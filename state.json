@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T18:58Z",
+  "updated_at": "2026-11-07T19:01Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5837,6 +5837,11 @@
       "id": "pool-579-nits",
       "added": "2026-11-07T18:58Z",
       "text": "#579 merged 30e956bf. Non-blocking from delta review: (1) starved-claim notify_waiters() in pool.rs ~456 has no test; (2) pre-existing missed wakeup ~474: granting a starved partial claim clears starved without notify (latency only). Fold into next pool.rs slice. rc.2 backport of #579 owed (P-v052-cut)."
+    },
+    {
+      "id": "wk10-split",
+      "added": "2026-11-07T19:01Z",
+      "text": "WK-10 split (runner-approved 19:0xZ): WK-10a coordinator tick in serve.rs (~600: Placement::sync per tick, WorkerFilter, WorkerSnapshots + wire keys, ack via InboundSink wrapper, pause-set seed, WK-2 nits); WK-10b worker runtime core (~1,300: session handle, have routing, off-thread install, Judge, claims/outcomes, pool cap + #579 reservation, drain deadline, sealing, floor-drop, WK-9c Invalid decision; gates e2e store + no seal before fresh snapshot); WK-10c sharded DHT (~800: live Assign shard restart, budget.rs, heartbeat, Hello caps, metrics.md target-prefix, measured RSS Q6). Same session/slot, sequential. Approved out-of-owns: cluster/src/client.rs handle() ~40, worker/session.rs Work widen ~30, services.rs Placement before Cluster::start ~5, logging/events.rs + registry incl web names file (not web/e2e). Next runner PR: add WK-10a/b/c to slices.yaml (WK-10 becomes epic-ish parent or replaced), deps chain, owns."
     }
   ],
   "main_health": [
@@ -6532,7 +6537,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-07T18:58Z",
+    "updated": "2026-11-07T19:01Z",
     "items": [
       {
         "slot": 1,
@@ -6560,10 +6565,10 @@
       },
       {
         "slot": 4,
-        "slice": "WK-10",
+        "slice": "WK-10a",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: worker runtime (sharded DHT, pool cap, claims, live Assign)",
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: WK-10a coordinator tick (then WK-10b runtime core, WK-10c sharded DHT/RSS)",
         "since": "2026-11-07T18:58Z"
       }
     ],
