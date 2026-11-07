@@ -135,9 +135,16 @@ fn dht_source() -> Source {
             enforced: false,
             max: 4,
         },
+        config_schema: json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        }),
         consent: ConsentClass::None,
         consent_required: false,
         consent_version: String::new(),
+        credential_spec: Vec::new(),
         credentials: Vec::new(),
         editable: ["agents", "egress", "enabled", "priority", "schedule"]
             .map(String::from)

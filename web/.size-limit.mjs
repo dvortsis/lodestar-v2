@@ -495,6 +495,9 @@ const sourcesLater = [
 	/features\/sources\/(?:Consent|Purge)Dialog\.svelte$/,
 	/features\/sources\/dialogs-root\.ts$/
 ];
+// The generated settings form (SRC-15c) has its own chunk and entry: most sources never use it.
+const sourcesConfig = [/features\/sources\/ConfigDialog\.svelte$/];
+const sourcesAllLater = [...sourcesLater, ...sourcesConfig];
 const sourcesBody = /features\/sources\/SourcesScreen\.svelte$/;
 const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
 	(chunk.imports ?? [])
@@ -509,7 +512,7 @@ const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
 		// The same for Updates' parts: they load from its body, whose chunk holds what they share.
 		.filter((key) => !(settingsUpdatesParts.some((re) => re.test(from)) && updatesBody.test(key)))
 		.filter((key) => !(filtersLater.some((re) => re.test(from)) && filtersBody.test(key)))
-		.filter((key) => !(sourcesLater.some((re) => re.test(from)) && sourcesBody.test(key)))
+		.filter((key) => !(sourcesAllLater.some((re) => re.test(from)) && sourcesBody.test(key)))
 		.map((key) => `${from} -> ${key}`)
 );
 if (staticHits.length)
@@ -580,7 +583,7 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 					// Filters' own dialogs and queue stop only Filters' first view.
 					...(/FiltersScreen\.svelte$/.test(key) ? [...filtersDialogs, ...filtersLater] : []),
 					// Sources' dialogs stop only Sources' first view.
-					...(/SourcesScreen\.svelte$/.test(key) ? sourcesLater : [])
+					...(/SourcesScreen\.svelte$/.test(key) ? sourcesAllLater : [])
 				],
 				false,
 				settingsShellView
@@ -779,8 +782,18 @@ const filtersPackPanelsLazy = filtersLazy({
 const sourcesDialogsLazy = filtersLazy({
 	name: 'Sources dialogs (on demand)',
 	keys: sourcesLater,
-	stop: []
+	stop: sourcesConfig
 });
+// What the settings form adds over the Consent and Purge dialogs: the shared field and dialog
+// modules are theirs (the one cost of opening either first), so only the rest is counted here.
+const sourcesConfigLazy = (() => {
+	const already = new Set(sourcesDialogsLazy);
+	return filtersLazy({
+		name: 'Sources config dialog (on demand)',
+		keys: sourcesConfig,
+		stop: sourcesLater
+	}).filter((f) => !already.has(f));
+})();
 const filtersPackImpactLazy = filtersLazy({
 	name: 'Filters pack impact (on demand)',
 	keys: [filtersLater[4]],
@@ -1238,8 +1251,9 @@ export default [
 	entry('Settings logging output messages (on demand)', settingsLoggingOutputMap, '0.77 KB'),
 	// runner §2.26, 2026-11-01: CI measures +3 B over local (build variance); main red on 7ea22803 at 17,103 B
 	entry('Settings logging parts (on demand)', settingsLoggingLazy, '17.15 KB'),
-	// S-logs-3: every event's plain name and help, en and zh. Measured 10.73 KB; limit = measured + 10%.
-	entry('Settings logging event names (on demand)', settingsLoggingNamesLazy, '11.8 KB'),
+	// S-logs-3: every event's plain name and help, en and zh. Measured 12.07 KB at WK-14 (four
+	// workers events); limit = measured + 10%.
+	entry('Settings logging event names (on demand)', settingsLoggingNamesLazy, '13.3 KB'),
 	// S-logs-2b: the outputs, the preview, the log files and the Danger zone, measured 9.81 KB.
 	entry('Settings logging files and preview (on demand)', settingsLoggingFilesLazy, '10.8 KB'),
 	// Each hand-built screen's first view (the route without the form, plus its body), against the
@@ -1287,7 +1301,8 @@ export default [
 	entry('Filters packs list (on demand)', filtersPacksLazy, '1.85 KB'), // measured 1.27 KB + ~25% for later packs; RP-6: +0.38 KB for the mount of the pack panels (measured 1.68 KB; 1.79 KB with the {:catch})
 	entry('Filters pack panels (on demand)', filtersPackPanelsLazy, '9 KB'),
 	entry('Filters pack impact (on demand)', filtersPackImpactLazy, '2.4 KB'),
-	entry('Sources dialogs (on demand)', sourcesDialogsLazy, '37 KB'),
+	entry('Sources dialogs (on demand)', sourcesDialogsLazy, '40 KB'),
+	entry('Sources config dialog (on demand)', sourcesConfigLazy, '6 KB'),
 	// S-filters-2c: the flows' one door, `flows-door.ts`: the root's preload list (~0.5 KB), fetched
 	// before the flows on the first change from Filters, a result's menu, the drawer or /t, as Save
 	// search's loader is. Measured 0.53 KB; limit = measured + 10%.

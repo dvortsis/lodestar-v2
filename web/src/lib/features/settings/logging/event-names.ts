@@ -378,6 +378,22 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_cluster_start_failed_n,
 		m.settings_logging_ev_cluster_start_failed_h
 	],
+	'workers.join_refused': [
+		m.settings_logging_ev_workers_join_refused_n,
+		m.settings_logging_ev_workers_join_refused_h
+	],
+	'workers.prefs_skipped': [
+		m.settings_logging_ev_workers_prefs_skipped_n,
+		m.settings_logging_ev_workers_prefs_skipped_h
+	],
+	'workers.token_created': [
+		m.settings_logging_ev_workers_token_created_n,
+		m.settings_logging_ev_workers_token_created_h
+	],
+	'workers.revoked': [
+		m.settings_logging_ev_workers_revoked_n,
+		m.settings_logging_ev_workers_revoked_h
+	],
 	'api.internal_error': [
 		m.settings_logging_ev_api_internal_error_n,
 		m.settings_logging_ev_api_internal_error_h

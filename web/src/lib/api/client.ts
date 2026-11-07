@@ -169,7 +169,7 @@ type PathsWith<M extends Method> = {
 }[keyof paths];
 type Op<P extends keyof paths, M extends Method> = paths[P][M];
 
-type Params<O, K extends 'path' | 'query'> = O extends { parameters: infer P }
+type Params<O, K extends 'path' | 'query'> = [O] extends [{ parameters: infer P }]
 	? P extends { [k in K]?: infer T }
 		? Exclude<T, undefined>
 		: never
@@ -177,14 +177,14 @@ type Params<O, K extends 'path' | 'query'> = O extends { parameters: infer P }
 /** `K` is required when the operation declares it required, optional when not, absent when never. */
 type Part<O, K extends 'path' | 'query'> = [Params<O, K>] extends [never]
 	? { [k in K]?: never }
-	: O extends { parameters: Record<K, object> }
+	: [O] extends [{ parameters: Record<K, object> }]
 		? { [k in K]: Params<O, K> }
 		: { [k in K]?: Params<O, K> };
 type BodyPart<O, M extends Method> = M extends 'get'
 	? { body?: never }
-	: O extends { requestBody: { content: { 'application/json': infer B } } }
+	: [O] extends [{ requestBody: { content: { 'application/json': infer B } } }]
 		? { body: B }
-		: O extends { requestBody?: { content: { 'application/json': infer B } } }
+		: [O] extends [{ requestBody?: { content: { 'application/json': infer B } } }]
 			? { body?: B }
 			: { body?: never };
 

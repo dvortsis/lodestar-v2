@@ -114,6 +114,20 @@ doc = false
 bench = false
 
 [[bin]]
+name = "cluster_assign"
+path = "fuzz_targets/cluster_assign.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cluster_have"
+path = "fuzz_targets/cluster_have.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "cluster_frame"
 path = "fuzz_targets/cluster_frame.rs"
 test = false
@@ -123,6 +137,20 @@ bench = false
 [[bin]]
 name = "cluster_results"
 path = "fuzz_targets/cluster_results.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cluster_filter_snapshot"
+path = "fuzz_targets/cluster_filter_snapshot.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "remote_blob"
+path = "fuzz_targets/remote_blob.rs"
 test = false
 doc = false
 bench = false

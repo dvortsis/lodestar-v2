@@ -21,14 +21,17 @@
 //!   heartbeats, clock offsets, leases and re-grants, revocation) and the
 //!   worker's [`WorkerSession`].
 
+pub mod assign;
 mod client;
 mod clock;
 mod coordinator;
 pub mod frame;
+pub mod have;
 mod hex;
 mod join;
 mod leases;
 mod link;
+pub mod placement;
 pub mod proto;
 mod server;
 mod tls;

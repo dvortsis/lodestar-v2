@@ -35,7 +35,7 @@ use lodestar_sources::claims::{
     AdultEnrichment, AdultKind, MAX_PERFORMER, MAX_PERFORMERS, MAX_SCENE_ID, MAX_SCENE_TITLE,
     MAX_STUDIO, ReleaseDate,
 };
-use lodestar_sources::consent::Need;
+use lodestar_sources::consent::{CredentialKind, CredentialSpec, Need};
 use lodestar_sources::enrich::{AdultEnricher, Lookup, Query, QueryForm};
 use lodestar_sources::http::Method;
 use lodestar_sources::{
@@ -90,9 +90,11 @@ pub(crate) const MANIFEST: Manifest = Manifest {
     finds_private: false,
 };
 
-/// The settings form (§10.10). Only the API key, write-only: the host
-/// stores it as the `api_key` credential (SRC-4) and never returns it.
-pub const CONFIG_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"api_key":{"type":"string","writeOnly":true,"title":"API key","description":"Your StashDB API key"}},"required":["api_key"],"additionalProperties":false}"#;
+/// The settings form (§10.10): none of its own. The API key isn't a
+/// setting: it's the `api_key` credential the policy declares
+/// (X-sources-api-spec), stored through the credential store (SRC-4) and
+/// never returned.
+pub const CONFIG_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{},"additionalProperties":false}"#;
 
 /// Q15: at most one request a second to the service, no burst. The runtime
 /// holds the same rate (`adult_enrich::capped`) and counts the daily cap
@@ -108,6 +110,12 @@ const POLICY: Policy = Policy {
         ..Caps::STRICT
     },
     config_schema: CONFIG_SCHEMA,
+    credentials: &[CredentialSpec {
+        name: API_KEY,
+        label: "API key",
+        kind: CredentialKind::Secret,
+        required: true,
+    }],
     ..Policy::STRICT
 };
 

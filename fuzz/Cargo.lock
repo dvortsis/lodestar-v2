@@ -1205,6 +1205,7 @@ dependencies = [
  "futures-util",
  "lodestar-integrations",
  "lodestar-metainfo",
+ "lodestar-network-policy",
  "lodestar-store",
  "postcard",
  "ring",
@@ -1347,10 +1348,12 @@ dependencies = [
  "lodestar-integrations",
  "lodestar-log",
  "lodestar-metainfo",
+ "lodestar-network-policy",
  "lodestar-peer-wire",
  "lodestar-sources",
  "lodestar-store",
  "lodestar-tracker-scrape",
+ "siphasher",
  "tokio",
 ]
 

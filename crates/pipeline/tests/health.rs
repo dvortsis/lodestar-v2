@@ -39,7 +39,8 @@ fn dict(name: &str, private: bool) -> Vec<u8> {
     to_vec(&OwnedValue::Dict(d))
 }
 
-/// Stores torrents named `names` (private when the name says so).
+/// Stores torrents named `names` (private when the name says so; a remote
+/// worker's, its BEP 27 bit unverified, when it starts with "remote").
 fn seed(path: &std::path::Path, names: &[&str]) -> Vec<(i64, InfoHash)> {
     let mut store = Store::open(path, StoreConfig::default()).unwrap();
     let source = store.register_source("test", "1", 1).unwrap();
@@ -54,7 +55,11 @@ fn seed(path: &std::path::Path, names: &[&str]) -> Vec<(i64, InfoHash)> {
                     raw_info: Some(&raw),
                     discovered_at: 1,
                     metadata_at: 1,
-                    extra_flags: 0,
+                    extra_flags: if name.starts_with("remote") {
+                        lodestar_store::flags::REMOTE_UNVERIFIED
+                    } else {
+                        0
+                    },
                     source,
                 }])
                 .unwrap()[0]
@@ -156,8 +161,8 @@ impl SourcePlugin for Scripted {
 async fn scrapes_new_torrents_into_the_store_and_hot_columns() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("t.db");
-    let t = seed(&db, &["alive", "dead", "private one"]);
-    let (alive, dead, private) = (t[0], t[1], t[2]);
+    let t = seed(&db, &["alive", "dead", "private one", "remote one"]);
+    let (alive, dead, private, remote) = (t[0], t[1], t[2], t[3]);
     let tracker = udp_tracker().await;
     tracker.state.set(alive.1, SWARM);
 
@@ -184,6 +189,7 @@ async fn scrapes_new_torrents_into_the_store_and_hot_columns() {
     assert_eq!(hot.get(Col::Trackers, id(alive)), 1);
     assert_eq!(hot.get(Col::Trackers, id(dead)), 0, "zeros don't count");
     assert_eq!(hot.get(Col::Seeders, id(private)), NEVER, "never scraped");
+    assert_eq!(hot.get(Col::Seeders, id(remote)), NEVER, "never scraped");
 
     // A rediscovery moves last-seen at once.
     let before = std::time::SystemTime::now()
@@ -205,6 +211,14 @@ async fn scrapes_new_torrents_into_the_store_and_hot_columns() {
     let rounds = get(&h.stats().rounds);
     h.interest(alive.0);
     until("fresh hints skipped", || get(&h.stats().fresh_skipped) >= 1).await;
+    // A look at the remote row is skipped as private, never scraped
+    // (the service's own gate, beside the store's lane selection).
+    let skipped = get(&h.stats().private_skipped);
+    h.interest(remote.0);
+    until("the remote row skipped as private", || {
+        get(&h.stats().private_skipped) > skipped
+    })
+    .await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(get(&h.stats().rounds), rounds, "no rescrape");
     assert_eq!(h.trackers().len(), 1);
@@ -225,6 +239,7 @@ async fn scrapes_new_torrents_into_the_store_and_hot_columns() {
         "dead: ~2 d"
     );
     assert!(store.swarm(private.0).unwrap().is_none());
+    assert!(store.swarm(remote.0).unwrap().is_none());
     assert!(store.history(alive.0).unwrap().is_some());
     assert!(store.history(dead.0).unwrap().is_none());
     assert_eq!(store.swarm_trackers(alive.0).unwrap().len(), 1);

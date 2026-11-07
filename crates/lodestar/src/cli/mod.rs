@@ -25,6 +25,7 @@ mod rollup;
 mod stats;
 pub(crate) mod util;
 mod vacuum;
+pub(crate) mod worker;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -113,6 +114,9 @@ pub enum Command {
     /// was tracked. Hourly detail older than 30 days is folded into days,
     /// so those days are repaired at daily grain.
     Rollup(RollupArgs),
+    /// Run as a remote worker: join a coordinator with a one-time token
+    /// (--join, --token-file), then run from the saved credentials
+    Worker(worker::WorkerArgs),
 }
 
 /// Where the bitmagnet database is. The password comes from
@@ -186,6 +190,24 @@ pub struct StatsArgs {
     pub json: bool,
 }
 
+/// The config for `command`. `lodestar worker --data <dir>` is the data
+/// folder for the config too (its config.toml, its log), as it is for the
+/// privilege drop, so the two agree.
+fn load_config(
+    command: &Command,
+    config_path: Option<&Path>,
+    env: impl Fn(&str) -> Option<String>,
+) -> Result<Config, crate::config::ConfigError> {
+    let data = match command {
+        Command::Worker(a) => a.data.as_ref().and_then(|d| d.to_str()).map(str::to_owned),
+        _ => None,
+    };
+    Config::load(config_path, |k| match (k, &data) {
+        ("LODESTAR_DATA_DIR", Some(d)) => Some(d.clone()),
+        _ => env(k),
+    })
+}
+
 /// Parses the process's arguments; on bad ones (or `--help`,
 /// `--version`) clap prints and exits (status 2 for errors).
 pub fn parse() -> Cli {
@@ -197,7 +219,7 @@ pub fn parse() -> Cli {
 /// `dropped` is what the PUID/PGID drop did, logged once the config (and
 /// so the log filter) is loaded.
 pub fn run(command: Command, config_path: Option<&Path>, dropped: &privdrop::Report) -> ExitCode {
-    let config = match Config::load(config_path, |k| std::env::var(k).ok()) {
+    let config = match load_config(&command, config_path, |k| std::env::var(k).ok()) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("config: {e}");
@@ -232,6 +254,7 @@ pub fn run(command: Command, config_path: Option<&Path>, dropped: &privdrop::Rep
         Command::Rollup(a) => ("rollup", rollup::run(&config, a.since)),
         Command::Import(a) => ("import", import::run(&config, a)),
         Command::ImportBitmagnet(a) => ("import-bitmagnet", import::legacy(&config, a)),
+        Command::Worker(a) => ("worker", worker::run(&config, a)),
         Command::Serve { .. } | Command::Healthcheck | Command::Lists => {
             unreachable!("main.rs runs these")
         }

@@ -98,6 +98,10 @@ pub struct ServerConfig {
     /// Tick every heartbeat by itself. Tests turn it off and call
     /// [`ClusterServer::tick`].
     pub auto_tick: bool,
+    /// Relayed peer hints pass `lodestar_network_policy::allows` with this
+    /// `allow_private` (WK-9): off, a worker can't steer another to a
+    /// loopback, private or link-local address.
+    pub hints_allow_private: bool,
 }
 
 impl Default for ServerConfig {
@@ -114,6 +118,7 @@ impl Default for ServerConfig {
             max_skew_ms: 60_000,
             maintain_every_secs: 3600,
             auto_tick: true,
+            hints_allow_private: false,
         }
     }
 }
@@ -269,6 +274,10 @@ struct WorkerState {
     offset_ms: i64,
     skewed: bool,
     draining: bool,
+    /// Paused by the admin (WK-14): no new leases, nothing sent to the
+    /// worker. It outlives sessions, like `draining`, and is never turned
+    /// into a drain.
+    paused: bool,
     stats: Stats,
     capabilities: Capabilities,
     /// The last acknowledgement sent: its sequence number and when.
@@ -328,11 +337,16 @@ pub struct WorkerStatus {
     pub worker: WorkerId,
     pub connected: bool,
     pub draining: bool,
+    /// Paused by the admin: connected or not, it gets no new leases.
+    pub paused: bool,
     pub offset_ms: i64,
     pub skewed: bool,
     pub leases: usize,
     pub last_seen_ms: i64,
     pub stats: Stats,
+    /// The public addresses the worker reported in `Hello` (at most
+    /// `MAX_EXTERNAL_IPS`): a placement hint, its own word (WK-5).
+    pub external_ips: Vec<IpAddr>,
 }
 
 /// A consistent view of the fleet and the server's counters.
@@ -489,12 +503,13 @@ fn ip_key(ip: IpAddr) -> IpAddr {
 }
 
 /// A peer hint worth relaying: a real unicast address with a port.
-fn usable_hint(a: &std::net::SocketAddr) -> bool {
+fn usable_hint(a: &std::net::SocketAddr, allow_private: bool) -> bool {
     let ip = a.ip();
     a.port() != 0
         && !ip.is_unspecified()
         && !ip.is_multicast()
         && ip != IpAddr::V4(std::net::Ipv4Addr::BROADCAST)
+        && lodestar_network_policy::allows(*a, allow_private)
 }
 
 fn clamp(v: i128) -> i64 {
@@ -614,6 +629,44 @@ impl ClusterServer {
         Ok(n)
     }
 
+    /// [`revoke`](Self::revoke), saying what it did: `(certificates,
+    /// leases)`, the certificates refused from now on and the leases taken
+    /// back for other workers (WK-14's Danger zone result). The connection is stopped here, before this returns, so a
+    /// snapshot taken afterwards no longer lists the worker.
+    pub async fn revoke_worker(&self, worker: WorkerId) -> Result<(usize, usize), ClusterError> {
+        let certificates = self
+            .with_pki(move |p| {
+                let Pki {
+                    coordinator, store, ..
+                } = &mut p.pki;
+                coordinator.revoke(store, worker)
+            })
+            .await
+            .unwrap_or(Err(ClusterError::Corrupt("the PKI task failed")))?;
+        let mut fleet = lock(&self.fleet);
+        let leases = self.leases.evict(worker);
+        self.sweep(&mut fleet, self.clock.now_ms());
+        // `sweep` forgets a revoked worker it saw connect; an entry `pause`
+        // made before it ever connected has no identity to check, so it
+        // goes here (it can't come back under this id).
+        fleet.workers.remove(&worker);
+        Ok((certificates, leases))
+    }
+
+    /// Every certificate on record (names, expiry, revoked or not; no key
+    /// material), for Settings → Workers.
+    pub async fn certificates(&self) -> Vec<crate::IssuedCert> {
+        self.with_pki(|p| p.pki.coordinator.certificates())
+            .await
+            .unwrap_or_default()
+    }
+
+    /// The heartbeat interval: a revoked worker's connection is closed
+    /// within one of these at most.
+    pub fn heartbeat_interval(&self) -> Duration {
+        self.config.heartbeat
+    }
+
     /// Asks a worker to drain: it gets no new leases, finishes the ones it
     /// holds, says `Drained` and is stopped. The drain stands across
     /// reconnects (it's asked for again after `Welcome`) until
@@ -638,14 +691,60 @@ impl ClusterServer {
     /// worker may be granted to it at once. Unlike [`drain`](Self::drain)
     /// it works on a disconnected worker too, so a drain can be lifted
     /// before the worker comes back. Nothing is sent to the worker: it
-    /// simply stops getting `Draining` denials. `false` if it wasn't
-    /// draining.
+    /// simply stops getting `Draining` denials. It ends a
+    /// [`pause`](Self::pause) too. `false` if it was neither.
     pub fn resume(&self, worker: WorkerId) -> bool {
         let mut fleet = lock(&self.fleet);
         let Some(state) = fleet.workers.get_mut(&worker) else {
             return false;
         };
-        if !std::mem::replace(&mut state.draining, false) {
+        let paused = std::mem::replace(&mut state.paused, false);
+        if !std::mem::replace(&mut state.draining, false) && !paused {
+            return false;
+        }
+        self.regrant(&mut fleet, self.clock.now_secs());
+        true
+    }
+
+    /// Pauses a worker (WK-14): it gets no new leases (its claims are
+    /// denied as if draining, and no re-grant goes to it) but keeps its
+    /// session and the leases it holds. Nothing is sent to it, and unlike
+    /// a drain it never stops. It stands across reconnects until
+    /// [`resume`](Self::resume) or [`unpause`](Self::unpause). A worker
+    /// that hasn't connected to this server yet is paused before it does
+    /// (a restarted coordinator re-applies saved pauses). `false` only
+    /// for the built-in worker.
+    pub fn pause(&self, worker: WorkerId) -> bool {
+        if worker == WorkerId::LOCAL {
+            return false;
+        }
+        let mut fleet = lock(&self.fleet);
+        let state = fleet.workers.entry(worker).or_insert_with(|| WorkerState {
+            session: None,
+            identity: None,
+            // Never seen: `snapshot` reports 0.
+            last_seen_ms: 0,
+            offset_ms: 0,
+            skewed: false,
+            draining: false,
+            paused: false,
+            stats: Stats::default(),
+            capabilities: Capabilities::default(),
+            last_ack: None,
+        });
+        state.paused = true;
+        true
+    }
+
+    /// Ends a pause and nothing else: a drain stands (WK-13's `release`
+    /// uses it so a quarantine lifts without ending the admin's drain).
+    /// `false` if it wasn't paused.
+    pub fn unpause(&self, worker: WorkerId) -> bool {
+        let mut fleet = lock(&self.fleet);
+        let Some(state) = fleet.workers.get_mut(&worker) else {
+            return false;
+        };
+        if !std::mem::replace(&mut state.paused, false) {
             return false;
         }
         self.regrant(&mut fleet, self.clock.now_secs());
@@ -667,11 +766,13 @@ impl ClusterServer {
                     worker: *worker,
                     connected: s.session.is_some(),
                     draining: s.draining,
+                    paused: s.paused,
                     offset_ms: s.offset_ms,
                     skewed: s.skewed,
                     leases,
                     last_seen_ms: s.last_seen_ms,
                     stats: s.stats,
+                    external_ips: s.capabilities.external_ips.clone(),
                 }
             })
             .collect();
@@ -790,7 +891,8 @@ impl ClusterServer {
             return false;
         };
         let mut hints = hints;
-        hints.retain(usable_hint);
+        let allow_private = self.config.hints_allow_private;
+        hints.retain(|a| usable_hint(a, allow_private));
         hints.truncate(MAX_HINTS);
         if hints.is_empty() {
             return false;
@@ -1075,6 +1177,7 @@ impl ClusterServer {
                     offset_ms: 0,
                     skewed: false,
                     draining: false,
+                    paused: false,
                     stats: Stats::default(),
                     capabilities: Capabilities::default(),
                     last_ack: None,
@@ -1387,6 +1490,8 @@ impl ClusterServer {
             .workers
             .get(&w)
             .map_or((true, 0), |s| (s.draining || !current, s.offset_ms));
+        // A paused worker is denied as if draining (WK-14).
+        let draining = draining || fleet.workers.get(&w).is_some_and(|s| s.paused);
         let mut out: Vec<Option<GrantItem>> = vec![None; items.len()];
         let mut asks: Vec<(usize, Claim)> = Vec::with_capacity(items.len());
         for (i, (item, &stored)) in items.iter().zip(stored).enumerate() {
@@ -1462,7 +1567,7 @@ impl ClusterServer {
                     ..
                 } => {
                     let mut hints = std::mem::take(&mut items[i].hints);
-                    hints.retain(usable_hint);
+                    hints.retain(|a| usable_hint(a, self.config.hints_allow_private));
                     if !hints.is_empty() {
                         let list = relays.entry(holder).or_default();
                         if list.len() < MAX_HINT_BATCH {
@@ -1627,7 +1732,7 @@ impl ClusterServer {
         let targets: Vec<WorkerId> = fleet
             .workers
             .iter()
-            .filter(|(_, s)| s.session.is_some() && !s.draining)
+            .filter(|(_, s)| s.session.is_some() && !s.draining && !s.paused)
             .map(|(&w, _)| w)
             .collect();
         if targets.is_empty() || self.leases.pending() == 0 {
@@ -1681,5 +1786,32 @@ mod tests {
         assert_eq!(clamp(i128::from(i64::MAX) * 4), i64::MAX);
         assert_eq!(clamp(i128::from(i64::MIN) * 4), i64::MIN);
         assert_eq!(clamp(-5), -5);
+    }
+
+    /// Relayed hints pass the network policy (WK-9): with private
+    /// addresses off, a worker can't steer another worker to loopback,
+    /// RFC 1918, link-local or a mapped form of them, whatever it claims.
+    #[test]
+    fn relayed_hints_follow_the_network_policy() {
+        let hint = |s: &str| s.parse::<std::net::SocketAddr>().unwrap();
+        for bad in [
+            "127.0.0.1:6881",
+            "10.0.0.5:6881",
+            "192.168.1.2:6881",
+            "169.254.0.1:6881",
+            "[::1]:6881",
+            "[::ffff:10.0.0.5]:6881",
+            "[fe80::1]:6881",
+            "8.8.8.8:0",
+            "224.0.0.1:6881",
+        ] {
+            assert!(!usable_hint(&hint(bad), false), "{bad}");
+        }
+        assert!(usable_hint(&hint("8.8.8.8:6881"), false));
+        assert!(usable_hint(&hint("[2001:4860::8888]:6881"), false));
+        // Allowed only when private addresses are (a LAN test network).
+        assert!(usable_hint(&hint("10.0.0.5:6881"), true));
+        assert!(!usable_hint(&hint("10.0.0.5:0"), true));
+        assert!(!ServerConfig::default().hints_allow_private);
     }
 }

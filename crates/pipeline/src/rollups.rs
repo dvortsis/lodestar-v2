@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use lodestar_cluster::WorkerId;
 use lodestar_store::{CohortCount, Counter, SourceId};
 
 /// `rollup_hour.metric` codes.
@@ -76,6 +77,47 @@ pub mod metric {
     /// store's `torrents_removed` trigger (V11), which has this code as a
     /// literal.
     pub const REMOVED: u32 = 15;
+    /// Late results committed (plan Q7, WK-9), **by discovery cohort**:
+    /// `hour` is the cohort (dim = the source that found it first, key 0).
+    /// Each is a key whose first lease ended with a terminal outcome and
+    /// whose late result then ended a second lease, so the funnel
+    /// reconciles as harvested = Σ terminal − late results + in flight.
+    pub const LATE_RESULTS: u32 = 16;
+    /// Counters remote workers sent, by worker (WK-9b, §19.7): dim = the
+    /// worker id (from its authenticated session, never its payload), key
+    /// = [`by_worker_key`] of the counter's own metric, dim and key. The
+    /// same counts are in their own metric's row too, so the fleet's
+    /// totals read as before; this row only breaks them down.
+    pub const BY_WORKER: u32 = 17;
+
+    /// A [`BY_WORKER`] key: the counter's metric, dim and key, each in
+    /// `0..=255` ([`super::Admit`] admits nothing else).
+    pub const fn by_worker_key(metric: u32, dim: u32, key: i64) -> i64 {
+        ((metric as i64) << 16) | ((dim as i64) << 8) | key
+    }
+
+    /// The fleet's row caps on remote workers' counters ([`super::Admit`]).
+    pub use super::FLEET_ROWS_PER_DAY;
+
+    /// A metric a worker may send, with its dims and keys (inclusive).
+    pub type Domain = (u32, (u32, u32), (i64, i64));
+
+    /// The metrics a remote worker may send, with their dim and key
+    /// domains (inclusive). Everything else is the coordinator's own:
+    /// harvests are counted at grant and stores at commit (§19.3), and
+    /// search, scrape scheduling, coverage, lifecycle, late results and
+    /// the per-worker rows themselves are coordinator work. Strategy codes
+    /// are a plugin's own `u8`.
+    pub const FROM_WORKERS: [Domain; 4] = [
+        // dim = source, key = strategy.
+        (REDISCOVERED, (0, 63), (0, 255)),
+        // dim = source, key 0.
+        (DROPPED, (0, 63), (0, 0)),
+        // dim = lane, key = result.
+        (SCRAPED, (0, 3), (0, 2)),
+        // dim 0, key = with or without an estimate.
+        (DHT_SCRAPES, (0, 0), (0, 1)),
+    ];
 
     /// How each code folds into a day (compaction, repair and day
     /// reads). **Every code has a kind;** a code with none is never
@@ -88,9 +130,9 @@ pub mod metric {
     }
 
     /// The highest code defined.
-    pub const LAST_CODE: u32 = REMOVED;
+    pub const LAST_CODE: u32 = BY_WORKER;
 
-    const AGGREGATION: [(u32, Aggregation); 15] = [
+    const AGGREGATION: [(u32, Aggregation); 17] = [
         (HARVESTED, Aggregation::Sum),
         (REDISCOVERED, Aggregation::Sum),
         (DROPPED, Aggregation::Sum),
@@ -106,6 +148,8 @@ pub mod metric {
         (SEARCHABLE, Aggregation::Last),
         (FUNNEL_EVENTS, Aggregation::Sum),
         (REMOVED, Aggregation::Sum),
+        (LATE_RESULTS, Aggregation::Sum),
+        (BY_WORKER, Aggregation::Sum),
     ];
 
     /// [`COVERAGE`] dims.
@@ -158,6 +202,98 @@ impl Rollups {
             .collect();
         out.sort_by_key(|c| (c.hour, c.metric, c.dim, c.key));
         out
+    }
+}
+
+/// Hours behind the coordinator's clock a worker's counter may name: a
+/// spool holds a day (owner §2.17), plus the hour under way.
+pub const WORKER_HOURS_BACK: i64 = 24;
+
+/// Distinct rows (metric, dim, key) all remote workers together may add
+/// to in one UTC day, whatever the fleet's size; so in any hour too. What
+/// the Insights pages read grows with these rows, the "all" ranges by the
+/// daily rows the nightly compaction leaves after 30 days. With a year of
+/// rows, 64 a day took the Discover page's "all" to 47 ms against its
+/// 50 ms budget (owner §1.6.4), and 32 kept it at 21–26 ms
+/// (`docs/decisions/2026-11-07-WK-9b.md`). A real fleet shares about 22,
+/// the same all day: every worker counts the same sources, strategies and
+/// lanes. A worker's `BY_WORKER` rows follow its fleet rows one to one,
+/// so this bounds them too.
+pub const FLEET_ROWS_PER_DAY: usize = 32;
+
+/// The most one worker may add to one row in one hour. Far above any real
+/// count, and low enough that no number of workers, batches or hours can
+/// take a `rollup_hour` value (a STRICT INTEGER) out of range.
+pub const WORKER_ROW_CAP: i64 = 1 << 32;
+
+/// A counter's row: its metric, dim and key.
+type Row = (u32, u32, i64);
+
+/// What a remote worker's counters may do to the rollups (WK-9b; the
+/// WK-6 decisions' "bound what counters can do"):
+/// - only [`metric::FROM_WORKERS`], each with its own dim and key domain;
+/// - only hours in [`WORKER_HOURS_BACK`] up to now, on the coordinator's
+///   clock after correcting for the worker's offset;
+/// - at most [`FLEET_ROWS_PER_DAY`] distinct rows a day, all workers
+///   together;
+/// - at most [`WORKER_ROW_CAP`] added to each row by each worker in an
+///   hour (anything over is cut, never wrapped).
+#[derive(Debug, Default)]
+pub struct Admit {
+    /// What each (worker, hour, metric, dim, key) took so far, for hours
+    /// still in the window.
+    taken: HashMap<(WorkerId, i64), HashMap<Row, i64>>,
+    /// The fleet rows all workers added to, per hour and per UTC day.
+    fleet_days: HashMap<i64, std::collections::HashSet<Row>>,
+}
+
+impl Admit {
+    /// The counter as it may be added (its hour corrected, its value cut
+    /// to the row's cap), or `None` if it may not.
+    pub fn admit(
+        &mut self,
+        worker: WorkerId,
+        c: Counter,
+        offset_ms: i64,
+        now: i64,
+    ) -> Option<Counter> {
+        let (_, (d0, d1), (k0, k1)) = metric::FROM_WORKERS
+            .iter()
+            .find(|(m, _, _)| *m == c.metric)
+            .copied()?;
+        if !(d0..=d1).contains(&c.dim) || !(k0..=k1).contains(&c.key) || c.value <= 0 {
+            return None;
+        }
+        // The worker's hour started at its own clock's hour mark; on ours
+        // it started `offset` earlier.
+        let start_ms = i128::from(c.hour) * 3_600_000 - i128::from(offset_ms);
+        let hour = i64::try_from(start_ms.div_euclid(3_600_000)).ok()?;
+        let now_hour = now.div_euclid(3600);
+        if hour > now_hour || hour < now_hour - WORKER_HOURS_BACK {
+            return None;
+        }
+        let oldest = now_hour - WORKER_HOURS_BACK;
+        self.taken.retain(|(_, h), _| *h >= oldest);
+        self.fleet_days.retain(|d, _| *d >= oldest.div_euclid(24));
+        let row = (c.metric, c.dim, c.key);
+        // The fleet's cap first: no number of workers widens the pages.
+        let fleet_day = self.fleet_days.entry(hour.div_euclid(24)).or_default();
+        if !fleet_day.contains(&row) && fleet_day.len() >= FLEET_ROWS_PER_DAY {
+            return None;
+        }
+        fleet_day.insert(row);
+        let took = self
+            .taken
+            .entry((worker, hour))
+            .or_default()
+            .entry(row)
+            .or_insert(0);
+        let value = c.value.min(WORKER_ROW_CAP - *took);
+        if value <= 0 {
+            return None;
+        }
+        *took += value;
+        Some(Counter { hour, value, ..c })
     }
 }
 
@@ -230,5 +366,155 @@ mod tests {
             ]
         );
         assert!(funnel_events(&[], now).is_empty());
+    }
+
+    fn counter(hour: i64, metric: u32, dim: u32, key: i64, value: i64) -> Counter {
+        Counter {
+            hour,
+            metric,
+            dim,
+            key,
+            value,
+        }
+    }
+
+    const W: WorkerId = WorkerId(3);
+    const NOW: i64 = 500_000 * 3600 + 1800;
+    const HOUR: i64 = 500_000;
+
+    /// Requirement 2: only the metrics a worker counts, in their own dim
+    /// and key domains; the coordinator's own (harvests, stores, search,
+    /// gauges) are refused whatever the value.
+    #[test]
+    fn worker_counters_stay_in_their_domains() {
+        let mut a = Admit::default();
+        let mut ok = |m, d, k| a.admit(W, counter(HOUR, m, d, k, 5), 0, NOW).is_some();
+        assert!(ok(metric::REDISCOVERED, 63, 255));
+        assert!(ok(metric::DROPPED, 1, 0));
+        assert!(ok(metric::SCRAPED, 3, 2));
+        assert!(ok(metric::DHT_SCRAPES, 0, 1));
+        assert!(!ok(metric::REDISCOVERED, 64, 0), "no such source");
+        assert!(!ok(metric::REDISCOVERED, 1, 256), "no such strategy");
+        assert!(!ok(metric::DROPPED, 1, 1));
+        assert!(!ok(metric::SCRAPED, 4, 0));
+        assert!(!ok(metric::DHT_SCRAPES, 1, 0));
+        for m in [
+            metric::HARVESTED,
+            metric::STORED,
+            metric::SCRAPE_REQUESTS,
+            metric::SEARCHES,
+            metric::SEARCH_LATENCY,
+            metric::NEWLY_SEARCHABLE,
+            metric::TIME_TO_SEARCHABLE,
+            metric::COVERAGE,
+            metric::SEARCHABLE,
+            metric::FUNNEL_EVENTS,
+            metric::REMOVED,
+            metric::BY_WORKER,
+            metric::LATE_RESULTS,
+            99,
+        ] {
+            assert!(!ok(m, 0, 0), "metric {m} is the coordinator's");
+        }
+        assert!(
+            a.admit(W, counter(HOUR, metric::DROPPED, 1, 0, 0), 0, NOW)
+                .is_none()
+        );
+        assert!(
+            a.admit(W, counter(HOUR, metric::DROPPED, 1, 0, -4), 0, NOW)
+                .is_none()
+        );
+        // The per-worker key holds the three, apart.
+        assert_eq!(
+            metric::by_worker_key(metric::REDISCOVERED, 63, 255),
+            (2 << 16) | (63 << 8) | 255
+        );
+    }
+
+    /// Requirement 2: hours are corrected by the worker's offset and kept
+    /// to a day back from the coordinator's own hour, never ahead.
+    #[test]
+    fn worker_hours_are_corrected_and_windowed() {
+        let mut a = Admit::default();
+        let mut hour = |h: i64, offset_ms: i64| {
+            a.admit(W, counter(h, metric::DROPPED, 1, 0, 1), offset_ms, NOW)
+                .map(|c| c.hour)
+        };
+        assert_eq!(hour(HOUR, 0), Some(HOUR));
+        // Its clock is two hours fast: its hour is our hour before last.
+        assert_eq!(hour(HOUR + 2, 2 * 3_600_000), Some(HOUR));
+        assert_eq!(hour(HOUR + 1, 0), None, "ahead of us");
+        assert_eq!(
+            hour(HOUR - WORKER_HOURS_BACK, 0),
+            Some(HOUR - WORKER_HOURS_BACK)
+        );
+        assert_eq!(
+            hour(HOUR - WORKER_HOURS_BACK - 1, 0),
+            None,
+            "older than a spool"
+        );
+        assert_eq!(hour(0, 0), None);
+        assert_eq!(hour(i64::from(i32::MAX), i64::MIN), None);
+        assert_eq!(hour(HOUR, i64::MAX), None);
+    }
+
+    /// Requirement 2: one row takes at most [`WORKER_ROW_CAP`] from one
+    /// worker in one hour, across any number of batches, so no sum leaves
+    /// SQLite's integer range; and all workers together add at most
+    /// [`FLEET_ROWS_PER_DAY`] distinct rows a day, however many there
+    /// are.
+    #[test]
+    fn worker_rows_are_capped() {
+        let mut a = Admit::default();
+        let big = 1 << 40; // the codec's largest delta
+        let mut total = 0;
+        for _ in 0..10_000 {
+            if let Some(c) = a.admit(W, counter(HOUR, metric::DROPPED, 1, 0, big), 0, NOW) {
+                total += c.value;
+            }
+        }
+        assert_eq!(total, WORKER_ROW_CAP);
+        // Another worker has its own cap; the fleet's row stays far inside
+        // i64 for any plausible fleet.
+        assert!(
+            a.admit(WorkerId(4), counter(HOUR, metric::DROPPED, 1, 0, 9), 0, NOW)
+                .is_some()
+        );
+        const { assert!(i64::MAX / WORKER_ROW_CAP > 1 << 30) };
+        // Eight workers with rows of their own, over the day's hours: new
+        // rows stop at the fleet's daily cap; known ones still add.
+        let mut day = Admit::default();
+        let first = (HOUR.div_euclid(24) * 24).max(HOUR - WORKER_HOURS_BACK);
+        assert!(HOUR - first >= 2, "the day has room for three hours");
+        let mut rows = std::collections::HashSet::new();
+        for h in first..=HOUR {
+            for w in 0..8u32 {
+                for source in 0..8 {
+                    let key = (h * 8 + i64::from(w)) % 256;
+                    let c = counter(h, metric::REDISCOVERED, source, key, 1);
+                    if let Some(c) = day.admit(WorkerId(w + 10), c, 0, NOW) {
+                        rows.insert((c.dim, c.key));
+                    }
+                }
+            }
+        }
+        assert_eq!(rows.len(), FLEET_ROWS_PER_DAY);
+        let &(dim, key) = rows.iter().next().unwrap();
+        let known = counter(HOUR, metric::REDISCOVERED, dim, key, 1);
+        assert!(day.admit(WorkerId(99), known, 0, NOW).is_some());
+        // Hours that left the window are forgotten.
+        let later = NOW + (WORKER_HOURS_BACK + 2) * 3600;
+        assert!(
+            a.admit(
+                W,
+                counter(later.div_euclid(3600), metric::DROPPED, 1, 0, 1),
+                0,
+                later
+            )
+            .is_some()
+        );
+        assert_eq!(a.taken.len(), 1);
+        let oldest_day = (later.div_euclid(3600) - WORKER_HOURS_BACK).div_euclid(24);
+        assert!(a.fleet_days.keys().all(|d| *d >= oldest_day));
     }
 }

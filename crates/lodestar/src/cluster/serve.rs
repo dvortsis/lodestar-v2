@@ -46,6 +46,7 @@ use lodestar_cluster::{
 };
 use lodestar_integrations::SecretStore;
 use lodestar_metainfo::InfoHash;
+use lodestar_pipeline::remote::RemoteIntake;
 use lodestar_store::{Store, StoreConfig};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -68,6 +69,9 @@ pub struct Wiring {
     pub data_dir: PathBuf,
     /// The pipeline's lease authority (`Monitor::lease_authority`).
     pub authority: Arc<LeaseAuthority>,
+    /// The pipeline's intake for what workers send (`Monitor::remote`,
+    /// WK-9). Without one, results and counters are refused.
+    pub remote: Option<Arc<RemoteIntake>>,
     pub settings: config::Cluster,
     pub clock: Arc<dyn Clock>,
 }
@@ -329,20 +333,29 @@ impl Inner {
         let (pki, check) = tokio::task::spawn_blocking(move || open_pki(&w, errors))
             .await
             .map_err(|_| StartError::task())??;
+        let preparer = check
+            .reader
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .preparer();
+        let check: Arc<dyn StoredKeys> = Arc::new(check);
+        let config = server_config(&self.wiring.settings);
+        // The intake (WK-9); the writer's backpressure is WK-9b's.
+        let attached =
+            self.wiring.remote.as_ref().map(|r| {
+                super::intake::attach(r, preparer, check.clone(), config.hints_allow_private)
+            });
         let hooks = ServerHooks {
             authority: self.wiring.authority.clone(),
-            stored: Some(Arc::new(check)),
-            // WK-9 adds the intake and the writer's backpressure.
-            sink: None,
-            admission: None,
+            stored: Some(check),
+            sink: attached.as_ref().map(|a| a.sink.clone() as _),
+            admission: attached.as_ref().map(|a| a.sink.clone() as _),
         };
-        let server = ClusterServer::with_hooks(
-            pki,
-            self.wiring.clock.clone(),
-            server_config(&self.wiring.settings),
-            hooks,
-        )
-        .map_err(|e| StartError::pki("server", &e))?;
+        let server = ClusterServer::with_hooks(pki, self.wiring.clock.clone(), config, hooks)
+            .map_err(|e| StartError::pki("server", &e))?;
+        if let (Some(a), Some(r)) = (&attached, &self.wiring.remote) {
+            a.serving(r, &server);
+        }
         let task = tokio::spawn(server.clone().serve(listener));
         self.state().current = Some((server.clone(), addr));
         lodestar_log::log_event!(
@@ -353,6 +366,9 @@ impl Inner {
     }
 
     async fn close(&self, running: Running, reason: &'static str) {
+        if let Some(r) = &self.wiring.remote {
+            r.serving(None, false);
+        }
         running.server.shutdown();
         let _ = running.task.await;
         {
@@ -719,6 +735,7 @@ mod tests {
             store: StoreConfig::default(),
             data_dir: dir.to_path_buf(),
             authority: Arc::new(LeaseAuthority::new(1, 600, Arc::new(NoEvents))),
+            remote: None,
             settings: config::Cluster {
                 enabled,
                 listen,

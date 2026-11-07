@@ -257,6 +257,73 @@ pub struct PurgeStep {
     pub queue_deleted: usize,
 }
 
+/// What [`Store::purge_source`] would remove for a source if it ran now,
+/// counted with the same rules and changing nothing
+/// ([`Store::purge_preview`]). Each count matches the sum of the
+/// [`PurgeStep`] field of the same name over a whole purge run while
+/// nothing else writes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PurgePreview {
+    pub unverified_deleted: u64,
+    pub unverified_kept: u64,
+    pub claims_deleted: u64,
+    pub torrents_deleted: u64,
+    pub torrents_kept: u64,
+    pub state_deleted: u64,
+    pub queue_deleted: u64,
+}
+
+/// What a purge of one source does to a row its bit may be set on. The
+/// one rule [`Store::purge_source`] applies and [`Store::purge_preview`]
+/// counts, so the two can't drift apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Fate {
+    /// Not this source's: left as it is.
+    Untouched,
+    /// Only this source found it: deleted.
+    Delete,
+    /// Others found it too: kept, without this source's bit.
+    Keep,
+}
+
+fn fate(sources: i64, bit: i64) -> Fate {
+    if sources & bit == 0 {
+        Fate::Untouched
+    } else if sources & !bit == 0 {
+        Fate::Delete
+    } else {
+        Fate::Keep
+    }
+}
+
+/// The rows a purge reads, in pages, and the tables it clears by source:
+/// the same text in the purge and the preview.
+macro_rules! unverified_page {
+    () => {
+        "SELECT id, sources, source_id FROM unverified_items WHERE id > ?1 ORDER BY id LIMIT ?2"
+    };
+}
+macro_rules! torrents_page {
+    () => {
+        "SELECT id, sources FROM torrents WHERE id > ?1 ORDER BY id LIMIT ?2"
+    };
+}
+macro_rules! claims_of {
+    () => {
+        "torrent_claims WHERE source_id = ?1"
+    };
+}
+macro_rules! state_of {
+    () => {
+        "source_state WHERE source_id = ?1"
+    };
+}
+macro_rules! queue_of {
+    () => {
+        "fetch_queue WHERE source = ?1"
+    };
+}
+
 impl Store {
     /// Records keys sources found, in one transaction (see [`Put`]).
     /// Claims must be within the [`claims`] limits (`Error::Invalid`
@@ -764,10 +831,7 @@ impl Store {
         match from.stage {
             Stage::Unverified => {
                 let rows: Vec<(i64, i64, i64)> = tx
-                    .prepare_cached(
-                        "SELECT id, sources, source_id FROM unverified_items
-                         WHERE id > ?1 ORDER BY id LIMIT ?2",
-                    )?
+                    .prepare_cached(unverified_page!())?
                     .query_map(params![from.after, limit as i64], |r| {
                         Ok((r.get(0)?, r.get(1)?, r.get(2)?))
                     })?
@@ -775,14 +839,17 @@ impl Store {
                 for (id, sources, owner) in rows {
                     scanned += 1;
                     last = id;
-                    if sources & bit == 0 {
-                        continue;
-                    }
                     let rest = sources & !bit;
-                    if rest == 0 {
-                        delete_item(&tx, id, true)?;
-                        step.unverified_deleted += 1;
-                    } else if owner == i64::from(source.get()) {
+                    match fate(sources, bit) {
+                        Fate::Untouched => continue,
+                        Fate::Delete => {
+                            delete_item(&tx, id, true)?;
+                            step.unverified_deleted += 1;
+                            continue;
+                        }
+                        Fate::Keep => {}
+                    }
+                    if owner == i64::from(source.get()) {
                         tx.prepare_cached(
                             "UPDATE unverified_items
                              SET sources = ?2, source_id = ?3, claims = NULL, flags = flags & ~2
@@ -805,18 +872,17 @@ impl Store {
             }
             Stage::Claims => {
                 scanned = tx
-                    .prepare_cached(
-                        "DELETE FROM torrent_claims WHERE rowid IN (
-                             SELECT rowid FROM torrent_claims WHERE source_id = ?1 LIMIT ?2)",
-                    )?
+                    .prepare_cached(concat!(
+                        "DELETE FROM torrent_claims WHERE rowid IN (SELECT rowid FROM ",
+                        claims_of!(),
+                        " LIMIT ?2)"
+                    ))?
                     .execute(params![source.get(), limit as i64])?;
                 step.claims_deleted = scanned;
             }
             Stage::Torrents => {
                 let rows: Vec<(i64, i64)> = tx
-                    .prepare_cached(
-                        "SELECT id, sources FROM torrents WHERE id > ?1 ORDER BY id LIMIT ?2",
-                    )?
+                    .prepare_cached(torrents_page!())?
                     .query_map(params![from.after, limit as i64], |r| {
                         Ok((r.get(0)?, r.get(1)?))
                     })?
@@ -831,28 +897,29 @@ impl Store {
                 for (id, sources) in rows {
                     scanned += 1;
                     last = id;
-                    if sources & bit == 0 {
-                        continue;
-                    }
-                    if sources == bit {
-                        delete.execute([id])?;
-                        log.execute([id])?;
-                        step.torrents_deleted.push(id);
-                    } else {
-                        clear.execute(params![id, bit])?;
-                        step.torrents_kept += 1;
+                    match fate(sources, bit) {
+                        Fate::Untouched => {}
+                        Fate::Delete => {
+                            delete.execute([id])?;
+                            log.execute([id])?;
+                            step.torrents_deleted.push(id);
+                        }
+                        Fate::Keep => {
+                            clear.execute(params![id, bit])?;
+                            step.torrents_kept += 1;
+                        }
                     }
                 }
             }
             Stage::State => {
                 step.state_deleted = tx
-                    .prepare_cached("DELETE FROM source_state WHERE source_id = ?1")?
+                    .prepare_cached(concat!("DELETE FROM ", state_of!()))?
                     .execute([source.get()])?;
                 // Keys it queued before it was disabled would otherwise be
                 // stored under its bit after the purge. The pipeline's
                 // in-memory queue is SRC-14's to drop.
                 step.queue_deleted = tx
-                    .prepare_cached("DELETE FROM fetch_queue WHERE source = ?1")?
+                    .prepare_cached(concat!("DELETE FROM ", queue_of!()))?
                     .execute([source.get()])?;
             }
         }
@@ -878,6 +945,83 @@ impl Store {
             self.scrub_wal();
         }
         Ok(step)
+    }
+
+    /// What purging `source` would remove now ([`PurgePreview`]),
+    /// changing nothing. It reads the rows the purge reads, in the same
+    /// pages, and judges each with the same rule (`fate`), so the two
+    /// agree. Each page is its own short read, never one snapshot held
+    /// across the scan, so a purge step's WAL checkpoint never waits on a
+    /// preview of millions of rows. The counts are therefore exact only
+    /// while nothing writes, which is already the case they promise:
+    /// unlike [`Store::purge_source`] the preview doesn't need the source
+    /// off, and an enabled source can still find more before a purge turns
+    /// it off. It reads every unverified item and torrent once, as a purge
+    /// does: run it on a reader ([`Store::open_reader`]) to keep the
+    /// writer free. `Error::NotFound` for an unknown source.
+    pub fn purge_preview(&self, source: SourceId) -> Result<PurgePreview> {
+        let bit = source.bit();
+        let conn = &self.conn;
+        let known: Option<i64> = conn
+            .query_row("SELECT 1 FROM sources WHERE id = ?1", [source.get()], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        if known.is_none() {
+            return Err(Error::NotFound("source"));
+        }
+        let mut preview = PurgePreview::default();
+        let tally = |sources: i64, deleted: &mut u64, kept: &mut u64| match fate(sources, bit) {
+            Fate::Untouched => {}
+            Fate::Delete => *deleted += 1,
+            Fate::Keep => *kept += 1,
+        };
+        let page = MAX_PURGE_STEP as i64;
+        let mut unverified = conn.prepare_cached(unverified_page!())?;
+        let mut after = 0;
+        loop {
+            let rows: Vec<(i64, i64)> = unverified
+                .query_map(params![after, page], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<_>>()?;
+            for &(_, sources) in &rows {
+                tally(
+                    sources,
+                    &mut preview.unverified_deleted,
+                    &mut preview.unverified_kept,
+                );
+            }
+            match rows.last() {
+                Some(&(id, _)) if rows.len() as i64 == page => after = id,
+                _ => break,
+            }
+        }
+        drop(unverified);
+        let mut torrents = conn.prepare_cached(torrents_page!())?;
+        let mut after = 0;
+        loop {
+            let rows: Vec<(i64, i64)> = torrents
+                .query_map(params![after, page], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<_>>()?;
+            for &(_, sources) in &rows {
+                tally(
+                    sources,
+                    &mut preview.torrents_deleted,
+                    &mut preview.torrents_kept,
+                );
+            }
+            match rows.last() {
+                Some(&(id, _)) if rows.len() as i64 == page => after = id,
+                _ => break,
+            }
+        }
+        drop(torrents);
+        let count = |sql: &str| -> Result<u64> {
+            Ok(conn.query_row(sql, [source.get()], |r| r.get::<_, i64>(0))? as u64)
+        };
+        preview.claims_deleted = count(concat!("SELECT count(*) FROM ", claims_of!()))?;
+        preview.state_deleted = count(concat!("SELECT count(*) FROM ", state_of!()))?;
+        preview.queue_deleted = count(concat!("SELECT count(*) FROM ", queue_of!()))?;
+        Ok(preview)
     }
 
     /// A plugin's state value.

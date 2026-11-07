@@ -1796,23 +1796,27 @@ export interface paths {
         head?: never;
         /**
          * Enables or disables a source, or sets its priority. A priority
-         *     applies at once; enabling or disabling at the next start. Enabling
-         *     checks the source's class (§18.7, its `needs`): an `external`,
-         *     `restricted` or `overlay` source needs `"consent"` naming its class and
-         *     `"consent_version"` (`409 consent_required` otherwise) until that
-         *     version is acknowledged; enabling a `restricted` or `overlay` source
-         *     also needs the admin `"password"`, every time (`428 confirm_required`); an
-         *     `account` source needs its credentials stored
-         *     (`409 credentials_required`). Agents, egress and the schedule apply
-         *     at the next start; changing egress needs the admin `"password"`
-         *     (`428 confirm_required`), and the `interface` and `bind_address`
-         *     routes are refused (`409 route_unavailable`). `config` sets the
-         *     source's settings, for a source whose `editable` lists it: a JSON
-         *     object of at most 16 KiB that the source's own rules check (`400
+         *     applies at once; enabling or disabling at the next start.
+         * @description This build turns on only a source whose class is `none`. Enabling an
+         *     `external`, `account`, `restricted` or `overlay` source is refused with
+         *     `400 invalid_setting` on `enabled`, before its consent, acknowledgement
+         *     or credentials are looked at, whatever the request sends: this version
+         *     can't show the class's consent dialog yet. A `"password"` sent with the
+         *     enable is still checked first (`401` when it's wrong). `needs` and
+         *     `credential_spec` still say what the source will need once a later
+         *     version can turn it on, and credentials can be stored and removed
+         *     meanwhile (`PATCH /sources/{id}/credentials`). Disabling works for every
+         *     class.
+         *
+         *     Agents, egress and the schedule apply at the next start; changing
+         *     egress needs the admin `"password"` (`428 confirm_required`), and the
+         *     `interface` and `bind_address` routes are refused (`409
+         *     route_unavailable`). `config` sets the source's settings, for a source
+         *     whose `editable` lists it: a JSON object of at most 16 KiB, shaped by
+         *     its `config_schema`, that the source's own rules check (`400
          *     invalid_config` names the rule, never a value). It applies at the next
          *     start; a torrent cache whose new list holds an address its
-         *     acknowledgement doesn't is switched off there until you acknowledge the
-         *     new list. A purge isn't a field:
+         *     acknowledgement doesn't is switched off there. A purge isn't a field:
          *     it's `POST /sources/{id}/purge` (`409 not_editable` here).
          */
         patch: operations["patchSource"];
@@ -1862,6 +1866,31 @@ export interface paths {
          *     `409 purge_running` while one runs for this source.
          */
         post: operations["purgeSource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sources/{id}/purge/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What purging a source would remove if it ran now, counted with the
+         *     purge's own rules, for the dialog to show before you commit
+         *     (§10.10.7). It changes nothing: the source keeps its state, data,
+         *     credentials and settings, and no job starts. It needs a session, like
+         *     every Sources route, and no password: the password is asked once, by
+         *     `POST /sources/{id}/purge`. The counts are exact while the source is
+         *     off (`settled`); see `PurgePreview`.
+         */
+        get: operations["previewPurge"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2354,6 +2383,148 @@ export interface paths {
         post: operations["createWebhookToken"];
         /** Removes the integration's token: its calls are refused from now on. */
         delete: operations["deleteWebhookToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every joined worker. Empty, with `allowed: false`, on a single
+         *     machine.
+         */
+        get: operations["listWorkers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workers/tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Creates a one-time join token for a new worker, valid 15 minutes and
+         *     for this name only, with ready-to-copy commands. **It's shown this
+         *     once:** only its hash is kept, so it can't be read back.
+         */
+        post: operations["createWorkerToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workers/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Changes a worker's budget, intensity, pool cap or DHT pin. Saved, so
+         *     it's kept across reconnects and coordinator restarts, and planned at
+         *     once; a worker applies it once the worker runtime sends assignments
+         *     (WK-10), not before.
+         */
+        patch: operations["updateWorker"];
+        trace?: never;
+    };
+    "/workers/{id}/drain": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Asks a worker to finish the leases it holds, then stop (§19.6). It
+         *     stays draining across reconnects until resumed.
+         */
+        post: operations["drainWorker"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workers/{id}/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pauses a worker: it stays connected and keeps the leases it holds, but
+         *     is given no new work until resumed.
+         */
+        post: operations["pauseWorker"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workers/{id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ends a drain or a pause: the worker takes work again. */
+        post: operations["resumeWorker"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workers/{id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * **Danger zone** (§10.10.7): revokes a worker. Its certificate is
+         *     refused from now on, its leases go back to other workers, and its
+         *     connection closes within one heartbeat. It can't reconnect: to use
+         *     the machine again, join it with a new token.
+         */
+        post: operations["revokeWorker"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -3783,6 +3954,20 @@ export interface components {
              */
             scopes?: components["schemas"]["KeyScope"][];
         };
+        /** @description `POST /workers/tokens`. `Debug` redacts the password. */
+        CreateWorkerToken: {
+            /**
+             * @description The new worker's name: 1–63 lowercase letters, digits and hyphens,
+             *     not starting or ending with a hyphen. It goes in its certificate.
+             */
+            name: string;
+            /**
+             * @description The admin password: a join token admits a machine to the cluster,
+             *     so it's confirmed like an API key (428 `confirm_required` without
+             *     it, 401 `bad_password` when wrong).
+             */
+            password?: string;
+        };
         /**
          * @description `POST /keys` and `POST /keys/{id}/regenerate`: the key and, this once,
          *     its secret. `Debug` redacts the secret.
@@ -3794,6 +3979,26 @@ export interface components {
              *     keeps its hash, not the secret.
              */
             secret: string;
+        };
+        /**
+         * @description One credential a source reads, as its plugin declares it: what the
+         *     Account dialog asks for. It describes the field and never holds a
+         *     value. Store it with `PATCH /sources/{id}/credentials` under `name`;
+         *     `credentials` then lists the name.
+         */
+        CredentialField: {
+            /**
+             * @description How a credential field is entered: `secret` (a password, API key or
+             *     token) is masked, `username` isn't. Neither is returned once stored.
+             * @enum {string}
+             */
+            kind: "secret" | "username";
+            /** @description What to call it, in English, such as "API key". */
+            label: string;
+            /** @description The name it's stored under, such as `api_key`. */
+            name: string;
+            /** @description Enabling the source needs it stored. */
+            required: boolean;
         };
         /**
          * @description `PATCH /sources/{id}/credentials`: credential names to values (a
@@ -3901,6 +4106,12 @@ export interface components {
             adult: boolean;
             hash: string;
         };
+        /**
+         * @description Whether a worker may run the DHT (§19.5 placement pins). `off` keeps
+         *     fetch and prepare.
+         * @enum {string}
+         */
+        DhtPin: "auto" | "off";
         /** @description The DHT node's state. */
         DhtStatus: {
             /** @description It has a routing table to crawl from. */
@@ -5377,6 +5588,37 @@ export interface components {
             status?: number;
         };
         /**
+         * @description Ready-to-copy ways to join with the token (§19.6). Most hold the
+         *     token, so they're shown once with it. `Debug` redacts every one.
+         */
+        JoinCommands: {
+            /**
+             * @description `lodestar worker`, given the token on standard input. The token is
+             *     in the line, so it lands in the shell's history; it's single use
+             *     and expires in 15 minutes. `cli_read` keeps it out.
+             */
+            cli: string;
+            /**
+             * @description The same, reading the token from a hidden prompt (`read -rs`):
+             *     paste the token when asked. Nothing secret is in the line.
+             */
+            cli_read: string;
+            /** @description A compose service. */
+            compose: string;
+            /**
+             * @description A `docker run` line. Remove `LODESTAR_TOKEN` once the worker has
+             *     joined (it's spent; the worker warns about it at each start).
+             */
+            docker_run: string;
+            /** @description What to enter in the Unraid "Lodestar Worker" template. */
+            unraid: string;
+            /**
+             * @description What to enter in the Windows installer's "Join an existing
+             *     Lodestar".
+             */
+            windows: string;
+        };
+        /**
          * @description A key or token as listed: never its secret or hash.
          * @example {
          *       "created_at": 1700000000,
@@ -6784,6 +7026,75 @@ export interface components {
              */
             unverified_deleted: number;
         };
+        /**
+         * @description `GET /sources/{id}/purge/preview`: what purging the source would
+         *     remove if it ran now, counted with the purge's own rules. Nothing is
+         *     changed. The dialog shows it before you commit (§10.10.7).
+         *
+         *     While the source is off (`settled`), a purge started next removes
+         *     exactly this, as long as nothing else changes the store meanwhile. An
+         *     enabled source keeps finding until the purge turns it off, so the purge
+         *     may remove more. Keys still in memory waiting to be fetched aren't
+         *     counted: the purge reports them as `keys_dropped`.
+         * @example {
+         *       "claims_deleted": 96402,
+         *       "kept": 88120,
+         *       "plugin": "nyaa",
+         *       "queue_deleted": 12,
+         *       "settled": true,
+         *       "source_id": 3,
+         *       "state_deleted": 4,
+         *       "torrents_deleted": 1204331,
+         *       "unverified_deleted": 5210,
+         *       "unverified_kept": 301
+         *     }
+         */
+        PurgePreview: {
+            /**
+             * Format: int64
+             * @description Claims of stored torrents it made, deleted.
+             */
+            claims_deleted: number;
+            /**
+             * Format: int64
+             * @description Torrents others found too, kept without this source (`kept` in the
+             *     purge job).
+             */
+            kept: number;
+            plugin: string;
+            /**
+             * Format: int64
+             * @description Keys it queued to be fetched, saved across restarts, dropped.
+             */
+            queue_deleted: number;
+            /**
+             * @description The source is off, so nothing it finds can add to the counts
+             *     before the purge runs.
+             */
+            settled: boolean;
+            /** Format: int32 */
+            source_id: number;
+            /**
+             * Format: int64
+             * @description Its plugin's saved state entries, deleted.
+             */
+            state_deleted: number;
+            /**
+             * Format: int64
+             * @description Torrents only this source found, deleted.
+             */
+            torrents_deleted: number;
+            /**
+             * Format: int64
+             * @description Items without metadata only this source found, deleted.
+             */
+            unverified_deleted: number;
+            /**
+             * Format: int64
+             * @description Items without metadata others found too, kept without this source.
+             */
+            unverified_kept: number;
+        };
         /** @description `POST /sources/{id}/purge`. */
         PurgeRequest: {
             /** @description The admin password, checked fresh: a purge can't be undone. */
@@ -8161,15 +8472,31 @@ export interface components {
                 max: number;
             };
             /**
+             * @description The JSON Schema (draft 2020-12) of its settings, as its plugin
+             *     declares it: the settings form is generated from it, and `config`
+             *     in `PATCH /sources/{id}` is checked against the plugin's own rules
+             *     (when `editable` lists `config`). Read-only, and the same for every
+             *     install: it holds no setting's value. Secrets are never in it: they
+             *     are `credential_spec`'s.
+             */
+            config_schema: {
+                [key: string]: unknown;
+            };
+            /**
              * @description What enabling a source requires (§18.7).
              * @enum {string}
              */
             consent: "none" | "external" | "account" | "restricted" | "overlay";
             /**
              * @description Its class is enabled by acknowledging what's shown (`external`,
-             *     `restricted`, `overlay`): enabling it sends `"consent"` naming the
-             *     class and `"consent_version"`, unless that version is already
-             *     acknowledged.
+             *     `restricted`, `overlay`).
+             *
+             *     This build refuses to enable any source whose class isn't `none`
+             *     (`400 invalid_setting` on `enabled`), this one included, whatever
+             *     the request sends: it can't show its consent text yet. Once a
+             *     later version shows the class's consent text, enabling a source
+             *     with this set sends `"consent"` naming the class and
+             *     `"consent_version"`, unless that version is already acknowledged.
              */
             consent_required: boolean;
             /**
@@ -8179,6 +8506,12 @@ export interface components {
              *     asks again. Empty for `none` and `account`.
              */
             consent_version: string;
+            /**
+             * @description The credentials its plugin reads, in the order to ask for them;
+             *     empty for a source that reads none. It describes the fields, never
+             *     a value.
+             */
+            credential_spec: components["schemas"]["CredentialField"][];
             /**
              * @description The names of its stored credentials; their values are never
              *     returned.
@@ -8397,9 +8730,16 @@ export interface components {
          *             "enforced": false,
          *             "max": 1
          *           },
+         *           "config_schema": {
+         *             "$schema": "https://json-schema.org/draft/2020-12/schema",
+         *             "additionalProperties": false,
+         *             "properties": {},
+         *             "type": "object"
+         *           },
          *           "consent": "none",
          *           "consent_required": false,
          *           "consent_version": "",
+         *           "credential_spec": [],
          *           "credentials": [],
          *           "editable": [
          *             "agents",
@@ -8496,8 +8836,14 @@ export interface components {
              */
             config?: Record<string, never>;
             /**
-             * @description The consent class you acknowledge; needed to enable a source whose
-             *     `needs` is `endpoints_ack` or `consent`, and must be its class.
+             * @description The consent class you acknowledge.
+             *
+             *     This build refuses to enable any source whose class isn't `none`
+             *     (`400 invalid_setting` on `enabled`), with or without this field: it
+             *     can't show its consent text yet, so nothing is acknowledged or
+             *     stored. Once a later version shows the class's consent text, this
+             *     is needed to enable a source whose `needs` is `endpoints_ack` or
+             *     `consent`, and must be its class.
              */
             consent?: "none" | "external" | "account" | "restricted" | "overlay";
             /** @description The `consent_version` you were shown, with `consent`. */
@@ -9704,6 +10050,182 @@ export interface components {
         WebhookToken: {
             integration: components["schemas"]["Integration"];
             /** @description Paste it into the app's webhook connection as the Password. */
+            token: string;
+        };
+        /**
+         * @description One worker. Live values are null while it has not connected since the
+         *     coordinator started.
+         */
+        Worker: {
+            budget: components["schemas"]["WorkerBudget"];
+            /**
+             * Format: int64
+             * @description Keys claimed, as the worker last reported (its counter).
+             */
+            claimed: number | null;
+            /**
+             * Format: int64
+             * @description The worker's clock minus the coordinator's, in ms.
+             */
+            clock_offset_ms: number | null;
+            /** @description More than 60 s off (§19.3): fix NTP on the worker. */
+            clock_skewed: boolean;
+            /**
+             * Format: int32
+             * @description CPU use in ‰, as last reported.
+             */
+            cpu_permille: number | null;
+            dht: components["schemas"]["DhtPin"];
+            /**
+             * @description The public addresses the worker reported for itself (its egress),
+             *     at most 8. Never a peer's.
+             */
+            external_ips: string[];
+            /**
+             * Format: int64
+             * @description Metadata fetched, as the worker last reported.
+             */
+            fetched: number | null;
+            /**
+             * Format: int32
+             * @description The worker's id in this cluster.
+             */
+            id: number;
+            intensity: components["schemas"]["WorkerIntensity"];
+            /**
+             * Format: int64
+             * @description Unix seconds of its last message; null if not seen since start.
+             */
+            last_seen_at: number | null;
+            /**
+             * Format: int64
+             * @description Leases it holds now.
+             */
+            leases: number;
+            /**
+             * @description The name it joined with (its certificate's); null when the
+             *     coordinator has no certificate on record for it.
+             */
+            name: string | null;
+            /**
+             * @description Paused by the admin: it gets no new work until resumed, and stays
+             *     paused across reconnects and restarts. Set while offline too, when
+             *     `status` can only say `offline`.
+             */
+            paused: boolean;
+            /**
+             * Format: int32
+             * @description Fetch-pool cap in keys, 1–1,000,000.
+             */
+            pool_cap: number;
+            /**
+             * Format: int64
+             * @description Torrents processed, as the worker last reported.
+             */
+            processed: number | null;
+            /**
+             * Format: int32
+             * @description Resident memory in MB, as last reported.
+             */
+            rss_mb: number | null;
+            /**
+             * Format: int64
+             * @description Bytes waiting in its on-disk spool (§19.6).
+             */
+            spool_bytes: number | null;
+            status: components["schemas"]["WorkerStatus"];
+        };
+        /** @description A worker's resource budget. 0 means no cap beyond the defaults. */
+        WorkerBudget: {
+            /**
+             * Format: int32
+             * @description CPU share in ‰, 1–1000.
+             */
+            cpu_permille: number;
+            /**
+             * Format: int32
+             * @description Download cap in kB/s.
+             */
+            down_kbps: number;
+            /**
+             * Format: int32
+             * @description Memory cap in MB.
+             */
+            ram_mb: number;
+            /**
+             * Format: int32
+             * @description Upload cap in kB/s.
+             */
+            up_kbps: number;
+        };
+        /**
+         * @description A worker's crawl intensity (§19.5: each worker has its own).
+         * @enum {string}
+         */
+        WorkerIntensity: "low" | "balanced" | "aggressive";
+        /** @description `GET /workers`. */
+        WorkerList: {
+            /** @description "Allow workers" is on and the cluster port is serving. */
+            allowed: boolean;
+            /** @description Every joined worker, by id. Empty on a single machine. */
+            workers: components["schemas"]["Worker"][];
+        };
+        /**
+         * @description `PATCH /workers/{id}`: any of these; absent fields are kept. `budget`
+         *     is sent whole, all four fields.
+         */
+        WorkerPatch: {
+            budget?: components["schemas"]["WorkerBudget"];
+            dht?: components["schemas"]["DhtPin"];
+            intensity?: components["schemas"]["WorkerIntensity"];
+            /**
+             * Format: int32
+             * @description 1–1,000,000 keys.
+             */
+            pool_cap?: number;
+        };
+        /** @description `POST /workers/{id}/revoke`: what revoking did. */
+        WorkerRevoked: {
+            /**
+             * Format: int64
+             * @description Certificates invalidated now.
+             */
+            certificates: number;
+            /**
+             * Format: int32
+             * @description Seconds until its connection is closed, at most: one heartbeat.
+             */
+            gone_within_secs: number;
+            /** Format: int32 */
+            id: number;
+            /**
+             * Format: int64
+             * @description Leases taken back and offered to other workers.
+             */
+            leases_returned: number;
+            name: string | null;
+        };
+        /**
+         * @description A worker's state as Settings → Workers shows it (icon + text).
+         *     `quarantined` arrives with WK-13.
+         * @enum {string}
+         */
+        WorkerStatus: "online" | "draining" | "paused" | "offline";
+        /**
+         * @description The one response that carries a join token. It can't be read back:
+         *     only its hash is kept. `Debug` redacts the token and the commands.
+         */
+        WorkerTokenCreated: {
+            /** @description The cluster address workers dial, `https://host:port`. */
+            address: string;
+            commands: components["schemas"]["JoinCommands"];
+            /**
+             * Format: int64
+             * @description Unix seconds; 15 minutes from now.
+             */
+            expires_at: number;
+            name: string;
+            /** @description The `lsj1…` token: single use, for this name only. */
             token: string;
         };
     };
@@ -13389,6 +13911,29 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    previewPurge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The source's id, as `GET /sources` lists it. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PurgePreview"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getStats: {
         parameters: {
             query?: never;
@@ -14385,6 +14930,421 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listWorkers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createWorkerToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateWorkerToken"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerTokenCreated"];
+                };
+            };
+            /** @description `bad_name`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `bad_password`. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `workers_off`, `name_in_use` or `too_many_tokens`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unsupported_media_type`: not JSON. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `confirm_required`: no password. */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `rate_limited`: too many password attempts. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateWorker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The worker's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerPatch"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Worker"];
+                };
+            };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unknown_worker`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `too_many_workers` or `workers_off`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unsupported_media_type`: not JSON. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_value` (with the field) or `bad_body`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    drainWorker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The worker's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Worker"];
+                };
+            };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unknown_worker`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `worker_offline` or `workers_off`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unsupported_media_type`: not JSON. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    pauseWorker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The worker's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Worker"];
+                };
+            };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unknown_worker`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `workers_off`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unsupported_media_type`: not JSON. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    resumeWorker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The worker's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Worker"];
+                };
+            };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unknown_worker`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `workers_off`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unsupported_media_type`: not JSON. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    revokeWorker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The worker's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerRevoked"];
+                };
+            };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unknown_worker`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `workers_off`: turn workers on to revoke one. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unsupported_media_type`: not JSON. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];

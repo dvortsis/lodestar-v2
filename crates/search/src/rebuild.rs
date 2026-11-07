@@ -1025,7 +1025,6 @@ fn rebuild_and_swap(
     let old = std::mem::replace(&mut *lock(&shared.current), Arc::new(new));
     // Nothing cached reads the new index.
     shared.cache.clear();
-    *lock(&shared.progress) = None;
     if let Some(((docs_added, adult_added), max_torrent_id)) = fresh.filter(|f| f.0.0 > 0) {
         shared.hook.publish(Committed {
             docs_added,
@@ -1034,6 +1033,9 @@ fn rebuild_and_swap(
             at: unix_now(),
         });
     }
+    // Only now is the swap finished: `rebuilding()` turns false after the
+    // swap's commit is reported, so a caller waiting on it sees that commit.
+    *lock(&shared.progress) = None;
     // The old index is still there, and the new one's catch-up wrote more.
     shared.note_disk(&root);
     lodestar_log::log_event!(

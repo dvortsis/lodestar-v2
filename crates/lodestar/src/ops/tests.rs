@@ -1298,17 +1298,23 @@ async fn no_class_can_be_enabled_past_its_condition() {
         "no acknowledgement recorded"
     );
 
-    // Account: refused until credentials are stored, whatever is sent.
+    // Account: refused like External, before credentials are looked at,
+    // until its credentials dialog ships approved text (§2.49,
+    // X-consent-gate-polish). It still says it needs them.
     for body in [
         json!({ "enabled": true }),
         json!({ "enabled": true, "consent": "account", "consent_version": "" }),
     ] {
-        let (status, e) = f.patch(&c, "account", body).await;
-        assert_eq!(
-            (status, e["error"]["code"].clone()),
-            (409, json!("credentials_required"))
+        assert_gated(
+            f.patch(&c, "account", body.clone()).await,
+            &body.to_string(),
         );
     }
+    let s = f.source(&c, "account").await;
+    assert_eq!(
+        (s["enabled"].clone(), s["needs"].clone()),
+        (json!(false), json!("credentials"))
+    );
     let id = f.source(&c, "account").await["id"].clone();
     let creds = |body: Value| {
         req(
@@ -1332,9 +1338,15 @@ async fn no_class_can_be_enabled_past_its_condition() {
         (status, e["error"]["code"].clone()),
         (400, json!("invalid_credentials"))
     );
+    // Stored credentials don't open it either.
+    assert_gated(
+        f.patch(&c, "account", json!({ "enabled": true })).await,
+        "account with credentials",
+    );
+    let s = f.source(&c, "account").await;
     assert_eq!(
-        f.patch(&c, "account", json!({ "enabled": true })).await.0,
-        200
+        (s["enabled"].clone(), s["needs"].clone()),
+        (json!(false), Value::Null)
     );
 
     // Restricted and Overlay: refused like External, with or without the
@@ -1391,7 +1403,20 @@ async fn no_class_can_be_enabled_past_its_condition() {
     assert_no_plaintext(f.dir.path());
 
     // Disabling keeps the acknowledgement; removing the credentials of an
-    // enabled Account source switches it off.
+    // enabled Account source switches it off. One a build before the gate
+    // turned on is seeded, as the API no longer can.
+    {
+        let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        let id = store
+            .sources()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.plugin == "account")
+            .unwrap()
+            .id;
+        store.enable_source(id, None).unwrap();
+    }
+    assert_eq!(f.source(&c, "account").await["enabled"], json!(true));
     let (status, s) = f
         .send(creds(json!({ "credentials": { "api_key": null } })))
         .await;
@@ -1680,5 +1705,157 @@ async fn a_config_written_through_the_api_applies_at_the_next_start_and_the_cach
         .await,
         "the old list's version",
     );
+    f.pipeline.shutdown().await.unwrap();
+}
+
+/// A one-file info dict named `name`, bencoded by hand.
+fn info_dict(name: &str) -> Vec<u8> {
+    let mut b = format!(
+        "d6:lengthi5e4:name{}:{name}12:piece lengthi16384e6:pieces20:",
+        name.len()
+    )
+    .into_bytes();
+    b.extend([0u8; 20]);
+    b.push(b'e');
+    b
+}
+
+/// X-sources-api-spec, end to end over the real `Ops`: `GET /sources`
+/// lists each source's credential spec and settings schema, and the purge
+/// preview counts what the purge job then removes and changes nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_purge_preview_counts_what_the_purge_removes() {
+    let plugins: Vec<Arc<dyn SourcePlugin>> = gated().into_iter().map(|(p, _)| p).collect();
+    let f = gated_fixture(tempfile::tempdir().unwrap(), plugins).await;
+    let cookie = f.session().await;
+    let c = cookie.as_str();
+    let row = f.source(c, "none").await;
+    assert_eq!(row["credential_spec"], json!([]));
+    assert_eq!(
+        row["config_schema"],
+        serde_json::from_str::<Value>(lodestar_sources::EMPTY_SCHEMA).unwrap()
+    );
+    let id = row["id"].as_u64().unwrap() as u8;
+    let other = f.source(c, "external").await["id"].as_u64().unwrap() as u8;
+
+    // What `none` found while it ran: two unverified items (one also
+    // `external`'s), a torrent of its own, one shared, a claim and its
+    // state. Written on a connection of the test's own.
+    let db = f.dir.path().join("t.db");
+    let mut s = Store::open(&db, StoreConfig::default()).unwrap();
+    let (src, ext) = (
+        lodestar_store::SourceId::new(id).unwrap(),
+        lodestar_store::SourceId::new(other).unwrap(),
+    );
+    s.enable_source(src, None).unwrap();
+    s.enable_source(ext, None).unwrap();
+    let claims = lodestar_store::claims::Claims {
+        name: Some("found".into()),
+        ..Default::default()
+    };
+    let item = |k: &'static [u8; 20], source| lodestar_store::unverified::NewUnverified {
+        network: lodestar_store::unverified::Network::Bt,
+        key: k,
+        source,
+        private_source: false,
+        claims: Some(&claims),
+        at: 1_700_000_000,
+    };
+    s.put_unverified(&[item(&[0x61; 20], src), item(&[0x62; 20], src)])
+        .unwrap();
+    s.put_unverified(&[item(&[0x62; 20], ext)]).unwrap();
+    let mut put = |name: &str, source| {
+        let p = s
+            .preparer()
+            .prepare(
+                &lodestar_metainfo::Info::parse(&info_dict(name)).unwrap(),
+                None,
+            )
+            .unwrap();
+        let batch = lodestar_store::WriteBatch {
+            prepared: &[lodestar_store::PreparedTorrent {
+                torrent: &p,
+                discovered_at: 1_700_000_000,
+                metadata_at: 1_700_000_000,
+                extra_flags: 0,
+                source,
+                verified: true,
+            }],
+            ..Default::default()
+        };
+        s.write(&batch).unwrap().prepared[0].id()
+    };
+    put("mine", src);
+    let shared = put("shared", ext);
+    put("shared", src);
+    s.put_claims(shared, src, &claims, false).unwrap();
+    s.set_plugin_state(src, "cursor", Some(b"1")).unwrap();
+    s.set_source_state(src, lodestar_store::SourceState::Disabled)
+        .unwrap();
+    s.set_source_state(ext, lodestar_store::SourceState::Disabled)
+        .unwrap();
+    drop(s);
+
+    let uri = format!("/api/v1/sources/{id}/purge/preview");
+    let (status, preview) = f.send(req("GET", &uri, c, None)).await;
+    assert_eq!(status, 200, "{preview}");
+    assert_eq!(
+        preview,
+        json!({
+            "claims_deleted": 1, "kept": 1, "plugin": "none", "queue_deleted": 0,
+            "settled": true, "source_id": id, "state_deleted": 1, "torrents_deleted": 1,
+            "unverified_deleted": 1, "unverified_kept": 1
+        })
+    );
+    // It changed nothing: asked again, the same; the source still off.
+    assert_eq!(f.send(req("GET", &uri, c, None)).await.1, preview);
+    assert_eq!(f.source(c, "none").await["state"], json!("disabled"));
+    // No session, no preview.
+    let mut anon = Request::get(&uri).body(Body::empty()).unwrap();
+    anon.extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([10, 9, 0, 3], 1))));
+    assert_eq!(f.app.clone().oneshot(anon).await.unwrap().status(), 401);
+
+    // The purge removes exactly that.
+    let (status, job) = f
+        .send(req(
+            "POST",
+            &format!("/api/v1/sources/{id}/purge"),
+            c,
+            Some(r#"{"password":"correct horse battery"}"#),
+        ))
+        .await;
+    assert_eq!(status, 202, "{job}");
+    let job_uri = format!("/api/v1/jobs/{}", job["id"]);
+    // Polled until it leaves `running`, for at most 15 s.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let job = loop {
+        let (_, job) = f.send(req("GET", &job_uri, c, None)).await;
+        if job["state"] != json!("running") {
+            break job;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "{job}");
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
+    assert_eq!(job["state"], json!("done"), "{job}");
+    assert_eq!(
+        job["purge"]["torrents_deleted"],
+        preview["torrents_deleted"]
+    );
+    assert_eq!(job["purge"]["kept"], preview["kept"]);
+    assert_eq!(
+        job["purge"]["unverified_deleted"],
+        preview["unverified_deleted"]
+    );
+    // Nothing is left to remove.
+    let (_, after) = f.send(req("GET", &uri, c, None)).await;
+    for k in [
+        "claims_deleted",
+        "state_deleted",
+        "torrents_deleted",
+        "unverified_deleted",
+    ] {
+        assert_eq!(after[k], json!(0), "{k}: {after}");
+    }
     f.pipeline.shutdown().await.unwrap();
 }

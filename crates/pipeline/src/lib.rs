@@ -28,6 +28,7 @@ pub mod gate;
 mod have;
 pub mod health;
 pub mod log_events;
+pub mod remote;
 mod rollups;
 mod setup_hold;
 pub mod source_adult;
@@ -72,6 +73,7 @@ pub use control::Control;
 pub use coordinator::LeaseStats;
 pub use dht::{DhtSource, strategy};
 pub use have::Have;
+pub use have::{Bloom, HaveObserver, new_key};
 pub use rollups::{Rollups, metric};
 pub use writer::{LIVE_FEEDS, WriterStats};
 
@@ -110,6 +112,9 @@ pub(crate) fn in_funnel(cohort: i64) -> bool {
 
 #[derive(Debug, Clone)]
 pub struct PipelineConfig {
+    /// Remote workers may join this run ("Allow workers"): the fetch queue
+    /// it starts from is kept for a day, for late results (plan Q7).
+    pub remote_workers: bool,
     pub pool: PoolConfig,
     pub fetch: FetchOptions,
     /// Per-plugin priority overrides, by manifest id (`config.toml`).
@@ -190,6 +195,7 @@ pub struct HealthSetup {
 impl Default for PipelineConfig {
     fn default() -> Self {
         PipelineConfig {
+            remote_workers: false,
             pool: PoolConfig::default(),
             fetch: FetchOptions::default(),
             priorities: HashMap::new(),
@@ -398,6 +404,7 @@ pub struct Monitor {
     writer: Arc<WriterStats>,
     leases: Arc<LeaseStats>,
     authority: Arc<LeaseAuthority>,
+    remote: Arc<remote::RemoteIntake>,
     have: Arc<Have>,
     sources: Arc<Vec<SourceEntry>>,
     stored_at_start: u64,
@@ -483,6 +490,12 @@ impl Monitor {
     /// CA or binds a port.
     pub fn lease_authority(&self) -> &Arc<LeaseAuthority> {
         &self.authority
+    }
+
+    /// The intake for remote workers' results, counters and hints (WK-9),
+    /// for the cluster server once workers are allowed.
+    pub fn remote(&self) -> &Arc<remote::RemoteIntake> {
+        &self.remote
     }
 
     pub fn have(&self) -> &Have {
@@ -702,6 +715,7 @@ impl Pipeline {
             funnel.clone(),
         ));
         let leases = Arc::new(WorkerLeases::default());
+        let mut prior = Vec::new();
         for q in &queue {
             // A refetch has no discovery hour: it was found at this start.
             let discovered_at = if in_funnel(q.cohort) {
@@ -709,18 +723,17 @@ impl Pipeline {
             } else {
                 started_at.div_euclid(3600) * 3600
             };
-            let token = coordinator.restore(
-                WorkerId::LOCAL,
-                q.info_hash,
-                RestoredLease {
-                    cohort: q.cohort,
-                    source: q.source,
-                    sources: 1u64 << q.source.get(),
-                    strategy: q.strategy,
-                    discovered_at,
-                },
-                started_at,
-            );
+            let restored = RestoredLease {
+                cohort: q.cohort,
+                source: q.source,
+                sources: 1u64 << q.source.get(),
+                strategy: q.strategy,
+                discovered_at,
+            };
+            if config.remote_workers {
+                prior.push((q.info_hash, restored));
+            }
+            let token = coordinator.restore(WorkerId::LOCAL, q.info_hash, restored, started_at);
             leases.insert(q.info_hash, token);
         }
         let preparer = store.preparer();
@@ -929,7 +942,26 @@ impl Pipeline {
             adult,
             queues: Queues::local(),
         }
-        .spawn(pool_rx, pool_shutdown, results_tx);
+        .spawn(pool_rx, pool_shutdown, results_tx.clone());
+        // Remote workers' results reach the same writer (WK-9).
+        let remote = Arc::new(remote::RemoteIntake::new(remote::RemoteParts {
+            authority: coordinator.authority().clone(),
+            writer: results_tx,
+            pool: pool_tx.clone(),
+            leases: leases.clone(),
+            refusals: Some(remote::Refusals {
+                held: held.clone(),
+                filter: config.filter.clone(),
+            }),
+            rollups: rollups.clone(),
+            epoch: started_at as u32,
+            prior: remote::Prior::new(prior, started_at),
+            private_sources: remote::private_sources(
+                sources
+                    .iter()
+                    .map(|s| (s.id, s.plugin.manifest().finds_private)),
+            ),
+        }));
         let (pool, pool_task, prepare) = (stages.pool, stages.pool_task, stages.prepare);
 
         let intake_stats = Arc::new(IntakeStats::default());
@@ -941,6 +973,7 @@ impl Pipeline {
                 coordinator: coordinator.clone(),
                 leases: leases.clone(),
                 to_pool: pool_tx.clone(),
+                remote: remote.clone(),
                 touches: touch_tx,
                 claims: claims_tx,
                 claims_budget,
@@ -956,26 +989,34 @@ impl Pipeline {
         // The built-in worker's heartbeat, and the authority's expiry tick
         // (the built-in worker's own leases never expire).
         let heartbeat = {
-            let coordinator = coordinator.clone();
+            let (coordinator, remote) = (coordinator.clone(), remote.clone());
             tokio::spawn(async move {
                 loop {
                     let now = unix_now();
                     coordinator.heartbeat(WorkerId::LOCAL, now);
                     // Remote workers' expired leases wait in the authority
-                    // for the cluster server to grant them again.
+                    // for the cluster server to grant them again, or go to
+                    // the built-in worker while no server runs (WK-9b).
                     coordinator.expire(now);
+                    remote.hand_parked(now);
                     tokio::time::sleep(HEARTBEAT_EVERY).await;
                 }
             })
         };
 
         let saver = {
-            let pool = pool.clone();
+            let (pool, remote) = (pool.clone(), remote.clone());
             let every = config.save_queue_every;
             tokio::spawn(async move {
                 loop {
                     tokio::time::sleep(every).await;
-                    let queue = pool.snapshot().await;
+                    // Remote and waiting leases are saved with the pool's
+                    // own (§19.3), so they survive a restart. Taken first:
+                    // a key the heartbeat hands to the pool in between is
+                    // then in both, and saved once (the first row wins),
+                    // never in neither.
+                    let mut queue = remote.queue_rows();
+                    queue.extend(pool.snapshot().await);
                     if queue_tx.send(queue).await.is_err() {
                         break;
                     }
@@ -1102,6 +1143,7 @@ impl Pipeline {
                 writer: writer_stats,
                 leases: lease_stats,
                 authority,
+                remote,
                 have,
                 sources: Arc::new(sources),
                 stored_at_start,
@@ -1174,7 +1216,7 @@ impl Pipeline {
 
     /// Stops the stages in order (plugins, intake, pool, prepare, writer), saving
     /// the DHT state and the fetch queue, and returns the store.
-    pub async fn shutdown(self) -> Result<Store, Error> {
+    pub async fn shutdown(mut self) -> Result<Store, Error> {
         // The scheduler first: its last rounds reach the writer, which
         // commits them on its way out.
         if let Some((stop, task)) = self.health {
@@ -1182,6 +1224,14 @@ impl Pipeline {
             task.await.map_err(Error::Join)?;
         }
         let _ = self.stop_plugins.send(true);
+        // The cluster port stopped first; the writer's input closes once
+        // the prepare stage's does.
+        self.monitor.remote.close();
+        // And the heartbeat, which hands parked keys to the pool, stops
+        // here (the built-in worker's leases never expire): every key is
+        // then in the pool's queue or in the remote rows below, once.
+        self.heartbeat.abort();
+        let _ = (&mut self.heartbeat).await;
         for (s, mut task) in self.monitor.sources.iter().zip(self.tasks) {
             let id = s.plugin.manifest().id;
             // A plugin that ignores shutdown mustn't hold up the rest.
@@ -1215,11 +1265,14 @@ impl Pipeline {
         let _ = self.stop_intake.send(true);
         self.intake.await.map_err(Error::Join)?;
         let _ = self.stop_pool.send(true);
-        let queue = self.pool_task.await.map_err(Error::Join)?;
+        let mut queue = self.pool_task.await.map_err(Error::Join)?;
+        // Before the writer's last save. The heartbeat (which hands parked
+        // keys to the pool) stopped above, and the intake let go of the
+        // pool, so a key is either in the pool's queue or here, once.
+        queue.extend(self.monitor.remote.queue_rows());
         // Prepare finishes what the pool fetched, then closes the writer's
         // input.
         self.prepare.await.map_err(Error::Join)?;
-        self.heartbeat.abort();
         self.saver.abort();
         let _ = self.finish.send(queue);
         self.writer.await.map_err(Error::Join)
@@ -1302,20 +1355,6 @@ fn prepare(
     // it was acknowledged, whose credentials are gone, or that was
     // enabled some other way, is switched off before it can run.
     control::switch_off_unapproved(&mut store, manifests.iter().map(|r| &r.manifest).zip(&ids))?;
-    let rows = store.sources()?;
-    for (r, id) in manifests.iter().zip(&ids) {
-        let enabled = rows
-            .iter()
-            .any(|row| row.id == *id && row.state == SourceState::Enabled);
-        if enabled && lodestar_sources::consent::need_in(&store, &r.manifest)?.is_some() {
-            store.set_source_state(*id, SourceState::Disabled)?;
-            lodestar_log::log_event!(
-                log_events::SOURCE_STATE_CHANGED,
-                plugin = r.manifest.id,
-                state = log_events::state(SourceState::Disabled)
-            );
-        }
-    }
     let states: HashMap<SourceId, SourceState> = store
         .sources()?
         .into_iter()
@@ -1330,6 +1369,12 @@ fn prepare(
         }
     };
     let mut queue = store.load_fetch_queue()?;
+    // A key committed after its row was saved is stored: not restored, so
+    // it's neither fetched nor counted again. A remote result still in the
+    // writer's queue at shutdown leaves one (its lease was held when the
+    // rows were taken), and so can a crash between a commit and the next
+    // save (WK-9b).
+    queue.retain(|q| !matches!(store.find(&q.info_hash), Ok(Some(_))));
     // Refetches are queued afresh from the store below, so a saved one
     // whose import was removed while the server was stopped isn't fetched
     // into a new, crawled-looking row (and one saved before they had their
@@ -1410,6 +1455,8 @@ struct Intake {
     coordinator: Arc<Coordinator>,
     leases: Arc<WorkerLeases>,
     to_pool: mpsc::Sender<Discovery>,
+    /// Peer hints for keys a remote worker holds (WK-9).
+    remote: Arc<remote::RemoteIntake>,
     touches: mpsc::Sender<Discovery>,
     /// Discoveries with claims, to the writer (SRC-2), each holding its
     /// share of `claims_budget` so the channel is bounded in bytes.
@@ -1517,7 +1564,13 @@ async fn intake(mut io: Intake, mut shutdown: Shutdown) {
             // reply, so the pool merges them but never admits the key
             // again once it has left (relaying them to a remote holder is
             // the intake's, WK-9).
-            Claimed::Held { .. } => d.reply = true,
+            Claimed::Held { holder, token } => {
+                // A private find's peers stay with this worker (§18.7).
+                if holder != WorkerId::LOCAL && !d.found.private_source {
+                    io.remote.relay_local(d.found.key, token, &d.found.peers);
+                }
+                d.reply = true;
+            }
         }
         // Waiting here backs up into the emitters: live sources drop and
         // count, importers wait.

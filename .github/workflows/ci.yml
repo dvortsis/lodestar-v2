@@ -104,7 +104,7 @@ jobs:
       - name: testing seams stay out of the binary
         run: |
           if cargo tree -e features -p lodestar \
-            | grep -E 'lodestar-(dht|sources) feature "testing"|tokio feature "test-util"'; then
+            | grep -E 'lodestar-(dht|sources|companions) feature "testing"|tokio feature "test-util"'; then
             echo "::error::a test-only feature reaches the lodestar binary"; exit 1
           fi
       # First-party lines only through log_event! (architecture §12.1).
@@ -214,6 +214,14 @@ jobs:
           sudo "$cli" maintenance_runs_as_puid --exact --nocapture 2>&1 | tee cli-root.log
           if grep -q skipping cli-root.log || ! grep -q "1 passed" cli-root.log; then
             echo "::error::the root-only CLI test skipped"; exit 1
+          fi
+          # The worker's --data goes through the same drop (tests/worker_join.rs).
+          wj=$(cargo test -p lodestar --test worker_join --no-run --message-format=json \
+            | jq -r 'select(.profile.test == true and .target.name == "worker_join") | .executable')
+          sudo "$wj" data_goes_through_the_privilege_drops_checks data_alone_is_the_folder_everything_uses \
+            --test-threads=1 --nocapture 2>&1 | tee worker-root.log
+          if grep -q skipping worker-root.log || ! grep -q "2 passed" worker-root.log; then
+            echo "::error::the root-only worker tests skipped or failed"; exit 1
           fi
 
   # Index and store size against the owner's §3 budgets, on 50k seeded

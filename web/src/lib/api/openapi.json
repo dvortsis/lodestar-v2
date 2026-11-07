@@ -5857,7 +5857,8 @@
         "tags": [
           "crawler"
         ],
-        "summary": "Enables or disables a source, or sets its priority. A priority\napplies at once; enabling or disabling at the next start. Enabling\nchecks the source's class (§18.7, its `needs`): an `external`,\n`restricted` or `overlay` source needs `\"consent\"` naming its class and\n`\"consent_version\"` (`409 consent_required` otherwise) until that\nversion is acknowledged; enabling a `restricted` or `overlay` source\nalso needs the admin `\"password\"`, every time (`428 confirm_required`); an\n`account` source needs its credentials stored\n(`409 credentials_required`). Agents, egress and the schedule apply\nat the next start; changing egress needs the admin `\"password\"`\n(`428 confirm_required`), and the `interface` and `bind_address`\nroutes are refused (`409 route_unavailable`). `config` sets the\nsource's settings, for a source whose `editable` lists it: a JSON\nobject of at most 16 KiB that the source's own rules check (`400\ninvalid_config` names the rule, never a value). It applies at the next\nstart; a torrent cache whose new list holds an address its\nacknowledgement doesn't is switched off there until you acknowledge the\nnew list. A purge isn't a field:\nit's `POST /sources/{id}/purge` (`409 not_editable` here).",
+        "summary": "Enables or disables a source, or sets its priority. A priority\napplies at once; enabling or disabling at the next start.",
+        "description": "This build turns on only a source whose class is `none`. Enabling an\n`external`, `account`, `restricted` or `overlay` source is refused with\n`400 invalid_setting` on `enabled`, before its consent, acknowledgement\nor credentials are looked at, whatever the request sends: this version\ncan't show the class's consent dialog yet. A `\"password\"` sent with the\nenable is still checked first (`401` when it's wrong). `needs` and\n`credential_spec` still say what the source will need once a later\nversion can turn it on, and credentials can be stored and removed\nmeanwhile (`PATCH /sources/{id}/credentials`). Disabling works for every\nclass.\n\nAgents, egress and the schedule apply at the next start; changing\negress needs the admin `\"password\"` (`428 confirm_required`), and the\n`interface` and `bind_address` routes are refused (`409\nroute_unavailable`). `config` sets the source's settings, for a source\nwhose `editable` lists it: a JSON object of at most 16 KiB, shaped by\nits `config_schema`, that the source's own rules check (`400\ninvalid_config` names the rule, never a value). It applies at the next\nstart; a torrent cache whose new list holds an address its\nacknowledgement doesn't is switched off there. A purge isn't a field:\nit's `POST /sources/{id}/purge` (`409 not_editable` here).",
         "operationId": "patchSource",
         "parameters": [
           {
@@ -5994,6 +5995,48 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BackgroundJob"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/sources/{id}/purge/preview": {
+      "get": {
+        "tags": [
+          "crawler"
+        ],
+        "summary": "What purging a source would remove if it ran now, counted with the\npurge's own rules, for the dialog to show before you commit\n(§10.10.7). It changes nothing: the source keeps its state, data,\ncredentials and settings, and no job starts. It needs a session, like\nevery Sources route, and no password: the password is asked once, by\n`POST /sources/{id}/purge`. The counts are exact while the source is\noff (`settled`); see `PurgePreview`.",
+        "operationId": "previewPurge",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The source's id, as `GET /sources` lists it.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PurgePreview"
                 }
               }
             }
@@ -7482,6 +7525,574 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/workers": {
+      "get": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Every joined worker. Empty, with `allowed: false`, on a single\nmachine.",
+        "operationId": "listWorkers",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/workers/tokens": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Creates a one-time join token for a new worker, valid 15 minutes and\nfor this name only, with ready-to-copy commands. **It's shown this\nonce:** only its hash is kept, so it can't be read back.",
+        "operationId": "createWorkerToken",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWorkerToken"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerTokenCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`bad_name`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`bad_password`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`workers_off`, `name_in_use` or `too_many_tokens`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: not JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "`confirm_required`: no password.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: too many password attempts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/workers/{id}": {
+      "patch": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Changes a worker's budget, intensity, pool cap or DHT pin. Saved, so\nit's kept across reconnects and coordinator restarts, and planned at\nonce; a worker applies it once the worker runtime sends assignments\n(WK-10), not before.",
+        "operationId": "updateWorker",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The worker's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkerPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Worker"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_worker`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`too_many_workers` or `workers_off`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: not JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_value` (with the field) or `bad_body`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/workers/{id}/drain": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Asks a worker to finish the leases it holds, then stop (§19.6). It\nstays draining across reconnects until resumed.",
+        "operationId": "drainWorker",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The worker's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Worker"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_worker`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`worker_offline` or `workers_off`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: not JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/workers/{id}/pause": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Pauses a worker: it stays connected and keeps the leases it holds, but\nis given no new work until resumed.",
+        "operationId": "pauseWorker",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The worker's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Worker"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_worker`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`workers_off`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: not JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/workers/{id}/resume": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Ends a drain or a pause: the worker takes work again.",
+        "operationId": "resumeWorker",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The worker's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Worker"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_worker`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`workers_off`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: not JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/workers/{id}/revoke": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "**Danger zone** (§10.10.7): revokes a worker. Its certificate is\nrefused from now on, its leases go back to other workers, and its\nconnection closes within one heartbeat. It can't reconnect: to use\nthe machine again, join it with a new token.",
+        "operationId": "revokeWorker",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The worker's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerRevoked"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_worker`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`workers_off`: turn workers on to revoke one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: not JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -10951,6 +11562,24 @@
           }
         }
       },
+      "CreateWorkerToken": {
+        "type": "object",
+        "description": "`POST /workers/tokens`. `Debug` redacts the password.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The new worker's name: 1–63 lowercase letters, digits and hyphens,\nnot starting or ending with a hyphen. It goes in its certificate."
+          },
+          "password": {
+            "type": "string",
+            "description": "The admin password: a join token admits a machine to the cluster,\nso it's confirmed like an API key (428 `confirm_required` without\nit, 401 `bad_password` when wrong)."
+          }
+        },
+        "additionalProperties": false
+      },
       "CreatedKey": {
         "type": "object",
         "description": "`POST /keys` and `POST /keys/{id}/regenerate`: the key and, this once,\nits secret. `Debug` redacts the secret.",
@@ -10965,6 +11594,38 @@
           "secret": {
             "type": "string",
             "description": "The whole secret (`lsk_…` or `lsf_…`). Shown only now: Lodestar\nkeeps its hash, not the secret."
+          }
+        }
+      },
+      "CredentialField": {
+        "type": "object",
+        "description": "One credential a source reads, as its plugin declares it: what the\nAccount dialog asks for. It describes the field and never holds a\nvalue. Store it with `PATCH /sources/{id}/credentials` under `name`;\n`credentials` then lists the name.",
+        "required": [
+          "kind",
+          "label",
+          "name",
+          "required"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "How a credential field is entered: `secret` (a password, API key or\ntoken) is masked, `username` isn't. Neither is returned once stored.",
+            "enum": [
+              "secret",
+              "username"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "description": "What to call it, in English, such as \"API key\"."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name it's stored under, such as `api_key`."
+          },
+          "required": {
+            "type": "boolean",
+            "description": "Enabling the source needs it stored."
           }
         }
       },
@@ -11238,6 +11899,14 @@
             "type": "string"
           }
         }
+      },
+      "DhtPin": {
+        "type": "string",
+        "description": "Whether a worker may run the DHT (§19.5 placement pins). `off` keeps\nfetch and prepare.",
+        "enum": [
+          "auto",
+          "off"
+        ]
       },
       "DhtStatus": {
         "type": "object",
@@ -14410,6 +15079,44 @@
           }
         }
       },
+      "JoinCommands": {
+        "type": "object",
+        "description": "Ready-to-copy ways to join with the token (§19.6). Most hold the\ntoken, so they're shown once with it. `Debug` redacts every one.",
+        "required": [
+          "cli",
+          "cli_read",
+          "compose",
+          "docker_run",
+          "unraid",
+          "windows"
+        ],
+        "properties": {
+          "cli": {
+            "type": "string",
+            "description": "`lodestar worker`, given the token on standard input. The token is\nin the line, so it lands in the shell's history; it's single use\nand expires in 15 minutes. `cli_read` keeps it out."
+          },
+          "cli_read": {
+            "type": "string",
+            "description": "The same, reading the token from a hidden prompt (`read -rs`):\npaste the token when asked. Nothing secret is in the line."
+          },
+          "compose": {
+            "type": "string",
+            "description": "A compose service."
+          },
+          "docker_run": {
+            "type": "string",
+            "description": "A `docker run` line. Remove `LODESTAR_TOKEN` once the worker has\njoined (it's spent; the worker warns about it at each start)."
+          },
+          "unraid": {
+            "type": "string",
+            "description": "What to enter in the Unraid \"Lodestar Worker\" template."
+          },
+          "windows": {
+            "type": "string",
+            "description": "What to enter in the Windows installer's \"Join an existing\nLodestar\"."
+          }
+        }
+      },
       "KeyInfo": {
         "type": "object",
         "description": "A key or token as listed: never its secret or hash.",
@@ -17276,6 +17983,90 @@
           }
         }
       },
+      "PurgePreview": {
+        "type": "object",
+        "description": "`GET /sources/{id}/purge/preview`: what purging the source would\nremove if it ran now, counted with the purge's own rules. Nothing is\nchanged. The dialog shows it before you commit (§10.10.7).\n\nWhile the source is off (`settled`), a purge started next removes\nexactly this, as long as nothing else changes the store meanwhile. An\nenabled source keeps finding until the purge turns it off, so the purge\nmay remove more. Keys still in memory waiting to be fetched aren't\ncounted: the purge reports them as `keys_dropped`.",
+        "required": [
+          "claims_deleted",
+          "kept",
+          "plugin",
+          "queue_deleted",
+          "settled",
+          "source_id",
+          "state_deleted",
+          "torrents_deleted",
+          "unverified_deleted",
+          "unverified_kept"
+        ],
+        "properties": {
+          "claims_deleted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Claims of stored torrents it made, deleted.",
+            "minimum": 0
+          },
+          "kept": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Torrents others found too, kept without this source (`kept` in the\npurge job).",
+            "minimum": 0
+          },
+          "plugin": {
+            "type": "string"
+          },
+          "queue_deleted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Keys it queued to be fetched, saved across restarts, dropped.",
+            "minimum": 0
+          },
+          "settled": {
+            "type": "boolean",
+            "description": "The source is off, so nothing it finds can add to the counts\nbefore the purge runs."
+          },
+          "source_id": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "state_deleted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its plugin's saved state entries, deleted.",
+            "minimum": 0
+          },
+          "torrents_deleted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Torrents only this source found, deleted.",
+            "minimum": 0
+          },
+          "unverified_deleted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Items without metadata only this source found, deleted.",
+            "minimum": 0
+          },
+          "unverified_kept": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Items without metadata others found too, kept without this source.",
+            "minimum": 0
+          }
+        },
+        "example": {
+          "claims_deleted": 96402,
+          "kept": 88120,
+          "plugin": "nyaa",
+          "queue_deleted": 12,
+          "settled": true,
+          "source_id": 3,
+          "state_deleted": 4,
+          "torrents_deleted": 1204331,
+          "unverified_deleted": 5210,
+          "unverified_kept": 301
+        }
+      },
       "PurgeRequest": {
         "type": "object",
         "description": "`POST /sources/{id}/purge`.",
@@ -19886,9 +20677,11 @@
         "description": "One source plugin of this build.",
         "required": [
           "agents",
+          "config_schema",
           "consent",
           "consent_required",
           "consent_version",
+          "credential_spec",
           "credentials",
           "editable",
           "egress",
@@ -19939,6 +20732,14 @@
               }
             }
           },
+          "config_schema": {
+            "type": "object",
+            "description": "The JSON Schema (draft 2020-12) of its settings, as its plugin\ndeclares it: the settings form is generated from it, and `config`\nin `PATCH /sources/{id}` is checked against the plugin's own rules\n(when `editable` lists `config`). Read-only, and the same for every\ninstall: it holds no setting's value. Secrets are never in it: they\nare `credential_spec`'s.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "consent": {
             "type": "string",
             "description": "What enabling a source requires (§18.7).",
@@ -19952,11 +20753,18 @@
           },
           "consent_required": {
             "type": "boolean",
-            "description": "Its class is enabled by acknowledging what's shown (`external`,\n`restricted`, `overlay`): enabling it sends `\"consent\"` naming the\nclass and `\"consent_version\"`, unless that version is already\nacknowledged."
+            "description": "Its class is enabled by acknowledging what's shown (`external`,\n`restricted`, `overlay`).\n\nThis build refuses to enable any source whose class isn't `none`\n(`400 invalid_setting` on `enabled`), this one included, whatever\nthe request sends: it can't show its consent text yet. Once a\nlater version shows the class's consent text, enabling a source\nwith this set sends `\"consent\"` naming the class and\n`\"consent_version\"`, unless that version is already acknowledged."
           },
           "consent_version": {
             "type": "string",
             "description": "The version an acknowledgement must name, sent back as it is. It\nholds the class's consent-text version and every address in\n`endpoints`, so it changes when either does, and then the source\nasks again. Empty for `none` and `account`."
+          },
+          "credential_spec": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CredentialField"
+            },
+            "description": "The credentials its plugin reads, in the order to ask for them;\nempty for a source that reads none. It describes the fields, never\na value."
           },
           "credentials": {
             "type": "array",
@@ -20348,9 +21156,16 @@
                 "enforced": false,
                 "max": 1
               },
+              "config_schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "additionalProperties": false,
+                "properties": {},
+                "type": "object"
+              },
               "consent": "none",
               "consent_required": false,
               "consent_version": "",
+              "credential_spec": [],
               "credentials": [],
               "editable": [
                 "agents",
@@ -20446,7 +21261,7 @@
                 ]
               }
             ],
-            "description": "The consent class you acknowledge; needed to enable a source whose\n`needs` is `endpoints_ack` or `consent`, and must be its class."
+            "description": "The consent class you acknowledge.\n\nThis build refuses to enable any source whose class isn't `none`\n(`400 invalid_setting` on `enabled`), with or without this field: it\ncan't show its consent text yet, so nothing is acknowledged or\nstored. Once a later version shows the class's consent text, this\nis needed to enable a source whose `needs` is `endpoints_ack` or\n`consent`, and must be its class."
           },
           "consent_version": {
             "type": "string",
@@ -22876,6 +23691,327 @@
             "description": "Paste it into the app's webhook connection as the Password."
           }
         }
+      },
+      "Worker": {
+        "type": "object",
+        "description": "One worker. Live values are null while it has not connected since the\ncoordinator started.",
+        "required": [
+          "budget",
+          "claimed",
+          "clock_offset_ms",
+          "clock_skewed",
+          "cpu_permille",
+          "dht",
+          "external_ips",
+          "fetched",
+          "id",
+          "intensity",
+          "last_seen_at",
+          "leases",
+          "name",
+          "paused",
+          "pool_cap",
+          "processed",
+          "rss_mb",
+          "spool_bytes",
+          "status"
+        ],
+        "properties": {
+          "budget": {
+            "$ref": "#/components/schemas/WorkerBudget"
+          },
+          "claimed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Keys claimed, as the worker last reported (its counter).",
+            "minimum": 0
+          },
+          "clock_offset_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The worker's clock minus the coordinator's, in ms."
+          },
+          "clock_skewed": {
+            "type": "boolean",
+            "description": "More than 60 s off (§19.3): fix NTP on the worker."
+          },
+          "cpu_permille": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "CPU use in ‰, as last reported.",
+            "minimum": 0
+          },
+          "dht": {
+            "$ref": "#/components/schemas/DhtPin"
+          },
+          "external_ips": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The public addresses the worker reported for itself (its egress),\nat most 8. Never a peer's."
+          },
+          "fetched": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Metadata fetched, as the worker last reported.",
+            "minimum": 0
+          },
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The worker's id in this cluster.",
+            "minimum": 0
+          },
+          "intensity": {
+            "$ref": "#/components/schemas/WorkerIntensity"
+          },
+          "last_seen_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix seconds of its last message; null if not seen since start."
+          },
+          "leases": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Leases it holds now.",
+            "minimum": 0
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name it joined with (its certificate's); null when the\ncoordinator has no certificate on record for it."
+          },
+          "paused": {
+            "type": "boolean",
+            "description": "Paused by the admin: it gets no new work until resumed, and stays\npaused across reconnects and restarts. Set while offline too, when\n`status` can only say `offline`."
+          },
+          "pool_cap": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Fetch-pool cap in keys, 1–1,000,000.",
+            "minimum": 0
+          },
+          "processed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Torrents processed, as the worker last reported.",
+            "minimum": 0
+          },
+          "rss_mb": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Resident memory in MB, as last reported.",
+            "minimum": 0
+          },
+          "spool_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Bytes waiting in its on-disk spool (§19.6).",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkerStatus"
+          }
+        }
+      },
+      "WorkerBudget": {
+        "type": "object",
+        "description": "A worker's resource budget. 0 means no cap beyond the defaults.",
+        "required": [
+          "cpu_permille",
+          "down_kbps",
+          "ram_mb",
+          "up_kbps"
+        ],
+        "properties": {
+          "cpu_permille": {
+            "type": "integer",
+            "format": "int32",
+            "description": "CPU share in ‰, 1–1000.",
+            "minimum": 0
+          },
+          "down_kbps": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Download cap in kB/s.",
+            "minimum": 0
+          },
+          "ram_mb": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Memory cap in MB.",
+            "minimum": 0
+          },
+          "up_kbps": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Upload cap in kB/s.",
+            "minimum": 0
+          }
+        }
+      },
+      "WorkerIntensity": {
+        "type": "string",
+        "description": "A worker's crawl intensity (§19.5: each worker has its own).",
+        "enum": [
+          "low",
+          "balanced",
+          "aggressive"
+        ]
+      },
+      "WorkerList": {
+        "type": "object",
+        "description": "`GET /workers`.",
+        "required": [
+          "allowed",
+          "workers"
+        ],
+        "properties": {
+          "allowed": {
+            "type": "boolean",
+            "description": "\"Allow workers\" is on and the cluster port is serving."
+          },
+          "workers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Worker"
+            },
+            "description": "Every joined worker, by id. Empty on a single machine."
+          }
+        }
+      },
+      "WorkerPatch": {
+        "type": "object",
+        "description": "`PATCH /workers/{id}`: any of these; absent fields are kept. `budget`\nis sent whole, all four fields.",
+        "properties": {
+          "budget": {
+            "$ref": "#/components/schemas/WorkerBudget"
+          },
+          "dht": {
+            "$ref": "#/components/schemas/DhtPin"
+          },
+          "intensity": {
+            "$ref": "#/components/schemas/WorkerIntensity"
+          },
+          "pool_cap": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1–1,000,000 keys.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkerRevoked": {
+        "type": "object",
+        "description": "`POST /workers/{id}/revoke`: what revoking did.",
+        "required": [
+          "certificates",
+          "gone_within_secs",
+          "id",
+          "leases_returned",
+          "name"
+        ],
+        "properties": {
+          "certificates": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Certificates invalidated now.",
+            "minimum": 0
+          },
+          "gone_within_secs": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Seconds until its connection is closed, at most: one heartbeat.",
+            "minimum": 0
+          },
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "leases_returned": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Leases taken back and offered to other workers.",
+            "minimum": 0
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "WorkerStatus": {
+        "type": "string",
+        "description": "A worker's state as Settings → Workers shows it (icon + text).\n`quarantined` arrives with WK-13.",
+        "enum": [
+          "online",
+          "draining",
+          "paused",
+          "offline"
+        ]
+      },
+      "WorkerTokenCreated": {
+        "type": "object",
+        "description": "The one response that carries a join token. It can't be read back:\nonly its hash is kept. `Debug` redacts the token and the commands.",
+        "required": [
+          "address",
+          "commands",
+          "expires_at",
+          "name",
+          "token"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The cluster address workers dial, `https://host:port`."
+          },
+          "commands": {
+            "$ref": "#/components/schemas/JoinCommands"
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds; 15 minutes from now."
+          },
+          "name": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string",
+            "description": "The `lsj1…` token: single use, for this name only."
+          }
+        }
       }
     },
     "responses": {
@@ -22959,6 +24095,10 @@
     {
       "name": "jobs",
       "description": "Background jobs: exports now, imports later (§9, §18.8)."
+    },
+    {
+      "name": "workers",
+      "description": "Remote workers: join, drain, pause, revoke and their budgets (§19.6, §19.7)."
     }
   ]
 }
