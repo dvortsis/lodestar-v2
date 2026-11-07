@@ -867,7 +867,7 @@ impl Scheduler {
 /// A torrent's hash, privacy and last scrape (blocking).
 fn load(s: &mut Store, id: i64) -> Option<Loaded> {
     let row = s.torrent(id).ok()??;
-    let private = row.flags & (flags::PRIVATE | flags::PRIVATE_SOURCE) != 0;
+    let private = row.flags & flags::PRIVACY != 0;
     let swarm = s.swarm(id).ok().flatten();
     let before = swarm.as_ref().map(|w| Before {
         seen: Seen {

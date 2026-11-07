@@ -98,6 +98,10 @@ pub struct ServerConfig {
     /// Tick every heartbeat by itself. Tests turn it off and call
     /// [`ClusterServer::tick`].
     pub auto_tick: bool,
+    /// Relayed peer hints pass `lodestar_network_policy::allows` with this
+    /// `allow_private` (WK-9): off, a worker can't steer another to a
+    /// loopback, private or link-local address.
+    pub hints_allow_private: bool,
 }
 
 impl Default for ServerConfig {
@@ -114,6 +118,7 @@ impl Default for ServerConfig {
             max_skew_ms: 60_000,
             maintain_every_secs: 3600,
             auto_tick: true,
+            hints_allow_private: false,
         }
     }
 }
@@ -498,12 +503,13 @@ fn ip_key(ip: IpAddr) -> IpAddr {
 }
 
 /// A peer hint worth relaying: a real unicast address with a port.
-fn usable_hint(a: &std::net::SocketAddr) -> bool {
+fn usable_hint(a: &std::net::SocketAddr, allow_private: bool) -> bool {
     let ip = a.ip();
     a.port() != 0
         && !ip.is_unspecified()
         && !ip.is_multicast()
         && ip != IpAddr::V4(std::net::Ipv4Addr::BROADCAST)
+        && lodestar_network_policy::allows(*a, allow_private)
 }
 
 fn clamp(v: i128) -> i64 {
@@ -885,7 +891,8 @@ impl ClusterServer {
             return false;
         };
         let mut hints = hints;
-        hints.retain(usable_hint);
+        let allow_private = self.config.hints_allow_private;
+        hints.retain(|a| usable_hint(a, allow_private));
         hints.truncate(MAX_HINTS);
         if hints.is_empty() {
             return false;
@@ -1560,7 +1567,7 @@ impl ClusterServer {
                     ..
                 } => {
                     let mut hints = std::mem::take(&mut items[i].hints);
-                    hints.retain(usable_hint);
+                    hints.retain(|a| usable_hint(a, self.config.hints_allow_private));
                     if !hints.is_empty() {
                         let list = relays.entry(holder).or_default();
                         if list.len() < MAX_HINT_BATCH {
@@ -1779,5 +1786,32 @@ mod tests {
         assert_eq!(clamp(i128::from(i64::MAX) * 4), i64::MAX);
         assert_eq!(clamp(i128::from(i64::MIN) * 4), i64::MIN);
         assert_eq!(clamp(-5), -5);
+    }
+
+    /// Relayed hints pass the network policy (WK-9): with private
+    /// addresses off, a worker can't steer another worker to loopback,
+    /// RFC 1918, link-local or a mapped form of them, whatever it claims.
+    #[test]
+    fn relayed_hints_follow_the_network_policy() {
+        let hint = |s: &str| s.parse::<std::net::SocketAddr>().unwrap();
+        for bad in [
+            "127.0.0.1:6881",
+            "10.0.0.5:6881",
+            "192.168.1.2:6881",
+            "169.254.0.1:6881",
+            "[::1]:6881",
+            "[::ffff:10.0.0.5]:6881",
+            "[fe80::1]:6881",
+            "8.8.8.8:0",
+            "224.0.0.1:6881",
+        ] {
+            assert!(!usable_hint(&hint(bad), false), "{bad}");
+        }
+        assert!(usable_hint(&hint("8.8.8.8:6881"), false));
+        assert!(usable_hint(&hint("[2001:4860::8888]:6881"), false));
+        // Allowed only when private addresses are (a LAN test network).
+        assert!(usable_hint(&hint("10.0.0.5:6881"), true));
+        assert!(!usable_hint(&hint("10.0.0.5:0"), true));
+        assert!(!ServerConfig::default().hints_allow_private);
     }
 }

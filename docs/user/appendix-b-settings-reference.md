@@ -16,19 +16,13 @@ Every field in the Lodestar Unraid template in one table. The recommended value 
 | Intensity | Crawler effort (`LODESTAR_INTENSITY`) | `balanced` | `aggressive` can overload home routers. |
 | DHT port | Gluetun template only (`LODESTAR_DHT_PORT`) | `6881` | Match the port your VPN provider forwards. |
 
-## Settings → Sources
+## Release scope
 
-These are in the web app, under **Settings → Sources**, not in the template. Each source has its own row. See [section 5.4](05-use-lodestar.md#54-choose-where-lodestar-finds-torrents-settings--sources).
-
-| Setting | What it does | Recommended | Notes |
-|---|---|---|---|
-| On | Turns the source on or off | On for **Mainline DHT**; off for **External** and **Account** sources unless you need them | Saved at once, with no Undo. Off stops the source at once. On applies at the next restart, and the row shows **Applies at next start** until then. |
-| Priority | Share of fetch work (**Low**, **Normal**, **High**, **Maximum**) | `Normal` | Saved and applied at once, with no Undo. |
-| Setup | Accepting what a source does and the sites it contacts, adding account details, or typing your password | Not available yet | A source marked **Needs setup** stays off. |
+This reference covers v0.5.1. The Sources screen, pack-version controls and safe-restart switch described in development notes are not available in this release.
 
 The templates do not include a Log level field. You can optionally add a custom
 container variable with key `LODESTAR_LOG` to set how much Lodestar logs on every output
-(`error`, `warn`, `info` or `debug`). While it is set, Logging verbosity in Settings can't be changed.
+(`error`, `warn`, `info` or `debug`). In v0.5.1, change this variable in the container configuration and restart to apply it.
 **Recommended:** leave it unset; the default is `info`.
 
 Transparent huge pages are a Linux feature that hands out memory in 2 MB pieces. They can make Lodestar's memory use creep up over days, so Lodestar turns them off for itself only.

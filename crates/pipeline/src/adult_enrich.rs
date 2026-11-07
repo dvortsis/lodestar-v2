@@ -356,7 +356,7 @@ pub fn check(
     // A partial import's file list came from another indexer's database,
     // not from metadata that hashed to the key: not verified (stricter).
     g.stored = row.flags & flags::FILES_PARTIAL == 0;
-    g.private_source = row.flags & (flags::PRIVATE_SOURCE | flags::PRIVATE) != 0;
+    g.private_source = row.flags & flags::PRIVACY != 0;
     g.held =
         store.held_among(&hashes)?.into_iter().any(|h| h) || engine.blocked_hash(&hashes).is_some();
     let own = store.correction(id)?;

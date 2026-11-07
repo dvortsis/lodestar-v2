@@ -28,6 +28,7 @@ pub mod gate;
 mod have;
 pub mod health;
 pub mod log_events;
+pub mod remote;
 mod rollups;
 mod setup_hold;
 pub mod source_adult;
@@ -111,6 +112,9 @@ pub(crate) fn in_funnel(cohort: i64) -> bool {
 
 #[derive(Debug, Clone)]
 pub struct PipelineConfig {
+    /// Remote workers may join this run ("Allow workers"): the fetch queue
+    /// it starts from is kept for a day, for late results (plan Q7).
+    pub remote_workers: bool,
     pub pool: PoolConfig,
     pub fetch: FetchOptions,
     /// Per-plugin priority overrides, by manifest id (`config.toml`).
@@ -191,6 +195,7 @@ pub struct HealthSetup {
 impl Default for PipelineConfig {
     fn default() -> Self {
         PipelineConfig {
+            remote_workers: false,
             pool: PoolConfig::default(),
             fetch: FetchOptions::default(),
             priorities: HashMap::new(),
@@ -399,6 +404,7 @@ pub struct Monitor {
     writer: Arc<WriterStats>,
     leases: Arc<LeaseStats>,
     authority: Arc<LeaseAuthority>,
+    remote: Arc<remote::RemoteIntake>,
     have: Arc<Have>,
     sources: Arc<Vec<SourceEntry>>,
     stored_at_start: u64,
@@ -484,6 +490,12 @@ impl Monitor {
     /// CA or binds a port.
     pub fn lease_authority(&self) -> &Arc<LeaseAuthority> {
         &self.authority
+    }
+
+    /// The intake for remote workers' results, counters and hints (WK-9),
+    /// for the cluster server once workers are allowed.
+    pub fn remote(&self) -> &Arc<remote::RemoteIntake> {
+        &self.remote
     }
 
     pub fn have(&self) -> &Have {
@@ -703,6 +715,7 @@ impl Pipeline {
             funnel.clone(),
         ));
         let leases = Arc::new(WorkerLeases::default());
+        let mut prior = Vec::new();
         for q in &queue {
             // A refetch has no discovery hour: it was found at this start.
             let discovered_at = if in_funnel(q.cohort) {
@@ -710,18 +723,17 @@ impl Pipeline {
             } else {
                 started_at.div_euclid(3600) * 3600
             };
-            let token = coordinator.restore(
-                WorkerId::LOCAL,
-                q.info_hash,
-                RestoredLease {
-                    cohort: q.cohort,
-                    source: q.source,
-                    sources: 1u64 << q.source.get(),
-                    strategy: q.strategy,
-                    discovered_at,
-                },
-                started_at,
-            );
+            let restored = RestoredLease {
+                cohort: q.cohort,
+                source: q.source,
+                sources: 1u64 << q.source.get(),
+                strategy: q.strategy,
+                discovered_at,
+            };
+            if config.remote_workers {
+                prior.push((q.info_hash, restored));
+            }
+            let token = coordinator.restore(WorkerId::LOCAL, q.info_hash, restored, started_at);
             leases.insert(q.info_hash, token);
         }
         let preparer = store.preparer();
@@ -930,7 +942,21 @@ impl Pipeline {
             adult,
             queues: Queues::local(),
         }
-        .spawn(pool_rx, pool_shutdown, results_tx);
+        .spawn(pool_rx, pool_shutdown, results_tx.clone());
+        // Remote workers' results reach the same writer (WK-9).
+        let remote = Arc::new(remote::RemoteIntake::new(remote::RemoteParts {
+            authority: coordinator.authority().clone(),
+            writer: results_tx,
+            pool: pool_tx.clone(),
+            rollups: rollups.clone(),
+            epoch: started_at as u32,
+            prior: remote::Prior::new(prior, started_at),
+            private_sources: remote::private_sources(
+                sources
+                    .iter()
+                    .map(|s| (s.id, s.plugin.manifest().finds_private)),
+            ),
+        }));
         let (pool, pool_task, prepare) = (stages.pool, stages.pool_task, stages.prepare);
 
         let intake_stats = Arc::new(IntakeStats::default());
@@ -942,6 +968,7 @@ impl Pipeline {
                 coordinator: coordinator.clone(),
                 leases: leases.clone(),
                 to_pool: pool_tx.clone(),
+                remote: remote.clone(),
                 touches: touch_tx,
                 claims: claims_tx,
                 claims_budget,
@@ -1103,6 +1130,7 @@ impl Pipeline {
                 writer: writer_stats,
                 leases: lease_stats,
                 authority,
+                remote,
                 have,
                 sources: Arc::new(sources),
                 stored_at_start,
@@ -1183,6 +1211,9 @@ impl Pipeline {
             task.await.map_err(Error::Join)?;
         }
         let _ = self.stop_plugins.send(true);
+        // The cluster port stopped first; the writer's input closes once
+        // the prepare stage's does.
+        self.monitor.remote.close();
         for (s, mut task) in self.monitor.sources.iter().zip(self.tasks) {
             let id = s.plugin.manifest().id;
             // A plugin that ignores shutdown mustn't hold up the rest.
@@ -1397,6 +1428,8 @@ struct Intake {
     coordinator: Arc<Coordinator>,
     leases: Arc<WorkerLeases>,
     to_pool: mpsc::Sender<Discovery>,
+    /// Peer hints for keys a remote worker holds (WK-9).
+    remote: Arc<remote::RemoteIntake>,
     touches: mpsc::Sender<Discovery>,
     /// Discoveries with claims, to the writer (SRC-2), each holding its
     /// share of `claims_budget` so the channel is bounded in bytes.
@@ -1504,7 +1537,13 @@ async fn intake(mut io: Intake, mut shutdown: Shutdown) {
             // reply, so the pool merges them but never admits the key
             // again once it has left (relaying them to a remote holder is
             // the intake's, WK-9).
-            Claimed::Held { .. } => d.reply = true,
+            Claimed::Held { holder, token } => {
+                // A private find's peers stay with this worker (§18.7).
+                if holder != WorkerId::LOCAL && !d.found.private_source {
+                    io.remote.relay_local(d.found.key, token, &d.found.peers);
+                }
+                d.reply = true;
+            }
         }
         // Waiting here backs up into the emitters: live sources drop and
         // count, importers wait.
