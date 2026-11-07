@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T07:46Z",
+  "updated_at": "2026-11-07T07:52Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5580,6 +5580,10 @@
     {
       "id": "rebuild-swap-panic-guard",
       "text": "#570 review (optional): a panic anywhere on the index-rebuild thread (now including a hook sink at the swap) leaves progress Some(non-Failed), so rebuilding() stays true. No sink can panic today. Consider a drop guard / catch_unwind at the spawn site (rebuild.rs:664) that sets Failed. Also: a failed stored_between/adult_between count at the swap silently skips the publish (rebuild.rs:991-996)."
+    },
+    {
+      "id": "wk10-notes-ops-placement",
+      "text": "Runner PR: add to WK-10's slices.yaml notes — WK-14's crates/lodestar/src/cluster/ops.rs owns the one Arc<Placement>; WK-10's serve tick calls its sync hook (see WK-14 decisions 'For WK-10'). Prefs saved before WK-10 reach workers only when WK-10 sends Assign."
     }
   ],
   "main_health": [
