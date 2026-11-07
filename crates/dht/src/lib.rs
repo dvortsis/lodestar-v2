@@ -17,3 +17,8 @@ pub mod secure_id;
 pub mod state;
 
 pub use compact::{NodeId, NodeInfo};
+
+/// How long a peer announcement stays in the node's in-memory peer table
+/// after its most recent refresh. The Legal Notice (section 2) states it;
+/// `crates/lodestar/tests/legal_facts.rs` checks the two agree.
+pub const PEER_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 60);

@@ -21,6 +21,11 @@ use super::util::{
 };
 use crate::config::Config;
 
+/// The files a backup holds, beside the README. The Legal Notice (section
+/// 5) names them; `tests/legal_facts.rs` checks the two agree. `secrets.key`
+/// is deliberately absent.
+pub const BACKUP_FILES: [&str; 4] = ["lodestar.db", "config.toml", "seal.key", "auth.json"];
+
 /// What a backup wrote, for the summary.
 #[derive(Debug)]
 pub struct Report {
@@ -91,7 +96,8 @@ pub fn backup(
     })?;
 
     let mut files = Vec::new();
-    let copy = dir.join("lodestar.db");
+    let [db_name, config_name, seal_name, auth_name] = BACKUP_FILES;
+    let copy = dir.join(db_name);
     vacuum_into(&conn, &copy)?;
     drop(conn);
     let check = open_read_only(&copy)?;
@@ -102,12 +108,12 @@ pub fn backup(
     let torrents = torrent_count(&check).map_err(failed("counting the copy's torrents"))?;
     drop(check);
     restrict(&copy);
-    files.push(("lodestar.db".to_string(), super::util::file_len(&copy)));
+    files.push((db_name.to_string(), super::util::file_len(&copy)));
 
     let extra = [
-        ("config.toml", config_file.map(Path::to_path_buf)),
-        ("seal.key", Some(data.join("seal.key"))),
-        ("auth.json", Some(data.join("auth.json"))),
+        (config_name, config_file.map(Path::to_path_buf)),
+        (seal_name, Some(data.join(seal_name))),
+        (auth_name, Some(data.join(auth_name))),
     ];
     for (name, source) in extra {
         let Some(source) = source.filter(|p| p.is_file()) else {
