@@ -194,6 +194,26 @@ impl HaveObserver for WorkerFilter {
     }
 }
 
+/// Clears a rebuild's state if it unwinds.
+struct ResetOnPanic<'a>(&'a WorkerFilter);
+
+impl Drop for ResetOnPanic<'_> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.0
+                .inserts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .building = None;
+            self.0
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .rebuilding = false;
+        }
+    }
+}
+
 impl WorkerFilter {
     pub fn new() -> WorkerFilter {
         let ms = std::time::SystemTime::now()
@@ -257,6 +277,10 @@ impl WorkerFilter {
             }
             st.rebuilding = true;
         }
+        // A panic from here on (sizing, allocating, the scan) leaves the old
+        // filter and clears the flag, so a later rebuild can run (WK-10a's
+        // review).
+        let _unwind = ResetOnPanic(self);
         // Never smaller than what the filter in use already holds.
         let held = self.inserts().current.as_ref().map_or(0, |b| b.len());
         let (capacity, bits, hashes) = worker_params(stored.max(held));
@@ -538,6 +562,7 @@ mod tests {
         WorkerStatus {
             worker: WorkerId(id),
             connected: true,
+            session: None,
             draining: false,
             paused: false,
             offset_ms: 0,

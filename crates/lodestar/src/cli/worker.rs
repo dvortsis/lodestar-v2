@@ -79,6 +79,17 @@ const ENV_TOKEN_STALE: &str = "LODESTAR_TOKEN is still set, but this worker has 
      so it's ignored. Remove it from the container's settings: a token works only once.";
 const JOIN_IGNORED: &str = "--join is ignored: this folder has already joined a coordinator.";
 const ENV_TOKEN_UNUSED: &str = "LODESTAR_TOKEN is ignored: --token-file was given.";
+/// The same two, said by an image `prepare` started again without the
+/// token: only `LODESTAR_TOKEN_IGNORED` says it was set, and someone may
+/// have set that by hand (WK-2's review), so the line says what to remove
+/// in either case.
+const ENV_TOKEN_STALE_RESTARTED: &str = "LODESTAR_TOKEN is still set, but this worker has \
+     already joined, so it's ignored. Remove it from the container's settings: a token works \
+     only once. If LODESTAR_TOKEN isn't set, remove LODESTAR_TOKEN_IGNORED instead: Lodestar \
+     sets that one itself.";
+const ENV_TOKEN_UNUSED_RESTARTED: &str = "LODESTAR_TOKEN is ignored: --token-file was given. \
+     If LODESTAR_TOKEN isn't set, remove LODESTAR_TOKEN_IGNORED instead: Lodestar sets that \
+     one itself.";
 
 /// Decides whether to join: `--token-file` always does (with `--join`);
 /// otherwise `LODESTAR_TOKEN` does only while the folder hasn't joined.
@@ -87,8 +98,10 @@ fn plan(args: &WorkerArgs, env: &dyn Fn(&str) -> Option<String>, joined: bool) -
     let env_token = set("LODESTAR_TOKEN");
     let mut warnings = Vec::new();
     if let Some(path) = &args.token_file {
-        if env_token.is_some() || set(TOKEN_IGNORED).is_some() {
+        if env_token.is_some() {
             warnings.push(ENV_TOKEN_UNUSED);
+        } else if set(TOKEN_IGNORED).is_some() {
+            warnings.push(ENV_TOKEN_UNUSED_RESTARTED);
         }
         let url = args.join.clone().ok_or_else(|| {
             Failure::Failed("--token-file needs --join <coordinator address>".to_owned())
@@ -103,7 +116,7 @@ fn plan(args: &WorkerArgs, env: &dyn Fn(&str) -> Option<String>, joined: bool) -
     let ignored = env_token.is_none() && set(TOKEN_IGNORED).is_some();
     match env_token {
         _ if ignored && joined => {
-            warnings.push(ENV_TOKEN_STALE);
+            warnings.push(ENV_TOKEN_STALE_RESTARTED);
             if args.join.is_some() {
                 warnings.push(JOIN_IGNORED);
             }
@@ -562,12 +575,18 @@ mod tests {
         let env = |k: &str| (k == TOKEN_IGNORED).then(|| "1".to_owned());
         assert_eq!(
             plan_warnings(&args(None, None), &env),
-            vec![ENV_TOKEN_STALE]
+            vec![ENV_TOKEN_STALE_RESTARTED]
         );
         // With a token file: that one wins, and the variable is said to be
         // ignored.
         let unused = plan(&args(Some("https://c"), Some("t")), &env, false).unwrap();
-        assert_eq!(unused.warnings, vec![ENV_TOKEN_UNUSED]);
+        assert_eq!(unused.warnings, vec![ENV_TOKEN_UNUSED_RESTARTED]);
+        // Set by hand, with no token: each line also says to remove the
+        // marker, so neither is wrong (WK-2's review).
+        for w in [ENV_TOKEN_STALE_RESTARTED, ENV_TOKEN_UNUSED_RESTARTED] {
+            assert!(w.contains("remove LODESTAR_TOKEN_IGNORED"), "{w}");
+            assert!(!w.contains("  "), "{w}");
+        }
         // Not joined (the folder changed meanwhile): nothing to warn about.
         assert_eq!(
             plan(&args(None, None), &env, false).unwrap().warnings,
