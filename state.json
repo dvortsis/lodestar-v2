@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T19:25Z",
+  "updated_at": "2026-11-07T21:39Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4080,7 +4080,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 32,
-  "last_heartbeat": "2026-11-07T18:39Z",
+  "last_heartbeat": "2026-11-07T21:39Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -6620,22 +6620,22 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-07T22:05Z",
+    "updated": "2026-11-07T21:39Z",
     "items": [
       {
         "slot": 1,
         "slice": "X-win-refusal-ux",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnABi9mwqkZULms8pjL: #584 rc.1 into release/v0.5.2; CI dispatched (macOS utp_demux SIGSEGV re-run pending)",
-        "since": "2026-11-07T22:05Z"
+        "doing": "session_01MMjhnABi9mwqkZULms8pjL: building; extra files approved 21:20-21:25Z (secure-datadir AdminUser gate, eventlog writer, customer-bit exit code)",
+        "since": "2026-11-07T21:10Z"
       },
       {
         "slot": 2,
         "slice": "X-web-hygiene-1107",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCVN68eUViVowdQeWw: keyboard-opened row menu focuses first item (Sonnet); after #590 merged 2bee902a",
+        "doing": "session_01MMjhnCVN68eUViVowdQeWw: 4 items done locally; budget +100 B approved 21:36Z; PR next",
         "since": "2026-11-07T21:20Z"
       },
       {
@@ -6643,7 +6643,7 @@
         "slice": "WK-17",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBbYe9ernDLKKvnSSv",
+        "doing": "session_01MMjhnBbYe9ernDLKKvnSSv: #593 delta review CHANGES 21:33Z (paused/offline visible text, decisions file)",
         "since": "2026-11-07T19:30Z"
       },
       {
@@ -6651,7 +6651,7 @@
         "slice": "WK-10a",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: WK-10a coordinator tick (then WK-10b runtime core, WK-10c sharded DHT/RSS)",
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #592 review CHANGES (B1 session id, B2 NotReady); fix push pending; then WK-10b, WK-10c",
         "since": "2026-11-07T18:58Z"
       }
     ],
@@ -6710,5 +6710,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-07T21:36:00Z"
+  "updated": "2026-11-07T21:39:00Z"
 }
