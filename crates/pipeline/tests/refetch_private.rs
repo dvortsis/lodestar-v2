@@ -110,15 +110,17 @@ fn config() -> PipelineConfig {
     }
 }
 
-/// Polls for 10 s (standards §2), so the slowest runner passes.
+/// Polls until a 10 s deadline (standards §2), so the slowest runner
+/// passes however long each poll takes.
 async fn until(what: &str, mut f: impl FnMut() -> bool) {
-    for _ in 0..400 {
-        if f() {
-            return;
-        }
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !f() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for {what}"
+        );
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    panic!("timed out waiting for {what}");
 }
 
 /// Stores `raw` as an import with no file list and `extra` flags, and

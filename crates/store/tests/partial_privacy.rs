@@ -130,3 +130,86 @@ fn a_private_item_under_the_hash_keeps_a_public_partial_out() {
     assert_eq!(store.partial_hashes(10).unwrap(), vec![public]);
     assert_eq!(store.partial_hashes(1).unwrap(), vec![public]);
 }
+
+/// A hybrid (v1 + v2) info dict named `name`.
+fn hybrid(name: &str) -> Vec<u8> {
+    let d = |e: Vec<(&str, OwnedValue)>| {
+        OwnedValue::Dict(
+            e.into_iter()
+                .map(|(k, v)| (k.as_bytes().to_vec(), v))
+                .collect(),
+        )
+    };
+    let leaf = d(vec![(
+        "",
+        d(vec![
+            ("length", OwnedValue::Int(100)),
+            ("pieces root", OwnedValue::Bytes(vec![5; 32])),
+        ]),
+    )]);
+    to_vec(&d(vec![
+        ("file tree", d(vec![("a.bin", leaf)])),
+        ("length", OwnedValue::Int(100)),
+        ("meta version", OwnedValue::Int(2)),
+        ("name", OwnedValue::Bytes(name.as_bytes().to_vec())),
+        ("piece length", OwnedValue::Int(16_384)),
+        ("pieces", OwnedValue::Bytes(vec![0; 20])),
+    ]))
+}
+
+/// The v2 half of the rule: an item a private source reported under a
+/// hybrid's truncated v2 hash alone keeps it out; a public hybrid partial
+/// is kept.
+#[test]
+fn a_private_item_under_the_v2_hash_alone_keeps_a_hybrid_partial_out() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let feed = store.register_source("feed", "1", 0).unwrap();
+    let claims = Claims {
+        name: Some("Named".into()),
+        ..Claims::default()
+    };
+    let import = |store: &mut Store, name: &str| {
+        let mut info = Info::parse(&hybrid(name)).unwrap();
+        info.files.clear();
+        let (v1, v2) = (info.v1.unwrap(), info.v2.unwrap().truncated());
+        assert_ne!(v1, v2);
+        store
+            .insert(&[NewTorrent {
+                info: &info,
+                raw_info: None,
+                discovered_at: 1_700_000_000,
+                metadata_at: 1_700_000_000,
+                extra_flags: flags::IMPORTED | flags::FILES_PARTIAL,
+                source: DHT,
+            }])
+            .unwrap();
+        (v1, v2)
+    };
+    let private_v2 = Info::parse(&hybrid("Private.Hybrid"))
+        .unwrap()
+        .v2
+        .unwrap()
+        .truncated();
+    store
+        .put_unverified(&[NewUnverified {
+            network: Network::Bt,
+            key: &private_v2.0,
+            source: feed,
+            private_source: true,
+            claims: Some(&claims),
+            at: 1_700_000_000,
+        }])
+        .unwrap();
+    let (private_v1, v2) = import(&mut store, "Private.Hybrid");
+    assert_eq!(v2, private_v2);
+    assert!(
+        store
+            .unverified(Network::Bt, &private_v1.0)
+            .unwrap()
+            .is_none(),
+        "nothing under the v1 hash: only the v2 term can exclude it"
+    );
+    assert!(store.unverified(Network::Bt, &v2.0).unwrap().is_some());
+    let (public_v1, _) = import(&mut store, "Public.Hybrid");
+    assert_eq!(store.partial_hashes(10).unwrap(), vec![public_v1]);
+}

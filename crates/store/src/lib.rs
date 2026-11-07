@@ -1043,20 +1043,20 @@ impl Store {
     /// left out here, not after, so `limit` counts only keys that can be
     /// refetched (`docs/decisions/2026-11-07-X-refetch-private.md`).
     pub fn partial_hashes(&self, limit: usize) -> Result<Vec<InfoHash>> {
-        // `u.flags & 1`: `unverified::PRIVATE`, found only privately.
         let mut stmt = self.conn.prepare(
             "SELECT t.info_hash FROM torrents t \
              WHERE t.flags & ?1 != 0 AND t.flags & ?2 = 0 \
              AND NOT EXISTS (SELECT 1 FROM unverified_items u \
-                 WHERE u.network = ?3 AND u.flags & 1 != 0 \
+                 WHERE u.network = ?3 AND u.flags & ?4 != 0 \
                  AND u.key IN (t.info_hash, substr(t.info_hash_v2, 1, 20))) \
-             ORDER BY t.id LIMIT ?4",
+             ORDER BY t.id LIMIT ?5",
         )?;
         let rows = stmt.query_map(
             params![
                 flags::FILES_PARTIAL,
                 flags::PRIVACY,
                 unverified::Network::Bt as i64,
+                unverified::PRIVATE,
                 limit as i64
             ],
             |r| r.get::<_, Vec<u8>>(0),

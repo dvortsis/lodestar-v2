@@ -30,7 +30,7 @@ use crate::{Error, PreparedTorrent, Result, Store, begin_write, flags};
 
 /// `unverified_items.flags`: found only through private sources (§18.7).
 /// Never sent to public peer finding. A public sighting clears it.
-const PRIVATE: i64 = 1;
+pub(crate) const PRIVATE: i64 = 1;
 /// `unverified_items.flags`, and `torrent_claims.flags` as 1: the claims
 /// came through a private source (a private indexer's names, tracker URLs
 /// with passkeys). Unlike [`PRIVATE`], a public sighting of the key
