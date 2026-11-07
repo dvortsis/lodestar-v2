@@ -309,6 +309,12 @@ async fn run(torrents: u64, load: Option<&Load>) -> Report {
     )
     .await
     .unwrap();
+    // The gate's searchable count follows the index's commits, as the
+    // binary wires it (`crates/lodestar/src/services.rs`, `follow_gate`).
+    let gate = pipeline.monitor().gate().clone();
+    serving
+        .commit_hook()
+        .add(move |c| gate.searchable(c.max_torrent_id, c.at as i64));
     // The pacer: a sleep that only paces a writer (standards §2).
     let slices = (budget_secs * 10.0).ceil().max(1.0) as usize;
     let pacer = tokio::spawn(async move {
