@@ -336,6 +336,10 @@ fn bump(c: &AtomicU64) {
 pub struct WorkerStatus {
     pub worker: WorkerId,
     pub connected: bool,
+    /// The live session's id, unique for this server's life (it counts
+    /// up): a new value means the worker connected again, even between
+    /// two snapshots (WK-10a). `None` while it isn't connected.
+    pub session: Option<u64>,
     pub draining: bool,
     /// Paused by the admin: connected or not, it gets no new leases.
     pub paused: bool,
@@ -765,6 +769,7 @@ impl ClusterServer {
                 WorkerStatus {
                     worker: *worker,
                     connected: s.session.is_some(),
+                    session: s.session.as_ref().map(|slot| slot.id),
                     draining: s.draining,
                     paused: s.paused,
                     offset_ms: s.offset_ms,

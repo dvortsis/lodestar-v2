@@ -369,6 +369,8 @@
 	"settings_logging_ev_cluster_have_at_cap_h": "告诉工作节点哪些内容已存储的过滤器已达到最大大小并已满。工作节点会认领更多已存储的键；协调节点会自行答复这些请求。",
 	"settings_logging_ev_cluster_snapshot_failed_n": "未能生成工作节点的过滤器快照",
 	"settings_logging_ev_cluster_snapshot_failed_h": "发送给远程工作节点的过滤规则无法生成，因此它们继续使用上次收到的规则。错误信息会说明超过了哪个限制。",
+	"settings_logging_ev_cluster_tick_failed_n": "集群定时任务已停止",
+	"settings_logging_ev_cluster_tick_failed_h": "协调节点为远程工作节点执行的定期任务因内部错误而停止：在关闭并重新开启“允许工作节点”或重启 Lodestar 之前，它们不会收到新的分配或过滤器更新。",
 	"settings_logging_ev_workers_join_refused_n": "工作节点未规划",
 	"settings_logging_ev_workers_join_refused_h": "已规划 4,096 个工作节点，此节点等待空位。",
 	"settings_logging_ev_workers_prefs_skipped_n": "工作节点设置已重置",

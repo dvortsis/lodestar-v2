@@ -332,6 +332,7 @@ mod tests {
         WorkerStatus {
             worker: WorkerId(id),
             connected,
+            session: None,
             draining,
             paused: false,
             offset_ms: 0,

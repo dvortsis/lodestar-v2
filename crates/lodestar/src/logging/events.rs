@@ -927,6 +927,16 @@ lodestar_log::catalogue! {
         message: "The workers' have-filter is full at its largest size; workers claim more stored keys",
         fields: { stored: Size },
     }
+    /// The cluster tick ended with a panic (a bug): placement, snapshots
+    /// and the have-filter stop until Allow workers is turned off and on or
+    /// Lodestar restarts. Said once (WK-10a).
+    CLUSTER_TICK_FAILED {
+        id: "cluster.tick_failed",
+        component: Workers,
+        level: Error,
+        message: "The cluster tick stopped; workers get no new assignments or snapshots until the port opens again",
+        fields: { error: Error },
+    }
     /// The filter or dictionary snapshot for remote workers couldn't be
     /// built (the store is past one of its caps, or the read failed).
     /// Workers keep the snapshots they have. The error names a cap, never
