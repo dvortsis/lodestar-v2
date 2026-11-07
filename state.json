@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T07:45Z",
+  "updated_at": "2026-11-07T07:46Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3588,12 +3588,19 @@
       "head": "4b771047"
     },
     "X-cmp0-polish": {
-      "state": "building",
-      "session": "session_01MMjhnBonbNUTDWLAzkBRCs"
+      "state": "merged",
+      "session": "session_01MMjhnBonbNUTDWLAzkBRCs",
+      "pr": 567,
+      "merge": "b371b8eb"
     },
     "WK-8": {
       "state": "building",
       "session": "session_01MMjhnBucpmG2oiyBH2LoQi"
+    },
+    "WK-14": {
+      "state": "running",
+      "session": "session_01MMjhnC7AMtBL224stKAMCf",
+      "since": "2026-11-07T07:45Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -6268,7 +6275,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-07T06:40Z",
+    "updated": "2026-11-07T07:46Z",
     "items": [
       {
         "slot": 1,
@@ -6288,11 +6295,11 @@
       },
       {
         "slot": 3,
-        "slice": "X-cmp0-polish",
+        "slice": "WK-14",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBonbNUTDWLAzkBRCs: companion catalogue follow-ups from the CMP-0 review",
-        "since": "2026-11-07T05:09Z"
+        "doing": "session_01MMjhnC7AMtBL224stKAMCf: Workers API (list, token, drain, pause, revoke, prefs, #560 hand-offs)",
+        "since": "2026-11-07T07:45Z"
       },
       {
         "slot": 4,
