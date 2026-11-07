@@ -5437,7 +5437,7 @@
     "v0.5.1 release verdict file (R1'' r5 PASS, R2 gluetun PASS, R-win PASS, R3''' rc.5 + R-legal #558) once CI/Release/E2E green on 12cd25ca",
     "owner-decisions §2.51: owner 2026-11-07 ~00:35Z (relayed by dashboard): \"Unraid as host\" and \"Port is not forwarded\". ext:experiment-host stays met:false (per booked run); dashboard label -> 'Book each run (host: Unraid)'; build-plan §0.5 rules: fixed network setup (DHT UDP not forwarded, Lodestar UPnP off, router unchanged, same LAN/public IP) for comparator through CR-COMB; change = network change -> comparator re-run; 'not the soak PC' = the CR-0 Windows PC; no LAN IP in repo"
    ],
-   "done_in": "#550 (1f5a8cd6) except: X-fetch-pool-bytes owns metrics.rs + docs/metrics.md; X-fetch-meta-reserve slice entry; manifest wording \"until SRC-15b\" -> \"until X-consent-gate-lift\" (:220,:305,:412, X-consent-gate-052 title); #557 (05986cde) did the rest up to 00:20Z"
+   "done_in": "#550 (1f5a8cd6) except: X-fetch-pool-bytes owns metrics.rs + docs/metrics.md; X-fetch-meta-reserve slice entry; manifest wording \"until SRC-15b\" -> \"until X-consent-gate-lift\" (:220,:305,:412, X-consent-gate-052 title); #557 (05986cde) did the rest up to 00:20Z; #559 (243407ed): §2.50, §2.51, X-soak-screen, X-sources-api-spec + WK-5 owns, v0.5.1 verdict. Still open: PK-cli vs WK-2 note; owner flags at merges"
   },
   {
    "id": "SRC-15c-notes",
