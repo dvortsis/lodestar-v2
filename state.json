@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-07T02:58Z",
+ "updated_at": "2026-11-07T03:24Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3562,8 +3562,10 @@
    "merge": "62412a05"
   },
   "X-sources-api-spec": {
-   "status": "running",
-   "session": "session_01MMjhn9ARUjR5QVyemUwrx1"
+   "status": "merged",
+   "session": "session_01MMjhn9ARUjR5QVyemUwrx1",
+   "pr": 561,
+   "merge": "c7499507"
   },
   "X-soak-screen": {
    "status": "running",
@@ -3572,6 +3574,10 @@
   "WK-3": {
    "status": "running",
    "session": "session_01MMjhnAxuW2sJ83mbnhLEYs"
+  },
+  "SRC-15c": {
+   "status": "running",
+   "session": "session_01MMjhnBxn64zRn4Jviz1B6e"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5497,7 +5503,8 @@
     "dashboard.yaml ext:experiment-host: booked cr-ab-comp-1 (start 2026-11-07T13:00Z); met only for that run, back to false at its end",
     "slices.yaml X-soak-screen notes: replace 'one new soak-screen job in .github/workflows/ci.yml' with owns .github/workflows/soak-screen.yml (workflow_dispatch + push release/**; outside ci-ok; runner 01:45Z)",
     "WK-14 notes (from #560 delta review): persist worker prefs (pin, budget) and re-apply after restart; disconnect before Placement::forget (else next tick rejoins with defaults); warn + don't record addresses when a join is refused at MAX_WORKERS (4,096) so it is retried; prefs_mut cap refuses pin silently when full -> surface an error. is_public nit: add 2001:2::/48 and 3fff::/20",
-    "After #562 merges: dispatch soak-screen.yml on main (first run = proof); ask owner (via dashboard) to run the new analyzer over private r4 and r5 run dirs and relay only 'screen:' lines; if thresholds move, a small thresholds-only follow-up"
+    "After #562 merges: dispatch soak-screen.yml on main (first run = proof); ask owner (via dashboard) to run the new analyzer over private r4 and r5 run dirs and relay only 'screen:' lines; if thresholds move, a small thresholds-only follow-up",
+    "slices.yaml SRC-15c owns: add web/e2e/settings-sources*.test.ts and docs/decisions/2026-11-07-SRC-15c.md (runner pre-approved at launch 03:24Z)"
    ]
   }
  ],
@@ -6191,7 +6198,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-07T02:58Z",
+  "updated": "2026-11-07T03:24Z",
   "items": [
    {
     "slot": 1,
@@ -6211,11 +6218,11 @@
    },
    {
     "slot": 3,
-    "slice": "X-sources-api-spec",
+    "slice": "SRC-15c",
     "role": "build",
     "agent": "claude",
-    "doing": "session_01MMjhn9ARUjR5QVyemUwrx1: credential spec, config_schema, purge preview count",
-    "since": "2026-11-07T00:22Z"
+    "doing": "session_01MMjhnBxn64zRn4Jviz1B6e (Sonnet): Account dialog, generated config forms, purge preview counts",
+    "since": "2026-11-07T03:24Z"
    },
    {
     "slot": 4,
