@@ -14,7 +14,10 @@ use lodestar_metainfo::InfoHash;
 
 use crate::bep33::Bloom;
 
-pub(crate) const TTL: Duration = Duration::from_secs(30 * 60);
+/// How long an announcement lives after its most recent refresh. The same
+/// value is [`crate::PEER_TTL`], which the legal notice's 30-minute sentence
+/// is checked against (LEGAL-3a).
+pub(crate) const TTL: Duration = crate::PEER_TTL;
 const MAX_HASHES: usize = 10_000;
 const MAX_PEERS: usize = 50;
 
