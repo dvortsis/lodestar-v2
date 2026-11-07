@@ -5912,6 +5912,11 @@
       "id": "wk10a-review-1",
       "at": "2026-11-07T21:35Z",
       "note": "#592 review CHANGES: B1 fleet-wide forget on any reconnect (cert renewal every 36 h) -> per-worker session id (server.rs ~3 lines approved) + test; B2 NotReady mapped to Loss::Blocked loses work at UTC midnight and would be tombstoned under WK-10c -> runner decision: NotReady never Blocked (retry/hold, non-tombstone release), coordinator pre-sends next-day key+snapshot from ~23:00Z (10b, serve.rs approved); N1 N2 N3 N5 N7 in this push; N6 + N8 -> WK-10c; N9 later. Owner \u00a72.19 flag at merge: B2 decision."
+    },
+    {
+      "id": "X-soak-screen-fixes-merged",
+      "at": "2026-11-07T22:05Z",
+      "note": "#595 merged ece37f0e on fresh Opus MERGE (3 optional nits: drop guard for parked threads on spawn failure, x*x last-bit, rustdoc link to fn-local const). Backport to release/v0.5.2: ride with v0.5.2 final or next rc (test/tooling only). Slot 1 -> X-win-refusal-ux (same session)."
     }
   ],
   "main_health": [
@@ -6607,15 +6612,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-07T21:20Z",
+    "updated": "2026-11-07T22:05Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-soak-screen-fixes",
+        "slice": "X-win-refusal-ux",
         "role": "build",
         "agent": "claude",
         "doing": "session_01MMjhnABi9mwqkZULms8pjL: #584 rc.1 into release/v0.5.2; CI dispatched (macOS utp_demux SIGSEGV re-run pending)",
-        "since": "2026-11-07T20:05Z"
+        "since": "2026-11-07T22:05Z"
       },
       {
         "slot": 2,
@@ -6696,5 +6701,5 @@
       "answers": "runner recommendation on all items: X-refetch-private ships in v0.5.2; installer Repair may re-secure admin-ACE-only folder (X-win-refusal-ux); v0.5.1 release body replacement (notes/v051-release-body.md); web-ok+e2e-ok required; delete wip/CMP-0-catalogue; Q13 stands, Q14 at G-m6; import host = Unraid box; nightly key deferred; counsel advisory, no reminders; package installers after 1.0"
     }
   ],
-  "heartbeat": "2026-11-07T21:35Z"
+  "heartbeat": "2026-11-07T22:05Z"
 }
