@@ -69,10 +69,23 @@ impl Server {
     /// nothing leaves the machine. The first start sets the password up;
     /// a later one logs in with it.
     fn start(dir: &Path, first: bool) -> Server {
+        Server::start_with(dir, first, false)
+    }
+
+    /// As [`Server::start`]; `dht` runs the DHT too, on a loopback port
+    /// with no bootstrap nodes, so it still contacts nobody.
+    fn start_with(dir: &Path, first: bool, dht: bool) -> Server {
+        if dht {
+            std::fs::write(
+                dir.join("config.toml"),
+                "[dht]\nbind = [\"127.0.0.1:0\"]\nbootstrap = []\n",
+            )
+            .unwrap();
+        }
         let mut child = Command::new(env!("CARGO_BIN_EXE_lodestar"))
             .env("LODESTAR_DATA_DIR", dir)
             .env("LODESTAR_HTTP_BIND", common::ANY_PORT)
-            .env("LODESTAR_DHT_ENABLED", "false")
+            .env("LODESTAR_DHT_ENABLED", dht.to_string())
             .env("LODESTAR_DHT_PORT", "0")
             .env("LODESTAR_SCRAPE_ENABLED", "false")
             .env("LODESTAR_LOG", "info")
@@ -386,4 +399,41 @@ fn a_grab_with_the_token_reaches_the_store_private_and_a_wrong_one_never_does() 
         !log.contains(&token) && !log.contains(&radarr_token),
         "a token is never logged"
     );
+}
+
+/// G1 of the v0.5.2 manifest (`docs/plan/2026-11-06-v052-feature-manifest.md`
+/// §3.3): a release build registers exactly three sources, the DHT, the
+/// torrent cache and the Sonarr/Radarr webhooks, and only the DHT starts
+/// on. Every other plugin in `sources-plugins` is compiled in but must stay
+/// unregistered; registering one changes what v0.5.2 ships, so it fails
+/// here until the manifest and this list say so.
+#[test]
+fn the_binary_registers_only_the_dht_the_torrent_cache_and_the_webhooks() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Server::start_with(dir.path(), true, true);
+    let sources = s.get_json("/api/v1/sources");
+    let list = sources
+        .as_array()
+        .or_else(|| sources["sources"].as_array())
+        .unwrap_or_else(|| panic!("a list of sources: {sources}"));
+    let mut seen: Vec<(String, bool)> = list
+        .iter()
+        .map(|x| {
+            (
+                x["plugin"].as_str().unwrap_or_default().to_owned(),
+                x["enabled"].as_bool().unwrap_or_else(|| panic!("{x}")),
+            )
+        })
+        .collect();
+    seen.sort();
+    assert_eq!(
+        seen,
+        [
+            ("arr_webhooks".to_owned(), false),
+            ("dht".to_owned(), true),
+            ("torrent_cache".to_owned(), false),
+        ],
+        "{sources}"
+    );
+    s.stop();
 }

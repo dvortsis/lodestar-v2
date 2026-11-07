@@ -1329,5 +1329,73 @@ class ScreenTests(Base):
         self.assertFalse(self.root.exists() and any(self.root.iterdir()))
 
 
+NOTICE_409 = json.dumps({"error": {"code": "notice_required", "message": "accept the notice"}}).encode()
+
+
+def notice_gate(method, url, body=None, cookie=None):
+    """Lodestar with the notice unaccepted: login works, every session route answers 409."""
+    if url.endswith("/login"):
+        return 200, {"set-cookie": "lodestar_session=abc; HttpOnly"}, b""
+    return 409, {}, NOTICE_409
+
+
+class NoticeRequiredTests(Base):
+    """`409 notice_required` (P-v052-cut, manifest §6): until the Legal Notice is
+    accepted every session route answers it, and the collector stops loudly
+    rather than recording each boundary's checks as unavailable."""
+
+    def api(self, answer):
+        password = self.tmp / "password"
+        password.write_text("pw\n", encoding="utf-8")
+        password.chmod(0o600)
+        calls = []
+
+        def request(method, url, body, cookie):
+            calls.append((method, url.rsplit("/api/v1", 1)[1]))
+            return answer(method, url)
+
+        return collect.LodestarAPI("http://127.0.0.1:1", password, request), calls, password
+
+    def test_a_session_route_answered_notice_required_raises(self):
+        api, calls, _ = self.api(notice_gate)
+        with self.assertRaises(collect.NoticeRequired):
+            api.build_target()
+        self.assertEqual(calls, [("POST", "/login"), ("GET", "/system")])
+
+    def test_another_409_is_still_an_unavailable_answer(self):
+        def answer(method, url):
+            if url.endswith("/login"):
+                return 200, {"set-cookie": "lodestar_session=abc"}, b""
+            return 409, {}, json.dumps({"error": {"code": "conflict"}}).encode()
+        api, _, _ = self.api(answer)
+        with self.assertRaises(ValueError):
+            api.settings()
+        self.assertFalse(collect.notice_required(409, b"not json"))
+
+    def test_a_boundary_check_doesnt_record_it_as_a_gap(self):
+        api, _, password = self.api(notice_gate)
+        c = self.collector(self.docker(), "--password-file", str(password))
+        c.api = api
+        with self.assertRaises(collect.NoticeRequired):
+            c.api_checks(0, self.clock.now())
+
+    def test_the_run_stops_at_once_and_says_why(self):
+        _, _, password = self.api(notice_gate)
+        args = args_for(self.root, "--url", self.lodestar.url, "--password-file", str(password))
+        c = collect.Collector(args, self.docker(), clock=self.clock.clock, sleep=self.clock.sleep,
+                              now=self.clock.now, volumes=fixed_volumes(),
+                              api_call=notice_gate)
+        with mock.patch("sys.stderr"):
+            code = c.run()
+        self.assertEqual(code, 1)
+        result = self.result()
+        self.assertEqual(result["reason"], "collector_error")
+        samples = self.root / "samples.jsonl"
+        self.assertFalse(samples.exists() and samples.read_text().strip(), "no sample before the stop")
+        events = (self.root / "events.log").read_text()
+        self.assertIn("notice_required", events)
+        self.assertNotIn("baseline", result.get("reason", ""))
+
+
 if __name__ == "__main__":
     unittest.main()

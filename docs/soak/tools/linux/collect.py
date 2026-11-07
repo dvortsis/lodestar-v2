@@ -1218,6 +1218,25 @@ class PublicIP:
         return "unchanged" if address == self.reference else "changed"
 
 
+class NoticeRequired(Exception):
+    """Lodestar answered `409 notice_required`: the Legal Notice isn't accepted.
+
+    Every session route answers it until someone signs in and accepts the
+    notice (an upgraded data folder sees a new version once). The run can't
+    measure anything the API reports until then, so the collector stops
+    with this reason instead of recording each answer as unavailable. Not an
+    OSError or ValueError, so the checks that record gaps don't catch it."""
+
+
+def notice_required(status, body):
+    if status != 409:
+        return False
+    try:
+        return json.loads(body)["error"]["code"] == "notice_required"
+    except (ValueError, KeyError, TypeError):
+        return False
+
+
 class LodestarAPI:
     """A logged-in session for the settings and Insights APIs (rule 5.5, §8).
 
@@ -1246,6 +1265,8 @@ class LodestarAPI:
             if status == 401 and attempt == 0:
                 self.cookie = None
                 continue
+            if notice_required(status, body):
+                raise NoticeRequired()
             if status != 200:
                 raise ValueError("api status")
             return json.loads(body)
@@ -1303,7 +1324,11 @@ def api_request(method, url, body, cookie, timeout=10):
         with OPENER.open(request, timeout=timeout) as response:
             return response.status, {k.lower(): v for k, v in response.headers.items()}, response.read(1 << 20)
     except urllib.error.HTTPError as error:
-        return error.code, {}, b""
+        try:
+            body = error.read(1 << 16)
+        except (OSError, http.client.IncompleteRead):
+            body = b""
+        return error.code, {}, body
 
 
 def demux_docker_stream(raw):
@@ -1890,6 +1915,13 @@ class Collector:
                 if endpoint_reached(elapsed, end_at, metrics_ok and health in (200, None), self.baseline_start):
                     self.reason = "baseline_window_complete"
                     break
+        except NoticeRequired:  # a stop reason the analyzer knows; the note says which
+            self.reason = "collector_error"
+            self.note("collector failure (notice_required): Lodestar answers 409 notice_required; "
+                      "sign in, accept the Legal Notice, "
+                      "then start the run again")
+            sys.stderr.write("Lodestar's Legal Notice isn't accepted (409 notice_required): sign in, "
+                             "accept it, then start the collector again.\n")
         except Exception as error:  # evidence_write_error keeps its own reason
             if self.reason != "evidence_write_error":
                 self.reason = "collector_error"

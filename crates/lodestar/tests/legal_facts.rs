@@ -171,11 +171,34 @@ fn registered_sources_and_consent_classes_match_section_2() {
         "The Sonarr and Radarr webhooks contact nothing and turn on with their switch",
         "webhooks are Consent::None with no endpoints",
     );
+    // The torrent cache can't be turned on in this build: the consent gate
+    // refuses every class but None (X-consent-gate-052, P-v052-cut). When
+    // X-consent-gate-lift opens External, this fails until section 2 says
+    // how it is turned on.
+    assert!(
+        !lodestar_pipeline::control::consent_text_approved(
+            lodestar_sources_plugins::torrent_cache::MANIFEST.consent
+        ),
+        "Legal Notice section 2 says the torrent cache can't be turned on in this version, but \
+         the consent gate now lets its class through"
+    );
     require(
         &n,
         s2,
-        "The torrent cache can't be turned on until you accept the websites it contacts",
+        "In this version the torrent cache can't be turned on.",
+        "the consent gate refuses Consent::External",
+    );
+    require(
+        &n,
+        s2,
+        "after you accept the websites it contacts",
         "torrent cache is Consent::External",
+    );
+    forbid(
+        &n,
+        s2,
+        "turned on through the API",
+        "the consent gate refuses to enable it through the API too",
     );
     // No Account, Restricted or Overlay source is registered.
     for class in ["Account", "Restricted", "Overlay"] {
