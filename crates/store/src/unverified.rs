@@ -947,19 +947,22 @@ impl Store {
         Ok(step)
     }
 
-    /// What purging `source` would remove now ([`PurgePreview`]), read
-    /// in one transaction and changing nothing. It reads the rows the
-    /// purge reads, in the same pages, and judges each with the same rule
-    /// (`fate`), so the two agree. Unlike [`Store::purge_source`] it
-    /// doesn't need the source off: an enabled source can still find more
-    /// before a purge turns it off, so the counts are exact only while
-    /// it's off. It reads every unverified item and torrent once, as a
-    /// purge does: run it on a reader ([`Store::open_reader`]) to keep the
+    /// What purging `source` would remove now ([`PurgePreview`]),
+    /// changing nothing. It reads the rows the purge reads, in the same
+    /// pages, and judges each with the same rule (`fate`), so the two
+    /// agree. Each page is its own short read, never one snapshot held
+    /// across the scan, so a purge step's WAL checkpoint never waits on a
+    /// preview of millions of rows. The counts are therefore exact only
+    /// while nothing writes, which is already the case they promise:
+    /// unlike [`Store::purge_source`] the preview doesn't need the source
+    /// off, and an enabled source can still find more before a purge turns
+    /// it off. It reads every unverified item and torrent once, as a purge
+    /// does: run it on a reader ([`Store::open_reader`]) to keep the
     /// writer free. `Error::NotFound` for an unknown source.
-    pub fn purge_preview(&mut self, source: SourceId) -> Result<PurgePreview> {
+    pub fn purge_preview(&self, source: SourceId) -> Result<PurgePreview> {
         let bit = source.bit();
-        let tx = self.conn.transaction()?;
-        let known: Option<i64> = tx
+        let conn = &self.conn;
+        let known: Option<i64> = conn
             .query_row("SELECT 1 FROM sources WHERE id = ?1", [source.get()], |r| {
                 r.get(0)
             })
@@ -974,7 +977,7 @@ impl Store {
             Fate::Keep => *kept += 1,
         };
         let page = MAX_PURGE_STEP as i64;
-        let mut unverified = tx.prepare_cached(unverified_page!())?;
+        let mut unverified = conn.prepare_cached(unverified_page!())?;
         let mut after = 0;
         loop {
             let rows: Vec<(i64, i64)> = unverified
@@ -993,7 +996,7 @@ impl Store {
             }
         }
         drop(unverified);
-        let mut torrents = tx.prepare_cached(torrents_page!())?;
+        let mut torrents = conn.prepare_cached(torrents_page!())?;
         let mut after = 0;
         loop {
             let rows: Vec<(i64, i64)> = torrents
@@ -1013,12 +1016,11 @@ impl Store {
         }
         drop(torrents);
         let count = |sql: &str| -> Result<u64> {
-            Ok(tx.query_row(sql, [source.get()], |r| r.get::<_, i64>(0))? as u64)
+            Ok(conn.query_row(sql, [source.get()], |r| r.get::<_, i64>(0))? as u64)
         };
         preview.claims_deleted = count(concat!("SELECT count(*) FROM ", claims_of!()))?;
         preview.state_deleted = count(concat!("SELECT count(*) FROM ", state_of!()))?;
         preview.queue_deleted = count(concat!("SELECT count(*) FROM ", queue_of!()))?;
-        tx.rollback()?;
         Ok(preview)
     }
 

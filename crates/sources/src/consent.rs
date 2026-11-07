@@ -267,7 +267,9 @@ pub enum SpecError {
     /// More than [`MAX_CREDENTIALS`] declared.
     TooMany,
     /// An Account source whose required credentials, all stored, still
-    /// leave [`need`] asking for credentials.
+    /// leave [`need`] asking for credentials. Today's `need` takes any
+    /// non-egress name, so this can't happen yet; it guards the stricter
+    /// `need` X-consent-gate-lift brings.
     NotEnough,
 }
 

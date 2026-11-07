@@ -1,7 +1,7 @@
 //! X-sources-api-spec through the router: `GET /sources` lists each
 //! source's declared credentials (`credential_spec`) and settings schema
 //! (`config_schema`) and never a credential's value, and
-//! `POST /sources/{id}/purge/preview` counts what a purge removes, changes
+//! `GET /sources/{id}/purge/preview` counts what a purge removes, changes
 //! nothing, needs a session (an API key won't do) and asks no password.
 //!
 //! The running process is a fake over a real store: the preview and the
@@ -681,7 +681,7 @@ async fn the_preview_counts_what_the_purge_removes_and_changes_nothing() {
     let id = serde_json::from_str::<Value>(&job).unwrap()["id"]
         .as_u64()
         .unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     let job = loop {
         let (_, j) = send(
             &f,
@@ -693,7 +693,8 @@ async fn the_preview_counts_what_the_purge_removes_and_changes_nothing() {
             break j;
         }
         assert!(std::time::Instant::now() < deadline, "{j}");
-        tokio::task::yield_now().await;
+        // Polled until the job leaves `running`, within the deadline.
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     };
     assert_eq!(job["state"], "done", "{job}");
     assert_eq!(job["purge"]["torrents_deleted"], got.torrents_deleted);

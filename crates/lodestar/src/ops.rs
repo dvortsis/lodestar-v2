@@ -350,10 +350,12 @@ fn credential_spec(spec: &[CredentialSpec]) -> Vec<CredentialField> {
 }
 
 /// A plugin's compiled-in settings schema as the API lists it: without
-/// its secrets. A property marked `"writeOnly"`, or named as one of its
-/// credentials, is written through `PATCH /sources/{id}/credentials`
+/// its secrets. A top-level property marked `"writeOnly"`, or named as
+/// one of its credentials, is written through `PATCH /sources/{id}/credentials`
 /// (`credential_spec`), never as a setting, so a form generated from the
-/// schema never asks for a secret as a setting. A schema that doesn't
+/// schema never asks for a secret as a setting. Only top-level
+/// properties are looked at: `sources-plugins`' `credential_spec` test
+/// refuses a write-only setting in any plugin's schema. A schema that doesn't
 /// parse (a plugin bug, which `sources-plugins`' tests catch) reads as
 /// [`lodestar_sources::EMPTY_SCHEMA`]: a form with no fields.
 fn config_schema(schema: &str, spec: &[CredentialSpec]) -> serde_json::Value {
@@ -713,7 +715,12 @@ impl OpsApi for Ops {
                 plugin: view.status.manifest.id.to_string(),
                 queue_deleted: counts.queue_deleted,
                 // Off and stopped: nothing it finds can add to the counts.
-                settled: view.state != lodestar_store::SourceState::Enabled && !view.status.running,
+                // Paused isn't off: its pending keys are still fetched,
+                // and a purge refuses it.
+                settled: matches!(
+                    view.state,
+                    lodestar_store::SourceState::Disabled | lodestar_store::SourceState::Purged
+                ) && !view.status.running,
                 source_id: id,
                 state_deleted: counts.state_deleted,
                 torrents_deleted: counts.torrents_deleted,

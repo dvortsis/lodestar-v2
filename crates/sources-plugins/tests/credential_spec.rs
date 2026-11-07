@@ -204,15 +204,16 @@ fn every_catalogued_plugin_is_checked() {
 }
 
 /// With its declared credential stored, an enricher gets past it: the
-/// lookup goes on to its request, which `NoEgress` refuses.
+/// lookup goes on to its request, which `NoEgress` refuses, and fails
+/// otherwise than it does with no key stored.
 #[tokio::test(start_paused = true)]
 async fn the_declared_names_are_the_ones_it_uses() {
     let stored = || Arc::new(StaticCredentials::new([("api_key", "abcdef0123456789")]));
-    let without = lookup_once(&tpdb::Tpdb::new(Arc::new(StaticCredentials::default()))).await;
-    for e in [
-        lookup_once(&tpdb::Tpdb::new(stored())).await,
-        lookup_once(&stashdb::StashDb::new(stored())).await,
-    ] {
-        assert_ne!(e, without, "{e}");
-    }
+    let none = || Arc::new(StaticCredentials::default());
+    let with = lookup_once(&tpdb::Tpdb::new(stored())).await;
+    let without = lookup_once(&tpdb::Tpdb::new(none())).await;
+    assert_ne!(with, without, "tpdb: {with}");
+    let with = lookup_once(&stashdb::StashDb::new(stored())).await;
+    let without = lookup_once(&stashdb::StashDb::new(none())).await;
+    assert_ne!(with, without, "stashdb: {with}");
 }

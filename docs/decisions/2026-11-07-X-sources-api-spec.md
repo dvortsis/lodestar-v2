@@ -38,7 +38,7 @@ This PR adds read-only API surface and one read-only store query. It opens no co
   - a plugin asks for a name it doesn't declare;
   - it declares one it never asks for;
   - it reads under another plugin's id;
-  - a `writeOnly` property in its schema isn't a declared credential;
+  - its schema lists a write-only property, or one named as a declared credential;
   - a plugin in the catalogue isn't checked.
 - **`need` itself is unchanged in this PR.** An Account source is still satisfied by any non-egress credential stored.
   - The runner agreed to tighten it: a declared required set must be stored exactly, and with nothing declared today's fail-closed rule applies.
@@ -61,10 +61,11 @@ This PR adds read-only API surface and one read-only store query. It opens no co
 - **It changes nothing.** The source keeps its state, data, credentials and settings, and no job starts.
 - **`Store::purge_preview(source)` shares its rules with `purge_source`** (the runner's condition), so the two can't drift apart.
   - One function, `fate(sources, bit)`, decides each row: this source's bit alone deletes it, another bit keeps it, no bit leaves it alone. The purge's unverified and torrent stages both use it.
-  - The page queries and the per-source table filters (claims, plugin state, the persisted queue) are shared macros: the purge deletes with them, and the preview pages and counts with them, in one read transaction it then rolls back.
+  - The page queries and the per-source table filters (claims, plugin state, the persisted queue) are shared macros: the purge deletes with them, and the preview pages and counts with them.
+  - Each page is its own short read, not one snapshot over the whole scan, so a purge step's WAL checkpoint (`scrub_wal`) never waits on a long preview (this PR's self-review). One snapshot would buy nothing: the counts are only exact while nothing writes anyway.
   - It counts unverified items deleted and kept, claims deleted, torrents deleted and kept, plugin state entries and persisted queue keys. Each count equals the sum of the `PurgeStep` field of the same name over a whole purge run, while nothing else writes. `crates/store/tests/unverified.rs` asserts this for every field, on the existing purge fixture.
 - **The binary runs it on a read-only connection of its own** (`Store::open_reader`), as `finish_purge` does, so the scan of the unverified items and torrents never holds the shared store's lock.
-- **`settled`** is true while the source is off and its plugin stopped. Then a purge started next removes exactly the counts, unless another source changes the store meanwhile: a torrent the DHT also finds is kept, not deleted.
+- **`settled`** is true while the source is Disabled or Purged and its plugin stopped. Paused isn't settled: its pending keys are still fetched, and a purge refuses it. Then a purge started next removes exactly the counts, unless another source changes the store meanwhile: a torrent the DHT also finds is kept, not deleted.
   - An enabled source keeps finding until the purge turns it off, so the purge may remove more.
   - Keys still in memory waiting to be fetched aren't counted. The purge job reports them as `keys_dropped`.
 - **Size isn't reported yet.** §10.10.7 asks for "the exact count and size". SQLite can't attribute bytes on disk to rows cheaply, and the sum of the torrents' content sizes would read as disk space freed, which it isn't. The dialog shows counts; the button names the torrent count ("Delete 1,204,331 torrents found only by Nyaa", §10.10.7's own example). If a size is wanted, it's a later slice.
@@ -84,7 +85,7 @@ This PR adds read-only API surface and one read-only store query. It opens no co
 ## For SRC-15c
 - **The Account dialog** asks for `credential_spec`'s fields in order: a masked input for `secret`, a plain one for `username`. The label is the spec's English label until its messages are added. It sends `PATCH /sources/{id}/credentials` with `{name: value}` and never shows a stored value. `credentials` says which are stored, so a stored one shows as "Saved", with Replace and Remove.
 - **Generated settings forms** come from `config_schema` and are sent as `config` (only when `editable` lists `config`). The schema never holds a credential field.
-- **The purge dialog** calls `GET /sources/{id}/purge/preview` when it opens, shows the counts, and asks for the password only when you commit (`POST /sources/{id}/purge`). When `settled` is false, say the source is still on, so the purge may remove a little more.
+- **The purge dialog** calls `GET /sources/{id}/purge/preview` once when it opens (each call scans the store), shows the counts, and asks for the password only when you commit (`POST /sources/{id}/purge`). When `settled` is false, say the source is still on, so the purge may remove a little more.
 - **Networks still have no display names** in the manifest (SRC-15b's follow-up). This slice didn't add them.
 - **`SourcePatch.password` is still missing from the schema** (SRC-15b's follow-up). It's outside this slice.
 
