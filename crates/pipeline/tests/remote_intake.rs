@@ -17,6 +17,7 @@ use lodestar_cluster::{
 use lodestar_metainfo::{Info, InfoHash};
 use lodestar_pipeline::metric;
 use lodestar_pipeline::remote::{Clocks, RemoteIntake, SinkParts, Standing};
+use lodestar_pipeline::wire::filter_snapshot::{SealedRecord, WireKey, WireKeys};
 use lodestar_pipeline::wire::{ResultRecord, ResultsBatch};
 use lodestar_pipeline::{Pipeline, PipelineConfig};
 use lodestar_sources::{PoolConfig, Stage};
@@ -87,11 +88,49 @@ fn record(torrent: Prepared, token: Token) -> ResultRecord {
     }
 }
 
+/// A batch from worker 7, every record sealed as a worker seals it.
 fn payload(batch: u64, records: Vec<ResultRecord>) -> Payload {
+    payload_as(W, batch, records)
+}
+
+/// The same from worker `w`: each record is sealed for its id.
+fn payload_as(w: WorkerId, batch: u64, records: Vec<ResultRecord>) -> Payload {
     Payload {
         batch,
-        bytes: ResultsBatch { batch, records }.encode().unwrap(),
+        bytes: sealed_bytes(w, batch, records),
     }
+}
+
+/// The wire key the tests' workers seal with.
+fn wire_key() -> WireKey {
+    WireKey::new(1, [7; 32])
+}
+
+/// The coordinator's keys: the tests' one.
+fn test_keys() -> Arc<WireKeys> {
+    let keys = Arc::new(WireKeys::default());
+    keys.set(vec![wire_key()]);
+    keys
+}
+
+/// A `Results` payload from `w` with every record sealed (WK-8: every
+/// remote record is).
+fn sealed_bytes(w: WorkerId, batch: u64, records: Vec<ResultRecord>) -> Vec<u8> {
+    sealed_with(&wire_key(), w, batch, records)
+}
+
+/// The same, sealed under `key`.
+fn sealed_with(key: &WireKey, w: WorkerId, batch: u64, records: Vec<ResultRecord>) -> Vec<u8> {
+    let sealed: Vec<SealedRecord> = records
+        .iter()
+        .map(|r| SealedRecord::seal(r, key, w).unwrap())
+        .collect();
+    ResultsBatch {
+        batch,
+        records: Vec::new(),
+    }
+    .encode_with(&sealed)
+    .unwrap()
 }
 
 /// A worker's clock offset, fixed.
@@ -153,6 +192,7 @@ fn sink_for(
     pipeline.monitor().remote().sink(SinkParts {
         preparer: Mutex::new(reader(db).preparer()),
         standing,
+        keys: test_keys(),
         stored: Arc::new(Reader(Mutex::new(reader(db)))),
         clocks: Arc::new(Offset(offset_ms)),
         hints_allow_private: false,
@@ -365,11 +405,11 @@ async fn stale_and_guessed_tokens_commit_nothing() {
     let (ka, kb) = (a.info_hash, b.info_hash);
     let ta = rig.lease(W, ka, 1);
     let tb = rig.lease(W, kb, 1);
-    // Worker 8 names worker 7's tokens.
+    // Worker 8 names worker 7's tokens, in a record it sealed itself.
     let other = WorkerId(8);
     assert!(
         rig.sink
-            .results(other, payload(3, vec![record(a.clone(), ta)]))
+            .results(other, payload_as(other, 3, vec![record(a.clone(), ta)]))
     );
     // Worker 7's lease on b moves on (expired, granted again elsewhere).
     let authority = rig.authority();
@@ -385,10 +425,10 @@ async fn stale_and_guessed_tokens_commit_nothing() {
     assert_eq!(authority.get(&kb).unwrap().token, tb2);
     // The real holder's result is stored, once, however often it's sent.
     for batch in [5, 6] {
-        assert!(
-            rig.sink
-                .results(WorkerId(9), payload(batch, vec![record(b.clone(), tb2)]))
-        );
+        assert!(rig.sink.results(
+            WorkerId(9),
+            payload_as(WorkerId(9), batch, vec![record(b.clone(), tb2)])
+        ));
     }
     rig.wait_stored(&kb).await;
     rig.wait_records(4).await;
@@ -504,10 +544,10 @@ async fn late_results_follow_q7() {
     let t0 = rig.lease(w9, torrents[0].info_hash, 5);
     let t4 = rig.lease(w9, torrents[4].info_hash, 5);
     let _ = t0;
-    assert!(
-        rig.sink
-            .results(w9, payload(30, vec![record(torrents[4].clone(), t4)]))
-    );
+    assert!(rig.sink.results(
+        w9,
+        payload_as(w9, 30, vec![record(torrents[4].clone(), t4)])
+    ));
     rig.wait_stored(&torrents[4].info_hash).await;
     rig.wait_records(2).await;
     until("worker 9's commit ends its lease", || {
@@ -888,6 +928,7 @@ async fn path_components_are_budgeted_per_record_and_per_batch() {
     let parts = SinkParts {
         preparer: Mutex::new(store.preparer()),
         standing: Arc::new(NoStanding),
+        keys: test_keys(),
         stored: Arc::new(Reader(Mutex::new(store))),
         clocks: Arc::new(Offset(0)),
         hints_allow_private: false,
@@ -915,31 +956,16 @@ async fn path_components_are_budgeted_per_record_and_per_batch() {
     let a = wide(&ws, "Half.A.2024.mkv", 100_000, 12);
     let b = wide(&ws, "Half.B.2024.mkv", 100_000, 12);
     const { assert!(1_200_000 < BATCH_COMPONENTS && 2_400_000 > BATCH_COMPONENTS) };
-    let one = ResultsBatch {
-        batch: 60,
-        records: vec![leased(over)],
-    }
-    .encode()
-    .unwrap();
+    let one = sealed_bytes(W, 60, vec![leased(over)]);
     let taken = intake.take(W, &one, &parts, now()).unwrap();
     assert!(taken.results.is_empty(), "over the budget alone");
-    let two = ResultsBatch {
-        batch: 61,
-        records: vec![leased(a.clone()), leased(b.clone())],
-    }
-    .encode()
-    .unwrap();
+    let two = sealed_bytes(W, 61, vec![leased(a.clone()), leased(b.clone())]);
     let taken = intake.take(W, &two, &parts, now()).unwrap();
     assert_eq!(taken.results.len(), 1, "the first fits, the second doesn't");
     assert_eq!(taken.results[0].key, a.info_hash);
     assert_eq!(stat(&intake, |s| &s.refused), 2);
     // A new batch has its own budget.
-    let three = ResultsBatch {
-        batch: 62,
-        records: vec![leased(b)],
-    }
-    .encode()
-    .unwrap();
+    let three = sealed_bytes(W, 62, vec![leased(b)]);
     assert_eq!(
         intake.take(W, &three, &parts, now()).unwrap().results.len(),
         1
@@ -1064,6 +1090,7 @@ async fn path_bytes_are_budgeted_per_batch() {
     let parts = SinkParts {
         preparer: Mutex::new(store.preparer()),
         standing: Arc::new(NoStanding),
+        keys: test_keys(),
         stored: Arc::new(Reader(Mutex::new(store))),
         clocks: Arc::new(Offset(0)),
         hints_allow_private: false,
@@ -1110,7 +1137,7 @@ async fn path_bytes_are_budgeted_per_batch() {
         records.push(record(t, token));
     }
     const { assert!(BATCH_PATH_BYTES == 64 << 20) };
-    let bytes = ResultsBatch { batch: 90, records }.encode().unwrap();
+    let bytes = sealed_bytes(W, 90, records);
     let taken = intake.take(W, &bytes, &parts, now()).unwrap();
     let kept: Vec<InfoHash> = taken.results.iter().map(|r| r.key).collect();
     assert_eq!(kept, keys[..4], "four fit; the fifth passes the budget");
@@ -1149,6 +1176,7 @@ async fn a_blob_that_fails_to_decode_still_spends_the_batch() {
     let parts = SinkParts {
         preparer: Mutex::new(store.preparer()),
         standing: Arc::new(NoStanding),
+        keys: test_keys(),
         stored: Arc::new(Reader(Mutex::new(store))),
         clocks: Arc::new(Offset(0)),
         hints_allow_private: false,
@@ -1199,7 +1227,7 @@ async fn a_blob_that_fails_to_decode_still_spends_the_batch() {
         };
         records.push(record(t, token));
     }
-    let bytes = ResultsBatch { batch: 95, records }.encode().unwrap();
+    let bytes = sealed_bytes(W, 95, records);
     let taken = intake.take(W, &bytes, &parts, now()).unwrap();
     assert!(taken.results.is_empty());
     assert_eq!(stat(&intake, |s| &s.refused), 8);
@@ -1448,6 +1476,7 @@ async fn backpressure_bounds_the_writer_queue() {
     let sink = intake.sink(SinkParts {
         preparer: Mutex::new(store.preparer()),
         standing: Arc::new(NoStanding),
+        keys: test_keys(),
         stored: Arc::new(Reader(Mutex::new(store))),
         clocks: Arc::new(Offset(0)),
         hints_allow_private: false,
@@ -1528,6 +1557,7 @@ async fn a_tree_over_the_components_left_is_over_the_budget() {
     let parts = SinkParts {
         preparer: Mutex::new(store.preparer()),
         standing: Arc::new(NoStanding),
+        keys: test_keys(),
         stored: Arc::new(Reader(Mutex::new(store))),
         clocks: Arc::new(Offset(0)),
         hints_allow_private: false,
@@ -1571,22 +1601,12 @@ async fn a_tree_over_the_components_left_is_over_the_budget() {
         t.files = lodestar_store::BlobCodec::new(19).compress(&raw).unwrap();
         t
     };
-    let spent = ResultsBatch {
-        batch: 70,
-        records: vec![leased(first), leased(claim(1))],
-    }
-    .encode()
-    .unwrap();
+    let spent = sealed_bytes(W, 70, vec![leased(first), leased(claim(1))]);
     let taken = intake.take(W, &spent, &parts, now()).unwrap();
     assert_eq!(taken.results.len(), 1);
     assert_eq!(stat(&intake, |s| &s.refused), 1);
     assert_eq!(stat(&intake, |s| &s.over_budget), 1);
-    let fresh = ResultsBatch {
-        batch: 71,
-        records: vec![leased(claim(2))],
-    }
-    .encode()
-    .unwrap();
+    let fresh = sealed_bytes(W, 71, vec![leased(claim(2))]);
     assert!(
         intake
             .take(W, &fresh, &parts, now())
@@ -1651,19 +1671,13 @@ fn copies_of_a_late_result_taken_at_once_are_rebuilt_once() {
     let parts = SinkParts {
         preparer: Mutex::new(preparer),
         standing: Arc::new(NoStanding),
+        keys: test_keys(),
         stored: gate.clone(),
         clocks: Arc::new(Offset(0)),
         hints_allow_private: false,
     };
     let earlier = Token(((epoch as u64 - 3_600) << 32) | 9);
-    let bytes = |batch| {
-        ResultsBatch {
-            batch,
-            records: vec![record(t.clone(), earlier)],
-        }
-        .encode()
-        .unwrap()
-    };
+    let bytes = |batch| sealed_bytes(W, batch, vec![record(t.clone(), earlier)]);
     let (one, two) = (bytes(1), bytes(2));
     std::thread::scope(|s| {
         let a = s.spawn(|| intake.take(W, &one, &parts, now()));
@@ -1777,6 +1791,7 @@ fn parked_keys_keep_their_privacy_and_refusals() {
     let sink = Arc::new(intake).sink(SinkParts {
         preparer: Mutex::new(store.preparer()),
         standing: Arc::new(lodestar_pipeline::remote::NoStanding),
+        keys: test_keys(),
         stored: Arc::new(Reader(Mutex::new(store))),
         clocks: Arc::new(Offset(0)),
         hints_allow_private: false,
@@ -1902,4 +1917,191 @@ async fn saved_keys_held_or_blocked_are_not_restored() {
         .map(|c| (c.reason, c.count))
         .collect();
     assert_eq!(lost, [(lodestar_sources::Loss::Blocked as u8, 2)]);
+}
+
+/// Sealed records (WK-9c; WK-8's format): one that opens under this
+/// session's worker id is rebuilt and stored like any record; every other
+/// is refused alone, counted, and its lease ended once as invalid. The
+/// cases: a wrong key, a key id the coordinator doesn't have, a tampered
+/// seal, the `SEALED` flag over a plain record's bytes, a record in clear
+/// (every remote record is sealed), one sealed for another worker, and a
+/// sealed record without its flag (it doesn't parse: the batch is
+/// undecodable, and the lease lasts while the worker heartbeats).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_records_that_open_are_taken() {
+    let rig = Rig::new(&[], 0).await;
+    let names = [
+        "Opens.2026.mkv",
+        "Wrong.Key.2026.mkv",
+        "Unknown.Key.2026.mkv",
+        "Tampered.2026.mkv",
+        "Flag.On.Plain.2026.mkv",
+        "In.Clear.2026.mkv",
+        "Other.Worker.2026.mkv",
+        "Flag.Missing.2026.mkv",
+    ];
+    let recs: Vec<ResultRecord> = names
+        .iter()
+        .map(|n| {
+            let t = prepared(&rig.worker_store, &info(n, GIB));
+            let token = rig.lease(W, t.info_hash, 1);
+            record(t, token)
+        })
+        .collect();
+    let keys: Vec<InfoHash> = recs.iter().map(|r| r.key).collect();
+    let one = |i: usize| vec![recs[i].clone()];
+    let mut payloads = vec![
+        sealed_bytes(W, 1, one(0)),
+        sealed_with(&WireKey::new(1, [8; 32]), W, 2, one(1)),
+        sealed_with(&WireKey::new(2, [7; 32]), W, 3, one(2)),
+    ];
+    // A flipped byte in the seal's tag (the seal is the record's last
+    // field).
+    let mut tampered = sealed_bytes(W, 4, one(3));
+    *tampered.last_mut().unwrap() ^= 1;
+    payloads.push(tampered);
+    // The seal's bytes overwritten, from its end, with the plain record a
+    // seal would hold.
+    let mut plain_flagged = sealed_bytes(W, 5, one(4));
+    let plain = ResultsBatch {
+        batch: 0,
+        records: one(4),
+    }
+    .encode()
+    .unwrap();
+    let at = plain_flagged.len() - plain.len();
+    plain_flagged[at..].copy_from_slice(&plain);
+    payloads.push(plain_flagged);
+    payloads.push(
+        ResultsBatch {
+            batch: 6,
+            records: one(5),
+        }
+        .encode()
+        .unwrap(),
+    );
+    payloads.push(sealed_bytes(WorkerId(8), 7, one(6)));
+    // Version, batch id, one record, then its flags: `SEALED` is two
+    // bytes of varint. Cleared, the rest reads as a record in clear.
+    let mut unflagged = sealed_bytes(W, 8, one(7));
+    assert_eq!(&unflagged[3..5], [0x80, 0x20], "the SEALED flag");
+    unflagged.splice(3..5, [0u8]);
+    payloads.push(unflagged);
+    for (i, bytes) in payloads.into_iter().enumerate() {
+        assert!(rig.sink.results(
+            W,
+            Payload {
+                batch: i as u64 + 1,
+                bytes
+            }
+        ));
+    }
+    rig.wait_records(7).await;
+    let remote = rig.remote();
+    until("the undecodable batch is counted", || {
+        stat(&remote, |s| &s.undecodable) == 1
+    })
+    .await;
+    rig.wait_stored(&keys[0]).await;
+    assert_eq!(stat(&remote, |s| &s.unopened), 5);
+    assert_eq!(stat(&remote, |s| &s.clear), 1);
+    assert_eq!(stat(&remote, |s| &s.committed), 1);
+    let authority = rig.authority();
+    until("the refused records' leases end", || {
+        keys[1..7].iter().all(|k| !authority.in_flight(k))
+    })
+    .await;
+    for k in &keys[1..] {
+        assert!(rig.stored(k).is_none());
+    }
+    assert!(
+        authority.in_flight(&keys[7]),
+        "an undecodable batch ends nothing"
+    );
+    rig.pipeline.shutdown().await.unwrap();
+}
+
+/// End to end (WK-8's last hop, WK-9c): a worker's sealed record whose
+/// name the commit's own re-judge quarantines (CS-2a here) is opened,
+/// rebuilt, and lands in the quarantine with its name sealed under the
+/// coordinator's own key. The name is nowhere in the data folder in clear.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_sealed_quarantine_reaches_the_quarantine_sealed() {
+    const NAME: &str = "Title 15yo lexa";
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lodestar.db");
+    let store = Store::open(&db, StoreConfig::default()).unwrap();
+    let seal_key = lodestar_filter::Sealer::generate_key().unwrap();
+    // The stand-in term lists `pipeline.rs` uses, so the pattern (CS-2a)
+    // hits.
+    use lodestar_filter::{Core, CsList, Engine, Handle, Lists, Switches, TermSet};
+    let lists = Lists {
+        sexual: TermSet::of(&["lexa"]),
+        child_roles: TermSet::of(&["rolea"]),
+        codes: TermSet::of(&["codex"]),
+    };
+    let config = PipelineConfig {
+        sealer: Some(Arc::new(lodestar_filter::Sealer::new(&seal_key))),
+        filter: Arc::new(Handle::new(Engine::new(Core::new(
+            lists,
+            CsList::default(),
+            Switches::default(),
+        )))),
+        ..config()
+    };
+    let pipeline = Pipeline::start(config, store, vec![]).await.unwrap();
+    let sink = sink_for(&pipeline, &db, Arc::new(Fake::default()), 0);
+    let worker_dir = tempfile::tempdir().unwrap();
+    let ws = Store::open(worker_dir.path().join("w.db"), StoreConfig::default()).unwrap();
+    let t = prepared(&ws, &info(NAME, GIB));
+    let key = t.info_hash;
+    let c = Claim {
+        key,
+        source: src(1),
+        strategy: 3,
+        at: now() - 30,
+    };
+    let authority = pipeline.monitor().lease_authority().clone();
+    let BatchAnswer::Claimed {
+        claimed: Claimed::Granted(token),
+        ..
+    } = authority.claim_batch(W, &[c], now(), None, None)[0]
+    else {
+        panic!()
+    };
+    let bytes = sealed_bytes(W, 1, vec![record(t, token)]);
+    assert!(!bytes.windows(NAME.len()).any(|w| w == NAME.as_bytes()));
+    assert!(sink.results(W, Payload { batch: 1, bytes }));
+    let stats = pipeline.writer_stats().clone();
+    until("quarantined", || {
+        stats.quarantined.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    until("its lease ends", || !authority.in_flight(&key)).await;
+    let store = pipeline.shutdown().await.unwrap();
+    assert!(store.find(&key).unwrap().is_none());
+    let q = store.quarantined(10).unwrap();
+    assert_eq!(
+        (q.len(), q[0].hash, q[0].rule.as_str()),
+        (1, key.0, "CS-2a")
+    );
+    let sealed = q[0].sealed.as_deref().expect("a sealed name");
+    assert_eq!(
+        lodestar_filter::Sealer::new(&seal_key)
+            .open(sealed)
+            .unwrap(),
+        NAME
+    );
+    drop(store);
+    for entry in std::fs::read_dir(dir.path()).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_file() {
+            let data = std::fs::read(&path).unwrap();
+            assert!(
+                !data.windows(NAME.len()).any(|w| w == NAME.as_bytes()),
+                "{} holds the name in clear",
+                path.display()
+            );
+        }
+    }
 }
