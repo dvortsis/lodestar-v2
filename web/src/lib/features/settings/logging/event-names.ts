@@ -382,6 +382,10 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_cluster_have_at_cap_n,
 		m.settings_logging_ev_cluster_have_at_cap_h
 	],
+	'cluster.tick_failed': [
+		m.settings_logging_ev_cluster_tick_failed_n,
+		m.settings_logging_ev_cluster_tick_failed_h
+	],
 	'cluster.snapshot_failed': [
 		m.settings_logging_ev_cluster_snapshot_failed_n,
 		m.settings_logging_ev_cluster_snapshot_failed_h
