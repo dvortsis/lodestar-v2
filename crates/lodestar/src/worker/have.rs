@@ -21,22 +21,29 @@
 //!
 //! WK-10 wires it into the worker runtime: it hands over `HaveSnapshot`,
 //! `Snapshot` chunks of the have-filter kind and `HaveDelta`, sends back
-//! the acknowledgements returned, and calls [`WorkerHave::reconnected`]
-//! on every `Welcome`.
+//! the acknowledgements returned, calls [`WorkerHave::reconnected`] on
+//! every `Welcome` and [`WorkerHave::poll`] on every tick. All of these
+//! run from the session's one message loop, in order: a chunk handled
+//! while `header` is still allocating its filter would be dropped.
 
 // WK-10 wires it into the runtime.
 #![allow(dead_code)]
 
 use std::sync::RwLock;
+use std::time::{Duration, Instant};
 
 use lodestar_cluster::have::{Assembly, HaveDelta, HaveError, HaveHeader, RESYNC, filter_bytes};
 use lodestar_cluster::proto::{SnapshotAck, SnapshotChunk};
 use lodestar_metainfo::InfoHash;
 use lodestar_pipeline::Bloom;
 
-/// Above this, a worker swaps its filter in place (plan Q6): 64 MiB for
-/// the old and new filters together.
+/// Above this, a worker swaps its filter in place (plan Q6): 64 MiB
+/// (mebibytes, 2^26 bytes; Q6 says "64 MB") for the old and new filters
+/// together.
 pub const IN_PLACE_ABOVE: u64 = 64 << 20;
+/// A resync request with no header after this long is sent again: the
+/// first may have been lost with a session (`poll`).
+pub const RESYNC_RETRY: Duration = Duration::from_secs(30);
 
 /// A complete filter and where its deltas are.
 #[derive(Debug)]
@@ -63,6 +70,8 @@ struct State {
     /// A resync was asked for and no new header has come since: don't ask
     /// again for every message that follows.
     resync_asked: bool,
+    /// When `poll` first saw `resync_asked`; the retry clock.
+    asked_at: Option<Instant>,
     refused: u64,
 }
 
@@ -156,6 +165,28 @@ impl WorkerHave {
         RESYNC
     }
 
+    /// Call on every tick with the current time. While a resync is asked
+    /// for and no header has come, the request is sent again every
+    /// [`RESYNC_RETRY`]: the first may have been lost with its session.
+    pub fn poll(&self, now: Instant) -> Option<SnapshotAck> {
+        let mut st = self.write();
+        if !st.resync_asked {
+            st.asked_at = None;
+            return None;
+        }
+        match st.asked_at {
+            None => {
+                st.asked_at = Some(now);
+                None
+            }
+            Some(at) if now.duration_since(at) >= RESYNC_RETRY => {
+                st.asked_at = Some(now);
+                Some(RESYNC)
+            }
+            Some(_) => None,
+        }
+    }
+
     /// A `HaveSnapshot` header: starts a new assembly, replacing any other.
     pub fn header(&self, bytes: &[u8]) -> Result<(), HaveError> {
         let h = match HaveHeader::decode(bytes) {
@@ -174,6 +205,7 @@ impl WorkerHave {
             let mut st = self.write();
             st.pending = None;
             st.resync_asked = false;
+            st.asked_at = None;
             if st
                 .current
                 .as_ref()
@@ -603,5 +635,26 @@ mod tests {
             (Ok(Applied::Inserted), None)
         );
         assert_eq!(w.delta(&delta(1, 0, 6..7)), (Ok(Applied::Inserted), None));
+    }
+
+    #[test]
+    fn a_lost_resync_request_is_sent_again() {
+        let w = WorkerHave::new();
+        let b = source(10, 0x13);
+        load(&w, &b, 1, 1);
+        let t0 = Instant::now();
+        assert_eq!(w.poll(t0), None);
+        // A gap asks once; that request is lost with the session.
+        assert_eq!(w.delta(&delta(1, 5, 0..1)).1, Some(RESYNC));
+        assert_eq!(w.poll(t0), None);
+        assert_eq!(w.poll(t0 + RESYNC_RETRY / 2), None);
+        assert_eq!(w.poll(t0 + RESYNC_RETRY), Some(RESYNC));
+        assert_eq!(w.poll(t0 + RESYNC_RETRY + RESYNC_RETRY / 2), None);
+        assert_eq!(w.poll(t0 + 2 * RESYNC_RETRY), Some(RESYNC));
+        // The header after the re-ask ends it.
+        load(&w, &b, 1, 2);
+        assert_eq!(w.poll(t0 + 10 * RESYNC_RETRY), None);
+        assert_eq!(w.poll(t0 + 20 * RESYNC_RETRY), None);
+        assert!((0..10).all(|i| w.might_be_stored(&key(i))));
     }
 }

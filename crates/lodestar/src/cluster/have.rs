@@ -64,6 +64,10 @@ const MIN_CAPACITY: u64 = 1 << 20;
 /// keys (Q6): 25 % headroom; 10 bits and 7 hashes (~1 % false positives)
 /// up to 30M stored, 8 bits and 6 hashes (~2 %) above. The capacity stops
 /// where the filter would pass the largest a worker accepts.
+///
+/// `stored` is the number of stored *swarm hashes* (`Have::len()`, what
+/// `for_each_swarm_hash` yields), not torrents: a hybrid torrent counts
+/// twice.
 pub fn worker_params(stored: u64) -> (u64, u64, u8) {
     let capacity = stored.saturating_add(stored / 4).max(MIN_CAPACITY);
     let (bits, hashes) = if stored <= WIDE_UP_TO {
@@ -77,6 +81,9 @@ pub fn worker_params(stored: u64) -> (u64, u64, u8) {
 /// A complete worker filter.
 struct Filter {
     bloom: Arc<Bloom>,
+    /// Built at the largest size a worker accepts: past its capacity it
+    /// stays as it is, since a rebuild couldn't make it larger.
+    at_cap: bool,
     generation: u64,
     /// The next delta's sequence number.
     next_delta: u64,
@@ -132,6 +139,10 @@ pub struct HaveSync {
     pub rebuild: bool,
     /// Workers whose queue was full; they're retried on the next sync.
     pub full: Vec<WorkerId>,
+    /// The filter is at the largest size a worker accepts and past its
+    /// capacity: no rebuild is asked for, and false positives climb. The
+    /// caller logs it once (WK-10).
+    pub at_cap: bool,
 }
 
 /// The workers' have-filter.
@@ -225,7 +236,8 @@ impl WorkerFilter {
             + ins.building.as_ref().map_or(0, |b| b.memory_bytes())
     }
 
-    /// Builds the filter for `stored` keys from the store, swaps it in at a
+    /// Builds the filter for `stored` swarm hashes (`Have::len()`, not
+    /// torrents: a hybrid counts twice) from the store, swaps it in at a
     /// new generation and restarts every worker's snapshot. `scan` calls
     /// its argument for every stored swarm hash (`for_each_swarm_hash` on
     /// its own read connection). It blocks: run it on a blocking thread.
@@ -245,11 +257,18 @@ impl WorkerFilter {
             }
             st.rebuilding = true;
         }
-        let (capacity, bits, hashes) = worker_params(stored);
+        // Never smaller than what the filter in use already holds.
+        let held = self.inserts().current.as_ref().map_or(0, |b| b.len());
+        let (capacity, bits, hashes) = worker_params(stored.max(held));
+        let at_cap = capacity == MAX_FILTER_BITS / bits;
         let bloom = Arc::new(Bloom::with_params(capacity, bits, hashes, new_key()));
         self.inserts().building = Some(bloom.clone());
         // From here every insert reaches the new filter, before the scan
         // takes its read. The scan holds no lock while it reads the store.
+        // Release/Acquire is enough: the `building` slot itself is behind
+        // the inserts mutex, and a key the scan could miss was committed
+        // after the scan's read began, which (through SQLite's own locks)
+        // is after this store, so its insert sees `active`.
         self.active.store(true, Ordering::Release);
         let result = scan(&mut |h| bloom.insert(&h));
         let mut st = self.state();
@@ -266,6 +285,7 @@ impl WorkerFilter {
             st.generations += 1;
             st.current = Some(Filter {
                 bloom,
+                at_cap,
                 generation: st.generations,
                 next_delta: 0,
             });
@@ -299,14 +319,22 @@ impl WorkerFilter {
             .map(|w| w.worker)
             .collect();
         let mut st = self.state();
+        let full_at_cap = st
+            .current
+            .as_ref()
+            .is_some_and(|c| c.at_cap && c.bloom.is_full());
         let rebuild = !remote.is_empty()
             && !st.rebuilding
-            && st.current.as_ref().is_none_or(|c| c.bloom.is_full());
+            && st
+                .current
+                .as_ref()
+                .is_none_or(|c| !c.at_cap && c.bloom.is_full());
         st.transfers.retain(|w, _| remote.contains(w));
         let Some(generation) = st.current.as_ref().map(|c| c.generation) else {
             return HaveSync {
                 rebuild,
                 full: Vec::new(),
+                at_cap: false,
             };
         };
         // Taken before any header goes out below: a key inserted later is
@@ -345,7 +373,11 @@ impl WorkerFilter {
             .map(|(w, _)| *w)
             .collect();
         if started.is_empty() {
-            return HaveSync { rebuild, full };
+            return HaveSync {
+                rebuild,
+                full,
+                at_cap: full_at_cap,
+            };
         }
         for keys in waiting.chunks(MAX_DELTA_KEYS) {
             let c = st.current.as_mut().expect("current");
@@ -369,7 +401,11 @@ impl WorkerFilter {
             }
         }
         full.sort();
-        HaveSync { rebuild, full }
+        HaveSync {
+            rebuild,
+            full,
+            at_cap: full_at_cap,
+        }
     }
 
     fn ack_with(
@@ -956,6 +992,47 @@ mod tests {
         net.now += RESYNC_MIN;
         net.sync();
         assert!(net.filter.state().transfers[&w].serial > next);
+    }
+
+    #[test]
+    fn a_filter_at_the_cap_is_never_rebuilt_in_a_loop() {
+        let mut net = Net::new(1);
+        net.store(10);
+        net.settle();
+        // Pretend the filter in use is already the largest a worker takes
+        // and past its capacity.
+        {
+            let mut st = net.filter.state();
+            st.current.as_mut().unwrap().at_cap = true;
+        }
+        net.store((1 << 20) + (1 << 17));
+        let s = net.sync();
+        assert!(!s.rebuild);
+        assert!(s.at_cap);
+        // Workers still finish their snapshot.
+        net.settle();
+        assert!(net.sides[&WorkerId(1)].is_ready());
+        // A stored count past the cap gives a capped filter, flagged.
+        let huge = MAX_FILTER_BITS; // keys
+        let (cap, bits, _) = worker_params(huge);
+        assert_eq!(cap * bits, MAX_FILTER_BITS);
+    }
+
+    #[test]
+    fn a_rebuild_is_never_sized_below_what_the_filter_holds() {
+        let mut net = Net::new(1);
+        net.store(10);
+        net.settle();
+        net.store(2_000_000);
+        // A caller that passes torrents, not swarm hashes, too few.
+        net.filter
+            .rebuild(5, |insert| {
+                net.stored.iter().for_each(|k| insert(*k));
+                Ok::<(), ()>(())
+            })
+            .unwrap();
+        let held = net.filter.inserts().current.as_ref().unwrap().capacity();
+        assert!(held >= 2_000_000, "{held}");
     }
 
     #[test]

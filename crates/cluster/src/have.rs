@@ -33,9 +33,11 @@ use crate::proto::{MAX_CHUNK, MAX_CHUNKS, MAX_OPAQUE, SnapshotAck, SnapshotChunk
 pub const HAVE_V1: u8 = 1;
 /// A header's exact length.
 pub const HEADER_V1_LEN: usize = 70;
-/// The largest filter a worker accepts: 256 MiB (2^31 bits), far above
-/// the worker filter at 50M stored (62.5 MB, plan Q6).
-pub const MAX_FILTER_BITS: u64 = 1 << 31;
+/// The largest filter a worker accepts: 128 MiB (2^30 bits), half the
+/// worker's 256 MB budget and twice the worker filter at 50M stored
+/// (62.5 MB, plan Q6). A header asking for more is refused, never
+/// allocated.
+pub const MAX_FILTER_BITS: u64 = 1 << 30;
 /// The smallest: one word.
 pub const MIN_FILTER_BITS: u64 = 64;
 /// Hash functions per key.
@@ -286,8 +288,9 @@ pub const RESYNC: SnapshotAck = SnapshotAck {
     seq: 0,
 };
 
-/// Where an accepted chunk's bytes go.
-#[derive(Debug, PartialEq, Eq)]
+/// Where an accepted chunk's bytes go. Its `Debug` prints the length of
+/// the bytes, never the bytes.
+#[derive(PartialEq, Eq)]
 pub struct Placed<'a> {
     /// Byte offset into the filter, a multiple of 8.
     pub offset: usize,
@@ -296,6 +299,17 @@ pub struct Placed<'a> {
     pub ack: SnapshotAck,
     /// The last chunk: the filter is complete.
     pub last: bool,
+}
+
+impl fmt::Debug for Placed<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Placed")
+            .field("offset", &self.offset)
+            .field("bytes", &self.bytes.len())
+            .field("ack", &self.ack)
+            .field("last", &self.last)
+            .finish()
+    }
 }
 
 /// One snapshot's chunks, taken strictly in order. A chunk out of order
