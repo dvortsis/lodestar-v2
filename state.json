@@ -5506,6 +5506,13 @@
     "After #562 merges: dispatch soak-screen.yml on main (first run = proof); ask owner (via dashboard) to run the new analyzer over private r4 and r5 run dirs and relay only 'screen:' lines; if thresholds move, a small thresholds-only follow-up",
     "slices.yaml SRC-15c owns: add web/e2e/settings-sources*.test.ts and docs/decisions/2026-11-07-SRC-15c.md (runner pre-approved at launch 03:24Z)"
    ]
+  },
+  {
+   "id": "R4-v051-docs",
+   "from": "2026-11-07T03:30Z",
+   "items": [
+    "Launch R4 (docs, Sonnet): bring docs/releases/v0.5.1.md from release/v0.5.1 to main, mark docs/releases/v0.5.0.md never released, README release status; dashboard ext:v051-tagged condition is auto (tag:v0.5.1); build-plan R3b/R4 rows done"
+   ]
   }
  ],
  "main_health": [
@@ -5863,9 +5870,12 @@
    "note": "R-legal-status merged; CI+Release+E2E dispatched 00:19Z; go to owner on green",
    "checks": "CI 42317461111, Release 42317463756, E2E 42317466554 all success by 00:53Z",
    "go_sent": "2026-11-07T00:55Z",
-   "next": "owner tags v0.5.1 on 12cd25ca, approves release env, publishes; runner verifies digests/assets then R4",
+   "next": "R4 docs slice (release notes to main, v0.5.0 never released, README status) at next free slot; then P-v052-cut",
    "tag": "v0.5.1 annotated f4e4e665 -> 12cd25ca, pushed ~01:35Z (owner)",
-   "release_run": "42322636882 (MSI job waiting on release env approval)"
+   "release_run": "42322636882 (MSI job waiting on release env approval)",
+   "published": "2026-11-07 ~03:24Z (release id 437294794)",
+   "image_index": "sha256:2ffce5cb9988b3173a46aeafb2a62e24cf66962da39d3286da0adbbd5d864c17 (0.5.1, 0.5, latest)",
+   "minisig": "verified against lodestar-release.pub"
   }
  },
  "owner_standing": {
