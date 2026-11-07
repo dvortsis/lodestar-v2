@@ -3568,8 +3568,9 @@
    "merge": "c7499507"
   },
   "X-soak-screen": {
-   "status": "running",
-   "session": "session_01MMjhnAigUdTtQ5M3dobhaR"
+   "state": "merged",
+   "pr": 562,
+   "merge": "66e40b3b"
   },
   "WK-3": {
    "status": "running",
@@ -3578,6 +3579,10 @@
   "SRC-15c": {
    "status": "running",
    "session": "session_01MMjhnBxn64zRn4Jviz1B6e"
+  },
+  "WK-9": {
+   "state": "building",
+   "session": "session_01MMjhn9UXuC8VxCmERMYLNB"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5536,6 +5541,10 @@
   {
    "id": "src15c-followups",
    "text": "From SRC-15c #564: (1) API should return saved source config (form starts from defaults today) \u2014 API owner; (2) zh strings for Account/config/purge dialogs are English placeholders \u2014 native translation; (3) X-consent-gate-lift note: admin-password re-entry when opening the gate for Account sources."
+  },
+  {
+   "id": "soak-screen-calibration",
+   "text": "#562 merged 66e40b3b 04:31Z; soak-screen.yml dispatched on main; owner asked (optional) to replay analyze_cr0 over r4/r5 and relay screen: lines only. Expect r4 trips early, r5 doesn't; retune before v0.5.2 soak if not. Then read the gauge ~1 h on musl+override before the v0.5.2 soak."
   }
  ],
  "main_health": [
@@ -6231,15 +6240,15 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-07T03:40Z",
+  "updated": "2026-11-07T04:34Z",
   "items": [
    {
     "slot": 1,
-    "slice": "X-soak-screen",
+    "slice": "WK-9",
     "role": "build",
     "agent": "claude",
-    "doing": "session_01MMjhnAigUdTtQ5M3dobhaR: pre-soak sweep + in-run screen (\u00a72.50)",
-    "since": "2026-11-07T01:25Z"
+    "doing": "session_01MMjhn9UXuC8VxCmERMYLNB: coordinator intake (fencing, late results, counters, hints, backpressure)",
+    "since": "2026-11-07T04:33Z"
    },
    {
     "slot": 2,
