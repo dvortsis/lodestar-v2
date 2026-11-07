@@ -28,8 +28,8 @@ use lodestar_cluster::proto::{
     Capabilities, Hello, MAX_OUTCOME_BATCH, OutcomeItem, RenewRefusal, StopReason,
 };
 use lodestar_cluster::{
-    ClientError, Clock, Credentials, RENEW_MIN_INTERVAL_SECS, WorkerConfig, WorkerEvent,
-    WorkerLink, WorkerSession,
+    ClientError, Clock, Credentials, RENEW_MIN_INTERVAL_SECS, SessionHandle, WorkerConfig,
+    WorkerEvent, WorkerLink, WorkerSession,
 };
 
 use super::Layout;
@@ -68,6 +68,12 @@ impl Connect for Tcp {
 /// What runs on the worker. WK-2's is [`Idle`]; WK-10 (`worker/runtime.rs`)
 /// puts the DHT and the fetch pool behind it.
 pub trait Work: Send {
+    /// A session started: its handle for claims, reports and results, until
+    /// [`disconnected`](Self::disconnected). Called before any of its
+    /// events.
+    fn connected(&mut self, _session: SessionHandle) {}
+    /// The session ended; a new one may follow.
+    fn disconnected(&mut self) {}
     /// Something the coordinator sent that the session doesn't handle
     /// itself: `Assign`, re-granted leases, hints, snapshots, …
     fn event(&mut self, event: WorkerEvent);
@@ -285,9 +291,11 @@ impl<C: Connect> Worker<C> {
                 Ok(session) => {
                     self.say(&format!("connected as worker {}", self.creds.name()));
                     let since = std::time::Instant::now();
+                    work.connected(session.handle());
                     let ended = self
                         .drive(session, &mut work, &mut renewing, shutdown.as_mut())
                         .await;
+                    work.disconnected();
                     // Only a session that lasted resets the back-off: a
                     // coordinator that accepts and drops at once still gets
                     // longer and longer waits.
