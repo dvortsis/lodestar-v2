@@ -349,34 +349,83 @@ fn credential_spec(spec: &[CredentialSpec]) -> Vec<CredentialField> {
         .collect()
 }
 
+/// How deep [`config_schema`] looks into a settings schema. Deeper than
+/// this counts as a secret (fail closed); every plugin's schema today is at
+/// most four levels deep.
+const SCHEMA_DEPTH: usize = 16;
+
 /// A plugin's compiled-in settings schema as the API lists it: without
-/// its secrets. A top-level property marked `"writeOnly"`, or named as
-/// one of its credentials, is written through `PATCH /sources/{id}/credentials`
-/// (`credential_spec`), never as a setting, so a form generated from the
-/// schema never asks for a secret as a setting. Only top-level
-/// properties are looked at: `sources-plugins`' `credential_spec` test
-/// refuses a write-only setting in any plugin's schema. A schema that doesn't
-/// parse (a plugin bug, which `sources-plugins`' tests catch) reads as
-/// [`lodestar_sources::EMPTY_SCHEMA`]: a form with no fields.
+/// its secrets, at any depth. Secrets are written through
+/// `PATCH /sources/{id}/credentials` (`credential_spec`), never as
+/// settings, so a form generated from the schema never asks for one. It's
+/// the second guard: `sources-plugins`' `credential_spec` test refuses a
+/// write-only field or a credential-named property anywhere in a plugin's
+/// schema. See [`strip_secrets`] for what goes. A schema that doesn't
+/// parse (a plugin bug, which that test catches), or whose root goes,
+/// reads as [`lodestar_sources::EMPTY_SCHEMA`]: a form with no fields.
 fn config_schema(schema: &str, spec: &[CredentialSpec]) -> serde_json::Value {
-    use serde_json::Value;
-    let mut v: Value = serde_json::from_str(schema).unwrap_or_else(|_| {
-        serde_json::from_str(lodestar_sources::EMPTY_SCHEMA).expect("the empty schema parses")
-    });
-    let mut secret: Vec<String> = spec.iter().map(|c| c.name.to_string()).collect();
-    if let Some(Value::Object(props)) = v.get_mut("properties") {
-        secret.extend(
-            props
-                .iter()
-                .filter(|(_, p)| p.get("writeOnly") == Some(&Value::Bool(true)))
-                .map(|(k, _)| k.clone()),
-        );
-        props.retain(|k, _| !secret.contains(k));
-    }
-    if let Some(Value::Array(required)) = v.get_mut("required") {
-        required.retain(|r| r.as_str().is_none_or(|r| !secret.iter().any(|s| s == r)));
+    let empty =
+        || serde_json::from_str(lodestar_sources::EMPTY_SCHEMA).expect("the empty schema parses");
+    let Ok(mut v) = serde_json::from_str::<serde_json::Value>(schema) else {
+        return empty();
+    };
+    let names: Vec<&str> = spec.iter().map(|c| c.name).collect();
+    if strip_secrets(&mut v, &names, 0) {
+        return empty();
     }
     v
+}
+
+/// Strips the secrets out of the subschema `v`; `true` when `v` itself
+/// must go. A subschema goes when it is `"writeOnly"`, or when it's nested
+/// deeper than [`SCHEMA_DEPTH`] (fail closed). Below it:
+/// - a property (in `properties`, `$defs` or `definitions`) that goes, or
+///   a property named in `names`, is removed with its `required` entry;
+/// - an entry of `allOf`, `anyOf`, `oneOf` or `prefixItems` that goes is
+///   removed;
+/// - when `items`, `additionalProperties`, `not` or `contains` goes, its
+///   values are secrets, so `v` goes too.
+fn strip_secrets(v: &mut serde_json::Value, names: &[&str], depth: usize) -> bool {
+    use serde_json::Value;
+    if depth > SCHEMA_DEPTH {
+        return true;
+    }
+    let Value::Object(o) = v else { return false };
+    if o.get("writeOnly") == Some(&Value::Bool(true)) {
+        return true;
+    }
+    let mut gone: Vec<String> = Vec::new();
+    for key in ["properties", "$defs", "definitions"] {
+        if let Some(Value::Object(map)) = o.get_mut(key) {
+            map.retain(|k, c| {
+                let named = key == "properties" && names.contains(&k.as_str());
+                let keep = !named && !strip_secrets(c, names, depth + 1);
+                if !keep && key == "properties" {
+                    gone.push(k.clone());
+                }
+                keep
+            });
+        }
+    }
+    for key in ["allOf", "anyOf", "oneOf", "prefixItems"] {
+        if let Some(Value::Array(list)) = o.get_mut(key) {
+            list.retain_mut(|c| !strip_secrets(c, names, depth + 1));
+        }
+    }
+    for key in ["items", "additionalProperties", "not", "contains"] {
+        if let Some(c) = o.get_mut(key)
+            && strip_secrets(c, names, depth + 1)
+        {
+            return true;
+        }
+    }
+    if let Some(Value::Array(required)) = o.get_mut("required") {
+        required.retain(|r| {
+            r.as_str()
+                .is_none_or(|r| !gone.iter().any(|g| g == r) && !names.contains(&r))
+        });
+    }
+    false
 }
 
 fn source(v: SourceView) -> Source {
@@ -812,6 +861,8 @@ mod spec_tests {
     };
     use serde_json::{Value, json};
 
+    use lodestar_sources::consent::{CredentialKind, CredentialSpec};
+
     use super::{config_schema, credential_spec};
 
     /// Every host private: the full scrape never runs here, only its
@@ -913,7 +964,6 @@ mod spec_tests {
     /// the form.
     #[test]
     fn a_secret_in_a_schema_is_left_out() {
-        use lodestar_sources::consent::{CredentialKind, CredentialSpec};
         let schema = r#"{"type":"object","properties":{
             "url":{"type":"string"},
             "api_key":{"type":"string"},
@@ -941,6 +991,56 @@ mod spec_tests {
         let listed = config_schema(schema, &[]);
         assert!(listed["properties"].get("token").is_none());
         assert!(listed["properties"].get("api_key").is_some());
+    }
+
+    /// A write-only field nested anywhere goes too: inside an array's
+    /// `items`, an object's `properties`, an `allOf` branch, or behind
+    /// `additionalProperties`. What holds no secret stays as it was.
+    #[test]
+    fn a_nested_secret_is_left_out() {
+        let schema = r#"{"type":"object","properties":{
+            "caches":{"type":"array","items":{"type":"object","properties":{
+                "url":{"type":"string"},
+                "token":{"type":"string","writeOnly":true}
+            },"required":["url","token"]}},
+            "list":{"type":"array","items":{"type":"string","writeOnly":true}},
+            "extra":{"type":"object","additionalProperties":{"type":"string","writeOnly":true}},
+            "either":{"anyOf":[{"type":"string"},{"type":"string","writeOnly":true}]},
+            "plain":{"type":"string"}
+        },"allOf":[{"properties":{"api_key":{"type":"string"}}}],
+        "required":["caches","list","plain"],"additionalProperties":false}"#;
+        let spec = [CredentialSpec {
+            name: "api_key",
+            label: "API key",
+            kind: CredentialKind::Secret,
+            required: true,
+        }];
+        let listed = config_schema(schema, &spec);
+        let props = &listed["properties"];
+        let item = &props["caches"]["items"];
+        assert_eq!(item["properties"], json!({ "url": { "type": "string" } }));
+        assert_eq!(item["required"], json!(["url"]));
+        // A property whose values are secrets goes, and so does its
+        // `required` entry.
+        assert!(props.get("list").is_none(), "{listed}");
+        assert!(props.get("extra").is_none(), "{listed}");
+        assert_eq!(props["either"]["anyOf"], json!([{ "type": "string" }]));
+        assert_eq!(props["plain"], json!({ "type": "string" }));
+        assert_eq!(listed["allOf"], json!([{ "properties": {} }]));
+        assert_eq!(listed["required"], json!(["caches", "plain"]));
+        assert!(!listed.to_string().contains("writeOnly"), "{listed}");
+    }
+
+    /// Past the depth bound, a secret is assumed: the form gets no fields.
+    #[test]
+    fn a_schema_too_deep_to_check_reads_as_empty() {
+        let mut deep = String::from(r#"{"type":"string"}"#);
+        for _ in 0..40 {
+            deep = format!(r#"{{"type":"array","items":{deep}}}"#);
+        }
+        let schema = format!(r#"{{"type":"object","properties":{{"deep":{deep}}}}}"#);
+        let listed = config_schema(&schema, &[]);
+        assert!(listed["properties"].get("deep").is_none(), "{listed}");
     }
 
     #[test]

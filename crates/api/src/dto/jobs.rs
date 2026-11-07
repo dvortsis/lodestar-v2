@@ -153,7 +153,7 @@ pub struct PurgeRequest {
 /// counted: the purge reports them as `keys_dropped`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({
-    "claims_deleted": 1_204_331,
+    "claims_deleted": 96_402,
     "kept": 88_120,
     "plugin": "nyaa",
     "queue_deleted": 12,

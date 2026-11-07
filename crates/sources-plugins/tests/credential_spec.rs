@@ -107,24 +107,89 @@ fn check(m: &Manifest, policy: &Policy, rec: &Recording) {
     if m.consent == Consent::Account && !required.is_empty() {
         assert_eq!(consent::need(m, None, &required), None, "{}", m.id);
     }
-    // A credential is never a setting: no settings field shares a
-    // declared name, and no settings field is a secret (write-only).
+    // A credential is never a setting: at any depth, no settings field
+    // shares a declared name and nothing is a secret (write-only).
     let schema: serde_json::Value = serde_json::from_str(policy.config_schema)
         .unwrap_or_else(|e| panic!("{}: the settings schema doesn't parse: {e}", m.id));
-    if let Some(props) = schema["properties"].as_object() {
-        for (k, p) in props {
-            assert!(
-                !names(spec).contains(k),
-                "{}: `{k}` is both a setting and a credential",
-                m.id
-            );
-            assert_ne!(
-                p["writeOnly"], true,
-                "{}: `{k}` is a write-only setting",
-                m.id
-            );
-        }
+    let mut seen = Vec::new();
+    no_secret_in(&schema, &names(spec), "", 0, &mut seen);
+    assert!(seen.is_empty(), "{}: {seen:?}", m.id);
+}
+
+/// How deep [`no_secret_in`] walks; the plugins' schemas are far shallower.
+const MAX_DEPTH: usize = 16;
+
+/// Walks every object and list below `v`, whatever the keyword (so
+/// `properties`, `items`, `additionalProperties`, `allOf`/`anyOf`/`oneOf`,
+/// `$defs` and the rest are all covered), and records in `seen` each
+/// `"writeOnly": true` and each property named as a declared credential,
+/// by its path. Deeper than [`MAX_DEPTH`] is recorded too.
+fn no_secret_in(
+    v: &serde_json::Value,
+    names: &BTreeSet<String>,
+    path: &str,
+    depth: usize,
+    seen: &mut Vec<String>,
+) {
+    use serde_json::Value;
+    if depth > MAX_DEPTH {
+        seen.push(format!("{path}: deeper than {MAX_DEPTH}"));
+        return;
     }
+    match v {
+        Value::Object(o) => {
+            if o.get("writeOnly") == Some(&Value::Bool(true)) {
+                seen.push(format!("{path}: write-only"));
+            }
+            if let Some(Value::Object(props)) = o.get("properties") {
+                for k in props.keys().filter(|k| names.contains(*k)) {
+                    seen.push(format!("{path}/properties/{k}: a credential"));
+                }
+            }
+            for (k, c) in o {
+                no_secret_in(c, names, &format!("{path}/{k}"), depth + 1, seen);
+            }
+        }
+        Value::Array(a) => {
+            for (i, c) in a.iter().enumerate() {
+                no_secret_in(c, names, &format!("{path}/{i}"), depth + 1, seen);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The walk itself finds a nested secret, wherever it sits.
+#[test]
+fn the_schema_walk_finds_nested_secrets() {
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "caches": { "type": "array", "items": { "type": "object", "properties": {
+                "token": { "type": "string", "writeOnly": true } } } },
+            "either": { "anyOf": [{ "type": "string" }, { "writeOnly": true }] },
+            "extra": { "additionalProperties": { "writeOnly": true } }
+        },
+        "allOf": [{ "properties": { "api_key": { "type": "string" } } }]
+    });
+    let mut seen = Vec::new();
+    no_secret_in(
+        &schema,
+        &BTreeSet::from(["api_key".to_string()]),
+        "",
+        0,
+        &mut seen,
+    );
+    seen.sort();
+    assert_eq!(
+        seen,
+        [
+            "/allOf/0/properties/api_key: a credential",
+            "/properties/caches/items/properties/token: write-only",
+            "/properties/either/anyOf/1: write-only",
+            "/properties/extra/additionalProperties: write-only",
+        ]
+    );
 }
 
 #[tokio::test(start_paused = true)]

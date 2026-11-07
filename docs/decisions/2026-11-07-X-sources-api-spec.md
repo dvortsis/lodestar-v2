@@ -1,4 +1,4 @@
-# X-sources-api-spec decisions (PR pending)
+# X-sources-api-spec decisions (#561)
 
 Spec:
 - `runner/slices.yaml`, entry `X-sources-api-spec`.
@@ -38,7 +38,7 @@ This PR adds read-only API surface and one read-only store query. It opens no co
   - a plugin asks for a name it doesn't declare;
   - it declares one it never asks for;
   - it reads under another plugin's id;
-  - its schema lists a write-only property, or one named as a declared credential;
+  - its schema holds, at any depth, a write-only field or a property named as a declared credential (runner's review, 2026-11-07T02:33Z);
   - a plugin in the catalogue isn't checked.
 - **`need` itself is unchanged in this PR.** An Account source is still satisfied by any non-egress credential stored.
   - The runner agreed to tighten it: a declared required set must be stored exactly, and with nothing declared today's fail-closed rule applies.
@@ -48,7 +48,10 @@ This PR adds read-only API surface and one read-only store query. It opens no co
 ## `GET /sources`: `credential_spec` and `config_schema`
 - **Both are new required fields of `Source`.** `credential_spec` lists the declared fields in order. `config_schema` is the plugin's JSON Schema, parsed.
 - **The listed schema has no secrets in it.** Before this PR, the three API-key plugins listed `api_key` in their schema as `"writeOnly": true`, as `Policy.config_schema`'s doc asked. None does now (above).
-  - `GET /sources` drops every `writeOnly` property and every property named as a declared credential, together with their `required` entries.
+  - `GET /sources` strips secrets at any depth (runner's review, 2026-11-07T02:33Z), up to 16 levels; deeper counts as a secret (fail closed):
+    - a write-only property, or one named as a declared credential, goes with its `required` entry, in `properties`, `$defs` and `definitions`;
+    - a write-only entry of `allOf`, `anyOf`, `oneOf` or `prefixItems` goes;
+    - a property whose `items`, `additionalProperties`, `not` or `contains` is a secret goes whole, since its values are secrets.
   - That way a form generated from the schema never asks for a secret as a setting, whatever a plugin's constant says. It's the second guard behind the plugin test, and `crates/lodestar/src/ops.rs` tests it on a schema that has both kinds.
 - **A schema that doesn't parse** reads as `EMPTY_SCHEMA`. That would be a plugin bug, and the plugin tests parse every schema.
 - **No value is ever listed.** The spec describes fields. `credentials` still lists only the names stored. `crates/api/tests/sources_spec.rs` stores a value and checks four places never quote it: the write's own response, both `GET` routes and the purge preview. It also checks that a malformed write's refusal doesn't quote it.
