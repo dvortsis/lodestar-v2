@@ -928,13 +928,14 @@ lodestar_log::catalogue! {
         fields: { stored: Size },
     }
     /// The cluster tick ended with a panic (a bug): placement, snapshots
-    /// and the have-filter stop until Allow workers is turned off and on or
-    /// Lodestar restarts. Said once (WK-10a).
+    /// and the have-filter stop until the cluster port reopens (Allow
+    /// workers turned off and on, a key reseal, or a restart). Said once
+    /// (WK-10a).
     CLUSTER_TICK_FAILED {
         id: "cluster.tick_failed",
         component: Workers,
         level: Error,
-        message: "The cluster tick stopped; workers get no new assignments or snapshots until the port opens again",
+        message: "The cluster tick stopped; workers get no new assignments or snapshots until the cluster port reopens",
         fields: { error: Error },
     }
     /// The filter or dictionary snapshot for remote workers couldn't be
