@@ -5933,6 +5933,10 @@
     {
       "id": "X-web-hygiene-1107-merged",
       "note": "#596 merged 8c058910 on fresh Opus MERGE (nits: facets waitForResponse loose; keyboard+pointer race before import). Owner \u00a72.19 flag: NotificationsScreen budget 45->45.1 kB. Slot 2 -> CMP-3 (Opus, new session); Sonnet session archived."
+    },
+    {
+      "id": "WK-10a-merged",
+      "note": "2026-11-07T23:27Z: #592 merged 3343ac08 on fresh Opus MERGE (3 review rounds). WK-10c nits: ResetOnPanic disarm (have.rs:197), ResetOnPanic unit test (have.rs:280), close waits watcher not tick (serve.rs:1052). Owner \u00a72.19 flags owed with WK-10b merge: B2 NotReady never Blocked + next-day key pre-send from 23:00Z; released results Lost(GaveUp); have-filter 1-in-16; tombstones (WK-10c)."
     }
   ],
   "main_health": [
@@ -6628,7 +6632,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-07T22:47Z",
+    "updated": "2026-11-07T23:27Z",
     "items": [
       {
         "slot": 1,
@@ -6656,11 +6660,11 @@
       },
       {
         "slot": 4,
-        "slice": "WK-10a",
+        "slice": "WK-10b",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #592 review CHANGES (B1 session id, B2 NotReady); fix push pending; then WK-10b, WK-10c",
-        "since": "2026-11-07T18:58Z"
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #592 WK-10a merged 3343ac08; WK-10b PR next (then WK-10c)",
+        "since": "2026-11-07T23:27Z"
       }
     ],
     "limit": 8,
@@ -6718,5 +6722,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-07T22:46:00Z"
+  "updated": "2026-11-07T23:27:00Z"
 }
