@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-07T03:40Z",
+ "updated_at": "2026-11-07T05:10Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3577,12 +3577,17 @@
    "session": "session_01MMjhnAxuW2sJ83mbnhLEYs"
   },
   "SRC-15c": {
-   "status": "running",
-   "session": "session_01MMjhnBxn64zRn4Jviz1B6e"
+   "state": "merged",
+   "pr": 564,
+   "merge": "542fdb8d"
   },
   "WK-9": {
    "state": "building",
    "session": "session_01MMjhn9UXuC8VxCmERMYLNB"
+  },
+  "X-cmp0-polish": {
+   "state": "building",
+   "session": "session_01MMjhnBonbNUTDWLAzkBRCs"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -6240,7 +6245,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-07T04:34Z",
+  "updated": "2026-11-07T05:10Z",
   "items": [
    {
     "slot": 1,
@@ -6260,11 +6265,11 @@
    },
    {
     "slot": 3,
-    "slice": "SRC-15c",
+    "slice": "X-cmp0-polish",
     "role": "build",
     "agent": "claude",
-    "doing": "session_01MMjhnBxn64zRn4Jviz1B6e (Sonnet): Account dialog, generated config forms, purge preview counts",
-    "since": "2026-11-07T03:24Z"
+    "doing": "session_01MMjhnBonbNUTDWLAzkBRCs: companion catalogue follow-ups from the CMP-0 review",
+    "since": "2026-11-07T05:09Z"
    },
    {
     "slot": 4,
