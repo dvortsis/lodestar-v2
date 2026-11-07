@@ -8,7 +8,7 @@
 | R1″ Linux Docker soak r5 (memory gate) | rc.4 `dba1a5c0` | **PASS** | `2026-11-06-soak-r5-verdict.md` |
 | R2 gluetun leg | rc.4 `dba1a5c0`, the same image digest as r5 | **PASS** | below |
 | R-win Windows MSI service smoke | rc.4 | **PASS** | build-plan §0 row R-win |
-| R3‴ rc.5: Legal Notice v3, text only | `a0eb0a90` (#540) | merged; Release dry run and CI green | build-plan §0 row R3‴ |
+| R3‴ rc.5: Legal Notice v3, text only | `a0eb0a90` (#540) | merged; Release dry run and CI green. No `v0.5.1-rc.5` tag: the release is tagged straight as `v0.5.1` on `12cd25ca` | build-plan §0 row R3‴ |
 | R-legal (§2.48) legal documents against the build | `a0eb0a90` → `12cd25ca` | **PASS after one docs fix** (#558) | below |
 
 ## R2: the gluetun leg (runner's verdict, 2026-11-06T23:55Z)
