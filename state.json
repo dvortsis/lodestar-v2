@@ -5925,6 +5925,10 @@
     {
       "id": "owner-flag-hygiene-budget",
       "note": "2026-11-07T21:36Z runner \u00a72.26: Settings NotificationsScreen (first view) size-limit 45 -> 45.1 kB for FieldMenu keyboard focus (X-web-hygiene-1107). \u00a72.19 flag to owner after merge."
+    },
+    {
+      "id": "owner-q-windows-event-log",
+      "note": "2026-11-07T22:00Z: owner question for next owner batch: should Lodestar write to the Windows Event Log (service refusal reason; optional error lines)? Needs Legal Notice \u00a75 fifth exception (Application log readable by all local users), legal_facts.rs check flipped, docs/legal/README.md. Runner recommends refusals-only with no data values. X-win-refusal-ux ships without it (event_log_errors hidden)."
     }
   ],
   "main_health": [
@@ -6710,5 +6714,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-07T21:39:00Z"
+  "updated": "2026-11-07T22:00:00Z"
 }
