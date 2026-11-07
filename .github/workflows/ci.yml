@@ -104,7 +104,7 @@ jobs:
       - name: testing seams stay out of the binary
         run: |
           if cargo tree -e features -p lodestar \
-            | grep -E 'lodestar-(dht|sources) feature "testing"|tokio feature "test-util"'; then
+            | grep -E 'lodestar-(dht|sources|companions) feature "testing"|tokio feature "test-util"'; then
             echo "::error::a test-only feature reaches the lodestar binary"; exit 1
           fi
       # First-party lines only through log_event! (architecture §12.1).

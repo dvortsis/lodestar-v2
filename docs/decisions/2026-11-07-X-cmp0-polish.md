@@ -25,5 +25,8 @@ Follow-ups from the CMP-0 review (#548), recorded in `runner/slices.yaml`'s `X-c
   - **Why a feature rather than `#[doc(hidden)]`:** a hidden constructor is still public. Any crate could call it in a release build and forge a plan, which would undo CMP-0's "a plan can't be forged".
   - **Why this feature:** it's the one `Catalogue::from_json` already sits behind. Only `[dev-dependencies]` enable it, and resolver 3 keeps dev-dependency features out of the binary's build. `cargo tree -e features -p lodestar` shows only `lodestar-companions feature "default"`.
   - **Runner-approved on those conditions** (2026-11-07T05:15Z): only `[dev-dependencies]` enable it, and never the `lodestar` package itself.
-  - **Not yet guarded in CI:** `ci.yml`'s "testing seams stay out of the binary" step greps only for `lodestar-(dht|sources)`. Adding `companions` to that pattern is the runner's call, because `ci.yml` is outside this slice's owns.
+  - **Guarded in CI:** `ci.yml`'s "testing seams stay out of the binary" step now covers companions too (see the owns additions below).
   - **No feature is added to the `lodestar` package.**
+- **Two owns additions (runner decision, §2.33, 2026-11-07T07:02Z):**
+  - **`.github/workflows/ci.yml`, the "testing seams stay out of the binary" step only.** Its pattern now includes `lodestar-companions feature "testing"`, so a normal dependency that enabled the feature, and with it `ConfigPlan::for_tests` and `Catalogue::from_json`, would fail CI.
+  - **`crates/companions/README.md`:** the `native.release` row now states the exact folder shape and the `<tag>/<file>` pin rule.
