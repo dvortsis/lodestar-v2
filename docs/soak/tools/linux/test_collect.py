@@ -1329,7 +1329,6 @@ class ScreenTests(Base):
         self.assertFalse(self.root.exists() and any(self.root.iterdir()))
 
 
-
 NOTICE_409 = json.dumps({"error": {"code": "notice_required", "message": "accept the notice"}}).encode()
 
 
