@@ -206,18 +206,18 @@ impl Rollups {
 /// spool holds a day (owner §2.17), plus the hour under way.
 pub const WORKER_HOURS_BACK: i64 = 24;
 
-/// Distinct counter rows one worker may add to in one hour. Far above what
-/// a worker counts (a few sources × strategies), and what bounds the
-/// per-worker rows against the rollups budget (owner §1.6.4).
-pub const WORKER_ROWS_PER_HOUR: usize = 64;
+/// Distinct rows (metric, dim, key) all remote workers together may add
+/// to in one hour, whatever the fleet's size. What the Insights pages read
+/// grows with these rows: with a year of rows, a stage page stayed near
+/// 24 ms with 64 more an hour and passed its 50 ms budget (owner §1.6.4)
+/// with 96, so 32 keeps a margin. A real fleet shares about 22 (every
+/// worker counts the same sources and lanes). A worker's `BY_WORKER` rows
+/// follow its fleet rows one to one, so this bounds them too.
+pub const FLEET_ROWS_PER_HOUR: usize = 32;
 
-/// Distinct (metric, dim, key) one worker may count in one UTC day. The
-/// nightly compaction folds a day's hours into one row per key, so this is
-/// what bounds a worker's rows after 30 days: with [`WORKER_ROWS_PER_HOUR`],
-/// at most 128 × 30 hourly-held days + 128 × 335 daily rows a year, about
-/// 47,000 rows (≈ 1 MB at 21 bytes a row) per worker for its own rows and
-/// as much again for the fleet's (`docs/decisions/2026-11-07-WK-9b.md`).
-pub const WORKER_KEYS_PER_DAY: usize = 128;
+/// Distinct rows all remote workers together may count in one UTC day:
+/// what bounds the daily rows the nightly compaction leaves after 30 days.
+pub const FLEET_KEYS_PER_DAY: usize = 64;
 
 /// The most one worker may add to one row in one hour. Far above any real
 /// count, and low enough that no number of workers, batches or hours can
@@ -232,17 +232,18 @@ type Row = (u32, u32, i64);
 /// - only [`metric::FROM_WORKERS`], each with its own dim and key domain;
 /// - only hours in [`WORKER_HOURS_BACK`] up to now, on the coordinator's
 ///   clock after correcting for the worker's offset;
-/// - at most [`WORKER_ROWS_PER_HOUR`] rows per worker per hour and
-///   [`WORKER_KEYS_PER_DAY`] keys per worker per day, and at most
-///   [`WORKER_ROW_CAP`] added to each row (anything over is cut, never
-///   wrapped).
+/// - at most [`FLEET_ROWS_PER_HOUR`] distinct rows an hour and
+///   [`FLEET_KEYS_PER_DAY`] a day, all workers together;
+/// - at most [`WORKER_ROW_CAP`] added to each row by each worker in an
+///   hour (anything over is cut, never wrapped).
 #[derive(Debug, Default)]
 pub struct Admit {
     /// What each (worker, hour, metric, dim, key) took so far, for hours
     /// still in the window.
     taken: HashMap<(WorkerId, i64), HashMap<Row, i64>>,
-    /// The keys each worker counted on each UTC day still in the window.
-    days: HashMap<(WorkerId, i64), std::collections::HashSet<Row>>,
+    /// The fleet rows all workers added to, per hour and per UTC day.
+    fleet_hours: HashMap<i64, std::collections::HashSet<Row>>,
+    fleet_days: HashMap<i64, std::collections::HashSet<Row>>,
 }
 
 impl Admit {
@@ -272,18 +273,29 @@ impl Admit {
         }
         let oldest = now_hour - WORKER_HOURS_BACK;
         self.taken.retain(|(_, h), _| *h >= oldest);
-        self.days.retain(|(_, d), _| *d >= oldest.div_euclid(24));
+        self.fleet_hours.retain(|h, _| *h >= oldest);
+        self.fleet_days.retain(|d, _| *d >= oldest.div_euclid(24));
         let row = (c.metric, c.dim, c.key);
-        let day = self.days.entry((worker, hour.div_euclid(24))).or_default();
-        if !day.contains(&row) && day.len() >= WORKER_KEYS_PER_DAY {
+        // The fleet's caps first: no number of workers widens the pages.
+        let fleet_day = self.fleet_days.entry(hour.div_euclid(24)).or_default();
+        if !fleet_day.contains(&row) && fleet_day.len() >= FLEET_KEYS_PER_DAY {
             return None;
         }
-        let rows = self.taken.entry((worker, hour)).or_default();
-        if !rows.contains_key(&row) && rows.len() >= WORKER_ROWS_PER_HOUR {
+        let fleet_hour = self.fleet_hours.entry(hour).or_default();
+        if !fleet_hour.contains(&row) && fleet_hour.len() >= FLEET_ROWS_PER_HOUR {
             return None;
         }
-        day.insert(row);
-        let took = rows.entry(row).or_insert(0);
+        fleet_hour.insert(row);
+        self.fleet_days
+            .entry(hour.div_euclid(24))
+            .or_default()
+            .insert(row);
+        let took = self
+            .taken
+            .entry((worker, hour))
+            .or_default()
+            .entry(row)
+            .or_insert(0);
         let value = c.value.min(WORKER_ROW_CAP - *took);
         if value <= 0 {
             return None;
@@ -456,8 +468,9 @@ mod tests {
 
     /// Requirement 2: one row takes at most [`WORKER_ROW_CAP`] from one
     /// worker in one hour, across any number of batches, so no sum leaves
-    /// SQLite's integer range; and a worker adds at most
-    /// [`WORKER_ROWS_PER_HOUR`] rows an hour.
+    /// SQLite's integer range; and all workers together add at most
+    /// [`FLEET_ROWS_PER_HOUR`] distinct rows an hour and
+    /// [`FLEET_KEYS_PER_DAY`] a day, however many there are.
     #[test]
     fn worker_rows_are_capped() {
         let mut a = Admit::default();
@@ -476,41 +489,36 @@ mod tests {
                 .is_some()
         );
         const { assert!(i64::MAX / WORKER_ROW_CAP > 1 << 30) };
-        let mut rows = 0;
-        for source in 0..64 {
-            for strategy in 0..4 {
-                let c = counter(HOUR - 1, metric::REDISCOVERED, source, strategy, 1);
-                rows += usize::from(a.admit(W, c, 0, NOW).is_some());
+        // Eight workers, each with rows of its own: 32 distinct in all.
+        let mut rows = std::collections::HashSet::new();
+        for w in 0..8 {
+            for source in 0..16 {
+                let c = counter(HOUR - 1, metric::REDISCOVERED, source, w, 1);
+                if let Some(c) = a.admit(WorkerId(w as u32 + 10), c, 0, NOW) {
+                    rows.insert((c.dim, c.key));
+                }
             }
         }
-        assert_eq!(rows, WORKER_ROWS_PER_HOUR);
-        // Over a day, new keys stop at the daily cap; known ones still add.
+        assert_eq!(rows.len(), FLEET_ROWS_PER_HOUR);
+        // A row already there still takes any worker's counts.
+        let known = counter(HOUR - 1, metric::REDISCOVERED, 0, 0, 1);
+        assert!(a.admit(WorkerId(99), known, 0, NOW).is_some());
+        // Over a day, new rows stop at the daily cap; known ones still add.
         let mut day = Admit::default();
         let first = (HOUR.div_euclid(24) * 24).max(HOUR - WORKER_HOURS_BACK);
+        assert!(HOUR - first >= 2, "the day has room for three hours");
         let mut keys = std::collections::HashSet::new();
         for h in first..=HOUR {
             for strategy in 0..32 {
                 let c = counter(h, metric::REDISCOVERED, 1, (h * 32 + strategy) % 256, 1);
-                if let Some(c) = day.admit(W, c, 0, NOW) {
+                if let Some(c) = day.admit(WorkerId(strategy as u32), c, 0, NOW) {
                     keys.insert(c.key);
                 }
             }
         }
-        assert_eq!(
-            keys.len(),
-            WORKER_KEYS_PER_DAY,
-            "{} hours",
-            HOUR - first + 1
-        );
-        assert!(
-            day.admit(
-                W,
-                counter(HOUR, metric::REDISCOVERED, 1, (HOUR * 32) % 256, 1),
-                0,
-                NOW
-            )
-            .is_some()
-        );
+        assert_eq!(keys.len(), FLEET_KEYS_PER_DAY);
+        let known = counter(HOUR, metric::REDISCOVERED, 1, (first * 32) % 256, 1);
+        assert!(day.admit(W, known, 0, NOW).is_some());
         // Hours that left the window are forgotten.
         let later = NOW + (WORKER_HOURS_BACK + 2) * 3600;
         assert!(
@@ -523,5 +531,6 @@ mod tests {
             .is_some()
         );
         assert_eq!(a.taken.len(), 1);
+        assert_eq!(a.fleet_hours.len(), 1);
     }
 }
