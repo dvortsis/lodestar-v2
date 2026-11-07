@@ -195,7 +195,7 @@ if ($Msi) {
   Assert ($reason -match [regex]::Escape($me)) "the refusal doesn't name the extra account's SID: $reason"
   Assert ($reason -match [regex]::Escape("/remove:g *$me /T /C")) "the refusal doesn't give the icacls fix: $reason"
   # Another account beside it: Repair must still refuse.
-  $other = 'S-1-5-21-1000000001-1000000002-1000000003-4242'
+  $other = 'S-1-5-32-545'   # Users: an account icacls can name
   & $icacls $dataDir /grant "*${other}:(OI)(CI)R" /C /Q | Out-Null
   Assert ($LASTEXITCODE -eq 0) 'could not add the second account for the test'
   $p = Start-Process msiexec.exe -ArgumentList @('/fa', "`"$Msi`"", '/qn', '/norestart', '/l*v', "`"$logs\msi-repair-refused.log`"") -Wait -PassThru

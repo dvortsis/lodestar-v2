@@ -25,15 +25,33 @@ function Icacls([string[]]$a) {
   if ($LASTEXITCODE -ne 0) { throw "icacls $($a -join ' ') failed ($LASTEXITCODE)" }
 }
 
+# An entry for any SID, through .NET: icacls refuses a SID that maps to no account (1332),
+# such as the service's before it is registered, or the made-up accounts here.
+function Add-Entry([string]$path, [string]$sid, [string]$rights = 'FullControl', [string]$type = 'Allow') {
+  $acl = Get-Acl -LiteralPath $path
+  $inherit = if ((Get-Item -LiteralPath $path -Force).PSIsContainer) { 'ContainerInherit, ObjectInherit' } else { 'None' }
+  $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
+    (New-Object Security.Principal.SecurityIdentifier $sid), $rights, $inherit, 'None', $type)))
+  Set-Acl -LiteralPath $path -AclObject $acl
+}
+
 # A folder an earlier install secured: its marker, a file and a subfolder, all owned by
-# Administrators, with the protected ACL secure-datadir.ps1 applies.
+# Administrators, with the protected ACL secure-datadir.ps1 applies. The ACL goes on first,
+# so what is created inside inherits only from it.
 function New-Secured([string]$name) {
   $dir = Join-Path $root $name
   New-Item -ItemType Directory -Path $dir | Out-Null
+  $sec = New-Object Security.AccessControl.DirectorySecurity
+  $sec.SetAccessRuleProtection($true, $false)
+  foreach ($sid in 'S-1-5-18', 'S-1-5-32-544', $svc) {
+    $sec.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
+      (New-Object Security.Principal.SecurityIdentifier $sid), 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow')))
+  }
+  $sec.SetOwner((New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-544'))
+  Set-Acl -LiteralPath $dir -AclObject $sec
   Set-Content -LiteralPath (Join-Path $dir '.lodestar-secured') -Value 'secured'
   New-Item -ItemType Directory -Path (Join-Path $dir 'logs') | Out-Null
   Set-Content -LiteralPath (Join-Path $dir 'logs\lodestar.log') -Value 'data'
-  Icacls @($dir, '/inheritance:r', '/grant:r', '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F', "*${svc}:(OI)(CI)F")
   Icacls @($dir, '/setowner', '*S-1-5-32-544', '/T', '/C')
   $dir
 }
@@ -76,19 +94,19 @@ try {
   $d = New-Secured 'other-sid'; Add-Me $d
   Expect "another account's SID" 1 (Invoke-Secure $d $other)
 
-  $d = New-Secured 'not-an-admin'; Icacls @($d, '/grant', "*${other}:(OI)(CI)F", '/T')
+  $d = New-Secured 'not-an-admin'; Add-Entry $d $other
   Expect 'only its own entry, but not in Administrators' 1 (Invoke-Secure $d $other)
 
   $d = New-Secured 'users'; Icacls @($d, '/grant', '*S-1-5-32-545:(OI)(CI)R')
   Expect 'the Users group passed as the installer' 1 (Invoke-Secure $d 'S-1-5-32-545')
 
-  $d = New-Secured 'domain-users'; Icacls @($d, '/grant', "*${domainUsers}:(OI)(CI)R")
+  $d = New-Secured 'domain-users'; Add-Entry $d $domainUsers 'Read'
   Expect 'a domain group passed as the installer' 1 (Invoke-Secure $d $domainUsers)
 
-  $d = New-Secured 'deny'; Add-Me $d; Icacls @($d, '/deny', "*${other}:(OI)(CI)W")
+  $d = New-Secured 'deny'; Add-Me $d; Add-Entry $d $other 'Write' 'Deny'
   Expect 'the administrator plus a Deny entry' 1 (Invoke-Secure $d $me)
 
-  $d = New-Secured 'second-account'; Add-Me $d; Icacls @($d, '/grant', "*${other}:(OI)(CI)R")
+  $d = New-Secured 'second-account'; Add-Me $d; Add-Entry $d $other 'Read'
   Expect 'the administrator plus another account' 1 (Invoke-Secure $d $me)
 
   $d = New-Secured 'inherits'; Add-Me $d; Icacls @($d, '/inheritance:e')
