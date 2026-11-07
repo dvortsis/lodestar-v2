@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T17:08Z",
+  "updated_at": "2026-11-07T17:10Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5778,6 +5778,11 @@
     {
       "id": "X-ci-guard-regex",
       "what": "ci.yml:107 feature guard regex lodestar-(dht|sources|companions) misses lodestar-sources-plugins 'testing'; extend so any lodestar-* testing feature in the binary tree fails (from #583 review nit 5).",
+      "since": "2026-11-07"
+    },
+    {
+      "id": "X-soak-screen-polish (scope add)",
+      "what": "crates/lodestar/src/memstats.rs:663 anon_mappings_cost_at_3000_mappings fails on every soak-screen run (only 1603 mappings from 750 threads; ~2/thread on runners). Size floor from measured per-thread mappings or raise thread count; keep 100 ms limit. Runs 42338719537, 42390958128, #584. Backport to next v0.5.2 rc if cut. Not blocking rc.1 (not in ci-ok).",
       "since": "2026-11-07"
     }
   ],
