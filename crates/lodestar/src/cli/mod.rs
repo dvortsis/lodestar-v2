@@ -25,7 +25,7 @@ mod rollup;
 mod stats;
 pub(crate) mod util;
 mod vacuum;
-mod worker;
+pub(crate) mod worker;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -201,7 +201,16 @@ pub fn parse() -> Cli {
 /// `dropped` is what the PUID/PGID drop did, logged once the config (and
 /// so the log filter) is loaded.
 pub fn run(command: Command, config_path: Option<&Path>, dropped: &privdrop::Report) -> ExitCode {
-    let config = match Config::load(config_path, |k| std::env::var(k).ok()) {
+    // `lodestar worker --data <dir>` is the data folder for the config too
+    // (its config.toml, its log), as for the privilege drop.
+    let data = match &command {
+        Command::Worker(a) => a.data.as_ref().and_then(|d| d.to_str()).map(str::to_owned),
+        _ => None,
+    };
+    let config = match Config::load(config_path, |k| match (k, &data) {
+        ("LODESTAR_DATA_DIR", Some(d)) => Some(d.clone()),
+        _ => std::env::var(k).ok(),
+    }) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("config: {e}");

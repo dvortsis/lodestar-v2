@@ -98,7 +98,20 @@ fn plan(args: &WorkerArgs, env: &dyn Fn(&str) -> Option<String>, joined: bool) -
             warnings,
         });
     }
+    // A process image started again without the token (`prepare`) still
+    // says it was ignored.
+    let ignored = env_token.is_none() && set(TOKEN_IGNORED).is_some();
     match env_token {
+        _ if ignored && joined => {
+            warnings.push(ENV_TOKEN_STALE);
+            if args.join.is_some() {
+                warnings.push(JOIN_IGNORED);
+            }
+            Ok(Plan {
+                join: None,
+                warnings,
+            })
+        }
         Some(_) if joined => {
             warnings.push(ENV_TOKEN_STALE);
             if args.join.is_some() {
@@ -136,6 +149,73 @@ fn plan(args: &WorkerArgs, env: &dyn Fn(&str) -> Option<String>, joined: bool) -
             warnings,
         }),
     }
+}
+
+/// Set (to `1`) on the image `prepare` starts again without
+/// `LODESTAR_TOKEN`, so it still prints the warning to remove it.
+const TOKEN_IGNORED: &str = "LODESTAR_TOKEN_IGNORED";
+
+/// What `main` does for `lodestar worker` before the privilege drop, while
+/// the process is still single-threaded:
+/// - refuses a `--data` that isn't UTF-8, or that names another folder than
+///   `LODESTAR_DATA_DIR`, so the folder the drop owns is the one written;
+/// - when the folder has already joined, so `LODESTAR_TOKEN` would only be
+///   ignored, starts the same command again without it (Unix `exec`, same
+///   process). The ignored token was never redeemed, so it stays valid for
+///   its 15 minutes; this keeps it out of `/proc/<pid>/environ`. (Clearing
+///   the variable in place would need `unsafe`, and the kernel's copy of the
+///   start-up environment would keep it anyway.)
+///
+/// Returns the `--data` folder as text, for the drop and the config.
+pub fn prepare(args: &WorkerArgs) -> Result<Option<String>, std::process::ExitCode> {
+    let refuse = |m: String| {
+        eprintln!("lodestar worker: {m}");
+        Err(std::process::ExitCode::from(2))
+    };
+    let data = match &args.data {
+        None => None,
+        Some(d) => match d.to_str() {
+            Some(t) => Some(t.to_owned()),
+            None => return refuse("--data must be a path in UTF-8.".to_owned()),
+        },
+    };
+    let var = std::env::var_os("LODESTAR_DATA_DIR");
+    if let (Some(flag), Some(var)) = (&data, &var)
+        && Path::new(flag) != Path::new(var)
+    {
+        return refuse(format!(
+            "--data {flag} and LODESTAR_DATA_DIR={} name different folders. Set only one, \
+             or the same folder in both.",
+            Path::new(var).display()
+        ));
+    }
+    #[cfg(unix)]
+    {
+        let folder = data
+            .as_deref()
+            .map(PathBuf::from)
+            .or_else(|| var.map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("data"));
+        let token = std::env::var_os("LODESTAR_TOKEN").filter(|v| !v.is_empty());
+        if token.is_some() && args.token_file.is_none() && Layout::new(&folder).is_joined() {
+            use std::os::unix::process::CommandExt;
+            let e = std::env::current_exe().map(|exe| {
+                std::process::Command::new(exe)
+                    .args(std::env::args_os().skip(1))
+                    .env_remove("LODESTAR_TOKEN")
+                    .env(TOKEN_IGNORED, "1")
+                    .exec()
+            });
+            let kind = match e {
+                Ok(e) | Err(e) => e.kind(),
+            };
+            return refuse(format!(
+                "couldn't start again without LODESTAR_TOKEN ({kind}); remove it from the \
+                 container's settings"
+            ));
+        }
+    }
+    Ok(data)
 }
 
 pub fn run(config: &Config, args: WorkerArgs) -> Outcome {
@@ -435,6 +515,20 @@ mod tests {
 
     fn plan_warnings(a: &WorkerArgs, env: &dyn Fn(&str) -> Option<String>) -> Vec<&'static str> {
         plan(a, env, true).unwrap().warnings
+    }
+
+    #[test]
+    fn a_restarted_image_still_warns() {
+        let env = |k: &str| (k == TOKEN_IGNORED).then(|| "1".to_owned());
+        assert_eq!(
+            plan_warnings(&args(None, None), &env),
+            vec![ENV_TOKEN_STALE]
+        );
+        // Not joined (the folder changed meanwhile): nothing to warn about.
+        assert_eq!(
+            plan(&args(None, None), &env, false).unwrap().warnings,
+            Vec::<&str>::new()
+        );
     }
 
     #[test]

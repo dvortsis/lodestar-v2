@@ -6,7 +6,7 @@
 //!   handle itself to the runtime ([`Work`]).
 //! - **Reconnect** with capped exponential back-off and equal jitter
 //!   ([`Backoff`]): 1 s, 2 s, 4 s … up to 2 minutes, each wait between half
-//!   and all of that step. It resets once a session is up. The wait itself
+//!   and all of that step. It resets once a session has lasted a minute. The wait itself
 //!   is injected ([`Wait`]), so a test sees each one without waiting (the
 //!   binary may not depend on tokio's `test-util`, which CI checks).
 //! - **Renew** the certificate at half-life (or at once when `Welcome`
@@ -187,6 +187,8 @@ pub struct Settings {
     pub upkeep_every: Duration,
     /// After a renewal that failed for another reason than "too soon".
     pub renew_retry_secs: i64,
+    /// A session that lasts this long resets the back-off.
+    pub stable_after: Duration,
     pub session: WorkerConfig,
 }
 
@@ -198,6 +200,7 @@ impl Default for Settings {
             connect_timeout: Duration::from_secs(15),
             upkeep_every: Duration::from_secs(60),
             renew_retry_secs: 600,
+            stable_after: Duration::from_secs(60),
             session: WorkerConfig::default(),
         }
     }
@@ -280,12 +283,18 @@ impl<C: Connect> Worker<C> {
             };
             match started {
                 Ok(session) => {
-                    backoff.reset();
                     self.say(&format!("connected as worker {}", self.creds.name()));
-                    match self
+                    let since = std::time::Instant::now();
+                    let ended = self
                         .drive(session, &mut work, &mut renewing, shutdown.as_mut())
-                        .await
-                    {
+                        .await;
+                    // Only a session that lasted resets the back-off: a
+                    // coordinator that accepts and drops at once still gets
+                    // longer and longer waits.
+                    if since.elapsed() >= self.settings.stable_after {
+                        backoff.reset();
+                    }
+                    match ended {
                         Ended::Exit(exit) => return exit,
                         Ended::Renewed => continue,
                         Ended::Lost => self.say("the connection to the coordinator was lost"),
@@ -1047,10 +1056,43 @@ pub(crate) mod tests {
         }
     }
 
-    /// The waits between attempts follow the back-off: 0.5 s, 1 s, 2 s …
-    /// with no jitter, capped. Each is recorded, not waited.
-    #[tokio::test]
-    async fn reconnect_waits_follow_the_backoff() {
+    /// A "coordinator" that welcomes each session, then drops it at once.
+    struct Flapping;
+
+    impl Connect for Flapping {
+        fn link(
+            &self,
+            _creds: &Credentials,
+        ) -> impl Future<Output = Result<WorkerLink, ClientError>> + Send {
+            let (mut coord, worker) = lodestar_cluster::local_pair(16);
+            tokio::spawn(async move {
+                if let Ok(Some(lodestar_cluster::proto::ToCoordinator::Hello(h))) =
+                    coord.recv().await
+                {
+                    let welcome = lodestar_cluster::proto::Welcome {
+                        major: h.major,
+                        minor: h.minor,
+                        worker: h.worker,
+                        heartbeat_ms: 60_000,
+                        lease_ttl_secs: 600,
+                        renew_now: false,
+                    };
+                    let _ = coord
+                        .send(lodestar_cluster::proto::ToWorker::Welcome(welcome))
+                        .await;
+                }
+                coord.close().await;
+            });
+            std::future::ready(Ok(worker))
+        }
+    }
+
+    /// The waits a worker on `connect` asks for, until it has asked `n`.
+    async fn waits_of<C: Connect + 'static>(
+        connect: C,
+        stable_after: Duration,
+        n: usize,
+    ) -> Vec<u128> {
         let dir = tempfile::tempdir().unwrap();
         let layout = Layout::new(dir.path());
         let clock = Arc::new(ManualClock::starting_now());
@@ -1063,11 +1105,12 @@ pub(crate) mod tests {
         let worker = Worker {
             layout: layout.clone(),
             creds: layout.load().unwrap().unwrap(),
-            connect: Down,
+            connect,
             clock: clock.clone(),
             settings: Settings {
                 backoff_base: Duration::from_secs(1),
                 backoff_cap: Duration::from_secs(8),
+                stable_after,
                 ..Settings::default()
             },
             report: lines.report(),
@@ -1081,15 +1124,31 @@ pub(crate) mod tests {
         let exit = tokio::spawn(worker.run(Idle, async move {
             let _ = rx.await;
         }));
-        until("six waits", || {
+        until("enough waits", || {
             let w = waits.lock().unwrap().clone();
-            (w.len() >= 6 || exit.is_finished(), w)
+            (w.len() >= n || exit.is_finished(), w)
         })
         .await;
         let _ = stop.send(());
         assert_eq!(exit.await.unwrap(), Exit::Shutdown, "{}", lines.all());
-        let waits = waits.lock().unwrap().clone();
-        assert_eq!(&waits[..6], &[500, 1000, 2000, 4000, 4000, 4000]);
-        assert!(lines.all().contains("couldn't connect"));
+        let w = waits.lock().unwrap().clone();
+        w[..n].to_vec()
+    }
+
+    #[tokio::test]
+    async fn a_session_dropped_at_once_doesnt_reset_the_backoff() {
+        let w = waits_of(Flapping, Duration::from_secs(60), 5).await;
+        assert_eq!(w, [500, 1000, 2000, 4000, 4000]);
+        // One that lasted resets it each time.
+        let w = waits_of(Flapping, Duration::ZERO, 3).await;
+        assert_eq!(w, [500, 500, 500]);
+    }
+
+    /// The waits between attempts follow the back-off: 0.5 s, 1 s, 2 s …
+    /// with no jitter, capped. Each is recorded, not waited.
+    #[tokio::test]
+    async fn reconnect_waits_follow_the_backoff() {
+        let w = waits_of(Down, Duration::from_secs(60), 6).await;
+        assert_eq!(w, [500, 1000, 2000, 4000, 4000, 4000]);
     }
 }

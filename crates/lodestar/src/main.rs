@@ -86,21 +86,14 @@ fn main() -> ExitCode {
     };
     // `lodestar worker --data <dir>`: that folder is the one to own, through
     // the same checks as LODESTAR_DATA_DIR (it's passed to the drop as that
-    // variable). Both set to different folders is refused: one would be
-    // owned and the other written.
+    // variable); `prepare` refuses what can't be checked the same way.
     let worker_data = match &command {
-        Command::Worker(a) => a.data.as_ref().map(|d| d.to_string_lossy().into_owned()),
+        Command::Worker(a) => match cli::worker::prepare(a) {
+            Ok(d) => d,
+            Err(code) => return code,
+        },
         _ => None,
     };
-    if let (Some(flag), Some(var)) = (&worker_data, std::env::var("LODESTAR_DATA_DIR").ok())
-        && std::path::Path::new(flag) != std::path::Path::new(&var)
-    {
-        eprintln!(
-            "lodestar worker: --data {flag} and LODESTAR_DATA_DIR={var} name different \
-             folders. Set only one, or the same folder in both."
-        );
-        return ExitCode::from(2);
-    }
     let env = |k: &str| match (k, &worker_data) {
         ("LODESTAR_DATA_DIR", Some(d)) => Some(d.clone()),
         _ => std::env::var(k).ok(),

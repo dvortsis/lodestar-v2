@@ -68,6 +68,12 @@ impl Layout {
         Ok(SecretStore::open_or_create(&self.data)?)
     }
 
+    /// Whether the folder holds credentials (it has joined), without
+    /// opening them.
+    pub fn is_joined(&self) -> bool {
+        self.cluster().join("credentials").exists()
+    }
+
     pub fn load(&self) -> Result<Option<Credentials>, ClusterError> {
         Credentials::load(&self.cluster(), &self.secrets()?)
     }
@@ -295,10 +301,18 @@ pub async fn join(
         Err(ClientError::Refused) => return Err(JoinFailure::Refused),
         Err(e) => return Err(JoinFailure::Unreachable(e)),
     };
-    // The address first: "joined" means the credentials file exists, so a
-    // crash between the two leaves an address alone, which is harmless.
-    layout.save_address(addr).map_err(JoinFailure::Save)?;
-    layout.save(&creds).map_err(JoinFailure::Save)?;
+    // "Joined" means the credentials file exists. A first join writes the
+    // address first, so a crash between the two leaves only an address and
+    // the folder still unjoined. A join again writes the credentials first,
+    // so a crash can't pair the new address with the old credentials (the
+    // new ones with the old address fail their TLS check and say so).
+    if layout.is_joined() {
+        layout.save(&creds).map_err(JoinFailure::Save)?;
+        layout.save_address(addr).map_err(JoinFailure::Save)?;
+    } else {
+        layout.save_address(addr).map_err(JoinFailure::Save)?;
+        layout.save(&creds).map_err(JoinFailure::Save)?;
+    }
     Ok(creds)
 }
 

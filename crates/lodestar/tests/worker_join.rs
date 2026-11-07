@@ -255,6 +255,16 @@ fn joins_restarts_and_never_shows_the_token() {
     let mut again = spawn(with_env());
     again.wait_for("LODESTAR_TOKEN is still set");
     again.wait_for("connected as worker w2");
+    // The ignored token was never redeemed, so it's still valid: the
+    // worker started itself again without it (same process), and it's no
+    // longer in the process's environment.
+    #[cfg(target_os = "linux")]
+    {
+        let environ = std::fs::read(format!("/proc/{}/environ", again.child.id())).unwrap();
+        let environ = String::from_utf8_lossy(&environ);
+        assert!(!leaks(&environ, &second), "the ignored token is in environ");
+        assert!(!environ.contains("LODESTAR_TOKEN="), "{environ}");
+    }
     let (exit, log) = again.stop();
     assert!(exit.success(), "{exit:?}: {log}");
     assert!(!log.contains("joined 127.0.0.1"), "no second join: {log}");
@@ -304,6 +314,44 @@ fn data_and_the_variable_must_agree() {
     assert_eq!(exit.code(), Some(2), "{log}");
     assert!(log.contains("name different folders"), "{log}");
     assert!(!a.exists() && !b.exists());
+}
+
+/// A `--data` that isn't UTF-8 is refused before anything is created.
+#[test]
+fn a_data_folder_that_isnt_utf8_is_refused() {
+    use std::os::unix::ffi::OsStrExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let bad = tmp.path().join(std::ffi::OsStr::from_bytes(b"w\xff"));
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_lodestar"));
+    cmd.arg("worker")
+        .arg("--data")
+        .arg(&bad)
+        .env_remove("LODESTAR_DATA_DIR")
+        .env_remove("LODESTAR_TOKEN");
+    let (exit, log) = spawn(cmd).finish();
+    assert_eq!(exit.code(), Some(2), "{log}");
+    assert!(log.contains("UTF-8"), "{log}");
+    assert!(!bad.exists());
+}
+
+/// `--data` alone is the data folder for the config and the privilege
+/// drop alike, so the drop's "the config's folder isn't the one checked"
+/// warning doesn't fire.
+#[test]
+fn data_alone_is_the_folder_everything_uses() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("w");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_lodestar"));
+    cmd.arg("worker")
+        .arg("--data")
+        .arg(&dir)
+        .env("LODESTAR_LOG", "debug")
+        .env_remove("LODESTAR_DATA_DIR")
+        .env_remove("LODESTAR_TOKEN");
+    let (exit, log) = spawn(cmd).finish();
+    assert_eq!(exit.code(), Some(1), "{log}");
+    assert!(log.contains("hasn't joined a coordinator yet"), "{log}");
+    assert!(!log.contains("data_dir_mismatch"), "{log}");
 }
 
 /// Started as root, `--data` gets the privilege drop's own checks, the same
