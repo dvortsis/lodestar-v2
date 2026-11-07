@@ -255,9 +255,10 @@ fn joins_restarts_and_never_shows_the_token() {
     let mut again = spawn(with_env());
     again.wait_for("LODESTAR_TOKEN is still set");
     again.wait_for("connected as worker w2");
-    // The ignored token was never redeemed, so it's still valid: the
-    // worker started itself again without it (same process), and it's no
-    // longer in the process's environment.
+    // The variable is ignored, so the worker started itself again without
+    // it (same process): it's no longer in the process's environment. (This
+    // token was spent by the first join; a fresh one ignored here would
+    // still be valid, which is why it matters.)
     #[cfg(target_os = "linux")]
     {
         let environ = std::fs::read(format!("/proc/{}/environ", again.child.id())).unwrap();
@@ -273,11 +274,22 @@ fn joins_restarts_and_never_shows_the_token() {
     // A token on stdin (`--token-file -`).
     let third = make_token(coord_dir.path(), "w3");
     let piped = tempfile::tempdir().unwrap();
-    let mut on_stdin = spawn_with(
-        worker(piped.path(), &["--join", url.as_str(), "--token-file", "-"]),
-        Some(&format!("{third}\n")),
-    );
+    // A fresh, unredeemed token in LODESTAR_TOKEN too: the file wins, and
+    // the worker starts itself again without the variable.
+    let unused = make_token(coord_dir.path(), "w4");
+    let mut cmd = worker(piped.path(), &["--join", url.as_str(), "--token-file", "-"]);
+    cmd.env("LODESTAR_TOKEN", &unused);
+    let mut on_stdin = spawn_with(cmd, Some(&format!("{third}\n")));
+    on_stdin.wait_for("LODESTAR_TOKEN is ignored: --token-file was given");
     on_stdin.wait_for("connected as worker w3");
+    #[cfg(target_os = "linux")]
+    {
+        let environ = std::fs::read(format!("/proc/{}/environ", on_stdin.child.id())).unwrap();
+        assert!(
+            !leaks(&String::from_utf8_lossy(&environ), &unused),
+            "the unused token is in environ"
+        );
+    }
     #[cfg(target_os = "linux")]
     for part in ["cmdline", "environ"] {
         let bytes = std::fs::read(format!("/proc/{}/{part}", on_stdin.child.id())).unwrap();

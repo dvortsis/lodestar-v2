@@ -301,19 +301,24 @@ pub async fn join(
         Err(ClientError::Refused) => return Err(JoinFailure::Refused),
         Err(e) => return Err(JoinFailure::Unreachable(e)),
     };
-    // "Joined" means the credentials file exists. A first join writes the
-    // address first, so a crash between the two leaves only an address and
-    // the folder still unjoined. A join again writes the credentials first,
-    // so a crash can't pair the new address with the old credentials (the
-    // new ones with the old address fail their TLS check and say so).
-    if layout.is_joined() {
-        layout.save(&creds).map_err(JoinFailure::Save)?;
-        layout.save_address(addr).map_err(JoinFailure::Save)?;
-    } else {
-        layout.save_address(addr).map_err(JoinFailure::Save)?;
-        layout.save(&creds).map_err(JoinFailure::Save)?;
-    }
+    save_joined(layout, &creds, addr).map_err(JoinFailure::Save)?;
     Ok(creds)
+}
+
+/// Saves a join's credentials and address. "Joined" means the credentials
+/// file exists. A first join writes the address first, so a crash between
+/// the two leaves only an address and the folder still unjoined. A join
+/// again writes the credentials first, so a crash can't pair the new
+/// address with the old credentials (the new ones with the old address fail
+/// their TLS check and say so).
+fn save_joined(layout: &Layout, creds: &Credentials, addr: &str) -> Result<(), ClusterError> {
+    if layout.is_joined() {
+        layout.save(creds)?;
+        layout.save_address(addr)
+    } else {
+        layout.save_address(addr)?;
+        layout.save(creds)
+    }
 }
 
 /// The worker's secrets-key rotation, worker stopped (the caller holds
@@ -381,6 +386,41 @@ pub(crate) mod tests {
             .redeem(&mut store, joining.token(), &joining.public_key(), now)
             .unwrap();
         joining.finish(grant, now).unwrap()
+    }
+
+    #[test]
+    fn a_first_join_writes_the_address_first_and_a_join_again_the_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = Layout::new(dir.path());
+        let clock = ManualClock::starting_now();
+        let blocker = layout.cluster().join("credentials.tmp");
+        // A first join whose credentials can't be written: only the address
+        // is there, and the folder isn't joined.
+        fs::create_dir_all(blocker.join("x")).unwrap();
+        assert!(save_joined(&layout, &credentials(&clock), "old:8091").is_err());
+        assert!(!layout.is_joined());
+        assert_eq!(layout.load_address().unwrap().as_deref(), Some("old:8091"));
+        fs::remove_dir_all(&blocker).unwrap();
+        save_joined(&layout, &credentials(&clock), "old:8091").unwrap();
+        let first = layout.load().unwrap().unwrap().not_after();
+
+        // A join again whose address can't be written: the new credentials
+        // are there with the old address, never the reverse.
+        clock.advance(std::time::Duration::from_secs(10));
+        let addr_blocker = layout.cluster().join("coordinator.tmp");
+        fs::create_dir_all(addr_blocker.join("x")).unwrap();
+        assert!(save_joined(&layout, &credentials(&clock), "new:8091").is_err());
+        assert_eq!(layout.load().unwrap().unwrap().not_after(), first + 10);
+        assert_eq!(layout.load_address().unwrap().as_deref(), Some("old:8091"));
+        fs::remove_dir_all(&addr_blocker).unwrap();
+
+        // And a join again whose credentials can't be written changes
+        // nothing.
+        clock.advance(std::time::Duration::from_secs(10));
+        fs::create_dir_all(blocker.join("x")).unwrap();
+        assert!(save_joined(&layout, &credentials(&clock), "newer:8091").is_err());
+        assert_eq!(layout.load().unwrap().unwrap().not_after(), first + 10);
+        assert_eq!(layout.load_address().unwrap().as_deref(), Some("old:8091"));
     }
 
     #[test]

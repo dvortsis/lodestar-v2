@@ -87,7 +87,7 @@ fn plan(args: &WorkerArgs, env: &dyn Fn(&str) -> Option<String>, joined: bool) -
     let env_token = set("LODESTAR_TOKEN");
     let mut warnings = Vec::new();
     if let Some(path) = &args.token_file {
-        if env_token.is_some() {
+        if env_token.is_some() || set(TOKEN_IGNORED).is_some() {
             warnings.push(ENV_TOKEN_UNUSED);
         }
         let url = args.join.clone().ok_or_else(|| {
@@ -156,11 +156,13 @@ fn plan(args: &WorkerArgs, env: &dyn Fn(&str) -> Option<String>, joined: bool) -
 const TOKEN_IGNORED: &str = "LODESTAR_TOKEN_IGNORED";
 
 /// What `main` does for `lodestar worker` before the privilege drop, while
-/// the process is still single-threaded:
+/// the process is still single-threaded (the folder is `--data`, else
+/// `LODESTAR_DATA_DIR`, else `data`, as for the drop; a `data_dir` in
+/// config.toml isn't read here):
 /// - refuses a `--data` that isn't UTF-8, or that names another folder than
 ///   `LODESTAR_DATA_DIR`, so the folder the drop owns is the one written;
-/// - when the folder has already joined, so `LODESTAR_TOKEN` would only be
-///   ignored, starts the same command again without it (Unix `exec`, same
+/// - when `LODESTAR_TOKEN` would only be ignored (a `--token-file` wins, or
+///   the folder has already joined), starts the same command again without it (Unix `exec`, same
 ///   process). The ignored token was never redeemed, so it stays valid for
 ///   its 15 minutes; this keeps it out of `/proc/<pid>/environ`. (Clearing
 ///   the variable in place would need `unsafe`, and the kernel's copy of the
@@ -196,12 +198,27 @@ pub fn prepare(args: &WorkerArgs) -> Result<Option<String>, std::process::ExitCo
             .map(PathBuf::from)
             .or_else(|| var.map(PathBuf::from))
             .unwrap_or_else(|| PathBuf::from("data"));
-        let token = std::env::var_os("LODESTAR_TOKEN").filter(|v| !v.is_empty());
-        if token.is_some() && args.token_file.is_none() && Layout::new(&folder).is_joined() {
+        // Blank counts as unset, as in `plan`.
+        let token = std::env::var("LODESTAR_TOKEN")
+            .ok()
+            .filter(|v| !v.trim().is_empty());
+        // Ignored when a token file wins, or once the folder has joined.
+        if token.is_some() && (args.token_file.is_some() || Layout::new(&folder).is_joined()) {
             use std::os::unix::process::CommandExt;
-            let e = std::env::current_exe().map(|exe| {
-                std::process::Command::new(exe)
-                    .args(std::env::args_os().skip(1))
+            // On Linux the running image itself: the same file even if the
+            // binary was replaced or removed meanwhile; argv[0] is kept.
+            #[cfg(target_os = "linux")]
+            let exe = Ok::<_, std::io::Error>(PathBuf::from("/proc/self/exe"));
+            #[cfg(not(target_os = "linux"))]
+            let exe = std::env::current_exe();
+            let mut args_os = std::env::args_os();
+            let argv0 = args_os.next();
+            let e = exe.map(|exe| {
+                let mut cmd = std::process::Command::new(exe);
+                if let Some(argv0) = argv0 {
+                    cmd.arg0(argv0);
+                }
+                cmd.args(args_os)
                     .env_remove("LODESTAR_TOKEN")
                     .env(TOKEN_IGNORED, "1")
                     .exec()
@@ -518,12 +535,39 @@ mod tests {
     }
 
     #[test]
+    fn data_is_the_configs_folder_too() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[cluster]\nenabled = true\n",
+        )
+        .unwrap();
+        let worker = Command::Worker(WorkerArgs {
+            join: None,
+            token_file: None,
+            data: Some(dir.path().to_path_buf()),
+            rotate_key: false,
+        });
+        let config = crate::cli::load_config(&worker, None, |_| None).unwrap();
+        // The folder, and the config.toml read from it.
+        assert_eq!(config.data_dir, dir.path());
+        assert!(config.cluster.enabled);
+        // Other commands keep LODESTAR_DATA_DIR.
+        let other = crate::cli::load_config(&Command::Vacuum, None, |_| None).unwrap();
+        assert_eq!(other.data_dir, std::path::PathBuf::from("data"));
+    }
+
+    #[test]
     fn a_restarted_image_still_warns() {
         let env = |k: &str| (k == TOKEN_IGNORED).then(|| "1".to_owned());
         assert_eq!(
             plan_warnings(&args(None, None), &env),
             vec![ENV_TOKEN_STALE]
         );
+        // With a token file: that one wins, and the variable is said to be
+        // ignored.
+        let unused = plan(&args(Some("https://c"), Some("t")), &env, false).unwrap();
+        assert_eq!(unused.warnings, vec![ENV_TOKEN_UNUSED]);
         // Not joined (the folder changed meanwhile): nothing to warn about.
         assert_eq!(
             plan(&args(None, None), &env, false).unwrap().warnings,
