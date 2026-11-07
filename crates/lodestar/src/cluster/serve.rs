@@ -600,24 +600,32 @@ async fn run_tick(
     }
 }
 
+/// Aborts a task when dropped.
+struct AbortOnDrop(tokio::task::AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// Waits on the tick and says once, at error level, if it panicked (the
 /// review's N7): placement, snapshots and the have-filter then stop until
-/// the port opens again. Aborting this aborts the tick.
-async fn watch_tick(tick: JoinHandle<()>) {
-    struct AbortOnDrop(tokio::task::AbortHandle);
-    impl Drop for AbortOnDrop {
-        fn drop(&mut self) {
-            self.0.abort();
+/// the port reopens. Aborting the returned future's task aborts the tick,
+/// even before it first runs: the guard is made here, not in the future
+/// (#592's delta review).
+fn watch_tick(tick: JoinHandle<()>) -> impl std::future::Future<Output = ()> + Send {
+    let abort = AbortOnDrop(tick.abort_handle());
+    async move {
+        let _abort = abort;
+        if let Err(e) = tick.await
+            && e.is_panic()
+        {
+            lodestar_log::log_event!(
+                events::CLUSTER_TICK_FAILED,
+                error = lodestar_log::Error::kind("panic")
+            );
         }
-    }
-    let _abort = AbortOnDrop(tick.abort_handle());
-    if let Err(e) = tick.await
-        && e.is_panic()
-    {
-        lodestar_log::log_event!(
-            events::CLUSTER_TICK_FAILED,
-            error = lodestar_log::Error::kind("panic")
-        );
     }
 }
 
@@ -658,11 +666,13 @@ fn new_sessions(tick: &Tick, fleet: &FleetSnapshot, seen: &mut Seen) {
         .filter(|w| w.worker != WorkerId::LOCAL)
         .filter_map(|w| Some((w.worker, w.session?)))
         .collect();
-    if let Some(s) = tick.snapshots().as_mut() {
-        for (w, id) in &now {
-            if seen.sessions.get(w) != Some(id) {
-                s.forget(*w);
-            }
+    // While the snapshots are out of their slot (an install), nothing is
+    // noted, so the next tick sees the new sessions.
+    let mut slot = tick.snapshots();
+    let Some(s) = slot.as_mut() else { return };
+    for (w, id) in &now {
+        if seen.sessions.get(w) != Some(id) {
+            s.forget(*w);
         }
     }
     seen.sessions = now;
@@ -707,34 +717,56 @@ fn have_step(
     );
     let stored = fleet.stored.swarm_hashes();
     let (db, config) = (wiring.db.clone(), wiring.store.clone());
-    // Its own connection: the scan is long, and the snapshots' reads
-    // shouldn't wait for it.
+    // Its own connection, opened in the scan: the scan is long, and the
+    // snapshots' reads shouldn't wait for it.
     tokio::task::spawn_blocking(move || {
-        // Cleared however this ends, a panic included.
-        let _clear = Clear(&rebuilding);
-        // A panic in the scan becomes an error inside `rebuild`, so the
-        // filter's own "rebuilding" flag is cleared too and the old filter
-        // stays (the review's N5).
-        let built = Store::open_reader(&db, config).and_then(|reader| {
-            have.rebuild(stored, |insert| {
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    reader.for_each_swarm_hash(insert)
-                }))
-                .unwrap_or(Err(lodestar_store::Error::Corrupt("the scan panicked")))
-            })
+        let counts = RebuildCounts {
+            rebuilding: &rebuilding,
+            retry: &retry,
+            failures: &failures,
+            rebuilds: &rebuilds,
+        };
+        rebuild_have(&have, &counts, stored, |insert| {
+            Store::open_reader(&db, config)?.for_each_swarm_hash(insert)
         });
-        match built {
-            Ok(true) => {
-                rebuilds.fetch_add(1, Ordering::Relaxed);
-                retry.succeeded();
-            }
-            Ok(false) => {}
-            Err(_) => {
-                failures.fetch_add(1, Ordering::Relaxed);
-                retry.failed();
-            }
-        }
     });
+}
+
+/// What a rebuild updates.
+struct RebuildCounts<'a> {
+    rebuilding: &'a AtomicBool,
+    retry: &'a Retry,
+    failures: &'a AtomicU64,
+    rebuilds: &'a AtomicU64,
+}
+
+/// One rebuild of the workers' have-filter (blocking). The tick's flag is
+/// cleared however it ends, a panic included. A panic in the scan becomes
+/// an error inside `rebuild`, so the filter's own flag clears too and the
+/// old filter stays (the review's N5); `WorkerFilter::rebuild` also clears
+/// its flag if its own sizing or allocation unwinds.
+fn rebuild_have(
+    have: &WorkerFilter,
+    c: &RebuildCounts<'_>,
+    stored: u64,
+    scan: impl FnOnce(&mut dyn FnMut(InfoHash)) -> Result<(), lodestar_store::Error>,
+) {
+    let _clear = Clear(c.rebuilding);
+    let built = have.rebuild(stored, |insert| {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scan(insert)))
+            .unwrap_or(Err(lodestar_store::Error::Corrupt("the scan panicked")))
+    });
+    match built {
+        Ok(true) => {
+            c.rebuilds.fetch_add(1, Ordering::Relaxed);
+            c.retry.succeeded();
+        }
+        Ok(false) => {}
+        Err(_) => {
+            c.failures.fetch_add(1, Ordering::Relaxed);
+            c.retry.failed();
+        }
+    }
 }
 
 /// The active file-tree dictionary as saved now. The store caches it at
@@ -2403,18 +2435,119 @@ mod tests {
 
     #[test]
     fn retries_back_off_and_reset() {
-        let r = Retry::new(Duration::from_secs(1));
+        // Not due while waiting (an hour, so a slow runner can't pass it).
+        let r = Retry::new(Duration::from_secs(3600));
         assert!(r.due());
         r.failed();
-        assert!(!r.due(), "not before a second");
+        assert!(!r.due(), "not before its wait");
+        r.succeeded();
+        assert!(r.due());
+        assert_eq!(r.wait(), None);
+        // The waits double from the first, up to five minutes.
+        let r = Retry::new(Duration::from_secs(1));
+        r.failed();
         assert_eq!(r.wait(), Some(Duration::from_secs(1)));
         for want in [2, 4, 8, 16, 32, 64, 128, 256, 300, 300] {
             r.failed();
             assert_eq!(r.wait(), Some(Duration::from_secs(want)));
         }
-        r.succeeded();
-        assert!(r.due());
-        assert_eq!(r.wait(), None);
+    }
+
+    /// Sets a flag when dropped: a task holding it has ended.
+    struct Ended(Arc<AtomicBool>);
+
+    impl Drop for Ended {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// #592's delta review: aborting the watcher ends the tick, whether the
+    /// watcher had run yet or not (a current-thread runtime, so the first
+    /// abort lands before it runs).
+    #[tokio::test]
+    async fn aborting_the_watcher_ends_the_tick_before_and_after_it_runs() {
+        for run_first in [false, true] {
+            let (ended, started) = (
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(AtomicBool::new(false)),
+            );
+            let (e, s) = (Ended(ended.clone()), started.clone());
+            let tick = tokio::spawn(async move {
+                let _e = e;
+                s.store(true, Ordering::SeqCst);
+                std::future::pending::<()>().await;
+            });
+            let watcher = tokio::spawn(watch_tick(tick));
+            if run_first {
+                until("the tick runs", || {
+                    let on = started.load(Ordering::SeqCst);
+                    (on, on)
+                })
+                .await;
+            }
+            watcher.abort();
+            until("the tick ended", || {
+                let done = ended.load(Ordering::SeqCst);
+                (done, (run_first, done))
+            })
+            .await;
+        }
+    }
+
+    /// A tick that panics is said once, at error level.
+    #[tokio::test]
+    async fn a_panicking_tick_is_said_once() {
+        crate::test_log::install();
+        let said = || {
+            crate::test_log::text()
+                .matches("cluster.tick_failed")
+                .count()
+        };
+        let before = said();
+        let tick = tokio::spawn(async { panic!("a test panic in the tick") });
+        watch_tick(tick).await;
+        assert_eq!(said(), before + 1);
+        // A tick that's aborted, or ends, says nothing.
+        let quiet = tokio::spawn(std::future::pending::<()>());
+        quiet.abort();
+        watch_tick(quiet).await;
+        watch_tick(tokio::spawn(async {})).await;
+        assert_eq!(said(), before + 1);
+    }
+
+    /// A panic in the rebuild's scan: counted as a failure, both flags
+    /// clear, the old filter stays, and the next rebuild works.
+    #[test]
+    fn a_panicking_scan_keeps_the_old_filter() {
+        let have = WorkerFilter::new();
+        let (rebuilding, failures, rebuilds) =
+            (AtomicBool::new(true), AtomicU64::new(0), AtomicU64::new(0));
+        let retry = Retry::new(Duration::ZERO);
+        let c = RebuildCounts {
+            rebuilding: &rebuilding,
+            retry: &retry,
+            failures: &failures,
+            rebuilds: &rebuilds,
+        };
+        rebuild_have(&have, &c, 10, |insert| {
+            insert(InfoHash([1; 20]));
+            Ok(())
+        });
+        let first = have.generation().expect("built");
+        assert_eq!(rebuilds.load(Ordering::Relaxed), 1);
+        rebuilding.store(true, Ordering::Relaxed);
+        rebuild_have(&have, &c, 10, |_| panic!("a test panic in the scan"));
+        assert_eq!(failures.load(Ordering::Relaxed), 1);
+        assert!(
+            !rebuilding.load(Ordering::Relaxed),
+            "the tick's flag cleared"
+        );
+        assert_eq!(have.generation(), Some(first), "the old filter stays");
+        // The filter's own flag cleared too: the next rebuild runs.
+        rebuild_have(&have, &c, 10, |_| Ok(()));
+        assert_eq!(rebuilds.load(Ordering::Relaxed), 2);
+        assert!(have.generation() > Some(first));
     }
 
     /// Without a fleet (tests, or an install whose pipeline has no
