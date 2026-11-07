@@ -22,8 +22,8 @@
 //!   generation, to every worker whose header went out. One that can't be
 //!   queued restarts that worker's snapshot, since it would leave a gap.
 //! - **A rebuild** bumps the generation and restarts every snapshot.
-//! - **A worker's [`RESYNC`] request**, or no progress for [`STALL`],
-//!   restarts its snapshot too.
+//! - **A worker's [`RESYNC`] request** (at most one per [`RESYNC_MIN`]),
+//!   or no progress for [`STALL`], restarts its snapshot too.
 //!
 //! Insert and rebuild notifications go through here, never `writer.rs`.
 //! WK-10 wires it in: [`Have::observe`] at start once workers are allowed,
@@ -36,10 +36,10 @@
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use lodestar_cluster::have::{HaveDelta, MAX_DELTA_KEYS, RESYNC, chunk_range};
+use lodestar_cluster::have::{HaveDelta, MAX_DELTA_KEYS, MAX_FILTER_BITS, RESYNC, chunk_range};
 use lodestar_cluster::proto::{SnapshotAck, SnapshotChunk, SnapshotKind, ToWorker};
 use lodestar_cluster::{ClusterServer, FleetSnapshot, SendError, WorkerId, WorkerStatus};
 use lodestar_metainfo::InfoHash;
@@ -49,6 +49,10 @@ use lodestar_pipeline::{Bloom, HaveObserver, new_key};
 pub const WINDOW: u32 = 4;
 /// A snapshot with no acknowledgement for this long starts over.
 pub const STALL: Duration = Duration::from_secs(60);
+/// A worker's resync requests start a new snapshot at most this often;
+/// one that comes sooner waits for it, so a worker can't make the
+/// coordinator resend its filter in a loop.
+pub const RESYNC_MIN: Duration = Duration::from_secs(5);
 /// Keys waiting for the next delta; past it (no sync for a long time),
 /// they're dropped and every worker gets a fresh snapshot instead.
 pub const MAX_WAITING: usize = 1 << 20;
@@ -58,14 +62,16 @@ const MIN_CAPACITY: u64 = 1 << 20;
 
 /// The worker filter's capacity, bits per key and hashes for `stored`
 /// keys (Q6): 25 % headroom; 10 bits and 7 hashes (~1 % false positives)
-/// up to 30M stored, 8 bits and 6 hashes (~2 %) above.
+/// up to 30M stored, 8 bits and 6 hashes (~2 %) above. The capacity stops
+/// where the filter would pass the largest a worker accepts.
 pub fn worker_params(stored: u64) -> (u64, u64, u8) {
     let capacity = stored.saturating_add(stored / 4).max(MIN_CAPACITY);
-    if stored <= WIDE_UP_TO {
-        (capacity, 10, 7)
+    let (bits, hashes) = if stored <= WIDE_UP_TO {
+        (10, 7)
     } else {
-        (capacity, 8, 6)
-    }
+        (8, 6)
+    };
+    (capacity.min(MAX_FILTER_BITS / bits), bits, hashes)
 }
 
 /// A complete worker filter.
@@ -87,19 +93,34 @@ struct Transfer {
     sent: u32,
     acked: u32,
     total: u32,
+    created: Instant,
     progress: Instant,
+    /// A resync was asked for within [`RESYNC_MIN`] of `created`.
+    resync: bool,
 }
 
+/// What an insert touches. Its own small lock, which the writer's insert
+/// path takes and nothing holds while sending, so a commit never waits on
+/// the cluster server.
 #[derive(Default)]
-struct State {
-    current: Option<Filter>,
+struct Inserts {
+    current: Option<Arc<Bloom>>,
     /// The filter a rebuild is filling; inserts go into both.
     building: Option<Arc<Bloom>>,
     waiting: Vec<InfoHash>,
+    /// `waiting` passed its cap and was dropped.
+    overflowed: bool,
+}
+
+/// The transfers. Lock order: `state`, then `inserts`.
+#[derive(Default)]
+struct State {
+    current: Option<Filter>,
+    rebuilding: bool,
     transfers: BTreeMap<WorkerId, Transfer>,
+    /// Serials and generations are numbered from the coordinator's clock,
+    /// so a restarted coordinator's are newer.
     serials: u64,
-    /// Generations are numbered from the coordinator's clock, so a
-    /// restarted coordinator's are newer.
     generations: u64,
 }
 
@@ -118,20 +139,27 @@ pub struct WorkerFilter {
     /// Set once a filter is being built: until then an insert costs this
     /// one load.
     active: AtomicBool,
-    /// Chunks in flight per worker ([`WINDOW`]).
+    /// Chunks in flight per worker ([`WINDOW`]) and the delta buffer's cap
+    /// ([`MAX_WAITING`]); smaller in tests.
     window: u32,
+    max_waiting: usize,
+    inserts: Mutex<Inserts>,
     state: Mutex<State>,
 }
 
 impl std::fmt::Debug for WorkerFilter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let st = self.state();
-        f.debug_struct("WorkerFilter")
-            .field("generation", &st.current.as_ref().map(|c| c.generation))
-            .field("bloom", &st.current.as_ref().map(|c| &c.bloom))
-            .field("building", &st.building.is_some())
-            .field("transfers", &st.transfers.len())
-            .finish()
+        // `try_lock`: formatting it while a lock is held must not hang.
+        let mut d = f.debug_struct("WorkerFilter");
+        match self.state.try_lock() {
+            Ok(st) => d
+                .field("generation", &st.current.as_ref().map(|c| c.generation))
+                .field("bloom", &st.current.as_ref().map(|c| &c.bloom))
+                .field("rebuilding", &st.rebuilding)
+                .field("transfers", &st.transfers.len()),
+            Err(_) => d.field("state", &"locked"),
+        };
+        d.finish()
     }
 }
 
@@ -140,20 +168,17 @@ impl HaveObserver for WorkerFilter {
         if !self.active.load(Ordering::Acquire) {
             return;
         }
-        let mut st = self.state();
-        if let Some(c) = &st.current {
-            c.bloom.insert(hash);
-        }
-        if let Some(b) = &st.building {
+        let mut ins = self.inserts();
+        if let Some(b) = &ins.building {
             b.insert(hash);
         }
-        if st.current.is_some() {
-            if st.waiting.len() >= MAX_WAITING {
-                st.waiting = Vec::new();
-                restart_all(&mut st);
-            } else {
-                st.waiting.push(*hash);
-            }
+        let Some(c) = &ins.current else { return };
+        c.insert(hash);
+        if ins.waiting.len() >= self.max_waiting {
+            ins.waiting = Vec::new();
+            ins.overflowed = true;
+        } else if !ins.overflowed {
+            ins.waiting.push(*hash);
         }
     }
 }
@@ -166,20 +191,27 @@ impl WorkerFilter {
         WorkerFilter::starting_at(ms)
     }
 
-    /// Generations count up from `generation` (the first is one more).
-    pub fn starting_at(generation: u64) -> WorkerFilter {
+    /// Generations and transfer serials count up from `start`.
+    pub fn starting_at(start: u64) -> WorkerFilter {
         WorkerFilter {
             active: AtomicBool::new(false),
             window: WINDOW,
+            max_waiting: MAX_WAITING,
+            inserts: Mutex::default(),
             state: Mutex::new(State {
-                generations: generation,
+                generations: start,
+                serials: start.max(1),
                 ..State::default()
             }),
         }
     }
 
-    fn state(&self) -> std::sync::MutexGuard<'_, State> {
+    fn state(&self) -> MutexGuard<'_, State> {
         self.state.lock().expect("worker filter lock")
+    }
+
+    fn inserts(&self) -> MutexGuard<'_, Inserts> {
+        self.inserts.lock().expect("worker filter inserts lock")
     }
 
     /// The generation workers are sent; `None` before the first build.
@@ -188,9 +220,9 @@ impl WorkerFilter {
     }
 
     pub fn memory_bytes(&self) -> u64 {
-        let st = self.state();
-        st.current.as_ref().map_or(0, |c| c.bloom.memory_bytes())
-            + st.building.as_ref().map_or(0, |b| b.memory_bytes())
+        let ins = self.inserts();
+        ins.current.as_ref().map_or(0, |b| b.memory_bytes())
+            + ins.building.as_ref().map_or(0, |b| b.memory_bytes())
     }
 
     /// Builds the filter for `stored` keys from the store, swaps it in at a
@@ -206,30 +238,38 @@ impl WorkerFilter {
         stored: u64,
         scan: impl FnOnce(&mut dyn FnMut(InfoHash)) -> Result<(), E>,
     ) -> Result<bool, E> {
-        let (capacity, bits, hashes) = worker_params(stored);
-        let bloom = Arc::new(Bloom::with_params(capacity, bits, hashes, new_key()));
         {
             let mut st = self.state();
-            if st.building.is_some() {
+            if st.rebuilding {
                 return Ok(false);
             }
-            st.building = Some(bloom.clone());
+            st.rebuilding = true;
         }
+        let (capacity, bits, hashes) = worker_params(stored);
+        let bloom = Arc::new(Bloom::with_params(capacity, bits, hashes, new_key()));
+        self.inserts().building = Some(bloom.clone());
         // From here every insert reaches the new filter, before the scan
         // takes its read. The scan holds no lock while it reads the store.
         self.active.store(true, Ordering::Release);
         let result = scan(&mut |h| bloom.insert(&h));
         let mut st = self.state();
-        st.building = None;
+        let mut ins = self.inserts();
+        ins.building = None;
+        st.rebuilding = false;
         if result.is_ok() {
+            // Every worker starts over at the new generation, so what was
+            // waiting for a delta of the old one is in the new filter and
+            // goes with it.
+            ins.current = Some(bloom.clone());
+            ins.waiting.clear();
+            ins.overflowed = false;
             st.generations += 1;
             st.current = Some(Filter {
                 bloom,
                 generation: st.generations,
                 next_delta: 0,
             });
-            st.waiting.clear();
-            restart_all(&mut st);
+            st.transfers.clear();
         }
         result.map(|()| true)
     }
@@ -260,7 +300,7 @@ impl WorkerFilter {
             .collect();
         let mut st = self.state();
         let rebuild = !remote.is_empty()
-            && st.building.is_none()
+            && !st.rebuilding
             && st.current.as_ref().is_none_or(|c| c.bloom.is_full());
         st.transfers.retain(|w, _| remote.contains(w));
         let Some(generation) = st.current.as_ref().map(|c| c.generation) else {
@@ -269,12 +309,24 @@ impl WorkerFilter {
                 full: Vec::new(),
             };
         };
+        // Taken before any header goes out below: a key inserted later is
+        // in the bits those workers are sent, or in the next delta.
+        let (waiting, overflowed) = {
+            let mut ins = self.inserts();
+            (
+                std::mem::take(&mut ins.waiting),
+                std::mem::take(&mut ins.overflowed),
+            )
+        };
+        if overflowed {
+            st.transfers.clear();
+        }
         for w in &remote {
-            let stalled = st
-                .transfers
-                .get(w)
-                .is_some_and(|t| t.acked < t.total && now.duration_since(t.progress) > STALL);
-            if !st.transfers.contains_key(w) || stalled {
+            let restart = st.transfers.get(w).is_none_or(|t| {
+                (t.acked < t.total && now.duration_since(t.progress) > STALL)
+                    || (t.resync && now.duration_since(t.created) >= RESYNC_MIN)
+            });
+            if restart {
                 let t = new_transfer(&mut st, generation, now);
                 st.transfers.insert(*w, t);
             }
@@ -286,7 +338,15 @@ impl WorkerFilter {
             }
         }
         // Deltas, to every worker whose header went out.
-        let waiting = std::mem::take(&mut st.waiting);
+        let started: Vec<WorkerId> = st
+            .transfers
+            .iter()
+            .filter(|(_, t)| t.started)
+            .map(|(w, _)| *w)
+            .collect();
+        if started.is_empty() {
+            return HaveSync { rebuild, full };
+        }
         for keys in waiting.chunks(MAX_DELTA_KEYS) {
             let c = st.current.as_mut().expect("current");
             let d = HaveDelta {
@@ -294,21 +354,16 @@ impl WorkerFilter {
                 seq: c.next_delta,
                 keys: keys.iter().map(|k| k.0).collect(),
             };
-            c.next_delta += 1;
+            c.next_delta = c.next_delta.wrapping_add(1);
             let msg = ToWorker::HaveDelta(d.encode().expect("a bounded, non-empty batch"));
-            let started: Vec<WorkerId> = st
-                .transfers
-                .iter()
-                .filter(|(_, t)| t.started)
-                .map(|(w, _)| *w)
-                .collect();
-            for w in started {
-                if send(w, msg.clone()).is_err() {
+            for w in &started {
+                if st.transfers.get(w).is_some_and(|t| t.started) && send(*w, msg.clone()).is_err()
+                {
                     // It would miss this delta: a fresh snapshot instead.
                     let t = new_transfer(&mut st, generation, now);
-                    st.transfers.insert(w, t);
-                    if !full.contains(&w) {
-                        full.push(w);
+                    st.transfers.insert(*w, t);
+                    if !full.contains(w) {
+                        full.push(*w);
                     }
                 }
             }
@@ -332,6 +387,14 @@ impl WorkerFilter {
             return;
         };
         if ack == RESYNC {
+            if let Some(t) = st.transfers.get_mut(&worker)
+                && now.duration_since(t.created) < RESYNC_MIN
+            {
+                // Too soon after the last start: the sync after
+                // `RESYNC_MIN` restarts it.
+                t.resync = true;
+                return;
+            }
             let t = new_transfer(&mut st, generation, now);
             st.transfers.insert(worker, t);
         } else {
@@ -357,7 +420,7 @@ impl Default for WorkerFilter {
 }
 
 fn new_transfer(st: &mut State, generation: u64, now: Instant) -> Transfer {
-    st.serials += 1;
+    st.serials = st.serials.wrapping_add(1).max(1);
     let total = st
         .current
         .as_ref()
@@ -369,14 +432,10 @@ fn new_transfer(st: &mut State, generation: u64, now: Instant) -> Transfer {
         sent: 0,
         acked: 0,
         total,
+        created: now,
         progress: now,
+        resync: false,
     }
-}
-
-/// Every worker starts over (a rebuild, dropped deltas): the next sync
-/// gives each connected one a new transfer.
-fn restart_all(st: &mut State) {
-    st.transfers.clear();
 }
 
 /// Sends a worker's header if it hasn't gone, then chunks up to the
@@ -393,6 +452,12 @@ fn pump(
     };
     if !t.started {
         let h = c.bloom.header(t.generation, t.serial, c.next_delta);
+        // `worker_params` keeps it in range; never send one a worker
+        // would refuse.
+        debug_assert!(h.check().is_ok());
+        if h.check().is_err() {
+            return true;
+        }
         match send(worker, ToWorker::HaveSnapshot(h.encode())) {
             Ok(()) => {
                 t.started = true;
@@ -457,7 +522,7 @@ mod tests {
     /// A coordinator (its `Have`, the store, the worker filter) and
     /// workers behind lossy, reorder-free queues, as sessions are.
     struct Net {
-        have: Have,
+        have: Arc<Have>,
         filter: Arc<WorkerFilter>,
         stored: Vec<InfoHash>,
         workers: Vec<WorkerStatus>,
@@ -478,9 +543,15 @@ mod tests {
 
         /// A window of 1 makes chunks and deltas interleave.
         fn with_window(workers: u32, window: u32) -> Net {
-            let have = Have::new(1024);
+            Net::with(workers, window, false, MAX_WAITING)
+        }
+
+        /// `in_place`: workers always drop their filter at a new header.
+        fn with(workers: u32, window: u32, in_place: bool, max_waiting: usize) -> Net {
+            let have = Arc::new(Have::new(1024));
             let mut filter = WorkerFilter::starting_at(100);
             filter.window = window;
+            filter.max_waiting = max_waiting;
             let filter = Arc::new(filter);
             assert!(have.observe(filter.clone()));
             let ids: Vec<WorkerId> = (1..=workers).map(WorkerId).collect();
@@ -489,7 +560,17 @@ mod tests {
                 filter,
                 stored: Vec::new(),
                 workers: ids.iter().map(|w| status(w.0)).collect(),
-                sides: ids.iter().map(|w| (*w, WorkerHave::new())).collect(),
+                sides: ids
+                    .iter()
+                    .map(|w| {
+                        let side = if in_place {
+                            WorkerHave::in_place_above(0)
+                        } else {
+                            WorkerHave::new()
+                        };
+                        (*w, side)
+                    })
+                    .collect(),
                 queues: ids.iter().map(|w| (*w, VecDeque::new())).collect(),
                 full: ids.iter().map(|w| (*w, false)).collect(),
                 stored_at: HashMap::new(),
@@ -607,14 +688,17 @@ mod tests {
             }
         }
 
-        /// Syncs and delivers until a sync sends nothing.
+        /// Syncs and delivers until every worker is ready and a sync sends
+        /// nothing. Time moves on, so deferred resyncs and stalls happen.
         fn settle(&mut self) {
             for _ in 0..1000 {
+                self.now += RESYNC_MIN;
                 if self.sync().rebuild {
                     self.rebuild();
                     continue;
                 }
-                if self.queues.values().all(VecDeque::is_empty) {
+                let ready = self.sides.values().all(WorkerHave::is_ready);
+                if ready && self.queues.values().all(VecDeque::is_empty) {
                     return;
                 }
                 let ws: Vec<WorkerId> = self.queues.keys().copied().collect();
@@ -635,7 +719,7 @@ mod tests {
         assert_eq!(net.filter.memory_bytes(), 0);
         assert_eq!(net.filter.generation(), None);
         assert!(!net.filter.active.load(Ordering::Relaxed));
-        assert!(net.filter.state().waiting.is_empty());
+        assert!(net.filter.inserts().waiting.is_empty());
     }
 
     #[test]
@@ -732,6 +816,153 @@ mod tests {
         assert_eq!((after.serial, after.acked), (t.serial, 0));
     }
 
+    #[test]
+    fn keys_stored_during_the_scan_are_kept() {
+        let mut net = Net::new(1);
+        net.store(100);
+        net.sync();
+        // The scan reads a snapshot of the store taken before these
+        // commits; the writer inserts them while it runs.
+        let read: Vec<InfoHash> = net.stored.clone();
+        let later: Vec<InfoHash> = (100..150).map(key).collect();
+        let have = &net.have;
+        net.filter
+            .rebuild(read.len() as u64, |insert| {
+                for (i, k) in read.iter().enumerate() {
+                    if i == 50 {
+                        later.iter().for_each(|k| have.insert(k));
+                    }
+                    insert(*k);
+                }
+                Ok::<(), ()>(())
+            })
+            .unwrap();
+        net.stored.extend(later);
+        net.settle();
+        let side = &net.sides[&WorkerId(1)];
+        assert!(net.stored.iter().all(|k| side.might_be_stored(k)));
+    }
+
+    #[test]
+    fn keys_stored_on_another_thread_during_a_rebuild_are_kept() {
+        let mut net = Net::new(1);
+        net.store(10);
+        net.settle();
+        let filter = net.filter.clone();
+        let read = net.stored.clone();
+        let writer = {
+            let have = net.have.clone();
+            std::thread::spawn(move || {
+                for i in 10..20_000 {
+                    have.insert(&key(i));
+                }
+            })
+        };
+        filter
+            .rebuild(read.len() as u64, |insert| {
+                read.iter().for_each(|k| insert(*k));
+                Ok::<(), ()>(())
+            })
+            .unwrap();
+        writer.join().unwrap();
+        net.stored.extend((10..20_000).map(key));
+        net.settle();
+        let side = &net.sides[&WorkerId(1)];
+        assert!(net.stored.iter().all(|k| side.might_be_stored(k)));
+    }
+
+    #[test]
+    fn a_failed_rebuild_keeps_the_old_filter() {
+        let mut net = Net::new(1);
+        net.store(10);
+        net.settle();
+        let generation = net.filter.generation();
+        let r = net.filter.rebuild(10, |insert| {
+            insert(key(0));
+            Err("store")
+        });
+        assert_eq!(r, Err("store"));
+        assert_eq!(net.filter.generation(), generation);
+        assert!(!net.filter.state().rebuilding);
+        assert!(net.filter.inserts().building.is_none());
+        net.store(5);
+        net.settle();
+        assert!(
+            net.stored
+                .iter()
+                .all(|k| net.sides[&WorkerId(1)].might_be_stored(k))
+        );
+        // And a second one at once is refused while one runs.
+        net.filter.state().rebuilding = true;
+        assert_eq!(net.filter.rebuild(1, |_| Ok::<(), ()>(())), Ok(false));
+    }
+
+    #[test]
+    fn too_many_waiting_keys_restart_every_snapshot() {
+        let mut net = Net::with(2, WINDOW, false, 100);
+        net.store(10);
+        net.settle();
+        let serials: Vec<u64> = net
+            .filter
+            .state()
+            .transfers
+            .values()
+            .map(|t| t.serial)
+            .collect();
+        net.store(150);
+        assert!(net.filter.inserts().overflowed);
+        assert!(net.filter.inserts().waiting.is_empty());
+        net.sync();
+        let after: Vec<u64> = net
+            .filter
+            .state()
+            .transfers
+            .values()
+            .map(|t| t.serial)
+            .collect();
+        assert!(after.iter().zip(&serials).all(|(a, b)| a > b));
+        net.settle();
+        for side in net.sides.values() {
+            assert!(net.stored.iter().all(|k| side.might_be_stored(k)));
+        }
+    }
+
+    #[test]
+    fn resync_requests_are_rate_limited() {
+        let mut net = Net::new(1);
+        let w = WorkerId(1);
+        net.store(10);
+        net.settle();
+        let serial = net.filter.state().transfers[&w].serial;
+        net.queues.get_mut(&w).unwrap().clear();
+        // Long after the last start: at once.
+        net.ack(w, RESYNC);
+        let next = net.filter.state().transfers[&w].serial;
+        assert!(next > serial);
+        let queued = net.queues[&w].len();
+        // Again straight away: deferred, nothing more sent.
+        for _ in 0..10 {
+            net.ack(w, RESYNC);
+        }
+        assert_eq!(net.filter.state().transfers[&w].serial, next);
+        assert_eq!(net.queues[&w].len(), queued);
+        net.sync();
+        assert_eq!(net.filter.state().transfers[&w].serial, next);
+        net.now += RESYNC_MIN;
+        net.sync();
+        assert!(net.filter.state().transfers[&w].serial > next);
+    }
+
+    #[test]
+    fn worker_params_follow_q6_and_stay_in_range() {
+        assert_eq!(worker_params(0), (1 << 20, 10, 7));
+        assert_eq!(worker_params(10_000_000), (12_500_000, 10, 7));
+        assert_eq!(worker_params(30_000_000), (37_500_000, 10, 7));
+        assert_eq!(worker_params(50_000_000), (62_500_000, 8, 6));
+        let (cap, bits, _) = worker_params(u64::MAX / 2);
+        assert!(cap * bits <= MAX_FILTER_BITS);
+    }
+
     #[derive(Debug, Clone)]
     enum Op {
         Store(u64),
@@ -764,8 +995,9 @@ mod tests {
         fn never_a_wrong_no(
             ops in proptest::collection::vec(op(), 1..60),
             window in 1u32..=WINDOW,
+            in_place in any::<bool>(),
         ) {
-            let mut net = Net::with_window(2, window);
+            let mut net = Net::with(2, window, in_place, MAX_WAITING);
             for op in ops {
                 match op {
                     Op::Store(n) => net.store(n),

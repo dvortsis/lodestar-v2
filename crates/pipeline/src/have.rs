@@ -6,7 +6,8 @@
 //! and the writer confirms it against the store; the rare false positive
 //! is sent on to the pool from there, so nothing new is lost to it.
 //!
-//! Reads and inserts are lock-free (atomic words). When the filter fills
+//! Reads and inserts are lock-free (atomic words); an observer, when one
+//! is set (WK-3, only once workers are allowed), takes its own lock. When the filter fills
 //! past its capacity it's rebuilt at twice the size from the store.
 
 use std::fmt;
@@ -169,6 +170,15 @@ impl Bloom {
             count: AtomicU64::new(h.count),
             key: h.key,
         }
+    }
+
+    /// Whether a snapshot with header `h` is of this filter: the same key
+    /// and shape, so its chunks can be ORed straight into it.
+    pub fn matches(&self, h: &HaveHeader) -> bool {
+        self.key == h.key
+            && self.bit_len() == h.bits
+            && self.hashes == h.hashes
+            && self.capacity == h.capacity
     }
 
     /// The header a snapshot of this filter starts with.

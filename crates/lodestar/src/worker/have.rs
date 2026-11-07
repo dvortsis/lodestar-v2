@@ -49,7 +49,9 @@ struct Held {
 
 #[derive(Debug)]
 struct Pending {
-    bloom: Bloom,
+    /// `None` refills the filter in use: a snapshot of the same filter
+    /// (a resync) ORs into it, with no second copy and no "maybe" window.
+    bloom: Option<Bloom>,
     assembly: Assembly,
     next_delta: u64,
 }
@@ -92,9 +94,14 @@ impl Default for WorkerHave {
 
 impl WorkerHave {
     pub fn new() -> WorkerHave {
+        WorkerHave::in_place_above(IN_PLACE_ABOVE)
+    }
+
+    /// Swaps in place when the old and new filters together pass `bytes`.
+    pub fn in_place_above(bytes: u64) -> WorkerHave {
         WorkerHave {
             state: RwLock::default(),
-            in_place_above: IN_PLACE_ABOVE,
+            in_place_above: bytes,
         }
     }
 
@@ -129,7 +136,10 @@ impl WorkerHave {
     pub fn memory_bytes(&self) -> u64 {
         let st = self.read();
         st.current.as_ref().map_or(0, |h| h.bloom.memory_bytes())
-            + st.pending.as_ref().map_or(0, |p| p.bloom.memory_bytes())
+            + st.pending
+                .as_ref()
+                .and_then(|p| p.bloom.as_ref())
+                .map_or(0, Bloom::memory_bytes)
     }
 
     /// Messages refused (malformed, out of order, gaps).
@@ -148,26 +158,39 @@ impl WorkerHave {
 
     /// A `HaveSnapshot` header: starts a new assembly, replacing any other.
     pub fn header(&self, bytes: &[u8]) -> Result<(), HaveError> {
-        let mut st = self.write();
         let h = match HaveHeader::decode(bytes) {
             Ok(h) => h,
             Err(e) => {
-                st.refused += 1;
+                self.write().refused += 1;
                 return Err(e);
             }
         };
-        st.pending = None;
-        st.resync_asked = false;
-        let new = filter_bytes(h.bits);
-        let old = st.current.as_ref().map_or(0, |c| c.bloom.memory_bytes());
-        if old + new > self.in_place_above {
-            st.current = None;
-        }
-        st.pending = Some(Pending {
-            bloom: Bloom::for_header(&h),
+        let pending = |bloom| Pending {
+            bloom,
             assembly: Assembly::new(h),
             next_delta: h.next_delta,
-        });
+        };
+        {
+            let mut st = self.write();
+            st.pending = None;
+            st.resync_asked = false;
+            if st
+                .current
+                .as_ref()
+                .is_some_and(|c| c.generation == h.generation && c.bloom.matches(&h))
+            {
+                st.pending = Some(pending(None));
+                return Ok(());
+            }
+            let new = filter_bytes(h.bits);
+            let old = st.current.as_ref().map_or(0, |c| c.bloom.memory_bytes());
+            if old + new > self.in_place_above {
+                st.current = None;
+            }
+        }
+        // Allocated with no lock held, so lookups don't wait on it.
+        let bloom = Bloom::for_header(&h);
+        self.write().pending = Some(pending(Some(bloom)));
         Ok(())
     }
 
@@ -176,29 +199,49 @@ impl WorkerHave {
     /// (the assembly is dropped). A chunk of an earlier transfer is
     /// ignored.
     pub fn chunk(&self, c: &SnapshotChunk) -> Option<SnapshotAck> {
-        let mut st = self.write();
+        let mut guard = self.write();
+        let st = &mut *guard;
         let p = st.pending.as_mut()?;
         if !p.assembly.owns(c) {
             return None;
         }
         match p.assembly.accept(c) {
             Ok(placed) => {
-                p.bloom.write_bytes(placed.offset, placed.bytes);
-                let ack = placed.ack;
-                if placed.last {
+                let (offset, ack, last) = (placed.offset, placed.ack, placed.last);
+                match (&p.bloom, &st.current) {
+                    (Some(b), _) => b.write_bytes(offset, placed.bytes),
+                    (None, Some(c)) => c.bloom.write_bytes(offset, placed.bytes),
+                    // A refill whose filter went away: can't happen, since
+                    // only a header drops the filter in use.
+                    (None, None) => {
+                        st.pending = None;
+                        return None;
+                    }
+                }
+                if last {
                     let p = st.pending.take().expect("pending");
-                    st.current = Some(Held {
-                        generation: p.assembly.header().generation,
-                        bloom: p.bloom,
-                        next_delta: p.next_delta,
-                    });
+                    let generation = p.assembly.header().generation;
+                    match p.bloom {
+                        Some(bloom) => {
+                            st.current = Some(Held {
+                                generation,
+                                bloom,
+                                next_delta: p.next_delta,
+                            });
+                        }
+                        None => {
+                            if let Some(c) = st.current.as_mut() {
+                                c.next_delta = p.next_delta;
+                            }
+                        }
+                    }
                 }
                 Some(ack)
             }
             Err(_) => {
                 st.refused += 1;
                 st.pending = None;
-                ask_resync(&mut st)
+                ask_resync(st)
             }
         }
     }
@@ -262,11 +305,13 @@ fn apply(st: &mut State, d: &HaveDelta) -> Option<Applied> {
             Less => Some(Applied::Stale),
             Greater => None,
             Equal => {
-                insert(&p.bloom);
+                if let Some(b) = &p.bloom {
+                    insert(b);
+                }
                 if let Some(c) = current {
                     insert(&c.bloom);
                 }
-                p.next_delta += 1;
+                p.next_delta = p.next_delta.wrapping_add(1);
                 Some(Applied::Inserted)
             }
         };
@@ -279,7 +324,7 @@ fn apply(st: &mut State, d: &HaveDelta) -> Option<Applied> {
             Greater => None,
             Equal => {
                 insert(&c.bloom);
-                c.next_delta += 1;
+                c.next_delta = c.next_delta.wrapping_add(1);
                 Some(Applied::Inserted)
             }
         };
@@ -421,9 +466,8 @@ mod tests {
 
     #[test]
     fn above_the_limit_the_swap_is_in_place() {
-        let mut w = WorkerHave::new();
         let old = source(100, 5);
-        w.in_place_above = 2 * old.memory_bytes() - 1;
+        let w = WorkerHave::in_place_above(2 * old.memory_bytes() - 1);
         load(&w, &old, 1, 1);
         let new = source(150, 6);
         w.header(&new.header(2, 2, 0).encode()).unwrap();
@@ -510,5 +554,54 @@ mod tests {
         for needle in ["c3", "C3", "195"] {
             assert!(!shown.contains(needle), "{needle} in {shown}");
         }
+    }
+
+    #[test]
+    fn a_resync_of_the_same_filter_refills_it_with_no_maybe_window() {
+        // Even with in-place swaps always on.
+        let w = WorkerHave::in_place_above(0);
+        let b = source(100, 0x11);
+        load(&w, &b, 1, 1);
+        for i in 100..120 {
+            b.insert(&key(i));
+        }
+        let mem = w.memory_bytes();
+        w.header(&b.header(1, 2, 0).encode()).unwrap();
+        assert!(w.is_ready());
+        assert_eq!(w.memory_bytes(), mem);
+        assert!(!w.might_be_stored(&key(1_000_000)));
+        let cs = chunks(&b, 2);
+        w.chunk(&cs[0]);
+        assert_eq!(
+            w.delta(&delta(1, 0, 200..210)),
+            (Ok(Applied::Inserted), None)
+        );
+        w.chunk(&cs[1]);
+        w.chunk(&cs[2]);
+        assert_eq!(w.generation(), Some(1));
+        assert!((0..120).chain(200..210).all(|i| w.might_be_stored(&key(i))));
+        // Its deltas carry on from the header's sequence number.
+        assert_eq!(
+            w.delta(&delta(1, 1, 300..301)),
+            (Ok(Applied::Inserted), None)
+        );
+        // Another generation or key is a new filter.
+        w.header(&b.header(2, 3, 0).encode()).unwrap();
+        assert!(!w.is_ready());
+    }
+
+    #[test]
+    fn sequence_numbers_at_the_end_of_their_range_wrap() {
+        let w = WorkerHave::new();
+        let b = source(1, 0x12);
+        w.header(&b.header(1, 1, u64::MAX).encode()).unwrap();
+        for c in chunks(&b, 1) {
+            w.chunk(&c);
+        }
+        assert_eq!(
+            w.delta(&delta(1, u64::MAX, 5..6)),
+            (Ok(Applied::Inserted), None)
+        );
+        assert_eq!(w.delta(&delta(1, 0, 6..7)), (Ok(Applied::Inserted), None));
     }
 }

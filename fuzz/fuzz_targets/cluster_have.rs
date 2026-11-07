@@ -6,7 +6,8 @@
 //!
 //! The first byte picks the case: 0 a header, 1 a delta, anything else an
 //! assembly, whose header (70 bytes, version forced to 1) is followed by
-//! chunks given as a sequence byte and a length byte (in 64 KiB steps).
+//! chunks given as a sequence byte (its top bit: another transfer's chunk)
+//! and a length byte (odd: the exact length; even: in 32 KiB steps).
 
 #![no_main]
 
@@ -58,9 +59,9 @@ fn assemble(data: &[u8]) {
     let mut a = Assembly::new(h);
     let mut expected = 0u32;
     for pair in data[HEADER_V1_LEN..].chunks_exact(2) {
-        let seq = u32::from(pair[0]);
+        let seq = u32::from(pair[0] & 0x7F);
+        let other = pair[0] & 0x80 != 0;
         let exact = chunk_range(h.bits, seq).len();
-        // Odd length bytes give the exact length, even ones a step size.
         let len = if pair[1] % 2 == 1 {
             exact
         } else {
@@ -68,13 +69,16 @@ fn assemble(data: &[u8]) {
         };
         let c = SnapshotChunk {
             kind: SnapshotKind::HaveFilter,
-            version: h.serial,
+            version: if other { h.serial.wrapping_add(1) } else { h.serial },
             seq,
             total: h.chunks,
             bytes: vec![pair[1]; len],
         };
+        let owned = a.owns(&c);
+        assert_eq!(owned, !other);
         match a.accept(&c) {
             Ok(p) => {
+                assert!(owned);
                 assert_eq!(seq, expected);
                 assert_eq!(p.bytes.len(), exact);
                 assert_eq!(p.offset, chunk_range(h.bits, seq).start);
@@ -83,7 +87,12 @@ fn assemble(data: &[u8]) {
                 assert_eq!(p.last, expected == h.chunks);
             }
             Err(_) => {
-                assert!(seq != expected || len != exact || expected == h.chunks);
+                assert!(!owned || seq != expected || len != exact || expected == h.chunks);
+                // A chunk of another transfer is skipped; anything else
+                // ends the assembly, as the worker drops it.
+                if !owned {
+                    continue;
+                }
                 break;
             }
         }
