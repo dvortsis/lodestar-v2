@@ -5929,6 +5929,10 @@
     {
       "id": "owner-q-windows-event-log",
       "note": "2026-11-07T22:00Z: owner question for next owner batch: should Lodestar write to the Windows Event Log (service refusal reason; optional error lines)? Needs Legal Notice \u00a75 fifth exception (Application log readable by all local users), legal_facts.rs check flipped, docs/legal/README.md. Runner recommends refusals-only with no data values. X-win-refusal-ux ships without it (event_log_errors hidden)."
+    },
+    {
+      "id": "X-web-hygiene-1107-merged",
+      "note": "#596 merged 8c058910 on fresh Opus MERGE (nits: facets waitForResponse loose; keyboard+pointer race before import). Owner \u00a72.19 flag: NotificationsScreen budget 45->45.1 kB. Slot 2 -> CMP-3 (Opus, new session); Sonnet session archived."
     }
   ],
   "main_health": [
@@ -6624,7 +6628,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-07T21:39Z",
+    "updated": "2026-11-07T23:05Z",
     "items": [
       {
         "slot": 1,
@@ -6636,11 +6640,11 @@
       },
       {
         "slot": 2,
-        "slice": "X-web-hygiene-1107",
+        "slice": "CMP-3",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCVN68eUViVowdQeWw: 4 items done locally; budget +100 B approved 21:36Z; PR next",
-        "since": "2026-11-07T21:20Z"
+        "doing": "launching (Opus); #596 X-web-hygiene-1107 merged 8c058910",
+        "since": "2026-11-07T23:05Z"
       },
       {
         "slot": 3,
@@ -6714,5 +6718,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-07T22:00:00Z"
+  "updated": "2026-11-07T23:05:00Z"
 }
