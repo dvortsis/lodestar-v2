@@ -720,8 +720,9 @@ impl Pipeline {
         // filter's hash floor since it was saved is restored only to end
         // as blocked, as the intake ends one it refuses: never fetched,
         // and its funnel row is terminal (WK-9c).
+        let engine = config.filter.current();
         let refuses = |key: &lodestar_metainfo::InfoHash| {
-            held.contains(&key.0) || config.filter.current().blocked_hash(&[key.0]).is_some()
+            held.contains(&key.0) || engine.blocked_hash(&[key.0]).is_some()
         };
         let mut refused = std::collections::HashSet::new();
         for q in &queue {

@@ -170,9 +170,12 @@ pub struct RemoteStats {
     pub late_refused: AtomicU64,
     /// Results fetched before the worker's last purge.
     pub purged: AtomicU64,
-    /// Records refused because they came in clear (every remote record is
-    /// sealed), or were sealed but didn't open.
+    /// Records refused because they came in clear: every remote record is
+    /// sealed (WK-8), so one in clear is a misbehaving worker.
     pub clear: AtomicU64,
+    /// Sealed records refused because they didn't open: an unknown or
+    /// expired wire key, a seal that fails under the session's worker id,
+    /// or an inside that isn't its header's one record.
     pub unopened: AtomicU64,
     /// Records refused for their content (counts, blob, dictionary, a
     /// hybrid hash naming another stored torrent).
@@ -609,9 +612,12 @@ impl RemoteIntake {
         for rec in &clear.records {
             refuse(&rec.key, rec.token, &self.stats.clear);
         }
+        drop(clear);
+        // Each seal is dropped as it's opened: its ciphertext isn't kept
+        // beside its plaintext.
         let mut records = Vec::with_capacity(sealed.len());
-        for s in &sealed {
-            match parts.keys.open(s, worker) {
+        for s in sealed {
+            match parts.keys.open(&s, worker) {
                 Ok(rec) => records.push(rec),
                 Err(_) => refuse(&s.key, s.token, &self.stats.unopened),
             }
