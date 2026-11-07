@@ -611,35 +611,55 @@ mod tests {
         }
     }
 
-    /// The sample's cost at about 3,000 mappings (X-soak-screen): 750
-    /// parked threads with small stacks, each its stack, guard page and
-    /// thread-local mappings.
+    /// The sample's cost at about 3,000 mappings (X-soak-screen): parked
+    /// threads with small stacks, spawned in batches until `/proc/self/maps`
+    /// holds [`TARGET`] lines. How many mappings one thread adds depends on
+    /// how the runner's libc lays out stacks and guard pages (about two on
+    /// GitHub's Ubuntu runners, where 750 threads gave only 1,605 lines), so
+    /// the test counts what it made instead of assuming it.
     /// Ignored in the workspace run; the soak-screen job runs it.
     #[cfg(target_os = "linux")]
     #[test]
-    #[ignore = "spawns 750 threads; run by the soak-screen CI job"]
+    #[ignore = "spawns up to 4,000 threads; run by the soak-screen CI job"]
     fn anon_mappings_cost_at_3000_mappings() {
-        use std::sync::{Arc, Barrier};
-        let threads = 750;
-        let barrier = Arc::new(Barrier::new(threads + 1));
-        let ready = Arc::new(Barrier::new(threads + 1));
-        let handles: Vec<_> = (0..threads)
-            .map(|_| {
-                let (b, r) = (barrier.clone(), ready.clone());
-                std::thread::Builder::new()
-                    .stack_size(64 << 10)
-                    .spawn(move || {
-                        r.wait();
-                        b.wait();
-                    })
-                    .expect("spawn")
-            })
-            .collect();
-        ready.wait();
-        let lines = std::fs::read_to_string("/proc/self/maps")
-            .unwrap()
-            .lines()
-            .count();
+        use std::sync::{Arc, Condvar, Mutex, mpsc};
+        const TARGET: usize = 3_000;
+        const MAX_THREADS: usize = 4_000;
+        const BATCH: usize = 100;
+        let release = Arc::new((Mutex::new(false), Condvar::new()));
+        let (started, ready) = mpsc::channel::<()>();
+        let mapped = || {
+            std::fs::read_to_string("/proc/self/maps")
+                .unwrap()
+                .lines()
+                .count()
+        };
+        let mut handles = Vec::new();
+        let mut lines = mapped();
+        while lines < TARGET && handles.len() < MAX_THREADS {
+            for _ in 0..BATCH {
+                let (release, started) = (release.clone(), started.clone());
+                handles.push(
+                    std::thread::Builder::new()
+                        .stack_size(64 << 10)
+                        .spawn(move || {
+                            started.send(()).unwrap();
+                            let (lock, go) = &*release;
+                            let mut go_now = lock.lock().unwrap();
+                            while !*go_now {
+                                go_now = go.wait(go_now).unwrap();
+                            }
+                        })
+                        .expect("spawn"),
+                );
+            }
+            // Every thread in the batch is running, so its stack is mapped.
+            for _ in 0..BATCH {
+                ready.recv().unwrap();
+            }
+            lines = mapped();
+        }
+        let threads = handles.len();
         let mut took: Vec<std::time::Duration> = (0..51)
             .map(|_| {
                 let started = std::time::Instant::now();
@@ -649,14 +669,18 @@ mod tests {
                 started.elapsed()
             })
             .collect();
-        barrier.wait();
+        {
+            let (lock, go) = &*release;
+            *lock.lock().unwrap() = true;
+            go.notify_all();
+        }
         for h in handles {
             h.join().unwrap();
         }
         took.sort();
         let median = took[took.len() / 2];
         println!(
-            "SCREEN-COST anon_mappings: {lines} mappings, median {:.0} us, max {:.0} us per read",
+            "SCREEN-COST anon_mappings: {lines} mappings from {threads} threads, median {:.0} us, max {:.0} us per read",
             median.as_secs_f64() * 1e6,
             took[took.len() - 1].as_secs_f64() * 1e6
         );

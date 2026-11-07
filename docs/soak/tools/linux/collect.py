@@ -246,7 +246,11 @@ def screen_config(thresholds):
 def screen_slope(pairs):
     n = len(pairs)
     mx, my = sum(x for x, _ in pairs) / n, sum(y for _, y in pairs) / n
-    sxx = sum((x - mx) ** 2 for x, _ in pairs)
+    # A product, not `** 2`: a float power raises OverflowError past about 1e154,
+    # and a spread too wide to square is no reading (the caller's unusable path).
+    sxx = sum((x - mx) * (x - mx) for x, _ in pairs)
+    if not math.isfinite(sxx):
+        return math.nan
     return None if sxx == 0 else sum((x - mx) * (y - my) for x, y in pairs) / sxx
 
 
