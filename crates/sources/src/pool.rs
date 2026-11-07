@@ -23,7 +23,7 @@
 //! channel slot.
 
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -111,9 +111,9 @@ impl Fetcher for PeerWireFetcher {
         reservation: Reservation,
     ) -> BoxFuture<'static, Result<Fetched, FailureKind>> {
         let mut opts = self.0.clone();
-        opts.reserve = Some(Reserve(Arc::new(move |heap| {
+        opts.reserve = Some(Reserve(Arc::new(move |now, total| {
             let r = reservation.clone();
-            Box::pin(async move { r.reserve(heap).await })
+            Box::pin(async move { r.reserve(now, total).await })
         })));
         Box::pin(async move {
             lodestar_peer_wire::fetch(peer, key, &opts)
@@ -193,6 +193,20 @@ pub const SHUTDOWN_DRAIN: Duration = Duration::from_secs(5);
 /// have reserved for their results, plus the bytes of finished results the
 /// pool holds, against [`PoolConfig::max_held_bytes`]. Both are in
 /// [`weigh`]'s units.
+///
+/// A fetch of a large dict reserves in two steps: its first request window
+/// at the handshake (a *partial* claim), the rest once its peer has sent a
+/// piece (*growth*). A claim that's granted never waits again, except a
+/// partial one for its growth. Two rules keep that from deadlocking:
+/// - **Growth goes first.** While a growth waits, nothing else is granted
+///   and the pool starts no fetch, so the bytes it needs can only come
+///   free: fetches that hold their whole reservation finish, and the
+///   consumer takes held results.
+/// - **Partial claims leave room for any one of them to grow.** A partial
+///   claim is admitted only if the partial claims' bytes plus the largest
+///   growth any of them still needs fit the budget. So once the rest has
+///   drained, the oldest growth always fits beside the other partial
+///   claims, which wait behind it holding only their first windows.
 #[derive(Debug)]
 struct Budget {
     limit: u64,
@@ -207,10 +221,39 @@ struct Budget {
 struct BudgetState {
     reserved: u64,
     held: u64,
-    /// Waiting reservations, oldest first, by claim id. Only the oldest
-    /// may take room, so a large one isn't starved by small ones.
+    /// Waiting first reservations, oldest first, by claim id. Only the
+    /// oldest may take room, so a large one isn't starved by small ones.
     queue: VecDeque<u64>,
+    /// Waiting growths, oldest first; they go before any first reservation.
+    growth: VecDeque<u64>,
+    /// Bytes held by partial claims, and the growth each still needs.
+    partial: u64,
+    needs: BTreeMap<u64, usize>,
     next_id: u64,
+}
+
+impl BudgetState {
+    fn add_need(&mut self, bytes: u64, need: u64) {
+        self.partial += bytes;
+        *self.needs.entry(need).or_insert(0) += 1;
+    }
+
+    fn remove_need(&mut self, bytes: u64, need: u64) {
+        if need == 0 {
+            return;
+        }
+        self.partial = self.partial.saturating_sub(bytes);
+        if let Some(n) = self.needs.get_mut(&need) {
+            *n -= 1;
+            if *n == 0 {
+                self.needs.remove(&need);
+            }
+        }
+    }
+
+    fn largest_need(&self) -> u64 {
+        self.needs.last_key_value().map_or(0, |(need, _)| *need)
+    }
 }
 
 impl Budget {
@@ -238,7 +281,7 @@ impl Budget {
     /// Room for another fetch: under the budget and nothing waiting.
     fn has_room(&self) -> bool {
         let s = self.lock();
-        s.queue.is_empty() && s.reserved.saturating_add(s.held) < self.limit
+        s.queue.is_empty() && s.growth.is_empty() && s.reserved.saturating_add(s.held) < self.limit
     }
 
     /// Bytes the pool no longer holds.
@@ -267,6 +310,9 @@ struct Claim {
     id: u64,
     /// Bytes reserved; changed only under the budget's lock.
     bytes: AtomicU64,
+    /// For a partial claim, the growth it still needs (0 otherwise);
+    /// changed only under the budget's lock.
+    need: AtomicU64,
     /// Set while waiting for room and left set if the wait never ended:
     /// the fetch ran out of time waiting, not because of its peer.
     waited_out: AtomicBool,
@@ -283,21 +329,27 @@ impl Reservation {
             budget,
             id,
             bytes: AtomicU64::new(0),
+            need: AtomicU64::new(0),
             waited_out: AtomicBool::new(false),
         }))
     }
 
-    /// Reserves room for a result whose heap holds at most `heap` bytes
-    /// (with the [`FetchedKey`] itself, [`weigh`]'s units), waiting while
-    /// the budget is full. Called again, it keeps the larger reservation.
+    /// Reserves room for `now` heap bytes of a result whose heap holds at
+    /// most `total` (each with the [`FetchedKey`] itself, [`weigh`]'s
+    /// units), waiting while the budget has no room. `now < total` makes a
+    /// partial claim, which a later call grows (peer-wire's two steps,
+    /// `lodestar_peer_wire::Reserve`). Called again with less, it keeps
+    /// what it has.
     ///
-    /// The first fetch to find the budget empty of everything else always
+    /// A first reservation that finds nothing else reserved or held always
     /// gets its room, so even a dict larger than the whole budget is
-    /// fetched, alone. Waiting reservations are served oldest first.
-    /// Cancel-safe: dropped while waiting, it leaves the queue and has
-    /// taken nothing.
-    pub async fn reserve(&self, heap: usize) {
-        let want = (std::mem::size_of::<FetchedKey>() as u64).saturating_add(heap as u64);
+    /// fetched, alone. Waiting reservations are served oldest first,
+    /// growths before first reservations. Cancel-safe: dropped while
+    /// waiting, it leaves its queue and keeps only what it had.
+    pub async fn reserve(&self, now: usize, total: usize) {
+        let key = std::mem::size_of::<FetchedKey>() as u64;
+        let want_total = key.saturating_add(total as u64);
+        let want = key.saturating_add(now as u64).min(want_total);
         let claim = &*self.0;
         let budget = &*claim.budget;
         let mut queued: Option<Queued<'_>> = None;
@@ -305,41 +357,68 @@ impl Reservation {
             let freed = budget.freed.notified();
             tokio::pin!(freed);
             freed.as_mut().enable();
-            if self.try_grow(want) {
+            if self.try_grow(want, want_total) {
                 if let Some(q) = queued.take() {
                     claim.waited_out.store(false, Ordering::Relaxed);
-                    q.leave();
+                    drop(q);
                 }
                 return;
             }
             if queued.is_none() {
                 claim.waited_out.store(true, Ordering::Relaxed);
-                budget.lock().queue.push_back(claim.id);
+                let mut s = budget.lock();
+                if claim.bytes.load(Ordering::Relaxed) > 0 {
+                    s.growth.push_back(claim.id);
+                } else {
+                    s.queue.push_back(claim.id);
+                }
+                drop(s);
                 queued = Some(Queued(claim));
             }
             freed.await;
         }
     }
 
-    /// Takes the room for `want` bytes if it fits, or if nothing else is
-    /// reserved or held; never ahead of an older waiting reservation.
-    fn try_grow(&self, want: u64) -> bool {
+    /// Takes the room for `want` bytes (of `want_total`) if the rules in
+    /// [`Budget`] allow it now.
+    fn try_grow(&self, want: u64, want_total: u64) -> bool {
         let claim = &*self.0;
+        let limit = claim.budget.limit;
         let mut s = claim.budget.lock();
         let mine = claim.bytes.load(Ordering::Relaxed);
         if mine >= want {
             return true;
         }
-        if s.queue.front().is_some_and(|&id| id != claim.id) {
+        let growing = mine > 0;
+        let first_in = |q: &VecDeque<u64>| q.front().is_none_or(|&id| id == claim.id);
+        if growing {
+            if !first_in(&s.growth) {
+                return false;
+            }
+        } else if !s.growth.is_empty() || !first_in(&s.queue) {
             return false;
         }
         let used = s.reserved.saturating_add(s.held);
         let others = used.saturating_sub(mine);
         let extra = want - mine;
-        if others > 0 && used.saturating_add(extra) > claim.budget.limit {
+        if others > 0 && used.saturating_add(extra) > limit {
             return false;
         }
+        let partial = want < want_total;
+        if partial && !growing && others > 0 {
+            let need = s.largest_need().max(want_total - want);
+            if s.partial.saturating_add(want).saturating_add(need) > limit {
+                return false;
+            }
+        }
         s.reserved += extra;
+        let old_need = claim.need.load(Ordering::Relaxed);
+        s.remove_need(mine, old_need);
+        let need = if partial { want_total - want } else { 0 };
+        if partial {
+            s.add_need(want, need);
+        }
+        claim.need.store(need, Ordering::Relaxed);
         claim.bytes.store(want, Ordering::Relaxed);
         true
     }
@@ -356,6 +435,8 @@ impl Reservation {
         let claim = &*self.0;
         let mut s = claim.budget.lock();
         let mine = claim.bytes.swap(0, Ordering::Relaxed);
+        let need = claim.need.swap(0, Ordering::Relaxed);
+        s.remove_need(mine, need);
         s.reserved = s.reserved.saturating_sub(mine);
         s.held = s.held.saturating_add(weight);
         drop(s);
@@ -373,7 +454,9 @@ impl Drop for Claim {
     fn drop(&mut self) {
         let mine = *self.bytes.get_mut();
         if mine > 0 {
+            let need = *self.need.get_mut();
             let mut s = self.budget.lock();
+            s.remove_need(mine, need);
             s.reserved = s.reserved.saturating_sub(mine);
             drop(s);
             self.budget.freed.notify_waiters();
@@ -381,21 +464,17 @@ impl Drop for Claim {
     }
 }
 
-/// A claim's place in the budget's queue; leaving it (or being dropped
-/// with a cancelled wait) wakes the next waiter and the pool.
+/// A claim's place in a queue of the budget's; leaving it (or being
+/// dropped with a cancelled wait) wakes the next waiter and the pool.
 struct Queued<'a>(&'a Claim);
-
-impl Queued<'_> {
-    fn leave(self) {}
-}
 
 impl Drop for Queued<'_> {
     fn drop(&mut self) {
         let budget = &*self.0.budget;
         let mut s = budget.lock();
-        if let Some(i) = s.queue.iter().position(|&id| id == self.0.id) {
-            s.queue.remove(i);
-        }
+        let id = self.0.id;
+        s.queue.retain(|&q| q != id);
+        s.growth.retain(|&q| q != id);
         drop(s);
         budget.freed.notify_waiters();
         budget.settled.notify_one();
@@ -2133,11 +2212,13 @@ impl Pool {
         };
         if waited_out {
             // The deadline ran out while it waited for room in the budget:
-            // not the peer's failure. The peer is tried again, and no
-            // attempt is used.
+            // not the peer's failure. The peer is tried again after the
+            // key's other untried peers, and no attempt is used.
             self.stats.reserve_timeouts.fetch_add(1, Ordering::Relaxed);
+            // Last among its untried peers, so the others go first.
             if let Some(i) = e.peers[..e.tried].iter().position(|p| *p == peer) {
-                e.peers.swap(i, e.tried - 1);
+                e.peers.remove(i);
+                e.peers.push(peer);
                 e.tried -= 1;
             }
             if e.has_untried() {
@@ -2644,9 +2725,9 @@ mod budget {
         let b = Arc::new(Budget::new(1000));
         let r = Reservation::new(b.clone());
         let copy = r.clone();
-        r.reserve(100).await;
+        r.reserve(100, 100).await;
         // Again, smaller: it keeps the larger reservation.
-        copy.reserve(50).await;
+        copy.reserve(50, 50).await;
         assert_eq!(r.bytes(), KEY + 100);
         assert_eq!(b.usage(), (0, KEY + 100));
         drop(r);
@@ -2659,7 +2740,7 @@ mod budget {
     async fn a_settled_claim_becomes_held_bytes_and_releases_the_rest() {
         let b = Arc::new(Budget::new(1000));
         let r = Reservation::new(b.clone());
-        r.reserve(200).await;
+        r.reserve(200, 200).await;
         r.settle(KEY + 150);
         assert_eq!(b.usage(), (KEY + 150, 0));
         drop(r);
@@ -2677,7 +2758,9 @@ mod budget {
     async fn a_full_budget_makes_reservations_wait_oldest_first() {
         let b = Arc::new(Budget::new(4 * KEY as usize + 300));
         let first = Reservation::new(b.clone());
-        first.reserve(2 * KEY as usize + 250).await;
+        first
+            .reserve(2 * KEY as usize + 250, 2 * KEY as usize + 250)
+            .await;
         assert!(b.has_room());
         // Too large to fit beside the first: it waits, and so does a small
         // one after it that would fit beside the first.
@@ -2685,12 +2768,12 @@ mod budget {
         let small = Reservation::new(b.clone());
         let mut big_wait = tokio::spawn({
             let big = big.clone();
-            async move { big.reserve(KEY as usize + 40).await }
+            async move { big.reserve(KEY as usize + 40, KEY as usize + 40).await }
         });
         tokio::time::sleep(Duration::from_millis(10)).await;
         let mut small_wait = tokio::spawn({
             let small = small.clone();
-            async move { small.reserve(10).await }
+            async move { small.reserve(10, 10).await }
         });
         tokio::time::sleep(Duration::from_secs(10)).await;
         assert!(!big_wait.is_finished() && !small_wait.is_finished());
@@ -2712,9 +2795,10 @@ mod budget {
     async fn a_cancelled_wait_leaves_the_queue_and_takes_nothing() {
         let b = Arc::new(Budget::new(KEY as usize + 100));
         let first = Reservation::new(b.clone());
-        first.reserve(100).await;
+        first.reserve(100, 100).await;
         let waiting = Reservation::new(b.clone());
-        let timed_out = tokio::time::timeout(Duration::from_secs(8), waiting.reserve(100)).await;
+        let timed_out =
+            tokio::time::timeout(Duration::from_secs(8), waiting.reserve(100, 100)).await;
         assert!(timed_out.is_err());
         assert!(waiting.waited_out(), "ran out of time waiting");
         assert_eq!(waiting.bytes(), 0);
@@ -2724,7 +2808,7 @@ mod budget {
         // Another can still go once the first ends.
         drop(first);
         let next = Reservation::new(b.clone());
-        next.reserve(100).await;
+        next.reserve(100, 100).await;
         assert_eq!(used(&b), KEY + 100);
     }
 
@@ -2734,15 +2818,99 @@ mod budget {
     async fn a_claim_over_the_budget_passes_alone() {
         let b = Arc::new(Budget::new(100));
         let r = Reservation::new(b.clone());
-        r.reserve(10_000).await;
+        r.reserve(10_000, 10_000).await;
         assert_eq!(used(&b), KEY + 10_000);
         r.settle(KEY + 10_000);
         drop(r);
         let next = Reservation::new(b.clone());
-        let wait = tokio::time::timeout(Duration::from_secs(8), next.reserve(1)).await;
+        let wait = tokio::time::timeout(Duration::from_secs(8), next.reserve(1, 1)).await;
         assert!(wait.is_err(), "waits while the big one is held");
         b.release_held(KEY + 10_000);
-        next.reserve(1).await;
+        next.reserve(1, 1).await;
         assert_eq!(used(&b), KEY + 1);
+    }
+
+    /// Peers that announce a large dict and never send hold only their
+    /// first window: small dicts still get room, and partial claims stop
+    /// once one more couldn't be sure to grow.
+    #[tokio::test(start_paused = true)]
+    async fn partial_claims_that_never_grow_leave_room_for_small_dicts() {
+        let limit = 10_000u64;
+        let b = Arc::new(Budget::new(limit as usize));
+        let mut liars = Vec::new();
+        // Each holds KEY + 100 and could need 4,900 more.
+        loop {
+            let r = Reservation::new(b.clone());
+            let got = tokio::time::timeout(Duration::from_secs(1), r.reserve(100, 5_000)).await;
+            if got.is_err() {
+                break;
+            }
+            liars.push(r);
+        }
+        let n = liars.len() as u64;
+        assert!(n >= 2, "{n} admitted");
+        let (_, reserved) = b.usage();
+        assert_eq!(reserved, n * (KEY + 100));
+        assert!(reserved + 4_900 <= limit, "room left for any one to grow");
+        assert!(reserved + (KEY + 100) + 4_900 > limit, "and no more");
+        // A small dict reserves whole and fits beside them.
+        let small = Reservation::new(b.clone());
+        tokio::time::timeout(Duration::from_secs(1), small.reserve(50, 50))
+            .await
+            .expect("a small dict isn't held up by the liars");
+        drop((liars, small));
+        assert_eq!(used(&b), 0);
+    }
+
+    /// No deadlock: partial claims all asking to grow are served one at a
+    /// time, oldest first, as the ones ahead finish. While a growth waits,
+    /// no first reservation is granted and no fetch starts.
+    #[tokio::test(start_paused = true)]
+    async fn growths_go_first_and_always_complete() {
+        let (now, total) = (500usize, 2_000usize);
+        let limit = 3 * (KEY + now as u64) + (total - now) as u64;
+        let b = Arc::new(Budget::new(limit as usize));
+        let claims: Vec<Reservation> = (0..3).map(|_| Reservation::new(b.clone())).collect();
+        for c in &claims {
+            tokio::time::timeout(Duration::from_secs(1), c.reserve(now, total))
+                .await
+                .expect("three partial claims fit");
+        }
+        let fourth = Reservation::new(b.clone());
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), fourth.reserve(now, total))
+                .await
+                .is_err(),
+            "a fourth couldn't be sure to grow"
+        );
+        // All three grow: the first fits at once, the others wait for it.
+        claims[0].reserve(total, total).await;
+        let mut waits: Vec<_> = claims[1..]
+            .iter()
+            .map(|c| {
+                let c = c.clone();
+                tokio::spawn(async move { c.reserve(total, total).await })
+            })
+            .collect();
+        let small = Reservation::new(b.clone());
+        let mut small_wait = tokio::spawn({
+            let small = small.clone();
+            async move { small.reserve(1, 1).await }
+        });
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        assert!(waits.iter().all(|w| !w.is_finished()));
+        assert!(!small_wait.is_finished(), "growth goes first");
+        assert!(!b.has_room());
+        let mut claims = claims.into_iter();
+        drop(claims.next());
+        (&mut waits[0]).await.unwrap();
+        drop(claims.next());
+        (&mut waits[1]).await.unwrap();
+        (&mut small_wait).await.unwrap();
+        assert!(used(&b) <= limit);
+        drop((claims, small, fourth));
+        assert_eq!(used(&b), 0);
+        assert_eq!(b.lock().partial, 0);
+        assert!(b.lock().needs.is_empty());
     }
 }

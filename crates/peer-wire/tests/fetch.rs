@@ -240,7 +240,8 @@ async fn denied_addresses_are_never_connected_to() {
 struct TestBudget {
     permits: Arc<Semaphore>,
     total: usize,
-    calls: Arc<std::sync::Mutex<Vec<usize>>>,
+    /// Every call's `(now, total)`.
+    calls: Arc<std::sync::Mutex<Vec<(usize, usize)>>>,
 }
 
 impl TestBudget {
@@ -260,13 +261,17 @@ impl TestBudget {
     fn opts(&self, held: Arc<std::sync::Mutex<Vec<OwnedSemaphorePermit>>>) -> FetchOptions {
         let budget = self.clone();
         let mut o = opts(Encryption::Disable);
-        o.reserve = Some(Reserve(Arc::new(move |bytes| {
+        o.reserve = Some(Reserve(Arc::new(move |now, total| {
             let (budget, held) = (budget.clone(), held.clone());
             Box::pin(async move {
-                budget.calls.lock().unwrap().push(bytes);
-                let n = u32::try_from(bytes.min(budget.total)).unwrap();
-                let permit = budget.permits.clone().acquire_many_owned(n).await.unwrap();
-                held.lock().unwrap().push(permit);
+                budget.calls.lock().unwrap().push((now, total));
+                let mine: usize = held.lock().unwrap().iter().map(|p| p.num_permits()).sum();
+                let more = now.min(budget.total).saturating_sub(mine);
+                if more > 0 {
+                    let n = u32::try_from(more).unwrap();
+                    let permit = budget.permits.clone().acquire_many_owned(n).await.unwrap();
+                    held.lock().unwrap().push(permit);
+                }
             })
         })));
         o
@@ -357,7 +362,12 @@ async fn fetches_wait_for_room_and_stay_within_their_reservations() {
     assert_eq!(budget.reserved(), 0);
     let calls = budget.calls.lock().unwrap().clone();
     assert_eq!(calls.len(), PEERS, "one reservation per fetch: {calls:?}");
-    assert!(calls.iter().all(|&c| c >= size), "{calls:?}");
+    assert!(
+        calls
+            .iter()
+            .all(|&(now, total)| now == total && now >= size),
+        "{calls:?}"
+    );
 }
 
 /// A peer that announces a size, then never sends a piece: its fetch ends
@@ -369,7 +379,9 @@ async fn a_peer_that_announces_then_stalls_ends_at_the_deadline() {
     let budget = TestBudget::new(1 << 20);
     let held = Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut o = budget.opts(held.clone());
-    o.timeout = Duration::from_millis(500);
+    // Long enough for the handshakes on a slow runner; a stalled peer
+    // ends only at the deadline, so the test takes exactly this long.
+    o.timeout = Duration::from_secs(3);
     let r = fetch(peer.addr(), InfoHash(seed.info_hash), &o).await;
     assert!(matches!(r, Err(Error::Timeout)), "{r:?}");
     assert!(
@@ -404,7 +416,7 @@ async fn a_peer_that_sends_more_than_it_announced_is_refused() {
     let calls = budget.calls.lock().unwrap().clone();
     assert_eq!(calls.len(), 1);
     assert!(
-        calls[0] < 20_000,
+        calls[0].1 < 20_000,
         "reserved for the announced 1000: {calls:?}"
     );
     drop(held);
@@ -475,11 +487,12 @@ async fn no_piece_is_requested_before_the_reservation() {
     let called = Arc::new(tokio::sync::Notify::new());
     let mut o = opts(Encryption::Disable);
     let (g, c) = (gate.clone(), called.clone());
-    o.reserve = Some(Reserve(Arc::new(move |_| {
+    o.reserve = Some(Reserve(Arc::new(move |_, _| {
         let (g, c) = (g.clone(), c.clone());
         Box::pin(async move {
             c.notify_one();
-            // Granted only once the peer has been told to watch.
+            // Holds the grant back a while (pacing only), so a request
+            // sent before it would reach the peer first.
             tokio::time::sleep(Duration::from_millis(200)).await;
             g.notify_one();
         })
@@ -550,7 +563,8 @@ async fn a_peer_announcing_max_metadata_reserves_exactly_its_bound() {
         assert!(r.is_err());
         let calls = budget.calls.lock().unwrap().clone();
         if reserves {
-            assert_eq!(calls, vec![MAX + client + pex_bound]);
+            let bound = MAX + client + pex_bound;
+            assert_eq!(calls, vec![(bound, bound)]);
         } else {
             assert!(matches!(r, Err(Error::MetadataSize(_))), "{r:?}");
             assert!(calls.is_empty(), "nothing reserved over the cap");
@@ -558,4 +572,58 @@ async fn a_peer_announcing_max_metadata_reserves_exactly_its_bound() {
         drop((o, held));
         assert_eq!(budget.reserved(), 0);
     }
+}
+
+/// A peer that announces a large dict reserves only its first request
+/// window until it has sent a piece: a peer that sends nothing holds at
+/// most that. An honest peer's fetch grows to the whole bound before it
+/// requests past the window.
+#[tokio::test]
+async fn a_large_claim_reserves_its_first_window_until_a_piece_arrives() {
+    const WINDOW: usize = 64 * 16 * 1024;
+    let pex_bound = 200 * std::mem::size_of::<SocketAddr>();
+    let client = "FakePeer 1.0".len();
+    let first = WINDOW + client + pex_bound;
+    let budget = TestBudget::new(16 << 20);
+    // A peer that claims 8 MiB, then sends nothing.
+    let seed = Seed::v1(info_dict(20_000));
+    let liar = FakePeer::spawn(
+        vec![seed.clone()],
+        Accept::Both,
+        Behavior::LieAboutSize(8 << 20),
+        vec![],
+    )
+    .await;
+    let held = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut o = budget.opts(held.clone());
+    o.timeout = Duration::from_secs(3);
+    // Its real pieces are the wrong length for an 8 MiB dict: refused.
+    let r = fetch(liar.addr(), InfoHash(seed.info_hash), &o).await;
+    assert!(r.is_err());
+    assert_eq!(
+        *budget.calls.lock().unwrap(),
+        vec![(first, (8 << 20) + client + pex_bound)],
+        "only the first window, never the claim"
+    );
+    assert!(budget.reserved() <= first);
+    drop((o, held));
+    budget.calls.lock().unwrap().clear();
+
+    // An honest peer with a 3 MiB dict: the window, then the whole bound.
+    let seed = Seed::v1(sized_dict(3 << 20));
+    let honest = FakePeer::spawn(vec![seed.clone()], Accept::Both, Behavior::Honest, vec![]).await;
+    let held = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut o = budget.opts(held.clone());
+    o.timeout = Duration::from_secs(30);
+    let got = fetch(honest.addr(), InfoHash(seed.info_hash), &o)
+        .await
+        .expect("fetched");
+    let bound = seed.info.len() + client + pex_bound;
+    assert_eq!(
+        *budget.calls.lock().unwrap(),
+        vec![(first, bound), (bound, bound)]
+    );
+    assert!(heap(&got) <= bound);
+    drop((o, held));
+    assert_eq!(budget.reserved(), 0);
 }

@@ -138,10 +138,10 @@ async fn serve(
         delay = delay.saturating_sub(handshake);
         let deadline = s.reserve_deadline_ms.load(Ordering::SeqCst);
         let done = if deadline == 0 {
-            r.reserve(len).await;
+            r.reserve(len, len).await;
             true
         } else {
-            tokio::time::timeout(Duration::from_millis(deadline), r.reserve(len))
+            tokio::time::timeout(Duration::from_millis(deadline), r.reserve(len, len))
                 .await
                 .is_ok()
         };

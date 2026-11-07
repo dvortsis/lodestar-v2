@@ -91,34 +91,46 @@ impl std::fmt::Debug for Deny {
     }
 }
 
-/// Reserves memory for a fetch's result before any of it is downloaded
+/// Reserves memory for a fetch's result before it's downloaded
 /// (X-fetch-meta-reserve).
 ///
-/// [`fetch_on_stream`] calls it with an upper bound on the heap bytes the
-/// [`Fetched`] it may return can hold: the announced `metadata_size`
-/// (already checked against [`FetchOptions::max_metadata`]), the client
-/// name's length and room for the most PEX peers kept. It requests no
-/// piece until the returned future completes, so a reservation that waits
-/// pauses the download, and the fetch's deadline still runs.
+/// The hook gets `(now, total)`. `total` is an upper bound on the heap
+/// bytes the [`Fetched`] it may return can hold: the announced
+/// `metadata_size` (already checked against
+/// [`FetchOptions::max_metadata`]), the client name's length and room for
+/// the most PEX peers kept. `now` is what to reserve before the next
+/// requests go out. [`fetch_on_stream`] calls it in at most two steps, and
+/// sends no request the reservation doesn't cover until the returned future
+/// completes. A reservation that waits pauses the download, and the fetch's
+/// deadline still runs.
+/// - **At the extended handshake:** `now` covers the first request window
+///   (its first 64 pieces, 1 MiB of the dict, or all of a smaller one).
+/// - **Once the whole first window has arrived**, if the dict is larger:
+///   `now == total`, before any request past the window.
+///
+/// A peer that announces a large size can therefore hold at most one
+/// window of the budget until it has sent that window's 1 MiB, not its
+/// whole claim for nothing.
 ///
 /// The promise: a [`Fetched`] from that attempt has `info.capacity()`,
 /// `pex.capacity() × size_of::<SocketAddr>()` and the client name's
-/// capacity summing to at most the bound. A peer that sends more than it
-/// announced is refused, so it can't take more than was reserved.
+/// capacity summing to at most `total`, and the dict's buffer never passes
+/// what `now` covered. A peer that sends more than it announced, or a
+/// piece it wasn't asked for, is refused.
 ///
 /// A fetch that retries (MSE then plaintext, uTP then TCP) may call it
-/// again for the same fetch, each bound covering that attempt's result
-/// alone: keep the largest. The hook never releases anything; whoever set
-/// it releases when the fetch's future ends, whichever way it ends.
+/// again for the same fetch, each call covering that attempt alone: keep
+/// the largest. The hook never releases anything; whoever set it releases
+/// when the fetch's future ends, whichever way it ends.
 #[derive(Clone)]
-pub struct Reserve(pub Arc<dyn Fn(usize) -> ReserveFuture + Send + Sync>);
+pub struct Reserve(pub Arc<dyn Fn(usize, usize) -> ReserveFuture + Send + Sync>);
 
 /// What a [`Reserve`] hook returns: completes once the bytes are reserved.
 type ReserveFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 impl Reserve {
-    pub fn reserve(&self, bytes: usize) -> ReserveFuture {
-        (self.0)(bytes)
+    pub fn reserve(&self, now: usize, total: usize) -> ReserveFuture {
+        (self.0)(now, total)
     }
 }
 
@@ -128,11 +140,14 @@ impl std::fmt::Debug for Reserve {
     }
 }
 
+/// The dict bytes the first request window covers: what a [`Reserve`]
+/// grants a peer before it has sent anything.
+pub(crate) const FIRST_WINDOW: usize = REQUEST_WINDOW * METADATA_PIECE;
+
 /// The heap bytes a [`Fetched`] can hold, for [`Reserve`]: the dict at
-/// its announced size, the client name, and a full PEX list.
-pub(crate) fn result_bound(metadata_size: usize, client: Option<&String>) -> usize {
-    metadata_size
-        .saturating_add(client.map_or(0, String::len))
+/// `dict` bytes, the client name, and a full PEX list.
+pub(crate) fn result_bound(dict: usize, client: Option<&String>) -> usize {
+    dict.saturating_add(client.map_or(0, String::len))
         .saturating_add(MAX_PEX * std::mem::size_of::<SocketAddr>())
 }
 
@@ -452,6 +467,8 @@ where
     let mut client = None;
     let mut pex = Vec::new();
     let mut assembly: Option<Assembly> = None;
+    // The result's bound, while only the first window is reserved.
+    let mut unreserved: Option<usize> = None;
     loop {
         let payload = match wire.read_message(MAX_EXTENDED, MAX_OTHER).await? {
             Incoming::Extended(p) => p,
@@ -472,10 +489,16 @@ where
                     .filter(|s| *s > 0 && *s <= opts.max_metadata)
                     .ok_or(Error::MetadataSize(size.max(0) as u64))?;
                 their_metadata_id = Some(id);
-                // The result's bytes are reserved before any is requested,
-                // so a full budget pauses here, not after the download.
+                // The first window's bytes are reserved before any is
+                // requested, so a full budget pauses here, not after the
+                // download. The rest waits until the peer has sent the window.
                 if let Some(reserve) = &opts.reserve {
-                    reserve.reserve(result_bound(size, client.as_ref())).await;
+                    let total = result_bound(size, client.as_ref());
+                    let now = result_bound(size.min(FIRST_WINDOW), client.as_ref());
+                    reserve.reserve(now, total).await;
+                    if now < total {
+                        unreserved = Some(total);
+                    }
                 }
                 let mut a = Assembly::new(size);
                 while let Some(piece) = a.next_request() {
@@ -511,6 +534,16 @@ where
                                 pex: pex.into_boxed_slice().into_vec(),
                                 client: client.map(|c| c.into_boxed_str().into_string()),
                             });
+                        }
+                        // Past the first window only once all of it has
+                        // arrived and the whole result is reserved: a peer
+                        // pins a large claim only by sending 1 MiB first.
+                        if let (Some(total), Some(reserve)) = (unreserved, &opts.reserve) {
+                            if a.in_flight > 0 {
+                                continue;
+                            }
+                            reserve.reserve(total, total).await;
+                            unreserved = None;
                         }
                         while let Some(piece) = a.next_request() {
                             wire.send_extended(their_id, &message::metadata_request(piece))
@@ -750,6 +783,12 @@ mod tests {
             1000 + 300 + MAX_PEX * std::mem::size_of::<SocketAddr>()
         );
         assert_eq!(result_bound(usize::MAX, None), usize::MAX);
+        // The first window is exactly what's requested before any reply.
+        let mut a = Assembly::new(FIRST_WINDOW * 3);
+        let first: usize = std::iter::from_fn(|| a.next_request())
+            .map(|p| a.piece_len(p))
+            .sum();
+        assert_eq!(first, FIRST_WINDOW);
     }
 
     #[test]
