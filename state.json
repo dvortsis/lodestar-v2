@@ -6256,7 +6256,16 @@
     "window": "2026-11-07T14:00Z to 2026-11-08T14:00Z (60 min warm-up + 24 h)",
     "next_lodestar_window_not_before": "2026-11-09T02:00Z",
     "booked_by": "owner ~01:25Z \"Start as soon as possible\", relayed by dashboard; runner reads it as the earliest start 13:00Z",
-    "holds": "ext:experiment-host for this run only"
+    "holds": "ext:experiment-host for this run only",
+    "scheduled_by_agent": "~01:55Z: rehearsal 11:30Z, run 13:00Z, restore 2026-11-08T14:10Z (nohup scripts)",
+    "digests": {
+     "bitmagnet": "sha256:b6373349a30193b436ce6b05e21f91aa4934074268105dded1f3b065b8c86f19",
+     "postgres": "sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139"
+    },
+    "commit_label": "e31b30d7351c269dc801876f92ebc59d31fee545",
+    "collector_expected_sha256": "fa718caa152c7035970d3eef6b3cbc846d2f1b7833934fd7daa42c2db0d0582f (main ac905457)",
+    "collector_reported": "a02d71d7... MISMATCH -> owner told to refetch and hash-check before 11:30Z (03:27Z)",
+    "checkins": "12:05Z rehearsal passed + db deleted; 13:10Z containers up + status.json"
    }
   ],
   "run_sheet": "briefs/CR-AB-COMP-run-sheet.md",
