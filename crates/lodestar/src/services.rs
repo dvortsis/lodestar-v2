@@ -349,14 +349,14 @@ impl Services {
         // Late results need the queue this run starts from (plan Q7).
         pipeline_config.remote_workers = config.cluster.enabled;
         let pipeline = Pipeline::start(pipeline_config, store, plugins).await?;
-        // The cluster port (WK-1, §19.6, plan Q3): until "Allow workers" is
-        // on, nothing is bound and no cluster CA is opened or created. A
-        // fixture is served offline, so never there.
         // The one planner (WK-14): the cluster tick syncs it (WK-10), and
         // `/workers` saves pins and budgets into it.
         let placement = Arc::new(crate::cluster::placement::Placement::new(
             dht_stats.is_some(),
         ));
+        // The cluster port (WK-1, §19.6, plan Q3): until "Allow workers" is
+        // on, nothing is bound and no cluster CA is opened or created. A
+        // fixture is served offline, so never there.
         let cluster = crate::cluster::Cluster::start(crate::cluster::Wiring {
             db: config.db_path(),
             store: config.store_config(),

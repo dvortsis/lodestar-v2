@@ -6,7 +6,7 @@
 //! and backpressure. This module hands it what only `serve` has when the
 //! port opens: the store check, each worker's clock offset (from the
 //! server it's about to be given to), the wire keys sealed records open
-//! with (WK-8; WK-10 sets them from the seal key), and the workers'
+//! with (WK-8; `serve`'s tick sets them from the seal key), and the workers'
 //! standing (quarantine and purge, which WK-13 adds; until then none is
 //! refused).
 
@@ -41,10 +41,9 @@ impl Clocks for ServerClocks {
 /// The intake attached to one server.
 pub(crate) struct Attached {
     pub sink: Arc<RemoteSink>,
-    /// The keys the sink opens sealed records with. Empty until WK-10
-    /// sets them (`WorkerSnapshots::keys` shares this `Arc`): until then
-    /// no remote record opens, and each is refused (fail closed).
-    #[allow(dead_code)]
+    /// The keys the sink opens sealed records with: `serve`'s tick sets
+    /// them from the seal key when the server is built and each new UTC
+    /// day (WK-10a). Empty, no remote record opens (fail closed).
     pub keys: Arc<WireKeys>,
     clocks: Arc<ServerClocks>,
     hints_allow_private: bool,
