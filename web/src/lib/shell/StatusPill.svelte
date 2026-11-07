@@ -63,11 +63,18 @@
 	};
 
 	const locale = $derived(currentLocale());
+	const showsCount = $derived(
+		state.kind === 'crawling' ||
+			state.kind === 'idle' ||
+			state.kind === 'paused' ||
+			state.kind === 'starting' ||
+			state.kind === 'stalled'
+	);
 	// The fleet (WK-17): " · N workers · X/h" after the count; paused and offline stay in the tooltip.
 	const fleetRef = useFleet();
 	const fleet = $derived(fleetRef.current);
 	const fleetText = $derived(
-		fleet
+		fleet && showsCount
 			? [
 					(fleet.workers === 1
 						? m.insights_workers_pill_workers_one
@@ -94,13 +101,6 @@
 	const helpText = $derived(help[state.kind]?.() ?? '');
 	const tipText = $derived([helpText, fleetHelp].filter(Boolean).join(' '));
 	const tone = $derived(state.kind === 'stalled' ? statusInk.warning : '');
-	const showsCount = $derived(
-		state.kind === 'crawling' ||
-			state.kind === 'idle' ||
-			state.kind === 'paused' ||
-			state.kind === 'starting' ||
-			state.kind === 'stalled'
-	);
 	const count = $derived(
 		state.kind === 'rebuilding'
 			? m.shell_status_rebuild_progress({

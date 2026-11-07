@@ -2,7 +2,7 @@
 // formatted rows out. Insights never names a worker itself: names come from `/workers` (admin
 // only) and anything missing falls back to "This server" (0) or "Worker <id>".
 import type { components } from '$lib/api/schema';
-import { formatCount, formatPercent } from '$lib/format';
+import { formatCount, formatPercent, DASH } from '$lib/format';
 import { m } from '$lib/paraglide/messages.js';
 
 export type DiscoverWorker = components['schemas']['DiscoverWorker'];
@@ -62,6 +62,9 @@ export function marginalRows(list: DiscoverWorker[], names: Names, locale: strin
 	return list.map((w) => ({
 		worker: workerName(w.worker, names),
 		marginal: formatCount(w.marginal, locale),
-		share: w.granted > 0 ? formatPercent(Math.min(1, w.marginal / w.granted), locale, 0) : '—'
+		share:
+			w.granted > 0 && w.marginal <= w.granted
+				? formatPercent(w.marginal / w.granted, locale, 0)
+				: DASH
 	}));
 }

@@ -1,5 +1,5 @@
 // The fleet pill's data (§19.7): `GET /insights/workers/summary`, polled at most once a minute and
-// only while the tab is visible. `null` is a single machine, a failed request, or no answer yet.
+// only while the tab is visible. `null` is a single machine or no answer yet; a failed poll leaves the last answer in place.
 import { api } from '$lib/api/client';
 import type { components } from '$lib/api/schema';
 
@@ -27,8 +27,9 @@ export function watchFleet(set: (f: Fleet | null) => void, doc: Document = docum
 			const r = await api.get('/insights/workers/summary', { signal: ctl.signal });
 			if (!stopped) set(r.fleet);
 		} catch (e) {
+			// A failed poll keeps what the pill had (a blip must not remount it); before any answer
+			// there is nothing to show.
 			if ((e as Error)?.name === 'AbortError') return;
-			if (!stopped) set(null);
 		}
 		arm();
 	}

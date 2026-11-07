@@ -12,6 +12,7 @@ vi.mock('$lib/api/client', async (actual) => ({
 	api: { get }
 }));
 
+const flush = () => new Promise((r) => setTimeout(r, 0));
 const until = (check: () => void) => waitFor(check, { timeout: 10_000 });
 const disc = [
 	{ worker: 0, granted: 1000, marginal: 250, rediscovered: 10, dropped: 2 },
@@ -25,7 +26,10 @@ beforeEach(() => {
 	get.mockReset();
 	initLocale('en');
 });
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+	vi.useRealTimers();
+	Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+});
 
 describe('WorkerBreakdown', () => {
 	it('renders nothing when by_worker is absent or empty', () => {
@@ -73,6 +77,15 @@ describe('WorkerBreakdown', () => {
 		expect(def).toContain('under-counts');
 	});
 
+	it('shows a dash, not a clamp, when marginal exceeds granted', () => {
+		get.mockRejectedValue(new Error('403'));
+		render(WorkerBreakdown, {
+			stage: 'discover',
+			byWorker: [{ worker: 0, granted: 10, marginal: 15, rediscovered: 0, dropped: 0 }]
+		});
+		expect(screen.getByTestId('insights-marginal-table').textContent).not.toContain('100%');
+	});
+
 	it('Fetch has its table and the reason-filter note, no marginal view', async () => {
 		get.mockRejectedValue(new Error('403'));
 		render(WorkerBreakdown, {
@@ -102,13 +115,30 @@ describe('fleet pill', () => {
 	it('adds nothing on fleet: null or a failed request', async () => {
 		get.mockResolvedValue({ fleet: null });
 		const a = render(StatusPill, { state: { kind: 'crawling', ...none } });
-		await until(() => expect(get).toHaveBeenCalled());
+		await until(() => expect(get).toHaveBeenCalledTimes(1));
+		await flush();
 		expect(screen.queryByTestId('status-pill-fleet')).toBeNull();
 		a.unmount();
 		get.mockRejectedValue(new Error('x'));
 		render(StatusPill, { state: { kind: 'crawling', ...none } });
 		await until(() => expect(get).toHaveBeenCalledTimes(2));
+		await flush();
 		expect(screen.queryByTestId('status-pill-fleet')).toBeNull();
+	});
+
+	it('keeps the last fleet through a failed poll, and stops polling on unmount', async () => {
+		vi.useFakeTimers();
+		get.mockResolvedValue({ fleet });
+		const view = render(StatusPill, { state: { kind: 'crawling', ...none } });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(screen.getByTestId('status-pill-fleet')).toBeTruthy();
+		get.mockRejectedValue(new Error('5xx'));
+		await vi.advanceTimersByTimeAsync(FLEET_POLL_MS);
+		expect(get).toHaveBeenCalledTimes(2);
+		expect(screen.getByTestId('status-pill-fleet')).toBeTruthy();
+		view.unmount();
+		await vi.advanceTimersByTimeAsync(FLEET_POLL_MS * 3);
+		expect(get).toHaveBeenCalledTimes(2);
 	});
 });
 
