@@ -3,7 +3,7 @@
 //! key lives outside the database, so a copy of the database alone (a
 //! backup, a support bundle) doesn't reveal names.
 
-use chacha20poly1305::aead::{Aead, KeyInit};
+use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 
 const NONCE: usize = 24;
@@ -41,27 +41,37 @@ impl Sealer {
 
     /// The nonce, then the ciphertext with its tag.
     pub fn seal(&self, text: &str) -> Result<Vec<u8>, SealError> {
+        self.seal_bytes(text.as_bytes(), &[])
+    }
+
+    pub fn open(&self, sealed: &[u8]) -> Result<String, SealError> {
+        String::from_utf8(self.open_bytes(sealed, &[])?).map_err(|_| SealError)
+    }
+
+    /// [`Sealer::seal`] for bytes that aren't text, bound to `aad`: the
+    /// seal opens only with the same `aad` (a worker's held-back record and
+    /// the clear header it travels under, WK-8). A fresh random 24-byte
+    /// nonce each time. With an empty `aad` it's exactly [`Sealer::seal`].
+    pub fn seal_bytes(&self, plain: &[u8], aad: &[u8]) -> Result<Vec<u8>, SealError> {
         let mut nonce = [0u8; NONCE];
         getrandom::fill(&mut nonce).map_err(|_| SealError)?;
         let ct = self
             .0
-            .encrypt(XNonce::from_slice(&nonce), text.as_bytes())
+            .encrypt(XNonce::from_slice(&nonce), Payload { msg: plain, aad })
             .map_err(|_| SealError)?;
         let mut out = nonce.to_vec();
         out.extend(ct);
         Ok(out)
     }
 
-    pub fn open(&self, sealed: &[u8]) -> Result<String, SealError> {
+    pub fn open_bytes(&self, sealed: &[u8], aad: &[u8]) -> Result<Vec<u8>, SealError> {
         if sealed.len() < NONCE {
             return Err(SealError);
         }
         let (nonce, ct) = sealed.split_at(NONCE);
-        let pt = self
-            .0
-            .decrypt(XNonce::from_slice(nonce), ct)
-            .map_err(|_| SealError)?;
-        String::from_utf8(pt).map_err(|_| SealError)
+        self.0
+            .decrypt(XNonce::from_slice(nonce), Payload { msg: ct, aad })
+            .map_err(|_| SealError)
     }
 }
 
@@ -83,5 +93,20 @@ mod tests {
         *bad.last_mut().unwrap() ^= 1;
         assert_eq!(s.open(&bad), Err(SealError));
         assert_eq!(s.open(&a[..10]), Err(SealError));
+    }
+
+    #[test]
+    fn bytes_round_trip_bound_to_their_aad() {
+        let s = Sealer::new(&Sealer::generate_key().unwrap());
+        let plain = [0u8, 0xff, 7, 0x80];
+        let a = s.seal_bytes(&plain, b"header").unwrap();
+        assert_eq!(s.open_bytes(&a, b"header").unwrap(), plain);
+        assert_eq!(s.open_bytes(&a, b"headex"), Err(SealError));
+        assert_eq!(s.open_bytes(&a, b""), Err(SealError));
+        // Text seals are bytes seals with no `aad`, either way round.
+        let t = s.seal("A Name").unwrap();
+        assert_eq!(s.open_bytes(&t, b"").unwrap(), b"A Name");
+        let b = s.seal_bytes(b"A Name", b"").unwrap();
+        assert_eq!(s.open(&b).unwrap(), "A Name");
     }
 }

@@ -411,9 +411,10 @@ fn unknown_flag_bits_and_bad_codes_are_refused() {
     // bytes) and count (1).
     let at = 6;
     assert_eq!(good[at], 0);
-    // Bit 12 and up are unknown in version 1: a two-byte varint.
+    // Bit 13 and up are unknown in version 1 (bit 12 is WK-8's `SEALED`):
+    // a two-byte varint.
     let mut bad = good.clone();
-    bad.splice(at..=at, [0x80, 0x20]);
+    bad.splice(at..=at, [0x80, 0x40]);
     assert_eq!(ResultsBatch::decode(&bad), Err(Error::Invalid("flags")));
     // FIX_ADULT without FIX.
     let mut bad = good.clone();

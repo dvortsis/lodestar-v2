@@ -3,6 +3,7 @@
 //! didn't choose. Arbitrary bytes never panic and never decode past the
 //! caps; whatever decodes is canonical (it re-encodes to the same bytes),
 //! carries no `pieces`, and keys every record by one of its swarm hashes.
+//! Sealed records (WK-8) decode with `decode_with` and re-encode too.
 //!
 //! The first byte picks the decoder (even: `Results`, odd: `Counters`), so
 //! each sees well-formed headers often. Run it with a small allocation
@@ -20,9 +21,11 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
     if pick % 2 == 0 {
-        if let Ok(batch) = ResultsBatch::decode(body) {
+        if let Ok((batch, sealed)) = ResultsBatch::decode_with(body) {
             assert!(body.len() <= MAX_PAYLOAD);
-            assert!(batch.records.len() <= MAX_RECORDS);
+            assert!(batch.records.len() + sealed.len() <= MAX_RECORDS);
+            // Sealed records (WK-8) are left out of a plain decode.
+            assert_eq!(ResultsBatch::decode(body).unwrap(), batch);
             for r in &batch.records {
                 assert!(r.torrent.swarm_hashes().any(|h| h == r.key));
                 for blob in [&r.torrent.raw, &r.torrent.extra].into_iter().flatten() {
@@ -30,7 +33,8 @@ fuzz_target!(|data: &[u8]| {
                     assert_eq!(&stripped, blob, "a blob with pieces decoded");
                 }
             }
-            assert_eq!(batch.encode().expect("a decoded batch encodes"), body);
+            let again = batch.encode_with(&sealed).expect("a decoded batch encodes");
+            assert_eq!(again, body);
         }
     } else if let Ok(batch) = CountersBatch::decode(body) {
         assert!(batch.counters.windows(2).all(|w| {
