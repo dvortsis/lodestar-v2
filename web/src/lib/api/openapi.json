@@ -7633,7 +7633,7 @@
         "tags": [
           "workers"
         ],
-        "summary": "Changes a worker's budget, intensity, pool cap or DHT pin. Saved, so\nit's kept across reconnects and coordinator restarts.",
+        "summary": "Changes a worker's budget, intensity, pool cap or DHT pin. Saved, so\nit's kept across reconnects and coordinator restarts, and planned at\nonce; a worker applies it once the worker runtime sends assignments\n(WK-10), not before.",
         "operationId": "updateWorker",
         "parameters": [
           {

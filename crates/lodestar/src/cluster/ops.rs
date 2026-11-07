@@ -590,41 +590,13 @@ mod tests {
         }
     }
 
-    /// Every log line, every kind shown (as `lodestar_api`'s capture).
-    mod capture {
-        use std::sync::{Mutex, Once};
-
-        use lodestar_log::{Mask, Record, Sink};
-
-        static LINES: Mutex<Vec<String>> = Mutex::new(Vec::new());
-        struct Capture;
-        impl Sink for Capture {
-            fn record(&self, r: &Record<'_>) {
-                let line = format!("{} {}", r.event.id, r.text(Mask(u32::MAX), None));
-                LINES.lock().unwrap_or_else(|e| e.into_inner()).push(line);
-            }
-        }
-        static CAPTURE: Capture = Capture;
-
-        pub fn install() {
-            static ONCE: Once = Once::new();
-            ONCE.call_once(|| {
-                lodestar_log::set_sink(&CAPTURE).expect("no other sink in these tests");
-            });
-        }
-
-        pub fn all() -> String {
-            LINES.lock().unwrap_or_else(|e| e.into_inner()).join("\n")
-        }
-    }
-
     struct Coord {
         cluster: Cluster,
         workers: Arc<Workers>,
     }
 
     async fn coordinator(dir: &Path, enabled: bool) -> Coord {
-        capture::install();
+        crate::test_log::install();
         let cluster = Cluster::start(Wiring {
             db: dir.join("lodestar.db"),
             store: StoreConfig::default(),
@@ -921,9 +893,15 @@ mod tests {
                 }
         );
         // The token was in no log line.
-        let log = capture::all();
-        assert!(log.contains("workers.token_created"), "{log}");
-        assert!(log.contains("workers.revoked"), "{log}");
+        let log = crate::test_log::text();
+        assert!(log.contains("event=\"workers.token_created\""), "{log}");
+        assert!(
+            log.contains(&format!(
+                "worker={} leases=2 event=\"workers.revoked\"",
+                w.0
+            )),
+            "{log}"
+        );
         assert!(
             !log.contains(&token) && !log.contains(&token[4..60]),
             "{log}"
@@ -1010,11 +988,11 @@ mod tests {
         }
         let c = coordinator(dir.path(), false).await;
         assert!(lock(&c.workers.saved).is_empty());
-        let log = capture::all();
-        assert!(
-            log.contains("workers.prefs_skipped worker=7") || log.contains("worker=7"),
-            "{log}"
-        );
+        let log = crate::test_log::text();
+        for w in [7, 8] {
+            let line = format!("worker={w} event=\"workers.prefs_skipped\"");
+            assert!(log.contains(&line), "{log}");
+        }
         c.stop().await;
     }
 

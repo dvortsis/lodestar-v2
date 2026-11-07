@@ -2444,7 +2444,9 @@ export interface paths {
         head?: never;
         /**
          * Changes a worker's budget, intensity, pool cap or DHT pin. Saved, so
-         *     it's kept across reconnects and coordinator restarts.
+         *     it's kept across reconnects and coordinator restarts, and planned at
+         *     once; a worker applies it once the worker runtime sends assignments
+         *     (WK-10), not before.
          */
         patch: operations["updateWorker"];
         trace?: never;

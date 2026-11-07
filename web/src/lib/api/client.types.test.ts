@@ -29,6 +29,19 @@ it('types the wrapper from the generated paths', () => {
 		void api.get('/login');
 		// @ts-expect-error unknown query param
 		void api.get('/parse', { query: { zzz: 1 } });
+		// The option types don't distribute over the union of every path
+		// (WK-14): a wrong body type, missing options and an unknown path are
+		// still refused while the path is being inferred.
+		void api.post('/alerts/read', { body: { saved_search: 1, through: 2 } });
+		// @ts-expect-error wrong body field type
+		void api.post('/alerts/read', { body: { saved_search: 'x', through: 2 } });
+		void api.post('/workers/{id}/drain', { path: { id: 3 } });
+		// @ts-expect-error path params are required
+		void api.post('/workers/{id}/drain');
+		// @ts-expect-error unknown path
+		void api.post('/workers/nope', {});
+		// @ts-expect-error PATCH ranges aside, the body's fields are typed
+		void api.patch('/workers/{id}', { path: { id: 3 }, body: { pool_cap: 'x' } });
 	};
 	void _types;
 
