@@ -949,6 +949,10 @@ impl Pipeline {
             writer: results_tx,
             pool: pool_tx.clone(),
             leases: leases.clone(),
+            refusals: Some(remote::Refusals {
+                held: held.clone(),
+                filter: config.filter.clone(),
+            }),
             rollups: rollups.clone(),
             epoch: started_at as u32,
             prior: remote::Prior::new(prior, started_at),
@@ -1007,9 +1011,12 @@ impl Pipeline {
                 loop {
                     tokio::time::sleep(every).await;
                     // Remote and waiting leases are saved with the pool's
-                    // own (§19.3), so they survive a restart.
-                    let mut queue = pool.snapshot().await;
-                    queue.extend(remote.queue_rows());
+                    // own (§19.3), so they survive a restart. Taken first:
+                    // a key the heartbeat hands to the pool in between is
+                    // then in both, and saved once (the first row wins),
+                    // never in neither.
+                    let mut queue = remote.queue_rows();
+                    queue.extend(pool.snapshot().await);
                     if queue_tx.send(queue).await.is_err() {
                         break;
                     }
@@ -1362,6 +1369,12 @@ fn prepare(
         }
     };
     let mut queue = store.load_fetch_queue()?;
+    // A key committed after its row was saved is stored: not restored, so
+    // it's neither fetched nor counted again. A remote result still in the
+    // writer's queue at shutdown leaves one (its lease was held when the
+    // rows were taken), and so can a crash between a commit and the next
+    // save (WK-9b).
+    queue.retain(|q| !matches!(store.find(&q.info_hash), Ok(Some(_))));
     // Refetches are queued afresh from the store below, so a saved one
     // whose import was removed while the server was stopped isn't fetched
     // into a new, crawled-looking row (and one saved before they had their

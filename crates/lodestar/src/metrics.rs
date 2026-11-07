@@ -411,6 +411,12 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
         "Waiting keys handed to the built-in worker while no cluster server ran.",
         get(&r.parked),
     );
+    o.one(
+        "remote_parked_refused_total",
+        "counter",
+        "Waiting keys the built-in worker refused (held or blocked); their leases ended.",
+        get(&r.parked_refused),
+    );
 
     let h = m.have();
     o.one(

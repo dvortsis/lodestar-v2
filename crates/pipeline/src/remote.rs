@@ -62,7 +62,7 @@ use lodestar_cluster::{
     ClusterServer, GrantAdmission, InboundSink, Lease, LeaseAuthority, RestoredLease, StoredKeys,
     Token, WorkerId,
 };
-use lodestar_filter::{Trail, Verdict};
+use lodestar_filter::{Handle, HeldSet, Trail, Verdict};
 use lodestar_metainfo::{InfoHash, Limits};
 use lodestar_sources::{Discovery, Found, Loss};
 use lodestar_store::{Preparer, QueuedKey, SourceId, flags};
@@ -189,8 +189,10 @@ pub struct RemoteStats {
     /// New leases not granted while the writer was past its high-water
     /// mark or the intake's queue was full (per key).
     pub held_back: AtomicU64,
-    /// Waiting keys handed to the built-in worker while no server ran.
+    /// Waiting keys handed to the built-in worker while no server ran, and
+    /// those it refused (held or blocked), whose leases ended.
     pub parked: AtomicU64,
+    pub parked_refused: AtomicU64,
 }
 
 fn bump(c: &AtomicU64) {
@@ -295,6 +297,23 @@ pub struct RemoteParts {
     pub private_sources: u64,
     /// The built-in worker's leases, for parked keys handed to it.
     pub leases: Arc<WorkerLeases>,
+    /// The held keys and the content filter, so a parked key the built-in
+    /// worker would refuse isn't handed to it (`None`: nothing refused).
+    pub refusals: Option<Refusals>,
+}
+
+/// What the built-in worker refuses before fetching (`lib.rs`'s intake):
+/// tombstoned or quarantined keys, and the filter's blocked hashes.
+#[derive(Clone)]
+pub struct Refusals {
+    pub held: Arc<HeldSet>,
+    pub filter: Arc<Handle>,
+}
+
+impl Refusals {
+    fn refuses(&self, key: &InfoHash) -> bool {
+        self.held.contains(&key.0) || self.filter.current().blocked_hash(&[key.0]).is_some()
+    }
 }
 
 impl std::fmt::Debug for RemoteParts {
@@ -317,6 +336,7 @@ pub struct RemoteIntake {
     prior: Mutex<Prior>,
     private_sources: u64,
     leases: Arc<WorkerLeases>,
+    refusals: Option<Refusals>,
     /// Writer-queue fill at or past which no new lease is granted.
     high_water: usize,
     admit: Mutex<Admit>,
@@ -393,6 +413,7 @@ impl RemoteIntake {
             private_sources: p.private_sources,
             high_water,
             leases: p.leases,
+            refusals: p.refusals,
             admit: Mutex::new(Admit::default()),
             server: RwLock::new(None),
             stats: Arc::new(RemoteStats::default()),
@@ -455,8 +476,12 @@ impl RemoteIntake {
 
     /// While no cluster server runs (workers off, WK-1), keys waiting for a
     /// re-grant go to the built-in worker instead of waiting for a remote
-    /// one: not a harvest, with their cohort and sources kept. A key the
-    /// pool has no room for goes back to wait.
+    /// one: not a harvest, with their cohort, sources and privacy kept
+    /// (§18.7: a key every source of which is private never reaches public
+    /// peer finding). A key the built-in worker refuses (held, or blocked
+    /// by the filter) ends its lease as blocked, as the built-in worker's
+    /// own intake does, and is never fetched. A key the pool has no room
+    /// for goes back to wait.
     pub fn hand_parked(&self, now: i64) {
         let serving = self
             .server
@@ -476,9 +501,16 @@ impl RemoteIntake {
                 let Some(lease) = self.authority.current(&key, token) else {
                     continue;
                 };
+                if self.refusals.as_ref().is_some_and(|r| r.refuses(&key)) {
+                    self.authority.lost(&key, token, Loss::Blocked as u8);
+                    bump(&self.stats.parked_refused);
+                    continue;
+                }
+                let mut found = Found::key(key, lease.strategy);
+                found.private_source = self.private(lease.sources | (1u64 << lease.source.get()));
                 let d = Discovery {
                     source: lease.source,
-                    found: Found::key(key, lease.strategy),
+                    found,
                     at: lease.discovered_at,
                     reply: false,
                 };
@@ -724,7 +756,9 @@ impl RemoteIntake {
                     // Over what the batch has left: refused before decoding.
                     let over = match &e {
                         lodestar_store::Error::Corrupt(why) => *why == lodestar_store::OVER_BUDGET,
-                        // Over a cap the batch's remaining bytes set.
+                        // Over a cap the batch's remaining bytes set. A bomb
+                        // over its own cap too is counted here then: only
+                        // this statistic, never what's refused.
                         lodestar_store::Error::Compression(io) => {
                             io.kind() == std::io::ErrorKind::InvalidData && cap < own
                         }
@@ -1040,6 +1074,11 @@ impl InboundSink for RemoteSink {
             }
             let mut found = Found::key(key, lease.strategy);
             found.peers = peers;
+            // A reply only adds peers to the pool's entry. Merged, its flag
+            // can only make the entry public (`private &= private_source`,
+            // `pool.rs`), so it's set: a worker's hints never make a
+            // private key public (§18.7).
+            found.private_source = true;
             let d = Discovery {
                 source: lease.source,
                 found,
