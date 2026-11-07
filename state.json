@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-11-07T05:10Z",
+ "updated_at": "2026-11-07T06:24Z",
  "launches": {
   "date": "2026-10-22",
   "count": 45
@@ -3573,8 +3573,9 @@
    "merge": "66e40b3b"
   },
   "WK-3": {
-   "status": "running",
-   "session": "session_01MMjhnAxuW2sJ83mbnhLEYs"
+   "state": "merged",
+   "pr": 566,
+   "merge": "e1ee45ca"
   },
   "SRC-15c": {
    "state": "merged",
@@ -3582,12 +3583,17 @@
    "merge": "542fdb8d"
   },
   "WK-9": {
-   "state": "building",
-   "session": "session_01MMjhn9UXuC8VxCmERMYLNB"
+   "state": "review",
+   "pr": 568,
+   "head": "4b771047"
   },
   "X-cmp0-polish": {
    "state": "building",
    "session": "session_01MMjhnBonbNUTDWLAzkBRCs"
+  },
+  "WK-8": {
+   "state": "building",
+   "session": "session_01MMjhnBucpmG2oiyBH2LoQi"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5518,7 +5524,7 @@
     "slices.yaml SRC-15c owns: add web/.size-limit.mjs (sourcesLater regex widened to ConfigDialog only; runner yes 03:30Z)",
     "X-soak-screen preconditions before relying on in-run screen (P-v052-cut soak): (1) read lodestar_mem_anon_mappings ~1 h in a musl+override container to calibrate the gauge's clean value; (2) owner replays new analyzer over private r4/r5 dirs, relays only 'screen:' lines; thresholds provisional until then"
    ],
-   "text": " | WK-3 owns: crates/cluster/src/proto.rs (manual Debug on ToWorker only, key-leak guard, \u00a72.33) and fuzz/README.md (cluster_have + cluster_assign rows), runner 03:56Z. | WK-9 owns (runner 04:4xZ, \u00a72.33): crates/cluster/src/{leases.rs,server.rs,worker.rs (held-set TTL prune only)}, crates/cluster/Cargo.toml (network-policy dep), crates/pipeline/src/{coordinator.rs,writer.rs (end_lease helper),lib.rs}, crates/lodestar/src/cluster/{mod.rs,serve.rs}, crates/lodestar/src/services.rs, metrics.rs + docs/metrics.md rows. New slice WK-9b (counters into rollups with worker dim, backpressure, fetch_queue), deps [WK-9], same session. + crates/store/src/{compress.rs,lib.rs} (Preparer::decode_files bounded streaming zstd + has_dict only; no format change)."
+   "text": " | WK-3 owns: crates/cluster/src/proto.rs (manual Debug on ToWorker only, key-leak guard, \u00a72.33) and fuzz/README.md (cluster_have + cluster_assign rows), runner 03:56Z. | WK-9 owns (runner 04:4xZ, \u00a72.33): crates/cluster/src/{leases.rs,server.rs,worker.rs (held-set TTL prune only)}, crates/cluster/Cargo.toml (network-policy dep), crates/pipeline/src/{coordinator.rs,writer.rs (end_lease helper),lib.rs}, crates/lodestar/src/cluster/{mod.rs,serve.rs}, crates/lodestar/src/services.rs, metrics.rs + docs/metrics.md rows. New slice WK-9b (counters into rollups with worker dim, backpressure, fetch_queue), deps [WK-9], same session. + crates/store/src/{compress.rs,lib.rs} (Preparer::decode_files bounded streaming zstd + has_dict only; no format change). | WK-3 merged #566: size 2,900 accepted (half tests); WK-10 notes: log HaveSync::at_cap once; stored = Have::len(); call WorkerHave from one message loop. WK-9 #568 size ~2,600 accepted."
   },
   {
    "id": "R4-v051-docs",
@@ -6245,7 +6251,7 @@
   }
  ],
  "slots": {
-  "updated": "2026-11-07T05:10Z",
+  "updated": "2026-11-07T06:24Z",
   "items": [
    {
     "slot": 1,
@@ -6257,11 +6263,11 @@
    },
    {
     "slot": 2,
-    "slice": "WK-3",
+    "slice": "WK-8",
     "role": "build",
     "agent": "claude",
-    "doing": "session_01MMjhnAxuW2sJ83mbnhLEYs: have-filter replication (keyed SipHash, snapshot/deltas, Q6 worker filter)",
-    "since": "2026-11-07T02:58Z"
+    "doing": "session_01MMjhnBucpmG2oiyBH2LoQi: worker filter + dictionary snapshot, judge before send/spool (Q1)",
+    "since": "2026-11-07T06:23Z"
    },
    {
     "slot": 3,
