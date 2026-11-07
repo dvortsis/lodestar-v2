@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T16:53Z",
+  "updated_at": "2026-11-07T16:56Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3634,7 +3634,7 @@
       "brief": "briefs/P-v052-cut.md",
       "since": "2026-11-07T14:43Z",
       "session": "session_01MMjhnABi9mwqkZULms8pjL",
-      "notes": "16:3xZ: #582 PR A merged (64870dc5) on fresh Opus MERGE; cut approved sent; next: release/v0.5.2 at 045d4a38, PR B rc.1."
+      "notes": "16:3xZ: #582 PR A merged (64870dc5) on fresh Opus MERGE; cut approved sent; next: release/v0.5.2 at 045d4a38, PR B rc.1. | 16:56Z: release/v0.5.2 created; PR B #584 (a753c5c7) into release/v0.5.2. Reporting-overhead bench red on main nightly since 11-06 (setup lacks notice_version since #472): fix in #584 + one-line main follow-up X-bench-notice-version (same session). Refinements accepted: webhooks notes line; Cargo 0.5.2 for rc tag. Supervisor check passed."
     },
     "WK-15": {
       "state": "running",
