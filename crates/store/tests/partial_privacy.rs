@@ -5,6 +5,8 @@
 
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::{Info, InfoHash};
+use lodestar_store::claims::Claims;
+use lodestar_store::unverified::{Network, NewUnverified};
 use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig, flags};
 
 const DHT: SourceId = SourceId::new(0).unwrap();
@@ -84,4 +86,47 @@ fn public_partials_are_returned_oldest_first_as_before() {
     assert_eq!(store.partial_hashes(10).unwrap(), vec![a, b]);
     assert_eq!(store.partial_hashes(1).unwrap(), vec![a]);
     assert!(store.partial_hashes(0).unwrap().is_empty());
+}
+
+/// An item a private source reported under the hash keeps the key private
+/// beside a public import (`Store::insert` leaves the item in place), as
+/// the torrent cache's gate and the writer's commit already hold. A public
+/// item beside one changes nothing.
+#[test]
+fn a_private_item_under_the_hash_keeps_a_public_partial_out() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let feed = store.register_source("feed", "1", 0).unwrap();
+    let claims = Claims {
+        name: Some("Named".into()),
+        ..Claims::default()
+    };
+    let hash = |name: &str| Info::parse(&raw(name)).unwrap().primary_hash();
+    let (private, public) = (hash("Private.Item"), hash("Public.Item"));
+    for (key, private_source) in [(&private, true), (&public, false)] {
+        store
+            .put_unverified(&[NewUnverified {
+                network: Network::Bt,
+                key: &key.0,
+                source: feed,
+                private_source,
+                claims: Some(&claims),
+                at: 1_700_000_000,
+            }])
+            .unwrap();
+    }
+    assert!(
+        store
+            .unverified(Network::Bt, &private.0)
+            .unwrap()
+            .unwrap()
+            .private_source
+    );
+    assert_eq!(partial(&mut store, "Private.Item", 0, false), private);
+    assert_eq!(partial(&mut store, "Public.Item", 0, false), public);
+    assert!(
+        store.unverified(Network::Bt, &private.0).unwrap().is_some(),
+        "the import leaves the item in place"
+    );
+    assert_eq!(store.partial_hashes(10).unwrap(), vec![public]);
+    assert_eq!(store.partial_hashes(1).unwrap(), vec![public]);
 }
