@@ -1118,7 +1118,12 @@ mod handle {
         // Once the session ends, the handle says so.
         let h = s.handle();
         coord.close().await;
-        while s.next_event().await.is_some() {}
+        drop(coord);
+        timeout(Duration::from_secs(15), async {
+            while s.next_event().await.is_some() {}
+        })
+        .await
+        .expect("the session ends");
         let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
         while !h.is_closed() {
             assert!(tokio::time::Instant::now() < deadline, "still open");
