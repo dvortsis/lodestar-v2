@@ -1879,18 +1879,18 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
-        put?: never;
         /**
          * What purging a source would remove if it ran now, counted with the
          *     purge's own rules, for the dialog to show before you commit
          *     (§10.10.7). It changes nothing: the source keeps its state, data,
-         *     credentials and settings. It needs the admin `"password"`, as the
-         *     purge does (`428 confirm_required`, `401`), since the counts say how
-         *     much a source found. The counts are exact while the source is off
-         *     (`settled`); see `PurgePreview`.
+         *     credentials and settings, and no job starts. It needs a session, like
+         *     every Sources route, and no password: the password is asked once, by
+         *     `POST /sources/{id}/purge`. The counts are exact while the source is
+         *     off (`settled`); see `PurgePreview`.
          */
-        post: operations["previewPurge"];
+        get: operations["previewPurge"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -6834,7 +6834,7 @@ export interface components {
             unverified_deleted: number;
         };
         /**
-         * @description `POST /sources/{id}/purge/preview`: what purging the source would
+         * @description `GET /sources/{id}/purge/preview`: what purging the source would
          *     remove if it ran now, counted with the purge's own rules. Nothing is
          *     changed. The dialog shows it before you commit (§10.10.7).
          *
@@ -8286,7 +8286,9 @@ export interface components {
              *     install: it holds no setting's value. Secrets are never in it: they
              *     are `credential_spec`'s.
              */
-            config_schema: Record<string, never>;
+            config_schema: {
+                [key: string]: unknown;
+            };
             /**
              * @description What enabling a source requires (§18.7).
              * @enum {string}
@@ -13550,11 +13552,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PurgeRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             200: {
                 headers: {

@@ -6011,11 +6011,11 @@
       }
     },
     "/sources/{id}/purge/preview": {
-      "post": {
+      "get": {
         "tags": [
           "crawler"
         ],
-        "summary": "What purging a source would remove if it ran now, counted with the\npurge's own rules, for the dialog to show before you commit\n(§10.10.7). It changes nothing: the source keeps its state, data,\ncredentials and settings. It needs the admin `\"password\"`, as the\npurge does (`428 confirm_required`, `401`), since the counts say how\nmuch a source found. The counts are exact while the source is off\n(`settled`); see `PurgePreview`.",
+        "summary": "What purging a source would remove if it ran now, counted with the\npurge's own rules, for the dialog to show before you commit\n(§10.10.7). It changes nothing: the source keeps its state, data,\ncredentials and settings, and no job starts. It needs a session, like\nevery Sources route, and no password: the password is asked once, by\n`POST /sources/{id}/purge`. The counts are exact while the source is\noff (`settled`); see `PurgePreview`.",
         "operationId": "previewPurge",
         "parameters": [
           {
@@ -6030,16 +6030,6 @@
             }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PurgeRequest"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "200": {
             "description": "",
@@ -17363,7 +17353,7 @@
       },
       "PurgePreview": {
         "type": "object",
-        "description": "`POST /sources/{id}/purge/preview`: what purging the source would\nremove if it ran now, counted with the purge's own rules. Nothing is\nchanged. The dialog shows it before you commit (§10.10.7).\n\nWhile the source is off (`settled`), a purge started next removes\nexactly this, as long as nothing else changes the store meanwhile. An\nenabled source keeps finding until the purge turns it off, so the purge\nmay remove more. Keys still in memory waiting to be fetched aren't\ncounted: the purge reports them as `keys_dropped`.",
+        "description": "`GET /sources/{id}/purge/preview`: what purging the source would\nremove if it ran now, counted with the purge's own rules. Nothing is\nchanged. The dialog shows it before you commit (§10.10.7).\n\nWhile the source is off (`settled`), a purge started next removes\nexactly this, as long as nothing else changes the store meanwhile. An\nenabled source keeps finding until the purge turns it off, so the purge\nmay remove more. Keys still in memory waiting to be fetched aren't\ncounted: the purge reports them as `keys_dropped`.",
         "required": [
           "claims_deleted",
           "kept",
@@ -20112,7 +20102,11 @@
           },
           "config_schema": {
             "type": "object",
-            "description": "The JSON Schema (draft 2020-12) of its settings, as its plugin\ndeclares it: the settings form is generated from it, and `config`\nin `PATCH /sources/{id}` is checked against the plugin's own rules\n(when `editable` lists `config`). Read-only, and the same for every\ninstall: it holds no setting's value. Secrets are never in it: they\nare `credential_spec`'s."
+            "description": "The JSON Schema (draft 2020-12) of its settings, as its plugin\ndeclares it: the settings form is generated from it, and `config`\nin `PATCH /sources/{id}` is checked against the plugin's own rules\n(when `editable` lists `config`). Read-only, and the same for every\ninstall: it holds no setting's value. Secrets are never in it: they\nare `credential_spec`'s.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "consent": {
             "type": "string",
