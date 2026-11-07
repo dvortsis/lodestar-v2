@@ -1,9 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { configure, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
+import {
+	cleanup,
+	configure,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+	within
+} from '@testing-library/svelte';
 import { mockFetch } from '../filters/flows/testing/fetch';
 import SourcesScreen from './SourcesScreen.svelte';
 import { approved } from './consent-approved.fixture';
-import { ADDRESSES_MARK, blocksFor } from './consent';
 import { darknet, dht, lime, nyaa, source, sourceList, tracker } from './fixtures';
 
 configure({ defaultHidden: true, asyncUtilTimeout: 10_000 });
@@ -61,6 +68,11 @@ describe('consent dialogs: the approved texts', () => {
 				egress: 'direct connection'
 			}
 		},
+		{
+			cls: 'account' as const,
+			s: tracker,
+			vals: { hosts: 'https://tracker.example/api, https://tracker.example/rss' }
+		},
 		{ cls: 'restricted' as const, s: lime, vals: {} },
 		{ cls: 'overlay' as const, s: darknet, vals: { network: 'I2P' } }
 	];
@@ -74,21 +86,6 @@ describe('consent dialogs: the approved texts', () => {
 			expect(got.buttons).toEqual(want.buttons.map((t) => fill(t, s, vals)));
 		});
 	}
-
-	it('account: the approved text (shown by SRC-15c) is in the messages and matches', () => {
-		const b = blocksFor(tracker, 'account');
-		const got = [b.title, ...b.paragraphs, b.confirm].map((x) =>
-			x
-				.replaceAll('**', '')
-				.replaceAll(ADDRESSES_MARK, 'https://tracker.example/api, https://tracker.example/rss')
-		);
-		const want = approved.account;
-		expect(got).toEqual(
-			[...want.lines, want.buttons[0]].map((x) =>
-				fill(x, tracker, { hosts: 'https://tracker.example/api, https://tracker.example/rss' })
-			)
-		);
-	});
 
 	it('shows the full addresses the acknowledgement covers, so a changed path is seen', async () => {
 		const a = source({ ...nyaa, endpoints: ['https://cache.example/~me/{hash}.torrent'] });
@@ -265,12 +262,139 @@ describe('consent dialogs: other refusals', () => {
 });
 
 describe('account sources (SRC-15c)', () => {
-	it('stay at "needs setup" with the toggle off: no credential dialog on this screen yet', async () => {
-		setup(tracker);
-		await screen.findByTestId('source-5');
-		expect(toggleOf(5).disabled).toBe(true);
-		await fireEvent.click(toggleOf(5));
-		expect(screen.queryByRole('dialog')).toBeNull();
+	const KEY = 'sup3r-secret-key-value';
+	const withSpec = source({
+		...tracker,
+		credential_spec: [
+			{ name: 'username', kind: 'username', label: 'Username', required: true },
+			{ name: 'api_key', kind: 'secret', label: 'API key', required: true }
+		]
+	});
+	const type = async (tid: string, value: string) =>
+		fireEvent.input(await screen.findByTestId(tid), { target: { value } });
+
+	it('draws a field per credential_spec: secrets masked, usernames not, nothing prefilled', async () => {
+		setup(withSpec);
+		await open(5);
+		const user = (await screen.findByTestId('credential-username')) as HTMLInputElement;
+		const key = screen.getByTestId('credential-api_key') as HTMLInputElement;
+		expect(user.type).toBe('text');
+		expect(key.type).toBe('password');
+		expect([user.value, key.value]).toEqual(['', '']);
+	});
+
+	it('saves credentials, clears them, and shows the server refusal plainly', async () => {
+		setup(withSpec);
+		net.on('PATCH /sources/{id}/credentials', {
+			body: { ...withSpec, credentials: ['username', 'api_key'] }
+		});
+		net.error('PATCH /sources/{id}', 400, 'invalid_setting', {
+			message: 'this source asks for your consent before it is turned on, so it stays off.'
+		});
+		await open(5);
+		await type('credential-username', 'me');
+		await type('credential-api_key', KEY);
+		await fireEvent.click(screen.getByTestId('consent-confirm'));
+		const problem = await screen.findByTestId('consent-problem');
+		expect(problem.textContent).toContain('stays off');
+		expect(problem.textContent).not.toContain(KEY);
+		expect(bodyOf(0)).toEqual({ credentials: { username: 'me', api_key: KEY } });
+		expect(bodyOf(1)).toEqual({ enabled: true });
+		expect((screen.getByTestId('credential-api_key') as HTMLInputElement).value).toBe('');
+		expect(document.body.textContent).not.toContain(KEY);
+		expect(problem.textContent).not.toContain('Nothing was changed');
+		expect((screen.getByTestId('credential-api_key') as HTMLInputElement).autocomplete).toBe(
+			'new-password'
+		);
+		expect(toggleOf(5).checked).toBe(false);
+	});
+
+	it('clears the secret when saving it fails, and never echoes it', async () => {
+		setup(withSpec);
+		net.error('PATCH /sources/{id}/credentials', 400, 'invalid_credentials', {
+			message: 'api_key is too long.'
+		});
+		await open(5);
+		await type('credential-username', 'me');
+		await type('credential-api_key', KEY);
+		await fireEvent.click(screen.getByTestId('consent-confirm'));
+		const problem = await screen.findByTestId('consent-problem');
+		expect(problem.textContent).not.toContain(KEY);
+		expect((screen.getByTestId('credential-api_key') as HTMLInputElement).value).toBe('');
+		expect(writes()).toHaveLength(1);
+	});
+
+	it('asks for missing required fields and sends nothing', async () => {
+		setup(withSpec);
+		await open(5);
+		await fireEvent.click(screen.getByTestId('consent-confirm'));
+		await waitFor(() => expect(screen.getByRole('dialog').textContent).toContain('Enter this'));
+		expect(writes()).toHaveLength(0);
+	});
+
+	it('a stored credential is not asked for again; Remove asks first, with focus on Keep', async () => {
+		setup(source({ ...withSpec, credentials: ['username', 'api_key'] }));
+		net.on('PATCH /sources/{id}/credentials', { body: withSpec });
+		await open(5);
+		await fireEvent.click(await screen.findByTestId('credential-api_key-remove'));
+		const keep = await screen.findByTestId('credential-api_key-keep');
+		await waitFor(() => expect(document.activeElement).toBe(keep));
+		expect(screen.getByTestId('credential-api_key-prompt').textContent).toContain(
+			"This can't be undone"
+		);
+		expect(keep.getAttribute('aria-describedby')).toBe(
+			screen.getByTestId('credential-api_key-prompt').id
+		);
+		await fireEvent.click(keep);
+		expect(writes()).toHaveLength(0);
+		await waitFor(() =>
+			expect(document.activeElement).toBe(screen.getByTestId('credential-api_key-remove'))
+		);
+		// Escape closes the confirm, not the dialog.
+		await fireEvent.click(screen.getByTestId('credential-api_key-remove'));
+		await fireEvent.keyDown(await screen.findByTestId('credential-api_key-keep'), {
+			key: 'Escape'
+		});
+		await waitFor(() => expect(screen.queryByTestId('credential-api_key-keep')).toBeNull());
+		expect(screen.getByRole('dialog')).toBeTruthy();
+		await fireEvent.click(await screen.findByTestId('credential-api_key-remove'));
+		await fireEvent.click(await screen.findByTestId('credential-api_key-remove-yes'));
+		await waitFor(() => expect(writes()).toHaveLength(1));
+		await waitFor(() =>
+			expect(document.activeElement).toBe(screen.getByTestId('credential-api_key'))
+		);
+		expect(bodyOf(0)).toEqual({ credentials: { api_key: null } });
+	});
+
+	it('announces missing required fields and focuses the first', async () => {
+		setup(withSpec);
+		await open(5);
+		await fireEvent.click(screen.getByTestId('consent-confirm'));
+		expect((await screen.findByTestId('consent-problem')).textContent).toContain('marked fields');
+		await waitFor(() =>
+			expect(document.activeElement).toBe(screen.getByTestId('credential-username'))
+		);
+	});
+
+	it('turns Confirm off when the server says the notice changed', async () => {
+		setup(withSpec);
+		net.on('PATCH /sources/{id}/credentials', { body: withSpec });
+		net.error('PATCH /sources/{id}', 400, 'consent_required');
+		await open(5);
+		await type('credential-username', 'me');
+		await type('credential-api_key', KEY);
+		await fireEvent.click(screen.getByTestId('consent-confirm'));
+		await screen.findByTestId('consent-problem');
+		await waitFor(() =>
+			expect((screen.getByTestId('consent-confirm') as HTMLButtonElement).disabled).toBe(true)
+		);
+	});
+
+	it('Escape closes it without sending anything', async () => {
+		setup(withSpec);
+		const dlg = await open(5);
+		await fireEvent.keyDown(dlg, { key: 'Escape' });
+		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 		expect(writes()).toHaveLength(0);
 	});
 });
@@ -300,6 +424,82 @@ describe('purge', () => {
 			unverified_deleted: 12,
 			...over
 		}
+	});
+
+	const preview = {
+		claims_deleted: 96402,
+		kept: 88120,
+		plugin: 'x',
+		queue_deleted: 0,
+		settled: true,
+		source_id: 1,
+		state_deleted: 0,
+		torrents_deleted: 1204331,
+		unverified_deleted: 5210,
+		unverified_kept: 0
+	};
+
+	it('shows the counts before the password, from a call that sends no body', async () => {
+		setup(nyaa);
+		net.on('GET /sources/{id}/purge/preview', { body: preview });
+		await screen.findByTestId('source-1');
+		await fireEvent.click(screen.getByTestId('source-1-purge'));
+		expect((await screen.findByTestId('preview-torrents')).textContent).toContain('1,204,331');
+		expect(screen.getByTestId('preview-claims').textContent).toContain('96,402');
+		expect(screen.getByTestId('preview-unverified').textContent).toContain('5,210');
+		expect(screen.getByTestId('preview-kept').textContent).toContain('88,120');
+		expect(screen.queryByTestId('preview-unsettled')).toBeNull();
+		expect(writes()).toHaveLength(0);
+		const sent = net.sent.find((x) => x.url.includes('/purge/preview'))!;
+		expect(sent.body ?? '').toBe('');
+	});
+
+	it('names the count on the purge button once it has loaded', async () => {
+		setup(nyaa);
+		net.on('GET /sources/{id}/purge/preview', { body: preview });
+		await screen.findByTestId('source-1');
+		await fireEvent.click(screen.getByTestId('source-1-purge'));
+		await waitFor(() =>
+			expect(screen.getByTestId('purge-confirm').textContent).toContain(
+				'Delete 1,204,331 torrents found only by Nyaa'
+			)
+		);
+	});
+
+	it('words the purge button for one, none and many', async () => {
+		const label = async (n: number) => {
+			setup(nyaa);
+			net.on('GET /sources/{id}/purge/preview', { body: { ...preview, torrents_deleted: n } });
+			await screen.findByTestId('source-1');
+			await fireEvent.click(screen.getByTestId('source-1-purge'));
+			await screen.findByTestId('preview-torrents');
+			const text = screen.getByTestId('purge-confirm').textContent!.trim();
+			cleanup();
+			return text;
+		};
+		expect(await label(1)).toBe('Delete 1 torrent found only by Nyaa');
+		expect(await label(0)).toBe('Purge Nyaa');
+		expect(await label(5)).toBe('Delete 5 torrents found only by Nyaa');
+	});
+
+	it('says the counts can grow while the source is on', async () => {
+		setup(nyaa);
+		net.on('GET /sources/{id}/purge/preview', { body: { ...preview, settled: false } });
+		await screen.findByTestId('source-1');
+		await fireEvent.click(screen.getByTestId('source-1-purge'));
+		expect((await screen.findByTestId('preview-unsettled')).textContent).toContain('can grow');
+	});
+
+	it('shows a failed count with a retry, and the purge stays possible', async () => {
+		setup(nyaa);
+		net.error('GET /sources/{id}/purge/preview', 500, 'internal');
+		await screen.findByTestId('source-1');
+		await fireEvent.click(screen.getByTestId('source-1-purge'));
+		const retry = await screen.findByTestId('purge-preview-retry');
+		expect(screen.getByTestId('purge-confirm')).toBeTruthy();
+		net.on('GET /sources/{id}/purge/preview', { body: preview });
+		await fireEvent.click(retry);
+		await screen.findByTestId('preview-torrents');
 	});
 
 	it('names what is deleted, starts on Cancel, sends nothing until confirmed', async () => {
@@ -398,5 +598,107 @@ describe('purge', () => {
 		await waitFor(() =>
 			expect(screen.getByTestId('purge-progress').textContent).toContain('stays off')
 		);
+	});
+});
+
+describe('settings form (SRC-15c)', () => {
+	const cache = source({
+		id: 8,
+		name: 'Torrent cache',
+		editable: ['enabled', 'priority', 'config'],
+		config_schema: {
+			type: 'object',
+			required: ['caches', 'level'],
+			properties: {
+				caches: {
+					type: 'array',
+					title: 'Torrent caches',
+					items: { type: 'string', maxLength: 40 },
+					maxItems: 2,
+					uniqueItems: true
+				},
+				level: { type: 'integer', minimum: 1, maximum: 5, default: 2 }
+			}
+		}
+	});
+	const odd = source({
+		...cache,
+		id: 9,
+		name: 'Odd',
+		config_schema: {
+			type: 'object',
+			properties: { extra: { oneOf: [{ type: 'string' }], title: 'Extra' }, n: { type: 'integer' } }
+		}
+	});
+	const openSettings = async (id = 8) => {
+		await screen.findByTestId(`source-${id}`);
+		await fireEvent.click(screen.getByTestId(`source-${id}-settings`));
+		return screen.findByRole('dialog');
+	};
+
+	it('draws the fields, notes what it cannot draw, and checks before sending', async () => {
+		setup(cache);
+		await openSettings();
+		await fireEvent.input(screen.getByLabelText(/level/i), { target: { value: '9' } });
+		await fireEvent.click(screen.getByTestId('cfg-save'));
+		await waitFor(() => expect(screen.getByRole('dialog').textContent).toContain('5 or less'));
+		expect(screen.getByTestId('cfg-problem')).toBeTruthy();
+		expect(writes()).toHaveLength(0);
+	});
+
+	it('offers "Not set" on an optional enum and numbers the boolean cells of each row', async () => {
+		const s = source({
+			id: 10,
+			name: 'Rows',
+			editable: ['config'],
+			config_schema: {
+				type: 'object',
+				properties: {
+					mode: { type: 'string', enum: ['a', 'b'], title: 'Mode' },
+					hosts: {
+						type: 'array',
+						title: 'Hosts',
+						items: {
+							type: 'object',
+							properties: { name: { type: 'string' }, tls: { type: 'boolean' } }
+						}
+					}
+				}
+			}
+		});
+		setup(s);
+		await openSettings(10);
+		const opts = [...(screen.getByLabelText('Mode') as HTMLSelectElement).options].map(
+			(o) => o.textContent
+		);
+		expect(opts).toEqual(['Not set', 'a', 'b']);
+		await fireEvent.click(screen.getByTestId('cfg-hosts-add'));
+		await fireEvent.click(screen.getByTestId('cfg-hosts-add'));
+		expect(screen.getByLabelText('tls 1')).toBeTruthy();
+		expect(screen.getByLabelText('tls 2')).toBeTruthy();
+	});
+
+	it('turns Save off and says why when a setting cannot be drawn', async () => {
+		setup(odd);
+		await openSettings(9);
+		expect((screen.getByTestId('cfg-save') as HTMLButtonElement).disabled).toBe(true);
+		expect(screen.getByTestId('cfg-save-off').textContent).toContain('Use the API');
+		expect(screen.getByTestId('cfg-save').getAttribute('aria-describedby')).toBe(
+			screen.getByTestId('cfg-save-off').id
+		);
+		expect(screen.getByTestId('cfg-unsupported').textContent).toContain('edit through the API');
+	});
+
+	it('sends the typed config and shows what the server then says', async () => {
+		setup(cache);
+		net.error('PATCH /sources/{id}', 400, 'invalid_config', { message: 'caches: not an address.' });
+		await openSettings();
+		await fireEvent.click(screen.getByTestId('cfg-caches-add'));
+		await fireEvent.input(screen.getAllByRole('textbox', { name: /Torrent caches 1/ })[0]!, {
+			target: { value: 'https://c.example/{hash}' }
+		});
+		await fireEvent.click(screen.getByTestId('cfg-save'));
+		expect((await screen.findByTestId('cfg-problem')).textContent).toContain('not an address');
+		expect(bodyOf()).toEqual({ config: { caches: ['https://c.example/{hash}'], level: 2 } });
 	});
 });

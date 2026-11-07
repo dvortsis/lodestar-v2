@@ -1,8 +1,10 @@
 <script lang="ts">
-	// Purge a source's data (§10.10.7, §18.1): says what goes, then shows progress and the result.
+	// Purge a source's data (§10.10.7, §18.1): says what goes, with the counts from
+	// `GET /sources/{id}/purge/preview` (session only, no password) before the password is asked,
+	// then shows progress and the result.
 	// Focus starts on Cancel. The server asks for the admin password on every purge (`428`/`401`), so
 	// the dialog asks for it; it never decides a purge went through, the job's own state does.
-	import { onDestroy } from 'svelte';
+	import { onDestroy, untrack } from 'svelte';
 	import { api, ApiError, isAbort } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
 	import Dialog from '$lib/ui/overlays/Dialog.svelte';
@@ -18,6 +20,7 @@
 
 	type Job = components['schemas']['BackgroundJob'];
 	type Stage = components['schemas']['PurgeStage'];
+	type Preview = components['schemas']['PurgePreview'];
 
 	interface Props {
 		open?: boolean;
@@ -43,11 +46,36 @@
 	let ctl: AbortController | undefined;
 	let destroyed = false;
 
+	// The preview: loading, loaded or failed. An enabled source keeps finding until the purge turns
+	// it off, so its counts (`settled: false`) are said to be a floor.
+	let preview = $state.raw<Preview | null>(null);
+	let previewState = $state<'loading' | 'ready' | 'failed'>('loading');
+	let previewCtl: AbortController | undefined;
+	async function loadPreview() {
+		previewCtl?.abort();
+		const mine = (previewCtl = new AbortController());
+		previewState = 'loading';
+		preview = null;
+		try {
+			const p = await api.get('/sources/{id}/purge/preview', {
+				path: { id: s.id },
+				signal: mine.signal
+			});
+			if (mine.signal.aborted || destroyed) return;
+			preview = p;
+			previewState = 'ready';
+		} catch (e) {
+			if (isAbort(e) || destroyed) return;
+			previewState = 'failed';
+		}
+	}
+
 	$effect(() => {
 		if (open && job === null) {
 			password = '';
 			passwordError = '';
 			problem = '';
+			void untrack(loadPreview);
 		}
 	});
 
@@ -135,6 +163,7 @@
 		destroyed = true;
 		clearTimeout(timer);
 		ctl?.abort();
+		previewCtl?.abort();
 		password = '';
 		// Closed with a purge still running: the list shows where the source stands.
 		if (running) onfinished();
@@ -168,6 +197,41 @@
 					<li>{m.sources_purge_item_consent()}</li>
 				</ul>
 				<p class="font-semibold">{m.sources_purge_undo()}</p>
+			</div>
+			<div data-testid="purge-preview" aria-live="polite">
+				{#if previewState === 'loading'}
+					<p class="text-muted-text" data-testid="purge-preview-loading">
+						{m.sources_purge_preview_loading()}
+					</p>
+				{:else if previewState === 'failed'}
+					<Banner kind="warning">
+						{m.sources_purge_preview_failed()}
+						{#snippet action()}<Button dense onclick={loadPreview} data-testid="purge-preview-retry"
+								>{m.sources_retry()}</Button
+							>{/snippet}
+					</Banner>
+				{:else if preview}
+					<p class="font-semibold">{m.sources_purge_preview_heading()}</p>
+					<ul class="ms-5 list-disc">
+						<li data-testid="preview-torrents">
+							{m.sources_purge_result_torrents({ count: count(preview.torrents_deleted) })}
+						</li>
+						<li data-testid="preview-claims">
+							{m.sources_purge_preview_claims({ count: count(preview.claims_deleted) })}
+						</li>
+						<li data-testid="preview-unverified">
+							{m.sources_purge_result_unverified({ count: count(preview.unverified_deleted) })}
+						</li>
+						<li data-testid="preview-kept">
+							{m.sources_purge_result_kept({ count: count(preview.kept) })}
+						</li>
+					</ul>
+					{#if !preview.settled}
+						<p class="text-small text-muted-text" data-testid="preview-unsettled">
+							{m.sources_purge_preview_unsettled({ name: s.name })}
+						</p>
+					{/if}
+				{/if}
 			</div>
 			<Field
 				label={m.sources_cx_password()}
@@ -232,7 +296,16 @@
 				loading={busy}
 				data-testid="purge-confirm"
 			>
-				{m.sources_purge_confirm({ name: s.name })}
+				{#if previewState === 'ready' && preview && preview.torrents_deleted > 0}
+					{preview.torrents_deleted === 1
+						? m.sources_purge_confirm_count_one({ name: s.name })
+						: m.sources_purge_confirm_count({
+								count: count(preview.torrents_deleted),
+								name: s.name
+							})}
+				{:else}
+					{m.sources_purge_confirm({ name: s.name })}
+				{/if}
 			</Button>
 		{:else}
 			<Button id={cancelId} onclick={close} data-testid="purge-close">{m.sources_cx_close()}</Button
