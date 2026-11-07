@@ -5523,6 +5523,10 @@
   {
    "id": "cr-ab-comp-script-review",
    "text": "03:45Z: script review sent (15 findings; blocking: rehearsal --baseline-hours 0.2 refused, run.sh self-count could void, rehearsal pass on exit code, restore must wait for collector). Await relaunch STATUS, pause file list, --commit label confirmation."
+  },
+  {
+   "id": "X-soak-screen-polish",
+   "text": "After #562: (1) test_collect.py ~1303 screen_results==[] assertion is a no-op (passes on 48fbdab5); move into test_screen_json_that_cant_be_written_never_ends_the_run. (2) screen_slope (x-mx)**2 raises OverflowError past ~1e154 -> use (x-mx)*(x-mx) so it reaches the per-counter unusable path; both copies. Small; bundle with the next soak-tools slice."
   }
  ],
  "main_health": [
