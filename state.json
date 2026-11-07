@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T08:55Z",
+  "updated_at": "2026-11-07T09:15Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3583,9 +3583,10 @@
       "merge": "542fdb8d"
     },
     "WK-9": {
-      "state": "review",
+      "state": "merged",
       "pr": 568,
-      "head": "4b771047"
+      "head": "4b771047",
+      "merge": "52a4c94e"
     },
     "X-cmp0-polish": {
       "state": "merged",
@@ -3601,6 +3602,11 @@
       "state": "running",
       "session": "session_01MMjhnC7AMtBL224stKAMCf",
       "since": "2026-11-07T07:45Z"
+    },
+    "WK-9b": {
+      "state": "running",
+      "session": "session_01MMjhn9UXuC8VxCmERMYLNB",
+      "since": "2026-11-07T09:15Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5588,6 +5594,10 @@
     {
       "id": "web-client-union-size",
       "text": "Taken by WK-14 (runner-approved 08:55Z): client.ts Params/Part/BodyPart made non-distributive, with type tests. Drop once WK-14 merges."
+    },
+    {
+      "id": "wk13-notes-remote-unverified",
+      "text": "Runner PR: add to WK-13's slices.yaml notes (from #568): re-verify PRIVATE on remote rows and clear flags::REMOTE_UNVERIFIED (nothing else clears it); six PRIVACY gates listed in docs/decisions/2026-11-07-WK-9.md; purge-margin note (honest results within ~120 s after a purge are refused); refuses_late must stay permanent for purged workers."
     }
   ],
   "main_health": [
@@ -6283,15 +6293,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-07T07:46Z",
+    "updated": "2026-11-07T09:15Z",
     "items": [
       {
         "slot": 1,
-        "slice": "WK-9",
+        "slice": "WK-9b",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn9UXuC8VxCmERMYLNB: coordinator intake (fencing, late results, counters, hints, backpressure)",
-        "since": "2026-11-07T04:33Z"
+        "doing": "session_01MMjhn9UXuC8VxCmERMYLNB: coordinator intake part 2 (counters by worker, backpressure, fetch_queue, sealed open after WK-8)",
+        "since": "2026-11-07T09:15Z"
       },
       {
         "slot": 2,
