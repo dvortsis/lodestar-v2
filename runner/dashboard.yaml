@@ -339,6 +339,7 @@ placement:
   - X-claim-store
   - X-claim-store-polish
   - X-fetch-pool-bytes
+  - X-fetch-meta-reserve
   - X-gs-gate-polish
   - X-adult-catalogue
   - D-sources-guide
