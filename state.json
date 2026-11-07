@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T19:09Z",
+  "updated_at": "2026-11-07T19:19Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5846,7 +5846,7 @@
     {
       "id": "X-menu-shift-f10-focus",
       "added": "2026-11-07T19:04Z",
-      "text": "From #590 (X-flakes-1107): a context menu opened with Shift+F10 focuses the menu container, not its first item (lazy-loaded Menu misses the keydown). Possible a11y product bug; reviewer assessing size. Candidate small Sonnet slice."
+      "text": "Confirmed real a11y bug (#590 review): Bits UI focuses first item only when isUsingKeyboard is true (bits-ui menu.svelte.js:756/:900; flag set by a document capture keydown listener that exists only while a Bits component is mounted). Lazy Menu in web/src/lib/features/search/results/RowActions.svelte:30-35 mounts after the Shift+F10 keydown, so focus lands on DropdownMenu.Content (web/src/lib/ui/overlays/Menu.svelte:37-42). Fix ~10-20 lines: in more(), synthetic .click() has event.detail===0 -> pass autofocusFirst to Menu; Menu.svelte onOpenAutoFocus preventDefault + focus first [role=menuitem]; tighten filters-block.keyboard.test.ts to assert first item focused on open. Also fold #590 nits: name /More actions/ in that test; shell.routes.test.ts .catch(()=>false) on page.evaluate inside expect.poll (navigation context destroyed). Small Sonnet slice X-menu-keyboard-focus."
     },
     {
       "id": "macos-utp-demux-segv",
