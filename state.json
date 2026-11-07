@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T14:44Z",
+  "updated_at": "2026-11-07T14:50Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5694,6 +5694,11 @@
       "id": "merges-1444",
       "added": "2026-11-07T14:44Z",
       "text": "#580 WK-9c merged (045d4a38) after local re-check against main 4c6d30d3 (pipeline clippy + 391 tests green). Slots 1,3 -> P-v052-cut (cut point 045d4a38, runner Q1 call), WK-15. Owner FYIs: WK-9c fail-closed unopened records; X-refetch-private backport recommendation. Next runner PR still owes: WK-9c notes wording, size reasons, FlareSolverr placement, ext:experiment-host false after cr-ab-comp-1, v0.5.1.md frontmatter rc4-delta cite."
+    },
+    {
+      "id": "approvals-1450",
+      "added": "2026-11-07T14:50Z",
+      "text": "P-v052-cut: release.yml G4 checks approved (tarball x86_64 + Windows exe refuse --fixture; aarch64 covered by build flags, recorded). WK-15: approved cluster/leases.rs LeaseEvents::claimed_elsewhere (no-op default, after lock), rollups metric 18 WORKER_LEASES (append-only), coordinator forwarding, remote.rs serving() gate, api insights stages/dto by_worker + SUMMED; conditions: local claims count as other claimer, bounded map test, parity test, sealed vs live equality, bench before/after, counts only."
     }
   ],
   "main_health": [
