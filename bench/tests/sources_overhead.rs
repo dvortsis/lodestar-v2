@@ -136,6 +136,8 @@ struct Report {
     secs: f64,
     /// Until every claim had been judged too.
     all_secs: f64,
+    /// When the start's re-judge sweep finished, if it did in the run.
+    sweep_at: Option<f64>,
     torrents: u64,
     /// Claims sent, and those stored as new unverified items (the rest
     /// merged into one already stored, or were refused).
@@ -329,6 +331,9 @@ async fn run(torrents: u64, load: Option<&Load>) -> Report {
     // When the torrents were all committed and indexed (the §3 figure),
     // and when every claim had been judged too.
     let mut torrents_at = None;
+    // When the start's re-judge sweep over the stored unverified items
+    // finished (it competes with ingest for the writer until then).
+    let mut sweep_at = None;
     loop {
         let w = pipeline.writer_stats();
         let i = pipeline.intake_stats();
@@ -336,6 +341,9 @@ async fn run(torrents: u64, load: Option<&Load>) -> Report {
         let indexed = serving.stats().indexed.load(Ordering::Relaxed);
         let judged =
             w.unverified.received.load(Ordering::Relaxed) + i.refused.load(Ordering::Relaxed);
+        if sweep_at.is_none() && w.unverified.sweeps.load(Ordering::Relaxed) > 0 {
+            sweep_at = Some(started.elapsed().as_secs_f64());
+        }
         if torrents_at.is_none() && stored >= torrents * 99 / 100 && indexed >= stored {
             torrents_at = Some(started.elapsed().as_secs_f64());
         }
@@ -362,6 +370,7 @@ async fn run(torrents: u64, load: Option<&Load>) -> Report {
     Report {
         secs,
         all_secs,
+        sweep_at,
         torrents,
         sent: claims_sent,
         claims: (items as u64).saturating_sub(if sources { seeded as u64 } else { 0 }),
@@ -434,11 +443,13 @@ async fn paired(torrents: u64, load: &Load, pairs: usize) -> Paired {
         let on = on_run.per_sec();
         let drop = 100.0 * (1.0 - on / off);
         println!(
-            "{} pair {}: off {off:.0}/s, on {on:.0}/s ({} claims, claims judged at {:.2} s), drop {drop:.1}%",
+            "{} pair {}: off {off:.0}/s, on {on:.0}/s ({} claims, torrents done at {:.2} s, claims judged at {:.2} s, start sweep done at {}), drop {drop:.1}%",
             load.name,
             i + 1,
             on_run.sent,
-            on_run.all_secs
+            on_run.secs,
+            on_run.all_secs,
+            on_run.sweep_at.map_or("-".into(), |t| format!("{t:.2} s"))
         );
         p.off.push(off);
         p.on.push(on);
@@ -488,4 +499,11 @@ async fn sources_overhead_breakdown() {
     for load in [&DUPLICATE_CHECK_ONLY, &CLAIMS_ONLY] {
         paired(TORRENTS, load, 5).await;
     }
+}
+
+/// One pair of the duplicate-check load, for a quick look.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "a measurement; run in release"]
+async fn sources_overhead_probe() {
+    paired(20_000, &DUPLICATE_CHECK_ONLY, 1).await;
 }
