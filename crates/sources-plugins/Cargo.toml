@@ -29,10 +29,19 @@ tokio = { version = "1.54.0", features = ["sync", "time", "rt", "macros"] }
 url = "2.5.8"
 
 [dev-dependencies]
+# SRC-G (`tests/safety.rs`): every plugin's fixture finds go through the
+# real pipeline, filter and store.
+lodestar-classify.workspace = true
+lodestar-dht.workspace = true
+lodestar-filter.workspace = true
+lodestar-log.workspace = true
+lodestar-peer-wire.workspace = true
+lodestar-pipeline.workspace = true
 lodestar-sources-plugins = { path = ".", features = ["testing"] }
 lodestar-store.workspace = true
 proptest = "1.11.0"
-tokio = { version = "1.54.0", features = ["sync", "time", "rt", "macros", "test-util"] }
+tempfile = "3.27.0"
+tokio = { version = "1.54.0", features = ["sync", "time", "rt", "rt-multi-thread", "macros", "test-util"] }
 
 [lints]
 workspace = true

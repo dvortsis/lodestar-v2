@@ -35,6 +35,12 @@ tower = { version = "0.5.3", features = ["util"] }
 dhat = "0.3"
 lodestar-peer-wire.workspace = true
 lodestar-sources.workspace = true
+# `tests/sources_overhead.rs` (SRC-G): every v0.6 plugin's recorded
+# fixture finds, replayed on a paused clock (`test-util`), mixed into the
+# real ingest path.
+lodestar-integrations.workspace = true
+lodestar-sources-plugins = { workspace = true, features = ["testing"] }
+tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros", "time", "test-util"] }
 # `extended`: `stats_json`, for `examples/mem-cheap.rs`'s committed bytes.
 mimalloc = { version = "0.1", default-features = false, features = ["extended"] }
 # `examples/mem-merge.rs` (X-merge-policy) builds the search writers itself
