@@ -5,7 +5,7 @@
 ## 1. New slices
 | Slice | Why |
 |---|---|
-| **WK-9b** | The runner split WK-9 at about 1,700 lines (2026-11-07T04:45Z). WK-9 (#568) keeps results intake, fencing, content safety, late results, hints and RECENT_COMMITS. WK-9b takes counters into rollups with the worker dimension, grant backpressure and remote leases in `fetch_queue`. It also opens WK-8's sealed records before the rebuild, so it depends on WK-8 too. |
+| **WK-9b** | The runner split WK-9 when its first estimate reached about 1,700 lines (2026-11-07T04:45Z); the first PR grew to about 2,600 with the review's fixes (§4). WK-9 (#568) keeps results intake, fencing, content safety, late results, hints, RECENT_COMMITS and the worker's held-set TTL prune. WK-9b takes counters into rollups with the worker dimension, grant backpressure and remote leases in `fetch_queue`. It also opens WK-8's sealed records before the rebuild, so it depends on WK-8 too. |
 | **D-v051-release-docs** | The owner had another vendor's agent align the README and user guide with the published v0.5.1 (#565). The runner reviews and merges it on its normal rules. D-v051-main shrinks to what #565 leaves out. |
 | **X-soak-screen-polish** | Two optional findings from #562's last review. One test assertion passes on the old code. `screen_slope` uses `** 2`, which overflows to `screen_error` instead of the per-counter `unusable` path. |
 
