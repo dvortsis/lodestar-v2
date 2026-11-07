@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T17:10Z",
+  "updated_at": "2026-11-07T17:16Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3653,7 +3653,7 @@
       "brief": "briefs/SRC-G.md",
       "session": "session_01MMjhnARrTCQPugwxwqfuCZ",
       "since": "2026-11-07T15:13Z",
-      "notes": "16:13Z: no FAIL found locally; dev-deps approved (bench tokio test-util + sources-plugins testing, dev-only; must keep `cargo tree -e features -p lodestar` clean); one PR (1,771 lines, 0 production, reason in PR); bench 1,176/s vs 1,000/s PASS, overhead 6.8% info only; \u00a72.37 wording = wiring blocker. | 16:3xZ: BUDGET MISS reported: commit+index with every source on 811-989/s vs \u00a73 1,000/s (off 1,178-1,266) under stress load (10k claims, 200k unverified). Runner: judge on sandbox (\u00a73 = 4 cores), >=5 alternating pairs, median; realistic-load (b) decides; breakdown pending; push held. | 16:37Z: PR #583 open at 37489331 (2,123 lines). Fresh Opus review launched. Next round: paired runs, item 7 updated (small delta check). | 17:0xZ: fresh Opus MERGE at 37489331 (6 mutations). Nits 1,2,4,6 ride the paired-run push; then delta check + merge.",
+      "notes": "16:13Z: no FAIL found locally; dev-deps approved (bench tokio test-util + sources-plugins testing, dev-only; must keep `cargo tree -e features -p lodestar` clean); one PR (1,771 lines, 0 production, reason in PR); bench 1,176/s vs 1,000/s PASS, overhead 6.8% info only; \u00a72.37 wording = wiring blocker. | 16:3xZ: BUDGET MISS reported: commit+index with every source on 811-989/s vs \u00a73 1,000/s (off 1,178-1,266) under stress load (10k claims, 200k unverified). Runner: judge on sandbox (\u00a73 = 4 cores), >=5 alternating pairs, median; realistic-load (b) decides; breakdown pending; push held. | 16:37Z: PR #583 open at 37489331 (2,123 lines). Fresh Opus review launched. Next round: paired runs, item 7 updated (small delta check). | 17:0xZ: fresh Opus MERGE at 37489331 (6 mutations). Nits 1,2,4,6 ride the paired-run push; then delta check + merge. | 17:15Z: head f13cda3f; paired runs: (b) realistic off 948 / on 649 median, drop 15.2% -> NOT DECIDED (host baseline). Delta self-checked (safety.rs nits 1/2 bite; bench hook wired; FAIL rule encoded). Merge on ci-ok.",
       "pr": 583
     },
     "X-bench-notice-version": {
@@ -5783,6 +5783,11 @@
     {
       "id": "X-soak-screen-polish (scope add)",
       "what": "crates/lodestar/src/memstats.rs:663 anon_mappings_cost_at_3000_mappings fails on every soak-screen run (only 1603 mappings from 750 threads; ~2/thread on runners). Size floor from measured per-thread mappings or raise thread count; keep 100 ms limit. Runs 42338719537, 42390958128, #584. Backport to next v0.5.2 rc if cut. Not blocking rc.1 (not in ci-ok).",
+      "since": "2026-11-07"
+    },
+    {
+      "id": "X-sources-ingest-sustained",
+      "what": "Before v0.6: re-run bench/tests/sources_overhead.rs on the soak host; measure sustained ingest after the start re-judge sweep (writer.rs:404 refile_unverified -> unverified::refile_step took 10-17 s of 20-35 s runs over 200k items); consider making the sweep yield the writer to ingest. Realistic sandbox: off 948, on 649 median (paired drop 15%). From SRC-G #583.",
       "since": "2026-11-07"
     }
   ],
