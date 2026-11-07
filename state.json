@@ -5478,7 +5478,9 @@
     "slices.yaml WK-10 owns: add crates/lodestar/src/cluster/serve.rs (per-tick Placement::sync hook ~15 lines; runner call (b) to WK-5)",
     "Owner §2.19 flag at WK-5 merge: unknown/non-public worker address puts the whole fleet in one politeness group (stricter); dual-stack worker grouped with the coordinator in v1; per-family grouping is a WK-G refinement",
     "Owner answer ~00:55Z: owner stopped the 10 containers and cancelled the parity read-check to prepare for tests (no unknown actor)",
-    "#557 nit: WK-2 and PK-cli share cli/mod.rs and main.rs; never run at once"
+    "#557 nit: WK-2 and PK-cli share cli/mod.rs and main.rs; never run at once",
+    "X-consent-gate-lift notes: step 1 = tighten consent::need to the declared credential spec (Account needs exactly the declared required credentials); call sites pipeline control.rs 635/1140/1291/1434, adult_enrich.rs 342, lib.rs 1259; add adult_enrich.rs and pipeline/src/lib.rs to its owns (runner 01:00Z, deferred from X-sources-api-spec); owner §2.19 flag moves to the lift",
+    "slices.yaml X-sources-api-spec owns: add crates/sources-plugins/tests/{prowlarr,stashdb,tpdb}.rs (one assert each; runner yes 01:00Z)"
    ]
   }
  ],
