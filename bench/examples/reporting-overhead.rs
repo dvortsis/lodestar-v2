@@ -544,7 +544,8 @@ async fn run(a: &Args) -> Result<bool, Error> {
     let mut req = Request::post("/api/v1/setup")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(format!(
-            r#"{{"token":"{token}","password":"correct horse battery"}}"#
+            r#"{{"token":"{token}","password":"correct horse battery","notice_version":{}}}"#,
+            lodestar_api::legal::NOTICE_VERSION
         )))?;
     req.extensions_mut()
         .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
