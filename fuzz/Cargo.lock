@@ -1351,6 +1351,7 @@ dependencies = [
  "lodestar-sources",
  "lodestar-store",
  "lodestar-tracker-scrape",
+ "siphasher",
  "tokio",
 ]
 
