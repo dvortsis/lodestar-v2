@@ -8,7 +8,7 @@
 //! written with.
 
 use std::collections::HashMap;
-use std::io;
+use std::io::{self, Read};
 
 use zstd::bulk::{Compressor, Decompressor};
 use zstd::zstd_safe::CParameter;
@@ -171,6 +171,49 @@ impl BlobCodec {
     }
 }
 
+impl BlobCodec {
+    /// [`decompress`](Self::decompress) for a blob from another machine,
+    /// refusing one that holds more than `max` bytes. Read as a stream, so
+    /// no more than `max + 1` bytes are ever produced or allocated, however
+    /// large the blob claims to be (a worker's blob, WK-9).
+    pub fn decompress_capped(
+        &self,
+        codec: Codec,
+        dict_id: Option<i64>,
+        data: &[u8],
+        max: usize,
+    ) -> io::Result<Vec<u8>> {
+        let too_large = || io::Error::new(io::ErrorKind::InvalidData, "blob over its cap");
+        match codec {
+            Codec::Raw if data.len() > max => Err(too_large()),
+            Codec::Raw => Ok(data.to_vec()),
+            Codec::Zstd => {
+                let dict: &[u8] = match dict_id {
+                    Some(id) => self.dicts.get(&id).ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::NotFound,
+                            format!("zstd dictionary {id} is missing"),
+                        )
+                    })?,
+                    None => &[],
+                };
+                let mut decoder = zstd::stream::read::Decoder::with_dictionary(data, dict)?;
+                // The window a frame may ask for: what `max` bytes need, at
+                // least 1 MiB (a dictionary widens a small blob's window),
+                // never zstd's default 128 MiB.
+                let window = usize::BITS - max.saturating_sub(1).leading_zeros();
+                decoder.window_log_max(window.clamp(20, 27))?;
+                let mut out = Vec::new();
+                decoder.take(max as u64 + 1).read_to_end(&mut out)?;
+                if out.len() > max {
+                    return Err(too_large());
+                }
+                Ok(out)
+            }
+        }
+    }
+}
+
 /// Trains a dictionary from sample blobs. Needs a few hundred samples to be
 /// worthwhile; zstd fails outright on too little data.
 pub fn train(samples: &[Vec<u8>], max_size: usize) -> io::Result<Vec<u8>> {
@@ -251,6 +294,94 @@ mod tests {
         assert!(
             c.decompress(Codec::Zstd, None, b"definitely not zstd")
                 .is_err()
+        );
+    }
+
+    /// A zstd bomb (a few KiB that would expand to 1 GiB) is refused at the
+    /// cap, having produced at most the cap and one byte: the decoder is a
+    /// stream read through `take`, never sized from the frame's own claim.
+    #[test]
+    fn a_capped_decompress_refuses_a_bomb_at_its_cap() {
+        let mut codec = BlobCodec::new(19);
+        let mut bomb = Vec::new();
+        {
+            // A window the cap allows, so it's the stream cap that stops it.
+            let mut enc = zstd::stream::write::Encoder::new(&mut bomb, 19).unwrap();
+            enc.window_log(20).unwrap();
+            let zeros = vec![0u8; 1 << 20];
+            for _ in 0..1024 {
+                std::io::Write::write_all(&mut enc, &zeros).unwrap();
+            }
+            enc.finish().unwrap();
+        }
+        assert!(bomb.len() < 64 << 10, "{} bytes", bomb.len());
+        let start = std::time::Instant::now();
+        let err = codec
+            .decompress_capped(Codec::Zstd, None, &bomb, 1 << 20)
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        // Stopped at the cap: nowhere near the time 1 GiB would take.
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+        // Raw blobs are capped too; a known size passes exactly.
+        assert!(
+            codec
+                .decompress_capped(Codec::Raw, None, &[1; 9], 8)
+                .is_err()
+        );
+        assert_eq!(
+            codec
+                .decompress_capped(Codec::Raw, None, &[1; 8], 8)
+                .unwrap()
+                .len(),
+            8
+        );
+        let small = codec.compress(&sample(3)).unwrap();
+        let out = codec
+            .decompress_capped(small.codec, small.dict_id, &small.data, sample(3).len())
+            .unwrap();
+        assert_eq!(out, sample(3));
+        // A dictionary nobody shipped is refused, not guessed.
+        assert_eq!(
+            codec
+                .decompress_capped(Codec::Zstd, Some(42), &small.data, 1 << 20)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+    }
+
+    /// A frame that asks for a 128 MiB window (and states no size) is
+    /// refused before the window is allocated: the window is capped by
+    /// what the blob's own cap needs.
+    #[test]
+    fn a_capped_decompress_refuses_a_huge_window() {
+        let mut frame = Vec::new();
+        {
+            let mut enc = zstd::stream::write::Encoder::new(&mut frame, 3).unwrap();
+            enc.window_log(27).unwrap();
+            enc.include_contentsize(false).unwrap();
+            std::io::Write::write_all(&mut enc, &sample(1)).unwrap();
+            enc.finish().unwrap();
+        }
+        let codec = BlobCodec::new(3);
+        assert!(
+            codec
+                .decompress_capped(Codec::Zstd, None, &frame, 1 << 20)
+                .is_err()
+        );
+        // The same bytes with a window that fits are read as usual.
+        let mut small = Vec::new();
+        {
+            let mut enc = zstd::stream::write::Encoder::new(&mut small, 3).unwrap();
+            enc.window_log(20).unwrap();
+            std::io::Write::write_all(&mut enc, &sample(1)).unwrap();
+            enc.finish().unwrap();
+        }
+        assert_eq!(
+            codec
+                .decompress_capped(Codec::Zstd, None, &small, 1 << 20)
+                .unwrap(),
+            sample(1)
         );
     }
 }

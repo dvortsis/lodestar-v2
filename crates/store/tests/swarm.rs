@@ -221,6 +221,8 @@ fn lanes_skip_private_torrents() {
     let (b, hb) = add(&mut store, "b", false, 0);
     add(&mut store, "private", true, 0);
     add(&mut store, "private-source", false, flags::PRIVATE_SOURCE);
+    // A remote worker's row whose BEP 27 bit isn't verified yet (WK-9).
+    add(&mut store, "remote", false, flags::REMOTE_UNVERIFIED);
     let (e, he) = add(&mut store, "e", false, 0);
 
     let new = store.unscraped_after(0, 10).unwrap();

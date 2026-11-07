@@ -148,6 +148,27 @@ impl Coordinator {
         self.stale(self.authority.release(key, token))
     }
 
+    /// Ends the lease of a committed result from `worker`. A remote
+    /// worker's goes through [`LeaseAuthority::commit`], which ends it only
+    /// for its holder (tokens are predictable); the built-in worker's by
+    /// token, as before. `None` if it was stale.
+    pub fn complete_for(&self, worker: WorkerId, key: &InfoHash, token: Token) -> Option<Lease> {
+        if worker == WorkerId::LOCAL {
+            return self.complete(key, token);
+        }
+        self.stale(self.authority.commit(worker, key, token))
+    }
+
+    /// [`lost`](Self::lost) for a result from `worker`: a remote worker's
+    /// loss ends the lease only for its holder.
+    pub fn lost_for(&self, worker: WorkerId, key: &InfoHash, token: Token, loss: Loss) -> bool {
+        if worker == WorkerId::LOCAL {
+            return self.lost(key, token, loss);
+        }
+        self.stale(self.authority.report(worker, key, token, Some(loss as u8)))
+            .is_some()
+    }
+
     /// The holder lost the key: count it once and end the lease. False
     /// if the token was stale (nothing was counted). A refetch's loss
     /// ends its lease but isn't the funnel's.
@@ -229,6 +250,31 @@ mod tests {
         assert_eq!(c.stats.granted.load(Ordering::Relaxed), 2);
         assert_eq!(c.stats.outstanding.load(Ordering::Relaxed), 0);
         assert_eq!(c.stats.expired.load(Ordering::Relaxed), 1);
+    }
+
+    /// A remote result's commit and loss end its lease only for the
+    /// worker holding it (WK-9): another worker that guessed the token
+    /// ends nothing, and the commit still counts once for the holder.
+    #[test]
+    fn a_remote_commit_is_checked_against_its_holder() {
+        let funnel = Arc::new(FunnelCounts::default());
+        let c = Coordinator::new(1, 600, funnel.clone());
+        let Claimed::Granted(t) = c.claim(WorkerId(7), claim(1), 0) else {
+            panic!()
+        };
+        let Claimed::Granted(u) = c.claim(WorkerId(7), claim(2), 0) else {
+            panic!()
+        };
+        let (k1, k2) = (InfoHash([1; 20]), InfoHash([2; 20]));
+        assert!(c.complete_for(WorkerId(8), &k1, t).is_none());
+        assert!(!c.lost_for(WorkerId(8), &k2, u, Loss::NoPeers));
+        assert_eq!(c.outstanding(), 2, "a guessed token ends nothing");
+        assert!(c.complete_for(WorkerId(7), &k1, t).is_some());
+        assert!(c.lost_for(WorkerId(7), &k2, u, Loss::NoPeers));
+        assert!(c.complete_for(WorkerId(7), &k1, t).is_none());
+        assert_eq!(c.outstanding(), 0);
+        assert_eq!(funnel.total(Stage::Lost, Some(Loss::NoPeers)), 1);
+        assert_eq!(c.stats.stale.load(Ordering::Relaxed), 3);
     }
 
     #[test]

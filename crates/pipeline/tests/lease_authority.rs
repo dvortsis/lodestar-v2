@@ -409,7 +409,7 @@ fn item(clock: &ManualClock, n: u8) -> ClaimItem {
         source: 5,
         strategy: 0,
         discovered_ms: clock.now_ms(),
-        hints: vec!["192.0.2.1:6881".parse().unwrap()],
+        hints: vec!["93.184.216.34:6881".parse().unwrap()],
     }
 }
 
@@ -460,7 +460,7 @@ async fn local_and_remote_workers_share_one_authority_and_the_funnel_reconciles(
         vec![vec![HintItem {
             key: [1; 20],
             token: local.token.0,
-            hints: vec!["192.0.2.1:6881".parse().unwrap()],
+            hints: vec!["93.184.216.34:6881".parse().unwrap()],
         }]]
     );
     assert_eq!(authority.get(&key(1)).unwrap().holder, WorkerId::LOCAL);

@@ -981,7 +981,7 @@ impl Writer {
                 let at = c.lease.discovered_at.clamp(0, i64::from(u32::MAX - 1));
                 hot.touch(id as u64, at as u32);
             }
-            let Some(lease) = self.coordinator.complete(&c.results.key, c.results.token) else {
+            let Some(lease) = self.end_lease(c, None) else {
                 continue;
             };
             if crawled {
@@ -1019,8 +1019,7 @@ impl Writer {
                 continue;
             }
             self.gate.exclude(Excluded::SourceStopped, 1);
-            self.coordinator
-                .lost(&c.results.key, c.results.token, Loss::Evicted);
+            self.end_lease(c, Some(Loss::Evicted));
         }
         for i in outcome.blocked {
             let c = &committing[i];
@@ -1037,8 +1036,7 @@ impl Writer {
             };
             counter.fetch_add(1, Ordering::Relaxed);
             self.gate.exclude(excluded, 1);
-            self.coordinator
-                .lost(&c.results.key, c.results.token, Loss::Blocked);
+            self.end_lease(c, Some(Loss::Blocked));
         }
         if let Some(hot) = &self.hot {
             for (u, stored) in swarm.iter().zip(&outcome.swarm) {
@@ -1091,6 +1089,19 @@ impl Writer {
             self.rebuild_have().await;
         }
         cache_stored
+    }
+
+    /// Ends a leased result's lease, committed (`None`) or lost: a remote
+    /// worker's only for its holder (`LeaseAuthority::commit`, WK-9).
+    fn end_lease(&self, c: &Committing, loss: Option<Loss>) -> Option<Lease> {
+        let r = &c.results;
+        match loss {
+            None => self.coordinator.complete_for(r.worker, &r.key, r.token),
+            Some(loss) => self
+                .coordinator
+                .lost_for(r.worker, &r.key, r.token, loss)
+                .then_some(c.lease),
+        }
     }
 
     /// Commits a batch of judged torrent-cache files (SRC-13b), the

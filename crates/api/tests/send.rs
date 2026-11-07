@@ -634,3 +634,35 @@ async fn a_third_send_while_two_run_is_refused_and_sends_nothing() {
         "the refused send added nothing"
     );
 }
+
+/// A row from a remote worker whose BEP 27 bit isn't verified yet
+/// (`REMOTE_UNVERIFIED`, WK-9) is refused like a private one: sending it
+/// to a client would announce its hash from this machine (§18.7).
+#[tokio::test]
+async fn a_remote_unverified_torrent_is_refused_like_a_private_one() {
+    let added = Arc::new(Mutex::new(Vec::new()));
+    let addr = qbittorrent(added.clone()).await;
+    let f = fixture(Some(saved(addr)));
+    // The first torrent is sent in the test above; mark it remote.
+    let db = f._dir.path().join("t.db");
+    let conn = lodestar_store::rusqlite::Connection::open(&db).unwrap();
+    conn.execute(
+        "UPDATE torrents SET flags = flags | ?1 WHERE id = 1",
+        [flags::REMOTE_UNVERIFIED],
+    )
+    .unwrap();
+    drop(conn);
+    let (status, v) = call(
+        &f,
+        "POST",
+        "/api/v1/send",
+        Some(json!({ "hashes": [f.hashes[0].clone()] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(v["results"][0]["code"], json!("private"), "{v}");
+    assert!(
+        added.lock().unwrap().is_empty(),
+        "nothing reached the client"
+    );
+}

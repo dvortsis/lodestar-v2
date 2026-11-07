@@ -183,7 +183,7 @@ fn key_check(
         return Ok(Err(Withheld::Held));
     }
     if let Some((row, _)) = stored {
-        if row.flags & (flags::PRIVATE_SOURCE | flags::PRIVATE) != 0 {
+        if row.flags & flags::PRIVACY != 0 {
             return Ok(Err(Withheld::Private));
         }
         // An item a private source reported under any of its hashes keeps
