@@ -5426,9 +5426,11 @@
     "slices.yaml X-fetch-meta-reserve entry: owns peer-wire/src/fetch.rs, peer-wire/tests/fetch.rs, sources/src/pool.rs, sources/tests/pool.rs, lodestar/src/metrics.rs, docs/metrics.md, decisions; deps X-fetch-pool-bytes; WK-10 deps add it; launched 23:31Z",
     "X-fetch-meta-reserve owns: add crates/peer-wire/src/lib.rs (one re-export token; runner yes 23:36Z)",
     "WK-2 main.rs: privdrop passes `worker --data` as LODESTAR_DATA_DIR (8 lines; runner accepted 23:47Z with same-guard + conflict-refusal conditions)",
-    "WITHDRAWN 23:58Z: WK-2 tokio test-util dev-dep on lodestar trips CI guard (test-only feature in binary); WK-2 injects clock instead. Runner rule: never approve test-util/testing features on the lodestar package"
+    "WITHDRAWN 23:58Z: WK-2 tokio test-util dev-dep on lodestar trips CI guard (test-only feature in binary); WK-2 injects clock instead. Runner rule: never approve test-util/testing features on the lodestar package",
+    "slices.yaml WK-5 owns: add crates/cluster/src/server.rs (WorkerStatus.external_ips in snapshot(), ~3 lines, no protocol change; runner yes 2026-11-07T00:26Z)",
+    "#557 review nit 4: WK-2 and PK-cli both list cli/mod.rs and main.rs; never run them at once"
    ],
-   "done_in": "#550 (1f5a8cd6) except: X-fetch-pool-bytes owns metrics.rs + docs/metrics.md; X-fetch-meta-reserve slice entry; manifest wording \"until SRC-15b\" -> \"until X-consent-gate-lift\" (:220,:305,:412, X-consent-gate-052 title)"
+   "done_in": "#550 (1f5a8cd6) except: X-fetch-pool-bytes owns metrics.rs + docs/metrics.md; X-fetch-meta-reserve slice entry; manifest wording \"until SRC-15b\" -> \"until X-consent-gate-lift\" (:220,:305,:412, X-consent-gate-052 title); #557 (05986cde) did the rest up to 00:20Z"
   },
   {
    "id": "SRC-15c-notes",
