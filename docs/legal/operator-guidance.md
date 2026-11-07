@@ -1,8 +1,8 @@
 # Running a Lodestar that other people can reach
 
-*Status (2026-11-04): this page describes the current version. Features marked **(planned)** are being built for a later release.*
+*Status (2026-11-06): this page describes Lodestar v0.5.1, the same software as version 3 of the Legal Notice. Features marked **(planned)** come in a later release.*
 
-This page is for the person who makes a Lodestar instance reachable by others: through its web interface, its API, an alert feed or an integration. Publishing the software and running a service are different things. The makers do the first; if you do the second, the duties below may fall on you. **This is guidance, not legal advice.** What applies to you depends on where you and your users are and on what your service does; ask a lawyer before you offer an index to others.
+This page is for the person who makes a Lodestar instance reachable by others: through its web interface, its API or an alert feed. Publishing the software and running a service are different things. The makers do the first; if you do the second, the duties below may fall on you. **This is guidance, not legal advice.** What applies to you depends on where you and your users are and on what your service does; ask a lawyer before you offer an index to others.
 
 ## 1. Private is not the same as exempt
 Lodestar is designed for a personal instance behind a password, reached over a LAN or a VPN (user guide, chapter 3). Authentication and private networking reduce exposure. Which duties apply depends on who uses the instance, what it does, what data it processes and the law that applies. A genuinely personal or household installation may qualify for exemptions that don't apply to a service offered to others, whether customers, colleagues or members, even when they need a password to get in.
@@ -11,7 +11,7 @@ Lodestar is designed for a personal instance behind a password, reached over a L
 Give the people who use or are affected by your service a way to reach you that you read: an email address or a form, on the page itself or in the feed's description. Monitor it. Failing to maintain the contact and notice procedures a law requires can cost you protections that would otherwise be available. Public issues on the Lodestar project don't reach you and aren't a substitute.
 
 ## 3. Handle complaints about indexed items
-- **Removing an item.** This version's search results and detail page have no Block action; the control is the filters API, called while signed in as the admin (API keys carry only the search scopes). `GET /api/v1/openapi.json` on your instance describes every field. Preview first, then apply, with the same JSON body and `Content-Type: application/json`:
+- **Removing an item.** This version's search results and detail page have no Block action; the control is the filters API, called while signed in as the admin (API keys and feed tokens only read; they can't reach it). `GET /api/v1/openapi.json` on your instance describes every field. Preview first, then apply, with the same JSON body and `Content-Type: application/json`:
   ```
   POST /api/v1/filters/preview
   POST /api/v1/filters/apply
