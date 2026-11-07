@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T11:06Z",
+  "updated_at": "2026-11-07T11:39Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5613,6 +5613,11 @@
       "id": "wk9b-wk14-round1",
       "added": "2026-11-07T11:06Z",
       "text": "2026-11-07T11:06Z #571 WK-9b CHANGES: blocking hand_parked drops private_source (BEP 27 leak); shutdown save double count; commit budget bench variants; polish (remove-test reliability, lock wording, saver order, blocklist pre-check). Fleet-wide caps + in-memory Admit counts judged sound -> owner \u00a72.19 at merge. | #573 WK-14 CHANGES: blocking token create lacks confirm_fresh_password (convention: keys.rs/webhooks.rs) -> runner required it (stricter, no owner question); services.rs ~15 lines accepted with non-fatal bad prefs rows; WK-13 precondition: seed pause set in serve.rs before quarantine reuses paused; polish (join_refused time floor, origin tests per route, Debug redaction, shell-history help, set_paused order, openapi refusals). Six \u00a72.19 refinements sound -> owner flag at merge. Both need fresh delta reviews."
+    },
+    {
+      "id": "wk13-notes-wk14-polish",
+      "added": "2026-11-07T11:39Z",
+      "text": "WK-13 (takes over api/src/workers.rs) polish from #573 delta review: (1) OpenAPI for pause/resume missing 409 too_many_workers (PrefsFull); (2) cli_read is bash-only \u2014 wrap in ( \u2026 ) subshell so the token var dies with it, say bash in doc; (3) quote '{address}' in join commands (<this-server> placeholder is read as redirection); (4) a_token_needs_the_password_now should also assert the password never appears in the log; (5) decisions note: join_refused limiter no longer resets on join/leave. Plus WK-13 precondition: seed pause set in serve.rs before quarantine reuses paused."
     }
   ],
   "main_health": [
