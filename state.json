@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T19:04Z",
+  "updated_at": "2026-11-07T19:09Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5847,6 +5847,16 @@
       "id": "X-menu-shift-f10-focus",
       "added": "2026-11-07T19:04Z",
       "text": "From #590 (X-flakes-1107): a context menu opened with Shift+F10 focuses the menu container, not its first item (lazy-loaded Menu misses the keydown). Possible a11y product bug; reviewer assessing size. Candidate small Sonnet slice."
+    },
+    {
+      "id": "macos-utp-demux-segv",
+      "added": "2026-11-07T19:09Z",
+      "text": "crates/dht/tests/utp_demux.rs SIGSEGV once on test (macos-latest) on #584 (release/v0.5.2 rc.1, 4dc18ffa, 18:35Z); passed on re-run 19:08Z; not in diff. Watch main nightly macOS; if it recurs, Opus fix slice (check thread stack size / recursion)."
+    },
+    {
+      "id": "merged-1915",
+      "added": "2026-11-07T19:09Z",
+      "text": "#587 X-v052-nits-forward merged aa7a1691; #584 rc.1 merged into release/v0.5.2 at 82076831. Owner long runs on rc.2 (runner call; owner told via dashboard, est. 22:00Z-00:00Z)."
     }
   ],
   "main_health": [
