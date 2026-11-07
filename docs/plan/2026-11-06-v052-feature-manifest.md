@@ -230,10 +230,10 @@ Every other plugin in `crates/sources-plugins` is compiled in (`catalogue.rs:28-
 | Nightly channel | no embedded key (`crates/update/src/keys.rs:17`) | none | excluded | `keys.rs::tests::embedded_keys_match_packaging` |
 | Updater on Windows | `#[cfg(unix)]` (`crates/lodestar/src/update/mod.rs:23-31`) | n/a | excluded | compile-time |
 | Import through the running server (B-import-server-2) | not built (`ext:owner-import-server-surface`) | n/a | absent | n/a |
-| Cluster, companions (`crates/cluster`) | not linked into `crates/lodestar` | n/a | absent | n/a |
+| Cluster, companions (`crates/cluster`) | not linked into `crates/lodestar` at `63a2c6df`. **Superseded at the cut, §9.3:** both crates are linked, the cluster port is off (`[cluster] enabled = false`), companions are unreached | n/a | absent at `63a2c6df`; inactive or excluded at the cut | §9.3 |
 | Blocklist subscriptions (B-subscriptions-api, S-blocklists) | nothing subscribed until the user connects one (owner §2.39 leaves them off) | none | enabled screen, nothing connected | `crates/api/tests/filters/subscriptions.rs::nothing_is_subscribed_by_default_and_listing_connects_nothing` |
 | Rule packs on an upgraded store (RP-DEF, RP-UC) | an explicit off row for every pack without one, plus the `packs.defaults` marker | previous state | the user is offered packs, never switched (owner §2.39) | `crates/pipeline/tests/pack_seed.rs::an_upgraded_store_keeps_every_packs_state`; `crates/filter/tests/unauthorised_copy.rs::an_upgraded_store_has_unauthorised_copy_off_until_turned_on` |
-| Not built: FK-3, SP-4 (`crates/filter/src/packs/mod.rs:11-13`) | absent | n/a | absent | n/a |
+| Not built: FK-3, SP-4 (`crates/filter/src/packs/mod.rs:11-13`) | absent | n/a | absent | n/a. **At the cut SP-4 is built and enabled (§9.2, #510)**; FK-3 is still absent |
 | New rules in a pack already on (RP-0, RP-1b, MW-6) | applied-version rows | shadow (reported, not enforced) until accepted | inactive until the user accepts | `crates/filter/tests/unauthorised_copy.rs::mw6_is_in_shadow_on_an_upgraded_store_with_malware_on` |
 | Show adult content | `content.show_adult`, `LODESTAR_SHOW_ADULT` (`config.rs:432-436`) | `false` | unchanged from v0.5.1 | `crates/lodestar/src/settings/content.rs::tests::hidden_by_default`; `crates/api/tests/adult_visibility.rs::adult_is_hidden_by_default_in_results_and_counts` |
 
@@ -294,7 +294,7 @@ Every other plugin in `crates/sources-plugins` is compiled in (`catalogue.rs:28-
 | #512 | X-claim-store | inactive | Claimed trackers stored canonical and guarded | claims only from sources (off) | `crates/pipeline/tests/claim_trackers.rs`; `fuzz/fuzz_targets/verified_claims.rs` |
 
 ### 3.3 Gaps: features with no test that proves they stay off
-P-v052-cut should close these before the freeze (decisions file, D4). Each one is a small test, not a behaviour change:
+P-v052-cut should close these before the freeze (decisions file, D4). Each one is a small test, not a behaviour change. **At the cut G1–G3 have tests, and G4 was already checked by the release smoke scripts, now made exact; §9.5 has the details.**
 - **G1:** the binary registers exactly the DHT, the torrent cache and the Sonarr/Radarr webhooks. One assert over the whole `/api/v1/sources` list in `crates/lodestar/tests/webhooks_e2e.rs`, which runs the real binary, closes it.
 - **G2:** the binary wires no adult-enrichment source (`adult_enrichers` is empty).
 - **G3:** `PipelineConfig::default().verify_unverified` is `false`, and no config or settings key sets it.
@@ -425,3 +425,173 @@ For P-v052-cut, which finishes `docs/releases/v0.5.2.md`:
 | Q4 | runner | Torrent cache and Sonarr/Radarr webhooks in v0.5.2 | **Decided by the runner:** no source that needs consent can be turned on in v0.5.2 (X-consent-gate-052, §3.4), so the torrent cache stays off. The webhooks need no consent and stay opt-in, advanced, API only. The release notes keep "built but not connected yet / come later" and add "advanced: API only" for the webhooks |
 | Q5 | runner | Soak plan under the delta rule | §6: 24 h Docker soak on an upgraded folder (binding), every pack turned on after the upgrade; ≥ 6 h Windows run on a fresh folder; a Windows upgrade and rollback leg (§5.2 step 4). Each clock starts after setup, and on an upgraded folder after Legal Notice v4 is accepted. The collector should fail loudly on `409 notice_required`. The rebuild runs in the first hours, mostly before the memory window (hours 12–24); report its disk high-water mark |
 | Q6 | owner | None blocks the manifest | Packs on for new installs, the unauthorised-copy pack and the v0.5.2 placement are owner decisions already (§2.39, §2.40). Crawler switches staying off is build-plan §0.4. Nothing here reverses or loosens an owner decision |
+
+## 9. Addendum at the cut: the delta `63a2c6df..045d4a38` (P-v052-cut)
+
+P-v052-cut, 2026-11-07, under D2. The runner cut `release/v0.5.2` at **`045d4a38`** (#580 WK-9c, 2026-11-07). That range holds **66 first-parent merges**. Each is classified below with the same four classes as §1. Every file:line and test name was checked at `045d4a38`. Later merges reach v0.5.2 only as reviewed backports. The decisions are in `docs/decisions/2026-11-07-P-v052-cut.md`.
+
+| Class | Count |
+|---|---|
+| Enabled (on in a default build, fully or partly) | 22 |
+| Inactive | 7 |
+| Excluded | 8 |
+| No user-visible behaviour | 29 |
+
+**Migrations and formats:**
+- **No migration.** `crates/store/src/schema.rs` is unchanged in the range, so there is no V15.
+- **Search:** `SCHEMA_VERSION` stays 7. #527 moves the `file_bucket` and `file_ext_bucket` generations 1 → 2.
+  - A v0.5.1 (v5) index gets generation 2 inside the existing v5 → v7 rebuild, at no extra cost.
+  - An index already at v7 (a pre-cut `main` build) backfills those fields in the background. It is resumable and is not a rebuild.
+- **Legal Notice:** `NOTICE_VERSION` goes 3 → 4 (#547).
+- **New on-disk rows:**
+  - SP-4 writes `settings` rows `filter.sp4.sigs.<n>` (format byte 1, #510).
+  - Claim encoding v3 (#542) is written only for claims from sources. Every such source is off.
+  - The `cluster.*` and `workers.prefs.*` rows are written only with workers allowed.
+  - Insights rollup codes 16 `LATE_RESULTS` (#568) and 17 `BY_WORKER` (#571) are written only by remote intake (`crates/pipeline/src/remote.rs`), so never on one machine. `crates/api/src/insights*` reads neither, so Insights shows no new rows.
+- **Packaging and toolchain:** `packaging/docker/Dockerfile` (still `rust:1.97-bookworm`), the Unraid templates, `release.yml`, `crates/network-policy`, `crates/peer-wire` and `rust-version` are unchanged in the range. The workspace adds the `lodestar-companions` dependency (#543).
+
+### 9.1 Enabled
+
+| PR | Slice | Behaviour on in the build | Acceptance | Note |
+|---|---|---|---|---|
+| #510 | RP-5 | **SP-4 ships:** clones of hidden spam (payload signature) inherit the original's demote or hide | `crates/filter/tests/sp4.rs::pending_on_an_upgraded_store_applied_on_a_fresh_one`, `::a_clone_of_what_sp2_hid_is_hidden`, `::the_set_survives_a_restart`, `::the_oldest_is_dropped_at_the_cap` | In `ADDED_AFTER_RP0` (`crates/filter/src/packs/manifest.rs:33-40`): applied on a fresh store, pending in shadow on an upgraded one. The set is fed whenever SP-2/SP-3 hide or demote a stored torrent, with SP-4 on or off (`crates/pipeline/src/writer.rs:1912-1923`). Cap 1M signatures (`crates/filter/src/spam_sigs.rs:80`), about 17–26 MB at the cap. **Writer-memory re-soak item (§9.4)** |
+| #524 | X-sp4-followups | SP-4's tighter index; row cap 524,288 with `rows_full` logged | `crates/filter/src/spam_sigs.rs` unit tests `past_what_memory_holds_the_oldest_row_goes`, `rows_of_removals_dont_outlive_what_they_cancel` | lowers #510's memory; the `memory_at_the_cap_*` tests are `#[ignore]` |
+| #525 | X-tcache-recheck | Turning a source off in Settings → Sources stops it **at once**, including the DHT; torrent-cache lookups re-checked at send | `crates/pipeline/tests/control.rs::turning_a_running_source_off_stops_it_at_once`, `::off_on_off_leaves_the_source_stopped` | user action only; the torrent-cache half is inactive (gated off) |
+| #527 | X-search-files-6 | `file:(ext:… -word)` fast path; finer size codes | `crates/search/tests/files.rs::negated_words_answer_as_the_file_index_does`, `::negated_words_wait_for_a_lagging_file_index`, `::a_generation_1_index_backfills_the_new_codes` | generation 1 → 2 backfill (above) |
+| #529 | X-net-redirect-allowlist | ntfy and webhook notifiers keep only allow-listed headers across a cross-origin redirect | `crates/integrations/src/net.rs` tests `a_cross_host_redirect_keeps_only_allow_listed_headers`, `the_cross_origin_list_drops_everything_else` | user-configured channels only; update checks and download clients don't follow redirects |
+| #530 | X-egress-state-watch | Every start opens one more read-only SQLite connection for source-state checks | `crates/sources/src/egress_tests.rs::a_held_store_lock_does_not_hold_back_an_enabled_source` | shows in the SQLite memory gauges |
+| #532 | X-commit-rejudge-reuse | A flooded or cloned commit's second judgment reuses the worker's trail when provably the same | `crates/filter/tests/props.rs::reuse::the_second_judgment_is_the_full_one` (differential), `::a_trail_is_never_read_for_another_torrent` | no verdict change; one boxed trail per in-flight result |
+| #534 | X-legal-docs-r2 | Legal Notice text corrected (owner §2.48) | `crates/api/tests/legal.rs`; `crates/lodestar/tests/legal_facts.rs` | **§2's torrent-cache sentence is wrong at the cut (§9.6)** |
+| #537 | X-consent-gate-052 | `PATCH /sources/{id}` refuses to enable any consent class but None; start switches such sources off | `crates/lodestar/tests/consent_gate.rs::a_source_that_needs_consent_cant_be_turned_on_and_one_that_doesnt_can` | §3.4 landed |
+| #538 | WK-0 | One lease authority under every fetch (`Coordinator` wraps `LeaseAuthority`, `crates/cluster/src/leases.rs:423`); heartbeat calls `expire(now)` | `crates/pipeline/src/coordinator.rs` tests `harvest_and_loss_are_counted_once`, `expired_leases_move_without_a_new_harvest`; `crates/pipeline/tests/lease_authority.rs::a_single_machine_install_creates_no_cluster_records` | same behaviour on one machine; **weak crawler-lifecycle trigger (§9.4)** |
+| #547 | X-notice-v4 | Legal Notice v4; upgraded installs see it once, session routes answer `409 notice_required` until accepted | `crates/api/tests/legal.rs::a_v0_5_1_install_sees_the_new_notice_once_at_login`, `::a_version_bump_gates_the_session_until_accepted` | the collector now stops loudly on that 409 (§9.5) |
+| #552 | SRC-15b | Sources consent dialogs (approved text) and purge flow; enabling ends in the gate's refusal | `web/src/lib/features/sources/dialogs.test.ts` ("shows the consent gate refusal plainly and leaves the source off"); `web/e2e/settings-sources.keyboard.test.ts` | |
+| #553 | X-consent-gate-polish | Account class closed too; start switch-off logs its reason | `crates/pipeline/tests/control.rs::a_restart_switches_off_a_source_whose_condition_no_longer_holds`, `::an_account_source_never_runs_and_losing_its_credential_keeps_it_off` | a v0.5.1 folder has no sources table: no effect on upgrade |
+| #554 | X-fetch-pool-bytes | The fetch pool holds finished dicts to a 64 MiB budget (`crates/sources/src/pool.rs:133-137`), deferring new fetches, never dropping; outbox drain on stop; `fetch_held_bytes`, `fetch_held_full_total` | `crates/sources/tests/pool.rs::a_stalled_consumer_pauses_fetching_within_the_budget`, `::shutdown_with_the_budget_full_drains_or_saves_every_key`, `::held_bytes_fall_as_the_consumer_takes_results` | unconditional, no key; **crawler-lifecycle re-soak trigger (§9.4)** |
+| #555 | X-win-log-held-open | Windows service retries a held `lodestar.log` rotation after 60 s; refuses records past 2× the cap | `crates/lodestar/src/windows/logfile.rs` tests `a_failed_rotation_waits_before_trying_again`, `a_file_that_cant_rotate_stops_at_twice_the_cap` | Windows only |
+| #561 | X-sources-api-spec | `GET /sources` gains `credential_spec`, `config_schema`; `GET /sources/{id}/purge/preview` | `crates/api/tests/sources_spec.rs::each_source_lists_its_credential_spec_and_settings_schema`, `::no_credential_value_is_ever_returned`, `::the_preview_needs_a_session_and_no_password` | API addition |
+| #562 | X-soak-screen | `lodestar_mem_anon_mappings{size}` on `/metrics` (Linux); soak screen tooling | `crates/lodestar/src/memstats.rs` tests `anonymous_mappings_count_by_size_class`, `anon_mappings_never_panics` | metrics only |
+| #564 | SRC-15c | Generated config forms and purge counts | `web/src/lib/features/sources/config-form.test.ts`; `web/e2e/settings-sources-account.keyboard.test.ts` | the Account dialog is excluded: no Account source is registered |
+| #571 | WK-9b | **At start, saved fetch-queue rows whose key is already stored are dropped** (`crates/pipeline/src/lib.rs:1392`) | `crates/pipeline/tests/remote_intake.rs::a_saved_row_for_a_stored_key_is_not_restored` | the remote half is inactive; **weak trigger (§9.4)** |
+| #573 | WK-14 | `/api/v1/workers*` routes registered (session only): `GET` answers `allowed:false`, every action `409 workers_off`; join tokens need the password | `crates/lodestar/src/cluster/ops.rs::a_single_machine_lists_nothing_and_acts_on_nothing`; `crates/api/tests/workers.rs::token_refusals`, `::a_token_needs_the_password_now` | no screen; no route turns the cluster on. Opens one more store connection and a 10 Hz follower task at every start |
+| #576 | X-refetch-private | Private and BEP 27 partials are never refetched through public peer finding at start (`crates/store/src/lib.rs:1045`) | `crates/store/tests/partial_privacy.rs::partial_hashes_never_returns_a_private_key`; `crates/pipeline/tests/refetch_private.rs::private_partials_never_reach_public_peer_finding_across_a_restart` | privacy fix; weak trigger, same family as #267 |
+| #580 | WK-9c | At start, a saved key now held or on the hash floor is ended `Loss::Blocked`, never fetched (`crates/pipeline/src/lib.rs:724-744`) | `crates/pipeline/tests/remote_intake.rs::saved_keys_held_or_blocked_are_not_restored` | sealed records fail closed (no keys); **weak trigger (§9.4)** |
+
+### 9.2 Inactive and excluded
+
+| PR | Slice | State | Kept off by | Test or proof |
+|---|---|---|---|---|
+| #513 | X-claim-store-polish | inactive | claims come only from sources (all off) | `crates/pipeline/tests/claim_trackers.rs::a_private_finds_external_ref_and_trackers_are_not_stored` |
+| #521 | X-sources-low | inactive | HTTP source egress only; the torrent cache is gated off | `crates/sources/src/egress_tests.rs::a_redirect_to_another_port_on_the_listed_host_is_refused` |
+| #542 | ENR-9 | inactive | claim encoding v3 is written only by sources | `crates/store/tests/claims_golden.rs::every_golden_blob_still_decodes` |
+| #551 | ENR-9b | inactive | no registered source sends a details section | `crates/pipeline/tests/unverified_details.rs::golden_claims_store_byte_identical_blobs` |
+| #544 | WK-1 | inactive | `[cluster] enabled` = `false` (`crates/lodestar/src/config.rs:523`), set only in `config.toml`; no env, Settings or API key. Nothing listens; 20 `lodestar_cluster_*` families export 0 | `crates/lodestar/tests/cluster_serve.rs::the_cluster_port_is_off_until_workers_are_allowed` (real binary); `config.rs::tests::the_cluster_port_is_off_until_allowed` |
+| #556 | WK-2 | inactive | `lodestar worker` runs only when an operator starts it against a coordinator that allows workers | `crates/lodestar/tests/worker_join.rs::joins_restarts_and_never_shows_the_token` |
+| #568 | WK-9 | inactive | the intake sink is attached only when a cluster server is built. Default-path hunks are neutral: `flags::PRIVACY` adds bit 14, never set locally; `end_lease` for `LOCAL` is `complete`/`lost`. 10 `lodestar_remote_*` families export 0 | `crates/pipeline/tests/remote_intake.rs::the_start_queue_is_kept_only_with_workers_allowed`; `crates/api/src/torrents.rs::tests::enrichment_lookups_skip_private_and_unverified_remote_rows` |
+| #536 | WK-4 | excluded | `dht::Config.shard` = `None`; no production caller sets it | `crates/dht/src/secure_id.rs::tests::every_slot_is_virtual_ids_draw_for_draw`; `crates/dht/src/node/shard_tests.rs::the_full_shard_is_no_shard` |
+| #539 | WK-6 | excluded | the codecs are decoded only by a cluster server's intake | `crates/pipeline/tests/wire.rs` |
+| #543 | CMP-0a | excluded | `lodestar-companions` is linked, but only its log catalogue is read (`crates/lodestar/src/logging/mod.rs`): `companions.catalogue_invalid` is listed in Settings → Logging and never emitted | `crates/lodestar/src/logging/tests.rs::every_declared_catalogue_is_registered` |
+| #548 | CMP-0 | excluded | `catalogue::builtin()` has no caller outside its crate; the `testing` feature is dev-only | `crates/companions/tests/catalogue.rs`; the CI guard in `.github/workflows/ci.yml` |
+| #560 | WK-5 | excluded | `Placement::sync` is never called; no `Assign` is sent | `crates/cluster/tests/placement.rs` (no test proves it stays unwired, §9.5) |
+| #566 | WK-3 | excluded | `Have::observe` is called only in tests. The local Bloom now hashes with keyed SipHash-1-3, in memory only, same size | `crates/pipeline/src/have.rs::tests::false_positive_rate_is_unchanged` |
+| #567 | X-cmp0-polish | excluded | as #548 | `crates/companions/tests/catalogue.rs` |
+| #572 | WK-8 | excluded | `crates/lodestar/src/cluster/filter.rs` is unwired. `Sealer::seal`/`open` stay byte-compatible | `crates/filter/src/seal.rs::tests::bytes_round_trip_bound_to_their_aad` |
+
+**No user-visible behaviour (29):**
+- #526 RP-G (pack-gate tests);
+- #549 WK-7 (local stages built by `WorkerStages`, same queues; `crates/pipeline/tests/stages.rs`);
+- #570 (rebuild swap reports its commit first);
+- #577 LEGAL-3a (CI facts test; `PEER_TTL` and `BACKUP_FILES` moved with the same values);
+- #578 (test helper);
+- #546 GS-gate (CI);
+- #541 X-flake-states-clock (e2e);
+- #565 D-v051-release-docs and #535 (user docs);
+- #574 (v0.5.0 notes);
+- runner and plan records #514, #515, #516, #517, #518, #519, #520, #522, #523, #528, #531, #533, #545, #550, #557, #559, #563, #569, #575.
+
+### 9.3 Corrections to §3
+
+- **`crates/cluster` and `crates/companions` are linked into `lodestar`.** §3.1 said "not linked". With the default config:
+  - every remote-worker path is inactive (`[cluster] enabled = false`) or unwired (§9.2);
+  - companions are unreached.
+- **Default-on traces of that code:**
+  - the `/api/v1/workers*` routes (#573);
+  - about 30 zero-valued `lodestar_cluster_*` and `lodestar_remote_*` metric families;
+  - one idle cluster task;
+  - the `cluster.*`, `workers.*` and `companions.*` log events in the catalogue, none of which fire on one machine.
+- **SP-4 is built and enabled** (#510); FK-3 is still absent.
+
+### 9.4 Delta-rule re-soak triggers
+
+| Trigger | PR | Active in the default build? | Why it counts |
+|---|---|---|---|
+| **Crawler lifecycle and fetch path:** held-bytes budget | #554 | **yes**, unconditional | It changes when the pool starts fetches, how it stops (outbox drain with no deadline, re-queue) and its snapshots. Same class as #223 |
+| **Crawler lifecycle:** lease authority | #538 | yes, behaviour-neutral by design | New lease and funnel code under every fetch. Weak |
+| **Crawler lifecycle:** start-time queue restore | #571, #580 | yes, at every start | Saved rows for stored keys are dropped; held or floored keys are ended `Blocked`. Weak, same family as #267/#274 |
+| **Crawler lifecycle:** start-time refetch query | #576 | yes | Private partials excluded. Weak |
+| **Writer and memory:** SP-4 signature set | #510, #524 | yes, wherever the spam pack is on: a fresh store, or an upgraded one once packs are turned on | Up to about 17–26 MB at the cap. Nothing on `/metrics` reports the set's size yet (§9.5) |
+| **Writer:** reused second judgment | #532 | yes | One boxed trail per in-flight result. Weak |
+| Not a trigger: stop on switch-off | #525 | only when the user turns a source off; a soak doesn't | n/a |
+| Sampler: keyspace shard | #536 | no: `shard = None` is proven identical draw for draw | n/a |
+
+**What this means for the gate:** §6's plan already covers these triggers. They add no new soak leg:
+- the 24 h Docker soak on an upgraded folder with every pack on (SP-4 fed, #554 under load);
+- the ≥ 6 h Windows run on a fresh folder (packs on from the first start).
+
+Both must run the rc.1 build, which contains every merge above.
+
+**SP-4's writer memory is a reporting item:**
+- The run record reports the `filter.sp4.sigs.%` row count at the start, at hour 12 and at the end.
+- The memory verdict states whether the set reached its cap: 17–26 MB at the cap (runner, 2026-11-07).
+- No gauge reports the set's size yet (§9.5), so the row count is the evidence.
+
+The collector and analyzer should know the new series:
+- `fetch_held_bytes` and `fetch_held_full_total`;
+- `lodestar_mem_anon_mappings`;
+- the zero-valued `lodestar_cluster_*` and `lodestar_remote_*` families.
+
+### 9.5 Gaps closed at the cut, and gaps left
+
+**Closed (§3.3):**
+
+| Gap | Test |
+|---|---|
+| G1 | `crates/lodestar/tests/webhooks_e2e.rs::the_binary_registers_only_the_dht_the_torrent_cache_and_the_webhooks`. It runs the real binary with the DHT on a loopback port and no bootstrap nodes. The whole `/api/v1/sources` list must be exactly `arr_webhooks` (off), `dht` (on) and `torrent_cache` (off) |
+| G2 | `crates/pipeline/tests/release_defaults.rs::no_adult_enricher_is_named_by_default`; `crates/lodestar/tests/release_defaults.rs::the_binary_wires_no_adult_enrichment_source` (no line of the binary's sources names `adult_enrichers`) |
+| G3 | `crates/pipeline/tests/release_defaults.rs::the_verification_cursor_is_off_by_default`; `crates/lodestar/tests/release_defaults.rs::the_binary_never_sets_the_verification_cursor`, `::a_config_key_for_the_verification_cursor_is_refused` (the binary refuses `[sources] verify_unverified` at start as an unknown field: no config section reaches the cursor); the API's refusal was already tested |
+| G4 | **Already covered at `63a2c6df`; §3.3 was wrong.** `release.yml`'s tarball "Smoke" runs `packaging/linux/smoke.sh`, whose lines 35-40 run `serve --fixture` and fail without "no fixture backend" (x86_64). The MSI smoke runs `packaging/windows/smoke.ps1:38-41`, the same check on the Windows exe. aarch64 can't run on the runner; its build command, `release.yml:478`, passes `--no-default-features --features web`. The Docker job (`release.yml:81-85`) matches the text only. This PR does two things: (1) both smoke checks now require the full refusal line from `crates/lodestar/src/fixture.rs:67` and exit status 2 (`:68`), so another failure can't pass for the refusal; (2) `packaging/windows/build-msi.ps1`'s manual build example passes the release flags |
+| `409 notice_required` (§6) | `docs/soak/tools/linux/collect.py` stops the run as `collector_error` with a `notice_required` note and an error on stderr, instead of recording unavailable checks. `test_collect.py::NoticeRequiredTests` |
+
+**Left, for later slices:**
+- WK-5's placement has no test that it stays unwired.
+- The Workers API has no real-binary test of `allowed:false`.
+- No test pins `dht_config().shard == None`.
+- The SP-4 set has no `/metrics` gauge.
+- The companions `testing` guard in `ci.yml` checks the default features, not the release features.
+
+None of these is a way to turn something on. The decisions file lists them.
+
+**Known issue in an inactive feature (runner, 2026-11-07):**
+- **The bug:** with streaming peers on (CR-1a-S, #251), a streaming lookup that ends with no peers on its last attempt underflows the pool's `lookups` count (`crates/sources/src/pool.rs`). A debug build panics. A release build stops starting lookups.
+- **The default build isn't exposed:**
+  - `dht.streaming_peers` defaults to `false` (`crates/lodestar/src/config.rs:225`), checked by `config.rs::tests::streaming_peers_is_off_unless_asked_for`.
+  - Only `config.toml` (`[dht] streaming_peers`) or `LODESTAR_DHT_STREAMING_PEERS` (`config.rs:775`) turns it on.
+  - No Settings screen, API or packaging file sets it.
+- **The fix:** it lands on `main` in #579. Backport it into `release/v0.5.2` in rc.1 if #579 has merged by then, otherwise in rc.2 (runner's call).
+
+### 9.6 Release notes and the Legal Notice
+
+- **The Legal Notice was wrong at the cut, and this PR fixes it.** §2 said the torrent cache "can only be turned on through the API". At the cut the screen exists (#552) and the gate refuses it everywhere (#537, #553).
+  - The sentence now says it can't be turned on in this version, and that a later version will let you turn it on after you accept the websites it contacts.
+  - `NOTICE_VERSION` stays 4 and the date moves to 2026-11-07 (runner, decisions file, D6).
+  - `crates/lodestar/tests/legal_facts.rs` ties the sentence to the gate.
+  - PR B carries the same change onto `release/v0.5.2`.
+- **Release notes:** P-v052-cut's PR B on `release/v0.5.2` adds:
+  - SP-4;
+  - "turning a source off stops it at once";
+  - the privacy fix (#576).
+
+  The Sonarr/Radarr switch is in Settings → Sources, but the token is API only, so the "advanced: API only" note covers the token.
+- **Two more default-on items, if material-composer's 450-word cap allows; otherwise they go in the rc delta report (runner, 2026-11-07):**
+  - the `/api/v1/workers` routes answer `409 workers_off`;
+  - turning a source off stops it at once, the DHT included (#525).
