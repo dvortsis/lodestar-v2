@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T17:02Z",
+  "updated_at": "2026-11-07T17:08Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3634,7 +3634,7 @@
       "brief": "briefs/P-v052-cut.md",
       "since": "2026-11-07T14:43Z",
       "session": "session_01MMjhnABi9mwqkZULms8pjL",
-      "notes": "16:3xZ: #582 PR A merged (64870dc5) on fresh Opus MERGE; cut approved sent; next: release/v0.5.2 at 045d4a38, PR B rc.1. | 16:56Z: release/v0.5.2 created; PR B #584 (a753c5c7) into release/v0.5.2. Reporting-overhead bench red on main nightly since 11-06 (setup lacks notice_version since #472): fix in #584 + one-line main follow-up X-bench-notice-version (same session). Refinements accepted: webhooks notes line; Cargo 0.5.2 for rc tag. Supervisor check passed."
+      "notes": "16:3xZ: #582 PR A merged (64870dc5) on fresh Opus MERGE; cut approved sent; next: release/v0.5.2 at 045d4a38, PR B rc.1. | 16:56Z: release/v0.5.2 created; PR B #584 (a753c5c7) into release/v0.5.2. Reporting-overhead bench red on main nightly since 11-06 (setup lacks notice_version since #472): fix in #584 + one-line main follow-up X-bench-notice-version (same session). Refinements accepted: webhooks notes line; Cargo 0.5.2 for rc tag. Supervisor check passed. | 17:07Z: #584 head 2eb03f58 (bench fix + delta notes), workflows re-dispatched. #586 X-bench-notice-version on main (9c51caa3), 1 line, runner self-checked; merge on ci-ok + #584 reporting-overhead green."
     },
     "WK-15": {
       "state": "running",
@@ -3655,6 +3655,11 @@
       "since": "2026-11-07T15:13Z",
       "notes": "16:13Z: no FAIL found locally; dev-deps approved (bench tokio test-util + sources-plugins testing, dev-only; must keep `cargo tree -e features -p lodestar` clean); one PR (1,771 lines, 0 production, reason in PR); bench 1,176/s vs 1,000/s PASS, overhead 6.8% info only; \u00a72.37 wording = wiring blocker. | 16:3xZ: BUDGET MISS reported: commit+index with every source on 811-989/s vs \u00a73 1,000/s (off 1,178-1,266) under stress load (10k claims, 200k unverified). Runner: judge on sandbox (\u00a73 = 4 cores), >=5 alternating pairs, median; realistic-load (b) decides; breakdown pending; push held. | 16:37Z: PR #583 open at 37489331 (2,123 lines). Fresh Opus review launched. Next round: paired runs, item 7 updated (small delta check). | 17:0xZ: fresh Opus MERGE at 37489331 (6 mutations). Nits 1,2,4,6 ride the paired-run push; then delta check + merge.",
       "pr": 583
+    },
+    "X-bench-notice-version": {
+      "pr": 586,
+      "status": "open",
+      "notes": "one-line bench fix by P-v052-cut session; slices.yaml entry in next runner PR"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
