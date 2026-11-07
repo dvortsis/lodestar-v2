@@ -725,6 +725,8 @@ impl RemoteIntake {
             sources: record.sources,
             strategy: record.strategy,
             discovered_at: record.discovered_at,
+            // A late result's key isn't anyone's find (WK-15).
+            finder: None,
         };
         // Its record is used up here, before the costly rebuild, and taking
         // it is the check: of any number of copies, however they arrive,

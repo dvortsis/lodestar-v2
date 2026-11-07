@@ -2797,7 +2797,7 @@
         "tags": [
           "insights"
         ],
-        "summary": "The fleet for the status pill: how many remote workers are working,\nin each state, and the fleet's commits in the last full UTC hour.\n`fleet` is `null` when no worker has joined (a single machine).",
+        "summary": "The fleet for the status pill: how many remote workers are working,\nin each state, and the torrents the fleet stored in the last full UTC\nhour.\n`fleet` is `null` when no worker has joined (a single machine).",
         "operationId": "insightsFleetSummary",
         "responses": {
           "200": {
@@ -12320,7 +12320,7 @@
           "marginal": {
             "type": "integer",
             "format": "int64",
-            "description": "Marginal gain, ≈: the keys granted to it that no other worker, the\nbuilt-in crawler included, claimed while they were in flight. An\napproximation of \"keys only it would have seen\" (a key found again\nafter its commit is a rediscovery, not a claim). By discovery time.",
+            "description": "Marginal gain, ≈: the keys it found that no other worker, the\nbuilt-in crawler included, claimed while they were in flight,\ncounted as their leases end (keys still in flight aren't in it yet).\nAn approximation of \"keys only it would have seen\": a key found\nagain after its commit is a rediscovery, not a claim. By discovery\ntime.",
             "minimum": 0
           },
           "rediscovered": {
@@ -13825,23 +13825,14 @@
         "type": "object",
         "description": "The fleet's counts.",
         "required": [
-          "committed_per_hour",
           "draining",
           "offline",
           "online",
           "paused",
+          "stored_per_hour",
           "workers"
         ],
         "properties": {
-          "committed_per_hour": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "description": "Torrents the whole fleet (the coordinator's own crawler included)\nfetched and committed in the last full UTC hour; `null` when that\nhour wasn't measured.",
-            "minimum": 0
-          },
           "draining": {
             "type": "integer",
             "format": "int32",
@@ -13864,6 +13855,15 @@
             "type": "integer",
             "format": "int32",
             "description": "Connected, taking no new work until resumed.",
+            "minimum": 0
+          },
+          "stored_per_hour": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Torrents the whole fleet (the coordinator's own crawler included)\nnewly stored in the last full UTC hour, as the overview's\n`ingest_per_hour`; `null` when that hour wasn't measured.",
             "minimum": 0
           },
           "workers": {
@@ -13895,11 +13895,11 @@
         },
         "example": {
           "fleet": {
-            "committed_per_hour": 4200,
             "draining": 1,
             "offline": 0,
             "online": 2,
             "paused": 1,
+            "stored_per_hour": 4200,
             "workers": 3
           }
         }

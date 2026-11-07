@@ -57,6 +57,12 @@ pub struct Lease {
     pub strategy: u8,
     /// Unix seconds of the first discovery.
     pub discovered_at: i64,
+    /// The worker the key was first granted to, while no other worker
+    /// has claimed it: cleared, under the authority's lock, the first time
+    /// another does (held, or waiting for a re-grant), and `None` for a
+    /// lease restored from an earlier run. Kept across re-grants. Insights'
+    /// marginal gain (WK-15) counts a lease that ends with it set.
+    pub finder: Option<WorkerId>,
 }
 
 /// What a claim got.
@@ -123,6 +129,9 @@ impl LeaseTable {
         let bit = 1u64 << c.source.get();
         if let Some(lease) = self.leases.get_mut(&c.key) {
             lease.sources |= bit;
+            if lease.finder != Some(worker) {
+                lease.finder = None;
+            }
             return Claimed::Held {
                 holder: lease.holder,
                 token: lease.token,
@@ -139,6 +148,7 @@ impl LeaseTable {
                 sources: bit,
                 strategy: c.strategy,
                 discovered_at: c.at,
+                finder: Some(worker),
             },
         );
         Claimed::Granted(token)
@@ -170,6 +180,7 @@ impl LeaseTable {
                 sources: lease.sources,
                 strategy: lease.strategy,
                 discovered_at: lease.discovered_at,
+                finder: None,
             },
         );
         token
@@ -225,7 +236,11 @@ impl LeaseTable {
     /// Grants an expired lease to another worker under a new token,
     /// keeping its cohort, sources and strategy. Not a new harvest.
     pub fn regrant(&mut self, worker: WorkerId, key: InfoHash, lease: Lease, now: i64) -> Token {
-        self.restore(worker, key, RestoredLease::from(lease), now)
+        let token = self.restore(worker, key, RestoredLease::from(lease), now);
+        if let Some(l) = self.leases.get_mut(&key).filter(|l| l.token == token) {
+            l.finder = lease.finder;
+        }
+        token
     }
 
     /// Ends every lease `worker` holds at once and forgets it: it was
@@ -281,12 +296,10 @@ pub trait LeaseEvents: Send + Sync + 'static {
     fn outstanding(&self, _n: usize) {}
     /// Leases of silent workers ended by an expiry, whoever ran it.
     fn expired(&self, _n: usize) {}
-    /// `claimer` claimed a key already in flight under another worker:
-    /// leased to it, or waiting for a re-grant after its lease ended
-    /// (`lease` is that lease, before the claim). Called once per such
-    /// claim, after the lock is released; a holder's own repeated claim
-    /// never calls it. Insights' marginal gain (WK-15) reads it.
-    fn claimed_elsewhere(&self, _key: &InfoHash, _lease: &Lease, _claimer: WorkerId) {}
+    /// Remote workers may now be granted keys
+    /// ([`LeaseAuthority::serve_remote`]): once per authority, after the
+    /// lock is released. Insights' per-worker counts (WK-15) start here.
+    fn serving(&self) {}
 }
 
 /// Keys committed recently, remembered so a remote claim that raced the
@@ -383,36 +396,27 @@ impl AuthorityState {
         }
     }
 
-    /// One claim: the answer, the new lease if it was a harvest, and the
-    /// key's earlier lease if another worker held it (or held it last,
-    /// for a key waiting for a re-grant), for
-    /// [`LeaseEvents::claimed_elsewhere`].
-    fn claim(
-        &mut self,
-        worker: WorkerId,
-        c: Claim,
-        now: i64,
-    ) -> (Claimed, Option<Lease>, Option<Lease>) {
+    /// One claim. The second value is the new lease, if it was a harvest.
+    /// A claim by any worker but the key's finder clears
+    /// [`Lease::finder`], held or waiting.
+    fn claim(&mut self, worker: WorkerId, c: Claim, now: i64) -> (Claimed, Option<Lease>) {
         if let Some(mut lease) = self.pending.remove(&c.key) {
             if self.pending.is_empty() {
                 self.order.clear();
             }
-            let before = (lease.holder != worker).then_some(lease);
             lease.sources |= 1u64 << c.source.get();
+            if lease.finder != Some(worker) {
+                lease.finder = None;
+            }
             let token = self.table.regrant(worker, c.key, lease, now);
-            return (Claimed::Granted(token), None, before);
+            return (Claimed::Granted(token), None);
         }
-        let before = self
-            .table
-            .get(&c.key)
-            .copied()
-            .filter(|l| l.holder != worker);
         let claimed = self.table.claim(worker, c, now);
         let fresh = match claimed {
             Claimed::Granted(_) => self.table.get(&c.key).copied(),
             Claimed::Held { .. } => None,
         };
-        (claimed, fresh, before)
+        (claimed, fresh)
     }
 }
 
@@ -457,8 +461,13 @@ impl LeaseAuthority {
     /// server calls it when it's built on this authority).
     pub fn serve_remote(&self) {
         let mut s = self.lock();
-        if s.recent.is_none() {
+        let first = s.recent.is_none();
+        if first {
             s.recent = Some((HashMap::new(), VecDeque::new()));
+        }
+        drop(s);
+        if first {
+            self.events.serving();
         }
     }
 
@@ -491,14 +500,11 @@ impl LeaseAuthority {
     /// [`claim_batch`](Self::claim_batch).
     pub fn claim(&self, worker: WorkerId, c: Claim, now: i64) -> Claimed {
         let mut s = self.lock();
-        let (claimed, fresh, before) = s.claim(worker, c, now);
+        let (claimed, fresh) = s.claim(worker, c, now);
         self.gauge(&s);
         drop(s);
         if let Some(lease) = fresh {
             self.events.harvested(&c.key, &lease);
-        }
-        if let Some(lease) = before {
-            self.events.claimed_elsewhere(&c.key, &lease, worker);
         }
         claimed
     }
@@ -535,7 +541,6 @@ impl LeaseAuthority {
             None => usize::MAX,
         };
         let mut fresh_leases = Vec::new();
-        let mut elsewhere = Vec::new();
         let answers: Vec<BatchAnswer> = claims
             .iter()
             .map(|c| {
@@ -548,12 +553,9 @@ impl LeaseAuthority {
                     }
                     allowed -= 1;
                 }
-                let (claimed, fresh, before) = s.claim(worker, *c, now);
+                let (claimed, fresh) = s.claim(worker, *c, now);
                 if let Some(lease) = fresh {
                     fresh_leases.push((c.key, lease));
-                }
-                if let Some(lease) = before {
-                    elsewhere.push((c.key, lease));
                 }
                 BatchAnswer::Claimed {
                     claimed,
@@ -565,9 +567,6 @@ impl LeaseAuthority {
         drop(s);
         for (key, lease) in &fresh_leases {
             self.events.harvested(key, lease);
-        }
-        for (key, lease) in &elsewhere {
-            self.events.claimed_elsewhere(key, lease, worker);
         }
         answers
     }
@@ -994,15 +993,13 @@ mod tests {
         harvested: std::sync::atomic::AtomicUsize,
         lost: std::sync::atomic::AtomicUsize,
         outstanding: std::sync::atomic::AtomicUsize,
-        elsewhere: Mutex<Vec<(u8, WorkerId, WorkerId)>>,
+        serving: std::sync::atomic::AtomicUsize,
     }
 
     impl LeaseEvents for Counted {
-        fn claimed_elsewhere(&self, key: &InfoHash, lease: &Lease, claimer: WorkerId) {
-            self.elsewhere
-                .lock()
-                .unwrap()
-                .push((key.0[0], lease.holder, claimer));
+        fn serving(&self) {
+            self.serving
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         fn harvested(&self, _: &InfoHash, _: &Lease) {
             self.harvested
@@ -1487,17 +1484,24 @@ mod tests {
         assert_eq!((l.sources, l.cohort), (1 << 3, (7_200 + 5) / 3600));
     }
 
-    /// WK-15: a claim by another worker (the built-in one included) for a
-    /// held key, or for a key waiting for a re-grant, is reported once per
-    /// claim, single or batched, and changes nothing else; the holder's
-    /// own claim is never reported.
+    /// WK-15: a lease keeps its finder only while no other worker (the
+    /// built-in one included) claims the key, held or waiting for a
+    /// re-grant; the finder's own claims, and a re-grant without a claim,
+    /// keep it. A restored lease has none. Serving remote workers is
+    /// reported once.
     #[test]
-    fn claims_elsewhere_are_reported_once_each() {
+    fn a_lease_keeps_its_finder_until_another_worker_claims_it() {
         let (a, ev) = counted();
+        let finder = |n: u8| a.get(&InfoHash([n; 20])).unwrap().finder;
         let Claimed::Granted(t) = a.claim(A, claim(1, 0), 0) else {
             panic!()
         };
-        // The holder again, alone and in a batch: nothing.
+        for n in 2..=4 {
+            let Claimed::Granted(_) = a.claim(A, claim(n, 0), 0) else {
+                panic!()
+            };
+        }
+        // The finder again, alone and in a batch: kept.
         assert_eq!(
             a.claim(A, claim(1, 0), 0),
             Claimed::Held {
@@ -1506,34 +1510,28 @@ mod tests {
             }
         );
         a.claim_batch(A, &[claim(1, 0)], 0, None, None);
-        assert!(ev.elsewhere.lock().unwrap().is_empty());
-        // The built-in worker, then B in a batch.
-        assert_eq!(
-            a.claim(WorkerId::LOCAL, claim(1, 2), 0),
-            Claimed::Held {
-                holder: A,
-                token: t
-            }
-        );
-        let answers = a.claim_batch(B, &[claim(1, 3), claim(2, 3)], 0, None, None);
-        assert!(matches!(
-            answers[0],
-            BatchAnswer::Claimed {
-                claimed: Claimed::Held { holder: A, .. },
-                harvested: false
-            }
-        ));
-        // A key waiting for a re-grant, claimed by B.
-        assert_eq!(a.evict(A), 1);
-        let Claimed::Granted(_) = a.claim(B, claim(1, 3), 1) else {
+        assert_eq!(finder(1), Some(A));
+        // The built-in worker on key 1, B in a batch on key 2.
+        a.claim(WorkerId::LOCAL, claim(1, 2), 0);
+        a.claim_batch(B, &[claim(2, 3)], 0, None, None);
+        assert_eq!((finder(1), finder(2), finder(3)), (None, None, Some(A)));
+        // Waiting for a re-grant: key 4 claimed by B loses it; key 3,
+        // re-granted to B without a claim, keeps A.
+        assert_eq!(a.evict(A), 4);
+        let Claimed::Granted(_) = a.claim(B, claim(4, 3), 1) else {
             panic!()
         };
-        assert_eq!(
-            *ev.elsewhere.lock().unwrap(),
-            [(1, A, WorkerId::LOCAL), (1, A, B), (1, A, B)]
-        );
-        // Key 2 is B's own, and nothing was harvested twice.
-        assert_eq!(get(&ev.harvested), 2);
-        assert_eq!(a.get(&InfoHash([1; 20])).unwrap().holder, B);
+        assert_eq!(finder(4), None);
+        a.regrant_pending(&[B], 10, 1);
+        let three = a.get(&InfoHash([3; 20])).unwrap();
+        assert_eq!((three.holder, three.finder), (B, Some(A)));
+        // Restored from an earlier run: no finder.
+        a.restore(B, InfoHash([9; 20]), RestoredLease::from(three), 1);
+        assert_eq!(finder(9), None);
+        // Nothing was harvested twice; serving is reported once.
+        assert_eq!(get(&ev.harvested), 4);
+        a.serve_remote();
+        a.serve_remote();
+        assert_eq!(get(&ev.serving), 1);
     }
 }

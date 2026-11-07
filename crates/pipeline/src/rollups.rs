@@ -90,8 +90,8 @@ pub mod metric {
     /// same counts are in their own metric's row too, so the fleet's
     /// totals read as before; this row only breaks them down.
     pub const BY_WORKER: u32 = 17;
-    /// Each worker's counts for Insights, by the coordinator once a remote
-    /// worker has been granted a key (WK-15, §19.7): dim = the worker id
+    /// Each worker's counts for Insights, by the coordinator while a
+    /// cluster server serves (WK-15, §19.7): dim = the worker id
     /// (the built-in worker 0), key = `crate::marginal::key`, 0–5, append
     /// only: 0 granted, 1 marginal, 2 committed, 3 lost, 4 rediscovered,
     /// 5 dropped. Keys 4 and 5 duplicate a remote worker's admitted

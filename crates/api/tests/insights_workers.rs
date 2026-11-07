@@ -33,6 +33,7 @@ const NOW: i64 = NOW_H * 3600 + 1800;
 /// `metric::REDISCOVERED`, `DROPPED`, `COVERAGE`, `BY_WORKER`, `WORKER_LEASES`.
 const REDISCOVERED: u32 = 2;
 const DROPPED: u32 = 3;
+const STORED: u32 = 4;
 const COVERAGE: u32 = 12;
 const BY_WORKER: u32 = 17;
 const LEASES: u32 = 18;
@@ -316,8 +317,8 @@ fn c(hour: i64, metric: u32, dim: u32, key: i64, value: i64) -> Counter {
 }
 
 /// One hour of a fleet: the built-in crawler (0), worker 3, and worker 4
-/// whose only key was claimed by another worker too (its marginal taken
-/// back in the same hour). The fleet's rediscovered and dropped totals
+/// whose only key was claimed by another worker too, and is still in
+/// flight (no lease of its ended). The fleet's rediscovered and dropped totals
 /// include the remote workers' own counters, which the remote intake also
 /// sums per worker under `WORKER_LEASES` (keys 4 and 5). Their packed
 /// `BY_WORKER` rows aren't read by these pages.
@@ -341,8 +342,7 @@ fn fleet_hour(h: i64) -> Vec<Counter> {
         c(h, LEASES, 3, COMMITTED, 30),
         c(h, LEASES, 3, LOST, 8),
         c(h, LEASES, 4, GRANTED, 1),
-        c(h, LEASES, 4, MARGINAL, 1),
-        c(h, LEASES, 4, MARGINAL, 0),
+        // Its only key was claimed by another worker too: no marginal.
     ]
 }
 
@@ -355,8 +355,8 @@ fn expected(n: u64) -> (Value, Value) {
     };
     let f = |w: u32, committed: u64, lost: u64| json!({ "committed": committed * n, "lost": lost * n, "worker": w });
     (
-        json!([d(0, 20, 3, 30, 25), d(3, 20, 2, 40, 10), d(4, 10, 0, 1, 1)]),
-        json!([f(0, 20, 5), f(3, 30, 8), f(4, 0, 0)]),
+        json!([d(0, 20, 3, 30, 25), d(3, 20, 2, 40, 10), d(4, 10, 0, 1, 0)]),
+        json!([f(0, 20, 5), f(3, 30, 8)]),
     )
 }
 
@@ -371,9 +371,10 @@ fn counts_only(list: &Value, fields: &[&str]) {
     }
 }
 
-/// Single-machine parity: with no worker rows the stage pages have no
-/// `by_worker` at all, and the summary's `fleet` is null, with or without
-/// a cluster.
+/// Single-machine parity: with no remote worker's rows the stage pages
+/// have no `by_worker` at all, also when a cluster serves and the built-in
+/// worker's leases are counted, and the summary's `fleet` is null, with or
+/// without a cluster.
 #[tokio::test]
 async fn a_single_machine_shows_nothing_new() {
     for fleet in [None, Some(Vec::new())] {
@@ -383,6 +384,9 @@ async fn a_single_machine_shows_nothing_new() {
             c(h, COVERAGE, 1, 0, 3600),
             c(h, REDISCOVERED, 0, 1, 50),
             c(h, DROPPED, 0, 0, 5),
+            c(h, LEASES, 0, GRANTED, 30),
+            c(h, LEASES, 0, MARGINAL, 30),
+            c(h, LEASES, 0, COMMITTED, 20),
         ]);
         let cookie = f.session().await;
         for page in ["discover", "fetch"] {
@@ -394,8 +398,9 @@ async fn a_single_machine_shows_nothing_new() {
     }
 }
 
-/// Each worker's counts, the built-in crawler's derived from the fleet's
-/// totals, marginal gain net of take-backs, and nothing but counts.
+/// Each worker's counts, the built-in crawler's rediscovered and dropped
+/// derived from the fleet's totals, a worker with no ended lease left out
+/// of Fetch, and nothing but counts.
 #[tokio::test]
 async fn discover_and_fetch_break_down_by_worker() {
     let f = fixture(None);
@@ -461,8 +466,11 @@ async fn sealed_cached_and_compacted_days_read_alike() {
 }
 
 /// The pill: workers working (online and draining), paused and offline
-/// ones apart, and the fleet's commits in the last full hour: their sum,
-/// 0 for a measured hour without one, null for an unmeasured hour.
+/// ones apart, and the torrents the fleet stored in the last full hour,
+/// read as the overview's `ingest_per_hour`: their sum, 0 for a measured
+/// hour without one, null for an unmeasured hour. It doesn't depend on
+/// the per-worker rows, which a fleet of paused or offline workers may
+/// not have.
 #[tokio::test]
 async fn the_fleet_summary_counts_states_and_the_last_hour() {
     let fleet = vec![
@@ -475,8 +483,8 @@ async fn the_fleet_summary_counts_states_and_the_last_hour() {
     let f = fixture(Some(fleet));
     let cookie = f.session().await;
     let summary = |n: Value| {
-        json!({ "fleet": { "committed_per_hour": n, "draining": 1, "offline": 1,
-                           "online": 2, "paused": 1, "workers": 3 } })
+        json!({ "fleet": { "draining": 1, "offline": 1, "online": 2, "paused": 1,
+                           "stored_per_hour": n, "workers": 3 } })
     };
     assert_eq!(
         f.get(&cookie, "/insights/workers/summary").await,
@@ -487,11 +495,15 @@ async fn the_fleet_summary_counts_states_and_the_last_hour() {
         f.get(&cookie, "/insights/workers/summary").await,
         summary(json!(0))
     );
-    // The hour under way doesn't count.
-    f.write(&fleet_hour(NOW_H - 1));
-    f.write(&fleet_hour(NOW_H));
+    // Stored by the fleet's sources, with no per-worker row at all; the
+    // hour under way doesn't count.
+    f.write(&[
+        c(NOW_H - 1, STORED, 0, 0, 4000),
+        c(NOW_H - 1, STORED, 1, 0, 200),
+        c(NOW_H, STORED, 0, 0, 99),
+    ]);
     let v = f.get(&cookie, "/insights/workers/summary").await;
-    assert_eq!(v, summary(json!(50)));
+    assert_eq!(v, summary(json!(4200)));
     // Counts only: no name, address or id of any worker.
     let text = v.to_string();
     for word in ["worker-", "81.2.69.7", "\"id\""] {

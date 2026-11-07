@@ -893,7 +893,8 @@ export interface paths {
         };
         /**
          * The fleet for the status pill: how many remote workers are working,
-         *     in each state, and the fleet's commits in the last full UTC hour.
+         *     in each state, and the torrents the fleet stored in the last full UTC
+         *     hour.
          *     `fleet` is `null` when no worker has joined (a single machine).
          */
         get: operations["insightsFleetSummary"];
@@ -4316,10 +4317,12 @@ export interface components {
             granted: number;
             /**
              * Format: int64
-             * @description Marginal gain, ≈: the keys granted to it that no other worker, the
-             *     built-in crawler included, claimed while they were in flight. An
-             *     approximation of "keys only it would have seen" (a key found again
-             *     after its commit is a rediscovery, not a claim). By discovery time.
+             * @description Marginal gain, ≈: the keys it found that no other worker, the
+             *     built-in crawler included, claimed while they were in flight,
+             *     counted as their leases end (keys still in flight aren't in it yet).
+             *     An approximation of "keys only it would have seen": a key found
+             *     again after its commit is a rediscovery, not a claim. By discovery
+             *     time.
              */
             marginal: number;
             /**
@@ -5037,13 +5040,6 @@ export interface components {
         /** @description The fleet's counts. */
         Fleet: {
             /**
-             * Format: int64
-             * @description Torrents the whole fleet (the coordinator's own crawler included)
-             *     fetched and committed in the last full UTC hour; `null` when that
-             *     hour wasn't measured.
-             */
-            committed_per_hour: number | null;
-            /**
              * Format: int32
              * @description Finishing their leases, then stopping.
              */
@@ -5064,6 +5060,13 @@ export interface components {
              */
             paused: number;
             /**
+             * Format: int64
+             * @description Torrents the whole fleet (the coordinator's own crawler included)
+             *     newly stored in the last full UTC hour, as the overview's
+             *     `ingest_per_hour`; `null` when that hour wasn't measured.
+             */
+            stored_per_hour: number | null;
+            /**
              * Format: int32
              * @description Remote workers doing work now: `online` plus `draining` (the pill's
              *     "3 workers").
@@ -5074,11 +5077,11 @@ export interface components {
          * @description `GET /insights/workers/summary`.
          * @example {
          *       "fleet": {
-         *         "committed_per_hour": 4200,
          *         "draining": 1,
          *         "offline": 0,
          *         "online": 2,
          *         "paused": 1,
+         *         "stored_per_hour": 4200,
          *         "workers": 3
          *       }
          *     }

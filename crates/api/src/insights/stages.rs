@@ -467,8 +467,7 @@ fn worker_leases(c: &Ctx<'_>) -> lodestar_store::Result<BTreeMap<u32, [u64; 6]>>
     let mut out: BTreeMap<u32, [u64; 6]> = BTreeMap::new();
     for ((dim, key), v) in sums {
         if let Some(slot) = usize::try_from(key).ok().filter(|&k| k < 6) {
-            // An hour's marginal is never below 0 once its take-backs
-            // land; a window cut through one in flight is held at 0.
+            // Every key only ever adds; a negative sum would be a bad row.
             out.entry(dim).or_default()[slot] = v.max(0) as u64;
         }
     }
@@ -480,14 +479,15 @@ fn worker_leases(c: &Ctx<'_>) -> lodestar_store::Result<BTreeMap<u32, [u64; 6]>>
 /// dropped (the remote intake sums them there beside `BY_WORKER`, whose
 /// packed rows are too many to read within the budget). The built-in
 /// crawler's rediscovered and dropped are the fleet's totals less the
-/// remote ones. Empty when no worker counted anything (a single machine).
+/// remote ones. Empty unless a remote worker counted something in the
+/// window (a single machine, or a cluster no worker has joined yet).
 fn discover_workers(
     c: &Ctx<'_>,
     rediscovered: u64,
     dropped: u64,
 ) -> lodestar_store::Result<Vec<DiscoverWorker>> {
     let mut leases = worker_leases(c)?;
-    if leases.is_empty() {
+    if !leases.keys().any(|&w| w != 0) {
         return Ok(Vec::new());
     }
     let (red, drop) = (
@@ -517,13 +517,24 @@ fn discover_workers(
         .collect())
 }
 
-/// Fetch's `by_worker` (WK-15): each worker's leases that ended.
+/// Fetch's `by_worker` (WK-15): each worker's leases that ended, on the
+/// same condition as Discover's.
 fn fetch_workers(c: &Ctx<'_>) -> lodestar_store::Result<Vec<FetchWorker>> {
-    Ok(worker_leases(c)?
+    let leases = worker_leases(c)?;
+    if !leases.keys().any(|&w| w != 0) {
+        return Ok(Vec::new());
+    }
+    let (committed, lost) = (
+        codes::WORKER_COMMITTED as usize,
+        codes::WORKER_LOST as usize,
+    );
+    Ok(leases
         .into_iter()
+        // A worker that only sent counters ended no lease here.
+        .filter(|(_, l)| l[committed] + l[lost] > 0)
         .map(|(worker, l)| FetchWorker {
-            committed: l[codes::WORKER_COMMITTED as usize],
-            lost: l[codes::WORKER_LOST as usize],
+            committed: l[committed],
+            lost: l[lost],
             worker,
         })
         .collect())

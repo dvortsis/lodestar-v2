@@ -65,16 +65,16 @@ struct FunnelEvents {
 }
 
 impl LeaseEvents for FunnelEvents {
-    fn harvested(&self, key: &InfoHash, lease: &Lease) {
+    fn harvested(&self, _key: &InfoHash, lease: &Lease) {
         self.stats.granted.fetch_add(1, Ordering::Relaxed);
         self.funnel
             .record(lease.cohort, lease.source, Stage::Harvested, None);
-        self.marginal.granted(key, lease);
+        self.marginal.granted(lease);
     }
 
     /// A refetch's loss ends its lease but isn't the funnel's.
-    fn lost(&self, key: &InfoHash, lease: &Lease, reason: u8) {
-        self.marginal.lost(key, lease, crate::unix_now());
+    fn lost(&self, _key: &InfoHash, lease: &Lease, reason: u8) {
+        self.marginal.lost(lease, crate::unix_now());
         if crate::in_funnel(lease.cohort) {
             self.funnel.record(
                 lease.cohort,
@@ -94,8 +94,8 @@ impl LeaseEvents for FunnelEvents {
         self.stats.expired.fetch_add(n as u64, Ordering::Relaxed);
     }
 
-    fn claimed_elsewhere(&self, key: &InfoHash, _lease: &Lease, claimer: WorkerId) {
-        self.marginal.claimed_elsewhere(key, claimer);
+    fn serving(&self) {
+        self.marginal.serve();
     }
 }
 
@@ -135,9 +135,9 @@ impl Coordinator {
     }
 
     /// A commit ended `lease`: counted for its holder.
-    fn committed(&self, key: &InfoHash, lease: Option<Lease>) -> Option<Lease> {
+    fn committed(&self, lease: Option<Lease>) -> Option<Lease> {
         if let Some(l) = &lease {
-            self.marginal.committed(key, l, crate::unix_now());
+            self.marginal.committed(l, crate::unix_now());
         }
         lease
     }
@@ -180,7 +180,7 @@ impl Coordinator {
 
     /// Ends a lease whose key was committed. `None` if it was stale.
     pub fn complete(&self, key: &InfoHash, token: Token) -> Option<Lease> {
-        self.committed(key, self.stale(self.authority.release(key, token)))
+        self.committed(self.stale(self.authority.release(key, token)))
     }
 
     /// Ends the lease of a committed result from `worker`. A remote
@@ -191,7 +191,7 @@ impl Coordinator {
         if worker == WorkerId::LOCAL {
             return self.complete(key, token);
         }
-        self.committed(key, self.stale(self.authority.commit(worker, key, token)))
+        self.committed(self.stale(self.authority.commit(worker, key, token)))
     }
 
     /// [`lost`](Self::lost) for a result from `worker`: a remote worker's
