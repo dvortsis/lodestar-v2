@@ -8,21 +8,39 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use lodestar_cluster::WorkerId;
 use lodestar_cluster::assign::{ALL_SLOTS, Assignment, INSTALL_PER_PEER_IP};
-use lodestar_cluster::placement::{DhtPin, MAX_DHT_PER_IP, Member, MemberId, Planner, Share, plan};
+use lodestar_cluster::placement::{
+    DhtPin, MAX_DHT_PER_IP, Member, MemberId, Planner, Share, WorkerSettings, plan,
+};
 use proptest::prelude::*;
 
 /// Addresses from a small pool, so members often share one; index 6 is an
-/// IPv4-mapped form of index 0, and `None` an unknown address.
+/// IPv4-mapped form of index 0, and index 7 a LAN address, which says
+/// nothing about where a remote peer sees the member from.
 fn addr(i: u8) -> IpAddr {
     match i {
         6 => IpAddr::V6(Ipv4Addr::new(192, 0, 2, 0).to_ipv6_mapped()),
+        7 => IpAddr::V4(Ipv4Addr::new(10, 0, 0, 7)),
         n => IpAddr::V4(Ipv4Addr::new(192, 0, 2, n)),
     }
 }
 
+/// The members as a remote peer could tell them apart: LAN addresses
+/// dropped, so a member left with none is one whose address is unknown.
+fn seen_as(members: &[Member]) -> Vec<Member> {
+    let lan = addr(7);
+    members
+        .iter()
+        .map(|m| Member {
+            id: m.id,
+            ips: m.ips.iter().copied().filter(|i| *i != lan).collect(),
+            dht: m.dht,
+        })
+        .collect()
+}
+
 fn fleet() -> impl Strategy<Value = (Vec<Member>, u8)> {
     let member = (
-        proptest::collection::vec(0u8..7, 0..3),
+        proptest::collection::vec(0u8..8, 0..3),
         any::<bool>(),
         // Mostly known addresses: an unknown one plans everything as one IP.
         prop::bool::weighted(0.9),
@@ -105,6 +123,7 @@ proptest! {
     #[test]
     fn members_that_may_share_an_ip_never_share_a_slot((members, per_ip) in fleet()) {
         let out = plan(&members, per_ip);
+        let members = seen_as(&members);
         let share = |id: MemberId| -> Share { out.iter().find(|(i, _)| *i == id).unwrap().1 };
         for (i, a) in members.iter().enumerate() {
             for b in &members[i + 1..] {
@@ -126,6 +145,7 @@ proptest! {
     #[test]
     fn per_remote_limits_never_exceed_one_install((members, per_ip) in fleet()) {
         let out = plan(&members, per_ip);
+        let members = seen_as(&members);
         let share = |id: MemberId| -> Share { out.iter().find(|(i, _)| *i == id).unwrap().1 };
         // Every address any member reported, and "unknown".
         let mut addrs: BTreeSet<Option<IpAddr>> =
@@ -165,8 +185,9 @@ proptest! {
             let dht = behind.iter().filter(|m| share(m.id).dht.is_some()).count();
             prop_assert!(dht <= MAX_DHT_PER_IP);
         }
-        // Every member can still reach every peer through someone, and
-        // reaches some peers itself.
+        // Every member may dial the peers in its own bucket. (With 3 or
+        // more on one IP a member can't dial peers outside it: the cost
+        // of the split, recorded in the WK-5 decisions.)
         for (_, s) in &out {
             prop_assert!(s.politeness.per_peer_ip >= 1);
         }
@@ -174,7 +195,7 @@ proptest! {
 
     #[test]
     fn replans_carry_new_revisions_and_valid_assignments(
-        ops in proptest::collection::vec((0u8..4, 1u32..12, proptest::collection::vec(0u8..7, 0..2)), 1..60),
+        ops in proptest::collection::vec((0u8..9, 1u32..12, proptest::collection::vec(0u8..7, 0..2)), 1..60),
     ) {
         let mut p = Planner::new(true);
         p.set_coordinator_ips(vec![addr(0)]);
@@ -185,7 +206,12 @@ proptest! {
                 0 => p.join(w, ips.into_iter().map(addr).collect()),
                 1 => p.leave(w),
                 2 => p.pin(w, DhtPin::Off),
-                _ => p.pin(w, DhtPin::Auto),
+                3 => p.pin(w, DhtPin::Auto),
+                4 => p.set_draining(w, w.0.is_multiple_of(2)),
+                5 => p.set_settings(w, WorkerSettings { pool_cap: w.0 * 1000, ..WorkerSettings::default() }),
+                6 => p.set_versions(u64::from(w.0), u64::from(w.0) + 1),
+                7 => p.set_coordinator_ips(ips.into_iter().map(addr).collect()),
+                _ => p.leave(w),
             };
             if let Some(r) = r {
                 prop_assert!(r.revision > last);

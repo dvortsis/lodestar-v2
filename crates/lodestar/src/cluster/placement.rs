@@ -2,10 +2,11 @@
 //! Q9): `lodestar_cluster::placement`'s planner, fed with the fleet the
 //! cluster server sees, and its assignments sent to the workers.
 //!
-//! - **Membership.** A worker is a member while it's connected and not
-//!   draining ([`Placement::sync`] diffs a `FleetSnapshot` against the
-//!   planner); joining, leaving, a new address, a pin or a setting re-plans
-//!   with a new revision.
+//! - **Membership.** A worker is a member while it's connected
+//!   ([`Placement::sync`] diffs a `FleetSnapshot` against the planner). A
+//!   draining one runs no DHT but keeps its politeness share, since it's
+//!   still fetching. Joining, leaving, draining, a new address, a pin or a
+//!   setting re-plans with a new revision, numbered from the clock.
 //! - **Sending.** Each sync queues the current `Assign` to every member
 //!   (56 bytes; a worker applies only a newer revision). That also covers a
 //!   worker that reconnected between two syncs and was greeted with the
@@ -64,6 +65,12 @@ pub fn dht_intensity(i: Intensity) -> lodestar_dht::node::Intensity {
     }
 }
 
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX / 2))
+}
+
 #[derive(Debug)]
 struct State {
     planner: Planner,
@@ -91,7 +98,9 @@ impl Placement {
     /// A coordinator that runs its own DHT when `coordinator_dht` is set.
     pub fn new(coordinator_dht: bool) -> Placement {
         Placement(Mutex::new(State {
-            planner: Planner::new(coordinator_dht),
+            // Plans are numbered from the clock, so after a restart they're
+            // still newer than any a worker applied before it.
+            planner: Planner::starting_at(coordinator_dht, now_ms()),
             addrs: BTreeMap::new(),
         }))
     }
@@ -171,10 +180,12 @@ impl Placement {
     /// if anything changed.
     fn update(&self, workers: &[WorkerStatus]) -> Option<Replan> {
         let mut st = self.state();
-        let now: BTreeMap<WorkerId, Vec<IpAddr>> = workers
+        // A draining worker stays a member: it's still fetching the keys it
+        // holds, so its IP's per-peer connections stay divided (§19.6).
+        let now: BTreeMap<WorkerId, (Vec<IpAddr>, bool)> = workers
             .iter()
-            .filter(|w| w.connected && !w.draining && w.worker != WorkerId::LOCAL)
-            .map(|w| (w.worker, w.external_ips.clone()))
+            .filter(|w| w.connected && w.worker != WorkerId::LOCAL)
+            .map(|w| (w.worker, (w.external_ips.clone(), w.draining)))
             .collect();
         let mut last = None;
         let gone: Vec<WorkerId> = st
@@ -187,11 +198,12 @@ impl Placement {
             st.addrs.remove(&w);
             last = st.planner.leave(w).or(last);
         }
-        for (w, ips) in now {
+        for (w, (ips, draining)) in now {
             if st.addrs.get(&w) != Some(&ips) {
                 st.addrs.insert(w, ips.clone());
                 last = st.planner.join(w, ips).or(last);
             }
+            last = st.planner.set_draining(w, draining).or(last);
         }
         last
     }
@@ -226,6 +238,10 @@ mod tests {
 
     #[test]
     fn no_source_plugin_runs_on_a_worker() {
+        // The structural guarantee is that `Assignment` has no field for a
+        // plugin, so nothing can place one. This checks the rule PL-3 will
+        // ask, and `runs_on_worker`'s exhaustive match makes a new
+        // `Distribution` variant a compile error until it's decided.
         for d in [
             Distribution::Everywhere,
             Distribution::ShardedKeyspace,
@@ -254,8 +270,10 @@ mod tests {
         let p = Placement::new(true);
         p.set_coordinator_ips(vec![HOME]);
         // Single machine: nothing planned.
+        let base = p.revision();
+        assert!(base > 1_000_000_000_000, "seeded from the clock");
         assert_eq!(p.update(&[status(0, true, false, vec![HOME])]), None);
-        assert_eq!(p.revision(), 0);
+        assert_eq!(p.revision(), base);
         assert_eq!(p.coordinator().dht, Some(ShardSpec::FULL));
         assert_eq!(p.coordinator().politeness, Politeness::ALONE);
 
@@ -266,7 +284,7 @@ mod tests {
             ]
         };
         let r = p.update(&both(false, true)).unwrap();
-        assert_eq!(r.revision, 2, "two joins, two revisions");
+        assert_eq!(r.revision, base + 2, "two joins, two revisions");
         let c = p.coordinator().dht.unwrap();
         let w1 = p.assignment(WorkerId(1)).unwrap().dht.unwrap();
         assert_eq!(c.id_slots() & w1.id_slots(), 0, "same IP, disjoint slots");
@@ -276,10 +294,17 @@ mod tests {
 
         // Nothing changed: no new plan.
         assert_eq!(p.update(&both(false, true)), None);
-        // Worker 1 drains, worker 2 disconnects: the coordinator is alone.
+        // Worker 1 drains, worker 2 disconnects: the coordinator runs the
+        // whole DHT again, but worker 1 is still fetching from its IP, so
+        // per-peer connections stay divided.
         let r = p.update(&both(true, false)).unwrap();
-        assert!(r.workers.is_empty());
+        assert_eq!(r.workers.len(), 1);
+        assert_eq!(r.workers[0].1.dht, None);
         assert_eq!(p.coordinator().dht, Some(ShardSpec::FULL));
+        assert_eq!(p.coordinator().politeness.per_peer_ip, 1);
+        // It finished and disconnected: the coordinator is alone.
+        let r = p.update(&[]).unwrap();
+        assert!(r.workers.is_empty());
         assert_eq!(p.coordinator().politeness, Politeness::ALONE);
         assert_eq!(p.assignment(WorkerId(1)), None);
     }
@@ -317,14 +342,15 @@ mod tests {
                 Ok(())
             }
         });
-        assert_eq!(s.replan.as_ref().map(|r| r.revision), Some(2));
+        let rev = p.revision();
+        assert_eq!(s.replan.as_ref().map(|r| r.revision), Some(rev));
         assert_eq!(s.full, vec![WorkerId(2)]);
         for (w, m) in &sent {
             let ToWorker::Assign(m) = m else {
                 panic!("{m:?}")
             };
             let a = Assignment::from_message(m).unwrap().unwrap();
-            assert_eq!(a.revision, 2);
+            assert_eq!(a.revision, rev);
             assert_eq!(Some(a), p.assignment(*w));
             assert!(a.fetch && a.prepare);
         }

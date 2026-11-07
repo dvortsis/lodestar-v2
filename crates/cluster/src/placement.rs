@@ -102,7 +102,22 @@ pub struct Share {
 /// is in member order: the coordinator first, then by worker id.
 pub fn plan(members: &[Member], per_peer_ip: u8) -> Vec<(MemberId, Share)> {
     let per_peer_ip = per_peer_ip.clamp(1, INSTALL_PER_PEER_IP);
-    let mut members: Vec<&Member> = members.iter().collect();
+    // Only a public address says where a remote peer sees a member from:
+    // a LAN, loopback or CGNAT address says nothing, so it's unknown.
+    let public: Vec<Member> = members
+        .iter()
+        .map(|m| Member {
+            id: m.id,
+            ips: m
+                .ips
+                .iter()
+                .map(|i| i.to_canonical())
+                .filter(|i| is_public(*i))
+                .collect(),
+            dht: m.dht,
+        })
+        .collect();
+    let mut members: Vec<&Member> = public.iter().collect();
     members.sort_by_key(|m| m.id);
     members.dedup_by_key(|m| m.id);
     let groups = ip_groups(&members);
@@ -167,6 +182,33 @@ pub fn plan(members: &[Member], per_peer_ip: u8) -> Vec<(MemberId, Share)> {
     }
 
     members.iter().map(|m| m.id).zip(shares).collect()
+}
+
+/// Whether a remote peer could see a member at `ip`: not private, CGNAT,
+/// loopback, link-local, unique-local, unspecified, multicast or
+/// broadcast. (Documentation ranges count as public, for tests.)
+pub fn is_public(ip: IpAddr) -> bool {
+    match ip.to_canonical() {
+        IpAddr::V4(a) => {
+            let [o0, o1, ..] = a.octets();
+            !(a.is_private()
+                || a.is_loopback()
+                || a.is_link_local()
+                || a.is_unspecified()
+                || a.is_broadcast()
+                || a.is_multicast()
+                || o0 == 0
+                || (o0 == 100 && (64..128).contains(&o1)))
+        }
+        IpAddr::V6(a) => {
+            let seg0 = a.segments()[0];
+            !(a.is_loopback()
+                || a.is_unspecified()
+                || a.is_multicast()
+                || (seg0 & 0xfe00) == 0xfc00
+                || (seg0 & 0xffc0) == 0xfe80)
+        }
+    }
 }
 
 /// Members (indices into the sorted list) grouped by shared address,
@@ -245,6 +287,9 @@ struct WorkerEntry {
     ips: Vec<IpAddr>,
     settings: WorkerSettings,
     pin: DhtPin,
+    /// Finishing its leases before it stops (§19.6): no DHT and no new
+    /// work, but it still fetches, so it keeps its politeness share.
+    draining: bool,
 }
 
 /// The coordinator's planner: the fleet's membership and settings, and
@@ -276,8 +321,15 @@ impl Planner {
     /// is set. No worker has joined: the coordinator's share is the whole
     /// keyspace and one install's limits.
     pub fn new(coordinator_dht: bool) -> Planner {
+        Planner::starting_at(coordinator_dht, 0)
+    }
+
+    /// As [`new`](Self::new), with plans numbered after `revision`. The
+    /// coordinator seeds it from its clock, so a restarted coordinator's
+    /// plans are still newer than the last one a worker applied.
+    pub fn starting_at(coordinator_dht: bool, revision: u64) -> Planner {
         Planner {
-            revision: 0,
+            revision,
             coordinator_ips: Vec::new(),
             coordinator_dht,
             per_peer_ip: INSTALL_PER_PEER_IP,
@@ -327,6 +379,18 @@ impl Planner {
         Some(self.replan())
     }
 
+    /// A worker started or stopped draining. While it drains it runs no
+    /// DHT but stays a member of its IP for politeness: it's still
+    /// fetching the keys it holds.
+    pub fn set_draining(&mut self, worker: WorkerId, draining: bool) -> Option<Replan> {
+        let w = self.workers.get_mut(&worker)?;
+        if w.draining == draining {
+            return None;
+        }
+        w.draining = draining;
+        Some(self.replan())
+    }
+
     /// Pins a worker's DHT on (`Auto`) or off.
     pub fn pin(&mut self, worker: WorkerId, pin: DhtPin) -> Option<Replan> {
         self.workers.get_mut(&worker)?.pin = pin;
@@ -371,7 +435,7 @@ impl Planner {
         members.extend(self.workers.iter().map(|(id, w)| Member {
             id: MemberId::Worker(*id),
             ips: w.ips.clone(),
-            dht: w.pin == DhtPin::Auto,
+            dht: w.pin == DhtPin::Auto && !w.draining,
         }));
         let mut out = Vec::with_capacity(self.workers.len());
         self.assignments.clear();
@@ -510,6 +574,48 @@ mod tests {
         assert_eq!(r.coordinator.politeness, Politeness::ALONE);
         assert!(p.leave(WorkerId(1)).is_none());
         assert!(p.join(WorkerId::LOCAL, vec![ip(1)]).is_none());
+    }
+
+    #[test]
+    fn a_draining_worker_keeps_its_share_of_connections() {
+        let mut p = Planner::new(true);
+        p.set_coordinator_ips(vec![ip(1)]);
+        p.join(WorkerId(1), vec![ip(1)]);
+        let r = p.set_draining(WorkerId(1), true).unwrap();
+        assert_eq!(r.workers[0].1.dht, None, "no DHT while draining");
+        assert_eq!(r.coordinator.dht, Some(ShardSpec::FULL));
+        assert_eq!(r.coordinator.politeness.per_peer_ip, 1, "still shared");
+        assert_eq!(r.workers[0].1.politeness.per_peer_ip, 1);
+        assert!(p.set_draining(WorkerId(1), true).is_none());
+    }
+
+    #[test]
+    fn non_public_addresses_count_as_unknown() {
+        let lan = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20));
+        for a in [
+            lan,
+            IpAddr::V4(Ipv4Addr::new(100, 64, 0, 1)),
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            "fd00::1".parse().unwrap(),
+            "fe80::1".parse().unwrap(),
+            "::ffff:10.0.0.1".parse().unwrap(),
+        ] {
+            assert!(!is_public(a), "{a}");
+        }
+        assert!(is_public(ip(1)) && is_public("2001:db8::1".parse().unwrap()));
+        let mut p = Planner::new(true);
+        p.set_coordinator_ips(vec![ip(1)]);
+        let r = p.join(WorkerId(1), vec![lan]).unwrap();
+        assert_eq!(
+            r.workers[0].1.politeness.per_peer_ip, 1,
+            "planned as shared"
+        );
+    }
+
+    #[test]
+    fn revisions_continue_from_the_seed() {
+        let mut p = Planner::starting_at(true, 1_000);
+        assert_eq!(p.join(WorkerId(1), vec![ip(2)]).unwrap().revision, 1_001);
     }
 
     #[test]
