@@ -83,7 +83,9 @@ pub trait Work: Send {
     fn drain(&mut self) -> impl Future<Output = Vec<OutcomeItem>> + Send;
 }
 
-/// The idle runtime: connected, doing no work.
+/// The idle runtime: connected, doing no work. The binary runs WK-10's
+/// runtime; the session's tests use this.
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Default)]
 pub struct Idle;
 

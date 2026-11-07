@@ -14,8 +14,10 @@
 //! - **The stages** are WK-7's, store-free, with the worker's queues and
 //!   the pool sized by `Assign`'s cap (plan Q5) and the byte budget of
 //!   X-fetch-pool-bytes and X-fetch-meta-reserve. Every result is judged
-//!   and sealed (`Judging`); only `SealedRecord`s can reach the outbound
-//!   queue.
+//!   and sealed ([`Sealing`]); only `SealedRecord`s can reach the outbound
+//!   queue. A result that can't be sealed yet (no snapshot, or past its
+//!   wire key's day) waits for the fresh snapshot; it is never reported
+//!   `Blocked`, which only the floor's drops are (runner, #592's B2).
 //! - **Results** go out in `Results` batches (WK-6's codec,
 //!   `encode_with(&[], &sealed)`), kept until the coordinator accepts them
 //!   and sent again on a new session; an accepted batch's leases are
@@ -41,12 +43,12 @@ use lodestar_metainfo::InfoHash;
 use lodestar_pipeline::gate::GateStats;
 use lodestar_pipeline::source_adult::AdultSources;
 use lodestar_pipeline::stages::{
-    ByteReceiver, ByteSender, Held, Inbox, OUTBOUND_BYTES, Queues, Reports, Weigh, WorkerLeases,
-    WorkerStages, byte_queue, next_claims,
+    ByteReceiver, ByteSender, Closed, Held, Inbox, OUTBOUND_BYTES, Outbox, Queues, Reports,
+    Results, Weigh, WorkerLeases, WorkerStages, byte_queue, next_claims,
 };
 use lodestar_pipeline::wire::ResultsBatch;
 use lodestar_pipeline::wire::filter_snapshot::{
-    DictSnapshot, Incoming, Judge, Judging, SealedRecord, Step,
+    DictSnapshot, Incoming, Judge, Judged, SealedRecord, Step,
 };
 use lodestar_sources::{Discovery, Fetcher, Found, FunnelCounts, Loss, PoolConfig, Shutdown};
 use lodestar_store::{Preparer, QueuedKey, SourceId, StoreConfig};
@@ -81,6 +83,18 @@ const BATCH_SLACK: usize = 4 << 10;
 /// The source a worker's own finds are counted under (the DHT's). The
 /// coordinator merges the real source bits from its own record.
 const DHT_SOURCE: u8 = 1;
+/// One "maybe stored" sighting in this many is still claimed, chosen by a
+/// random draw per sighting (not by the key), so a false positive of the
+/// have-filter (~1 %, ~2 % above 30M stored) is recovered on a later
+/// sighting instead of being lost for good. The coordinator answers those
+/// claims from the store (runner, 2026-11-07T20:34Z, plan Q6; the WK-10b
+/// decisions file).
+pub const REDISCOVERY_SAMPLE: u64 = 16;
+/// The longest a result waits for a snapshot it can be sealed under. Past
+/// it, the result is let go unreported: its lease runs out on the
+/// coordinator and the key is granted again (never `Blocked`).
+pub const SEAL_WAIT: Duration = Duration::from_secs(600);
+const DAY: i64 = 86_400;
 
 /// What the runtime is built from.
 pub struct Config {
@@ -95,6 +109,10 @@ pub struct Config {
     /// Dial peers in private ranges (tests and LAN-only setups).
     pub allow_private: bool,
     pub drain_deadline: Duration,
+    /// The rediscovery sampler's seed; `None` draws one at start. Tests
+    /// fix it.
+    pub seed: Option<u64>,
+    pub seal_wait: Duration,
 }
 
 impl Config {
@@ -112,6 +130,8 @@ impl Config {
             outbound_bytes: OUTBOUND_BYTES,
             allow_private: false,
             drain_deadline: DRAIN_DEADLINE,
+            seed: None,
+            seal_wait: SEAL_WAIT,
         }
     }
 }
@@ -129,8 +149,17 @@ impl std::fmt::Debug for Config {
 pub struct Counts {
     /// Keys found here.
     pub found: AtomicU64,
-    /// Keys the have-filter said were stored, not claimed.
+    /// "Maybe stored" sightings dropped without a claim (`rediscovered`
+    /// in the worker's counters; it includes the filter's false
+    /// positives, about 1–2 %).
     pub skipped: AtomicU64,
+    /// "Maybe stored" sightings claimed all the same (one in
+    /// [`REDISCOVERY_SAMPLE`]).
+    pub sampled: AtomicU64,
+    /// Results that waited for a fresh snapshot, and those let go after
+    /// [`SEAL_WAIT`].
+    pub waited: AtomicU64,
+    pub released: AtomicU64,
     pub claimed: AtomicU64,
     pub granted: AtomicU64,
     /// Results sent, and accepted by the coordinator.
@@ -213,11 +242,16 @@ struct Shared {
     losses: Arc<Losses>,
     draining: AtomicBool,
     started: watch::Sender<bool>,
+    /// The installed snapshot's wire-key day (`u32::MAX` before one), for
+    /// "can a record be sealed now?"; it changes on every install.
+    key_day: watch::Sender<u32>,
+    sampler: Mutex<u64>,
 }
 
 /// The runtime (see the module docs).
 pub struct Runtime {
     shared: Arc<Shared>,
+    #[cfg_attr(not(test), allow(dead_code))]
     found: mpsc::Sender<Found>,
     tasks: Vec<JoinHandle<()>>,
     /// The session task, which owns the outbound queue's receiving end.
@@ -239,6 +273,9 @@ impl std::fmt::Debug for Runtime {
 #[derive(Debug, Clone)]
 pub struct Finds(mpsc::Sender<Found>);
 
+// WK-10c's DHT sends its finds here and reads the counters for the
+// heartbeat; tests do today.
+#[cfg_attr(not(test), allow(dead_code))]
 impl Finds {
     /// Queues a key to check and claim; `false` when the queue is full (the
     /// key is dropped: it will be found again).
@@ -247,6 +284,7 @@ impl Finds {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 impl Runtime {
     /// Starts the runtime's tasks; the stages start once the snapshots are
     /// in (see the module docs). Must be called in a Tokio runtime.
@@ -284,6 +322,8 @@ impl Runtime {
             }),
             draining: AtomicBool::new(false),
             started: watch::channel(false).0,
+            key_day: watch::channel(u32::MAX).0,
+            sampler: Mutex::new(config.seed.unwrap_or_else(super::session::random_jitter)),
             config,
         });
         let (stop_reports, reports_stopped) = watch::channel(false);
@@ -341,15 +381,17 @@ impl Runtime {
         let _ = stages.stop.send(true);
         let deadline = self.shared.config.drain_deadline;
         let Stages { pool, prepare, .. } = stages;
+        let (pool_abort, prepare_abort) = (pool.abort_handle(), prepare.abort_handle());
         let both = async {
             let _ = pool.await;
             let _ = prepare.await;
         };
-        let mut both = std::pin::pin!(both);
-        if tokio::time::timeout(deadline, &mut both).await.is_err() {
+        if tokio::time::timeout(deadline, both).await.is_err() {
             // A stalled session: the prepare stage is waiting on the
-            // outbound queue. Its keys' leases go back to the coordinator.
-            drop(both);
+            // outbound queue, or a fetch on its peer. Both stop here, and
+            // their keys' leases go back to the coordinator when they end.
+            pool_abort.abort();
+            prepare_abort.abort();
         }
     }
 
@@ -566,6 +608,8 @@ fn snapshot_chunk(s: &Arc<Shared>, c: SnapshotChunk) {
                     if *done < asked {
                         *done = asked;
                         let _notes = s.judge.install(&snapshot, complete.version);
+                        // Results waiting for a sealable key look again.
+                        s.key_day.send_replace(snapshot.key.id);
                     }
                     true
                 }
@@ -642,8 +686,8 @@ fn start_if_ready(s: &Arc<Shared>) {
     .spawn(
         rx,
         shutdown,
-        Judging {
-            judge: s.judge.clone(),
+        Sealing {
+            shared: s.clone(),
             reports,
             out,
         },
@@ -654,6 +698,102 @@ fn start_if_ready(s: &Arc<Shared>) {
         prepare: running.prepare,
     });
     s.started.send_replace(true);
+}
+
+/// What to do with a key found here (runner, 2026-11-07T20:34Z):
+/// - before a have-filter is complete, claim it ("maybe": the coordinator
+///   answers from the store);
+/// - once one is, claim a "not stored";
+/// - drop a "maybe stored", except one sighting in [`REDISCOVERY_SAMPLE`],
+///   by the per-sighting `draw`, so a false positive isn't lost for good.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Sighting {
+    Claim,
+    Sampled,
+    Drop,
+}
+
+fn rediscovery(ready: bool, maybe: bool, draw: u64) -> Sighting {
+    match (ready, maybe) {
+        (true, true) if draw.is_multiple_of(REDISCOVERY_SAMPLE) => Sighting::Sampled,
+        (true, true) => Sighting::Drop,
+        _ => Sighting::Claim,
+    }
+}
+
+impl Shared {
+    /// The next draw (SplitMix64): cheap, and seeded per runtime.
+    fn draw(&self) -> u64 {
+        let mut state = lock(&self.sampler);
+        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = *state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// Whether a record can be sealed at `now`: a snapshot is installed and
+    /// `now` is on or before its wire key's day (`Judge::judge_at`'s rule).
+    fn sealable(&self, now: i64) -> bool {
+        let day = *self.key_day.borrow();
+        day != u32::MAX && self.judge.version() != 0 && now.div_euclid(DAY) <= i64::from(day)
+    }
+}
+
+/// The judge around the outbound queue, as WK-8's `Judging`, except that a
+/// result that can't be sealed yet waits for the next snapshot (up to
+/// [`SEAL_WAIT`]; the prepare stage waits with it, which pauses the pool,
+/// as a stalled link does). One let go after that isn't reported: its lease
+/// runs out and the key is granted again. `Blocked` is only ever the
+/// floor's (CS-8a, hash lists), which WK-10c tombstones (runner, #592's B2).
+struct Sealing<O> {
+    shared: Arc<Shared>,
+    reports: Arc<dyn Reports>,
+    out: O,
+}
+
+impl<O: Outbox<SealedRecord>> Outbox<Results> for Sealing<O> {
+    fn send(&self, item: Results) -> impl std::future::Future<Output = Result<(), Closed>> + Send {
+        let s = self.shared.clone();
+        let reports = self.reports.clone();
+        async move {
+            if !s.sealable(unix_now()) {
+                bump(&s.counts.waited);
+                let mut installs = s.key_day.subscribe();
+                let ready = tokio::time::timeout(s.config.seal_wait, async {
+                    while !s.sealable(unix_now()) {
+                        // A new install, or the next minute (the clock may
+                        // be what changed).
+                        let _ =
+                            tokio::time::timeout(Duration::from_secs(60), installs.changed()).await;
+                    }
+                })
+                .await;
+                if ready.is_err() {
+                    bump(&s.counts.released);
+                    return Ok(());
+                }
+            }
+            match s.judge.judge(item) {
+                Judged::Send(o) => self.out.send(o).await,
+                // The floor: never sent or spooled (WK-8).
+                Judged::Dropped { key, token, .. } => {
+                    reports.lost(&key, token, Loss::Blocked);
+                    Ok(())
+                }
+                Judged::Invalid { key, token } => {
+                    reports.lost(&key, token, Loss::Invalid);
+                    Ok(())
+                }
+                // The day turned between the check and the judge: let it go
+                // unreported, as one that waited too long.
+                Judged::NotReady { .. } => {
+                    bump(&s.counts.released);
+                    Ok(())
+                }
+            }
+        }
+    }
 }
 
 /// Moves queued keys into the pool, waiting while it's full.
@@ -742,29 +882,49 @@ async fn check(
     items: mpsc::Sender<(ClaimItem, Vec<std::net::SocketAddr>)>,
 ) {
     while let Some(f) = found.recv().await {
-        bump(&s.counts.found);
-        if s.have.is_ready() && s.have.might_be_stored(&f.key) {
-            bump(&s.counts.skipped);
+        let (ready, maybe) = (s.have.is_ready(), s.have.might_be_stored(&f.key));
+        let Some(item) = sift(&s, f, ready, maybe) else {
             continue;
-        }
-        let peers: Vec<_> = f
-            .peers
-            .iter()
-            .copied()
-            .filter(|a| lodestar_network_policy::allows(*a, s.config.allow_private))
-            .take(MAX_HINTS)
-            .collect();
-        let item = ClaimItem {
-            key: f.key.0,
-            source: DHT_SOURCE,
-            strategy: f.strategy,
-            discovered_ms: unix_now().saturating_mul(1000),
-            hints: peers.clone(),
         };
-        if items.send((item, peers)).await.is_err() {
+        if items.send(item).await.is_err() {
             return;
         }
     }
+}
+
+/// One sighting through the have-filter's answer (`ready`: a filter is
+/// complete; `maybe`: it says the key may be stored), counted; the claim
+/// to make, if any.
+fn sift(
+    s: &Shared,
+    f: Found,
+    ready: bool,
+    maybe: bool,
+) -> Option<(ClaimItem, Vec<std::net::SocketAddr>)> {
+    bump(&s.counts.found);
+    match rediscovery(ready, maybe, s.draw()) {
+        Sighting::Claim => {}
+        Sighting::Sampled => bump(&s.counts.sampled),
+        Sighting::Drop => {
+            bump(&s.counts.skipped);
+            return None;
+        }
+    }
+    let peers: Vec<_> = f
+        .peers
+        .iter()
+        .copied()
+        .filter(|a| lodestar_network_policy::allows(*a, s.config.allow_private))
+        .take(MAX_HINTS)
+        .collect();
+    let item = ClaimItem {
+        key: f.key.0,
+        source: DHT_SOURCE,
+        strategy: f.strategy,
+        discovered_ms: unix_now().saturating_mul(1000),
+        hints: peers.clone(),
+    };
+    Some((item, peers))
 }
 
 /// Reports losses in batches, keeping each until a session takes it. On
@@ -1029,10 +1189,15 @@ mod tests {
     /// The coordinator's filter snapshot for today, from an empty store,
     /// as its chunks.
     fn filter_chunks() -> (u64, Vec<SnapshotChunk>) {
+        filter_chunks_at(unix_now())
+    }
+
+    /// The same, with the wire key of the day `at` falls on.
+    fn filter_chunks_at(at: i64) -> (u64, Vec<SnapshotChunk>) {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("c.db"), StoreConfig::default()).unwrap();
         let snap: FilterSnapshot =
-            crate::cluster::filter::read_snapshot(&store, &[4; 32], unix_now()).unwrap();
+            crate::cluster::filter::read_snapshot(&store, &[4; 32], at).unwrap();
         let bytes = snap.encode().unwrap();
         let version = version_of(&bytes);
         let chunks = (0..chunk_count(bytes.len()))
@@ -1210,6 +1375,154 @@ mod tests {
         assert!(started.elapsed() < deadline + Duration::from_secs(5));
     }
 
+    fn found(n: u8) -> Found {
+        let mut f = Found::key(InfoHash([n; 20]), 0);
+        f.peers = vec!["8.8.8.8:6881".parse().unwrap()];
+        f
+    }
+
+    /// The runner's rule (2026-11-07T20:34Z): before a have-filter is
+    /// complete every sighting is claimed; once it is, a "not stored" is
+    /// claimed, and a "maybe stored" is dropped and counted, except about
+    /// one in 16, drawn per sighting.
+    #[tokio::test]
+    async fn maybes_are_dropped_once_a_filter_is_complete_but_sampled() {
+        let rt = Runtime::start(Config {
+            seed: Some(7),
+            ..Config::new(W, Arc::new(MapFetch::default()))
+        });
+        let s = &rt.shared;
+        // No filter: claimed, maybe or not.
+        assert!(sift(s, found(1), false, true).is_some());
+        assert!(sift(s, found(1), false, false).is_some());
+        // Complete: a "no" is claimed.
+        assert!(sift(s, found(2), true, false).is_some());
+        let c = rt.counts();
+        assert_eq!(c.skipped.load(Ordering::Relaxed), 0);
+        // Complete, "maybe": dropped, about 1 in 16 claimed all the same.
+        let n = 16_000;
+        let claimed = (0..n)
+            .filter(|_| sift(s, found(3), true, true).is_some())
+            .count();
+        assert!(
+            (800..1200).contains(&claimed),
+            "{claimed} of {n} maybes claimed"
+        );
+        assert_eq!(c.sampled.load(Ordering::Relaxed), claimed as u64);
+        assert_eq!(
+            c.skipped.load(Ordering::Relaxed),
+            (n - claimed) as u64,
+            "every dropped maybe counted as rediscovered"
+        );
+        assert_eq!(c.found.load(Ordering::Relaxed), 3 + n as u64);
+        rt.shutdown().await;
+    }
+
+    /// A false positive (a new key the filter says may be stored) is
+    /// claimed on a later sighting: the draw is per sighting, not per key.
+    #[test]
+    fn a_false_positive_is_claimed_on_a_later_sighting() {
+        for seed in 0..50u64 {
+            let mut state = seed;
+            let mut draw = || {
+                state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+                let mut z = state;
+                z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                z ^ (z >> 31)
+            };
+            let first = (1..=400)
+                .find(|_| rediscovery(true, true, draw()) == Sighting::Sampled)
+                .unwrap_or_else(|| panic!("seed {seed}: never claimed in 400 sightings"));
+            assert!(first <= 400);
+        }
+        // The same key, the same answer from the filter: only the draw
+        // decides.
+        assert_eq!(rediscovery(true, true, 16), Sighting::Sampled);
+        assert_eq!(rediscovery(true, true, 17), Sighting::Drop);
+        assert_eq!(rediscovery(false, true, 17), Sighting::Claim);
+    }
+
+    /// The runner's B2 on the worker: a snapshot pre-sent at 23:00Z for the
+    /// next day seals across midnight; one only for today doesn't past it,
+    /// and none before a snapshot.
+    #[tokio::test]
+    async fn a_pre_sent_snapshot_seals_across_midnight() {
+        let mut rt = Runtime::start(config(Arc::new(MapFetch::default())));
+        let now = unix_now();
+        let midnight = now - now.rem_euclid(DAY) + DAY;
+        assert!(!rt.shared.sealable(now), "no snapshot yet");
+        let (today, chunks) = filter_chunks_at(now);
+        for c in chunks {
+            rt.event(WorkerEvent::Snapshot(c));
+        }
+        until("installed", || (rt.filter_version() == today, ())).await;
+        assert!(rt.shared.sealable(now));
+        assert!(
+            !rt.shared.sealable(midnight + 30),
+            "today's key ends at midnight"
+        );
+        // The next day's snapshot (sent from 23:00Z) covers both sides.
+        let (next, chunks) = filter_chunks_at(midnight);
+        assert_ne!(next, today);
+        for c in chunks {
+            rt.event(WorkerEvent::Snapshot(c));
+        }
+        until("the next day's installed", || {
+            (rt.filter_version() == next, ())
+        })
+        .await;
+        assert!(rt.shared.sealable(midnight - 3600 + 1));
+        assert!(rt.shared.sealable(midnight + 30));
+        rt.shutdown().await;
+    }
+
+    /// A result fetched while the installed snapshot's key has run out
+    /// waits for the fresh one and is then sealed: never reported lost,
+    /// never `Blocked` (runner, #592's B2).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_late_snapshot_is_waited_for_not_dropped() {
+        let fetch = Arc::new(MapFetch::default());
+        let raw = info("Fetched before the new day's key");
+        lock(&fetch.0).insert(key_of(&raw), raw.clone());
+        let mut rt = Runtime::start(config(fetch));
+        rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
+        // Yesterday's snapshot: its key can't seal today.
+        let (_, chunks) = filter_chunks_at(unix_now() - DAY);
+        for c in chunks {
+            rt.event(WorkerEvent::Snapshot(c));
+        }
+        until("started", || (rt.is_started(), ())).await;
+        granted(
+            &rt.shared,
+            key_of(&raw),
+            Token(9),
+            vec!["203.0.113.9:6881".parse().unwrap()],
+            unix_now(),
+        );
+        let c = rt.counts();
+        until("waiting for a key", || {
+            let n = c.waited.load(Ordering::Relaxed);
+            (n == 1, n)
+        })
+        .await;
+        let judge = rt.shared.judge.clone();
+        let sealed = || {
+            let j = &judge.counts;
+            j.clear.load(Ordering::Relaxed) + j.marked.load(Ordering::Relaxed)
+        };
+        assert_eq!(sealed(), 0);
+        // Today's arrives: the result is judged and sealed.
+        let (_, chunks) = filter_chunks();
+        for c in chunks {
+            rt.event(WorkerEvent::Snapshot(c));
+        }
+        until("sealed", || (sealed() == 1, sealed())).await;
+        assert_eq!(c.lost.load(Ordering::Relaxed), 0, "nothing reported lost");
+        assert_eq!(c.released.load(Ordering::Relaxed), 0);
+        rt.shutdown().await;
+    }
+
     mod end_to_end {
         use lodestar_cluster::{JoinToken, Joining, LeaseAuthority};
         use lodestar_pipeline::{Pipeline, PipelineConfig};
@@ -1308,6 +1621,7 @@ mod tests {
             }
             let rt = Runtime::start(Config {
                 allow_private: true,
+                seed: Some(3),
                 ..Config::new(creds.worker(), fetch)
             });
             let finds = rt.finds();
@@ -1384,18 +1698,36 @@ mod tests {
                 (skipped >= raws.len() as u64, skipped)
             })
             .await;
-            let claimed = counts.claimed.load(Ordering::Relaxed);
-            let skipped = counts.skipped.load(Ordering::Relaxed);
+            // Each later sighting is dropped, or claimed as one of the
+            // sampled one in 16; the coordinator answers those from the
+            // store and grants none.
+            let seen =
+                |c: &Counts| c.skipped.load(Ordering::Relaxed) + c.sampled.load(Ordering::Relaxed);
+            let (before, sampled, granted) = (
+                seen(&counts),
+                counts.sampled.load(Ordering::Relaxed),
+                counts.granted.load(Ordering::Relaxed),
+            );
             refind();
             until("checked", || {
-                let n = counts.skipped.load(Ordering::Relaxed);
-                (n == skipped + raws.len() as u64, n)
+                let n = seen(&counts);
+                (n == before + raws.len() as u64, n)
             })
             .await;
+            let newly_sampled = counts.sampled.load(Ordering::Relaxed) - sampled;
+            until("the sampled ones claimed", || {
+                let n = counts.claimed.load(Ordering::Relaxed);
+                (
+                    n >= raws.len() as u64 + counts.sampled.load(Ordering::Relaxed),
+                    n,
+                )
+            })
+            .await;
+            assert!(newly_sampled <= raws.len() as u64);
             assert_eq!(
-                counts.claimed.load(Ordering::Relaxed),
-                claimed,
-                "none claimed again"
+                counts.granted.load(Ordering::Relaxed),
+                granted,
+                "a stored key is never granted again"
             );
 
             // A drain finishes the work and stops the worker.
