@@ -5531,7 +5531,7 @@
   },
   {
    "id": "pr565-codex-docs",
-   "text": "04:01Z: owner's Codex opened #565 D-v051-release-docs (docs, 22 files). Fresh Opus review running. D-v051-main held: shrink to what #565 leaves out (likely v0.5.0 never released) or retire. Add slices.yaml entry D-v051-release-docs (agent other, docs, owner-launched) in next runner PR."
+   "text": "04:01Z: owner's Codex opened #565 D-v051-release-docs (docs, 22 files). Fresh Opus review running. D-v051-main held: shrink to what #565 leaves out (likely v0.5.0 never released) or retire. Add slices.yaml entry D-v051-release-docs (agent other, docs, owner-launched) in next runner PR. | 04:1xZ review CHANGES relayed (table split, Explorer/Continue warning, folder_shared row, setup.facts firewall rows, restore shipped v0.5.1 notes). D-v051-main shrinks to v0.5.0 never released. v0.5.2 docs must restore webhook tokens, torrent cache, safe restart (+restart record folder out of backups) guidance removed by #565 (git 8cd5f2b8^) \u2014 add to P-v052-cut notes. Owner: GitHub release body is old draft ('Settings \u2192 About'); offer replacement text. Image name is ghcr.io/dvortsis/lodestar-v2."
   }
  ],
  "main_health": [
