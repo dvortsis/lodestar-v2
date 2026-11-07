@@ -371,9 +371,15 @@ test.describe('full-page states', () => {
 	}) => {
 		// Nothing answers: the stream, the probe, and the REST calls an engaged page makes (any REST
 		// success proves the server is there, and the search results ask for /stats).
-		const dead = (route: Route) => route.abort('connectionrefused');
+		// The server stays dead until Try again reloads the page: the reload's navigation request flips
+		// `back`, so the page's own retries (probe, stream, REST) cannot recover first and remove the button.
+		let back = false;
+		const dead = (route: Route) => (back ? route.fallback() : route.abort('connectionrefused'));
 		await page.route('**/api/v1/**', dead);
 		await go('/search');
+		page.on('request', (request) => {
+			if (request.isNavigationRequest()) back = true;
+		});
 		await engage(page);
 		await expect(
 			page.getByRole('heading', { level: 1, name: 'Can’t reach Lodestar' })
@@ -382,8 +388,9 @@ test.describe('full-page states', () => {
 		// The top bar stays, so the person can still see where they are.
 		await expect(page.getByRole('banner')).toBeVisible();
 		await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible();
-		await page.unroute('**/api/v1/**', dead);
+		// The reloaded page gets the live stream (an init script runs in new documents only).
 		await liveEvents(page);
+		expect(back, 'nothing recovered before the click').toBe(false);
 		await page.getByRole('button', { name: 'Try again' }).click();
 		await expect(page.getByRole('heading', { name: 'Search' })).toBeVisible();
 	});
