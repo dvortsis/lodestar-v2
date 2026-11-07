@@ -106,11 +106,18 @@ docker run -d --name lodestar-soak-collector --restart no \
   -v /sys/fs/cgroup:/host/cgroup:ro \
   -v /mnt/user/appdata/lodestar-soak:/evidence \
   -v /path/to/collect.py:/collect.py:ro \
+  -v /path/to/screen-thresholds.json:/screen-thresholds.json:ro \
   python:3.12-slim python /collect.py --mode docker --container lodestar \
+    --screen-thresholds /screen-thresholds.json \
     --url http://127.0.0.1:8484 --cgroup-root /host/cgroup \
     --root /evidence/run-1 --commit <40-char source commit> \
     --intensity balanced --storage-path /evidence
 ```
+
+**`--screen-thresholds`** (X-soak-screen; `../README.md`, "Screen") is
+`docs/soak/screen-thresholds.json`, frozen into the run. Run from a checkout it's
+found on its own; mounted alone, as above, name it. Without it the run has no
+screen; the gate is the same either way.
 
 **Optional: `--password-file`.** Not in the command above, so a CR-0 run stays
 comparable with r4's. With it, the collector logs in to Lodestar and records

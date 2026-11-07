@@ -30,6 +30,9 @@ static ALLOC: dhat::Alloc = dhat::Alloc;
 
 /// Retained bytes per commit allowed between the samples: well under the
 /// leak's 1–3 KB, above what the live index legitimately grows by.
+/// The soak-screen sweep reads the same bound from
+/// `docs/soak/screen-thresholds.json` and trips only above it, so at exactly
+/// this value the test fails while the sweep says ok; it judges the job.
 const MAX_PER_COMMIT: f64 = 300.0;
 const FIRST: usize = 500;
 const LAST: usize = 2_500;

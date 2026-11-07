@@ -840,6 +840,7 @@ Either way the rest is neither an upper nor a lower bound. It also holds thread 
 | `mem_rss_file_bytes` | gauge | `RssFile` from `/proc/self/status`: resident file-backed pages, the memory-mapped index included. Linux only. |
 | `mem_anon_huge_bytes` | gauge | `AnonHugePages` from `/proc/self/smaps_rollup`: anonymous memory in transparent huge pages, part of `mem_rss_anon_bytes`. Linux only. |
 | `search_segments{index}` | gauge | Live segments in each index's current searcher, read at scrape: `index` is `main` (torrents) or `files`. Rendered with search on. |
+| `mem_anon_mappings{size}` | gauge | Anonymous mappings outside the allocator's arenas, from `/proc/self/maps`, by the kernel's mapping size: `size` is `lt_128k`, `128k_512k`, `512k_2m` or `ge_2m`. A mapping counts when it has no path and inode 0 and isn't `---p` (a guard page or reserved space); a run of adjacent anonymous mappings spanning 256 MiB or more that holds one mapping of 64 MiB or more is an arena and doesn't count (a long run of small mappings still counts). Soak r4's C-heap growth showed as `128k_512k` ([X-soak-screen](decisions/2026-11-07-X-soak-screen.md)). Sampled with the gauges above; all four absent when the file can't be read whole. Linux only. |
 
 ## Fetch pool held bytes (X-fetch-pool-bytes, 2026-11-06)
 

@@ -189,6 +189,14 @@ class SpecRunTests(SpecBase):
         self.assertEqual(report["verdict"], "valid", [c for c in report["checks"] if not c["ok"]])
         self.assertEqual(report["window_hours"], 2)
 
+    def test_a_spec_run_has_no_screen(self):
+        """X-soak-screen is for CR-0 runs; a CR-SPEC run's evidence is unchanged."""
+        self.spec_run()
+        self.assertNotIn("screen_thresholds_sha256", self.run_doc())
+        self.assertFalse((self.root / "screen.json").exists())
+        self.assertFalse((self.root / "screen-thresholds.json").exists())
+        self.assertNotIn("screen", (self.root / "events.log").read_text())
+
     def test_status_shows_no_counts_while_the_window_is_open(self):
         self.spec_run()
         status_rows = []

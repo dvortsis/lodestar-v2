@@ -1,0 +1,91 @@
+name: Soak screen
+
+# X-soak-screen's pre-soak sweep (docs/decisions/2026-11-07-X-soak-screen.md):
+# an early warning on a release candidate, never a gate. It's a separate
+# workflow so ci.yml's triggers are unchanged (runner, 2026-11-07), and it is
+# in no required check. Pull requests keep ci.yml's mmap-retention job. Each
+# harness also runs a control arm that must still trip, so a sweep that has
+# lost its sight fails too. Thresholds: docs/soak/screen-thresholds.json.
+
+on:
+  push:
+    branches: ["release/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  soak-screen:
+    name: soak screen (release candidates)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: soak-screen
+      # The soak tools need Python 3.12's standard library, which ubuntu-latest
+      # (24.04) ships, so no setup action is needed.
+      - run: python3 -c 'import sys; assert sys.version_info >= (3, 12), sys.version'
+      # The musl release build's toolchain, pinned as in release.yml.
+      - name: Install zig
+        env:
+          ZIG_WHEEL: https://files.pythonhosted.org/packages/fe/6f/e1c380fe61db36cb464d5d4d18c557338812500986885373e2550d4ebf6b/ziglang-0.17.0-py3-none-manylinux_2_12_x86_64.manylinux2010_x86_64.musllinux_1_1_x86_64.whl
+          ZIG_SHA256: 97079827064a7492cce5541ceb438ae8003ce1e54e399676da2d62fb7a5dc08b
+        run: |
+          curl --fail --silent --show-error --location --retry 3 --output "$RUNNER_TEMP/ziglang.whl" "$ZIG_WHEEL"
+          echo "$ZIG_SHA256  $RUNNER_TEMP/ziglang.whl" | sha256sum --check -
+          sudo unzip -q "$RUNNER_TEMP/ziglang.whl" 'ziglang/*' -d /opt
+          sudo chmod +x /opt/ziglang/zig
+          sudo ln -s /opt/ziglang/zig /usr/local/bin/zig
+      - run: cargo zigbuild --version 2>/dev/null | grep -q '0\.24\.0' || cargo install --locked --force cargo-zigbuild@0.24.0
+      - name: mapping gauge cost at about 3,000 mappings
+        run: cargo test --locked -p lodestar --bin lodestar memstats::tests::anon_mappings_cost -- --ignored --nocapture | tee "$RUNNER_TEMP/cost.log"
+      - name: per-commit retention (r3's leak)
+        if: ${{ !cancelled() }}
+        run: |
+          # A candidate over the bound fails the test's own assertion; the sweep
+          # still judges it below, so neither arm stops the job here.
+          cargo test --locked --release -p lodestar-bench --features dhat-heap --test mmap_retention -- --test-threads=1 --nocapture > "$RUNNER_TEMP/retention.log" 2>&1 || true
+          cat "$RUNNER_TEMP/retention.log"
+          # The control arm fails its own assertion by design; the sweep judges it.
+          MMAP_RETENTION_PRUNE=off cargo test --locked --release -p lodestar-bench --features dhat-heap --test mmap_retention -- --test-threads=1 --nocapture > "$RUNNER_TEMP/retention-off.log" 2>&1 || true
+      - name: small mappings outside the arena on musl (r4's growth)
+        if: ${{ !cancelled() }}
+        run: |
+          read -r N R < <(python3 -I -c 'import json; m = json.load(open("docs/soak/screen-thresholds.json"))["sweep"]["mem_cheap"]; print(m["torrents"], m["readers"])')
+          out=target/x86_64-unknown-linux-musl/release/examples/mem-cheap
+          rm -f "$out"  # a failed build must not leave the other arm's binary to run
+          cargo zigbuild --locked --release -p lodestar-bench --example mem-cheap --target x86_64-unknown-linux-musl --features mimalloc-override
+          "$out" "$N" "$R" | tee "$RUNNER_TEMP/cheap.csv"
+          rm -f "$out"
+          cargo zigbuild --locked --release -p lodestar-bench --example mem-cheap --target x86_64-unknown-linux-musl
+          "$out" "$N" "$R" > "$RUNNER_TEMP/cheap-off.csv"
+      - name: SCREEN
+        if: ${{ !cancelled() }}
+        run: |
+          set +e
+          sweep="python3 -I docs/soak/tools/screen_sweep.py"
+          $sweep --retention-log "$RUNNER_TEMP/retention.log" --mem-cheap-csv "$RUNNER_TEMP/cheap.csv" > "$RUNNER_TEMP/screen.txt"; a=$?
+          $sweep --label "control: pruning off" --expect trip --retention-log "$RUNNER_TEMP/retention-off.log" >> "$RUNNER_TEMP/screen.txt"; b=$?
+          $sweep --label "control: override off" --expect trip --mem-cheap-csv "$RUNNER_TEMP/cheap-off.csv" >> "$RUNNER_TEMP/screen.txt"; c=$?
+          grep -h '^SCREEN-COST' "$RUNNER_TEMP/cost.log" >> "$RUNNER_TEMP/screen.txt"
+          tee -a "$GITHUB_STEP_SUMMARY" < "$RUNNER_TEMP/screen.txt"
+          exit $(( a || b || c ))
