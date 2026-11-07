@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T12:39Z",
+  "updated_at": "2026-11-07T12:42Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5636,7 +5636,12 @@
       "text": "WK-15 notes: Insights overview compacted 'all' ~35 ms on busy-crawler year even without workers (WK-9b measurement, budget 50 ms, owner \u00a71.6.4) \u2014 watch before adding more rows. WK-9b fleet-wide caps now 32 new rows/day (Discover 'all' was 47 ms at 64/day). Reproduce: bench/examples/worker-rollups.rs and ignored test crates/api/tests/insights.rs a_year_of_rollups_with_eight_workers_answers_within_budget."
     },
     "runner PR: add WK-9c to slices.yaml (sealed open + restore drops held/blocked; deps WK-9b, WK-8); WK-10 deps WK-9c not WK-9b",
-    "runner PR: fold D-v051-main in (only docs/releases/v0.5.0.md never-released note remains; README and v0.5.1.md already match release)"
+    "runner PR: fold D-v051-main in (only docs/releases/v0.5.0.md never-released note remains; README and v0.5.1.md already match release)",
+    {
+      "id": "runner-pr-575",
+      "added": "2026-11-07T12:42Z",
+      "text": "#574 D-v051-main merged (76189f4f). Runner PR #575 (043b3680): WK-9c, X-refetch-private, WK-10 deps WK-9c, WK-10/13/15 notes; Opus review + CI running. Still queued for a later runner PR: size reasons (WK-3/9/8/14), FlareSolverr placement, ext:experiment-host back to false after cr-ab-comp-1 (~2026-11-08T14:01Z), v0.5.1.md frontmatter cites rc4-delta not on main."
+    }
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
