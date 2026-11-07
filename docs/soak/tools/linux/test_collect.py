@@ -1291,6 +1291,29 @@ class ScreenTests(Base):
         report = analyze_cr0.analyze(self.root, now=self.clock.now(), screen_current=path)
         self.assertIs(report["screen"]["thresholds"]["changed_since_start"], True)
 
+    def test_a_screen_error_never_ends_the_run(self):
+        path = self.thresholds()
+        with mock.patch.object(collect, "screen_checkpoint", side_effect=TypeError("boom")):
+            c, rc = self.screened(0, path)
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.result()["reason"], "baseline_window_complete")
+        self.assertIn("screen off after an error (TypeError); the run continues",
+                      (self.root / "events.log").read_text())
+        self.assertFalse((self.root / "screen.json").exists())
+
+    def test_screen_json_that_cant_be_written_never_ends_the_run(self):
+        path = self.thresholds()
+        real = collect.save_json
+
+        def refuse(value, target):
+            if Path(target).name == "screen.json":
+                raise OSError("disk full")
+            return real(value, target)
+        with mock.patch.object(collect, "save_json", side_effect=refuse):
+            c, rc = self.screened(0, path)
+        self.assertEqual(self.result()["reason"], "baseline_window_complete")
+        self.assertEqual(rc, 0)
+
     def test_without_thresholds_there_is_no_screen_and_an_invalid_file_is_refused(self):
         c = self.collector(self.docker(), "--screen-thresholds", "")
         c.run()

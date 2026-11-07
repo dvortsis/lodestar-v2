@@ -101,6 +101,11 @@ never changes it.
   `not_available(<reason>)`: an input is missing (an older binary, or Windows,
   which has no mapping gauge), a checkpoint isn't reached, or the thresholds
   aren't usable. **`ok` never means the soak passed.**
+- **The in-run screen advises only until it's calibrated:** its mapping gauge
+  needs a clean reading from the release build, and its mimalloc and segment
+  thresholds need a replay over r4's and r5's evidence (the decision's
+  "Preconditions"). Until then, treat an in-run trip as a prompt to look, not
+  a reason to stop on its own. The CI sweep isn't affected.
 - **The thresholds** are in `docs/soak/screen-thresholds.json`, each with its
   reason, clean value and margin. The collector copies the file into the run
   and records its SHA-256 in `run.json`; the analyzer judges by that copy,

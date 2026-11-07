@@ -153,6 +153,9 @@ class ThresholdsFileTests(unittest.TestCase):
             lambda d: d["in_run"].update(checkpoints_hours=[3, 6]),
             lambda d: d["in_run"].update(files_per_segment=6),
             lambda d: d["in_run"].update(min_samples=0),
+            lambda d: d["in_run"].update(min_samples=float("nan")),
+            lambda d: d["in_run"].update(min_stored_spread=float("inf")),
+            lambda d: d["in_run"].update(checkpoint_tolerance_seconds=float("nan")),
             lambda d: d["in_run"]["counters"].pop("segments"),
             lambda d: d["in_run"]["counters"]["segments"].update(value="64"),
             lambda d: d["in_run"]["counters"]["segments"].update(trips="below"),
@@ -163,6 +166,13 @@ class ThresholdsFileTests(unittest.TestCase):
             broken(d)
             with self.assertRaises(ValueError, msg=i):
                 screen_config(d)
+            with self.assertRaises(ValueError, msg=i):  # through JSON text too
+                screen_config(json.loads(json.dumps(d)))
+        # json.loads reads NaN and Infinity in a file; the screen refuses them.
+        nan = json.dumps(good).replace('"min_samples": 30', '"min_samples": NaN')
+        self.assertIn("NaN", nan)
+        with self.assertRaisesRegex(ValueError, "min_samples"):
+            screen_config(json.loads(nan))
 
 
 class CoreTests(unittest.TestCase):
@@ -324,6 +334,46 @@ class NeverAPassTests(Base):
             suite.analyze = real
         self.assertTrue(result.wasSuccessful(), result.failures + result.errors)
         self.assertGreater(len(calls), 30)
+
+    def edit_rows(self, root, change):
+        rows = [json.loads(line) for line in (root / "samples.jsonl").read_text().splitlines()]
+        for r in rows:
+            change(r)
+        (root / "samples.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+    def test_evidence_the_screen_cant_read_never_touches_the_gate(self):
+        """A JSON integer past a float's range, or a dict where the identity goes:
+        the gate's output is what it is with the screen off, and the screen says
+        so rather than failing the report."""
+        def huge(r):
+            if r["phase"] == "baseline" and r["elapsed_seconds"] == 300 + 7200:
+                r["values"]["torrents"] = 10**400
+                r["values"]["fetch_pending"] = 10**400
+        def odd_identity(r):
+            if r["phase"] == "baseline" and r["elapsed_seconds"] == 300 + 3600:
+                r["process_identity"] = {"not": "a string"}
+        for change, line in ((huge, "ok"), (odd_identity, "not_available(screen_error)")):
+            root = self.run_dir(r5)
+            plain = analyze(root, now=NOW)
+            self.edit_rows(root, change)
+            on, off = analyze(root, now=NOW), analyze(root, now=NOW, screen=False)
+            self.assertEqual(json.dumps(self.gate(on), sort_keys=True), json.dumps(off, sort_keys=True))
+            self.assertTrue(markdown(on).startswith(markdown(off)))
+            self.assertIs(off["memory_fit"]["meets_bar"], plain["memory_fit"]["meets_bar"])
+            self.assertEqual(on["screen"]["overall"]["line"], line, change.__name__)
+            json.dumps(on, allow_nan=False)  # the CLI's own serialisation
+        self.assertEqual({c["line"] for c in on["screen"]["checkpoints"]}, {"not_available(screen_error)"})
+
+    def test_the_cli_reports_with_unreadable_screen_inputs(self):
+        import subprocess
+        import sys
+        root = self.run_dir(r5)
+        self.edit_rows(root, lambda r: r["values"].update(torrents=10**400))
+        for extra in ([], ["--no-screen"]):
+            done = subprocess.run([sys.executable, "-I", str(HERE / "analyze_cr0.py"), str(root), "--format", "json",
+                                   *extra], capture_output=True, text=True, timeout=120)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertEqual("screen" in json.loads(done.stdout), not extra)
 
     def test_ok_never_implies_a_gate_pass(self):
         report = analyze(self.run_dir(failing_gate), now=NOW)

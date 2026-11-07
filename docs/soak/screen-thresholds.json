@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "preconditions": "The in-run screen advises only until calibrated: (1) read lodestar_mem_anon_mappings from the musl release build with override for about an hour, since the gauge's arena rule is stricter than mem-cheap's; (2) replay the analyzer over r4 and r5 to calibrate the mimalloc and segment thresholds. Until then an in-run trip is a prompt to look, not a stop on its own. The sweep isn't affected.",
   "about": "X-soak-screen's frozen thresholds (docs/decisions/2026-11-07-X-soak-screen.md). An early warning before and during a soak: a trip means stop and investigate; ok never means pass. The CR-0 gate does not read this file. Every counter trips when its value is strictly above its threshold; at the threshold it is ok.",
   "in_run": {
     "checkpoints_hours": [3, 6, 12],

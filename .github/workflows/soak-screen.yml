@@ -57,16 +57,16 @@ jobs:
           sudo ln -s /opt/ziglang/zig /usr/local/bin/zig
       - run: cargo zigbuild --version 2>/dev/null | grep -q '0\.24\.0' || cargo install --locked --force cargo-zigbuild@0.24.0
       - name: mapping gauge cost at about 3,000 mappings
-        run: cargo test -p lodestar --bin lodestar memstats::tests::anon_mappings_cost -- --ignored --nocapture | tee "$RUNNER_TEMP/cost.log"
+        run: cargo test --locked -p lodestar --bin lodestar memstats::tests::anon_mappings_cost -- --ignored --nocapture | tee "$RUNNER_TEMP/cost.log"
       - name: per-commit retention (r3's leak)
         if: ${{ !cancelled() }}
         run: |
           # A candidate over the bound fails the test's own assertion; the sweep
           # still judges it below, so neither arm stops the job here.
-          cargo test --release -p lodestar-bench --features dhat-heap --test mmap_retention -- --test-threads=1 --nocapture > "$RUNNER_TEMP/retention.log" 2>&1 || true
+          cargo test --locked --release -p lodestar-bench --features dhat-heap --test mmap_retention -- --test-threads=1 --nocapture > "$RUNNER_TEMP/retention.log" 2>&1 || true
           cat "$RUNNER_TEMP/retention.log"
           # The control arm fails its own assertion by design; the sweep judges it.
-          MMAP_RETENTION_PRUNE=off cargo test --release -p lodestar-bench --features dhat-heap --test mmap_retention -- --test-threads=1 --nocapture > "$RUNNER_TEMP/retention-off.log" 2>&1 || true
+          MMAP_RETENTION_PRUNE=off cargo test --locked --release -p lodestar-bench --features dhat-heap --test mmap_retention -- --test-threads=1 --nocapture > "$RUNNER_TEMP/retention-off.log" 2>&1 || true
       - name: small mappings outside the arena on musl (r4's growth)
         if: ${{ !cancelled() }}
         run: |

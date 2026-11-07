@@ -50,6 +50,11 @@ Every counter trips when its value is **strictly above** its threshold; at the t
 - **The sweep's first CI run** happens after merge: `workflow_dispatch` only offers a workflow that's on the default branch, and no `release/**` push has happened. Every figure above is a local measurement on the same toolchain (cargo-zigbuild 0.24.0, zig 0.17.0). The runner dispatches `soak-screen.yml` on `main` by hand after the merge and treats that run as its proof (2026-11-07T03:15Z). A fix for a failure there comes from this slice, or from a follow-up slice.
 - **Mapping gauge cost:** with 3,105 mappings, a read takes 0.66 ms median and 1.13 ms max, measured in the test profile on 4 vCPUs (`anon_mappings_cost_at_3000_mappings`, which the sweep job reruns and prints). At 6,105 mappings, under load from a parallel build, it took 1.5 ms. It runs once a minute and never in a scrape.
 
+## Preconditions: the in-run screen advises only until calibrated
+The runner's review, 2026-11-07T03:27Z. Until both of these are done, an in-run trip is a prompt to look, not a reason to stop a run on its own; the sweep is unaffected.
+1. **Read the gauge's clean value with its own rule.** The gauge's arena rule needs a 64 MiB mapping, which is stricter than `mem-cheap`'s (span alone), so `mem-cheap`'s clean 0 doesn't measure it. Before the first screened soak, read `lodestar_mem_anon_mappings` from the musl release build (with `override`) in a container for about an hour, and record the `128k_512k` level and growth in a new decision.
+2. **Calibrate the mimalloc and segment thresholds from r4 and r5.** The owner runs the new analyzer over r4's and r5's private run directories and relays only the `screen:` lines and the per-checkpoint values (above). If the values move a threshold, a small follow-up changes `screen-thresholds.json` and its notes, under a new hash.
+
 ## What the screen can and can't catch
 - **It catches:**
   - r3's leak in the sweep. With the prune off, retention read 2,513 B per commit and the sweep trips naming `retention_bytes_per_commit`.

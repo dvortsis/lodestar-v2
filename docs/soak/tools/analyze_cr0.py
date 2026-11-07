@@ -146,8 +146,12 @@ def screen_inputs(values, text):
     out = {}
     for key, name in (("stored", "torrents"), ("fetch_pending", "fetch_pending")):
         v = values.get(name)
-        if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v >= 0:
-            out[key] = float(v)
+        try:  # an integer too big for a float raises; it's absent, like a non-finite one
+            v = float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+        except OverflowError:
+            v = None
+        if v is not None and math.isfinite(v) and v >= 0:
+            out[key] = v
     for line in text.splitlines():
         m = SCREEN_INPUT.fullmatch(line)
         if not m:
@@ -201,7 +205,8 @@ def screen_config(thresholds):
             or run.get("checkpoints_hours") != [3, 6, 12]):
         raise ValueError("Unsupported screen thresholds")
     for key in ("min_samples", "min_stored_spread", "checkpoint_tolerance_seconds"):
-        if not isinstance(run.get(key), (int, float)) or isinstance(run.get(key), bool) or run[key] <= 0:
+        v = run.get(key)  # json.loads accepts NaN and Infinity
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v) or v <= 0:
             raise ValueError(f"Invalid screen setting {key}")
     counters = run.get("counters")
     if not isinstance(counters, dict) or set(counters) != {c[0] for c in SCREEN_COUNTERS}:
@@ -372,8 +377,9 @@ def load_rows(root, issues):
                     # Keep the collector's JSON values, not partial Prom data.
             else:
                 issues["missing_prom_snapshots"] += 1
-        # Outside the try above: the screen can never count against a snapshot.
-        row["screen"] = screen_inputs(values, screen_text)
+        # Kept for the screen, which reads it only when it's on (screen_report);
+        # the gate never does.
+        row["screen_text"] = screen_text
         rows.append(row)
     return rows
 
@@ -980,7 +986,20 @@ def screen_thresholds(root, run, current):
 
 
 def screen_report(root, run, rows, current=SCREEN_THRESHOLDS):
-    """X-soak-screen, apart from the gate: baseline hours 3, 6 and 12."""
+    """X-soak-screen, apart from the gate: baseline hours 3, 6 and 12. Any error
+    in it is the screen's own (`not_available(screen_error)`), never the report's."""
+    try:
+        return screen_evaluate(root, run, rows, current)
+    except Exception:  # noqa: BLE001: whatever the evidence holds, the gate report stands
+        line = {"status": "not_available", "line": "not_available(screen_error)"}
+        return {"informational": True, "never_a_pass": True, "thresholds": {
+                    "source": None, "sha256": None, "recorded_sha256": None, "changed_since_start": None},
+                "overall": line,
+                "checkpoints": [screen_line({"hour": h, "status": "not_available", "reason": "screen_error",
+                                             "counters": {}}) for h in (3, 6, 12)]}
+
+
+def screen_evaluate(root, run, rows, current):
     provenance, config, reason = screen_thresholds(root, run, current)
     baseline = [r for r in rows if r["phase"] == "baseline"]
     hours = [3, 6, 12]
@@ -991,7 +1010,7 @@ def screen_report(root, run, rows, current=SCREEN_THRESHOLDS):
     else:
         t0 = baseline[0]["elapsed_seconds"]
         timed = [((r["elapsed_seconds"] - t0) / 3600, r) for r in baseline]
-        points = [(h, r["screen"]) for h, r in timed if usable(r)]
+        points = [(h, screen_inputs(r["values"], r.get("screen_text", ""))) for h, r in timed if usable(r)]
         checkpoints = []
         for hour in hours:
             # The gate's identity check, over the rows up to this checkpoint.

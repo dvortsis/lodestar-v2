@@ -170,8 +170,12 @@ def screen_inputs(values, text):
     out = {}
     for key, name in (("stored", "torrents"), ("fetch_pending", "fetch_pending")):
         v = values.get(name)
-        if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v >= 0:
-            out[key] = float(v)
+        try:  # an integer too big for a float raises; it's absent, like a non-finite one
+            v = float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+        except OverflowError:
+            v = None
+        if v is not None and math.isfinite(v) and v >= 0:
+            out[key] = v
     for line in text.splitlines():
         m = SCREEN_INPUT.fullmatch(line)
         if not m:
@@ -225,7 +229,8 @@ def screen_config(thresholds):
             or run.get("checkpoints_hours") != [3, 6, 12]):
         raise ValueError("Unsupported screen thresholds")
     for key in ("min_samples", "min_stored_spread", "checkpoint_tolerance_seconds"):
-        if not isinstance(run.get(key), (int, float)) or isinstance(run.get(key), bool) or run[key] <= 0:
+        v = run.get(key)  # json.loads accepts NaN and Infinity
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v) or v <= 0:
             raise ValueError(f"Invalid screen setting {key}")
     counters = run.get("counters")
     if not isinstance(counters, dict) or set(counters) != {c[0] for c in SCREEN_COUNTERS}:
@@ -1842,7 +1847,11 @@ class Collector:
                             row["api"] = self.api_checks(values["start_time_seconds"], stamp)
                 self.write(self.root / "samples.jsonl", dumps(row), append=True)
                 if phase == "baseline" and getattr(self, "screen_run", None) is not None:
-                    self.screen_step(row, snapshot if metrics_ok and self.kind != "comparator" else "")
+                    try:  # the screen never ends or changes a run
+                        self.screen_step(row, snapshot if metrics_ok and self.kind != "comparator" else "")
+                    except Exception as error:  # noqa: BLE001: screen.json too, unlike the evidence
+                        self.screen_run = None
+                        self.note(f"screen off after an error ({type(error).__name__}); the run continues")
                 shown = row
                 if self.spec:  # rule 6.11: progress and checks only, never counts or rates
                     shown = {k: v for k, v in row.items()
@@ -1906,7 +1915,7 @@ class Collector:
                 now = set()
             result["thresholds_changed"] = now != {recorded}
             self.screen_results.append(result)
-            self.save({"informational": True, "never_a_pass": True, "thresholds_sha256": recorded,
+            save_json({"informational": True, "never_a_pass": True, "thresholds_sha256": recorded,
                        "overall": screen_overall(self.screen_results), "checkpoints": self.screen_results},
                       self.root / "screen.json")
             self.note(f"screen baseline hour {h}: {result['line']}"
