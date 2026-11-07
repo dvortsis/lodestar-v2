@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T17:30Z",
+  "updated_at": "2026-11-07T17:45Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3634,7 +3634,7 @@
       "brief": "briefs/P-v052-cut.md",
       "since": "2026-11-07T14:43Z",
       "session": "session_01MMjhnABi9mwqkZULms8pjL",
-      "notes": "16:3xZ: #582 PR A merged (64870dc5) on fresh Opus MERGE; cut approved sent; next: release/v0.5.2 at 045d4a38, PR B rc.1. | 16:56Z: release/v0.5.2 created; PR B #584 (a753c5c7) into release/v0.5.2. Reporting-overhead bench red on main nightly since 11-06 (setup lacks notice_version since #472): fix in #584 + one-line main follow-up X-bench-notice-version (same session). Refinements accepted: webhooks notes line; Cargo 0.5.2 for rc tag. Supervisor check passed. | 17:07Z: #584 head 2eb03f58 (bench fix + delta notes), workflows re-dispatched. #586 X-bench-notice-version on main (9c51caa3), 1 line, runner self-checked; merge on ci-ok + #584 reporting-overhead green. | 17:2xZ: #584 fresh Opus CHANGES at 87703908: B1 delta report wrongly says smoke.ps1/collect.py byte-identical to #582 (2d6f3a29 nits release-only). Relayed + soak-evidence section, notes Action Needed fixes, forward-port PR X-v052-nits-forward on main. Then delta check."
+      "notes": "16:3xZ: #582 PR A merged (64870dc5) on fresh Opus MERGE; cut approved sent; next: release/v0.5.2 at 045d4a38, PR B rc.1. | 16:56Z: release/v0.5.2 created; PR B #584 (a753c5c7) into release/v0.5.2. Reporting-overhead bench red on main nightly since 11-06 (setup lacks notice_version since #472): fix in #584 + one-line main follow-up X-bench-notice-version (same session). Refinements accepted: webhooks notes line; Cargo 0.5.2 for rc tag. Supervisor check passed. | 17:07Z: #584 head 2eb03f58 (bench fix + delta notes), workflows re-dispatched. #586 X-bench-notice-version on main (9c51caa3), 1 line, runner self-checked; merge on ci-ok + #584 reporting-overhead green. | 17:2xZ: #584 fresh Opus CHANGES at 87703908: B1 delta report wrongly says smoke.ps1/collect.py byte-identical to #582 (2d6f3a29 nits release-only). Relayed + soak-evidence section, notes Action Needed fixes, forward-port PR X-v052-nits-forward on main. Then delta check. | 17:4xZ: #584 head 4dc18ffa answers B1+N1-N4; runner delta-checked (docs only). #587 X-v052-nits-forward (a3bc43ab) = 2d6f3a29 hunks exactly. Merge both when dispatched runs / ci-ok green."
     },
     "WK-15": {
       "state": "running",
@@ -3661,6 +3661,10 @@
       "status": "merged",
       "notes": "one-line bench fix by P-v052-cut session; slices.yaml entry in next runner PR",
       "merge": "6bdb84ca"
+    },
+    "X-v052-nits-forward": {
+      "pr": 587,
+      "status": "open"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5784,6 +5788,11 @@
     {
       "id": "X-sources-ingest-sustained",
       "what": "Before v0.6: re-run bench/tests/sources_overhead.rs on the soak host; measure sustained ingest after the start re-judge sweep (writer.rs:404 refile_unverified -> unverified::refile_step took 10-17 s of 20-35 s runs over 200k items); consider making the sweep yield the writer to ingest. Realistic sandbox: off 948, on 649 median (paired drop 15%). From SRC-G #583.",
+      "since": "2026-11-07"
+    },
+    {
+      "id": "v052-notes-scrape-clause",
+      "what": "v0.5.2.md Known Issues: restore 'it asks public trackers for peer counts' after 'Tracker scraping is on by default' (dropped in rc.1 trim; user-docs: define the term). Do in rc.2 or final notes.",
       "since": "2026-11-07"
     }
   ],
