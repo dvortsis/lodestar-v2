@@ -5507,7 +5507,8 @@
     "slices.yaml SRC-15c owns: add web/e2e/settings-sources*.test.ts and docs/decisions/2026-11-07-SRC-15c.md (runner pre-approved at launch 03:24Z)",
     "slices.yaml SRC-15c owns: add web/.size-limit.mjs (sourcesLater regex widened to ConfigDialog only; runner yes 03:30Z)",
     "X-soak-screen preconditions before relying on in-run screen (P-v052-cut soak): (1) read lodestar_mem_anon_mappings ~1 h in a musl+override container to calibrate the gauge's clean value; (2) owner replays new analyzer over private r4/r5 dirs, relays only 'screen:' lines; thresholds provisional until then"
-   ]
+   ],
+   "text": " | WK-3 owns: crates/cluster/src/proto.rs (manual Debug on ToWorker only, key-leak guard, \u00a72.33) and fuzz/README.md (cluster_have + cluster_assign rows), runner 03:56Z."
   },
   {
    "id": "R4-v051-docs",
