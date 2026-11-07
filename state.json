@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T17:58Z",
+  "updated_at": "2026-11-07T18:12Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6531,8 +6531,8 @@
   "soak_notes_r4": "h16.77 provisional fit 12.88 MiB/h [10.95,14.81] (h12-16.7, incomplete). Likely FAIL. Step up to 418-471 MiB band; collector CPU/h rising with corpus; mmap cache bounded. X-merge-policy prioritised; rc.4 path if fail.",
   "owner_actions": [
     {
-      "at": "2026-11-06T21:44Z",
-      "item": "Delete branch wip/CMP-0-catalogue (pre-split CMP-0 work; #548 merged)"
+      "at": "2026-11-07T18:10Z",
+      "item": "Delete branch wip/CMP-0-catalogue (\u00a72.52, owner queue n8)"
     }
   ],
   "experiment_host": {
@@ -6567,5 +6567,12 @@
       "schedules": "CA Docker auto-update 11-08 11:00Z off for run (auto_update=not_applicable); SSD TRIM 07:00Z paused; others outside window",
       "containers": "sonarr/radarr ok if not restarted; no torrent client; autoheal, qbitmanage, unpackerr, purgarr stay stopped; owner to confirm who stopped 10 containers 00:44-00:46Z; owner confirmed ~00:55Z they stopped them"
     }
-  }
+  },
+  "owner_answers": [
+    {
+      "at": "2026-11-07T18:00Z",
+      "ref": "\u00a72.52 (runner PR #588)",
+      "answers": "runner recommendation on all items: X-refetch-private ships in v0.5.2; installer Repair may re-secure admin-ACE-only folder (X-win-refusal-ux); v0.5.1 release body replacement (notes/v051-release-body.md); web-ok+e2e-ok required; delete wip/CMP-0-catalogue; Q13 stands, Q14 at G-m6; import host = Unraid box; nightly key deferred; counsel advisory, no reminders; package installers after 1.0"
+    }
+  ]
 }

@@ -1,0 +1,53 @@
+## Summary
+
+Lodestar v0.5.1 is the first public release. It finds torrents on the [DHT](https://github.com/dvortsis/lodestar-v2/blob/main/docs/user/glossary.md#dht) and indexes their descriptions on your server. It never downloads content or sends telemetry. Sampling waits 6 hours after each start; the index grows over days.
+
+## What Changed
+
+### New
+
+- **Crawler:** names, files, sizes and dates from the DHT.
+- **Search, details, Discover, Alerts and Compare.**
+- **Content filters,** with the child-safety core always on.
+- **Install options:** an Unraid template, Docker Compose and a gluetun VPN variant.
+- **Deletion journal:** deleted torrents stay out of snapshots and backups.
+- **Legal Notice:** setup asks you to confirm you've read it. It's under **More** → **About** ([section 2.5](https://github.com/dvortsis/lodestar-v2/blob/main/docs/user/02-install-lodestar-on-unraid-and-docker.md#25-create-the-admin-password)).
+
+### Changed
+
+- **Faster crawler:** stalled lookups no longer hold slots.
+- **Outbound policy:** never contacts private or special-purpose addresses learned from the network.
+- **Status pill:** **Starting**, **Stalled** or **Idle**; **Insights** warns when the crawler stalls.
+- **NAT64:** IPv6-only hosts can bootstrap; the DHT still binds IPv4 by default.
+- **Memory on Linux:** Lodestar turns huge pages off and uses one memory manager for all its code, aiming to stop memory growing over days. `LODESTAR_THP=allow` turns huge pages back on ([Appendix B](https://github.com/dvortsis/lodestar-v2/blob/main/docs/user/appendix-b-settings-reference.md)).
+- **New metrics:** `docs/metrics.md`.
+
+### Fixed
+
+- A failed password save no longer changes your credentials.
+- Filter, parser, search-link and memory-leak fixes.
+- **Security:** logs no longer show a web address's password after a stray `://`.
+- A failed update-pause save keeps updates held until a save succeeds or Lodestar restarts.
+
+## Who Is Affected
+
+From a pre-release or `:nightly`, the database migrates to V12, which older builds can't read. Installs set up before rc.4 (rc.1–rc.3, a pre-release or `:nightly`) show the Legal Notice once at next sign-in; API-key apps keep working meanwhile.
+
+## Action Needed
+
+From Nov. 7, 2026 (UTC), when v0.5.1 was published:
+
+1. From a pre-release or `:nightly`: run `lodestar backup` first, then pull the release image and start it ([section 3.7](https://github.com/dvortsis/lodestar-v2/blob/main/docs/user/03-keep-lodestar-safe.md#37-back-up-and-restore)).
+2. Don't run `:nightly` on real data: it can apply migrations the release can't read.
+3. New installs: follow [Chapter 2](https://github.com/dvortsis/lodestar-v2/blob/main/docs/user/02-install-lodestar-on-unraid-and-docker.md). Keep port 8090 off the internet; create the admin password at once.
+
+## Known Issues
+
+- No uTP or import screen yet.
+- No automatic updates: back up, then pull the new image.
+- Not in Community Applications yet; add the template by hand.
+- The unsigned Windows installer triggers SmartScreen; check its checksum ([Chapter 4](https://github.com/dvortsis/lodestar-v2/blob/main/docs/user/04-install-on-windows-and-linux.md)).
+
+## Get Help
+
+Report problems at <https://github.com/dvortsis/lodestar-v2/issues>. Leave out torrent-detail logs and your setup token.
