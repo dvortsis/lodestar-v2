@@ -91,10 +91,13 @@ fn realistic(_hour: i64) -> Rows {
     by_worker(&c)
 }
 
-/// The cap's worst case: the fleet's full 32 rows every hour of every
-/// day, each counted by every worker.
-fn worst(_hour: i64) -> Rows {
-    let key = 100;
+/// The cap's worst case: the fleet's full 32 rows every hour, a new set
+/// each day (the most the daily cap lets rotate), each counted by every
+/// worker. No two days share a row, so compaction folds nothing across
+/// days.
+fn worst(hour: i64) -> Rows {
+    // Keys 3–255: the wide hour has 0–2 for its own rows.
+    let key = 3 + hour.div_euclid(24).rem_euclid(253);
     let rows = metric::FLEET_ROWS_PER_DAY as u32;
     by_worker(
         &(0..rows)

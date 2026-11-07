@@ -5,13 +5,16 @@
 //! results, counters into the rollups with a worker dimension, peer hints
 //! and backpressure. This module hands it what only `serve` has when the
 //! port opens: the store check, each worker's clock offset (from the
-//! server it's about to be given to), and the workers' standing (quarantine
-//! and purge, which WK-13 adds; until then none is refused).
+//! server it's about to be given to), the wire keys sealed records open
+//! with (WK-8; WK-10 sets them from the seal key), and the workers'
+//! standing (quarantine and purge, which WK-13 adds; until then none is
+//! refused).
 
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use lodestar_cluster::{ClusterServer, StoredKeys, WorkerId};
 use lodestar_pipeline::remote::{Clocks, NoStanding, RemoteIntake, RemoteSink, SinkParts};
+use lodestar_pipeline::wire::filter_snapshot::WireKeys;
 use lodestar_store::Preparer;
 
 /// Each worker's offset as the server measured it from its heartbeats.
@@ -38,6 +41,11 @@ impl Clocks for ServerClocks {
 /// The intake attached to one server.
 pub(crate) struct Attached {
     pub sink: Arc<RemoteSink>,
+    /// The keys the sink opens sealed records with. Empty until WK-10
+    /// sets them (`WorkerSnapshots::keys` shares this `Arc`): until then
+    /// no remote record opens, and each is refused (fail closed).
+    #[allow(dead_code)]
+    pub keys: Arc<WireKeys>,
     clocks: Arc<ServerClocks>,
     hints_allow_private: bool,
 }
@@ -60,15 +68,18 @@ pub(crate) fn attach(
     hints_allow_private: bool,
 ) -> Attached {
     let clocks = Arc::new(ServerClocks::default());
+    let keys = Arc::new(WireKeys::default());
     let sink = remote.sink(SinkParts {
         preparer: Mutex::new(preparer),
         standing: Arc::new(NoStanding),
+        keys: keys.clone(),
         stored,
         clocks: clocks.clone(),
         hints_allow_private,
     });
     Attached {
         sink,
+        keys,
         clocks,
         hints_allow_private,
     }

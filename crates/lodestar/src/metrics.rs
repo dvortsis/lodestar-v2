@@ -354,6 +354,8 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
         ("late_refused", &r.late_refused),
         ("purged", &r.purged),
         ("refused", &r.refused),
+        ("clear", &r.clear),
+        ("unopened", &r.unopened),
     ] {
         o.value(
             "remote_records_total",
