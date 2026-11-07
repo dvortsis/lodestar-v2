@@ -5937,6 +5937,10 @@
     {
       "id": "WK-10a-merged",
       "note": "2026-11-07T23:27Z: #592 merged 3343ac08 on fresh Opus MERGE (3 review rounds). WK-10c nits: ResetOnPanic disarm (have.rs:197), ResetOnPanic unit test (have.rs:280), close waits watcher not tick (serve.rs:1052). Owner \u00a72.19 flags owed with WK-10b merge: B2 NotReady never Blocked + next-day key pre-send from 23:00Z; released results Lost(GaveUp); have-filter 1-in-16; tombstones (WK-10c)."
+    },
+    {
+      "id": "X-ps-tests-on-pr-ci",
+      "note": "2026-11-07T23:53Z: test-secure-datadir.ps1 and test-service-sid.ps1 run only in release.yml; add a PR CI job (windows) on packaging/windows/** changes. From #597 review."
     }
   ],
   "main_health": [
@@ -6632,14 +6636,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-07T23:27Z",
+    "updated": "2026-11-07T23:53Z",
     "items": [
       {
         "slot": 1,
         "slice": "X-win-refusal-ux",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnABi9mwqkZULms8pjL: building; extra files approved 21:20-21:25Z (secure-datadir AdminUser gate, eventlog writer, customer-bit exit code)",
+        "doing": "session_01MMjhnABi9mwqkZULms8pjL: #597 review MERGE (no blocking); one hardening+docs push requested, then delta review",
         "since": "2026-11-07T21:10Z"
       },
       {
@@ -6722,5 +6726,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-07T23:27:00Z"
+  "updated": "2026-11-07T23:53:00Z"
 }
