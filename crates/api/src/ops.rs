@@ -19,8 +19,10 @@
 //!   operational control, not a filter change.
 //! - **Consent (§18.7):** the server refuses to enable a source until its
 //!   class's condition holds (the binary checks it against the store;
-//!   this crate only checks the password). Enabling a `restricted` or
-//!   `overlay` source needs the admin password, every time (Q13, §20.11).
+//!   this crate only checks the password). In this build that refuses
+//!   every class but `none` (see `patchSource`).
+//! - **What a source declares** (`credential_spec`, `config_schema`) is
+//!   read-only and compiled in: it describes fields, never a value.
 //! - **Credentials** (`PATCH /sources/{id}/credentials`) are taken in and
 //!   never given back: no response, error or log line holds a value. The
 //!   body is read by hand, so a malformed one is refused without quoting
@@ -43,13 +45,14 @@ use lodestar_store::unverified::{PurgeCursor, PurgeStep};
 
 use crate::ApiState;
 use crate::auth;
-use crate::dto::jobs::{BackgroundJob, PurgeJob, PurgeRequest, PurgeStage};
+use crate::dto::jobs::{BackgroundJob, PurgeJob, PurgePreview, PurgeRequest, PurgeStage};
 pub use crate::dto::ops::{
-    ConsentClass, CrawlerIntensity, CrawlerPatch, CrawlerState, CrawlerStatus, CredentialsPatch,
-    DhtStatus, EgressCounts, EgressLive, EgressRoute, EgressSetting, EgressState, ExternalAddress,
-    FetchStatus, NetworkCheck, PortMapping, ReachReason, RiskLevel, SamplingBlocked, SocksDns,
-    Source, SourceAgents, SourceEgress, SourceHealth, SourceKind, SourceList, SourceNeed,
-    SourcePatch, SourcePriority, SourceSchedule, SourceState, StatsResponse,
+    ConsentClass, CrawlerIntensity, CrawlerPatch, CrawlerState, CrawlerStatus, CredentialField,
+    CredentialKind, CredentialsPatch, DhtStatus, EgressCounts, EgressLive, EgressRoute,
+    EgressSetting, EgressState, ExternalAddress, FetchStatus, NetworkCheck, PortMapping,
+    ReachReason, RiskLevel, SamplingBlocked, SocksDns, Source, SourceAgents, SourceEgress,
+    SourceHealth, SourceKind, SourceList, SourceNeed, SourcePatch, SourcePriority, SourceSchedule,
+    SourceState, StatsResponse,
 };
 use crate::error::{ApiError, ApiResult, internal};
 use crate::events::EventHub;
@@ -74,6 +77,7 @@ type Hub = Option<Extension<Arc<EventHub>>>;
     patch_source,
     patch_source_credentials,
     purge_source,
+    preview_purge,
     network,
     restart_network
 ))]
@@ -137,6 +141,11 @@ pub trait OpsApi: Send + Sync + fmt::Debug {
         _id: u8,
         _from: PurgeCursor,
     ) -> BoxFuture<'_, Result<PurgeStep, OpsError>> {
+        Box::pin(async { Err(OpsError::UnknownSource) })
+    }
+    /// What purging the source would remove now, changing nothing. A
+    /// process without sources knows none.
+    fn purge_preview(&self, _id: u8) -> BoxFuture<'_, Result<PurgePreview, OpsError>> {
         Box::pin(async { Err(OpsError::UnknownSource) })
     }
     /// Ends it: the source Purged with its credentials, consent and
@@ -691,23 +700,28 @@ fn check_settings(body: &mut SourcePatch) -> ApiResult<()> {
 }
 
 /// Enables or disables a source, or sets its priority. A priority
-/// applies at once; enabling or disabling at the next start. Enabling
-/// checks the source's class (§18.7, its `needs`): an `external`,
-/// `restricted` or `overlay` source needs `"consent"` naming its class and
-/// `"consent_version"` (`409 consent_required` otherwise) until that
-/// version is acknowledged; enabling a `restricted` or `overlay` source
-/// also needs the admin `"password"`, every time (`428 confirm_required`); an
-/// `account` source needs its credentials stored
-/// (`409 credentials_required`). Agents, egress and the schedule apply
-/// at the next start; changing egress needs the admin `"password"`
-/// (`428 confirm_required`), and the `interface` and `bind_address`
-/// routes are refused (`409 route_unavailable`). `config` sets the
-/// source's settings, for a source whose `editable` lists it: a JSON
-/// object of at most 16 KiB that the source's own rules check (`400
+/// applies at once; enabling or disabling at the next start.
+///
+/// This build turns on only a source whose class is `none`. Enabling an
+/// `external`, `account`, `restricted` or `overlay` source is refused with
+/// `400 invalid_setting` on `enabled`, before its consent, acknowledgement
+/// or credentials are looked at, whatever the request sends: this version
+/// can't show the class's consent dialog yet. A `"password"` sent with the
+/// enable is still checked first (`401` when it's wrong). `needs` and
+/// `credential_spec` still say what the source will need once a later
+/// version can turn it on, and credentials can be stored and removed
+/// meanwhile (`PATCH /sources/{id}/credentials`). Disabling works for every
+/// class.
+///
+/// Agents, egress and the schedule apply at the next start; changing
+/// egress needs the admin `"password"` (`428 confirm_required`), and the
+/// `interface` and `bind_address` routes are refused (`409
+/// route_unavailable`). `config` sets the source's settings, for a source
+/// whose `editable` lists it: a JSON object of at most 16 KiB, shaped by
+/// its `config_schema`, that the source's own rules check (`400
 /// invalid_config` names the rule, never a value). It applies at the next
 /// start; a torrent cache whose new list holds an address its
-/// acknowledgement doesn't is switched off there until you acknowledge the
-/// new list. A purge isn't a field:
+/// acknowledgement doesn't is switched off there. A purge isn't a field:
 /// it's `POST /sources/{id}/purge` (`409 not_editable` here).
 #[utoipa::path(
     operation_id = "patchSource",
@@ -807,7 +821,9 @@ fn credential_changes(body: Value) -> ApiResult<Vec<(String, Option<Secret>)>> {
 
 /// `POST /sources/{id}/purge`, beside `/jobs`, whose registry it shares.
 pub(crate) fn purge_routes() -> Router<ApiState> {
-    Router::new().route("/sources/{id}/purge", post(purge_source))
+    Router::new()
+        .route("/sources/{id}/purge", post(purge_source))
+        .route("/sources/{id}/purge/preview", get(preview_purge))
 }
 
 /// How long a paused purge waits to be resumed before it fails.
@@ -864,6 +880,28 @@ pub(crate) async fn purge_source(
     let status = job.status();
     tokio::spawn(run_purge(ops, job, id));
     Ok((StatusCode::ACCEPTED, Json(status)))
+}
+
+/// What purging a source would remove if it ran now, counted with the
+/// purge's own rules, for the dialog to show before you commit
+/// (§10.10.7). It changes nothing: the source keeps its state, data,
+/// credentials and settings, and no job starts. It needs a session, like
+/// every Sources route, and no password: the password is asked once, by
+/// `POST /sources/{id}/purge`. The counts are exact while the source is
+/// off (`settled`); see `PurgePreview`.
+#[utoipa::path(
+    operation_id = "previewPurge",
+    get,
+    path = "/sources/{id}/purge/preview",
+    tag = "crawler",
+    params(("id" = u8, Path, description = "The source's id, as `GET /sources` lists it.")),
+    responses((status = 200, body = PurgePreview))
+)]
+pub(crate) async fn preview_purge(
+    State(s): State<ApiState>,
+    Path(id): Path<u8>,
+) -> ApiResult<Json<PurgePreview>> {
+    Ok(Json(ops(&s)?.purge_preview(id).await?))
 }
 
 /// The purge job's worker. Every count it reports was committed.

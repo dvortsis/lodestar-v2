@@ -36,6 +36,7 @@ use lodestar_store::{SourceState, Store};
 
 use crate::egress::{CredentialError, EgressCredentials};
 use crate::manifest::{Consent, Manifest};
+pub use crate::manifest::{CredentialKind, CredentialSpec};
 use crate::plugin::BoxFuture;
 
 /// The current version of each class's consent text. Raise a class's
@@ -248,6 +249,63 @@ pub const MAX_CREDENTIALS: usize = 16;
 
 fn is_egress_name(name: &str) -> bool {
     name == SOCKS5_USERNAME || name == SOCKS5_PASSWORD
+}
+
+/// Why a plugin's declared credentials ([`CredentialSpec`]) are wrong.
+/// A test failure, never a user's: the spec is compiled in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SpecError {
+    /// The name can't be stored: [`check_name`] refuses it.
+    Name(&'static str),
+    /// The name is one of the egress names (`egress.socks5.*`), which
+    /// belong to the egress setting, not to the plugin.
+    Egress(&'static str),
+    /// Declared twice.
+    Repeated(&'static str),
+    /// No label to show.
+    Label(&'static str),
+    /// More than [`MAX_CREDENTIALS`] declared.
+    TooMany,
+    /// An Account source whose required credentials, all stored, still
+    /// leave [`need`] asking for credentials. Today's `need` takes any
+    /// non-egress name, so this can't happen yet; it guards the stricter
+    /// `need` X-consent-gate-lift brings.
+    NotEnough,
+}
+
+/// Checks `spec` against what the credential store takes and what
+/// [`need`] accepts for `manifest`: each name passes [`check_name`], isn't
+/// an egress name and is declared once with a label, and for an Account
+/// source, storing every required one satisfies [`need`].
+pub fn check_spec(manifest: &Manifest, spec: &[CredentialSpec]) -> Result<(), SpecError> {
+    if spec.len() > MAX_CREDENTIALS {
+        return Err(SpecError::TooMany);
+    }
+    for (i, c) in spec.iter().enumerate() {
+        if is_egress_name(c.name) {
+            return Err(SpecError::Egress(c.name));
+        }
+        if check_name(c.name).is_err() {
+            return Err(SpecError::Name(c.name));
+        }
+        if spec[..i].iter().any(|o| o.name == c.name) {
+            return Err(SpecError::Repeated(c.name));
+        }
+        if c.label.trim().is_empty() {
+            return Err(SpecError::Label(c.name));
+        }
+    }
+    if needs_credentials(manifest.consent) && spec.iter().any(|c| c.required) {
+        let names: Vec<String> = spec
+            .iter()
+            .filter(|c| c.required)
+            .map(|c| c.name.to_string())
+            .collect();
+        if need(manifest, Some(&Ack::of(manifest)), &names) == Some(Need::Credentials) {
+            return Err(SpecError::NotEnough);
+        }
+    }
+    Ok(())
 }
 
 /// Why a credential change was refused. Carries no value.
@@ -761,6 +819,73 @@ mod tests {
             let set = |v: &[String]| v.iter().cloned().collect::<std::collections::BTreeSet<_>>();
             proptest::prop_assert_eq!(version(&ma) == version(&mb), set(&a) == set(&b));
         }
+    }
+
+    const fn field(name: &'static str, required: bool) -> CredentialSpec {
+        CredentialSpec {
+            name,
+            label: "API key",
+            kind: CredentialKind::Secret,
+            required,
+        }
+    }
+
+    #[test]
+    fn a_spec_is_checked_against_the_store_and_need() {
+        let account = manifest(Consent::Account);
+        assert_eq!(check_spec(&account, &[field("api_key", true)]), Ok(()));
+        assert_eq!(
+            check_spec(
+                &account,
+                &[
+                    field("user", true),
+                    CredentialSpec {
+                        kind: CredentialKind::Username,
+                        ..field("password", false)
+                    }
+                ]
+            ),
+            Ok(())
+        );
+        // Nothing declared, and an optional credential on a class that
+        // never needs one, are both fine.
+        assert_eq!(check_spec(&account, &[]), Ok(()));
+        assert_eq!(
+            check_spec(&manifest(Consent::None), &[field("token", false)]),
+            Ok(())
+        );
+        // Names the store refuses, or that belong to the egress setting.
+        for bad in ["", "Api", "a.b", "a-b"] {
+            assert_eq!(
+                check_spec(&account, &[field(bad, true)]),
+                Err(SpecError::Name(bad))
+            );
+        }
+        for egress in [SOCKS5_USERNAME, SOCKS5_PASSWORD] {
+            assert_eq!(
+                check_spec(&account, &[field(egress, true)]),
+                Err(SpecError::Egress(egress))
+            );
+        }
+        assert_eq!(
+            check_spec(&account, &[field("k", true), field("k", false)]),
+            Err(SpecError::Repeated("k"))
+        );
+        let unlabelled = CredentialSpec {
+            label: " ",
+            ..field("k", true)
+        };
+        assert_eq!(
+            check_spec(&account, &[unlabelled]),
+            Err(SpecError::Label("k"))
+        );
+        let many: Vec<CredentialSpec> = (0..=MAX_CREDENTIALS)
+            .map(|i| field(Box::leak(format!("k{i}").into_boxed_str()), false))
+            .collect();
+        assert_eq!(check_spec(&account, &many), Err(SpecError::TooMany));
+        // Every required credential stored satisfies `need`.
+        let names = vec!["api_key".to_string()];
+        assert_eq!(need(&account, None, &names), None);
     }
 
     #[test]

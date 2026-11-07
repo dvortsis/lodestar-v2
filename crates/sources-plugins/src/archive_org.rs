@@ -148,6 +148,7 @@ const POLICY: Policy = Policy {
     schedule: Schedule::ALWAYS,
     // One agent: the setting can't be changed (SRC-14a).
     max_agents: 1,
+    ..Policy::STRICT
 };
 
 /// The Internet Archive plugin.

@@ -5857,7 +5857,8 @@
         "tags": [
           "crawler"
         ],
-        "summary": "Enables or disables a source, or sets its priority. A priority\napplies at once; enabling or disabling at the next start. Enabling\nchecks the source's class (§18.7, its `needs`): an `external`,\n`restricted` or `overlay` source needs `\"consent\"` naming its class and\n`\"consent_version\"` (`409 consent_required` otherwise) until that\nversion is acknowledged; enabling a `restricted` or `overlay` source\nalso needs the admin `\"password\"`, every time (`428 confirm_required`); an\n`account` source needs its credentials stored\n(`409 credentials_required`). Agents, egress and the schedule apply\nat the next start; changing egress needs the admin `\"password\"`\n(`428 confirm_required`), and the `interface` and `bind_address`\nroutes are refused (`409 route_unavailable`). `config` sets the\nsource's settings, for a source whose `editable` lists it: a JSON\nobject of at most 16 KiB that the source's own rules check (`400\ninvalid_config` names the rule, never a value). It applies at the next\nstart; a torrent cache whose new list holds an address its\nacknowledgement doesn't is switched off there until you acknowledge the\nnew list. A purge isn't a field:\nit's `POST /sources/{id}/purge` (`409 not_editable` here).",
+        "summary": "Enables or disables a source, or sets its priority. A priority\napplies at once; enabling or disabling at the next start.",
+        "description": "This build turns on only a source whose class is `none`. Enabling an\n`external`, `account`, `restricted` or `overlay` source is refused with\n`400 invalid_setting` on `enabled`, before its consent, acknowledgement\nor credentials are looked at, whatever the request sends: this version\ncan't show the class's consent dialog yet. A `\"password\"` sent with the\nenable is still checked first (`401` when it's wrong). `needs` and\n`credential_spec` still say what the source will need once a later\nversion can turn it on, and credentials can be stored and removed\nmeanwhile (`PATCH /sources/{id}/credentials`). Disabling works for every\nclass.\n\nAgents, egress and the schedule apply at the next start; changing\negress needs the admin `\"password\"` (`428 confirm_required`), and the\n`interface` and `bind_address` routes are refused (`409\nroute_unavailable`). `config` sets the source's settings, for a source\nwhose `editable` lists it: a JSON object of at most 16 KiB, shaped by\nits `config_schema`, that the source's own rules check (`400\ninvalid_config` names the rule, never a value). It applies at the next\nstart; a torrent cache whose new list holds an address its\nacknowledgement doesn't is switched off there. A purge isn't a field:\nit's `POST /sources/{id}/purge` (`409 not_editable` here).",
         "operationId": "patchSource",
         "parameters": [
           {
@@ -5994,6 +5995,48 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BackgroundJob"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/sources/{id}/purge/preview": {
+      "get": {
+        "tags": [
+          "crawler"
+        ],
+        "summary": "What purging a source would remove if it ran now, counted with the\npurge's own rules, for the dialog to show before you commit\n(§10.10.7). It changes nothing: the source keeps its state, data,\ncredentials and settings, and no job starts. It needs a session, like\nevery Sources route, and no password: the password is asked once, by\n`POST /sources/{id}/purge`. The counts are exact while the source is\noff (`settled`); see `PurgePreview`.",
+        "operationId": "previewPurge",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The source's id, as `GET /sources` lists it.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PurgePreview"
                 }
               }
             }
@@ -10965,6 +11008,38 @@
           "secret": {
             "type": "string",
             "description": "The whole secret (`lsk_…` or `lsf_…`). Shown only now: Lodestar\nkeeps its hash, not the secret."
+          }
+        }
+      },
+      "CredentialField": {
+        "type": "object",
+        "description": "One credential a source reads, as its plugin declares it: what the\nAccount dialog asks for. It describes the field and never holds a\nvalue. Store it with `PATCH /sources/{id}/credentials` under `name`;\n`credentials` then lists the name.",
+        "required": [
+          "kind",
+          "label",
+          "name",
+          "required"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "How a credential field is entered: `secret` (a password, API key or\ntoken) is masked, `username` isn't. Neither is returned once stored.",
+            "enum": [
+              "secret",
+              "username"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "description": "What to call it, in English, such as \"API key\"."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name it's stored under, such as `api_key`."
+          },
+          "required": {
+            "type": "boolean",
+            "description": "Enabling the source needs it stored."
           }
         }
       },
@@ -17276,6 +17351,90 @@
           }
         }
       },
+      "PurgePreview": {
+        "type": "object",
+        "description": "`GET /sources/{id}/purge/preview`: what purging the source would\nremove if it ran now, counted with the purge's own rules. Nothing is\nchanged. The dialog shows it before you commit (§10.10.7).\n\nWhile the source is off (`settled`), a purge started next removes\nexactly this, as long as nothing else changes the store meanwhile. An\nenabled source keeps finding until the purge turns it off, so the purge\nmay remove more. Keys still in memory waiting to be fetched aren't\ncounted: the purge reports them as `keys_dropped`.",
+        "required": [
+          "claims_deleted",
+          "kept",
+          "plugin",
+          "queue_deleted",
+          "settled",
+          "source_id",
+          "state_deleted",
+          "torrents_deleted",
+          "unverified_deleted",
+          "unverified_kept"
+        ],
+        "properties": {
+          "claims_deleted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Claims of stored torrents it made, deleted.",
+            "minimum": 0
+          },
+          "kept": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Torrents others found too, kept without this source (`kept` in the\npurge job).",
+            "minimum": 0
+          },
+          "plugin": {
+            "type": "string"
+          },
+          "queue_deleted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Keys it queued to be fetched, saved across restarts, dropped.",
+            "minimum": 0
+          },
+          "settled": {
+            "type": "boolean",
+            "description": "The source is off, so nothing it finds can add to the counts\nbefore the purge runs."
+          },
+          "source_id": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "state_deleted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its plugin's saved state entries, deleted.",
+            "minimum": 0
+          },
+          "torrents_deleted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Torrents only this source found, deleted.",
+            "minimum": 0
+          },
+          "unverified_deleted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Items without metadata only this source found, deleted.",
+            "minimum": 0
+          },
+          "unverified_kept": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Items without metadata others found too, kept without this source.",
+            "minimum": 0
+          }
+        },
+        "example": {
+          "claims_deleted": 96402,
+          "kept": 88120,
+          "plugin": "nyaa",
+          "queue_deleted": 12,
+          "settled": true,
+          "source_id": 3,
+          "state_deleted": 4,
+          "torrents_deleted": 1204331,
+          "unverified_deleted": 5210,
+          "unverified_kept": 301
+        }
+      },
       "PurgeRequest": {
         "type": "object",
         "description": "`POST /sources/{id}/purge`.",
@@ -19886,9 +20045,11 @@
         "description": "One source plugin of this build.",
         "required": [
           "agents",
+          "config_schema",
           "consent",
           "consent_required",
           "consent_version",
+          "credential_spec",
           "credentials",
           "editable",
           "egress",
@@ -19939,6 +20100,14 @@
               }
             }
           },
+          "config_schema": {
+            "type": "object",
+            "description": "The JSON Schema (draft 2020-12) of its settings, as its plugin\ndeclares it: the settings form is generated from it, and `config`\nin `PATCH /sources/{id}` is checked against the plugin's own rules\n(when `editable` lists `config`). Read-only, and the same for every\ninstall: it holds no setting's value. Secrets are never in it: they\nare `credential_spec`'s.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "consent": {
             "type": "string",
             "description": "What enabling a source requires (§18.7).",
@@ -19957,6 +20126,13 @@
           "consent_version": {
             "type": "string",
             "description": "The version an acknowledgement must name, sent back as it is. It\nholds the class's consent-text version and every address in\n`endpoints`, so it changes when either does, and then the source\nasks again. Empty for `none` and `account`."
+          },
+          "credential_spec": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CredentialField"
+            },
+            "description": "The credentials its plugin reads, in the order to ask for them;\nempty for a source that reads none. It describes the fields, never\na value."
           },
           "credentials": {
             "type": "array",
@@ -20348,9 +20524,16 @@
                 "enforced": false,
                 "max": 1
               },
+              "config_schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "additionalProperties": false,
+                "properties": {},
+                "type": "object"
+              },
               "consent": "none",
               "consent_required": false,
               "consent_version": "",
+              "credential_spec": [],
               "credentials": [],
               "editable": [
                 "agents",

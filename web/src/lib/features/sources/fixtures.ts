@@ -6,9 +6,16 @@ type Source = components['schemas']['Source'];
 
 export const source = (over: Partial<Source> & { id: number; name: string }): Source => ({
 	agents: { count: 1, enforced: false, max: 1 },
+	config_schema: {
+		$schema: 'https://json-schema.org/draft/2020-12/schema',
+		type: 'object',
+		properties: {},
+		additionalProperties: false
+	},
 	consent: 'none',
 	consent_required: false,
 	consent_version: '',
+	credential_spec: [],
 	credentials: [],
 	editable: ['agents', 'egress', 'enabled', 'priority', 'schedule'],
 	egress: { live: null, setting: { route: 'direct' }, warnings: [] },
