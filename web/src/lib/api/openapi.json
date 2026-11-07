@@ -12320,7 +12320,7 @@
           "marginal": {
             "type": "integer",
             "format": "int64",
-            "description": "Marginal gain, ≈: the keys it found that no other worker, the\nbuilt-in crawler included, claimed while they were in flight,\ncounted as their leases end (keys still in flight aren't in it yet).\nAn approximation of \"keys only it would have seen\": a key found\nagain after its commit is a rediscovery, not a claim. By discovery\ntime.",
+            "description": "Marginal gain, ≈: the keys it found that no other worker, the\nbuilt-in crawler included, claimed while they were in flight,\ncounted as their leases end (keys still in flight aren't in it yet).\nAn approximation of \"keys only it would have seen\" that mostly\nunder-counts: a key found again after its commit is a rediscovery,\nnot a claim. By discovery time.",
             "minimum": 0
           },
           "rediscovered": {

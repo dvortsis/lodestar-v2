@@ -662,9 +662,9 @@ pub struct DiscoverWorker {
     /// Marginal gain, ≈: the keys it found that no other worker, the
     /// built-in crawler included, claimed while they were in flight,
     /// counted as their leases end (keys still in flight aren't in it yet).
-    /// An approximation of "keys only it would have seen": a key found
-    /// again after its commit is a rediscovery, not a claim. By discovery
-    /// time.
+    /// An approximation of "keys only it would have seen" that mostly
+    /// under-counts: a key found again after its commit is a rediscovery,
+    /// not a claim. By discovery time.
     pub marginal: u64,
     /// Keys stored already that it saw again. Event time.
     pub rediscovered: u64,

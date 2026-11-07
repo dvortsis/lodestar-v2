@@ -498,8 +498,7 @@ fn discover_workers(
         leases
             .iter()
             .filter(|(w, _)| **w != 0)
-            .map(|(_, l)| l[i])
-            .sum()
+            .fold(0u64, |n, (_, l)| n.saturating_add(l[i]))
     };
     let (remote_red, remote_drop) = (remote(red), remote(drop));
     let local = leases.entry(0).or_default();
