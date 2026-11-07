@@ -46,9 +46,22 @@ test('lantern lists rows; type:movie is checked in Type with the server’s coun
 		new Intl.NumberFormat('en').format(want)
 	);
 
+	// Checking changes the query, and the rail re-renders from the /facets answer for the new one. Unchecking
+	// before that lands can hit the old checkbox, which the re-render then resets ("did not change its
+	// state"), so wait for that answer, then for the rail to show its settled state.
+	const settled = page.waitForResponse(
+		(r) =>
+			new URL(r.url()).pathname === '/api/v1/facets' &&
+			r.request().method() === 'POST' &&
+			(r.request().postData() ?? '').includes('"key":"type"')
+	);
 	await movie.check();
 	await expect.poll(q).toBe('lantern type:movie');
+	await settled;
 	await expect(page.getByTestId('facet-type-movie')).toBeChecked();
+	// The Clear button renders only once the server's data marks a Type value selected: the rail has re-rendered.
+	await expect(page.getByTestId('facet-type-clear')).toBeVisible();
 	await page.getByTestId('facet-type-movie').uncheck();
 	await expect.poll(q).toBe('lantern');
+	await expect(page.getByTestId('facet-type-movie')).not.toBeChecked();
 });
