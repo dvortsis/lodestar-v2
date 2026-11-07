@@ -1642,13 +1642,18 @@ dependencies = [
 name = "lodestar-companions"
 version = "0.5.0"
 dependencies = [
+ "getrandom 0.3.4",
  "lodestar-companions",
  "lodestar-integrations",
  "lodestar-log",
+ "pbkdf2",
  "proptest",
+ "quick-xml",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]
@@ -2235,6 +2240,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aab41826031698d6ffcd9cff78ef56ef998e39dc7e5067cdfebe373842d4723b"
 dependencies = [
  "phc",
+]
+
+[[package]]
+name = "pbkdf2"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "112d82ceb8c5bf524d9af484d4e4970c9fd5a0cc15ba14ad93dccd28873b0629"
+dependencies = [
+ "digest",
+ "hmac",
 ]
 
 [[package]]
