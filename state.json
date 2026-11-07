@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T13:30Z",
+  "updated_at": "2026-11-07T14:26Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6357,7 +6357,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-07T12:39Z",
+    "updated": "2026-11-07T14:26Z",
     "items": [
       {
         "slot": 1,
@@ -6369,11 +6369,11 @@
       },
       {
         "slot": 2,
-        "slice": "LEGAL-3a",
+        "slice": "X-gs-gate-polish",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8fDparGrAa4UZ8bWL (Sonnet): legal notice facts test in CI",
-        "since": "2026-11-07T12:34Z"
+        "doing": "session_01MMjhn9J1eP2czawieouHQW (Sonnet): size-gate follow-ups from #546",
+        "since": "2026-11-07T14:26Z"
       },
       {
         "slot": 3,
