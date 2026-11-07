@@ -1396,7 +1396,7 @@ gates:
   name: Sources gate (v0.6)
   plain: The blocklist and safety rules apply through every source plug-in.
   slice: SRC-G
-  measure: 'No property fails (9 plug-in kinds, 11 manifests). Ingest with every source on 1,176/s (budget >= 1,000/s), overhead 6.8%. Not yet built: Torznab, Stremio, unverified indexing (SRC-3b). Full scrape stays unwired until the owner 2.37 wording ships'
+  measure: 'No property fails (9 plug-in kinds plus the DHT, 11 manifests). Ingest budget not decided in the sandbox (off 1,088-1,266/s, on 811-1,041/s with the index; re-run on the reference CPU). Not yet built: Torznab, Stremio, unverified indexing (SRC-3b). Full scrape stays unwired until the owner 2.37 wording ships'
   target: See docs/plan/2026-11-01-v06-sources.md section 4.2
   where: docs/decisions/2026-11-07-SRC-G.md
 - id: G-import

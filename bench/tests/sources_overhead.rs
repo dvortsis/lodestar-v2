@@ -2,7 +2,8 @@
 //! all v0.6 sources enabled, the §3 search and ingest budgets still
 //! hold"; §3: coordinator ingest ≥ 1,000 new verified torrents/s).
 //!
-//! The real ingest path (pool → fetch → prepare → writer → SQLite) stores
+//! The real ingest path (pool → fetch → prepare → writer → SQLite, with
+//! the live search index following it, as §3's "commit + index") stores
 //! synthetic torrents from a DHT-like source, as `examples/mem-ingest.rs`
 //! does, once alone and once with every v0.6 plugin kind on: each plugin's
 //! recorded fixture finds, replayed with no network and re-keyed so every
@@ -33,6 +34,7 @@ use lodestar_bench::synth::Generator;
 use lodestar_metainfo::{Info, InfoHash};
 use lodestar_peer_wire::{FailureKind, Fetched};
 use lodestar_pipeline::{Pipeline, PipelineConfig};
+use lodestar_search::{LiveConfig, Ranking, Serving, ServingConfig};
 use lodestar_sources::{
     BoxFuture, Consent, Fetcher, Found, Kind, Manifest, Network, PluginError, Priority, Risk,
     SourceCtx, SourcePlugin,
@@ -130,7 +132,10 @@ fn rekey(f: &Found, copy: u32) -> Found {
 }
 
 struct Report {
+    /// Until every torrent was committed and indexed.
     secs: f64,
+    /// Until every claim had been judged too.
+    all_secs: f64,
     torrents: u64,
     /// Claims sent, and those stored as new unverified items (the rest
     /// merged into one already stored, or were refused).
@@ -149,7 +154,32 @@ impl Report {
 /// kind's finds alongside (one claim per two torrents) into a store
 /// already holding `seeded` unverified items.
 async fn run(torrents: u64, sources: bool, seeded: usize) -> Report {
-    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    run_with(torrents, sources, seeded, sources).await
+}
+
+/// As [`run`]; `claims` says whether the plugins' finds flow too (off: only
+/// the seeded items, so only the duplicate check costs).
+async fn run_with(torrents: u64, sources: bool, seeded: usize, claims: bool) -> Report {
+    // On disk, with the live search index following it: §3's budget is
+    // for commit + index.
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lodestar.db");
+    let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+    let (hot, _) = lodestar_pipeline::open_hot(&mut store, dir.path()).unwrap();
+    let hot = Arc::new(hot);
+    let serving = Serving::open_or_rebuild(
+        &dir.path().join("index"),
+        &db,
+        ServingConfig {
+            live: LiveConfig::default(),
+            ranking: Ranking {
+                hot: Some(hot.clone()),
+                ..Ranking::default()
+            },
+            ..ServingConfig::default()
+        },
+    )
+    .unwrap();
     let runs = if sources {
         plugins::fixture_runs()
     } else {
@@ -190,7 +220,11 @@ async fn run(torrents: u64, sources: bool, seeded: usize) -> Report {
     })];
     // Each kind's share of one claim per two torrents.
     let mut rounds = Vec::new();
-    let per_kind = (torrents / 2) / runs.len().max(1) as u64;
+    let per_kind = if claims {
+        (torrents / 2) / runs.len().max(1) as u64
+    } else {
+        0
+    };
     for r in &runs {
         let (p, tx) = plugins::relay(&r.manifest);
         plugins.push(p);
@@ -205,7 +239,11 @@ async fn run(torrents: u64, sources: bool, seeded: usize) -> Report {
     let claims_sent: u64 = rounds.iter().map(|(_, f)| f.len() as u64).sum();
     let started = Instant::now();
     let pipeline = Pipeline::start_with(
-        PipelineConfig::default(),
+        PipelineConfig {
+            hot: Some(hot),
+            gate_follows_index: true,
+            ..PipelineConfig::default()
+        },
         store,
         plugins,
         Arc::new(Serves(pending)),
@@ -218,32 +256,46 @@ async fn run(torrents: u64, sources: bool, seeded: usize) -> Report {
         }
     }
     let deadline = Instant::now() + Duration::from_secs(600);
+    // When the torrents were all committed and indexed (the §3 figure),
+    // and when every claim had been judged too.
+    let mut torrents_at = None;
     loop {
         let w = pipeline.writer_stats();
         let i = pipeline.intake_stats();
         let stored = w.stored.load(Ordering::Relaxed);
+        let indexed = serving.stats().indexed.load(Ordering::Relaxed);
         let judged =
             w.unverified.received.load(Ordering::Relaxed) + i.refused.load(Ordering::Relaxed);
-        if stored >= torrents * 99 / 100 && judged >= claims_sent {
+        if torrents_at.is_none() && stored >= torrents * 99 / 100 && indexed >= stored {
+            torrents_at = Some(started.elapsed().as_secs_f64());
+        }
+        if torrents_at.is_some() && judged >= claims_sent {
             break;
         }
         assert!(
             Instant::now() < deadline,
-            "stalled: {stored} of {torrents} stored, {judged} of {claims_sent} claims"
+            "stalled: {stored} of {torrents} stored, {indexed} indexed, {judged} of {claims_sent} claims"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    let secs = started.elapsed().as_secs_f64();
-    let w = pipeline.writer_stats();
-    let report = Report {
+    let all_secs = started.elapsed().as_secs_f64();
+    let secs = torrents_at.unwrap();
+    let torrents = pipeline.writer_stats().stored.load(Ordering::Relaxed);
+    // Read from the store once the writer has stopped: every claim's batch
+    // is committed by then.
+    let store = pipeline.shutdown().await.unwrap();
+    let items: i64 = store
+        .connection()
+        .query_row("SELECT COUNT(*) FROM unverified_items", [], |r| r.get(0))
+        .unwrap();
+    Report {
         secs,
-        torrents: w.stored.load(Ordering::Relaxed),
+        all_secs,
+        torrents,
         sent: claims_sent,
-        claims: w.unverified.stored.load(Ordering::Relaxed),
+        claims: (items as u64).saturating_sub(if sources { seeded as u64 } else { 0 }),
         kinds: runs.iter().map(|r| r.kind).collect(),
-    };
-    pipeline.shutdown().await.unwrap();
-    report
+    }
 }
 
 /// Everything lands with every source on: the torrents, and the claims as
@@ -296,10 +348,11 @@ async fn sources_overhead() {
         off.per_sec()
     );
     println!(
-        "sources on:  {} torrents in {:.2} s = {:.0}/s, {} claims sent ({} stored new) from {:?}; overhead {overhead:.1}%",
+        "sources on:  {} torrents in {:.2} s = {:.0}/s (claims all judged at {:.2} s), {} claims sent ({} stored new) from {:?}; overhead {overhead:.1}%",
         on.torrents,
         on.secs,
         on.per_sec(),
+        on.all_secs,
         on.sent,
         on.claims,
         on.kinds
@@ -309,4 +362,35 @@ async fn sources_overhead() {
         "§3 ingest budget missed with every source on: {:.0}/s",
         on.per_sec()
     );
+}
+
+/// Where the overhead comes from: each factor alone, best of three, no
+/// assert. For the runner when the measurement misses.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "a measurement; run in release"]
+async fn sources_overhead_breakdown() {
+    const TORRENTS: u64 = 20_000;
+    let cases: [(&str, bool, usize, bool); 4] = [
+        ("off", false, 0, false),
+        ("200k unverified, no claims", true, 200_000, false),
+        ("claims, no unverified", true, 0, true),
+        ("both", true, 200_000, true),
+    ];
+    for (name, sources, seeded, claims) in cases {
+        let mut best: Option<Report> = None;
+        for _ in 0..3 {
+            let r = run_with(TORRENTS, sources, seeded, claims).await;
+            if best.as_ref().is_none_or(|b| r.per_sec() > b.per_sec()) {
+                best = Some(r);
+            }
+        }
+        let b = best.unwrap();
+        println!(
+            "{name}: {:.0}/s ({:.2} s; claims judged at {:.2} s; {} sent)",
+            b.per_sec(),
+            b.secs,
+            b.all_secs,
+            b.sent
+        );
+    }
 }

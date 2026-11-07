@@ -98,7 +98,8 @@ fn arr_fixture(name: &str) -> Vec<u8> {
 
 /// Every plugin kind that finds keys, run on its normal fixture. The
 /// enrichment kinds (torrent cache, ThePornDB, StashDB) answer lookups
-/// about keys already found; they're covered on their own below.
+/// about keys already found; their blocklist paths are covered where they
+/// live (`docs/decisions/2026-11-07-SRC-G.md`).
 async fn every_plugin_kind() -> Vec<Run> {
     let mut runs = Vec::new();
     let mut add = |kind, (manifest, got): (Manifest, Vec<Discovery>)| {

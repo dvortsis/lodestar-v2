@@ -13,13 +13,10 @@
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
-use lodestar_filter::{
-    Action, Core, CsList, Engine, Handle, Lists, Origin, Sealer, Switches, TermSet,
-};
+use lodestar_filter::{Action, Origin};
 use lodestar_metainfo::InfoHash;
 use lodestar_pipeline::{Pipeline, PipelineConfig};
 use lodestar_sources::{BoxFuture, Consent, Found, Manifest, PluginError, SourceCtx, SourcePlugin};
@@ -27,71 +24,16 @@ use lodestar_sources_plugins::{arr, catalogue, full_scrape, nyaa};
 use lodestar_store::unverified::Network;
 use lodestar_store::{Store, StoreConfig};
 
+#[path = "support/harness.rs"]
+mod harness;
 #[path = "support/plugins.rs"]
 mod plugins;
 
+use harness::{core_with, n, pipeline_config, until, user_rule};
 use plugins::{Run, fixture_runs, relay};
 
 /// This crate's folder, for the shared fixture runs.
 const PLUGINS_DIR: &str = env!("CARGO_MANIFEST_DIR");
-
-/// The child-safety core with stand-in term lists, as the pipeline's own
-/// tests build it: a child role next to a sexual term is a CS-4 pattern.
-fn core_with(sexual: &[&str], roles: &[&str]) -> Arc<Handle> {
-    let lists = Lists {
-        sexual: TermSet::of(sexual),
-        child_roles: TermSet::of(roles),
-        codes: TermSet::of(&["codex"]),
-    };
-    Arc::new(Handle::new(Engine::new(Core::new(
-        lists,
-        CsList::default(),
-        Switches::default(),
-    ))))
-}
-
-fn user_rule(filter: &Handle, query: &str, action: Action) {
-    filter.update_engine(|e| {
-        let notes = e.load_rules(&lodestar_store::RuleSet {
-            rules: vec![lodestar_store::RuleRow {
-                id: 1,
-                query: query.into(),
-                action: action.code(),
-                enabled: true,
-                shadow_until: None,
-                unless_query: None,
-            }],
-            ..Default::default()
-        });
-        assert!(notes.is_empty(), "{notes:?}");
-        e.version += 1;
-    });
-}
-
-fn pipeline_config(filter: Arc<Handle>) -> PipelineConfig {
-    PipelineConfig {
-        flush_every: Duration::from_millis(100),
-        batch_wait: Duration::from_millis(20),
-        filter,
-        sealer: Some(Arc::new(Sealer::new(&Sealer::generate_key().unwrap()))),
-        ..PipelineConfig::default()
-    }
-}
-
-/// Polls for at least 10 s (standards §2), so the slowest runner passes.
-async fn until(what: &str, mut f: impl FnMut() -> bool) {
-    for _ in 0..600 {
-        if f() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    panic!("timed out waiting for {what}");
-}
-
-fn n(c: &AtomicU64) -> u64 {
-    c.load(Ordering::Relaxed)
-}
 
 /// Lowercase words of four or more letters, in order.
 fn words(name: &str) -> Vec<String> {
@@ -191,6 +133,11 @@ async fn a_blocklisted_hash_and_name_through_every_plugin_kind_are_never_stored(
 async fn check_blocklist(run: &Run) {
     let kind = run.kind;
     let plan = plan(run);
+    // Every check runs for every kind but the keys-only full scrape, which
+    // has no name to block or match a rule (`docs/decisions/2026-11-07-SRC-G.md`).
+    let named_kind = kind != "full_scrape";
+    assert_eq!(plan.named.is_some(), named_kind, "{kind}: the name block");
+    assert!(!plan.clean.is_empty(), "{kind}: no clean control");
     let (sexual, roles): (Vec<&str>, Vec<&str>) = match &plan.named {
         Some((_, role, sexual)) => (vec![sexual.as_str()], vec![role.as_str()]),
         None => (vec!["lexa"], vec!["rolea"]),
@@ -242,15 +189,37 @@ async fn check_blocklist(run: &Run) {
             .find_map(|f| name_of(f).map(words))
             .and_then(|w| w.into_iter().next())
     });
+    assert_eq!(
+        rule_word.is_some(),
+        named_kind,
+        "{kind}: the re-judge check"
+    );
     if let Some(w) = &rule_word {
+        // Every clean key the word names goes, the target among them.
+        let matched: Vec<InfoHash> = plan
+            .clean
+            .iter()
+            .copied()
+            .filter(|k| {
+                run.finds
+                    .iter()
+                    .filter(|f| f.key == *k)
+                    .any(|f| name_of(f).is_some_and(|n| words(n).iter().any(|x| x == w)))
+            })
+            .collect();
+        assert!(matched.contains(&target.unwrap()), "{kind}");
         let refiled = n(&pipeline.writer_stats().unverified.refiled);
         user_rule(&filter, w, Action::Drop);
         let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
-        let k = target.unwrap();
         // Gone, and by the sweep: its count follows the commit.
-        until(&format!("{kind}: the re-judge sweep removes {k:?}"), || {
-            !stored(&reader, &k) && n(&pipeline.writer_stats().unverified.refiled) > refiled
-        })
+        until(
+            &format!("{kind}: the re-judge sweep removes {matched:?}"),
+            || {
+                matched.iter().all(|k| !stored(&reader, k))
+                    && n(&pipeline.writer_stats().unverified.refiled)
+                        >= refiled + matched.len() as u64
+            },
+        )
         .await;
     }
     let store = pipeline.shutdown().await.unwrap();
@@ -399,6 +368,7 @@ async fn a_private_find_is_stored_private_and_never_reaches_a_public_lookup() {
     .unwrap();
     let mut private_keys = BTreeSet::new();
     let mut public_keys = BTreeSet::new();
+    let mut sent_total = 0u64;
     for (r, tx) in &senders {
         let mut round = r.finds.clone();
         // Each find again as a bare sighting, which would go to the pool.
@@ -412,9 +382,18 @@ async fn a_private_find_is_stored_private_and_never_reaches_a_public_lookup() {
                 false => public_keys.insert(f.key),
             };
         }
+        sent_total += round.len() as u64;
         tx.send(round).await.unwrap();
     }
     let control = InfoHash([0x77; 20]);
+    // Every private find through intake, the bare sightings handed to the
+    // pool and the claims stored, before the control is sent: a private
+    // key the pool would look up is already queued ahead of it.
+    until("the private finds through intake", || {
+        let i = pipeline.intake_stats();
+        n(&i.received) >= sent_total && n(&i.to_pool) > 0
+    })
+    .await;
     until("the private claims stored", || {
         n(&pipeline.writer_stats().unverified.stored) >= private_keys.len() as u64
     })
@@ -453,6 +432,42 @@ async fn a_private_find_is_stored_private_and_never_reaches_a_public_lookup() {
         .query_row("SELECT COUNT(*) FROM torrents", [], |r| r.get(0))
         .unwrap();
     assert_eq!(torrents, 0);
+}
+
+/// The DHT's own finds are keys alone: a key on the floor is refused at
+/// intake and never looked up, while a clean key goes to the peer finders.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_floor_hash_the_dht_finds_is_refused_and_never_looked_up() {
+    let dht = lodestar_pipeline::DhtSource::new(Default::default());
+    let manifest = Manifest {
+        // The relay only finds; the spy below plays the peer finder.
+        kinds: &[lodestar_sources::Kind::Discovery],
+        ..dht.manifest().clone()
+    };
+    assert_eq!(manifest.id, "dht");
+    let (finder, asked) = spy();
+    let (source, tx) = relay(&manifest);
+    let filter = core_with(&["lexa"], &["rolea"]);
+    let (floor, clean) = (InfoHash([0x31; 20]), InfoHash([0x32; 20]));
+    filter.update(|c| c.cs.add_hash(floor.0, Origin::Imported));
+    let store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let pipeline = Pipeline::start(pipeline_config(filter), store, vec![finder, source])
+        .await
+        .unwrap();
+    tx.send(vec![Found::key(floor, 0), Found::key(clean, 0)])
+        .await
+        .unwrap();
+    until("the clean key looked up", || {
+        asked.lock().unwrap().contains(&clean)
+    })
+    .await;
+    assert_eq!(n(&pipeline.intake_stats().refused), 1);
+    let store = pipeline.shutdown().await.unwrap();
+    assert!(
+        !asked.lock().unwrap().contains(&floor),
+        "the floor hash was looked up"
+    );
+    assert!(!stored(&store, &floor));
 }
 
 // ---------------------------------------------------------------------
@@ -520,108 +535,6 @@ fn the_schema_keeps_no_peer_address_beside_content() {
     assert!(found.is_empty(), "address-like columns: {found:?}");
 }
 
-/// Every event the pipeline, filter, DHT, peer wire and integrations
-/// declare is on, and every record is kept.
-struct Capture(Mutex<Vec<(String, String, bool)>>);
-
-impl lodestar_log::Sink for Capture {
-    fn record(&self, r: &lodestar_log::Record<'_>) {
-        let all = lodestar_log::Mask(u32::MAX).without_opt_ins();
-        self.0.lock().unwrap().push((
-            r.text(all, None),
-            r.text(lodestar_log::Mask::PRIVATE, None),
-            r.pairs_torrent(),
-        ));
-    }
-}
-
-/// The log scan (§18.9): a fixture run with every event on, a failed
-/// fetch from a peer included, shows no peer address beside a torrent
-/// unless the opt-in Peer activity kind is on, even with every other kind
-/// (hashes and peer addresses included) shown. With the default preset
-/// no key a source found is printed at all.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_log_scan_finds_no_peer_address_beside_a_torrent() {
-    static CAPTURE: std::sync::OnceLock<Capture> = std::sync::OnceLock::new();
-    let capture = CAPTURE.get_or_init(|| Capture(Mutex::new(Vec::new())));
-    lodestar_log::set_sink(capture).expect("this binary's only sink");
-    for c in [
-        &lodestar_pipeline::log_events::CATALOGUE,
-        &lodestar_filter::log_events::CATALOGUE,
-        &lodestar_dht::log_events::CATALOGUE,
-        &lodestar_peer_wire::log_events::CATALOGUE,
-        &lodestar_integrations::log_events::CATALOGUE,
-    ] {
-        for e in c.events {
-            e.set_on(true);
-        }
-    }
-    // A peer that refuses: its address and the key meet in a failed fetch.
-    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let peer = closed.local_addr().unwrap();
-    drop(closed);
-    let runs = fixture_runs();
-    let mut plugins: Vec<Arc<dyn SourcePlugin>> = Vec::new();
-    let mut senders = Vec::new();
-    for r in &runs {
-        let (p, tx) = relay(&r.manifest);
-        plugins.push(p);
-        senders.push((r, tx));
-    }
-    let mut config = pipeline_config(core_with(&["lexa"], &["rolea"]));
-    config.fetch.allow_private = true;
-    config.pool.max_attempts = 1;
-    let fetched = InfoHash([0x66; 20]);
-    let store = Store::open_in_memory(StoreConfig::default()).unwrap();
-    let pipeline = Pipeline::start(config, store, plugins).await.unwrap();
-    let mut keys: BTreeSet<InfoHash> = BTreeSet::from([fetched]);
-    for (r, tx) in &senders {
-        keys.extend(r.finds.iter().map(|f| f.key));
-        let mut round = r.finds.clone();
-        if r.kind == "nyaa" {
-            round.push(Found::key(fetched, 0).with_peers(vec![peer]));
-        }
-        tx.send(round).await.unwrap();
-    }
-    until("the failed fetch logged", || {
-        capture
-            .0
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|(all, _, pairs)| *pairs && all.contains("Metadata fetch failed"))
-    })
-    .await;
-    pipeline.shutdown().await.unwrap();
-    let lines = capture.0.lock().unwrap().clone();
-    let address = peer.ip().to_string();
-    for (all, private, pairs) in &lines {
-        if *pairs {
-            assert!(!all.contains(&address), "a peer beside a torrent: {all}");
-        }
-        // The address shows only where no torrent is named at all.
-        let names_a_key = keys.iter().any(|k| all.contains(&k.to_string()));
-        assert!(
-            !(names_a_key && all.contains(&address)),
-            "a peer beside a key: {all}"
-        );
-        for k in &keys {
-            assert!(
-                !private.contains(&k.to_string()),
-                "a key at the default preset: {private}"
-            );
-        }
-    }
-    // The scan saw the case it's for: a peer and a key in one record,
-    // with the key shown and the peer not.
-    assert!(
-        lines.iter().any(|(all, _, pairs)| *pairs
-            && all.contains(&fetched.to_string())
-            && all.contains("peer=[hidden]")),
-        "{lines:?}"
-    );
-}
-
 // ---------------------------------------------------------------------
 // Consent can't be bypassed (§18.7, §18.9; owner §2.49 and
 // X-consent-gate-052's v0.5.2 rule).
@@ -670,7 +583,11 @@ async fn no_enable_path_opens_a_consent_class_in_any_shipped_plugin() {
     {
         let mut store = Store::open(&db, StoreConfig::default()).unwrap();
         for m in &manifests {
-            store.register_source(m.id, m.version, 0).unwrap();
+            // Half under an older plugin version: a start after an upgrade
+            // is refused the same way (the version alone never re-asks or
+            // opens anything; consent covers the class, text and addresses).
+            let version = if m.id.len() % 2 == 0 { "0" } else { m.version };
+            store.register_source(m.id, version, 0).unwrap();
         }
     }
     let mut ran = Vec::new();
@@ -811,13 +728,144 @@ fn rust_files(dir: &std::path::Path, out: &mut Vec<(PathBuf, String)>) {
             if name == "tests.rs" || name.ends_with("_tests.rs") {
                 continue;
             }
-            // What the binary is built from: a test module (by convention
-            // last in its file) is left out.
             let text = std::fs::read_to_string(&p).unwrap();
-            let shipped = text.split("#[cfg(test)]").next().unwrap().to_owned();
-            out.push((p.clone(), shipped));
+            let kept = shipped(&text).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+            out.push((p.clone(), kept));
         }
     }
+}
+
+/// `text` without its test modules: each `#[cfg(test)]` that's followed
+/// (after any further attributes) by `mod name;` or `mod name { … }` is cut
+/// out with that module. Any other `#[cfg(test)]` item is kept, so a scan
+/// errs towards seeing too much. A module whose braces don't balance is an
+/// error rather than a guess.
+fn shipped(text: &str) -> Result<String, String> {
+    const ATTR: &str = "#[cfg(test)]";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(ATTR) {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + ATTR.len()..];
+        // Skip whitespace and further attributes.
+        let mut item = after.trim_start();
+        while item.starts_with("#[") {
+            let Some(end) = item.find(']') else { break };
+            item = item[end + 1..].trim_start();
+        }
+        let item_mod = item
+            .strip_prefix("pub(crate) ")
+            .or_else(|| item.strip_prefix("pub "))
+            .unwrap_or(item)
+            .strip_prefix("mod ");
+        let Some(m) = item_mod else {
+            // Not a module: keep the attribute and go on after it.
+            out.push_str(ATTR);
+            rest = after;
+            continue;
+        };
+        let name_end = m
+            .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .unwrap_or(m.len());
+        let tail = m[name_end..].trim_start();
+        if let Some(t) = tail.strip_prefix(';') {
+            rest = t;
+            continue;
+        }
+        let Some(body) = tail.strip_prefix('{') else {
+            return Err(format!("unexpected text after `mod {}`", &m[..name_end]));
+        };
+        rest = &body[module_end(body)?..];
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
+/// Where a module body that starts just after its `{` ends (just after its
+/// `}`). Skips string and character literals and comments.
+fn module_end(body: &str) -> Result<usize, String> {
+    let b = body.as_bytes();
+    let (mut depth, mut i) = (1usize, 0usize);
+    while i < b.len() {
+        match b[i] {
+            b'/' if b.get(i + 1) == Some(&b'/') => {
+                i = body[i..].find('\n').map_or(b.len(), |n| i + n);
+            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                i = body[i + 2..].find("*/").map_or(b.len(), |n| i + 2 + n + 2);
+                continue;
+            }
+            b'r' if matches!(b.get(i + 1), Some(b'"' | b'#'))
+                && (i == 0 || !b[i - 1].is_ascii_alphanumeric()) =>
+            {
+                let hashes = b[i + 1..].iter().take_while(|c| **c == b'#').count();
+                let close = format!("\"{}", "#".repeat(hashes));
+                let open = i + 1 + hashes + 1;
+                i = body[open..]
+                    .find(&close)
+                    .map_or(b.len(), |n| open + n + close.len());
+                continue;
+            }
+            b'"' => {
+                i += 1;
+                while i < b.len() && b[i] != b'"' {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+            }
+            b'\''
+                if b.get(i + 2) == Some(&b'\'')
+                    || (b.get(i + 1) == Some(&b'\\') && b.get(i + 3) == Some(&b'\'')) =>
+            {
+                i += if b[i + 1] == b'\\' { 3 } else { 2 };
+            }
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Ok(i + 1);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    Err("a test module's braces don't balance".into())
+}
+
+/// The scan sees shipped code after an item-level `#[cfg(test)]` and after
+/// a test module, and none of the test module itself.
+#[test]
+fn the_source_scan_drops_only_test_modules() {
+    let text = r##"fn a() {}
+#[cfg(test)]
+pub const STEPS: u8 = 1;
+fn shipped_one() { FullScrape::new(); }
+#[cfg(test)]
+#[allow(dead_code)]
+mod tests {
+    fn t() { let s = "}"; let c = '}'; let r = r#"}"#; /* } */ StaticPrivateTrackers::none(); }
+    // }
+}
+fn shipped_two() { "/torznab"; }
+#[cfg(test)]
+mod other_tests;
+fn shipped_three() {}
+"##;
+    let kept = shipped(text).unwrap();
+    for seen in [
+        "STEPS",
+        "shipped_one",
+        "FullScrape::new",
+        "shipped_two",
+        "/torznab",
+        "shipped_three",
+    ] {
+        assert!(kept.contains(seen), "{seen} hidden: {kept}");
+    }
+    for hidden in ["StaticPrivateTrackers", "mod tests", "other_tests"] {
+        assert!(!kept.contains(hidden), "{hidden} kept: {kept}");
+    }
+    assert!(shipped("#[cfg(test)]\nmod t {\n fn x() {").is_err());
 }
 
 /// `full_scrape` isn't registered by the binary today. The moment it is,
@@ -852,6 +900,8 @@ fn the_full_scrape_is_unwired_or_wired_with_a_store_backed_private_tracker_looku
     if wired.is_empty() {
         return;
     }
+    // Only that one exists: whether it fails closed (an error counts as
+    // private, `full_scrape::PrivateTrackers`) is the wiring PR's review.
     let store_backed = files.iter().any(|(_, t)| {
         t.contains("impl PrivateTrackers for") || t.contains("full_scrape::PrivateTrackers for")
     });
@@ -865,10 +915,15 @@ fn the_full_scrape_is_unwired_or_wired_with_a_store_backed_private_tracker_looku
         "the full-scrape settings text lacks the §2.37 wording"
     );
     let mut guide = String::new();
-    for e in std::fs::read_dir(root.join("docs/user")).unwrap() {
-        let p = e.unwrap().path();
-        if p.extension().is_some_and(|x| x == "md") {
-            guide.push_str(&std::fs::read_to_string(p).unwrap());
+    let mut dirs = vec![root.join("docs/user")];
+    while let Some(dir) = dirs.pop() {
+        for e in std::fs::read_dir(dir).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                dirs.push(p);
+            } else if p.extension().is_some_and(|x| x == "md") {
+                guide.push_str(&std::fs::read_to_string(p).unwrap().to_lowercase());
+            }
         }
     }
     assert!(
