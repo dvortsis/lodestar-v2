@@ -186,6 +186,43 @@ describe('SettingField', () => {
 		expect(writeText).toHaveBeenCalledWith('LODESTAR_DHT_PORT');
 	});
 
+	it('leaves focus on the menu itself after a pointer open', async () => {
+		show('crawler.timeout_secs');
+		const more = screen.getByRole('button', { name: 'Options for Fetch timeout' });
+		// A pointer click has `detail` 1: Bits UI's default focus stays on the menu.
+		await fireEvent.click(more, { detail: 1 });
+		const first = (await screen.findAllByRole('menuitem'))[0]!;
+		const menu = document.querySelector('[role="menu"]')!;
+		await waitFor(() => expect(menu.contains(document.activeElement)).toBe(true));
+		expect(document.activeElement).not.toBe(first);
+	});
+
+	it('does not carry a keyboard open over to a later pointer open', async () => {
+		show('crawler.timeout_secs');
+		const more = screen.getByRole('button', { name: 'Options for Fetch timeout' });
+		await fireEvent.click(more, { detail: 0 });
+		await waitFor(() => expect(document.activeElement).toBe(screen.getAllByRole('menuitem')[0]));
+		await fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+		await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+		// The menu's own trigger has replaced the placeholder button by now.
+		const trigger = screen.getByRole('button', { name: 'Options for Fetch timeout' });
+		await fireEvent.pointerDown(trigger);
+		await fireEvent.click(trigger, { detail: 1 });
+		const first = (await screen.findAllByRole('menuitem'))[0]!;
+		const menu = document.querySelector('[role="menu"]')!;
+		await waitFor(() => expect(menu.contains(document.activeElement)).toBe(true));
+		expect(document.activeElement).not.toBe(first);
+	});
+
+	it('focuses the first menu item on a keyboard open (a click with detail 0)', async () => {
+		show('crawler.timeout_secs');
+		await fireEvent.click(screen.getByRole('button', { name: 'Options for Fetch timeout' }), {
+			detail: 0
+		});
+		const items = await screen.findAllByRole('menuitem');
+		await waitFor(() => expect(document.activeElement).toBe(items[0]));
+	});
+
 	it('offers Reset only for a value saved in the app, and shows the keys', async () => {
 		show('crawler.timeout_secs');
 		await fireEvent.click(screen.getByRole('button', { name: 'Options for Fetch timeout' }));

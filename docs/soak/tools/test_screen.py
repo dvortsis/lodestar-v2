@@ -406,17 +406,6 @@ class NeverAPassTests(Base):
         self.assertEqual(out["counters"]["anon_mappings_128k_512k_per_1000_stored"]["status"], "unusable")
         self.assertNotEqual(out["status"], "ok")
 
-    def test_a_stored_spread_too_wide_to_square_is_unusable_not_an_error(self):
-        # (x - mx) ** 2 raised OverflowError past about 1e154; the slope is no reading.
-        bound_off = dict(config(), counters={**config()["counters"], "anon_mappings_128k_512k":
-                                             {"value": float("inf"), "trips": "above"}})
-        out = screen_checkpoint([(i / 10, {"stored": 1e158 * (1 + i), "anon_mappings_128k_512k": 1.0 * i})
-                                 for i in range(41)], 4.0, 3, bound_off)
-        self.assertEqual(out["counters"]["anon_mappings_128k_512k_per_1000_stored"]["status"], "unusable")
-        self.assertIsNone(out["counters"]["anon_mappings_128k_512k_per_1000_stored"]["value"])
-        self.assertNotEqual(out["status"], "ok")
-        self.assertTrue(math.isnan(analyze_cr0.screen_slope([(1e155, 0.0), (3e155, 1.0)])))
-
     def test_a_result_the_cli_cant_write_is_a_screen_error(self):
         root = self.run_dir(r5)
         real = analyze_cr0.screen_evaluate

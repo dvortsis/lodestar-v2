@@ -201,6 +201,13 @@ describe('Menu', () => {
 			await openFromCode({ autofocusFirst: true, firstDisabled: true });
 			await waitFor(() => expect(document.activeElement).toBe(item('Second')));
 		});
+
+		it('leaves the first item unfocused when it is off', async () => {
+			await openFromCode({});
+			const menu = screen.getByRole('menu', { name: 'Row actions' });
+			await waitFor(() => expect(menu.contains(document.activeElement)).toBe(true));
+			expect(document.activeElement).not.toBe(item('First'));
+		});
 	});
 
 	it('marks disabled items', async () => {

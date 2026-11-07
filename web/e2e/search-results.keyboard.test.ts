@@ -101,7 +101,8 @@ test('a pointer open of the More menu after a keyboard open does not focus the f
 	await expect(page.getByRole('menu')).toHaveCount(0);
 	await rowOf(page, 1).hover();
 	await rowOf(page, 1).locator('[data-row-more]').click();
-	await expect(page.getByRole('menu', { name: /More actions/ })).toBeVisible();
+	// Focus has settled in the menu (on the menu itself), so the negative check below cannot pass early.
+	await expect(page.getByRole('menu', { name: /More actions/ })).toBeFocused();
 	await expect(first).not.toBeFocused();
 });
 

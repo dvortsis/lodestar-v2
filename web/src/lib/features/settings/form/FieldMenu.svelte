@@ -2,6 +2,7 @@
 	// The field menu (⋯), loaded on first use: the Menu primitive brings Bits UI and its floating
 	// positioning, which no field needs until someone opens a menu. Its items are built here, so
 	// their labels load with it.
+	import { untrack } from 'svelte';
 	import IconButton from '$lib/ui/controls/IconButton.svelte';
 	import Menu, { type MenuItem } from '$lib/ui/overlays/Menu.svelte';
 	import { m } from '$lib/paraglide/messages.js';
@@ -13,9 +14,18 @@
 		label: string;
 		onSelect: (id: string) => void;
 		open?: boolean;
+		/**
+		 * The menu's first open was made from the keyboard, before this lazily loaded menu was mounted (Bits UI
+		 * only focuses the first item itself once it has seen a keydown). Later opens go through the mounted trigger.
+		 */
+		byKeyboard?: boolean;
 	}
 
-	let { field: f, label, onSelect, open = $bindable(false) }: Props = $props();
+	let { field: f, label, onSelect, open = $bindable(false), byKeyboard = false }: Props = $props();
+	let autofocusFirst = $state(untrack(() => byKeyboard));
+	$effect(() => {
+		if (!open) autofocusFirst = false;
+	});
 
 	const items = $derived<MenuItem[]>([
 		...(f.source === 'db' && !f.locked && !f.spec.writeOnly
@@ -28,7 +38,7 @@
 	]);
 </script>
 
-<Menu {items} {onSelect} {label} bind:open>
+<Menu {items} {onSelect} {label} {autofocusFirst} bind:open>
 	{#snippet trigger({ props })}
 		<IconButton {...props} dense {label}>
 			<IconMenu />
