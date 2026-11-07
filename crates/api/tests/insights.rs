@@ -1194,8 +1194,8 @@ async fn responses_are_cached_per_flush() {
 /// whatever the index size). Built with SQL, which is quicker than the
 /// store's API at this size. With `workers`, 8 remote workers' rows at
 /// the most `Admit` lets through (WK-9b): the fleet's 32 rows every hour
-/// (`metric::FLEET_ROWS_PER_DAY`), each also a `BY_WORKER` row (code 17)
-/// for each worker.
+/// (`metric::FLEET_ROWS_PER_DAY`), a new set each day, each also a
+/// `BY_WORKER` row (code 17) for each worker.
 fn year_of_rollups(db: &Path, workers: bool) {
     let mut c = rusqlite::Connection::open(db).unwrap();
     let tx = c.transaction().unwrap();
@@ -1244,7 +1244,8 @@ fn year_of_rollups(db: &Path, workers: bool) {
                 r.execute(params![h, 12, d, 0, 3600]).unwrap();
             }
             if workers {
-                let key = 100;
+                // A new set each day, the most the daily cap lets rotate.
+                let key = 3 + h.div_euclid(24).rem_euclid(253);
                 for dim in 0..32i64 {
                     r.execute(params![h, 2, dim, key, 7]).unwrap();
                     for w in 0..8i64 {

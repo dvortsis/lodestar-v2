@@ -1703,8 +1703,9 @@ impl StoredKeys for Gate {
 
 /// Parked keys handed to the built-in worker keep their privacy (§18.7,
 /// BEP 27: a key every source of which is private never reaches public
-/// peer finding), and one it refuses (held here) ends its lease as
-/// blocked and is never fetched (security review). A worker's hints for
+/// peer finding), and one it refuses (held, or on the filter's hash
+/// floor) ends its lease as blocked and is never fetched (security
+/// review; the floor's arm, WK-9c). A worker's hints for
 /// a key the built-in worker holds never make it public either.
 #[test]
 fn parked_keys_keep_their_privacy_and_refusals() {
@@ -1718,6 +1719,12 @@ fn parked_keys_keep_their_privacy_and_refusals() {
     let (writer, _w) = tokio::sync::mpsc::channel(8);
     let (pool, mut to_pool) = tokio::sync::mpsc::channel(8);
     let held = Arc::new(lodestar_filter::HeldSet::default());
+    let (private, public, blocked, floored) = (
+        InfoHash([3; 20]),
+        InfoHash([1; 20]),
+        InfoHash([9; 20]),
+        InfoHash([0xC5; 20]),
+    );
     let intake = RemoteIntake::new(RemoteParts {
         authority: authority.clone(),
         writer,
@@ -1730,11 +1737,10 @@ fn parked_keys_keep_their_privacy_and_refusals() {
         leases: Arc::new(lodestar_pipeline::stages::WorkerLeases::default()),
         refusals: Some(Refusals {
             held: held.clone(),
-            filter: Arc::new(lodestar_pipeline::default_filter()),
+            filter: Arc::new(filter_blocking(&[floored])),
         }),
     });
-    let (private, public, blocked) = (InfoHash([3; 20]), InfoHash([1; 20]), InfoHash([9; 20]));
-    for (key, s) in [(private, 3), (public, 1), (blocked, 1)] {
+    for (key, s) in [(private, 3), (public, 1), (blocked, 1), (floored, 1)] {
         let c = Claim {
             key,
             source: src(s),
@@ -1747,7 +1753,7 @@ fn parked_keys_keep_their_privacy_and_refusals() {
         ));
     }
     held.insert(blocked.0);
-    assert_eq!(authority.evict(WorkerId(8)), 3);
+    assert_eq!(authority.evict(WorkerId(8)), 4);
     intake.hand_parked(now());
     let mut handed = HashMap::new();
     while let Ok(d) = to_pool.try_recv() {
@@ -1756,8 +1762,9 @@ fn parked_keys_keep_their_privacy_and_refusals() {
     }
     assert_eq!(handed, HashMap::from([(private, true), (public, false)]));
     assert!(!authority.in_flight(&blocked), "its lease ended as blocked");
+    assert!(!authority.in_flight(&floored), "so did the floor's");
     assert_eq!(stat(&intake, |s| &s.parked), 2);
-    assert_eq!(stat(&intake, |s| &s.parked_refused), 1);
+    assert_eq!(stat(&intake, |s| &s.parked_refused), 2);
     // A remote worker's hints for the private key, which the built-in
     // worker holds now: a reply whose flag can't make it public.
     let token = authority.get(&private).unwrap().token;
@@ -1825,4 +1832,74 @@ async fn a_saved_row_for_a_stored_key_is_not_restored() {
     assert_eq!(stored, 1);
     assert!(store.load_fetch_queue().unwrap().is_empty());
     drop(db);
+}
+
+/// A content filter whose hash floor (CS-1) blocks `hashes`, loaded the
+/// way the pipeline loads the store's.
+fn filter_blocking(hashes: &[InfoHash]) -> lodestar_filter::Handle {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let raw: Vec<[u8; 20]> = hashes.iter().map(|h| h.0).collect();
+    store.add_cs_hashes(&raw, 0, 1).unwrap();
+    let filter = lodestar_pipeline::default_filter();
+    lodestar_pipeline::load_filter(
+        &filter,
+        &lodestar_pipeline::StoreFilter::read(&store).unwrap(),
+    );
+    for h in &raw {
+        assert!(filter.current().blocked_hash(&[*h]).is_some());
+    }
+    filter
+}
+
+/// Saved keys held or on the filter's hash floor since they were saved
+/// are restored only to end as blocked (WK-9c): never fetched, never
+/// saved again, and their funnel rows are terminal, so the funnel still
+/// reconciles.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn saved_keys_held_or_blocked_are_not_restored() {
+    let (plain, held_key, floored) = (InfoHash([1; 20]), InfoHash([2; 20]), InfoHash([3; 20]));
+    let cohort = now().div_euclid(3600) - 1;
+    let queue: Vec<QueuedKey> = [plain, held_key, floored]
+        .iter()
+        .map(|k| QueuedKey {
+            info_hash: *k,
+            source: src(1),
+            cohort,
+            strategy: 0,
+            priority: 0,
+            attempts: 0,
+            private_source: false,
+        })
+        .collect();
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path().join("l.db"), StoreConfig::default()).unwrap();
+    store.save_fetch_queue(&queue).unwrap();
+    store.add_cs_hashes(&[floored.0], 0, 1).unwrap();
+    let held = Arc::new(lodestar_filter::HeldSet::default());
+    held.insert(held_key.0);
+    let config = PipelineConfig { held, ..config() };
+    let pipeline = Pipeline::start(config, store, vec![]).await.unwrap();
+    let authority = pipeline.monitor().lease_authority().clone();
+    assert!(authority.get(&plain).is_some());
+    assert!(authority.get(&held_key).is_none() && authority.get(&floored).is_none());
+    assert_eq!(
+        pipeline.monitor().remote().late_records(),
+        1,
+        "only the plain key"
+    );
+    let store = pipeline.shutdown().await.unwrap();
+    let saved: Vec<InfoHash> = store
+        .load_fetch_queue()
+        .unwrap()
+        .iter()
+        .map(|q| q.info_hash)
+        .collect();
+    assert_eq!(saved, [plain]);
+    let funnel = store.cohorts(cohort, cohort + 1).unwrap();
+    let lost: Vec<(u8, i64)> = funnel
+        .iter()
+        .filter(|c| c.stage == Stage::Lost as u8)
+        .map(|c| (c.reason, c.count))
+        .collect();
+    assert_eq!(lost, [(lodestar_sources::Loss::Blocked as u8, 2)]);
 }
