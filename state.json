@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T18:37Z",
+  "updated_at": "2026-11-07T18:38Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5820,6 +5820,11 @@
       "id": "next-runner-pr-owner-queue",
       "added": "2026-11-07T18:37Z",
       "text": "Next runner PR: drop owner_queue n8 (delete wip/CMP-0-catalogue), n9 (v0.5.1 release text) and the web-ok/e2e-ok required-checks item; all done and verified 18:4xZ."
+    },
+    {
+      "id": "agent-mailbox-branch",
+      "added": "2026-11-07T18:38Z",
+      "text": "Orphan branch agent-mailbox (dashboard session <-> owner Antigravity agent message files), owner-approved per dashboard session 18:38Z. Not stray work: never merge, no PR, leave alone."
     }
   ],
   "main_health": [
