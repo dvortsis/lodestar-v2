@@ -16,7 +16,7 @@ You can install an app from the Unraid app store or start a Docker container. Th
 
 ## How to use this guide
 
-Read chapters 1 to 3 in order the first time. Come back to a chapter by task. Anything marked **(planned)** isn't built yet.
+Read chapters 1 to 3 in order the first time. Come back to a chapter by task. Anything marked **(planned)** is unavailable in v0.5.1, even if development builds already include it.
 
 ### Where to find each task
 
@@ -59,23 +59,20 @@ Read chapters 1 to 3 in order the first time. Come back to a chapter by task. An
   - [3.5 Choose how updates work](03-keep-lodestar-safe.md#35-choose-how-updates-work)
   - [3.6 Know what protects the content filters and API keys](03-keep-lodestar-safe.md#36-know-what-protects-the-content-filters-and-api-keys)
   - [3.7 Back up and restore](03-keep-lodestar-safe.md#37-back-up-and-restore)
-  - [3.8 Restart without the six-hour wait](03-keep-lodestar-safe.md#38-restart-without-the-six-hour-wait)
-  - [3.9 Check your understanding](03-keep-lodestar-safe.md#39-check-your-understanding)
+  - [3.8 Check your understanding](03-keep-lodestar-safe.md#38-check-your-understanding)
 - [Chapter 4: Install on Windows and Linux](04-install-on-windows-and-linux.md)
   - [4.1 Understand the SmartScreen warning](04-install-on-windows-and-linux.md#41-understand-the-smartscreen-warning)
   - [4.2 Check the download before you run it](04-install-on-windows-and-linux.md#42-check-the-download-before-you-run-it)
   - [4.3 Run it or stop](04-install-on-windows-and-linux.md#43-run-it-or-stop)
-  - [4.4 Install on Linux](04-install-on-windows-and-linux.md#44-install-on-linux)
+  - [4.4 Install on Windows](04-install-on-windows-and-linux.md#44-install-on-windows)
+  - [4.5 Install on Linux](04-install-on-windows-and-linux.md#45-install-on-linux)
 - [Chapter 5: Use Lodestar](05-use-lodestar.md)
   - [5.1 Search and filter](05-use-lodestar.md#51-search-and-filter)
   - [5.2 Inspect a torrent](05-use-lodestar.md#52-inspect-a-torrent)
   - [5.3 Browse Discover and Insights](05-use-lodestar.md#53-browse-discover-and-insights)
-  - [5.4 Choose where Lodestar finds torrents (Settings → Sources)](05-use-lodestar.md#54-choose-where-lodestar-finds-torrents-settings--sources)
-  - [5.5 Connect Sonarr and Radarr](05-use-lodestar.md#55-connect-sonarr-and-radarr)
 - [Chapter 6: Troubleshooting](06-troubleshooting.md)
   - [6.1 Common problems](06-troubleshooting.md#61-common-problems)
-  - [6.2 Fix a Magnetico import refused as in use](06-troubleshooting.md#62-fix-a-magnetico-import-refused-as-in-use)
-  - [6.3 Get help](06-troubleshooting.md#63-get-help)
+  - [6.2 Get help](06-troubleshooting.md#62-get-help)
 - [Appendix A: Answers to check your understanding](appendix-a-answers.md)
 - [Appendix B: Settings reference](appendix-b-settings-reference.md)
 - [Glossary](glossary.md)
@@ -85,14 +82,18 @@ Read chapters 1 to 3 in order the first time. Come back to a chapter by task. An
 
 ## What you need
 
-- A server that runs Unraid or Docker.
+- A server that runs Unraid, Docker, Windows or Linux.
 - Fast local storage (SSD or NVMe) for the data folder.
 - Port `8090` free on the server for the web page.
 - A password manager for the admin password.
 
 ## About this guide
 
-This guide covers Lodestar as built from `main` ahead of its first release, v0.5.1. Last updated 2026-10-24. Facts come from `packaging/unraid/lodestar.xml`, `packaging/unraid/lodestar-gluetun.xml`, `packaging/docker/README.md`, `docker-compose.yml`, `docs/operations.md` and `docs/architecture.md` §12. They are listed in [`docs/setup.facts.md`](../setup.facts.md). Form illustrations in Chapter 2 are generated from `packaging/unraid/lodestar.xml`; see [`images/SHOTLIST.md`](images/SHOTLIST.md) for live capture instructions.
+This guide covers the published **v0.5.1** release, tagged at `12cd25ca38f8eac1a930316623dec742c1ba585d`. Last updated `2026-11-07T03:35:37Z`. See the [release notes](../releases/v0.5.1.md) and [downloads](https://github.com/dvortsis/lodestar-v2/releases/tag/v0.5.1).
+
+Facts come from the tagged packaging files, configuration, setup screens and release assets. [`docs/setup.facts.md`](../setup.facts.md) records the sources. Development plans and the v0.5.2 draft do not describe this release.
+
+Existing application captures show example data and may differ visually from v0.5.1. Follow the written release instructions for control order. Unraid figures are stamped illustrations. [`images/SHOTLIST.md`](images/SHOTLIST.md) records the pending release captures.
 
 <!-- nav:start -->
 ---

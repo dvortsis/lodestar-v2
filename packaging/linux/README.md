@@ -27,9 +27,9 @@ npm ci
 npm run build
 cd ..
 cargo build --release --locked -p lodestar --no-default-features --features web --target x86_64-unknown-linux-musl
-packaging/linux/build-tarball.sh x86_64-unknown-linux-musl 0.5.0 \
+packaging/linux/build-tarball.sh x86_64-unknown-linux-musl 0.5.1 \
   target/x86_64-unknown-linux-musl/release/lodestar dist
-packaging/linux/smoke.sh dist/lodestar-0.5.0-x86_64-linux-musl.tar.gz
+packaging/linux/smoke.sh dist/lodestar-0.5.1-x86_64-linux-musl.tar.gz
 ```
 
 Without `web/build`, Rust embeds a stub page rather than the application UI.

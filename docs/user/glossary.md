@@ -26,10 +26,6 @@ A router setting that sends all unrequested internet traffic to one device. Neve
 
 The layer behind Unraid's `/mnt/user` paths. It adds overhead that databases notice.
 
-## Lodestar source
-
-A place Lodestar learns about torrents from. **Mainline DHT** is the one in this version. Each source has a row in **Settings → Sources**.
-
 ## Metadata
 
 The description a torrent publishes about itself: name, file list, sizes and dates. It is not the content.
@@ -46,21 +42,9 @@ A router rule that sends traffic from the internet to one device on your network
 
 A rule that connects a port on your server to the port an app listens on inside its container.
 
-## Proxy (HTTPS_PROXY)
-
-A middleman server that some networks send web requests through, set with the `HTTPS_PROXY` variable. Lodestar ignores it for blocklist downloads; see [Blocklist downloads and HTTPS_PROXY](03-keep-lodestar-safe.md#33-decide-about-the-dht-port-and-a-vpn).
-
 ## PUID and PGID
 
 The user ID and group ID a container runs as. They decide who owns the files in the data folder.
-
-## Restart record
-
-What Lodestar writes when it stops cleanly, so the next start can skip the six-hour wait before sampling the DHT. Part of it lives in a separate restart record folder that is never backed up with the data folder. See [section 3.8](03-keep-lodestar-safe.md#38-restart-without-the-six-hour-wait).
-
-## Safe restart
-
-The setting that lets a clean restart skip the six-hour wait. It is off by default.
 
 ## Setup token
 
@@ -78,10 +62,6 @@ The database Lodestar stores its torrents in. It needs fast local storage.
 
 A web server in front of an app that adds HTTPS. Lodestar needs `LODESTAR_SECURE_COOKIES=true` behind one.
 
-## Torrent cache
-
-A website that serves a torrent's `.torrent` file for its info hash. Each lookup tells it which torrent you want.
-
 ## UDP
 
 A network protocol without a connection setup, used for peer discovery. Firewall and router rules list it separately from TCP.
@@ -89,14 +69,6 @@ A network protocol without a connection setup, used for peer discovery. Firewall
 ## VPN
 
 A private tunnel to another network. It can hide your home IP address from peers and let you reach home safely from outside.
-
-## Webhook
-
-A short message one app sends to another's address when something happens. Sonarr and Radarr send one to Lodestar when they grab or import a release.
-
-## Yield bar
-
-The small bar on a source's row in **Settings → Sources**. It shows how much of what the source found first, in the last 24 hours, Lodestar stored.
 
 <!-- nav:start -->
 ---

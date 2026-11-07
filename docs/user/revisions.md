@@ -2,6 +2,7 @@
 
 | Version | Date | Change |
 |---|---|---|
+| 2.2 (v0.5.1) | 2026-11-07T03:35:37Z | Aligned the guide with the published tag and assets; corrected setup order, downloads, signatures, update guidance and feature availability. Earlier development entries below may describe later features. |
 | 2.1 | 2026-11-05 | Added section 5.5 on connecting Sonarr and Radarr, a glossary entry, and corrected the list of sources in section 5.4. |
 | 2.0 | 2026-11-05 | Section 2.5: nothing connects to the network until setup is done; the crawler starts on its own after setup. |
 | 1.9 | 2026-11-05 | Added a section in 3.6 on pack versions, why a new version asks for your password, what "in doubt" means and overrides. |

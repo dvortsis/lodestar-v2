@@ -12,13 +12,15 @@ How to install, run and look after Lodestar. It follows `docs/architecture.md`
 not built yet; don't rely on it. Unmarked statements describe the code on
 `main` today.
 
+**Published release: v0.5.1.** Use the [release setup guide](user/README.md) for verified installation and everyday-use instructions. This reference also describes development features. Safe restart, newer source controls and newer store migrations are not part of v0.5.1.
+
 ## 1. What Exists Today
 
 | Area | Today | Planned |
 |---|---|---|
-| Binary | `lodestar serve` (default), `lodestar healthcheck`, `lodestar import` (with `import-bitmagnet` as its old name), `--version`, `--help` | `reindex`, `backup`, `rollback`, `vacuum`, `stats`, `companion`, `worker` |
+| Binary | `lodestar serve` (default), `lodestar healthcheck`, `lodestar import-bitmagnet`, `backup`, `rollback`, `vacuum`, `reindex`, `rollup`, `stats`, `lists`, `--version`, `--help` in v0.5.1 | The newer `import` job commands below are development features; worker mode is later work |
 | Settings | `config.toml` and the `LODESTAR_*` variables below | Editing settings in the UI (milestone B2) |
-| Packaging | Unraid templates and a systemd unit (`packaging/`) | Docker image and compose file, release tarballs, Windows MSI |
+| Packaging | v0.5.1 Docker image, Compose file, Unraid templates, Linux archives with systemd unit, Windows MSI and portable ZIP | Community Applications listing |
 | Workers | — | Worker mode (`LODESTAR_JOIN`, `LODESTAR_TOKEN`, cluster port 8091), Lodestar v0.6+ |
 
 Environment variables the binary reads today:
@@ -32,8 +34,8 @@ Environment variables the binary reads today:
 | `LODESTAR_INTENSITY` | `low`, `balanced` or `aggressive` | `balanced` |
 | `LODESTAR_SCRAPE_ENABLED` | Tracker and DHT scrapes (§9): `true` or `false` | `true` |
 | `LODESTAR_LOG` | `error`, `warn`, `info`, `debug` or a `tracing` filter. While it's set, **Settings → Logging** is read-only; leave it unset to change logging in the app | `info` |
-| `LODESTAR_DHT_SAFE_RESTART` | `true` lets a clean restart skip the six-hour sampling wait (`[dht] safe_restart`, CR-0d) | `false` |
-| `LODESTAR_DHT_WITNESS_DIR` | The restart record folder, outside the data directory and never backed up with it. The Docker image and the systemd unit set `/var/lib/lodestar-witness`; the Windows service uses `%ProgramData%\Lodestar-witness` | Native: `$XDG_STATE_HOME/lodestar` (or `~/.local/state/lodestar`) on Linux, `%LOCALAPPDATA%\Lodestar\witness` on Windows |
+| `LODESTAR_DHT_SAFE_RESTART` | Development only; unavailable in v0.5.1. `true` lets a clean restart skip the six-hour sampling wait (`[dht] safe_restart`, CR-0d) | `false` |
+| `LODESTAR_DHT_WITNESS_DIR` | Development only; unavailable in v0.5.1. The restart record folder, outside the data directory and never backed up with it. The Docker image and the systemd unit set `/var/lib/lodestar-witness`; the Windows service uses `%ProgramData%\Lodestar-witness` | Native: `$XDG_STATE_HOME/lodestar` (or `~/.local/state/lodestar`) on Linux, `%LOCALAPPDATA%\Lodestar\witness` on Windows |
 
 Everything else is in `config.toml` (`--config <path>`, or
 `$LODESTAR_DATA_DIR/config.toml`). Unknown keys are rejected. The variables
@@ -47,12 +49,12 @@ timestamps are UTC today. Details: `packaging/docker/README.md`.
 
 ## 2. Installing
 
-### Docker **(planned)**
-The multi-arch image (`ghcr.io/dvortsis/lodestar-v2`) and a
-`docker-compose.yml` come with the Docker packaging slice. The design: one
-container, `/data` as a volume, `8090/tcp` for the web UI, `6881/udp` for the DHT
-(`6881/tcp` is reserved for incoming peer connections, planned), a `HEALTHCHECK` that runs
-`lodestar healthcheck`.
+### Docker
+
+The v0.5.1 image is `ghcr.io/dvortsis/lodestar-v2:0.5.1`, for `amd64` and `arm64`.
+It uses `/data` as a volume, `8090/tcp` for the web UI and `6881/udp` for the DHT.
+The `6881/tcp` mapping is reserved; metadata fetches are outbound.
+Follow [Chapter 2](user/02-install-lodestar-on-unraid-and-docker.md) for the release Compose file and first-run setup.
 
 ### Unraid
 Templates are in `packaging/unraid/`:
@@ -62,7 +64,7 @@ Templates are in `packaging/unraid/`:
 - `lodestar-worker.xml`: a worker for an existing Lodestar. **(planned;
   requires Lodestar v0.6+.)**
 
-The templates point at the image above, so they work once it is published.
+The templates default to `latest`. Set **Repository** to `ghcr.io/dvortsis/lodestar-v2:0.5.1` to stay on this release.
 Until Community Applications lists Lodestar, copy the XML file to
 `/boot/config/plugins/dockerMan/templates-user/` on the server, then add the
 container from **Docker → Add Container → Template**.
@@ -94,10 +96,12 @@ cargo build --release -p lodestar
 Without `web/build`, the Rust build embeds a stub page instead of the application UI.
 Rebuild the frontend and then the binary to include the full UI.
 
-### Windows **(planned)**
-An MSI that installs a Windows Service (data in `%ProgramData%\Lodestar`,
-below-normal priority, firewall rules for the DHT port) and a portable zip.
-Nothing is published yet.
+### Windows
+
+v0.5.1 publishes an `x86_64` MSI and portable ZIP with signed checksums.
+The MSI installs the Windows service and stores data in `%ProgramData%\Lodestar`.
+The executable and installer are not Authenticode-signed.
+Follow [Chapter 4](user/04-install-on-windows-and-linux.md) for verification, permissions and installation.
 
 ## 3. First Run
 
@@ -110,15 +114,13 @@ Nothing is published yet.
      Unraid).
    - systemd: `journalctl -u lodestar | grep "setup token"`.
    - Terminal: the console.
-3. Enter the token and choose the admin password. Anyone who can read the log
+3. Enter the token, read and accept the Legal Notice, then choose the admin password. Anyone who can read the log
    can claim a fresh instance, so do this before exposing the port.
 4. The token is generated fresh at each start while no admin exists, and is
    not stored. Once the admin password is set, no token is printed or needed.
 
-The crawler doesn't connect to the network until setup is done: it waits for
-the admin password and starts on its own once it's set. Early on the library
-fills slowly because the routing table is still warming up; the status page
-and `/metrics` show progress.
+In v0.5.1, do not assume setup keeps the crawler offline. Sampling waits six hours after each start, and the index grows over days.
+Search remains available. The development behavior that waits for setup before starting the crawler is not in this release.
 
 ## 4. Networking
 
@@ -207,7 +209,7 @@ split are **planned**.
 ## 7. Upgrades and Backups
 
 - **Upgrade today:** stop Lodestar, replace the binary (or pull the new image
-  tag once images exist), start it. Before upgrading, copy the whole data
+  tag), start it. Before upgrading, copy the whole data
   directory while the service is stopped. That is your rollback.
 - **Snapshots before store upgrades.** When a new version has to change the
   database's layout (a schema migration), it first saves a copy beside it:
@@ -241,11 +243,13 @@ split are **planned**.
 
 ### Importing from Magnetico or Bitmagnet
 
+**Development builds only:** these job commands and Magnetico imports are unavailable in v0.5.1. For the released Bitmagnet importer, run `lodestar import-bitmagnet --help` in a terminal beside the binary.
+
 An import copies the torrents another crawler already found into Lodestar, so a new install doesn't start empty. Lodestar only reads the other database; it never changes it. Each import is a **job** with a number, which you can pause, resume, cancel or take back.
 
 **Before you start:**
 1. **Back up first, while Lodestar still runs:** `lodestar backup`. On Unraid, open the terminal and run `docker exec Lodestar /lodestar backup`. A backup is the safe undo; you can also take an import back (below).
-2. **Stop the other crawler.** A database that's still being written is refused. For Magnetico, a copy works only if you copy its `-wal` file with it and checkpoint the copy first; if it's still refused after magneticod has stopped, see [section 6.2 of the user guide](user/06-troubleshooting.md#62-fix-a-magnetico-import-refused-as-in-use).
+2. **Stop the other crawler.** A database that's still being written is refused. For Magnetico, a copy works only if you copy its `-wal` file with it and checkpoint the copy first; if it's still refused after magneticod has stopped, see [development import troubleshooting](#development-import-troubleshooting).
 3. **Stop Lodestar.** Imports run while the server is stopped. If it's running, `lodestar import start` refuses and changes nothing.
 
 **On Unraid (or any Docker install),** a stopped container can't run commands. Instead, start a one-off container from the same image, with the same data folder, and with the folder that holds the Magnetico database:
@@ -308,6 +312,34 @@ lodestar import remove 1
 - **Filter decisions stay.** A torrent the filters removed during the import stays removed.
 - **A job that can still read its source can't be removed:** one that's paused, blocked or running before it reached the end of the source. Cancel it first, so it can't later resume past what was removed. A job that read its whole source (it says `indexing`) can be removed as it is.
 - **Start Lodestar afterwards.** The removed torrents leave search when it starts.
+
+### Development import troubleshooting
+<!-- index: Magnetico; import; source_not_quiescent; -wal file; WAL checkpoint -->
+
+`lodestar import` refuses a Magnetico database with `source_not_quiescent` while magneticod may still be writing to it. The sign is a `database.sqlite3-wal` file that isn't empty, or a `database.sqlite3-journal` file, beside the database. The refusal changes nothing, and it stays even after magneticod stops if those files still hold changes.
+
+The `-wal` file holds changes [SQLite](user/glossary.md#sqlite) hasn't written into the database file yet. magneticod writes them in, and removes or empties the file, when it stops cleanly. When that fails, for example because the disk is full, the `-wal` file keeps torrents that aren't in the database file.
+
+To fix it:
+
+1. If magneticod is running, stop it. Run the import again, as [the import guide](#importing-from-magnetico-or-bitmagnet) shows.
+   **Result:** The import starts. If it's still refused, go on to step 2.
+2. Free some disk space on the drive that holds the database. Writing the changes in needs room.
+3. Start magneticod, wait until it's running, then stop it.
+   **Result:** magneticod writes the changes into the database, and the `-wal` file is gone or empty. Run the import again.
+
+If you can't run magneticod again, write the changes in on a copy with the `sqlite3` tool instead. This is for a leftover `-wal` file only. A `-journal` file means a change was cut off part-way; steps 1 to 3 undo it when magneticod opens the database again.
+
+1. Copy `database.sqlite3` and `database.sqlite3-wal` together to a folder with free space. The database file alone is missing the newest torrents and can be damaged.
+2. Open a terminal in that folder (on Unraid, the terminal button at the top of the web page, then `cd` to the folder) and paste:
+   ```bash
+   sqlite3 database.sqlite3 'PRAGMA wal_checkpoint(TRUNCATE);'
+   ```
+   **Result:** It prints `0|0|0`, and the `-wal` file is gone or empty. A first number of `1` means another program still has the copy open. If the terminal says `sqlite3: command not found`, copy the folder to a computer that has the `sqlite3` tool from [sqlite.org](https://sqlite.org/download.html), and run the command there.
+3. Import the copy: point `--path` at it, and in Docker mount its folder instead ([the import guide](#importing-from-magnetico-or-bitmagnet)).
+
+> [!WARNING]
+> Never delete the `-wal` file: that loses the torrents in it. Write its changes in instead, with magneticod or `sqlite3` as above. A copy with its leftover `-wal` file beside it is refused like the original. Run step 2 on the copy before you import it.
 
 ## 8. Troubleshooting
 
