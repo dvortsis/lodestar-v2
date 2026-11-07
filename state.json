@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T11:39Z",
+  "updated_at": "2026-11-07T11:44Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5618,6 +5618,11 @@
       "id": "wk13-notes-wk14-polish",
       "added": "2026-11-07T11:39Z",
       "text": "WK-13 (takes over api/src/workers.rs) polish from #573 delta review: (1) OpenAPI for pause/resume missing 409 too_many_workers (PrefsFull); (2) cli_read is bash-only \u2014 wrap in ( \u2026 ) subshell so the token var dies with it, say bash in doc; (3) quote '{address}' in join commands (<this-server> placeholder is read as redirection); (4) a_token_needs_the_password_now should also assert the password never appears in the log; (5) decisions note: join_refused limiter no longer resets on join/leave. Plus WK-13 precondition: seed pause set in serve.rs before quarantine reuses paused."
+    },
+    {
+      "id": "slices-wk10-dep-wk9b",
+      "added": "2026-11-07T11:44Z",
+      "text": "Next runner PR: runner/slices.yaml WK-10 deps add WK-9b (and WK-G transitively). WK-8 seals every remote record and ResultsBatch::decode leaves sealed records out, so WK-10 before WK-9b's WireKeys::open = remote worker commits nothing (lease expiry/refetch loop). Do not launch WK-10 until WK-9b's sealed-open PR merges."
     }
   ],
   "main_health": [
