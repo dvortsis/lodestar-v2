@@ -225,7 +225,10 @@ async fn check_blocklist(run: &Run) {
     // Intake refused the floor hash both times, before the writer saw it.
     let floor_finds = run.finds.iter().filter(|f| f.key == plan.floor).count() as u64;
     let refused = n(&pipeline.intake_stats().refused);
-    assert!(refused >= 2 * floor_finds, "{kind}: {refused} refused at intake");
+    assert!(
+        refused >= 2 * floor_finds,
+        "{kind}: {refused} refused at intake"
+    );
     let store = pipeline.shutdown().await.unwrap();
 
     // The floor is itself the permanent hold: intake refuses its hash
@@ -373,6 +376,7 @@ async fn a_private_find_is_stored_private_and_never_reaches_a_public_lookup() {
     let mut private_keys = BTreeSet::new();
     let mut public_keys = BTreeSet::new();
     let mut named_links = BTreeSet::new();
+    let mut tagged_runs = 0;
     let mut sent_total = 0u64;
     for (r, tx) in &senders {
         let mut round = r.finds.clone();
@@ -384,9 +388,11 @@ async fn a_private_find_is_stored_private_and_never_reaches_a_public_lookup() {
         {
             let c = f.claims.as_mut().unwrap();
             c.trackers.push("http://tracker.example/announce".into());
-            f.provenance.get_or_insert_with(Default::default).external_ref =
-                Some("https://tracker.example/details/1".into());
+            f.provenance
+                .get_or_insert_with(Default::default)
+                .external_ref = Some("https://tracker.example/details/1".into());
             named_links.insert(f.key);
+            tagged_runs += 1;
         }
         // Each find again as a bare sighting, which would go to the pool.
         round.extend(r.finds.iter().map(|f| Found {
@@ -434,8 +440,10 @@ async fn a_private_find_is_stored_private_and_never_reaches_a_public_lookup() {
             assert!(c.provenance.external_ref.is_none(), "{k:?} kept a link");
         }
     }
-    // The check bites: a private find in every private kind named both.
-    assert_eq!(named_links.len(), private.len());
+    // The check bites: a private find in every private kind named both
+    // (some kinds share keys, so the keys can be fewer).
+    assert_eq!(tagged_runs, private.len());
+    assert!(!named_links.is_empty());
     for k in &named_links {
         let item = store.unverified(Network::Bt, &k.0).unwrap().unwrap();
         assert!(item.claims.is_some(), "{k:?}: its claims weren't stored");

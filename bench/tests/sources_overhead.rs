@@ -190,8 +190,9 @@ const REALISTIC: Load = Load {
     rates: &[
         ("academic", 150.0 / 3600.0),
         ("archive_org", 10_000.0 / 3600.0),
-        ("nyaa", 300.0 / 300.0),
-        ("sukebei", 300.0 / 300.0),
+        // 300 items per 5-minute poll.
+        ("nyaa", 1.0),
+        ("sukebei", 1.0),
         ("prowlarr", 10.0 * 1000.0 / 900.0),
         ("clients/qbittorrent", 20.0 / 60.0),
         ("clients/transmission", 0.0),
