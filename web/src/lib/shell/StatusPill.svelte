@@ -70,7 +70,7 @@
 			state.kind === 'starting' ||
 			state.kind === 'stalled'
 	);
-	// The fleet (WK-17): " · N workers · X/h" after the count; paused and offline are read, not shown.
+	// The fleet (WK-17): " · N workers · X/h" after the count, with paused and offline when above zero.
 	const fleet = useFleet(() => showsCount);
 
 	const Icon = $derived(icons[state.kind]);
@@ -110,8 +110,6 @@
 				>{/if}
 		</span>
 		<span class="sr-only">{m.shell_status_label()}</span>
-		{#if fleet.help}<span class="sr-only" data-testid="status-pill-fleet-help">{fleet.help}</span
-			>{/if}
 	</a>
 {/snippet}
 

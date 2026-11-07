@@ -99,18 +99,27 @@ describe('WorkerBreakdown', () => {
 });
 
 describe('fleet pill', () => {
-	it('adds workers and rate, with paused and offline only in the description', async () => {
+	it('shows paused and offline in the text only when above zero', async () => {
 		get.mockResolvedValue({ fleet });
-		render(StatusPill, { state: { kind: 'crawling', ...none } });
+		const a = render(StatusPill, { state: { kind: 'crawling', ...none } });
+		await until(() =>
+			expect(screen.getByTestId('status-pill-fleet').textContent).toBe(
+				'· 3 workers · 1 paused · 2 offline · 4.2K/h'
+			)
+		);
+		expect(screen.getByTestId('status-pill').textContent).toContain('Crawling');
+		a.unmount();
+		get.mockResolvedValue({ fleet: { ...fleet, paused: 0, offline: 0 } });
+		const b = render(StatusPill, { state: { kind: 'crawling', ...none } });
 		await until(() =>
 			expect(screen.getByTestId('status-pill-fleet').textContent).toBe('· 3 workers · 4.2K/h')
 		);
-		const link = screen.getByTestId('status-pill');
-		expect(screen.getByTestId('status-pill-fleet').textContent).not.toMatch(/paused|offline/);
-		expect(screen.getByTestId('status-pill-fleet-help').textContent).toBe(
-			'3 working, 1 paused, 2 offline.'
+		b.unmount();
+		get.mockResolvedValue({ fleet: { ...fleet, workers: 1, paused: 0, stored_per_hour: null } });
+		render(StatusPill, { state: { kind: 'crawling', ...none } });
+		await until(() =>
+			expect(screen.getByTestId('status-pill-fleet').textContent).toBe('· 1 worker · 2 offline')
 		);
-		expect(link.textContent).toContain('Crawling');
 	});
 
 	it('adds nothing on fleet: null or a failed request', async () => {
