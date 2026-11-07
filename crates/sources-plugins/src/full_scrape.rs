@@ -142,6 +142,7 @@ const POLICY: Policy = Policy {
     distribution: Distribution::ShardedUnit,
     schedule: SCHEDULE,
     max_agents: 1,
+    ..Policy::STRICT
 };
 
 /// One tracker, checked.

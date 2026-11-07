@@ -90,6 +90,7 @@ const ROUTES: &[(&str, &str)] = &[
     ("PATCH", "/sources/{id}"),
     ("PATCH", "/sources/{id}/credentials"),
     ("POST", "/sources/{id}/purge"),
+    ("GET", "/sources/{id}/purge/preview"),
     ("GET", "/network/check"),
     ("POST", "/network/check"),
     ("GET", "/events"),

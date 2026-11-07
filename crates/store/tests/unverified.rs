@@ -6,8 +6,8 @@ use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::Info;
 use lodestar_store::claims::{ClaimedFile, Claims, Confidence, ExternalId, Provenance};
 use lodestar_store::unverified::{
-    ClaimsRefiled, MAX_PAGE, MAX_ROW, Network, NewUnverified, PAGE_BYTES, PurgeCursor, PurgeStep,
-    Put, RefiledClaims, RefiledUnverified, UnverifiedRefiled,
+    ClaimsRefiled, MAX_PAGE, MAX_ROW, Network, NewUnverified, PAGE_BYTES, PurgeCursor,
+    PurgePreview, PurgeStep, Put, RefiledClaims, RefiledUnverified, UnverifiedRefiled,
 };
 use lodestar_store::{
     Error, Filtered, Held, Prepared, PreparedTorrent, SourceId, SourceState, Store, StoreConfig,
@@ -873,10 +873,58 @@ fn purge_removes_only_what_the_source_alone_found() {
         matches!(err, Error::Invalid(_)),
         "an enabled source: {err:?}"
     );
+    // One key Nyaa queued while it ran, one the DHT did.
+    let queued = |b: u8, source| lodestar_store::QueuedKey {
+        info_hash: lodestar_metainfo::InfoHash([b; 20]),
+        source,
+        cohort: 0,
+        strategy: 0,
+        priority: 0,
+        attempts: 0,
+        private_source: false,
+    };
+    store
+        .save_fetch_queue(&[queued(0x77, nyaa), queued(0x78, dht)])
+        .unwrap();
     store.set_source_state(nyaa, SourceState::Disabled).unwrap();
+
+    // The preview counts what the purge then removes, and changes nothing
+    // (X-sources-api-spec).
+    let tables = |store: &Store| {
+        [
+            "unverified_items",
+            "torrents",
+            "torrent_claims",
+            "source_state",
+            "fetch_queue",
+        ]
+        .map(|t| count(store, &format!("SELECT count(*) FROM {t}")))
+    };
+    let before = tables(&store);
+    let preview = store.purge_preview(nyaa).unwrap();
+    assert_eq!(tables(&store), before, "the preview wrote nothing");
+    assert_eq!(store.purge_preview(nyaa).unwrap(), preview, "and repeats");
+    assert!(matches!(
+        store.purge_preview(SourceId::new(40).unwrap()),
+        Err(Error::NotFound(_))
+    ));
 
     let (total, steps) = purge_all(&mut store, nyaa, 2);
     assert!(steps > 4, "chunked: {steps}");
+    assert_eq!(
+        preview,
+        PurgePreview {
+            unverified_deleted: total.unverified_deleted as u64,
+            unverified_kept: total.unverified_kept as u64,
+            claims_deleted: total.claims_deleted as u64,
+            torrents_deleted: total.torrents_deleted.len() as u64,
+            torrents_kept: total.torrents_kept as u64,
+            state_deleted: total.state_deleted as u64,
+            queue_deleted: total.queue_deleted as u64,
+        }
+    );
+    assert_eq!(total.queue_deleted, 1);
+    assert_eq!(store.purge_preview(nyaa).unwrap(), PurgePreview::default());
     assert_eq!(total.unverified_deleted, 3);
     assert_eq!(total.unverified_kept, 2);
     assert_eq!(total.torrents_deleted, vec![ta]);

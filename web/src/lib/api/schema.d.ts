@@ -1796,23 +1796,27 @@ export interface paths {
         head?: never;
         /**
          * Enables or disables a source, or sets its priority. A priority
-         *     applies at once; enabling or disabling at the next start. Enabling
-         *     checks the source's class (§18.7, its `needs`): an `external`,
-         *     `restricted` or `overlay` source needs `"consent"` naming its class and
-         *     `"consent_version"` (`409 consent_required` otherwise) until that
-         *     version is acknowledged; enabling a `restricted` or `overlay` source
-         *     also needs the admin `"password"`, every time (`428 confirm_required`); an
-         *     `account` source needs its credentials stored
-         *     (`409 credentials_required`). Agents, egress and the schedule apply
-         *     at the next start; changing egress needs the admin `"password"`
-         *     (`428 confirm_required`), and the `interface` and `bind_address`
-         *     routes are refused (`409 route_unavailable`). `config` sets the
-         *     source's settings, for a source whose `editable` lists it: a JSON
-         *     object of at most 16 KiB that the source's own rules check (`400
+         *     applies at once; enabling or disabling at the next start.
+         * @description This build turns on only a source whose class is `none`. Enabling an
+         *     `external`, `account`, `restricted` or `overlay` source is refused with
+         *     `400 invalid_setting` on `enabled`, before its consent, acknowledgement
+         *     or credentials are looked at, whatever the request sends: this version
+         *     can't show the class's consent dialog yet. A `"password"` sent with the
+         *     enable is still checked first (`401` when it's wrong). `needs` and
+         *     `credential_spec` still say what the source will need once a later
+         *     version can turn it on, and credentials can be stored and removed
+         *     meanwhile (`PATCH /sources/{id}/credentials`). Disabling works for every
+         *     class.
+         *
+         *     Agents, egress and the schedule apply at the next start; changing
+         *     egress needs the admin `"password"` (`428 confirm_required`), and the
+         *     `interface` and `bind_address` routes are refused (`409
+         *     route_unavailable`). `config` sets the source's settings, for a source
+         *     whose `editable` lists it: a JSON object of at most 16 KiB, shaped by
+         *     its `config_schema`, that the source's own rules check (`400
          *     invalid_config` names the rule, never a value). It applies at the next
          *     start; a torrent cache whose new list holds an address its
-         *     acknowledgement doesn't is switched off there until you acknowledge the
-         *     new list. A purge isn't a field:
+         *     acknowledgement doesn't is switched off there. A purge isn't a field:
          *     it's `POST /sources/{id}/purge` (`409 not_editable` here).
          */
         patch: operations["patchSource"];
@@ -1862,6 +1866,31 @@ export interface paths {
          *     `409 purge_running` while one runs for this source.
          */
         post: operations["purgeSource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sources/{id}/purge/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What purging a source would remove if it ran now, counted with the
+         *     purge's own rules, for the dialog to show before you commit
+         *     (§10.10.7). It changes nothing: the source keeps its state, data,
+         *     credentials and settings, and no job starts. It needs a session, like
+         *     every Sources route, and no password: the password is asked once, by
+         *     `POST /sources/{id}/purge`. The counts are exact while the source is
+         *     off (`settled`); see `PurgePreview`.
+         */
+        get: operations["previewPurge"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3794,6 +3823,26 @@ export interface components {
              *     keeps its hash, not the secret.
              */
             secret: string;
+        };
+        /**
+         * @description One credential a source reads, as its plugin declares it: what the
+         *     Account dialog asks for. It describes the field and never holds a
+         *     value. Store it with `PATCH /sources/{id}/credentials` under `name`;
+         *     `credentials` then lists the name.
+         */
+        CredentialField: {
+            /**
+             * @description How a credential field is entered: `secret` (a password, API key or
+             *     token) is masked, `username` isn't. Neither is returned once stored.
+             * @enum {string}
+             */
+            kind: "secret" | "username";
+            /** @description What to call it, in English, such as "API key". */
+            label: string;
+            /** @description The name it's stored under, such as `api_key`. */
+            name: string;
+            /** @description Enabling the source needs it stored. */
+            required: boolean;
         };
         /**
          * @description `PATCH /sources/{id}/credentials`: credential names to values (a
@@ -6784,6 +6833,75 @@ export interface components {
              */
             unverified_deleted: number;
         };
+        /**
+         * @description `GET /sources/{id}/purge/preview`: what purging the source would
+         *     remove if it ran now, counted with the purge's own rules. Nothing is
+         *     changed. The dialog shows it before you commit (§10.10.7).
+         *
+         *     While the source is off (`settled`), a purge started next removes
+         *     exactly this, as long as nothing else changes the store meanwhile. An
+         *     enabled source keeps finding until the purge turns it off, so the purge
+         *     may remove more. Keys still in memory waiting to be fetched aren't
+         *     counted: the purge reports them as `keys_dropped`.
+         * @example {
+         *       "claims_deleted": 96402,
+         *       "kept": 88120,
+         *       "plugin": "nyaa",
+         *       "queue_deleted": 12,
+         *       "settled": true,
+         *       "source_id": 3,
+         *       "state_deleted": 4,
+         *       "torrents_deleted": 1204331,
+         *       "unverified_deleted": 5210,
+         *       "unverified_kept": 301
+         *     }
+         */
+        PurgePreview: {
+            /**
+             * Format: int64
+             * @description Claims of stored torrents it made, deleted.
+             */
+            claims_deleted: number;
+            /**
+             * Format: int64
+             * @description Torrents others found too, kept without this source (`kept` in the
+             *     purge job).
+             */
+            kept: number;
+            plugin: string;
+            /**
+             * Format: int64
+             * @description Keys it queued to be fetched, saved across restarts, dropped.
+             */
+            queue_deleted: number;
+            /**
+             * @description The source is off, so nothing it finds can add to the counts
+             *     before the purge runs.
+             */
+            settled: boolean;
+            /** Format: int32 */
+            source_id: number;
+            /**
+             * Format: int64
+             * @description Its plugin's saved state entries, deleted.
+             */
+            state_deleted: number;
+            /**
+             * Format: int64
+             * @description Torrents only this source found, deleted.
+             */
+            torrents_deleted: number;
+            /**
+             * Format: int64
+             * @description Items without metadata only this source found, deleted.
+             */
+            unverified_deleted: number;
+            /**
+             * Format: int64
+             * @description Items without metadata others found too, kept without this source.
+             */
+            unverified_kept: number;
+        };
         /** @description `POST /sources/{id}/purge`. */
         PurgeRequest: {
             /** @description The admin password, checked fresh: a purge can't be undone. */
@@ -8161,6 +8279,17 @@ export interface components {
                 max: number;
             };
             /**
+             * @description The JSON Schema (draft 2020-12) of its settings, as its plugin
+             *     declares it: the settings form is generated from it, and `config`
+             *     in `PATCH /sources/{id}` is checked against the plugin's own rules
+             *     (when `editable` lists `config`). Read-only, and the same for every
+             *     install: it holds no setting's value. Secrets are never in it: they
+             *     are `credential_spec`'s.
+             */
+            config_schema: {
+                [key: string]: unknown;
+            };
+            /**
              * @description What enabling a source requires (§18.7).
              * @enum {string}
              */
@@ -8184,6 +8313,12 @@ export interface components {
              *     asks again. Empty for `none` and `account`.
              */
             consent_version: string;
+            /**
+             * @description The credentials its plugin reads, in the order to ask for them;
+             *     empty for a source that reads none. It describes the fields, never
+             *     a value.
+             */
+            credential_spec: components["schemas"]["CredentialField"][];
             /**
              * @description The names of its stored credentials; their values are never
              *     returned.
@@ -8402,9 +8537,16 @@ export interface components {
          *             "enforced": false,
          *             "max": 1
          *           },
+         *           "config_schema": {
+         *             "$schema": "https://json-schema.org/draft/2020-12/schema",
+         *             "additionalProperties": false,
+         *             "properties": {},
+         *             "type": "object"
+         *           },
          *           "consent": "none",
          *           "consent_required": false,
          *           "consent_version": "",
+         *           "credential_spec": [],
          *           "credentials": [],
          *           "editable": [
          *             "agents",
@@ -13395,6 +13537,29 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BackgroundJob"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    previewPurge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The source's id, as `GET /sources` lists it. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PurgePreview"];
                 };
             };
             default: components["responses"]["Error"];

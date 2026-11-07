@@ -142,6 +142,51 @@ pub struct PurgeRequest {
     pub password: Option<String>,
 }
 
+/// `GET /sources/{id}/purge/preview`: what purging the source would
+/// remove if it ran now, counted with the purge's own rules. Nothing is
+/// changed. The dialog shows it before you commit (§10.10.7).
+///
+/// While the source is off (`settled`), a purge started next removes
+/// exactly this, as long as nothing else changes the store meanwhile. An
+/// enabled source keeps finding until the purge turns it off, so the purge
+/// may remove more. Keys still in memory waiting to be fetched aren't
+/// counted: the purge reports them as `keys_dropped`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "claims_deleted": 96_402,
+    "kept": 88_120,
+    "plugin": "nyaa",
+    "queue_deleted": 12,
+    "settled": true,
+    "source_id": 3,
+    "state_deleted": 4,
+    "torrents_deleted": 1_204_331,
+    "unverified_deleted": 5_210,
+    "unverified_kept": 301
+}))]
+pub struct PurgePreview {
+    /// Claims of stored torrents it made, deleted.
+    pub claims_deleted: u64,
+    /// Torrents others found too, kept without this source (`kept` in the
+    /// purge job).
+    pub kept: u64,
+    pub plugin: String,
+    /// Keys it queued to be fetched, saved across restarts, dropped.
+    pub queue_deleted: u64,
+    /// The source is off, so nothing it finds can add to the counts
+    /// before the purge runs.
+    pub settled: bool,
+    pub source_id: u8,
+    /// Its plugin's saved state entries, deleted.
+    pub state_deleted: u64,
+    /// Torrents only this source found, deleted.
+    pub torrents_deleted: u64,
+    /// Items without metadata only this source found, deleted.
+    pub unverified_deleted: u64,
+    /// Items without metadata others found too, kept without this source.
+    pub unverified_kept: u64,
+}
+
 /// `GET /jobs`: every job kept, newest first.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct BackgroundJobs {
