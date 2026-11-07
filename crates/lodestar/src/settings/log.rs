@@ -200,9 +200,6 @@ pub fn follow_with(
                 }
                 report(&switched, why);
                 rt.heartbeat(now);
-                // The Windows service's errors to the Event Log; elsewhere
-                // nothing is installed and this does nothing.
-                crate::windows::eventlog::follow(section.event_log_errors, why == Why::Saved);
             }
             if labels != Some(now_labels) {
                 log_event!(

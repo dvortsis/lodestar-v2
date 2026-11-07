@@ -76,6 +76,9 @@ try {
   $d = New-Secured 'other-sid'; Add-Me $d
   Expect "another account's SID" 1 (Invoke-Secure $d $other)
 
+  $d = New-Secured 'not-an-admin'; Icacls @($d, '/grant', "*${other}:(OI)(CI)F", '/T')
+  Expect 'only its own entry, but not in Administrators' 1 (Invoke-Secure $d $other)
+
   $d = New-Secured 'users'; Icacls @($d, '/grant', '*S-1-5-32-545:(OI)(CI)R')
   Expect 'the Users group passed as the installer' 1 (Invoke-Secure $d 'S-1-5-32-545')
 
@@ -101,6 +104,13 @@ try {
   New-Item -ItemType Junction -Path (Join-Path $d 'logs\out') -Target $root | Out-Null
   Expect 'the administrator plus a junction inside' 1 (Invoke-Secure $d $me)
 
+  # Found only after the lock, deep inside.
+  $d = New-Secured 'deep-owner'; Add-Me $d; Icacls @((Join-Path $d 'logs\lodestar.log'), '/setowner', "*$me")
+  Expect 'the administrator plus a file inside owned by a user' 1 (Invoke-Secure $d $me)
+
+  $d = New-Secured 'deep-entry'; Add-Me $d; Icacls @((Join-Path $d 'logs\lodestar.log'), '/grant', '*S-1-1-0:R')
+  Expect 'the administrator plus a file inside open to Everyone' 1 (Invoke-Secure $d $me)
+
   $d = New-Secured 'no-marker'; Add-Me $d; Remove-Item -LiteralPath (Join-Path $d '.lodestar-secured')
   Expect 'the administrator but no marker' 1 (Invoke-Secure $d $me)
 } finally {
@@ -113,3 +123,5 @@ try {
 
 if ($failed.Count) { throw ("secure-datadir tests failed:`n" + ($failed -join "`n")) }
 Write-Host 'secure-datadir tests ok'
+# The cleanup's icacls left its own exit code; the result is the tests'.
+exit 0

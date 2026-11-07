@@ -10,8 +10,8 @@
 //! Started by the SCM, Lodestar:
 //! - first makes sure `%ProgramData%\Lodestar` is private
 //!   ([`super::acl`]), and refuses to start if it isn't: the reason, with
-//!   the exact fix, goes to the Windows Event Log and beside the
-//!   installer's log, and the exit code is 3 ([`scm_code`]);
+//!   the exact fix, goes beside the installer's log, and the exit code is
+//!   3, which the SCM is given as `0x20000003` ([`scm_code`]);
 //! - keeps its data there unless `LODESTAR_DATA_DIR` or the config file
 //!   says otherwise, and runs from that folder, so relative paths in the
 //!   config land there;
@@ -20,8 +20,8 @@
 //! - maps Stop, Shutdown and Preshutdown to the same graceful shutdown as
 //!   Ctrl+C, acknowledging at once (also while the store opens) and
 //!   reporting progress so the SCM waits for it;
-//! - reports a service-specific exit code 1 when it stops on an error, so
-//!   the SCM's recovery actions (restart) apply.
+//! - reports a service-specific exit code 1 (`0x20000001`) when it stops
+//!   on an error, so the SCM's recovery actions (restart) apply.
 
 use std::path::{Path, PathBuf};
 
@@ -185,7 +185,7 @@ pub use scm::run_if_launched;
 /// service-specific code up in Windows' own messages, so a refusal (3)
 /// read "The system cannot find the path specified" and an error (1)
 /// "Incorrect function". With it nothing is looked up: the event shows the
-/// number, and the reason is in Lodestar's own Event Log entry.
+/// number, and the reason is in `%SystemRoot%\Temp\lodestar-service.log`.
 pub const CUSTOMER: u32 = 0x2000_0000;
 
 /// The service-specific code the SCM is given for an exit code: 0 stays 0,
@@ -315,11 +315,6 @@ mod scm {
                     &data_dir,
                     config.as_ref().map_or("info", |c| c.log.as_str()),
                 );
-                // Errors to the Event Log, as `logging.event_log_errors`
-                // says once the settings are read.
-                if let Some(sink) = crate::windows::eventlog::Thread::start() {
-                    crate::windows::eventlog::install(Box::new(sink));
-                }
                 lodestar_log::log_event!(
                     crate::logging::events::SERVICE_STARTING,
                     path = lodestar_log::Path::new(&data_dir)
@@ -406,21 +401,10 @@ mod scm {
 
     /// Appends a refusal's reason to `%SystemRoot%\Temp\lodestar-service.log`,
     /// where the installer logs too, never through a planted link
-    /// ([`super::super::temp_log`]), and writes it to the Windows Event
-    /// Log, where Event Viewer and `Get-EventLog` find it. Only
-    /// [`acl::secure_dir`]'s refusals come here: paths, SIDs, account names
-    /// and the fix.
+    /// ([`super::super::temp_log`]). Only [`acl::secure_dir`]'s refusals
+    /// come here: paths, SIDs, account names and the fix.
     fn log_refusal(why: &str) {
         let _ = crate::windows::temp_log::append("service refused to start", why);
-        // Best effort: without the installer's event source (a manual
-        // registration) the write fails, and the temp log still has it.
-        // The text holds only paths, SIDs, account names and commands:
-        // the Application log is readable by local users, so never a
-        // secret, and never the config file's text.
-        let _ = crate::windows::eventlog::write(
-            crate::windows::eventlog::REFUSAL_ID,
-            &format!("Lodestar refused to start: {why}"),
-        );
     }
 
     /// Serialises status reports, so a progress tick never follows
@@ -559,10 +543,6 @@ mod tests {
         assert_eq!(scm_code(3), 536_870_915);
         assert_eq!(scm_code(3), 0x2000_0003);
         assert_eq!(scm_code(1), 0x2000_0001);
-        // The script takes the message from the environment, never inline.
-        let script = crate::windows::eventlog::EVENT_SCRIPT;
-        assert!(script.contains("-Message $env:LODESTAR_EVENT_MESSAGE"));
-        assert!(script.contains("-Source $env:LODESTAR_EVENT_SOURCE"));
     }
 
     #[test]

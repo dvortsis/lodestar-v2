@@ -181,7 +181,6 @@ if ($Msi) {
   $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
   & $icacls $dataDir /grant "*${me}:(OI)(CI)F" /T /C /Q | Out-Null
   Assert ($LASTEXITCODE -eq 0) 'could not add the administrator entry for the test'
-  $since = Get-Date
   Start-Service Lodestar -ErrorAction SilentlyContinue
   $deadline = (Get-Date).AddSeconds(60)
   do {
@@ -191,22 +190,17 @@ if ($Msi) {
   } while ((Get-Date) -lt $deadline)
   Assert ($svc.State -eq 'Stopped') "the service is $($svc.State) with the administrator's entry on the folder; it must refuse"
   Assert ($svc.ServiceSpecificExitCode -eq 536870915) "the refusal's service-specific code is $($svc.ServiceSpecificExitCode), expected 536870915 (0x20000003)"
-  $event = $null
-  $deadline = (Get-Date).AddSeconds(30)
-  do {
-    $event = Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Lodestar'; Id = 3; StartTime = $since } -MaxEvents 1 -ErrorAction SilentlyContinue
-    if ($event) { break }
-    Start-Sleep -Milliseconds 500
-  } while ((Get-Date) -lt $deadline)
-  Assert ($null -ne $event) 'the refusal is not in the Application event log under the Lodestar source'
-  Assert ($event.Message -match [regex]::Escape($me)) "the event doesn't name the extra account's SID: $($event.Message)"
-  Assert ($event.Message -match [regex]::Escape("/remove:g *$me /T /C")) "the event doesn't give the icacls fix: $($event.Message)"
+  # The reason, with the account and the fix, goes beside the installer's log.
+  $reason = Get-Content -LiteralPath (Join-Path $env:SystemRoot 'Temp\lodestar-service.log') -Tail 1
+  Assert ($reason -match [regex]::Escape($me)) "the refusal doesn't name the extra account's SID: $reason"
+  Assert ($reason -match [regex]::Escape("/remove:g *$me /T /C")) "the refusal doesn't give the icacls fix: $reason"
   # Another account beside it: Repair must still refuse.
   $other = 'S-1-5-21-1000000001-1000000002-1000000003-4242'
   & $icacls $dataDir /grant "*${other}:(OI)(CI)R" /C /Q | Out-Null
   Assert ($LASTEXITCODE -eq 0) 'could not add the second account for the test'
   $p = Start-Process msiexec.exe -ArgumentList @('/fa', "`"$Msi`"", '/qn', '/norestart', '/l*v', "`"$logs\msi-repair-refused.log`"") -Wait -PassThru
-  Assert ($p.ExitCode -ne 0) "Repair went ahead with another account's entry on the folder"
+  Assert ($p.ExitCode -eq 1603) "Repair with another account's entry on the folder ended with msiexec exit $($p.ExitCode), expected 1603 (the install stopped)"
+  Assert (Select-String -LiteralPath "$logs\msi-repair-refused.log" -SimpleMatch 'LODESTAR INSTALL STOPPED' -Quiet) "the refused Repair didn't stop in secure-datadir.ps1; see msi-repair-refused.log"
   Assert ((Get-Acl $dataDir).GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]).IdentityReference.Value -contains $other) 'the refused Repair changed the folder'
   & $icacls $dataDir /remove:g "*$other" /C /Q | Out-Null
   # Only the administrator's own entry: Repair removes it everywhere and the service starts.

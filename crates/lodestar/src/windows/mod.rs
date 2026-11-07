@@ -13,7 +13,6 @@
 #![cfg_attr(not(windows), allow(dead_code))]
 
 pub mod acl;
-pub mod eventlog;
 pub mod logfile;
 pub mod ports;
 pub mod priority;

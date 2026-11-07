@@ -19,8 +19,10 @@
   One exception (owner decision 2.52): when the one problem with such a folder is an
   Allow entry for the administrator running the install (Windows Explorer adds one,
   on the folder and everything in it, when you click Continue on its permission
-  prompt), that entry is removed everywhere and the folder re-secured. The MSI passes
-  -InstallerSid only for a real administrator. Anything else still stops the install.
+  prompt), that entry is removed everywhere and the folder re-secured. The MSI passes the
+  installing user's SID as -InstallerSid, and it counts only if that account is in the local
+  Administrators group. The folder is locked first and then everything in it is checked again:
+  any link, other owner or other account's entry anywhere inside still stops the install.
 
   Matches crates/lodestar/src/windows/acl.rs in the service.
 #>
@@ -106,10 +108,59 @@ function Get-NotPrivateReason($folder) {
   return $null
 }
 
+# Whether $sid is a direct member of the local Administrators group: $false when the group
+# cannot be read (a domain member that cannot be looked up, say), so Repair then refuses.
+function Test-LocalAdmin($sid) {
+  try {
+    $name = $admins.Translate([Security.Principal.NTAccount]).Value.Split('\')[-1]
+    $group = [ADSI]"WinNT://$env:COMPUTERNAME/$name,group"
+    foreach ($m in @($group.Invoke('Members'))) {
+      $bytes = $m.GetType().InvokeMember('objectSid', 'GetProperty', $null, $m, $null)
+      if ((New-Object Security.Principal.SecurityIdentifier($bytes, 0)) -eq $sid) { return $true }
+    }
+  } catch { Log "could not read the Administrators group: $($_.Exception.Message)" }
+  return $false
+}
+
+# Runs icacls, reading its error output instead of throwing on it: Windows PowerShell turns a
+# native tool's stderr into errors, which 'Stop' would make fatal before the exit code is seen.
+function Invoke-Icacls([string[]]$arguments, [string]$fix) {
+  $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
+  $ErrorActionPreference = 'Continue'
+  $out = & $icacls @arguments 2>&1 | Out-String
+  $code = $LASTEXITCODE
+  $ErrorActionPreference = 'Stop'
+  if ($code -ne 0) {
+    Log "icacls $($arguments -join ' ') failed ($code): $out"
+    Stop-Install "icacls could not change $dir (exit $code). As an administrator, run: $fix"
+  }
+}
+
+# Stops the install unless everything inside $folder is a real file or folder, owned by
+# SYSTEM, Administrators or the service, with entries only for those three (no Deny).
+function Assert-PrivateInside($folder) {
+  # Fail closed: if the scan itself cannot run, the install stops (trap, exit 2).
+  foreach ($item in @(Get-ChildItem -LiteralPath $folder -Force -Recurse -ErrorAction Stop)) {
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+      Stop-Install "$($item.FullName) is a link or junction inside the data folder. Remove it and install again."
+    }
+    $acl = Get-Acl -LiteralPath $item.FullName
+    $o = $acl.GetOwner([Security.Principal.SecurityIdentifier])
+    if ($trusted -notcontains $o) {
+      Stop-Install "$($item.FullName) is owned by $o, not SYSTEM, Administrators or the Lodestar service. Someone else may have put it there: move the folder's contents somewhere else, check them, then install again."
+    }
+    foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+      if ($rule.AccessControlType -ne 'Allow' -or $trusted -notcontains $rule.IdentityReference) {
+        Stop-Install "$($item.FullName) has its own permissions for $($rule.IdentityReference). Someone else may have changed it: move the folder's contents somewhere else, check them, then install again."
+      }
+    }
+  }
+}
+
 # The installing administrator's SID, when the one thing that keeps the folder from being
 # private is that account's own Allow entries; $null otherwise. Only a user account's SID
-# (S-1-5-21-...), never a well-known, built-in or domain group SID, never one already trusted.
-# Any Deny entry, inheritance or other account means $null.
+# (S-1-5-21-...) in the local Administrators group, never a well-known, built-in or domain
+# group SID, never one already trusted. Any Deny entry, inheritance or other account means $null.
 function Get-RepairableSid($folder) {
   if (-not $InstallerSid) { return $null }
   if ($InstallerSid -notmatch '^S-1-5-21(-\d+){4}$') { return $null }
@@ -126,8 +177,9 @@ function Get-RepairableSid($folder) {
     if ($rule.IdentityReference -ne $me) { return $null }
     $found = $true
   }
-  if ($found) { return $me }
-  return $null
+  if (-not $found) { return $null }
+  if (-not (Test-LocalAdmin $me)) { Log "$me is not in the local Administrators group"; return $null }
+  return $me
 }
 
 # Creates the folder with its descriptor, then checks that what is there is ours: if someone
@@ -207,19 +259,20 @@ if (Test-Path -LiteralPath $dir) {
   $link = Get-ChildItem -LiteralPath $dir -Force -Recurse -Attributes ReparsePoint -ErrorAction Stop | Select-Object -First 1
   if ($link) { Stop-Install "$($link.FullName) is a link or junction inside the data folder. Remove it and install again." }
   if ($repairSid) {
-    # As the user guide's fix does: that account's granted entries, on everything inside.
-    # No links inside (checked just above), so this stays in the folder.
-    $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
-    # Its error output is read here, not thrown: Windows PowerShell turns a native tool's
-    # stderr into errors, which 'Stop' would make fatal before the exit code is seen.
-    $ErrorActionPreference = 'Continue'
-    $out = & $icacls $dir /remove:g "*$($repairSid.Value)" /T /C /Q 2>&1 | Out-String
-    $ErrorActionPreference = 'Stop'
-    if ($LASTEXITCODE -ne 0) {
-      Log "icacls failed ($LASTEXITCODE): $out"
-      Stop-Install "Could not remove $repairSid from $dir (icacls exit $LASTEXITCODE). As an administrator, run: icacls `"$dir`" /remove:g *$($repairSid.Value) /T /C"
+    $sidText = $repairSid.Value
+    # Lock it first. With /L, icacls changes a link itself, never what it points to, so a folder
+    # swapped for a junction in the meantime is never followed. Once that account's entries are
+    # gone, only SYSTEM, Administrators and the service can change anything in the folder.
+    Invoke-Icacls @($dir, '/remove:g', "*$sidText", '/T', '/C', '/L', '/Q') "icacls `"$dir`" /remove:g *$sidText /T /C"
+    Log "removed $sidText from $dir and everything in it"
+    # Then check it all again, now that nobody else can change it.
+    $item = Get-Item -LiteralPath $dir -Force
+    if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+      Stop-Install "$dir was replaced while Lodestar was installing. Check it, move it away, then install again."
     }
-    Log "removed $repairSid from $dir and everything in it"
+    $why = Get-NotPrivateReason $dir
+    if ($why) { Stop-Install "$dir is still not private after removing ${sidText}: $why. Move its contents somewhere else, check them, then install again." }
+    Assert-PrivateInside $dir
   }
   Set-Acl -LiteralPath $dir -AclObject (New-DataSecurity)
   Log "re-secured $dir"

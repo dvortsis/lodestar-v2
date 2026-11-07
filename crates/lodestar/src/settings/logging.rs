@@ -206,7 +206,9 @@ pub struct Logging {
     pub file_max_age_days: u32,
     /// The logs folder never goes over this, in MiB.
     pub file_total_mib: u32,
-    /// Errors also go to the Windows Event Log (Windows service only).
+    /// Deprecated: nothing writes to the Windows Event Log (the Legal
+    /// Notice says so), and the UI doesn't show it. Kept so settings files
+    /// and exports an earlier version saved still load.
     pub event_log_errors: bool,
 }
 
@@ -429,6 +431,7 @@ impl Section for Logging {
             .advanced()
             .unit("mebibytes")
             .preview(),
+        // Hidden in the UI: nothing writes to the Windows Event Log.
         Field::new("event_log_errors").group("event_log").advanced(),
     ];
 

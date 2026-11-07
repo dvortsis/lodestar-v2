@@ -1,5 +1,5 @@
 // Settings → Logging's outputs on the real form engine (fakeServer): the Windows Event Log setting
-// only on a Windows service, an Advanced field with an error shown rather than hidden, and the
+// never shown, not even on a Windows service, an Advanced field with an error shown rather than hidden, and the
 // preview following the staged values, Verbosity left out while the environment sets it.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/svelte';
@@ -69,18 +69,15 @@ afterEach(() => {
 });
 
 describe('outputs', () => {
-	it('shows the Windows Event Log setting only on a Windows service, without a disclosure', async () => {
+	it('never shows the Windows Event Log setting, not even on a Windows service', async () => {
 		await start();
 		const { rerender } = render(Outputs, { form, deployment: 'docker' });
 		await screen.findByRole('heading', { name: 'Log file' });
 		expect(screen.queryByRole('heading', { name: 'Windows Event Log' })).toBeNull();
 		await rerender({ form, deployment: 'windows_service' });
-		await screen.findByRole('heading', { name: 'Windows Event Log' });
-		expect(screen.getByRole('switch', { name: 'Errors to the Windows Event Log' })).toBeTruthy();
-		await rerender({ form, deployment: undefined });
-		await until(() =>
-			expect(screen.queryByRole('heading', { name: 'Windows Event Log' })).toBeNull()
-		);
+		await screen.findByRole('heading', { name: 'Log file' });
+		expect(screen.queryByRole('heading', { name: 'Windows Event Log' })).toBeNull();
+		expect(screen.queryByRole('switch', { name: 'Errors to the Windows Event Log' })).toBeNull();
 	});
 
 	it('opens Advanced when one of its fields has an error, so the error is seen', async () => {

@@ -343,10 +343,15 @@ pub const MOVE_AWAY: &str = "Someone else may have put files in it. As an admini
                              See \"Fix Windows service error 3\" in the user guide";
 
 /// A name or SID as it may go into a message: printable, short, no quotes
-/// (it's pasted into a command line).
+/// (it's pasted into a command line), no bidirectional overrides (they
+/// could make a message read differently from what it says).
 fn printable(text: &str) -> String {
     text.chars()
-        .filter(|c| !c.is_control() && *c != '"')
+        .filter(|c| {
+            !c.is_control()
+                && *c != '"'
+                && !matches!(*c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        })
         .take(256)
         .collect()
 }
@@ -543,9 +548,13 @@ impl Ops for Windows<'_> {
         self.powershell(CREATE_SCRIPT, dir).map(drop)
     }
 
+    /// At most [`NAME_WAIT`]: on a domain member with no domain
+    /// controller in reach, a lookup can take long enough to hold up the
+    /// refusal past the SCM's patience. Then the message gives the SID
+    /// alone.
     fn account_name(&self, sid: &str) -> Option<String> {
-        let mut cmd = super::powershell_command()?;
-        let out = cmd
+        use std::io::Read;
+        let mut child = super::powershell_command()?
             .args([
                 "-NoLogo",
                 "-NoProfile",
@@ -554,12 +563,34 @@ impl Ops for Windows<'_> {
                 NAME_SCRIPT,
             ])
             .env("LODESTAR_ACL_SID", sid)
-            .output()
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
             .ok()?;
-        let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        (out.status.success() && !name.is_empty()).then_some(name)
+        let deadline = std::time::Instant::now() + NAME_WAIT;
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                _ => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+            }
+        };
+        let mut name = String::new();
+        child.stdout.take()?.read_to_string(&mut name).ok()?;
+        let name = name.trim().to_string();
+        (status.success() && !name.is_empty()).then_some(name)
     }
 }
+
+/// How long a refusal waits for an account's name.
+pub const NAME_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// An account's name for its SID. The SID arrives in an environment
 /// variable, so it's never parsed as script; it fails (no output) for a
@@ -977,7 +1008,7 @@ mod tests {
             "{msg}"
         );
         // A name that would break the command line is cleaned.
-        let odd = |_: &str| Some("a\"b\n".to_string());
+        let odd = |_: &str| Some("a\"b\n\u{202e}".to_string());
         let msg = refusal(dir, &seen, Some(OWN), &why, &odd);
         assert!(msg.contains("grants access to ab (S-1-5-21"), "{msg}");
         // A group or well-known account is never offered as your own:
