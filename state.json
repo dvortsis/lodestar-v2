@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T18:35Z",
+  "updated_at": "2026-11-07T18:37Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5815,6 +5815,11 @@
       "id": "X-wk15-nits",
       "added": "2026-11-07T18:35Z",
       "text": "#585 merged 044a32d6; X-wk15-nits (marginal wording, saturating_add) in same session; add slices.yaml entry in next runner PR. Reviewer nit 4 for future slices: worker-side claim suppression would inflate marginal; nit 5: sealed-vs-live test never reads an unsealed day (FakeSource now fixed) \u2014 candidate test addition."
+    },
+    {
+      "id": "next-runner-pr-owner-queue",
+      "added": "2026-11-07T18:37Z",
+      "text": "Next runner PR: drop owner_queue n8 (delete wip/CMP-0-catalogue), n9 (v0.5.1 release text) and the web-ok/e2e-ok required-checks item; all done and verified 18:4xZ."
     }
   ],
   "main_health": [
@@ -6553,6 +6558,10 @@
     {
       "at": "2026-11-07T18:10Z",
       "item": "Delete branch wip/CMP-0-catalogue (\u00a72.52, owner queue n8)"
+    },
+    {
+      "at": "2026-11-07T18:37Z",
+      "text": "Owner (via Antigravity, relayed by dashboard 18:37Z), runner-verified 2026-11-07T18:37Z: v0.5.1 release body replaced (starts \"## Summary\", 10 assets, flags unchanged); ruleset 25689105 requires ci-ok, web-ok, e2e-ok; wip/CMP-0-catalogue deleted (tip 48cfe0c1)."
     }
   ],
   "experiment_host": {
