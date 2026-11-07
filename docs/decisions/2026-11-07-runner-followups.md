@@ -1,4 +1,4 @@
-# Runner follow-ups after #550–#555 (2026-11-07)
+# Runner follow-ups after #550–#555 (#557)
 
 **Decided by:** the build runner, 2026-11-07T00:30Z. Plan bookkeeping and one correction of numbers; no owner decision changes.
 
@@ -24,11 +24,11 @@ Recorded in `runner/slices.yaml`:
 | Slice | Added | Runner's call |
 |---|---|---|
 | SRC-15b | `web/e2e/settings-sources.keyboard.test.ts` | its keyboard test |
-| X-consent-gate-polish | `crates/pipeline/src/lib.rs` | 22:05Z: `prepare`'s condition loop moved into `control::switch_off_unapproved` |
-| X-consent-gate-polish | `docs/releases/v0.5.2.md` | 22:19Z |
-| X-fetch-pool-bytes | `crates/lodestar/src/metrics.rs`, `docs/metrics.md` | 21:52Z |
-| WK-2 | `crates/lodestar/src/cli/mod.rs`, `crates/lodestar/src/main.rs` | 23:14Z and 23:47Z: one variant, the dispatch arm, privdrop passing `worker --data` through under the same guard, and removing `LODESTAR_TOKEN` from the environment |
-| X-fetch-meta-reserve | `crates/peer-wire/src/lib.rs` | 23:36Z: one re-export |
+| X-consent-gate-polish | `crates/pipeline/src/lib.rs` | 2026-11-06T22:05Z: `prepare`'s condition loop moved into `control::switch_off_unapproved` |
+| X-consent-gate-polish | `docs/releases/v0.5.2.md` | 2026-11-06T22:19Z |
+| X-fetch-pool-bytes | `crates/lodestar/src/metrics.rs`, `docs/metrics.md` | 2026-11-06T21:52Z |
+| WK-2 | `crates/lodestar/src/cli/mod.rs`, `crates/lodestar/src/main.rs` | 2026-11-06T23:14Z and 23:47Z: one variant, the dispatch arm, privdrop passing `worker --data` through under the same guard, and removing `LODESTAR_TOKEN` from the environment |
+| X-fetch-meta-reserve | `crates/peer-wire/src/lib.rs` | 2026-11-06T23:36Z: one re-export |
 
 **WK-2's notes also record a rule.** No tokio `test-util` and no `testing` features on the `lodestar` package. The CI guard refuses test-only features in the binary's tree, and WK-2 injects its clock instead.
 
