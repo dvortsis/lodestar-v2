@@ -27,7 +27,10 @@ fn root() -> PathBuf {
 
 fn read(rel: &str) -> String {
     let p = root().join(rel);
-    std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("reading {}: {e}", p.display()))
+    // Normalised: a Windows checkout may have CRLF line endings.
+    std::fs::read_to_string(&p)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", p.display()))
+        .replace("\r\n", "\n")
 }
 
 const NOTICE: &str = "docs/legal/legal-notice.md";
@@ -181,7 +184,7 @@ fn registered_sources_and_consent_classes_match_section_2() {
     assert_eq!(
         n.matches("None is built yet.").count(),
         3,
-        "Account, Restricted and Overlay are each \"None is built yet.\" in section 2"
+        "Legal Notice section 2: Account, Restricted and Overlay are each \"None is built yet.\" in section 2"
     );
 }
 
@@ -218,7 +221,7 @@ fn backup_files_match_section_5() {
     );
     assert!(
         !files.contains(&SecretStore::KEY_FILE),
-        "a backup now holds secrets.key; the notice says it doesn't"
+        "Legal Notice section 5: a backup now holds secrets.key; the notice says it doesn't"
     );
     require(
         &n,
@@ -230,13 +233,16 @@ fn backup_files_match_section_5() {
     require(
         &n,
         s5,
-        "It does not contain `secrets.key`",
+        &format!("It does not contain `{}`", SecretStore::KEY_FILE),
         "SecretStore::KEY_FILE not in BACKUP_FILES",
     );
     require(
         &n,
         s5,
-        "a key file (`secrets.key`) stored separately from the database",
+        &format!(
+            "a key file (`{}`) stored separately from the database",
+            SecretStore::KEY_FILE
+        ),
         "SecretStore::KEY_FILE",
     );
 }
@@ -261,25 +267,25 @@ fn notification_channels_match_the_outbound_list() {
         modules, 5,
         "a notify module was added or removed; update section 5's list"
     );
+    // In the notice's order: the mapping above decides the phrase.
     let names: Vec<&str> = [
-        Channel::Webhook,
         Channel::Ntfy,
         Channel::Discord,
         Channel::Email,
+        Channel::Webhook,
         Channel::Rss,
     ]
     .into_iter()
     .filter_map(sent)
     .collect();
-    assert_eq!(
-        names,
-        ["webhooks", "ntfy", "Discord", "email"],
-        "Legal Notice section 5: the notification channels changed"
+    let phrase = format!(
+        "for notification channels you set up ({})",
+        names.join(", ")
     );
     require(
         &n,
         "5 (Your data)",
-        "for notification channels you set up (ntfy, Discord, email, webhooks)",
+        &phrase,
         "integrations::notify::Channel",
     );
 }
@@ -308,11 +314,23 @@ fn private_flag_clears_on_a_public_sighting() {
     };
     let id = put(&mut store, flags::PRIVATE_SOURCE);
     let flag = |store: &Store| store.torrent(id).unwrap().unwrap().flags & flags::PRIVATE_SOURCE;
-    assert_ne!(flag(&store), 0, "stored by a private source");
+    assert_ne!(
+        flag(&store),
+        0,
+        "Legal Notice section 2 (private sentence): a private source's find must be flagged"
+    );
     assert_eq!(put(&mut store, flags::PRIVATE_SOURCE), id);
-    assert_ne!(flag(&store), 0, "a second private sighting keeps it");
+    assert_ne!(
+        flag(&store),
+        0,
+        "Legal Notice section 2 (private sentence): a second private sighting must keep the flag"
+    );
     assert_eq!(put(&mut store, 0), id);
-    assert_eq!(flag(&store), 0, "a public sighting clears it");
+    assert_eq!(
+        flag(&store),
+        0,
+        "Legal Notice section 2 (private sentence): a public sighting must clear the flag"
+    );
 
     let n = read(NOTICE);
     let s2 = "2 (What Lodestar does on your network)";
