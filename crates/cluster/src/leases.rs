@@ -792,6 +792,21 @@ impl LeaseAuthority {
             .is_some_and(|(seqs, _)| seqs.contains_key(key))
     }
 
+    /// Every lease a remote worker holds and every key waiting for a
+    /// re-grant, for the coordinator's fetch queue (§19.3: outstanding
+    /// leases survive restarts), read under one lock into an owned list.
+    /// The built-in worker's leases are in its pool's own snapshot.
+    pub fn outstanding_remote(&self) -> Vec<(InfoHash, RestoredLease)> {
+        let s = self.lock();
+        s.table
+            .leases
+            .iter()
+            .filter(|(_, l)| l.holder != WorkerId::LOCAL)
+            .chain(s.pending.iter())
+            .map(|(k, l)| (*k, RestoredLease::from(*l)))
+            .collect()
+    }
+
     /// Leases held now.
     pub fn len(&self) -> usize {
         self.lock().table.len()
@@ -1406,5 +1421,32 @@ mod tests {
             a.restore_if_free(A, key, lease, 2, a.commit_seq())
                 .is_some()
         );
+    }
+
+    /// The fetch queue gets remote-held and waiting leases, never the
+    /// built-in worker's (they're in its pool's snapshot), with their
+    /// cohort and sources kept (WK-9b).
+    #[test]
+    fn remote_and_waiting_leases_are_listed_for_the_fetch_queue() {
+        let (a, _) = counted();
+        let Claimed::Granted(_) = a.claim(WorkerId::LOCAL, claim(1, 1), 0) else {
+            panic!()
+        };
+        let Claimed::Granted(_) = a.claim(A, claim(2, 2), 0) else {
+            panic!()
+        };
+        let Claimed::Granted(_) = a.claim(B, claim(3, 3), 0) else {
+            panic!()
+        };
+        assert_eq!(a.evict(B), 1);
+        let mut out: Vec<u8> = a.outstanding_remote().iter().map(|(k, _)| k.0[0]).collect();
+        out.sort_unstable();
+        assert_eq!(out, [2, 3], "held by A, and waiting; not the local one");
+        let (_, l) = a
+            .outstanding_remote()
+            .into_iter()
+            .find(|(k, _)| k.0[0] == 3)
+            .unwrap();
+        assert_eq!((l.sources, l.cohort), (1 << 3, (7_200 + 5) / 3600));
     }
 }

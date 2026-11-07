@@ -297,7 +297,9 @@ impl Prepared {
 }
 
 /// [`Preparer::measure_files`]'s refusal of a tree within metainfo's limits
-/// but over the caller's components or path-byte budget.
+/// but over the caller's components or path-byte budget, including one
+/// whose directories alone are more than the components left
+/// ([`filetree::MORE_DIRS`] inside `shape`).
 pub const OVER_BUDGET: &str = "file tree over its budget";
 
 /// Builds [`Prepared`] records with the store's blob dictionaries, away
@@ -375,7 +377,14 @@ impl Preparer {
         // Each directory is at least one component: more than the budget
         // is refused before the shape reserves anything for them.
         let max_dirs = usize::try_from(max_components).unwrap_or(usize::MAX);
-        let shape = filetree::shape(&raw, max_dirs, limits.max_files)?;
+        // More directories than components left is the caller's budget
+        // running out, not a limit: say so (WK-9b).
+        let shape = match filetree::shape(&raw, max_dirs, limits.max_files) {
+            Err(CodecError::Corrupt(filetree::MORE_DIRS)) => {
+                return Err(Error::Corrupt(OVER_BUDGET));
+            }
+            other => other?,
+        };
         if shape.depth > limits.max_path_depth || shape.longest_path > limits.max_path_bytes as u64
         {
             return Err(Error::Corrupt("file tree over its limits"));

@@ -1192,8 +1192,11 @@ async fn responses_are_cached_per_flush() {
 
 /// A year of hourly rollups at a realistic density (§1.6.4: ≤ 50 ms
 /// whatever the index size). Built with SQL, which is quicker than the
-/// store's API at this size.
-fn year_of_rollups(db: &Path) {
+/// store's API at this size. With `workers`, 8 remote workers' rows at
+/// the most `Admit` lets through (WK-9b): the fleet's 32 rows every hour
+/// (`metric::FLEET_ROWS_PER_DAY`), each also a `BY_WORKER` row (code 17)
+/// for each worker.
+fn year_of_rollups(db: &Path, workers: bool) {
     let mut c = rusqlite::Connection::open(db).unwrap();
     let tx = c.transaction().unwrap();
     {
@@ -1240,6 +1243,17 @@ fn year_of_rollups(db: &Path) {
             for d in 0..2 {
                 r.execute(params![h, 12, d, 0, 3600]).unwrap();
             }
+            if workers {
+                let key = 100;
+                for dim in 0..32i64 {
+                    r.execute(params![h, 2, dim, key, 7]).unwrap();
+                    for w in 0..8i64 {
+                        // `metric::by_worker_key(2, dim, key)`.
+                        let k = (2i64 << 16) | (dim << 8) | key;
+                        r.execute(params![h, 17, 100 + w, k, 7]).unwrap();
+                    }
+                }
+            }
             for source in 0..2 {
                 for (stage, reason, n) in [
                     (1, 0, 1000),
@@ -1274,8 +1288,21 @@ fn year_of_rollups(db: &Path) {
 
 #[tokio::test]
 async fn a_year_of_rollups_answers_within_budget() {
+    year_answers_within_budget(false).await;
+}
+
+/// The same with 8 remote workers' rows at `Admit`'s caps (WK-9b). Run it
+/// in a release build, where the 50 ms budget is asserted:
+/// `cargo test --release -p lodestar-api --test insights -- --ignored a_year_of_rollups_with_eight_workers`.
+#[tokio::test]
+#[ignore = "slow in debug builds; run in release (WK-9b's budget check)"]
+async fn a_year_of_rollups_with_eight_workers_answers_within_budget() {
+    year_answers_within_budget(true).await;
+}
+
+async fn year_answers_within_budget(workers: bool) {
     let f = fixture();
-    year_of_rollups(&f.db);
+    year_of_rollups(&f.db, workers);
     let cookie = session(&f).await;
     // What the recorder does at start: the sealed days' sums.
     let cold = Instant::now();

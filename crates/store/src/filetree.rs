@@ -161,6 +161,11 @@ pub fn encode(files: &[File], encoding: TextEncoding) -> Result<Vec<u8>, CodecEr
     Ok(out)
 }
 
+/// [`shape`]'s refusal of a blob claiming more directories than allowed.
+pub const MORE_DIRS: &str = "more directories than allowed";
+/// [`shape`]'s refusal of a blob claiming more files than allowed.
+pub const MORE_FILES: &str = "more files than allowed";
+
 /// What a file-tree blob would decode to, read without building any path
 /// ([`decode`] copies each directory's path into every child's, so a blob's
 /// decoded size can be far larger than the blob). For blobs from another
@@ -205,10 +210,11 @@ pub fn shape(blob: &[u8], max_dirs: usize, max_files: usize) -> Result<Shape, Co
     TextEncoding::from_id(r.u8()?).ok_or(CodecError::Corrupt("encoding id"))?;
     let dir_count = r.count()?;
     let file_count = r.count()?;
-    if dir_count > max_dirs || file_count > max_files {
-        return Err(CodecError::Corrupt(
-            "more directories or files than allowed",
-        ));
+    if dir_count > max_dirs {
+        return Err(CodecError::Corrupt(MORE_DIRS));
+    }
+    if file_count > max_files {
+        return Err(CodecError::Corrupt(MORE_FILES));
     }
     let mut parents: Vec<u32> = Vec::with_capacity(dir_count);
     for i in 0..dir_count {
@@ -655,9 +661,14 @@ mod tests {
             blob
         };
         let over = claim(3_000_000, 0);
-        let refused = CodecError::Corrupt("more directories or files than allowed");
-        assert_eq!(shape(&over, 2_000_000, 200_000), Err(refused));
-        assert_eq!(shape(&claim(0, 200_001), 2_000_000, 200_000), Err(refused));
+        assert_eq!(
+            shape(&over, 2_000_000, 200_000),
+            Err(CodecError::Corrupt(MORE_DIRS))
+        );
+        assert_eq!(
+            shape(&claim(0, 200_001), 2_000_000, 200_000),
+            Err(CodecError::Corrupt(MORE_FILES))
+        );
         // With room for them, the same blob is read (and is valid: 3M
         // empty-named directories under the root).
         assert!(shape(&over, 3_000_000, 200_000).is_ok());
