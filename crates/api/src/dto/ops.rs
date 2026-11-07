@@ -420,7 +420,10 @@ pub struct Source {
     /// (when `editable` lists `config`). Read-only, and the same for every
     /// install: it holds no setting's value. Secrets are never in it: they
     /// are `credential_spec`'s.
-    #[schema(value_type = std::collections::BTreeMap<String, Value>)]
+    // Always sent. `default` only lets a client or test fixture written
+    // before this field read a `Source` (X-sources-api-spec).
+    #[serde(default)]
+    #[schema(value_type = std::collections::BTreeMap<String, Value>, required = true)]
     pub config_schema: Value,
     #[schema(inline)]
     pub consent: ConsentClass,
@@ -442,6 +445,8 @@ pub struct Source {
     /// The credentials its plugin reads, in the order to ask for them;
     /// empty for a source that reads none. It describes the fields, never
     /// a value.
+    #[serde(default)]
+    #[schema(required = true)]
     pub credential_spec: Vec<CredentialField>,
     /// The names of its stored credentials; their values are never
     /// returned.
