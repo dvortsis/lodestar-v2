@@ -9,7 +9,6 @@ This chapter sets up Lodestar so the web page, your password and your logs stay 
 > - Choose whether to forward the [DHT](glossary.md#dht) port or run through a VPN [container](glossary.md#container).
 > - Keep torrent details out of logs you share.
 > - Back up the data folder and restore it.
-> - Choose whether a clean restart skips the six-hour wait.
 
 ## 3.1 Keep the web UI off the internet
 <!-- index: port forwarding; web UI; remote access; VPN -->
@@ -40,7 +39,7 @@ The setup token is a one-time key to a fresh instance. It appears in the log unt
 If someone could have read the token before you used it, create the password now. Once an admin exists, the token stops working and can't be used to claim the instance.
 
 ## 3.3 Decide about the DHT port and a VPN
-<!-- index: DHT port; gluetun; VPN; connection tracking; HTTPS_PROXY; proxy; blocklist downloads -->
+<!-- index: DHT port; gluetun; VPN; connection tracking -->
 
 Lodestar works without any router change. It reaches fewer nodes, but it still finds and fetches torrents. You have three ways to run it.
 
@@ -85,12 +84,6 @@ The crawler opens hundreds of short outbound connections at once: about 400 at `
 
 </details>
 
-### Blocklist downloads and HTTPS_PROXY
-
-`HTTPS_PROXY` is a setting some networks use to send a program's web requests through a middleman server, called a proxy. Lodestar downloads blocklists (public lists of torrents and addresses to block) directly. It ignores `HTTPS_PROXY` for these downloads and uses the container's own network route.
-
-A VPN that covers the whole container still applies, because it works below the program. If you want blocklist downloads to go through a VPN, run Lodestar through a whole-container VPN such as gluetun, as above. Setting `HTTPS_PROXY` won't do it.
-
 ## 3.4 Keep logs private
 <!-- index: logs; diagnostics; torrent details -->
 
@@ -103,63 +96,41 @@ By default Lodestar's logs contain no torrent details. They record what Lodestar
 The setup token is the one secret that appears in the log. It stops working once the admin password exists.
 
 ## 3.5 Choose how updates work
-<!-- index: updates; fixes only; rollback -->
+<!-- index: updates -->
 
-Updates are off until you choose them, because checking contacts GitHub. In-app update settings are **(planned)**. Today you update by pulling a new image.
+Updates are off until you choose them, because checking contacts GitHub. Automatic updates are not available in this release.
 
-| Option | What it means |
-|---|---|
-| **Off or notify (recommended)** | You decide when to update. Back up first (see [section 3.7](#37-back-up-and-restore)). |
-| Install automatically | **(planned)** Will install fixes only by default, then check health and roll back by itself if the new version fails. |
+**Recommended:** update manually after making a backup. In-app update controls are unavailable in v0.5.1.
 
 To update by hand:
 
 1. Take a backup while Lodestar runs ([section 3.7](#37-back-up-and-restore)). It is your rollback.
 2. Stop the container.
-3. Pull the new image and start the container.
-   **Result:** The container starts, and the old data is intact.
+3. Select the release you want. On Unraid, edit **Repository** to its exact image tag, then apply. For Compose, edit `image:` first.
+   **Result:** Unraid starts the selected release with the existing data folder.
+4. For Compose, run these commands in the folder containing `docker-compose.yml` on your Docker host:
+
+    ```bash
+    docker compose pull
+    docker compose up -d
+    ```
+
+   **Result:** Compose starts the selected image with the existing data volume. A pinned `0.5.1` tag stays on v0.5.1 until you change it.
+
+> [!NOTE]
+> After every start, sampling waits 6 hours before it resumes, so new discoveries slow down after an update or restart. Search still works. The index grows over days.
+
+> [!WARNING]
+> v0.5.1 uses schema V12 and can upgrade older compatible data. Back up first. A newer nightly can create a store v0.5.1 cannot read. Restore a compatible backup or choose a fresh data folder when returning from newer development builds.
+
+The safe-restart switch documented for development builds is not available in v0.5.1. Native installations also need manual updates: stop the service, install the verified release package, then restart.
 
 ## 3.6 Know what protects the content filters and API keys
-<!-- index: API keys; content filters; child-safety core; rule packs; unauthorised-copy pack; pack version; pending pack version; in doubt -->
+<!-- index: API keys; content filters; child-safety core -->
 
 The child-safety core of the content filters is always on. A change that would weaken protection asks for your password and shows a plain-language warning first.
 
-Rule packs sit on top of the core. A rule pack is a set of rules that hides one kind of unwanted torrent. There are six: malware, lures, fakes, spam, scams and unauthorised copies. On a new install they are all on, and we recommend you leave them on.
-
-The **unauthorised-copy** pack hides torrents whose names follow the conventions of unauthorised copies:
-
-- camcorder, telesync, telecine and screener copies of films (names with `HDCAM`, `HDTS`, `DVDSCR` and similar);
-- film and TV releases named the way release groups name their copies, such as `Title.2019.1080p.BluRay.x264-GROUP`;
-- cracked software, such as a program sold with a `Keygen` or a `Crack`. A plain `Patch` or `Update` is never hidden.
-
-It reads only the name. It can't know who holds the rights to anything, so it may hide something you are allowed to have.
-
-<details>
-<summary>What it lets through, and how to show something it hides</summary>
-
-A built-in list of public-domain and Creative Commons films, such as *Big Buck Bunny* or *Night of the Living Dead* (1968), passes its scene-style rule. So do items from the Internet Archive that carry the Archive's own file lists. To show anything else it hides, add the search to **Always allow** in **Settings → Filters & Safety**.
-
-</details>
-
-On a new install, the malware pack also hides cracked software, because cracks often carry malware. Turning the unauthorised-copy pack off then doesn't show cracked software again. If you also turn off the malware pack's cracked-software rule (MW-6), cracked software shows again but still ranks lower in search, as other junk does.
-
-If you installed an earlier version, the unauthorised-copy pack starts off. Lodestar offers it in the setup wizard and in **Settings → Filters & Safety**, where turning it on shows what it would hide first. We recommend you turn it on. The malware pack's new cracked-software rule waits for review on an upgraded install, so it hides nothing until a later version lets you accept it.
-
-### Pack versions and your password
-
-Each rule pack has a **version**. A new Lodestar release can bring a newer version of a pack's rules. It doesn't change what you see straight away. It waits as a **newer version waiting**, runs quietly in the background, and changes nothing until you accept it.
-
-To review one, open **Settings → Filters & Safety** and find the pack under **Pack versions and overrides**. **What changed** lists the changes in plain words. **Accept** shows what the new version would hold that the old one doesn't, and the other way round, before anything happens.
-
-**Why you're asked for your password.** If the new version would let anything through that the old one held, accepting it weakens your filters. Lodestar then shows a warning and asks for your admin password, as for any change that weakens protection. A new version that only holds more needs no password. Lodestar decides which it is, not the screen.
-
-**What "in doubt" means.** Sometimes Lodestar can't confirm a change is safe. It may have no record of what the new version does. It may not have seen enough of your torrents while the version ran. The screen then says "We can't confirm this change is safe, so it needs your password". That is a reason to read the warning, not a fault.
-
-Accept only if the warning matches what you want.
-
-**Accepting can't be undone with Undo.** If the warning lists holds left for review, they stay held. Nothing is released.
-
-**Your own overrides.** You can change what a rule does, or exempt searches from it, with **Edit override**. When a rule's version changes after you set an override, the screen says so. If your override would now make the rule looser, it is **paused**. The rule applies as built until you choose **Confirm again** and give your password.
+The five optional packs cover malware, lures, fakes, spam and scams. They are off by default in v0.5.1. Default-on packs, unauthorised-copy rules and pack-version controls belong to later releases.
 
 API keys, which let other apps such as Torznab clients talk to Lodestar, are **(planned)**. When they arrive, create one key per app and regenerate any key that leaks. Never use the admin password as a key.
 
@@ -223,63 +194,17 @@ To restore on Unraid:
 
 You can also copy the whole data folder while Lodestar is stopped. That copy includes the index, so step 2 doesn't apply when you restore it.
 
-After you restore a backup, the content filters are as they were when the backup was taken. Anything you did to them since is gone. A torrent you blocked, reported or deleted since then can come back, so block, report or delete it again. Filter changes you made since are undone, so make them again. The child-safety core is built in, so it is always on.
-
-## 3.8 Restart without the six-hour wait
-<!-- index: safe restart; restart record; witness; six hours; Starting -->
-
-After every start, the crawler waits up to six hours before it samples the [DHT](glossary.md#dht) again. While it waits, the status pill usually says **Starting**. The wait is on purpose. Lodestar promises other DHT nodes to wait a while before asking them again, and it can't tell whether a restart kept those promises.
-
-The [safe restart](glossary.md#safe-restart) switch removes the wait after a clean restart. When Lodestar stops cleanly, it writes a [restart record](glossary.md#restart-record): the promises still open and a check that the data folder is the same one. On the next start it checks the record and carries on at once. If anything doesn't add up, it waits the six hours as before. It is **off by default**.
-
-Lodestar still waits the six hours after:
-- its first start, and a crash or power cut;
-- a restore from a backup, or a copied or moved data folder;
-- a Docker image update, or a change you **Apply** to the container, because both make a new container;
-- a restart record it can't write. The pill then says sampling waits until Lodestar can save its restart record. Open **Logs** to see why.
-
-The record is in two places: in the data folder, and in a small restart record folder outside it. The second folder is how Lodestar notices a restored backup.
-
-| Install | Restart record folder |
-|---|---|
-| Unraid and Docker | `/var/lib/lodestar-witness`, inside the container. You don't map it. |
-| Linux (systemd) | `/var/lib/lodestar-witness`, beside `/var/lib/lodestar` |
-| Windows service | `C:\ProgramData\Lodestar-witness`, beside `C:\ProgramData\Lodestar`. Lodestar makes it private. |
-
-> [!WARNING]
-> Keep the restart record folder out of your backups. Back up the data folder with `lodestar backup` ([section 3.7](#37-back-up-and-restore)), which copies no part of the restart record. Never back up the restart record folder with the data folder, and never restore the two together. A restore that brings back both looks like a clean restart, and Lodestar would then ask DHT nodes again too soon. On Linux with the systemd unit, both folders are under `/var/lib/private`, so back up `/var/lib/private/lodestar` rather than `/var/lib/private` as a whole.
-
-To turn safe restart on with Unraid:
-
-1. On the Docker tab, select the **Lodestar** icon, then **Edit**.
-2. Select **Add another Path, Port, Variable, Label or Device**. Set **Config Type** to **Variable**, **Key** to `LODESTAR_DHT_SAFE_RESTART` and **Value** to `true`, then select **Add**.
-3. Select **Apply**.
-   **Result:** The container restarts. This first start still waits the six hours. From the next clean restart on, sampling carries on at once.
-
-On other installs, set the same variable, or add this to `config.toml` and restart:
-
-```toml
-[dht]
-safe_restart = true
-```
-
-Leave `LODESTAR_DHT_WITNESS_DIR`, the variable that names the restart record folder, as the image or the service sets it.
-
-When you uninstall Lodestar on Windows, `C:\ProgramData\Lodestar-witness` stays, like the data folder. It is harmless. You can delete it.
-
-## 3.9 Check your understanding
+## 3.8 Check your understanding
 
 1. A friend wants to open Lodestar from work. What do you set up, and what do you not do?
 2. What does forwarding UDP `6881` tell DHT peers?
 3. Why must a backup stay on a private share, and what does a restore bring back that you should know about?
-4. You turned on safe restart. Why must the restart record folder never be in the same backup as the data folder?
 
 > [!TIP]
 > **Key takeaways**
 > - Never forward port `8090`. Use a VPN for remote access.
 > - Forwarding `6881` over UDP is optional and shows your IP to DHT peers.
 > - Run `lodestar backup`, keep the result private and copy it off the cache pool.
-> - Safe restart is off by default. With it on, a clean restart carries on at once. Keep the restart record folder out of your backups.
 
 <!-- nav:start -->
 ---

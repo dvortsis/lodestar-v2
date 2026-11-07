@@ -10,6 +10,8 @@
 
 *Every node is a new discovery.*
 
+**v0.5.1 is available.** [Download the release](https://github.com/dvortsis/lodestar-v2/releases/tag/v0.5.1) · [Release notes](docs/releases/v0.5.1.md) · [Documentation](docs/README.md).
+
 Lodestar is a from-scratch BitTorrent DHT crawler and torrent-metadata search engine. It ships as one Rust binary with an embedded Svelte web UI and runs on Unraid, Docker, Windows and Linux.
 
 <picture>
@@ -40,12 +42,12 @@ Lodestar is a from-scratch BitTorrent DHT crawler and torrent-metadata search en
 Lodestar listens to the public BitTorrent DHT and fetches each torrent's small description (info-dictionary metadata). It parses release titles and file trees, then indexes them locally in Tantivy and SQLite.
 
 - **Metadata only.** Lodestar never downloads or shares torrent content. It disconnects from each peer as soon as the description arrives.
-- **Local and private.** Your searches, saved alerts and settings stay in your `/data` folder. Lodestar sends no telemetry, and your searches go to another site only through a source you turn on **(planned)**.
-- **Safe defaults.** First run prints a one-time setup token to the container log so you can set an admin password. A built-in child-safety filter stays on at all times. Rule packs that hide malware, junk and the patterns of unauthorised copies are on by default, and setup shows them for review **(planned)**.
+- **Local and private.** Your searches run against your local index. Lodestar sends no telemetry. External search sources are not available in v0.5.1.
+- **Safe defaults.** First run prints a one-time setup token to the container log so you can set an admin password. A built-in child-safety filter stays on at all times. Optional rule packs are off by default in v0.5.1. Default-on packs and the unauthorised-copy pack are planned for a later release.
 
 ## Legal
 
-Lodestar is made for lawful use. You run your own copy, you choose what it connects to, and anything you do with what it finds is your sole responsibility under the laws where you are. The software is free, under the AGPL-3.0-or-later licence, with no warranty. Read the [Legal Notice and Network Risks](docs/legal/legal-notice.md) before you install: it explains what Lodestar does on your network and what it finds. Setup shows it as its first step and asks you to confirm that you've read it. If you run an instance other people can reach, read [Running a Lodestar that other people can reach](docs/legal/operator-guidance.md).
+Lodestar is made for lawful use. You run your own copy, you choose what it connects to, and anything you do with what it finds is your sole responsibility under the laws where you are. The software is free, under the AGPL-3.0-or-later licence, with no warranty. Read the [Legal Notice and Network Risks](docs/legal/legal-notice.md) before you install: it explains what Lodestar does on your network and what it finds. Setup shows it after the token step and asks you to confirm that you've read it. If you run an instance other people can reach, read [Running a Lodestar that other people can reach](docs/legal/operator-guidance.md).
 
 ## How it works
 
@@ -104,7 +106,12 @@ Run these commands in a terminal on your Docker host to start Lodestar with a na
 
 ```bash
 mkdir lodestar && cd lodestar
-curl -fsSLO https://raw.githubusercontent.com/dvortsis/lodestar-v2/main/docker-compose.yml
+curl -fsSLO https://raw.githubusercontent.com/dvortsis/lodestar-v2/v0.5.1/docker-compose.yml
+```
+
+Open `docker-compose.yml` in a text editor and set `image:` to `ghcr.io/dvortsis/lodestar-v2:0.5.1`. Save it, then run in the same terminal:
+
+```bash
 docker compose up -d
 ```
 
@@ -114,15 +121,22 @@ Then run this command in the same terminal to read the one-time setup token, and
 docker compose logs lodestar
 ```
 
+Enter the setup token, read and accept the Legal Notice, then create your admin password. Sampling waits six hours after each start; search remains available.
+
 See [Chapter 2](docs/user/02-install-lodestar-on-unraid-and-docker.md) for the Unraid template, bind-mount permissions (`PUID` and `PGID`) and first-run setup.
+
+### Windows and Linux
+
+The [v0.5.1 release](https://github.com/dvortsis/lodestar-v2/releases/tag/v0.5.1) includes Windows `x86_64` MSI and portable ZIP downloads, plus Linux `x86_64` and `aarch64` archives. Verify `SHA256SUMS` and its Minisign signature before installing. Windows binaries are not Authenticode-signed. Follow [Chapter 4](docs/user/04-install-on-windows-and-linux.md) for verification and installation.
 
 ## Reference and architecture
 
+- **Documentation home:** [docs](docs/README.md)
 - **User setup and safety guide:** [`docs/user/README.md`](docs/user/README.md)
 - **Search query syntax:** [`docs/query-language.md`](docs/query-language.md)
-- **Operations and environment variables:** [`docs/operations.md`](docs/operations.md)
+- **Operations and environment variables (includes development options):** [`docs/operations.md`](docs/operations.md)
 - **System architecture:** [`docs/architecture.md`](docs/architecture.md)
-- **Release notes:** [`docs/releases/`](docs/releases/). The first release will be v0.5.1.
+- **Release notes:** [v0.5.1](docs/releases/v0.5.1.md), the first public release.
 - **Brand assets and checksums:** [`brand/source/`](brand/source/) (`SHA256SUMS.txt`)
 
 ## Licence

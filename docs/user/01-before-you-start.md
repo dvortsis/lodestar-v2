@@ -34,10 +34,10 @@ Four more facts hold today:
 - Lodestar sends no telemetry.
 - Updates are off until you choose them, because checking for updates contacts GitHub.
 - The child-safety core of the content filters is always on.
-- Rule packs are on by default on a new install. A rule pack is a set of rules that hides junk such as malware, fakes and scams. One pack hides names that follow the conventions of unauthorised copies (see [3.6](03-keep-lodestar-safe.md#36-know-what-protects-the-content-filters-and-api-keys)). You can turn a pack off in the setup wizard or in **Settings → Filters & Safety**. Turning one off shows what it would let through and asks for your password. We recommend you leave them on.
+- The five optional rule packs are off by default in v0.5.1. Default-on packs and the unauthorised-copy pack belong to later releases.
 
 > [!IMPORTANT]
-> **Lodestar is made for lawful use.** You run your own copy. You decide what it connects to, and anything you do with what it finds is your sole responsibility. The laws on peer-to-peer networks differ by country and by state. Read the [Legal Notice and Network Risks](../legal/legal-notice.md) before you install. It explains what Lodestar does on your network and what it finds. Setup shows it again as its first step and asks you to confirm that you've read it.
+> **Lodestar is made for lawful use.** You run your own copy. You decide what it connects to, and anything you do with what it finds is your sole responsibility. The laws on peer-to-peer networks differ by country and by state. Read the [Legal Notice and Network Risks](../legal/legal-notice.md) before you install. It explains what Lodestar does on your network and what it finds. Setup shows it after the [setup token](glossary.md#setup-token) and asks you to confirm that you've read it.
 
 <details>
 <summary>What the crawler still shares with the network</summary>
@@ -51,7 +51,7 @@ To find torrents, the crawler talks to other DHT nodes and to peers, as every Bi
 
 You need:
 
-- A server that runs Unraid or Docker. The image supports `amd64` and `arm64`.
+- Unraid, Docker, Windows `x86_64`, or Linux `x86_64` or `aarch64`. The Docker image supports `amd64` and `arm64`.
 - Fast local storage for the data folder. On Unraid, use the [cache pool](glossary.md#cache-pool) or another SSD or NVMe pool. The index does random reads and writes, so spinning disks and network shares are slow.
 - A way to read the [container](glossary.md#container) log. You need it once, to copy the [setup token](glossary.md#setup-token).
 - A home router that copes with many connections. At the default intensity the crawler opens about 400 at once.
@@ -65,8 +65,8 @@ You don't need an account, a licence key or an open port on your router.
 |---|---|
 | **Unraid template (recommended)** | You run Unraid. It sets the ports and folders for you. [Chapter 2](02-install-lodestar-on-unraid-and-docker.md#21-install-with-the-unraid-template) |
 | Docker Compose | You run Docker on Linux or a NAS other than Unraid. [Chapter 2](02-install-lodestar-on-unraid-and-docker.md#24-install-with-docker-compose) |
-| Windows installer | **(planned)** Not published yet. [Chapter 4](04-install-on-windows-and-linux.md) |
-| Linux service (systemd) | Build from source today. Release files are **(planned)**. [Chapter 4](04-install-on-windows-and-linux.md) |
+| Windows installer | Published MSI and portable ZIP for `x86_64`. [Chapter 4](04-install-on-windows-and-linux.md) |
+| Linux service (systemd) | Published archives for `x86_64` and `aarch64`, with a service unit. [Chapter 4](04-install-on-windows-and-linux.md) |
 
 ## 1.5 Check your understanding
 

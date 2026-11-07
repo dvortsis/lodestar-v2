@@ -1,13 +1,13 @@
 # Chapter 4: Install on Windows and Linux
 
-Windows and Linux installs are **(planned)**: nothing is published yet. This chapter explains what to expect from the unsigned Windows download, so you can check it before you run it.
+Install v0.5.1 from the published Windows or Linux downloads. Check the download first, then choose a service or a portable run.
 
 > [!NOTE]
 > **What you will learn**
 > - Explain why Windows shows "Windows protected your PC" for Lodestar.
 > - Check a download against its [checksum](glossary.md#checksum) with PowerShell.
 > - Decide when to run the file and when to stop.
-> - Find the [setup token](glossary.md#setup-token) on Windows without changing the data folder's permissions.
+> - Install the Windows service, portable ZIP or Linux service.
 
 ## 4.1 Understand the SmartScreen warning
 <!-- index: SmartScreen; unsigned; code signing -->
@@ -19,7 +19,7 @@ That is why you verify the file yourself before you run it.
 ## 4.2 Check the download before you run it
 <!-- index: checksum; Get-FileHash; SHA-256 -->
 
-A [checksum](glossary.md#checksum) is a short fingerprint of a file. If the file changes by one byte, the fingerprint changes. Download Lodestar only from the project's official release page: <https://github.com/dvortsis/lodestar-v2/releases>.
+A [checksum](glossary.md#checksum) is a short fingerprint of a file. If the file changes by one byte, the fingerprint changes. Download Lodestar only from the project's official release page: [v0.5.1 downloads](https://github.com/dvortsis/lodestar-v2/releases/tag/v0.5.1).
 
 > [!WARNING]
 > Don't run an installer from a mirror, forum post or re-upload. Get it from the official release page instead.
@@ -52,13 +52,13 @@ To check a download on Linux:
 
    **Result:** The line for your file ends in `OK`.
 
-The checksum file proves the file arrived intact. A signature proves it came from the project. `SHA256SUMS.minisig` is made with the project's release key and is attached once the release key is set up. This signature check is **(planned)** until a release carries the file. The public key (key ID `02910813433E81E0`) is in the repository. With [minisign](https://jedisct1.github.io/minisign/) installed, check the signature:
+The checksum checks file integrity. The signature checks that the checksum list was signed with the project's release key. v0.5.1 includes `SHA256SUMS.minisig`. The public key has ID `02910813433E81E0`. With [minisign](https://jedisct1.github.io/minisign/) installed, check the signature before relying on the checksums:
 
 1. Open a terminal in a folder that holds `SHA256SUMS` and `SHA256SUMS.minisig`.
-2. Download the public key:
+2. Download the public key. In Windows PowerShell, use `curl.exe` in place of `curl`:
 
     ```bash
-    curl -fsSLO https://raw.githubusercontent.com/dvortsis/lodestar-v2/main/packaging/keys/lodestar-release.pub
+    curl --fail --silent --show-error --location --remote-name https://raw.githubusercontent.com/dvortsis/lodestar-v2/v0.5.1/packaging/keys/lodestar-release.pub
     ```
 
 3. Run:
@@ -80,40 +80,105 @@ If the hashes differ, stop. Delete the file and download it again from the offic
 > [!TIP]
 > Select **Run anyway** only after the hashes match. Never turn off SmartScreen or Defender to get past the warning.
 
-## 4.4 Find the setup token on Windows
-<!-- index: setup token; Windows service; elevated PowerShell; Run as administrator; ProgramData; File Explorer -->
+## 4.4 Install on Windows
+<!-- index: Windows; MSI; portable ZIP; Windows service; Defender -->
 
-These steps apply once the Windows installer is published. Lodestar runs as a Windows service. On first run it writes a one-time [setup token](glossary.md#setup-token) to `C:\ProgramData\Lodestar\logs\lodestar.log`. That folder is private on purpose: only SYSTEM and Administrators can open it, so a normal window can't read the log.
+Choose a download from the [v0.5.1 release](https://github.com/dvortsis/lodestar-v2/releases/tag/v0.5.1). Both Windows packages require `x86_64`.
 
-To find the token:
+| Option | When to use it |
+|---|---|
+| **MSI installer (recommended)** | Run Lodestar as a service that starts with Windows. Download `lodestar-0.5.1-x86_64.msi`. |
+| Portable ZIP | Try Lodestar without installing a service. Download `lodestar-0.5.1-x86_64-windows-portable.zip`. |
 
-1. Open the Start menu. Right-click **Windows PowerShell** or **Terminal**, then select **Run as administrator**. Confirm the prompt.
-   **Result:** You have an [elevated PowerShell](glossary.md#elevated-powershell) window.
-2. Paste this command:
+To install the Windows service:
+
+1. Verify the MSI as described in [section 4.2](#42-check-the-download-before-you-run-it), then open it.
+2. On **Options**, leave **Exclude Lodestar's data folder from Windows Defender scans** unchecked.
+3. Leave **Let other PCs on my private network open the Lodestar web page** unchecked unless you need access from another trusted computer.
+4. Finish the installer and accept the Windows administrator prompt for this verified installer.
+   **Result:** The **Lodestar** service starts. Its files are in `C:\Program Files\Lodestar`, and its data is in `C:\ProgramData\Lodestar`.
+5. From Start, open **PowerShell** with **Run as administrator**, then read the [setup token](glossary.md#setup-token):
 
     ```powershell
-    Get-Content "C:\ProgramData\Lodestar\logs\lodestar.log" | Select-String "enter setup token"
+    Get-Content -LiteralPath 'C:\ProgramData\Lodestar\logs\lodestar.log' | Select-String 'setup token'
     ```
 
-   **Result:** PowerShell prints one line per start that needed a token.
-3. In the newest line, copy the word right after `enter setup token`.
-4. Open `http://localhost:8090` in your browser. Enter the token when setup asks for it, then create the admin password as in [section 2.5](02-install-lodestar-on-unraid-and-docker.md#25-create-the-admin-password).
+6. Open `http://localhost:8090/` and complete [first-run setup](02-install-lodestar-on-unraid-and-docker.md#25-create-the-admin-password).
+   **Result:** You sign in with your new password. Keep the token and log private.
 
-The token works once and stops working when the admin password exists ([section 3.2](03-keep-lodestar-safe.md#32-protect-the-setup-token-and-the-password)). Once you've signed in, the **Logs** screen in Lodestar shows the log, so you don't need PowerShell again.
+![Windows installer options showing both optional checkboxes left unchecked](images/windows-options-illustration.svg)
+*Figure 4.1: Recommended Windows installer options. Illustration, not a live screenshot.*
+
+The service uses its own unprivileged account. Only Administrators, SYSTEM and the service can read its data folder. Read logs from [elevated PowerShell](glossary.md#elevated-powershell).
 
 > [!WARNING]
-> Don't open `C:\ProgramData\Lodestar` in File Explorer, and never select **Continue** on its permission prompt ("You don't currently have permission to access this folder"). **Continue** adds your account to the folder's permissions for good. The folder is then no longer private, and Lodestar refuses to start. Use the elevated PowerShell command instead. If it already happened, see [section 6.3](06-troubleshooting.md#63-fix-windows-service-error-3).
+> Do not open `C:\ProgramData\Lodestar` in File Explorer, and never select **Continue** on its permission prompt. Doing so adds your account permanently, and the service then refuses to start. Use elevated PowerShell instead. If this already happened, follow [the error 3 fix](06-troubleshooting.md#62-fix-windows-service-error-3).
+
+The installer opens [DHT](glossary.md#dht) port `6881` over [UDP](glossary.md#udp) on private networks only. It opens `8090/tcp` to other computers only when you select the web-page option. Uninstalling keeps your data by default.
+
+**Recommended:** leave the Defender exclusion off. If you later need it for performance, exclude only `C:\ProgramData\Lodestar`, never a whole drive.
+
+To use the portable ZIP:
+
+1. Verify the ZIP, then extract it into a private folder on a local SSD, outside OneDrive or other synced folders.
+2. Open **Start Lodestar.cmd**. If Windows asks about the firewall, allow private networks only.
+3. Copy the setup token from its console and complete setup at `http://localhost:8090/`.
+   **Result:** Lodestar keeps its database and settings in the `data` folder beside `lodestar.exe`.
+4. To stop, press **Ctrl+C** in the console and wait for shutdown before closing it.
+   **Result:** Lodestar saves its database and index before exiting.
 
 ## 4.5 Install on Linux
+<!-- index: Linux; systemd; service; tarball -->
 
-For Linux, `packaging/systemd/README.md` describes the service unit. Release files are **(planned)**.
+Download `lodestar-0.5.1-x86_64-linux-musl.tar.gz` for Intel or AMD Linux, or `lodestar-0.5.1-aarch64-linux-musl.tar.gz` for ARM64 Linux.
+
+**Recommended:** use the included systemd service for an installation that starts at boot. It runs as an unprivileged dynamic user.
+
+To install the Linux service:
+
+1. Download the archive, `SHA256SUMS` and `SHA256SUMS.minisig` into a private folder. Verify them using [section 4.2](#42-check-the-download-before-you-run-it).
+2. Open a terminal in that folder and extract the archive:
+
+    ```bash
+    tar -xzf lodestar-0.5.1-<arch>-linux-musl.tar.gz
+    cd lodestar-0.5.1-<arch>-linux-musl
+    ```
+
+   Replace `<arch>` in both commands with `x86_64` or `aarch64`, matching your download.
+3. In the same terminal, install the program and service:
+
+    ```bash
+    sudo install -m 0755 lodestar /usr/local/bin/lodestar
+    sudo install -m 0644 lodestar.service /etc/systemd/system/lodestar.service
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now lodestar
+    ```
+
+   **Result:** The service starts and keeps its data in `/var/lib/lodestar`.
+4. Read the token in the same terminal:
+
+    ```bash
+    sudo journalctl -u lodestar --no-pager | grep 'setup token'
+    ```
+
+5. Open `http://localhost:8090/` on that machine, or `http://<server-ip>:8090/` on your trusted home network, and complete setup.
+   **Result:** You sign in and can search the local index.
+
+Replace `<server-ip>` with your server's address. If a firewall blocks the web page, allow `8090/tcp` only from your trusted home network. Never forward it on your router.
+
+To try Linux without a service, open a terminal in the extracted folder and run `./lodestar serve` as your normal user. It stores data in `./data`. Stop with **Ctrl+C** and wait for shutdown.
+
+| Mistake | What to do instead |
+|---|---|
+| Install an archive for the wrong processor | Match `x86_64` or `aarch64` to your Linux machine. |
+| Run a portable copy from a shared or synced folder | Use a private folder on local SSD storage. |
+| Close a running console without stopping Lodestar | Press **Ctrl+C** and wait for shutdown. |
 
 > [!TIP]
 > **Key takeaways**
 > - Windows builds are unsigned, so SmartScreen warns.
 > - Compare the `Get-FileHash` value with the checksum before you run anything.
 > - If the hashes differ, don't run the file.
-> - On Windows, read the setup token from an elevated PowerShell. Never open the data folder in File Explorer.
 
 <!-- nav:start -->
 ---

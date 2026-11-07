@@ -3,7 +3,7 @@
 This chapter installs Lodestar from the Unraid template or with Docker Compose, then takes you through first run.
 
 > [!IMPORTANT]
-> The Lodestar image is published from the first release. No release exists yet, so `latest` isn't available and **Apply** or `docker compose up` fails with "manifest unknown". The only tag today is `nightly`, which is built daily from `main` and untested. Use it only to try Lodestar, and check this guide again after the first release.
+> This guide covers v0.5.1. Use image `ghcr.io/dvortsis/lodestar-v2:0.5.1` to stay on this release. The `latest` tag follows stable releases; `nightly` follows development.
 
 > [!NOTE]
 > **What you will learn**
@@ -24,14 +24,14 @@ To install from the template:
 2. Paste this command to download the template:
 
     ```bash
-    wget -O /boot/config/plugins/dockerMan/templates-user/lodestar.xml https://github.com/dvortsis/lodestar-v2/raw/main/packaging/unraid/lodestar.xml
+    wget -O /boot/config/plugins/dockerMan/templates-user/lodestar.xml https://github.com/dvortsis/lodestar-v2/raw/v0.5.1/packaging/unraid/lodestar.xml
     ```
 
    **Result:** The command ends without an error.
 3. Open the **Docker** tab and select **Add Container**.
 4. In **Template**, choose **Lodestar** under **User templates**.
    **Result:** The form shows **Web UI**, **DHT / peers (UDP)** and **Data**.
-5. Check the fields against [section 2.2](#22-settings-in-the-unraid-template). Leave everything else on its default.
+5. Set **Repository** to `ghcr.io/dvortsis/lodestar-v2:0.5.1`. Check the remaining fields against [section 2.2](#22-settings-in-the-unraid-template).
 6. Select **Apply**.
    **Result:** Unraid pulls the image and starts the [container](glossary.md#container). A **Lodestar** icon appears on the Docker tab.
 
@@ -116,7 +116,7 @@ How hard the crawler works: `low`, `balanced` or `aggressive`. Balanced opens ab
 
 The templates have no Log level field. The optional custom container variable
 `LODESTAR_LOG` sets how much Lodestar logs on every output: `error`, `warn`, `info` or `debug`.
-While it is set, you can't change Logging verbosity in Settings.
+In v0.5.1, change this variable in the container configuration and restart to apply it.
 If you add this variable to the container configuration, use `LODESTAR_LOG` as its key.
 
 **Recommended:** leave it unset; the default is `info`. Logs hold no torrent details by default.
@@ -165,16 +165,16 @@ To install with the named volume:
 2. Download the compose file:
 
     ```bash
-    curl -fsSLO https://raw.githubusercontent.com/dvortsis/lodestar-v2/main/docker-compose.yml
+    curl -fsSLO https://raw.githubusercontent.com/dvortsis/lodestar-v2/v0.5.1/docker-compose.yml
     ```
 
-3. Start Lodestar:
+3. Open `docker-compose.yml` in a text editor. Set `image:` to `ghcr.io/dvortsis/lodestar-v2:0.5.1`, save it, then run in the same terminal:
 
     ```bash
     docker compose up -d
     ```
 
-   **Result:** Docker pulls the image and starts the container `lodestar`. Until the first release, this fails with "manifest unknown" unless you change the tag to `nightly`.
+   **Result:** Docker pulls the image and starts the container `lodestar`. The pinned image uses v0.5.1.
 4. Check that it is healthy:
 
     ```bash
@@ -214,7 +214,9 @@ To keep the data in a folder you own instead:
 
 Do not use `network_mode: host` unless you need it. It skips Docker's network translation for better DHT reach, but it exposes port `8090` on every host interface.
 
-Pin an exact version such as `x.y.z` instead of `latest` once releases exist, if you want updates only when you decide.
+Use `ghcr.io/dvortsis/lodestar-v2:0.5.1` in the `image:` field to update only when you decide.
+
+For an exact image that a moved tag cannot change, use `ghcr.io/dvortsis/lodestar-v2@sha256:2ffce5cb9988b3173a46aeafb2a62e24cf66962da39d3286da0adbbd5d864c17` instead. A digest identifies the image content; a tag can be moved.
 
 ## 2.5 Create the admin password
 <!-- index: setup token; admin password; first run; Legal Notice -->
@@ -231,22 +233,24 @@ To create the admin password:
 
 2. Find the line that contains `enter setup token` and copy the word right after it. The line also has a time and a level at its start.
 3. Open `http://<server-ip>:8090` in your browser. Replace `<server-ip>` with your server's address, or use `localhost` on the same machine.
-4. Read the **Legal Notice**. It says what Lodestar does on your network, what it finds, and what is yours to decide. Scroll the box to read all of it. Select **I have read the Legal Notice**, then **Continue**.
-5. Enter the token, then select **Continue**.
+4. Enter the token, then select **Continue**.
+5. Read the **Legal Notice**. It says what Lodestar does on your network, what it finds, and what is yours to decide. Scroll the box to read all of it. Select **I have read the Legal Notice**, then **Continue**.
 6. Choose a password from your password manager, enter it twice, and select **Create password and sign in**.
    **Result:** Lodestar signs you in. It prints no token again.
 
-![Lodestar first-run setup screen showing the Legal Notice, with the I have read the Legal Notice box outlined](images/setup-notice.png)
-*Figure 2.3: The first step of setup at /setup: the Legal Notice, with the box you select outlined.*
+![Lodestar v0.5.1 setup token step before the Legal Notice and password](images/setup-v051-illustration.svg)
+*Figure 2.3: The v0.5.1 setup token step comes first. Illustration, not a live screenshot.*
 
-![Lodestar first-run setup screen with the Setup token field outlined](images/setup-screen.png)
-*Figure 2.4: The setup token step, with the Setup token field outlined.*
+In v0.5.1, setup does not gate all crawler network activity. Claim the instance promptly. The library fills slowly while the DHT routing table warms up.
 
-Nothing connects to the network until setup is done: the crawler waits, and it starts on its own when you finish setup. The library fills slowly at first while the DHT routing table warms up.
+> [!NOTE]
+> **What to expect in the first hours**
+> - Search works at once, but the index is small. It grows over days, not minutes.
+> - After every start, including restarts and updates, sampling waits 6 hours before it resumes. New discoveries ramp up over the first hours after each start.
 
-To read the notice again later, open **Settings** → **About** and select **Show the Legal Notice** in the **Legal** section.
+To read the notice again later, open **More** → **About**. The **Legal** section shows it.
 
-Some updates change the notice in substance, such as the update from 0.5.1. After one, Lodestar shows the new notice once, the next time you sign in. It does the same if your copy was set up before it showed the notice. Read it and select **I have read it, continue**. Apps that use an API key, a feed link or a [webhook](glossary.md#webhook) keep working meanwhile.
+If you set up Lodestar on release candidate rc.1, rc.2 or rc.3, it never showed you the notice. After the update, the next time you open Lodestar it shows the notice first. Read it and select **I have read it, continue**. It shows again only when a later version changes the notice in substance. Apps that use an API key or a feed link keep working meanwhile.
 
 > [!NOTE]
 > **Worked example**
