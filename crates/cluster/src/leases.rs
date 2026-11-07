@@ -562,18 +562,25 @@ impl LeaseAuthority {
     /// caller's store check: [`RECENT_COMMITS`]), checked and done under one
     /// lock: the token, or `None` and nothing changed. For a late result (plan Q7, WK-9),
     /// which may never take over a key in flight.
+    ///
+    /// `checked_at` is the [`commit_seq`](Self::commit_seq) taken before the
+    /// caller's store check: if more commits than are remembered happened
+    /// since, one of them may have been this key's, so it's refused (as
+    /// [`claim_batch`](Self::claim_batch) does).
     pub fn restore_if_free(
         &self,
         worker: WorkerId,
         key: InfoHash,
         lease: RestoredLease,
         now: i64,
+        checked_at: u64,
     ) -> Option<Token> {
         let mut s = self.lock();
-        let committed = s
-            .recent
-            .as_ref()
-            .is_some_and(|(seqs, _)| seqs.contains_key(&key));
+        let forgotten = s.commits.saturating_sub(checked_at) > RECENT_COMMITS as u64;
+        let committed = forgotten
+            || s.recent
+                .as_ref()
+                .is_some_and(|(seqs, _)| seqs.contains_key(&key));
         if s.table.get(&key).is_some() || s.pending.contains_key(&key) || committed {
             return None;
         }
@@ -775,6 +782,14 @@ impl LeaseAuthority {
     pub fn in_flight(&self, key: &InfoHash) -> bool {
         let s = self.lock();
         s.table.get(key).is_some() || s.pending.contains_key(key)
+    }
+
+    #[cfg(test)]
+    fn committed_recently_for_test(&self, key: &InfoHash) -> bool {
+        self.lock()
+            .recent
+            .as_ref()
+            .is_some_and(|(seqs, _)| seqs.contains_key(key))
     }
 
     /// Leases held now.
@@ -1251,13 +1266,27 @@ mod tests {
         let Claimed::Granted(_) = a.claim(B, claim(3, 1), 0) else {
             panic!()
         };
-        assert_eq!(a.restore_if_free(A, key, lease, 1), None, "held");
+        assert_eq!(
+            a.restore_if_free(A, key, lease, 1, a.commit_seq()),
+            None,
+            "held"
+        );
         assert_eq!(a.evict(B), 1);
-        assert_eq!(a.restore_if_free(A, key, lease, 1), None, "waiting");
+        assert_eq!(
+            a.restore_if_free(A, key, lease, 1, a.commit_seq()),
+            None,
+            "waiting"
+        );
         assert_eq!(a.pending(), 1, "the waiting lease is untouched");
         let free = InfoHash([4; 20]);
-        let t = a.restore_if_free(A, free, lease, 1).unwrap();
-        assert_eq!(a.restore_if_free(A, free, lease, 1), None, "only once");
+        let t = a
+            .restore_if_free(A, free, lease, 1, a.commit_seq())
+            .unwrap();
+        assert_eq!(
+            a.restore_if_free(A, free, lease, 1, a.commit_seq()),
+            None,
+            "only once"
+        );
         assert_eq!(a.held(A, &free, t).unwrap().cohort, 2);
         assert_eq!(get(&ev.harvested), 1, "a restore is never a harvest");
     }
@@ -1292,7 +1321,7 @@ mod tests {
             assert_eq!(a.expire(10_000), 1, "B went silent: the key waits");
             assert!(free_at_check);
             let leased = if atomic {
-                a.restore_if_free(A, key, lease, 10_000).is_some()
+                a.restore_if_free(A, key, lease, 10_000, 0).is_some()
             } else {
                 a.restore(A, key, lease, 10_000);
                 true
@@ -1329,8 +1358,53 @@ mod tests {
         };
         assert!(a.commit(B, &key, t).is_some());
         // 3. The intake's lease: refused.
-        assert_eq!(a.restore_if_free(A, key, lease, 1), None);
+        assert_eq!(a.restore_if_free(A, key, lease, 1, a.commit_seq()), None);
         assert!(!a.in_flight(&key));
         assert_eq!(get(&ev.harvested), 1);
+    }
+
+    /// More commits than `RECENT_COMMITS` remembers between the late-result
+    /// check and its lease: the key's own commit may have been forgotten,
+    /// so the lease is refused, whatever the key (as a remote claim's is).
+    #[test]
+    fn a_late_lease_is_refused_when_commits_since_were_forgotten() {
+        let (a, _) = counted();
+        a.serve_remote();
+        let lease = RestoredLease {
+            cohort: 2,
+            source: src(1),
+            sources: 2,
+            strategy: 0,
+            discovered_at: 7_200,
+        };
+        let key = InfoHash([8; 20]);
+        // 1. The intake takes the sequence, then checks the store: free.
+        let checked_at = a.commit_seq();
+        // 2. The key is granted and committed, then more commits than are
+        // remembered push it out.
+        let Claimed::Granted(t) = a.claim(B, claim(8, 1), 0) else {
+            panic!()
+        };
+        assert!(a.commit(B, &key, t).is_some());
+        for n in 0..RECENT_COMMITS as u64 {
+            let mut k = [9; 20];
+            k[..8].copy_from_slice(&n.to_le_bytes());
+            let c = Claim {
+                key: InfoHash(k),
+                ..claim(9, 1)
+            };
+            let Claimed::Granted(t) = a.claim(WorkerId::LOCAL, c, 1) else {
+                panic!()
+            };
+            assert!(a.release(&c.key, t).is_some());
+        }
+        assert!(!a.committed_recently_for_test(&key), "forgotten");
+        // 3. The intake's lease: refused, though the key looks free.
+        assert_eq!(a.restore_if_free(A, key, lease, 2, checked_at), None);
+        // Taken after the commits, the sequence allows it.
+        assert!(
+            a.restore_if_free(A, key, lease, 2, a.commit_seq())
+                .is_some()
+        );
     }
 }

@@ -219,7 +219,7 @@ impl Rig {
     async fn wait_records(&self, n: u64) {
         let stats = self.remote().stats.clone();
         until("the intake read the records", || {
-            stats.records.load(Ordering::Relaxed) >= n
+            stats.records.load(Ordering::Acquire) >= n
         })
         .await;
     }
@@ -320,6 +320,11 @@ async fn provenance_comes_from_the_lease_and_counts_from_the_blob() {
         "the lease's source, not the worker's bits"
     );
     assert_eq!(row.flags & lodestar_store::flags::PRIVATE_SOURCE, 0);
+    // Its BEP 27 bit is the worker's word (cleared here): every privacy
+    // gate treats the row as private until it's re-verified (WK-9, fail
+    // closed). The display bit stays as sent.
+    assert_ne!(row.flags & lodestar_store::flags::REMOTE_UNVERIFIED, 0);
+    assert_eq!(row.flags & lodestar_store::flags::PRIVATE, 0);
     assert!(
         (fetched..=now()).contains(&row.metadata_at),
         "corrected by the offset: {} vs {fetched}",
@@ -969,4 +974,127 @@ async fn the_row_follows_the_file_list() {
         assert!(rig.stored(k).is_none());
     }
     rig.pipeline.shutdown().await.unwrap();
+}
+
+/// An honest torrent whose folders are deep and unshared: its directory
+/// paths (copied into every child when decoded) outweigh its info dict,
+/// which spells out only the files' paths. It's stored: a record's path
+/// bytes are bounded by the largest dict (16 MiB), not its own size.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_honest_deep_tree_is_stored() {
+    let rig = Rig::new(&[], 0).await;
+    let mut raw = b"d5:filesl".to_vec();
+    for f in 0..20 {
+        let segs: String = (0..30)
+            .map(|d| bytes(&format!("{f:02}{d:02}{}", "x".repeat(96))))
+            .collect();
+        raw.extend(format!("d6:lengthi1e4:pathl{segs}ee").into_bytes());
+    }
+    raw.extend(
+        format!(
+            "e4:name{}12:piece lengthi16384e6:pieces20:{}e",
+            bytes("Deep.Honest.2026"),
+            "\0".repeat(20)
+        )
+        .into_bytes(),
+    );
+    let t = prepared(&rig.worker_store, &raw);
+    let shape = lodestar_store::Preparer::from_dict(None, 3, false)
+        .decode_files(&t.files, 16 << 20, u64::MAX, u64::MAX)
+        .unwrap()
+        .2;
+    assert!(
+        shape.path_bytes > t.info_size + 4096,
+        "{} path bytes from a {}-byte dict",
+        shape.path_bytes,
+        t.info_size
+    );
+    let key = t.info_hash;
+    let token = rig.lease(W, key, 1);
+    assert!(rig.sink.results(W, payload(80, vec![record(t, token)])));
+    rig.wait_stored(&key).await;
+    assert_eq!(stat(&rig.remote(), |s| &s.refused), 0);
+    rig.pipeline.shutdown().await.unwrap();
+}
+
+/// The intake charges each record's decoded path bytes to the batch: five
+/// trees of about 15.6 MB of paths each (one 4,000-byte folder over 3,900
+/// files; small as blobs) fit the 64 MiB batch four times, and the fifth
+/// is refused alone. Taken directly, with no writer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn path_bytes_are_budgeted_per_batch() {
+    use lodestar_pipeline::remote::{BATCH_PATH_BYTES, NoStanding, Prior, RemoteParts};
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().join("p.db"), StoreConfig::default()).unwrap();
+    let epoch = (now() as u32).wrapping_sub(10);
+    let authority = Arc::new(LeaseAuthority::new(
+        epoch,
+        600,
+        Arc::new(lodestar_cluster::NoEvents),
+    ));
+    let (writer, _w) = tokio::sync::mpsc::channel(8);
+    let (pool, _p) = tokio::sync::mpsc::channel(8);
+    let intake = RemoteIntake::new(RemoteParts {
+        authority: authority.clone(),
+        writer,
+        pool,
+        rollups: Arc::new(lodestar_pipeline::Rollups::default()),
+        epoch,
+        prior: Prior::default(),
+        private_sources: 0,
+    });
+    let parts = SinkParts {
+        preparer: Mutex::new(store.preparer()),
+        standing: Arc::new(NoStanding),
+        stored: Arc::new(Reader(Mutex::new(store))),
+        clocks: Arc::new(Offset(0)),
+        hints_allow_private: false,
+    };
+    let ws = Store::open(dir.path().join("w.db"), StoreConfig::default()).unwrap();
+    let mut records = Vec::new();
+    let mut keys = Vec::new();
+    for n in 0..5u8 {
+        let mut t = prepared(&ws, &info(&format!("Wide.{n}.2026.mkv"), GIB));
+        let folder = vec![b'a' + n; 4_000];
+        let list: Vec<lodestar_metainfo::File> = (0..3_900)
+            .map(|i| lodestar_metainfo::File {
+                path: vec![folder.clone(), format!("{i:06}").into_bytes()],
+                size: 1,
+                attrs: lodestar_metainfo::FileAttrs::empty(),
+                symlink_target: None,
+                pieces_root: None,
+                hashes: lodestar_metainfo::FileHashes::default(),
+            })
+            .collect();
+        let raw =
+            lodestar_store::filetree::encode(&list, lodestar_metainfo::TextEncoding::UTF8).unwrap();
+        // The dict spells out every path: about 4 KB a file.
+        t.info_size = 3_900 * 4_040;
+        t.files = lodestar_store::BlobCodec::new(19).compress(&raw).unwrap();
+        t.size = 3_900;
+        t.file_count = 3_900;
+        t.piece_count = 1;
+        t.flags &= !lodestar_store::flags::SINGLE_FILE;
+        keys.push(t.info_hash);
+        let c = Claim {
+            key: t.info_hash,
+            source: src(1),
+            strategy: 0,
+            at: now(),
+        };
+        let BatchAnswer::Claimed {
+            claimed: Claimed::Granted(token),
+            ..
+        } = authority.claim_batch(W, &[c], now(), None, None)[0]
+        else {
+            panic!()
+        };
+        records.push(record(t, token));
+    }
+    const { assert!(BATCH_PATH_BYTES == 64 << 20) };
+    let bytes = ResultsBatch { batch: 90, records }.encode().unwrap();
+    let taken = intake.take(W, &bytes, &parts, now()).unwrap();
+    let kept: Vec<InfoHash> = taken.results.iter().map(|r| r.key).collect();
+    assert_eq!(kept, keys[..4], "four fit; the fifth passes the budget");
+    assert_eq!(stat(&intake, |s| &s.refused), 1);
 }

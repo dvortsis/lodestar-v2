@@ -476,7 +476,8 @@ impl RemoteIntake {
         }
         // Counted once each has its outcome, so a reader of the counters
         // sees every record's outcome with its count.
-        self.stats.records.fetch_add(n, Ordering::Relaxed);
+        // Release: a reader that sees the count sees every outcome above.
+        self.stats.records.fetch_add(n, Ordering::Release);
         Some(out)
     }
 
@@ -504,6 +505,9 @@ impl RemoteIntake {
             bump(&self.stats.purged);
             return None;
         }
+        // Taken before the store check, so the lease below knows whether
+        // every commit since is still remembered.
+        let checked_at = self.authority.commit_seq();
         if self.authority.in_flight(&key) || parts.stored.stored(&[key])[0] {
             bump(&self.stats.stale);
             return None;
@@ -526,7 +530,10 @@ impl RemoteIntake {
         // in one step under the authority's lock: a claim, an expiry or
         // another feed in between makes this record stale, never a second
         // lease or a second correction.
-        let Some(token) = self.authority.restore_if_free(worker, key, record, now) else {
+        let Some(token) = self
+            .authority
+            .restore_if_free(worker, key, record, now, checked_at)
+        else {
             bump(&self.stats.stale);
             return None;
         };
@@ -578,7 +585,11 @@ impl RemoteIntake {
             // so a batch of bombs costs the budget, not 1,024 caps. Its
             // shape is read before any path is built, and its paths may
             // copy no more than its own byte cap (and the batch's rest).
-            let paths = budget.path_bytes.min(cap as u64);
+            // Directory paths are copied into each child's, which the info
+            // dict doesn't spell out: an honest deep tree can outweigh it,
+            // so a record's paths are bounded by the largest dict, not its
+            // own (`MAX_BLOB`, 16 MiB), and the batch's rest.
+            let paths = budget.path_bytes.min(MAX_BLOB as u64);
             let decoded = preparer.decode_files(&torrent.files, cap, budget.components, paths);
             let (took, shape) = match &decoded {
                 Ok((_, took, shape)) => (*took, Some(*shape)),
@@ -610,6 +621,9 @@ impl RemoteIntake {
             return Err(Refusal::Counts);
         }
         torrent.flags = (torrent.flags & !(flags::PADDING | flags::SYMLINKS)) | derived.bits;
+        // `PRIVATE` is the worker's word: every privacy gate treats the row
+        // as private until WK-13 re-verifies it (fail closed).
+        torrent.flags |= flags::REMOTE_UNVERIFIED;
         // A hybrid's other hash is the worker's word: a record that would
         // merge into another stored torrent through it is refused.
         let other: Vec<InfoHash> = torrent.swarm_hashes().filter(|h| *h != rec.key).collect();

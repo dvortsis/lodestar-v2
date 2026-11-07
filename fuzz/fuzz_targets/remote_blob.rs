@@ -28,7 +28,7 @@ fuzz_target!(|data: &[u8]| {
     };
     // The pre-pass and the decoder, on the bytes as given: a raw blob.
     // `decode` runs only on what the shape bounds, as `decode_files` does.
-    match shape(body) {
+    match shape(body, COMPONENTS as usize, 200_000) {
         Err(_) => assert!(decode(body).is_err(), "shape refused what decode reads"),
         Ok(s) if s.components <= COMPONENTS && s.path_bytes <= PATH_BYTES => match decode(body) {
             Ok(tree) => {

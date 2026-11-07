@@ -114,6 +114,16 @@ pub mod flags {
     pub const DEMOTED: i64 = 1 << 12;
     /// A filter rule flagged it for review.
     pub const FLAGGED: i64 = 1 << 13;
+    /// Its info-derived columns came from a remote worker and haven't been
+    /// re-verified (WK-9): `PRIVATE` (the dict's BEP 27 bit) is the
+    /// worker's word, so every privacy gate treats the row as private
+    /// until WK-13's re-verification clears this. A refetch by the
+    /// coordinator itself rewrites the flags and clears it too.
+    pub const REMOTE_UNVERIFIED: i64 = 1 << 14;
+    /// What every §18.7 privacy gate (scrapes, cache lookups, ENR-1, Send
+    /// to client) refuses: a BEP 27 private torrent, a private source's
+    /// find, or a remote row whose `PRIVATE` isn't verified yet.
+    pub const PRIVACY: i64 = PRIVATE | PRIVATE_SOURCE | REMOTE_UNVERIFIED;
 }
 
 #[derive(Debug)]
@@ -325,7 +335,8 @@ impl Preparer {
     /// Decodes a file-tree blob prepared elsewhere (a remote worker's,
     /// WK-9), refusing one that decompresses to more than `max` bytes, or
     /// whose [`filetree::shape`] (read before any path is built) is over
-    /// metainfo's limits (depth, files, a name's or a path's bytes) or over
+    /// metainfo's limits (depth, files, a path's bytes, which bounds each
+    /// name's too) or over
     /// the caller's budgets: `max_components` path components and
     /// `max_path_bytes` bytes of paths in all, which is what decoding
     /// copies. Also returns how many bytes it decompressed to, and the
@@ -340,11 +351,12 @@ impl Preparer {
         let raw = self
             .codec
             .decompress_capped(blob.codec, blob.dict_id, &blob.data, max)?;
-        let shape = filetree::shape(&raw)?;
         let limits = lodestar_metainfo::Limits::DEFAULT;
+        // Each directory is at least one component: more than the budget
+        // is refused before the shape reserves anything for them.
+        let max_dirs = usize::try_from(max_components).unwrap_or(usize::MAX);
+        let shape = filetree::shape(&raw, max_dirs, limits.max_files)?;
         if shape.depth > limits.max_path_depth
-            || shape.files > limits.max_files
-            || shape.longest_name > limits.max_name_bytes
             || shape.longest_path > limits.max_path_bytes as u64
             || shape.components > max_components
             || shape.path_bytes > max_path_bytes
@@ -1690,7 +1702,7 @@ mod tests {
         // A 400 KB name under 2,000 files: 800 MB of paths from 413 KB.
         let long = tree(400_000, 2_000);
         assert!(long.len() < 420_000, "{} bytes", long.len());
-        let shape = filetree::shape(&long).unwrap();
+        let shape = filetree::shape(&long, usize::MAX, usize::MAX).unwrap();
         assert!(shape.path_bytes > 800_000_000);
         let raw = Compressed {
             codec: Codec::Raw,
@@ -1699,12 +1711,12 @@ mod tests {
         };
         assert!(
             p.decode_files(&raw, cap, any, any).is_err(),
-            "a name over 4,096 bytes"
+            "a path over 4,096 bytes"
         );
         // Names within the limit, but 30,000 files under a 4,000-byte
         // directory: 120 MB of paths in about 150 KB, compressed to less.
         let wide = tree(4_000, 30_000);
-        let shape = filetree::shape(&wide).unwrap();
+        let shape = filetree::shape(&wide, usize::MAX, usize::MAX).unwrap();
         assert!(shape.path_bytes > 120_000_000 && shape.longest_path <= 4_096);
         let z = BlobCodec::new(19).compress(&wide).unwrap();
         assert!(z.data.len() < 64 << 10);
@@ -1814,5 +1826,23 @@ mod tests {
             assert_eq!(ours.has_dict(7), with_dict);
             assert!(!ours.has_dict(8));
         }
+    }
+
+    /// Writes the `remote_blob` fuzz seed for a huge directory claim (run by
+    /// hand: `cargo test -p lodestar-store -- --ignored write_remote_blob_seed`).
+    #[test]
+    #[ignore]
+    fn write_remote_blob_seed() {
+        let mut blob = vec![filetree::FORMAT_VERSION, 0, 0];
+        blob.extend([0x80, 0x9b, 0xee, 0x02]); // 6,000,000 directories
+        blob.push(0); // no files
+        blob.resize(blob.len() + 12_000_000, 0);
+        let z = BlobCodec::new(19).compress(&blob).unwrap();
+        // Odd: zstd; then a 16 MiB cap in KiB.
+        let mut seed = vec![1u8, 0x40, 0x00];
+        seed.extend(&z.data);
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fuzz/seeds/remote_blob");
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(format!("{dir}/huge_dir_count"), seed).unwrap();
     }
 }

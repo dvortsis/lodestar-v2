@@ -492,7 +492,13 @@ proptest! {
                 }
                 let extra = if sp.hidden { flags::HIDDEN } else { 0 }
                     | if sp.private { flags::PRIVATE_SOURCE } else { 0 }
-                    | if sp.bep27 { flags::PRIVATE } else { 0 }
+                    // Half of them a remote worker's row, its BEP 27 bit
+                    // unverified (WK-9): gated the same.
+                    | if sp.bep27 {
+                        if name.len() % 2 == 0 { flags::PRIVATE } else { flags::REMOTE_UNVERIFIED }
+                    } else {
+                        0
+                    }
                     | if sp.partial { flags::FILES_PARTIAL | flags::IMPORTED } else { 0 };
                 let source = if sp.masked { sukebei } else { dht };
                 let (id, key) = put(&mut s, &name, source, extra, sp.adult);
