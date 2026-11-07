@@ -147,6 +147,13 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET", "/webhooks"),
     ("POST", "/webhooks/{integration}/token"),
     ("DELETE", "/webhooks/{integration}/token"),
+    ("GET", "/workers"),
+    ("POST", "/workers/tokens"),
+    ("PATCH", "/workers/{id}"),
+    ("POST", "/workers/{id}/drain"),
+    ("POST", "/workers/{id}/resume"),
+    ("POST", "/workers/{id}/pause"),
+    ("POST", "/workers/{id}/revoke"),
     ("GET", "/openapi.json"),
 ];
 const OPEN: [&str; 6] = [

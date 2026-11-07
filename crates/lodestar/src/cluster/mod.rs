@@ -12,6 +12,7 @@
 
 pub mod have;
 mod intake;
+pub mod ops;
 pub mod placement;
 pub mod serve;
 

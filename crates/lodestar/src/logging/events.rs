@@ -916,4 +916,42 @@ lodestar_log::catalogue! {
         message: "The cluster port couldn't open; workers can't connect",
         fields: { step: Label, error: Error },
     }
+
+    // ── Workers API (WK-14, §19.6, §19.7) ──
+    /// A worker connected while the planner already had 4,096 workers: it
+    /// gets no assignment until one leaves, and is tried again then. Said
+    /// once per worker until it joins.
+    WORKERS_JOIN_REFUSED {
+        id: "workers.join_refused",
+        component: Workers,
+        level: Warn,
+        message: "A worker can't be planned: Lodestar plans at most 4,096 workers",
+        fields: { worker: Label },
+    }
+    /// A worker's saved settings row didn't read back (another version, or
+    /// a value out of range): it gets the defaults until they're set again.
+    WORKERS_PREFS_SKIPPED {
+        id: "workers.prefs_skipped",
+        component: Workers,
+        level: Warn,
+        message: "A worker's saved settings couldn't be read; it uses the defaults",
+        fields: { worker: Label },
+    }
+    /// The admin created a one-time join token (shown once, never logged).
+    WORKERS_TOKEN_CREATED {
+        id: "workers.token_created",
+        component: Workers,
+        level: Info,
+        message: "A worker join token was created; it expires in 15 minutes",
+        fields: {},
+    }
+    /// The admin revoked a worker: its certificate is refused and its
+    /// leases went back to other workers.
+    WORKERS_REVOKED {
+        id: "workers.revoked",
+        component: Workers,
+        level: Info,
+        message: "A worker was revoked",
+        fields: { worker: Label, leases: Label },
+    }
 }

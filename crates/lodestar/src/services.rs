@@ -52,6 +52,8 @@ pub struct Services {
     system: Arc<dyn lodestar_api::system::SystemApi>,
     /// `/updates` (B-update), beside `/system`.
     updates: Arc<dyn lodestar_api::updates::UpdatesApi>,
+    /// `/workers` (WK-14), beside `/system`.
+    workers: Arc<dyn lodestar_api::workers::WorkersApi>,
     /// `POST /webhooks/{integration}` (SRC-11c), over the plugin's inbox.
     webhooks: Arc<lodestar_api::webhooks::Webhooks>,
 }
@@ -363,6 +365,16 @@ impl Services {
             clock: Arc::new(lodestar_cluster::SystemClock),
         })
         .await?;
+        // `/workers` (WK-14): the planner WK-10's tick syncs, with saved
+        // pins, budgets and pauses re-applied.
+        let workers = crate::cluster::ops::Workers::open(
+            cluster.handle(),
+            Arc::new(crate::cluster::placement::Placement::new(
+                dht_stats.is_some(),
+            )),
+            &config.db_path(),
+            config.store_config(),
+        )?;
         // Fed and drained only while it's enabled at this start with a
         // cache listed: with none, it stops at "needs setup".
         let cache_feed = pipeline
@@ -630,6 +642,7 @@ impl Services {
             system,
             updates: updates.api,
             webhooks,
+            workers,
         })
     }
 
@@ -666,6 +679,7 @@ impl Services {
             system,
             updates,
             webhooks,
+            workers,
         } = self;
         // Exports and other background jobs (§9): one registry, closed at
         // shutdown so open downloads end rather than hold it.
@@ -689,6 +703,7 @@ impl Services {
             .layer(Extension(export_adult))
             .layer(Extension(system))
             .layer(Extension(updates))
+            .layer(Extension(workers))
             .layer(webhooks.layer())
             .into_make_service_with_connect_info::<SocketAddr>();
         // Open streams never end on their own: closing the hub ends them,

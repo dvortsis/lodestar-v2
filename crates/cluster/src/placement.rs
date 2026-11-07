@@ -194,7 +194,9 @@ pub fn plan(members: &[Member], per_peer_ip: u8) -> Vec<(MemberId, Share)> {
 /// Whether a remote peer could see a member at `ip`: not private, CGNAT,
 /// loopback, link-local, unique-local, site-local, unspecified,
 /// multicast, broadcast, reserved (240/4), benchmarking (198.18/15),
-/// IETF protocol (192.0.0/24), documentation or discard-only (100::/64).
+/// IETF protocol (192.0.0/24), documentation (IPv4's three /24s,
+/// 2001:db8::/32 and 3fff::/20), IPv6 benchmarking (2001:2::/48) or
+/// discard-only (100::/64).
 /// 6to4, Teredo and NAT64 forms aren't unwrapped: they count as public.
 pub fn is_public(ip: IpAddr) -> bool {
     match ip.to_canonical() {
@@ -224,6 +226,8 @@ pub fn is_public(ip: IpAddr) -> bool {
                 || (seg[0] & 0xffc0) == 0xfe80
                 || (seg[0] & 0xffc0) == 0xfec0
                 || (seg[0], seg[1]) == (0x2001, 0x0db8)
+                || (seg[0], seg[1] & 0xf000) == (0x3fff, 0)
+                || seg[..3] == [0x2001, 0x0002, 0]
                 || seg[..4] == [0x0100, 0, 0, 0])
         }
     }
@@ -334,6 +338,8 @@ pub struct Planner {
     prefs: BTreeMap<WorkerId, Prefs>,
     coordinator_share: Share,
     assignments: BTreeMap<WorkerId, Assignment>,
+    /// Members taken at most: [`MAX_WORKERS`] unless lowered.
+    max_members: usize,
 }
 
 /// A new plan: every remote worker's assignment (all at the new revision)
@@ -371,7 +377,16 @@ impl Planner {
                 politeness: Politeness::ALONE,
             },
             assignments: BTreeMap::new(),
+            max_members: MAX_WORKERS,
         }
+    }
+
+    /// Takes at most `n` members (at most [`MAX_WORKERS`]), so a caller's
+    /// handling of a refused join can be tested without thousands of
+    /// re-plans.
+    #[doc(hidden)]
+    pub fn limit_members(&mut self, n: usize) {
+        self.max_members = n.min(MAX_WORKERS);
     }
 
     pub fn revision(&self) -> u64 {
@@ -398,7 +413,7 @@ impl Planner {
     /// [`MAX_WORKERS`].
     pub fn join(&mut self, worker: WorkerId, ips: Vec<IpAddr>) -> Option<Replan> {
         if worker == WorkerId::LOCAL
-            || (!self.workers.contains_key(&worker) && self.workers.len() >= MAX_WORKERS)
+            || (!self.workers.contains_key(&worker) && self.workers.len() >= self.max_members)
         {
             return None;
         }
@@ -435,17 +450,32 @@ impl Planner {
 
     /// Pins a worker's DHT on (`Auto`) or off. It's kept across sessions;
     /// a plan is made only while the worker is connected. A worker id that
-    /// was never set and has no session stores nothing past
-    /// [`MAX_WORKERS`].
+    /// was never set stores nothing past [`MAX_WORKERS`]: check
+    /// [`can_store_prefs`](Self::can_store_prefs) first.
     pub fn pin(&mut self, worker: WorkerId, pin: DhtPin) -> Option<Replan> {
         self.prefs_mut(worker)?.pin = pin;
         self.workers.contains_key(&worker).then(|| self.replan())
     }
 
+    /// Whether `worker` is a member now. A [`join`](Self::join) past
+    /// [`MAX_WORKERS`] leaves it out: the caller can tell, and try again
+    /// once there's room.
+    pub fn is_member(&self, worker: WorkerId) -> bool {
+        self.workers.contains_key(&worker)
+    }
+
+    /// Whether a [`pin`](Self::pin) or [`set_settings`](Self::set_settings)
+    /// for `worker` would be kept. Settings are kept for at most
+    /// [`MAX_WORKERS`] workers; past that, a worker that has none yet is
+    /// refused (and the built-in worker never has any). Ask first, so the
+    /// refusal reaches the admin instead of being lost (WK-14).
+    pub fn can_store_prefs(&self, worker: WorkerId) -> bool {
+        worker != WorkerId::LOCAL
+            && (self.prefs.contains_key(&worker) || self.prefs.len() < MAX_WORKERS)
+    }
+
     fn prefs_mut(&mut self, worker: WorkerId) -> Option<&mut Prefs> {
-        if worker == WorkerId::LOCAL
-            || (!self.prefs.contains_key(&worker) && self.prefs.len() >= MAX_WORKERS)
-        {
+        if !self.can_store_prefs(worker) {
             return None;
         }
         Some(self.prefs.entry(worker).or_default())
@@ -705,6 +735,14 @@ mod tests {
             ("2001:db8::1", false),
             ("100::1", false),
             ("100:0:0:1::1", true),
+            ("2001:2::1", false),
+            ("2001:2:0:ffff::1", false),
+            ("2001:2:1::1", true),
+            ("2001:3::1", true),
+            ("3fff::1", false),
+            ("3fff:fff:ffff::1", false),
+            ("3fff:1000::1", true),
+            ("3ffe::1", true),
             ("::ffff:10.0.0.1", false),
             ("::ffff:8.8.8.8", true),
         ] {
@@ -743,6 +781,17 @@ mod tests {
     }
 
     #[test]
+    fn a_lowered_member_limit_refuses_joins() {
+        let mut p = Planner::new(true);
+        p.limit_members(1);
+        assert!(p.join(WorkerId(1), vec![ip(1)]).is_some());
+        assert!(p.join(WorkerId(2), vec![ip(2)]).is_none());
+        assert!(!p.is_member(WorkerId(2)));
+        p.limit_members(usize::MAX);
+        assert_eq!(p.max_members, MAX_WORKERS);
+    }
+
+    #[test]
     fn joins_past_the_cap_are_refused() {
         let mut p = Planner::new(true);
         for w in 1..=MAX_WORKERS as u32 {
@@ -750,9 +799,33 @@ mod tests {
         }
         assert!(p.join(WorkerId(MAX_WORKERS as u32 + 1), vec![]).is_none());
         assert!(
+            !p.is_member(WorkerId(MAX_WORKERS as u32 + 1)),
+            "the caller can tell"
+        );
+        assert!(
             p.join(WorkerId(1), vec![ip(9)]).is_some(),
             "a member rejoins"
         );
+        assert!(p.is_member(WorkerId(1)));
+    }
+
+    #[test]
+    fn a_full_prefs_table_is_reported_before_it_refuses() {
+        let mut p = Planner::new(true);
+        for w in 1..=MAX_WORKERS as u32 {
+            p.prefs.insert(WorkerId(w), Prefs::default());
+        }
+        let new = WorkerId(MAX_WORKERS as u32 + 1);
+        assert!(!p.can_store_prefs(new));
+        assert!(
+            p.can_store_prefs(WorkerId(7)),
+            "one with settings may change them"
+        );
+        assert!(!p.can_store_prefs(WorkerId::LOCAL));
+        p.pin(new, DhtPin::Off);
+        assert!(!p.prefs.contains_key(&new), "refused, as asked");
+        p.forget(WorkerId(7));
+        assert!(p.can_store_prefs(new), "room again");
     }
 
     #[test]

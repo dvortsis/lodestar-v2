@@ -18,9 +18,10 @@
 //!   or sent, and the coordinator's share is the full keyspace with one
 //!   install's limits. Nothing here opens the cluster PKI.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use lodestar_cluster::assign::{Assignment, Intensity, ShardSpec};
 use lodestar_cluster::placement::{DhtPin, Planner, Replan, Share, WorkerSettings};
@@ -28,6 +29,8 @@ use lodestar_cluster::proto::ToWorker;
 use lodestar_cluster::{ClusterServer, FleetSnapshot, SendError, WorkerId, WorkerStatus};
 use lodestar_dht::node::shard::Shard;
 use lodestar_sources::Distribution;
+
+use crate::logging::events;
 
 /// Whether a source plugin may run on a remote worker. Never, in v1 (plan
 /// Q9): `ShardedKeyspace` is the DHT's, and the DHT is built in, not a
@@ -77,7 +80,54 @@ struct State {
     planner: Planner,
     /// Each member's last reported addresses.
     addrs: BTreeMap<WorkerId, Vec<IpAddr>>,
+    /// Workers revoked or removed: never members again. A revoked id
+    /// can't come back (its certificates are refused), so a fleet
+    /// snapshot taken before the revocation must not rejoin it with the
+    /// defaults (the #560 delta review).
+    forgotten: BTreeSet<WorkerId>,
+    /// Rate limit for `workers.join_refused`.
+    warned: Refusals,
 }
+
+/// How often one worker's refused join is logged at most.
+const REFUSED_EVERY: Duration = Duration::from_secs(600);
+/// Refused joins logged across the fleet per minute at most.
+const REFUSED_PER_MINUTE: u32 = 10;
+
+/// The rate limit for `workers.join_refused`: each worker at most once
+/// per [`REFUSED_EVERY`], and the fleet at most [`REFUSED_PER_MINUTE`]
+/// a minute, so a worker that flaps (or thousands refused at once) can't
+/// flood the log.
+#[derive(Debug, Default)]
+struct Refusals {
+    last: BTreeMap<WorkerId, Instant>,
+    window: Option<(Instant, u32)>,
+}
+
+impl Refusals {
+    fn allow(&mut self, w: WorkerId, now: Instant) -> bool {
+        self.last
+            .retain(|_, at| now.saturating_duration_since(*at) < REFUSED_EVERY);
+        if self.last.contains_key(&w) {
+            return false;
+        }
+        let (start, n) = self.window.get_or_insert((now, 0));
+        if now.saturating_duration_since(*start) >= Duration::from_secs(60) {
+            (*start, *n) = (now, 0);
+        }
+        if *n >= REFUSED_PER_MINUTE {
+            return false;
+        }
+        *n += 1;
+        self.last.insert(w, now);
+        true
+    }
+}
+
+/// Settings are kept for at most `MAX_WORKERS` workers; this one has none
+/// and there's no room (#560's delta review: refused, not lost).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrefsFull;
 
 /// The coordinator's planner and what it last sent.
 #[derive(Debug)]
@@ -103,7 +153,17 @@ impl Placement {
             // still newer than any a worker applied before it.
             planner: Planner::starting_at(coordinator_dht, now_ms()),
             addrs: BTreeMap::new(),
+            forgotten: BTreeSet::new(),
+            warned: Refusals::default(),
         }))
+    }
+
+    /// A placement whose planner takes at most `n` members, for tests.
+    #[cfg(test)]
+    fn with_member_limit(coordinator_dht: bool, n: usize) -> Placement {
+        let p = Placement::new(coordinator_dht);
+        p.state().planner.limit_members(n);
+        p
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -129,19 +189,44 @@ impl Placement {
         self.state().planner.set_coordinator_ips(ips)
     }
 
-    pub fn pin(&self, worker: WorkerId, pin: DhtPin) -> Option<Replan> {
-        self.state().planner.pin(worker, pin)
+    /// Whether settings can be kept for `worker` (`Planner::can_store_prefs`).
+    pub fn can_store(&self, worker: WorkerId) -> bool {
+        self.state().planner.can_store_prefs(worker)
     }
 
-    pub fn set_settings(&self, worker: WorkerId, s: WorkerSettings) -> Option<Replan> {
-        self.state().planner.set_settings(worker, s)
+    /// Pins a worker's DHT. `Err` when no settings can be kept for it
+    /// (`MAX_WORKERS` workers have some), so the admin hears of it.
+    pub fn pin(&self, worker: WorkerId, pin: DhtPin) -> Result<Option<Replan>, PrefsFull> {
+        let mut st = self.state();
+        if !st.planner.can_store_prefs(worker) {
+            return Err(PrefsFull);
+        }
+        Ok(st.planner.pin(worker, pin))
     }
 
-    /// A worker was revoked or removed: its pin and settings go too
-    /// (WK-14). A worker that only disconnects keeps them.
+    /// A worker's budget, intensity and pool cap; `Err` as for
+    /// [`pin`](Self::pin).
+    pub fn set_settings(
+        &self,
+        worker: WorkerId,
+        s: WorkerSettings,
+    ) -> Result<Option<Replan>, PrefsFull> {
+        let mut st = self.state();
+        if !st.planner.can_store_prefs(worker) {
+            return Err(PrefsFull);
+        }
+        Ok(st.planner.set_settings(worker, s))
+    }
+
+    /// A worker was revoked or removed: its pin and settings go too, and
+    /// it's never planned again (WK-14). Call it once the worker is
+    /// disconnected (`ClusterServer::revoke_worker` stops the session
+    /// first); a snapshot still listing it can't rejoin it. A worker that
+    /// only disconnects keeps its pin and settings.
     pub fn forget(&self, worker: WorkerId) -> Option<Replan> {
         let mut st = self.state();
         st.addrs.remove(&worker);
+        st.forgotten.insert(worker);
         st.planner.forget(worker)
     }
 
@@ -190,11 +275,15 @@ impl Placement {
     fn update(&self, workers: &[WorkerStatus]) -> Option<Replan> {
         let mut st = self.state();
         // A draining worker stays a member: it's still fetching the keys it
-        // holds, so its IP's per-peer connections stay divided (§19.6).
+        // holds, so its IP's per-peer connections stay divided (§19.6). A
+        // paused one is planned the same way: it takes no new keys, so its
+        // DHT shard goes to the others rather than going uncovered.
         let now: BTreeMap<WorkerId, (Vec<IpAddr>, bool)> = workers
             .iter()
-            .filter(|w| w.connected && w.worker != WorkerId::LOCAL)
-            .map(|w| (w.worker, (w.external_ips.clone(), w.draining)))
+            .filter(|w| {
+                w.connected && w.worker != WorkerId::LOCAL && !st.forgotten.contains(&w.worker)
+            })
+            .map(|w| (w.worker, (w.external_ips.clone(), w.draining || w.paused)))
             .collect();
         let mut last = None;
         let gone: Vec<WorkerId> = st
@@ -209,8 +298,19 @@ impl Placement {
         }
         for (w, (ips, draining)) in now {
             if st.addrs.get(&w) != Some(&ips) {
-                st.addrs.insert(w, ips.clone());
-                last = st.planner.join(w, ips).or(last);
+                last = st.planner.join(w, ips.clone()).or(last);
+                if !st.planner.is_member(w) {
+                    // Past `MAX_WORKERS`: its addresses aren't recorded,
+                    // so the next sync tries again once there's room.
+                    if st.warned.allow(w, Instant::now()) {
+                        lodestar_log::log_event!(
+                            events::WORKERS_JOIN_REFUSED,
+                            worker = lodestar_log::Count(u64::from(w.0))
+                        );
+                    }
+                    continue;
+                }
+                st.addrs.insert(w, ips);
             }
             last = st.planner.set_draining(w, draining).or(last);
         }
@@ -223,6 +323,7 @@ mod tests {
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     use lodestar_cluster::assign::{ALL_SLOTS, Politeness};
+    use lodestar_cluster::placement::MAX_WORKERS;
     use lodestar_cluster::proto::Stats;
 
     use super::*;
@@ -232,6 +333,7 @@ mod tests {
             worker: WorkerId(id),
             connected,
             draining,
+            paused: false,
             offset_ms: 0,
             skewed: false,
             leases: 0,
@@ -379,14 +481,15 @@ mod tests {
         let p = Placement::new(true);
         p.set_coordinator_ips(vec![HOME]);
         p.update(&[status(3, true, false, vec![AWAY])]);
-        p.pin(WorkerId(3), DhtPin::Off);
+        p.pin(WorkerId(3), DhtPin::Off).unwrap();
         p.set_settings(
             WorkerId(3),
             WorkerSettings {
                 pool_cap: 1234,
                 ..WorkerSettings::default()
             },
-        );
+        )
+        .unwrap();
         // One heartbeat timeout: disconnected, then back.
         p.update(&[status(3, false, false, vec![AWAY])]).unwrap();
         let mut sent = Vec::new();
@@ -399,10 +502,12 @@ mod tests {
         };
         let a = Assignment::from_message(m).unwrap().unwrap();
         assert_eq!((a.dht, a.pool_cap), (None, 1234));
-        // Revoked: forgotten.
+        // Revoked: forgotten, settings and all, and never planned again
+        // (a revoked id can't reconnect; WK-14).
         p.forget(WorkerId(3));
-        p.update(&[status(3, true, false, vec![AWAY])]).unwrap();
-        assert_eq!(p.assignment(WorkerId(3)).unwrap().pool_cap, 50_000);
+        assert_eq!(p.update(&[status(3, true, false, vec![AWAY])]), None);
+        assert_eq!(p.assignment(WorkerId(3)), None);
+        assert!(p.can_store(WorkerId(3)));
     }
 
     #[test]
@@ -410,7 +515,7 @@ mod tests {
         let p = Placement::new(true);
         p.set_coordinator_ips(vec![HOME]);
         p.update(&[status(1, true, false, vec![HOME])]);
-        let r = p.pin(WorkerId(1), DhtPin::Off).unwrap();
+        let r = p.pin(WorkerId(1), DhtPin::Off).unwrap().unwrap();
         assert_eq!(r.workers[0].1.dht, None);
         assert_eq!(p.coordinator().dht, Some(ShardSpec::FULL));
         let s = WorkerSettings {
@@ -418,7 +523,7 @@ mod tests {
             pool_cap: 10_000,
             ..WorkerSettings::default()
         };
-        let r = p.set_settings(WorkerId(1), s).unwrap();
+        let r = p.set_settings(WorkerId(1), s).unwrap().unwrap();
         let a = r.workers[0].1;
         assert_eq!(
             (a.intensity, a.pool_cap, a.dht),
@@ -430,8 +535,94 @@ mod tests {
             (2, 5)
         );
         assert!(
-            p.pin(WorkerId(9), DhtPin::Off).is_none(),
+            p.pin(WorkerId(9), DhtPin::Off).unwrap().is_none(),
             "not connected: no plan"
         );
+    }
+    #[test]
+    fn a_paused_worker_hands_its_dht_shard_over() {
+        let p = Placement::new(true);
+        p.set_coordinator_ips(vec![HOME]);
+        let mut w = status(4, true, false, vec![AWAY]);
+        p.update(std::slice::from_ref(&w)).unwrap();
+        assert!(p.assignment(WorkerId(4)).unwrap().dht.is_some());
+        w.paused = true;
+        p.update(std::slice::from_ref(&w)).unwrap();
+        assert_eq!(p.assignment(WorkerId(4)).unwrap().dht, None);
+        assert_eq!(p.coordinator().dht, Some(ShardSpec::FULL));
+    }
+
+    #[test]
+    fn a_forgotten_worker_isnt_rejoined_by_an_older_snapshot() {
+        let p = Placement::new(true);
+        p.set_coordinator_ips(vec![HOME]);
+        let before = [status(3, true, false, vec![AWAY])];
+        p.update(&before).unwrap();
+        p.pin(WorkerId(3), DhtPin::Off).unwrap();
+        p.forget(WorkerId(3));
+        // A snapshot taken before the revocation still lists it.
+        assert_eq!(p.update(&before), None);
+        assert_eq!(
+            p.assignment(WorkerId(3)),
+            None,
+            "not rejoined with defaults"
+        );
+        assert_eq!(p.coordinator().politeness, Politeness::ALONE);
+    }
+
+    #[test]
+    fn a_join_past_the_cap_is_retried_once_there_is_room() {
+        // `MAX_WORKERS` itself takes thousands of re-plans; the planner's
+        // own test covers the real cap. Three members here.
+        let p = Placement::with_member_limit(true, 3);
+        let extra = WorkerId(4);
+        let mut fleet: Vec<WorkerStatus> =
+            (1..=4).map(|w| status(w, true, false, vec![])).collect();
+        p.update(&fleet);
+        assert!(p.assignment(WorkerId(1)).is_some());
+        assert_eq!(p.assignment(extra), None, "refused at the cap");
+        // Still full: refused again, and warned about once (`warned`).
+        p.update(&fleet);
+        assert_eq!(p.assignment(extra), None);
+        assert!(p.state().warned.last.contains_key(&extra));
+        // Worker 1 leaves: the same snapshot of the extra one now joins.
+        fleet.remove(0);
+        p.update(&fleet);
+        assert!(p.assignment(extra).is_some(), "tried again");
+    }
+
+    #[test]
+    fn refused_joins_are_rate_limited_per_worker_and_fleet_wide() {
+        let mut r = Refusals::default();
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        assert!(r.allow(WorkerId(1), at(0)));
+        // Flapping: refused again a minute later, not logged again.
+        assert!(!r.allow(WorkerId(1), at(60)));
+        assert!(!r.allow(WorkerId(1), at(599)));
+        assert!(r.allow(WorkerId(1), at(600)), "once per 10 minutes");
+        // Many workers at once: at most ten a minute.
+        let logged = (100..200)
+            .filter(|&w| r.allow(WorkerId(w), at(700)))
+            .count();
+        assert_eq!(logged, REFUSED_PER_MINUTE as usize);
+        assert!(r.allow(WorkerId(300), at(760)), "a new minute");
+    }
+
+    #[test]
+    fn a_pin_with_no_room_is_refused_out_loud() {
+        let p = Placement::new(true);
+        for w in 1..=MAX_WORKERS as u32 {
+            p.set_settings(WorkerId(w), WorkerSettings::default())
+                .unwrap();
+        }
+        let new = WorkerId(MAX_WORKERS as u32 + 1);
+        assert_eq!(p.pin(new, DhtPin::Off), Err(PrefsFull));
+        assert_eq!(
+            p.set_settings(new, WorkerSettings::default()),
+            Err(PrefsFull)
+        );
+        assert_eq!(p.pin(WorkerId(1), DhtPin::Off), Ok(None), "kept");
+        assert_eq!(p.pin(WorkerId::LOCAL, DhtPin::Off), Err(PrefsFull));
     }
 }

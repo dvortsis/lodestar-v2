@@ -37,6 +37,7 @@ pub mod system;
 pub mod torrents;
 pub mod updates;
 pub mod user_items;
+pub mod workers;
 
 /// What a secret (a password, the setup token) shows as in `Debug`
 /// output, so one never reaches a log.
