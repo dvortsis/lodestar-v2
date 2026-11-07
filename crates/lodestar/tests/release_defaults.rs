@@ -22,7 +22,9 @@ fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
         if path.is_dir() {
             sources(&path, out);
         } else if path.extension().is_some_and(|e| e == "rs")
-            && path.file_name().is_some_and(|n| n != "tests.rs" && n != "test_log.rs")
+            && path
+                .file_name()
+                .is_some_and(|n| n != "tests.rs" && n != "test_log.rs")
         {
             out.push(path);
         }
