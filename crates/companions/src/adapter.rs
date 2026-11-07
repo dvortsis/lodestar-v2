@@ -266,40 +266,48 @@ pub enum Method {
 /// A request path and query (`/api/v2/app/version`,
 /// `/api/v1/system/status?x=1`): `/` first, RFC 3986 characters, well-formed
 /// `%` escapes, no fragment, no `//`, no `.` or `..` segment (encoded or
-/// not), no `%2f`, `%5c`, `%25` or `;` in the path, no `%00` anywhere, at most 2048
-/// bytes.
+/// not), no `;` and no escaped `;`, `?`, `#`, `/`, `\`, `%` or byte from
+/// `0x80` in the path, no
+/// escaped control byte anywhere, at most 2048 bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestPath(String);
+
+/// The bytes a path's `%` escapes stand for. Call after [`percent_ok`],
+/// so every `%` starts a full escape.
+fn escaped_bytes(s: &str) -> impl Iterator<Item = u8> + '_ {
+    s.as_bytes()
+        .windows(3)
+        .filter(|w| w[0] == b'%')
+        .filter_map(|w| u8::from_str_radix(std::str::from_utf8(&w[1..]).ok()?, 16).ok())
+}
+
+/// A control byte, which no path or query may carry even escaped: `%00`
+/// ends a string in some servers, and `%0d%0a` splits a line once decoded.
+fn control(b: u8) -> bool {
+    b < 0x20 || b == 0x7f
+}
 
 /// The checks a path (without its query) passes, shared by
 /// [`RequestPath`] and [`EnteredUrl`]'s base path.
 ///
-/// - No `%2f` or `%5c` (an encoded separator hides from the checks), no
-///   `%25` (a server that decodes twice would turn `%252e` into `.`), no
-///   `;` (path parameters like `/a/..;/b` that some servers strip), no
-///   `%00`.
+/// - No `;` (path parameters like `/a/..;/b` that some servers strip).
+/// - No escape, in either case, of a byte that ends or splits a path once
+///   decoded: `;` (`%3b`), `?` (`%3f`), `#` (`%23`), `/` (`%2f`), `\`
+///   (`%5c`), `%` itself (`%25`: a server that decodes twice would turn
+///   `%252e` into `.`), or a control byte (`%00`–`%1f`, `%7f`).
 /// - No encoded byte from `0x80`: that covers overlong and fullwidth
 ///   spellings of `.` and `/` (`%c0%ae`, `%ef%bc%8e`), which some servers
 ///   normalise.
 /// - No `//`, and no `.` or `..` segment, plain or with `%2e`.
 fn path_ok(path: &str) -> Result<(), InputError> {
-    let lower = path.to_ascii_lowercase();
-    if lower.contains("%2f")
-        || lower.contains("%5c")
-        || lower.contains("%25")
-        || lower.contains("%00")
-        || lower.contains(';')
+    if path.contains(';')
+        || escaped_bytes(path).any(|b| {
+            matches!(b, b';' | b'?' | b'#' | b'/' | b'\\' | b'%') || control(b) || b >= 0x80
+        })
     {
         return Err(InputError::Character);
     }
-    let b = lower.as_bytes();
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() && matches!(b[i + 1], b'8'..=b'9' | b'a'..=b'f') {
-            return Err(InputError::Character);
-        }
-        i += 1;
-    }
+    let lower = path.to_ascii_lowercase();
     let decoded = lower.replace("%2e", ".");
     if decoded.contains("//") || decoded.split('/').any(|g| g == "." || g == "..") {
         return Err(InputError::Component);
@@ -318,8 +326,8 @@ impl RequestPath {
         if !s.bytes().all(uri_char) || s.contains(['#', '[', ']', '@']) || !percent_ok(s) {
             return Err(InputError::Character);
         }
-        // A NUL anywhere ends a string in some servers.
-        if s.to_ascii_lowercase().contains("%00") {
+        // No control byte anywhere, escaped or not (`%00`, `%0d%0a`).
+        if escaped_bytes(s).any(control) {
             return Err(InputError::Character);
         }
         path_ok(s.split('?').next().unwrap_or(""))?;
@@ -686,8 +694,10 @@ impl SettingKey {
 ///
 /// Only [`Configure::plan`] makes one: the constructor is crate-private, so
 /// no caller can forge a plan for a companion or add a change to one.
+/// Tests elsewhere build fakes with `ConfigPlan::for_tests`, which exists
+/// only under this crate's `testing` feature.
 ///
-/// ```compile_fail
+/// ```compile_fail,E0624
 /// use lodestar_companions::{adapter::ConfigPlan, CompanionId};
 /// let _ = ConfigPlan::new(CompanionId::parse("prowlarr").unwrap(), Vec::new());
 /// ```
@@ -698,14 +708,22 @@ pub struct ConfigPlan {
 }
 
 impl ConfigPlan {
-    /// For this crate's adapters (CMP-8b). Only the tests call it until
-    /// CMP-8b's adapters land.
+    /// For this crate's adapters (CMP-8b). Only the tests and
+    /// [`ConfigPlan::for_tests`] call it until CMP-8b's adapters land.
     #[cfg_attr(
-        not(test),
+        not(any(test, feature = "testing")),
         expect(dead_code, reason = "CMP-8b's adapters are its first callers")
     )]
     pub(crate) fn new(companion: CompanionId, changes: Vec<SettingKey>) -> ConfigPlan {
         ConfigPlan { companion, changes }
+    }
+
+    /// For other crates' `tests/` fakes (CMP-5g). Only under the `testing`
+    /// feature, which only dev-dependencies enable, so a shipped build
+    /// has no way to make a plan outside [`Configure::plan`].
+    #[cfg(feature = "testing")]
+    pub fn for_tests(companion: CompanionId, changes: Vec<SettingKey>) -> ConfigPlan {
+        ConfigPlan::new(companion, changes)
     }
 
     pub fn companion(&self) -> &CompanionId {
@@ -881,6 +899,11 @@ mod tests {
             ("http://host/a%00", InputError::Character),
             ("http://host//x", InputError::Component),
             ("http://host/a;b", InputError::Character),
+            ("http://host/a%3bb", InputError::Character),
+            ("http://host/a%3B", InputError::Character),
+            ("http://host/a%3f", InputError::Character),
+            ("http://host/a%23", InputError::Character),
+            ("http://host/a%0d%0a", InputError::Character),
             ("http://[::1", InputError::Character),
             ("http://[::1]x", InputError::Character),
             ("http://[::1]:0", InputError::Range),
@@ -963,6 +986,10 @@ mod tests {
             "/ping",
             "/api/v2/app/version",
             "/api/v1/x?a=1&b=%20",
+            // In the query a `;` or its escape is data, not a path
+            // parameter.
+            "/api/v1/x?a=%3b&b=%3F",
+            "/a%20b/%41",
             "/a..b/c",
         ] {
             assert!(RequestPath::parse(ok).is_ok(), "{ok}");
@@ -992,6 +1019,23 @@ mod tests {
             ("/a/%ef%bc%8e%ef%bc%8e/b", InputError::Character),
             ("/a/%C0%AF", InputError::Character),
             ("/a/%80", InputError::Character),
+            // An escape is refused wherever its literal byte would be, in
+            // either case: `;`, and the other bytes that end or split a
+            // path once decoded.
+            ("/a/..%3b/b", InputError::Character),
+            ("/a%3Bx/b", InputError::Character),
+            ("/a%3f/../b", InputError::Character),
+            ("/a%3F", InputError::Character),
+            ("/a%23", InputError::Character),
+            ("/a%5C", InputError::Character),
+            ("/a%2f", InputError::Character),
+            // Controls, escaped, anywhere: the path or the query.
+            ("/a%0d%0aHost:%20evil", InputError::Character),
+            ("/a%0A", InputError::Character),
+            ("/a%1f", InputError::Character),
+            ("/a%7F", InputError::Character),
+            ("/a?x=%0d%0a", InputError::Character),
+            ("/a?x=%7f", InputError::Character),
         ];
         for (s, e) in cases {
             assert_eq!(RequestPath::parse(s), Err(*e), "{s:?}");
