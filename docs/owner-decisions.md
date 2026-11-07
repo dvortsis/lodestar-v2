@@ -595,6 +595,19 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **Runner addition: runs never overlap the soaks** on the same box (build-plan §0.7, "The owner's machines"). The runner reads the plan's "not the soak PC" as the Windows PC that ran CR-0.
     - **Bookings:** `ext:experiment-host` still holds per booked run, from the owner's start time for that run. Naming the host doesn't make it hold.
 
+52. **The runner's recommendation on the remaining owner items; no more counsel reminders; package installers after 1.0** (owner, about 2026-11-07T18:00Z, relayed by the dashboard session): "Use runner recommendations for all those. Stop reminding me about counsel review. Yes, I register with winget and other package installers after 1.0."
+    - **The X-refetch-private backport:** yes. The fix (#576, mask `PRIVATE|PRIVATE_SOURCE`) is in the v0.5.2 cut, and v0.5.2 is the next v0.5.x patch, so it ships there. There's no separate v0.5.1 patch: v0.5.1's imports come only from the DHT, so the risk until v0.5.2 is low (runner).
+    - **The installer's Repair may re-secure a data folder whose only problem is an extra Allow entry for an administrator.** This applies to X-win-refusal-ux. The folder gets the installer's own access list back, and every other problem still refuses.
+    - **The published v0.5.1 release text** is replaced with the text of `docs/releases/v0.5.1.md`. The runner drafts it with dates in UTC, and the owner pastes it.
+    - **Owner-side items, decided on the runner's recommendation:**
+      - **Required checks:** `web-ok` and `e2e-ok` join `ci-ok` on the main ruleset (§2.37). The owner edits the ruleset.
+      - **Branch clean-up:** the owner deletes `wip/CMP-0-catalogue`. It held the pre-split CMP-0 work, which merged as #548.
+      - **M6 Q13 and Q14:** Q13 stands as §2.47 approved it. Q14's manual installs and release approval happen at G-m6; the runner sends those steps when G-m6 is ready.
+      - **The import host is the Unraid box,** the same machine as the experiment host (§2.51). Import pilots never overlap an A/B run, a comparator day or a soak. `ext:import-host` holds per booked run, from the owner's start time for that run (build-plan §0.7).
+      - **The nightly signing key (Q8) is deferred.** Update checks on the Nightly channel stay off until it exists. The runner raises it again before 1.0 only if the Nightly channel is offered to users.
+    - **Colorado counsel review** stays advisory (§2.38) and is no longer surfaced to the owner.
+    - **Package installers:** after 1.0 the owner registers Lodestar with winget and other package installers. That's a post-1.0 owner action, with no reminders before then.
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.

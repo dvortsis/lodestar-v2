@@ -1335,9 +1335,9 @@ owner_queue:
   when: Any time
 - n: 3
   type: action
-  action: Create the nightly signing key and its environment (skipped for v0.5.1)
+  action: Create the nightly signing key and its environment (deferred, §2.52)
   unblocks: Update checks on the Nightly channel
-  when: Optional
+  when: Before 1.0, only if the Nightly channel is offered
 - n: 4
   type: decision
   action: 'Checkpoint 1: re-decide the crawler gate if the projection falls short'
@@ -1355,14 +1355,14 @@ owner_queue:
   when: After the 1.0 release is complete (§2.37)
 - n: 7
   type: action
-  action: Have Colorado counsel review docs/legal/legal-notice.md and docs/legal/operator-guidance.md (advisory, not a gate on the v0.5.1 tag; §2.38)
-  unblocks: Counsel's comments on the Legal Notice
-  when: When convenient
+  action: Register Lodestar with winget and other package installers (§2.52)
+  unblocks: Package-installer listings
+  when: After 1.0
 - n: 8
   type: action
-  action: Submit Lodestar to winget, if you want it (M6 Q6)
-  unblocks: A winget listing for Windows users
-  when: After 1.0, optional
+  action: Delete branch wip/CMP-0-catalogue (pre-split CMP-0 work; #548 merged; §2.52)
+  unblocks: Branch hygiene
+  when: Any time
 gates:
 - id: G-v05
   name: v0.5 MVP exit
