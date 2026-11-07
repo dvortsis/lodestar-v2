@@ -849,18 +849,23 @@ mod tests {
         net.store(10);
         net.settle();
         let filter = net.filter.clone();
-        let read = net.stored.clone();
+        // The store: the writer commits a key, then inserts it, as
+        // `writer.rs` does; the scan reads what's committed when it runs.
+        let store = Arc::new(std::sync::Mutex::new(net.stored.clone()));
         let writer = {
             let have = net.have.clone();
+            let store = store.clone();
             std::thread::spawn(move || {
                 for i in 10..20_000 {
+                    store.lock().unwrap().push(key(i));
                     have.insert(&key(i));
                 }
             })
         };
         filter
-            .rebuild(read.len() as u64, |insert| {
-                read.iter().for_each(|k| insert(*k));
+            .rebuild(10, |insert| {
+                let read = store.lock().unwrap().clone();
+                read.into_iter().for_each(&mut *insert);
                 Ok::<(), ()>(())
             })
             .unwrap();
