@@ -615,6 +615,7 @@ mod tests {
             store: StoreConfig::default(),
             data_dir: dir.to_path_buf(),
             authority: Arc::new(LeaseAuthority::new(1, 600, Arc::new(NoEvents))),
+            remote: None,
             settings: config::Cluster {
                 enabled,
                 listen: SocketAddr::from(([127, 0, 0, 1], 0)),

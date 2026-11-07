@@ -5590,7 +5590,10 @@ export interface components {
             cli: string;
             /** @description A compose service. */
             compose: string;
-            /** @description A `docker run` line. */
+            /**
+             * @description A `docker run` line. Remove `LODESTAR_TOKEN` once the worker has
+             *     joined (it's spent; the worker warns about it at each start).
+             */
             docker_run: string;
             /** @description What to enter in the Unraid "Lodestar Worker" template. */
             unraid: string;
@@ -10090,6 +10093,12 @@ export interface components {
              */
             name: string | null;
             /**
+             * @description Paused by the admin: it gets no new work until resumed, and stays
+             *     paused across reconnects and restarts. Set while offline too, when
+             *     `status` can only say `offline`.
+             */
+            paused: boolean;
+            /**
              * Format: int32
              * @description Fetch-pool cap in keys, 1–1,000,000.
              */
@@ -10146,7 +10155,10 @@ export interface components {
             /** @description Every joined worker, by id. Empty on a single machine. */
             workers: components["schemas"]["Worker"][];
         };
-        /** @description `PATCH /workers/{id}`: any of these; absent fields are kept. */
+        /**
+         * @description `PATCH /workers/{id}`: any of these; absent fields are kept. `budget`
+         *     is sent whole, all four fields.
+         */
         WorkerPatch: {
             budget?: components["schemas"]["WorkerBudget"];
             dht?: components["schemas"]["DhtPin"];
@@ -15012,7 +15024,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `out_of_range` (with the field) or `bad_body`. */
+            /** @description `invalid_value` (with the field) or `bad_body`. */
             422: {
                 headers: {
                     [name: string]: unknown;

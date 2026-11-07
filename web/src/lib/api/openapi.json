@@ -7690,7 +7690,7 @@
             }
           },
           "422": {
-            "description": "`out_of_range` (with the field) or `bad_body`.",
+            "description": "`invalid_value` (with the field) or `bad_body`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -14926,7 +14926,7 @@
           },
           "docker_run": {
             "type": "string",
-            "description": "A `docker run` line."
+            "description": "A `docker run` line. Remove `LODESTAR_TOKEN` once the worker has\njoined (it's spent; the worker warns about it at each start)."
           },
           "unraid": {
             "type": "string",
@@ -23530,6 +23530,7 @@
           "last_seen_at",
           "leases",
           "name",
+          "paused",
           "pool_cap",
           "processed",
           "rss_mb",
@@ -23618,6 +23619,10 @@
               "null"
             ],
             "description": "The name it joined with (its certificate's); null when the\ncoordinator has no certificate on record for it."
+          },
+          "paused": {
+            "type": "boolean",
+            "description": "Paused by the admin: it gets no new work until resumed, and stays\npaused across reconnects and restarts. Set while offline too, when\n`status` can only say `offline`."
           },
           "pool_cap": {
             "type": "integer",
@@ -23725,7 +23730,7 @@
       },
       "WorkerPatch": {
         "type": "object",
-        "description": "`PATCH /workers/{id}`: any of these; absent fields are kept.",
+        "description": "`PATCH /workers/{id}`: any of these; absent fields are kept. `budget`\nis sent whole, all four fields.",
         "properties": {
           "budget": {
             "$ref": "#/components/schemas/WorkerBudget"
