@@ -6,8 +6,9 @@
 //!   handle itself to the runtime ([`Work`]).
 //! - **Reconnect** with capped exponential back-off and equal jitter
 //!   ([`Backoff`]): 1 s, 2 s, 4 s … up to 2 minutes, each wait between half
-//!   and all of that step. It resets once a session is up. The waits are
-//!   `tokio::time` sleeps, so tests drive them with paused time.
+//!   and all of that step. It resets once a session is up. The wait itself
+//!   is injected ([`Wait`]), so a test sees each one without waiting (the
+//!   binary may not depend on tokio's `test-util`, which CI checks).
 //! - **Renew** the certificate at half-life (or at once when `Welcome`
 //!   says a CA is being rotated out), save the new credentials, then
 //!   reconnect at once on them: the coordinator checks the certificate a
@@ -162,6 +163,14 @@ impl Backoff {
     }
 }
 
+/// How the worker waits between attempts: [`sleep`] in the binary.
+pub type Wait = Arc<dyn Fn(Duration) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+
+/// A real wait.
+pub fn sleep() -> Wait {
+    Arc::new(|d| Box::pin(tokio::time::sleep(d)))
+}
+
 /// A random `u64` for the jitter (0 if the system's source fails: the
 /// wait is then the step's lower half, still bounded).
 pub fn random_jitter() -> u64 {
@@ -203,6 +212,7 @@ pub struct Worker<C> {
     pub settings: Settings,
     pub report: Report,
     pub jitter: fn() -> u64,
+    pub wait: Wait,
 }
 
 /// How one session ended.
@@ -293,7 +303,7 @@ impl<C: Connect> Worker<C> {
             self.say(&format!("connecting again in {:.1} s", wait.as_secs_f64()));
             tokio::select! {
                 () = shutdown.as_mut() => return Exit::Shutdown,
-                () = tokio::time::sleep(wait) => {}
+                () = (self.wait)(wait) => {}
             }
         }
     }
@@ -433,7 +443,7 @@ async fn drain<W: Work>(session: &WorkerSession, work: &mut W) -> Result<(), Cli
 #[cfg(test)]
 pub(crate) mod tests {
     //! Against a real `ClusterServer` over TCP and mutual TLS, on one
-    //! controllable clock; the back-off on paused time.
+    //! controllable clock; the back-off with its waits recorded.
 
     use std::path::Path;
     use std::sync::Mutex;
@@ -614,6 +624,7 @@ pub(crate) mod tests {
             settings: settings(),
             report: lines.report(),
             jitter: || 0,
+            wait: sleep(),
         };
         let (stop, rx) = oneshot::channel::<()>();
         let exit = tokio::spawn(worker.run(work, async move {
@@ -948,6 +959,7 @@ pub(crate) mod tests {
             settings: settings(),
             report: s.lines.report(),
             jitter: || 0,
+            wait: sleep(),
         };
         assert_eq!(worker.or_expired(Exit::Revoked), Exit::Revoked);
         assert_eq!(worker.or_expired(Exit::Drained), Exit::Drained);
@@ -1023,22 +1035,21 @@ pub(crate) mod tests {
         }
     }
 
-    /// Always fails, noting when it was asked.
-    struct Down(Arc<Mutex<Vec<tokio::time::Instant>>>);
+    /// Always fails.
+    struct Down;
 
     impl Connect for Down {
         fn link(
             &self,
             _creds: &Credentials,
         ) -> impl Future<Output = Result<WorkerLink, ClientError>> + Send {
-            self.0.lock().unwrap().push(tokio::time::Instant::now());
             std::future::ready(Err(ClientError::Io(std::io::ErrorKind::ConnectionRefused)))
         }
     }
 
-    /// The waits between attempts follow the back-off, on paused time (no
-    /// real waiting): 0.5 s, 1 s, 2 s … with no jitter, capped.
-    #[tokio::test(start_paused = true)]
+    /// The waits between attempts follow the back-off: 0.5 s, 1 s, 2 s …
+    /// with no jitter, capped. Each is recorded, not waited.
+    #[tokio::test]
     async fn reconnect_waits_follow_the_backoff() {
         let dir = tempfile::tempdir().unwrap();
         let layout = Layout::new(dir.path());
@@ -1046,12 +1057,13 @@ pub(crate) mod tests {
         layout
             .save(&crate::worker::tests::credentials(&clock))
             .unwrap();
-        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let waits = Arc::new(Mutex::new(Vec::new()));
+        let seen = waits.clone();
         let lines = Lines::default();
         let worker = Worker {
             layout: layout.clone(),
             creds: layout.load().unwrap().unwrap(),
-            connect: Down(attempts.clone()),
+            connect: Down,
             clock: clock.clone(),
             settings: Settings {
                 backoff_base: Duration::from_secs(1),
@@ -1060,27 +1072,24 @@ pub(crate) mod tests {
             },
             report: lines.report(),
             jitter: || 0,
+            wait: Arc::new(move |d| {
+                seen.lock().unwrap().push(d.as_millis());
+                Box::pin(tokio::task::yield_now())
+            }),
         };
         let (stop, rx) = oneshot::channel::<()>();
         let exit = tokio::spawn(worker.run(Idle, async move {
             let _ = rx.await;
         }));
-        // Bounded in virtual time: the waits add up to 15.5 s.
-        let start = tokio::time::Instant::now();
-        while attempts.lock().unwrap().len() < 7 {
-            assert!(!exit.is_finished(), "stopped early: {}", lines.all());
-            assert!(
-                start.elapsed() < Duration::from_secs(1000),
-                "only {:?}",
-                attempts.lock().unwrap()
-            );
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
+        until("six waits", || {
+            let w = waits.lock().unwrap().clone();
+            (w.len() >= 6 || exit.is_finished(), w)
+        })
+        .await;
         let _ = stop.send(());
-        assert_eq!(exit.await.unwrap(), Exit::Shutdown);
-        let at = attempts.lock().unwrap().clone();
-        let gaps: Vec<u128> = at.windows(2).map(|w| (w[1] - w[0]).as_millis()).collect();
-        assert_eq!(&gaps[..6], &[500, 1000, 2000, 4000, 4000, 4000]);
+        assert_eq!(exit.await.unwrap(), Exit::Shutdown, "{}", lines.all());
+        let waits = waits.lock().unwrap().clone();
+        assert_eq!(&waits[..6], &[500, 1000, 2000, 4000, 4000, 4000]);
         assert!(lines.all().contains("couldn't connect"));
     }
 }

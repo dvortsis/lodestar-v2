@@ -22,7 +22,7 @@ use lodestar_cluster::{JoinToken, SystemClock, read_join_token, read_join_token_
 
 use super::util::{Failure, Outcome, failed};
 use crate::config::Config;
-use crate::worker::session::{Exit, Idle, Report, Settings, Tcp, Worker, random_jitter};
+use crate::worker::session::{Exit, Idle, Report, Settings, Tcp, Worker, random_jitter, sleep};
 use crate::worker::{self, JoinFailure, Layout};
 
 #[derive(Debug, Args, PartialEq, Eq)]
@@ -215,6 +215,7 @@ fn run_with(config: &Config, args: WorkerArgs, env: &dyn Fn(&str) -> Option<Stri
             settings,
             report: report.clone(),
             jitter: random_jitter,
+            wait: sleep(),
         };
         let exit = worker.run(Idle, crate::shutdown_signal()).await;
         finish(exit, &report)
