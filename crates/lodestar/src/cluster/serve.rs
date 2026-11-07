@@ -2051,15 +2051,25 @@ mod tests {
         let (remote, _ends) = intake(&w.authority);
         w.remote = Some(remote);
         let (placement, now) = (w.placement.clone(), w.clock.now_secs());
+        let w_clock = w.clock.clone();
         let cluster = Cluster::start(w).await.unwrap();
         let h = cluster.handle();
         // The keys are set when the server is built, before any tick.
+        // Yesterday's and today's, and from 23:00Z tomorrow's too: whatever
+        // `open_keys` says for now (the test may run either side of 23:00Z
+        // or of midnight, so the expectation follows the clock).
         let keys = format!("{:?}", lock(&h.0.tick.keys));
         let today = day_of(now);
-        assert!(
-            keys.contains(&format!("[{}, {today}]", today - 1)),
-            "{keys}"
-        );
+        assert!(keys.contains(&format!("{}, {today}", today - 1)), "{keys}");
+        let later = w_clock.now_secs();
+        let want = |at: i64| {
+            let ids: Vec<String> = open_keys(&[7; 32], at)
+                .iter()
+                .map(|k| k.id.to_string())
+                .collect();
+            format!("Some(WireKeys([{}]))", ids.join(", "))
+        };
+        assert!(keys == want(now) || keys == want(later), "{keys}");
         let creds = join(&h, "w1").await;
         let addr = h.local_addr().unwrap().to_string();
 
