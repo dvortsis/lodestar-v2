@@ -339,7 +339,9 @@ placement:
   - X-claim-store
   - X-claim-store-polish
   - X-fetch-pool-bytes
+  - X-fetch-meta-reserve
   - X-gs-gate-polish
+  - X-soak-screen
   - X-adult-catalogue
   - D-sources-guide
   - L4-followups
@@ -696,7 +698,7 @@ conditions:
   experiment-host:
     met: false
     who: you
-    label: You name the experiment host and book it
+    label: You book each crawler run (host named, the Unraid box, §2.51)
   owner-checkpoint-1:
     met: false
     who: you
@@ -861,12 +863,12 @@ roadmap:
     members: []
     override: done
   - id: gluetun
-    label: VPN (gluetun) leg, running
-    plain: 'A separate run through the VPN: 6 h settling, 30 min warm-up, then a 2-hour measured baseline, about 8.5 h in all. Started about 2026-11-06T15:00Z, so it ends about 23:30Z. Then the Windows MSI check (at least 1 h).'
+    label: VPN (gluetun) leg, passed
+    plain: 'A separate run through the VPN: a 2-hour measured baseline after settling and warm-up. It passed (2026-11-06): full coverage, no restarts, no VPN drops.'
     col: 1
     row: 2
     members: []
-    override: active
+    override: done
   - id: tag
     label: Tag v0.5.1
     plain: You tag the release and publish it.
@@ -1318,12 +1320,12 @@ roadmap:
 owner_queue:
 - n: 1
   type: action
-  action: Soak r5 on rc.4 passed (0.91 MiB/h, bar 2.0) and the Windows MSI check on rc.4 passed (2026-11-06). rc.5 (text-only Legal Notice v3, #540) is green. The gluetun leg is running, with its final report about 23:50Z. Then tag v0.5.1 on a0eb0a9087c2474ef4285416403eacbf8a475111 (rc.5) once the runner gives the go
+  action: Every v0.5.1 leg passed (soak r5, the gluetun leg, the Windows MSI check, rc.5 and the legal check with #558). Tag v0.5.1 on 12cd25ca38f8eac1a930316623dec742c1ba585d, not on a0eb0a90, once the runner gives the go
   unblocks: The v0.5.1 release
-  when: After the gluetun leg's final report (about 2026-11-06T23:50Z)
+  when: When the runner sends the go, after CI on 12cd25ca (2026-11-07)
 - n: 2
   type: action
-  action: Name the experiment host for crawler tests, and when it is free
+  action: Book each crawler run on the experiment host (the Unraid box, §2.51), starting with the comparator
   unblocks: All live crawler measurement and the v0.6 tag
   when: Before CR-4 lands
 - n: 3
