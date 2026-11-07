@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T18:12Z",
+  "updated_at": "2026-11-07T18:29Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3655,7 +3655,10 @@
       "session": "session_01MMjhnARrTCQPugwxwqfuCZ",
       "since": "2026-11-07T15:13Z",
       "notes": "16:13Z: no FAIL found locally; dev-deps approved (bench tokio test-util + sources-plugins testing, dev-only; must keep `cargo tree -e features -p lodestar` clean); one PR (1,771 lines, 0 production, reason in PR); bench 1,176/s vs 1,000/s PASS, overhead 6.8% info only; \u00a72.37 wording = wiring blocker. | 16:3xZ: BUDGET MISS reported: commit+index with every source on 811-989/s vs \u00a73 1,000/s (off 1,178-1,266) under stress load (10k claims, 200k unverified). Runner: judge on sandbox (\u00a73 = 4 cores), >=5 alternating pairs, median; realistic-load (b) decides; breakdown pending; push held. | 16:37Z: PR #583 open at 37489331 (2,123 lines). Fresh Opus review launched. Next round: paired runs, item 7 updated (small delta check). | 17:0xZ: fresh Opus MERGE at 37489331 (6 mutations). Nits 1,2,4,6 ride the paired-run push; then delta check + merge. | 17:15Z: head f13cda3f; paired runs: (b) realistic off 948 / on 649 median, drop 15.2% -> NOT DECIDED (host baseline). Delta self-checked (safety.rs nits 1/2 bite; bench hook wired; FAIL rule encoded). Merge on ci-ok.",
-      "pr": 583
+      "pr": 583,
+      "status": "merged",
+      "merge": "0422e254",
+      "note": "ingest budget NOT DECIDED in sandbox (host baseline 948/s); re-run on soak host"
     },
     "X-bench-notice-version": {
       "pr": 586,
@@ -6490,7 +6493,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-07T15:39Z",
+    "updated": "2026-11-07T18:29Z",
     "items": [
       {
         "slot": 1,
@@ -6502,11 +6505,7 @@
       },
       {
         "slot": 2,
-        "slice": "SRC-G",
-        "role": "build",
-        "agent": "claude",
-        "doing": "session_01MMjhnARrTCQPugwxwqfuCZ: v0.6 sources safety gate (tests + verdict)",
-        "since": "2026-11-07T15:13Z"
+        "status": "idle"
       },
       {
         "slot": 3,
