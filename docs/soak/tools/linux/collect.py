@@ -170,7 +170,7 @@ def screen_inputs(values, text):
     out = {}
     for key, name in (("stored", "torrents"), ("fetch_pending", "fetch_pending")):
         v = values.get(name)
-        if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0:
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v >= 0:
             out[key] = float(v)
     for line in text.splitlines():
         m = SCREEN_INPUT.fullmatch(line)
@@ -191,7 +191,8 @@ def screen_inputs(values, text):
         elif label == "index":
             key = f"{key}[{value}]"
         scale = 2**20 if key.endswith("_mib") else 1
-        out.setdefault(key, float(raw) / scale)
+        if math.isfinite(float(raw)):  # a value too long for a float is absent, never ok
+            out.setdefault(key, float(raw) / scale)
     for index in SCREEN_INDEXES:
         entries, segments = out.get(f"mmap_cache_entries[{index}]"), out.get(f"segments[{index}]")
         if entries is not None and segments is not None:
@@ -1471,7 +1472,9 @@ class Collector:
             if os.stat(a.password_file).st_mode & 0o077:
                 raise SystemExit("--password-file must be readable by its owner only (chmod 600).")
         self.screen_bytes = self.screen_run = None
-        if getattr(a, "screen_thresholds", None):
+        # CR-0 runs only: CR-SPEC's rule 6.11 shows no counts or rates while its
+        # window is open, and its evidence and procedure stay unchanged.
+        if getattr(a, "screen_thresholds", None) and not self.spec:
             try:
                 self.screen_bytes = Path(a.screen_thresholds).read_bytes()
                 self.screen_run = screen_config(json.loads(self.screen_bytes.decode("utf-8")))
@@ -1602,6 +1605,8 @@ class Collector:
             run["screen_thresholds_sha256"] = hashlib.sha256(self.screen_bytes).hexdigest()
         self.run = {k: v for k, v in run.items() if v is not None}
         self.save(self.run, self.root / "run.json")
+        if not self.spec and self.screen_bytes is None:
+            self.note("screen off: no --screen-thresholds (the gate is unaffected)")
         write_text(self.root / "samples.jsonl", "")  # the analyzer requires it even if no sample lands
 
     # -- main loop

@@ -81,10 +81,15 @@ pub const MAPPING_CLASSES: [(u64, &str); 4] = [
     (u64::MAX, "ge_2m"),
 ];
 
-/// A run of adjacent anonymous mappings at least this big is taken to be
-/// an allocator arena (mimalloc reserves 1 GiB at a time) and isn't
-/// counted, as `mem-cheap` decides it.
+/// A run of adjacent anonymous mappings at least this big, holding one
+/// mapping of at least [`ARENA_PART_MIN`], is taken to be an allocator arena
+/// (mimalloc reserves 1 GiB at a time) and isn't counted.
 const ARENA_MIN: u64 = 256 << 20;
+
+/// The arena's own mapping. Without one, a long run is many small mappings
+/// side by side (r4's 2,000-odd 128-512 KiB ones span about 500 MiB) and is
+/// counted: `mem-cheap`'s rule (span alone) could hide that growth.
+const ARENA_PART_MIN: u64 = 64 << 20;
 
 /// More lines than this and the read gives up (absent): the kernel's
 /// default `vm.max_map_count` is 65,530, so this bounds the sample's cost.
@@ -191,8 +196,9 @@ fn read() -> Snapshot {
 ///
 /// A mapping is anonymous when its inode is 0 and it has no path (so not
 /// `[heap]`, `[stack]` or a named one). Adjacent anonymous mappings form a
-/// run, whatever their permissions; a run spanning [`ARENA_MIN`] or more is
-/// an arena and none of its mappings count. Of the rest, only mappings
+/// run, whatever their permissions; a run spanning [`ARENA_MIN`] or more
+/// that holds a mapping of [`ARENA_PART_MIN`] or more is an arena and none
+/// of its mappings count. Of the rest, only mappings
 /// that can be read, written or run count: a `---p` one is a guard page or
 /// reserved address space, not memory. Read one line at a time, so the
 /// cost is one line buffer whatever the count. `None` (absent) for any
@@ -203,8 +209,10 @@ pub fn anon_mappings(maps: impl std::io::BufRead) -> Option<[u64; MAPPING_CLASSE
     let mut total = [0u64; MAPPING_CLASSES.len()];
     let mut run = total;
     let mut span: Option<(u64, u64)> = None;
-    let mut flush = |run: &mut [u64; 4], span: Option<(u64, u64)>| {
-        if span.is_some_and(|(a, b)| b - a < ARENA_MIN) {
+    // Whether the current run holds an arena-sized mapping.
+    let mut big = false;
+    let mut flush = |run: &mut [u64; 4], span: Option<(u64, u64)>, big: bool| {
+        if span.is_some_and(|(a, b)| b - a < ARENA_MIN || !big) {
             for (t, r) in total.iter_mut().zip(run.iter()) {
                 *t += r;
             }
@@ -236,10 +244,12 @@ pub fn anon_mappings(maps: impl std::io::BufRead) -> Option<[u64; MAPPING_CLASSE
         match span {
             Some((first, last)) if last == start => span = Some((first, end)),
             _ => {
-                flush(&mut run, span);
+                flush(&mut run, span, big);
                 span = Some((start, end));
+                big = false;
             }
         }
+        big |= end - start >= ARENA_PART_MIN;
         if !perms.starts_with("---") {
             let size = end - start;
             let class = MAPPING_CLASSES
@@ -249,7 +259,7 @@ pub fn anon_mappings(maps: impl std::io::BufRead) -> Option<[u64; MAPPING_CLASSE
             run[class] += 1;
         }
     }
-    flush(&mut run, span);
+    flush(&mut run, span, big);
     Some(total)
 }
 
@@ -548,6 +558,32 @@ mod tests {
             map(g + (200 << 20) + (4 << 10), 200 << 10, "rw-p", 0, ""),
         ];
         assert_eq!(mappings(&split), Some([0, 0, 0, 2]));
+    }
+
+    /// r4's shape: about 2,000 adjacent 256 KiB mappings, about 500 MiB in
+    /// all, with no arena among them. A long run of small mappings is not
+    /// an arena, with or without guard pages between them.
+    #[test]
+    fn r4s_adjacent_small_mappings_are_counted_not_taken_for_an_arena() {
+        let g = 1u64 << 40;
+        let bare: Vec<String> = (0..2_000)
+            .map(|i| map(g + i * (256 << 10), 256, "rw-p", 0, ""))
+            .collect();
+        assert_eq!(mappings(&bare), Some([0, 2_000, 0, 0]));
+        let guarded: Vec<String> = (0..2_000)
+            .flat_map(|i| {
+                let at = g + i * (260 << 10);
+                [
+                    map(at, 4, "---p", 0, ""),
+                    map(at + (4 << 10), 256, "rw-p", 0, ""),
+                ]
+            })
+            .collect();
+        assert_eq!(mappings(&guarded), Some([0, 2_000, 0, 0]));
+        // The same run beside a real arena mapping is the arena's.
+        let mut arena = vec![map(g - (64 << 20), 64 << 10, "rw-p", 0, "")];
+        arena.extend(bare);
+        assert_eq!(mappings(&arena), Some([0; 4]));
     }
 
     #[test]

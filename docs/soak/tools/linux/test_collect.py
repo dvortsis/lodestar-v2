@@ -1226,10 +1226,6 @@ class PublicationTests(Base):
             self.assertNotIn(secret, text)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ScreenTests(Base):
     """X-soak-screen in the collector: the thresholds frozen with the run, checkpoints
     at baseline hours 3, 6 and 12 in screen.json and the event log, never a stop."""
@@ -1307,3 +1303,7 @@ class ScreenTests(Base):
             self.collector(self.docker(), "--screen-thresholds", str(bad)).run()
         self.assertIn("screen thresholds", str(refused.exception.code))
         self.assertFalse(self.root.exists() and any(self.root.iterdir()))
+
+
+if __name__ == "__main__":
+    unittest.main()

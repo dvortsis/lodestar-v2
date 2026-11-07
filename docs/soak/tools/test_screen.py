@@ -187,6 +187,9 @@ class CoreTests(unittest.TestCase):
                                "anon_mappings_128k_512k": 2085, "mimalloc_committed_mib": 568,
                                "fetch_held_mib": 1})
         self.assertEqual(screen_inputs({}, ""), {})
+        # A value no float holds, or a non-finite JSON value, is absent, never ok.
+        self.assertEqual(screen_inputs({"torrents": float("inf")},
+                                       "lodestar_fetch_held_bytes " + "9" * 400 + "\n"), {})
 
     def linear(self, key, slope, at_value=None):
         """41 points, h = i/10, stored = 1,000 i, the input `slope` per 1,000."""
@@ -305,9 +308,10 @@ class NeverAPassTests(Base):
         real, calls = suite.analyze, []
 
         def both(root, *args, **kw):
-            kw.setdefault("now", NOW)
-            on = real(root, *args, **kw)
+            on = real(root, *args, **kw)  # each fixture's own arguments, unchanged
             off = real(root, *args, **dict(kw, screen=False))
+            if "now" not in kw:  # freshness reads the wall clock without one
+                on, off = dict(on, observation_state=None), dict(off, observation_state=None)
             self.assertEqual(json.dumps(self.gate(on), sort_keys=True), json.dumps(off, sort_keys=True))
             self.assertTrue(markdown(on).startswith(markdown(off)))
             calls.append(root)
@@ -443,6 +447,13 @@ class FreezingTests(Base):
         (root / "screen-thresholds.json").unlink()
         self.assertEqual(self.screen(root)["overall"]["line"], "not_available(thresholds_missing)")
 
+    def test_a_malformed_recorded_hash_is_not_available(self):
+        root = self.run_dir(r5)
+        run = json.loads((root / "run.json").read_text())
+        run["screen_thresholds_sha256"] = "not-a-hash"
+        (root / "run.json").write_text(json.dumps(run))
+        self.assertEqual(self.screen(root)["overall"]["line"], "not_available(thresholds_hash_invalid)")
+
     def test_an_invalid_or_missing_file_is_not_available(self):
         root = self.run_dir(r5, frozen=False)
         self.assertEqual(self.screen(root, screen_current=self.tmp / "none.json")["overall"]["line"],
@@ -510,15 +521,14 @@ class SweepTests(unittest.TestCase):
     def test_boundaries(self):
         for value, want in ((299, 0), (300, 0), (301, 1)):
             self.assertEqual(self.sweep("--retention-log", str(self.log(value)))[0], want, value)
-        for slope, want in ((1.9, 0), (2.0, 0), (2.1, 1)):
-            path = self.tmp / f"exact{slope}.csv"
-            rows = [f"{n},{slope * n / 1000}" for n in range(1000, 10001, 1000)]
-            path.write_text("torrents,<128K,128K-512K\n" + "\n".join(f"{r.split(',')[0]},0,{r.split(',')[1]}" for r in rows) + "\n")
-            # Exact values (the harness prints integers; this checks the comparison alone).
-            value = screen_sweep.mem_cheap(path.read_text().replace(".0\n", "\n")) if slope == 2.0 else None
-            if value is not None:
-                self.assertEqual(screen_sweep.judge("x", value, 2)[0], "ok")
-            self.assertEqual(screen_sweep.judge("x", slope, 2)[0], "ok" if want == 0 else "trip")
+        # Through the CSV parser: integer counts whose OLS slope is exactly 2, or
+        # 2 with the last row one higher or lower (2 +- about 0.05).
+        for last, want in ((-1, 0), (0, 0), (1, 1)):
+            path = self.tmp / f"exact{last}.csv"
+            rows = [f"{n},0,{2 * n // 1000 + (last if n == 10000 else 0)}" for n in range(1000, 10001, 1000)]
+            path.write_text("torrents,<128K,128K-512K\n" + "\n".join(rows) + "\n")
+            self.assertEqual(self.sweep("--mem-cheap-csv", str(path))[0], want, last)
+        self.assertEqual(screen_sweep.mem_cheap((self.tmp / "exact0.csv").read_text()), 2.0)
 
     def test_unreadable_input_is_not_available(self):
         bad = self.tmp / "bad.log"

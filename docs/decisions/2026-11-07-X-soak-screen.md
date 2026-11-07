@@ -14,8 +14,10 @@ The runner's brief X-soak-screen, 2026-11-07, comes from the owner's answer reco
   - The Linux collector writes `screen.json` and a `screen baseline hour N:` line in `events.log`.
   - Both run the same code. Its "screen core" block is byte-identical in the two files, and `test_screen.py` fails if the copies drift. Each tool still runs alone under `python3 -I`, so neither can import the other: the collector is mounted on its own in Docker.
 - **The new gauge** `lodestar_mem_anon_mappings{size="lt_128k"|"128k_512k"|"512k_2m"|"ge_2m"}` (`crates/lodestar/src/memstats.rs`, `docs/metrics.md`). It's read from `/proc/self/maps` on Linux, on the existing 60 s storage sampler. A scrape reads four atomics.
-  - It counts anonymous mappings, meaning no path and inode 0, that aren't `---p`. A run of adjacent anonymous mappings spanning 256 MiB or more is an arena and isn't counted, by `mem-cheap`'s rule.
+  - It counts anonymous mappings, meaning no path and inode 0, that aren't `---p`. A run of adjacent anonymous mappings is an arena, and isn't counted, only when it spans 256 MiB or more **and** holds one mapping of 64 MiB or more.
+  - **That's stricter than `mem-cheap`'s rule, which uses the span alone.** By span alone, r4's 2,000-odd 128–512 KiB mappings (about 500 MiB) would read as an arena whenever they sat side by side, and the gauge would show 0 exactly when r4's growth came back. A test covers that shape, with and without guard pages (fresh self-review). `mem-cheap` keeps its own rule, because its measurements here and in X-mimalloc-override were made with it. The sweep's control arm shows it still sees the growth.
   - It reads one line at a time and gives up past 131,072 lines. A line that doesn't parse makes all four series absent.
+- **CR-0 runs only.** The collector runs no screen for CR-SPEC kinds (`ab`, `comb`, `comparator`). Under rule 6.11, CR-SPEC shows no counts or rates while its window is open, and its evidence stays unchanged (fresh self-review). Without `--screen-thresholds`, a CR-0 run notes "screen off" in `events.log`.
 - **Freezing:**
   - At start the collector copies the thresholds file into the run directory and records its SHA-256 in `run.json` (`screen_thresholds_sha256`).
   - The analyzer judges only by that copy, and refuses one whose hash no longer matches (`not_available(thresholds_modified)`).
@@ -31,7 +33,7 @@ Every counter trips when its value is **strictly above** its threshold; at the t
 | Sweep: retention, B per commit | 300 | 32 (pruning on, release, 2026-11-07); r3's arm 2,513 (pruning off) | 268 B above clean (9.4 ×); the control arm reads 8.4 × the threshold |
 | Sweep: mappings < 512 KiB outside the arena per 1,000 torrents (musl) | 2 | 0.00 with `override` (4 mappings from 1,000 to 10,000 torrents) | the control arm read 17.28, 8.6 × the threshold |
 | mmap-cache entries per 1,000 stored, either index | 40 | r5-shaped fixture: 15 at hour 3, 4 at 6, 1 at 12 (merge sawtooth) | 2.6 × the fixture's worst; one leaked mapping per commit reads about 1,000 |
-| mmap-cache entries beyond 8 per segment | 32 | r5's end: files 72 − 8 × 15 = −48 | 80 entries |
+| mmap-cache entries beyond 8 per segment (a stand-in for the live segment-file count, which isn't a metric) | 32 | r5's end: files 72 − 8 × 15 = −48 | 80 entries |
 | Segments per 1,000 stored, either index | 10 | fixture: 3 at hour 3, 0.8 at 6 | 3.3 ×; stopped merges read about 1,000 |
 | Segments, either index | 64 | r5 peak 21 | 3 × |
 | 128–512 KiB mappings per 1,000 stored | 20 | 0 (harness with `override`) | r4 read about 200: 10 × |
@@ -43,6 +45,8 @@ Every counter trips when its value is **strictly above** its threshold; at the t
 
 - **Why the sweep's mapping counter isn't r4's class alone.** Without `override`, this run of the harness grew the 128–512 KiB class by only 2.64 per 1,000 torrents, 1.3 times a threshold of 2, too close for a control arm that must always trip. The same mechanism grows the class under 128 KiB about five times as fast, so the sweep sums the two: 17.28 against 0.00. The in-run gauge keeps r4's own class, where production's rate (about 200 per 1,000) is far above any threshold.
 - **Synthetic clean values.** The raw soak evidence is private, and r5 had none of the new gauges. Wherever r5 didn't publish a figure, the clean value is a fixture shaped by the published ones (`test_screen.py`'s `r5`), and the table says so. The mimalloc growth threshold rests the most on that assumption. Recalibrate every in-run threshold from the first screened soak's checkpoint figures, as a new decision with a new hash.
+- **Before relying on the in-run thresholds** (fresh self-review): r4's and r5's private run directories already hold `mem_mimalloc_committed_bytes`, `search_segments` and `search_mmap_cache_entries`. Run the new analyzer over them on the owner's host and relay only the `screen:` lines and the per-checkpoint values. Then r5 should read ok and r4 should trip (on these counters; r4 has no mapping gauge). Retune any growth threshold that r5 comes within 1.5 times of. The runner takes that request to the owner.
+- **The sweep's first CI run** happens after merge: `workflow_dispatch` only offers a workflow that's on the default branch, and no `release/**` push has happened. Every figure above is a local measurement on the same toolchain (cargo-zigbuild 0.24.0, zig 0.17.0). A throwaway `release/**` branch would run the workflow first, but that's the runner's call.
 - **Mapping gauge cost:** with 3,105 mappings, a read takes 0.66 ms median and 1.13 ms max, measured in the test profile on 4 vCPUs (`anon_mappings_cost_at_3000_mappings`, which the sweep job reruns and prints). At 6,105 mappings, under load from a parallel build, it took 1.5 ms. It runs once a minute and never in a scrape.
 
 ## What the screen can and can't catch
@@ -59,7 +63,7 @@ Every counter trips when its value is **strictly above** its threshold; at the t
   - Anything that starts after hour 12.
   - The mapping counters on Windows, which has no `/proc`. They report `not_available`.
   - Load the soak doesn't apply: there's no search load in the soak protocol.
-- **Missing data is never ok or trip.** A snapshot without an input gives `absent`. So do too few samples, too little stored spread, a checkpoint not reached, no sample within 180 s of the checkpoint, a restart before it (the gate's identity check), and unusable thresholds. Each checkpoint stands at its own hour, so a gap at hour 6 leaves hours 3 and 12 as they were.
+- **Missing data is never ok or trip.** A snapshot without an input, or with a value no float holds, gives `absent`. So do too few samples, too little stored spread, a checkpoint not reached, no sample within 180 s of the checkpoint, a restart before it (the gate's identity check), and unusable thresholds (a missing, edited or malformed hash included). Each checkpoint stands at its own hour, so a gap at hour 6 leaves hours 3 and 12 as they were.
 
 ## Tests
 `docs/soak/tools/test_screen.py` (33), plus `linux/test_collect.py`'s `ScreenTests` (4) and the Rust gauge's tests.

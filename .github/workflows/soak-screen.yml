@@ -59,19 +59,27 @@ jobs:
       - name: mapping gauge cost at about 3,000 mappings
         run: cargo test -p lodestar --bin lodestar memstats::tests::anon_mappings_cost -- --ignored --nocapture | tee "$RUNNER_TEMP/cost.log"
       - name: per-commit retention (r3's leak)
+        if: ${{ !cancelled() }}
         run: |
-          cargo test --release -p lodestar-bench --features dhat-heap --test mmap_retention -- --test-threads=1 --nocapture 2>&1 | tee "$RUNNER_TEMP/retention.log"
+          # A candidate over the bound fails the test's own assertion; the sweep
+          # still judges it below, so neither arm stops the job here.
+          cargo test --release -p lodestar-bench --features dhat-heap --test mmap_retention -- --test-threads=1 --nocapture > "$RUNNER_TEMP/retention.log" 2>&1 || true
+          cat "$RUNNER_TEMP/retention.log"
           # The control arm fails its own assertion by design; the sweep judges it.
           MMAP_RETENTION_PRUNE=off cargo test --release -p lodestar-bench --features dhat-heap --test mmap_retention -- --test-threads=1 --nocapture > "$RUNNER_TEMP/retention-off.log" 2>&1 || true
       - name: small mappings outside the arena on musl (r4's growth)
+        if: ${{ !cancelled() }}
         run: |
           read -r N R < <(python3 -I -c 'import json; m = json.load(open("docs/soak/screen-thresholds.json"))["sweep"]["mem_cheap"]; print(m["torrents"], m["readers"])')
           out=target/x86_64-unknown-linux-musl/release/examples/mem-cheap
+          rm -f "$out"  # a failed build must not leave the other arm's binary to run
           cargo zigbuild --locked --release -p lodestar-bench --example mem-cheap --target x86_64-unknown-linux-musl --features mimalloc-override
           "$out" "$N" "$R" | tee "$RUNNER_TEMP/cheap.csv"
+          rm -f "$out"
           cargo zigbuild --locked --release -p lodestar-bench --example mem-cheap --target x86_64-unknown-linux-musl
           "$out" "$N" "$R" > "$RUNNER_TEMP/cheap-off.csv"
       - name: SCREEN
+        if: ${{ !cancelled() }}
         run: |
           set +e
           sweep="python3 -I docs/soak/tools/screen_sweep.py"

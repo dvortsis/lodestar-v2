@@ -146,7 +146,7 @@ def screen_inputs(values, text):
     out = {}
     for key, name in (("stored", "torrents"), ("fetch_pending", "fetch_pending")):
         v = values.get(name)
-        if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0:
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v >= 0:
             out[key] = float(v)
     for line in text.splitlines():
         m = SCREEN_INPUT.fullmatch(line)
@@ -167,7 +167,8 @@ def screen_inputs(values, text):
         elif label == "index":
             key = f"{key}[{value}]"
         scale = 2**20 if key.endswith("_mib") else 1
-        out.setdefault(key, float(raw) / scale)
+        if math.isfinite(float(raw)):  # a value too long for a float is absent, never ok
+            out.setdefault(key, float(raw) / scale)
     for index in SCREEN_INDEXES:
         entries, segments = out.get(f"mmap_cache_entries[{index}]"), out.get(f"segments[{index}]")
         if entries is not None and segments is not None:
@@ -352,6 +353,7 @@ def load_rows(root, issues):
         row["counters"] = {name: {"": values[name]} for name in COUNTERS
                            if number(values.get(name))}
         prom = root / "metrics" / f"{row.get('sequence', index):05d}.prom"
+        screen_text = ""
         if row.get("metrics_ok") is True:
             if prom.exists():
                 try:
@@ -364,13 +366,14 @@ def load_rows(root, issues):
                     text = prom.read_text(encoding="utf-8-sig")
                     row["search"] = parse_search(text)
                     row["memory"] = parse_memory(text)
-                    row["screen"] = screen_inputs(values, text)
+                    screen_text = text
                 except (ValueError, OSError):
                     issues["invalid_prom_snapshots"] += 1
                     # Keep the collector's JSON values, not partial Prom data.
             else:
                 issues["missing_prom_snapshots"] += 1
-        row.setdefault("screen", screen_inputs(values, ""))
+        # Outside the try above: the screen can never count against a snapshot.
+        row["screen"] = screen_inputs(values, screen_text)
         rows.append(row)
     return rows
 
@@ -953,7 +956,9 @@ def screen_thresholds(root, run, current):
     now = current.read_bytes() if current is not None and current.is_file() else None
     out = {"source": None, "sha256": None, "recorded_sha256": None, "changed_since_start": None}
     recorded = run.get("screen_thresholds_sha256")
-    if isinstance(recorded, str) and re.fullmatch(r"[0-9a-f]{64}", recorded):
+    if recorded is not None and not (isinstance(recorded, str) and re.fullmatch(r"[0-9a-f]{64}", recorded)):
+        return out, None, "thresholds_hash_invalid"
+    if recorded is not None:
         out["recorded_sha256"] = recorded
         copy = root / "screen-thresholds.json"
         data = copy.read_bytes() if copy.is_file() else None
