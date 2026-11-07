@@ -189,15 +189,22 @@ pub fn weigh(fetched: &Fetched) -> u64 {
 /// do when the consumer is gone.
 pub const SHUTDOWN_DRAIN: Duration = Duration::from_secs(5);
 
+/// Reserve timeouts a key may have without one being charged as
+/// a failed fetch (runner, 2026-11-07): enough to ride out a burst, but a
+/// key that keeps waiting out (a large dict behind steady small ones) uses
+/// up its peers and attempts in the end, like any timeout.
+pub const RESERVE_WAITS_FREE: u8 = 3;
+
 /// The pool's byte budget (X-fetch-meta-reserve): what fetches in flight
 /// have reserved for their results, plus the bytes of finished results the
 /// pool holds, against [`PoolConfig::max_held_bytes`]. Both are in
 /// [`weigh`]'s units.
 ///
-/// A fetch of a large dict reserves in two steps: its first request window
-/// at the handshake (a *partial* claim), the rest once its peer has sent a
-/// piece (*growth*). A claim that's granted never waits again, except a
-/// partial one for its growth. Two rules keep that from deadlocking:
+/// A fetch of a dict over 64 KiB reserves in two steps: its first request
+/// window at the handshake (a *partial* claim), the rest once its peer has
+/// sent that whole window (*growth*). A claim that's granted never waits
+/// again, except a partial one for its growth. Two rules keep that from
+/// deadlocking:
 /// - **Growth goes first.** While a growth waits, nothing else is granted
 ///   and the pool starts no fetch, so the bytes it needs can only come
 ///   free: fetches that hold their whole reservation finish, and the
@@ -207,6 +214,11 @@ pub const SHUTDOWN_DRAIN: Duration = Duration::from_secs(5);
 ///   growth any of them still needs fit the budget. So once the rest has
 ///   drained, the oldest growth always fits beside the other partial
 ///   claims, which wait behind it holding only their first windows.
+///
+/// Partial claims wait in their own queue. One held back by its own rule
+/// holds up nothing else; the oldest, when it passes its rule and only
+/// lacks room, goes before new whole claims and stops dispatch, so steady
+/// small traffic can't keep a large dict out.
 #[derive(Debug)]
 struct Budget {
     limit: u64,
@@ -229,6 +241,10 @@ struct BudgetState {
     /// from `queue`, so a partial claim held back by its own rule (a liar's
     /// claim, perhaps) never holds up a whole one that fits.
     partials: VecDeque<u64>,
+    /// The partial claim at the head of `partials` if it passes its own
+    /// rule and only lacks room: it goes before whole first claims, and the
+    /// pool starts no fetch, until it's granted or leaves.
+    starved: Option<u64>,
     /// Waiting growths, oldest first; they go before any first reservation.
     growth: VecDeque<u64>,
     /// Bytes held by partial claims, and the growth each still needs.
@@ -283,13 +299,15 @@ impl Budget {
         (s.held, s.reserved)
     }
 
-    /// Room for another fetch: under the budget, and no whole reservation
-    /// or growth waiting. A waiting partial claim doesn't stop dispatch: it
-    /// may be a liar's, and the fetches started meanwhile can't take what
-    /// it waits for for long (their deadlines).
+    /// Room for another fetch: under the budget, and no whole reservation,
+    /// growth or room-starved partial claim waiting. A partial claim held
+    /// back by its own rule doesn't stop dispatch: it may be a liar's.
     fn has_room(&self) -> bool {
         let s = self.lock();
-        s.queue.is_empty() && s.growth.is_empty() && s.reserved.saturating_add(s.held) < self.limit
+        s.queue.is_empty()
+            && s.growth.is_empty()
+            && s.starved.is_none()
+            && s.reserved.saturating_add(s.held) < self.limit
     }
 
     /// Bytes the pool no longer holds.
@@ -407,7 +425,7 @@ impl Reservation {
         } else if partial {
             s.growth.is_empty() && first_in(&s.partials)
         } else {
-            s.growth.is_empty() && first_in(&s.queue)
+            s.growth.is_empty() && s.starved.is_none() && first_in(&s.queue)
         };
         if !in_turn {
             return false;
@@ -415,14 +433,30 @@ impl Reservation {
         let used = s.reserved.saturating_add(s.held);
         let others = used.saturating_sub(mine);
         let extra = want - mine;
-        if others > 0 && used.saturating_add(extra) > limit {
-            return false;
-        }
-        if partial && !growing && others > 0 {
+        let first_partial = partial && !growing;
+        if first_partial && others > 0 {
             let need = s.largest_need().max(want_total - want);
             if s.partial.saturating_add(want).saturating_add(need) > limit {
+                // Held back by its own rule (perhaps a liar's claim): it
+                // holds up nothing else.
+                if s.starved == Some(claim.id) {
+                    s.starved = None;
+                    claim.budget.settled.notify_one();
+                }
                 return false;
             }
+        }
+        if others > 0 && used.saturating_add(extra) > limit {
+            if first_partial {
+                // An honest-looking large dict that only lacks room: it
+                // goes before new whole claims and stops dispatch, or
+                // steady small traffic could keep it out for ever.
+                s.starved = Some(claim.id);
+            }
+            return false;
+        }
+        if s.starved == Some(claim.id) {
+            s.starved = None;
         }
         s.reserved += extra;
         let old_need = claim.need.load(Ordering::Relaxed);
@@ -489,6 +523,9 @@ impl Drop for Queued<'_> {
         s.queue.retain(|&q| q != id);
         s.partials.retain(|&q| q != id);
         s.growth.retain(|&q| q != id);
+        if s.starved == Some(id) {
+            s.starved = None;
+        }
         drop(s);
         budget.freed.notify_waiters();
         budget.settled.notify_one();
@@ -812,6 +849,9 @@ struct Entry {
     lookup_requested: bool,
     fetch_started: bool,
     last_failure: Option<FailureKind>,
+    /// Fetches of this key that ran out of time waiting for a reservation
+    /// (X-fetch-meta-reserve); the `RESERVE_WAITS_FREE`th is charged.
+    reserve_waits: u8,
     state: State,
     /// Set from the pool's counter on every state change, to invalidate
     /// old timers and requests. Pool-wide, so a key evicted and found again
@@ -1237,6 +1277,7 @@ impl Pool {
                 lookup_requested: false,
                 fetch_started: false,
                 last_failure: None,
+                reserve_waits: 0,
                 state: State::Backoff,
                 generation: 0,
             },
@@ -1287,6 +1328,7 @@ impl Pool {
                 lookup_requested: false,
                 fetch_started: false,
                 last_failure: None,
+                reserve_waits: 0,
                 state: State::Backoff,
                 generation: 0,
             },
@@ -1386,6 +1428,9 @@ impl Pool {
         match e.state {
             // The stale copy in its source queue is skipped when popped.
             State::Ready => self.interest.push_back(key),
+            // Backing off after waiting out a reservation, it still has its
+            // peer: ready now rather than a second lookup.
+            State::Backoff if e.has_untried() => self.make_ready(key),
             State::Backoff => self.request_peers(key, WaitKind::Retry),
             // A copy joins the interactive queue; whichever is granted
             // first makes the other stale.
@@ -2227,14 +2272,23 @@ impl Pool {
             self.budget.release_held(weight);
             return;
         };
-        if waited_out {
-            // The deadline ran out while it waited for room in the budget:
-            // not the peer's failure. The peer is tried again after the
-            // key's other untried peers, and no attempt is used.
+        // The deadline ran out while it waited for room in the budget: not
+        // the peer's failure, up to `RESERVE_WAITS_FREE` times for
+        // a key. The next one is charged as the timeout it is, so a key
+        // can't cycle for ever on waits alone.
+        let waited_out = waited_out && {
             self.stats.reserve_timeouts.fetch_add(1, Ordering::Relaxed);
-            // Last among its untried peers, so the others go first. With
-            // none left, the key waits `retry_backoff` before it redials the
-            // same peer, rather than at once.
+            e.reserve_waits += 1;
+            if e.reserve_waits >= RESERVE_WAITS_FREE {
+                e.reserve_waits = 0;
+                false
+            } else {
+                true
+            }
+        };
+        if waited_out {
+            // The peer goes last among its untried peers, so the others go
+            // first, and no attempt is used.
             let others = e.has_untried();
             if let Some(i) = e.peers[..e.tried].iter().position(|p| *p == peer) {
                 e.peers.remove(i);
@@ -2243,9 +2297,15 @@ impl Pool {
             }
             if others {
                 self.make_ready(key);
+            } else if self.requests.get(&key).is_some_and(|r| r.streaming) {
+                // CR-1a-S, as after a failure: the stream keeps its lookup
+                // slot; its next batch or its end brings the key back, the
+                // peer still untried.
+                e.state = State::Lookup;
+                e.generation = next_generation(&mut self.generations);
             } else {
-                // A timer only, no lookup and no loss: the key keeps its
-                // attempts, as nothing failed.
+                // A timer only, no lookup and no loss: the key waits
+                // `retry_backoff`, then redials the same peer.
                 e.state = State::Backoff;
                 e.generation = next_generation(&mut self.generations);
                 let generation = e.generation;
@@ -3085,12 +3145,14 @@ mod budget {
         }
         let stats = handle.stats();
         let gauge = |g: &AtomicU64| g.load(Ordering::Relaxed);
-        // The staller's claim (its announced 300 KB, with the bound) shows.
+        // The staller announced 300 KB but sent nothing: only its first
+        // window (64 KiB, with the bound) shows.
         until("the stalled fetch's reservation", async || {
             handle.queued().await; // a round of the pool publishes its stats
-            gauge(&stats.reserved_bytes) >= 300_000
+            gauge(&stats.reserved_bytes) >= 64 << 10
         })
         .await;
+        assert!(gauge(&stats.reserved_bytes) < 100_000, "not its claim");
         let got = tokio::time::timeout(Duration::from_secs(10), out.recv())
             .await
             .expect("the honest dict")
@@ -3113,5 +3175,44 @@ mod budget {
         );
         stop.send(true).unwrap();
         task.await.unwrap();
+    }
+
+    /// A partial claim that passes its own rule but lacks room goes before
+    /// whole first claims and stops dispatch, so steady small traffic can't
+    /// keep a large dict out; once room comes, it's granted first.
+    #[tokio::test(start_paused = true)]
+    async fn a_room_starved_partial_claim_goes_before_whole_ones() {
+        let limit = 10_000u64;
+        let b = Arc::new(Budget::new(limit as usize));
+        // Whole claims fill most of the budget.
+        let fills: Vec<Reservation> = (0..4).map(|_| Reservation::new(b.clone())).collect();
+        for f in &fills {
+            f.reserve(2_000, 2_000).await;
+        }
+        assert!(b.has_room());
+        // A partial claim whose window doesn't fit, though its rule passes.
+        let large = Reservation::new(b.clone());
+        let mut large_wait = tokio::spawn({
+            let large = large.clone();
+            async move { large.reserve(2_000, 6_000).await }
+        });
+        queued(&b, |s| s.starved.is_some()).await;
+        assert!(!b.has_room(), "dispatch stops");
+        // A small whole claim that would fit waits behind it.
+        let small = Reservation::new(b.clone());
+        let mut small_wait = tokio::spawn({
+            let small = small.clone();
+            async move { small.reserve(10, 10).await }
+        });
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        assert!(!large_wait.is_finished() && !small_wait.is_finished());
+        // Room comes: the large one first, then the small one beside it.
+        let mut fills = fills.into_iter();
+        drop(fills.next());
+        (&mut large_wait).await.unwrap();
+        (&mut small_wait).await.unwrap();
+        assert!(b.lock().starved.is_none());
+        drop((fills, large, small));
+        assert_eq!(used(&b), 0);
     }
 }

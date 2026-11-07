@@ -169,7 +169,8 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
     o.one(
         "fetch_held_full_total",
         "counter",
-        "Times the byte budget or a waiting reservation stopped new fetches.",
+        "Times the byte budget or a waiting reservation stopped new fetches; \
+         a result waiting for an output slot isn't counted.",
         get(&p.held_full),
     );
     o.one(

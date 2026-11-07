@@ -104,12 +104,12 @@ impl std::fmt::Debug for Deny {
 /// completes. A reservation that waits pauses the download, and the fetch's
 /// deadline still runs.
 /// - **At the extended handshake:** `now` covers the first request window
-///   (its first 64 pieces, 1 MiB of the dict, or all of a smaller one).
+///   (its first 4 pieces, 64 KiB of the dict, or all of a smaller one).
 /// - **Once the whole first window has arrived**, if the dict is larger:
 ///   `now == total`, before any request past the window.
 ///
 /// A peer that announces a large size can therefore hold at most one
-/// window of the budget until it has sent that window's 1 MiB, not its
+/// window of the budget until it has sent that window's 64 KiB, not its
 /// whole claim for nothing.
 ///
 /// The promise: a [`Fetched`] from that attempt has `info.capacity()`,
@@ -140,9 +140,13 @@ impl std::fmt::Debug for Reserve {
     }
 }
 
-/// The dict bytes the first request window covers: what a [`Reserve`]
-/// grants a peer before it has sent anything.
-pub(crate) const FIRST_WINDOW: usize = REQUEST_WINDOW * METADATA_PIECE;
+/// Pieces in the first request window: what a [`Reserve`] covers before
+/// the peer has sent anything. 64 KiB holds the 10–60 KB dicts most
+/// torrents have (architecture §3) whole, while a peer that announces a
+/// size and sends nothing pins only this much (runner, 2026-11-07).
+const FIRST_PIECES: usize = 4;
+/// The dict bytes the first request window covers.
+pub(crate) const FIRST_WINDOW: usize = FIRST_PIECES * METADATA_PIECE;
 
 /// The heap bytes a [`Fetched`] can hold, for [`Reserve`]: the dict at
 /// `dict` bytes, the client name, and a full PEX list.
@@ -500,7 +504,12 @@ where
                         unreserved = Some(total);
                     }
                 }
+                // Its piece bitmap (1 B per 16 KiB piece, ≤ 1 KiB) sits
+                // outside the reservation, in the socket's working memory.
                 let mut a = Assembly::new(size);
+                if unreserved.is_some() {
+                    a.limit = FIRST_PIECES;
+                }
                 while let Some(piece) = a.next_request() {
                     wire.send_extended(id, &message::metadata_request(piece))
                         .await?;
@@ -537,13 +546,14 @@ where
                         }
                         // Past the first window only once all of it has
                         // arrived and the whole result is reserved: a peer
-                        // pins a large claim only by sending 1 MiB first.
+                        // pins a large claim only by sending 64 KiB first.
                         if let (Some(total), Some(reserve)) = (unreserved, &opts.reserve) {
                             if a.in_flight > 0 {
                                 continue;
                             }
                             reserve.reserve(total, total).await;
                             unreserved = None;
+                            a.limit = usize::MAX;
                         }
                         while let Some(piece) = a.next_request() {
                             wire.send_extended(their_id, &message::metadata_request(piece))
@@ -596,6 +606,9 @@ struct Assembly {
     remaining: usize,
     next: usize,
     in_flight: usize,
+    /// No piece at or past this is requested (the first window, until a
+    /// large dict's whole bound is reserved).
+    limit: usize,
 }
 
 impl Assembly {
@@ -608,6 +621,7 @@ impl Assembly {
             remaining: pieces,
             next: 0,
             in_flight: 0,
+            limit: usize::MAX,
         }
     }
 
@@ -616,7 +630,7 @@ impl Assembly {
     }
 
     fn next_request(&mut self) -> Option<usize> {
-        if self.in_flight >= REQUEST_WINDOW || self.next >= self.received.len() {
+        if self.in_flight >= REQUEST_WINDOW || self.next >= self.received.len().min(self.limit) {
             return None;
         }
         self.in_flight += 1;
@@ -755,16 +769,30 @@ mod tests {
     /// the pieces requested so far, which is what a `Reserve` covered.
     #[test]
     fn assembly_never_grows_past_what_was_requested() {
-        // The review's case: a large dict, the first window's last pieces
-        // first, with only that window requested.
+        // A large dict's first window out of order, with only that window
+        // requested.
         let size = METADATA_PIECE * 1024;
         let mut a = Assembly::new(size);
+        a.limit = FIRST_PIECES;
         let window: Vec<usize> = std::iter::from_fn(|| a.next_request()).collect();
         assert_eq!(window.len() * METADATA_PIECE, FIRST_WINDOW);
-        for p in [62, 63, 0, 2, 3, 6, 12, 24, 48, 61] {
+        for p in [3, 2, 0, 1] {
             a.accept(p as i64, &vec![1; METADATA_PIECE]).unwrap();
             assert!(
                 a.buf.capacity() <= FIRST_WINDOW,
+                "{p}: {}",
+                a.buf.capacity()
+            );
+        }
+        // Once grown, a full request window out of order: never past the
+        // 64 pieces requested.
+        let mut a = Assembly::new(size);
+        let window: Vec<usize> = std::iter::from_fn(|| a.next_request()).collect();
+        assert_eq!(window.len(), REQUEST_WINDOW);
+        for p in [62, 63, 0, 2, 3, 6, 12, 24, 48, 61] {
+            a.accept(p as i64, &vec![1; METADATA_PIECE]).unwrap();
+            assert!(
+                a.buf.capacity() <= REQUEST_WINDOW * METADATA_PIECE,
                 "{p}: {}",
                 a.buf.capacity()
             );
@@ -815,6 +843,7 @@ mod tests {
         assert_eq!(result_bound(usize::MAX, None), usize::MAX);
         // The first window is exactly what's requested before any reply.
         let mut a = Assembly::new(FIRST_WINDOW * 3);
+        a.limit = FIRST_PIECES;
         let requested: Vec<usize> = std::iter::from_fn(|| a.next_request()).collect();
         let first: usize = requested.iter().map(|&p| a.piece_len(p)).sum();
         assert_eq!(first, FIRST_WINDOW);
