@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T18:29Z",
+  "updated_at": "2026-11-07T18:30Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3669,6 +3669,12 @@
     "X-v052-nits-forward": {
       "pr": 587,
       "status": "open"
+    },
+    "X-flakes-1107": {
+      "status": "running",
+      "session": "session_01MMjhnCVN68eUViVowdQeWw",
+      "model": "sonnet",
+      "brief": "briefs/X-flakes-1107.md"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -5775,11 +5781,6 @@
       "since": "2026-11-07"
     },
     {
-      "id": "X-flake-filters-block-keyboard",
-      "what": "web/e2e/filters-block.keyboard.test.ts:70: after End the 'Block this...' menu item stays inactive 10 s under CI load (#583 run 42392077532). Bundle with X-flake-shell-unreachable into one test-only flake slice.",
-      "since": "2026-11-07"
-    },
-    {
       "id": "X-ci-guard-regex",
       "what": "ci.yml:107 feature guard regex lodestar-(dht|sources|companions) misses lodestar-sources-plugins 'testing'; extend so any lodestar-* testing feature in the binary tree fails (from #583 review nit 5).",
       "since": "2026-11-07"
@@ -5798,6 +5799,11 @@
       "id": "v052-notes-scrape-clause",
       "what": "v0.5.2.md Known Issues: restore 'it asks public trackers for peer counts' after 'Tracker scraping is on by default' (dropped in rc.1 trim; user-docs: define the term). Do in rc.2 or final notes.",
       "since": "2026-11-07"
+    },
+    {
+      "id": "X-flakes-1107-launched",
+      "added": "2026-11-07T18:30Z",
+      "text": "X-flakes-1107 launched (slot 2, Sonnet) bundling X-flake-shell-unreachable + X-flake-filters-block-keyboard. Add slices.yaml entry in next runner PR."
     }
   ],
   "main_health": [
@@ -6493,7 +6499,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-07T18:29Z",
+    "updated": "2026-11-07T18:30Z",
     "items": [
       {
         "slot": 1,
@@ -6505,7 +6511,11 @@
       },
       {
         "slot": 2,
-        "status": "idle"
+        "slice": "X-flakes-1107",
+        "role": "author",
+        "agent": "session_01MMjhnCVN68eUViVowdQeWw",
+        "doing": "fix shell unreachable + filters-block keyboard e2e flakes",
+        "since": "2026-11-07T18:30Z"
       },
       {
         "slot": 3,
