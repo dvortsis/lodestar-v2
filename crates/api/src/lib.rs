@@ -36,6 +36,7 @@ pub mod extract;
 mod facets;
 pub mod filters;
 pub mod insights;
+pub mod insights_workers;
 pub mod jobs;
 pub mod keys;
 pub mod legal;
@@ -115,6 +116,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(compare::routes())
         .merge(discover::routes())
         .merge(insights::routes())
+        .merge(insights_workers::routes())
         .merge(digest::routes())
         .merge(events::routes())
         .merge(keys::routes())

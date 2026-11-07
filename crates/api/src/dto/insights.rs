@@ -584,6 +584,11 @@ pub struct InsightsDiscoverResponse {
     /// get_peers, announce, lookup), refetch, and each other source's own
     /// codes. Event time: volume, not yield.
     pub by_strategy: Vec<StrategyCount>,
+    /// Each worker's keys, the built-in crawler (worker 0) first, then
+    /// remote workers by id (§19.7). Left out on a single machine, where
+    /// no worker has counted anything. Counts only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub by_worker: Vec<DiscoverWorker>,
     pub kpi: DiscoverKpi,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
@@ -647,6 +652,36 @@ pub struct DiscoverSource {
     pub reported: u64,
 }
 
+/// One worker on Discover (WK-15).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DiscoverWorker {
+    /// Keys it dropped because its pipeline was full. Event time.
+    pub dropped: u64,
+    /// Keys first granted to it (its harvest), by discovery time.
+    pub granted: u64,
+    /// Marginal gain, ≈: the keys granted to it that no other worker, the
+    /// built-in crawler included, claimed while they were in flight. An
+    /// approximation of "keys only it would have seen" (a key found again
+    /// after its commit is a rediscovery, not a claim). By discovery time.
+    pub marginal: u64,
+    /// Keys stored already that it saw again. Event time.
+    pub rediscovered: u64,
+    /// The worker's id; 0 is this server's own crawler.
+    pub worker: u32,
+}
+
+/// One worker on Fetch (WK-15): its leases that ended in the range.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct FetchWorker {
+    /// Results it fetched that were committed. Event time.
+    pub committed: u64,
+    /// Keys it lost, for any reason (`reason` doesn't narrow it). Event
+    /// time.
+    pub lost: u64,
+    /// The worker's id; 0 is this server's own crawler.
+    pub worker: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct StrategyCount {
     /// The DHT's strategies by name (`sample`, `get_peers`, `announce`,
@@ -667,6 +702,10 @@ pub struct DiscoverPrevious {
 /// `GET /insights/fetch`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct FetchResponse {
+    /// Each worker's leases that ended, the built-in crawler (worker 0)
+    /// first (§19.7). Left out on a single machine. Counts only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub by_worker: Vec<FetchWorker>,
     /// The discovery-cohort funnel, as the overview's (with `reason`, only
     /// that loss).
     pub funnel: Vec<FunnelCohort>,

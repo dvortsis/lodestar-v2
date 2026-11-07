@@ -27,11 +27,11 @@ use super::{
     read_period, sources, stale_of, type_lists, window, windows,
 };
 use crate::dto::insights::{
-    DiscoverKpi, DiscoverPoint, DiscoverPrevious, DiscoverSource, FetchKpi, FetchPoint,
-    FetchPrevious, FetchResponse, IndexKpi, IndexPoint, IndexPrevious, IndexResponse,
-    InsightsDiscoverResponse, LossCount, RemovedCount, ServeKpi, ServePoint, ServePrevious,
-    ServeResponse, StageQuery, StrategyCount, UnderstandKpi, UnderstandPoint, UnderstandPrevious,
-    UnderstandResponse,
+    DiscoverKpi, DiscoverPoint, DiscoverPrevious, DiscoverSource, DiscoverWorker, FetchKpi,
+    FetchPoint, FetchPrevious, FetchResponse, FetchWorker, IndexKpi, IndexPoint, IndexPrevious,
+    IndexResponse, InsightsDiscoverResponse, LossCount, RemovedCount, ServeKpi, ServePoint,
+    ServePrevious, ServeResponse, StageQuery, StrategyCount, UnderstandKpi, UnderstandPoint,
+    UnderstandPrevious, UnderstandResponse,
 };
 use crate::extract::Query;
 
@@ -137,7 +137,9 @@ fn sealed_metric(
 }
 
 /// The metrics the stage pages read by day: summed, and gauges.
-const SUMMED: [u32; 8] = [
+const SUMMED: [u32; 10] = [
+    codes::metric::BY_WORKER,
+    codes::metric::WORKER_LEASES,
     codes::metric::COVERAGE,
     codes::metric::HARVESTED,
     codes::metric::REDISCOVERED,
@@ -431,6 +433,87 @@ fn discover(
     Ok((kpi, trend, by_source, by_strategy))
 }
 
+/// Each worker's `WORKER_LEASES` sums in a window, by worker and key.
+fn worker_leases(c: &Ctx<'_>) -> lodestar_store::Result<BTreeMap<u32, [u64; 4]>> {
+    let mut out: BTreeMap<u32, [u64; 4]> = BTreeMap::new();
+    for ((_, dim, key), v) in read_metric(c, codes::metric::WORKER_LEASES)? {
+        if let Some(slot) = usize::try_from(key).ok().filter(|&k| k < 4) {
+            let e = out.entry(dim).or_default();
+            // A bucket's marginal can be negative while its take-backs
+            // land; the range's sum can't.
+            e[slot] = (e[slot] as i64).saturating_add(v).max(0) as u64;
+        }
+    }
+    Ok(out)
+}
+
+/// Discover's `by_worker` (WK-15): `WORKER_LEASES` for every worker, and
+/// remote workers' own rediscovered and dropped counters (`BY_WORKER`).
+/// The built-in crawler's are the fleet's totals less the remote ones.
+/// Empty when no worker counted anything (a single machine).
+fn discover_workers(
+    c: &Ctx<'_>,
+    rediscovered: u64,
+    dropped: u64,
+) -> lodestar_store::Result<Vec<DiscoverWorker>> {
+    use codes::metric;
+    let leases = worker_leases(c)?;
+    // (rediscovered, dropped) per remote worker.
+    let mut own: BTreeMap<u32, (u64, u64)> = BTreeMap::new();
+    for ((_, dim, key), v) in read_metric(c, metric::BY_WORKER)? {
+        let e = own.entry(dim).or_default();
+        let v = v.max(0) as u64;
+        match u32::try_from(key >> 16) {
+            Ok(metric::REDISCOVERED) => e.0 += v,
+            Ok(metric::DROPPED) => e.1 += v,
+            _ => {}
+        }
+    }
+    if leases.is_empty() && own.is_empty() {
+        return Ok(Vec::new());
+    }
+    let remote = |f: fn(&(u64, u64)) -> u64| {
+        own.iter()
+            .filter(|(w, _)| **w != 0)
+            .map(|(_, e)| f(e))
+            .sum::<u64>()
+    };
+    own.insert(
+        0,
+        (
+            rediscovered.saturating_sub(remote(|e| e.0)),
+            dropped.saturating_sub(remote(|e| e.1)),
+        ),
+    );
+    let ids: std::collections::BTreeSet<u32> = leases.keys().chain(own.keys()).copied().collect();
+    Ok(ids
+        .into_iter()
+        .map(|w| {
+            let l = leases.get(&w).copied().unwrap_or_default();
+            let (rediscovered, dropped) = own.get(&w).copied().unwrap_or_default();
+            DiscoverWorker {
+                dropped,
+                granted: l[codes::WORKER_GRANTED as usize],
+                marginal: l[codes::WORKER_MARGINAL as usize],
+                rediscovered,
+                worker: w,
+            }
+        })
+        .collect())
+}
+
+/// Fetch's `by_worker` (WK-15): each worker's leases that ended.
+fn fetch_workers(c: &Ctx<'_>) -> lodestar_store::Result<Vec<FetchWorker>> {
+    Ok(worker_leases(c)?
+        .into_iter()
+        .map(|(worker, l)| FetchWorker {
+            committed: l[codes::WORKER_COMMITTED as usize],
+            lost: l[codes::WORKER_LOST as usize],
+            worker,
+        })
+        .collect())
+}
+
 /// Fetches and losses by event time, for Fetch and Understand: the rows
 /// of `FUNNEL_EVENTS`.
 fn funnel_events(c: &Ctx<'_>) -> lodestar_store::Result<BTreeMap<(i64, u32, i64), i64>> {
@@ -703,6 +786,7 @@ fn build(
     Ok(match stage {
         Stage::Discover => {
             let (kpi, trend, by_source, by_strategy) = discover(&cur)?;
+            let by_worker = discover_workers(&cur, kpi.rediscovered, kpi.dropped)?;
             let previous = prev
                 .map(|p| -> lodestar_store::Result<_> {
                     let (kpi, trend, ..) = discover(&ctx(p))?;
@@ -717,6 +801,7 @@ fn build(
                 by_ip_family: None,
                 by_source,
                 by_strategy,
+                by_worker,
                 kpi,
                 previous,
                 range: w.dto(),
@@ -738,6 +823,7 @@ fn build(
                 })
                 .transpose()?;
             StagePage::Fetch(FetchResponse {
+                by_worker: fetch_workers(&cur)?,
                 funnel,
                 funnel_total,
                 kpi,

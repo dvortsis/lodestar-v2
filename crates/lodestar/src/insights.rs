@@ -748,6 +748,20 @@ mod tests {
         assert_eq!(codes::metric::HARVESTED, metric::HARVESTED);
         assert_eq!(codes::metric::REDISCOVERED, metric::REDISCOVERED);
         assert_eq!(codes::metric::DROPPED, metric::DROPPED);
+        assert_eq!(codes::metric::BY_WORKER, metric::BY_WORKER);
+        assert_eq!(codes::metric::WORKER_LEASES, metric::WORKER_LEASES);
+        {
+            use lodestar_pipeline::marginal::key;
+            assert_eq!(
+                [
+                    codes::WORKER_GRANTED,
+                    codes::WORKER_MARGINAL,
+                    codes::WORKER_COMMITTED,
+                    codes::WORKER_LOST
+                ],
+                [key::GRANTED, key::MARGINAL, key::COMMITTED, key::LOST]
+            );
+        }
         assert_eq!(codes::BLOCKED, Loss::Blocked as u8);
         use lodestar_pipeline::strategy;
         for (code, name) in [

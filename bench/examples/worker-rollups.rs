@@ -55,7 +55,9 @@ fn wide_hour() -> Rows {
     r
 }
 
-/// Each worker's `BY_WORKER` row for each fleet row.
+/// Each worker's `BY_WORKER` row for each fleet row, and WK-15's lease
+/// counts (`WORKER_LEASES`: granted, marginal, committed, lost) for the
+/// built-in worker and each remote one.
 fn by_worker(fleet: &Rows) -> Rows {
     let mut r = fleet.clone();
     for w in 0..WORKERS {
@@ -67,6 +69,9 @@ fn by_worker(fleet: &Rows) -> Rows {
                 v,
             ));
         }
+    }
+    for w in std::iter::once(0).chain((0..WORKERS).map(|w| 100 + w)) {
+        r.extend((0..4).map(|k| (metric::WORKER_LEASES, w, k, 5)));
     }
     r
 }

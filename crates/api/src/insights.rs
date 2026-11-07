@@ -99,10 +99,21 @@ pub mod codes {
         pub const SEARCHABLE: u32 = 13;
         pub const FUNNEL_EVENTS: u32 = 14;
         pub const REMOVED: u32 = 15;
+        /// Remote workers' own counters, by worker (dim), key =
+        /// `metric << 16 | dim << 8 | key` of the counter.
+        pub const BY_WORKER: u32 = 17;
+        /// Each worker's leases (dim = worker, key = `WORKER_*` below).
+        pub const WORKER_LEASES: u32 = 18;
         /// `COVERAGE` dims.
         pub const COVERAGE_INDEX: u32 = 0;
         pub const COVERAGE_CRAWL: u32 = 1;
     }
+
+    /// `metric::WORKER_LEASES` keys (`lodestar_pipeline::marginal::key`).
+    pub const WORKER_GRANTED: i64 = 0;
+    pub const WORKER_MARGINAL: i64 = 1;
+    pub const WORKER_COMMITTED: i64 = 2;
+    pub const WORKER_LOST: i64 = 3;
 
     /// `cohort_hour.stage` (`lodestar_sources::Stage`).
     pub const HARVESTED: u8 = 1;

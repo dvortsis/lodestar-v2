@@ -1,7 +1,8 @@
 //! Event-time counters for the Insights rollups (architecture §7),
 //! accumulated in memory and flushed by the writer.
 //!
-//! Metric codes are persisted in `rollup_hour`: append only, never reuse.
+//! Metric codes are persisted in `rollup_hour` and `rollup_day`, so each
+//! is an on-disk meaning: append only, never reuse or renumber one.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -89,6 +90,13 @@ pub mod metric {
     /// same counts are in their own metric's row too, so the fleet's
     /// totals read as before; this row only breaks them down.
     pub const BY_WORKER: u32 = 17;
+    /// Each worker's leases, counted by the coordinator once a cluster
+    /// server serves (WK-15, §19.7): dim = the worker id (the built-in
+    /// worker 0), key = `crate::marginal::key` (granted, marginal,
+    /// committed, lost). Never from a worker's `Counters`. Granted and
+    /// marginal land at the discovery hour, committed and lost at the
+    /// lease's end.
+    pub const WORKER_LEASES: u32 = 18;
 
     /// A [`BY_WORKER`] key: the counter's metric, dim and key, each in
     /// `0..=255` ([`super::Admit`] admits nothing else).
@@ -130,9 +138,9 @@ pub mod metric {
     }
 
     /// The highest code defined.
-    pub const LAST_CODE: u32 = BY_WORKER;
+    pub const LAST_CODE: u32 = WORKER_LEASES;
 
-    const AGGREGATION: [(u32, Aggregation); 17] = [
+    const AGGREGATION: [(u32, Aggregation); 18] = [
         (HARVESTED, Aggregation::Sum),
         (REDISCOVERED, Aggregation::Sum),
         (DROPPED, Aggregation::Sum),
@@ -150,6 +158,7 @@ pub mod metric {
         (REMOVED, Aggregation::Sum),
         (LATE_RESULTS, Aggregation::Sum),
         (BY_WORKER, Aggregation::Sum),
+        (WORKER_LEASES, Aggregation::Sum),
     ];
 
     /// [`COVERAGE`] dims.

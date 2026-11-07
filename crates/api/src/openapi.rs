@@ -91,6 +91,10 @@ fn parts() -> Vec<(&'static str, Doc)> {
         ("compare", crate::compare::ApiDoc::openapi()),
         ("discover", crate::discover::ApiDoc::openapi()),
         ("insights", crate::insights::ApiDoc::openapi()),
+        (
+            "insights_workers",
+            crate::insights_workers::ApiDoc::openapi(),
+        ),
         ("digest", crate::digest::ApiDoc::openapi()),
         ("events", crate::events::ApiDoc::openapi()),
         ("keys", crate::keys::ApiDoc::openapi()),

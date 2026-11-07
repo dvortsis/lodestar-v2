@@ -281,6 +281,12 @@ pub trait LeaseEvents: Send + Sync + 'static {
     fn outstanding(&self, _n: usize) {}
     /// Leases of silent workers ended by an expiry, whoever ran it.
     fn expired(&self, _n: usize) {}
+    /// `claimer` claimed a key already in flight under another worker:
+    /// leased to it, or waiting for a re-grant after its lease ended
+    /// (`lease` is that lease, before the claim). Called once per such
+    /// claim, after the lock is released; a holder's own repeated claim
+    /// never calls it. Insights' marginal gain (WK-15) reads it.
+    fn claimed_elsewhere(&self, _key: &InfoHash, _lease: &Lease, _claimer: WorkerId) {}
 }
 
 /// Keys committed recently, remembered so a remote claim that raced the
@@ -377,22 +383,36 @@ impl AuthorityState {
         }
     }
 
-    /// One claim. The second value is the new lease, if it was a harvest.
-    fn claim(&mut self, worker: WorkerId, c: Claim, now: i64) -> (Claimed, Option<Lease>) {
+    /// One claim: the answer, the new lease if it was a harvest, and the
+    /// key's earlier lease if another worker held it (or held it last,
+    /// for a key waiting for a re-grant), for
+    /// [`LeaseEvents::claimed_elsewhere`].
+    fn claim(
+        &mut self,
+        worker: WorkerId,
+        c: Claim,
+        now: i64,
+    ) -> (Claimed, Option<Lease>, Option<Lease>) {
         if let Some(mut lease) = self.pending.remove(&c.key) {
             if self.pending.is_empty() {
                 self.order.clear();
             }
+            let before = (lease.holder != worker).then_some(lease);
             lease.sources |= 1u64 << c.source.get();
             let token = self.table.regrant(worker, c.key, lease, now);
-            return (Claimed::Granted(token), None);
+            return (Claimed::Granted(token), None, before);
         }
+        let before = self
+            .table
+            .get(&c.key)
+            .copied()
+            .filter(|l| l.holder != worker);
         let claimed = self.table.claim(worker, c, now);
         let fresh = match claimed {
             Claimed::Granted(_) => self.table.get(&c.key).copied(),
             Claimed::Held { .. } => None,
         };
-        (claimed, fresh)
+        (claimed, fresh, before)
     }
 }
 
@@ -471,11 +491,14 @@ impl LeaseAuthority {
     /// [`claim_batch`](Self::claim_batch).
     pub fn claim(&self, worker: WorkerId, c: Claim, now: i64) -> Claimed {
         let mut s = self.lock();
-        let (claimed, fresh) = s.claim(worker, c, now);
+        let (claimed, fresh, before) = s.claim(worker, c, now);
         self.gauge(&s);
         drop(s);
         if let Some(lease) = fresh {
             self.events.harvested(&c.key, &lease);
+        }
+        if let Some(lease) = before {
+            self.events.claimed_elsewhere(&c.key, &lease, worker);
         }
         claimed
     }
@@ -512,6 +535,7 @@ impl LeaseAuthority {
             None => usize::MAX,
         };
         let mut fresh_leases = Vec::new();
+        let mut elsewhere = Vec::new();
         let answers: Vec<BatchAnswer> = claims
             .iter()
             .map(|c| {
@@ -524,9 +548,12 @@ impl LeaseAuthority {
                     }
                     allowed -= 1;
                 }
-                let (claimed, fresh) = s.claim(worker, *c, now);
+                let (claimed, fresh, before) = s.claim(worker, *c, now);
                 if let Some(lease) = fresh {
                     fresh_leases.push((c.key, lease));
+                }
+                if let Some(lease) = before {
+                    elsewhere.push((c.key, lease));
                 }
                 BatchAnswer::Claimed {
                     claimed,
@@ -538,6 +565,9 @@ impl LeaseAuthority {
         drop(s);
         for (key, lease) in &fresh_leases {
             self.events.harvested(key, lease);
+        }
+        for (key, lease) in &elsewhere {
+            self.events.claimed_elsewhere(key, lease, worker);
         }
         answers
     }
@@ -964,9 +994,16 @@ mod tests {
         harvested: std::sync::atomic::AtomicUsize,
         lost: std::sync::atomic::AtomicUsize,
         outstanding: std::sync::atomic::AtomicUsize,
+        elsewhere: Mutex<Vec<(u8, WorkerId, WorkerId)>>,
     }
 
     impl LeaseEvents for Counted {
+        fn claimed_elsewhere(&self, key: &InfoHash, lease: &Lease, claimer: WorkerId) {
+            self.elsewhere
+                .lock()
+                .unwrap()
+                .push((key.0[0], lease.holder, claimer));
+        }
         fn harvested(&self, _: &InfoHash, _: &Lease) {
             self.harvested
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1448,5 +1485,55 @@ mod tests {
             .find(|(k, _)| k.0[0] == 3)
             .unwrap();
         assert_eq!((l.sources, l.cohort), (1 << 3, (7_200 + 5) / 3600));
+    }
+
+    /// WK-15: a claim by another worker (the built-in one included) for a
+    /// held key, or for a key waiting for a re-grant, is reported once per
+    /// claim, single or batched, and changes nothing else; the holder's
+    /// own claim is never reported.
+    #[test]
+    fn claims_elsewhere_are_reported_once_each() {
+        let (a, ev) = counted();
+        let Claimed::Granted(t) = a.claim(A, claim(1, 0), 0) else {
+            panic!()
+        };
+        // The holder again, alone and in a batch: nothing.
+        assert_eq!(
+            a.claim(A, claim(1, 0), 0),
+            Claimed::Held {
+                holder: A,
+                token: t
+            }
+        );
+        a.claim_batch(A, &[claim(1, 0)], 0, None, None);
+        assert!(ev.elsewhere.lock().unwrap().is_empty());
+        // The built-in worker, then B in a batch.
+        assert_eq!(
+            a.claim(WorkerId::LOCAL, claim(1, 2), 0),
+            Claimed::Held {
+                holder: A,
+                token: t
+            }
+        );
+        let answers = a.claim_batch(B, &[claim(1, 3), claim(2, 3)], 0, None, None);
+        assert!(matches!(
+            answers[0],
+            BatchAnswer::Claimed {
+                claimed: Claimed::Held { holder: A, .. },
+                harvested: false
+            }
+        ));
+        // A key waiting for a re-grant, claimed by B.
+        assert_eq!(a.evict(A), 1);
+        let Claimed::Granted(_) = a.claim(B, claim(1, 3), 1) else {
+            panic!()
+        };
+        assert_eq!(
+            *ev.elsewhere.lock().unwrap(),
+            [(1, A, WorkerId::LOCAL), (1, A, B), (1, A, B)]
+        );
+        // Key 2 is B's own, and nothing was harvested twice.
+        assert_eq!(get(&ev.harvested), 2);
+        assert_eq!(a.get(&InfoHash([1; 20])).unwrap().holder, B);
     }
 }
