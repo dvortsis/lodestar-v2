@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T17:25Z",
+  "updated_at": "2026-11-07T17:30Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3658,8 +3658,9 @@
     },
     "X-bench-notice-version": {
       "pr": 586,
-      "status": "open",
-      "notes": "one-line bench fix by P-v052-cut session; slices.yaml entry in next runner PR"
+      "status": "merged",
+      "notes": "one-line bench fix by P-v052-cut session; slices.yaml entry in next runner PR",
+      "merge": "6bdb84ca"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
