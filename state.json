@@ -6170,17 +6170,17 @@
    {
     "slot": 2,
     "slice": "WK-5",
-    "role": "core (workers)",
-    "agent": "session_01MMjhnANUoXZj6CqJZWcoEQ",
-    "doing": "Assign v1 payload and placement planner",
+    "role": "build",
+    "agent": "claude",
+    "doing": "session_01MMjhnANUoXZj6CqJZWcoEQ: Assign v1 payload and placement planner",
     "since": "2026-11-07T00:22Z"
    },
    {
     "slot": 3,
     "slice": "X-sources-api-spec",
-    "role": "core (sources API)",
-    "agent": "session_01MMjhn9ARUjR5QVyemUwrx1",
-    "doing": "credential spec, config_schema, purge dry-run count",
+    "role": "build",
+    "agent": "claude",
+    "doing": "session_01MMjhn9ARUjR5QVyemUwrx1: credential spec, config_schema, purge preview count",
     "since": "2026-11-07T00:22Z"
    },
    {
