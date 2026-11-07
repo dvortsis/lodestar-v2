@@ -178,6 +178,14 @@ fn qbittorrent_refuses_malformed_files() {
         ("[Preferences]\nwebui\\address=*\n", Some(2)),
         ("[preferences]\nFoo=1\n", Some(1)),
         ("[General]\npreferences/WebUI/Address=*\n", Some(2)),
+        // Qt trims `\v` from a section name and doesn't skip `\f` before
+        // `[`; Rust's ASCII whitespace is the other way round.
+        (
+            "[Preferences]\nA=1\n[\x0BPreferences]\nWebUI\\Address=0.0.0.0\n",
+            Some(3),
+        ),
+        ("[Preferences]\n\x0C[X]\nWebUI\\Address=0.0.0.0\n", Some(2)),
+        ("[Preferences]\nWebUI\\Locale=a\x7fb\n", Some(2)),
         // A quoted value running on hides the lines inside it.
         (
             "[Preferences]\nWebUI\\Locale=\"x\nWebUI\\Address=0.0.0.0\n\"\n",

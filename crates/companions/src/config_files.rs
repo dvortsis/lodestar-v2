@@ -218,6 +218,12 @@ pub fn qbittorrent_conf(
         if body.contains('\r') {
             return Err(malformed("a lone carriage return", line_no));
         }
+        // Qt's writer escapes control characters, and Qt and Rust disagree
+        // on which of them are whitespace (`\v`, `\f`), so one could move a
+        // section boundary between what we see and what qBittorrent reads.
+        if body.bytes().any(|c| (c < 0x20 && c != b'\t') || c == 0x7f) {
+            return Err(malformed("a control character", line_no));
+        }
         let t = ascii_trim(body);
         // Qt reads `\` and the character after it as a pair, so an odd
         // run of them at the end of a line joins it to the next one
