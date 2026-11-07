@@ -1568,7 +1568,7 @@ notes:
     text: You published v0.5.1 on 2026-11-07 from 12cd25ca, after it passed the 24-hour memory test (0.91 MiB an hour, upper bound 1.35, bar 2.0), the VPN (gluetun) leg and the Windows MSI check. It carries the memory fixes (mimalloc serves the C code too, huge pages off, memory gauges), the log redaction security fix and the Legal Notice at setup, as you decided (§2.40). Soak r4 on release candidate 3 failed at 29.35 MiB an hour (bar 2.0). Rule packs on by default come in v0.5.2.
   - label: The crawler is the longest road
     text: It finds about 12 torrents a minute and the v0.6 tag needs 100. Every idea is built behind an off switch.
-      The live tests wait for an experiment host you name.
+      The live tests run on your Unraid box; the comparator goes first.
   - label: Sources are being laid down
     text: The plug-in contract, the feed readers for Torznab and RSS, and the Jobs view are merged. Consent, network
       controls and the Internet Archive reader are next. Your answers on terms of service, private sources, caches and
@@ -1577,6 +1577,6 @@ notes:
     text: 'By your instruction at most four worker slots run at once from 2026-11-06T00:00Z, filled only when ready work fits the plan (owner-decisions §2.42). The slices launched in your no-limit window (§2.45) finish under it, and nothing new launches until fewer than four are running. The runner approves best-practice UX and performance decisions itself, listing them in the daily summary (§2.33). The runner keeps the current list in its state file, shown on the slots view.'
   you:
   - label: The comparator run
-    text: bitmagnet's 25-hour run on your Unraid box is booked from 2026-11-07T13:00Z, after a short rehearsal at 11:30Z. No Lodestar run until 12 hours after it ends.
+    text: bitmagnet's 24-hour run (25 hours with warm-up) on your Unraid box is booked from 2026-11-07T13:00Z, after a short rehearsal at 11:30Z. No Lodestar run until 12 hours after it ends.
   - label: Also for you
     text: Add web-ok and e2e-ok to the main ruleset's required checks (you said yes). The nightly signing key and the Unraid Backups share minimum free space are optional.
