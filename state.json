@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T16:56Z",
+  "updated_at": "2026-11-07T17:02Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3653,7 +3653,7 @@
       "brief": "briefs/SRC-G.md",
       "session": "session_01MMjhnARrTCQPugwxwqfuCZ",
       "since": "2026-11-07T15:13Z",
-      "notes": "16:13Z: no FAIL found locally; dev-deps approved (bench tokio test-util + sources-plugins testing, dev-only; must keep `cargo tree -e features -p lodestar` clean); one PR (1,771 lines, 0 production, reason in PR); bench 1,176/s vs 1,000/s PASS, overhead 6.8% info only; \u00a72.37 wording = wiring blocker. | 16:3xZ: BUDGET MISS reported: commit+index with every source on 811-989/s vs \u00a73 1,000/s (off 1,178-1,266) under stress load (10k claims, 200k unverified). Runner: judge on sandbox (\u00a73 = 4 cores), >=5 alternating pairs, median; realistic-load (b) decides; breakdown pending; push held. | 16:37Z: PR #583 open at 37489331 (2,123 lines). Fresh Opus review launched. Next round: paired runs, item 7 updated (small delta check).",
+      "notes": "16:13Z: no FAIL found locally; dev-deps approved (bench tokio test-util + sources-plugins testing, dev-only; must keep `cargo tree -e features -p lodestar` clean); one PR (1,771 lines, 0 production, reason in PR); bench 1,176/s vs 1,000/s PASS, overhead 6.8% info only; \u00a72.37 wording = wiring blocker. | 16:3xZ: BUDGET MISS reported: commit+index with every source on 811-989/s vs \u00a73 1,000/s (off 1,178-1,266) under stress load (10k claims, 200k unverified). Runner: judge on sandbox (\u00a73 = 4 cores), >=5 alternating pairs, median; realistic-load (b) decides; breakdown pending; push held. | 16:37Z: PR #583 open at 37489331 (2,123 lines). Fresh Opus review launched. Next round: paired runs, item 7 updated (small delta check). | 17:0xZ: fresh Opus MERGE at 37489331 (6 mutations). Nits 1,2,4,6 ride the paired-run push; then delta check + merge.",
       "pr": 583
     }
   },
@@ -5768,6 +5768,11 @@
     {
       "id": "X-flake-filters-block-keyboard",
       "what": "web/e2e/filters-block.keyboard.test.ts:70: after End the 'Block this...' menu item stays inactive 10 s under CI load (#583 run 42392077532). Bundle with X-flake-shell-unreachable into one test-only flake slice.",
+      "since": "2026-11-07"
+    },
+    {
+      "id": "X-ci-guard-regex",
+      "what": "ci.yml:107 feature guard regex lodestar-(dht|sources|companions) misses lodestar-sources-plugins 'testing'; extend so any lodestar-* testing feature in the binary tree fails (from #583 review nit 5).",
       "since": "2026-11-07"
     }
   ],
