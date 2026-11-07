@@ -5430,7 +5430,8 @@
     "slices.yaml WK-5 owns: add crates/cluster/src/server.rs (WorkerStatus.external_ips in snapshot(), ~3 lines, no protocol change; runner yes 2026-11-07T00:26Z)",
     "#557 review nit 4: WK-2 and PK-cli both list cli/mod.rs and main.rs; never run them at once",
     "slices.yaml X-sources-api-spec owns: add crates/sources-plugins/src/{prowlarr,stashdb,tpdb,full_scrape,academic,nyaa,archive_org}.rs, crates/sources-plugins/tests/credential_spec.rs, crates/store/src/unverified.rs (purge_preview sharing purge predicates), crates/lodestar/src/ops/tests.rs (runner yes 2026-11-07T00:29Z); preview route GET session-only, no password",
-    "Owner §2.19 flag at X-sources-api-spec merge: consent::need tightened for Account (declared required credentials must be stored exactly); purge preview without password, password only at commit"
+    "Owner §2.19 flag at X-sources-api-spec merge: consent::need tightened for Account (declared required credentials must be stored exactly); purge preview without password, password only at commit",
+    "slices.yaml X-sources-api-spec owns: add crates/api/tests/ops.rs and web/src/lib/features/sources/fixtures.ts (fixture lines for required credential_spec/config_schema; runner yes 2026-11-07T00:30Z)"
    ],
    "done_in": "#550 (1f5a8cd6) except: X-fetch-pool-bytes owns metrics.rs + docs/metrics.md; X-fetch-meta-reserve slice entry; manifest wording \"until SRC-15b\" -> \"until X-consent-gate-lift\" (:220,:305,:412, X-consent-gate-052 title); #557 (05986cde) did the rest up to 00:20Z"
   },
