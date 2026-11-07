@@ -5528,6 +5528,10 @@
   {
    "id": "X-soak-screen-polish",
    "text": "After #562: (1) test_collect.py ~1303 screen_results==[] assertion is a no-op (passes on 48fbdab5); move into test_screen_json_that_cant_be_written_never_ends_the_run. (2) screen_slope (x-mx)**2 raises OverflowError past ~1e154 -> use (x-mx)*(x-mx) so it reaches the per-counter unusable path; both copies. Small; bundle with the next soak-tools slice."
+  },
+  {
+   "id": "pr565-codex-docs",
+   "text": "04:01Z: owner's Codex opened #565 D-v051-release-docs (docs, 22 files). Fresh Opus review running. D-v051-main held: shrink to what #565 leaves out (likely v0.5.0 never released) or retire. Add slices.yaml entry D-v051-release-docs (agent other, docs, owner-launched) in next runner PR."
   }
  ],
  "main_health": [
