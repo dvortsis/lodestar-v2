@@ -28,6 +28,7 @@
 //! the authenticated session, never from bytes the worker chose.
 
 pub mod counters;
+pub mod filter_snapshot;
 pub mod results;
 
 pub use counters::CountersBatch;
