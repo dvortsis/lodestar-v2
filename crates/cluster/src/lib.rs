@@ -26,6 +26,7 @@ mod client;
 mod clock;
 mod coordinator;
 pub mod frame;
+pub mod have;
 mod hex;
 mod join;
 mod leases;

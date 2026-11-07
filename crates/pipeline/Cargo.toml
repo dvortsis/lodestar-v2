@@ -21,6 +21,8 @@ lodestar-filter.workspace = true
 lodestar-integrations.workspace = true
 lodestar-log.workspace = true
 lodestar-network-policy.workspace = true
+# The have-filter's keyed PRF (WK-3); already in the lockfile through phf.
+siphasher = "=1.0.4"
 tokio = { version = "1.54.0", features = ["sync", "time", "rt", "macros"] }
 
 [lints]

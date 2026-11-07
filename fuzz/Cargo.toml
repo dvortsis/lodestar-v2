@@ -121,6 +121,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "cluster_have"
+path = "fuzz_targets/cluster_have.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "cluster_frame"
 path = "fuzz_targets/cluster_frame.rs"
 test = false

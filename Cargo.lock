@@ -1782,6 +1782,7 @@ dependencies = [
  "lodestar-store",
  "lodestar-tracker-scrape",
  "proptest",
+ "siphasher",
  "tempfile",
  "tokio",
 ]

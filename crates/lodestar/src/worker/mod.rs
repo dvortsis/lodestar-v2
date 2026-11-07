@@ -24,6 +24,7 @@
 //! `Debug`, and every message the worker prints is fixed text plus names,
 //! paths and addresses.
 
+pub mod have;
 pub mod session;
 
 use std::fs;
