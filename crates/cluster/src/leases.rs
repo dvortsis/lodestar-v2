@@ -1256,4 +1256,47 @@ mod tests {
         assert_eq!(a.held(A, &free, t).unwrap().cohort, 2);
         assert_eq!(get(&ev.harvested), 1, "a restore is never a harvest");
     }
+
+    /// The interleaving the late-result path must survive (WK-9), injected
+    /// step by step: the intake finds the key free, then the server's tick
+    /// expires another worker's lease on it (it waits for a re-grant, still
+    /// in flight, harvested once and with no outcome yet), then the intake
+    /// leases it. The old check-then-`restore` takes the waiting key over,
+    /// so the waiting lease vanishes without an outcome and the late
+    /// result's correction is counted against a key that never ended;
+    /// `restore_if_free` refuses, and the waiting key keeps its lease.
+    #[test]
+    fn a_late_lease_never_takes_over_a_key_expired_in_between() {
+        let lease = RestoredLease {
+            cohort: 2,
+            source: src(1),
+            sources: 2,
+            strategy: 0,
+            discovered_at: 7_200,
+        };
+        let key = InfoHash([5; 20]);
+        let run = |atomic: bool| {
+            let (a, _) = counted();
+            // 1. The intake's check: free. 2. Another worker claims it.
+            // 3. That worker goes silent and its lease expires: the key
+            // waits. 4. The intake leases the key it found free.
+            let free_at_check = !a.in_flight(&key);
+            let Claimed::Granted(_) = a.claim(B, claim(5, 1), 0) else {
+                panic!()
+            };
+            assert_eq!(a.expire(10_000), 1, "B went silent: the key waits");
+            assert!(free_at_check);
+            let leased = if atomic {
+                a.restore_if_free(A, key, lease, 10_000).is_some()
+            } else {
+                a.restore(A, key, lease, 10_000);
+                true
+            };
+            (leased, a.pending())
+        };
+        // The old path: leased, and the waiting lease is gone (no outcome).
+        assert_eq!(run(false), (true, 0));
+        // The atomic path: refused, and the key still waits for a re-grant.
+        assert_eq!(run(true), (false, 1));
+    }
 }

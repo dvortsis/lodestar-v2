@@ -1578,6 +1578,78 @@ mod tests {
         );
     }
 
+    /// A worker's file tree is refused by its shape, before any path is
+    /// built (WK-9): deeper than metainfo's 64, more than its 200,000
+    /// files, or more path components than the caller allows. A deep chain
+    /// of a few hundred KB is refused with no path built.
+    #[test]
+    fn decode_files_refuses_a_tree_over_its_shape_limits() {
+        use lodestar_metainfo::{File, FileAttrs, FileHashes, TextEncoding};
+        let file = |path: Vec<Vec<u8>>| File {
+            path,
+            size: 1,
+            attrs: FileAttrs::empty(),
+            symlink_target: None,
+            pieces_root: None,
+            hashes: FileHashes::default(),
+        };
+        let raw = |files: &[File]| Compressed {
+            codec: Codec::Raw,
+            dict_id: None,
+            data: filetree::encode(files, TextEncoding::UTF8).unwrap(),
+        };
+        let p = Preparer::from_dict(None, 3, false);
+        let deep = |d: usize| raw(&[file((0..d).map(|i| vec![b'a' + (i % 26) as u8]).collect())]);
+        let max = 64 << 20;
+        let (tree, _, parts) = p.decode_files(&deep(64), max, u64::MAX).unwrap();
+        assert_eq!(tree.files[0].path.len(), 64, "depth 64 is accepted");
+        assert_eq!(parts, (1..=63).sum::<u64>() + 64);
+        assert!(
+            p.decode_files(&deep(65), max, u64::MAX).is_err(),
+            "depth 65 isn't"
+        );
+        // Exactly the components allowed, then one fewer.
+        assert!(p.decode_files(&deep(64), max, parts).is_ok());
+        assert!(p.decode_files(&deep(64), max, parts - 1).is_err());
+        let many = |n: usize| {
+            let files: Vec<File> = (0..n)
+                .map(|i| file(vec![format!("{i}").into_bytes()]))
+                .collect();
+            raw(&files)
+        };
+        assert!(p.decode_files(&many(200_000), max, u64::MAX).is_ok());
+        assert!(
+            p.decode_files(&many(200_001), max, u64::MAX).is_err(),
+            "200,001 files"
+        );
+        // A 60,000-deep chain in under 300 KB: refused by its shape.
+        let mut chain = vec![filetree::FORMAT_VERSION, 0, TextEncoding::UTF8.id()];
+        let put = |out: &mut Vec<u8>, mut v: u64| loop {
+            let b = (v & 0x7f) as u8;
+            v >>= 7;
+            if v == 0 {
+                out.push(b);
+                break;
+            }
+            out.push(b | 0x80);
+        };
+        put(&mut chain, 60_000);
+        put(&mut chain, 1);
+        for i in 0..60_000 {
+            put(&mut chain, i);
+        }
+        chain.extend(std::iter::repeat_n(0, 60_000));
+        put(&mut chain, 60_000);
+        chain.extend([0, 7]);
+        assert!(chain.len() < 300 << 10);
+        let blob = Compressed {
+            codec: Codec::Raw,
+            dict_id: None,
+            data: chain,
+        };
+        assert!(p.decode_files(&blob, max, u64::MAX).is_err());
+    }
+
     /// A preparer built from the active dictionary's bytes prepares the
     /// same bytes as the store's own, with and without a dictionary and
     /// with archiving on (WK-7: a worker gets the dictionary, not a store).

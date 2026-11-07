@@ -592,6 +592,8 @@ async fn hints_are_filtered_and_never_stored() {
         panic!()
     };
     let public: std::net::SocketAddr = "203.0.113.77:6881".parse().unwrap();
+    // A public address the policy passes. Nothing dials it: the key isn't
+    // in the built-in worker's pool, so the reply has no entry to join.
     let real: std::net::SocketAddr = "93.184.216.34:51413".parse().unwrap();
     rig.sink.local_hints(vec![HintItem {
         key: key.0,
@@ -599,13 +601,15 @@ async fn hints_are_filtered_and_never_stored() {
         hints: vec![
             "127.0.0.1:6881".parse().unwrap(),
             "10.1.2.3:6881".parse().unwrap(),
+            // The documentation address WK-0's test relayed: now dropped.
+            "192.0.2.1:6881".parse().unwrap(),
             public,
             real,
         ],
     }]);
     let remote = rig.remote();
     // Loopback, private and documentation addresses are dropped.
-    assert_eq!(stat(&remote, |s| &s.hints_dropped), 3);
+    assert_eq!(stat(&remote, |s| &s.hints_dropped), 4);
     assert_eq!(stat(&remote, |s| &s.hints), 1);
     let dir = rig.db.parent().unwrap().to_path_buf();
     rig.pipeline.shutdown().await.unwrap();
@@ -790,4 +794,119 @@ async fn a_purged_record_ends_its_lease() {
     assert!(rig.stored(&key).is_none());
     assert!(authority.report(W, &key, token, Some(6)).is_none(), "once");
     rig.pipeline.shutdown().await.unwrap();
+}
+
+/// A worker's records with a tree of `files` files, each `depth` deep
+/// (sharing one directory chain), sized to pass the count checks.
+fn wide(store: &Store, name: &str, files: usize, depth: usize) -> Prepared {
+    let mut t = prepared(store, &info(name, GIB));
+    let chain: Vec<Vec<u8>> = (1..depth).map(|i| format!("d{i}").into_bytes()).collect();
+    let list: Vec<lodestar_metainfo::File> = (0..files)
+        .map(|i| {
+            let mut path = chain.clone();
+            path.push(format!("{i:06}").into_bytes());
+            lodestar_metainfo::File {
+                path,
+                size: 1,
+                attrs: lodestar_metainfo::FileAttrs::empty(),
+                symlink_target: None,
+                pieces_root: None,
+                hashes: lodestar_metainfo::FileHashes::default(),
+            }
+        })
+        .collect();
+    let raw =
+        lodestar_store::filetree::encode(&list, lodestar_metainfo::TextEncoding::UTF8).unwrap();
+    t.info_size = raw.len() as u64;
+    t.files = lodestar_store::BlobCodec::new(19).compress(&raw).unwrap();
+    t.size = files as u64;
+    t.file_count = files as u64;
+    t
+}
+
+/// The path-component budget (`BATCH_COMPONENTS`) holds per record and per
+/// batch: one tree over it is refused alone; of two that each fit, the
+/// second, which would pass the batch's total, is refused. Taken directly,
+/// with no writer, on the intake's own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn path_components_are_budgeted_per_record_and_per_batch() {
+    use lodestar_pipeline::remote::{BATCH_COMPONENTS, NoStanding, Prior, RemoteParts};
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().join("c.db"), StoreConfig::default()).unwrap();
+    let epoch = (now() as u32).wrapping_sub(10);
+    let authority = Arc::new(LeaseAuthority::new(
+        epoch,
+        600,
+        Arc::new(lodestar_cluster::NoEvents),
+    ));
+    let (writer, _w) = tokio::sync::mpsc::channel(8);
+    let (pool, _p) = tokio::sync::mpsc::channel(8);
+    let intake = RemoteIntake::new(RemoteParts {
+        authority: authority.clone(),
+        writer,
+        pool,
+        rollups: Arc::new(lodestar_pipeline::Rollups::default()),
+        preparer: store.preparer(),
+        epoch,
+        prior: Prior::default(),
+        private_sources: 0,
+    });
+    let parts = SinkParts {
+        standing: Arc::new(NoStanding),
+        stored: Arc::new(Reader(Mutex::new(store))),
+        clocks: Arc::new(Offset(0)),
+        hints_allow_private: false,
+    };
+    let ws = Store::open(dir.path().join("w.db"), StoreConfig::default()).unwrap();
+    let leased = |t: Prepared| {
+        let c = Claim {
+            key: t.info_hash,
+            source: src(1),
+            strategy: 0,
+            at: now(),
+        };
+        let BatchAnswer::Claimed {
+            claimed: Claimed::Granted(token),
+            ..
+        } = authority.claim_batch(W, &[c], now(), None, None)[0]
+        else {
+            panic!()
+        };
+        record(t, token)
+    };
+    // 200,000 files, 11 deep: 2.2M components, over the budget alone.
+    let over = wide(&ws, "Over.2024.mkv", 200_000, 11);
+    // 100,000 files, 12 deep: 1.2M each; two pass the batch's 2M.
+    let a = wide(&ws, "Half.A.2024.mkv", 100_000, 12);
+    let b = wide(&ws, "Half.B.2024.mkv", 100_000, 12);
+    const { assert!(1_200_000 < BATCH_COMPONENTS && 2_400_000 > BATCH_COMPONENTS) };
+    let one = ResultsBatch {
+        batch: 60,
+        records: vec![leased(over)],
+    }
+    .encode()
+    .unwrap();
+    let taken = intake.take(W, &one, &parts, now()).unwrap();
+    assert!(taken.results.is_empty(), "over the budget alone");
+    let two = ResultsBatch {
+        batch: 61,
+        records: vec![leased(a.clone()), leased(b.clone())],
+    }
+    .encode()
+    .unwrap();
+    let taken = intake.take(W, &two, &parts, now()).unwrap();
+    assert_eq!(taken.results.len(), 1, "the first fits, the second doesn't");
+    assert_eq!(taken.results[0].key, a.info_hash);
+    assert_eq!(stat(&intake, |s| &s.refused), 2);
+    // A new batch has its own budget.
+    let three = ResultsBatch {
+        batch: 62,
+        records: vec![leased(b)],
+    }
+    .encode()
+    .unwrap();
+    assert_eq!(
+        intake.take(W, &three, &parts, now()).unwrap().results.len(),
+        1
+    );
 }

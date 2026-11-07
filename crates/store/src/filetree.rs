@@ -177,6 +177,11 @@ pub struct Shape {
 
 /// Reads a blob's [`Shape`]. Allocates one byte per directory, never a
 /// path. An error here means [`decode`] would fail too.
+///
+/// Cost: one pass over the blob, linear in its bytes, with no recursion
+/// (a directory's depth is its parent's plus one, and parents come first),
+/// so a hostile depth can't grow the stack; the depth table is one byte per
+/// directory, and the directory count is bounded by the blob's length.
 pub fn shape(blob: &[u8]) -> Result<Shape, CodecError> {
     let mut r = Reader { buf: blob, pos: 0 };
     let version = r.u8()?;
