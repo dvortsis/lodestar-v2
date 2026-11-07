@@ -83,7 +83,8 @@ describe('WorkerBreakdown', () => {
 			stage: 'discover',
 			byWorker: [{ worker: 0, granted: 10, marginal: 15, rediscovered: 0, dropped: 0 }]
 		});
-		expect(screen.getByTestId('insights-marginal-table').textContent).not.toContain('100%');
+		const rows = screen.getByTestId('insights-marginal-table').querySelectorAll('tbody td');
+		expect(rows[2]?.textContent).toBe('—');
 	});
 
 	it('Fetch has its table and the reason-filter note, no marginal view', async () => {

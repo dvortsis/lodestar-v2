@@ -70,36 +70,11 @@
 			state.kind === 'starting' ||
 			state.kind === 'stalled'
 	);
-	// The fleet (WK-17): " · N workers · X/h" after the count; paused and offline stay in the tooltip.
-	const fleetRef = useFleet();
-	const fleet = $derived(fleetRef.current);
-	const fleetText = $derived(
-		fleet && showsCount
-			? [
-					(fleet.workers === 1
-						? m.insights_workers_pill_workers_one
-						: m.insights_workers_pill_workers)({ count: formatCount(fleet.workers, locale) }),
-					fleet.stored_per_hour === null
-						? ''
-						: m.insights_workers_pill_rate({ rate: formatCompact(fleet.stored_per_hour, locale) })
-				]
-					.filter(Boolean)
-					.join(' · ')
-			: ''
-	);
-	const fleetHelp = $derived(
-		fleet
-			? m.insights_workers_pill_detail({
-					workers: formatCount(fleet.workers, locale),
-					paused: formatCount(fleet.paused, locale),
-					offline: formatCount(fleet.offline, locale)
-				})
-			: ''
-	);
+	// The fleet (WK-17): " · N workers · X/h" after the count; paused and offline are read, not shown.
+	const fleet = useFleet(() => showsCount);
 
 	const Icon = $derived(icons[state.kind]);
 	const helpText = $derived(help[state.kind]?.() ?? '');
-	const tipText = $derived([helpText, fleetHelp].filter(Boolean).join(' '));
 	const tone = $derived(state.kind === 'stalled' ? statusInk.warning : '');
 	const count = $derived(
 		state.kind === 'rebuilding'
@@ -130,18 +105,18 @@
 			{#if count}<span class="text-muted-text tabular-nums" data-testid="status-pill-count"
 					>· {count}</span
 				>{/if}
-			{#if fleetText}<span class="text-muted-text tabular-nums" data-testid="status-pill-fleet"
-					>· {fleetText}</span
+			{#if fleet.text}<span class="text-muted-text tabular-nums" data-testid="status-pill-fleet"
+					>· {fleet.text}</span
 				>{/if}
 		</span>
 		<span class="sr-only">{m.shell_status_label()}</span>
-		{#if fleetHelp}<span class="sr-only" data-testid="status-pill-fleet-help">{fleetHelp}</span
+		{#if fleet.help}<span class="sr-only" data-testid="status-pill-fleet-help">{fleet.help}</span
 			>{/if}
 	</a>
 {/snippet}
 
-{#if tipText}
-	<Tooltip side="bottom" content={tipText}>
+{#if helpText}
+	<Tooltip side="bottom" content={helpText}>
 		{#snippet trigger({ props })}{@render link(props)}{/snippet}
 	</Tooltip>
 {:else}

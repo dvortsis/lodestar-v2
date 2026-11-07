@@ -13,7 +13,10 @@ import {
 import { pillState, type CrawlerSnapshot } from './status';
 
 const get = vi.hoisted(() => vi.fn());
-vi.mock('$lib/api/client', () => ({ api: { get } }));
+vi.mock('$lib/api/client', async (actual) => ({
+	...(await actual<typeof import('$lib/api/client')>()),
+	api: { get }
+}));
 
 const CLEAR_S = STARTUP_SUPPRESSION_S + 2 * 3600;
 
