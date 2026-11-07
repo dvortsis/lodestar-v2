@@ -131,6 +131,13 @@
 		document.getElementById(cancelRemoveId)?.focus();
 	}
 
+	/** Back out of a removal: focus returns to the Remove button that opened it. */
+	async function keep(name: string) {
+		removing = null;
+		await tick();
+		document.querySelector<HTMLElement>(`[data-testid="credential-${name}-remove"]`)?.focus();
+	}
+
 	async function remove(name: string) {
 		if (busy) return;
 		removing = null;
@@ -149,6 +156,9 @@
 					: m.sources_error_network();
 		} finally {
 			busy = false;
+			// The Remove buttons are gone: focus the field they belonged to.
+			await tick();
+			document.querySelector<HTMLElement>(`[data-testid="credential-${name}"]`)?.focus();
 		}
 	}
 
@@ -233,7 +243,18 @@
 						required={f.required && !storedHas(f.name)}
 					>
 						{#snippet children(c)}
-							<div class="flex items-start gap-2">
+							<!-- svelte-ignore a11y_no_static_element_interactions -->
+							<div
+								class="flex flex-wrap items-start gap-2"
+								onkeydown={(e) => {
+									// Escape cancels the open confirm only; the dialog stays.
+									if (e.key === 'Escape' && removing === f.name) {
+										e.preventDefault();
+										e.stopPropagation();
+										void keep(f.name);
+									}
+								}}
+							>
 								<Input
 									{...c}
 									type={f.kind === 'secret' ? 'password' : 'text'}
@@ -243,10 +264,18 @@
 									data-testid="credential-{f.name}"
 								/>
 								{#if storedHas(f.name) && removing === f.name}
+									<p
+										class="basis-full text-small"
+										id="{uid}-rm-{f.name}"
+										data-testid="credential-{f.name}-prompt"
+									>
+										{m.sources_cx_credential_remove_ask({ label: f.label })}
+									</p>
 									<Button
 										id={cancelRemoveId}
 										dense
-										onclick={() => (removing = null)}
+										aria-describedby="{uid}-rm-{f.name}"
+										onclick={() => keep(f.name)}
 										data-testid="credential-{f.name}-keep"
 									>
 										{m.sources_cx_credential_keep()}

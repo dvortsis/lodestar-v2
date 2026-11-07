@@ -195,7 +195,9 @@
 			</p>
 		{/each}
 		{#if skipped.length > 0}
-			<p class="text-small" data-testid="cfg-save-off">{m.sources_cfg_save_off()}</p>
+			<p class="text-small" id="{uid}-save-off" data-testid="cfg-save-off">
+				{m.sources_cfg_save_off()}
+			</p>
 		{/if}
 		{#if fields.length === 0}
 			<p class="text-muted-text" data-testid="cfg-unsupported">{m.sources_cfg_none()}</p>
@@ -212,6 +214,7 @@
 			form={formId}
 			loading={busy}
 			disabled={drawn.length === 0 || skipped.length > 0}
+			aria-describedby={skipped.length > 0 ? `${uid}-save-off` : undefined}
 			data-testid="cfg-save"
 		>
 			{m.sources_cfg_save()}

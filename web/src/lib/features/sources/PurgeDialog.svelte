@@ -296,8 +296,13 @@
 				loading={busy}
 				data-testid="purge-confirm"
 			>
-				{#if previewState === 'ready' && preview}
-					{m.sources_purge_confirm_count({ count: count(preview.torrents_deleted), name: s.name })}
+				{#if previewState === 'ready' && preview && preview.torrents_deleted > 0}
+					{preview.torrents_deleted === 1
+						? m.sources_purge_confirm_count_one({ name: s.name })
+						: m.sources_purge_confirm_count({
+								count: count(preview.torrents_deleted),
+								name: s.name
+							})}
 				{:else}
 					{m.sources_purge_confirm({ name: s.name })}
 				{/if}

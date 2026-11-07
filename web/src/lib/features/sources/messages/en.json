@@ -145,5 +145,7 @@
 	"sources_cx_credential_remove_yes": "Remove for good",
 	"sources_purge_confirm_count": "Delete {count} torrents found only by {name}",
 	"sources_cfg_not_set": "Not set",
-	"sources_cfg_save_off": "Saving is off: this screen can't show all of this source's settings, and saving would reset the ones it can't. Use the API to change them."
+	"sources_cfg_save_off": "Saving is off: this screen can't show all of this source's settings, and saving would reset the ones it can't. Use the API to change them.",
+	"sources_cx_credential_remove_ask": "Remove the saved {label}? This can't be undone.",
+	"sources_purge_confirm_count_one": "Delete 1 torrent found only by {name}"
 }

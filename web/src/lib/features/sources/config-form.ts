@@ -193,9 +193,7 @@ export function validate(fields: Field[], values: Values): Errors {
 			continue;
 		}
 		const rows = (v as (string | Row)[]).filter((r) =>
-			typeof r === 'string'
-				? r.trim() !== ''
-				: Object.values(r).some((x) => x !== '' && x !== false)
+			typeof r === 'string' ? r.trim() !== '' : !isBlankRow(f, r)
 		);
 		const n = rows.length;
 		if (f.minItems !== undefined && n < f.minItems)

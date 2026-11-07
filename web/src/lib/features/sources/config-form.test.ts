@@ -205,3 +205,40 @@ describe('lists with defaults and boolean cells', () => {
 		expect(toConfig(f, v).rows).toEqual([]);
 	});
 });
+
+describe('rows with item defaults', () => {
+	const f = parseSchema(
+		schema({
+			ports: {
+				type: 'array',
+				items: {
+					type: 'object',
+					properties: { host: { type: 'string' }, port: { type: 'integer', default: 6881 } },
+					required: ['host']
+				}
+			}
+		})
+	)!;
+	const list = f[0] as ListField;
+
+	it('drops a row left at its defaults and keeps one with a changed cell', () => {
+		const untouched = blankRow(list);
+		expect(untouched.port).toBe('6881');
+		expect(validate(f, { ports: [untouched] })).toEqual({});
+		expect(toConfig(f, { ports: [untouched] }).ports).toEqual([]);
+		const edited = { ...untouched, host: 'h.example' };
+		expect(toConfig(f, { ports: [untouched, edited] }).ports).toEqual([
+			{ host: 'h.example', port: 6881 }
+		]);
+		const portOnly = { ...untouched, port: '1' };
+		expect(validate(f, { ports: [portOnly] })['ports.0.host']).toBeTruthy();
+	});
+});
+
+describe('length limits count characters', () => {
+	const f = parseSchema(schema({ s: { type: 'string', maxLength: 2 } }))!;
+	it('counts a code point once', () => {
+		expect(validate(f, { s: '😀😀' })).toEqual({});
+		expect(validate(f, { s: '😀😀😀' }).s).toContain('2 characters');
+	});
+});

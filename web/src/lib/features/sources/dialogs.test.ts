@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { configure, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
+import {
+	cleanup,
+	configure,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+	within
+} from '@testing-library/svelte';
 import { mockFetch } from '../filters/flows/testing/fetch';
 import SourcesScreen from './SourcesScreen.svelte';
 import { approved } from './consent-approved.fixture';
@@ -331,11 +339,30 @@ describe('account sources (SRC-15c)', () => {
 		await fireEvent.click(await screen.findByTestId('credential-api_key-remove'));
 		const keep = await screen.findByTestId('credential-api_key-keep');
 		await waitFor(() => expect(document.activeElement).toBe(keep));
+		expect(screen.getByTestId('credential-api_key-prompt').textContent).toContain(
+			"This can't be undone"
+		);
+		expect(keep.getAttribute('aria-describedby')).toBe(
+			screen.getByTestId('credential-api_key-prompt').id
+		);
 		await fireEvent.click(keep);
 		expect(writes()).toHaveLength(0);
+		await waitFor(() =>
+			expect(document.activeElement).toBe(screen.getByTestId('credential-api_key-remove'))
+		);
+		// Escape closes the confirm, not the dialog.
+		await fireEvent.click(screen.getByTestId('credential-api_key-remove'));
+		await fireEvent.keyDown(await screen.findByTestId('credential-api_key-keep'), {
+			key: 'Escape'
+		});
+		await waitFor(() => expect(screen.queryByTestId('credential-api_key-keep')).toBeNull());
+		expect(screen.getByRole('dialog')).toBeTruthy();
 		await fireEvent.click(await screen.findByTestId('credential-api_key-remove'));
 		await fireEvent.click(await screen.findByTestId('credential-api_key-remove-yes'));
 		await waitFor(() => expect(writes()).toHaveLength(1));
+		await waitFor(() =>
+			expect(document.activeElement).toBe(screen.getByTestId('credential-api_key'))
+		);
 		expect(bodyOf(0)).toEqual({ credentials: { api_key: null } });
 	});
 
@@ -437,6 +464,22 @@ describe('purge', () => {
 				'Delete 1,204,331 torrents found only by Nyaa'
 			)
 		);
+	});
+
+	it('words the purge button for one, none and many', async () => {
+		const label = async (n: number) => {
+			setup(nyaa);
+			net.on('GET /sources/{id}/purge/preview', { body: { ...preview, torrents_deleted: n } });
+			await screen.findByTestId('source-1');
+			await fireEvent.click(screen.getByTestId('source-1-purge'));
+			await screen.findByTestId('preview-torrents');
+			const text = screen.getByTestId('purge-confirm').textContent!.trim();
+			cleanup();
+			return text;
+		};
+		expect(await label(1)).toBe('Delete 1 torrent found only by Nyaa');
+		expect(await label(0)).toBe('Purge Nyaa');
+		expect(await label(5)).toBe('Delete 5 torrents found only by Nyaa');
 	});
 
 	it('says the counts can grow while the source is on', async () => {
@@ -603,11 +646,46 @@ describe('settings form (SRC-15c)', () => {
 		expect(writes()).toHaveLength(0);
 	});
 
+	it('offers "Not set" on an optional enum and numbers the boolean cells of each row', async () => {
+		const s = source({
+			id: 10,
+			name: 'Rows',
+			editable: ['config'],
+			config_schema: {
+				type: 'object',
+				properties: {
+					mode: { type: 'string', enum: ['a', 'b'], title: 'Mode' },
+					hosts: {
+						type: 'array',
+						title: 'Hosts',
+						items: {
+							type: 'object',
+							properties: { name: { type: 'string' }, tls: { type: 'boolean' } }
+						}
+					}
+				}
+			}
+		});
+		setup(s);
+		await openSettings(10);
+		const opts = [...(screen.getByLabelText('Mode') as HTMLSelectElement).options].map(
+			(o) => o.textContent
+		);
+		expect(opts).toEqual(['Not set', 'a', 'b']);
+		await fireEvent.click(screen.getByTestId('cfg-hosts-add'));
+		await fireEvent.click(screen.getByTestId('cfg-hosts-add'));
+		expect(screen.getByLabelText('tls 1')).toBeTruthy();
+		expect(screen.getByLabelText('tls 2')).toBeTruthy();
+	});
+
 	it('turns Save off and says why when a setting cannot be drawn', async () => {
 		setup(odd);
 		await openSettings(9);
 		expect((screen.getByTestId('cfg-save') as HTMLButtonElement).disabled).toBe(true);
 		expect(screen.getByTestId('cfg-save-off').textContent).toContain('Use the API');
+		expect(screen.getByTestId('cfg-save').getAttribute('aria-describedby')).toBe(
+			screen.getByTestId('cfg-save-off').id
+		);
 		expect(screen.getByTestId('cfg-unsupported').textContent).toContain('edit through the API');
 	});
 
