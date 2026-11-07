@@ -5921,6 +5921,10 @@
     {
       "id": "X-win-refusal-ux-owns-ext",
       "note": "2026-11-07T21:25Z runner approved extra files: packaging/windows/secure-datadir.ps1 (-InstallerSid from UserSID only under AdminUser; account SID only), test-secure-datadir.ps1 + release.yml line, smoke.ps1 Repair leg (+ negative case). Implements owner-decisions \u00a72.x 'Repair may re-secure' rule."
+    },
+    {
+      "id": "owner-flag-hygiene-budget",
+      "note": "2026-11-07T21:36Z runner \u00a72.26: Settings NotificationsScreen (first view) size-limit 45 -> 45.1 kB for FieldMenu keyboard focus (X-web-hygiene-1107). \u00a72.19 flag to owner after merge."
     }
   ],
   "main_health": [
@@ -6706,5 +6710,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-07T21:25:00Z"
+  "updated": "2026-11-07T21:36:00Z"
 }
