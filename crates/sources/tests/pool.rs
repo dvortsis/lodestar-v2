@@ -2007,6 +2007,18 @@ async fn the_third_reserve_timeout_is_charged() {
 /// returns to 0 when the stream ends.
 #[tokio::test(start_paused = true)]
 async fn a_reserve_timeout_under_a_live_stream_starts_no_second_lookup() {
+    reserve_timeout_under_a_live_stream(3).await;
+}
+
+/// The same on the key's last attempt: when the stream ends, the key is
+/// ready with its untried peer, not lost, and the lookup count is
+/// decremented once (runner's review: it underflowed).
+#[tokio::test(start_paused = true)]
+async fn a_reserve_timeout_under_a_stream_on_the_last_attempt_keeps_the_key() {
+    reserve_timeout_under_a_live_stream(1).await;
+}
+
+async fn reserve_timeout_under_a_live_stream(max_attempts: u16) {
     use lodestar_sources::{LookupSession, PeerRequest, Terminal};
     let len = MIB - 4096;
     let fake = Arc::new(FakeState::default());
@@ -2023,6 +2035,7 @@ async fn a_reserve_timeout_under_a_live_stream_starts_no_second_lookup() {
             // Room left, but not a third dict's.
             max_held_bytes: 2 * weight(len) as usize + 1000,
             streaming_peers: true,
+            max_attempts,
             ..config()
         },
         Arc::new(Fake(fake.clone())),
@@ -2097,6 +2110,72 @@ async fn a_reserve_timeout_under_a_live_stream_starts_no_second_lookup() {
     .await;
     drop(requests);
     drop(disc);
+    stop.send(true).unwrap();
+    task.await.unwrap();
+}
+
+/// A stream that ends empty on the key's last attempt loses the key as
+/// "no peers", once, and gives its lookup slot back once. CR-1a-S counted
+/// it twice, which underflowed `lookups` (runner's review, a bug already on
+/// `main`).
+#[tokio::test(start_paused = true)]
+async fn a_stream_that_ends_empty_on_the_last_attempt_counts_its_lookup_once() {
+    use lodestar_sources::{LookupSession, PeerRequest, Terminal};
+    let (disc, discoveries) = mpsc::channel(8);
+    let (finder, mut requests) = mpsc::channel::<PeerRequest>(8);
+    let (out_tx, _out) = mpsc::channel(4);
+    let (stop, shutdown) = Shutdown::new();
+    let causes = Arc::new(Causes {
+        counts: Arc::new(FunnelCounts::default()),
+        lost: Mutex::default(),
+    });
+    let (handle, task) = spawn(
+        PoolConfig {
+            streaming_peers: true,
+            max_attempts: 1,
+            ..config()
+        },
+        Arc::new(Fake(Arc::new(FakeState::default()))),
+        PoolIo {
+            discoveries,
+            peer_finders: vec![finder],
+            out: out_tx,
+            funnel: causes.clone(),
+            shutdown,
+        },
+        HashMap::new(),
+        Vec::new(),
+    );
+    disc.try_send(found(0, 1, vec![])).unwrap();
+    let request = tokio::time::timeout(Duration::from_secs(60), requests.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let (batches_tx, batches) = mpsc::channel(4);
+    let (terminal_tx, terminal) = tokio::sync::oneshot::channel();
+    request
+        .session
+        .expect("a streaming request")
+        .send(Some(LookupSession { batches, terminal }))
+        .unwrap();
+    let stats = handle.stats();
+    until("the lookup to start", || {
+        stats.lookups.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    drop(batches_tx);
+    terminal_tx.send(Terminal::Complete).unwrap();
+    until("the key to be lost", || {
+        !causes.lost.lock().unwrap().is_empty()
+    })
+    .await;
+    assert_eq!(
+        causes.lost.lock().unwrap()[..],
+        [(key(1), Loss::NoPeers, None)]
+    );
+    // A round of the pool publishes its stats.
+    handle.queued().await;
+    assert_eq!(stats.lookups.load(Ordering::Relaxed), 0);
     stop.send(true).unwrap();
     task.await.unwrap();
 }

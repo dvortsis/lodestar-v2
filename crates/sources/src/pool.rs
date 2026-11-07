@@ -383,7 +383,9 @@ impl Reservation {
             let freed = budget.freed.notified();
             tokio::pin!(freed);
             freed.as_mut().enable();
-            if self.try_grow(want, want_total) {
+            // The first failure joins its queue under the same lock as the
+            // check, so no other claim can slip in between.
+            if self.try_grow(want, want_total, queued.is_none()) {
                 if let Some(q) = queued.take() {
                     claim.waited_out.store(false, Ordering::Relaxed);
                     drop(q);
@@ -392,15 +394,6 @@ impl Reservation {
             }
             if queued.is_none() {
                 claim.waited_out.store(true, Ordering::Relaxed);
-                let mut s = budget.lock();
-                if claim.bytes.load(Ordering::Relaxed) > 0 {
-                    s.growth.push_back(claim.id);
-                } else if want < want_total {
-                    s.partials.push_back(claim.id);
-                } else {
-                    s.queue.push_back(claim.id);
-                }
-                drop(s);
                 queued = Some(Queued(claim));
             }
             freed.await;
@@ -409,10 +402,28 @@ impl Reservation {
 
     /// Takes the room for `want` bytes (of `want_total`) if the rules in
     /// [`Budget`] allow it now.
-    fn try_grow(&self, want: u64, want_total: u64) -> bool {
+    fn try_grow(&self, want: u64, want_total: u64, enqueue: bool) -> bool {
+        let claim = &*self.0;
+        let mut s = claim.budget.lock();
+        if self.grant(&mut s, want, want_total) {
+            return true;
+        }
+        if enqueue {
+            if claim.bytes.load(Ordering::Relaxed) > 0 {
+                s.growth.push_back(claim.id);
+            } else if want < want_total {
+                s.partials.push_back(claim.id);
+            } else {
+                s.queue.push_back(claim.id);
+            }
+        }
+        false
+    }
+
+    /// [`try_grow`](Self::try_grow)'s rules, under the budget's lock.
+    fn grant(&self, s: &mut BudgetState, want: u64, want_total: u64) -> bool {
         let claim = &*self.0;
         let limit = claim.budget.limit;
-        let mut s = claim.budget.lock();
         let mine = claim.bytes.load(Ordering::Relaxed);
         if mine >= want {
             return true;
@@ -442,6 +453,7 @@ impl Reservation {
                 if s.starved == Some(claim.id) {
                     s.starved = None;
                     claim.budget.settled.notify_one();
+                    claim.budget.freed.notify_waiters();
                 }
                 return false;
             }
@@ -1937,9 +1949,7 @@ impl Pool {
             // Every finder is done: the logical lookup ends, once.
             self.requests.remove(&key);
             self.lookups -= 1;
-            if self.entries[&key].state == State::Lookup {
-                self.back_off(key);
-            }
+            self.stream_ended(key);
         }
     }
 
@@ -1956,7 +1966,21 @@ impl Pool {
     fn stream_deadline(&mut self, key: InfoHash) {
         self.requests.remove(&key);
         self.lookups -= 1;
-        if self.entries[&key].state == State::Lookup {
+        self.stream_ended(key);
+    }
+
+    /// A stream's lookup has ended (its slot already given back). A key
+    /// still waiting on it is ready if it has a peer left to try (one that
+    /// waited out a reservation, X-fetch-meta-reserve), and backs off
+    /// otherwise.
+    fn stream_ended(&mut self, key: InfoHash) {
+        let e = &self.entries[&key];
+        if e.state != State::Lookup {
+            return;
+        }
+        if e.has_untried() {
+            self.make_ready(key);
+        } else {
             self.back_off(key);
         }
     }
@@ -2484,11 +2508,10 @@ impl Pool {
             };
             self.stats.evicted_service[stage].fetch_add(1, Ordering::Relaxed);
         }
-        if e.state == State::Lookup {
-            self.requests.remove(&key);
-            self.lookups -= 1;
-        } else if self.requests.remove(&key).is_some() {
-            // A stream's lookup, while its key is ready or fetching.
+        // Every lookup counted holds a request, so the request decides: a
+        // stream that has already ended took its count with it, though the
+        // key may still read `Lookup`.
+        if self.requests.remove(&key).is_some() {
             self.lookups -= 1;
         }
         self.first_batch.remove(&key);
