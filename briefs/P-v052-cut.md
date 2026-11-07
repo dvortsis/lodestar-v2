@@ -1,7 +1,7 @@
 # P-v052-cut: cut release/v0.5.2 from main, map the delta, build the rc
 **Model:** Opus, with `/security-review` on any code it touches. A fresh Opus reviewer reads each PR.
 
-Runner brief, 2026-11-07T15:10Z. Slot 1. Track R step R5 (`docs/build-plan.md` §0.2 rung 1, §0.4 "v0.5.2").
+Runner brief, 2026-11-07T14:40Z. Slot 1. Track R step R5 (`docs/build-plan.md` §0.2 rung 1, §0.4 "v0.5.2").
 
 ## Read first
 - `docs/plan/2026-11-06-v052-feature-manifest.md` (the freeze list) and `docs/decisions/2026-11-06-P-v052-manifest.md`.

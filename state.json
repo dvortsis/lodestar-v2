@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T15:12Z",
+  "updated_at": "2026-11-07T14:44Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3632,12 +3632,14 @@
     "P-v052-cut": {
       "state": "running",
       "brief": "briefs/P-v052-cut.md",
-      "since": "2026-11-07T15:12Z"
+      "since": "2026-11-07T14:43Z",
+      "session": "session_01MMjhnABi9mwqkZULms8pjL"
     },
     "WK-15": {
       "state": "running",
       "brief": "briefs/WK-15.md",
-      "since": "2026-11-07T15:12Z"
+      "since": "2026-11-07T14:43Z",
+      "session": "session_01MMjhn9mqDCgbWNwmfQuB9V"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -4026,7 +4028,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 32,
-  "last_heartbeat": "2026-11-07T15:12Z",
+  "last_heartbeat": "2026-11-07T14:44Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -5689,8 +5691,8 @@
       "text": "#578 merged (e18fa870): main compiles again. All four sessions told to bring main in once. RULE for this batch: merge one at a time; before each next merge, check the PR's CI base includes the previous merge when both touch the lodestar or pipeline crates (#576, #580 both edit pipeline lib.rs Pipeline::start), else ask it to bring main in."
     },
     {
-      "id": "merges-1507",
-      "added": "2026-11-07T15:12Z",
+      "id": "merges-1444",
+      "added": "2026-11-07T14:44Z",
       "text": "#580 WK-9c merged (045d4a38) after local re-check against main 4c6d30d3 (pipeline clippy + 391 tests green). Slots 1,3 -> P-v052-cut (cut point 045d4a38, runner Q1 call), WK-15. Owner FYIs: WK-9c fail-closed unopened records; X-refetch-private backport recommendation. Next runner PR still owes: WK-9c notes wording, size reasons, FlareSolverr placement, ext:experiment-host false after cr-ab-comp-1, v0.5.1.md frontmatter rc4-delta cite."
     }
   ],
@@ -6387,15 +6389,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-07T15:12Z",
+    "updated": "2026-11-07T14:44Z",
     "items": [
       {
         "slot": 1,
         "slice": "P-v052-cut",
         "role": "build",
         "agent": "claude",
-        "doing": "launching: delta report 63a2c6df..045d4a38, G1-G4 tests, collector 409; cut release/v0.5.2 at 045d4a38; rc.1 PR",
-        "since": "2026-11-07T15:12Z"
+        "doing": "session_01MMjhnABi9mwqkZULms8pjL: delta report 63a2c6df..045d4a38, G1-G4 tests, collector 409; cut release/v0.5.2 at 045d4a38; rc.1 PR",
+        "since": "2026-11-07T14:43Z"
       },
       {
         "slot": 2,
@@ -6410,8 +6412,8 @@
         "slice": "WK-15",
         "role": "build",
         "agent": "claude",
-        "doing": "launching: Insights worker dimension, marginal gain, fleet summary",
-        "since": "2026-11-07T15:12Z"
+        "doing": "session_01MMjhn9mqDCgbWNwmfQuB9V: Insights worker dimension, marginal gain, fleet summary",
+        "since": "2026-11-07T14:43Z"
       },
       {
         "slot": 4,
