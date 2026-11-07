@@ -30,17 +30,19 @@
 	// Counts the PATCH replies taken in: a list read that started before the latest reply is older
 	// than it, so its answer is dropped instead of undoing that change.
 	let replies = 0;
-	type Dialog = { kind: 'consent' | 'purge'; id: number } | null;
+	type Dialog = { kind: 'consent' | 'purge' | 'config'; id: number } | null;
 	let dialog = $state.raw<Dialog>(null);
 	let dialogOpen = $state(false);
 	const target = $derived(dialog ? (sources?.find((x) => x.id === dialog!.id) ?? null) : null);
 	// Each dialog's code is fetched on first use; until it arrives the screen stays as it is.
 	let ConsentDialog = $state.raw<typeof import('./ConsentDialog.svelte').default | null>(null);
 	let PurgeDialog = $state.raw<typeof import('./PurgeDialog.svelte').default | null>(null);
+	let ConfigDialog = $state.raw<typeof import('./ConfigDialog.svelte').default | null>(null);
 	async function show(kind: NonNullable<Dialog>['kind'], s: Source) {
 		try {
 			const root = await import('./dialogs-root');
 			if (kind === 'consent') ConsentDialog ??= await root.consentDialog();
+			else if (kind === 'config') ConfigDialog ??= await root.configDialog();
 			else PurgeDialog ??= await root.purgeDialog();
 		} catch {
 			problem = m.sources_error_network();
@@ -115,13 +117,22 @@
 {/if}
 
 {#if target && dialog}
-	{#if dialog.kind === 'consent' && ConsentDialog && target.consent !== 'none' && target.consent !== 'account'}
+	{#if dialog.kind === 'consent' && ConsentDialog && target.consent !== 'none'}
 		<ConsentDialog
 			bind:open={dialogOpen}
 			source={target}
 			onenable={(body) => apply(target, { enabled: true, ...body })}
 			onstale={load}
+			onsaved={load}
 		/>
+	{:else if dialog.kind === 'config' && ConfigDialog}
+		{#key target.id}
+			<ConfigDialog
+				bind:open={dialogOpen}
+				source={target}
+				onsave={(config) => apply(target, { config: config as Record<string, never> })}
+			/>
+		{/key}
 	{:else if dialog.kind === 'purge' && PurgeDialog}
 		{#key target.id}
 			<PurgeDialog bind:open={dialogOpen} source={target} onfinished={load} />
@@ -161,6 +172,7 @@
 								onpriority={(priority: Priority) => change(s, { priority })}
 								onsetup={() => show('consent', s)}
 								onpurge={() => show('purge', s)}
+								onsettings={() => show('config', s)}
 							/>
 						{/each}
 					</ul>
