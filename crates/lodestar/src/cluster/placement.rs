@@ -33,7 +33,8 @@ use lodestar_sources::Distribution;
 /// Q9): `ShardedKeyspace` is the DHT's, and the DHT is built in, not a
 /// plugin; `sharded(unit)`, singleton and account placement wait for v0.8
 /// (build-plan P6). A new variant has to be decided here.
-// The sources' placement (PL-3) asks it; its tests do today.
+// The sources' placement (PL-3) asks it; its tests do today. WK-10, which
+// wires placement into `serve`, removes this `allow`.
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn runs_on_worker(d: Distribution) -> bool {
     match d {
@@ -136,6 +137,14 @@ impl Placement {
         self.state().planner.set_settings(worker, s)
     }
 
+    /// A worker was revoked or removed: its pin and settings go too
+    /// (WK-14). A worker that only disconnects keeps them.
+    pub fn forget(&self, worker: WorkerId) -> Option<Replan> {
+        let mut st = self.state();
+        st.addrs.remove(&worker);
+        st.planner.forget(worker)
+    }
+
     pub fn set_versions(&self, dict: u64, filter: u64) -> Option<Replan> {
         self.state().planner.set_versions(dict, filter)
     }
@@ -232,9 +241,9 @@ mod tests {
         }
     }
 
-    const HOME: IpAddr = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1));
-    const AWAY: IpAddr = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 2));
-    const HOME_V6: IpAddr = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
+    const HOME: IpAddr = IpAddr::V4(Ipv4Addr::new(81, 2, 69, 1));
+    const AWAY: IpAddr = IpAddr::V4(Ipv4Addr::new(81, 2, 69, 2));
+    const HOME_V6: IpAddr = IpAddr::V6(Ipv6Addr::new(0x2a00, 0x1450, 0, 0, 0, 0, 0, 1));
 
     #[test]
     fn no_source_plugin_runs_on_a_worker() {
@@ -366,6 +375,37 @@ mod tests {
     }
 
     #[test]
+    fn a_reconnecting_worker_keeps_its_pin_and_budget() {
+        let p = Placement::new(true);
+        p.set_coordinator_ips(vec![HOME]);
+        p.update(&[status(3, true, false, vec![AWAY])]);
+        p.pin(WorkerId(3), DhtPin::Off);
+        p.set_settings(
+            WorkerId(3),
+            WorkerSettings {
+                pool_cap: 1234,
+                ..WorkerSettings::default()
+            },
+        );
+        // One heartbeat timeout: disconnected, then back.
+        p.update(&[status(3, false, false, vec![AWAY])]).unwrap();
+        let mut sent = Vec::new();
+        p.sync_with(&[status(3, true, false, vec![AWAY])], |w, m| {
+            sent.push((w, m));
+            Ok(())
+        });
+        let [(_, ToWorker::Assign(m))] = &sent[..] else {
+            panic!("{sent:?}")
+        };
+        let a = Assignment::from_message(m).unwrap().unwrap();
+        assert_eq!((a.dht, a.pool_cap), (None, 1234));
+        // Revoked: forgotten.
+        p.forget(WorkerId(3));
+        p.update(&[status(3, true, false, vec![AWAY])]).unwrap();
+        assert_eq!(p.assignment(WorkerId(3)).unwrap().pool_cap, 50_000);
+    }
+
+    #[test]
     fn pins_settings_and_versions_reach_the_assignment() {
         let p = Placement::new(true);
         p.set_coordinator_ips(vec![HOME]);
@@ -389,6 +429,9 @@ mod tests {
             (r.workers[0].1.dict_version, r.workers[0].1.filter_version),
             (2, 5)
         );
-        assert!(p.pin(WorkerId(9), DhtPin::Off).is_none(), "not a member");
+        assert!(
+            p.pin(WorkerId(9), DhtPin::Off).is_none(),
+            "not connected: no plan"
+        );
     }
 }

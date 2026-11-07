@@ -18,9 +18,9 @@ use proptest::prelude::*;
 /// nothing about where a remote peer sees the member from.
 fn addr(i: u8) -> IpAddr {
     match i {
-        6 => IpAddr::V6(Ipv4Addr::new(192, 0, 2, 0).to_ipv6_mapped()),
+        6 => IpAddr::V6(Ipv4Addr::new(81, 2, 69, 0).to_ipv6_mapped()),
         7 => IpAddr::V4(Ipv4Addr::new(10, 0, 0, 7)),
-        n => IpAddr::V4(Ipv4Addr::new(192, 0, 2, n)),
+        n => IpAddr::V4(Ipv4Addr::new(81, 2, 69, n)),
     }
 }
 
@@ -195,7 +195,7 @@ proptest! {
 
     #[test]
     fn replans_carry_new_revisions_and_valid_assignments(
-        ops in proptest::collection::vec((0u8..9, 1u32..12, proptest::collection::vec(0u8..7, 0..2)), 1..60),
+        ops in proptest::collection::vec((0u8..10, 1u32..12, proptest::collection::vec(0u8..7, 0..2)), 1..60),
     ) {
         let mut p = Planner::new(true);
         p.set_coordinator_ips(vec![addr(0)]);
@@ -211,6 +211,7 @@ proptest! {
                 5 => p.set_settings(w, WorkerSettings { pool_cap: w.0 * 1000, ..WorkerSettings::default() }),
                 6 => p.set_versions(u64::from(w.0), u64::from(w.0) + 1),
                 7 => p.set_coordinator_ips(ips.into_iter().map(addr).collect()),
+                8 => p.forget(w),
                 _ => p.leave(w),
             };
             if let Some(r) = r {

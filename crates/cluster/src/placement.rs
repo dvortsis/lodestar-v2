@@ -167,13 +167,20 @@ pub fn plan(members: &[Member], per_peer_ip: u8) -> Vec<(MemberId, Share)> {
         let n = group.len();
         let limit = usize::from(per_peer_ip);
         let peer_groups = n.div_ceil(limit);
+        // At most `MAX_WORKERS` + 1 members, so this always fits; a larger
+        // input is refused rather than truncated into overlapping groups.
+        let Ok(groups_u16) = u16::try_from(peer_groups) else {
+            debug_assert!(false, "{n} members on one IP");
+            continue;
+        };
         for (j, &i) in group.iter().enumerate() {
             let pg = j % peer_groups;
             let size = (0..n).filter(|x| x % peer_groups == pg).count();
             let rank = j / peer_groups;
             let share = limit / size + usize::from(rank < limit % size);
             shares[i].politeness = Politeness {
-                peer_ip_groups: peer_groups as u16,
+                peer_ip_groups: groups_u16,
+                // pg < peer_groups, which fits.
                 peer_ip_group: pg as u16,
                 per_peer_ip: share as u8,
                 bep51_interval_scale: dht_in_group[g].clamp(1, MAX_DHT_PER_IP) as u8,
@@ -185,12 +192,14 @@ pub fn plan(members: &[Member], per_peer_ip: u8) -> Vec<(MemberId, Share)> {
 }
 
 /// Whether a remote peer could see a member at `ip`: not private, CGNAT,
-/// loopback, link-local, unique-local, unspecified, multicast or
-/// broadcast. (Documentation ranges count as public, for tests.)
+/// loopback, link-local, unique-local, site-local, unspecified,
+/// multicast, broadcast, reserved (240/4), benchmarking (198.18/15),
+/// IETF protocol (192.0.0/24), documentation or discard-only (100::/64).
+/// 6to4, Teredo and NAT64 forms aren't unwrapped: they count as public.
 pub fn is_public(ip: IpAddr) -> bool {
     match ip.to_canonical() {
         IpAddr::V4(a) => {
-            let [o0, o1, ..] = a.octets();
+            let [o0, o1, o2, _] = a.octets();
             !(a.is_private()
                 || a.is_loopback()
                 || a.is_link_local()
@@ -198,15 +207,24 @@ pub fn is_public(ip: IpAddr) -> bool {
                 || a.is_broadcast()
                 || a.is_multicast()
                 || o0 == 0
-                || (o0 == 100 && (64..128).contains(&o1)))
+                || o0 >= 240
+                || (o0 == 100 && (64..128).contains(&o1))
+                || (o0 == 198 && (o1 == 18 || o1 == 19))
+                || (o0, o1, o2) == (192, 0, 0)
+                || (o0, o1, o2) == (192, 0, 2)
+                || (o0, o1, o2) == (198, 51, 100)
+                || (o0, o1, o2) == (203, 0, 113))
         }
         IpAddr::V6(a) => {
-            let seg0 = a.segments()[0];
+            let seg = a.segments();
             !(a.is_loopback()
                 || a.is_unspecified()
                 || a.is_multicast()
-                || (seg0 & 0xfe00) == 0xfc00
-                || (seg0 & 0xffc0) == 0xfe80)
+                || (seg[0] & 0xfe00) == 0xfc00
+                || (seg[0] & 0xffc0) == 0xfe80
+                || (seg[0] & 0xffc0) == 0xfec0
+                || (seg[0], seg[1]) == (0x2001, 0x0db8)
+                || seg[..4] == [0x0100, 0, 0, 0])
         }
     }
 }
@@ -282,11 +300,21 @@ fn group_index(groups: &[Vec<usize>], n: usize) -> Vec<usize> {
     out
 }
 
+/// The most remote workers a planner takes. Far above any real fleet; it
+/// keeps every per-IP count within the payload's `u16`s.
+pub const MAX_WORKERS: usize = 4096;
+
+/// What the admin set for a worker. It outlives the worker's session, so a
+/// worker that reconnects keeps its pin and budget (cleared by `forget`).
+#[derive(Debug, Clone, Copy, Default)]
+struct Prefs {
+    settings: WorkerSettings,
+    pin: DhtPin,
+}
+
 #[derive(Debug, Clone, Default)]
 struct WorkerEntry {
     ips: Vec<IpAddr>,
-    settings: WorkerSettings,
-    pin: DhtPin,
     /// Finishing its leases before it stops (§19.6): no DHT and no new
     /// work, but it still fetches, so it keeps its politeness share.
     draining: bool,
@@ -303,6 +331,7 @@ pub struct Planner {
     dict_version: u64,
     filter_version: u64,
     workers: BTreeMap<WorkerId, WorkerEntry>,
+    prefs: BTreeMap<WorkerId, Prefs>,
     coordinator_share: Share,
     assignments: BTreeMap<WorkerId, Assignment>,
 }
@@ -336,6 +365,7 @@ impl Planner {
             dict_version: 0,
             filter_version: 0,
             workers: BTreeMap::new(),
+            prefs: BTreeMap::new(),
             coordinator_share: Share {
                 dht: coordinator_dht.then_some(ShardSpec::FULL),
                 politeness: Politeness::ALONE,
@@ -362,21 +392,33 @@ impl Planner {
         self.workers.keys().copied()
     }
 
-    /// A worker joined (or reconnected) with the addresses it reported.
-    /// The built-in worker is the coordinator itself and is ignored.
+    /// A worker joined (or reconnected) with the addresses it reported. It
+    /// keeps the pin and settings set for it before. The built-in worker is
+    /// the coordinator itself and is ignored, as is a join past
+    /// [`MAX_WORKERS`].
     pub fn join(&mut self, worker: WorkerId, ips: Vec<IpAddr>) -> Option<Replan> {
-        if worker == WorkerId::LOCAL {
+        if worker == WorkerId::LOCAL
+            || (!self.workers.contains_key(&worker) && self.workers.len() >= MAX_WORKERS)
+        {
             return None;
         }
         self.workers.entry(worker).or_default().ips = ips;
         Some(self.replan())
     }
 
-    /// A worker left (disconnected, drained, revoked).
+    /// A worker's session ended (disconnected, drained). Its pin and
+    /// settings are kept for when it reconnects.
     pub fn leave(&mut self, worker: WorkerId) -> Option<Replan> {
         self.workers.remove(&worker)?;
         self.assignments.remove(&worker);
         Some(self.replan())
+    }
+
+    /// A worker is gone for good (revoked or removed): its pin and
+    /// settings are dropped too.
+    pub fn forget(&mut self, worker: WorkerId) -> Option<Replan> {
+        self.prefs.remove(&worker);
+        self.leave(worker)
     }
 
     /// A worker started or stopped draining. While it drains it runs no
@@ -391,20 +433,37 @@ impl Planner {
         Some(self.replan())
     }
 
-    /// Pins a worker's DHT on (`Auto`) or off.
+    /// Pins a worker's DHT on (`Auto`) or off. It's kept across sessions;
+    /// a plan is made only while the worker is connected. A worker id that
+    /// was never set and has no session stores nothing past
+    /// [`MAX_WORKERS`].
     pub fn pin(&mut self, worker: WorkerId, pin: DhtPin) -> Option<Replan> {
-        self.workers.get_mut(&worker)?.pin = pin;
-        Some(self.replan())
+        self.prefs_mut(worker)?.pin = pin;
+        self.workers.contains_key(&worker).then(|| self.replan())
     }
 
-    /// A worker's budget, intensity and pool cap (its pin is kept). A pool
+    fn prefs_mut(&mut self, worker: WorkerId) -> Option<&mut Prefs> {
+        if worker == WorkerId::LOCAL
+            || (!self.prefs.contains_key(&worker) && self.prefs.len() >= MAX_WORKERS)
+        {
+            return None;
+        }
+        Some(self.prefs.entry(worker).or_default())
+    }
+
+    fn prefs(&self, worker: WorkerId) -> Prefs {
+        self.prefs.get(&worker).copied().unwrap_or_default()
+    }
+
+    /// A worker's budget, intensity and pool cap (its pin is kept, and
+    /// both are kept across sessions, as for [`pin`](Self::pin)). A pool
     /// cap of 0 is taken as 1, one over the maximum as the maximum, and the
     /// CPU share as 1–1000 ‰.
     pub fn set_settings(&mut self, worker: WorkerId, mut s: WorkerSettings) -> Option<Replan> {
         s.pool_cap = s.pool_cap.clamp(1, crate::assign::MAX_POOL_CAP);
         s.budget.cpu_permille = s.budget.cpu_permille.clamp(1, 1000);
-        self.workers.get_mut(&worker)?.settings = s;
-        Some(self.replan())
+        self.prefs_mut(worker)?.settings = s;
+        self.workers.contains_key(&worker).then(|| self.replan())
     }
 
     /// The coordinator's own public addresses (its DHT's address vote).
@@ -435,7 +494,7 @@ impl Planner {
         members.extend(self.workers.iter().map(|(id, w)| Member {
             id: MemberId::Worker(*id),
             ips: w.ips.clone(),
-            dht: w.pin == DhtPin::Auto && !w.draining,
+            dht: self.prefs(*id).pin == DhtPin::Auto && !w.draining,
         }));
         let mut out = Vec::with_capacity(self.workers.len());
         self.assignments.clear();
@@ -443,7 +502,7 @@ impl Planner {
             match id {
                 MemberId::Coordinator => self.coordinator_share = share,
                 MemberId::Worker(w) => {
-                    let s = self.workers[&w].settings;
+                    let s = self.prefs(w).settings;
                     let a = Assignment {
                         revision: self.revision,
                         dht: share.dht,
@@ -477,7 +536,7 @@ mod tests {
     use super::*;
 
     fn ip(n: u8) -> IpAddr {
-        IpAddr::V4(Ipv4Addr::new(198, 51, 100, n))
+        IpAddr::V4(Ipv4Addr::new(81, 2, 69, n))
     }
 
     #[test]
@@ -602,13 +661,97 @@ mod tests {
         ] {
             assert!(!is_public(a), "{a}");
         }
-        assert!(is_public(ip(1)) && is_public("2001:db8::1".parse().unwrap()));
+        assert!(is_public(ip(1)) && is_public("2a00:1450::1".parse().unwrap()));
         let mut p = Planner::new(true);
         p.set_coordinator_ips(vec![ip(1)]);
         let r = p.join(WorkerId(1), vec![lan]).unwrap();
         assert_eq!(
             r.workers[0].1.politeness.per_peer_ip, 1,
             "planned as shared"
+        );
+    }
+
+    #[test]
+    fn is_public_refuses_every_special_range() {
+        for (a, public) in [
+            ("8.8.8.8", true),
+            ("81.2.69.1", true),
+            ("10.1.2.3", false),
+            ("172.16.0.1", false),
+            ("192.168.1.1", false),
+            ("100.64.0.1", false),
+            ("100.127.255.255", false),
+            ("100.128.0.1", true),
+            ("127.0.0.1", false),
+            ("169.254.1.1", false),
+            ("0.1.2.3", false),
+            ("224.0.0.1", false),
+            ("240.0.0.1", false),
+            ("255.255.255.255", false),
+            ("198.18.0.1", false),
+            ("198.19.255.255", false),
+            ("198.20.0.1", true),
+            ("192.0.0.8", false),
+            ("192.0.2.1", false),
+            ("198.51.100.1", false),
+            ("203.0.113.1", false),
+            ("2a00:1450::1", true),
+            ("::1", false),
+            ("::", false),
+            ("ff02::1", false),
+            ("fd00::1", false),
+            ("fe80::1", false),
+            ("fec0::1", false),
+            ("2001:db8::1", false),
+            ("100::1", false),
+            ("100:0:0:1::1", true),
+            ("::ffff:10.0.0.1", false),
+            ("::ffff:8.8.8.8", true),
+        ] {
+            assert_eq!(is_public(a.parse().unwrap()), public, "{a}");
+        }
+    }
+
+    #[test]
+    fn pins_and_settings_survive_a_reconnect_until_forgotten() {
+        let mut p = Planner::new(true);
+        p.set_coordinator_ips(vec![ip(1)]);
+        p.join(WorkerId(3), vec![ip(2)]);
+        p.pin(WorkerId(3), DhtPin::Off);
+        let capped = WorkerSettings {
+            budget: Budget {
+                up_kbps: 500,
+                ..Budget::default()
+            },
+            ..WorkerSettings::default()
+        };
+        p.set_settings(WorkerId(3), capped);
+        p.leave(WorkerId(3)).unwrap();
+        let r = p.join(WorkerId(3), vec![ip(2)]).unwrap();
+        assert_eq!(r.workers[0].1.dht, None, "still pinned off");
+        assert_eq!(r.workers[0].1.budget.up_kbps, 500, "still capped");
+        // Set while it's away: no plan, kept for its next join.
+        p.leave(WorkerId(3));
+        assert!(p.pin(WorkerId(3), DhtPin::Auto).is_none());
+        let r = p.join(WorkerId(3), vec![ip(2)]).unwrap();
+        assert!(r.workers[0].1.dht.is_some());
+        // Forgotten (revoked): a later join starts from the defaults.
+        p.forget(WorkerId(3)).unwrap();
+        let r = p.join(WorkerId(3), vec![ip(2)]).unwrap();
+        assert_eq!(r.workers[0].1.budget, Budget::default());
+        assert!(p.pin(WorkerId::LOCAL, DhtPin::Off).is_none());
+    }
+
+    #[test]
+    fn joins_past_the_cap_are_refused() {
+        let mut p = Planner::new(true);
+        for w in 1..=MAX_WORKERS as u32 {
+            p.workers.insert(WorkerId(w), WorkerEntry::default());
+        }
+        assert!(p.join(WorkerId(MAX_WORKERS as u32 + 1), vec![]).is_none());
+        assert!(
+            p.join(WorkerId(1), vec![ip(9)]).is_some(),
+            "a member rejoins"
         );
     }
 
