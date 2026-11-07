@@ -352,6 +352,11 @@ impl Services {
         // The cluster port (WK-1, §19.6, plan Q3): until "Allow workers" is
         // on, nothing is bound and no cluster CA is opened or created. A
         // fixture is served offline, so never there.
+        // The one planner (WK-14): the cluster tick syncs it (WK-10), and
+        // `/workers` saves pins and budgets into it.
+        let placement = Arc::new(crate::cluster::placement::Placement::new(
+            dht_stats.is_some(),
+        ));
         let cluster = crate::cluster::Cluster::start(crate::cluster::Wiring {
             db: config.db_path(),
             store: config.store_config(),
@@ -363,15 +368,19 @@ impl Services {
                 ..config.cluster.clone()
             },
             clock: Arc::new(lodestar_cluster::SystemClock),
+            placement: placement.clone(),
+            fleet: Some(crate::cluster::serve::Fleet {
+                stored: Arc::new(pipeline.monitor()),
+                filter: filter.clone(),
+                seal_key: key,
+            }),
         })
         .await?;
         // `/workers` (WK-14): the planner WK-10's tick syncs, with saved
         // pins, budgets and pauses re-applied.
         let workers = crate::cluster::ops::Workers::open(
             cluster.handle(),
-            Arc::new(crate::cluster::placement::Placement::new(
-                dht_stats.is_some(),
-            )),
+            placement,
             &config.db_path(),
             config.store_config(),
         )?;

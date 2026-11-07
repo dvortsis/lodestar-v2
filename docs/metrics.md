@@ -918,6 +918,19 @@ See [the decision](decisions/2026-11-06-WK-1.md). Every series renders on every 
 | `cluster_start_failures_total` | counter | Times turning the port on failed (binding it or opening the PKI). |
 | `cluster_store_check_errors_total` | counter | Claimed keys whose "already stored?" read failed. They're granted; the commit refuses a duplicate. |
 
+### The cluster tick (WK-10a, 2026-11-07)
+Every second while the port is served, the coordinator plans the fleet and sends each remote worker its assignment, the workers' have-filter and the filter and dictionary snapshots. With no remote worker connected, nothing is built.
+
+| Series | Type | Meaning |
+|---|---|---|
+| `cluster_have_rebuilds_total` | counter | Times the workers' have-filter was built or rebuilt from the store: once when the first remote worker connects, then each time it fills. |
+| `cluster_have_rebuild_failures_total` | counter | Have-filter rebuilds whose store scan failed. The old filter stays, and the next tick tries again. |
+| `cluster_have_filter_bytes` | gauge | Memory the workers' have-filter holds, two filters' worth during a rebuild. 0 until a remote worker connects. |
+| `cluster_have_filter_at_cap` | gauge | 1 while the have-filter is at the largest size a worker accepts and full: workers claim more stored keys, which the coordinator answers itself. The `cluster.have_at_cap` log line says so once each time it turns on. |
+| `cluster_snapshot_installs_total` | counter | Filter and dictionary snapshots built for remote workers: on a new filter engine, a new UTC day (the wire key) or a new dictionary. |
+| `cluster_snapshot_install_failures_total` | counter | Snapshot builds or reads that failed; workers keep the snapshots they have. See the `cluster.snapshot_failed` log line, whose error names the cap passed. |
+| `cluster_snapshot_acks_dropped_total` | counter | Snapshot acknowledgements dropped because the tick's queue was full. That transfer starts over after 60 s without progress. |
+
 ## Remote intake (WK-9, 2026-11-07)
 
 See the decisions for [WK-9](decisions/2026-11-07-WK-9.md) and [WK-9b](decisions/2026-11-07-WK-9b.md). Remote workers' `Results` and `Counters` as the coordinator takes them, grant backpressure, and parked keys. Every series renders on every install; on a single machine they're all 0. No series carries a worker id, name or address, and every `outcome` value is from the fixed list below.

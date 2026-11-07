@@ -916,6 +916,28 @@ lodestar_log::catalogue! {
         message: "The cluster port couldn't open; workers can't connect",
         fields: { step: Label, error: Error },
     }
+    /// The workers' have-filter reached the largest size a worker accepts
+    /// and is full: it isn't rebuilt larger, so false positives climb (a
+    /// false positive only costs a claim the coordinator answers from the
+    /// store). Said once each time it turns true (WK-3, WK-10).
+    CLUSTER_HAVE_AT_CAP {
+        id: "cluster.have_at_cap",
+        component: Workers,
+        level: Warn,
+        message: "The workers' have-filter is full at its largest size; workers claim more stored keys",
+        fields: { stored: Size },
+    }
+    /// The filter or dictionary snapshot for remote workers couldn't be
+    /// built (the store is past one of its caps, or the read failed).
+    /// Workers keep the snapshots they have. The error names a cap, never
+    /// a rule (WK-8, WK-10). Said once per failed build.
+    CLUSTER_SNAPSHOT_FAILED {
+        id: "cluster.snapshot_failed",
+        component: Workers,
+        level: Error,
+        message: "The filter snapshot for remote workers couldn't be built; they keep the last one",
+        fields: { error: Error },
+    }
 
     // ── Workers API (WK-14, §19.6, §19.7) ──
     /// A worker connected while the planner already had 4,096 workers: it

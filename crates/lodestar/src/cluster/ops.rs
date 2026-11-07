@@ -615,6 +615,7 @@ mod tests {
 
     async fn coordinator(dir: &Path, enabled: bool) -> Coord {
         crate::test_log::install();
+        let placement = Arc::new(Placement::new(true));
         let cluster = Cluster::start(Wiring {
             db: dir.join("lodestar.db"),
             store: StoreConfig::default(),
@@ -627,6 +628,8 @@ mod tests {
                 ..config::Cluster::default()
             },
             clock: Arc::new(SystemClock),
+            placement: placement.clone(),
+            fleet: None,
         })
         .await
         .unwrap();
@@ -640,7 +643,7 @@ mod tests {
         }
         let workers = Workers::open(
             h,
-            Arc::new(Placement::new(true)),
+            placement,
             &dir.join("lodestar.db"),
             StoreConfig::default(),
         )

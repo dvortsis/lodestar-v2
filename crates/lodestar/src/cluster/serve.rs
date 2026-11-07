@@ -34,24 +34,34 @@
 //! server is rebuilt on the key file as it is now. `serve` has no rotation
 //! flow yet; whichever slice adds one calls this.
 
+use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
+use std::time::{Duration, Instant};
 
-use lodestar_cluster::{
-    Clock, ClusterError, ClusterServer, Coordinator, FleetSnapshot, LeaseAuthority, Pki,
-    ServerConfig, ServerHooks, StoredKeys,
+use lodestar_cluster::proto::{
+    HintItem, Outcome, Payload, ReverifyReply, SnapshotAck, SnapshotKind,
 };
+use lodestar_cluster::{
+    Clock, ClusterError, ClusterServer, Coordinator, FleetSnapshot, InboundSink, Lease,
+    LeaseAuthority, Pki, ServerConfig, ServerHooks, StoredKeys, WorkerId,
+};
+use lodestar_filter::Handle;
 use lodestar_integrations::SecretStore;
 use lodestar_metainfo::InfoHash;
-use lodestar_pipeline::remote::RemoteIntake;
+use lodestar_pipeline::remote::{RemoteIntake, RemoteSink};
+use lodestar_pipeline::wire::filter_snapshot::{WireKey, WireKeys};
+use lodestar_pipeline::{Have, HaveObserver, Monitor};
 use lodestar_store::{Store, StoreConfig};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
+use super::filter::{WorkerSnapshots, day_of, read_dict, read_snapshot, wire_key};
+use super::have::WorkerFilter;
+use super::placement::Placement;
 use crate::config;
 use crate::logging::events;
 
@@ -74,14 +84,61 @@ pub struct Wiring {
     pub remote: Option<Arc<RemoteIntake>>,
     pub settings: config::Cluster,
     pub clock: Arc<dyn Clock>,
+    /// The one planner (`Workers::placement`, WK-14): the tick syncs it.
+    pub placement: Arc<Placement>,
+    /// What the tick sends remote workers to judge with and check against
+    /// (WK-3, WK-8). Without it no snapshot is built or sent and no
+    /// sealed record opens.
+    pub fleet: Option<Fleet>,
 }
 
 impl std::fmt::Debug for Wiring {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Wiring")
             .field("listen", &self.settings.listen)
+            .field("fleet", &self.fleet.is_some())
             .finish_non_exhaustive()
     }
+}
+
+/// The coordinator's stored set, as the workers' have-filter needs it.
+pub trait Stored: Send + Sync + 'static {
+    /// Stored swarm hashes (`Have::len`, not torrents).
+    fn swarm_hashes(&self) -> u64;
+    /// Sets the one insert observer (`Have::observe`).
+    fn observe(&self, observer: Arc<dyn HaveObserver>) -> bool;
+}
+
+impl Stored for Monitor {
+    fn swarm_hashes(&self) -> u64 {
+        self.have().len()
+    }
+
+    fn observe(&self, observer: Arc<dyn HaveObserver>) -> bool {
+        self.have().observe(observer)
+    }
+}
+
+impl Stored for Have {
+    fn swarm_hashes(&self) -> u64 {
+        self.len()
+    }
+
+    fn observe(&self, observer: Arc<dyn HaveObserver>) -> bool {
+        Have::observe(self, observer)
+    }
+}
+
+/// What remote workers are sent and checked against (WK-3, WK-8, WK-10).
+#[derive(Clone)]
+pub struct Fleet {
+    pub stored: Arc<dyn Stored>,
+    /// The commit's filter engine: its version says when the filter
+    /// snapshot is due again.
+    pub filter: Arc<Handle>,
+    /// `seal.key`: the day's wire keys are derived from it (WK-8). It
+    /// never leaves this process.
+    pub seal_key: [u8; 32],
 }
 
 /// The server configuration `[cluster]` gives (its numbers were checked at
@@ -227,6 +284,390 @@ pub(crate) fn reseal_pki(w: &Wiring) -> Result<bool, ClusterError> {
     Ok(true)
 }
 
+/// How often the cluster tick runs (WK-10): placement, the have-filter and
+/// the filter and dictionary snapshots.
+pub const TICK: Duration = Duration::from_secs(1);
+/// Snapshot acknowledgements waiting for the tick. Each worker has at most
+/// two windows of chunks in flight, so honest workers never fill it; past
+/// it an acknowledgement is dropped and that transfer restarts after its
+/// stall.
+const ACK_QUEUE: usize = 4096;
+/// A worker whose clock is this far past UTC midnight seals under the new
+/// day's key a little before the coordinator's day turns (WK-9c): the
+/// clock-skew tolerance (`CLOCK_SKEW_SECS`).
+const NEXT_DAY_WITHIN: i64 = lodestar_cluster::CLOCK_SKEW_SECS;
+
+/// The keys sealed records open with at `now`: yesterday's (a spool holds a
+/// record for at most 24 h), today's, and tomorrow's within the clock-skew
+/// tolerance of midnight, so an honest worker a few seconds ahead isn't
+/// refused (the WK-9c choice, recorded in the WK-10 decisions file).
+pub fn open_keys(seal_key: &[u8; 32], now: i64) -> Vec<WireKey> {
+    let today = day_of(now);
+    let mut days: Vec<u32> = (today.saturating_sub(super::filter::KEY_DAYS)..=today).collect();
+    let soon = day_of(now.saturating_add(NEXT_DAY_WITHIN));
+    if soon > today {
+        days.push(soon);
+    }
+    days.into_iter().map(|d| wire_key(seal_key, d)).collect()
+}
+
+/// The coordinator's per-process cluster state the tick drives: one
+/// workers' have-filter (its observer can be set only once), one set of
+/// snapshots, the counters.
+struct Tick {
+    placement: Arc<Placement>,
+    fleet: Option<Fleet>,
+    have: Arc<WorkerFilter>,
+    /// The observer is set the first time a server is built.
+    observing: AtomicBool,
+    /// Taken out while a read or an install runs on a blocking thread.
+    snapshots: Mutex<Option<WorkerSnapshots>>,
+    rebuilding: Arc<AtomicBool>,
+    /// The have-filter reached its largest size; said once.
+    at_cap: AtomicBool,
+    install_failures: AtomicU64,
+    rebuild_failures: Arc<AtomicU64>,
+    have_rebuilds: Arc<AtomicU64>,
+    snapshot_installs: AtomicU64,
+    acks_dropped: AtomicU64,
+    /// One read connection for the snapshots, opened on first use and
+    /// dropped after an error.
+    reader: Mutex<Option<Store>>,
+    db: PathBuf,
+    store: StoreConfig,
+}
+
+impl Tick {
+    fn new(w: &Wiring) -> Tick {
+        Tick {
+            placement: w.placement.clone(),
+            fleet: w.fleet.clone(),
+            reader: Mutex::new(None),
+            db: w.db.clone(),
+            store: w.store.clone(),
+            have: Arc::new(WorkerFilter::new()),
+            observing: AtomicBool::new(false),
+            snapshots: Mutex::new(Some(WorkerSnapshots::new())),
+            rebuilding: Arc::new(AtomicBool::new(false)),
+            at_cap: AtomicBool::new(false),
+            install_failures: AtomicU64::new(0),
+            rebuild_failures: Arc::new(AtomicU64::new(0)),
+            have_rebuilds: Arc::new(AtomicU64::new(0)),
+            snapshot_installs: AtomicU64::new(0),
+            acks_dropped: AtomicU64::new(0),
+        }
+    }
+
+    fn snapshots(&self) -> std::sync::MutexGuard<'_, Option<WorkerSnapshots>> {
+        self.snapshots
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Runs `f` on the snapshots' read connection (blocking). `None` if it
+    /// can't open or `f` fails; the connection is opened again next time.
+    fn with_reader<T>(
+        &self,
+        f: impl FnOnce(&Store) -> Result<T, lodestar_store::Error>,
+    ) -> Option<T> {
+        let mut reader = self.reader.lock().unwrap_or_else(PoisonError::into_inner);
+        if reader.is_none() {
+            *reader = Store::open_reader(&self.db, self.store.clone()).ok();
+        }
+        let out = f(reader.as_ref()?);
+        if out.is_err() {
+            *reader = None;
+        }
+        out.ok()
+    }
+
+    /// [`with_reader`](Self::with_reader) on a blocking thread.
+    async fn read<T: Send + 'static>(
+        self: &Arc<Self>,
+        f: fn(&Store) -> Result<T, lodestar_store::Error>,
+    ) -> Option<T> {
+        let t = self.clone();
+        tokio::task::spawn_blocking(move || t.with_reader(f))
+            .await
+            .ok()
+            .flatten()
+    }
+
+    /// Once workers are allowed: every insert reaches the workers' filter
+    /// from now on (until a worker connects that costs one atomic load).
+    fn observe(&self) {
+        if let Some(f) = &self.fleet
+            && !self.observing.swap(true, Ordering::AcqRel)
+        {
+            f.stored.observe(self.have.clone());
+        }
+    }
+}
+
+/// The server's inbound sink: the pipeline's intake (WK-9), with snapshot
+/// acknowledgements routed to the tick (WK-10). Nothing here blocks: the
+/// have-filter's `ack` takes only its own mutex, and the other kinds are
+/// queued for the tick.
+struct Sink {
+    remote: Option<Arc<RemoteSink>>,
+    have: Arc<WorkerFilter>,
+    acks: mpsc::Sender<(WorkerId, SnapshotAck)>,
+    server: OnceLock<Weak<ClusterServer>>,
+    tick: Weak<Tick>,
+}
+
+impl InboundSink for Sink {
+    fn results(&self, worker: WorkerId, batch: Payload) -> bool {
+        self.remote
+            .as_ref()
+            .is_some_and(|r| r.results(worker, batch))
+    }
+
+    fn counters(&self, worker: WorkerId, batch: Payload) -> bool {
+        self.remote
+            .as_ref()
+            .is_some_and(|r| r.counters(worker, batch))
+    }
+
+    fn outcomes(&self, worker: WorkerId, accepted: Vec<(InfoHash, Lease, Outcome)>) {
+        if let Some(r) = &self.remote {
+            r.outcomes(worker, accepted);
+        }
+    }
+
+    fn snapshot_ack(&self, worker: WorkerId, ack: SnapshotAck) {
+        if ack.kind == SnapshotKind::HaveFilter {
+            if let Some(server) = self.server.get().and_then(Weak::upgrade) {
+                self.have.ack(worker, ack, &server, Instant::now());
+            }
+        } else if self.acks.try_send((worker, ack)).is_err()
+            && let Some(t) = self.tick.upgrade()
+        {
+            t.acks_dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn reverified(&self, worker: WorkerId, reply: ReverifyReply) {
+        if let Some(r) = &self.remote {
+            r.reverified(worker, reply);
+        }
+    }
+
+    fn local_hints(&self, hints: Vec<HintItem>) {
+        if let Some(r) = &self.remote {
+            r.local_hints(hints);
+        }
+    }
+}
+
+/// One server's tick: runs every [`TICK`] and applies acknowledgements as
+/// they come, until the server's task ends (it's aborted on close).
+async fn run_tick(
+    tick: Arc<Tick>,
+    server: Arc<ClusterServer>,
+    keys: Option<Arc<WireKeys>>,
+    wiring: Wiring,
+    mut acks: mpsc::Receiver<(WorkerId, SnapshotAck)>,
+) {
+    let mut every = tokio::time::interval(TICK);
+    every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut connected = BTreeSet::new();
+    let mut key_day = None;
+    loop {
+        tokio::select! {
+            _ = every.tick() => {
+                step(&tick, &server, keys.as_deref(), &wiring, &mut connected, &mut key_day).await;
+            }
+            Some((worker, ack)) = acks.recv() => {
+                if let Some(s) = tick.snapshots().as_mut() {
+                    s.ack(worker, ack, &server, Instant::now());
+                }
+            }
+        }
+    }
+}
+
+/// One tick (the contracts are WK-3's, WK-5's and WK-8's for WK-10):
+/// 1. a worker whose session is new starts both snapshots from chunk 0;
+/// 2. placement brings membership in line and queues each assignment;
+/// 3. the open keys follow the day;
+/// 4. the have-filter syncs, and is rebuilt on a blocking thread when due;
+/// 5. the filter and dictionary snapshots are read and installed on a
+///    blocking thread when due, then synced.
+async fn step(
+    tick: &Arc<Tick>,
+    server: &Arc<ClusterServer>,
+    keys: Option<&WireKeys>,
+    wiring: &Wiring,
+    connected: &mut BTreeSet<WorkerId>,
+    key_day: &mut Option<i64>,
+) {
+    let fleet_snapshot = server.snapshot();
+    let now_connected: BTreeSet<WorkerId> = fleet_snapshot
+        .workers
+        .iter()
+        .filter(|w| w.connected && w.worker != WorkerId::LOCAL)
+        .map(|w| w.worker)
+        .collect();
+    // A reconnect within one tick isn't seen here; that worker's transfer
+    // then stalls and restarts after `filter::STALL`.
+    if let Some(s) = tick.snapshots().as_mut() {
+        for w in now_connected.difference(connected) {
+            s.forget(*w);
+        }
+    }
+    *connected = now_connected;
+    // Retried by the next tick's sync whatever it says.
+    let _ = tick.placement.sync(&fleet_snapshot, server);
+    let Some(fleet) = &tick.fleet else { return };
+    let now = wiring.clock.now_secs();
+    // The open keys change at most twice a day; set them when they do.
+    let window = (day_of(now), day_of(now.saturating_add(NEXT_DAY_WITHIN)));
+    let mark = i64::from(window.0) * 2 + i64::from(window.1 != window.0);
+    if *key_day != Some(mark) {
+        if let Some(k) = keys {
+            k.set(open_keys(&fleet.seal_key, now));
+        }
+        *key_day = Some(mark);
+    }
+    have_step(tick, server, fleet, &fleet_snapshot, wiring);
+    snapshot_step(tick, server, fleet, &fleet_snapshot, now).await;
+}
+
+fn have_step(
+    tick: &Arc<Tick>,
+    server: &ClusterServer,
+    fleet: &Fleet,
+    snapshot: &FleetSnapshot,
+    wiring: &Wiring,
+) {
+    let synced = tick.have.sync(snapshot, server, Instant::now());
+    // Said once each time it turns true (WK-3).
+    if synced.at_cap && !tick.at_cap.swap(true, Ordering::Relaxed) {
+        lodestar_log::log_event!(
+            events::CLUSTER_HAVE_AT_CAP,
+            stored = fleet.stored.swarm_hashes()
+        );
+    } else if !synced.at_cap {
+        tick.at_cap.store(false, Ordering::Relaxed);
+    }
+    if !synced.rebuild || tick.rebuilding.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let (have, rebuilding, failures, rebuilds) = (
+        tick.have.clone(),
+        tick.rebuilding.clone(),
+        tick.rebuild_failures.clone(),
+        tick.have_rebuilds.clone(),
+    );
+    let stored = fleet.stored.swarm_hashes();
+    let (db, config) = (wiring.db.clone(), wiring.store.clone());
+    // Its own connection: the scan is long, and the snapshots' reads
+    // shouldn't wait for it.
+    tokio::task::spawn_blocking(move || {
+        let built = Store::open_reader(&db, config)
+            .and_then(|reader| have.rebuild(stored, |insert| reader.for_each_swarm_hash(insert)));
+        match built {
+            Ok(true) => rebuilds.fetch_add(1, Ordering::Relaxed),
+            Ok(false) => 0,
+            Err(_) => failures.fetch_add(1, Ordering::Relaxed),
+        };
+        rebuilding.store(false, Ordering::Release);
+    });
+}
+
+/// The active file-tree dictionary as saved now. The store caches it at
+/// open, so a long-lived reader wouldn't see a newly trained one.
+fn active_dict(reader: &Store) -> Result<Option<i64>, lodestar_store::Error> {
+    Ok(reader
+        .settings_with_prefix("file_dict")?
+        .into_iter()
+        .find(|(k, _)| k == "file_dict")
+        .and_then(|(_, v)| v.parse().ok()))
+}
+
+async fn snapshot_step(
+    tick: &Arc<Tick>,
+    server: &ClusterServer,
+    fleet: &Fleet,
+    snapshot: &FleetSnapshot,
+    now: i64,
+) {
+    let remote = snapshot
+        .workers
+        .iter()
+        .any(|w| w.connected && w.worker != WorkerId::LOCAL);
+    if remote && let Some(dict_id) = tick.read(active_dict).await {
+        let engine = fleet.filter.current().version;
+        let due = tick
+            .snapshots()
+            .as_ref()
+            .is_some_and(|s| s.due(&snapshot.workers, engine, now, dict_id));
+        if due {
+            install(tick, fleet, engine, now).await;
+        }
+    }
+    if let Some(s) = tick.snapshots().as_mut() {
+        let _ = s.sync(snapshot, server, Instant::now());
+    }
+}
+
+/// Reads both snapshots and installs them, on a blocking thread: at the
+/// caps the read, the encode and the decode check are tens of MiB.
+/// Acknowledgements that arrive meanwhile are dropped; the install
+/// restarts every transfer that changed anyway.
+async fn install(tick: &Arc<Tick>, fleet: &Fleet, engine: u64, now: i64) {
+    let Some(mut s) = tick.snapshots().take() else {
+        return;
+    };
+    let (seal, t) = (fleet.seal_key, tick.clone());
+    let joined = tokio::task::spawn_blocking(move || {
+        let read = t.with_reader(|r| {
+            let filter = read_snapshot(r, &seal, now)?;
+            Ok((filter, read_dict(r)?))
+        });
+        let installed = match read {
+            Some((filter, dict)) => s
+                .install(engine, &seal, &filter, dict.as_ref())
+                .map_err(|e| wire_kind(&e)),
+            None => Err("store"),
+        };
+        (s, installed)
+    })
+    .await;
+    let (s, installed) = joined.unwrap_or_else(|_| (WorkerSnapshots::new(), Err("task_failed")));
+    *tick.snapshots() = Some(s);
+    match installed {
+        Ok((dict, filter)) => {
+            tick.snapshot_installs.fetch_add(1, Ordering::Relaxed);
+            // The new versions go out with the next sync's assignments.
+            let _ = tick.placement.set_versions(dict, filter);
+        }
+        // A build that failed is remembered by `install`, so it isn't read
+        // again until something changes, and is said each time. A failed
+        // read is tried again on the next tick and said only the first
+        // time, so a store that stays unreadable doesn't log every second.
+        Err(kind) => {
+            if tick.install_failures.fetch_add(1, Ordering::Relaxed) == 0 || kind != "store" {
+                lodestar_log::log_event!(
+                    events::CLUSTER_SNAPSHOT_FAILED,
+                    error = lodestar_log::Error::kind(kind)
+                );
+            }
+        }
+    }
+}
+
+/// A fixed kind for a snapshot's build error: the cap it passed, never
+/// what's in it.
+fn wire_kind(e: &lodestar_pipeline::wire::Error) -> &'static str {
+    use lodestar_pipeline::wire::Error as E;
+    match e {
+        E::TooLarge(cap) | E::Invalid(cap) => cap,
+        _ => "encode",
+    }
+}
+
 /// The counters a server keeps, summed over every server this process
 /// built (one per time "Allow workers" was turned on), so they never go
 /// backwards.
@@ -307,12 +748,14 @@ struct Inner {
     reseal: mpsc::Sender<ResealReply>,
     start_failures: AtomicU64,
     store_errors: Arc<AtomicU64>,
+    tick: Arc<Tick>,
 }
 
-/// A running server and its `serve` task.
+/// A running server, its `serve` task and its tick.
 struct Running {
     server: Arc<ClusterServer>,
     task: JoinHandle<()>,
+    ticker: JoinHandle<()>,
 }
 
 impl Inner {
@@ -345,30 +788,59 @@ impl Inner {
             self.wiring.remote.as_ref().map(|r| {
                 super::intake::attach(r, preparer, check.clone(), config.hints_allow_private)
             });
+        let (acks, ack_rx) = mpsc::channel(ACK_QUEUE);
+        let sink = Arc::new(Sink {
+            remote: attached.as_ref().map(|a| a.sink.clone()),
+            have: self.tick.have.clone(),
+            acks,
+            server: OnceLock::new(),
+            tick: Arc::downgrade(&self.tick),
+        });
         let hooks = ServerHooks {
             authority: self.wiring.authority.clone(),
             stored: Some(check),
-            sink: attached.as_ref().map(|a| a.sink.clone() as _),
+            sink: Some(sink.clone() as _),
             admission: attached.as_ref().map(|a| a.sink.clone() as _),
         };
         let server = ClusterServer::with_hooks(pki, self.wiring.clock.clone(), config, hooks)
             .map_err(|e| StartError::pki("server", &e))?;
+        let _ = sink.server.set(Arc::downgrade(&server));
         if let (Some(a), Some(r)) = (&attached, &self.wiring.remote) {
             a.serving(r, &server);
         }
+        // Sealed records open from the first result on, a spool replayed
+        // after a restart included (WK-9c's note for WK-10).
+        let keys = attached.as_ref().map(|a| a.keys.clone());
+        if let (Some(k), Some(f)) = (&keys, &self.wiring.fleet) {
+            k.set(open_keys(&f.seal_key, self.wiring.clock.now_secs()));
+        }
+        self.tick.observe();
         let task = tokio::spawn(server.clone().serve(listener));
+        let ticker = tokio::spawn(run_tick(
+            self.tick.clone(),
+            server.clone(),
+            keys,
+            self.wiring.clone(),
+            ack_rx,
+        ));
         self.state().current = Some((server.clone(), addr));
         lodestar_log::log_event!(
             events::CLUSTER_LISTENING,
             address = lodestar_log::Listen(addr)
         );
-        Ok(Running { server, task })
+        Ok(Running {
+            server,
+            task,
+            ticker,
+        })
     }
 
     async fn close(&self, running: Running, reason: &'static str) {
         if let Some(r) = &self.wiring.remote {
             r.serving(None, false);
         }
+        running.ticker.abort();
+        let _ = running.ticker.await;
         running.server.shutdown();
         let _ = running.task.await;
         {
@@ -588,9 +1060,46 @@ impl ClusterHandle {
                 "Claimed keys whose stored check failed (granted; the commit refuses duplicates).",
                 inner.store_errors.load(Ordering::Relaxed),
             ),
+            (
+                "cluster_have_rebuilds_total",
+                "Times the workers' have-filter was built or rebuilt from the store.",
+                inner.tick.have_rebuilds.load(Ordering::Relaxed),
+            ),
+            (
+                "cluster_have_rebuild_failures_total",
+                "Workers' have-filter rebuilds that failed (the old filter stays).",
+                inner.tick.rebuild_failures.load(Ordering::Relaxed),
+            ),
+            (
+                "cluster_snapshot_installs_total",
+                "Filter and dictionary snapshots built for remote workers.",
+                inner.tick.snapshot_installs.load(Ordering::Relaxed),
+            ),
+            (
+                "cluster_snapshot_install_failures_total",
+                "Snapshot builds that failed (workers keep the ones they have).",
+                inner.tick.install_failures.load(Ordering::Relaxed),
+            ),
+            (
+                "cluster_snapshot_acks_dropped_total",
+                "Snapshot acknowledgements dropped because the tick's queue was full.",
+                inner.tick.acks_dropped.load(Ordering::Relaxed),
+            ),
         ] {
             o.one(name, "counter", help, n);
         }
+        o.one(
+            "cluster_have_filter_bytes",
+            "gauge",
+            "Memory the workers' have-filter holds (0 until a remote worker connects).",
+            inner.tick.have.memory_bytes(),
+        );
+        o.one(
+            "cluster_have_filter_at_cap",
+            "gauge",
+            "1 when the workers' have-filter is at its largest size and full.",
+            u8::from(inner.tick.at_cap.load(Ordering::Relaxed)),
+        );
     }
 }
 
@@ -636,7 +1145,9 @@ impl Cluster {
         let enabled = wiring.settings.enabled;
         let (allowed, follow) = watch::channel(enabled);
         let (reseal, reseals) = mpsc::channel(1);
+        let tick = Arc::new(Tick::new(&wiring));
         let inner = Arc::new(Inner {
+            tick,
             wiring,
             allowed,
             state: Mutex::new(State::default()),
@@ -720,8 +1231,6 @@ async fn run(
 
 #[cfg(test)]
 mod tests {
-    use std::time::Instant;
-
     use lodestar_cluster::{Credentials, JoinToken, Joining, NoEvents, SystemClock};
 
     use super::*;
@@ -742,6 +1251,8 @@ mod tests {
                 ..config::Cluster::default()
             },
             clock: Arc::new(SystemClock),
+            placement: Arc::new(Placement::new(false)),
+            fleet: None,
         }
     }
 
@@ -1116,7 +1627,7 @@ mod tests {
             .filter_map(|l| l.strip_prefix("# TYPE lodestar_"))
             .map(|l| l.split(' ').next().unwrap())
             .collect();
-        assert_eq!(families.len(), 20, "{text}");
+        assert_eq!(families.len(), 27, "{text}");
         for family in &families {
             assert!(
                 doc.lines().any(|l| l.starts_with(&format!("| `{family}"))),
@@ -1159,5 +1670,228 @@ mod tests {
             (d.heartbeat, d.lease_ttl_secs)
         );
         assert!(s.auto_tick);
+    }
+
+    fn fleet() -> Fleet {
+        Fleet {
+            stored: Arc::new(Have::new(1 << 20)),
+            filter: Arc::new(lodestar_pipeline::default_filter()),
+            seal_key: [7; 32],
+        }
+    }
+
+    /// What one session was sent, acknowledging each snapshot chunk as it
+    /// comes, until `done` says it has seen enough.
+    #[derive(Debug, Default)]
+    struct Seen {
+        assign: Option<lodestar_cluster::assign::Assignment>,
+        have_headers: usize,
+        /// (kind, version, seq) of every chunk.
+        chunks: Vec<(SnapshotKind, u64, u32)>,
+        /// Kinds whose last chunk arrived.
+        complete: Vec<SnapshotKind>,
+    }
+
+    async fn watch_session(
+        link: &mut lodestar_cluster::WorkerLink,
+        done: impl Fn(&Seen) -> bool,
+    ) -> Seen {
+        use lodestar_cluster::proto::{ToCoordinator, ToWorker};
+        let mut seen = Seen::default();
+        let watched = tokio::time::timeout(DEADLINE, async {
+            while !done(&seen) {
+                let Ok(Some(msg)) = link.recv().await else {
+                    panic!("the session ended: {seen:?}");
+                };
+                match msg {
+                    ToWorker::Assign(a) => {
+                        seen.assign = lodestar_cluster::assign::Assignment::from_message(&a)
+                            .expect("a valid assignment");
+                    }
+                    ToWorker::HaveSnapshot(_) => seen.have_headers += 1,
+                    ToWorker::Snapshot(c) => {
+                        seen.chunks.push((c.kind, c.version, c.seq));
+                        if c.seq + 1 == c.total && !seen.complete.contains(&c.kind) {
+                            seen.complete.push(c.kind);
+                        }
+                        let ack = SnapshotAck {
+                            kind: c.kind,
+                            version: c.version,
+                            seq: c.seq,
+                        };
+                        link.send(ToCoordinator::SnapshotAck(ack)).await.unwrap();
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await;
+        assert!(watched.is_ok(), "not seen in time: {seen:?}");
+        seen
+    }
+
+    async fn session(h: &ClusterHandle, creds: &Credentials) -> lodestar_cluster::WorkerLink {
+        use lodestar_cluster::proto::{Hello, ToCoordinator};
+        let mut l = link(h, creds).await.expect("a link");
+        l.send(ToCoordinator::Hello(Hello::new(
+            creds.worker().0,
+            Default::default(),
+        )))
+        .await
+        .unwrap();
+        l
+    }
+
+    /// The tick's gate: a connected worker is planned and sent its
+    /// assignment, the have-filter (built for it) and the filter snapshot,
+    /// paced by its acknowledgements; the assignment then names the
+    /// snapshot's version. A new session gets the snapshot again from
+    /// chunk 0.
+    #[tokio::test]
+    async fn a_worker_gets_its_assignment_and_every_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut w = wiring(dir.path(), true, any_port());
+        w.fleet = Some(fleet());
+        let placement = w.placement.clone();
+        let cluster = Cluster::start(w).await.unwrap();
+        let h = cluster.handle();
+        let creds = join(&h, "w1").await;
+
+        let mut first = session(&h, &creds).await;
+        let seen = watch_session(&mut first, |s| {
+            s.have_headers >= 1
+                && s.complete.contains(&SnapshotKind::Filter)
+                && s.complete.contains(&SnapshotKind::HaveFilter)
+                && s.assign.is_some_and(|a| a.filter_version != 0)
+        })
+        .await;
+        let a = seen.assign.unwrap();
+        let version = seen
+            .chunks
+            .iter()
+            .find(|c| c.0 == SnapshotKind::Filter)
+            .unwrap()
+            .1;
+        assert_eq!(a.filter_version, version, "{seen:?}");
+        assert_eq!(a.dict_version, 0, "no dictionary is trained");
+        assert!(a.fetch && a.prepare);
+        assert_eq!(placement.assignment(creds.worker()), Some(a));
+        let m = metrics(&h);
+        assert_eq!(series(&m, "lodestar_cluster_snapshot_installs_total"), 1);
+        assert_eq!(series(&m, "lodestar_cluster_have_rebuilds_total"), 1);
+        assert!(series(&m, "lodestar_cluster_have_filter_bytes") > 0);
+        assert_eq!(
+            series(&m, "lodestar_cluster_snapshot_install_failures_total"),
+            0
+        );
+
+        // Gone, then back: the new session starts both from chunk 0.
+        drop(first);
+        until("disconnected", || {
+            let n = series(&metrics(&h), "lodestar_cluster_workers_connected");
+            (n == 0, n)
+        })
+        .await;
+        // Long enough for a tick to see it gone.
+        let gone = series(&metrics(&h), "lodestar_cluster_sessions_total");
+        let mut ticks = tokio::time::interval(TICK);
+        ticks.tick().await;
+        ticks.tick().await;
+        let mut second = session(&h, &creds).await;
+        let again = watch_session(&mut second, |s| {
+            s.complete.contains(&SnapshotKind::Filter) && s.have_headers >= 1
+        })
+        .await;
+        assert!(series(&metrics(&h), "lodestar_cluster_sessions_total") > gone);
+        assert!(
+            again.chunks.contains(&(SnapshotKind::Filter, version, 0)),
+            "{again:?}"
+        );
+        // Built once: the same snapshot went out again.
+        assert_eq!(
+            series(&metrics(&h), "lodestar_cluster_snapshot_installs_total"),
+            1
+        );
+        cluster.shutdown().await;
+    }
+
+    /// Without a fleet (tests, or an install whose pipeline has no
+    /// intake), the tick still plans, and builds and sends nothing else.
+    #[tokio::test]
+    async fn without_a_fleet_only_placement_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let cluster = Cluster::start(wiring(dir.path(), true, any_port()))
+            .await
+            .unwrap();
+        let h = cluster.handle();
+        let creds = join(&h, "w1").await;
+        let mut l = session(&h, &creds).await;
+        let seen = watch_session(&mut l, |s| s.assign.is_some()).await;
+        assert_eq!(seen.assign.unwrap().filter_version, 0);
+        let m = metrics(&h);
+        assert_eq!(series(&m, "lodestar_cluster_have_rebuilds_total"), 0);
+        assert_eq!(series(&m, "lodestar_cluster_have_filter_bytes"), 0);
+        assert!(seen.chunks.is_empty() && seen.have_headers == 0, "{seen:?}");
+        cluster.shutdown().await;
+    }
+
+    #[test]
+    fn the_open_keys_are_yesterdays_todays_and_tomorrows_near_midnight() {
+        let seal = [3; 32];
+        let day = 20_400_i64;
+        let ids = |now: i64| -> Vec<u32> { open_keys(&seal, now).iter().map(|k| k.id).collect() };
+        let d = |n: i64| u32::try_from(n).unwrap();
+        // Midday: yesterday's and today's.
+        assert_eq!(ids(day * 86_400 + 43_200), [d(day - 1), d(day)]);
+        // Within the skew tolerance of midnight: tomorrow's too (WK-9c).
+        let late = (day + 1) * 86_400 - NEXT_DAY_WITHIN;
+        assert_eq!(ids(late), [d(day - 1), d(day), d(day + 1)]);
+        assert_eq!(ids(late - 1), [d(day - 1), d(day)]);
+        // Each is the day's own key, the one a worker seals with.
+        assert_eq!(
+            open_keys(&seal, late)[2],
+            wire_key(&seal, d(day + 1)),
+            "the next day's key"
+        );
+        // The first day has no yesterday.
+        assert_eq!(ids(100), [0]);
+    }
+
+    /// Acknowledgements of the filter and dictionary snapshots go to the
+    /// tick's queue; a full queue drops and counts them, never blocks.
+    #[tokio::test]
+    async fn the_sink_queues_snapshot_acks_without_blocking() {
+        let dir = tempfile::tempdir().unwrap();
+        let tick = Arc::new(Tick::new(&wiring(dir.path(), false, any_port())));
+        let (acks, mut rx) = mpsc::channel(1);
+        let sink = Sink {
+            remote: None,
+            have: tick.have.clone(),
+            acks,
+            server: OnceLock::new(),
+            tick: Arc::downgrade(&tick),
+        };
+        let ack = |kind| SnapshotAck {
+            kind,
+            version: 9,
+            seq: 0,
+        };
+        sink.snapshot_ack(WorkerId(4), ack(SnapshotKind::Filter));
+        sink.snapshot_ack(WorkerId(4), ack(SnapshotKind::Dictionary));
+        // The have-filter's go straight to it (here, with no server, nowhere).
+        sink.snapshot_ack(WorkerId(4), ack(SnapshotKind::HaveFilter));
+        assert_eq!(
+            rx.recv().await,
+            Some((WorkerId(4), ack(SnapshotKind::Filter)))
+        );
+        assert!(rx.try_recv().is_err());
+        assert_eq!(tick.acks_dropped.load(Ordering::Relaxed), 1);
+        // Without an intake, results and counters are refused for now.
+        let payload = Payload {
+            batch: 1,
+            bytes: vec![1],
+        };
+        assert!(!sink.results(WorkerId(4), payload.clone()));
+        assert!(!sink.counters(WorkerId(4), payload));
     }
 }
