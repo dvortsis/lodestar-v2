@@ -88,7 +88,8 @@ never changes it.
   allocator's arena (r4's growth), mimalloc's committed bytes, and the fetch
   pool's size and held bytes against their caps. Memory itself isn't an input:
   r5's early slope read 6.58 MiB/h and the run passed.
-- **Before a soak**, the `soak-screen` CI job (on a `release/**` push or by hand)
+- **Before a soak**, the `Soak screen` workflow (`.github/workflows/soak-screen.yml`,
+  on a `release/**` push or run by hand from the Actions tab)
   runs the dhat retention test and `mem-cheap` on musl, each with a control
   arm that must still trip (mmap-cache pruning off; mimalloc's `override` off).
 - **During a soak**, the Linux collector writes `screen.json` and a

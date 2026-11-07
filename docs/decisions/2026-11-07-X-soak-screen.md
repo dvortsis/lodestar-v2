@@ -5,7 +5,7 @@ The runner's brief X-soak-screen, 2026-11-07, comes from the owner's answer reco
 **The screen adds evidence and never decides.** The CR-0 gate (`2026-10-30-CR-0-acceptance.md`) and CR-SPEC are unchanged: their inputs, window, bar and verdict all stay as they were. A trip means "stop and investigate". `ok` never means pass.
 
 ## What was built
-- **The pre-soak sweep:** `soak-screen` in `.github/workflows/ci.yml`. It runs on `workflow_dispatch` and on pushes to `release/**`, never on pull requests, and it isn't part of `ci-ok`. It runs two existing harnesses, each with a **control arm that must still trip**. A sweep that can no longer see the known leak therefore fails as well.
+- **The pre-soak sweep:** the `soak-screen` job in its own workflow, `.github/workflows/soak-screen.yml`. It runs on `workflow_dispatch` and on pushes to `release/**`, never on pull requests. It's in no required check and isn't part of `ci-ok`. Its actions are pinned by SHA. It runs two existing harnesses, each with a **control arm that must still trip**. A sweep that can no longer see the known leak therefore fails as well.
   - **Per-commit retention:** `bench/tests/mmap_retention.rs`, dhat `curr_bytes`, one torrent per commit. It runs with tantivy's mmap-cache prune on, then off (`MMAP_RETENTION_PRUNE=off`, the existing test-only switch).
   - **Small anonymous mappings outside the arena:** `bench/examples/mem-cheap`, built for **`x86_64-unknown-linux-musl` with cargo-zigbuild and zig 0.17**, the r4 build. It runs with mimalloc's `override`, then without it. CI builds musl the way `release.yml` already does, so nothing falls back to glibc.
   - `docs/soak/tools/screen_sweep.py` judges both outputs against the thresholds file. It prints one `SCREEN sweep` line per counter and appends them to the job summary.
@@ -76,7 +76,8 @@ Every counter trips when its value is **strictly above** its threshold; at the t
 
 ## Shared files
 - `crates/lodestar/src/metrics.rs` and `docs/metrics.md`: the gauge's render, one row, and the existing documentation test extended to it. X-fetch-meta-reserve also adds rows; whichever PR merges later brings `main` in.
-- `.github/workflows/ci.yml`: only the new job. **The `release/**` push trigger needs one line in `on.push.branches`**, which is outside the job. That line was taken to the runner (2026-11-07); its answer is recorded in the PR description.
+- **A workflow of its own, not a job in `ci.yml`** (runner, 2026-11-07T01:45Z, replacing the brief's "new job in `ci.yml`"). `ci.yml` runs only on pushes to `main`. Giving it a `release/**` trigger would run the full matrix on every release-branch push, which changes CI cost for every release and isn't this slice's call. `ci.yml` is untouched; the runner updates the slice's owns in `runner/slices.yaml`.
+- **No cherry-pick.** `release/v0.5.1` is tagged. The v0.5.2 cut carries the workflow from `main`, and GitHub reads a push's workflow from the pushed branch.
 - The analyzer's file hash changes, so the next soak pins the new `analyze_cr0.py` and `collect.py` hashes, as for any tools change. The gate's code paths are unchanged, and the test above proves their output is.
 
 ## For the runner: what else to test
