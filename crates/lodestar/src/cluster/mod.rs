@@ -11,6 +11,7 @@
 //! Later slices add one `mod` line each here (placement, intake, ops…).
 
 pub mod have;
+pub mod ops;
 pub mod placement;
 pub mod serve;
 

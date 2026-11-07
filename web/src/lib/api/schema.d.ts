@@ -2388,6 +2388,146 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every joined worker. Empty, with `allowed: false`, on a single
+         *     machine.
+         */
+        get: operations["listWorkers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workers/tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Creates a one-time join token for a new worker, valid 15 minutes and
+         *     for this name only, with ready-to-copy commands. **It's shown this
+         *     once:** only its hash is kept, so it can't be read back.
+         */
+        post: operations["createWorkerToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workers/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Changes a worker's budget, intensity, pool cap or DHT pin. Saved, so
+         *     it's kept across reconnects and coordinator restarts.
+         */
+        patch: operations["updateWorker"];
+        trace?: never;
+    };
+    "/workers/{id}/drain": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Asks a worker to finish the leases it holds, then stop (§19.6). It
+         *     stays draining across reconnects until resumed.
+         */
+        post: operations["drainWorker"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workers/{id}/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pauses a worker: it stays connected and keeps the leases it holds, but
+         *     is given no new work until resumed.
+         */
+        post: operations["pauseWorker"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workers/{id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ends a drain or a pause: the worker takes work again. */
+        post: operations["resumeWorker"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workers/{id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * **Danger zone** (§10.10.7): revokes a worker. Its certificate is
+         *     refused from now on, its leases go back to other workers, and its
+         *     connection closes within one heartbeat. It can't reconnect: to use
+         *     the machine again, join it with a new token.
+         */
+        post: operations["revokeWorker"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3812,6 +3952,14 @@ export interface components {
              */
             scopes?: components["schemas"]["KeyScope"][];
         };
+        /** @description `POST /workers/tokens`. */
+        CreateWorkerToken: {
+            /**
+             * @description The new worker's name: 1–63 lowercase letters, digits and hyphens,
+             *     not starting or ending with a hyphen. It goes in its certificate.
+             */
+            name: string;
+        };
         /**
          * @description `POST /keys` and `POST /keys/{id}/regenerate`: the key and, this once,
          *     its secret. `Debug` redacts the secret.
@@ -3950,6 +4098,12 @@ export interface components {
             adult: boolean;
             hash: string;
         };
+        /**
+         * @description Whether a worker may run the DHT (§19.5 placement pins). `off` keeps
+         *     fetch and prepare.
+         * @enum {string}
+         */
+        DhtPin: "auto" | "off";
         /** @description The DHT node's state. */
         DhtStatus: {
             /** @description It has a routing table to crawl from. */
@@ -5424,6 +5578,25 @@ export interface components {
              * @description Once `failed`: the HTTP status of `error`.
              */
             status?: number;
+        };
+        /**
+         * @description Ready-to-copy ways to join with the token (§19.6). Each holds the
+         *     token, so they're shown once with it.
+         */
+        JoinCommands: {
+            /** @description `lodestar worker`, reading the token from standard input. */
+            cli: string;
+            /** @description A compose service. */
+            compose: string;
+            /** @description A `docker run` line. */
+            docker_run: string;
+            /** @description What to enter in the Unraid "Lodestar Worker" template. */
+            unraid: string;
+            /**
+             * @description What to enter in the Windows installer's "Join an existing
+             *     Lodestar".
+             */
+            windows: string;
         };
         /**
          * @description A key or token as listed: never its secret or hash.
@@ -9857,6 +10030,173 @@ export interface components {
         WebhookToken: {
             integration: components["schemas"]["Integration"];
             /** @description Paste it into the app's webhook connection as the Password. */
+            token: string;
+        };
+        /**
+         * @description One worker. Live values are null while it has not connected since the
+         *     coordinator started.
+         */
+        Worker: {
+            budget: components["schemas"]["WorkerBudget"];
+            /**
+             * Format: int64
+             * @description Keys claimed, as the worker last reported (its counter).
+             */
+            claimed: number | null;
+            /**
+             * Format: int64
+             * @description The worker's clock minus the coordinator's, in ms.
+             */
+            clock_offset_ms: number | null;
+            /** @description More than 60 s off (§19.3): fix NTP on the worker. */
+            clock_skewed: boolean;
+            /**
+             * Format: int32
+             * @description CPU use in ‰, as last reported.
+             */
+            cpu_permille: number | null;
+            dht: components["schemas"]["DhtPin"];
+            /**
+             * @description The public addresses the worker reported for itself (its egress),
+             *     at most 8. Never a peer's.
+             */
+            external_ips: string[];
+            /**
+             * Format: int64
+             * @description Metadata fetched, as the worker last reported.
+             */
+            fetched: number | null;
+            /**
+             * Format: int32
+             * @description The worker's id in this cluster.
+             */
+            id: number;
+            intensity: components["schemas"]["WorkerIntensity"];
+            /**
+             * Format: int64
+             * @description Unix seconds of its last message; null if not seen since start.
+             */
+            last_seen_at: number | null;
+            /**
+             * Format: int64
+             * @description Leases it holds now.
+             */
+            leases: number;
+            /**
+             * @description The name it joined with (its certificate's); null when the
+             *     coordinator has no certificate on record for it.
+             */
+            name: string | null;
+            /**
+             * Format: int32
+             * @description Fetch-pool cap in keys, 1–1,000,000.
+             */
+            pool_cap: number;
+            /**
+             * Format: int64
+             * @description Torrents processed, as the worker last reported.
+             */
+            processed: number | null;
+            /**
+             * Format: int32
+             * @description Resident memory in MB, as last reported.
+             */
+            rss_mb: number | null;
+            /**
+             * Format: int64
+             * @description Bytes waiting in its on-disk spool (§19.6).
+             */
+            spool_bytes: number | null;
+            status: components["schemas"]["WorkerStatus"];
+        };
+        /** @description A worker's resource budget. 0 means no cap beyond the defaults. */
+        WorkerBudget: {
+            /**
+             * Format: int32
+             * @description CPU share in ‰, 1–1000.
+             */
+            cpu_permille: number;
+            /**
+             * Format: int32
+             * @description Download cap in kB/s.
+             */
+            down_kbps: number;
+            /**
+             * Format: int32
+             * @description Memory cap in MB.
+             */
+            ram_mb: number;
+            /**
+             * Format: int32
+             * @description Upload cap in kB/s.
+             */
+            up_kbps: number;
+        };
+        /**
+         * @description A worker's crawl intensity (§19.5: each worker has its own).
+         * @enum {string}
+         */
+        WorkerIntensity: "low" | "balanced" | "aggressive";
+        /** @description `GET /workers`. */
+        WorkerList: {
+            /** @description "Allow workers" is on and the cluster port is serving. */
+            allowed: boolean;
+            /** @description Every joined worker, by id. Empty on a single machine. */
+            workers: components["schemas"]["Worker"][];
+        };
+        /** @description `PATCH /workers/{id}`: any of these; absent fields are kept. */
+        WorkerPatch: {
+            budget?: components["schemas"]["WorkerBudget"];
+            dht?: components["schemas"]["DhtPin"];
+            intensity?: components["schemas"]["WorkerIntensity"];
+            /**
+             * Format: int32
+             * @description 1–1,000,000 keys.
+             */
+            pool_cap?: number;
+        };
+        /** @description `POST /workers/{id}/revoke`: what revoking did. */
+        WorkerRevoked: {
+            /**
+             * Format: int64
+             * @description Certificates invalidated now.
+             */
+            certificates: number;
+            /**
+             * Format: int32
+             * @description Seconds until its connection is closed, at most: one heartbeat.
+             */
+            gone_within_secs: number;
+            /** Format: int32 */
+            id: number;
+            /**
+             * Format: int64
+             * @description Leases taken back and offered to other workers.
+             */
+            leases_returned: number;
+            name: string | null;
+        };
+        /**
+         * @description A worker's state as Settings → Workers shows it (icon + text).
+         *     `quarantined` arrives with WK-13.
+         * @enum {string}
+         */
+        WorkerStatus: "online" | "draining" | "paused" | "offline";
+        /**
+         * @description The one response that carries a join token. It can't be read back:
+         *     only its hash is kept.
+         */
+        WorkerTokenCreated: {
+            /** @description The cluster address workers dial, `https://host:port`. */
+            address: string;
+            commands: components["schemas"]["JoinCommands"];
+            /**
+             * Format: int64
+             * @description Unix seconds; 15 minutes from now.
+             */
+            expires_at: number;
+            name: string;
+            /** @description The `lsj1…` token: single use, for this name only. */
             token: string;
         };
     };
@@ -14561,6 +14901,268 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listWorkers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createWorkerToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateWorkerToken"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerTokenCreated"];
+                };
+            };
+            /** @description `bad_name`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `workers_off`, `name_in_use` or `too_many_tokens`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateWorker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The worker's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerPatch"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Worker"];
+                };
+            };
+            /** @description `unknown_worker`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `too_many_workers`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `out_of_range` (with the field) or `bad_body`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    drainWorker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The worker's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Worker"];
+                };
+            };
+            /** @description `unknown_worker`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `worker_offline`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    pauseWorker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The worker's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Worker"];
+                };
+            };
+            /** @description `unknown_worker`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `worker_offline`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    resumeWorker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The worker's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Worker"];
+                };
+            };
+            /** @description `unknown_worker`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    revokeWorker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The worker's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerRevoked"];
+                };
+            };
+            /** @description `unknown_worker`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];

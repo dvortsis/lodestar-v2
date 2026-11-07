@@ -7539,6 +7539,404 @@
           }
         ]
       }
+    },
+    "/workers": {
+      "get": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Every joined worker. Empty, with `allowed: false`, on a single\nmachine.",
+        "operationId": "listWorkers",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/workers/tokens": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Creates a one-time join token for a new worker, valid 15 minutes and\nfor this name only, with ready-to-copy commands. **It's shown this\nonce:** only its hash is kept, so it can't be read back.",
+        "operationId": "createWorkerToken",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWorkerToken"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerTokenCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`bad_name`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`workers_off`, `name_in_use` or `too_many_tokens`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/workers/{id}": {
+      "patch": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Changes a worker's budget, intensity, pool cap or DHT pin. Saved, so\nit's kept across reconnects and coordinator restarts.",
+        "operationId": "updateWorker",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The worker's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkerPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Worker"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_worker`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`too_many_workers`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`out_of_range` (with the field) or `bad_body`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/workers/{id}/drain": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Asks a worker to finish the leases it holds, then stop (§19.6). It\nstays draining across reconnects until resumed.",
+        "operationId": "drainWorker",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The worker's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Worker"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_worker`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`worker_offline`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/workers/{id}/pause": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Pauses a worker: it stays connected and keeps the leases it holds, but\nis given no new work until resumed.",
+        "operationId": "pauseWorker",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The worker's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Worker"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_worker`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`worker_offline`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/workers/{id}/resume": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "Ends a drain or a pause: the worker takes work again.",
+        "operationId": "resumeWorker",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The worker's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Worker"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_worker`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/workers/{id}/revoke": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "**Danger zone** (§10.10.7): revokes a worker. Its certificate is\nrefused from now on, its leases go back to other workers, and its\nconnection closes within one heartbeat. It can't reconnect: to use\nthe machine again, join it with a new token.",
+        "operationId": "revokeWorker",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The worker's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerRevoked"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_worker`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -10994,6 +11392,20 @@
           }
         }
       },
+      "CreateWorkerToken": {
+        "type": "object",
+        "description": "`POST /workers/tokens`.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The new worker's name: 1–63 lowercase letters, digits and hyphens,\nnot starting or ending with a hyphen. It goes in its certificate."
+          }
+        },
+        "additionalProperties": false
+      },
       "CreatedKey": {
         "type": "object",
         "description": "`POST /keys` and `POST /keys/{id}/regenerate`: the key and, this once,\nits secret. `Debug` redacts the secret.",
@@ -11313,6 +11725,14 @@
             "type": "string"
           }
         }
+      },
+      "DhtPin": {
+        "type": "string",
+        "description": "Whether a worker may run the DHT (§19.5 placement pins). `off` keeps\nfetch and prepare.",
+        "enum": [
+          "auto",
+          "off"
+        ]
       },
       "DhtStatus": {
         "type": "object",
@@ -14482,6 +14902,39 @@
             "format": "int32",
             "description": "Once `failed`: the HTTP status of `error`.",
             "minimum": 0
+          }
+        }
+      },
+      "JoinCommands": {
+        "type": "object",
+        "description": "Ready-to-copy ways to join with the token (§19.6). Each holds the\ntoken, so they're shown once with it.",
+        "required": [
+          "cli",
+          "compose",
+          "docker_run",
+          "unraid",
+          "windows"
+        ],
+        "properties": {
+          "cli": {
+            "type": "string",
+            "description": "`lodestar worker`, reading the token from standard input."
+          },
+          "compose": {
+            "type": "string",
+            "description": "A compose service."
+          },
+          "docker_run": {
+            "type": "string",
+            "description": "A `docker run` line."
+          },
+          "unraid": {
+            "type": "string",
+            "description": "What to enter in the Unraid \"Lodestar Worker\" template."
+          },
+          "windows": {
+            "type": "string",
+            "description": "What to enter in the Windows installer's \"Join an existing\nLodestar\"."
           }
         }
       },
@@ -23059,6 +23512,322 @@
             "description": "Paste it into the app's webhook connection as the Password."
           }
         }
+      },
+      "Worker": {
+        "type": "object",
+        "description": "One worker. Live values are null while it has not connected since the\ncoordinator started.",
+        "required": [
+          "budget",
+          "claimed",
+          "clock_offset_ms",
+          "clock_skewed",
+          "cpu_permille",
+          "dht",
+          "external_ips",
+          "fetched",
+          "id",
+          "intensity",
+          "last_seen_at",
+          "leases",
+          "name",
+          "pool_cap",
+          "processed",
+          "rss_mb",
+          "spool_bytes",
+          "status"
+        ],
+        "properties": {
+          "budget": {
+            "$ref": "#/components/schemas/WorkerBudget"
+          },
+          "claimed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Keys claimed, as the worker last reported (its counter).",
+            "minimum": 0
+          },
+          "clock_offset_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The worker's clock minus the coordinator's, in ms."
+          },
+          "clock_skewed": {
+            "type": "boolean",
+            "description": "More than 60 s off (§19.3): fix NTP on the worker."
+          },
+          "cpu_permille": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "CPU use in ‰, as last reported.",
+            "minimum": 0
+          },
+          "dht": {
+            "$ref": "#/components/schemas/DhtPin"
+          },
+          "external_ips": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The public addresses the worker reported for itself (its egress),\nat most 8. Never a peer's."
+          },
+          "fetched": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Metadata fetched, as the worker last reported.",
+            "minimum": 0
+          },
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The worker's id in this cluster.",
+            "minimum": 0
+          },
+          "intensity": {
+            "$ref": "#/components/schemas/WorkerIntensity"
+          },
+          "last_seen_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix seconds of its last message; null if not seen since start."
+          },
+          "leases": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Leases it holds now.",
+            "minimum": 0
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name it joined with (its certificate's); null when the\ncoordinator has no certificate on record for it."
+          },
+          "pool_cap": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Fetch-pool cap in keys, 1–1,000,000.",
+            "minimum": 0
+          },
+          "processed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Torrents processed, as the worker last reported.",
+            "minimum": 0
+          },
+          "rss_mb": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Resident memory in MB, as last reported.",
+            "minimum": 0
+          },
+          "spool_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Bytes waiting in its on-disk spool (§19.6).",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkerStatus"
+          }
+        }
+      },
+      "WorkerBudget": {
+        "type": "object",
+        "description": "A worker's resource budget. 0 means no cap beyond the defaults.",
+        "required": [
+          "cpu_permille",
+          "down_kbps",
+          "ram_mb",
+          "up_kbps"
+        ],
+        "properties": {
+          "cpu_permille": {
+            "type": "integer",
+            "format": "int32",
+            "description": "CPU share in ‰, 1–1000.",
+            "minimum": 0
+          },
+          "down_kbps": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Download cap in kB/s.",
+            "minimum": 0
+          },
+          "ram_mb": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Memory cap in MB.",
+            "minimum": 0
+          },
+          "up_kbps": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Upload cap in kB/s.",
+            "minimum": 0
+          }
+        }
+      },
+      "WorkerIntensity": {
+        "type": "string",
+        "description": "A worker's crawl intensity (§19.5: each worker has its own).",
+        "enum": [
+          "low",
+          "balanced",
+          "aggressive"
+        ]
+      },
+      "WorkerList": {
+        "type": "object",
+        "description": "`GET /workers`.",
+        "required": [
+          "allowed",
+          "workers"
+        ],
+        "properties": {
+          "allowed": {
+            "type": "boolean",
+            "description": "\"Allow workers\" is on and the cluster port is serving."
+          },
+          "workers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Worker"
+            },
+            "description": "Every joined worker, by id. Empty on a single machine."
+          }
+        }
+      },
+      "WorkerPatch": {
+        "type": "object",
+        "description": "`PATCH /workers/{id}`: any of these; absent fields are kept.",
+        "properties": {
+          "budget": {
+            "$ref": "#/components/schemas/WorkerBudget"
+          },
+          "dht": {
+            "$ref": "#/components/schemas/DhtPin"
+          },
+          "intensity": {
+            "$ref": "#/components/schemas/WorkerIntensity"
+          },
+          "pool_cap": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1–1,000,000 keys.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkerRevoked": {
+        "type": "object",
+        "description": "`POST /workers/{id}/revoke`: what revoking did.",
+        "required": [
+          "certificates",
+          "gone_within_secs",
+          "id",
+          "leases_returned",
+          "name"
+        ],
+        "properties": {
+          "certificates": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Certificates invalidated now.",
+            "minimum": 0
+          },
+          "gone_within_secs": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Seconds until its connection is closed, at most: one heartbeat.",
+            "minimum": 0
+          },
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "leases_returned": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Leases taken back and offered to other workers.",
+            "minimum": 0
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "WorkerStatus": {
+        "type": "string",
+        "description": "A worker's state as Settings → Workers shows it (icon + text).\n`quarantined` arrives with WK-13.",
+        "enum": [
+          "online",
+          "draining",
+          "paused",
+          "offline"
+        ]
+      },
+      "WorkerTokenCreated": {
+        "type": "object",
+        "description": "The one response that carries a join token. It can't be read back:\nonly its hash is kept.",
+        "required": [
+          "address",
+          "commands",
+          "expires_at",
+          "name",
+          "token"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The cluster address workers dial, `https://host:port`."
+          },
+          "commands": {
+            "$ref": "#/components/schemas/JoinCommands"
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds; 15 minutes from now."
+          },
+          "name": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string",
+            "description": "The `lsj1…` token: single use, for this name only."
+          }
+        }
       }
     },
     "responses": {
@@ -23142,6 +23911,10 @@
     {
       "name": "jobs",
       "description": "Background jobs: exports now, imports later (§9, §18.8)."
+    },
+    {
+      "name": "workers",
+      "description": "Remote workers: join, drain, pause, revoke and their budgets (§19.6, §19.7)."
     }
   ]
 }
