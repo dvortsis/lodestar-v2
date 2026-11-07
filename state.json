@@ -5834,7 +5834,10 @@
   },
   "v051_candidate": {
    "sha": "12cd25ca38f8eac1a930316623dec742c1ba585d",
-   "note": "R-legal-status merged; CI+Release+E2E dispatched 00:19Z; go to owner on green"
+   "note": "R-legal-status merged; CI+Release+E2E dispatched 00:19Z; go to owner on green",
+   "checks": "CI 42317461111, Release 42317463756, E2E 42317466554 all success by 00:53Z",
+   "go_sent": "2026-11-07T00:55Z",
+   "next": "owner tags v0.5.1 on 12cd25ca, approves release env, publishes; runner verifies digests/assets then R4"
   }
  },
  "owner_standing": {
