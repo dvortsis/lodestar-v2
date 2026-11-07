@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T14:50Z",
+  "updated_at": "2026-11-07T15:10Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5699,6 +5699,11 @@
       "id": "approvals-1450",
       "added": "2026-11-07T14:50Z",
       "text": "P-v052-cut: release.yml G4 checks approved (tarball x86_64 + Windows exe refuse --fixture; aarch64 covered by build flags, recorded). WK-15: approved cluster/leases.rs LeaseEvents::claimed_elsewhere (no-op default, after lock), rollups metric 18 WORKER_LEASES (append-only), coordinator forwarding, remote.rs serving() gate, api insights stages/dto by_worker + SUMMED; conditions: local claims count as other claimer, bounded map test, parity test, sealed vs live equality, bench before/after, counts only."
+    },
+    {
+      "id": "notice-v4-fix-1510",
+      "added": "2026-11-07T15:10Z",
+      "text": "P-v052-cut found Legal Notice v4 false at 045d4a38: says torrent cache can be turned on via API; #537/#553 refuse it. Runner call (\u00a72.33/\u00a72.48, owner FYI owed): cut stays 045d4a38; P-v052-cut fixes notice.md + docs/legal/legal-notice.md in PR A, NOTICE_VERSION stays 4 (no released build showed v4), date 2026-11-07, legal_facts.rs check ties sentence to the consent gate, full \u00a72.48 recheck of notice + operator-guidance, backport in PR B. G4 yes re-sent."
     }
   ],
   "main_health": [
