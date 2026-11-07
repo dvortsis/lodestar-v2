@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T10:47Z",
+  "updated_at": "2026-11-07T11:06Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5608,6 +5608,11 @@
       "id": "wk8-572-round1",
       "added": "2026-11-07T10:47Z",
       "text": "2026-11-07T10:47Z #572 WK-8 (16eccc59): both Opus reviews MERGE, no blockers. Round 1 sent: A.1 seal every outbound remote record except local hash-list drops (commit-only adult-source/SP-3/SP-4 holds would otherwise go clear) \u2014 runner \u00a72.33, stricter than plan Q1, owner \u00a72.19 flag at merge; WireKeys::open decode_with + no nested sealed + inner batch 0; install day from snapshot key; atomic install + failed Built recorded; combined decoded-size budget (~96 MB); mutation-gap tests; wire_key KAT; midnight flake; docs. Notes: WK-10 keys at startup, floor-drop tombstone report, Outbound-only queue; WK-9b refuse+count any clear remote record. A.1 = behaviour change -> fresh delta review. Owner flag line: shared per-day key keeps held-back names off stopped workers' disks and binds records to header+worker; does not protect against a compromised running/revoked worker holding that day's key reading others' sealed records for that day and the next."
+    },
+    {
+      "id": "wk9b-wk14-round1",
+      "added": "2026-11-07T11:06Z",
+      "text": "2026-11-07T11:06Z #571 WK-9b CHANGES: blocking hand_parked drops private_source (BEP 27 leak); shutdown save double count; commit budget bench variants; polish (remove-test reliability, lock wording, saver order, blocklist pre-check). Fleet-wide caps + in-memory Admit counts judged sound -> owner \u00a72.19 at merge. | #573 WK-14 CHANGES: blocking token create lacks confirm_fresh_password (convention: keys.rs/webhooks.rs) -> runner required it (stricter, no owner question); services.rs ~15 lines accepted with non-fatal bad prefs rows; WK-13 precondition: seed pause set in serve.rs before quarantine reuses paused; polish (join_refused time floor, origin tests per route, Debug redaction, shell-history help, set_paused order, openapi refusals). Six \u00a72.19 refinements sound -> owner flag at merge. Both need fresh delta reviews."
     }
   ],
   "main_health": [
