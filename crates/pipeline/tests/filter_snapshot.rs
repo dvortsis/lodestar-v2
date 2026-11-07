@@ -260,22 +260,15 @@ async fn drops_stay_on_the_worker_and_quarantine_goes_sealed() {
         .unwrap();
     }
 
-    // Exactly two reach the queue, both sealed: the clean one with no
-    // action, the quarantined one with its action in the clear header.
+    // Exactly two reach the queue, both sealed, their verdicts inside
+    // (opened below): the clean one and the quarantined one.
     let mut outbound = vec![recv(&mut wire).await, recv(&mut wire).await];
     outbound.sort_by_key(|o| keys.iter().position(|k| *k == o.key));
     assert_eq!(
-        (
-            outbound[0].key,
-            outbound[0].action,
-            outbound[0].rule_version
-        ),
-        (keys[0], None, version)
+        (outbound[0].key, outbound[0].rule_version),
+        (keys[0], version)
     );
-    assert_eq!(
-        (outbound[1].key, outbound[1].action),
-        (keys[4], Some(Action::Quarantine))
-    );
+    assert_eq!(outbound[1].key, keys[4]);
 
     // The three drops are reported lost as blocked, under their tokens.
     until(
@@ -335,9 +328,10 @@ async fn drops_stay_on_the_worker_and_quarantine_goes_sealed() {
     assert!(clear.records.is_empty(), "nothing leaves a worker in clear");
     let keyring = WireKeys::default();
     keyring.set(vec![WireKey::new(KEY_DAY.with(|d| *d), [9; 32])]);
+    let clean = keyring.open(&sealed[0], WORKER).unwrap();
     assert_eq!(
-        keyring.open(&sealed[0], WORKER).unwrap().torrent.name,
-        "A holiday video"
+        (clean.torrent.name.as_str(), clean.action),
+        ("A holiday video", None)
     );
     let opened = keyring.open(&sealed[1], WORKER).unwrap();
     assert_eq!(opened.torrent.name, format!("{SECRET} holiday video"));

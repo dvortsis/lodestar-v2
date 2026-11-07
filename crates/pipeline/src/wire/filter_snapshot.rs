@@ -19,9 +19,9 @@
 //!     [`Loss::Blocked`]: never sent, never spooled;
 //!   - **every other record goes to the coordinator sealed**
 //!     ([`SealedRecord`]): the whole record, name, file tree and all, under
-//!     the snapshot's [`WireKey`], with the worker's action (quarantine,
-//!     the adult hold, a rule's drop, hide, demote, flag, or none) in its
-//!     clear header. A quarantine stays reviewable and correctable at
+//!     the snapshot's [`WireKey`], the worker's verdict (quarantine, the
+//!     adult hold, a rule's drop, hide, demote, flag, or none) sealed with
+//!     it. A quarantine stays reviewable and correctable at
 //!     commit, and no name is ever in clear on the wire or in the spool.
 //!     Even a record the worker sees as clean goes sealed, because some
 //!     holds are decided only at commit (an always-adult source the worker
@@ -697,23 +697,21 @@ impl Incoming {
 }
 
 /// A record leaving a worker, sealed for the coordinator (every record but
-/// a hash-list drop, which never leaves). In clear are only what fencing
-/// needs and what the commit keeps of a held-back torrent in any case: the
-/// leased key, the token, the rule-set version, the worker's action if any
-/// and the wire key's id. The rest, name, file tree, extras and enrichment
-/// included, is one record of the `Results` codec sealed under a
-/// [`WireKey`], bound (as AAD) to that clear header and the worker's id, so
-/// it opens only under the same key, token, version, action and worker.
-/// It travels in a `Results` batch under [`flag::SEALED`](super::results::flag::SEALED).
-/// Its `Debug` shows the key, the action and the lengths.
+/// a hash-list drop, which never leaves). In clear is only what fencing and
+/// opening need: the leased key, the token, the rule-set version and the
+/// wire key's id. Never the worker's verdict, so a spooled or wired record
+/// doesn't show which keys were quarantined or dropped. The rest, the
+/// verdict, name, file tree, extras and enrichment included, is one record
+/// of the `Results` codec sealed under a [`WireKey`], bound (as AAD) to
+/// that clear header and the worker's id, so it opens only under the same
+/// key, token, version and worker. It travels in a `Results` batch under
+/// [`flag::SEALED`](super::results::flag::SEALED). Its `Debug` shows the
+/// key and the lengths.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SealedRecord {
     pub key: InfoHash,
     pub token: Token,
     pub rule_version: u64,
-    /// The worker's verdict, if any. The commit judges again whatever it
-    /// says.
-    pub action: Option<Action>,
     pub key_id: u32,
     sealed: Vec<u8>,
 }
@@ -722,7 +720,6 @@ impl std::fmt::Debug for SealedRecord {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SealedRecord")
             .field("key", &self.key)
-            .field("action", &self.action)
             .field("key_id", &self.key_id)
             .field("sealed", &self.sealed.len())
             .finish_non_exhaustive()
@@ -745,7 +742,6 @@ impl SealedRecord {
             key: record.key,
             token: record.token,
             rule_version: record.rule_version,
-            action: record.action,
             key_id: key.id,
             sealed: Vec::new(),
         };
@@ -768,15 +764,10 @@ impl SealedRecord {
     }
 
     fn write_header(&self, w: &mut Writer) {
-        let flag =
-            super::results::flag::SEALED | self.action.map_or(0, |_| super::results::flag::ACTION);
-        w.uvar(flag);
+        w.uvar(super::results::flag::SEALED);
         w.fixed(&self.key.0);
         w.uvar(self.token.0);
         w.uvar(self.rule_version);
-        if let Some(a) = self.action {
-            w.u8(a.code());
-        }
         w.uvar(u64::from(self.key_id));
     }
 
@@ -786,17 +777,12 @@ impl SealedRecord {
         w.bytes(&self.sealed);
     }
 
-    /// Reads one after its flags (`SEALED`, with `ACTION` when
-    /// `has_action`; the caller has refused any other bit).
-    pub(super) fn read(r: &mut Reader<'_>, has_action: bool) -> Result<SealedRecord> {
+    /// Reads one after its flags (exactly `SEALED`; the caller has refused
+    /// any other bit).
+    pub(super) fn read(r: &mut Reader<'_>) -> Result<SealedRecord> {
         let key = InfoHash(r.fixed()?);
         let token = Token(r.uvar()?);
         let rule_version = r.uvar()?;
-        let action = if has_action {
-            Some(Action::from_code(r.u8()?).ok_or(Error::Invalid("action"))?)
-        } else {
-            None
-        };
         let key_id = u32::try_from(r.uvar()?).map_err(|_| Error::Invalid("key id"))?;
         let sealed = r.bytes(MAX_SEALED, "sealed record")?;
         if sealed.len() < MIN_SEAL {
@@ -806,7 +792,6 @@ impl SealedRecord {
             key,
             token,
             rule_version,
-            action,
             key_id,
             sealed: sealed.to_vec(),
         })
@@ -845,8 +830,8 @@ impl WireKeys {
     /// The record inside, checked: its key id must be one of these, the
     /// seal intact under the clear header and `worker` (the authenticated
     /// session's id, never one the payload names), and the inside exactly
-    /// one record in clear, in a batch numbered 0, whose key, token, rule
-    /// version and action are the clear ones. A sealed record nested
+    /// one record in clear, in a batch numbered 0, whose key, token and rule
+    /// version are the clear ones. A sealed record nested
     /// inside is refused. Every failure is the same few words, never
     /// content. The record it returns is re-judged at commit like any
     /// remote record.
@@ -865,11 +850,7 @@ impl WireKeys {
             return Err(Error::Invalid("sealed record"));
         }
         let record = batch.records.pop().expect("one record");
-        if record.key != s.key
-            || record.token != s.token
-            || record.rule_version != s.rule_version
-            || record.action != s.action
-        {
+        if record.key != s.key || record.token != s.token || record.rule_version != s.rule_version {
             return Err(Error::Invalid("sealed record"));
         }
         Ok(record)
@@ -1719,7 +1700,6 @@ mod tests {
         let Judged::Send(sealed) = j.judge_at(r, NOW) else {
             panic!("not sealed");
         };
-        assert_eq!(sealed.action, Some(Action::Quarantine));
         assert_eq!(sealed.rule_version, 5);
         // On the wire: the name is nowhere in the payload, in Debug or in
         // the judge's own Debug.
@@ -1746,8 +1726,6 @@ mod tests {
         for tamper in [
             |s: &mut SealedRecord| s.token = Token(43),
             |s: &mut SealedRecord| s.rule_version = 6,
-            |s: &mut SealedRecord| s.action = Some(Action::Drop),
-            |s: &mut SealedRecord| s.action = None,
             |s: &mut SealedRecord| s.key = InfoHash([0; 20]),
         ] {
             let mut t = got[0].clone();
@@ -1773,10 +1751,11 @@ mod tests {
         assert_eq!(v.decision.unwrap().action, Action::Quarantine);
     }
 
-    /// Every record leaves sealed, with the worker's action, if any, in
-    /// its clear header: marks, a rule's drop, and no decision at all.
+    /// Every record leaves sealed, its verdict sealed with it: marks, a
+    /// rule's drop, and no decision at all. Nothing in clear tells them
+    /// apart.
     #[test]
-    fn every_record_goes_sealed_with_its_action() {
+    fn every_record_goes_sealed_with_its_verdict_inside() {
         let s = snapshot(vec![
             rule(1, "cam", Action::Hide),
             rule(2, "spamword", Action::Drop),
@@ -1792,7 +1771,7 @@ mod tests {
             let Judged::Send(sealed) = j.judge_at(r, NOW) else {
                 panic!("{name} not sent");
             };
-            assert_eq!((sealed.action, sealed.rule_version), (action, 5), "{name}");
+            assert_eq!(sealed.rule_version, 5, "{name}");
             let wire = ResultsBatch {
                 batch: 1,
                 records: Vec::new(),
@@ -1804,7 +1783,14 @@ mod tests {
                 "{name}"
             );
             let (_, got) = ResultsBatch::decode_with(&wire).unwrap();
-            assert_eq!(k.open(&got[0], WORKER).unwrap().torrent.name, name);
+            let opened = k.open(&got[0], WORKER).unwrap();
+            assert_eq!(
+                (opened.torrent.name.as_str(), opened.action),
+                (name, action)
+            );
+            // The clear part is the same shape whatever the verdict: the
+            // flags (SEALED alone), then the key.
+            assert_eq!(wire[3..5], [0x80, 0x20], "{name}");
         }
         let c = &j.counts;
         let n = |a: &AtomicU64| a.load(Ordering::Relaxed);
@@ -1821,7 +1807,6 @@ mod tests {
         let Judged::Send(sealed) = old.judge_at(r, NOW) else {
             panic!("not sent");
         };
-        assert_eq!(sealed.action, None, "the old rules let it through");
         // Over the wire and opened, as the coordinator receives it.
         let wire = ResultsBatch {
             batch: 1,
@@ -1831,6 +1816,7 @@ mod tests {
         .unwrap();
         let (_, got) = ResultsBatch::decode_with(&wire).unwrap();
         let rec = keys(&snapshot(Vec::new())).open(&got[0], WORKER).unwrap();
+        assert_eq!(rec.action, None, "the old rules let it through");
         // The commit rebuilds the file list and classification from the
         // record itself (as WK-9's intake does) and judges again with
         // today's rules, which quarantine it.
@@ -1903,7 +1889,6 @@ mod tests {
             key: InfoHash([1; 20]),
             token: Token(u64::MAX),
             rule_version: u64::MAX,
-            action: Some(Action::Drop),
             key_id: u32::MAX,
             sealed: vec![0; MAX_SEALED],
         };
@@ -1960,14 +1945,12 @@ mod tests {
         assert!(r.verdict.decision.is_none());
         j.install(&snapshot(vec![rule(1, SECRET, Action::Quarantine)]), 6);
         assert_eq!(j.version(), 6);
-        assert!(matches!(
-            j.judge_at(r, NOW),
-            Judged::Send(SealedRecord {
-                rule_version: 6,
-                action: Some(Action::Quarantine),
-                ..
-            })
-        ));
+        let Judged::Send(sealed) = j.judge_at(r, NOW) else {
+            panic!("not sent");
+        };
+        assert_eq!(sealed.rule_version, 6);
+        let rec = keys(&snapshot(Vec::new())).open(&sealed, WORKER).unwrap();
+        assert_eq!(rec.action, Some(Action::Quarantine));
         assert_eq!(j.counts.rejudged.load(Ordering::Relaxed), 1);
     }
 
@@ -1997,7 +1980,7 @@ mod tests {
         }
         .encode_with(std::slice::from_ref(&sealed))
         .unwrap();
-        // The flags are SEALED, with ACTION or without, and nothing else.
+        // The flags are exactly SEALED: ACTION or any other bit refuses.
         let flags_at = 3; // version, batch 1, count 1
         let mut bad = wire.clone();
         bad[flags_at] |= super::super::results::flag::V2 as u8;
@@ -2005,20 +1988,14 @@ mod tests {
             ResultsBatch::decode_with(&bad).err(),
             Some(Error::Invalid("flags"))
         );
-        // An action code that isn't one, and a seal too short to hold a
-        // nonce and tag, are refused.
-        let mut w = Writer::default();
-        w.u8(1);
-        w.uvar(1);
-        w.uvar(1);
-        sealed.write(&mut w);
-        let at = w.out.len() - 1 - 1 - sealed.sealed.len() - 3 - 1;
-        assert_eq!(w.out[at], Action::Quarantine.code());
-        w.out[at] = 0xEE;
+        let mut with_action = wire.clone();
+        // SEALED | ACTION as a varint.
+        with_action.splice(3..5, [0x80, 0x21]);
         assert_eq!(
-            ResultsBatch::decode_with(&w.out).err(),
-            Some(Error::Invalid("action"))
+            ResultsBatch::decode_with(&with_action).err(),
+            Some(Error::Invalid("flags"))
         );
+        // A seal too short to hold a nonce and tag is refused.
         let mut w = Writer::default();
         w.u8(1);
         w.uvar(1);
@@ -2031,22 +2008,6 @@ mod tests {
         for n in 0..wire.len() {
             assert!(ResultsBatch::decode_with(&wire[..n]).is_err());
         }
-        // A sealed record without an action round-trips with its flag
-        // clear.
-        let r = prepared(&j.filter().current(), "plain", 1 << 20);
-        let Judged::Send(none) = j.judge_at(r, NOW) else {
-            panic!()
-        };
-        assert_eq!(none.action, None);
-        let wire = ResultsBatch {
-            batch: 2,
-            records: Vec::new(),
-        }
-        .encode_with(std::slice::from_ref(&none))
-        .unwrap();
-        // SEALED (1 << 12) alone, as a varint.
-        assert_eq!(wire[3..5], [0x80, 0x20]);
-        assert_eq!(ResultsBatch::decode_with(&wire).unwrap().1, vec![none]);
     }
 
     /// `open` takes only exactly one record in clear, in a batch numbered

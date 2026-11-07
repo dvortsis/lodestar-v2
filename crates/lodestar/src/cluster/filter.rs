@@ -536,12 +536,20 @@ mod tests {
             "not read again for the same state"
         );
         assert!(s.due(&w, 3, NOW, Some(8)), "a real change is");
-        // A dictionary that can't be encoded fails it too, filter unchanged.
+        // A dictionary that can't be encoded fails it too, and a new,
+        // valid filter that came with it isn't taken either.
         let zero = DictSnapshot {
             id: 0,
             bytes: vec![],
         };
-        assert!(s.install(4, &SEAL, &snap, Some(&zero)).is_err());
+        let mut changed = snap.clone();
+        changed.filter.state.cs_sigs = vec![42];
+        assert_ne!(
+            version_of(&changed.encode().unwrap()),
+            before.1,
+            "a different filter payload"
+        );
+        assert!(s.install(4, &SEAL, &changed, Some(&zero)).is_err());
         assert_eq!(s.versions(), before);
     }
 

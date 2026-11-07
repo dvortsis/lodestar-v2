@@ -68,7 +68,12 @@ fuzz_target!(|data: &[u8]| {
                 match inc.take(c) {
                     Ok(Step::Done(_, done)) => {
                         assert!(done.bytes.len() <= MAX_SNAPSHOT);
+                        // Straight to the decoder: the version check in
+                        // `done.filter()` would stop almost every input.
                         let _ = done.filter();
+                        if let Ok(s) = FilterSnapshot::decode(&done.bytes) {
+                            assert_eq!(s.encode().expect("a decoded snapshot encodes"), done.bytes);
+                        }
                     }
                     Ok(Step::Ack(a)) => assert_eq!(a.kind, SnapshotKind::Filter),
                     Err(_) => {}

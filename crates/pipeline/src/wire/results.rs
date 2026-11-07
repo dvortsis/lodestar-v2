@@ -60,11 +60,11 @@
 //! A `[field]` is present exactly when its bit in `flags` is set ([`flag`]).
 //!
 //! A record from a remote worker (WK-8) goes **sealed** instead, flags
-//! `SEALED` plus `ACTION` when it has one ([`flag::SEALED`]); records in
+//! exactly `SEALED` ([`flag::SEALED`]), its verdict sealed too; records in
 //! clear are for the built-in worker's path and the pinned bytes:
 //!
 //! ```text
-//! sealed  = flags:uvar info_hash:[20] token:uvar rule_version:uvar [action:u8]
+//! sealed  = flags:uvar info_hash:[20] token:uvar rule_version:uvar
 //!           key_id:uvar sealed:bytes
 //! ```
 //! Sealed records follow every record in clear. `sealed` holds a whole
@@ -147,10 +147,9 @@ pub mod flag {
     /// Every bit a record in clear may set; any other refuses the record.
     pub const ALL: u64 = (1 << 12) - 1;
     /// A record from a remote worker, sealed (WK-8, [`SealedRecord`](super::super::filter_snapshot::SealedRecord)):
-    /// its flags are `SEALED`, plus `ACTION` when the worker's verdict
-    /// has one, and its layout is `info_hash:[20] token:uvar
-    /// rule_version:uvar [action:u8] key_id:uvar sealed:bytes`. Nothing
-    /// else is in clear.
+    /// its flags are exactly `SEALED`, and its layout is `info_hash:[20]
+    /// token:uvar rule_version:uvar key_id:uvar sealed:bytes`. Nothing else
+    /// is in clear, not even the worker's verdict.
     pub const SEALED: u64 = 1 << 12;
 }
 
@@ -290,13 +289,10 @@ enum Any {
 fn read_any(r: &mut Reader<'_>) -> Result<Any> {
     let flags = r.uvar()?;
     if flags & flag::SEALED != 0 {
-        if flags & !(flag::SEALED | flag::ACTION) != 0 {
+        if flags != flag::SEALED {
             return Err(Error::Invalid("flags"));
         }
-        return Ok(Any::Sealed(SealedRecord::read(
-            r,
-            flags & flag::ACTION != 0,
-        )?));
+        return Ok(Any::Sealed(SealedRecord::read(r)?));
     }
     Ok(Any::Clear(read_record(r, flags)?))
 }
