@@ -326,12 +326,18 @@ pub trait Ops {
     fn inspect(&self, dir: &Path) -> io::Result<Option<Inspection>>;
     /// Creates the folder with its final ACL in one step.
     fn create(&self, dir: &Path) -> io::Result<()>;
-    /// An account's name (`DESKTOP-1\\alex`) for a refusal's message, when
-    /// it can be looked up.
-    fn account_name(&self, _sid: &str) -> Option<String> {
+    /// An account for a refusal's message, when it can be looked up: its
+    /// SID spelled out (an SDDL alias such as `LA`, the built-in
+    /// Administrator, names a machine-specific SID) and its name
+    /// (`DESKTOP-1\\alex`), if it has one.
+    fn account(&self, _sid: &str) -> Option<Account> {
         None
     }
 }
+
+/// An account as [`Ops::account`] looks it up: the SID spelled out and
+/// the account's name.
+pub type Account = (String, Option<String>);
 
 /// What a refusal tells the administrator to do when someone else may
 /// have had the folder: the installer's Repair secures an existing folder
@@ -393,7 +399,7 @@ pub fn refusal(
     seen: &Inspection,
     own_sid: Option<&str>,
     why: &str,
-    name: &dyn Fn(&str) -> Option<String>,
+    account: &dyn Fn(&str) -> Option<Account>,
 ) -> String {
     let dir = printable(&dir.display().to_string());
     let clean = !seen.folder.link
@@ -406,10 +412,21 @@ pub fn refusal(
         .ok()
         .filter(|d| clean && trusted(&d.owner, own_sid));
     let extra = folder.and_then(|d| extra_accounts(&d.dacl, own_sid));
-    match extra.as_deref() {
-        Some([sid]) if icacls_sid(sid).is_some_and(|full| user_account(&full)) => {
-            let full = icacls_sid(sid).unwrap_or_default();
-            let who = match name(&full) {
+    // The one extra account, spelled out: a SID as written, or the
+    // built-in Administrator or Guest (`LA`, `LG`) as Windows expands it.
+    let one = match extra.as_deref() {
+        Some([sid]) => match icacls_sid(sid) {
+            Some(full) => Some((full.clone(), account(&full).and_then(|a| a.1))),
+            None if matches!(sid.as_str(), "LA" | "LG") => {
+                account(sid).and_then(|(full, name)| icacls_sid(&full).map(|f| (f, name)))
+            }
+            None => None,
+        },
+        _ => None,
+    };
+    match one.filter(|(full, _)| user_account(full)) {
+        Some((full, name)) => {
+            let who = match name {
                 Some(n) => format!("{} ({full})", printable(&n)),
                 None => full.clone(),
             };
@@ -420,7 +437,7 @@ pub fn refusal(
                  /remove:g *{full} /T /C. If it's anyone else: {MOVE_AWAY}."
             )
         }
-        _ => format!("{dir} isn't private: {why}. {MOVE_AWAY}."),
+        None => format!("{dir} isn't private: {why}. {MOVE_AWAY}."),
     }
 }
 
@@ -442,7 +459,7 @@ pub fn secure_dir(dir: &Path, own_sid: Option<&str>, ops: &impl Ops) -> Result<(
         }
     };
     verdict(&seen, own_sid)
-        .map_err(|why| refusal(dir, &seen, own_sid, &why, &|sid| ops.account_name(sid)))?;
+        .map_err(|why| refusal(dir, &seen, own_sid, &why, &|sid| ops.account(sid)))?;
     let marker = dir.join(MARKER);
     if !marker.exists() {
         let _ = std::fs::write(marker, "Lodestar checked this folder's permissions.\r\n");
@@ -552,7 +569,7 @@ impl Ops for Windows<'_> {
     /// controller in reach, a lookup can take long enough to hold up the
     /// refusal past the SCM's patience. Then the message gives the SID
     /// alone.
-    fn account_name(&self, sid: &str) -> Option<String> {
+    fn account(&self, sid: &str) -> Option<Account> {
         use std::io::Read;
         let mut child = super::powershell_command()?
             .args([
@@ -582,21 +599,27 @@ impl Ops for Windows<'_> {
                 }
             }
         };
-        let mut name = String::new();
-        child.stdout.take()?.read_to_string(&mut name).ok()?;
-        let name = name.trim().to_string();
-        (status.success() && !name.is_empty()).then_some(name)
+        let mut out = String::new();
+        child.stdout.take()?.read_to_string(&mut out).ok()?;
+        if !status.success() {
+            return None;
+        }
+        let mut lines = out.lines().map(str::trim).filter(|l| !l.is_empty());
+        let full = lines.next()?.to_string();
+        Some((full, lines.next().map(str::to_string)))
     }
 }
 
 /// How long a refusal waits for an account's name.
 pub const NAME_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// An account's name for its SID. The SID arrives in an environment
-/// variable, so it's never parsed as script; it fails (no output) for a
-/// SID that names no account.
+/// A SID or SDDL alias spelled out, then the account's name when it has
+/// one. The SID arrives in an environment variable, so it's never parsed
+/// as script.
 pub const NAME_SCRIPT: &str = "$ErrorActionPreference = 'Stop'
-(New-Object System.Security.Principal.SecurityIdentifier($env:LODESTAR_ACL_SID)).Translate([System.Security.Principal.NTAccount]).Value";
+$s = New-Object System.Security.Principal.SecurityIdentifier($env:LODESTAR_ACL_SID)
+$s.Value
+try { $s.Translate([System.Security.Principal.NTAccount]).Value } catch { }";
 
 /// The folder's own SDDL, or nothing for a link or junction. The path
 /// arrives in an environment variable, as [`INSPECT_SCRIPT`]'s does.
@@ -989,7 +1012,9 @@ mod tests {
         let dir = Path::new(r"C:\ProgramData\Lodestar");
         let seen = seen(&with_alex(), &[item("auth.json", "O:BAD:AI")]);
         let why = verdict(&seen, Some(OWN)).unwrap_err();
-        let named = |sid: &str| (sid == ALEX).then(|| r"DESKTOP-1\alex".to_string());
+        let named = |sid: &str| {
+            (sid == ALEX).then(|| (ALEX.to_string(), Some(r"DESKTOP-1\alex".to_string())))
+        };
         let msg = refusal(dir, &seen, Some(OWN), &why, &named);
         for part in [
             r"C:\ProgramData\Lodestar isn't private",
@@ -1008,7 +1033,7 @@ mod tests {
             "{msg}"
         );
         // A name that would break the command line is cleaned.
-        let odd = |_: &str| Some("a\"b\n\u{202e}".to_string());
+        let odd = |_: &str| Some((ALEX.to_string(), Some("a\"b\n\u{202e}".to_string())));
         let msg = refusal(dir, &seen, Some(OWN), &why, &odd);
         assert!(msg.contains("grants access to ab (S-1-5-21"), "{msg}");
         // A group or well-known account is never offered as your own:
@@ -1019,6 +1044,32 @@ mod tests {
             let msg = refusal(dir, &group, Some(OWN), &why, &|_| None);
             assert!(!msg.contains("Repair, or remove"), "{other}: {msg}");
             assert!(msg.contains(MOVE_AWAY), "{other}: {msg}");
+        }
+    }
+
+    /// SDDL writes the built-in Administrator as `LA`, whose SID depends on
+    /// the machine: Windows spells it out, and then it's handled like any
+    /// other administrator account.
+    #[test]
+    fn the_built_in_administrator_is_spelled_out() {
+        let dir = Path::new(r"C:\ProgramData\Lodestar");
+        let seen = seen(&format!("{PRIVATE}(A;OICI;FA;;;LA)"), &[]);
+        let why = verdict(&seen, Some(OWN)).unwrap_err();
+        let admin = "S-1-5-21-9-9-9-500";
+        let expand = |sid: &str| {
+            (sid == "LA").then(|| (admin.to_string(), Some(r"DESKTOP-1\Administrator".into())))
+        };
+        let msg = refusal(dir, &seen, Some(OWN), &why, &expand);
+        assert!(
+            msg.contains(r"grants access to DESKTOP-1\Administrator (S-1-5-21-9-9-9-500)"),
+            "{msg}"
+        );
+        assert!(msg.contains("/remove:g *S-1-5-21-9-9-9-500 /T /C"), "{msg}");
+        // Not expanded, or expanded to something that isn't a user account:
+        // the general advice.
+        for lookup in [None, Some(("S-1-5-32-544".to_string(), None))] {
+            let msg = refusal(dir, &seen, Some(OWN), &why, &|_| lookup.clone());
+            assert!(msg.ends_with(&format!("{why}. {MOVE_AWAY}.")), "{msg}");
         }
     }
 
@@ -1052,7 +1103,9 @@ mod tests {
                 // the admin's entry it's refused, but never as Repair's case.
                 panic!("{case:?} passed");
             };
-            let msg = refusal(dir, &case, Some(OWN), &why, &|_| Some("x".into()));
+            let msg = refusal(dir, &case, Some(OWN), &why, &|_| {
+                Some((ALEX.into(), Some("x".into())))
+            });
             assert!(msg.ends_with(&format!("{why}. {MOVE_AWAY}.")), "{msg}");
             assert!(!msg.contains("icacls"), "{msg}");
             assert!(!msg.contains("Continue"), "{msg}");
