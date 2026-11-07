@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-07T15:39Z",
+  "updated_at": "2026-11-07T15:53Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5730,6 +5730,11 @@
       "id": "status-1534",
       "added": "2026-11-07T15:34Z",
       "text": "#582 P-v052-cut PR A open (a9fc74d8), CI running; D6 NOTICE_VERSION stays 4 (owner told), D7 collector uses existing collector_error stop reason (runner accepts); docs/legal/README.md phrase table edited (accepted). WK-15: Discover 30d broke 50 ms (51.3) from per-row metric-17 read; fix = grouped SQL in store insights.rs; runner asked full test incl compacted, headroom (<~40 ms), equality test. SRC-G: dev-deps in sources-plugins and bench approved; e2e renamed sources-gate.routes.test.ts; \u00a72.37 wording missing = wiring blocker."
+    },
+    {
+      "id": "flake-shell-unreachable",
+      "added": "2026-11-07T15:53Z",
+      "text": "Flake candidate: web/e2e/shell.routes.test.ts:368 \"a server that never answers shows the unreachable page, and Try again reloads\" timed out clicking Try again (line 387) on #582 (run 42386800085, job 128445845679); #582 touches no web/. Likely race: test unroutes API + restores event stream before click, app probe recovers and removes the button. One rerun spent. If it recurs: small X-flake-shell-unreachable fix (wait for button/click before restoring routes). WK-15: remote.rs counters() keys 4/5 into metric 18 approved (grouped query insufficient: 49/69 ms)."
     }
   ],
   "main_health": [
