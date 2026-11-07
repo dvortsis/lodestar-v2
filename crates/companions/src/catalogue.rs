@@ -603,22 +603,21 @@ impl std::error::Error for NotAvailable {}
 ///
 /// Read-only outside this crate: it can't be built, cloned or changed.
 ///
-/// ```compile_fail
+/// ```compile_fail,E0596
 /// let c = lodestar_companions::builtin().unwrap();
 /// let mut copy = c.get("qbittorrent").unwrap().clone();
 /// copy.hosts.clear();
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0599
 /// let c = lodestar_companions::builtin().unwrap();
-/// let a = c.get("qbittorrent").unwrap().native.as_ref().unwrap().artifacts[0].clone();
-/// let _: lodestar_companions::catalogue::Artifact = a;
+/// let _ = c.get("qbittorrent").unwrap().native.as_ref().unwrap().artifacts[0].clone();
 /// ```
 ///
 /// An image can't be read before it's pinned, except through
 /// [`Entry::renderable`]:
 ///
-/// ```compile_fail
+/// ```compile_fail,E0616
 /// let c = lodestar_companions::builtin().unwrap();
 /// let _ = &c.get("qbittorrent").unwrap().container.as_ref().unwrap().image;
 /// ```
@@ -1199,7 +1198,9 @@ fn validate_entry(e: RawEntry, at: &str) -> Result<Entry, CatalogueError> {
     check(native.is_some() || container.is_some(), Rule::Shape, at)?;
     // FlareSolverr can't be made a default by labelling it as something
     // else (owner §2.47, Q21): whatever names it — the id, the container
-    // name or the image — it must be a `challenge_solver` and opt-in.
+    // name or the image's last segment, each compared whole, so
+    // `my-flaresolverr-fork` is another companion — it must be opt-in and
+    // only a `challenge_solver`, never also labelled as something else.
     let names_flaresolverr = id.as_str() == "flaresolverr"
         || container.as_ref().is_some_and(|c| {
             c.name.as_str() == "flaresolverr"
@@ -1210,9 +1211,14 @@ fn validate_entry(e: RawEntry, at: &str) -> Result<Entry, CatalogueError> {
                     .is_some_and(|r| r.eq_ignore_ascii_case("flaresolverr"))
         });
     check(
-        !names_flaresolverr || (e.opt_in && e.needed_for.contains(&Need::ChallengeSolver)),
+        !names_flaresolverr || e.opt_in,
         Rule::Need,
         &format!("{at}.opt_in"),
+    )?;
+    check(
+        !names_flaresolverr || e.needed_for == [Need::ChallengeSolver],
+        Rule::Need,
+        &at_need,
     )?;
     // The VPN route is gluetun in a container; the native VPN is v1.x
     // (plan §2).
@@ -1289,14 +1295,19 @@ fn validate_entry(e: RawEntry, at: &str) -> Result<Entry, CatalogueError> {
     check(e.templates.len() <= MAX_TEMPLATES, Rule::Count, &at_t)?;
     check(unique(e.templates.iter()), Rule::Duplicate, &at_t)?;
     for (j, t) in e.templates.iter().enumerate() {
-        // A companion's own config file goes only with that kind of
-        // companion, and with a native build to write it for.
+        // A companion's own config file goes only with that companion, by
+        // id as well as by role (another download client isn't
+        // qBittorrent), and with a native build to write it for.
         let ok = match t {
             TemplateId::QbittorrentConf => {
-                native.is_some() && e.needed_for.contains(&Need::DownloadClient)
+                id.as_str() == "qbittorrent"
+                    && native.is_some()
+                    && e.needed_for.contains(&Need::DownloadClient)
             }
             TemplateId::ProwlarrConfigXml => {
-                native.is_some() && e.needed_for.contains(&Need::IndexerManager)
+                id.as_str() == "prowlarr"
+                    && native.is_some()
+                    && e.needed_for.contains(&Need::IndexerManager)
             }
             TemplateId::ComposeService | TemplateId::UnraidTemplate => container.is_some(),
         };
@@ -1319,6 +1330,15 @@ fn validate_entry(e: RawEntry, at: &str) -> Result<Entry, CatalogueError> {
     })
 }
 
+/// `/<owner>/<project>/releases/download/`, with a non-empty owner and
+/// project (`HttpsUrl` already refuses `.`, `..` and empty segments).
+fn release_folder(path: &str) -> bool {
+    matches!(
+        path.split('/').collect::<Vec<_>>()[..],
+        ["", owner, project, "releases", "download", ""] if !owner.is_empty() && !project.is_empty()
+    )
+}
+
 fn validate_native(n: RawNative, hosts: &[Hostname], at: &str) -> Result<Native, CatalogueError> {
     let at_r = format!("{at}.release");
     let release = field(HttpsUrl::parse(&n.release), &at_r)?;
@@ -1327,14 +1347,12 @@ fn validate_native(n: RawNative, hosts: &[Hostname], at: &str) -> Result<Native,
         Rule::HostNotAllowed,
         &at_r,
     )?;
-    // A release folder, not a host: `/<owner>/<project>/…/` with at least
-    // two segments and a closing `/`, so a pin can't come from another
-    // owner or project on the same host (owner §2.47, cq6).
-    check(
-        release.path().ends_with('/') && release.path()[1..].split('/').count() >= 3,
-        Rule::Source,
-        &at_r,
-    )?;
+    // A release folder, not a host: exactly
+    // `/<owner>/<project>/releases/download/`, so a pin can't come from
+    // another owner or project on the same host (owner §2.47, cq6), nor
+    // from a project's source archives (`/archive/`) or anything that
+    // isn't a published release.
+    check(release_folder(release.path()), Rule::Source, &at_r)?;
     let at_a = format!("{at}.artifacts");
     check(
         !n.artifacts.is_empty() && n.artifacts.len() <= MAX_ARTIFACTS,
@@ -1469,10 +1487,13 @@ fn validate_pin(
         },
         _ => return Err(CatalogueError::new(Rule::Fingerprint, at_s)),
     };
-    // From the entry's own release folder (cq6: whose binaries run), and
-    // a file in it rather than the folder itself.
+    // From the entry's own release folder (cq6: whose binaries run), as
+    // one release's file: `<tag>/<file>`, nothing deeper.
     check(
-        url.as_str().len() > release.as_str().len() && url.as_str().starts_with(release.as_str()),
+        url.as_str()
+            .strip_prefix(release.as_str())
+            .and_then(|rest| rest.split_once('/'))
+            .is_some_and(|(tag, file)| !tag.is_empty() && !file.is_empty() && !file.contains('/')),
         Rule::Source,
         &at_u,
     )?;

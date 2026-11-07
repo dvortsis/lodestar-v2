@@ -403,6 +403,36 @@ fn refuses_pins_from_another_source() {
         qbit(v)["native"]["release"] =
             json!("https://github.com/userdocs/qbittorrent-nox-static/releases/download");
     });
+    // Exactly `/<owner>/<project>/releases/download/`: not source
+    // archives, not another folder under the project, nothing before
+    // `releases` and nothing after `download`.
+    for bad in [
+        "https://github.com/userdocs/qbittorrent-nox-static/archive/",
+        "https://github.com/userdocs/qbittorrent-nox-static/releases/",
+        "https://github.com/userdocs/qbittorrent-nox-static/tree/releases/download/",
+        "https://github.com/userdocs/qbittorrent-nox-static/x/releases/download/",
+        "https://github.com/userdocs/qbittorrent-nox-static/releases/download/release-5.0.3_v2.0.11/",
+        "https://github.com/userdocs/releases/download/",
+        "https://github.com/userdocs/qbittorrent-nox-static/Releases/Download/",
+    ] {
+        // The pin moves into the bad folder too, so only the folder rule
+        // can refuse it.
+        refused(Rule::Source, |v| {
+            qbit(v)["native"]["release"] = json!(bad);
+            qbit_pin(v)["url"] = json!(format!("{bad}v1/x86_64-qbittorrent-nox"));
+        });
+    }
+    // A pin is one release's file, `<tag>/<file>`, nothing deeper.
+    refused(Rule::Source, |v| {
+        qbit_pin(v)["url"] = json!(
+            "https://github.com/userdocs/qbittorrent-nox-static/releases/download/x86_64-qbittorrent-nox"
+        );
+    });
+    refused(Rule::Source, |v| {
+        qbit_pin(v)["url"] = json!(
+            "https://github.com/userdocs/qbittorrent-nox-static/releases/download/r/sub/x86_64-qbittorrent-nox"
+        );
+    });
     refused(Rule::Url, |v| {
         qbit(v)["native"]["release"] = json!("http://github.com/a/b/c/")
     });
@@ -444,8 +474,26 @@ fn refuses_flaresolverr_made_default_by_labelling() {
         );
         v["entries"][2]["opt_in"] = json!(true);
     });
+    // Opt-in and a challenge solver, but labelled as something else too:
+    // refused, so it can't pick up another role's defaults.
+    refused(Rule::Need, |v| {
+        v["entries"][2]["needed_for"] = json!(["challenge_solver", "indexer_manager"]);
+    });
     // The real thing, opt-in and a challenge solver, is fine.
     assert!(parse(&pinned()).is_ok());
+    // Names are compared whole: one that merely contains the word is
+    // another companion, and needn't be opt-in.
+    let mut v = pinned();
+    as_indexer(
+        &mut v,
+        "my-flaresolverr-fork",
+        "my-flaresolverr-fork",
+        "ghcr.io/someone/my-flaresolverr-fork",
+    );
+    assert!(parse(&v).is_ok());
+    let mut v = pinned();
+    as_indexer(&mut v, "solver", "solver", "ghcr.io/flaresolverr/solver");
+    assert!(parse(&v).is_ok());
 }
 
 /// A companion's own config template goes only with that kind of companion.
@@ -457,6 +505,26 @@ fn refuses_config_templates_on_the_wrong_companion() {
     refused(Rule::Template, |v| {
         qbit(v)["templates"] = json!(["prowlarr_config_xml"]);
     });
+    // The role matches but the id doesn't: another download client or
+    // indexer manager isn't qBittorrent or Prowlarr.
+    refused(Rule::Template, |v| {
+        qbit(v)["id"] = json!("transmission");
+        qbit(v)["container"]["name"] = json!("transmission");
+    });
+    refused(Rule::Template, |v| {
+        v["entries"][1]["id"] = json!("jackett");
+    });
+}
+
+/// CMP-5g: other crates' `tests/` fakes build a plan through the
+/// `testing` feature; a shipped build can't (`ConfigPlan`'s doctest).
+#[test]
+fn tests_can_build_a_config_plan() {
+    use lodestar_companions::CompanionId;
+    use lodestar_companions::adapter::ConfigPlan;
+    let plan = ConfigPlan::for_tests(CompanionId::parse("prowlarr").unwrap(), Vec::new());
+    assert_eq!(plan.companion().as_str(), "prowlarr");
+    assert!(plan.changes().is_empty());
 }
 
 #[test]
