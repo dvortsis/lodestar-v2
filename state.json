@@ -5917,6 +5917,10 @@
       "id": "X-soak-screen-fixes-merged",
       "at": "2026-11-07T22:05Z",
       "note": "#595 merged ece37f0e on fresh Opus MERGE (3 optional nits: drop guard for parked threads on spawn failure, x*x last-bit, rustdoc link to fn-local const). Backport to release/v0.5.2: ride with v0.5.2 final or next rc (test/tooling only). Slot 1 -> X-win-refusal-ux (same session)."
+    },
+    {
+      "id": "X-win-refusal-ux-owns-ext",
+      "note": "2026-11-07T21:25Z runner approved extra files: packaging/windows/secure-datadir.ps1 (-InstallerSid from UserSID only under AdminUser; account SID only), test-secure-datadir.ps1 + release.yml line, smoke.ps1 Repair leg (+ negative case). Implements owner-decisions \u00a72.x 'Repair may re-secure' rule."
     }
   ],
   "main_health": [
@@ -6701,5 +6705,6 @@
       "answers": "runner recommendation on all items: X-refetch-private ships in v0.5.2; installer Repair may re-secure admin-ACE-only folder (X-win-refusal-ux); v0.5.1 release body replacement (notes/v051-release-body.md); web-ok+e2e-ok required; delete wip/CMP-0-catalogue; Q13 stands, Q14 at G-m6; import host = Unraid box; nightly key deferred; counsel advisory, no reminders; package installers after 1.0"
     }
   ],
-  "heartbeat": "2026-11-07T22:05Z"
+  "heartbeat": "2026-11-07T22:05Z",
+  "updated": "2026-11-07T21:25:00Z"
 }
