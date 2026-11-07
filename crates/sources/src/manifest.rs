@@ -275,8 +275,8 @@ impl Caps {
 pub struct Policy {
     pub caps: Caps,
     /// A JSON Schema (draft 2020-12) object for the plugin's settings. The
-    /// settings UI is generated from it (§10.10). Secrets are marked
-    /// `"writeOnly": true` and are never echoed back.
+    /// settings UI is generated from it (§10.10). It never lists a secret:
+    /// those are [`Policy::credentials`] (X-sources-api-spec).
     pub config_schema: &'static str,
     pub distribution: Distribution,
     /// When the plugin runs unless the user sets other windows.
@@ -284,6 +284,40 @@ pub struct Policy {
     /// The most agents (§18.4: the plugin's concurrency unit) the user may
     /// set. 1, the strict default, means the setting can't be changed.
     pub max_agents: u32,
+    /// The credentials the plugin reads from the per-source credential
+    /// store ([`crate::consent::SourceCredentials`]), by name: what the
+    /// Account dialog asks for. Empty, the strict default, for a plugin
+    /// that reads none. They're written through
+    /// `PATCH /sources/{id}/credentials`, never as settings: no name here
+    /// is a property of `config_schema`, and the API leaves out of the
+    /// schema it lists any property that is, or that's `"writeOnly"`.
+    pub credentials: &'static [CredentialSpec],
+}
+
+/// One credential a plugin reads (X-sources-api-spec). It describes the
+/// field, never a value: the API lists it for the dialog, and
+/// [`crate::consent::need`] checks the required ones are stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CredentialSpec {
+    /// The name it's stored under. It passes
+    /// [`crate::consent::check_name`] and isn't one of the egress names
+    /// (`egress.socks5.*`), which belong to the egress setting.
+    pub name: &'static str,
+    /// What the dialog calls it, in English ("API key").
+    pub label: &'static str,
+    pub kind: CredentialKind,
+    /// Enabling the source needs it stored (§18.7, Account).
+    pub required: bool,
+}
+
+/// How a credential field is shown and handled. Neither kind is ever
+/// returned once stored: the API lists only the names stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialKind {
+    /// A password, API key or token: a masked input.
+    Secret,
+    /// A user name: a plain input.
+    Username,
 }
 
 impl Policy {
@@ -294,6 +328,7 @@ impl Policy {
         distribution: Distribution::Coordinator,
         schedule: Schedule::ALWAYS,
         max_agents: 1,
+        credentials: &[],
     };
 
     /// The limits that apply once the user's settings meet the hard caps.

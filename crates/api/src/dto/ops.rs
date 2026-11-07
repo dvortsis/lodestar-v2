@@ -164,6 +164,31 @@ pub enum SourceState {
     Purged,
 }
 
+/// How a credential field is entered: `secret` (a password, API key or
+/// token) is masked, `username` isn't. Neither is returned once stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialKind {
+    Secret,
+    Username,
+}
+
+/// One credential a source reads, as its plugin declares it: what the
+/// Account dialog asks for. It describes the field and never holds a
+/// value. Store it with `PATCH /sources/{id}/credentials` under `name`;
+/// `credentials` then lists the name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CredentialField {
+    #[schema(inline)]
+    pub kind: CredentialKind,
+    /// What to call it, in English, such as "API key".
+    pub label: String,
+    /// The name it's stored under, such as `api_key`.
+    pub name: String,
+    /// Enabling the source needs it stored.
+    pub required: bool,
+}
+
 /// What enabling a source requires (§18.7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
@@ -389,6 +414,14 @@ pub struct SourceSchedule {
 pub struct Source {
     #[schema(inline)]
     pub agents: SourceAgents,
+    /// The JSON Schema (draft 2020-12) of its settings, as its plugin
+    /// declares it: the settings form is generated from it, and `config`
+    /// in `PATCH /sources/{id}` is checked against the plugin's own rules
+    /// (when `editable` lists `config`). Read-only, and the same for every
+    /// install: it holds no setting's value. Secrets are never in it: they
+    /// are `credential_spec`'s.
+    #[schema(value_type = std::collections::BTreeMap<String, Value>)]
+    pub config_schema: Value,
     #[schema(inline)]
     pub consent: ConsentClass,
     /// Its class is enabled by acknowledging what's shown (`external`,
@@ -406,6 +439,10 @@ pub struct Source {
     /// `endpoints`, so it changes when either does, and then the source
     /// asks again. Empty for `none` and `account`.
     pub consent_version: String,
+    /// The credentials its plugin reads, in the order to ask for them;
+    /// empty for a source that reads none. It describes the fields, never
+    /// a value.
+    pub credential_spec: Vec<CredentialField>,
     /// The names of its stored credentials; their values are never
     /// returned.
     pub credentials: Vec<String>,
@@ -471,9 +508,14 @@ pub struct Source {
 #[schema(example = json!({
     "sources": [{
         "agents": { "count": 1, "enforced": false, "max": 1 },
+        "config_schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object", "properties": {}, "additionalProperties": false
+        },
         "consent": "none",
         "consent_required": false,
         "consent_version": "",
+        "credential_spec": [],
         "credentials": [],
         "editable": ["agents", "egress", "enabled", "priority", "schedule"],
         "egress": {
