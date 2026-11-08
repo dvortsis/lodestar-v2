@@ -6839,7 +6839,7 @@
         "slice": "CMP-4b",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCb1R6WRuMNMxCLNcn: #608 at 24769baf green; Opus review + /security-review running; main merge (Cargo conflict) prepared locally",
+        "doing": "session_01MMjhnCb1R6WRuMNMxCLNcn: #608 Opus review CHANGES (1 blocking: Gated drop race; cgroup detection; pub release); security review running; main merged locally 9b8da59c, unpushed",
         "since": "2026-11-08T07:43Z"
       },
       {
@@ -6914,5 +6914,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T11:05Z"
+  "updated": "2026-11-08T11:07Z"
 }
