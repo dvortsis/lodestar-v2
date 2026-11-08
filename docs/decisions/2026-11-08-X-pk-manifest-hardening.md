@@ -1,0 +1,10 @@
+# X-pk-manifest-hardening decisions
+
+Follow-up to PK-manifest (#618), from its review's non-blocking notes (runner, 2026-11-08). It supplements `2026-11-08-PK-manifest.md`.
+
+- **The builder refuses a previous manifest that lists a version twice.** A carried duplicate would make the manifest every client refuses (`doc.rs`: versions are unique), and later runs would carry it forward.
+- **Carried key statements are type-checked:** `body`, `minisig` and an optional `cosig` must be strings. Every JSON input refuses `NaN` and `Infinity`, which Python's parser accepts by default and the verifier's doesn't.
+- **One tag check, strict semver:** release.yml's two tag checks (the image `publish` job and `package-gate`) now call `update_manifest.py check-version`, the same rule the manifest and `build.rs` apply. So `v0.6.0-rc.01` (a numeric identifier with a leading zero) is refused before anything is built, and the rule is unit-tested.
+- **The inert nightly manifest job doesn't join the shared `update-manifest` concurrency group.** It gets a per-run group, so a nightly run can never displace a pending release manifest job or `freshness.yml` run (a newer pending run cancels an older pending one in a group). Tag runs still use `update-manifest`. When PK-nightly-host makes the nightly job sign, it must join the shared group again.
+- **The CI round trip uses its own empty key chain** instead of `crates/update/keys/statements.json`. That file is signed by the real recovery key, which the round trip's throwaway trust root doesn't hold, so once it has statements they couldn't verify there. The job also gets `timeout-minutes: 20`.
+- **Key rotation runbook:** `packaging/keys/README.md` step 5 now says what to do after a release-key rotation. The manifest job refuses until Stable and Beta are re-signed with the new key, because it checks the published envelope against the tagged `lodestar-release.pub`. The steps rebuild each body with the new chain and a new date, sign it with the new key, and upload it, before the next tag.

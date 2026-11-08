@@ -276,7 +276,10 @@ jobs:
       - name: Tag is a semantic version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
-          if ! echo "$GITHUB_REF_NAME" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'; then
+          # Strict semver (no leading zeros in numeric pre-release parts), the
+          # same check as the update manifest's (update_manifest.py).
+          if [ "${GITHUB_REF_NAME#v}" = "$GITHUB_REF_NAME" ] ||
+            ! python3 .github/scripts/update_manifest.py check-version "${GITHUB_REF_NAME#v}"; then
             echo "::error::$GITHUB_REF_NAME is not vMAJOR.MINOR.PATCH[-prerelease]; nothing to publish"
             exit 1
           fi
@@ -373,7 +376,9 @@ jobs:
                 echo "::error::$tag does not match the version in Cargo.toml ($base): bump it before tagging"
                 exit 1
               fi
-              if ! echo "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'; then
+              # Strict semver, as the update manifest and build.rs need it
+              # (`-rc.01` is refused: a numeric part has no leading zero).
+              if ! python3 .github/scripts/update_manifest.py check-version "$version"; then
                 echo "::error::$tag is not vMAJOR.MINOR.PATCH[-prerelease]"
                 exit 1
               fi
@@ -834,8 +839,10 @@ jobs:
     environment: ${{ startsWith(github.ref, 'refs/tags/v') && 'release' || 'nightly' }}
     # One writer for `update-manifest` at a time, shared with freshness.yml
     # (docs/decisions/2026-10-30-X-freshness-hardening.md).
+    # The nightly run is inert (it signs nothing), so it gets a group of its
+    # own and can never displace a pending release or freshness job.
     concurrency:
-      group: update-manifest
+      group: ${{ startsWith(github.ref, 'refs/tags/v') && 'update-manifest' || format('update-manifest-inert-{0}', github.run_id) }}
       cancel-in-progress: false
     permissions:
       contents: write

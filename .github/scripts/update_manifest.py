@@ -15,6 +15,7 @@ Usage:
       [--notes-url URL] [--keep N] [--now SECONDS]
   update_manifest.py extract ENVELOPE BODY_OUT MINISIG_OUT
   update_manifest.py envelope BODY MINISIG OUT
+  update_manifest.py check-version VERSION
 
 Every artifact URL is under `https://github.com/dvortsis/lodestar-v2/releases/download/`
 (`--repo` must be that repository), and this release's under its own tag (`v<version>`; `nightly` for a
@@ -98,7 +99,9 @@ def strict_json(raw: bytes | str):
         if len(keys) != len(set(keys)):
             raise Refused(f"duplicate key in {keys}")
         return dict(items)
-    return json.loads(raw, object_pairs_hook=pairs)
+    def constant(name):
+        raise Refused(f"{name} isn't JSON")
+    return json.loads(raw, object_pairs_hook=pairs, parse_constant=constant)
 
 
 def version_key(v: str) -> tuple:
@@ -229,6 +232,8 @@ def load_statements(path: Path) -> list:
         raise Refused(f"{path}: at most {MAX_STATEMENTS} statements")
     for i, s in enumerate(stmts):
         check_fields(s, ("body", "minisig", "cosig"), ("cosig",), f"statement {i}")
+        if not all(isinstance(v, str) for v in s.values()):
+            raise Refused(f"statement {i}: body, minisig and cosig must be strings")
         if len(base64.b64decode(s["body"], validate=True)) > MAX_STATEMENT:
             raise Refused(f"statement {i} body is over {MAX_STATEMENT} bytes")
     return stmts
@@ -277,6 +282,8 @@ def build(a: argparse.Namespace) -> int:
         if not isinstance(prev["releases"], list):
             raise Refused("the previous manifest's releases must be a list")
         previous = [normalise_release(r, f"previous release {i}") for i, r in enumerate(prev["releases"])]
+        if len({r["version"] for r in previous}) != len(previous):
+            raise Refused("the previous manifest lists a version twice")
         if any(r["version"] == version for r in previous):
             print(f"{version} is already in the published {channel} manifest; nothing to do.", file=sys.stderr)
             return EXIT_ALREADY
@@ -365,6 +372,12 @@ def envelope(a: argparse.Namespace) -> int:
     return 0
 
 
+def check_version_cmd(a: argparse.Namespace) -> int:
+    """release.yml's tag check: strict semver, no build metadata, 64 bytes."""
+    check_version(a.version)
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="command", required=True)
@@ -390,6 +403,9 @@ def parser() -> argparse.ArgumentParser:
     for name in ("body", "minisig", "out"):
         w.add_argument(name)
     w.set_defaults(run=envelope)
+    c = sub.add_parser("check-version")
+    c.add_argument("version")
+    c.set_defaults(run=check_version_cmd)
     return p
 
 

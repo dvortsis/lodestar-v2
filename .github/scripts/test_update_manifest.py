@@ -211,6 +211,32 @@ class Builder(unittest.TestCase):
         self.assertEqual(self.build("--previous", prev, "--keep", 1, channel="nightly",
                                     version="0.6.0-nightly.0.1")[0], 1, "older than everything kept")
 
+    def test_a_previous_manifest_listing_a_version_twice_is_refused(self):
+        prev = self.previous(["0.5.2", "0.5.2"])
+        code, out = self.build("--previous", prev)
+        self.assertEqual(code, 1)
+        self.assertIn("twice", out)
+
+    def test_statement_fields_must_be_strings_and_json_finite(self):
+        for st in [{"body": 1, "minisig": SIG}, {"body": "e30=", "minisig": None},
+                   {"body": "e30=", "minisig": SIG, "cosig": 7}]:
+            with self.subTest(st=st):
+                self.statements.write_text(json.dumps([st]))
+                self.assertEqual(self.build()[0], 1)
+        for raw in ['[{"body": "e30=", "minisig": NaN}]', '[{"body": "e30=", "minisig": Infinity}]']:
+            with self.subTest(raw=raw):
+                self.statements.write_text(raw)
+                self.assertEqual(self.build()[0], 1)
+
+    def test_check_version_is_the_tag_check(self):
+        for good in ["0.6.0", "0.6.0-rc.1", "0.6.0-rc.10", "1.0.0-beta.2", "0.6.1-nightly.20261108.57"]:
+            with self.subTest(version=good):
+                self.assertEqual(self.run_cli("check-version", good)[0], 0)
+        for bad in ["0.6.0-rc.01", "0.6.0-01", "0.6.0-", "0.6.0-rc..1", "0.6.0+b", "v0.6.0", "00.6.0",
+                    "0.6.0-rc.1\n", "0.6.0-" + "a" * 64]:
+            with self.subTest(version=bad):
+                self.assertEqual(self.run_cli("check-version", bad)[0], 1)
+
     def test_a_previous_manifest_of_another_channel_is_refused(self):
         prev = self.previous(["0.5.2"], channel="beta")
         self.assertEqual(self.build("--previous", prev)[0], 1)
