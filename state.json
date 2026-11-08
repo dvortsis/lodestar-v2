@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-08T00:56Z",
+  "updated_at": "2026-11-08T01:08Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4213,6 +4213,11 @@
       "id": "CR-0d-witness",
       "added": "2026-10-30",
       "text": "CR-0d (safe restart, switch off by default, not in v0.5.1): a restored backup must suppress (plan A3), so a witness lives outside the data dir. On Docker that is the container layer: restarts and reboots resume, but image updates recreate the container and suppress (6 h). Follow-up option: an optional state volume in the Unraid template. Owner may prefer dropping restore detection (loosens plan A3). Residual (review I2): a snapshot backup that captures data and witness together (appdata incl. witness, VM/ZFS snapshots) is not detected; docs must say not to back up the witness location."
+    },
+    {
+      "at": "2026-11-08T01:08Z",
+      "pr": 598,
+      "flag": "CMP-3 writer also owns WebUI\\LocalHostAuth=true and WebUI\\AuthSubnetWhitelistEnabled=false (runner tightening, \u00a72.33/\u00a72.19)"
     }
   ],
   "decisions_log": [
@@ -6642,7 +6647,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T00:56Z",
+    "updated": "2026-11-08T01:08Z",
     "items": [
       {
         "slot": 1,
@@ -6657,7 +6662,7 @@
         "slice": "CMP-3",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnA1oLZ56UoBFFMwUoU: #598 fix round green 4b8d3c24; runner delta security review running",
+        "doing": "session_01MMjhnA1oLZ56UoBFFMwUoU: #598 delta review CHANGES (N1 stale qBittorrent_new.conf; LocalHostAuth/whitelist keys; proptest oracle); fix round requested 2026-11-08T01:08Z",
         "since": "2026-11-07T22:46Z"
       },
       {
