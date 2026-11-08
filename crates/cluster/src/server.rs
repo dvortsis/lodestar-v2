@@ -1888,10 +1888,12 @@ impl ClusterServer {
             .filter(|a| a.len() == n);
         let batches = reserved.disarm();
         let mut fleet = lock(&self.fleet);
-        let answer = answer.unwrap_or_else(|| vec![KeyCheck::Unknown; n]);
-        if answer.contains(&KeyCheck::Unknown) {
+        // A check that died or came back short counts here; a key's own
+        // failed read is the store check's to count (#607's review).
+        let answer = answer.unwrap_or_else(|| {
             bump(&self.counters.check_failures);
-        }
+            vec![KeyCheck::Unknown; n]
+        });
         let mut answer = answer.into_iter();
         for (w, ks) in batches {
             let mut send = Vec::with_capacity(ks.len());

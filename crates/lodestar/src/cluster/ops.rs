@@ -488,9 +488,23 @@ impl Workers {
     /// Saves the pause of a worker the sink paused for too many floor
     /// reports. A failure is logged; the server's pause stands until a
     /// restart.
+    ///
+    /// Under `edits`, so it orders with an admin's calls (#607's review): a
+    /// worker revoked meanwhile isn't saved again, and one an admin resumed
+    /// meanwhile is paused again with the save, so the saved and live states
+    /// agree.
     async fn save_floor_pause(&self, w: WorkerId) {
         let _edit = self.edits.lock().await;
-        if let Err(e) = self.set_paused(w, true).await {
+        if let Some(server) = self.follow()
+            && self.check(&server, w).await.is_err()
+        {
+            return;
+        }
+        let saved = self.set_paused(w, true).await;
+        if let Some(server) = self.follow() {
+            server.pause(w);
+        }
+        if let Err(e) = saved {
             let code = match e {
                 WorkersError::PrefsFull => "prefs_full",
                 _ => "failed",
@@ -992,6 +1006,53 @@ mod tests {
         let s = c.connect(&creds).await;
         assert!(!granted(&s.claim(claim(5)).await.unwrap()));
         drop(s);
+        c.stop().await;
+    }
+
+    /// #607's review: the over-budget save orders with an admin's calls. A
+    /// worker revoked before it runs isn't saved again; one an admin
+    /// resumed before it runs is paused again, saved and live alike.
+    #[tokio::test]
+    async fn the_floor_pause_save_follows_a_resume_or_a_revoke() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = coordinator(dir.path(), true).await;
+        let server = c.cluster.handle().server().unwrap();
+        let paused = |w: WorkerId| {
+            server
+                .snapshot()
+                .workers
+                .iter()
+                .any(|x| x.worker == w && x.paused)
+        };
+
+        // The sink paused it; the admin resumed it; then the save runs.
+        let (one, _) = c.join("w1").await;
+        let w1 = one.worker();
+        assert!(server.pause(w1));
+        c.workers.resume(w1.0).await.unwrap();
+        assert!(!paused(w1));
+        c.workers.save_floor_pause(w1).await;
+        assert!(
+            c.workers.saved(w1).paused && paused(w1),
+            "saved and live agree"
+        );
+
+        // The sink paused it; the admin revoked it; then the save runs.
+        let (two, _) = c.join("w2").await;
+        let w2 = two.worker();
+        assert!(server.pause(w2));
+        c.workers.revoke(w2.0).await.unwrap();
+        c.workers.save_floor_pause(w2).await;
+        assert!(!c.workers.saved(w2).paused);
+        let store = Store::open(dir.path().join("lodestar.db"), StoreConfig::default()).unwrap();
+        assert!(
+            store
+                .settings_with_prefix(PREFS_PREFIX)
+                .unwrap()
+                .iter()
+                .all(|(k, _)| *k != prefs_key(w2))
+        );
+        drop(store);
         c.stop().await;
     }
 
