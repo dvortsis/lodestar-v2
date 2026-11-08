@@ -6389,6 +6389,10 @@
     {
       "at": "2026-11-08T18:07Z",
       "note": "CMP-5 reviews relayed: #620 MERGE (N1-N6 into 5b round); #621 CHANGES (B1 recovery/install deletes foreign content in catalogue-id folder; B2 no race-guard tests); #619 CHANGES (B1 tests for serve start + CLI confirmation). CMP-5 pushes stack once, then fresh reviews of #621/#619. #629 gained c8be068c (seeded filter trail coverage test)."
+    },
+    {
+      "at": "2026-11-08T18:17Z",
+      "note": "#620 CMP-5a merged (11267a21); #621 retargeted to main. #626 delta review running (e3875411). #631 P-cloud-operator Opus review running. #629 MERGE verdict, notes folded (b1321d8c), retitled with slice ids; merge on green. PK-win-upd-1 #630: approved removing cfg(any(unix,test)) at settings/updates.rs:101."
     }
   ],
   "main_health": [
@@ -7188,5 +7192,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T18:07Z"
+  "updated": "2026-11-08T18:17Z"
 }
