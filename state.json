@@ -6118,6 +6118,11 @@
       "id": "CMP-5g-detect-notes",
       "note": "From #610 security review (no blocking): (1) set detect::Runtime::Container only when Docker's embedded DNS (127.0.0.11) is the resolver, else a LAN host named 'qbittorrent' via dnsmasq/search domain is a false detection; (2) the API maps user input to Target::Entered only, never Loopback/Container; (3) never log ProbeResponse with {:?} (Debug includes body, CMP-0 adapter.rs); (4) entered-URL error classes are a port-probe oracle: endpoint admin-only and rate-limited. CMP-8b: never send credentials to a container-detected target the user hasn't confirmed.",
       "logged": "2026-11-08T09:41Z"
+    },
+    {
+      "id": "merged-610",
+      "note": "#610 CMP-8a merged 9e567a21 (MERGE x2 + self-checked tests delta 90c89bba); session archived; owner FYI sent. #608 conflicts with main in Cargo.toml/Cargo.lock: session prepares merge locally, pushes with review fixes.",
+      "logged": "2026-11-08T11:04Z"
     }
   ],
   "main_health": [
@@ -6909,5 +6914,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T09:41Z"
+  "updated": "2026-11-08T11:04Z"
 }
