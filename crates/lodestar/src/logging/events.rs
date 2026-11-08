@@ -996,6 +996,33 @@ lodestar_log::catalogue! {
         fields: { error: Error },
     }
 
+    /// A remote worker's floor drop couldn't be written as a tombstone
+    /// yet (the store refused the write). It's kept, refused to every
+    /// worker meanwhile, and written on a later try. Said once per streak
+    /// of failures (WK-10d).
+    CLUSTER_FLOOR_REPORT_FAILED {
+        id: "cluster.floor_report_failed",
+        component: Workers,
+        level: Error,
+        message: "A worker's blocked torrent couldn't be recorded yet; it stays blocked and is recorded on a later try",
+        fields: { error: Error },
+    }
+
+    /// A remote worker reported far more floor drops than an honest one
+    /// does (more than 100 in an hour), so it's paused and its work is
+    /// taken back. The pause is saved: Workers shows it paused, and it
+    /// stays paused across a restart until an admin resumes it. What it
+    /// reports from now on isn't recorded. Check that machine; remove the
+    /// worker if it can't be trusted, which also drops the reports not yet
+    /// recorded (WK-10d).
+    CLUSTER_FLOOR_REPORTS_OVER_BUDGET {
+        id: "cluster.floor_reports_over_budget",
+        component: Workers,
+        level: Warn,
+        message: "A worker reported too many blocked torrents and was paused",
+        fields: { worker: Label },
+    }
+
     // ── Worker runtime (WK-10c, §19.5) ──
     /// The worker's DHT started on its assigned shard: target prefixes
     /// `first..end` of 256 and its BEP 42 id slots. A new shard restarts
@@ -1007,8 +1034,29 @@ lodestar_log::catalogue! {
         message: "The worker's DHT started on its assigned part of the keyspace",
         fields: { first: Label, end: Label, slots: Label },
     }
+    /// A filter or dictionary snapshot reached the worker whole but didn't
+    /// decode. The worker keeps the one it has (none after a restart, so
+    /// it can't seal yet) until the coordinator sends the next version or
+    /// the worker reconnects (WK-10d).
+    WORKER_SNAPSHOT_FAILED {
+        id: "worker.snapshot_failed",
+        component: Workers,
+        level: Warn,
+        message: "A snapshot from the coordinator didn't decode; the worker keeps the one it has",
+        fields: { kind: Label },
+    }
+    /// The worker's fetch pool or prepare stage ended by itself (a bug):
+    /// the worker stops with an error so its service manager starts it
+    /// again, and the coordinator re-grants its keys (WK-10d).
+    WORKER_STAGE_FAILED {
+        id: "worker.stage_failed",
+        component: Workers,
+        level: Error,
+        message: "The worker's fetch or prepare stage stopped unexpectedly; the worker stops so it can be started again",
+        fields: { stage: Label },
+    }
     /// The worker's DHT couldn't bind its address; it tries again after a
-    /// back-off of up to a minute.
+    /// back-off of up to a minute. Said once per streak of failures.
     WORKER_DHT_START_FAILED {
         id: "worker.dht_start_failed",
         component: Workers,
@@ -1036,6 +1084,17 @@ lodestar_log::catalogue! {
         level: Warn,
         message: "A worker's saved settings couldn't be read; it uses the defaults",
         fields: { worker: Label },
+    }
+    /// A worker paused for too many floor reports couldn't have its pause
+    /// saved (too many workers' settings, or the write failed). It stays
+    /// paused until the coordinator restarts; pause it in Workers to keep
+    /// it paused after that (WK-10d).
+    WORKERS_PAUSE_NOT_SAVED {
+        id: "workers.pause_not_saved",
+        component: Workers,
+        level: Warn,
+        message: "A worker's pause couldn't be saved; it stays paused until a restart",
+        fields: { worker: Label, code: Label },
     }
     /// The admin created a one-time join token (shown once, never logged).
     WORKERS_TOKEN_CREATED {

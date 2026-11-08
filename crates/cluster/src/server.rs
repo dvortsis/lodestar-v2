@@ -68,7 +68,7 @@ use crate::link::{BoxIo, CoordinatorLink, Link, WorkerLink, local_pair, ws_confi
 use crate::proto::*;
 use crate::{
     ALPN_JOIN, BatchAnswer, Claim, Claimed, ClusterError, Coordinator, CoordinatorTls, JoinToken,
-    Lease, LeaseAuthority, NoEvents, PeerIdentity, QUEUE_BYTES, Token, WorkerId,
+    Lease, LeaseAuthority, NoEvents, PeerIdentity, QUEUE_BYTES, Regranted, Token, WorkerId,
 };
 
 /// The WebSocket path on the cluster port.
@@ -127,7 +127,36 @@ impl Default for ServerConfig {
 /// grant, §19.3). It runs on a blocking thread.
 pub trait StoredKeys: Send + Sync + 'static {
     fn stored(&self, keys: &[InfoHash]) -> Vec<bool>;
+    /// The check before a re-grant, one answer per key (#607's review).
+    /// By default [`stored`](Self::stored)'s: `true` reads as stored.
+    fn regrant_check(&self, keys: &[InfoHash]) -> Vec<KeyCheck> {
+        self.stored(keys)
+            .into_iter()
+            .map(|s| if s { KeyCheck::Stored } else { KeyCheck::Free })
+            .collect()
+    }
 }
+
+/// One key's answer before a re-grant ([`StoredKeys::regrant_check`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyCheck {
+    /// Neither stored nor held: it may go out.
+    Free,
+    /// Already stored: the lease ends with no loss (nothing was lost, and
+    /// the target never had it).
+    Stored,
+    /// Held (a tombstone, a quarantine, a worker's floor report or the
+    /// floor's hash lists): the lease ends as lost, blocked, as the
+    /// target's floor would have ended it.
+    Held,
+    /// The read failed: the key waits for the next re-grant. An error
+    /// never grants a key, and never ends one.
+    Unknown,
+}
+
+/// `funnel::Loss::Blocked` (`lodestar-sources`, persisted): the loss a
+/// re-grant reports for a key the store check refused.
+const LOSS_BLOCKED: u8 = 7;
 
 /// Where the server hands what workers send. Every method runs on the
 /// session's task with no lock held, so it must not block: queue the work
@@ -325,6 +354,7 @@ struct Counters {
     skew_flags: AtomicU64,
     pki_errors: AtomicU64,
     ticks: AtomicU64,
+    check_failures: AtomicU64,
 }
 
 fn bump(c: &AtomicU64) {
@@ -389,6 +419,9 @@ pub struct FleetSnapshot {
     pub skew_flags: u64,
     pub pki_errors: u64,
     pub ticks: u64,
+    /// Store checks that failed or came back short: the claim batch was
+    /// denied as busy, or the re-grant's keys waited (#607's review).
+    pub check_failures: u64,
 }
 
 /// Who is on the other end of a session.
@@ -461,6 +494,30 @@ enum Flow {
 /// then as seen, so `changed` alone would wait forever).
 async fn stopped(stop: &mut watch::Receiver<bool>) {
     let _ = stop.wait_for(|s| *s).await;
+}
+
+/// Keys a re-grant reserved for their targets while its store check runs:
+/// dropped armed (the future cancelled), each goes back to waiting
+/// (`requeue` checks the token, so one that changed meanwhile is left).
+struct Reserved<'a> {
+    leases: &'a LeaseAuthority,
+    batches: Vec<(WorkerId, Regranted)>,
+}
+
+impl Reserved<'_> {
+    fn disarm(mut self) -> Vec<(WorkerId, Regranted)> {
+        std::mem::take(&mut self.batches)
+    }
+}
+
+impl Drop for Reserved<'_> {
+    fn drop(&mut self) {
+        for (_, keys) in self.batches.drain(..) {
+            for (key, token) in keys {
+                self.leases.requeue(&key, token);
+            }
+        }
+    }
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -626,10 +683,13 @@ impl ClusterServer {
             })
             .await
             .unwrap_or(Err(ClusterError::Corrupt("the PKI task failed")))?;
-        let mut fleet = lock(&self.fleet);
-        // Connected or not, its leases go back now (§19.6).
-        self.leases.evict(worker);
-        self.sweep(&mut fleet, self.clock.now_ms());
+        {
+            let mut fleet = lock(&self.fleet);
+            // Connected or not, its leases go back now (§19.6).
+            self.leases.evict(worker);
+            self.sweep(&mut fleet, self.clock.now_ms());
+        }
+        self.regrant().await;
         Ok(n)
     }
 
@@ -647,13 +707,17 @@ impl ClusterServer {
             })
             .await
             .unwrap_or(Err(ClusterError::Corrupt("the PKI task failed")))?;
-        let mut fleet = lock(&self.fleet);
-        let leases = self.leases.evict(worker);
-        self.sweep(&mut fleet, self.clock.now_ms());
-        // `sweep` forgets a revoked worker it saw connect; an entry `pause`
-        // made before it ever connected has no identity to check, so it
-        // goes here (it can't come back under this id).
-        fleet.workers.remove(&worker);
+        let leases = {
+            let mut fleet = lock(&self.fleet);
+            let leases = self.leases.evict(worker);
+            self.sweep(&mut fleet, self.clock.now_ms());
+            // `sweep` forgets a revoked worker it saw connect; an entry
+            // `pause` made before it ever connected has no identity to
+            // check, so it goes here (it can't come back under this id).
+            fleet.workers.remove(&worker);
+            leases
+        };
+        self.regrant().await;
         Ok((certificates, leases))
     }
 
@@ -692,7 +756,8 @@ impl ClusterServer {
     }
 
     /// Ends a drain: the worker may claim again, and keys waiting for a
-    /// worker may be granted to it at once. Unlike [`drain`](Self::drain)
+    /// worker may be granted to it at once (with a store check, at the next
+    /// tick, which checks them first). Unlike [`drain`](Self::drain)
     /// it works on a disconnected worker too, so a drain can be lifted
     /// before the worker comes back. Nothing is sent to the worker: it
     /// simply stops getting `Draining` denials. It ends a
@@ -706,7 +771,7 @@ impl ClusterServer {
         if !std::mem::replace(&mut state.draining, false) && !paused {
             return false;
         }
-        self.regrant(&mut fleet, self.clock.now_secs());
+        self.regrant_unchecked(&mut fleet, self.clock.now_secs());
         true
     }
 
@@ -742,7 +807,8 @@ impl ClusterServer {
 
     /// Ends a pause and nothing else: a drain stands (WK-13's `release`
     /// uses it so a quarantine lifts without ending the admin's drain).
-    /// `false` if it wasn't paused.
+    /// Waiting keys go out as after [`resume`](Self::resume). `false` if
+    /// it wasn't paused.
     pub fn unpause(&self, worker: WorkerId) -> bool {
         let mut fleet = lock(&self.fleet);
         let Some(state) = fleet.workers.get_mut(&worker) else {
@@ -751,7 +817,7 @@ impl ClusterServer {
         if !std::mem::replace(&mut state.paused, false) {
             return false;
         }
-        self.regrant(&mut fleet, self.clock.now_secs());
+        self.regrant_unchecked(&mut fleet, self.clock.now_secs());
         true
     }
 
@@ -806,6 +872,7 @@ impl ClusterServer {
             skew_flags: get(&c.skew_flags),
             pki_errors: get(&c.pki_errors),
             ticks: get(&c.ticks),
+            check_failures: get(&c.check_failures),
         }
     }
 
@@ -1225,10 +1292,7 @@ impl ClusterServer {
             greeted = greeted && self.send_on(&mut link, msg).await;
         }
         // A re-grant may have waited for this worker.
-        {
-            let mut fleet = lock(&self.fleet);
-            self.regrant(&mut fleet, self.clock.now_secs());
-        }
+        self.regrant().await;
         let reason = if greeted {
             self.serve_session(&peer, &mut link, &mut ctl, &mut stop, &mut drain)
                 .await
@@ -1336,13 +1400,28 @@ impl ClusterServer {
                         let keys: Vec<InfoHash> =
                             batch.items.iter().map(|i| InfoHash(i.key)).collect();
                         match tokio::task::spawn_blocking(move || check.stored(&keys)).await {
-                            Ok(s) if s.len() == batch.items.len() => s,
-                            _ => vec![false; batch.items.len()],
+                            Ok(s) if s.len() == batch.items.len() => Some(s),
+                            // Fails closed: a check that died or came back
+                            // short grants nothing (#607's review).
+                            _ => None,
                         }
                     }
-                    None => vec![false; batch.items.len()],
+                    None => Some(vec![false; batch.items.len()]),
                 };
-                let items = self.claim(peer, &mut batch.items, &stored, checked_at);
+                let items = match stored {
+                    Some(stored) => self.claim(peer, &mut batch.items, &stored, checked_at),
+                    None => {
+                        bump(&self.counters.check_failures);
+                        batch
+                            .items
+                            .iter()
+                            .map(|i| GrantItem::Denied {
+                                key: i.key,
+                                reason: DenyReason::Busy,
+                            })
+                            .collect()
+                    }
+                };
                 self.reply(
                     link,
                     ToWorker::Grants(GrantBatch {
@@ -1364,12 +1443,14 @@ impl ClusterServer {
                 self.reply(link, reply).await
             }
             ToCoordinator::Drained => {
-                let mut fleet = lock(&self.fleet);
-                if !fleet.is_current(peer) {
-                    return Flow::Stop(StopReason::Drained);
+                {
+                    let fleet = lock(&self.fleet);
+                    if !fleet.is_current(peer) {
+                        return Flow::Stop(StopReason::Drained);
+                    }
+                    self.leases.evict(w);
                 }
-                self.leases.evict(w);
-                self.regrant(&mut fleet, self.clock.now_secs());
+                self.regrant().await;
                 Flow::Stop(StopReason::Drained)
             }
             ToCoordinator::Results(batch) | ToCoordinator::Counters(batch)
@@ -1686,10 +1767,12 @@ impl ClusterServer {
             // The previous state stays in force; the next tick tries again.
             bump(&self.counters.pki_errors);
         }
-        let mut fleet = lock(&self.fleet);
-        self.sweep(&mut fleet, now_ms);
-        self.leases.expire(now);
-        self.regrant(&mut fleet, now);
+        {
+            let mut fleet = lock(&self.fleet);
+            self.sweep(&mut fleet, now_ms);
+            self.leases.expire(now);
+        }
+        self.regrant().await;
     }
 
     /// Stops sessions whose certificate no longer stands (returning their
@@ -1726,47 +1809,161 @@ impl ClusterServer {
             // id: forget it rather than check it every tick.
             fleet.workers.remove(&w);
         }
-        self.regrant(fleet, now_ms.div_euclid(1000));
+        self.regrant_unchecked(fleet, now_ms.div_euclid(1000));
+    }
+
+    /// The workers a re-grant may go to: connected, neither draining nor
+    /// paused.
+    fn regrant_targets(fleet: &Fleet) -> Vec<WorkerId> {
+        fleet
+            .workers
+            .iter()
+            .filter(|(_, s)| s.session.is_some() && !s.draining && !s.paused)
+            .map(|(&w, _)| w)
+            .collect()
+    }
+
+    /// [`regrant`](Self::regrant) from code that holds the fleet lock and
+    /// can't wait: only for a server without a store check. With one, the
+    /// keys wait for the next `regrant` (every tick, at the latest).
+    fn regrant_unchecked(&self, fleet: &mut Fleet, now: i64) {
+        if self.stored.is_some() {
+            return;
+        }
+        let targets = Self::regrant_targets(fleet);
+        if targets.is_empty() || self.leases.pending() == 0 {
+            return;
+        }
+        for (w, keys) in self.leases.regrant_pending(&targets, MAX_GRANT_BATCH, now) {
+            self.send_regrants(fleet, w, keys);
+        }
     }
 
     /// Grants keys whose lease ended without an outcome to the connected,
     /// non-draining workers holding the fewest leases, as unsolicited
     /// `Grants` (batch 0). Keys wait while no worker is available, or go
     /// back to waiting if a worker's queue is full.
-    fn regrant(&self, fleet: &mut Fleet, now: i64) {
-        let targets: Vec<WorkerId> = fleet
-            .workers
-            .iter()
-            .filter(|(_, s)| s.session.is_some() && !s.draining && !s.paused)
-            .map(|(&w, _)| w)
-            .collect();
-        if targets.is_empty() || self.leases.pending() == 0 {
+    ///
+    /// With a store check, every key is checked first, as a claim is
+    /// (#607's review): the keys are leased to their targets under the
+    /// fleet lock, the lock is released for the check, and once it's taken
+    /// again each key is acted on only if its target still holds it under
+    /// the same token ([`KeyCheck`] says what becomes of it). Cancelled
+    /// during the check, every reserved key waits again.
+    async fn regrant(&self) {
+        let Some(check) = self.stored.clone() else {
+            let mut fleet = lock(&self.fleet);
+            self.regrant_unchecked(&mut fleet, self.clock.now_secs());
+            return;
+        };
+        let batches = {
+            let fleet = lock(&self.fleet);
+            let targets = Self::regrant_targets(&fleet);
+            if targets.is_empty() || self.leases.pending() == 0 {
+                return;
+            }
+            // Leased to their targets now, so no other claim or re-grant
+            // can take them while the check runs; nothing is sent yet.
+            self.leases
+                .regrant_pending(&targets, MAX_GRANT_BATCH, self.clock.now_secs())
+        };
+        if batches.is_empty() {
             return;
         }
-        let ttl_secs = u32::try_from(self.config.lease_ttl_secs).unwrap_or(u32::MAX);
-        for (w, keys) in self.leases.regrant_pending(&targets, MAX_GRANT_BATCH, now) {
-            let items: Vec<GrantItem> = keys
-                .iter()
-                .map(|&(key, token)| GrantItem::Granted {
-                    key: key.0,
-                    token: token.0,
-                    ttl_secs,
-                })
-                .collect();
-            let n = items.len() as u64;
-            let slot = fleet.workers.get(&w).and_then(|s| s.session.as_ref());
-            let sent = slot.is_some_and(|slot| {
-                slot.try_send(ToWorker::Grants(GrantBatch { batch: 0, items }))
-                    .is_ok()
-            });
-            if sent {
-                self.counters.regrants.fetch_add(n, Ordering::Relaxed);
+        // Requeued if this future is dropped while the check runs (an
+        // admin's revoke whose request went away): nothing stays reserved.
+        let reserved = Reserved {
+            leases: &self.leases,
+            batches,
+        };
+        let keys: Vec<InfoHash> = reserved
+            .batches
+            .iter()
+            .flat_map(|(_, ks)| ks.iter().map(|&(k, _)| k))
+            .collect();
+        let n = keys.len();
+        let answer = tokio::task::spawn_blocking(move || check.regrant_check(&keys))
+            .await
+            .ok()
+            .filter(|a| a.len() == n);
+        let batches = reserved.disarm();
+        let mut fleet = lock(&self.fleet);
+        let answer = answer.unwrap_or_else(|| vec![KeyCheck::Unknown; n]);
+        if answer.contains(&KeyCheck::Unknown) {
+            bump(&self.counters.check_failures);
+        }
+        let mut answer = answer.into_iter();
+        for (w, ks) in batches {
+            let mut send = Vec::with_capacity(ks.len());
+            for (key, token) in ks {
+                let check = answer.next().unwrap_or(KeyCheck::Unknown);
+                // Re-validated under the lock: a key whose lease changed
+                // while the check ran (expired, evicted, granted again)
+                // is left alone.
+                let current = self
+                    .leases
+                    .get(&key)
+                    .is_some_and(|l| l.holder == w && l.token == token);
+                if !current {
+                    continue;
+                }
+                // Each ends only under `w`'s current token.
+                match check {
+                    KeyCheck::Free => send.push((key, token)),
+                    KeyCheck::Stored => {
+                        self.leases.report(w, &key, token, None);
+                    }
+                    KeyCheck::Held => {
+                        self.leases.report(w, &key, token, Some(LOSS_BLOCKED));
+                    }
+                    KeyCheck::Unknown => {
+                        self.leases.requeue(&key, token);
+                    }
+                }
+            }
+            if send.is_empty() {
                 continue;
             }
-            // The worker's queue is full: take the leases back.
-            for (key, token) in keys {
-                self.leases.requeue(&key, token);
+            // The target may have gone, drained or paused meanwhile.
+            let usable = fleet
+                .workers
+                .get(&w)
+                .is_some_and(|s| s.session.is_some() && !s.draining && !s.paused);
+            if usable {
+                self.send_regrants(&mut fleet, w, send);
+            } else {
+                for (key, token) in send {
+                    self.leases.requeue(&key, token);
+                }
             }
+        }
+    }
+
+    /// Sends one worker its re-granted keys, or takes the leases back if
+    /// its queue is full.
+    fn send_regrants(&self, fleet: &mut Fleet, w: WorkerId, keys: Regranted) {
+        let ttl_secs = u32::try_from(self.config.lease_ttl_secs).unwrap_or(u32::MAX);
+        let items: Vec<GrantItem> = keys
+            .iter()
+            .map(|&(key, token)| GrantItem::Granted {
+                key: key.0,
+                token: token.0,
+                ttl_secs,
+            })
+            .collect();
+        let n = items.len() as u64;
+        let slot = fleet.workers.get(&w).and_then(|s| s.session.as_ref());
+        let sent = slot.is_some_and(|slot| {
+            slot.try_send(ToWorker::Grants(GrantBatch { batch: 0, items }))
+                .is_ok()
+        });
+        if sent {
+            self.counters.regrants.fetch_add(n, Ordering::Relaxed);
+            return;
+        }
+        // The worker's queue is full: take the leases back.
+        for (key, token) in keys {
+            self.leases.requeue(&key, token);
         }
     }
 }

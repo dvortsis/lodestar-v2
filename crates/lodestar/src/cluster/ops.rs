@@ -65,7 +65,7 @@ fn prefs_key(worker: WorkerId) -> String {
 /// One worker's saved settings, as its row holds them (JSON, version 1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Saved {
+pub(crate) struct Saved {
     v: u8,
     dht_off: bool,
     intensity: u8,
@@ -133,7 +133,7 @@ impl Saved {
 
     /// A row this version wrote, within the API's ranges; anything else is
     /// skipped (the worker gets the defaults) rather than trusted.
-    fn parse(text: &str) -> Option<Saved> {
+    pub(crate) fn parse(text: &str) -> Option<Saved> {
         let s: Saved = serde_json::from_str(text).ok()?;
         let ok = s.v == 1
             && s.intensity <= 2
@@ -143,6 +143,11 @@ impl Saved {
             && lodestar_api::workers::KBPS.contains(&s.down_kbps)
             && lodestar_api::workers::POOL_CAP.contains(&s.pool_cap);
         ok.then_some(s)
+    }
+
+    /// Saved paused (the cluster tick seeds a new server with it, WK-10d).
+    pub(crate) fn paused(&self) -> bool {
+        self.paused
     }
 
     fn text(&self) -> String {
@@ -253,6 +258,17 @@ impl Workers {
             applied_to: Mutex::new(Weak::new()),
             edits: tokio::sync::Mutex::new(()),
         });
+        // A worker over its floor budget: the sink has paused it and taken
+        // its leases back; this saves the pause (#607's review). With
+        // `Workers` gone, or no runtime, the in-memory pause still stands.
+        let floor = Arc::downgrade(&workers);
+        workers.cluster.on_floor_over_budget(Arc::new(move |w| {
+            let (Some(workers), Ok(rt)) = (floor.upgrade(), tokio::runtime::Handle::try_current())
+            else {
+                return;
+            };
+            rt.spawn(async move { workers.save_floor_pause(w).await });
+        }));
         let weak = Arc::downgrade(&workers);
         tokio::spawn(async move {
             while let Some(w) = weak.upgrade() {
@@ -469,6 +485,24 @@ impl Workers {
         self.one(&server, w).await
     }
 
+    /// Saves the pause of a worker the sink paused for too many floor
+    /// reports. A failure is logged; the server's pause stands until a
+    /// restart.
+    async fn save_floor_pause(&self, w: WorkerId) {
+        let _edit = self.edits.lock().await;
+        if let Err(e) = self.set_paused(w, true).await {
+            let code = match e {
+                WorkersError::PrefsFull => "prefs_full",
+                _ => "failed",
+            };
+            lodestar_log::log_event!(
+                events::WORKERS_PAUSE_NOT_SAVED,
+                worker = lodestar_log::Count(u64::from(w.0)),
+                code = code
+            );
+        }
+    }
+
     /// Saves a pause or its end. The caller holds `edits`.
     async fn set_paused(&self, w: WorkerId, paused: bool) -> Result<(), WorkersError> {
         let mut s = self.saved(w);
@@ -493,6 +527,8 @@ impl Workers {
         // Disconnect (and take the leases back) first, then forget: a sync
         // in between can't rejoin it with the defaults.
         let (certificates, leases) = server.revoke_worker(w).await.map_err(failed)?;
+        // Its floor reports not written yet go too (#607's review).
+        self.cluster.forget_floor_reports(w);
         self.placement.forget(w);
         lock(&self.saved).remove(&w);
         // The revocation stands either way. A row left behind only gives
@@ -579,7 +615,7 @@ mod tests {
     use std::time::Instant;
 
     use lodestar_cluster::proto::{
-        Capabilities, ClaimItem, DenyReason, GrantItem, Hello, StopReason,
+        Capabilities, ClaimItem, DenyReason, GrantItem, Hello, Outcome, OutcomeItem, StopReason,
     };
     use lodestar_cluster::{
         Credentials, JoinToken, Joining, LeaseAuthority, NoEvents, SystemClock, WorkerConfig,
@@ -630,6 +666,8 @@ mod tests {
             clock: Arc::new(SystemClock),
             placement: placement.clone(),
             fleet: None,
+            coordinator_dht: None,
+            held: None,
         })
         .await
         .unwrap();
@@ -853,6 +891,127 @@ mod tests {
         for b in &bodies {
             assert!(!b.contains(&token) && !b.contains(&token[4..60]), "{b}");
         }
+        c.stop().await;
+    }
+
+    /// Claims `n` keys (first byte 200, then the index) and reports each
+    /// one a floor drop (`Lost(Blocked)`) under its token.
+    async fn report_floor_drops(s: &WorkerSession, n: usize) {
+        let items: Vec<ClaimItem> = (0..n)
+            .map(|i| {
+                let mut key = [200u8; 20];
+                key[1..9].copy_from_slice(&(i as u64).to_le_bytes());
+                ClaimItem {
+                    key,
+                    source: 0,
+                    strategy: 0,
+                    discovered_ms: unix_now() * 1000,
+                    hints: vec![],
+                }
+            })
+            .collect();
+        let grants = s.claim(items).await.unwrap();
+        let reports: Vec<OutcomeItem> = grants
+            .iter()
+            .map(|g| match g {
+                GrantItem::Granted { key, token, .. } => OutcomeItem {
+                    key: *key,
+                    token: *token,
+                    outcome: Outcome::Lost {
+                        reason: lodestar_sources::Loss::Blocked as u8,
+                    },
+                },
+                GrantItem::Denied { .. } => panic!("denied: {g:?}"),
+            })
+            .collect();
+        s.report(reports).await.unwrap();
+    }
+
+    /// #607's delta review: the first floor report over a worker's budget
+    /// pauses it, takes its leases back, and saves the pause, so Workers
+    /// shows it paused and a new server (or a restart) keeps it paused.
+    #[tokio::test]
+    async fn a_worker_over_its_floor_budget_stays_paused() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = coordinator(dir.path(), true).await;
+        let (creds, _) = c.join("w1").await;
+        let w = creds.worker();
+        let s = c.connect(&creds).await;
+        c.wait_status(w, StatusDto::Online).await;
+        // Holding a lease it won't report: evicted with the rest.
+        assert!(granted(&s.claim(claim(9)).await.unwrap()));
+        report_floor_drops(&s, crate::cluster::serve::FLOOR_BUDGET + 1).await;
+        let workers = &c.workers;
+        until("saved as paused", || async move {
+            (workers.saved(w).paused, ())
+        })
+        .await;
+        c.wait_status(w, StatusDto::Paused).await;
+        let h = c.cluster.handle();
+        let leases = |server: &ClusterServer| {
+            server
+                .snapshot()
+                .workers
+                .iter()
+                .find(|x| x.worker == w)
+                .map(|x| x.leases)
+        };
+        assert_eq!(leases(&h.server().unwrap()), Some(0), "leases taken back");
+        // The row is in the store, so it outlives this process.
+        let store = Store::open(dir.path().join("lodestar.db"), StoreConfig::default()).unwrap();
+        let row = store.settings_with_prefix(PREFS_PREFIX).unwrap();
+        assert!(
+            row.iter()
+                .any(|(_, t)| Saved::parse(t).is_some_and(|s| s.paused))
+        );
+        drop(store);
+        // A new server (workers off and on) has it paused before serving.
+        drop(s);
+        h.set_allowed(false);
+        until("off", || {
+            let h = h.clone();
+            async move { (h.server().is_none(), ()) }
+        })
+        .await;
+        h.set_allowed(true);
+        let new = until("on again", || {
+            let h = h.clone();
+            async move {
+                let s = h.server();
+                (s.is_some(), s)
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            new.snapshot()
+                .workers
+                .iter()
+                .any(|x| x.worker == w && x.paused)
+        );
+        let s = c.connect(&creds).await;
+        assert!(!granted(&s.claim(claim(5)).await.unwrap()));
+        drop(s);
+        c.stop().await;
+    }
+
+    /// #607's delta review: revoking a worker forgets its floor reports not
+    /// written yet and its budget window.
+    #[tokio::test]
+    async fn revoking_a_worker_forgets_its_floor_reports() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = coordinator(dir.path(), true).await;
+        let (creds, _) = c.join("w1").await;
+        let w = creds.worker();
+        let h = c.cluster.handle();
+        // A budget used up: its next report would be over it.
+        for i in 0..crate::cluster::serve::FLOOR_BUDGET {
+            assert!(h.floor_report_for_test(w, i as u8, i / 256));
+        }
+        assert!(!h.floor_report_for_test(w, 255, 999));
+        c.workers.revoke(w.0).await.unwrap();
+        assert_eq!(h.floor_pending_for_test(w), 0);
+        assert!(h.floor_report_for_test(w, 1, 1000), "a fresh window");
         c.stop().await;
     }
 

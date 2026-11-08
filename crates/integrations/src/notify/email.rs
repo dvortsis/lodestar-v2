@@ -1026,7 +1026,15 @@ mod tests {
             "{headers}"
         );
         assert!(headers.contains("Date: "), "{headers}");
-        assert!(!s.data.contains("Bcc"));
+        // No line of the message is a Bcc header. The raw DATA can't be
+        // searched for the bare letters: its random MIME boundary and base64
+        // bodies can spell "Bcc" by chance. Neither can contain a colon.
+        assert!(
+            !s.data
+                .lines()
+                .any(|l| l.to_ascii_lowercase().starts_with("bcc:")),
+            "{headers}"
+        );
         assert_eq!(parts.len(), 2);
         assert_eq!(
             parts[0],
