@@ -6665,7 +6665,7 @@
         "slice": "CMP-2",
         "role": "build",
         "agent": "claude",
-        "doing": "CMP-2 companion archive extraction + layout (Opus, 2R, /security-review); launching",
+        "doing": "session_01MMjhnBjswJ9d8Qu8vvTvyu: CMP-2 companion archive extraction + layout (Opus, 2R, /security-review)",
         "since": "2026-11-08T00:55Z"
       },
       {
