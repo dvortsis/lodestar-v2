@@ -6864,7 +6864,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T12:30Z",
+    "updated": "2026-11-08T12:31Z",
     "items": [
       {
         "slot": 1,
@@ -6884,12 +6884,11 @@
       },
       {
         "slot": 3,
-        "slice": "",
+        "slice": "CMP-10",
         "role": "build",
         "agent": "claude",
-        "doing": "CMP-7 merged as #606 (f61ffa33); session archived; slot free",
-        "since": "2026-11-08T12:30Z",
-        "status": "idle"
+        "doing": "session_01MMjhnBW9CdDyYQ8KvyGVXS: CMP-10 plugin to companion map + Needs state",
+        "since": "2026-11-08T12:31Z"
       },
       {
         "slot": 4,
