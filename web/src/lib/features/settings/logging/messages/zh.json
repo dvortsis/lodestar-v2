@@ -369,6 +369,8 @@
 	"settings_logging_ev_cluster_have_at_cap_h": "告诉工作节点哪些内容已存储的过滤器已达到最大大小并已满。工作节点会认领更多已存储的键；协调节点会自行答复这些请求。",
 	"settings_logging_ev_cluster_snapshot_failed_n": "未能生成工作节点的过滤器快照",
 	"settings_logging_ev_cluster_snapshot_failed_h": "发送给远程工作节点的过滤规则无法生成，因此它们继续使用上次收到的规则。错误信息会说明超过了哪个限制。",
+	"settings_logging_ev_cluster_floor_report_failed_n": "工作节点拦截的种子尚未记录",
+	"settings_logging_ev_cluster_floor_report_failed_h": "远程工作节点按锁定底线拦截了一个种子，协调节点暂时无法把它写入数据库。在此期间它对所有工作节点保持拦截，并会在稍后重试时记录。如果反复出现，请检查磁盘和数据库。",
 	"settings_logging_ev_worker_dht_started_n": "工作节点 DHT 已启动",
 	"settings_logging_ev_worker_dht_started_h": "此工作节点的 DHT 已在协调节点分配给它的密钥空间部分上启动。分配变化时，只重启 DHT，而不重启工作节点。",
 	"settings_logging_ev_worker_snapshot_failed_n": "工作节点快照无法解码",

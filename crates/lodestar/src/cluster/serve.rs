@@ -229,6 +229,132 @@ fn cluster_kind(e: &ClusterError) -> &'static str {
     }
 }
 
+/// Floor drops remote workers reported (`Lost(Blocked)`, WK-10d), until
+/// each is a `worker-floor:<id>` tombstone in the store
+/// ([`Store::tombstone_from_worker`]).
+///
+/// - **Never dropped:** a report goes into this map on the sink's path (a
+///   short lock, nothing that waits) and leaves only once its row is
+///   written. A failed write keeps it for the next try. The map's size
+///   is bounded by the leases workers held: the server passes on a loss
+///   only under the holder's current token.
+/// - **Refused at once:** the claim check ([`StoreCheck`]) reads the map
+///   as well as the store, so a re-claim is denied before the row lands.
+#[derive(Debug, Default)]
+pub(crate) struct FloorReports {
+    pending: Mutex<BTreeMap<[u8; 20], (u32, i64)>>,
+    wake: tokio::sync::Notify,
+    /// Reports taken, rows written, and writes that failed (kept).
+    pub reported: AtomicU64,
+    pub written: AtomicU64,
+    pub write_failures: AtomicU64,
+}
+
+impl FloorReports {
+    fn pending(&self) -> std::sync::MutexGuard<'_, BTreeMap<[u8; 20], (u32, i64)>> {
+        self.pending.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// A worker's floor drop. The first report of a key keeps its worker.
+    fn report(&self, worker: WorkerId, key: &InfoHash, at: i64) {
+        self.pending().entry(key.0).or_insert((worker.0, at));
+        self.reported.fetch_add(1, Ordering::Relaxed);
+        self.wake.notify_one();
+    }
+
+    fn holds(&self, key: &InfoHash) -> bool {
+        self.pending().contains_key(&key.0)
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.pending().len()
+    }
+
+    /// Writes up to `FLOOR_BATCH` pending reports, removing each once its
+    /// row is in. Blocking. `Err` keeps them all for the next try.
+    fn flush(
+        &self,
+        db: &std::path::Path,
+        config: StoreConfig,
+    ) -> Result<usize, lodestar_store::Error> {
+        let batch: Vec<([u8; 20], (u32, i64))> = self
+            .pending()
+            .iter()
+            .take(FLOOR_BATCH)
+            .map(|(k, v)| (*k, *v))
+            .collect();
+        if batch.is_empty() {
+            return Ok(0);
+        }
+        let mut store = Store::open(db, config)?;
+        let mut by_worker: BTreeMap<(u32, i64), Vec<[u8; 20]>> = BTreeMap::new();
+        for (k, (w, at)) in &batch {
+            by_worker.entry((*w, *at)).or_default().push(*k);
+        }
+        for ((w, at), keys) in &by_worker {
+            // A key already tombstoned (by its rule or an earlier report)
+            // keeps its row; either way it's held now.
+            store.tombstone_from_worker(keys, *w, *at)?;
+        }
+        let mut pending = self.pending();
+        for (k, v) in &batch {
+            if pending.get(k) == Some(v) {
+                pending.remove(k);
+            }
+        }
+        self.written
+            .fetch_add(batch.len() as u64, Ordering::Relaxed);
+        Ok(batch.len())
+    }
+}
+
+/// Floor reports written per store transaction.
+const FLOOR_BATCH: usize = 1024;
+/// How long the floor writer waits before trying a failed write again.
+const FLOOR_RETRY: Duration = Duration::from_secs(5);
+
+/// Writes floor reports as they come, until `stopped`; then once more,
+/// so a report taken before a shutdown is in the store when it ends.
+async fn write_floor(
+    floor: Arc<FloorReports>,
+    db: PathBuf,
+    config: StoreConfig,
+    mut stopped: watch::Receiver<bool>,
+) {
+    let mut failing = false;
+    loop {
+        let stop = tokio::select! {
+            () = floor.wake.notified() => false,
+            () = tokio::time::sleep(FLOOR_RETRY), if failing || floor.len() > 0 => false,
+            _ = stopped.changed() => true,
+        };
+        loop {
+            let (f, db, config) = (floor.clone(), db.clone(), config.clone());
+            match tokio::task::spawn_blocking(move || f.flush(&db, config)).await {
+                Ok(Ok(0)) => {
+                    failing = false;
+                    break;
+                }
+                Ok(Ok(_)) => failing = false,
+                Ok(Err(e)) => {
+                    floor.write_failures.fetch_add(1, Ordering::Relaxed);
+                    if !std::mem::replace(&mut failing, true) {
+                        lodestar_log::log_event!(
+                            events::CLUSTER_FLOOR_REPORT_FAILED,
+                            error = lodestar_log::Error::new(&e)
+                        );
+                    }
+                    break;
+                }
+                Err(_) => break,
+            }
+        }
+        if stop {
+            return;
+        }
+    }
+}
+
 /// Whether claimed keys are stored (§19.3's authoritative check before a
 /// grant), on a read-only connection of its own. A key that's tombstoned
 /// or quarantined counts as stored too: it's never granted, so a held key
@@ -239,6 +365,8 @@ fn cluster_kind(e: &ClusterError) -> &'static str {
 struct StoreCheck {
     reader: Mutex<Store>,
     errors: Arc<AtomicU64>,
+    /// Floor reports not written yet: refused as held.
+    floor: Arc<FloorReports>,
 }
 
 impl StoredKeys for StoreCheck {
@@ -252,13 +380,14 @@ impl StoredKeys for StoreCheck {
         keys.iter()
             .zip(held)
             .map(|(k, held)| {
-                held || match reader.find(k) {
-                    Ok(found) => found.is_some(),
-                    Err(_) => {
-                        self.errors.fetch_add(1, Ordering::Relaxed);
-                        false
+                held || self.floor.holds(k)
+                    || match reader.find(k) {
+                        Ok(found) => found.is_some(),
+                        Err(_) => {
+                            self.errors.fetch_add(1, Ordering::Relaxed);
+                            false
+                        }
                     }
-                }
             })
             .collect()
     }
@@ -266,7 +395,11 @@ impl StoredKeys for StoreCheck {
 
 /// Opens the PKI (creating the CA on first use) and the store check's
 /// connection. Blocking.
-fn open_pki(w: &Wiring, errors: Arc<AtomicU64>) -> Result<(Pki, StoreCheck), StartError> {
+fn open_pki(
+    w: &Wiring,
+    errors: Arc<AtomicU64>,
+    floor: Arc<FloorReports>,
+) -> Result<(Pki, StoreCheck), StartError> {
     let store_err = |e: lodestar_store::Error| StartError::pki("store", &ClusterError::Store(e));
     let mut store = Store::open(&w.db, w.store.clone()).map_err(store_err)?;
     let secrets = SecretStore::open_or_create(&w.data_dir)
@@ -283,6 +416,7 @@ fn open_pki(w: &Wiring, errors: Arc<AtomicU64>) -> Result<(Pki, StoreCheck), Sta
         StoreCheck {
             reader: Mutex::new(reader),
             errors,
+            floor,
         },
     ))
 }
@@ -525,6 +659,8 @@ impl Tick {
 /// queued for the tick, at most [`ACKS_PER_WORKER`] per worker.
 struct Sink {
     remote: Option<Arc<RemoteSink>>,
+    floor: Arc<FloorReports>,
+    clock: Arc<dyn Clock>,
     have: Arc<WorkerFilter>,
     acks: mpsc::Sender<(WorkerId, SnapshotAck)>,
     server: OnceLock<Weak<ClusterServer>>,
@@ -545,6 +681,15 @@ impl InboundSink for Sink {
     }
 
     fn outcomes(&self, worker: WorkerId, accepted: Vec<(InfoHash, Lease, Outcome)>) {
+        // A floor drop leaves a tombstone, as a local one does: the key is
+        // never claimed, fetched or stored again (WK-10d).
+        let blocked = lodestar_sources::Loss::Blocked as u8;
+        let now = self.clock.now_secs();
+        for (key, _, outcome) in &accepted {
+            if matches!(outcome, Outcome::Lost { reason } if *reason == blocked) {
+                self.floor.report(worker, key, now);
+            }
+        }
         if let Some(r) = &self.remote {
             r.outcomes(worker, accepted);
         }
@@ -1043,6 +1188,8 @@ struct Inner {
     start_failures: AtomicU64,
     store_errors: Arc<AtomicU64>,
     tick: Arc<Tick>,
+    /// Workers' floor reports, across servers (`write_floor` empties it).
+    floor: Arc<FloorReports>,
 }
 
 /// The workers saved as paused (WK-14's rows), for a new server. A store
@@ -1097,7 +1244,8 @@ impl Inner {
             .local_addr()
             .map_err(|e| StartError::bind(listen, &e))?;
         let (w, errors) = (self.wiring.clone(), self.store_errors.clone());
-        let (pki, check) = tokio::task::spawn_blocking(move || open_pki(&w, errors))
+        let floor = self.floor.clone();
+        let (pki, check) = tokio::task::spawn_blocking(move || open_pki(&w, errors, floor))
             .await
             .map_err(|_| StartError::task())??;
         let (db, store) = (self.wiring.db.clone(), self.wiring.store.clone());
@@ -1119,6 +1267,8 @@ impl Inner {
         let (acks, ack_rx) = mpsc::channel(ACK_QUEUE);
         let sink = Arc::new(Sink {
             remote: attached.as_ref().map(|a| a.sink.clone()),
+            floor: self.floor.clone(),
+            clock: self.wiring.clock.clone(),
             have: self.tick.have.clone(),
             acks,
             server: OnceLock::new(),
@@ -1479,6 +1629,8 @@ pub struct Cluster {
     handle: ClusterHandle,
     stop: watch::Sender<bool>,
     task: JoinHandle<()>,
+    /// Writes workers' floor reports; it ends after a last flush.
+    writer: JoinHandle<()>,
 }
 
 impl std::fmt::Debug for Cluster {
@@ -1504,6 +1656,7 @@ impl Cluster {
             reseal,
             start_failures: AtomicU64::new(0),
             store_errors: Arc::new(AtomicU64::new(0)),
+            floor: Arc::default(),
         });
         let running = if enabled {
             match inner.open().await {
@@ -1517,11 +1670,18 @@ impl Cluster {
             None
         };
         let (stop, stopped) = watch::channel(false);
+        let writer = tokio::spawn(write_floor(
+            inner.floor.clone(),
+            inner.wiring.db.clone(),
+            inner.wiring.store.clone(),
+            stopped.clone(),
+        ));
         let task = tokio::spawn(run(inner.clone(), follow, reseals, stopped, running));
         Ok(Cluster {
             handle: ClusterHandle(inner),
             stop,
             task,
+            writer,
         })
     }
 
@@ -1534,6 +1694,9 @@ impl Cluster {
     pub async fn shutdown(self) {
         let _ = self.stop.send(true);
         let _ = self.task.await;
+        // The sessions are gone: no report comes now. The last ones are
+        // written before the pipeline stops.
+        let _ = self.writer.await;
     }
 }
 
@@ -2206,6 +2369,7 @@ mod tests {
         let check = StoreCheck {
             reader: Mutex::new(Store::open_reader(&db, StoreConfig::default()).unwrap()),
             errors: Arc::default(),
+            floor: Arc::default(),
         };
         assert_eq!(
             check.stored(&[InfoHash([3; 20]), InfoHash([4; 20])]),
@@ -2213,6 +2377,100 @@ mod tests {
             "the tombstoned key is refused; the other is free"
         );
         assert_eq!(check.errors.load(Ordering::Relaxed), 0);
+    }
+
+    /// WK-10d: a worker's floor report is refused to every claim at once,
+    /// kept across a failed write, and written as a `worker-floor:<id>`
+    /// tombstone on the next try; only a `Blocked` loss counts.
+    #[test]
+    fn a_floor_report_is_refused_at_once_and_never_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        drop(Store::open(&db, StoreConfig::default()).unwrap());
+        let floor = Arc::new(FloorReports::default());
+        let tick = Arc::new(Tick::new(&wiring(dir.path(), false, any_port())));
+        let sink = Sink {
+            remote: None,
+            floor: floor.clone(),
+            clock: Arc::new(SystemClock),
+            have: tick.have.clone(),
+            acks: mpsc::channel(1).0,
+            server: OnceLock::new(),
+            tick: Arc::downgrade(&tick),
+        };
+        let lease = Lease {
+            holder: WorkerId(7),
+            token: lodestar_cluster::Token(1),
+            cohort: 0,
+            source: lodestar_store::SourceId::new(1).unwrap(),
+            sources: 2,
+            strategy: 0,
+            discovered_at: 0,
+            finder: None,
+        };
+        let lost = |reason: lodestar_sources::Loss| Outcome::Lost {
+            reason: reason as u8,
+        };
+        sink.outcomes(
+            WorkerId(7),
+            vec![
+                (
+                    InfoHash([5; 20]),
+                    lease,
+                    lost(lodestar_sources::Loss::Blocked),
+                ),
+                (
+                    InfoHash([6; 20]),
+                    lease,
+                    lost(lodestar_sources::Loss::GaveUp),
+                ),
+            ],
+        );
+        assert_eq!(floor.len(), 1, "only the floor drop");
+        let check = StoreCheck {
+            reader: Mutex::new(Store::open_reader(&db, StoreConfig::default()).unwrap()),
+            errors: Arc::default(),
+            floor: floor.clone(),
+        };
+        let refused = || check.stored(&[InfoHash([5; 20]), InfoHash([6; 20])]);
+        assert_eq!(refused(), vec![true, false], "refused before any write");
+        // The store refuses the write: kept, still refused.
+        let gone = dir.path().join("no-such-dir").join("lodestar.db");
+        assert!(floor.flush(&gone, StoreConfig::default()).is_err());
+        assert_eq!(floor.len(), 1);
+        assert_eq!(refused(), vec![true, false]);
+        // The next try lands it.
+        assert_eq!(floor.flush(&db, StoreConfig::default()).unwrap(), 1);
+        assert_eq!(floor.len(), 0);
+        assert_eq!(refused(), vec![true, false], "now from the store");
+        let rule = Store::open(&db, StoreConfig::default())
+            .unwrap()
+            .tombstones(10)
+            .unwrap()
+            .into_iter()
+            .find(|t| t.hash == [5; 20])
+            .map(|t| t.rule);
+        assert_eq!(rule.as_deref(), Some("worker-floor:7"));
+    }
+
+    /// A report taken just before a shutdown is in the store once the
+    /// cluster has shut down.
+    #[tokio::test]
+    async fn the_last_floor_reports_are_written_at_shutdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let w = wiring(dir.path(), false, any_port());
+        let db = w.db.clone();
+        drop(Store::open(&db, StoreConfig::default()).unwrap());
+        let cluster = Cluster::start(w).await.unwrap();
+        let floor = cluster.handle().0.floor.clone();
+        floor.report(WorkerId(3), &InfoHash([9; 20]), 1);
+        cluster.shutdown().await;
+        assert_eq!(floor.len(), 0);
+        let held = Store::open(&db, StoreConfig::default())
+            .unwrap()
+            .held_among(&[[9; 20]])
+            .unwrap();
+        assert_eq!(held, vec![true]);
     }
 
     /// Only public addresses reach the planner from the DHT's vote.
@@ -2368,7 +2626,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut wiring = wiring(dir.path(), true, any_port());
         wiring.fleet = Some(fleet());
-        let (pki, check) = open_pki(&wiring, Arc::new(AtomicU64::new(0))).unwrap();
+        let (pki, check) = open_pki(&wiring, Arc::new(AtomicU64::new(0)), Arc::default()).unwrap();
         let mut tick = Tick::new(&wiring);
         if let Some(db) = db {
             // The tick's reads go to a store that isn't there. Its reads are
@@ -2383,6 +2641,8 @@ mod tests {
         let (acks, ack_rx) = mpsc::channel(ACK_QUEUE);
         let sink = Arc::new(Sink {
             remote: None,
+            floor: Arc::default(),
+            clock: wiring.clock.clone(),
             have: tick.have.clone(),
             acks,
             server: OnceLock::new(),
@@ -2913,6 +3173,8 @@ mod tests {
         let (acks, mut rx) = mpsc::channel(ACK_QUEUE);
         let sink = Sink {
             remote: None,
+            floor: Arc::default(),
+            clock: Arc::new(SystemClock),
             have: tick.have.clone(),
             acks,
             server: OnceLock::new(),

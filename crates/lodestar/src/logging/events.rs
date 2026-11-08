@@ -950,6 +950,18 @@ lodestar_log::catalogue! {
         fields: { error: Error },
     }
 
+    /// A remote worker's floor drop couldn't be written as a tombstone
+    /// yet (the store refused the write). It's kept, refused to every
+    /// worker meanwhile, and written on a later try. Said once per streak
+    /// of failures (WK-10d).
+    CLUSTER_FLOOR_REPORT_FAILED {
+        id: "cluster.floor_report_failed",
+        component: Workers,
+        level: Error,
+        message: "A worker's blocked torrent couldn't be recorded yet; it stays blocked and is recorded on a later try",
+        fields: { error: Error },
+    }
+
     // ── Worker runtime (WK-10c, §19.5) ──
     /// The worker's DHT started on its assigned shard: target prefixes
     /// `first..end` of 256 and its BEP 42 id slots. A new shard restarts
