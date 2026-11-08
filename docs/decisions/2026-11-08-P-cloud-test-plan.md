@@ -1,4 +1,4 @@
-# P-cloud-test-plan decisions
+# P-cloud-test-plan decisions (#627)
 
 The plan is `docs/plan/2026-11-08-cloud-test-plan.md`: concurrent test lanes on the 48 h pilot fleet (one AWS Windows VM, two Linodes behind PIA), and a standing cloud screen for crawler improvements. Docs only; it starts no VM.
 
