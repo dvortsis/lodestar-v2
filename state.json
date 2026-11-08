@@ -6258,6 +6258,11 @@
       "id": "PK-manifest-channel",
       "at": "2026-11-08T15:31:23Z",
       "note": "Approved LODESTAR_CHANNEL from package-gate (stable/beta/nightly/dev), Dockerfile ARG (2 lines), smoke+build-arm64 same build-args. Owner flag at merge: v0.5.1 (and release/v0.5.2 builds without this) report channel dev, so they refuse self-update; one manual update needed. Tell PK-smoke the smoke job changed. Check release/v0.5.2 release.yml for the same gap before v0.5.2 final."
+    },
+    {
+      "id": "CMP-5-prs",
+      "at": "2026-11-08T15:50:07Z",
+      "note": "CMP-5 stacked: #620 CMP-5a (38e88b0f, base main), #621 CMP-5b (bfa63d69, base slice/CMP-5a, ~2.2k lines with reason), #619 CMP-5 (94ca499e, base slice/CMP-5b, ~710). not_wired holds; durable 'staged' state moves to CMP-5g (supersedes 14:38Z ask). stage_binary name from companion id via RelPath (accepted). CMP-10 contract (external_client/external_indexer, Some(rx), Prowlarr restart after hand-over) -> CMP-5g brief."
     }
   ],
   "main_health": [
@@ -6966,7 +6971,7 @@
         "slice": "CMP-5",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8X2TF9tNCnNecmH9G: splitting into stacked PRs CMP-5a/5b/5",
+        "doing": "session_01MMjhn8X2TF9tNCnNecmH9G: PRs #620/#621/#619 stacked, CI running",
         "since": "2026-11-08T14:32Z"
       },
       {
@@ -7049,5 +7054,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T15:39:10Z"
+  "updated": "2026-11-08T15:50:07Z"
 }
