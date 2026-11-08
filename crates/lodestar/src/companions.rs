@@ -121,10 +121,21 @@ impl ApiConfigure for Unwired {
 
 /// The manager over this data folder and store. Downloads go direct, as
 /// the updater's do (CMP-1's decision); nothing is started ([`Unwired`]).
+/// Blocking (the store, the secrets file, the lock): async callers use
+/// `spawn_blocking`.
 pub fn manager(
     data: PathBuf,
     store: Arc<Mutex<Store>>,
     catalogue: &'static Catalogue,
+) -> Result<Manager, OpenError> {
+    manager_on(data, store, catalogue, host())
+}
+
+fn manager_on(
+    data: PathBuf,
+    store: Arc<Mutex<Store>>,
+    catalogue: &'static Catalogue,
+    host: Host,
 ) -> Result<Manager, OpenError> {
     let fail = |code: &'static str, message: String| OpenError { code, message };
     let secrets =
@@ -134,7 +145,7 @@ pub fn manager(
         Downloader::new(Guarded::new(client).map_err(|e| fail(e.code(), e.code().to_owned()))?);
     Manager::open(Parts {
         data,
-        host: host(),
+        host,
         catalogue,
         downloader,
         secrets: Arc::new(secrets),
@@ -176,13 +187,35 @@ pub struct Companions {
 /// companions, and follows whether any download client is set up. A bad
 /// catalogue turns companions off for the run (CMP-0); a failed recovery
 /// is logged by code and leaves that companion as it is.
+///
+/// TODO(CMP-5g): the task following `integrations.clients` isn't stopped
+/// at shutdown; its stop signal belongs in `Handles::shutdown` with the
+/// rest of CMP-5g's wiring.
 pub async fn start(
     data: PathBuf,
     store: Arc<Mutex<Store>>,
-    mut integrations: watch::Receiver<crate::settings::integrations::Integrations>,
+    integrations: watch::Receiver<crate::settings::integrations::Integrations>,
 ) -> Option<Companions> {
     let catalogue = lodestar_companions::builtin().ok()?;
-    let manager = match manager(data, store, catalogue) {
+    start_with(data, store, integrations, catalogue, host()).await
+}
+
+async fn start_with(
+    data: PathBuf,
+    store: Arc<Mutex<Store>>,
+    mut integrations: watch::Receiver<crate::settings::integrations::Integrations>,
+    catalogue: &'static Catalogue,
+    host: Host,
+) -> Option<Companions> {
+    let opened = tokio::task::spawn_blocking(move || manager_on(data, store, catalogue, host))
+        .await
+        .unwrap_or_else(|_| {
+            Err(OpenError {
+                code: "panicked",
+                message: String::new(),
+            })
+        });
+    let manager = match opened {
         Ok(m) => Arc::new(m),
         Err(e) => {
             // Companions are off for this run.
@@ -244,6 +277,116 @@ mod tests {
         )));
         assert!(!in_container(only("/proc/1/cgroup", b"0::/\n")));
         assert!(!in_container(only("/proc/1/environ", b"PATH=/bin\0")));
+    }
+
+    fn store(dir: &std::path::Path) -> Arc<Mutex<Store>> {
+        Arc::new(Mutex::new(
+            Store::open(dir.join("db"), Default::default()).unwrap(),
+        ))
+    }
+
+    const NATIVE: Host = Host {
+        platform: Some((
+            lodestar_companions::catalogue::Platform::Linux,
+            lodestar_companions::catalogue::Arch::X86_64,
+        )),
+        in_container: false,
+    };
+
+    fn integrations() -> watch::Sender<crate::settings::integrations::Integrations> {
+        watch::channel(Default::default()).0
+    }
+
+    /// #619's review (B1): a held companion lock turns companions off for
+    /// the run instead of stopping serve.
+    #[tokio::test]
+    async fn a_held_lock_turns_companions_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let cat = lodestar_companions::builtin().unwrap();
+        let held = manager_on(dir.path().to_path_buf(), store(dir.path()), cat, NATIVE).unwrap();
+        let tx = integrations();
+        let got = start_with(
+            dir.path().to_path_buf(),
+            store(dir.path()),
+            tx.subscribe(),
+            cat,
+            NATIVE,
+        )
+        .await;
+        assert!(got.is_none());
+        drop(held);
+        let got = start_with(
+            dir.path().to_path_buf(),
+            store(dir.path()),
+            tx.subscribe(),
+            cat,
+            NATIVE,
+        )
+        .await;
+        assert!(got.is_some());
+    }
+
+    /// Recovery runs at serve start: an empty folder (a crash before
+    /// `begun`) is tidied, and a folder holding files Lodestar has no
+    /// record of is left as it is.
+    #[tokio::test]
+    async fn recovery_runs_at_start_and_spares_foreign_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let cat = lodestar_companions::builtin().unwrap();
+        let companions = dir.path().join("companions");
+        std::fs::create_dir_all(companions.join("qbittorrent")).unwrap();
+        let mine = companions.join("prowlarr").join("config.xml");
+        std::fs::create_dir_all(mine.parent().unwrap()).unwrap();
+        std::fs::write(&mine, b"<Config/>").unwrap();
+        let tx = integrations();
+        let got = start_with(
+            dir.path().to_path_buf(),
+            store(dir.path()),
+            tx.subscribe(),
+            cat,
+            NATIVE,
+        )
+        .await;
+        assert!(got.is_some());
+        assert!(!companions.join("qbittorrent").exists());
+        assert_eq!(std::fs::read(&mine).unwrap(), b"<Config/>");
+    }
+
+    /// The snapshot follows whether any download client is set up.
+    #[tokio::test]
+    async fn the_snapshot_follows_the_download_clients() {
+        let dir = tempfile::tempdir().unwrap();
+        let cat = lodestar_companions::builtin().unwrap();
+        let tx = integrations();
+        let c = start_with(
+            dir.path().to_path_buf(),
+            store(dir.path()),
+            tx.subscribe(),
+            cat,
+            NATIVE,
+        )
+        .await
+        .unwrap();
+        let mut rx = c.snapshot.clone();
+        assert!(!rx.borrow_and_update().download_clients);
+        let client = serde_json::from_value(serde_json::json!({
+            "id": "home",
+            "name": "Home",
+            "kind": "qbittorrent",
+            "url": "http://127.0.0.1:8080/"
+        }))
+        .unwrap();
+        tx.send_modify(|i| i.clients.push(client));
+        let deadline = std::time::Duration::from_secs(10);
+        tokio::time::timeout(deadline, rx.wait_for(|s| s.download_clients))
+            .await
+            .expect("the snapshot didn't follow the new client")
+            .unwrap();
+        tx.send_modify(|i| i.clients.clear());
+        tokio::time::timeout(deadline, rx.wait_for(|s| !s.download_clients))
+            .await
+            .expect("the snapshot didn't follow the removed client")
+            .unwrap();
     }
 
     #[test]

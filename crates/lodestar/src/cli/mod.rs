@@ -312,6 +312,36 @@ mod tests {
         (c.config, c.command)
     }
 
+    /// #619's review: an install needs the shown SHA-256, never a bare
+    /// yes; a removal without `--yes` only shows what it would delete.
+    #[test]
+    fn companion_confirmation_is_explicit() {
+        use companion::{CompanionArgs, CompanionCommand};
+        assert_eq!(
+            args("companion install qbittorrent --yes").unwrap_err(),
+            clap::error::ErrorKind::UnknownArgument
+        );
+        let hex = "ab".repeat(32);
+        assert_eq!(
+            cmd(&format!("companion install qbittorrent --sha256 {hex}")).1,
+            Some(Command::Companion(CompanionArgs {
+                command: CompanionCommand::Install {
+                    id: "qbittorrent".into(),
+                    sha256: Some(hex),
+                }
+            }))
+        );
+        assert_eq!(
+            cmd("companion remove x").1,
+            Some(Command::Companion(CompanionArgs {
+                command: CompanionCommand::Remove {
+                    id: "x".into(),
+                    yes: false
+                }
+            }))
+        );
+    }
+
     #[test]
     fn serve_stays_the_default() {
         assert_eq!(cmd(""), (None, None));
