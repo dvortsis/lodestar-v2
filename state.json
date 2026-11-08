@@ -6397,7 +6397,8 @@
     {
       "at": "2026-11-08T18:32Z",
       "note": "Next runner PR: steward/runner rule that edited GitHub comments are not trusted (check updated_at == created_at, or verify against the Actions run) because the operator App can edit others' comments with author preserved (#631 B2'). #631 at ea5fa600 CHANGES (B1' deliver-pia can't open firewall, B2' App repo-wide powers, B3' no AWS identity for bridge/apply) relayed."
-    }
+    },
+    "2026-11-08T18:36Z: CMP-5 stack pushed: #621 5e0b6014 (base main), #619 7b233d13; #631 at 8e38be68. Fresh Opus reviews running on all three."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7196,5 +7197,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T18:32Z"
+  "updated": "2026-11-08T18:36Z"
 }
