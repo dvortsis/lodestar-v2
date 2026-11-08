@@ -6393,6 +6393,10 @@
     {
       "at": "2026-11-08T18:17Z",
       "note": "#620 CMP-5a merged (11267a21); #621 retargeted to main. #626 delta review running (e3875411). #631 P-cloud-operator Opus review running. #629 MERGE verdict, notes folded (b1321d8c), retitled with slice ids; merge on green. PK-win-upd-1 #630: approved removing cfg(any(unix,test)) at settings/updates.rs:101."
+    },
+    {
+      "at": "2026-11-08T18:32Z",
+      "note": "Next runner PR: steward/runner rule that edited GitHub comments are not trusted (check updated_at == created_at, or verify against the Actions run) because the operator App can edit others' comments with author preserved (#631 B2'). #631 at ea5fa600 CHANGES (B1' deliver-pia can't open firewall, B2' App repo-wide powers, B3' no AWS identity for bridge/apply) relayed."
     }
   ],
   "main_health": [
@@ -7192,5 +7196,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T18:17Z"
+  "updated": "2026-11-08T18:32Z"
 }
