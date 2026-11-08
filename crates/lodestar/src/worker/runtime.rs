@@ -90,9 +90,11 @@ const DHT_SOURCE: u8 = 1;
 /// claims from the store (runner, 2026-11-07T20:34Z, plan Q6; the WK-10b
 /// decisions file).
 pub const REDISCOVERY_SAMPLE: u64 = 16;
-/// The longest a result waits for a snapshot it can be sealed under. Past
-/// it, the result is let go unreported: its lease runs out on the
-/// coordinator and the key is granted again (never `Blocked`).
+/// The longest sealing may be down (no snapshot whose key covers now)
+/// before the results waiting on it are released: each is reported lost as
+/// `GaveUp` (never `Blocked`), which ends its lease so the key can be
+/// claimed again. The wait counts from when sealing went down, not from
+/// each result (#599's review), so a backlog is let go all at once.
 pub const SEAL_WAIT: Duration = Duration::from_secs(600);
 const DAY: i64 = 86_400;
 
@@ -160,6 +162,8 @@ pub struct Counts {
     /// [`SEAL_WAIT`].
     pub waited: AtomicU64,
     pub released: AtomicU64,
+    /// Finds not claimed because sealing was down.
+    pub held_back: AtomicU64,
     pub claimed: AtomicU64,
     pub granted: AtomicU64,
     /// Results sent, and accepted by the coordinator.
@@ -256,6 +260,10 @@ struct Shared {
     /// A new session's first `Assign` applies whatever its revision: a
     /// coordinator whose clock went back numbers its plans lower (WK-5).
     fresh_session: AtomicBool,
+    /// When sealing went down (no installed key covers now): results wait
+    /// until [`SEAL_WAIT`] after this, then go at once. Cleared by a
+    /// result that seals.
+    unsealable_since: Mutex<Option<std::time::Instant>>,
     /// Asks the session task to send everything it has now (a drain).
     flush: mpsc::UnboundedSender<tokio::sync::oneshot::Sender<()>>,
 }
@@ -341,6 +349,7 @@ impl Runtime {
             waiting: std::sync::atomic::AtomicUsize::new(0),
             fresh_session: AtomicBool::new(false),
             flush,
+            unsealable_since: Mutex::new(None),
             config,
         });
         let (stop_reports, reports_stopped) = watch::channel(false);
@@ -543,7 +552,10 @@ impl Work for Runtime {
 impl Drop for Runtime {
     fn drop(&mut self) {
         // A local stop drops the runtime (`Worker::run` owns it): everything
-        // stops at once, and the keys' leases go back to the coordinator.
+        // stops at once, and the keys' leases go back to the coordinator. A
+        // late install on a blocking thread then can't start stages nobody
+        // owns.
+        self.shared.draining.store(true, Ordering::Release);
         if let Some(stages) = lock(&self.shared.stages).take() {
             let _ = stages.stop.send(true);
             stages.prepare.abort();
@@ -649,10 +661,19 @@ fn snapshot_chunk(s: &Arc<Shared>, c: SnapshotChunk) {
     // time, under the install lock, and a transfer a newer one has already
     // followed is skipped before it's built, so two never peak together.
     tokio::task::spawn_blocking(move || {
+        let mut complete = complete;
+        let stale = |asked: u64| asked < lock(&s.snapshots).asked;
         let ok = match kind {
+            // A transfer a newer one has already followed is dropped before
+            // it waits on the lock, so big payloads can't pile up there.
+            SnapshotKind::Filter if stale(asked) => true,
             SnapshotKind::Filter => {
                 let mut done = lock(&s.install);
-                if *done >= asked || asked < lock(&s.snapshots).asked {
+                if *done >= asked || stale(asked) {
+                    true
+                } else if complete.version == s.judge.version() {
+                    // The same snapshot again (a reconnect): nothing to build.
+                    *done = asked;
                     true
                 } else {
                     match complete.filter() {
@@ -675,6 +696,10 @@ fn snapshot_chunk(s: &Arc<Shared>, c: SnapshotChunk) {
                 Err(_) => false,
             },
         };
+        // The filter snapshot's bytes hold the wire key: overwritten once
+        // used or skipped, as WK-8's `Transfer` and `WireKey` are.
+        complete.bytes.fill(0);
+        std::sync::atomic::compiler_fence(Ordering::SeqCst);
         if !ok {
             bump(&s.counts.snapshot_errors);
         }
@@ -788,6 +813,17 @@ impl Shared {
         z ^ (z >> 31)
     }
 
+    /// Whether sealing is down at `now`: a result found it so, and no key
+    /// covers `now` yet. A key that does (a fresh install, or the clock
+    /// moving back onto the key's day) ends it.
+    fn sealing_down(&self, now: i64) -> bool {
+        let mut since = lock(&self.unsealable_since);
+        if since.is_some() && self.sealable(now) {
+            *since = None;
+        }
+        since.is_some()
+    }
+
     /// Whether a record can be sealed at `now`: a snapshot is installed and
     /// `now` is on or before its wire key's day (`Judge::judge_at`'s rule).
     fn sealable(&self, now: i64) -> bool {
@@ -797,11 +833,11 @@ impl Shared {
 }
 
 /// The judge around the outbound queue, as WK-8's `Judging`, except that a
-/// result that can't be sealed yet waits for the next snapshot (up to
-/// [`SEAL_WAIT`]; the prepare stage waits with it, which pauses the pool,
-/// as a stalled link does). One let go after that isn't reported: its lease
-/// runs out and the key is granted again. `Blocked` is only ever the
-/// floor's (CS-8a, hash lists), which WK-10c tombstones (runner, #592's B2).
+/// result that can't be sealed yet waits for the next snapshot, until
+/// [`SEAL_WAIT`] after sealing went down; the pool is paused meanwhile and
+/// nothing new is claimed. Past that, every waiting result is released as
+/// `GaveUp`, which ends its lease. `Blocked` is only ever the floor's
+/// (CS-8a, hash lists), which WK-10c tombstones (runner, #592's B2).
 struct Sealing<O> {
     shared: Arc<Shared>,
     reports: Arc<dyn Reports>,
@@ -815,13 +851,18 @@ impl<O: Outbox<SealedRecord>> Outbox<Results> for Sealing<O> {
         async move {
             if !s.sealable(unix_now()) {
                 bump(&s.counts.waited);
+                // The wait runs from when sealing went down, once for all.
+                let deadline = *lock(&s.unsealable_since)
+                    .get_or_insert_with(std::time::Instant::now)
+                    + s.config.seal_wait;
                 // No fetch is started while a result waits: they'd only
                 // spend their keys waiting on the pool's byte budget.
                 if s.waiting.fetch_add(1, Ordering::AcqRel) == 0 {
                     s.pause_pool(true).await;
                 }
                 let mut installs = s.key_day.subscribe();
-                let ready = tokio::time::timeout(s.config.seal_wait, async {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                let ready = tokio::time::timeout(left, async {
                     while !s.sealable(unix_now()) {
                         // A new install, or the next minute (the clock may
                         // be what changed).
@@ -839,7 +880,11 @@ impl<O: Outbox<SealedRecord>> Outbox<Results> for Sealing<O> {
                 }
             }
             match s.judge.judge(item) {
-                Judged::Send(o) => self.out.send(o).await,
+                Judged::Send(o) => {
+                    // Sealing works again.
+                    *lock(&s.unsealable_since) = None;
+                    self.out.send(o).await
+                }
                 // The floor: never sent or spooled (WK-8).
                 Judged::Dropped { key, token, .. } => {
                     reports.lost(&key, token, Loss::Blocked);
@@ -995,6 +1040,12 @@ fn sift(
     maybe: bool,
 ) -> Option<(ClaimItem, Vec<std::net::SocketAddr>)> {
     bump(&s.counts.found);
+    // Nothing is claimed while sealing is down: it couldn't be sent, and
+    // its lease would only wait (#599's review).
+    if s.sealing_down(unix_now()) {
+        bump(&s.counts.held_back);
+        return None;
+    }
     match rediscovery(ready, maybe, s.draw()) {
         Sighting::Claim => {}
         Sighting::Sampled => bump(&s.counts.sampled),
@@ -1778,6 +1829,69 @@ mod tests {
             }]
         );
         assert_ne!(Loss::GaveUp as u8, Loss::Blocked as u8);
+    }
+
+    /// #599's review: the wait runs from when sealing went down, not per
+    /// result, so a backlog is released together (12 results and a 1 s wait
+    /// take about 1 s, not 12), and nothing new is claimed meanwhile.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_backlog_is_released_together_and_claims_wait() {
+        let fetch = Arc::new(MapFetch::default());
+        let raws: Vec<Vec<u8>> = (0..12).map(|i| info(&format!("backlog {i}"))).collect();
+        for r in &raws {
+            lock(&fetch.0).insert(key_of(r), r.clone());
+        }
+        let mut rt = Runtime::start(Config {
+            seal_wait: Duration::from_secs(1),
+            ..config(fetch)
+        });
+        rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
+        let (_, chunks) = filter_chunks_at(unix_now() - DAY);
+        for c in chunks {
+            rt.event(WorkerEvent::Snapshot(c));
+        }
+        until("started", || (rt.is_started(), ())).await;
+        for (n, r) in raws.iter().enumerate() {
+            granted(
+                &rt.shared,
+                key_of(r),
+                Token(50 + n as u64),
+                vec!["203.0.113.9:6881".parse().unwrap()],
+                unix_now(),
+            );
+        }
+        let c = rt.counts();
+        until("waiting", || {
+            let n = c.waited.load(Ordering::Relaxed);
+            (n >= 1, n)
+        })
+        .await;
+        let started = Instant::now();
+        until("all released", || {
+            let n = c.released.load(Ordering::Relaxed);
+            (n == raws.len() as u64, n)
+        })
+        .await;
+        let took = started.elapsed();
+        assert!(
+            took < Duration::from_secs(8),
+            "released one wait after another: {took:?}"
+        );
+        assert_eq!(c.lost.load(Ordering::Relaxed), raws.len() as u64);
+        // Sealing is still down: a find isn't claimed.
+        assert!(sift(&rt.shared, found(4), false, false).is_none());
+        assert_eq!(c.held_back.load(Ordering::Relaxed), 1);
+        // A fresh snapshot ends it.
+        let (_, chunks) = filter_chunks();
+        for ch in chunks {
+            rt.event(WorkerEvent::Snapshot(ch));
+        }
+        until("claims again", || {
+            let ok = sift(&rt.shared, found(4), false, false).is_some();
+            (ok, ok)
+        })
+        .await;
+        rt.shutdown().await;
     }
 
     /// A worker session over the in-process link, with the coordinator's
