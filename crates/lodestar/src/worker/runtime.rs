@@ -81,6 +81,12 @@ pub const STATS_EVERY: Duration = Duration::from_secs(5);
 /// Keys found here waiting to be checked and claimed. A full queue drops
 /// the newest: the DHT finds a key again.
 const FOUND_QUEUE: usize = 4096;
+/// Snapshot acknowledgements waiting for the session: well above the
+/// coordinator's window per transfer (four kinds at once).
+const ACK_QUEUE: usize = 1024;
+/// `Accepted` answers waiting for the session task: one per batch in
+/// flight, which the outbound byte budget bounds far below this.
+const ACCEPTED_QUEUE: usize = 4096;
 /// Room left in a `Results` payload for the batch's own header.
 const BATCH_SLACK: usize = 4 << 10;
 /// The source a worker's own finds are counted under (the DHT's). The
@@ -258,8 +264,11 @@ struct Shared {
     /// (the pool's cap), and never dropped.
     into_pool: mpsc::UnboundedSender<Discovery>,
     pool_rx: Mutex<Option<mpsc::UnboundedReceiver<Discovery>>>,
-    acks: mpsc::UnboundedSender<SnapshotAck>,
-    accepted: mpsc::UnboundedSender<(u64, bool)>,
+    /// Bounded (#599's review): a lost acknowledgement stalls that
+    /// transfer, which the coordinator starts over, and a lost `Accepted`
+    /// leaves its batch to be sent again and answered again.
+    acks: mpsc::Sender<SnapshotAck>,
+    accepted: mpsc::Sender<(u64, bool)>,
     losses: Arc<Losses>,
     draining: AtomicBool,
     started: watch::Sender<bool>,
@@ -344,8 +353,8 @@ impl Runtime {
     /// in (see the module docs). Must be called in a Tokio runtime.
     pub fn start(config: Config) -> Runtime {
         let (into_pool, pool_rx) = mpsc::unbounded_channel();
-        let (acks, ack_rx) = mpsc::unbounded_channel();
-        let (accepted, accepted_rx) = mpsc::unbounded_channel();
+        let (acks, ack_rx) = mpsc::channel(ACK_QUEUE);
+        let (accepted, accepted_rx) = mpsc::channel(ACCEPTED_QUEUE);
         let (loss_tx, loss_rx) = mpsc::unbounded_channel();
         let (found, found_rx) = mpsc::channel(FOUND_QUEUE);
         let (flush, flush_rx) = mpsc::unbounded_channel();
@@ -584,7 +593,7 @@ impl Runtime {
             }
             WorkerEvent::Hints(items) => hints(s, items),
             WorkerEvent::Accepted { batch, accepted } => {
-                let _ = s.accepted.send((batch, accepted));
+                let _ = s.accepted.try_send((batch, accepted));
             }
             WorkerEvent::Snapshot(c) => snapshot_chunk(s, c),
             WorkerEvent::HaveSnapshot(b) => {
@@ -594,7 +603,7 @@ impl Runtime {
             }
             WorkerEvent::HaveDelta(b) => {
                 if let (_, Some(ack)) = s.have.delta(&b) {
-                    let _ = s.acks.send(ack);
+                    let _ = s.acks.try_send(ack);
                 }
             }
             // Re-verification is WK-13's; the session handles the rest.
@@ -621,7 +630,7 @@ impl Work for Runtime {
         // Anything queued to the last session may be lost: ask for a fresh
         // have-filter snapshot (WK-3). The coordinator starts the filter
         // and dictionary snapshots over by itself (WK-10a).
-        let _ = self.shared.acks.send(self.shared.have.reconnected());
+        let _ = self.shared.acks.try_send(self.shared.have.reconnected());
         self.shared.fresh_session.store(true, Ordering::Release);
         self.shared.session.send_replace(Some(session));
         want_dht(&self.shared);
@@ -751,7 +760,7 @@ fn unix_now() -> i64 {
 fn snapshot_chunk(s: &Arc<Shared>, c: SnapshotChunk) {
     if c.kind == SnapshotKind::HaveFilter {
         if let Some(ack) = s.have.chunk(&c) {
-            let _ = s.acks.send(ack);
+            let _ = s.acks.try_send(ack);
         }
         return;
     }
@@ -766,11 +775,11 @@ fn snapshot_chunk(s: &Arc<Shared>, c: SnapshotChunk) {
     };
     let complete = match step {
         Ok(Step::Ack(ack)) => {
-            let _ = s.acks.send(ack);
+            let _ = s.acks.try_send(ack);
             return;
         }
         Ok(Step::Done(ack, complete)) => {
-            let _ = s.acks.send(ack);
+            let _ = s.acks.try_send(ack);
             complete
         }
         // Dropped; the coordinator starts it over after its stall.
@@ -1001,6 +1010,15 @@ impl Shared {
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
         z ^ (z >> 31)
+    }
+
+    /// Keys the pool can still take: its cap (the budget's, from the
+    /// assignment) less the leases held.
+    fn pool_room(&self) -> usize {
+        let cap = lock(&self.assignment).map_or(0, |a| super::budget::Limits::of(&a).pool_cap);
+        usize::try_from(cap)
+            .unwrap_or(usize::MAX)
+            .saturating_sub(self.leases.len())
     }
 
     /// Whether the assignment lets this worker fetch: `fetch` and
@@ -1259,7 +1277,7 @@ async fn heartbeat_stats(s: Arc<Shared>) {
 
 /// Sends snapshot acknowledgements, and the have-filter's resync request
 /// again while no header comes (WK-3).
-async fn send_acks(s: Arc<Shared>, mut acks: mpsc::UnboundedReceiver<SnapshotAck>) {
+async fn send_acks(s: Arc<Shared>, mut acks: mpsc::Receiver<SnapshotAck>) {
     let mut poll = tokio::time::interval(POLL_EVERY);
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
@@ -1299,6 +1317,20 @@ async fn claim(s: Arc<Shared>, found: mpsc::Receiver<Found>) {
             s.counts
                 .held_back
                 .fetch_add(batch.len() as u64, Ordering::Relaxed);
+            continue;
+        }
+        // Only as many as the pool has room for: the leases held never
+        // pass the pool's cap, which bounds the queue into the pool and the
+        // losses queued (#599's review). The rest are found again later.
+        let mut batch = batch;
+        let room = s.pool_room();
+        if batch.len() > room {
+            s.counts
+                .held_back
+                .fetch_add((batch.len() - room) as u64, Ordering::Relaxed);
+            batch.truncate(room);
+        }
+        if batch.is_empty() {
             continue;
         }
         let peers: BTreeMap<[u8; 20], Vec<_>> =
@@ -1473,7 +1505,7 @@ fn batch_up(
 async fn send_results(
     s: Arc<Shared>,
     mut outbound: ByteReceiver<SealedRecord>,
-    mut accepted: mpsc::UnboundedReceiver<(u64, bool)>,
+    mut accepted: mpsc::Receiver<(u64, bool)>,
     mut flush: mpsc::UnboundedReceiver<tokio::sync::oneshot::Sender<()>>,
 ) {
     let mut next_batch: u64 = 1;
@@ -2351,6 +2383,38 @@ mod tests {
                 .is_err(),
             "a drain isn't a failure"
         );
+        rt.shutdown().await;
+    }
+
+    /// Claims stop at the pool's room: leases held never pass its cap.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn claims_stop_at_the_pools_room() {
+        let mut rt = Runtime::start(config(Arc::new(MapFetch::default())));
+        let (_coord, session) = session_pair().await;
+        rt.connected(session.handle());
+        let mut a = Assignment::from_message(&assignment(1, 0, 1))
+            .unwrap()
+            .unwrap();
+        a.pool_cap = 2;
+        rt.event(WorkerEvent::Assign(a.to_message().unwrap()));
+        let (_, chunks) = filter_chunks().await;
+        for c in chunks {
+            rt.event(WorkerEvent::Snapshot(c));
+        }
+        until("started", || (rt.is_started(), ())).await;
+        assert_eq!(rt.shared.pool_room(), 2);
+        // The pool is full: two keys held.
+        rt.shared.leases.insert(InfoHash([1; 20]), Token(1));
+        rt.shared.leases.insert(InfoHash([2; 20]), Token(2));
+        assert_eq!(rt.shared.pool_room(), 0);
+        let c = rt.counts();
+        assert!(rt.finds().found(found(9)));
+        until("held back", || {
+            let n = c.held_back.load(Ordering::Relaxed);
+            (n == 1, n)
+        })
+        .await;
+        assert_eq!(c.claimed.load(Ordering::Relaxed), 0);
         rt.shutdown().await;
     }
 
