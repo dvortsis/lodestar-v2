@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-08T12:39:02Z",
+  "updated_at": "2026-11-08T15:39:10Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4114,7 +4114,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 32,
-  "last_heartbeat": "2026-11-08T12:39:02Z",
+  "last_heartbeat": "2026-11-08T15:39:10Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -6959,14 +6959,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T15:04Z",
+    "updated": "2026-11-08T15:39:10Z",
     "items": [
       {
         "slot": 1,
         "slice": "CMP-5",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8X2TF9tNCnNecmH9G: CMP-5 companion manager (brief briefs/CMP-5.md)",
+        "doing": "session_01MMjhn8X2TF9tNCnNecmH9G: splitting into stacked PRs CMP-5a/5b/5",
         "since": "2026-11-08T14:32Z"
       },
       {
@@ -6974,7 +6974,7 @@
         "slice": "PK-manifest",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCXsenhYx7tX8TeoyN: PK-manifest (brief briefs/PK-manifest.md)",
+        "doing": "session_01MMjhnCXsenhYx7tX8TeoyN: PR #618 open, CI running",
         "since": "2026-11-08T15:04Z"
       },
       {
@@ -6982,7 +6982,7 @@
         "slice": "CMP-10",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBW9CdDyYQ8KvyGVXS: CMP-10 plugin to companion map + Needs state",
+        "doing": "session_01MMjhnBW9CdDyYQ8KvyGVXS: PR #616, round 2 items pending",
         "since": "2026-11-08T12:31Z"
       },
       {
@@ -6990,7 +6990,7 @@
         "slice": "WK-10e",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #615 WK-10d-polish merged; #617 WK-10e in CI",
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: PR #617, fixing review blocker",
         "since": "2026-11-08T13:34Z"
       }
     ],
@@ -7049,5 +7049,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T15:31:23Z"
+  "updated": "2026-11-08T15:39:10Z"
 }
