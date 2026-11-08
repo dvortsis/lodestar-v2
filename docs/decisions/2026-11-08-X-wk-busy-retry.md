@@ -21,6 +21,8 @@ The worker claims a `Busy` key again instead of dropping it (#628's review; runn
 - `BusyRetries` holds the keys in a retry: the claims so far and the back-off for each, and when each is due along with what to claim it with.
 - A small task feeds each key back into the claims channel when it comes due. So retried keys go through the same batching, room check and sealing check as new ones, and the claim loop, whose `next_claims` isn't cancel-safe, never waits on a timer.
 - A key's retry ends when it's granted, denied for another reason, or not claimed after all (draining, sealing down, no room in the pool, a failed claim). A key whose retry ended meanwhile isn't fed back.
+- A key the coordinator's answer leaves out ends its retry too (#637's delta review). The protocol promises one answer per key, but nothing enforces it, and an unanswered key would otherwise hold a slot for ever.
+- A re-find whose batch is held back (draining, no room in the pool) ends the key's retry, as it drops a new find. The DHT finds it again (#637's delta review).
 - A key keeps its original discovery time, so it stays in its own cohort.
 - **A key waits at most once** (#637's review): `waiting.len() <= tries.len() <= capacity`.
   - Its `Try` names its one wait.
@@ -49,4 +51,5 @@ The worker claims a `Busy` key again instead of dropping it (#628's review; runn
 - `a_busy_key_is_claimed_again_and_granted`: over a real local session.
 - `a_key_busy_past_its_limit_is_dropped`: claimed 1 + `attempts` times, then dropped and counted.
 - `a_key_denied_for_another_reason_is_dropped_at_once`: `Stored`, `HeldElsewhere` and `Draining`.
-- Mutation-checked: the retry arm, the attempt limit, the wait-once rule, `done` clearing the wait, and the fetching gate.
+- `an_unanswered_key_frees_its_retry_slot`: with room for one key, a key left out of an answer frees its slot for the next `Busy`.
+- Mutation-checked: the retry arm, the attempt limit, the wait-once rule, `done` clearing the wait, the fetching gate, and ending unanswered keys.

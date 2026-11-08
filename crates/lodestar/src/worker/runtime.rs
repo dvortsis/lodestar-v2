@@ -1734,6 +1734,13 @@ async fn claim(s: Arc<Shared>, found: mpsc::Receiver<Found>) {
                 GrantItem::Denied { key, .. } => retries.done(&key),
             }
         }
+        // A key the answer left out (the protocol promises one answer per
+        // key, but nothing enforces it) ends its retry too, so it can't
+        // hold a slot for ever. Busy keys are out of `sent` already, and
+        // ending a denied key twice is a no-op.
+        for key in sent.keys() {
+            retries.done(key);
+        }
         if streak(&mut giving_up, busy, gave_up) {
             // The first batch's count; the counters have the whole streak.
             lodestar_log::log_event!(
@@ -3065,13 +3072,24 @@ mod tests {
         lodestar_cluster::CoordinatorLink,
         lodestar_cluster::WorkerSession,
     ) {
-        let mut cfg = config(Arc::new(MapFetch::default()));
-        cfg.busy_retry = BusyRetry {
+        busy_rig_full(BusyRetry {
             base,
             cap: base * 4,
             attempts,
             capacity: 16,
-        };
+        })
+        .await
+    }
+
+    async fn busy_rig_full(
+        policy: BusyRetry,
+    ) -> (
+        Runtime,
+        lodestar_cluster::CoordinatorLink,
+        lodestar_cluster::WorkerSession,
+    ) {
+        let mut cfg = config(Arc::new(MapFetch::default()));
+        cfg.busy_retry = policy;
         let mut rt = Runtime::start(cfg);
         let (coord, session) = session_pair().await;
         rt.connected(session.handle());
@@ -3141,7 +3159,7 @@ mod tests {
     /// counted as held back; turned on again, it isn't claimed.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_retry_due_while_fetching_is_off_is_dropped() {
-        let (mut rt, mut coord, _session) = busy_rig_with(5, Duration::from_millis(400)).await;
+        let (mut rt, mut coord, _session) = busy_rig_with(5, Duration::from_secs(2)).await;
         assert!(rt.finds().found(found(7)));
         let first = next_claim(&mut coord).await;
         answer(&mut coord, &first, |_| Some(DenyReason::Busy)).await;
@@ -3152,7 +3170,8 @@ mod tests {
             a.fetch = fetch;
             a.to_message().unwrap()
         };
-        // At least 200 ms before it's due (equal jitter on a 400 ms step).
+        // At least 1 s before it's due (equal jitter on a 2 s step), so a
+        // stalled runner still turns fetching off first.
         rt.event(WorkerEvent::Assign(with_fetch(2, false)));
         let c = rt.counts();
         until("the retry held back", || {
@@ -3165,6 +3184,43 @@ mod tests {
         let next = next_claim(&mut coord).await;
         let keys: Vec<[u8; 20]> = next.items.iter().map(|i| i.key).collect();
         assert_eq!(keys, vec![[9; 20]], "the retried key isn't claimed");
+        rt.shutdown().await;
+    }
+
+    /// #637's delta review: a key the coordinator's answer leaves out ends
+    /// its retry, so it doesn't hold a slot for ever. With room for one
+    /// key, a second key's `Busy` is retried, not dropped as `Full`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_unanswered_key_frees_its_retry_slot() {
+        let (rt, mut coord, _session) = busy_rig_full(BusyRetry {
+            base: Duration::from_millis(20),
+            cap: Duration::from_millis(80),
+            attempts: 5,
+            capacity: 1,
+        })
+        .await;
+        assert!(rt.finds().found(found(7)));
+        let first = next_claim(&mut coord).await;
+        answer(&mut coord, &first, |_| Some(DenyReason::Busy)).await;
+        let again = next_claim(&mut coord).await;
+        assert_eq!(again.items[0].key, [7; 20]);
+        // Answered with the key left out.
+        let empty = lodestar_cluster::proto::ClaimBatch {
+            items: vec![],
+            ..again.clone()
+        };
+        answer(&mut coord, &empty, |_| None).await;
+        assert!(rt.finds().found(found(8)));
+        let b = next_claim(&mut coord).await;
+        assert_eq!(b.items[0].key, [8; 20]);
+        answer(&mut coord, &b, |_| Some(DenyReason::Busy)).await;
+        let c = rt.counts();
+        until("the second key retried", || {
+            let n = c.busy_retried.load(Ordering::Relaxed);
+            (n == 2, n)
+        })
+        .await;
+        assert_eq!(c.busy_dropped.load(Ordering::Relaxed), 0);
         rt.shutdown().await;
     }
 
