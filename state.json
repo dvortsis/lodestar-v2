@@ -6318,6 +6318,11 @@
       "id": "merged-616",
       "at": "2026-11-08T17:17Z",
       "note": "#616 CMP-10 merged ba27bf5d; session archived; CMP-5 told. Owner flag (download_clients + ExternalIndexer, size ~1.6k, web budget 98%) via dashboard."
+    },
+    {
+      "id": "X-utp-backoff",
+      "at": "2026-11-08T17:20Z",
+      "note": "Core (Opus) follow-up from the utp flake review: the proposed reset-backoff-on-progress fix was rejected (B1: Karn regression; small messages resent 2-3x once RTT jumps above the RTO; probe in scratchpad probe.rs). Options: (a) cap backoff growth across timeouts separated by progress while keeping Karn retention; (b) SACK-driven fast retransmit of a lost resend; (c) libutp behaviour with an honest trade-off and an RTT-increase Sim bound. Also pre-existing: on_timeout counts timeouts only when !heard, so a peer that sends but never ACKs never reaches MAX_TIMEOUTS. Check whether the socket layer bounds it. Test-only flake fix lands first (X-flake-utp-lossy)."
     }
   ],
   "main_health": [
