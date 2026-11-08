@@ -1,10 +1,34 @@
 //! `<data>/bin` (architecture §12.2): the supervisor's and the updater's
 //! files, and the primitives every write goes through.
 //!
-//! The folder is created 0700 and refused if it's a symlink or owned by
-//! another user. Every file is written by temporary file, fsync, rename
-//! and a directory fsync, and opened with `O_NOFOLLOW`. Overlay folder
-//! names are validated versions, never paths.
+//! **Unix:** the folder is created 0700 and refused if it's a symlink or
+//! owned by another user. Every file is written by temporary file, fsync,
+//! rename and a directory fsync, and opened with `O_NOFOLLOW`. Overlay
+//! folder names are validated versions, never paths.
+//!
+//! **Windows** (`<data>\bin`, PK-win-upd-1), the same guarantees with
+//! std's safe Windows calls (the workspace forbids `unsafe`):
+//! - **No reparse points:** the folder and every file in it are opened
+//!   with `FILE_FLAG_OPEN_REPARSE_POINT`, so a symlink or junction is
+//!   opened as itself, and refused by its attributes on the handle (no
+//!   check-then-open gap). `<data>` itself is the configured folder, as on
+//!   Unix; the service's is checked for reparse points at every start
+//!   (`windows::acl`).
+//! - **Pinned:** [`Bin`] holds the folder open without
+//!   `FILE_SHARE_DELETE` while it lives, so it can't be renamed, deleted
+//!   or swapped for a junction after it was checked.
+//! - **Atomic replace:** temporary file (`CREATE_NEW`, never through a
+//!   link), `FlushFileBuffers`, then `MoveFileEx`-style replace
+//!   (`std::fs::rename`). NTFS journals the rename, and a folder can't be
+//!   flushed through std, so there's no folder fsync.
+//! - **One writer:** `.lock`, an exclusive `LockFileEx` lock
+//!   (`File::try_lock`).
+//! - **Owner-only:** rests on the folder's ACL, not on code: files inherit
+//!   the data folder's protected DACL, which the MSI sets and the service
+//!   checks at every start (SYSTEM, Administrators and `NT SERVICE\Lodestar`
+//!   only; `secure-datadir.ps1`, `windows::acl`). The portable build's
+//!   folder has whatever ACL the place it was unpacked to gives it. Setting
+//!   an ACL from code would need Win32 calls (`unsafe`) or a new crate.
 //!
 //! **Two writers, never at once:** the supervisor writes only while no
 //! child runs (`active`, `pending`, `rollback.json`, `halted.json`,
@@ -14,16 +38,20 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+#[cfg(unix)]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use lodestar_update::semver::Version;
+#[cfg(unix)]
 use rustix::fs::{FlockOperation, OFlags};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+#[cfg(unix)]
 use super::log_events::UPDATE_DIR_SYNC_UNSUPPORTED;
 
 /// The largest state file read (`history.json` is the biggest).
@@ -35,7 +63,12 @@ pub struct Bin {
     dir: PathBuf,
     /// The folder can't be fsynced (and that was logged): once per `Bin`,
     /// which the engine opens once per run.
+    #[cfg(unix)]
     dir_sync_unsupported: Arc<AtomicBool>,
+    /// The folder, held open without `FILE_SHARE_DELETE` so it can't be
+    /// renamed or replaced while this lives.
+    #[cfg(windows)]
+    _pin: Arc<File>,
 }
 
 /// The exclusive lock on `<data>/bin/.lock`, held while the value lives.
@@ -52,7 +85,15 @@ impl Bin {
         match fs::symlink_metadata(&dir) {
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 fs::create_dir_all(data_dir)?;
-                match fs::DirBuilder::new().mode(0o700).create(&dir) {
+                #[cfg(unix)]
+                let builder = {
+                    let mut b = fs::DirBuilder::new();
+                    b.mode(0o700);
+                    b
+                };
+                #[cfg(not(unix))]
+                let builder = fs::DirBuilder::new();
+                match builder.create(&dir) {
                     Err(e) if e.kind() != io::ErrorKind::AlreadyExists => return Err(e),
                     _ => {}
                 }
@@ -75,6 +116,7 @@ impl Bin {
 
     /// Checks the folder through a descriptor opened without following a
     /// link, so the owner checked and the mode set are the folder's own.
+    #[cfg(unix)]
     fn check(dir: PathBuf) -> io::Result<Bin> {
         let refuse = |why: String| {
             io::Error::new(
@@ -117,6 +159,33 @@ impl Bin {
         })
     }
 
+    /// Opens the folder as itself (never through a link or junction),
+    /// refuses it unless it's a real folder, and keeps it open so it
+    /// can't be renamed or replaced afterwards.
+    #[cfg(windows)]
+    fn check(dir: PathBuf) -> io::Result<Bin> {
+        use std::os::windows::fs::OpenOptionsExt;
+        let pin = OpenOptions::new()
+            .read(true)
+            .share_mode(win::SHARE_READ | win::SHARE_WRITE)
+            .custom_flags(win::BACKUP_SEMANTICS | win::OPEN_REPARSE_POINT)
+            .open(&dir)?;
+        let attrs = win::attributes(&pin)?;
+        if attrs & win::ATTRIBUTE_REPARSE_POINT != 0 || attrs & win::ATTRIBUTE_DIRECTORY == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "{}: not a folder (a link or junction isn't accepted)",
+                    dir.display()
+                ),
+            ));
+        }
+        Ok(Bin {
+            dir,
+            _pin: Arc::new(pin),
+        })
+    }
+
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn dir(&self) -> &Path {
         &self.dir
@@ -127,11 +196,13 @@ impl Bin {
     }
 
     /// An overlay's folder: the version's own canonical text, never a path.
+    #[cfg(unix)]
     pub fn overlay(&self, version: &Version) -> PathBuf {
         self.dir.join(version.to_string())
     }
 
     /// Takes `.lock` exclusively, or `None` while another process holds it.
+    #[cfg(unix)]
     pub fn lock(&self) -> io::Result<Option<Lock>> {
         let file = OpenOptions::new()
             .read(true)
@@ -144,6 +215,26 @@ impl Bin {
             Ok(()) => Ok(Some(Lock { _file: file })),
             Err(rustix::io::Errno::WOULDBLOCK) => Ok(None),
             Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Takes `.lock` exclusively (`LockFileEx`), or `None` while another
+    /// handle holds it. A link or junction in its place is refused.
+    #[cfg(windows)]
+    pub fn lock(&self) -> io::Result<Option<Lock>> {
+        use std::os::windows::fs::OpenOptionsExt;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .custom_flags(win::OPEN_REPARSE_POINT)
+            .open(self.path(".lock"))?;
+        win::refuse_reparse(&file, &self.path(".lock"))?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(Lock { _file: file })),
+            Err(fs::TryLockError::WouldBlock) => Ok(None),
+            Err(fs::TryLockError::Error(e)) => Err(e),
         }
     }
 
@@ -191,6 +282,7 @@ impl Bin {
     /// such as Unraid's `/mnt/user`) leaves the rename standing, as every
     /// other writer here does; that's logged once, without a path. Any
     /// other error (`EIO`, …) fails the change.
+    #[cfg(unix)]
     fn sync_acknowledged(&self, fault: &dyn Fn(Step) -> io::Result<()>) -> io::Result<()> {
         let dir = File::open(&self.dir)?;
         match fault(Step::SyncDir).and_then(|()| dir.sync_all()) {
@@ -204,8 +296,15 @@ impl Bin {
         }
     }
 
+    /// NTFS journals the rename and std can't flush a folder: only the
+    /// test fault runs.
+    #[cfg(windows)]
+    fn sync_acknowledged(&self, fault: &dyn Fn(Step) -> io::Result<()>) -> io::Result<()> {
+        fault(Step::SyncDir)
+    }
+
     /// Whether a folder fsync was found unsupported (and logged).
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub fn dir_sync_unsupported(&self) -> bool {
         self.dir_sync_unsupported.load(Ordering::Relaxed)
     }
@@ -228,12 +327,14 @@ impl Bin {
     /// The overlay folders: names that are strict versions, each a real
     /// folder (`<version>.bad` and anything else is ignored). An entry that
     /// can't be read fails the whole list.
+    #[cfg(unix)]
     pub fn overlays(&self) -> io::Result<Vec<Version>> {
         self.scan(Err)
     }
 
     /// [`Bin::overlays`], skipping (and handing to `bad`) an entry that
     /// can't be read, so one bad entry doesn't hide the others.
+    #[cfg(unix)]
     pub fn overlays_skipping(&self, mut bad: impl FnMut(&io::Error)) -> io::Result<Vec<Version>> {
         self.scan(|e| {
             bad(&e);
@@ -241,6 +342,7 @@ impl Bin {
         })
     }
 
+    #[cfg(unix)]
     fn scan(&self, mut bad: impl FnMut(io::Error) -> io::Result<()>) -> io::Result<Vec<Version>> {
         let mut out = Vec::new();
         for entry in fs::read_dir(&self.dir)? {
@@ -268,6 +370,7 @@ impl Bin {
     }
 
     /// Deletes an overlay folder (only ever one named by a version).
+    #[cfg(unix)]
     pub fn remove_overlay(&self, version: &Version) -> io::Result<()> {
         match fs::remove_dir_all(self.overlay(version)) {
             Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
@@ -290,6 +393,7 @@ pub fn parse_version(s: &str) -> Option<Version> {
     (v.build.is_empty() && v.to_string() == s).then_some(v)
 }
 
+#[cfg(unix)]
 pub fn nofollow() -> i32 {
     OFlags::NOFOLLOW.bits() as i32
 }
@@ -297,11 +401,32 @@ pub fn nofollow() -> i32 {
 /// Opens a regular file for reading without following a symlink. It's
 /// opened non-blocking, so a FIFO in its place can't hang the open, and
 /// anything but a regular file is refused.
+#[cfg(unix)]
 pub fn open_nofollow(path: &Path) -> io::Result<File> {
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(nofollow() | OFlags::NONBLOCK.bits() as i32)
         .open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{} isn't a regular file", path.display()),
+        ));
+    }
+    Ok(file)
+}
+
+/// Opens a regular file for reading as itself: a symlink, junction or
+/// other reparse point is opened, not followed, and refused, as is
+/// anything but a regular file.
+#[cfg(windows)]
+pub fn open_nofollow(path: &Path) -> io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(win::OPEN_REPARSE_POINT)
+        .open(path)?;
+    win::refuse_reparse(&file, path)?;
     if !file.metadata()?.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -357,6 +482,7 @@ pub enum Step {
 }
 
 /// A folder fsync this filesystem doesn't support, rather than a failure.
+#[cfg(unix)]
 fn sync_unsupported(e: &io::Error) -> bool {
     use rustix::io::Errno;
     Errno::from_io_error(e)
@@ -384,12 +510,7 @@ fn write_steps(
     let tmp = dir.join(format!(".{name}.tmp"));
     let _ = fs::remove_file(&tmp);
     let written = (|| {
-        let mut f = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(nofollow())
-            .open(&tmp)?;
+        let mut f = create_private(&tmp)?;
         let (head, tail) = bytes.split_at(bytes.len() / 2);
         f.write_all(head)?;
         fault(Step::Write)?;
@@ -405,13 +526,73 @@ fn write_steps(
     written
 }
 
+/// A new file (never an existing one, and never through a link): 0600 on
+/// Unix; on Windows it inherits the folder's ACL.
+#[cfg(unix)]
+fn create_private(path: &Path) -> io::Result<File> {
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(nofollow())
+        .open(path)
+}
+
+#[cfg(windows)]
+fn create_private(path: &Path) -> io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .custom_flags(win::OPEN_REPARSE_POINT)
+        .open(path)
+}
+
+#[cfg(unix)]
 pub fn sync_dir(dir: &Path) {
     if let Ok(f) = File::open(dir) {
         let _ = f.sync_all();
     }
 }
 
-#[cfg(test)]
+/// NTFS journals renames, and std can't open a folder to flush it.
+#[cfg(windows)]
+pub fn sync_dir(_dir: &Path) {}
+
+/// The Win32 constants std's `OpenOptionsExt` takes, and the attribute
+/// check every open makes.
+#[cfg(windows)]
+mod win {
+    use std::fs::File;
+    use std::io;
+    use std::os::windows::fs::MetadataExt;
+    use std::path::Path;
+
+    pub const SHARE_READ: u32 = 0x0000_0001;
+    pub const SHARE_WRITE: u32 = 0x0000_0002;
+    pub const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    pub const BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    pub const ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
+    pub const ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+
+    /// The attributes of the object the handle names.
+    pub fn attributes(file: &File) -> io::Result<u32> {
+        Ok(file.metadata()?.file_attributes())
+    }
+
+    /// Refuses a handle to a link, junction or other reparse point.
+    pub fn refuse_reparse(file: &File, path: &Path) -> io::Result<()> {
+        if attributes(file)? & ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{} is a link or junction", path.display()),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
@@ -508,5 +689,111 @@ mod tests {
             .map(|v| v.to_string())
             .collect();
         assert_eq!(found, ["0.5.3", "0.6.0"]);
+    }
+}
+
+/// The Windows layout (run on the Windows CI job): reparse points refused,
+/// atomic replace, one writer, and the folder pinned.
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    /// A directory junction at `link` to `target` (`mklink /J` needs no
+    /// privilege, unlike a symlink).
+    fn junction(link: &Path, target: &Path) {
+        let out = std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("mklink")
+            .arg("/J")
+            .arg(link)
+            .arg(target)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "mklink /J failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    #[test]
+    fn a_junction_in_place_of_the_folder_or_a_file_is_refused() {
+        let data = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        junction(&data.path().join("bin"), elsewhere.path());
+        assert!(Bin::open(data.path()).is_err());
+        assert!(Bin::existing(data.path()).is_err());
+
+        let data = tempfile::tempdir().unwrap();
+        let bin = Bin::open(data.path()).unwrap();
+        let target = tempfile::tempdir().unwrap();
+        std::fs::write(target.path().join("x"), "{}").unwrap();
+        // A reparse point where a state file belongs is opened as itself
+        // and refused, never read through.
+        junction(&bin.path("trust.json"), target.path());
+        assert!(open_nofollow(&bin.path("trust.json")).is_err());
+        assert!(bin.read::<serde_json::Value>("trust.json").is_err());
+        junction(&bin.path(".lock"), target.path());
+        assert!(bin.lock().is_err());
+    }
+
+    #[test]
+    fn writes_replace_atomically() {
+        let data = tempfile::tempdir().unwrap();
+        let bin = Bin::open(data.path()).unwrap();
+        bin.write("updater.json", &serde_json::json!({"n": 1}))
+            .unwrap();
+        bin.write_acknowledged("updater.json", &serde_json::json!({"n": 2}), &|_| Ok(()))
+            .unwrap();
+        let back: serde_json::Value = bin.read("updater.json").unwrap().unwrap();
+        assert_eq!(back["n"], 2);
+        // A write that fails before the rename leaves the old file whole.
+        let failed = bin.write_acknowledged("updater.json", &serde_json::json!({"n": 3}), &|s| {
+            if s == Step::Rename {
+                Err(io::Error::other("injected"))
+            } else {
+                Ok(())
+            }
+        });
+        assert!(failed.is_err());
+        let back: serde_json::Value = bin.read("updater.json").unwrap().unwrap();
+        assert_eq!(back["n"], 2);
+        let names: Vec<_> = fs::read_dir(bin.dir())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.iter().all(|n| !n.ends_with(".tmp")), "{names:?}");
+    }
+
+    #[test]
+    fn a_second_writer_is_blocked() {
+        let data = tempfile::tempdir().unwrap();
+        let bin = Bin::open(data.path()).unwrap();
+        let other = Bin::open(data.path()).unwrap();
+        let held = bin.lock().unwrap().unwrap();
+        assert!(other.lock().unwrap().is_none());
+        drop(held);
+        assert!(other.lock().unwrap().is_some());
+    }
+
+    /// While a `Bin` lives, its folder can't be renamed away (and a
+    /// junction put in its place).
+    #[test]
+    fn the_folder_is_pinned_while_open() {
+        let data = tempfile::tempdir().unwrap();
+        let bin = Bin::open(data.path()).unwrap();
+        assert!(fs::rename(bin.dir(), data.path().join("moved")).is_err());
+        let dir = bin.dir().to_path_buf();
+        drop(bin);
+        fs::rename(&dir, data.path().join("moved")).unwrap();
+    }
+
+    #[test]
+    fn an_oversize_file_is_damage() {
+        let data = tempfile::tempdir().unwrap();
+        let bin = Bin::open(data.path()).unwrap();
+        fs::write(bin.path("active"), vec![b' '; MAX_STATE as usize + 1]).unwrap();
+        let e = bin.read::<serde_json::Value>("active").unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData);
     }
 }

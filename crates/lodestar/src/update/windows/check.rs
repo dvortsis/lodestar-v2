@@ -1,0 +1,1497 @@
+//! Check and notify on Windows (§12.2, PK-win-upd-1), in the service or
+//! the portable build: what the Unix engine does before it installs.
+//!
+//! - **The same pieces, unchanged:** [`update::window`](crate::update::window),
+//!   [`update::policy`](crate::update::policy), the signed check's fetch
+//!   and request ([`update::check`](crate::update::check)), `trust.json`
+//!   ([`trust_file`]) and `lodestar_update::check`. There are no overlays
+//!   on Windows, so the trust floor is the embedded statements alone.
+//! - **When:** with `mode` notify or auto, every 6 hours plus a random
+//!   minute within the hour; `POST /updates/check` at any mode, at most
+//!   once a minute and one at a time. `<data>\bin\updater.json` keeps the
+//!   times and the pause, as on Unix.
+//! - **What's offered:** releases with an artifact for this installation
+//!   ([`offered`]): the MSI for the service, the portable zip for the
+//!   portable build, either when the kind isn't known ([`detect`]). The
+//!   artifact an install would take is [`select`]'s, which never guesses:
+//!   an unknown kind takes none.
+//! - **Install and Roll back** aren't built yet (PK-win-upd-2, -3,
+//!   PK-win-portable-upd): `capability.reason` and `rollback.reason` are
+//!   `not_built_yet`, the policy treats `auto` as Check and notify, and
+//!   both routes answer `409` with that reason.
+//! - **The one writer:** the notifier holds `<data>\bin\.lock` for its
+//!   whole life. If another process holds it, nothing is fetched or
+//!   written (`bin_unavailable`).
+//! - **Untrusted input:** every file read from the data folder
+//!   (`updater.json`, `skipped`, `trust.json`) is size-capped, parsed with
+//!   unknown fields refused, opened without following a reparse point, and
+//!   never trusted for more than the schedule and what's shown: the trust
+//!   state is verified against the embedded keys and raised to their floor
+//!   (a damaged one is never overwritten).
+
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use lodestar_api::dto::events::{Event, UpdatesEvent, UpdatesState};
+use lodestar_api::events::EventHub;
+use lodestar_api::ops::BoxFuture;
+use lodestar_api::updates::{
+    Blocked, Capability, CheckState, CheckStatus, InstallWhen, Policy, ReleaseInfo, RollbackInfo,
+    Running, UpdatesApi, UpdatesError, UpdatesStatus,
+};
+use lodestar_log::log_event;
+use lodestar_update::doc::{Artifact, ArtifactKind, Release, Target};
+use lodestar_update::semver::Version;
+use lodestar_update::{Checked, Embedded, Notice};
+use serde::{Deserialize, Serialize};
+use tokio::sync::watch;
+
+use crate::settings::updates::{Level, Mode, Updates};
+use crate::update::check::{self, CheckError, Fetch};
+use crate::update::layout::{Bin, Lock, Step};
+use crate::update::log_events::{
+    UPDATE_AVAILABLE, UPDATE_CHECK_FAILED, UPDATE_STATE_UNREADABLE, UPDATE_STATE_UNSAVED,
+};
+use crate::update::policy::{self, Block, Reason};
+use crate::update::trust_file;
+use crate::update::window::{When, Window};
+
+/// Between scheduled checks, before the random minute.
+const EVERY: Duration = Duration::from_secs(6 * 3600);
+/// Between manual checks.
+const MANUAL_EVERY: Duration = Duration::from_secs(60);
+/// The longest the schedule sleeps before it looks at the clock again.
+const MAX_SLEEP: Duration = Duration::from_secs(15 * 60);
+pub const UPDATER_FILE: &str = "updater.json";
+pub const SKIPPED_FILE: &str = "skipped";
+/// Why Install and Roll back refuse until they're built on Windows.
+pub const NOT_BUILT_YET: &str = "not_built_yet";
+
+/// How Lodestar was installed, which decides the artifact it updates
+/// from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallKind {
+    /// The MSI: the `Lodestar` service, from `%ProgramFiles%\Lodestar`.
+    Msi,
+    /// The portable zip, run from the folder it was unpacked to.
+    Portable,
+    /// Neither for certain: notified, never given an artifact.
+    Unknown,
+}
+
+/// What [`detect`] looks at. Every field is a fact about this process;
+/// nothing comes from the data folder.
+#[derive(Debug, Clone, Default)]
+pub struct Signals {
+    /// The process runs as a service's virtual account (`NT SERVICE\…`,
+    /// SID `S-1-5-80-…`), as the MSI's service does.
+    pub service_account: bool,
+    /// This executable (`current_exe`).
+    pub exe: Option<PathBuf>,
+    /// `%ProgramFiles%`.
+    pub program_files: Option<PathBuf>,
+    /// The data folder in use.
+    pub data_dir: PathBuf,
+    /// `Start Lodestar.cmd`, the portable zip's launcher, is a regular
+    /// file beside the executable.
+    pub launcher_beside_exe: bool,
+}
+
+/// The portable zip's launcher, beside `lodestar.exe`.
+pub const LAUNCHER: &str = "Start Lodestar.cmd";
+
+/// How Lodestar was installed, failing safe: each kind needs every one
+/// of its signs, and anything else is [`InstallKind::Unknown`].
+///
+/// - **MSI:** a service account, running `%ProgramFiles%\Lodestar\lodestar.exe`
+///   (the MSI installs only there: `main.wxs` `WrongInstallFolder`).
+/// - **Portable:** not a service account, not under `%ProgramFiles%`,
+///   the launcher beside the executable, and the data folder the
+///   launcher sets (`<exe folder>\data`).
+pub fn detect(s: &Signals) -> InstallKind {
+    let Some(exe) = s.exe.as_deref().map(normal) else {
+        return InstallKind::Unknown;
+    };
+    let program_files = s.program_files.as_deref().map(normal);
+    let in_program_files = program_files
+        .as_deref()
+        .is_some_and(|pf| exe.starts_with(&format!("{pf}\\")));
+    if s.service_account {
+        let msi = program_files
+            .as_deref()
+            .is_some_and(|pf| exe == format!("{pf}\\lodestar\\lodestar.exe"));
+        return if msi {
+            InstallKind::Msi
+        } else {
+            InstallKind::Unknown
+        };
+    }
+    let Some((folder, _)) = exe.rsplit_once('\\') else {
+        return InstallKind::Unknown;
+    };
+    if !in_program_files
+        && s.launcher_beside_exe
+        && normal(&s.data_dir) == format!("{folder}\\data")
+    {
+        InstallKind::Portable
+    } else {
+        InstallKind::Unknown
+    }
+}
+
+/// A Windows path compared as Windows does: case-insensitive, either
+/// separator, no `\\?\` prefix, no trailing separator.
+fn normal(p: &Path) -> String {
+    let s = p.to_string_lossy().replace('/', "\\").to_lowercase();
+    let s = s.strip_prefix(r"\\?\").unwrap_or(&s);
+    s.trim_end_matches('\\').to_string()
+}
+
+/// The facts [`detect`] needs, read from the system.
+#[cfg(windows)]
+pub fn signals(data_dir: &Path) -> Signals {
+    let exe = std::env::current_exe().ok();
+    let launcher_beside_exe = exe
+        .as_deref()
+        .and_then(Path::parent)
+        .and_then(|d| std::fs::symlink_metadata(d.join(LAUNCHER)).ok())
+        .is_some_and(|m| m.is_file());
+    Signals {
+        service_account: crate::windows::acl::process_sid()
+            .is_some_and(|sid| sid.starts_with("S-1-5-80-")),
+        exe,
+        program_files: std::env::var_os("ProgramFiles").map(PathBuf::from),
+        data_dir: data_dir.to_path_buf(),
+        launcher_beside_exe,
+    }
+}
+
+/// Why [`select`] chose no artifact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoArtifact {
+    /// This build's target isn't one the manifest ships.
+    NoTarget,
+    /// The install kind isn't known, so no artifact is chosen.
+    UnknownKind,
+    /// The release has no artifact of this kind for this target.
+    Missing,
+}
+
+impl NoArtifact {
+    pub fn code(self) -> &'static str {
+        match self {
+            NoArtifact::NoTarget => "no_target",
+            NoArtifact::UnknownKind => "install_kind_unknown",
+            NoArtifact::Missing => "no_artifact",
+        }
+    }
+}
+
+/// The artifact this installation would update from: the MSI for the
+/// service, the portable zip for the portable build, for this target.
+pub fn select(
+    release: &Release,
+    target: Option<Target>,
+    kind: InstallKind,
+) -> Result<&Artifact, NoArtifact> {
+    let target = target.ok_or(NoArtifact::NoTarget)?;
+    let want = match kind {
+        InstallKind::Msi => ArtifactKind::Msi,
+        InstallKind::Portable => ArtifactKind::Portable,
+        InstallKind::Unknown => return Err(NoArtifact::UnknownKind),
+    };
+    release
+        .artifacts
+        .iter()
+        .find(|a| a.target == target && a.kind == want)
+        .ok_or(NoArtifact::Missing)
+}
+
+/// Whether a release is shown here: it has this installation's artifact,
+/// or, when the kind isn't known, an MSI or portable zip for this target.
+/// A release without one (a Linux-only fix) isn't for this machine.
+pub fn offered(release: &Release, target: Option<Target>, kind: InstallKind) -> bool {
+    match select(release, target, kind) {
+        Ok(_) => true,
+        Err(NoArtifact::UnknownKind) => release.artifacts.iter().any(|a| {
+            Some(a.target) == target && matches!(a.kind, ArtifactKind::Msi | ArtifactKind::Portable)
+        }),
+        Err(_) => false,
+    }
+}
+
+/// `updater.json`: the fields the Unix engine writes, so either reads the
+/// other's. `queued` and `rolled_back_seen` are kept as found and never
+/// set here.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Updater {
+    pub format: u32,
+    #[serde(default)]
+    pub checked_at: Option<i64>,
+    #[serde(default)]
+    pub next_check_at: Option<i64>,
+    #[serde(default)]
+    pub paused_until: Option<i64>,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queued: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rolled_back_seen: Option<u64>,
+}
+
+/// One `skipped` entry, as the Unix engine writes it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Skip {
+    version: String,
+    reason: String,
+}
+
+/// The most `skipped` keeps (oldest dropped first), as on Unix.
+const MAX_SKIPPED: usize = 64;
+
+/// What the notifier knows about this process.
+#[derive(Debug, Clone)]
+pub struct Context {
+    pub data_dir: PathBuf,
+    pub running: Version,
+    /// `CARGO_PKG_REPOSITORY`.
+    pub repository: String,
+    /// A development build: it has no release version to update from.
+    pub dev: bool,
+    pub kind: InstallKind,
+    /// This build's target; `None` where nothing is shipped for it.
+    pub target: Option<Target>,
+}
+
+/// Where `updates` events go: the event hub, or a test's list.
+pub type Publish = Arc<dyn Fn(UpdatesEvent) + Send + Sync>;
+type Fault = Box<dyn Fn(Step) -> std::io::Result<()> + Send + Sync>;
+type Keys = Box<dyn Fn() -> Result<Embedded, lodestar_update::Error> + Send + Sync>;
+
+/// What tests replace: the clock, the keys and the writes' faults.
+pub struct Seams {
+    pub clock: Box<dyn Fn() -> i64 + Send + Sync>,
+    pub keys: Keys,
+    pub fault: Fault,
+}
+
+/// What the last check found.
+#[derive(Default)]
+struct Found {
+    state: Option<CheckState>,
+    checked: Option<Checked>,
+    notices: Vec<String>,
+    trust_damaged: bool,
+}
+
+/// `updater.json` in this process.
+#[derive(Debug, Default, Clone)]
+struct State {
+    /// As last written or read: every write starts from it.
+    durable: Updater,
+    /// The last check's times when they couldn't be written.
+    unsaved: Option<(i64, i64, Option<String>)>,
+    /// It was there but couldn't be read: only a pause or resume writes
+    /// over it (a pause in it is unknown).
+    unreadable: bool,
+}
+
+impl State {
+    fn effective(&self) -> Updater {
+        let mut u = self.durable.clone();
+        if let Some((at, next, error)) = &self.unsaved {
+            u.checked_at = Some(*at);
+            u.next_check_at = Some(*next);
+            u.error = error.clone();
+        }
+        u
+    }
+}
+
+/// The notifier: cheap to clone.
+#[derive(Clone)]
+pub struct Notifier {
+    inner: Arc<Inner>,
+}
+
+impl std::fmt::Debug for Notifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Notifier").finish_non_exhaustive()
+    }
+}
+
+struct Inner {
+    ctx: Context,
+    bin: Option<Bin>,
+    _lock: Option<Lock>,
+    settings: watch::Receiver<Updates>,
+    publish: Publish,
+    fetch: Arc<dyn Fetch>,
+    zone: (jiff::tz::TimeZone, String),
+    found: Mutex<Found>,
+    /// Held through every write of `updater.json` or `skipped`.
+    state: Mutex<State>,
+    checking: Arc<tokio::sync::Mutex<()>>,
+    last_manual: Mutex<Option<Instant>>,
+    clock: Box<dyn Fn() -> i64 + Send + Sync>,
+    keys: Keys,
+    fault: Fault,
+}
+
+impl Notifier {
+    pub fn new(
+        ctx: Context,
+        settings: watch::Receiver<Updates>,
+        hub: Arc<EventHub>,
+        fetch: Arc<dyn Fetch>,
+    ) -> Notifier {
+        let (tz, name, _) = crate::update::window::local_zone();
+        let publish: Publish = Arc::new(move |e| {
+            hub.publish(&Event::Updates(e));
+        });
+        Notifier::with(
+            ctx,
+            settings,
+            publish,
+            fetch,
+            (tz, name),
+            Seams {
+                clock: Box::new(crate::unix_now),
+                keys: Box::new(Embedded::builtin),
+                fault: Box::new(|_| Ok(())),
+            },
+        )
+    }
+
+    pub fn with(
+        ctx: Context,
+        settings: watch::Receiver<Updates>,
+        publish: Publish,
+        fetch: Arc<dyn Fetch>,
+        zone: (jiff::tz::TimeZone, String),
+        Seams { clock, keys, fault }: Seams,
+    ) -> Notifier {
+        // The one writer of `<data>\bin`: without its lock, nothing is
+        // written (or fetched).
+        let (bin, lock) = match Bin::open(&ctx.data_dir) {
+            Ok(bin) => match bin.lock() {
+                Ok(Some(lock)) => (Some(bin), Some(lock)),
+                _ => (None, None),
+            },
+            Err(_) => (None, None),
+        };
+        let mut state = State::default();
+        if let Some(b) = &bin {
+            match b.read::<Updater>(UPDATER_FILE) {
+                Ok(u) => state.durable = u.unwrap_or_default(),
+                Err(e) => {
+                    log_event!(UPDATE_STATE_UNREADABLE, error = lodestar_log::Error::io(&e));
+                    state.unreadable = true;
+                }
+            }
+        }
+        Notifier {
+            inner: Arc::new(Inner {
+                ctx,
+                bin,
+                _lock: lock,
+                settings,
+                publish,
+                fetch,
+                zone,
+                found: Mutex::new(Found::default()),
+                state: Mutex::new(state),
+                checking: Arc::new(tokio::sync::Mutex::new(())),
+                last_manual: Mutex::new(None),
+                clock,
+                keys,
+                fault,
+            }),
+        }
+    }
+
+    /// The scheduled checks, until `stop` is set.
+    pub fn spawn(&self, mut stop: watch::Receiver<bool>) -> tokio::task::JoinHandle<()> {
+        let n = self.clone();
+        let mut settings = self.inner.settings.clone();
+        tokio::spawn(async move {
+            loop {
+                let wait = n.until_scheduled();
+                tokio::select! {
+                    _ = stop.changed() => return,
+                    r = settings.changed() => {
+                        if r.is_err() { return; }
+                        continue;
+                    }
+                    () = sleep(wait.map(|w| w.min(MAX_SLEEP))) => {}
+                }
+                if n.due() {
+                    let one = tokio::select! {
+                        one = n.inner.checking.clone().lock_owned() => one,
+                        _ = stop.changed() => return,
+                    };
+                    // Still due once the lock is ours: a manual check may
+                    // have run meanwhile.
+                    if n.due() {
+                        n.run_check(one).await;
+                    }
+                }
+            }
+        })
+    }
+
+    /// How long until the next scheduled check; `None` with updates off.
+    fn until_scheduled(&self) -> Option<Duration> {
+        if self.inner.settings.borrow().mode == Mode::Off {
+            return None;
+        }
+        let now = (self.inner.clock)();
+        let next = self.updater().next_check_at.unwrap_or(now);
+        // Further ahead than one interval can be (a clock corrected
+        // backwards): due now.
+        if next > now.saturating_add(EVERY.as_secs() as i64 + 3600) {
+            return Some(Duration::ZERO);
+        }
+        Some(Duration::from_secs(next.saturating_sub(now).max(0) as u64))
+    }
+
+    fn due(&self) -> bool {
+        self.until_scheduled().is_some_and(|d| d.is_zero())
+    }
+
+    fn updater(&self) -> Updater {
+        lock(&self.inner.state).effective()
+    }
+
+    /// For `/system`'s Updates row: whether updates are on, and when the
+    /// last check completed.
+    pub fn summary(&self) -> (bool, Option<i64>) {
+        (
+            self.inner.settings.borrow().mode != Mode::Off,
+            self.updater().checked_at,
+        )
+    }
+
+    fn publish(&self, state: UpdatesState, version: Option<String>, error: Option<String>) {
+        (self.inner.publish)(UpdatesEvent {
+            state,
+            version,
+            bytes_done: None,
+            bytes_total: None,
+            error,
+        });
+    }
+
+    /// `POST /updates/check`: at most once a minute, one at a time.
+    pub async fn check_now(&self) -> Result<UpdatesStatus, UpdatesError> {
+        let one = {
+            let mut last = lock(&self.inner.last_manual);
+            if let Some(at) = *last {
+                let since = at.elapsed();
+                if since < MANUAL_EVERY {
+                    return Err(UpdatesError::RateLimited {
+                        retry_after: (MANUAL_EVERY - since).as_secs().max(1),
+                    });
+                }
+            }
+            let Ok(one) = self.inner.checking.clone().try_lock_owned() else {
+                return Err(UpdatesError::RateLimited { retry_after: 5 });
+            };
+            *last = Some(Instant::now());
+            one
+        };
+        self.run_check(one).await;
+        let n = self.clone();
+        Ok(blocking(move || n.status()).await)
+    }
+
+    /// One check, holding the one-check lock: fetch, verify, advance
+    /// `trust.json`, keep the result, save the times, publish the end.
+    async fn run_check(&self, _one: tokio::sync::OwnedMutexGuard<()>) {
+        let settings = self.inner.settings.borrow().clone();
+        lock(&self.inner.found).state = Some(CheckState::Checking);
+        self.publish(UpdatesState::Checking, None, None);
+        let result = self.check_once(settings.channel.update()).await;
+        let now = (self.inner.clock)();
+        let next = now + EVERY.as_secs() as i64 + jitter();
+        let error = result.err().map(str::to_string);
+        let n = self.clone();
+        blocking(move || n.save_check(now, next, error)).await;
+        match result {
+            Ok(()) => {
+                lock(&self.inner.found).state = Some(CheckState::Ok);
+                let n = self.clone();
+                let newest = blocking(move || {
+                    n.plan(&settings, now)
+                        .releases
+                        .first()
+                        .map(|a| a.version.to_string())
+                })
+                .await;
+                match newest {
+                    Some(v) => {
+                        log_event!(UPDATE_AVAILABLE);
+                        self.publish(UpdatesState::Available, Some(v), None);
+                    }
+                    None => self.publish(UpdatesState::Checked, None, None),
+                }
+            }
+            Err(code) => {
+                lock(&self.inner.found).state = Some(CheckState::Failed);
+                log_event!(UPDATE_CHECK_FAILED, error = code);
+                self.publish(UpdatesState::Failed, None, Some(code.to_string()));
+            }
+        }
+    }
+
+    async fn check_once(&self, channel: lodestar_update::Channel) -> Result<(), &'static str> {
+        let Some(bin) = self.inner.bin.clone() else {
+            return Err("bin_unavailable");
+        };
+        let url = check::source(&self.inner.ctx.repository, channel).map_err(CheckError::code)?;
+        let Some(body) = check::fetch(&*self.inner.fetch, url)
+            .await
+            .map_err(CheckError::code)?
+        else {
+            // Nothing published for this channel yet.
+            let mut f = lock(&self.inner.found);
+            f.checked = None;
+            f.notices.clear();
+            f.trust_damaged = false;
+            return Ok(());
+        };
+        let embedded = (self.inner.keys)().map_err(lodestar_update::Error::code)?;
+        let now = (self.inner.clock)().max(0) as u64;
+        let (checked, damaged) = blocking(move || {
+            // No overlays on Windows: the floor is the embedded statements.
+            let loaded = trust_file::load(bin.dir(), &embedded, &[]);
+            let checked = lodestar_update::check(&body, channel, now, &embedded, loaded.state());
+            if let Ok(c) = &checked {
+                let _ = trust_file::save(bin.dir(), &loaded, c.next.clone());
+            }
+            (checked, loaded.damaged())
+        })
+        .await;
+        let mut f = lock(&self.inner.found);
+        f.trust_damaged = damaged;
+        match checked {
+            Ok(c) => {
+                f.notices = c.notices.iter().map(|n| n.code().to_string()).collect();
+                f.checked = Some(c);
+                Ok(())
+            }
+            Err(e) => {
+                f.notices = e
+                    .notice()
+                    .map(|n| n.code().to_string())
+                    .into_iter()
+                    .collect();
+                Err(e.code())
+            }
+        }
+    }
+
+    /// Saves a check's times; kept in memory only when they can't be
+    /// written, or when an unreadable file may hold a pause.
+    fn save_check(&self, at: i64, next: i64, error: Option<String>) {
+        let mut state = lock(&self.inner.state);
+        if !state.unreadable {
+            let mut u = state.durable.clone();
+            (u.checked_at, u.next_check_at, u.error) = (Some(at), Some(next), error.clone());
+            if self.write(UPDATER_FILE, &u).is_ok() {
+                state.durable = u;
+                state.unsaved = None;
+                return;
+            }
+        }
+        state.unsaved = Some((at, next, error));
+    }
+
+    /// A durable write (acknowledged: a failed step is an error).
+    fn write<T: Serialize>(&self, name: &'static str, value: &T) -> Result<(), UpdatesError> {
+        let bin = self
+            .inner
+            .bin
+            .as_ref()
+            .ok_or(UpdatesError::BinUnavailable)?;
+        bin.write_acknowledged(name, value, &*self.inner.fault)
+            .map_err(|e| {
+                log_event!(
+                    UPDATE_STATE_UNSAVED,
+                    file = name,
+                    error = lodestar_log::Error::io(&e)
+                );
+                UpdatesError::NotSaved
+            })
+    }
+
+    /// The skipped versions; `None` when `skipped` can't be read.
+    fn skipped(&self) -> Option<Vec<Skip>> {
+        let Some(bin) = &self.inner.bin else {
+            return Some(vec![]);
+        };
+        Some(
+            bin.read::<Vec<Skip>>(SKIPPED_FILE)
+                .ok()?
+                .unwrap_or_default(),
+        )
+    }
+
+    /// Why this installation can't install itself: always something here,
+    /// since installing isn't built on Windows yet.
+    fn incapable(&self, skipped_ok: bool) -> Reason {
+        if !skipped_ok {
+            Reason::SkippedUnreadable
+        } else if self.inner.ctx.dev {
+            Reason::DevBuild
+        } else {
+            Reason::NotBuiltYet
+        }
+    }
+
+    /// The policy's plan over the releases offered here.
+    fn plan(&self, settings: &Updates, now: i64) -> policy::Plan {
+        let paused_until = self.updater().paused_until;
+        let found = lock(&self.inner.found);
+        let Some(c) = found.checked.as_ref() else {
+            return policy::Plan::default();
+        };
+        let ctx = &self.inner.ctx;
+        let releases: Vec<Release> = c
+            .manifest
+            .releases
+            .iter()
+            .filter(|r| offered(r, ctx.target, ctx.kind))
+            .cloned()
+            .collect();
+        let window = Window::parse(&settings.window).ok();
+        let tz = self.inner.zone.0.clone();
+        let window_from = move |t: i64| match window.map(|w| w.when(t, &tz)) {
+            Some(When::Open { .. }) | None => t,
+            Some(When::Opens(at)) => at,
+        };
+        let skipped = self.skipped();
+        let incapable = self.incapable(skipped.is_some());
+        let skipped: Vec<String> = skipped
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| s.version)
+            .collect();
+        policy::plan(&policy::Inputs {
+            settings,
+            releases: &releases,
+            current: current(c, now),
+            running: &ctx.running,
+            skipped: &skipped,
+            paused_until,
+            held_in_process: false,
+            now,
+            window_from: &window_from,
+            incapable: Some(incapable),
+        })
+    }
+
+    /// Everything `GET /updates` reports.
+    pub fn status(&self) -> UpdatesStatus {
+        let settings = self.inner.settings.borrow().clone();
+        let now = (self.inner.clock)();
+        let ctx = &self.inner.ctx;
+        let (updater, check_unsaved, unreadable) = {
+            let s = lock(&self.inner.state);
+            (s.effective(), s.unsaved.is_some(), s.unreadable)
+        };
+        let plan = self.plan(&settings, now);
+        let reason = self.incapable(self.skipped().is_some());
+        let found = lock(&self.inner.found);
+        let mut notices = found.notices.clone();
+        if found.trust_damaged {
+            notices.push(Notice::TrustDamaged.code().to_string());
+        }
+        if found.checked.as_ref().is_some_and(|c| !current(c, now)) {
+            notices.push("manifest_lapsed".into());
+        }
+        if check_unsaved && self.inner.bin.is_some() {
+            notices.push("check_not_saved".into());
+        }
+        if unreadable {
+            notices.push("updater_unreadable".into());
+        }
+        notices.sort();
+        notices.dedup();
+        let releases = found
+            .checked
+            .as_ref()
+            .map(|c| release_infos(&plan, &c.manifest.releases))
+            .unwrap_or_default();
+        let withdrawn = found.checked.as_ref().is_some_and(|c| {
+            c.manifest
+                .releases
+                .iter()
+                .any(|r| r.version == ctx.running && r.withdrawn)
+        });
+        let next_window_at =
+            Window::parse(&settings.window)
+                .ok()
+                .map(|w| match w.when(now, &self.inner.zone.0) {
+                    When::Open { .. } => now,
+                    When::Opens(at) => at,
+                });
+        UpdatesStatus {
+            unavailable: None,
+            status: CheckStatus {
+                state: found.state.unwrap_or(CheckState::Idle),
+                checked_at: updater.checked_at,
+                next_check_at: updater.next_check_at.filter(|_| settings.mode != Mode::Off),
+                error: updater.error.clone(),
+            },
+            running: Running {
+                version: ctx.running.to_string(),
+                channel: settings.channel.update().name().into(),
+                image_version: None,
+                overlay: false,
+                revoked_key: false,
+                withdrawn,
+            },
+            capability: Capability {
+                can_install: false,
+                reason: Some(reason.code().to_string()),
+            },
+            policy: Policy {
+                mode: mode_name(settings.mode).into(),
+                level: level_name(settings.level).into(),
+                security_fixes: settings.security_effective(),
+                wait_days: settings.wait_days,
+                window: settings.window.clone(),
+                window_zone: self.inner.zone.1.clone(),
+                next_window_at,
+                paused_until: updater.paused_until.filter(|&p| p > now),
+                held_in_process: false,
+                allow_reindex: settings.allow_reindex,
+            },
+            releases,
+            pending: None,
+            installing: None,
+            rollback: RollbackInfo {
+                available: false,
+                reason: Some(NOT_BUILT_YET.into()),
+                to_version: None,
+                lost_torrents: None,
+                restores_store: None,
+            },
+            notices,
+            history: vec![],
+        }
+    }
+
+    /// `POST /updates/skip`: hides a version a check found, as on Unix
+    /// (`skipped`, reason `user`); acknowledged only once it's durable.
+    pub fn skip(&self, version: &str) -> Result<UpdatesStatus, UpdatesError> {
+        let known = lock(&self.inner.found).checked.as_ref().is_some_and(|c| {
+            c.manifest
+                .releases
+                .iter()
+                .any(|r| r.version.to_string() == version)
+        });
+        if !known {
+            return Err(UpdatesError::UnknownVersion);
+        }
+        if self.inner.bin.is_none() {
+            return Err(UpdatesError::BinUnavailable);
+        }
+        {
+            let _state = lock(&self.inner.state);
+            // An unreadable list is damage: nothing is written over it.
+            let mut list = self
+                .skipped()
+                .ok_or_else(|| UpdatesError::Internal("skipped is unreadable".into()))?;
+            if !list.iter().any(|s| s.version == version) {
+                list.push(Skip {
+                    version: version.to_string(),
+                    reason: "user".into(),
+                });
+                let over = list.len().saturating_sub(MAX_SKIPPED);
+                list.drain(..over);
+                self.write(SKIPPED_FILE, &list)?;
+            }
+        }
+        Ok(self.status())
+    }
+
+    /// `POST /updates/pause`: `days` 0 resumes. Acknowledged only once
+    /// it's durable; a saved one replaces an unreadable file. Nothing
+    /// installs automatically here, so a failed pause holds nothing.
+    pub fn pause(&self, days: u32) -> Result<UpdatesStatus, UpdatesError> {
+        let now = (self.inner.clock)();
+        {
+            let mut state = lock(&self.inner.state);
+            let mut u = state.durable.clone();
+            u.format = 1;
+            u.paused_until = (days > 0).then(|| now + i64::from(days) * 86_400);
+            self.write(UPDATER_FILE, &u)?;
+            state.durable = u;
+            state.unreadable = false;
+        }
+        Ok(self.status())
+    }
+}
+
+/// The releases as `/updates` lists them, in the policy's order.
+fn release_infos(plan: &policy::Plan, releases: &[Release]) -> Vec<ReleaseInfo> {
+    plan.releases
+        .iter()
+        .filter_map(|a| {
+            let r = releases.iter().find(|r| r.version == a.version)?;
+            Some(ReleaseInfo {
+                version: r.version.to_string(),
+                date: r.date as i64,
+                level: match r.level {
+                    lodestar_update::doc::Level::Fix => "fix",
+                    lodestar_update::doc::Level::Feature => "feature",
+                    lodestar_update::doc::Level::Major => "major",
+                }
+                .into(),
+                security: r.security,
+                manual_steps: r.manual_steps,
+                migrates: r.migrates,
+                reindex: r.reindex,
+                reindex_bytes: r.reindex_bytes,
+                notes: r.notes.clone(),
+                notes_url: r.notes_url.clone(),
+                eligible: a.eligible,
+                blocked_by: a.blocked_by.iter().map(blocked).collect(),
+                installs_at: a.installs_at,
+            })
+        })
+        .collect()
+}
+
+fn blocked(b: &Block) -> Blocked {
+    let (code, until, via, reason) = match b {
+        Block::Mode => ("mode", None, None, None),
+        Block::Level => ("level", None, None, None),
+        Block::ManualSteps => ("manual_steps", None, None, None),
+        Block::Reindex => ("reindex", None, None, None),
+        Block::Wait { until } => ("wait", Some(*until), None, None),
+        Block::Paused { until } => ("paused", Some(*until), None, None),
+        Block::Held => ("held", None, None, None),
+        Block::NotCurrent => ("not_current", None, None, None),
+        Block::UpgradePath { via } => ("upgrade_path", None, via.clone(), None),
+        Block::Capability { reason } => ("capability", None, None, Some(reason.code().into())),
+    };
+    Blocked {
+        code: code.into(),
+        until,
+        via,
+        reason,
+    }
+}
+
+fn mode_name(m: Mode) -> &'static str {
+    match m {
+        Mode::Off => "off",
+        Mode::Notify => "notify",
+        Mode::Auto => "auto",
+        Mode::Image => "image",
+    }
+}
+
+fn level_name(l: Level) -> &'static str {
+    match l {
+        Level::Fixes => "fixes",
+        Level::Features => "features",
+        Level::All => "all",
+    }
+}
+
+/// Current when it was checked, and not expired since.
+fn current(c: &Checked, now: i64) -> bool {
+    c.current && (now.max(0) as u64) < c.expires
+}
+
+/// A random minute within the hour after the 6 hours.
+fn jitter() -> i64 {
+    let mut b = [0u8; 2];
+    let _ = getrandom::fill(&mut b);
+    i64::from(u16::from_le_bytes(b) % 3600)
+}
+
+async fn sleep(d: Option<Duration>) {
+    match d {
+        Some(d) => tokio::time::sleep(d).await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Runs `f` on the blocking pool (file I/O under `<data>\bin`).
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    match tokio::task::spawn_blocking(f).await {
+        Ok(v) => v,
+        Err(e) => std::panic::resume_unwind(e.into_panic()),
+    }
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+impl UpdatesApi for Notifier {
+    fn status(&self) -> BoxFuture<'_, UpdatesStatus> {
+        let n = self.clone();
+        Box::pin(blocking(move || n.status()))
+    }
+
+    fn check(&self) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
+        Box::pin(self.check_now())
+    }
+
+    fn install(
+        &self,
+        _version: String,
+        _when: InstallWhen,
+        _confirm_manual: bool,
+    ) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
+        Box::pin(async { Err(UpdatesError::InstallUnavailable(NOT_BUILT_YET)) })
+    }
+
+    fn skip(&self, version: String) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
+        let n = self.clone();
+        Box::pin(blocking(move || n.skip(&version)))
+    }
+
+    fn pause(&self, days: u32) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
+        let n = self.clone();
+        Box::pin(blocking(move || n.pause(days)))
+    }
+
+    /// There's no install history on Windows yet: nothing to clear.
+    fn clear_history(&self) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
+        let n = self.clone();
+        Box::pin(async move { Ok(blocking(move || n.status()).await) })
+    }
+
+    fn rollback(&self) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
+        Box::pin(async { Err(UpdatesError::RollbackUnavailable(NOT_BUILT_YET)) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lodestar_update::Channel;
+    use lodestar_update::testing::{TestTrust, bytes, envelope, manifest, release};
+    use serde_json::{Value, json};
+
+    use super::*;
+    use crate::update::check::tests::Fake;
+
+    const NOW: i64 = 1_800_000_000;
+    const STABLE: &str =
+        "https://github.com/dvortsis/lodestar-v2/releases/download/update-manifest/stable.json";
+    const WIN: Option<Target> = Some(Target::X86_64WindowsMsvc);
+
+    /// A release with the named artifacts: `msi`, `portable` (Windows) or
+    /// `binary` (Linux).
+    fn release_with(version: &str, kinds: &[&str]) -> Value {
+        let mut r = release(version, NOW as u64, b"x");
+        r["artifacts"] = kinds
+            .iter()
+            .map(|k| {
+                let (target, file) = match *k {
+                    "msi" => ("x86_64-pc-windows-msvc", "lodestar.msi"),
+                    "portable" => ("x86_64-pc-windows-msvc", "lodestar.zip"),
+                    _ => ("x86_64-unknown-linux-musl", "lodestar"),
+                };
+                json!({
+                    "target": target,
+                    "kind": k,
+                    "url": format!(
+                        "https://github.com/dvortsis/lodestar-v2/releases/download/v{version}/{file}"
+                    ),
+                    "sha256": lodestar_update::Sha256::of(b"x").to_hex(),
+                    "size": 1,
+                })
+            })
+            .collect();
+        r
+    }
+
+    fn parsed(v: Value) -> Release {
+        serde_json::from_value(v).unwrap()
+    }
+
+    // ---- How Lodestar was installed ----
+
+    fn msi() -> Signals {
+        Signals {
+            service_account: true,
+            exe: Some(r"C:\Program Files\Lodestar\lodestar.exe".into()),
+            program_files: Some(r"C:\Program Files".into()),
+            data_dir: r"C:\ProgramData\Lodestar".into(),
+            launcher_beside_exe: false,
+        }
+    }
+
+    fn portable() -> Signals {
+        Signals {
+            service_account: false,
+            exe: Some(r"D:\Apps\Lodestar\lodestar.exe".into()),
+            program_files: Some(r"C:\Program Files".into()),
+            data_dir: r"D:\Apps\Lodestar\data".into(),
+            launcher_beside_exe: true,
+        }
+    }
+
+    #[test]
+    fn the_msi_needs_the_service_account_and_the_install_folder() {
+        assert_eq!(detect(&msi()), InstallKind::Msi);
+        // Spelled differently, as Windows allows.
+        let s = Signals {
+            exe: Some(r"\\?\c:/PROGRAM FILES/lodestar/LODESTAR.EXE".into()),
+            program_files: Some(r"C:\Program Files\".into()),
+            ..msi()
+        };
+        assert_eq!(detect(&s), InstallKind::Msi);
+        // A service account running a copy from anywhere else.
+        let elsewhere = Signals {
+            exe: Some(r"C:\Program Files\Other\lodestar.exe".into()),
+            ..msi()
+        };
+        assert_eq!(detect(&elsewhere), InstallKind::Unknown);
+        // The install folder, but not as a service.
+        let by_hand = Signals {
+            service_account: false,
+            ..msi()
+        };
+        assert_eq!(detect(&by_hand), InstallKind::Unknown);
+        // %ProgramFiles% unknown: not provably the MSI.
+        let no_pf = Signals {
+            program_files: None,
+            ..msi()
+        };
+        assert_eq!(detect(&no_pf), InstallKind::Unknown);
+    }
+
+    #[test]
+    fn portable_needs_the_launcher_and_its_data_folder() {
+        assert_eq!(detect(&portable()), InstallKind::Portable);
+        let lower = Signals {
+            data_dir: r"d:/apps/lodestar/DATA/".into(),
+            ..portable()
+        };
+        assert_eq!(detect(&lower), InstallKind::Portable);
+        for s in [
+            Signals {
+                launcher_beside_exe: false,
+                ..portable()
+            },
+            Signals {
+                data_dir: r"D:\Elsewhere\data".into(),
+                ..portable()
+            },
+            // Unpacked into Program Files: that's the MSI's place.
+            Signals {
+                exe: Some(r"C:\Program Files\Lodestar\lodestar.exe".into()),
+                data_dir: r"C:\Program Files\Lodestar\data".into(),
+                ..portable()
+            },
+            // A service account is never the portable build.
+            Signals {
+                service_account: true,
+                ..portable()
+            },
+            Signals {
+                exe: None,
+                ..portable()
+            },
+            Signals::default(),
+        ] {
+            assert_eq!(detect(&s), InstallKind::Unknown, "{s:?}");
+        }
+    }
+
+    // ---- Which artifact ----
+
+    #[test]
+    fn each_kind_takes_its_own_artifact() {
+        let both = parsed(release_with("0.5.4", &["binary", "msi", "portable"]));
+        let msi = select(&both, WIN, InstallKind::Msi).unwrap();
+        assert_eq!(msi.kind, ArtifactKind::Msi);
+        assert!(msi.url.ends_with("/lodestar.msi"));
+        let zip = select(&both, WIN, InstallKind::Portable).unwrap();
+        assert_eq!(zip.kind, ArtifactKind::Portable);
+        assert!(zip.url.ends_with("/lodestar.zip"));
+        // Unknown never guesses, but is still told about it.
+        assert_eq!(
+            select(&both, WIN, InstallKind::Unknown).unwrap_err(),
+            NoArtifact::UnknownKind
+        );
+        for kind in [
+            InstallKind::Msi,
+            InstallKind::Portable,
+            InstallKind::Unknown,
+        ] {
+            assert!(offered(&both, WIN, kind));
+        }
+    }
+
+    #[test]
+    fn a_missing_artifact_or_target_offers_nothing() {
+        let msi_only = parsed(release_with("0.5.4", &["msi"]));
+        assert_eq!(
+            select(&msi_only, WIN, InstallKind::Portable).unwrap_err(),
+            NoArtifact::Missing
+        );
+        assert!(!offered(&msi_only, WIN, InstallKind::Portable));
+        assert!(offered(&msi_only, WIN, InstallKind::Unknown));
+        // A Linux-only release isn't for this machine, whatever the kind.
+        let linux = parsed(release_with("0.5.4", &["binary"]));
+        for kind in [
+            InstallKind::Msi,
+            InstallKind::Portable,
+            InstallKind::Unknown,
+        ] {
+            assert!(!offered(&linux, WIN, kind), "{kind:?}");
+        }
+        assert_eq!(
+            select(&linux, WIN, InstallKind::Msi).unwrap_err(),
+            NoArtifact::Missing
+        );
+        // A build for a target nothing ships (aarch64 Windows).
+        let both = parsed(release_with("0.5.4", &["msi", "portable"]));
+        assert_eq!(
+            select(&both, None, InstallKind::Msi).unwrap_err(),
+            NoArtifact::NoTarget
+        );
+        assert!(!offered(&both, None, InstallKind::Unknown));
+        // The Linux target doesn't take the Windows artifacts.
+        let musl = Some(Target::X86_64LinuxMusl);
+        assert!(!offered(&both, musl, InstallKind::Msi));
+        assert!(!offered(&both, musl, InstallKind::Unknown));
+    }
+
+    // ---- The notifier ----
+
+    /// The notifier comes first, so it's dropped (and its folder
+    /// released, which Windows needs) before the temporary folder.
+    struct Env {
+        n: Option<Notifier>,
+        dir: tempfile::TempDir,
+        fake: Arc<Fake>,
+        trust: Arc<TestTrust>,
+        settings: watch::Sender<Updates>,
+        events: Arc<Mutex<Vec<UpdatesEvent>>>,
+    }
+
+    impl Env {
+        fn new(mode: Mode, kind: InstallKind) -> Env {
+            let (settings, _) = watch::channel(Updates {
+                mode,
+                ..Updates::default()
+            });
+            let mut e = Env {
+                dir: tempfile::tempdir().unwrap(),
+                fake: Arc::new(Fake::default()),
+                trust: Arc::new(TestTrust::default()),
+                settings,
+                events: Arc::default(),
+                n: None,
+            };
+            e.n = Some(e.open(kind));
+            e
+        }
+
+        fn open(&self, kind: InstallKind) -> Notifier {
+            let sink = self.events.clone();
+            let keys = self.trust.clone();
+            Notifier::with(
+                Context {
+                    data_dir: self.dir.path().to_path_buf(),
+                    running: Version::new(0, 5, 3),
+                    repository: "https://github.com/dvortsis/lodestar-v2".into(),
+                    dev: false,
+                    kind,
+                    target: WIN,
+                },
+                self.settings.subscribe(),
+                Arc::new(move |e| lock(&sink).push(e)),
+                self.fake.clone(),
+                (jiff::tz::TimeZone::UTC, "UTC".into()),
+                Seams {
+                    clock: Box::new(|| NOW),
+                    keys: Box::new(move || Ok(keys.embedded(vec![]))),
+                    fault: Box::new(|_| Ok(())),
+                },
+            )
+        }
+
+        fn n(&self) -> &Notifier {
+            self.n.as_ref().unwrap()
+        }
+
+        /// Serves `releases` on `channel`'s manifest, at the Stable URL.
+        fn serve(&self, channel: Channel, releases: Vec<Value>) {
+            let mut m = manifest(channel, NOW as u64, "0.0.1", b"x");
+            m["releases"] = Value::Array(releases);
+            let signed = self.trust.release.signed(&bytes(&m));
+            self.fake.serve(STABLE, 200, None, &envelope(&signed, None));
+        }
+
+        async fn check(&self) -> Value {
+            serde_json::to_value(self.n().check_now().await.unwrap()).unwrap()
+        }
+
+        fn status(&self) -> Value {
+            serde_json::to_value(self.n().status()).unwrap()
+        }
+
+        fn states(&self) -> Vec<(UpdatesState, Option<String>)> {
+            lock(&self.events)
+                .iter()
+                .map(|e| (e.state, e.version.clone()))
+                .collect()
+        }
+
+        fn versions(json: &Value) -> Vec<&str> {
+            json["releases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r["version"].as_str().unwrap())
+                .collect()
+        }
+    }
+
+    /// The `/updates` contract on Windows: no `unavailable`, the releases
+    /// a check found for this installation, nothing installable (even
+    /// under `auto`), and Install and Roll back refused with
+    /// `not_built_yet`.
+    #[tokio::test]
+    async fn checks_and_notifies_but_installs_nothing() {
+        let e = Env::new(Mode::Auto, InstallKind::Msi);
+        e.serve(
+            Channel::Stable,
+            vec![
+                release_with("0.5.5", &["binary"]),
+                release_with("0.5.4", &["binary", "msi", "portable"]),
+            ],
+        );
+        let json = e.check().await;
+        assert_eq!(json["unavailable"], Value::Null);
+        assert_eq!(json["status"]["state"], "ok");
+        assert_eq!(json["status"]["checked_at"], NOW);
+        assert_eq!(Env::versions(&json), ["0.5.4"], "the Linux-only one isn't");
+        assert_eq!(json["capability"]["can_install"], false);
+        assert_eq!(json["capability"]["reason"], "not_built_yet");
+        let r = &json["releases"][0];
+        assert_eq!(r["eligible"], false);
+        assert_eq!(r["installs_at"], Value::Null);
+        assert!(
+            r["blocked_by"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|b| b["code"] == "capability" && b["reason"] == "not_built_yet"),
+            "{r}"
+        );
+        assert_eq!(json["rollback"]["available"], false);
+        assert_eq!(json["rollback"]["reason"], "not_built_yet");
+        assert_eq!(json["running"]["version"], "0.5.3");
+        assert_eq!(json["running"]["channel"], "stable");
+        assert_eq!(json["policy"]["mode"], "auto");
+        assert_eq!(json["pending"], Value::Null);
+        assert_eq!(json["history"], json!([]));
+        assert_eq!(
+            e.states(),
+            [
+                (UpdatesState::Checking, None),
+                (UpdatesState::Available, Some("0.5.4".into()))
+            ]
+        );
+        // The times and the trust state are saved.
+        let bin = e.dir.path().join("bin");
+        let u: Updater =
+            serde_json::from_slice(&std::fs::read(bin.join(UPDATER_FILE)).unwrap()).unwrap();
+        assert_eq!(u.checked_at, Some(NOW));
+        assert!(u.next_check_at.unwrap() >= NOW + EVERY.as_secs() as i64);
+        assert!(bin.join(trust_file::FILE).exists());
+        // Install and Roll back say why not.
+        let n = e.n();
+        assert_eq!(
+            UpdatesApi::install(n, "0.5.4".into(), InstallWhen::Now, true)
+                .await
+                .unwrap_err(),
+            UpdatesError::InstallUnavailable(NOT_BUILT_YET)
+        );
+        assert_eq!(
+            UpdatesApi::rollback(n).await.unwrap_err(),
+            UpdatesError::RollbackUnavailable(NOT_BUILT_YET)
+        );
+        assert!(UpdatesApi::clear_history(n).await.is_ok());
+        // A second manual check within the minute waits.
+        assert!(matches!(
+            n.check_now().await.unwrap_err(),
+            UpdatesError::RateLimited { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn each_kind_is_offered_what_it_can_take() {
+        let releases = || {
+            vec![
+                release_with("0.5.6", &["portable"]),
+                release_with("0.5.5", &["msi"]),
+                release_with("0.5.4", &["binary"]),
+            ]
+        };
+        for (kind, want) in [
+            (InstallKind::Msi, vec!["0.5.5"]),
+            (InstallKind::Portable, vec!["0.5.6"]),
+            (InstallKind::Unknown, vec!["0.5.6", "0.5.5"]),
+        ] {
+            let e = Env::new(Mode::Notify, kind);
+            e.serve(Channel::Stable, releases());
+            assert_eq!(Env::versions(&e.check().await), want, "{kind:?}");
+        }
+    }
+
+    /// A validly signed manifest for another channel is refused: nothing
+    /// is offered and the check fails.
+    #[tokio::test]
+    async fn a_manifest_for_another_channel_is_refused() {
+        let e = Env::new(Mode::Notify, InstallKind::Msi);
+        e.serve(Channel::Beta, vec![release_with("0.5.4", &["msi"])]);
+        let json = e.check().await;
+        assert_eq!(json["status"]["state"], "failed");
+        assert!(json["status"]["error"].is_string());
+        assert_eq!(json["releases"], json!([]));
+        assert_eq!(e.states().last().unwrap().0, UpdatesState::Failed);
+    }
+
+    #[tokio::test]
+    async fn nothing_published_yet_is_a_good_check() {
+        let e = Env::new(Mode::Notify, InstallKind::Msi);
+        let json = e.check().await;
+        assert_eq!(json["status"]["state"], "ok");
+        assert_eq!(json["releases"], json!([]));
+        assert_eq!(e.states().last().unwrap().0, UpdatesState::Checked);
+    }
+
+    #[tokio::test]
+    async fn skip_and_pause_are_saved() {
+        let mut e = Env::new(Mode::Notify, InstallKind::Msi);
+        e.serve(Channel::Stable, vec![release_with("0.5.4", &["msi"])]);
+        e.check().await;
+        assert_eq!(
+            e.n().skip("0.9.9").unwrap_err(),
+            UpdatesError::UnknownVersion
+        );
+        let skipped = serde_json::to_value(e.n().skip("0.5.4").unwrap()).unwrap();
+        assert_eq!(skipped["releases"], json!([]));
+        let paused = serde_json::to_value(e.n().pause(7).unwrap()).unwrap();
+        assert_eq!(paused["policy"]["paused_until"], NOW + 7 * 86_400);
+        // Both survive a restart (the lock goes with the old notifier).
+        e.n = None;
+        e.n = Some(e.open(InstallKind::Msi));
+        assert_eq!(e.status()["policy"]["paused_until"], NOW + 7 * 86_400);
+        let list: Value = serde_json::from_slice(
+            &std::fs::read(e.dir.path().join("bin").join(SKIPPED_FILE)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(list, json!([{"version": "0.5.4", "reason": "user"}]));
+        assert!(e.n().pause(0).is_ok());
+        assert_eq!(e.status()["policy"]["paused_until"], Value::Null);
+    }
+
+    /// Another process holding `<data>\bin\.lock` keeps this one from
+    /// fetching or writing anything.
+    #[tokio::test]
+    async fn a_second_writer_gets_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = Bin::open(dir.path()).unwrap();
+        let _held = first.lock().unwrap().unwrap();
+        let mut e = Env::new(Mode::Notify, InstallKind::Msi);
+        e.n = None;
+        let moved = std::mem::replace(&mut e.dir, dir);
+        e.n = Some(e.open(InstallKind::Msi));
+        e.serve(Channel::Stable, vec![release_with("0.5.4", &["msi"])]);
+        let json = e.check().await;
+        assert_eq!(json["status"]["error"], "bin_unavailable");
+        assert!(e.fake.asked.lock().unwrap().is_empty(), "nothing fetched");
+        assert_eq!(e.n().pause(1).unwrap_err(), UpdatesError::BinUnavailable);
+        drop(moved);
+    }
+
+    /// An `updater.json` that can't be read (planted, damaged) isn't
+    /// trusted and isn't overwritten by a check; a pause replaces it.
+    #[tokio::test]
+    async fn an_unreadable_updater_file_is_kept_until_a_pause() {
+        let mut e = Env::new(Mode::Notify, InstallKind::Msi);
+        e.n = None;
+        let path = e.dir.path().join("bin").join(UPDATER_FILE);
+        std::fs::write(&path, br#"{"format":1,"surprise":true}"#).unwrap();
+        e.n = Some(e.open(InstallKind::Msi));
+        let json = e.check().await;
+        assert!(
+            json["notices"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("updater_unreadable"))
+        );
+        assert!(
+            json["notices"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("check_not_saved"))
+        );
+        assert_eq!(json["status"]["checked_at"], NOW, "kept in memory");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            br#"{"format":1,"surprise":true}"#
+        );
+        assert!(e.n().pause(0).is_ok());
+        let u: Updater = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(u.paused_until, None);
+        assert!(
+            !e.status()["notices"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("updater_unreadable"))
+        );
+    }
+
+    /// The schedule checks at once when no check is on record, and not at
+    /// all with updates off.
+    #[tokio::test]
+    async fn the_schedule_runs_the_first_check_and_stops() {
+        let e = Env::new(Mode::Notify, InstallKind::Msi);
+        assert_eq!(e.n().until_scheduled(), Some(Duration::ZERO));
+        let (stop, stopped) = watch::channel(false);
+        let task = e.n().spawn(stopped);
+        let start = Instant::now();
+        while e.n().updater().checked_at.is_none() {
+            assert!(start.elapsed() < Duration::from_secs(20), "no check ran");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(e.n().summary(), (true, Some(NOW)));
+        stop.send(true).unwrap();
+        task.await.unwrap();
+        e.settings.send_modify(|s| s.mode = Mode::Off);
+        assert_eq!(e.n().until_scheduled(), None);
+        assert_eq!(e.status()["status"]["next_check_at"], Value::Null);
+    }
+
+    /// The same files as the Unix engine, both ways.
+    #[test]
+    fn updater_json_reads_the_unix_engines_fields() {
+        let u: Updater = serde_json::from_str(
+            r#"{"format":1,"checked_at":1,"next_check_at":2,"paused_until":3,"error":null,
+                "queued":"0.5.4","rolled_back_seen":9}"#,
+        )
+        .unwrap();
+        assert_eq!(u.queued.as_deref(), Some("0.5.4"));
+        assert!(serde_json::from_str::<Updater>(r#"{"format":1,"x":1}"#).is_err());
+    }
+}
