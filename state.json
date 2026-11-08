@@ -3726,6 +3726,13 @@
       "brief": "briefs/CMP-7.md",
       "since": "2026-11-08T06:06:52Z",
       "session": "session_01MMjhnBuvgoPj7DQ8u9wewz"
+    },
+    "OP-1": {
+      "status": "running",
+      "session": "session_01MMjhn8vnSa2hCANaKahuAe",
+      "branch": "slice/OP-1",
+      "launched": "2026-11-08T19:55:08Z",
+      "attempt": 1
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -6416,6 +6423,10 @@
     {
       "at": "2026-11-08T19:55Z",
       "note": "#628 X-wk10d-unknown merged (6c915427). Slot 4 -> X-wk-busy-retry then X-wk-pause-text in the same session."
+    },
+    {
+      "at": "2026-11-08T19:56Z",
+      "note": "#626 X-pk-manifest-hardening merged (06ef6385); PK-manifest session archived; slot 2 -> OP-1 (session_01MMjhn8vnSa2hCANaKahuAe)."
     }
   ],
   "main_health": [
@@ -7117,7 +7128,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T19:55:00Z",
+    "updated": "2026-11-08T19:56:00Z",
     "items": [
       {
         "slot": 1,
@@ -7129,11 +7140,11 @@
       },
       {
         "slot": 2,
-        "slice": "X-pk-manifest-hardening",
+        "slice": "OP-1",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCXsenhYx7tX8TeoyN: #626 delta review MERGE at e3875411; merge on green CI",
-        "since": "2026-11-08T17:12Z"
+        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: launched 19:55Z per briefs/OP-1.md",
+        "since": "2026-11-08T19:55:08Z"
       },
       {
         "slot": 3,
