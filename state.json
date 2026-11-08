@@ -6203,6 +6203,11 @@
       "id": "WK-10d-polish-pr",
       "at": "2026-11-08T13:56Z",
       "note": "#615 head a633587d; review when session reports green."
+    },
+    {
+      "id": "merged-611-614",
+      "at": "2026-11-08T14:32Z",
+      "note": "#611 CMP-8b merged 2ab8f4b4 (delta self-checked: test + logging polish); #614 X-flake-ops-pause merged 506a30d5. CMP-8b session to archive; owner FYI sent. Slot 1 -> CMP-5."
     }
   ],
   "main_health": [
@@ -6904,15 +6909,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T13:34Z",
+    "updated": "2026-11-08T14:32Z",
     "items": [
       {
         "slot": 1,
-        "slice": "CMP-8b",
+        "slice": "CMP-5",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCJUWWGd7mwdqxpyXh: CMP-8b auto-configuration (brief 99bfafad)",
-        "since": "2026-11-08T11:05Z"
+        "doing": "launching: CMP-5 companion manager (brief briefs/CMP-5.md)",
+        "since": "2026-11-08T14:32Z"
       },
       {
         "slot": 2,

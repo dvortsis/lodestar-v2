@@ -1,6 +1,6 @@
 # CMP-5: Companion manager (install flow, pinned updates keeping the previous version, uninstall, state rows, companion CLI)
 
-**Model:** Opus. **Review:** a fresh Opus reviewer plus `/security-review`. It runs downloaded programs. **Branch:** `slice/CMP-5`, cut from `origin/main`: CMP-1, CMP-2, CMP-3, CMP-4a, CMP-4b (#608, c748dba9), CMP-7 and CMP-8a are in. **PR title:** `CMP-5: <title>`. **Steward:** follow `.claude/skills/steward/SKILL.md`. The runner merges; you never do.
+**Model:** Opus. **Review:** a fresh Opus reviewer plus `/security-review`. It runs downloaded programs. **Branch:** `slice/CMP-5`, cut from `origin/main`: CMP-1, CMP-2, CMP-3, CMP-4a, CMP-4b (#608, c748dba9), CMP-7, CMP-8a and CMP-8b (#611, 2ab8f4b4) are in. **PR title:** `CMP-5: <title>`. **Steward:** follow `.claude/skills/steward/SKILL.md`. The runner merges; you never do.
 
 ## Read first
 - **`docs/plan/2026-11-06-v06-companions.md`:**
@@ -43,7 +43,7 @@
 ## What to build
 1. **The install flow as one state machine with a journal.**
    - A crash at any step leaves either the old version or nothing, never a half-install.
-   - Steps: confirm (an explicit confirmation token naming entry, version and SHA-256; CMP-6 will carry it from the API) → fetch → verify → extract → credentials (CMP-3) → config files → start (CMP-4a/4b) → health → configure through the API (CMP-8b's `Configure`, behind a trait object so this works before CMP-8b merges) → done.
+   - Steps: confirm (an explicit confirmation token naming entry, version and SHA-256; CMP-6 will carry it from the API) → fetch → verify → extract → credentials (CMP-3) → config files → start (CMP-4a/4b) → health → configure through the API (CMP-8b's `Configure`, merged in #611; keep it behind a trait object so tests can fake it) → done.
    - Each step is resumable or reversible from the journal on startup.
 2. **Updates keep the previous version until the new one passes health,** then remove it. A failed update rolls back to the previous version and restarts it.
 3. **Uninstall:**
@@ -106,7 +106,7 @@
 
 ## Coordination
 These run in parallel:
-- **CMP-8b** (#611): `configure/`;
+- **CMP-8b** merged (#611): `configure/` is read-only for you; a needed change goes to the runner first;
 - **CMP-10:** `requires.rs`, pipeline;
 - **X-cmp4b-mounts:** `supervise/limits*`;
 - **WK-10e:** cluster.
