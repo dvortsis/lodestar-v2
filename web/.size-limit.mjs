@@ -1252,9 +1252,10 @@ export default [
 	entry('Settings logging output messages (on demand)', settingsLoggingOutputMap, '0.77 KB'),
 	// runner §2.26, 2026-11-01: CI measures +3 B over local (build variance); main red on 7ea22803 at 17,103 B
 	entry('Settings logging parts (on demand)', settingsLoggingLazy, '17.15 KB'),
-	// S-logs-3: every event's plain name and help, en and zh. Measured 13.58 KB at WK-10d (three
-	// worker and cluster events); limit = measured + 10%.
-	entry('Settings logging event names (on demand)', settingsLoggingNamesLazy, '14.9 KB'),
+	// S-logs-3: every event's plain name and help, en and zh. Measured 15,056 B at X-wk-busy-retry
+	// (#637, with main's companion events); limit = measured + 10% (runner §2.26, 2026-11-08). It
+	// covers CMP-6's one event too; a split by component is the runner's follow-up.
+	entry('Settings logging event names (on demand)', settingsLoggingNamesLazy, '16.6 KB'),
 	// S-logs-2b: the outputs, the preview, the log files and the Danger zone, measured 9.81 KB.
 	entry('Settings logging files and preview (on demand)', settingsLoggingFilesLazy, '10.8 KB'),
 	// Each hand-built screen's first view (the route without the form, plus its body), against the
