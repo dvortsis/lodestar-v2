@@ -14,8 +14,8 @@ The plan is `docs/plan/2026-11-08-cloud-operator.md`: an AI operator on Anthropi
 3. unattended root step scripts over SSH;
 4. the PIA login read unattended by the `deliver-pia` job, not only behind MFA;
 5. control-plane changes merging on the runner's review, with no owner approval;
-6. the operator App's Pull requests write, which reaches every PR in the repo, beyond Q4's "comments only". It's contained by a tripwire workflow, the stop variable, unedited-comment trust and no state in comments;
-7. per-job SSH ingress from the job's GitHub-hosted runner `/32`, with runtime firewall writes, including a firewall-only Linode token in `pia-delivery`.
+6. the operator App's Pull requests write, which reaches every PR in the repo, beyond Q4's "comments only". It's contained by the stop variable, unedited-comment trust, no state in comments, and a tripwire: `pull_request_target` and `issue_comment` triggers plus a sweep of issue events and reviews;
+7. per-job SSH ingress from the job's GitHub-hosted runner `/32`, with runtime firewall writes, including a Linode firewall token (whole-firewall scope) behind `LodestarPiaDelivery`, which the reaper audits hourly.
 
 All seven are for the control plane only. The sixth and seventh are inferred from Q4, and from Q1 and Q3, rather than quoted, so the runner flags them to the owner.
 
@@ -36,7 +36,7 @@ All seven are for the control plane only. The sixth and seventh are inferred fro
     - the token lasts 1 hour and is revoked when the session ends.
 - **PIA uses the owner's broker, made unattended at the owner's request.**
   - **Withdrawn first:** the first draft's SSM hybrid activation, because it gave each Linode an AWS identity and the owner's rule is that Linodes get none.
-  - **The reader:** a separate `deliver-pia` job, in its own `pia-delivery` environment, assumes `LodestarPiaDelivery` by OIDC. That role's only permission is `GetSecretValue` on the exact `lodestar/pia-vpn` ARN; the fleet role can't read it, and the operator never sees it.
+  - **The reader:** a separate `deliver-pia` job, in its own `pia-delivery` environment, assumes `LodestarPiaDelivery` by OIDC. That role's permissions are `GetSecretValue` on the exact `lodestar/pia-vpn` and `lodestar/akamai-firewall-token` ARNs, plus `s3:GetObject` on `fleet.json`; the fleet role can't read it, and the operator never sees it.
   - **The transfer:** the job masks the values and streams them over SSH stdin to pinned host keys, into root-only files in `/run`.
   - **On the VM:** the WireGuard configuration is made there, and the credentials are deleted.
   - **Exits:** they come from a private `PIA_SERVERS` secret, distinct for Main and Worker and never the Unraid host's.
@@ -44,7 +44,8 @@ All seven are for the control plane only. The sixth and seventh are inferred fro
   - **The delivery job's own boundary:**
     - its environment allows `main` only, and it repeats the author, edit and stop gates itself;
     - its role's trust requires `aud` and a `sub` naming `fleet.yml@refs/heads/main`;
-    - it takes targets and pins only from the fleet's Terraform state, never from comments or arguments;
+    - it takes targets and pins only from `fleet.json`, never from comments or arguments;
+    - it runs inside the fleet lock, and its firewall rule is API-managed and labelled by run;
     - it reads the secret with boto3, masks each value, and discards the remote output;
     - it delivers only to a fleet whose pinned commit is an ancestor of `main`;
     - its role lives in the secret's own account.
@@ -72,7 +73,7 @@ All seven are for the control plane only. The sixth and seventh are inferred fro
   - it denies approval pauses, and posts the escalation itself on a budget stop, an error or a timeout.
 
   These are runner parameters under §2.26.
-- **OIDC trust is pinned to `aud` and to a `sub` naming the environment and `fleet.yml@refs/heads/main`.** The repo's subject template is customized to include `job_workflow_ref`.
+- **OIDC trust is pinned to `aud` and to a full `sub` (`StringEquals`) naming the environment and the exact workflow at `refs/heads/main`:** `fleet.yml` for the fleet and PIA roles, and `operator-wake.yml` or `operator-apply.yml` for the bridge role. None of these workflows has `workflow_call`. The repo's subject template is customized to include `job_workflow_ref`.
 - **A third OIDC role, `LodestarOperatorBridge`,** gives the bridge and `operator-apply.yml` the lock prefix and the lock-file object only, never the state bucket.
 - **`deliver-pia` reads only `fleet.json`** (addresses, fingerprints, firewall IDs, pin, expiry), never the whole Terraform state, which holds host private keys. It reaches the Linodes with a firewall-only Linode token that opens its own `/32`.
 - **`fleet.yml` has no `workflow_call` and uses no reusable workflow,** so the `job_workflow_ref` pin can't be sidestepped.
@@ -81,6 +82,8 @@ All seven are for the control plane only. The sixth and seventh are inferred fro
 - **Models:** Sonnet 5.5 at medium (set explicitly; its default is high) for the routine loop, and Opus 5.5 at high (set explicitly; its default is medium) for triage. Max is never used.
   - **Deployment gate:** a prompt-injection corpus, each item 5 times, stopped at $50 of the $200, escalating Sonnet medium → Sonnet high → Opus medium → Opus high. If Opus at high fails, the runner stops and tells the owner.
   - **Model IDs stay out of the repo** (the runner's ruling): they're the Actions variables `OPERATOR_MODEL_ROUTINE` and `OPERATOR_MODEL_TRIAGE`, and committed files name only the variables.
+- **Job SSH rules use one mechanism, the Linode API under the fleet lock,** labelled by run. Terraform keeps only the admin rule, and stale rules are swept by Actions-API status.
+- **The injection harness can't act:** its own vault with a dummy token, no route to `api.github.com`, attempts detected from tool-call events, and no runs while a fleet exists.
 - **Evidence:** an allow-list scrubber, on the VM and again in the control plane. Scrubbed aggregates reach the runner as a result comment, and the repo only through a reviewed PR.
 - **Residual risk, stated:** the runner shares the owner's login with every Claude session. Any session posting as the owner could wake the operator. The rate limit, the budgets, the $200 cap and the control plane's limits bound it.
 
