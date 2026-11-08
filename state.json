@@ -6188,6 +6188,21 @@
       "id": "WK-10e-sequence",
       "at": "2026-11-08T13:34Z",
       "note": "Runner approved WK-10d-polish as its own PR first, then WK-10e per briefs/WK-10e.md. Runner adds slices.yaml entries for both in the next runner PR."
+    },
+    {
+      "id": "owner-flag-WK-10e-sampler-scale",
+      "at": "2026-11-08T13:56Z",
+      "note": "Runner approved: WK-10e scales the BEP 51 cooldown after clamping (cooldown up to 6 h x MAX_DHT_PER_IP = 48 h); shared edits dht node/mod.rs (Config + SetSampleScale), sampler.rs, sources lib.rs re-export. Flag to owner under 2.19 at merge."
+    },
+    {
+      "id": "X-flake-ops-pause",
+      "at": "2026-11-08T13:56Z",
+      "note": "Runner PR #614: ops/tests.rs node pause race (failed #611 47d965b8 ubuntu). Merge on green."
+    },
+    {
+      "id": "WK-10d-polish-pr",
+      "at": "2026-11-08T13:56Z",
+      "note": "#615 head a633587d; review when session reports green."
     }
   ],
   "main_health": [
