@@ -163,6 +163,13 @@ impl PasswordHash {
     }
 }
 
+impl Drop for PasswordHash {
+    fn drop(&mut self) {
+        self.salt.zeroize();
+        self.hash.zeroize();
+    }
+}
+
 impl fmt::Debug for PasswordHash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("PasswordHash(…)")
@@ -190,7 +197,7 @@ pub fn qbittorrent_conf(
     existing: Option<&str>,
     username: &Username,
     hash: &PasswordHash,
-) -> Result<String, ConfigError> {
+) -> Result<Secret, ConfigError> {
     let values = [
         BIND_ADDRESS.to_owned(),
         format!("\"{}\"", hash.to_qbittorrent()),
@@ -202,7 +209,9 @@ pub fn qbittorrent_conf(
     }
     let eol = if text.contains("\r\n") { "\r\n" } else { "\n" };
 
-    let mut out: Vec<String> = Vec::new();
+    // Lines of the existing file, which may hold other plaintext secrets
+    // (`Network\Proxy\Password`): zeroed on drop.
+    let mut out: Vec<Zeroizing<String>> = Vec::new();
     let mut written = [false; 3];
     let mut section = String::new();
     // Where missing keys go: after the last entry of the first
@@ -239,14 +248,27 @@ pub fn qbittorrent_conf(
             return Err(malformed("a quoted value spanning lines", line_no));
         }
         if let Some(rest) = t.strip_prefix('[') {
-            let name = rest
+            let (name, after) = rest
                 .split_once(']')
-                .map(|(name, _)| name)
                 .ok_or(malformed("an unterminated section header", line_no))?;
-            if name.contains('%') && name != "%General" {
-                return Err(malformed("a percent-encoded section name", line_no));
+            let after = ascii_trim(after);
+            if !after.is_empty() && !after.starts_with(';') {
+                return Err(malformed("text after a section header", line_no));
             }
             let name = ascii_trim(name);
+            // Qt cuts a line at an unquoted `;` (so `[Preferences ; x]` is
+            // `Preferences` to it) and names `[]` `/`, not the root. Refuse
+            // every name outside the characters Qt's writer leaves
+            // unescaped, and the empty one.
+            if name.is_empty() {
+                return Err(malformed("an empty section name", line_no));
+            }
+            if name != "%General" && !name.bytes().all(name_byte) {
+                return Err(malformed(
+                    "a section name Qt would read differently",
+                    line_no,
+                ));
+            }
             section = if name.eq_ignore_ascii_case("general") {
                 String::new()
             } else {
@@ -260,19 +282,19 @@ pub fn qbittorrent_conf(
             }
             in_first_prefs = !seen_prefs && section == "Preferences";
             seen_prefs |= in_first_prefs;
-            out.push(raw.to_owned());
+            out.push(Zeroizing::new(raw.to_owned()));
             if in_first_prefs {
                 insert_at = Some(out.len());
             }
             continue;
         }
         if t.is_empty() || t.starts_with(';') || !t.contains('=') {
-            out.push(raw.to_owned());
+            out.push(Zeroizing::new(raw.to_owned()));
             continue;
         }
         let key_text = ascii_trim(body.split_once('=').map_or(body, |(k, _)| k));
-        if key_text.contains('%') {
-            return Err(malformed("a percent-encoded key", line_no));
+        if !key_text.bytes().all(name_byte) {
+            return Err(malformed("a key Qt would read differently", line_no));
         }
         let logical = if section.is_empty() {
             normalize(key_text)
@@ -292,18 +314,18 @@ pub fn qbittorrent_conf(
             Some(i) if written[i] => {} // a duplicate: dropped
             Some(i) => {
                 written[i] = true;
-                out.push(format!("{key_text}={}{eol}", values[i]));
+                out.push(Zeroizing::new(format!("{key_text}={}{eol}", values[i])));
             }
-            None => out.push(raw.to_owned()),
+            None => out.push(Zeroizing::new(raw.to_owned())),
         }
         if in_first_prefs {
             insert_at = Some(out.len());
         }
     }
 
-    let missing: Vec<String> = (0..3)
+    let missing: Vec<Zeroizing<String>> = (0..3)
         .filter(|&i| !written[i])
-        .map(|i| format!("{}={}{eol}", QBIT_KEYS[i].1, values[i]))
+        .map(|i| Zeroizing::new(format!("{}={}{eol}", QBIT_KEYS[i].1, values[i])))
         .collect();
     if !missing.is_empty() {
         // The last line may lack its newline.
@@ -318,14 +340,25 @@ pub fn qbittorrent_conf(
             }
             None => {
                 if out.iter().any(|l| !ascii_trim(l).is_empty()) {
-                    out.push(eol.to_owned());
+                    out.push(Zeroizing::new(eol.to_owned()));
                 }
-                out.push(format!("[Preferences]{eol}"));
+                out.push(Zeroizing::new(format!("[Preferences]{eol}")));
                 out.extend(missing);
             }
         }
     }
-    Ok(format!("{bom}{}", out.concat()))
+    let mut text = String::with_capacity(bom.len() + out.iter().map(|l| l.len()).sum::<usize>());
+    text.push_str(bom);
+    for line in &out {
+        text.push_str(line);
+    }
+    Ok(Secret::new(text))
+}
+
+/// The bytes Qt's INI writer leaves unescaped in section and key names
+/// (it percent-encodes the rest), plus space and both separators.
+fn name_byte(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-' | b'.' | b' ' | b'/' | b'\\')
 }
 
 /// `/` as `\`: Qt reads both as the group separator.
@@ -375,7 +408,7 @@ pub fn write_qbittorrent(
         username,
         &PasswordHash::new(password)?,
     )?;
-    write_atomic(path, text.as_bytes())
+    write_atomic(path, text.expose().as_bytes())
 }
 
 /// Prowlarr's elements, children of `<Config>`, in the order they're
@@ -603,10 +636,15 @@ fn read_existing(path: &Path) -> Result<Option<Zeroizing<String>>, ConfigError> 
     if meta.len() > MAX_EXISTING {
         return Err(ConfigError::TooLarge);
     }
+    let file = File::open(path).map_err(io_err("open"))?;
+    // `open` follows a symlink swapped in after the check above: make sure
+    // the handle is the regular file we inspected.
+    let opened = file.metadata().map_err(io_err("inspect"))?;
+    if !opened.file_type().is_file() || !same_file(&meta, &opened) {
+        return Err(ConfigError::NotAFile);
+    }
     let mut buf = Zeroizing::new(Vec::new());
-    File::open(path)
-        .map_err(io_err("open"))?
-        .take(MAX_EXISTING + 1)
+    file.take(MAX_EXISTING + 1)
         .read_to_end(&mut buf)
         .map_err(io_err("read"))?;
     if buf.len() as u64 > MAX_EXISTING {
@@ -619,6 +657,20 @@ fn read_existing(path: &Path) -> Result<Option<Zeroizing<String>>, ConfigError> 
             Err(malformed("not UTF-8", None))
         }
     }
+}
+
+#[cfg(unix)]
+fn same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+/// Windows: the size and modification time, as std exposes no file id on
+/// stable. A symlink there needs privileges an attacker writing the
+/// companion's folder doesn't usually have.
+#[cfg(not(unix))]
+fn same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    a.len() == b.len() && a.modified().ok() == b.modified().ok()
 }
 
 /// Temp file in the same folder, fsync, rename; private permissions.

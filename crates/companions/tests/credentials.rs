@@ -6,8 +6,7 @@ use std::sync::{Mutex, OnceLock};
 
 use lodestar_companions::CompanionId;
 use lodestar_companions::config_files::{
-    ConfigError, PasswordHash, Username, prowlarr_config, qbittorrent_conf, write_prowlarr,
-    write_qbittorrent,
+    ConfigError, PasswordHash, Username, prowlarr_config, write_prowlarr, write_qbittorrent,
 };
 use lodestar_companions::credentials::{
     CredentialKey, Field, accept_pasted, generate, is_secret_row, open, replace_temporary_password,
@@ -29,6 +28,16 @@ const HASH_B64: &str =
 
 fn key(id: &str, field: Field) -> CredentialKey {
     CredentialKey::new(CompanionId::parse(id).unwrap(), field)
+}
+
+/// The writer's output as plain text, for comparing.
+fn qbittorrent_conf(
+    existing: Option<&str>,
+    username: &Username,
+    hash: &PasswordHash,
+) -> Result<String, ConfigError> {
+    lodestar_companions::config_files::qbittorrent_conf(existing, username, hash)
+        .map(|s| s.expose().to_owned())
 }
 
 fn fixed_hash() -> &'static PasswordHash {
@@ -186,6 +195,19 @@ fn qbittorrent_refuses_malformed_files() {
         ),
         ("[Preferences]\n\x0C[X]\nWebUI\\Address=0.0.0.0\n", Some(2)),
         ("[Preferences]\nWebUI\\Locale=a\x7fb\n", Some(2)),
+        // Qt cuts a line at an unquoted `;`, and names `[]` `/`.
+        (
+            "[Preferences]\nA=1\n[Preferences ; old]\nWebUI\\Address=*\n",
+            Some(3),
+        ),
+        ("[Preferences;x]\nWebUI\\Address=*\n", Some(1)),
+        ("[Preferences\\WebUI;]\nAddress=*\n", Some(1)),
+        ("[]\nPreferences\\WebUI\\Address=*\n", Some(1)),
+        ("[ ]\nPreferences\\WebUI\\Address=*\n", Some(1)),
+        ("[\"Preferences\"]\nWebUI\\Address=*\n", Some(1)),
+        ("[Preferences]x\nWebUI\\Address=*\n", Some(1)),
+        ("[Preferences]\nWebUI\\Address;x=*\n", Some(2)),
+        ("[Preferences]\nWebUI\\Port=1\nWebUI%5CAddress=*\n", Some(3)),
         // A quoted value running on hides the lines inside it.
         (
             "[Preferences]\nWebUI\\Locale=\"x\nWebUI\\Address=0.0.0.0\n\"\n",
@@ -436,6 +458,24 @@ fn rotation_reseals_companion_rows_and_they_still_open() {
 }
 
 #[test]
+fn a_credential_opens_only_as_its_own_field() {
+    let store = SecretStore::from_key(&[1; 32]);
+    let pw = key("qbittorrent", Field::WebUiPassword);
+    let issued = generate(&store, &pw).unwrap();
+    assert!(matches!(
+        open(
+            &store,
+            &key("qbittorrent", Field::ApiKey),
+            &issued.row.value
+        ),
+        Err(lodestar_companions::credentials::CredentialError::Sealed(
+            SecretError::Open
+        ))
+    ));
+    assert!(open(&store, &pw, &issued.row.value).is_ok());
+}
+
+#[test]
 fn a_malformed_companion_secret_row_stops_the_reseal() {
     let store = SecretStore::from_key(&[1; 32]);
     let sealed = store.seal("x", &Secret::new("x")).unwrap();
@@ -464,6 +504,15 @@ fn no_plaintext_reaches_logs_or_debug_output() {
         lodestar_log::set_sink(sink).is_ok(),
         "a sink was already set"
     );
+    // Every event these crates declare, Debug and opt-in ones included.
+    for c in [
+        &lodestar_companions::log_events::CATALOGUE,
+        &lodestar_integrations::log_events::CATALOGUE,
+    ] {
+        for e in c.events {
+            e.set_on(true);
+        }
+    }
 
     let dir = TestDir::new();
     let store = SecretStore::from_key(&[3; 32]);
@@ -528,19 +577,29 @@ fn ini_entries(text: &str) -> Vec<(String, String)> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let trim = |s: &str| s.trim_matches(|c: char| c.is_ascii_whitespace()).to_owned();
     for line in text.lines() {
-        let t = trim(line);
-        if t.starts_with(';') {
-            continue;
+        // Qt reads `\` and the next character as a pair, and ends the line
+        // at the first `;` outside quotes.
+        let (mut quoted, mut escaped, mut cut) = (false, false, line.len());
+        for (i, c) in line.char_indices() {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                quoted = !quoted;
+            } else if c == ';' && !quoted {
+                cut = i;
+                break;
+            }
         }
-        let quotes = t
-            .replace("\\\\", "")
-            .replace("\\\"", "")
-            .matches('"')
-            .count();
-        assert!(quotes % 2 == 0, "open quote in {line:?}");
+        assert!(!quoted || cut < line.len(), "open quote in {line:?}");
+        let t = trim(&line[..cut]);
         if let Some(rest) = t.strip_prefix('[') {
             let name = trim(rest.split_once(']').unwrap().0);
-            section = if name.eq_ignore_ascii_case("general") {
+            // `[]` is the group `/`, not the root.
+            section = if name.is_empty() {
+                "/\\".to_owned()
+            } else if name.eq_ignore_ascii_case("general") {
                 String::new()
             } else {
                 format!("{}\\", name.replace('/', "\\"))
@@ -660,7 +719,7 @@ proptest! {
     #[test]
     fn qbittorrent_takes_any_bytes_or_refuses(text in prop_oneof![
         "(?s).{0,200}",
-        "(\\[|\\]|=|;|%|\\\\|/|\"|\r|\n|\u{feff}| |Preferences|preferences|General|WebUI|webui|Address|Username|Password_PBKDF2|x){0,60}",
+        "(\\[|\\]|=|;|%|\\\\|/|\"|\\[\\]|\r|\n|\u{feff}| |Preferences|preferences|General|WebUI|webui|Address|Username|Password_PBKDF2|x){0,60}",
     ]) {
         if let Ok(out) = qbittorrent_conf(Some(&text), &Username::default(), fixed_hash()) {
             // Whatever it accepts, it can read back with our keys once.
