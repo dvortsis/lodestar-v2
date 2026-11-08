@@ -1264,7 +1264,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/InstallRequest"
+                "$ref": "#/components/schemas/CompanionInstallRequest"
               }
             }
           },
@@ -12023,6 +12023,23 @@
             "type": "string"
           }
         }
+      },
+      "CompanionInstallRequest": {
+        "type": "object",
+        "description": "`POST /companions/{id}/install`: the offer's version and SHA-256,\nechoed. Anything else is `409 confirmation_mismatch`.",
+        "required": [
+          "sha256",
+          "version"
+        ],
+        "properties": {
+          "sha256": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
       },
       "CompanionList": {
         "type": "object",

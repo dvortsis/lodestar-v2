@@ -41,8 +41,9 @@ use lodestar_log::{Client, log_event};
 use utoipa::OpenApi;
 
 use crate::dto::companions::{
-    Companion, CompanionAccepted, CompanionList, CompanionLogs, CompanionTemplate, InstallOffer,
-    InstallRequest, RemovalPlan, RemoveRequest, RevealRequest, RevealedCredential, TemplateRequest,
+    Companion, CompanionAccepted, CompanionInstallRequest, CompanionList, CompanionLogs,
+    CompanionTemplate, InstallOffer, RemovalPlan, RemoveRequest, RevealRequest, RevealedCredential,
+    TemplateRequest,
 };
 use crate::dto::error::ErrorEnvelope;
 use crate::error::{ApiError, ApiResult, internal};
@@ -336,7 +337,7 @@ pub(crate) async fn install_offer(
     path = "/companions/{id}/install",
     tag = "companions",
     params(("id" = String, Path, description = "The catalogue id.")),
-    request_body = InstallRequest,
+    request_body = CompanionInstallRequest,
     responses(
         (status = 200, body = Companion),
         (status = 422, description = "`bad_body`.", body = ErrorEnvelope),
@@ -351,7 +352,7 @@ pub(crate) async fn install_companion(
     handle: Handle,
     headers: HeaderMap,
     Path(id): Path<String>,
-    extract::Json(body): extract::Json<InstallRequest>,
+    extract::Json(body): extract::Json<CompanionInstallRequest>,
 ) -> ApiResult<Json<Companion>> {
     same_origin_json(&headers)?;
     check_id(&id)?;

@@ -95,7 +95,7 @@ pub struct InstallOffer {
 /// echoed. Anything else is `409 confirmation_mismatch`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct InstallRequest {
+pub struct CompanionInstallRequest {
     pub sha256: String,
     pub version: String,
 }

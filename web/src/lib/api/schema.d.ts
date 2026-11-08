@@ -3855,6 +3855,14 @@ export interface components {
         CompanionAccepted: {
             id: string;
         };
+        /**
+         * @description `POST /companions/{id}/install`: the offer's version and SHA-256,
+         *     echoed. Anything else is `409 confirmation_mismatch`.
+         */
+        CompanionInstallRequest: {
+            sha256: string;
+            version: string;
+        };
         CompanionList: {
             companions: components["schemas"]["Companion"][];
         };
@@ -11581,7 +11589,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["InstallRequest"];
+                "application/json": components["schemas"]["CompanionInstallRequest"];
             };
         };
         responses: {
