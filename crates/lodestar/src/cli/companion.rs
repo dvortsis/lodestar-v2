@@ -206,7 +206,7 @@ fn install(config: &Config, id: &CompanionId, sha256: Option<&str>) -> Outcome {
             offer.sha256.to_hex()
         );
         return Err(Failure::Refused(
-            "not confirmed: nothing was changed".into(),
+            "not confirmed: nothing was installed".into(),
         ));
     };
     let sha = Sha256::parse_hex(typed.trim())
@@ -240,7 +240,7 @@ fn remove(config: &Config, id: &CompanionId, yes: bool) -> Outcome {
             list()
         );
         return Err(Failure::Refused(
-            "not confirmed: nothing was changed".into(),
+            "not confirmed: nothing was removed".into(),
         ));
     }
     rt.block_on(m.remove(id)).map_err(refused)?;
