@@ -1,6 +1,6 @@
 # CMP-4b: Companion resource limits, sandbox and egress (Job Object, rlimits, delegated cgroup v2 when present, Landlock; stopped while the route is down)
 
-**Model:** Opus. **Review:** a fresh Opus reviewer plus `/security-review`; platform security and concurrency. **Branch:** `slice/CMP-4b`, cut from `origin/main` once CMP-4a (#603) is in. **PR title:** `CMP-4b: <title>`. **Steward:** follow `.claude/skills/steward/SKILL.md`. The runner merges; you never do.
+**Model:** Opus. **Review:** a fresh Opus reviewer plus `/security-review`; platform security and concurrency. **Branch:** `slice/CMP-4b`, cut from `origin/main` (CMP-4a #603 is in at fa469e4e). **PR title:** `CMP-4b: <title>`. **Steward:** follow `.claude/skills/steward/SKILL.md`. The runner merges; you never do.
 
 ## Read first
 - `docs/plan/2026-11-06-v06-companions.md`:
