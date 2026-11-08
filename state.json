@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-08T04:29:08Z",
+  "updated_at": "2026-11-08T04:46:43Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6014,6 +6014,10 @@
       "id": "X-flake-utp-lossy",
       "what": "lodestar-peer-wire tests/utp.rs::fetches_over_a_lossy_link timed out ('Require: timed out' line 349) on test (windows-latest) for #600 merge head fdd3c451; passed on ae052ae9. No fix PR. Runner routes.",
       "logged": "2026-11-08T03:41:11Z"
+    },
+    {
+      "id": "CMP-1-merged",
+      "note": "2026-11-08T04:46:43Z: #602 merged 52e1ac1d on 2R MERGE (security + second read) plus runner-checked pre-merge push 21d75d6d. Session archived; owner FYI sent with 4 \u00a72.19 refinements. CMP-5 notes in decisions file. Slot 2 -> CMP-4a (critical path CMP-4a->4b->5->6->5g->G)."
     }
   ],
   "main_health": [
@@ -6715,7 +6719,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T04:29:08Z",
+    "updated": "2026-11-08T04:46:43Z",
     "items": [
       {
         "slot": 1,
@@ -6727,18 +6731,18 @@
       },
       {
         "slot": 2,
-        "slice": "CMP-1",
+        "slice": "CMP-4a",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBUJa6y4tEEAzxmMJs; #602 2R both MERGE at 925d94fd; small push asked (header-idle test, fetch takes &Guarded, tampered-comment test, notes); runner self-checks delta then merges",
-        "since": "2026-11-08T02:13Z"
+        "doing": "session_01MMjhn9UTgWx4UJ4Ae7mhXJ: building (brief pushed bff1587e)",
+        "since": "2026-11-08T04:46:43Z"
       },
       {
         "slot": 3,
         "slice": "CMP-2",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBjswJ9d8Qu8vvTvyu; #600 final push 220d4723 self-checked OK; awaiting green CI then merge",
+        "doing": "session_01MMjhnBjswJ9d8Qu8vvTvyu; #600 220d4723 checked; must bring main in (conflict with #602 in Cargo.toml/lib.rs/lock), then merge",
         "since": "2026-11-08T00:55Z"
       },
       {
