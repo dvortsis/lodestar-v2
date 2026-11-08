@@ -358,19 +358,43 @@ fn printable(text: &str) -> String {
         .collect()
 }
 
-/// `text` without control characters or bidirectional marks and overrides,
-/// which could make a message read differently from what it says (item
-/// names in a refusal are whoever could write the folder's choice).
+/// `text` without control characters, format characters (Unicode general
+/// category Cf: bidirectional marks and overrides, zero-width characters,
+/// the byte order mark) or line and paragraph separators (Zl, Zp), which
+/// could make a message read differently from what it says (item names in
+/// a refusal are whoever could write the folder's choice).
 fn plain(text: &str) -> String {
     text.chars()
-        .filter(|c| {
-            !c.is_control()
-                && !matches!(
-                    *c,
-                    '\u{200e}' | '\u{200f}' | '\u{061c}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
-                )
-        })
+        .filter(|c| !c.is_control() && !invisible(*c))
         .collect()
+}
+
+/// Unicode's Cf, Zl and Zp characters (Unicode 15).
+fn invisible(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00ad}'
+            | '\u{0600}'..='\u{0605}'
+            | '\u{061c}'
+            | '\u{06dd}'
+            | '\u{070f}'
+            | '\u{0890}'..='\u{0891}'
+            | '\u{08e2}'
+            | '\u{180e}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{2028}'..='\u{202e}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206f}'
+            | '\u{feff}'
+            | '\u{fff9}'..='\u{fffb}'
+            | '\u{110bd}'
+            | '\u{110cd}'
+            | '\u{13430}'..='\u{1343f}'
+            | '\u{1bca0}'..='\u{1bca3}'
+            | '\u{1d173}'..='\u{1d17a}'
+            | '\u{e0001}'
+            | '\u{e0020}'..='\u{e007f}'
+    )
 }
 
 /// A SID [`full_sid`] spells out, if it's one `icacls` can take as `*SID`.
@@ -1064,16 +1088,21 @@ mod tests {
     fn a_refusal_drops_marks_from_planted_names() {
         let dir = Path::new(r"C:\ProgramData\Lodestar");
         let seen = Inspection {
-            links: vec!["evil\u{202e}txt.exe\u{200f}\n".into()],
+            links: vec![
+                "e\u{202e}v\u{200f}i\u{200b}l\u{2028}t\u{feff}x\u{2060}t\u{061c}.\u{2029}exe\n — ok…".into(),
+            ],
             ..seen(PRIVATE, &[])
         };
         let why = verdict(&seen, Some(OWN)).unwrap_err();
         let msg = refusal(dir, &seen, Some(OWN), &why, &|_| None);
-        assert!(msg.contains("eviltxt.exe is a link"), "{msg}");
-        assert!(
-            !msg.chars()
-                .any(|c| c.is_control() || ('\u{200e}'..='\u{202e}').contains(&c))
-        );
+        // The marks and separators go; dashes and ellipses stay.
+        assert!(msg.contains("eviltxt.exe — ok… is a link"), "{msg}");
+        for c in [
+            '\u{202e}', '\u{200f}', '\u{200b}', '\u{2028}', '\u{2029}', '\u{feff}', '\u{2060}',
+            '\u{061c}', '\n',
+        ] {
+            assert!(!msg.contains(c), "{c:?} in {msg}");
+        }
     }
 
     /// SDDL writes the built-in Administrator as `LA`, whose SID depends on

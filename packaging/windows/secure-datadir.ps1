@@ -93,9 +93,9 @@ function New-DataSecurity {
 $trusted = @($system, $admins, $svc)
 
 # Why the folder is not private yet, or $null if it is: protected (no inheritance from
-# ProgramData) and every Allow entry names SYSTEM, Administrators or the service. A NULL
-# DACL and object-specific ACEs are not looked at: wherever this is used the ACL is
-# re-applied afterwards, so they cannot survive.
+# ProgramData) and every Allow entry names SYSTEM, Administrators or the service. Only a hint:
+# it reads .NET's rule list, which leaves out a NULL DACL, object and callback entries, so
+# whatever decides to keep a folder's contents also runs Get-DaclProblem.
 function Get-NotPrivateReason($folder) {
   $acl = Get-Acl -LiteralPath $folder
   if (-not $acl.AreAccessRulesProtected) { return 'it inherits permissions from ProgramData' }
@@ -104,6 +104,21 @@ function Get-NotPrivateReason($folder) {
     if ($rule.AccessControlType -eq 'Allow' -and $trusted -notcontains $who) {
       return "it lets $($rule.IdentityReference) in"
     }
+  }
+  return $null
+}
+
+# The first problem with an ACL's entries, read from the raw descriptor as windows/acl.rs
+# (check_entries) reads them: $null only when there is a DACL and every entry is a plain Allow
+# for a SID in $allowed. .NET's rule list (GetAccessRules, .Access) leaves out object and
+# callback (conditional) entries, so it can't be used for this.
+function Get-DaclProblem($acl, $allowed) {
+  $raw = New-Object Security.AccessControl.RawSecurityDescriptor($acl.GetSecurityDescriptorBinaryForm(), 0)
+  if ($null -eq $raw.DiscretionaryAcl) { return 'it has no access list, so anyone can open it' }
+  foreach ($ace in $raw.DiscretionaryAcl) {
+    $who = if ($ace -is [Security.AccessControl.KnownAce]) { $ace.SecurityIdentifier } else { $null }
+    if ($ace.AceType -ne [Security.AccessControl.AceType]::AccessAllowed) { return "it has an entry of type $($ace.AceType) for $who" }
+    if ($allowed -notcontains $who) { return "it lets $who in" }
   }
   return $null
 }
@@ -158,57 +173,66 @@ function Get-FileId($folder) {
 $ownerSids = @(
   (New-Object Security.Principal.SecurityIdentifier 'S-1-3-4'),   # OWNER RIGHTS
   (New-Object Security.Principal.SecurityIdentifier 'S-1-3-0'))   # CREATOR OWNER
-function Assert-PrivateInside($folder) {
+# The first problem inside $folder, or $null; $extra is a SID also allowed (the installing
+# administrator's, before its entries are removed).
+function Get-InsideProblem($folder, $extra) {
+  $allowed = @($trusted) + $ownerSids + @($extra | Where-Object { $_ })
   # Fail closed: if the scan itself cannot run, the install stops (trap, exit 2).
   foreach ($item in @(Get-ChildItem -LiteralPath $folder -Force -Recurse -ErrorAction Stop)) {
     if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
-      Stop-Install "$($item.FullName) is a link or junction inside the data folder. Remove it and install again."
+      return "$($item.FullName) is a link or junction inside the data folder"
     }
     $acl = Get-Acl -LiteralPath $item.FullName
     $o = $acl.GetOwner([Security.Principal.SecurityIdentifier])
     if ($trusted -notcontains $o) {
-      Stop-Install "$($item.FullName) is owned by $o, not SYSTEM, Administrators or the Lodestar service. Someone else may have put it there: move the folder's contents somewhere else, check them, then install again."
+      return "$($item.FullName) is owned by $o, not SYSTEM, Administrators or the Lodestar service"
     }
-    # From the raw descriptor, not GetAccessRules, which leaves out callback (conditional)
-    # and object entries: as in windows/acl.rs (check_entries), only plain Allow entries.
-    $raw = New-Object Security.AccessControl.RawSecurityDescriptor($acl.GetSecurityDescriptorBinaryForm(), 0)
-    if ($null -eq $raw.DiscretionaryAcl) {
-      Stop-Install "$($item.FullName) has no access list, so anyone can open it. Someone else may have changed it: move the folder's contents somewhere else, check them, then install again."
-    }
-    foreach ($ace in $raw.DiscretionaryAcl) {
-      $who = if ($ace -is [Security.AccessControl.KnownAce]) { $ace.SecurityIdentifier } else { $null }
-      if ($ace.AceType -ne [Security.AccessControl.AceType]::AccessAllowed -or
-          ($trusted -notcontains $who -and $ownerSids -notcontains $who)) {
-        Stop-Install "$($item.FullName) has its own permissions ($($ace.AceType) for $who). Someone else may have changed it: move the folder's contents somewhere else, check them, then install again."
-      }
-    }
+    $problem = Get-DaclProblem $acl $allowed
+    if ($problem) { return "$($item.FullName) has its own permissions: $problem" }
+  }
+  return $null
+}
+
+function Assert-PrivateInside($folder) {
+  $problem = Get-InsideProblem $folder $null
+  if ($problem) {
+    Stop-Install "$problem. Someone else may have put it there or changed it: move the folder's contents somewhere else, check them, then install again."
   }
 }
 
 # The installing administrator's SID, when the one thing that keeps the folder from being
 # private is that account's own Allow entries; $null otherwise. Only a user account's SID
 # (S-1-5-21-...) in the local Administrators group, never a well-known, built-in or domain
-# group SID, never one already trusted. Any Deny entry, inheritance or other account means $null.
+# group SID, never one already trusted. Any Deny, object or callback entry, inheritance or other
+# account means $null.
+#
+# When the folder's only extra entries are the installing account's own and nothing inside
+# looks wrong, but Repair can't take that account (a work or school account, S-1-12-1-..., or
+# one that is an administrator only through a group), it stops with a message of its own that
+# gives the icacls command: the guide's manual fix keys on it, so a refusal that found
+# something else never sends anyone there.
 function Get-RepairableSid($folder) {
   if (-not $InstallerSid) { return $null }
-  # Case-sensitive, ASCII digits only, nothing after the last one (not even a newline).
-  if ($InstallerSid -cnotmatch '\AS-1-5-21(-[0-9]+){4}\z') { return $null }
+  # Case-sensitive, ASCII digits only, nothing before or after (not even a space or newline).
+  $local = $InstallerSid -cmatch '\AS-1-5-21(-[0-9]+){4}\z'
+  $entra = $InstallerSid -cmatch '\AS-1-12-1(-[0-9]+){4}\z'
+  if (-not ($local -or $entra)) { return $null }
   $me = New-Object Security.Principal.SecurityIdentifier $InstallerSid
   $rid = [long]($InstallerSid -split '-')[-1]
-  if ($rid -ge 512 -and $rid -le 527) { return $null }   # Domain Admins, Domain Users and the other domain groups
+  if ($local -and $rid -ge 512 -and $rid -le 527) { return $null }   # Domain Admins, Domain Users and the other domain groups
   if ($trusted -contains $me) { return $null }
   $acl = Get-Acl -LiteralPath $folder
   if (-not $acl.AreAccessRulesProtected) { return $null }
-  $found = $false
-  foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
-    if ($rule.AccessControlType -ne 'Allow') { return $null }
-    if ($trusted -contains $rule.IdentityReference) { continue }
-    if ($rule.IdentityReference -ne $me) { return $null }
-    $found = $true
-  }
-  if (-not $found) { return $null }
-  if (-not (Test-LocalAdmin $me)) { Log "$me is not in the local Administrators group"; return $null }
-  return $me
+  # Every entry, read raw, a plain Allow for SYSTEM, Administrators, the service or this account.
+  $problem = Get-DaclProblem $acl (@($trusted) + $me)
+  if ($problem) { Log "not repairable: $problem"; return $null }
+  $member = $local -and (Test-LocalAdmin $me)
+  if ($member) { return $me }
+  Log "$me is not itself in the local Administrators group"
+  # Read only, before anything changes: if anything inside is wrong, the general refusal.
+  $inside = Get-InsideProblem $folder $me
+  if ($inside) { Log "not repairable: $inside"; return $null }
+  Stop-Install "Repair can't fix this for your account: $folder lets the account installing Lodestar ($me) in, and Repair removes only the entries of an account that is itself in the local Administrators group. Nothing else in the folder looks wrong. As an administrator, run: icacls `"$folder`" /remove:g *$($me.Value) /T /C, then start the Lodestar service."
 }
 
 # Creates the folder with its descriptor, then checks that what is there is ours: if someone
@@ -303,6 +327,7 @@ if (Test-Path -LiteralPath $dir) {
       Stop-Install "$dir was replaced while Lodestar was installing. Check it, move it away, then install again."
     }
     $why = Get-NotPrivateReason $dir
+    if (-not $why) { $why = Get-DaclProblem (Get-Acl -LiteralPath $dir) $trusted }
     if ($why) { Stop-Install "$dir is still not private after removing ${sidText}: $why. Move its contents somewhere else, check them, then install again." }
     $owner = (Get-Acl -LiteralPath $dir).GetOwner([Security.Principal.SecurityIdentifier])
     if ($trusted -notcontains $owner) {
@@ -310,8 +335,10 @@ if (Test-Path -LiteralPath $dir) {
     }
     Assert-PrivateInside $dir
   }
+  # File ID first, then the link check, so the only gap left is Set-Acl's own call.
+  $sameId = (Get-FileId $dir) -eq $fileId
   $item = Get-Item -LiteralPath $dir -Force
-  if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or (Get-FileId $dir) -ne $fileId) {
+  if (-not $sameId -or -not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
     Stop-Install "$dir was replaced while Lodestar was installing. Check it, move it away, then install again."
   }
   Set-Acl -LiteralPath $dir -AclObject (New-DataSecurity)

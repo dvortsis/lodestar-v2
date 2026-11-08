@@ -62,9 +62,24 @@ function Add-Me([string]$dir) { Icacls @($dir, '/grant', "*${me}:(OI)(CI)F", '/T
 function Invoke-Secure([string]$dir, [string]$sid) {
   $a = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $target, '-Path', $dir)
   if ($sid) { $a += @('-InstallerSid', $sid) }
-  & $ps @a | Out-Host
+  $script:lastOut = & $ps @a 2>&1 | Out-String
+  Write-Host $script:lastOut
   $LASTEXITCODE
 }
+
+# Adds an entry written in SDDL (object and callback entries, which .NET's rule objects can't
+# make) to $path; $false when this Windows won't store it, and the case is then skipped.
+function Add-Sddl([string]$path, [string]$ace) {
+  try {
+    $acl = Get-Acl -LiteralPath $path
+    $acl.SetSecurityDescriptorSddlForm($acl.Sddl + $ace, 'Access')
+    Set-Acl -LiteralPath $path -AclObject $acl
+    return (Get-Acl -LiteralPath $path).Sddl.Contains($ace.Substring(0, 4))
+  } catch { Write-Host "could not add $ace to ${path}: $($_.Exception.Message)"; return $false }
+}
+
+# The installer's own message for an account Repair can't take, which sends people to icacls.
+$manualFix = "Repair can't fix this for your account"
 
 function Has-Me([string]$path) {
   @((Get-Acl -LiteralPath $path).GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]) |
@@ -72,9 +87,12 @@ function Has-Me([string]$path) {
 }
 
 $failed = @()
-function Expect([string]$case, [int]$want, [int]$got) {
+# Every refusal but the $manual ones must not send anyone to icacls.
+function Expect([string]$case, [int]$want, [int]$got, [bool]$manual = $false) {
+  $says = $script:lastOut -match [regex]::Escape($manualFix)
   if ($got -ne $want) { $script:failed += "${case}: exit $got, expected $want" }
-  else { Write-Host "ok: $case (exit $got)" }
+  elseif ($says -ne $manual) { $script:failed += "${case}: the manual-fix message is $(if ($says) { 'there' } else { 'missing' })" }
+  else { Write-Host "ok: $case (exit $got$(if ($manual) { ', manual fix' }))" }
 }
 
 try {
@@ -97,7 +115,15 @@ try {
   Expect "another account's SID" 1 (Invoke-Secure $d $other)
 
   $d = New-Secured 'not-an-admin'; Add-Entry $d $other
-  Expect 'only its own entry, but not in Administrators' 1 (Invoke-Secure $d $other)
+  Expect 'only its own entry, but not in Administrators' 1 (Invoke-Secure $d $other) $true
+
+  $entra = 'S-1-12-1-1111111111-2222222222-3333333333-4444444444'
+  $d = New-Secured 'entra'; Add-Entry $d $entra
+  Expect 'a work or school account' 1 (Invoke-Secure $d $entra) $true
+
+  # Not a member, and something inside is wrong too: never the manual fix.
+  $d = New-Secured 'not-an-admin-deep'; Add-Entry $d $other; Icacls @((Join-Path $d 'logs\lodestar.log'), '/setowner', "*$me")
+  Expect 'not in Administrators, and a file inside owned by a user' 1 (Invoke-Secure $d $other)
 
   $d = New-Secured 'users'; Icacls @($d, '/grant', '*S-1-5-32-545:(OI)(CI)R')
   Expect 'the Users group passed as the installer' 1 (Invoke-Secure $d 'S-1-5-32-545')
@@ -134,16 +160,17 @@ try {
   # A conditional (callback) Allow for Everyone deep inside: .NET's own rule list leaves those
   # out, so only a check of the raw entries finds it.
   $d = New-Secured 'deep-callback'; Add-Me $d
-  $f = Join-Path $d 'logs\lodestar.log'
-  $built = $false
-  try {
-    $acl = Get-Acl -LiteralPath $f
-    $acl.SetSecurityDescriptorSddlForm($acl.Sddl + '(XA;;FR;;;WD;(Exists LodestarTest))', 'Access')
-    Set-Acl -LiteralPath $f -AclObject $acl
-    $built = (Get-Acl -LiteralPath $f).Sddl -match 'XA;'
-  } catch { Write-Host "could not build a callback entry: $($_.Exception.Message)" }
-  if ($built) { Expect 'the administrator plus a callback entry inside' 1 (Invoke-Secure $d $me) }
-  else { Write-Host '::warning::skipped the callback-entry case: this Windows would not store one' }
+  if (Add-Sddl (Join-Path $d 'logs\lodestar.log') '(XA;;FR;;;WD;(Exists LodestarTest))') {
+    Expect 'the administrator plus a callback entry inside' 1 (Invoke-Secure $d $me)
+  } else { Write-Host '::warning::skipped the callback-entry case: this Windows would not store one' }
+
+  # The same on the folder itself, where .NET's rule list would miss them too.
+  $d = New-Secured 'top-object'; Add-Me $d
+  if (Add-Sddl $d '(OA;;FA;;;WD)') { Expect 'the administrator plus an object entry on the folder' 1 (Invoke-Secure $d $me) }
+  else { Write-Host '::warning::skipped the top object-entry case: this Windows would not store one' }
+  $d = New-Secured 'top-callback'; Add-Me $d
+  if (Add-Sddl $d '(XA;;FA;;;WD;(Exists LodestarTest))') { Expect 'the administrator plus a callback entry on the folder' 1 (Invoke-Secure $d $me) }
+  else { Write-Host '::warning::skipped the top callback-entry case: this Windows would not store one' }
 
   # Only an exact user SID counts: no lower case, no trailing newline, no missing part.
   $d = New-Secured 'sid-newline'; Add-Me $d
@@ -152,6 +179,10 @@ try {
   Expect 'the installer SID in lower case' 1 (Invoke-Secure $d $me.ToLowerInvariant())
   $d = New-Secured 'sid-short'; Add-Me $d
   Expect 'a malformed installer SID' 1 (Invoke-Secure $d ($me -replace '-[0-9]+$', ''))
+  $d = New-Secured 'sid-unicode'; Add-Me $d
+  Expect 'the installer SID with a non-ASCII digit' 1 (Invoke-Secure $d ($me.Substring(0, $me.Length - 1) + [char]0x0661))
+  $d = New-Secured 'sid-space'; Add-Me $d
+  Expect 'the installer SID with spaces around it' 1 (Invoke-Secure $d " $me ")
 
   $d = New-Secured 'no-marker'; Add-Me $d; Remove-Item -LiteralPath (Join-Path $d '.lodestar-secured')
   Expect 'the administrator but no marker' 1 (Invoke-Secure $d $me)

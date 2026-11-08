@@ -1426,7 +1426,7 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
     - Rotation by size: 16 MiB per file by default. Rotated files are gzip-compressed. Lodestar keeps 7 of them, for at most 14 days, and the logs folder never goes over a total cap (default 256 MiB).
     - All of these are settings. The folder is configurable, and applies after a restart.
     - A disk-full condition stops file logging with a console warning, rather than stopping Lodestar.
-  - **Windows service:** the file is the main log. Errors also go to the Windows Event Log (on by default for the service).
+  - **Windows service:** the file is the main log. Nothing goes to the Windows Event Log (Legal Notice §5; `docs/decisions/2026-11-07-X-win-refusal-ux.md`); a refusal to start is written to `%SystemRoot%\Temp\lodestar-service.log`.
   - **In-memory ring buffer:** the last 5,000 records (at most 4 MiB). It feeds the live log (`GET /logs/stream`) the moment it opens.
 - **Floods:** a burst of repeated lines (same target, level and message) is folded into one "repeated 1,204 times in 10 s" line in every output. A noisy failure can't fill the disk or swamp the live stream.
 - **Metrics:** `lodestar_log_records_total{level}`. The Settings Overview uses it for "12 errors in the last hour · View" (§10.10.3).
