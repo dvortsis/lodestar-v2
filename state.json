@@ -6358,6 +6358,21 @@
       "id": "review-627-verdict",
       "at": "2026-11-08T17:28Z",
       "note": "#627 at 726b5ffc: CHANGES, B1 = who decided the screen (session said owner decision; dashboard said deferral). Runner settled on the safer wording: owner approved the standing stage, design left to the runner, rules under \u00a72.26. Relayed with N1-N4, N7 (N5/N6 the author's call). Docs-only delta: runner self-checks, then merges on green."
+    },
+    {
+      "id": "X-flake-export-wal",
+      "at": "2026-11-08T17:41Z",
+      "note": "crates/api/tests/export.rs the_wal_stays_bounded_beside_a_writer: 'only 2 checkpoints' on Windows (#619 run 42499042994). Export ran ~1 s (400 rows @400/s); fix rows_per_sec 100 (~4 s), assert unchanged. In next runner PR."
+    },
+    {
+      "id": "P-cloud-operator",
+      "at": "2026-11-08T17:41Z",
+      "note": "Owner (via dashboard 17:29Z): API-credit Claude 'operator' runs cloud test VMs, runner manages it with two-way channel, no owner relay. Runner scoped: planning slice P-cloud-operator (docs, Opus) after #627 merges; channel = long-lived draft PR (not agent-mailbox); owner Q1-Q6 sent to dashboard (approve AI operator with credentials; API key + spend cap; cloud tokens scope/create-destroy via committed scripts; fine-grained GitHub token PR comments only; host: hosted agent; dedicated PIA credential). Nothing built until answers."
+    },
+    {
+      "id": "reviews-cmp5",
+      "at": "2026-11-08T17:41Z",
+      "note": "Fresh Opus + /security-review running on #620 fffd1218, #621 127e0208, #619 dfaa7c7c. CMP-5 asked not to push."
     }
   ],
   "main_health": [
