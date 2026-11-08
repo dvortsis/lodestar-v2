@@ -28,7 +28,7 @@ All seven are for the control plane only. The sixth and seventh are inferred fro
 - **A GitHub App instead of a machine account or a personal token.**
   - **Why not the alternatives:** a collaborator on a personal-account repo always has write access, and a separate account's fine-grained token may not reach this repo. The only fallback was a classic `public_repo` token, which isn't limited to this repo.
   - **The App's scope:** installed on this repo only, with Pull requests write and Metadata read, and no Issues or Contents.
-  - **What that scope still allows beyond Q4's "comments only":** editing others' comments, changing labels, and closing or retitling PRs.
+  - **What that scope still allows beyond Q4's "comments only":** it acts on every PR in the repo. The full list is in the plan's Loosenings table. It can't merge or push.
   - **So:**
     - the soft stop is the repository variable `OPERATOR_STOP`, which the App can't change;
     - only unedited comments are trusted;
@@ -75,13 +75,14 @@ All seven are for the control plane only. The sixth and seventh are inferred fro
   These are runner parameters under §2.26.
 - **OIDC trust is pinned to `aud` and to a full `sub` (`StringEquals`) naming the environment and the exact workflow at `refs/heads/main`:** `fleet.yml` for the fleet and PIA roles, and `operator-wake.yml` or `operator-apply.yml` for the bridge role. None of these workflows has `workflow_call`. The repo's subject template is customized to include `job_workflow_ref`.
 - **A third OIDC role, `LodestarOperatorBridge`,** gives the bridge and `operator-apply.yml` the lock prefix and the lock-file object only, never the state bucket.
-- **`deliver-pia` reads only `fleet.json`** (addresses, fingerprints, firewall IDs, pin, expiry), never the whole Terraform state, which holds host private keys. It reaches the Linodes with a firewall-only Linode token that opens its own `/32`.
+- **`deliver-pia` reads only `fleet.json`** (addresses, fingerprints, firewall IDs, pin, expiry), never the whole Terraform state, which holds host private keys. It reaches the Linodes with the Linode firewall token (whole-firewall scope, kept in Secrets Manager behind `LodestarPiaDelivery`) that opens its own labelled `/32` under the fleet lock.
 - **`fleet.yml` has no `workflow_call` and uses no reusable workflow,** so the `job_workflow_ref` pin can't be sidestepped.
 - **The runner never holds the Anthropic workspace key.** `ant apply` runs from `operator-apply.yml` in `cloud-operator`, which renders the model from the variables at apply time. `claude-lock.json` stays in the private bucket, because it holds resource IDs.
 - **Terraform state moves to an S3 backend,** with Terraform 1.10 or later for native locking. An unattended control plane can't use the operator's local state, and `#625` already blocks `apply` until state ownership is reconciled.
 - **Models:** Sonnet 5.5 at medium (set explicitly; its default is high) for the routine loop, and Opus 5.5 at high (set explicitly; its default is medium) for triage. Max is never used.
   - **Deployment gate:** a prompt-injection corpus, each item 5 times, stopped at $50 of the $200, escalating Sonnet medium → Sonnet high → Opus medium → Opus high. If Opus at high fails, the runner stops and tells the owner.
   - **Model IDs stay out of the repo** (the runner's ruling): they're the Actions variables `OPERATOR_MODEL_ROUTINE` and `OPERATOR_MODEL_TRIAGE`, and committed files name only the variables.
+- **The emergency path pre-empts the fleet lock.** An audit mismatch, or a fleet more than 15 minutes past expiry, writes a "reaping" marker and destroys without waiting. `fleet.yml` then accepts only `down`. The lock's 90-minute expiry covers the whole delivery chain, and release is conditional on the holder.
 - **Job SSH rules use one mechanism, the Linode API under the fleet lock,** labelled by run. Terraform keeps only the admin rule, and stale rules are swept by Actions-API status.
 - **The injection harness can't act:** its own vault with a dummy token, no route to `api.github.com`, attempts detected from tool-call events, and no runs while a fleet exists.
 - **Evidence:** an allow-list scrubber, on the VM and again in the control plane. Scrubbed aggregates reach the runner as a result comment, and the repo only through a reviewed PR.
