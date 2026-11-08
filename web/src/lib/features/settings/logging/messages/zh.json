@@ -371,6 +371,8 @@
 	"settings_logging_ev_cluster_snapshot_failed_h": "发送给远程工作节点的过滤规则无法生成，因此它们继续使用上次收到的规则。错误信息会说明超过了哪个限制。",
 	"settings_logging_ev_cluster_floor_report_failed_n": "工作节点拦截的种子尚未记录",
 	"settings_logging_ev_cluster_floor_report_failed_h": "远程工作节点按锁定底线拦截了一个种子，协调节点暂时无法把它写入数据库。在此期间它对所有工作节点保持拦截，并会在稍后重试时记录。如果反复出现，请检查磁盘和数据库。",
+	"settings_logging_ev_cluster_floor_reports_over_budget_n": "工作节点已暂停：拦截的种子过多",
+	"settings_logging_ev_cluster_floor_reports_over_budget_h": "某个远程工作节点报告按锁定底线拦截的种子远多于正常工作节点，因此已被暂停。它此后报告的内容会被拒绝但不会记录。请检查那台机器；如果无法信任，请移除该工作节点，移除时也会清除它记录的拦截。",
 	"settings_logging_ev_worker_dht_started_n": "工作节点 DHT 已启动",
 	"settings_logging_ev_worker_dht_started_h": "此工作节点的 DHT 已在协调节点分配给它的密钥空间部分上启动。分配变化时，只重启 DHT，而不重启工作节点。",
 	"settings_logging_ev_worker_snapshot_failed_n": "工作节点快照无法解码",

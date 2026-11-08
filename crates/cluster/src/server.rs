@@ -68,7 +68,7 @@ use crate::link::{BoxIo, CoordinatorLink, Link, WorkerLink, local_pair, ws_confi
 use crate::proto::*;
 use crate::{
     ALPN_JOIN, BatchAnswer, Claim, Claimed, ClusterError, Coordinator, CoordinatorTls, JoinToken,
-    Lease, LeaseAuthority, NoEvents, PeerIdentity, QUEUE_BYTES, Token, WorkerId,
+    Lease, LeaseAuthority, NoEvents, PeerIdentity, QUEUE_BYTES, Regranted, Token, WorkerId,
 };
 
 /// The WebSocket path on the cluster port.
@@ -127,7 +127,19 @@ impl Default for ServerConfig {
 /// grant, §19.3). It runs on a blocking thread.
 pub trait StoredKeys: Send + Sync + 'static {
     fn stored(&self, keys: &[InfoHash]) -> Vec<bool>;
+    /// The check before a re-grant: as [`stored`](Self::stored), `true`
+    /// for a key in the store or held, but `None` if the answer can't be
+    /// known (a read failed). A re-grant then sends nothing and the keys
+    /// wait for the next one: an error never grants a key, and never ends
+    /// one as blocked either (#607's review).
+    fn stored_or_unknown(&self, keys: &[InfoHash]) -> Option<Vec<bool>> {
+        Some(self.stored(keys))
+    }
 }
+
+/// `funnel::Loss::Blocked` (`lodestar-sources`, persisted): the loss a
+/// re-grant reports for a key the store check refused.
+const LOSS_BLOCKED: u8 = 7;
 
 /// Where the server hands what workers send. Every method runs on the
 /// session's task with no lock held, so it must not block: queue the work
@@ -626,10 +638,13 @@ impl ClusterServer {
             })
             .await
             .unwrap_or(Err(ClusterError::Corrupt("the PKI task failed")))?;
-        let mut fleet = lock(&self.fleet);
-        // Connected or not, its leases go back now (§19.6).
-        self.leases.evict(worker);
-        self.sweep(&mut fleet, self.clock.now_ms());
+        {
+            let mut fleet = lock(&self.fleet);
+            // Connected or not, its leases go back now (§19.6).
+            self.leases.evict(worker);
+            self.sweep(&mut fleet, self.clock.now_ms());
+        }
+        self.regrant().await;
         Ok(n)
     }
 
@@ -647,13 +662,17 @@ impl ClusterServer {
             })
             .await
             .unwrap_or(Err(ClusterError::Corrupt("the PKI task failed")))?;
-        let mut fleet = lock(&self.fleet);
-        let leases = self.leases.evict(worker);
-        self.sweep(&mut fleet, self.clock.now_ms());
-        // `sweep` forgets a revoked worker it saw connect; an entry `pause`
-        // made before it ever connected has no identity to check, so it
-        // goes here (it can't come back under this id).
-        fleet.workers.remove(&worker);
+        let leases = {
+            let mut fleet = lock(&self.fleet);
+            let leases = self.leases.evict(worker);
+            self.sweep(&mut fleet, self.clock.now_ms());
+            // `sweep` forgets a revoked worker it saw connect; an entry
+            // `pause` made before it ever connected has no identity to
+            // check, so it goes here (it can't come back under this id).
+            fleet.workers.remove(&worker);
+            leases
+        };
+        self.regrant().await;
         Ok((certificates, leases))
     }
 
@@ -692,7 +711,8 @@ impl ClusterServer {
     }
 
     /// Ends a drain: the worker may claim again, and keys waiting for a
-    /// worker may be granted to it at once. Unlike [`drain`](Self::drain)
+    /// worker may be granted to it at once (with a store check, at the next
+    /// tick, which checks them first). Unlike [`drain`](Self::drain)
     /// it works on a disconnected worker too, so a drain can be lifted
     /// before the worker comes back. Nothing is sent to the worker: it
     /// simply stops getting `Draining` denials. It ends a
@@ -706,7 +726,7 @@ impl ClusterServer {
         if !std::mem::replace(&mut state.draining, false) && !paused {
             return false;
         }
-        self.regrant(&mut fleet, self.clock.now_secs());
+        self.regrant_unchecked(&mut fleet, self.clock.now_secs());
         true
     }
 
@@ -742,7 +762,8 @@ impl ClusterServer {
 
     /// Ends a pause and nothing else: a drain stands (WK-13's `release`
     /// uses it so a quarantine lifts without ending the admin's drain).
-    /// `false` if it wasn't paused.
+    /// Waiting keys go out as after [`resume`](Self::resume). `false` if
+    /// it wasn't paused.
     pub fn unpause(&self, worker: WorkerId) -> bool {
         let mut fleet = lock(&self.fleet);
         let Some(state) = fleet.workers.get_mut(&worker) else {
@@ -751,7 +772,7 @@ impl ClusterServer {
         if !std::mem::replace(&mut state.paused, false) {
             return false;
         }
-        self.regrant(&mut fleet, self.clock.now_secs());
+        self.regrant_unchecked(&mut fleet, self.clock.now_secs());
         true
     }
 
@@ -1225,10 +1246,7 @@ impl ClusterServer {
             greeted = greeted && self.send_on(&mut link, msg).await;
         }
         // A re-grant may have waited for this worker.
-        {
-            let mut fleet = lock(&self.fleet);
-            self.regrant(&mut fleet, self.clock.now_secs());
-        }
+        self.regrant().await;
         let reason = if greeted {
             self.serve_session(&peer, &mut link, &mut ctl, &mut stop, &mut drain)
                 .await
@@ -1364,12 +1382,14 @@ impl ClusterServer {
                 self.reply(link, reply).await
             }
             ToCoordinator::Drained => {
-                let mut fleet = lock(&self.fleet);
-                if !fleet.is_current(peer) {
-                    return Flow::Stop(StopReason::Drained);
+                {
+                    let fleet = lock(&self.fleet);
+                    if !fleet.is_current(peer) {
+                        return Flow::Stop(StopReason::Drained);
+                    }
+                    self.leases.evict(w);
                 }
-                self.leases.evict(w);
-                self.regrant(&mut fleet, self.clock.now_secs());
+                self.regrant().await;
                 Flow::Stop(StopReason::Drained)
             }
             ToCoordinator::Results(batch) | ToCoordinator::Counters(batch)
@@ -1686,10 +1706,12 @@ impl ClusterServer {
             // The previous state stays in force; the next tick tries again.
             bump(&self.counters.pki_errors);
         }
-        let mut fleet = lock(&self.fleet);
-        self.sweep(&mut fleet, now_ms);
-        self.leases.expire(now);
-        self.regrant(&mut fleet, now);
+        {
+            let mut fleet = lock(&self.fleet);
+            self.sweep(&mut fleet, now_ms);
+            self.leases.expire(now);
+        }
+        self.regrant().await;
     }
 
     /// Stops sessions whose certificate no longer stands (returning their
@@ -1726,47 +1748,154 @@ impl ClusterServer {
             // id: forget it rather than check it every tick.
             fleet.workers.remove(&w);
         }
-        self.regrant(fleet, now_ms.div_euclid(1000));
+        self.regrant_unchecked(fleet, now_ms.div_euclid(1000));
+    }
+
+    /// The workers a re-grant may go to: connected, neither draining nor
+    /// paused.
+    fn regrant_targets(fleet: &Fleet) -> Vec<WorkerId> {
+        fleet
+            .workers
+            .iter()
+            .filter(|(_, s)| s.session.is_some() && !s.draining && !s.paused)
+            .map(|(&w, _)| w)
+            .collect()
+    }
+
+    /// [`regrant`](Self::regrant) from code that holds the fleet lock and
+    /// can't wait: only for a server without a store check. With one, the
+    /// keys wait for the next `regrant` (every tick, at the latest).
+    fn regrant_unchecked(&self, fleet: &mut Fleet, now: i64) {
+        if self.stored.is_some() {
+            return;
+        }
+        let targets = Self::regrant_targets(fleet);
+        if targets.is_empty() || self.leases.pending() == 0 {
+            return;
+        }
+        for (w, keys) in self.leases.regrant_pending(&targets, MAX_GRANT_BATCH, now) {
+            self.send_regrants(fleet, w, keys);
+        }
     }
 
     /// Grants keys whose lease ended without an outcome to the connected,
     /// non-draining workers holding the fewest leases, as unsolicited
     /// `Grants` (batch 0). Keys wait while no worker is available, or go
     /// back to waiting if a worker's queue is full.
-    fn regrant(&self, fleet: &mut Fleet, now: i64) {
-        let targets: Vec<WorkerId> = fleet
-            .workers
-            .iter()
-            .filter(|(_, s)| s.session.is_some() && !s.draining && !s.paused)
-            .map(|(&w, _)| w)
-            .collect();
-        if targets.is_empty() || self.leases.pending() == 0 {
+    ///
+    /// With a store check, every key is checked first, as a claim is
+    /// (#607's review): the keys are leased to their targets under the
+    /// fleet lock, the lock is released for the check, and once it's taken
+    /// again each key is acted on only if its target still holds it under
+    /// the same token. A key the check refuses (stored, held, or a
+    /// worker's floor report) ends as lost, blocked; one it can't answer
+    /// waits for the next re-grant; the rest go out.
+    async fn regrant(&self) {
+        let Some(check) = self.stored.clone() else {
+            let mut fleet = lock(&self.fleet);
+            self.regrant_unchecked(&mut fleet, self.clock.now_secs());
+            return;
+        };
+        let batches = {
+            let fleet = lock(&self.fleet);
+            let targets = Self::regrant_targets(&fleet);
+            if targets.is_empty() || self.leases.pending() == 0 {
+                return;
+            }
+            // Leased to their targets now, so no other claim or re-grant
+            // can take them while the check runs; nothing is sent yet.
+            self.leases
+                .regrant_pending(&targets, MAX_GRANT_BATCH, self.clock.now_secs())
+        };
+        if batches.is_empty() {
             return;
         }
-        let ttl_secs = u32::try_from(self.config.lease_ttl_secs).unwrap_or(u32::MAX);
-        for (w, keys) in self.leases.regrant_pending(&targets, MAX_GRANT_BATCH, now) {
-            let items: Vec<GrantItem> = keys
-                .iter()
-                .map(|&(key, token)| GrantItem::Granted {
-                    key: key.0,
-                    token: token.0,
-                    ttl_secs,
-                })
-                .collect();
-            let n = items.len() as u64;
-            let slot = fleet.workers.get(&w).and_then(|s| s.session.as_ref());
-            let sent = slot.is_some_and(|slot| {
-                slot.try_send(ToWorker::Grants(GrantBatch { batch: 0, items }))
-                    .is_ok()
-            });
-            if sent {
-                self.counters.regrants.fetch_add(n, Ordering::Relaxed);
+        let keys: Vec<InfoHash> = batches
+            .iter()
+            .flat_map(|(_, ks)| ks.iter().map(|&(k, _)| k))
+            .collect();
+        let n = keys.len();
+        let answer = tokio::task::spawn_blocking(move || check.stored_or_unknown(&keys))
+            .await
+            .ok()
+            .flatten()
+            .filter(|a| a.len() == n);
+        let mut fleet = lock(&self.fleet);
+        let Some(refused) = answer else {
+            // Unknown: nothing is granted. Each key the target still holds
+            // under its token waits again (`requeue` checks the token).
+            for (_, ks) in batches {
+                for (key, token) in ks {
+                    self.leases.requeue(&key, token);
+                }
+            }
+            return;
+        };
+        let mut refused = refused.into_iter();
+        for (w, ks) in batches {
+            let mut send = Vec::with_capacity(ks.len());
+            for (key, token) in ks {
+                let refused = refused.next().unwrap_or(true);
+                // Re-validated under the lock: a key whose lease changed
+                // while the check ran (expired, evicted, granted again)
+                // is left alone.
+                let current = self
+                    .leases
+                    .get(&key)
+                    .is_some_and(|l| l.holder == w && l.token == token);
+                if !current {
+                    continue;
+                }
+                if refused {
+                    // Ends only under `w`'s current token, reported once.
+                    self.leases.report(w, &key, token, Some(LOSS_BLOCKED));
+                } else {
+                    send.push((key, token));
+                }
+            }
+            if send.is_empty() {
                 continue;
             }
-            // The worker's queue is full: take the leases back.
-            for (key, token) in keys {
-                self.leases.requeue(&key, token);
+            // The target may have gone, drained or paused meanwhile.
+            let usable = fleet
+                .workers
+                .get(&w)
+                .is_some_and(|s| s.session.is_some() && !s.draining && !s.paused);
+            if usable {
+                self.send_regrants(&mut fleet, w, send);
+            } else {
+                for (key, token) in send {
+                    self.leases.requeue(&key, token);
+                }
             }
+        }
+    }
+
+    /// Sends one worker its re-granted keys, or takes the leases back if
+    /// its queue is full.
+    fn send_regrants(&self, fleet: &mut Fleet, w: WorkerId, keys: Regranted) {
+        let ttl_secs = u32::try_from(self.config.lease_ttl_secs).unwrap_or(u32::MAX);
+        let items: Vec<GrantItem> = keys
+            .iter()
+            .map(|&(key, token)| GrantItem::Granted {
+                key: key.0,
+                token: token.0,
+                ttl_secs,
+            })
+            .collect();
+        let n = items.len() as u64;
+        let slot = fleet.workers.get(&w).and_then(|s| s.session.as_ref());
+        let sent = slot.is_some_and(|slot| {
+            slot.try_send(ToWorker::Grants(GrantBatch { batch: 0, items }))
+                .is_ok()
+        });
+        if sent {
+            self.counters.regrants.fetch_add(n, Ordering::Relaxed);
+            return;
+        }
+        // The worker's queue is full: take the leases back.
+        for (key, token) in keys {
+            self.leases.requeue(&key, token);
         }
     }
 }

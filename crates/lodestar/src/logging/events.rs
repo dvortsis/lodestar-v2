@@ -1008,6 +1008,19 @@ lodestar_log::catalogue! {
         fields: { error: Error },
     }
 
+    /// A remote worker reported far more floor drops than an honest one
+    /// does (more than 100 in an hour), so it's paused: Workers shows it
+    /// paused. What it reports from now on is refused but not recorded.
+    /// Check that machine; remove the worker if it can't be trusted, which
+    /// also clears its blocks (WK-10d).
+    CLUSTER_FLOOR_REPORTS_OVER_BUDGET {
+        id: "cluster.floor_reports_over_budget",
+        component: Workers,
+        level: Warn,
+        message: "A worker reported too many blocked torrents and was paused",
+        fields: { worker: Label },
+    }
+
     // ── Worker runtime (WK-10c, §19.5) ──
     /// The worker's DHT started on its assigned shard: target prefixes
     /// `first..end` of 256 and its BEP 42 id slots. A new shard restarts

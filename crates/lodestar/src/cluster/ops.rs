@@ -636,6 +636,7 @@ mod tests {
             placement: placement.clone(),
             fleet: None,
             coordinator_dht: None,
+            held: None,
         })
         .await
         .unwrap();

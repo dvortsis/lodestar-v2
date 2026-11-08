@@ -138,6 +138,8 @@ pub struct Config {
     /// At most one fresh session asked for per this long
     /// ([`RECONNECT_DEBOUNCE`]).
     pub reconnect_debounce: Duration,
+    /// How often refused result batches are sent again (5 s).
+    pub retry_every: Duration,
 }
 
 impl Config {
@@ -161,6 +163,7 @@ impl Config {
             dht_linger: super::dht::LINGER,
             stats_every: STATS_EVERY,
             reconnect_debounce: RECONNECT_DEBOUNCE,
+            retry_every: POLL_EVERY,
         }
     }
 }
@@ -1100,7 +1103,11 @@ impl Shared {
     /// `now` is on or before its wire key's day (`Judge::judge_at`'s rule).
     fn sealable(&self, now: i64) -> bool {
         let day = *self.key_day.borrow();
-        day != u32::MAX && self.judge.version() != 0 && now.div_euclid(DAY) <= i64::from(day)
+        // The judge drops an expired key (WK-10d): with none, nothing seals.
+        day != u32::MAX
+            && self.judge.version() != 0
+            && self.judge.has_key()
+            && now.div_euclid(DAY) <= i64::from(day)
     }
 }
 
@@ -1606,7 +1613,7 @@ async fn send_results(
     let mut next_batch: u64 = 1;
     let mut flight: BTreeMap<u64, InFlight> = BTreeMap::new();
     let mut sessions = s.session.subscribe();
-    let mut retry = tokio::time::interval(POLL_EVERY);
+    let mut retry = tokio::time::interval(s.config.retry_every);
     retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         // Send whatever is due on the current session.
@@ -2064,8 +2071,9 @@ mod tests {
         .await;
         let (_coord2, session2) = session_pair().await;
         rt.connected(session2.handle());
-        // Still paused until the new session's first `Assign`.
-        until("the refresh settled", || (paused(&rt).is_some(), ())).await;
+        // Still paused until the new session's first `Assign`: wanted so,
+        // and so told.
+        assert!(*rt.shared.pool_paused.borrow(), "wanted paused");
         assert_eq!(paused(&rt), Some(true));
         let a = ShardSpec::new(64..128, 0xff).unwrap();
         rt.event(WorkerEvent::Assign(assign_dht(
@@ -3163,7 +3171,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_drain_resends_a_refused_batch_and_counts_it_once() {
         use lodestar_cluster::proto::ToWorker;
-        let mut rt = Runtime::start(config(Arc::new(MapFetch::default())));
+        // The retry tick never fires here: only the drain can resend.
+        let mut rt = Runtime::start(Config {
+            retry_every: Duration::from_secs(3600),
+            ..config(Arc::new(MapFetch::default()))
+        });
         let (mut coord, mut session) = session_pair().await;
         rt.connected(session.handle());
         let out = lock(&rt.shared.out).take().unwrap();
@@ -3186,13 +3198,8 @@ mod tests {
             (rt.shared.accepted.capacity() == ACCEPTED_QUEUE, ())
         })
         .await;
-        let started = Instant::now();
         let (_, again) = tokio::join!(rt.drain(), next_results(&mut coord));
-        assert_eq!(again.batch, first.batch);
-        assert!(
-            started.elapsed() < POLL_EVERY,
-            "sent by the drain, not the tick"
-        );
+        assert_eq!(again.batch, first.batch, "sent again by the drain");
         assert_eq!(rt.counts().sent.load(Ordering::Relaxed), 1, "counted once");
         rt.shutdown().await;
     }
@@ -3242,6 +3249,7 @@ mod tests {
                 clock: Arc::new(lodestar_cluster::SystemClock),
                 placement: Arc::new(Placement::new(false)),
                 coordinator_dht: None,
+                held: None,
                 fleet: Some(Fleet {
                     stored: Arc::new(monitor),
                     filter,

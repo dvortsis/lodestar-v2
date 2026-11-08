@@ -326,7 +326,7 @@ impl<C: Connect> Worker<C> {
                         Ended::Exit(exit) => return exit,
                         Ended::Renewed => continue,
                         Ended::Reconnect => {
-                            self.say("connecting again with this worker's new details");
+                            self.say("connecting again: the worker asked for a fresh session");
                             continue;
                         }
                         Ended::Lost => self.say("the connection to the coordinator was lost"),
@@ -811,7 +811,7 @@ pub(crate) mod tests {
         })
         .await;
         let all = s.lines.all();
-        assert!(all.contains("connecting again with"), "{all}");
+        assert!(all.contains("asked for a fresh session"), "{all}");
         assert!(!all.contains("connecting again in"), "no back-off: {all}");
         assert_eq!(running.shutdown().await, Exit::Shutdown);
     }

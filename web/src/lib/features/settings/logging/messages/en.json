@@ -371,6 +371,8 @@
 	"settings_logging_ev_cluster_snapshot_failed_h": "The filter rules sent to remote workers couldn't be built, so they keep the last ones they got. The error names the limit that was passed.",
 	"settings_logging_ev_cluster_floor_report_failed_n": "Worker's blocked torrent not recorded yet",
 	"settings_logging_ev_cluster_floor_report_failed_h": "A remote worker blocked a torrent under the locked floor, and the coordinator couldn't record it in the database yet. It stays blocked for every worker meanwhile and is recorded on a later try. If this repeats, check the disk and the database.",
+	"settings_logging_ev_cluster_floor_reports_over_budget_n": "Worker paused: too many blocked torrents",
+	"settings_logging_ev_cluster_floor_reports_over_budget_h": "A remote worker reported far more torrents blocked under the locked floor than an honest one does, so it was paused. What it reports from now on is refused but not recorded. Check that machine, and remove the worker if it can't be trusted; removing it also clears the blocks it recorded.",
 	"settings_logging_ev_worker_dht_started_n": "Worker DHT started",
 	"settings_logging_ev_worker_dht_started_h": "This worker's DHT started on the part of the keyspace the coordinator assigned it. When the assignment changes, only the DHT restarts, not the worker.",
 	"settings_logging_ev_worker_snapshot_failed_n": "Worker snapshot not decoded",

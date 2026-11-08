@@ -411,6 +411,10 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_cluster_floor_report_failed_n,
 		m.settings_logging_ev_cluster_floor_report_failed_h
 	],
+	'cluster.floor_reports_over_budget': [
+		m.settings_logging_ev_cluster_floor_reports_over_budget_n,
+		m.settings_logging_ev_cluster_floor_reports_over_budget_h
+	],
 	'worker.dht_started': [
 		m.settings_logging_ev_worker_dht_started_n,
 		m.settings_logging_ev_worker_dht_started_h

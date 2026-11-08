@@ -726,6 +726,145 @@ impl StoredKeys for HighKeysStored {
     }
 }
 
+/// A store check for re-grants (#607's review): claims see nothing
+/// stored; a re-grant's check refuses `refuse`, answers nothing while
+/// `unknown`, and with a `gate`, signals and waits once before answering.
+#[derive(Default)]
+struct RegrantCheck {
+    refuse: std::sync::Mutex<Vec<[u8; 20]>>,
+    unknown: std::sync::atomic::AtomicBool,
+    gate: std::sync::Mutex<
+        Option<(
+            tokio::sync::oneshot::Sender<()>,
+            std::sync::mpsc::Receiver<()>,
+        )>,
+    >,
+}
+
+impl StoredKeys for RegrantCheck {
+    fn stored(&self, keys: &[InfoHash]) -> Vec<bool> {
+        vec![false; keys.len()]
+    }
+
+    fn stored_or_unknown(&self, keys: &[InfoHash]) -> Option<Vec<bool>> {
+        let gate = self.gate.lock().unwrap().take();
+        if let Some((entered, release)) = gate {
+            let _ = entered.send(());
+            let _ = release.recv();
+        }
+        if self.unknown.load(std::sync::atomic::Ordering::SeqCst) {
+            return None;
+        }
+        let refuse = self.refuse.lock().unwrap();
+        Some(keys.iter().map(|k| refuse.contains(&k.0)).collect())
+    }
+}
+
+/// `a` claims `keys` and goes silent; past the TTL its leases wait for a
+/// re-grant, and the tick that would re-grant them runs.
+async fn leases_left_by_a_silent_worker(c: &Coord, b: &WorkerSession, keys: &[u8]) {
+    let nas = c.join("nas").await;
+    let a = c.session(&nas).await;
+    for g in a.claim(found(&*c.clock, keys)).await.unwrap() {
+        token_of(&g);
+    }
+    c.advance(16);
+    b.heartbeat().await.unwrap();
+    c.server.tick().await;
+    c.advance(590);
+    b.heartbeat().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stored_or_held_key_is_never_granted_again() {
+    guard(async {
+        let check = Arc::new(RegrantCheck::default());
+        check.refuse.lock().unwrap().push(key(2));
+        let c = coordinator_with(config(), Some(check.clone())).await;
+        let mut b = c.local().await;
+        leases_left_by_a_silent_worker(&c, &b, &[1, 2]).await;
+        c.server.tick().await;
+        let WorkerEvent::Regranted(items) = event(&mut b).await else {
+            panic!("no re-grant");
+        };
+        let keys: Vec<[u8; 20]> = items.iter().map(|i| i.key()).collect();
+        assert_eq!(keys, vec![key(1)]);
+        // Key 2 ended (lost, blocked) instead of waiting or going out.
+        assert!(c.server.lease(&InfoHash(key(2))).is_none());
+        let s = c.server.snapshot();
+        assert_eq!((s.regrants, s.leases, s.pending), (1, 1, 0));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_regrant_whose_check_fails_grants_nothing() {
+    guard(async {
+        let check = Arc::new(RegrantCheck::default());
+        check
+            .unknown
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let c = coordinator_with(config(), Some(check.clone())).await;
+        let mut b = c.local().await;
+        leases_left_by_a_silent_worker(&c, &b, &[1, 2]).await;
+        c.server.tick().await;
+        // The tick has finished its re-grant: nothing went out, nothing
+        // ended, and both keys wait.
+        let s = c.server.snapshot();
+        assert_eq!((s.regrants, s.leases, s.pending), (0, 0, 2));
+
+        // Once the check answers, the next tick grants them.
+        check
+            .unknown
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        b.heartbeat().await.unwrap();
+        c.server.tick().await;
+        let WorkerEvent::Regranted(items) = event(&mut b).await else {
+            panic!("no re-grant");
+        };
+        assert_eq!(items.len(), 2);
+        let s = c.server.snapshot();
+        assert_eq!((s.regrants, s.leases, s.pending), (2, 2, 0));
+    })
+    .await;
+}
+
+/// The lock is released while the check runs; a key whose lease changed
+/// meanwhile is left as it is when the lock is taken again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_key_that_changed_during_the_check_is_left_alone() {
+    guard(async {
+        let (entered_tx, entered) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = std::sync::mpsc::channel();
+        let check = Arc::new(RegrantCheck::default());
+        *check.gate.lock().unwrap() = Some((entered_tx, release_rx));
+        let c = coordinator_with(config(), Some(check.clone())).await;
+        let vps = c.join("vps").await;
+        let b = c.session(&vps).await;
+        leases_left_by_a_silent_worker(&c, &b, &[1]).await;
+        let ticking = {
+            let server = c.server.clone();
+            tokio::spawn(async move { server.tick().await })
+        };
+        entered.await.unwrap();
+        // While the check waits, the lease it would send to b expires
+        // (b is still connected) and the key waits again.
+        assert_eq!(
+            c.server.lease(&InfoHash(key(1))).unwrap().holder,
+            vps.worker()
+        );
+        c.advance(700);
+        assert_eq!(c.server.authority().expire(c.clock.now_secs()), 1);
+        release.send(()).unwrap();
+        ticking.await.unwrap();
+        // Not sent under the dead token, not taken from the waiting list.
+        let s = c.server.snapshot();
+        assert_eq!((s.regrants, s.leases, s.pending), (0, 0, 1));
+        assert!(b.leases() == 0);
+    })
+    .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stored_keys_are_denied_without_a_lease() {
     guard(async {

@@ -94,6 +94,10 @@ pub struct Wiring {
     /// handle): its address vote is the coordinator's public address for
     /// the planner (`set_coordinator_ips`, WK-5). `None`: no DHT.
     pub coordinator_dht: Option<CoordinatorDht>,
+    /// The built-in worker's held set (`PipelineConfig::held`): a worker's
+    /// floor report goes into it at once, so the built-in worker refuses
+    /// the key too (WK-10d). `None` in tests that need none.
+    pub held: Option<Arc<lodestar_filter::HeldSet>>,
 }
 
 /// The coordinator DHT's handle slot, set while its node runs.
@@ -233,33 +237,126 @@ fn cluster_kind(e: &ClusterError) -> &'static str {
 /// each is a `worker-floor:<id>` tombstone in the store
 /// ([`Store::tombstone_from_worker`]).
 ///
-/// - **Never dropped:** a report goes into this map on the sink's path (a
-///   short lock, nothing that waits) and leaves only once its row is
-///   written. A failed write keeps it for the next try. The map's size
-///   is bounded by the leases workers held: the server passes on a loss
-///   only under the holder's current token.
-/// - **Refused at once:** the claim check ([`StoreCheck`]) reads the map
-///   as well as the store, so a re-claim is denied before the row lands.
+/// - **Refused at once, everywhere:** a report goes into this map, and
+///   into the built-in worker's `HeldSet` (its intake, parked keys and
+///   commit refuse what that set holds), on the sink's path: short locks,
+///   nothing that waits. The claim check ([`StoreCheck`]) reads the map
+///   before the store, so a re-claim is denied before the row lands.
+/// - **Never dropped within the budget:** a report leaves the map only
+///   once its row is written; a failed write keeps it for the next try.
+/// - **Bounded:** each worker may report [`FLOOR_BUDGET`] drops per
+///   [`FLOOR_WINDOW`] (rolling). Past that, the worker is paused (WK-14's
+///   pause) and its further reports are refused in memory but never
+///   written. The map holds at most [`FLOOR_PENDING_CAP`] reports; past
+///   that, a report is counted and refused nowhere but the store's own
+///   holds. (The leases a worker holds don't bound it: a worker can claim
+///   and report again and again, #607's security review.)
 #[derive(Debug, Default)]
 pub(crate) struct FloorReports {
-    pending: Mutex<BTreeMap<[u8; 20], (u32, i64)>>,
+    pending: Mutex<BTreeMap<[u8; 20], Report>>,
+    /// Each worker's reports in the rolling window (oldest first).
+    recent: Mutex<HashMap<u32, std::collections::VecDeque<Instant>>>,
+    /// The built-in worker's held set (`None` in tests that need none).
+    held: Option<Arc<lodestar_filter::HeldSet>>,
     wake: tokio::sync::Notify,
-    /// Reports taken, rows written, and writes that failed (kept).
+    /// Reports taken, rows written, writes that failed (kept), reports
+    /// over a worker's budget (kept in memory, unwritten), and reports the
+    /// full map turned away.
     pub reported: AtomicU64,
     pub written: AtomicU64,
     pub write_failures: AtomicU64,
+    pub over_budget: AtomicU64,
+    pub turned_away: AtomicU64,
 }
 
+/// One pending report: who reported it and when; `write` is false for a
+/// report over its worker's budget (refused in memory, never written).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Report {
+    worker: u32,
+    at: i64,
+    write: bool,
+}
+
+/// What became of a report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reported {
+    /// Within the worker's budget: refused, and written soon.
+    Taken,
+    /// Over its budget: refused in memory, never written; `first` the
+    /// first report over it in this window (the worker is paused then).
+    OverBudget { first: bool },
+    /// The map is full: counted, nothing else.
+    TurnedAway,
+}
+
+/// A worker's floor reports per rolling window before it's paused. An
+/// honest worker reports a floor drop rarely: the hash lists refuse most
+/// floor keys before a claim, and a CS-8a repost is rare.
+pub(crate) const FLOOR_BUDGET: usize = 100;
+pub(crate) const FLOOR_WINDOW: Duration = Duration::from_secs(3600);
+/// Reports the map holds at most (about 5 MB).
+pub(crate) const FLOOR_PENDING_CAP: usize = 100_000;
+
 impl FloorReports {
-    fn pending(&self) -> std::sync::MutexGuard<'_, BTreeMap<[u8; 20], (u32, i64)>> {
+    pub(crate) fn new(held: Option<Arc<lodestar_filter::HeldSet>>) -> FloorReports {
+        FloorReports {
+            held,
+            ..FloorReports::default()
+        }
+    }
+
+    fn pending(&self) -> std::sync::MutexGuard<'_, BTreeMap<[u8; 20], Report>> {
         self.pending.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// A worker's floor drop. The first report of a key keeps its worker.
-    fn report(&self, worker: WorkerId, key: &InfoHash, at: i64) {
-        self.pending().entry(key.0).or_insert((worker.0, at));
+    /// A worker's floor drop at `now`. The first report of a key keeps its
+    /// worker.
+    fn report(&self, worker: WorkerId, key: &InfoHash, at: i64, now: Instant) -> Reported {
         self.reported.fetch_add(1, Ordering::Relaxed);
-        self.wake.notify_one();
+        let (within, first) = {
+            let mut recent = self.recent.lock().unwrap_or_else(PoisonError::into_inner);
+            let q = recent.entry(worker.0).or_default();
+            while q
+                .front()
+                .is_some_and(|t| now.duration_since(*t) >= FLOOR_WINDOW)
+            {
+                q.pop_front();
+            }
+            // The window holds the budget's reports, plus one mark for the
+            // first report over it, so that one alone pauses the worker.
+            let (within, first) = match q.len() {
+                n if n < FLOOR_BUDGET => (true, false),
+                n if n == FLOOR_BUDGET => (false, true),
+                _ => (false, false),
+            };
+            if within || first {
+                q.push_back(now);
+            }
+            (within, first)
+        };
+        {
+            let mut pending = self.pending();
+            if pending.len() >= FLOOR_PENDING_CAP && !pending.contains_key(&key.0) {
+                self.turned_away.fetch_add(1, Ordering::Relaxed);
+                return Reported::TurnedAway;
+            }
+            pending.entry(key.0).or_insert(Report {
+                worker: worker.0,
+                at,
+                write: within,
+            });
+        }
+        if let Some(held) = &self.held {
+            held.insert(key.0);
+        }
+        if within {
+            self.wake.notify_one();
+            Reported::Taken
+        } else {
+            self.over_budget.fetch_add(1, Ordering::Relaxed);
+            Reported::OverBudget { first }
+        }
     }
 
     fn holds(&self, key: &InfoHash) -> bool {
@@ -270,6 +367,11 @@ impl FloorReports {
         self.pending().len()
     }
 
+    /// Reports waiting to be written (not those over a budget).
+    fn unwritten(&self) -> usize {
+        self.pending().values().filter(|r| r.write).count()
+    }
+
     /// Writes up to `FLOOR_BATCH` pending reports, removing each once its
     /// row is in. Blocking. `Err` keeps them all for the next try.
     fn flush(
@@ -277,9 +379,10 @@ impl FloorReports {
         db: &std::path::Path,
         config: StoreConfig,
     ) -> Result<usize, lodestar_store::Error> {
-        let batch: Vec<([u8; 20], (u32, i64))> = self
+        let batch: Vec<([u8; 20], Report)> = self
             .pending()
             .iter()
+            .filter(|(_, r)| r.write)
             .take(FLOOR_BATCH)
             .map(|(k, v)| (*k, *v))
             .collect();
@@ -288,18 +391,20 @@ impl FloorReports {
         }
         let mut store = Store::open(db, config)?;
         let mut by_worker: BTreeMap<(u32, i64), Vec<[u8; 20]>> = BTreeMap::new();
-        for (k, (w, at)) in &batch {
-            by_worker.entry((*w, *at)).or_default().push(*k);
+        for (k, r) in &batch {
+            by_worker.entry((r.worker, r.at)).or_default().push(*k);
         }
         for ((w, at), keys) in &by_worker {
-            // A key already tombstoned (by its rule or an earlier report)
-            // keeps its row; either way it's held now.
-            store.tombstone_from_worker(keys, *w, *at)?;
             // Nothing stays stored under a held hash (as `hold_claims`): a
             // key stored after this worker's grant (another worker's
             // result, or the built-in worker's) goes, and the indexer drops
-            // it.
+            // it. First, so a crash between the two leaves the report to
+            // come again (the crash window), never a torrent stored under
+            // a hold.
             store.delete_torrents(keys)?;
+            // A key already tombstoned (by its rule or an earlier report)
+            // keeps its row; either way it's held now.
+            store.tombstone_from_worker(keys, *w, *at)?;
         }
         let mut pending = self.pending();
         for (k, v) in &batch {
@@ -330,7 +435,7 @@ async fn write_floor(
     loop {
         let stop = tokio::select! {
             () = floor.wake.notified() => false,
-            () = tokio::time::sleep(FLOOR_RETRY), if failing || floor.len() > 0 => false,
+            () = tokio::time::sleep(FLOOR_RETRY), if failing || floor.unwritten() > 0 => false,
             _ = stopped.changed() => true,
         };
         loop {
@@ -372,29 +477,68 @@ struct StoreCheck {
     errors: Arc<AtomicU64>,
     /// Floor reports not written yet: refused as held.
     floor: Arc<FloorReports>,
+    /// The floor's hash lists (CS-1a/1b and floor-marked lists), as the
+    /// built-in intake checks them (`None` without a fleet).
+    filter: Option<Arc<Handle>>,
 }
 
-impl StoredKeys for StoreCheck {
-    fn stored(&self, keys: &[InfoHash]) -> Vec<bool> {
+impl StoreCheck {
+    /// [`StoredKeys::stored`], with `between` run after the floor map is
+    /// read and before the store is (a seam for the ordering test). Also
+    /// says whether a read failed: a failed `held_among` refuses every key,
+    /// a failed `find` reads as not stored.
+    fn stored_with(&self, keys: &[InfoHash], between: impl FnOnce()) -> (Vec<bool>, bool) {
+        // The map first: a report leaves it only after its row is
+        // committed, so a key read missing here is in the store by the
+        // time the store is read (#607's review).
+        let reported: Vec<bool> = keys.iter().map(|k| self.floor.holds(k)).collect();
+        between();
         let reader = self.reader.lock().unwrap_or_else(PoisonError::into_inner);
         let hashes: Vec<[u8; 20]> = keys.iter().map(|k| k.0).collect();
+        // A read that fails refuses: it might have been a held key.
+        let failed = std::cell::Cell::new(false);
         let held = reader.held_among(&hashes).unwrap_or_else(|_| {
             self.errors.fetch_add(1, Ordering::Relaxed);
-            vec![false; keys.len()]
+            failed.set(true);
+            vec![true; keys.len()]
         });
-        keys.iter()
+        let engine = self.filter.as_ref().map(|f| f.current());
+        let stored = keys
+            .iter()
             .zip(held)
-            .map(|(k, held)| {
-                held || self.floor.holds(k)
+            .zip(reported)
+            .map(|((k, held), reported)| {
+                reported
+                    || held
+                    || engine
+                        .as_ref()
+                        .is_some_and(|e| e.blocked_hash(&[k.0]).is_some())
                     || match reader.find(k) {
                         Ok(found) => found.is_some(),
                         Err(_) => {
                             self.errors.fetch_add(1, Ordering::Relaxed);
+                            failed.set(true);
                             false
                         }
                     }
             })
-            .collect()
+            .collect();
+        (stored, failed.get())
+    }
+}
+
+impl StoredKeys for StoreCheck {
+    fn stored(&self, keys: &[InfoHash]) -> Vec<bool> {
+        self.stored_with(keys, || {}).0
+    }
+
+    /// A re-grant's check: any failed read leaves the answer unknown, so
+    /// the keys wait rather than go out or end as blocked (#607's review).
+    fn stored_or_unknown(&self, keys: &[InfoHash]) -> Option<Vec<bool>> {
+        match self.stored_with(keys, || {}) {
+            (stored, false) => Some(stored),
+            (_, true) => None,
+        }
     }
 }
 
@@ -422,6 +566,7 @@ fn open_pki(
             reader: Mutex::new(reader),
             errors,
             floor,
+            filter: w.fleet.as_ref().map(|f| f.filter.clone()),
         },
     ))
 }
@@ -689,10 +834,23 @@ impl InboundSink for Sink {
         // A floor drop leaves a tombstone, as a local one does: the key is
         // never claimed, fetched or stored again (WK-10d).
         let blocked = lodestar_sources::Loss::Blocked as u8;
-        let now = self.clock.now_secs();
+        let (now, mono) = (self.clock.now_secs(), Instant::now());
         for (key, _, outcome) in &accepted {
-            if matches!(outcome, Outcome::Lost { reason } if *reason == blocked) {
-                self.floor.report(worker, key, now);
+            if !matches!(outcome, Outcome::Lost { reason } if *reason == blocked) {
+                continue;
+            }
+            if let Reported::OverBudget { first: true } = self.floor.report(worker, key, now, mono)
+            {
+                // Far more than an honest worker reports: it's paused (it
+                // shows so in Workers) and said, and what it reports from
+                // here is refused in memory but never written.
+                if let Some(server) = self.server.get().and_then(Weak::upgrade) {
+                    server.pause(worker);
+                }
+                lodestar_log::log_event!(
+                    events::CLUSTER_FLOOR_REPORTS_OVER_BUDGET,
+                    worker = lodestar_log::Count(u64::from(worker.0))
+                );
             }
         }
         if let Some(r) = &self.remote {
@@ -1628,6 +1786,16 @@ impl ClusterHandle {
                 "Writes of workers' floor drops the store refused; the reports are kept and tried again.",
                 &floor.write_failures,
             ),
+            (
+                "cluster_floor_reports_over_budget_total",
+                "Floor drops reported past a worker's budget (100 an hour): refused in memory, not written; the worker is paused.",
+                &floor.over_budget,
+            ),
+            (
+                "cluster_floor_reports_turned_away_total",
+                "Floor drops reported while 100,000 were already pending: counted only.",
+                &floor.turned_away,
+            ),
         ] {
             o.one(name, "counter", help, n.load(Ordering::Relaxed));
         }
@@ -1660,7 +1828,9 @@ pub struct Cluster {
     handle: ClusterHandle,
     stop: watch::Sender<bool>,
     task: JoinHandle<()>,
-    /// Writes workers' floor reports; it ends after a last flush.
+    /// Writes workers' floor reports; it ends after a last flush, once
+    /// `writer_stop` fires.
+    writer_stop: watch::Sender<bool>,
     writer: JoinHandle<()>,
 }
 
@@ -1679,6 +1849,7 @@ impl Cluster {
         let (allowed, follow) = watch::channel(enabled);
         let (reseal, reseals) = mpsc::channel(1);
         let tick = Arc::new(Tick::new(&wiring));
+        let wiring_held = wiring.held.clone();
         let inner = Arc::new(Inner {
             tick,
             wiring,
@@ -1687,7 +1858,7 @@ impl Cluster {
             reseal,
             start_failures: AtomicU64::new(0),
             store_errors: Arc::new(AtomicU64::new(0)),
-            floor: Arc::default(),
+            floor: Arc::new(FloorReports::new(wiring_held)),
         });
         let running = if enabled {
             match inner.open().await {
@@ -1701,17 +1872,20 @@ impl Cluster {
             None
         };
         let (stop, stopped) = watch::channel(false);
+        // The writer's own stop, fired only once the sessions are gone.
+        let (writer_stop, writer_stopped) = watch::channel(false);
         let writer = tokio::spawn(write_floor(
             inner.floor.clone(),
             inner.wiring.db.clone(),
             inner.wiring.store.clone(),
-            stopped.clone(),
+            writer_stopped,
         ));
         let task = tokio::spawn(run(inner.clone(), follow, reseals, stopped, running));
         Ok(Cluster {
             handle: ClusterHandle(inner),
             stop,
             task,
+            writer_stop,
             writer,
         })
     }
@@ -1723,11 +1897,33 @@ impl Cluster {
     /// Stops every session and closes the port. Before the pipeline stops,
     /// so no remote work arrives while it saves.
     pub async fn shutdown(self) {
+        let writer = self.stop_serving().await;
+        writer.finish().await;
+    }
+
+    /// Stops every session and closes the port; the floor writer still
+    /// runs (a session could deliver a report until the port closed).
+    async fn stop_serving(self) -> FloorWriter {
         let _ = self.stop.send(true);
         let _ = self.task.await;
-        // The sessions are gone: no report comes now. The last ones are
-        // written before the pipeline stops.
-        let _ = self.writer.await;
+        FloorWriter {
+            stop: self.writer_stop,
+            task: self.writer,
+        }
+    }
+}
+
+/// The floor writer after the sessions are gone.
+struct FloorWriter {
+    stop: watch::Sender<bool>,
+    task: JoinHandle<()>,
+}
+
+impl FloorWriter {
+    /// Writes the last reports, then ends: before the pipeline stops.
+    async fn finish(self) {
+        let _ = self.stop.send(true);
+        let _ = self.task.await;
     }
 }
 
@@ -1798,6 +1994,7 @@ mod tests {
             placement: Arc::new(Placement::new(false)),
             fleet: None,
             coordinator_dht: None,
+            held: None,
         }
     }
 
@@ -2172,7 +2369,7 @@ mod tests {
             .filter_map(|l| l.strip_prefix("# TYPE lodestar_"))
             .map(|l| l.split(' ').next().unwrap())
             .collect();
-        assert_eq!(families.len(), 31, "{text}");
+        assert_eq!(families.len(), 33, "{text}");
         for family in &families {
             assert!(
                 doc.lines().any(|l| l.starts_with(&format!("| `{family}"))),
@@ -2401,6 +2598,7 @@ mod tests {
             reader: Mutex::new(Store::open_reader(&db, StoreConfig::default()).unwrap()),
             errors: Arc::default(),
             floor: Arc::default(),
+            filter: None,
         };
         assert_eq!(
             check.stored(&[InfoHash([3; 20]), InfoHash([4; 20])]),
@@ -2462,6 +2660,7 @@ mod tests {
             reader: Mutex::new(Store::open_reader(&db, StoreConfig::default()).unwrap()),
             errors: Arc::default(),
             floor: floor.clone(),
+            filter: None,
         };
         let refused = || check.stored(&[InfoHash([5; 20]), InfoHash([6; 20])]);
         assert_eq!(refused(), vec![true, false], "refused before any write");
@@ -2508,11 +2707,83 @@ mod tests {
         assert!(store.find(&key).unwrap().is_some());
         drop(store);
         let floor = FloorReports::default();
-        floor.report(WorkerId(4), &key, 2);
+        floor.report(WorkerId(4), &key, 2, Instant::now());
         assert_eq!(floor.flush(&db, StoreConfig::default()).unwrap(), 1);
         let store = Store::open(&db, StoreConfig::default()).unwrap();
         assert!(store.find(&key).unwrap().is_none(), "deleted");
         assert_eq!(store.held_among(&[key.0]).unwrap(), vec![true]);
+    }
+
+    /// #607's review: a worker reporting far more floor drops than an honest
+    /// one is cut off at its budget. Its further reports are refused in
+    /// memory (and in the built-in worker's held set) but never written,
+    /// and the first one over says so once.
+    #[test]
+    fn floor_reports_have_a_per_worker_budget_and_reach_the_built_in_worker() {
+        let held = Arc::new(lodestar_filter::HeldSet::default());
+        let floor = FloorReports::new(Some(held.clone()));
+        let now = Instant::now();
+        let key = |i: usize| {
+            let mut h = [0u8; 20];
+            h[..8].copy_from_slice(&(i as u64).to_le_bytes());
+            InfoHash(h)
+        };
+        for i in 0..FLOOR_BUDGET {
+            assert_eq!(floor.report(WorkerId(2), &key(i), 1, now), Reported::Taken);
+        }
+        assert!(held.contains(&key(0).0), "the built-in worker refuses it");
+        assert_eq!(
+            floor.report(WorkerId(2), &key(1000), 1, now),
+            Reported::OverBudget { first: true }
+        );
+        assert_eq!(
+            floor.report(WorkerId(2), &key(1001), 1, now),
+            Reported::OverBudget { first: false }
+        );
+        assert!(floor.holds(&key(1001)) && held.contains(&key(1001).0));
+        assert_eq!(
+            floor.unwritten(),
+            FLOOR_BUDGET,
+            "the over-budget ones aren't written"
+        );
+        // Another worker has its own budget; and the window rolls.
+        assert_eq!(
+            floor.report(WorkerId(3), &key(2000), 1, now),
+            Reported::Taken
+        );
+        let later = now + FLOOR_WINDOW;
+        assert_eq!(
+            floor.report(WorkerId(2), &key(3000), 1, later),
+            Reported::Taken
+        );
+    }
+
+    /// #607's review: the claim check reads the floor map before the store,
+    /// so a report written (and removed from the map) between the two reads
+    /// is still refused; and the floor's hash list refuses too.
+    #[test]
+    fn a_report_written_between_the_checks_reads_is_still_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        drop(Store::open(&db, StoreConfig::default()).unwrap());
+        let floor = Arc::new(FloorReports::default());
+        floor.report(WorkerId(7), &InfoHash([5; 20]), 1, Instant::now());
+        let filter = lodestar_pipeline::default_filter();
+        filter.update(|c| {
+            c.cs.add_hash([6; 20], lodestar_filter::Origin::Confirmed);
+        });
+        let check = StoreCheck {
+            reader: Mutex::new(Store::open_reader(&db, StoreConfig::default()).unwrap()),
+            errors: Arc::default(),
+            floor: floor.clone(),
+            filter: Some(Arc::new(filter)),
+        };
+        let keys = [InfoHash([5; 20]), InfoHash([6; 20]), InfoHash([7; 20])];
+        let got = check.stored_with(&keys, || {
+            assert_eq!(floor.flush(&db, StoreConfig::default()).unwrap(), 1);
+            assert_eq!(floor.len(), 0, "gone from the map before the store is read");
+        });
+        assert_eq!(got, (vec![true, true, false], false));
     }
 
     /// A report taken just before a shutdown is in the store once the
@@ -2526,7 +2797,7 @@ mod tests {
         let cluster = Cluster::start(w).await.unwrap();
         let h = cluster.handle();
         let floor = h.0.floor.clone();
-        floor.report(WorkerId(3), &InfoHash([9; 20]), 1);
+        floor.report(WorkerId(3), &InfoHash([9; 20]), 1, Instant::now());
         // Pending or already written: the metrics say which.
         let mut m = String::new();
         h.render(&mut m);
@@ -2534,13 +2805,17 @@ mod tests {
         let written = series(&m, "lodestar_cluster_floor_reports_written_total");
         assert_eq!(series(&m, "lodestar_cluster_floor_reports_total"), 1);
         assert_eq!(pending + written, 1, "{m}");
-        cluster.shutdown().await;
+        // The sessions stop, and a report still in flight lands after: the
+        // writer runs until they're gone (#607's review).
+        let writer = cluster.stop_serving().await;
+        floor.report(WorkerId(3), &InfoHash([10; 20]), 2, Instant::now());
+        writer.finish().await;
         assert_eq!(floor.len(), 0);
         let held = Store::open(&db, StoreConfig::default())
             .unwrap()
-            .held_among(&[[9; 20]])
+            .held_among(&[[9; 20], [10; 20]])
             .unwrap();
-        assert_eq!(held, vec![true]);
+        assert_eq!(held, vec![true, true]);
     }
 
     /// Only public addresses reach the planner from the DHT's vote.
