@@ -1,0 +1,19 @@
+# Documentation-only service snippet to merge into compose.vpn.yaml
+# once the actual Lodestar container image and required mounts are known.
+# This file is NOT runnable and is deliberately not a full Compose definition.
+#
+#   crawler:
+#     image: REPLACE_WITH_YOUR_LODESTAR_IMAGE_AND_EXACT_TAG
+#     network_mode: "service:gluetun"
+#     depends_on:
+#       gluetun:
+#         condition: service_started
+#     security_opt:
+#       - no-new-privileges:true
+#     cap_drop:
+#       - ALL
+#     restart: "no"
+#
+# Never set network_mode: bridge or host for the crawler.
+# Never mount /var/run/docker.sock into the crawler.
+# For worker deployments, confirm the crawler stays below 256 MiB under load.

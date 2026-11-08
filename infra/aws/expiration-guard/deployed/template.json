@@ -1,0 +1,255 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Lodestar AWS EC2 expiration enforcement, scoped to approved test Windows instances, scans every 15 minutes.",
+  "Resources": {
+    "Topic": {
+      "Type": "AWS::SNS::Topic",
+      "Properties": {
+        "TopicName": "lodestar-expiration-alerts"
+      }
+    },
+    "LogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/lodestar-aws-expiration-guard",
+        "RetentionInDays": 14
+      }
+    },
+    "Role": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": "lodestar-expiration-guard-exec",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "GuardMinimallyScopedPermissions",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "ListInstances",
+                  "Effect": "Allow",
+                  "Action": "ec2:DescribeInstances",
+                  "Resource": "*"
+                },
+                {
+                  "Sid": "DeleteOnlyTaggedTests",
+                  "Effect": "Allow",
+                  "Action": "ec2:TerminateInstances",
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
+                  },
+                  "Condition": {
+                    "StringEquals": {
+                      "aws:ResourceTag/Project": "Lodestar",
+                      "aws:ResourceTag/Environment": "Test",
+                      "aws:ResourceTag/ManagedBy": "Terraform",
+                      "ec2:InstanceType": "c6a.xlarge"
+                    }
+                  }
+                },
+                {
+                  "Sid": "WriteLogs",
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/lodestar-aws-expiration-guard:*"
+                  }
+                },
+                {
+                  "Sid": "Notify",
+                  "Effect": "Allow",
+                  "Action": "sns:Publish",
+                  "Resource": {
+                    "Ref": "Topic"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "Lodestar"
+          },
+          {
+            "Key": "Environment",
+            "Value": "Test"
+          }
+        ]
+      }
+    },
+    "Function": {
+      "Type": "AWS::Lambda::Function",
+      "DependsOn": "LogGroup",
+      "Properties": {
+        "FunctionName": "lodestar-aws-expiration-guard",
+        "Runtime": "python3.13",
+        "Handler": "index.handler",
+        "Code": {
+          "ZipFile": "import json\nimport logging\nimport os\nfrom datetime import datetime, timezone, timedelta\nimport boto3\nfrom botocore.config import Config\n\nlog = logging.getLogger()\nlog.setLevel(logging.INFO)\nretry_config = Config(retries={\"mode\": \"standard\", \"max_attempts\": 4})\nec2 = boto3.client(\"ec2\", config=retry_config)\nsns = boto3.client(\"sns\", config=retry_config)\n\nREQUIRED = {\"Project\": \"Lodestar\", \"Environment\": \"Test\", \"ManagedBy\": \"Terraform\"}\nVPC = os.environ[\"EXPECTED_VPC\"]\nSG = os.environ[\"EXPECTED_SECURITY_GROUP\"]\nTOPIC = os.environ[\"ALERT_TOPIC_ARN\"]\n\ndef expires_at(value):\n    try:\n        return datetime.strptime(value, \"%Y-%m-%dT%H:%M:%SZ\").replace(tzinfo=timezone.utc)\n    except (ValueError, TypeError):\n        return None\n\ndef handler(event, context):\n    dry_run = isinstance(event, dict) and event.get(\"dry_run\") is True\n    now = datetime.now(timezone.utc)\n    expired = []\n    scanned = 0\n    for page in ec2.get_paginator(\"describe_instances\").paginate(Filters=[\n        {\"Name\": \"tag:Project\", \"Values\": [\"Lodestar\"]},\n        {\"Name\": \"tag:Environment\", \"Values\": [\"Test\"]},\n        {\"Name\": \"tag:ManagedBy\", \"Values\": [\"Terraform\"]},\n        {\"Name\": \"vpc-id\", \"Values\": [VPC]},\n        {\"Name\": \"instance-state-name\", \"Values\": [\"pending\", \"running\", \"stopping\", \"stopped\"]},\n    ]):\n        for reservation in page.get(\"Reservations\", []):\n            for instance in reservation.get(\"Instances\", []):\n                scanned += 1\n                tags = {x[\"Key\"]: x[\"Value\"] for x in instance.get(\"Tags\", [])}\n                if not (\n                    all(tags.get(k) == v for k,v in REQUIRED.items()) and\n                    instance.get(\"VpcId\") == VPC and\n                    instance.get(\"InstanceType\") == \"c6a.xlarge\" and\n                    any(s.get(\"GroupId\") == SG for s in instance.get(\"SecurityGroups\", []))\n                ):\n                    log.warning(json.dumps({\"event\": \"out_of_scope\", \"id\": instance[\"InstanceId\"]}))\n                    continue\n                launched = instance[\"LaunchTime\"].astimezone(timezone.utc)\n                latest = launched + timedelta(hours=48)\n                tagged = expires_at(tags.get(\"ExpiresAt\"))\n                if tagged is None:\n                    log.warning(json.dumps({\"event\": \"invalid_or_missing_expiration\", \"id\": instance[\"InstanceId\"]}))\n                deadline = min(tagged, latest) if tagged is not None else latest\n                if now >= deadline:\n                    expired.append(instance[\"InstanceId\"])\n    terminated = []\n    errors = []\n    for instance_id in expired[:15]:\n        if dry_run:\n            log.info(json.dumps({\"event\": \"would_terminate\", \"id\": instance_id}))\n            continue\n        try:\n            result = ec2.terminate_instances(InstanceIds=[instance_id])\n            states = result.get(\"TerminatingInstances\", [])\n            if not any(x.get(\"InstanceId\") == instance_id and x.get(\"CurrentState\", {}).get(\"Name\") in (\"shutting-down\", \"terminated\") for x in states):\n                raise RuntimeError(\"Termination not acknowledged\")\n            terminated.append(instance_id)\n            log.info(json.dumps({\"event\": \"termination_accepted\", \"id\": instance_id}))\n        except Exception as exc:\n            log.exception(\"termination_failed id=%s\", instance_id)\n            errors.append(instance_id + \":\" + type(exc).__name__)\n    if terminated:\n        try:\n            sns.publish(TopicArn=TOPIC, Subject=\"Lodestar EC2 expiration: termination started\",\n                        Message=json.dumps({\"instance_ids\": terminated, \"utc\": now.isoformat(), \"state\": \"termination initiated, not yet confirmed final\"}))\n        except Exception:\n            log.exception(\"notification_failed\")\n            errors.append(\"notification_failed\")\n    log.info(json.dumps({\"event\": \"scan_summary\", \"scanned\": scanned, \"expired\": len(expired),\n                         \"requested\": len(terminated), \"dry_run\": dry_run}))\n    if errors:\n        raise RuntimeError(\"Expiration processing failed: \" + \",\".join(errors))\n    return {\"scanned\": scanned, \"expired\": len(expired), \"requested\": len(terminated), \"dry_run\": dry_run}\n"
+        },
+        "Role": {
+          "Fn::GetAtt": [
+            "Role",
+            "Arn"
+          ]
+        },
+        "MemorySize": 128,
+        "Timeout": 120,
+        "Environment": {
+          "Variables": {
+            "EXPECTED_VPC": {
+              "Ref": "LodestarVpcId"
+            },
+            "EXPECTED_SECURITY_GROUP": {
+              "Ref": "WindowsSecurityGroupId"
+            },
+            "ALERT_TOPIC_ARN": {
+              "Ref": "Topic"
+            }
+          }
+        },
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "Lodestar"
+          },
+          {
+            "Key": "Environment",
+            "Value": "Test"
+          }
+        ]
+      }
+    },
+    "Schedule": {
+      "Type": "AWS::Events::Rule",
+      "Properties": {
+        "Name": "lodestar-expiration-guard-quarter-hour",
+        "ScheduleExpression": "rate(15 minutes)",
+        "State": "ENABLED",
+        "Targets": [
+          {
+            "Id": "EC2Guard",
+            "Arn": {
+              "Fn::GetAtt": [
+                "Function",
+                "Arn"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "PermitEvent": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "Function"
+        },
+        "Action": "lambda:InvokeFunction",
+        "Principal": "events.amazonaws.com",
+        "SourceArn": {
+          "Fn::GetAtt": [
+            "Schedule",
+            "Arn"
+          ]
+        }
+      }
+    },
+    "Alarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmName": "lodestar-expiration-guard-errors",
+        "AlarmDescription": "Lodestar expiration guard: Lambda scan or termination errors; email endpoint stored as masked stack parameter.",
+        "Namespace": "AWS/Lambda",
+        "MetricName": "Errors",
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "Function"
+            }
+          }
+        ],
+        "Statistic": "Sum",
+        "Period": 900,
+        "EvaluationPeriods": 1,
+        "Threshold": 0,
+        "ComparisonOperator": "GreaterThanThreshold",
+        "TreatMissingData": "notBreaching",
+        "AlarmActions": [
+          {
+            "Ref": "Topic"
+          }
+        ]
+      }
+    },
+    "EmailSubscriber": {
+      "Type": "AWS::SNS::Subscription",
+      "Properties": {
+        "TopicArn": {
+          "Ref": "Topic"
+        },
+        "Protocol": "email",
+        "Endpoint": {
+          "Ref": "NotificationEmail"
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "LambdaArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "Function",
+          "Arn"
+        ]
+      }
+    },
+    "ScheduleArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "Schedule",
+          "Arn"
+        ]
+      }
+    },
+    "Alerts": {
+      "Value": {
+        "Ref": "Topic"
+      }
+    }
+  },
+  "Parameters": {
+    "NotificationEmail": {
+      "Type": "String",
+      "NoEcho": true,
+      "Description": "Confirmed email endpoint for SNS notifications; masked when stack described.",
+      "AllowedPattern": ".+@.+"
+    },
+    "LodestarVpcId": {
+      "Type": "AWS::EC2::VPC::Id",
+      "Description": "Existing Lodestar test VPC; required for authorized deployment updates."
+    },
+    "WindowsSecurityGroupId": {
+      "Type": "AWS::EC2::SecurityGroup::Id",
+      "Description": "Existing Windows test security group; required for authorized deployment updates."
+    }
+  }
+}

@@ -1,0 +1,20 @@
+# VPN GATEWAY ONLY. This file deliberately does not run Lodestar.
+# Provide a real PIA-negotiated WireGuard configuration in ./secrets/wg0.conf
+# according to the official PIA manual-connections instructions.
+services:
+  gluetun:
+    image: qmcgaw/gluetun:latest # Pin a reviewed digest before repeatable production deployments.
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      VPN_SERVICE_PROVIDER: custom
+      VPN_TYPE: wireguard
+      TZ: Etc/UTC
+    volumes:
+      - ./secrets/wg0.conf:/gluetun/wireguard/wg0.conf:ro
+    restart: unless-stopped
+    # No host ports published. Access the app later via a restricted SSH tunnel.

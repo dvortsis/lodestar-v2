@@ -1,0 +1,80 @@
+#cloud-config
+# The only value embedded from Terraform is the PUBLIC SSH key. No PIA or API credentials.
+hostname: lodestar-${role_label}
+manage_etc_hosts: true
+ssh_pwauth: false
+disable_root: true
+package_update: true
+package_upgrade: true
+packages:
+  - ca-certificates
+  - curl
+  - gnupg
+  - jq
+  - wireguard-tools
+  - unattended-upgrades
+users:
+  - name: lodestar
+    gecos: Lodestar Test Administrator
+    groups: [sudo]
+    shell: /bin/bash
+    lock_passwd: true
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+write_files:
+  - path: /etc/ssh/sshd_config.d/99-lodestar.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PubkeyAuthentication yes
+  - path: /usr/local/sbin/lodestar-bootstrap.sh
+    owner: root:root
+    permissions: '0700'
+    content: |
+      #!/usr/bin/env bash
+      set -Eeuo pipefail
+      umask 027
+      install -d -m 0750 /var/log/lodestar
+      exec > >(tee -a /var/log/lodestar/bootstrap.log) 2>&1
+      trap 'rc=$?; printf "bootstrap failure: exit=%s line=%s UTC=%s\\n" "$rc" "$LINENO" "$(date -u +%FT%TZ)" >&2' ERR
+      echo "Bootstrapping Lodestar test VM, UTC=$(date -u +%FT%TZ)"
+      . /etc/os-release
+      if [[ "$ID" != "ubuntu" || "$VERSION_ID" != "24.04" ]]; then
+        echo "ERROR: unsupported distro; expected Ubuntu 24.04" >&2
+        exit 1
+      fi
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -y
+      apt-get install -y ca-certificates curl gnupg
+      install -m 0755 -d /etc/apt/keyrings
+      curl --fail --silent --show-error --location --retry 5 --retry-delay 2 \
+        https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+      chmod a+r /etc/apt/keyrings/docker.asc
+      CODENAME="$(. /etc/os-release && echo "$VERSION_CODENAME")"
+      ARCH="$(dpkg --print-architecture)"
+      cat > /etc/apt/sources.list.d/docker.sources <<DOCKEREOF
+      Types: deb
+      URIs: https://download.docker.com/linux/ubuntu
+      Suites: $CODENAME
+      Components: stable
+      Architectures: $ARCH
+      Signed-By: /etc/apt/keyrings/docker.asc
+      DOCKEREOF
+      apt-get update -y
+      apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+      systemctl enable --now docker
+      systemctl restart ssh
+      install -d -o lodestar -g lodestar -m 0700 /home/lodestar/lodestar
+      install -d -o lodestar -g lodestar -m 0700 /home/lodestar/lodestar/secrets
+      # Never start a crawler on an unverified tunnel.
+      docker --version
+      docker compose version
+      test -c /dev/net/tun || { echo "ERROR: /dev/net/tun unavailable" >&2; exit 1; }
+      echo "Bootstrap complete UTC=$(date -u +%FT%TZ)"
+runcmd:
+  - [bash, /usr/local/sbin/lodestar-bootstrap.sh]
+final_message: "Lodestar bootstrap finished; inspect /var/log/lodestar/bootstrap.log and /var/log/cloud-init-output.log."
