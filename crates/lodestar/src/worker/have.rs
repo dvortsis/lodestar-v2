@@ -131,6 +131,16 @@ impl WorkerHave {
         }
     }
 
+    /// Whether a complete filter is in use, and what it says of `hash`,
+    /// read under one lock: an in-place swap between two separate reads
+    /// would pair "ready" with the "maybe" of no filter (WK-10b's review).
+    pub fn answer(&self, hash: &InfoHash) -> (bool, bool) {
+        match &self.read().current {
+            Some(h) => (true, h.bloom.contains(hash)),
+            None => (false, true),
+        }
+    }
+
     /// Whether a complete filter is in use.
     pub fn is_ready(&self) -> bool {
         self.read().current.is_some()

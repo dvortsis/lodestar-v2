@@ -44,7 +44,8 @@ mod tests;
 use std::fmt;
 
 pub use client::{
-    ClientError, QUEUE_BYTES, WorkerConfig, WorkerEvent, WorkerSession, connect, join,
+    ClientError, QUEUE_BYTES, SessionHandle, WorkerConfig, WorkerEvent, WorkerSession, connect,
+    join,
 };
 pub use clock::{Clock, ClockTime, ManualClock, OffsetClock, SystemClock};
 pub use coordinator::{

@@ -1540,6 +1540,7 @@ dependencies = [
  "lodestar-integrations",
  "lodestar-log",
  "lodestar-metainfo",
+ "lodestar-network-policy",
  "lodestar-peer-wire",
  "lodestar-pipeline",
  "lodestar-search",
