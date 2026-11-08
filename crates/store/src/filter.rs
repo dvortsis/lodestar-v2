@@ -89,6 +89,53 @@ const SCRUB_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
 /// tombstones.
 pub const FLOOR_RULES: [&str; 3] = ["CS-1a", "CS-1b", "CS-8a"];
 
+/// The stored rule of a floor drop a remote worker reported (WK-10d),
+/// followed by the worker's id: `worker-floor:7`. Such a row is a floor
+/// hold everywhere ([`is_floor_hold`]): an adult hold's purge never
+/// replaces it, a rollback keeps it over a weaker hold, and no release
+/// removes it. The only way out is WK-13's purge-by-worker, which deletes
+/// a removed worker's rows by rule.
+pub const WORKER_FLOOR_PREFIX: &str = "worker-floor:";
+
+/// Whether a stored tombstone rule is a floor hold: the locked floor's
+/// rules, or a worker's floor report.
+pub fn is_floor_hold(rule: &str) -> bool {
+    FLOOR_RULES.contains(&rule) || rule.starts_with(WORKER_FLOOR_PREFIX)
+}
+
+/// The SQL guards, built here only so every one agrees. The values are
+/// constants, written in place.
+///
+/// A worker's floor report over the column `col`: the exact,
+/// case-sensitive prefix, as `str::starts_with` (not `LIKE`, which ignores
+/// ASCII case).
+pub(crate) fn worker_floor_sql(col: &str) -> String {
+    let n = WORKER_FLOOR_PREFIX.len();
+    format!("(substr({col}, 1, {n}) = '{WORKER_FLOOR_PREFIX}')")
+}
+
+/// The locked floor's own rules over `col`.
+pub(crate) fn local_floor_sql(col: &str) -> String {
+    let [a, b, c] = FLOOR_RULES;
+    format!("({col} IN ('{a}', '{b}', '{c}'))")
+}
+
+/// [`is_floor_hold`] over `col`.
+pub(crate) fn floor_hold_sql(col: &str) -> String {
+    format!("({} OR {})", local_floor_sql(col), worker_floor_sql(col))
+}
+
+/// A release's tombstone delete: never a worker's floor report. (The
+/// locked floor's own rows are released as before; their rules refuse the
+/// key again when it's next seen, which nothing here can do for a
+/// worker's report.)
+fn release_tombstone_sql() -> String {
+    format!(
+        "DELETE FROM tombstones WHERE hash = ?1 AND NOT {}",
+        worker_floor_sql("rule")
+    )
+}
+
 /// Appended to the stored rule id of an adult hold
 /// ([`Filtered::adult_hold`]) in `quarantine` and `tombstones`. Reads
 /// strip it, so callers see plain rule ids.
@@ -161,8 +208,18 @@ pub(crate) fn write(tx: &Transaction<'_>, filtered: &[Filtered<'_>]) -> Result<(
     let mut hit = tx.prepare_cached(
         "INSERT INTO filter_hits (hash, rule, action, at, evidence) VALUES (?1, ?2, ?3, ?4, ?5)",
     )?;
-    let mut tomb = tx
-        .prepare_cached("INSERT OR REPLACE INTO tombstones (hash, rule, at) VALUES (?1, ?2, ?3)")?;
+    // As before, a later hold replaces an earlier one (and the insert
+    // triggers fire), except over a worker's floor report, which only a
+    // local floor rule may take over (#604's review): otherwise a weaker
+    // rule there could later be released and free the hash.
+    let mut tomb = tx.prepare_cached(&format!(
+        "INSERT OR REPLACE INTO tombstones (hash, rule, at)
+         SELECT ?1, ?2, ?3 WHERE {} OR NOT EXISTS (
+             SELECT 1 FROM tombstones WHERE hash = ?1 AND {}
+         )",
+        local_floor_sql("?2"),
+        worker_floor_sql("rule")
+    ))?;
     let mut quarantine = tx.prepare_cached(
         "INSERT OR REPLACE INTO quarantine (hash, rule, sealed, at, expires_at)
          VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -285,11 +342,44 @@ impl Store {
         Ok(())
     }
 
+    /// Records a remote worker's floor drops (CS-1a, CS-1b, CS-8a or a
+    /// hash list, reported as `Lost(Blocked)`) as tombstones under
+    /// `worker-floor:<worker>` (WK-10d), so the keys are never claimed,
+    /// fetched or stored again. A hash already tombstoned keeps its row (a
+    /// local floor row is never renamed). Returns how many rows were added.
+    pub fn tombstone_from_worker(
+        &mut self,
+        hashes: &[[u8; 20]],
+        worker: u32,
+        at: i64,
+    ) -> Result<usize> {
+        if hashes.is_empty() {
+            return Ok(0);
+        }
+        let rule = format!("{WORKER_FLOOR_PREFIX}{worker}");
+        let tx = crate::begin_write(&mut self.conn)?;
+        let mut added = 0;
+        {
+            let mut ins = tx.prepare_cached(
+                "INSERT INTO tombstones (hash, rule, at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (hash) DO NOTHING",
+            )?;
+            for h in hashes {
+                added += ins.execute(params![&h[..], rule, at])?;
+            }
+        }
+        tx.commit()?;
+        Ok(added)
+    }
+
     /// Releases a held hash (removes its tombstone or quarantine row), so
-    /// it can be fetched again. Returns whether it was held.
+    /// it can be fetched again. Returns whether a row was removed. A
+    /// worker's floor report is never removed, so a hash with one stays
+    /// held even when its quarantine row goes and this returns `true`
+    /// ([`Store::held_among`] tells).
     pub fn release(&mut self, hash: &[u8; 20]) -> Result<bool> {
         let tx = self.conn.transaction()?;
-        let n = tx.execute("DELETE FROM tombstones WHERE hash = ?1", [&hash[..]])?
+        let n = tx.execute(&release_tombstone_sql(), [&hash[..]])?
             + tx.execute("DELETE FROM quarantine WHERE hash = ?1", [&hash[..]])?;
         tx.commit()?;
         if n > 0 {
@@ -394,14 +484,17 @@ impl Store {
             }
             // The adult mark is the one hold filtering can't rebuild (the
             // correction went with the torrent), so it replaces another
-            // rule's tombstone, except the floor's, which stays.
+            // rule's tombstone, except a floor hold, which stays.
             tx.execute(
-                "INSERT INTO tombstones (hash, rule, at)
-                 SELECT hash, rule, at FROM quarantine
-                 WHERE expires_at <= ?1 AND substr(rule, -length(?2)) = ?2
-                 ON CONFLICT (hash) DO UPDATE SET rule = excluded.rule, at = excluded.at
-                 WHERE tombstones.rule NOT IN (?3, ?4, ?5)",
-                params![now, adult, FLOOR_RULES[0], FLOOR_RULES[1], FLOOR_RULES[2]],
+                &format!(
+                    "INSERT INTO tombstones (hash, rule, at)
+                     SELECT hash, rule, at FROM quarantine
+                     WHERE expires_at <= ?1 AND substr(rule, -length(?2)) = ?2
+                     ON CONFLICT (hash) DO UPDATE SET rule = excluded.rule, at = excluded.at
+                     WHERE NOT {}",
+                    floor_hold_sql("tombstones.rule")
+                ),
+                params![now, adult],
             )?;
         }
         tx.execute("DELETE FROM quarantine WHERE expires_at <= ?1", [now])?;
@@ -427,7 +520,9 @@ impl Store {
     ) -> Result<usize> {
         let mut total = 0;
         let mut deleted_any = false;
-        for rule in rules {
+        // A worker's floor report isn't released by rule here: only WK-13's
+        // purge-by-worker removes it.
+        for rule in rules.iter().filter(|r| !r.starts_with(WORKER_FLOOR_PREFIX)) {
             for table in ["quarantine", "tombstones"] {
                 loop {
                     let tx = self.conn.transaction()?;
@@ -504,6 +599,11 @@ impl Store {
         hashes: &[[u8; 20]],
         mut released: impl FnMut(&[[u8; 20]]),
     ) -> Result<usize> {
+        // As `release_rules`: a worker's floor report isn't released by
+        // rule here.
+        if rule.starts_with(WORKER_FLOOR_PREFIX) {
+            return Ok(0);
+        }
         let adult = held_rule(rule, true);
         let mut total = 0;
         let mut deleted_any = false;
@@ -583,12 +683,13 @@ impl Store {
 
     /// [`release`](Store::release) for many hashes in one transaction,
     /// with one WAL scrub at the end rather than one per hash. Returns,
-    /// per hash, whether it was held.
+    /// per hash, whether a row was removed (a hash a worker's floor report
+    /// holds stays held, as with `release`).
     pub fn release_many(&mut self, hashes: &[[u8; 20]]) -> Result<Vec<bool>> {
         let tx = self.conn.transaction()?;
         let mut had = Vec::with_capacity(hashes.len());
         {
-            let mut tomb = tx.prepare_cached("DELETE FROM tombstones WHERE hash = ?1")?;
+            let mut tomb = tx.prepare_cached(&release_tombstone_sql())?;
             let mut quar = tx.prepare_cached("DELETE FROM quarantine WHERE hash = ?1")?;
             for h in hashes {
                 had.push(tomb.execute([&h[..]])? + quar.execute([&h[..]])? > 0);
@@ -1252,6 +1353,145 @@ mod tests {
         reader.execute_batch("COMMIT").unwrap();
         assert!(n > 0);
         assert_eq!(failed, 0, "of {n} inserts; first error: {first:?}");
+    }
+
+    /// WK-10d: a worker's floor report is a tombstone under
+    /// `worker-floor:<id>`. It never renames an existing row (a local
+    /// floor row above all), an expiring adult hold never replaces it, and
+    /// no release removes it, by hash or by rule.
+    #[test]
+    fn a_workers_floor_report_is_a_floor_hold() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        assert!(is_floor_hold("CS-8a") && is_floor_hold("worker-floor:7"));
+        assert!(!is_floor_hold("CS-5a") && !is_floor_hold("worker-floor"));
+        // A local floor row exists for [1]; [2] and [3] are new.
+        let tx = s.conn.transaction().unwrap();
+        let local = [[1u8; 20]];
+        write(
+            &tx,
+            &[Filtered {
+                hashes: &local,
+                rule: "CS-8a",
+                action: 4,
+                held: Some(Held::Tombstone),
+                sealed: None,
+                evidence: &[],
+                at: 5,
+                expires_at: 0,
+                adult_hold: false,
+            }],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        let added = s
+            .tombstone_from_worker(&[[1; 20], [2; 20], [3; 20]], 7, 10)
+            .unwrap();
+        assert_eq!(added, 2, "the local row is kept, not counted");
+        let rules: std::collections::BTreeMap<[u8; 20], String> = s
+            .tombstones(10)
+            .unwrap()
+            .into_iter()
+            .map(|t| (t.hash, t.rule))
+            .collect();
+        assert_eq!(rules[&[1; 20]], "CS-8a", "never renamed");
+        assert_eq!(rules[&[2; 20]], "worker-floor:7");
+        // Again: nothing changes.
+        assert_eq!(s.tombstone_from_worker(&[[2; 20]], 9, 11).unwrap(), 0);
+        assert_eq!(
+            s.held_among(&[[2; 20], [4; 20]]).unwrap(),
+            vec![true, false]
+        );
+
+        // An adult hold expiring over [3] doesn't replace the report.
+        let tx = s.conn.transaction().unwrap();
+        let adult = [[3u8; 20]];
+        write(
+            &tx,
+            &[Filtered {
+                hashes: &adult,
+                rule: "CS-5a",
+                action: 4,
+                held: Some(Held::Quarantine),
+                sealed: None,
+                evidence: &[],
+                at: 10,
+                expires_at: 20,
+                adult_hold: true,
+            }],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        s.purge_filter(100, 0).unwrap();
+        let t3 = s
+            .tombstones(10)
+            .unwrap()
+            .into_iter()
+            .find(|t| t.hash == [3; 20])
+            .unwrap();
+        assert_eq!(t3.rule, "worker-floor:7");
+
+        // A later hold under another rule (ingest, refile, hold_claims)
+        // doesn't take the row over; a local floor rule may (below).
+        let weaker = [[2u8; 20]];
+        let hold = |s: &mut Store, rule: &'static str, at: i64| {
+            let tx = s.conn.transaction().unwrap();
+            write(
+                &tx,
+                &[Filtered {
+                    hashes: &weaker,
+                    rule,
+                    action: 4,
+                    held: Some(Held::Tombstone),
+                    sealed: None,
+                    evidence: &[],
+                    at,
+                    expires_at: 0,
+                    adult_hold: false,
+                }],
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        };
+        hold(&mut s, "SRC-2", 30);
+        let rule_of = |s: &Store, h: [u8; 20]| {
+            s.tombstones(10)
+                .unwrap()
+                .into_iter()
+                .find(|t| t.hash == h)
+                .map(|t| t.rule)
+        };
+        assert_eq!(rule_of(&s, [2; 20]).as_deref(), Some("worker-floor:7"));
+        // The prefix is exact: another case is a different rule.
+        assert_eq!(s.tombstone_from_worker(&[[8; 20]], 1, 1).unwrap(), 1);
+        s.conn
+            .execute(
+                "UPDATE tombstones SET rule = 'Worker-Floor:1' WHERE hash = ?1",
+                [&[8u8; 20][..]],
+            )
+            .unwrap();
+        assert!(s.release(&[8; 20]).unwrap(), "not a worker's report");
+
+        // No release removes a report: by hash, many, or by its rule.
+        assert!(!s.release(&[2; 20]).unwrap());
+        assert_eq!(
+            s.release_many(&[[2; 20], [3; 20]]).unwrap(),
+            vec![false, false]
+        );
+        assert_eq!(
+            s.release_rules(&["worker-floor:7".into()], |_| {}).unwrap(),
+            0
+        );
+        assert_eq!(
+            s.release_rule_hashes("worker-floor:7", &[[2; 20]], |_| {})
+                .unwrap(),
+            0
+        );
+        assert_eq!(s.held_among(&[[2; 20], [3; 20]]).unwrap(), vec![true, true]);
+        // A local floor rule may take over a report.
+        hold(&mut s, "CS-8a", 40);
+        assert_eq!(rule_of(&s, [2; 20]).as_deref(), Some("CS-8a"));
+        // The locked floor's own rows are released as before.
+        assert!(s.release(&[1; 20]).unwrap());
     }
 
     /// An adult hold's purge never replaces the floor's tombstone:

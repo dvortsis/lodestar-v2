@@ -102,6 +102,8 @@ pub fn run(
         }
     };
     let mut s = Supervisor {
+        #[cfg(target_os = "linux")]
+        data_dir: data_dir.to_owned(),
         bin,
         db,
         index_root,
@@ -137,6 +139,9 @@ fn own_program() -> std::io::Result<PathBuf> {
 }
 
 struct Supervisor {
+    /// For the companion orphan hook (Linux).
+    #[cfg(target_os = "linux")]
+    data_dir: PathBuf,
     bin: Bin,
     db: PathBuf,
     index_root: PathBuf,
@@ -242,6 +247,8 @@ impl Supervisor {
                     }
                 }
             };
+            #[cfg(target_os = "linux")]
+            self.kill_adopted_companions();
             // It passed if it cleared `pending`, whether or not a tick saw it.
             let mut ended = ended;
             if pending.is_some() && !self.bin.exists("pending") {
@@ -385,6 +392,23 @@ impl Supervisor {
                 say!("the rollback failed: {why}. Neither version will start until it's fixed.");
                 Some(ExitCode::FAILURE)
             }
+        }
+    }
+
+    /// The child has exited, so the companions it left running are ours
+    /// now (we're their subreaper): kill each one its record still
+    /// matches, before anything starts again (CMP-4a). Called between
+    /// reaps, on this one thread, so none can be reaped (and its pid
+    /// reused) between the check and the kill.
+    #[cfg(target_os = "linux")]
+    fn kill_adopted_companions(&self) {
+        use lodestar_companions::supervise::pidfile;
+        match pidfile::kill_adopted(&self.data_dir, std::process::id()) {
+            Ok(c) if c.killed > 0 => {
+                say!("stopped {} companion(s) the child left running", c.killed)
+            }
+            Ok(_) => {}
+            Err(e) => say!("looking for companions the child left running: {e}"),
         }
     }
 

@@ -13,12 +13,18 @@
 //! - [`config_files`]: `qBittorrent.conf` and Prowlarr's `config.xml`,
 //!   written before first start with the credential and a loopback bind
 //!   (CMP-3).
+//! - [`detect`]: finding qBittorrent, Prowlarr and gluetun on fixed
+//!   targets or a URL you enter, and their health, through the SSRF guard
+//!   (CMP-8a).
 //! - [`fetch`] and [`verify`]: a pinned artifact's download through the
 //!   entry's host allowlist, and its size, SHA-256 and upstream signature
 //!   checks (CMP-1).
 //! - [`inputs`]: the closed, validated values generated compose services
 //!   and Unraid templates are built from, and the shared [`CompanionId`]
 //!   and [`Version`].
+//! - [`supervise`]: starting, restarting, health-checking and stopping
+//!   managed companions, their redacted log rings, and orphan cleanup
+//!   (CMP-4a).
 //!
 //! Later CMP slices add their modules here, one `mod` line each.
 
@@ -27,11 +33,13 @@ pub mod catalogue;
 pub mod compose;
 pub mod config_files;
 pub mod credentials;
+pub mod detect;
 pub mod extract;
 pub mod fetch;
 pub mod inputs;
 pub mod layout;
 pub mod log_events;
+pub mod supervise;
 pub mod unraid;
 pub mod verify;
 

@@ -412,6 +412,224 @@ fn its_virtual_account_creates_a_missing_folder() {
     );
 }
 
+/// An HTTP/1.0 request to the server on `port`, with the body after it.
+fn request(port: u16, head: &str, body: &str) -> Option<String> {
+    let mut s = TcpStream::connect(("127.0.0.1", port)).ok()?;
+    s.set_read_timeout(Some(Duration::from_secs(10))).ok()?;
+    write!(
+        s,
+        "{head}\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    )
+    .ok()?;
+    let mut out = String::new();
+    s.read_to_string(&mut out).ok()?;
+    Some(out)
+}
+
+fn json_body(response: &str) -> serde_json::Value {
+    let (_, body) = response.split_once("\r\n\r\n").expect("a body");
+    serde_json::from_str(body).unwrap_or_else(|e| panic!("{e}: {response}"))
+}
+
+/// Claims the instance with the setup token in `log`; returns the cookie.
+fn sign_in(port: u16, log: &str) -> String {
+    let token = log
+        .lines()
+        .rev()
+        .find_map(|l| l.split("setup token ").nth(1))
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or_else(|| panic!("no setup token in:\n{log}"));
+    let setup = request(
+        port,
+        "POST /api/v1/setup HTTP/1.0\r\nContent-Type: application/json",
+        &format!(
+            r#"{{"token":"{token}","password":"correct horse battery","notice_version":{v}}}"#,
+            v = lodestar_api::legal::NOTICE_VERSION
+        ),
+    )
+    .unwrap_or_default();
+    assert!(setup.starts_with("HTTP/1.0 200"), "{setup}");
+    setup
+        .lines()
+        .find_map(|l| l.strip_prefix("set-cookie: "))
+        .and_then(|c| c.split(';').next())
+        .expect("a session cookie")
+        .to_string()
+}
+
+fn signed_in(port: u16, method: &str, path: &str, cookie: &str) -> String {
+    request(
+        port,
+        &format!("{method} {path} HTTP/1.0\r\nCookie: {cookie}\r\nContent-Type: application/json"),
+        "",
+    )
+    .unwrap_or_default()
+}
+
+/// `/system`'s `restart`.
+fn restart_info(port: u16, cookie: &str) -> serde_json::Value {
+    let info = signed_in(port, "GET", "/api/v1/system", cookie);
+    assert!(info.starts_with("HTTP/1.0 200"), "{info}");
+    json_body(&info)["restart"].clone()
+}
+
+/// The port of the `n`th `app.serving` line (from 1) in `log_path`.
+fn nth_port(log_path: &Path, n: usize, limit: Duration) -> Option<u16> {
+    wait_for(limit, || {
+        let log = std::fs::read_to_string(log_path).unwrap_or_default();
+        (log.matches("app.serving").count() >= n)
+            .then(|| common::serving_port(&log))
+            .flatten()
+    })
+}
+
+/// Restart now as a service (PK-win-restart): the graceful shutdown, then
+/// the dedicated service-specific code (`0x20000050`) for the SCM's
+/// recovery action, and the next start, inside the 24 hours, doesn't offer
+/// it again. A service registered with `sc.exe` has no recovery action, so
+/// it stays stopped here; `packaging/windows/smoke.ps1` sees the
+/// installed service come back.
+#[test]
+fn restart_now_exits_for_the_scm() {
+    if !can_register() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let name = format!("LodestarRs{}", std::process::id());
+    let exe = Path::new(env!("CARGO_BIN_EXE_lodestar"));
+    let service = register(&name, exe, None, root.path(), None);
+    let data = root.path().join("Lodestar");
+    let log_path = data.join("logs").join("lodestar.log");
+    let log = start_and_check(&service, &log_path);
+    let port = port_in(&log_path, Duration::from_secs(10)).expect("a port");
+    let cookie = sign_in(port, &log);
+
+    let info = restart_info(port, &cookie);
+    assert_eq!(info["method"], "service", "{info}");
+    assert_eq!(info["available"], true, "{info}");
+    assert!(info["estimated_seconds"].as_u64().unwrap() > 60, "{info}");
+
+    let restart = signed_in(port, "POST", "/api/v1/system/restart", &cookie);
+    assert!(restart.starts_with("HTTP/1.0 202"), "{restart}");
+    let stopped = wait_until_stopped(&service);
+    assert_eq!(
+        field(&stopped, "SERVICE_EXIT_CODE").as_deref(),
+        Some("536870992"),
+        "{stopped}"
+    );
+    let log = std::fs::read_to_string(&log_path).unwrap();
+    assert!(log.contains("restart requested"), "{log}");
+    assert!(log.contains("shutting down"), "{log}");
+    assert!(
+        log.contains("service: exiting so Windows starts it again"),
+        "{log}"
+    );
+    let record = std::fs::read_to_string(data.join("service-restarts.txt")).unwrap();
+    assert!(record.contains("state stopped\nrestart "), "{record}");
+
+    // Started again within the day: paused, with the hint.
+    sc(&["start", &service.name]);
+    let port = nth_port(&log_path, 2, Duration::from_secs(90)).expect("started again");
+    wait_for(Duration::from_secs(90), || healthz(port)).expect("healthz after the restart");
+    let info = restart_info(port, &cookie);
+    assert_eq!(info["available"], false, "{info}");
+    assert_eq!(info["method"], "manual", "{info}");
+    assert!(
+        info["hint"].as_str().unwrap().contains("Windows Services"),
+        "{info}"
+    );
+    let log = std::fs::read_to_string(&log_path).unwrap();
+    assert!(log.contains("Restart now is paused"), "{log}");
+    let stopped = stop(&service);
+    assert_eq!(
+        field(&stopped, "SERVICE_EXIT_CODE").as_deref(),
+        Some("0"),
+        "{stopped}"
+    );
+}
+
+/// Stops any `lodestar.exe` whose command line names `config`: the copy a
+/// relaunch started, which the test didn't spawn itself.
+struct KillByConfig(std::path::PathBuf);
+
+impl Drop for KillByConfig {
+    fn drop(&mut self) {
+        let config = self.0.display().to_string().replace('\'', "''");
+        let _ = Command::new("powershell.exe")
+            .env_remove("PSModulePath")
+            .args(["-NoProfile", "-NonInteractive", "-Command"])
+            .arg(format!(
+                "Get-CimInstance Win32_Process -Filter \"Name='lodestar.exe'\" | \
+                 Where-Object {{ $_.CommandLine -like '*{config}*' }} | \
+                 ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}"
+            ))
+            .output();
+    }
+}
+
+/// Restart now in the portable build: the old process shuts down and exits
+/// cleanly, and a new copy with the same arguments (the same config, so
+/// the same data and log) serves again, signed in as before.
+#[test]
+fn a_portable_restart_starts_a_new_copy() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path());
+    let _cleanup = KillByConfig(config.clone());
+    let mut child = Command::new(env!("CARGO_BIN_EXE_lodestar"))
+        .arg("--config")
+        .arg(&config)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    // The setup token is on the console (stderr here).
+    let stderr = child.stderr.take().unwrap();
+    let console = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    std::thread::spawn({
+        let console = console.clone();
+        move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(stderr)
+                .lines()
+                .map_while(Result::ok)
+            {
+                let mut c = console.lock().unwrap();
+                c.push_str(&line);
+                c.push('\n');
+            }
+        }
+    });
+    let jsonl = dir.path().join("data").join("logs").join("lodestar.jsonl");
+    let port = nth_port(&jsonl, 1, Duration::from_secs(60)).expect("server didn't come up");
+    wait_for(Duration::from_secs(60), || healthz(port)).expect("healthz");
+    let token_logged = wait_for(Duration::from_secs(30), || {
+        let c = console.lock().unwrap().clone();
+        c.contains("setup token ").then_some(c)
+    })
+    .expect("a setup token on the console");
+    let cookie = sign_in(port, &token_logged);
+    let info = restart_info(port, &cookie);
+    assert_eq!(info["method"], "relaunch", "{info}");
+    assert_eq!(info["available"], true, "{info}");
+
+    let restart = signed_in(port, "POST", "/api/v1/system/restart", &cookie);
+    assert!(restart.starts_with("HTTP/1.0 202"), "{restart}");
+    let status = wait_for(Duration::from_secs(90), || child.try_wait().ok().flatten())
+        .expect("the old process didn't exit");
+    assert!(status.success(), "the old process exited with {status}");
+
+    // The new copy: same config, so the same log, and the same store.
+    let port = nth_port(&jsonl, 2, Duration::from_secs(90)).expect("no new copy served");
+    let health = wait_for(Duration::from_secs(60), || healthz(port)).expect("healthz");
+    assert!(health.starts_with("HTTP/1.0 200"), "{health}");
+    let info = restart_info(port, &cookie);
+    assert_eq!(info["method"], "relaunch", "{info}");
+    let log = std::fs::read_to_string(&jsonl).unwrap();
+    assert!(log.contains("app.relaunch"), "{log}");
+}
+
 #[test]
 fn reads_sc_output() {
     let out = "SERVICE_NAME: x\r\n        TYPE               : 10  WIN32_OWN_PROCESS\r\n\

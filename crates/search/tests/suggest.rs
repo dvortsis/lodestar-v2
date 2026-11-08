@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::Info;
-use lodestar_search::natural::{Piece, natural};
+use lodestar_search::natural::{
+    MAX_NATURAL_BYTES, MAX_NATURAL_WORDS, NaturalError, Piece, natural,
+};
 use lodestar_search::query::TagKey;
 use lodestar_search::suggest::{self, Kind, Request, Shown, Suggestion};
 use lodestar_search::{CancelToken, LiveConfig, LiveIndexer, Node, SearchIndex, parse};
@@ -1076,6 +1078,36 @@ fn vocabulary() -> impl Strategy<Value = String> {
     ]
 }
 
+/// A phrase natural phrasing refused, for the reason it gave. The size
+/// limits are natural phrasing's own (`400 natural_too_long`) and come
+/// first, so a valid query past them is still refused; within them,
+/// `Syntax` only when the strict parse rejects it too (`/parse` answers
+/// it with the syntax error).
+fn refused_rightly(phrase: &str, e: NaturalError) -> Result<(), TestCaseError> {
+    let long = phrase.len() > MAX_NATURAL_BYTES;
+    let many = || lodestar_search::natural::tokens(phrase) > MAX_NATURAL_WORDS;
+    match e {
+        NaturalError::TooLong => prop_assert!(long, "{}", phrase),
+        NaturalError::TooManyWords => prop_assert!(!long && many(), "{}", phrase),
+        NaturalError::Syntax => {
+            prop_assert!(!long && !many() && parse(phrase).is_err(), "{}", phrase)
+        }
+    }
+    Ok(())
+}
+
+/// Found by `natural_keeps_explicit_syntax` on dvortsis/lodestar-v2#607:
+/// a valid query past the token cap is refused as too long, which the
+/// property's refusal branch once took for a syntax error.
+#[test]
+fn natural_refuses_valid_query_past_the_cap() {
+    let phrase = r#"-(4k | x) -(4k | x) (a | b) -(4k | x) -(4k | x) -x265 -x265 -"cam rip""#;
+    assert!(parse(phrase).is_ok());
+    assert_eq!(natural(phrase), Err(NaturalError::TooManyWords));
+    refused_rightly(phrase, NaturalError::TooManyWords).unwrap();
+    assert!(refused_rightly(phrase, NaturalError::Syntax).is_err());
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(2000))]
 
@@ -1084,9 +1116,9 @@ proptest! {
     #[test]
     fn natural_output_round_trips(words in prop::collection::vec(vocabulary(), 0..12)) {
         let phrase = words.join(" ");
-        let Ok(n) = natural(&phrase) else {
-            prop_assert!(parse(&phrase).is_err(), "{}", phrase);
-            return Ok(());
+        let n = match natural(&phrase) {
+            Ok(n) => n,
+            Err(e) => return refused_rightly(&phrase, e),
         };
         let parsed = parse(&n.canonical).unwrap();
         prop_assert_eq!(&parsed, &n.ast);
@@ -1112,10 +1144,9 @@ proptest! {
         ),
     ) {
         let phrase = parts.join(" ");
-        let Ok(n) = natural(&phrase) else {
-            // Not a query: `/parse` answers it with the syntax error.
-            prop_assert!(parse(&phrase).is_err(), "{}", phrase);
-            return Ok(());
+        let n = match natural(&phrase) {
+            Ok(n) => n,
+            Err(e) => return refused_rightly(&phrase, e),
         };
         let strict = parse(&phrase).unwrap();
         let pieces = lodestar_search::natural::pieces(&phrase).unwrap();
@@ -1165,10 +1196,10 @@ proptest! {
         ),
     ) {
         let phrase = words.join(" ");
-        let Ok(n) = natural(&phrase) else {
+        let n = match natural(&phrase) {
+            Ok(n) => n,
             // `/x` is regex syntax: not a query yet.
-            prop_assert!(parse(&phrase).is_err(), "{}", phrase);
-            return Ok(());
+            Err(e) => return refused_rightly(&phrase, e),
         };
         let mut at = 0;
         for w in &words {
