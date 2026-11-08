@@ -19,7 +19,14 @@
 //! route's, and `proxy.bypass_filter` (`proxyBypassFilter`) empty, so no
 //! indexer host is left on the direct route. An interface or bind-address route is refused
 //! ([`ROUTE_UNSUPPORTED`](super::ROUTE_UNSUPPORTED)). With no route
-//! nothing is planned and nothing sent.
+//! nothing is planned and nothing sent. When the host or port changes, the
+//! proxy's username and password are cleared, so the old proxy's
+//! credentials never go to the new one.
+//!
+//! **Your own Prowlarr** (confirmed or guided): a proxy it already uses is
+//! never turned off or moved
+//! ([`WOULD_LOOSEN`](super::WOULD_LOOSEN)); turning one on where none is
+//! set is allowed.
 
 use std::time::Duration;
 
@@ -34,8 +41,17 @@ use crate::inputs::CompanionId;
 use crate::log_events::CONFIG_APPLIED;
 
 use super::{
-    CONTENT_TYPE, ROUTE_UNSUPPORTED, Route, consent, credential, failed, header, key, plain,
+    CONTENT_TYPE, Origin, PLAN_MISMATCH, ROUTE_UNSUPPORTED, Route, UNKNOWN_SETTING, WOULD_LOOSEN,
+    consent, credential, failed, header, key, plain,
 };
+
+/// The refusal when Prowlarr's validation refused its host settings.
+pub const HOST_SETTINGS_REFUSED: &str = "host_settings_refused";
+
+/// A companion you confirmed or guided rather than one Lodestar installed.
+fn yours(input: &ConfigureInput<'_>) -> bool {
+    !matches!(input.origin, Origin::Installed(_))
+}
 
 /// Its catalogue id.
 pub const ID: &str = "prowlarr";
@@ -222,6 +238,35 @@ fn differing(want: &Option<(String, u32)>, have: &Proxy) -> Vec<SettingKey> {
     out
 }
 
+/// Whether the route would turn off or move a proxy your own Prowlarr is
+/// already using. Turning one on where none is set only narrows it.
+fn loosens(yours: bool, want: &Option<(String, u32)>, have: &Proxy) -> bool {
+    yours
+        && have.enabled
+        && match want {
+            None => true,
+            Some((host, port)) => {
+                !have.kind.eq_ignore_ascii_case("socks5")
+                    || have.hostname != *host
+                    || have.port != *port
+            }
+        }
+}
+
+/// Every listed key has what the route supplies, checked before anything
+/// is sent.
+fn check_plan(plan: &ConfigPlan, want: &Option<(String, u32)>) -> Result<(), AdapterError> {
+    for k in plan.changes() {
+        if !ORDER.contains(k) {
+            return Err(AdapterError::Refused(UNKNOWN_SETTING));
+        }
+        if *k != PROXY_ENABLED && want.is_none() {
+            return Err(AdapterError::Refused(PLAN_MISMATCH));
+        }
+    }
+    Ok(())
+}
+
 fn path(p: &'static str) -> Result<RequestPath, AdapterError> {
     RequestPath::parse(p).map_err(|_| AdapterError::Protocol("request path"))
 }
@@ -261,6 +306,9 @@ impl Prowlarr {
         };
         let want = wanted(route)?;
         let (_, have) = read_host(http, target, input).await?;
+        if loosens(yours(input), &want, &have) {
+            return Err(AdapterError::Refused(WOULD_LOOSEN));
+        }
         Ok(ConfigPlan::new(self.id.clone(), differing(&want, &have)))
     }
 
@@ -272,15 +320,16 @@ impl Prowlarr {
         plan: &ConfigPlan,
     ) -> Result<(), AdapterError> {
         consent(input, target)?;
-        if plan.changes().iter().any(|k| !ORDER.contains(k)) {
-            return Err(AdapterError::Refused("a setting this adapter doesn't know"));
-        }
         let route = input
             .route
             .as_ref()
-            .ok_or(AdapterError::Refused("the plan doesn't match the input"))?;
+            .ok_or(AdapterError::Refused(PLAN_MISMATCH))?;
         let want = wanted(route)?;
-        let (answer, _) = read_host(http, target, input).await?;
+        check_plan(plan, &want)?;
+        let (answer, have) = read_host(http, target, input).await?;
+        if loosens(yours(input), &want, &have) {
+            return Err(failed(ID, "proxy", AdapterError::Refused(WOULD_LOOSEN)));
+        }
         // Already checked by `parse_host` with the bounded reader: one flat
         // object of strings, booleans, nulls and whole numbers, so every
         // field `serde_json` reads it into goes back unchanged. Prowlarr's
@@ -297,9 +346,14 @@ impl Prowlarr {
                 (k, Some((h, _))) if *k == PROXY_HOSTNAME => ("proxyHostname", h.clone().into()),
                 (k, Some((_, p))) if *k == PROXY_PORT => ("proxyPort", (*p).into()),
                 (k, Some(_)) if *k == PROXY_BYPASS => ("proxyBypassFilter", "".into()),
-                _ => return Err(AdapterError::Refused("the plan doesn't match the input")),
+                _ => return Err(AdapterError::Refused(PLAN_MISMATCH)),
             };
             host.insert(name.to_owned(), value);
+        }
+        // A new proxy host or port never gets the old proxy's credentials.
+        if plan.changes().contains(&PROXY_HOSTNAME) || plan.changes().contains(&PROXY_PORT) {
+            host.insert("proxyUsername".to_owned(), serde_json::Value::Null);
+            host.insert("proxyPassword".to_owned(), serde_json::Value::Null);
         }
         let body = serde_json::Value::Object(host).to_string().into_bytes();
         let req = ProbeRequest::new(target, path(HOST_PUT)?, limits())
@@ -315,7 +369,7 @@ impl Prowlarr {
                 return Err(failed(
                     ID,
                     step,
-                    AdapterError::Refused("Prowlarr refused its host settings"),
+                    AdapterError::Refused(HOST_SETTINGS_REFUSED),
                 ));
             }
             _ => return Err(failed(ID, step, AdapterError::Protocol("HTTP status"))),

@@ -51,14 +51,15 @@ use crate::inputs::CompanionId;
 use crate::log_events::CONFIG_APPLIED;
 
 use super::{
-    BIND_UNSUITED, CONTENT_TYPE, Origin, ROUTE_UNSUPPORTED, Route, WebUiBind, consent, cookie,
-    credential, failed, form, header, key, plain,
+    BIND_UNSUITED, CONTENT_TYPE, Origin, PLAN_MISMATCH, ROUTE_UNSUPPORTED, Route, UNKNOWN_SETTING,
+    WOULD_LOOSEN, WebUiBind, consent, cookie, credential, failed, form, header, key, plain,
 };
 
 /// Its catalogue id.
 pub const ID: &str = "qbittorrent";
 
 const LOGIN: &str = "/api/v2/auth/login";
+const VERSION: &str = "/api/v2/app/version";
 const PREFERENCES: &str = "/api/v2/app/preferences";
 const SET_PREFERENCES: &str = "/api/v2/app/setPreferences";
 const CATEGORIES: &str = "/api/v2/torrents/categories";
@@ -86,19 +87,22 @@ pub const INTERFACE_ADDRESS: SettingKey = key("network.bind_address");
 
 /// Every key this adapter plans, in the order `apply` writes them.
 const ORDER: [SettingKey; 7] = [
+    PASSWORD,
     CATEGORY_SET,
     SAVE_PATH,
     LOCAL_AUTH,
     INTERFACE,
     INTERFACE_ADDRESS,
-    PASSWORD,
     WEBUI_BIND,
 ];
 
 /// The refusal when qBittorrent has banned this address.
-pub const BANNED: &str = "qBittorrent has banned this address after failed sign-ins";
+pub const BANNED: &str = "banned_after_failed_sign_ins";
 /// The refusal when the new password doesn't sign in after it was set.
-pub const PASSWORD_NOT_TAKEN: &str = "the new WebUI password didn't take";
+pub const PASSWORD_NOT_TAKEN: &str = "password_not_taken";
+/// The refusal when turning the localhost bypass off would lock Lodestar
+/// out; the bypass is put back first.
+pub const LOCAL_AUTH_LOCKOUT: &str = "local_auth_would_lock_out";
 
 /// A configuration request's bounds: preferences run to about 12 KiB, and a
 /// write may take a moment on a slow NAS.
@@ -123,11 +127,19 @@ struct Wanted {
     webui: Option<&'static str>,
     /// `(interface, address)`, each empty for "any".
     route: Option<(String, String)>,
+    /// A companion you confirmed or guided rather than one Lodestar
+    /// installed: nothing that limits it may be cleared or widened.
+    yours: bool,
 }
 
 fn wanted(input: &ConfigureInput<'_>, target: &Target) -> Result<Wanted, AdapterError> {
+    let yours = !matches!(input.origin, Origin::Installed(_));
     let webui = match input.webui {
         None => None,
+        // Only on a companion Lodestar installed. In your own container
+        // with a published port, `127.0.0.1` cuts off Docker's port
+        // forward for good, and `*` would widen what reaches it.
+        Some(_) if yours => return Err(AdapterError::Refused(BIND_UNSUITED)),
         Some(b) if !b.suits(target) => return Err(AdapterError::Refused(BIND_UNSUITED)),
         Some(WebUiBind::Loopback) => Some("127.0.0.1"),
         Some(WebUiBind::ContainerNetwork) => Some("*"),
@@ -139,7 +151,11 @@ fn wanted(input: &ConfigureInput<'_>, target: &Target) -> Result<Wanted, Adapter
         Some(Route::BindAddress(ip)) => Some((String::new(), ip.get().to_string())),
         Some(Route::Socks5(_)) => return Err(AdapterError::Refused(ROUTE_UNSUPPORTED)),
     };
-    Ok(Wanted { webui, route })
+    Ok(Wanted {
+        webui,
+        route,
+        yours,
+    })
 }
 
 /// The preferences this adapter compares, from `/api/v2/app/preferences`.
@@ -375,7 +391,7 @@ async fn call(
     match r.status() {
         200 | 204 => Ok(r),
         401 | 403 => Err(AdapterError::Unauthorized),
-        400 | 404 | 409 => Err(AdapterError::Refused("qBittorrent refused the setting")),
+        400 | 404 | 409 => Err(AdapterError::Refused("setting_refused")),
         _ => Err(AdapterError::Protocol("HTTP status")),
     }
 }
@@ -445,6 +461,59 @@ fn differing(input: &ConfigureInput<'_>, w: &Wanted, p: &Prefs) -> Vec<SettingKe
     out
 }
 
+/// Whether the route would clear or replace an interface or address that
+/// your own qBittorrent is already bound to (a VPN kill-switch binding).
+/// Binding one where none is set only narrows it, and is allowed.
+fn loosens(w: &Wanted, p: &Prefs) -> bool {
+    let Some((iface, addr)) = &w.route else {
+        return false;
+    };
+    w.yours
+        && ((!p.interface.is_empty() && p.interface != *iface)
+            || (!p.interface_address.trim().is_empty()
+                && !same_address(&p.interface_address, addr)))
+}
+
+/// Every listed key has what it needs in the input, checked before
+/// anything is sent.
+fn check_plan(
+    plan: &ConfigPlan,
+    input: &ConfigureInput<'_>,
+    w: &Wanted,
+) -> Result<(), AdapterError> {
+    let guided = matches!(input.origin, Origin::Guided { .. });
+    for k in plan.changes() {
+        let ok = if *k == PASSWORD {
+            guided
+        } else if *k == CATEGORY_SET || *k == SAVE_PATH {
+            input.downloads.is_some()
+        } else if *k == LOCAL_AUTH {
+            true
+        } else if *k == INTERFACE || *k == INTERFACE_ADDRESS {
+            w.route.is_some()
+        } else if *k == WEBUI_BIND {
+            w.webui.is_some()
+        } else {
+            return Err(AdapterError::Refused(UNKNOWN_SETTING));
+        };
+        if !ok {
+            return Err(AdapterError::Refused(PLAN_MISMATCH));
+        }
+    }
+    Ok(())
+}
+
+/// Whether qBittorrent skips sign-in for Lodestar's address (a subnet
+/// whitelist, or loopback with `bypass_local_auth`): the version endpoint
+/// answers `200` without a session. Then any password signs in, so a
+/// guided install can't tell the temporary password from the new one.
+async fn auth_bypassed(http: &dyn GuardedHttp, target: &Target) -> Result<bool, AdapterError> {
+    let r = http
+        .send(ProbeRequest::new(target, path(VERSION)?, limits()))
+        .await?;
+    Ok(r.status() == 200)
+}
+
 /// One `setPreferences` with this JSON object.
 async fn set_preferences(
     http: &dyn GuardedHttp,
@@ -464,6 +533,12 @@ async fn set_preferences(
     .map(|_| ())
 }
 
+fn one(name: &str, value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+    let mut m = serde_json::Map::new();
+    m.insert(name.to_owned(), value);
+    m
+}
+
 fn applied(k: &SettingKey) {
     lodestar_log::log_event!(CONFIG_APPLIED, companion = ID, setting = k.as_str());
 }
@@ -477,8 +552,13 @@ impl QBittorrent {
     ) -> Result<ConfigPlan, AdapterError> {
         consent(input, target)?;
         let w = wanted(input, target)?;
+        let guided = matches!(input.origin, Origin::Guided { .. });
+        let bypassed = guided && auth_bypassed(http, target).await?;
         let (session, temporary) = sign_in(http, target, input, false).await?;
         let prefs = read_prefs(http, target, &session).await?;
+        if loosens(&w, &prefs) {
+            return Err(AdapterError::Refused(WOULD_LOOSEN));
+        }
         let mut keys = differing(input, &w, &prefs);
         if input.downloads.is_some() {
             let have = read_categories(http, target, &session).await?;
@@ -486,7 +566,9 @@ impl QBittorrent {
                 keys.push(CATEGORY_SET);
             }
         }
-        if temporary {
+        // Under an auth bypass the temporary password can't be seen to
+        // work or not, so a guided install always writes the new one.
+        if temporary || bypassed {
             keys.push(PASSWORD);
         }
         let changes = ORDER.into_iter().filter(|k| keys.contains(k)).collect();
@@ -502,52 +584,88 @@ impl QBittorrent {
     ) -> Result<(), AdapterError> {
         consent(input, target)?;
         let w = wanted(input, target)?;
+        check_plan(plan, input, &w)?;
         let listed = |k: &SettingKey| plan.changes().contains(k);
-        if plan.changes().iter().any(|k| !ORDER.contains(k)) {
-            return Err(AdapterError::Refused("a setting this adapter doesn't know"));
-        }
-        let guided = matches!(input.origin, Origin::Guided { .. });
-        if listed(&PASSWORD) && !guided {
-            return Err(AdapterError::Refused(
-                "only a guided install replaces the password",
-            ));
-        }
+        let bypassed = listed(&PASSWORD) && auth_bypassed(http, target).await?;
         let (session, _) = sign_in(http, target, input, listed(&PASSWORD)).await?;
+        let stored = credential(input, Field::WebUiPassword)?;
+
+        // The password first: qBittorrent printed the temporary one to its
+        // log, so no later failure may leave it valid.
+        if listed(&PASSWORD) {
+            let json = one("web_ui_password", stored.expose().to_owned().into());
+            set_preferences(http, target, &session, json)
+                .await
+                .map_err(|e| failed(ID, PASSWORD.as_str(), e))?;
+            // The new password has to sign in before this counts as done.
+            // Under an auth bypass any password does, so the check can't be
+            // made there (decisions file).
+            if !bypassed {
+                login(http, target, input, &stored).await.map_err(|e| {
+                    let e = match e {
+                        AdapterError::Unauthorized => AdapterError::Refused(PASSWORD_NOT_TAKEN),
+                        e => e,
+                    };
+                    failed(ID, PASSWORD.as_str(), e)
+                })?;
+            }
+            applied(&PASSWORD);
+        }
 
         if listed(&CATEGORY_SET) {
             let have = read_categories(http, target, &session).await?;
-            for (name, save_path, exists) in category_changes(input, &have) {
-                let endpoint = if exists {
+            let changes = category_changes(input, &have);
+            for (name, save_path, exists) in &changes {
+                let endpoint = if *exists {
                     EDIT_CATEGORY
                 } else {
                     CREATE_CATEGORY
                 };
-                let body = form(&[("category", &name), ("savePath", &save_path)]);
+                let body = form(&[("category", name), ("savePath", save_path)]);
                 call(http, target, &session, endpoint, Some(body))
                     .await
                     .map_err(|e| failed(ID, CATEGORY_SET.as_str(), e))?;
             }
-            applied(&CATEGORY_SET);
+            if !changes.is_empty() {
+                applied(&CATEGORY_SET);
+            }
         }
 
+        if w.yours && (listed(&INTERFACE) || listed(&INTERFACE_ADDRESS)) {
+            let prefs = read_prefs(http, target, &session).await?;
+            if loosens(&w, &prefs) {
+                return Err(failed(
+                    ID,
+                    INTERFACE.as_str(),
+                    AdapterError::Refused(WOULD_LOOSEN),
+                ));
+            }
+        }
         let mut prefs = serde_json::Map::new();
         let mut batch = Vec::new();
         for k in [SAVE_PATH, LOCAL_AUTH, INTERFACE, INTERFACE_ADDRESS] {
             if !listed(&k) {
                 continue;
             }
-            let (name, value) = match (&k, &input.downloads, &w.route) {
-                (k, Some(d), _) if *k == SAVE_PATH => {
-                    ("save_path", d.save_path().as_str().to_owned().into())
-                }
-                (k, _, _) if *k == LOCAL_AUTH => ("bypass_local_auth", false.into()),
-                (k, _, Some((iface, _))) if *k == INTERFACE => {
+            // `check_plan` made sure each listed key has its input.
+            let (name, value): (&str, serde_json::Value) = if k == SAVE_PATH {
+                let d = input
+                    .downloads
+                    .as_ref()
+                    .ok_or(AdapterError::Refused(PLAN_MISMATCH))?;
+                ("save_path", d.save_path().as_str().to_owned().into())
+            } else if k == LOCAL_AUTH {
+                ("bypass_local_auth", false.into())
+            } else {
+                let (iface, addr) = w
+                    .route
+                    .as_ref()
+                    .ok_or(AdapterError::Refused(PLAN_MISMATCH))?;
+                if k == INTERFACE {
                     ("current_network_interface", iface.clone().into())
-                }
-                (k, _, Some((_, addr))) if *k == INTERFACE_ADDRESS => {
+                } else {
                     ("current_interface_address", addr.clone().into())
                 }
-                _ => return Err(AdapterError::Refused("the plan doesn't match the input")),
             };
             prefs.insert(name.to_owned(), value);
             batch.push(k);
@@ -556,38 +674,32 @@ impl QBittorrent {
             set_preferences(http, target, &session, prefs)
                 .await
                 .map_err(|e| failed(ID, batch[0].as_str(), e))?;
+            // Turning the localhost bypass off must not lock Lodestar out:
+            // the stored password has to sign in afresh, or the bypass goes
+            // back on through the session still open.
+            if listed(&LOCAL_AUTH) {
+                match login(http, target, input, &stored).await {
+                    Ok(_) => {}
+                    Err(AdapterError::Unauthorized) => {
+                        let restore = one("bypass_local_auth", true.into());
+                        set_preferences(http, target, &session, restore)
+                            .await
+                            .map_err(|e| failed(ID, LOCAL_AUTH.as_str(), e))?;
+                        return Err(failed(
+                            ID,
+                            LOCAL_AUTH.as_str(),
+                            AdapterError::Refused(LOCAL_AUTH_LOCKOUT),
+                        ));
+                    }
+                    Err(e) => return Err(failed(ID, LOCAL_AUTH.as_str(), e)),
+                }
+            }
             batch.iter().for_each(applied);
         }
 
-        if listed(&PASSWORD) {
-            let next = credential(input, Field::WebUiPassword)?;
-            let mut json = serde_json::Map::new();
-            json.insert(
-                "web_ui_password".to_owned(),
-                next.expose().to_owned().into(),
-            );
-            set_preferences(http, target, &session, json)
-                .await
-                .map_err(|e| failed(ID, PASSWORD.as_str(), e))?;
-            // The temporary password must not be left in place: the new one
-            // has to sign in before this counts as done.
-            login(http, target, input, &next).await.map_err(|e| {
-                let e = match e {
-                    AdapterError::Unauthorized => AdapterError::Refused(PASSWORD_NOT_TAKEN),
-                    e => e,
-                };
-                failed(ID, PASSWORD.as_str(), e)
-            })?;
-            applied(&PASSWORD);
-        }
-
         if listed(&WEBUI_BIND) {
-            let addr = w
-                .webui
-                .ok_or(AdapterError::Refused("the plan doesn't match the input"))?;
-            let mut json = serde_json::Map::new();
-            json.insert("web_ui_address".to_owned(), addr.into());
-            set_preferences(http, target, &session, json)
+            let addr = w.webui.ok_or(AdapterError::Refused(PLAN_MISMATCH))?;
+            set_preferences(http, target, &session, one("web_ui_address", addr.into()))
                 .await
                 .map_err(|e| failed(ID, WEBUI_BIND.as_str(), e))?;
             applied(&WEBUI_BIND);

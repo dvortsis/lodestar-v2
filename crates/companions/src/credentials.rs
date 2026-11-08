@@ -181,8 +181,11 @@ pub struct Issued {
 }
 
 /// qBittorrent's temporary password swapped for a generated one (guided
-/// installs, plan Q19): CMP-8b signs in with `temporary`, sets
-/// `next.secret`, then stores `next.row`.
+/// installs, plan Q19). **The caller stores `next.row` durably first**, as
+/// the companion's credential; then CMP-8b signs in with `temporary` and
+/// sets `next.secret`. Stored first, a crash between the two leaves either
+/// password working, and a retry signs in with whichever does; stored
+/// after, a crash would leave qBittorrent on a password nothing holds.
 #[derive(Debug)]
 pub struct PasswordChange {
     pub temporary: Secret,

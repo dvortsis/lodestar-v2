@@ -488,6 +488,65 @@ mod tests {
         assert_eq!(pick(&[&format!("SID={}", "a".repeat(513))]), None);
     }
 
+    mod cookie_props {
+        use super::*;
+        use proptest::prelude::*;
+
+        const NAMES: &[CookieName] = &[
+            match CookieName::new("SID") {
+                Some(c) => c,
+                None => panic!(),
+            },
+            match CookieName::numbered("QBT_SID_") {
+                Some(c) => c,
+                None => panic!(),
+            },
+        ];
+
+        fn header() -> impl Strategy<Value = String> {
+            prop_oneof![
+                any::<String>(),
+                "[ -~]{0,80}",
+                "(SID|QBT_SID_[0-9]{0,7}|sid|X)=[ -~]{0,40}(; [a-zA-Z=/]{0,20}){0,3}",
+            ]
+        }
+
+        proptest! {
+            /// Any list of headers: no panic, and anything handed back is
+            /// a matching name with a value that may be sent back.
+            #[test]
+            fn never_panics_and_returns_only_safe_pairs(
+                headers in proptest::collection::vec(header(), 0..6)
+            ) {
+                if let Some(pair) = session_cookie(headers.iter().map(String::as_str), NAMES) {
+                    let (n, v) = pair.split_once('=').unwrap();
+                    prop_assert!(NAMES.iter().any(|c| c.matches(n)));
+                    prop_assert!(cookie_value_ok(v));
+                    prop_assert!(ProbeResponse::new(200, Vec::new(), &Limits::PROBE)
+                        .unwrap()
+                        .with_session_cookie(Secret::new(pair.clone()))
+                        .is_ok());
+                }
+            }
+
+            /// A well-formed cookie with attributes round-trips.
+            #[test]
+            fn well_formed_cookies_round_trip(
+                port in 1u32..=65535,
+                numbered: bool,
+                value in "[A-Za-z0-9_.+/=%:-]{1,64}",
+                attrs in "(; (HttpOnly|path=/|SameSite=Strict)){0,3}",
+            ) {
+                let name = if numbered { format!("QBT_SID_{port}") } else { "SID".to_owned() };
+                let header = format!("{name}={value}{attrs}");
+                prop_assert_eq!(
+                    session_cookie(std::iter::once(header.as_str()), NAMES),
+                    Some(format!("{name}={value}"))
+                );
+            }
+        }
+    }
+
     #[test]
     fn guard_errors_keep_only_the_class() {
         assert_eq!(

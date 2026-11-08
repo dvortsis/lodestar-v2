@@ -49,13 +49,21 @@ pub mod prowlarr;
 pub mod qbittorrent;
 
 /// The refusal when the input doesn't establish consent for this target.
-pub const NOT_CONFIRMED: &str = "not confirmed for this target";
+pub const NOT_CONFIRMED: &str = "not_confirmed_for_target";
 /// The refusal when the companion can't follow the route's kind (Q8).
-pub const ROUTE_UNSUPPORTED: &str = "the companion can't follow this route";
-/// The refusal when the WebUI binding doesn't suit the target.
-pub const BIND_UNSUITED: &str = "this WebUI binding doesn't suit the target";
+pub const ROUTE_UNSUPPORTED: &str = "route_unsupported";
+/// The refusal when the WebUI binding doesn't suit the target, or the
+/// companion isn't one Lodestar installed.
+pub const BIND_UNSUITED: &str = "webui_bind_unsuited";
+/// The refusal when a route would clear or replace a binding or proxy that
+/// a companion you confirmed already has.
+pub const WOULD_LOOSEN: &str = "would_loosen_companion_setting";
+/// The refusal when a plan lists a setting its input can't supply.
+pub const PLAN_MISMATCH: &str = "plan_does_not_match_input";
+/// The refusal when a plan lists a setting the adapter doesn't know.
+pub const UNKNOWN_SETTING: &str = "unknown_setting";
 /// The refusal when Lodestar's own settings didn't take the entry.
-pub const SINK_REFUSED: &str = "Lodestar's settings refused the entry";
+pub const SINK_REFUSED: &str = "sink_refused";
 
 /// The configuration adapter for a catalogue entry, if there is one.
 /// gluetun has none, and FlareSolverr is CMP-12's (Q21).
@@ -222,13 +230,19 @@ impl Socks5Proxy {
     }
 }
 
-/// Where a companion's WebUI listens.
+/// Where a companion's WebUI listens. Set only on a companion Lodestar
+/// installed ([`Origin::Installed`]); for one you confirmed it's refused
+/// ([`BIND_UNSUITED`]), because Lodestar can't see how its container is
+/// networked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WebUiBind {
     /// `127.0.0.1`: only this machine. For a loopback target only.
     Loopback,
-    /// Every address inside the companion's own container, which only
-    /// Docker's network reaches. For a container target only.
+    /// `*`: every address in the companion's network namespace. For a
+    /// container target only. What can reach it is then decided by how the
+    /// container is networked, which CMP-7 generates, not by this setting:
+    /// Docker's network, and also anything that reaches a published port,
+    /// host networking, or gluetun's namespace under `service:gluetun`.
     ContainerNetwork,
 }
 

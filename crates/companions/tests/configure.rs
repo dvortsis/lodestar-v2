@@ -18,7 +18,8 @@ use lodestar_companions::config_files::Username;
 use lodestar_companions::configure::{
     self, BIND_UNSUITED, Category, CategoryName, ConfigSink, Confirmation, DownloadClientEntry,
     Downloads, IndexerManagerEntry, InstallReceipt, InterfaceName, NOT_CONFIRMED,
-    ROUTE_UNSUPPORTED, Route, SINK_REFUSED, SinkError, Socks5Proxy, WebUiBind, qbittorrent,
+    ROUTE_UNSUPPORTED, Route, SINK_REFUSED, SinkError, Socks5Proxy, WOULD_LOOSEN, WebUiBind,
+    qbittorrent,
 };
 use lodestar_companions::detect::CompanionHttp;
 use lodestar_companions::inputs::{HostPath, PortNumber};
@@ -293,6 +294,17 @@ struct QState {
     /// Answer as qBittorrent 5.2 does: `QBT_SID_<port>`, `204` for a
     /// sign-in or a write, `401` for a wrong password.
     v52: bool,
+    /// Skips sign-in for every request, as a subnet whitelist does: any
+    /// password signs in and the version endpoint answers without one.
+    bypass: bool,
+    /// Skips sign-in while `bypass_local_auth` is on, as for loopback.
+    bypass_from_prefs: bool,
+    /// Replaces the sign-in answer.
+    hostile_login: Option<fn() -> Reply>,
+    /// Replaces the categories answer.
+    hostile_categories: Option<fn() -> Reply>,
+    /// Takes the next password write but never answers it.
+    silent_password_once: bool,
 }
 
 type Qbit = Arc<Mutex<QState>>;
@@ -309,18 +321,37 @@ fn qbit_state(password: &str) -> Qbit {
         hostile: None,
         no_cookie: false,
         v52: false,
+        bypass: false,
+        bypass_from_prefs: false,
+        hostile_login: None,
+        hostile_categories: None,
+        silent_password_once: false,
     }))
 }
 
 fn qbit_handler(state: Qbit) -> Handler {
     Arc::new(move |seen: &Seen| {
         let mut s = state.lock().unwrap();
+        let bypassing =
+            s.bypass || (s.bypass_from_prefs && s.prefs["bypass_local_auth"] == json!(true));
+        if seen.path == "/api/v2/app/version" {
+            return if bypassing {
+                reply(200, "v5.0.3")
+            } else {
+                reply(403, "Forbidden")
+            };
+        }
         if seen.method == "POST" && seen.path == "/api/v2/auth/login" {
+            if let Some(h) = s.hostile_login {
+                return h();
+            }
             if s.banned {
                 return reply(403, "Your IP address has been banned");
             }
             let f = form_decode(&seen.body);
-            if f.get("username") == Some(&s.username) && f.get("password") == Some(&s.password) {
+            let matches =
+                f.get("username") == Some(&s.username) && f.get("password") == Some(&s.password);
+            if matches || bypassing {
                 let sid = format!("{SID_PREFIX}{}", s.sessions.len());
                 s.sessions.push(sid.clone());
                 let name = if s.v52 { "QBT_SID_8080" } else { "SID" };
@@ -347,10 +378,11 @@ fn qbit_handler(state: Qbit) -> Handler {
             };
         }
         let prefix = if s.v52 { "QBT_SID_8080=" } else { "SID=" };
-        let authed = seen
-            .header("cookie")
-            .and_then(|c| c.strip_prefix(prefix))
-            .is_some_and(|sid| s.sessions.iter().any(|x| x == sid));
+        let authed = bypassing
+            || seen
+                .header("cookie")
+                .and_then(|c| c.strip_prefix(prefix))
+                .is_some_and(|sid| s.sessions.iter().any(|x| x == sid));
         if !authed {
             return reply(403, "Forbidden");
         }
@@ -359,22 +391,28 @@ fn qbit_handler(state: Qbit) -> Handler {
                 Some(h) => h(),
                 None => reply(200, Value::Object(s.prefs.clone()).to_string()),
             },
-            ("GET", "/api/v2/torrents/categories") => {
-                reply(200, Value::Object(s.categories.clone()).to_string())
-            }
+            ("GET", "/api/v2/torrents/categories") => match s.hostile_categories {
+                Some(h) => h(),
+                None => reply(200, Value::Object(s.categories.clone()).to_string()),
+            },
             ("POST", "/api/v2/app/setPreferences") => {
                 let f = form_decode(&seen.body);
                 let Ok(Value::Object(m)) = serde_json::from_str(&f["json"]) else {
                     return reply(400, "");
                 };
+                let mut silent = false;
                 for (k, v) in m {
                     if k == "web_ui_password" {
                         if !s.ignore_password {
                             s.password = v.as_str().unwrap().to_owned();
                         }
+                        silent = std::mem::take(&mut s.silent_password_once);
                     } else {
                         s.prefs.insert(k, v);
                     }
+                }
+                if silent {
+                    return Reply::Silent;
                 }
                 reply(if s.v52 { 204 } else { 200 }, "")
             }
@@ -572,6 +610,15 @@ async fn qbittorrent_partly_configured_writes_only_what_differs() {
             .clone()
     );
     assert_eq!(state.lock().unwrap().prefs["web_ui_address"], "*");
+    // Applied, then planned again: nothing left.
+    assert!(
+        qbit()
+            .plan(&http, &target, &input)
+            .await
+            .unwrap()
+            .changes()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -695,17 +742,29 @@ async fn qbittorrent_refuses_a_socks5_route_and_unsuited_bindings_before_sending
 #[tokio::test]
 async fn unconfirmed_targets_are_refused_before_anything_is_sent() {
     capture();
-    let server = Server::start(qbit_handler(qbit_state(GENERATED))).await;
-    let entered = server.entered();
-    let lo = server.loopback();
+    // The refused target is a server of its own, which must see nothing.
+    let refused_server = Server::start(Arc::new(|_: &Seen| reply(404, ""))).await;
+    let entered = refused_server.entered();
+    let q = Server::start(qbit_handler(qbit_state(GENERATED))).await;
+    let p = Server::start(prowlarr_handler(prowlarr_state())).await;
     let qcreds = qbit_creds(GENERATED);
     let pcreds = Creds(HashMap::from([("api_key", API_KEY)]));
     let sink = FakeSink::default();
-    for (creds, adapter, id) in [
-        (&qcreds, qbit(), "qbittorrent"),
-        (&pcreds, prowlarr_adapter(), "prowlarr"),
-    ] {
+    let qlo = q.loopback();
+    let plo = p.loopback();
+    let cases = [
+        (&qcreds, qbit(), "qbittorrent", &q, &qlo),
+        (&pcreds, prowlarr_adapter(), "prowlarr", &p, &plo),
+    ];
+    for (creds, adapter, id, server, lo) in cases {
         let id = CompanionId::parse(id).unwrap();
+        // A real, non-empty plan from the companion's own server.
+        let good = ConfigureInput::new(creds)
+            .installed(receipt(lo))
+            .downloads(downloads())
+            .route(socks5_or_direct(id.as_str()));
+        let plan = adapter.plan(&http(), lo, &good).await.unwrap();
+        assert!(!plan.changes().is_empty(), "{id}");
         let inputs = [
             // Nothing stated.
             ConfigureInput::new(creds).route(Route::Direct),
@@ -715,7 +774,7 @@ async fn unconfirmed_targets_are_refused_before_anything_is_sent() {
                 .route(Route::Direct),
             // A receipt for another target.
             ConfigureInput::new(creds)
-                .installed(receipt(&lo))
+                .installed(receipt(lo))
                 .route(Route::Direct),
             // A confirmation for another target.
             ConfigureInput::new(creds)
@@ -725,50 +784,41 @@ async fn unconfirmed_targets_are_refused_before_anything_is_sent() {
                 .guided(Confirmation::of(lo.clone()), Secret::new(TEMPORARY))
                 .route(Route::Direct),
         ];
+        let refused = AdapterError::Refused(NOT_CONFIRMED);
+        let before = server.count();
         for input in &inputs {
-            let refused = AdapterError::Refused(NOT_CONFIRMED);
             assert_eq!(adapter.plan(&http(), &entered, input).await, Err(refused));
-            let plan = adapter
-                .plan(
-                    &http(),
-                    &lo,
-                    &ConfigureInput::new(creds)
-                        .installed(receipt(&lo))
-                        .route(Route::Direct),
-                )
-                .await;
-            if let Ok(plan) = plan {
-                assert_eq!(
-                    adapter.apply(&http(), &entered, input, &plan).await,
-                    Err(refused)
-                );
-            }
+            assert_eq!(
+                adapter.apply(&http(), &entered, input, &plan).await,
+                Err(refused)
+            );
             assert_eq!(
                 configure::hand_over(&sink, &id, &entered, input).await,
                 Err(refused)
             );
         }
-        // Not stated at all, even on loopback.
+        // Not stated at all, even on the companion's own loopback target.
         let bare = ConfigureInput::new(creds);
+        assert_eq!(adapter.plan(&http(), lo, &bare).await, Err(refused));
+        assert_eq!(adapter.apply(&http(), lo, &bare, &plan).await, Err(refused));
         assert_eq!(
-            adapter.plan(&http(), &lo, &bare).await,
-            Err(AdapterError::Refused(NOT_CONFIRMED))
+            server.count(),
+            before,
+            "{id}: nothing reached the companion"
         );
     }
-    assert!(
-        server
-            .seen()
-            .iter()
-            .all(|s| s.path != "/" && !s.path.is_empty())
-    );
-    assert!(
-        server
-            .seen()
-            .iter()
-            .all(|s| s.method == "GET" || s.path.ends_with("/login")),
-        "only the loopback plans reached the server"
+    assert_eq!(
+        refused_server.count(),
+        0,
+        "nothing reached the refused target"
     );
     assert!(sink.entries.lock().unwrap().is_empty());
+}
+
+/// A route each adapter can follow and that changes something on its
+/// fixture: an interface for qBittorrent, SOCKS5 for Prowlarr.
+fn socks5_or_direct(id: &str) -> Route {
+    if id == "prowlarr" { socks5() } else { tun0() }
 }
 
 fn oversized() -> Reply {
@@ -1007,6 +1057,8 @@ async fn prowlarr_already_and_partly_configured() {
         s.host.insert("proxyType".into(), "socks5".into());
         s.host.insert("proxyHostname".into(), "10.0.0.9".into());
         s.host.insert("proxyBypassFilter".into(), "*.org".into());
+        s.host.insert("proxyUsername".into(), "olduser".into());
+        s.host.insert("proxyPassword".into(), "oldproxypass".into());
     }
     let input = ConfigureInput::new(&creds)
         .installed(receipt(&target))
@@ -1023,6 +1075,9 @@ async fn prowlarr_already_and_partly_configured() {
         .apply(&http, &target, &input, &plan)
         .await
         .unwrap();
+    // A new host never gets the old proxy's credentials.
+    assert_eq!(state.lock().unwrap().host["proxyUsername"], Value::Null);
+    assert_eq!(state.lock().unwrap().host["proxyPassword"], Value::Null);
     assert!(
         prowlarr_adapter()
             .plan(&http, &target, &input)
@@ -1268,10 +1323,10 @@ async fn qbittorrent_5_2_sign_in_cookie_and_answers() {
     assert_eq!(
         names(&plan),
         [
+            "webui.password",
             "downloads.categories",
             "downloads.save_path",
-            "network.interface",
-            "webui.password"
+            "network.interface"
         ]
     );
     qbit().apply(&http, &target, &input, &plan).await.unwrap();
@@ -1284,7 +1339,13 @@ async fn qbittorrent_5_2_sign_in_cookie_and_answers() {
             .changes()
             .is_empty()
     );
-    for s in server.seen().iter().filter(|s| !s.path.ends_with("/login")) {
+    // Every call but the sign-in and the unauthenticated bypass probe
+    // carries 5.2's cookie.
+    for s in server
+        .seen()
+        .iter()
+        .filter(|s| !s.path.ends_with("/login") && !s.path.ends_with("/version"))
+    {
         assert!(
             s.header("cookie")
                 .unwrap()
@@ -1299,5 +1360,308 @@ async fn qbittorrent_5_2_sign_in_cookie_and_answers() {
     assert_eq!(
         qbit().plan(&http, &target, &input).await,
         Err(AdapterError::Unauthorized)
+    );
+}
+
+// ─── Review round: binding, bypass, lockout, loosening ─────────────────
+
+#[tokio::test]
+async fn webui_binding_is_only_for_companions_lodestar_installed() {
+    capture();
+    let server = Server::start(qbit_handler(qbit_state(GENERATED))).await;
+    let lo = server.loopback();
+    let creds = qbit_creds(GENERATED);
+    // Your own qBittorrent on loopback may be a container with a published
+    // port: binding it to 127.0.0.1 would cut off Docker's forward.
+    for input in [
+        ConfigureInput::new(&creds)
+            .confirmed(Confirmation::of(lo.clone()))
+            .webui(WebUiBind::Loopback),
+        ConfigureInput::new(&creds)
+            .guided(Confirmation::of(lo.clone()), Secret::new(TEMPORARY))
+            .webui(WebUiBind::Loopback),
+    ] {
+        assert_eq!(
+            qbit().plan(&http(), &lo, &input).await,
+            Err(AdapterError::Refused(BIND_UNSUITED))
+        );
+    }
+    assert_eq!(server.count(), 0);
+}
+
+#[tokio::test]
+async fn guided_install_under_an_auth_bypass_always_writes_the_password() {
+    capture();
+    let state = qbit_state(TEMPORARY);
+    {
+        let mut s = state.lock().unwrap();
+        s.bypass = true;
+        s.username = "admin".into();
+    }
+    let server = Server::start(qbit_handler(Arc::clone(&state))).await;
+    let target = server.entered();
+    let creds = qbit_creds(GENERATED);
+    let input = ConfigureInput::new(&creds)
+        .guided(Confirmation::of(target.clone()), Secret::new(TEMPORARY))
+        .username(Username::parse("admin").unwrap());
+    let http = http();
+    // Any password signs in, so the stored one "works" too; the probe sees
+    // the bypass and the plan writes the new password anyway.
+    let plan = qbit().plan(&http, &target, &input).await.unwrap();
+    assert_eq!(names(&plan), ["webui.password"]);
+    qbit().apply(&http, &target, &input, &plan).await.unwrap();
+    assert_eq!(state.lock().unwrap().password, GENERATED);
+    // The check can't be made under a bypass, so a guided plan keeps
+    // writing it (decisions file); CMP-5g confirms the origin after.
+    let again = qbit().plan(&http, &target, &input).await.unwrap();
+    assert_eq!(names(&again), ["webui.password"]);
+    let confirmed = ConfigureInput::new(&creds)
+        .confirmed(Confirmation::of(target.clone()))
+        .username(Username::parse("admin").unwrap());
+    assert!(
+        qbit()
+            .plan(&http, &target, &confirmed)
+            .await
+            .unwrap()
+            .changes()
+            .is_empty()
+    );
+    clean_urls(&server.seen());
+}
+
+#[tokio::test]
+async fn turning_local_auth_on_never_locks_lodestar_out() {
+    capture();
+    // qBittorrent lets loopback in without a password, and the password
+    // Lodestar holds is wrong.
+    let state = qbit_state(GENERATED);
+    {
+        let mut s = state.lock().unwrap();
+        s.bypass_from_prefs = true;
+        s.prefs.insert("bypass_local_auth".into(), true.into());
+    }
+    let server = Server::start(qbit_handler(Arc::clone(&state))).await;
+    let target = server.loopback();
+    let wrong = qbit_creds(WRONG);
+    let input = ConfigureInput::new(&wrong).installed(receipt(&target));
+    let http = http();
+    let plan = qbit().plan(&http, &target, &input).await.unwrap();
+    assert_eq!(names(&plan), ["webui.local_auth"]);
+    let e = qbit()
+        .apply(&http, &target, &input, &plan)
+        .await
+        .unwrap_err();
+    assert_eq!(e, AdapterError::Refused(qbittorrent::LOCAL_AUTH_LOCKOUT));
+    clean_error(&e);
+    // The bypass went back on, so Lodestar still reaches it.
+    assert_eq!(state.lock().unwrap().prefs["bypass_local_auth"], true);
+
+    // With the right password it turns off and stays off.
+    let creds = qbit_creds(GENERATED);
+    let input = ConfigureInput::new(&creds).installed(receipt(&target));
+    let plan = qbit().plan(&http, &target, &input).await.unwrap();
+    qbit().apply(&http, &target, &input, &plan).await.unwrap();
+    assert_eq!(state.lock().unwrap().prefs["bypass_local_auth"], false);
+    assert!(
+        qbit()
+            .plan(&http, &target, &input)
+            .await
+            .unwrap()
+            .changes()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn a_bind_address_route_is_idempotent() {
+    capture();
+    let state = qbit_state(GENERATED);
+    let server = Server::start(qbit_handler(Arc::clone(&state))).await;
+    let target = server.loopback();
+    let creds = qbit_creds(GENERATED);
+    let ip = configure::BindIp::new("10.8.0.2".parse().unwrap()).unwrap();
+    let input = ConfigureInput::new(&creds)
+        .installed(receipt(&target))
+        .route(Route::BindAddress(ip));
+    let http = http();
+    let plan = qbit().plan(&http, &target, &input).await.unwrap();
+    assert_eq!(names(&plan), ["network.bind_address"]);
+    qbit().apply(&http, &target, &input, &plan).await.unwrap();
+    assert_eq!(
+        state.lock().unwrap().prefs["current_interface_address"],
+        "10.8.0.2"
+    );
+    assert_eq!(state.lock().unwrap().prefs["current_network_interface"], "");
+    assert!(
+        qbit()
+            .plan(&http, &target, &input)
+            .await
+            .unwrap()
+            .changes()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn your_own_companions_routes_are_never_loosened() {
+    capture();
+    // qBittorrent you set up yourself, bound to a VPN interface.
+    let state = qbit_state(GENERATED);
+    state
+        .lock()
+        .unwrap()
+        .prefs
+        .insert("current_network_interface".into(), "tun0".into());
+    let server = Server::start(qbit_handler(Arc::clone(&state))).await;
+    let target = server.entered();
+    let creds = qbit_creds(GENERATED);
+    let http = http();
+    let yours = |route: Route| {
+        ConfigureInput::new(&creds)
+            .confirmed(Confirmation::of(target.clone()))
+            .route(route)
+    };
+    for route in [
+        Route::Direct,
+        Route::Interface(InterfaceName::parse("wg0").unwrap()),
+        Route::BindAddress(configure::BindIp::new("10.8.0.2".parse().unwrap()).unwrap()),
+    ] {
+        assert_eq!(
+            qbit().plan(&http, &target, &yours(route)).await,
+            Err(AdapterError::Refused(WOULD_LOOSEN))
+        );
+    }
+    assert!(
+        qbit()
+            .plan(&http, &target, &yours(tun0()))
+            .await
+            .unwrap()
+            .changes()
+            .is_empty()
+    );
+    // A plan made for an install is refused at apply for your own: the
+    // binding is read again first.
+    let lo_target = server.loopback();
+    let installed = ConfigureInput::new(&creds)
+        .installed(receipt(&lo_target))
+        .route(Route::Direct);
+    let plan = qbit().plan(&http, &lo_target, &installed).await.unwrap();
+    assert_eq!(names(&plan), ["network.interface"]);
+    assert_eq!(
+        qbit()
+            .apply(&http, &target, &yours(Route::Direct), &plan)
+            .await,
+        Err(AdapterError::Refused(WOULD_LOOSEN))
+    );
+    assert_eq!(
+        state.lock().unwrap().prefs["current_network_interface"],
+        "tun0"
+    );
+    // Binding one where none is set only narrows it.
+    state
+        .lock()
+        .unwrap()
+        .prefs
+        .insert("current_network_interface".into(), "".into());
+    assert_eq!(
+        names(&qbit().plan(&http, &target, &yours(tun0())).await.unwrap()),
+        ["network.interface"]
+    );
+
+    // Prowlarr you set up yourself, already behind a SOCKS5 proxy.
+    let pstate = prowlarr_state();
+    {
+        let mut s = pstate.lock().unwrap();
+        s.host.insert("proxyEnabled".into(), true.into());
+        s.host.insert("proxyType".into(), "socks5".into());
+        s.host.insert("proxyHostname".into(), "10.0.0.9".into());
+        s.host.insert("proxyPort".into(), 1080.into());
+    }
+    let pserver = Server::start(prowlarr_handler(Arc::clone(&pstate))).await;
+    let ptarget = pserver.entered();
+    let pcreds = Creds(HashMap::from([("api_key", API_KEY)]));
+    for route in [Route::Direct, socks5()] {
+        let input = ConfigureInput::new(&pcreds)
+            .confirmed(Confirmation::of(ptarget.clone()))
+            .route(route);
+        assert_eq!(
+            prowlarr_adapter().plan(&http, &ptarget, &input).await,
+            Err(AdapterError::Refused(WOULD_LOOSEN))
+        );
+    }
+    assert!(pserver.seen().iter().all(|s| s.method == "GET"));
+    // Lodestar's own install may be switched back to direct.
+    let plo = pserver.loopback();
+    let input = ConfigureInput::new(&pcreds)
+        .installed(receipt(&plo))
+        .route(Route::Direct);
+    assert_eq!(
+        names(&prowlarr_adapter().plan(&http, &plo, &input).await.unwrap()),
+        ["proxy.enabled"]
+    );
+}
+
+fn login_oversized() -> Reply {
+    reply(200, vec![b'O'; 300 * 1024])
+}
+fn login_error() -> Reply {
+    reply(500, "Internal Server Error")
+}
+fn categories_malformed() -> Reply {
+    reply(200, r#"{"lodestar":{"savePath":"/a"},"lodestar":{}}"#)
+}
+
+#[tokio::test]
+async fn qbittorrent_hostile_sign_in_categories_and_a_lost_password_write() {
+    capture();
+    let creds = qbit_creds(GENERATED);
+    let http = http();
+    for (login, want) in [
+        (login_oversized as fn() -> Reply, AdapterError::TooLarge),
+        (login_error, AdapterError::Protocol("sign-in answer")),
+    ] {
+        let state = qbit_state(GENERATED);
+        state.lock().unwrap().hostile_login = Some(login);
+        let server = Server::start(qbit_handler(state)).await;
+        let target = server.loopback();
+        let input = ConfigureInput::new(&creds).installed(receipt(&target));
+        assert_eq!(qbit().plan(&http, &target, &input).await, Err(want));
+    }
+    let state = qbit_state(GENERATED);
+    state.lock().unwrap().hostile_categories = Some(categories_malformed);
+    let server = Server::start(qbit_handler(state)).await;
+    let target = server.loopback();
+    let input = ConfigureInput::new(&creds)
+        .installed(receipt(&target))
+        .downloads(downloads());
+    assert_eq!(
+        qbit().plan(&http, &target, &input).await,
+        Err(AdapterError::Protocol("categories"))
+    );
+
+    // The password write is taken but never answered: the apply times out
+    // on the client's own deadline, and a retry finds the new password in
+    // place and nothing left to do.
+    let state = qbit_state(TEMPORARY);
+    state.lock().unwrap().silent_password_once = true;
+    let server = Server::start(qbit_handler(Arc::clone(&state))).await;
+    let target = server.loopback();
+    let input = ConfigureInput::new(&creds)
+        .guided(Confirmation::of(target.clone()), Secret::new(TEMPORARY));
+    let plan = qbit().plan(&http, &target, &input).await.unwrap();
+    assert_eq!(names(&plan), ["webui.password"]);
+    let e = qbit()
+        .apply(&http, &target, &input, &plan)
+        .await
+        .unwrap_err();
+    assert_eq!(e, AdapterError::Timeout);
+    assert_eq!(state.lock().unwrap().password, GENERATED);
+    assert!(
+        qbit()
+            .plan(&http, &target, &input)
+            .await
+            .unwrap()
+            .changes()
+            .is_empty()
     );
 }

@@ -974,7 +974,10 @@ impl<'a> ConfigureInput<'a> {
     }
 
     /// A guided install you confirmed, with the temporary password you
-    /// pasted (plan Q19).
+    /// pasted (plan Q19). The generated password that replaces it must
+    /// already be stored durably as the companion's credential
+    /// (`credentials::PasswordChange`): `apply` reads it from
+    /// [`Credentials`] and writes it into qBittorrent.
     pub fn guided(mut self, confirmation: Confirmation, temporary: Secret) -> ConfigureInput<'a> {
         self.origin = Origin::Guided {
             confirmation,
