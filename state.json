@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-08T04:22:33Z",
+  "updated_at": "2026-11-08T04:29:08Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6715,7 +6715,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T04:22:33Z",
+    "updated": "2026-11-08T04:29:08Z",
     "items": [
       {
         "slot": 1,
@@ -6738,7 +6738,7 @@
         "slice": "CMP-2",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBjswJ9d8Qu8vvTvyu; #600 round-3 delta MERGE at d3952e2c; final small push (switch skips sweep when unsynced; docs peak ~250 MB) -> runner self-check -> merge",
+        "doing": "session_01MMjhnBjswJ9d8Qu8vvTvyu; #600 final push 220d4723 self-checked OK; awaiting green CI then merge",
         "since": "2026-11-08T00:55Z"
       },
       {
@@ -6746,7 +6746,7 @@
         "slice": "WK-10c",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f; #601 review CHANGES (B1 tests: heartbeat stats, back-off, state save; +4 small); web/** labels approved; fix push pending",
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f; #601 fix push a179e892 green; delta review running",
         "since": "2026-11-08T01:53Z"
       }
     ],
