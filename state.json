@@ -6493,7 +6493,12 @@
       "from": "#639 CMP-6",
       "what": "If a guided qBittorrent's replaced password must be revealable, add a provenance marker; CMP-6 reveals only Lodestar-generated credentials. Add to CMP-5g notes in next runner PR."
     },
-    "2026-11-08: #636 OP-1 security review MERGE (c0f43b2d); notes for OP-2: pin checkout by SHA once id-token/secrets land; attempt-1 rule for dispatch-down optional; live inventory must filter to fleet account+tag."
+    "2026-11-08: #636 OP-1 security review MERGE (c0f43b2d); notes for OP-2: pin checkout by SHA once id-token/secrets land; attempt-1 rule for dispatch-down optional; live inventory must filter to fleet account+tag.",
+    {
+      "id": "OP-2-notes",
+      "from": "#636 reviews",
+      "what": "Owner setup: hourly reaper creates the cloud-fleet environment before step 2.4 \u2014 owner edits it to main-only rather than creating it. OP-2: down with no fleet.json (write fleet.json before apply or let down run anyway); mismatch with no fleet recorded; max_fleets unused; monthly_compute_cap_usd unbounded in limits.load; attempt-1 rule for dispatch-down optional; live inventory filtered to fleet account+tag."
+    }
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
