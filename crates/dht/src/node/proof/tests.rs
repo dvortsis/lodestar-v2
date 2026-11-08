@@ -755,6 +755,41 @@ async fn in_flight_samples_are_sealed_for_the_full_horizon() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_scaled_cooldown_is_saved_as_the_horizon() {
+    // WK-10e: a 48 h cooldown (scale 8) doesn't fail the snapshot. It's
+    // saved and restored for the horizon, so every node's own interval
+    // (at most `MAX_INTERVAL`) still holds after the restart.
+    let d = Dirs::new("wk10e");
+    let c = clock();
+    let mut r = Run::boot(&d, &c, true);
+    advance(horizon()).await;
+    r.tick();
+    let max = super::super::sampler::MAX_INTERVAL;
+    assert!(r.sampler.reserve(addr(5), 9, Instant::now()));
+    assert!(
+        r.sampler
+            .complete_scaled(addr(5), 9, max, 8, Instant::now())
+    );
+    let saved_at = Instant::now();
+    let Run {
+        mut proof,
+        mut sampler,
+        stats,
+    } = r;
+    proof
+        .commit(&mut sampler, &state(), &d.state_path(), &stats)
+        .unwrap()
+        .unwrap();
+    let mut r = Run::boot(&d, &c, true);
+    advance(saved_at + horizon() - Instant::now() - Duration::from_secs(1)).await;
+    r.tick();
+    assert_eq!(r.proof.reason(), Reason::Resumed, "the snapshot loaded");
+    assert!(!r.sampler.reserve(addr(5), 1, Instant::now()));
+    advance(Duration::from_secs(2)).await;
+    assert!(r.sampler.reserve(addr(5), 2, Instant::now()));
+}
+
+#[tokio::test(start_paused = true)]
 async fn the_marker_carries_the_ids_saved_at_shutdown() {
     // P2: BEP 42 rotated the ids mid-run; dht-state.bin is saved with the
     // new ones, and the next start (which loads them) resumes.

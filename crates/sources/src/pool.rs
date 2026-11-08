@@ -129,6 +129,10 @@ pub struct PoolConfig {
     pub max_sockets: usize,
     /// Concurrent connections to one IP.
     pub per_ip: usize,
+    /// A fleet member's per-peer-IP share from the start (WK-10e), so it
+    /// never dials before it has it; `None` (the default) is `per_ip`
+    /// alone. [`PoolHandle::set_ip_cap`] changes it.
+    pub ip_cap: IpCap,
     /// Keys queued or in flight; beyond this the oldest idle key is evicted.
     pub max_pending: usize,
     pub max_peers_per_key: usize,
@@ -549,6 +553,7 @@ impl Default for PoolConfig {
         PoolConfig {
             max_sockets: 400,
             per_ip: 2,
+            ip_cap: IpCap::default(),
             max_pending: 200_000,
             max_peers_per_key: 32,
             max_lookups: 256,
@@ -669,8 +674,37 @@ fn failure_index(kind: FailureKind) -> usize {
     }
 }
 
+/// How many connections this install may open to one peer IP (WK-10e,
+/// plan Q9): a fleet member's share of one install's limit, so the members
+/// behind one public address together never open more than one install
+/// would. 0 means never dial that IP (another member's bucket). The pool
+/// never goes above its own `per_ip` whatever this says.
+pub trait PeerIpCap: Send + Sync + 'static {
+    fn connections_to(&self, ip: IpAddr) -> usize;
+}
+
+/// A [`PeerIpCap`] in a [`PoolConfig`]: `None` is `per_ip` alone.
+#[derive(Clone, Default)]
+pub struct IpCap(pub Option<Arc<dyn PeerIpCap>>);
+
+impl std::fmt::Debug for IpCap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() {
+            "IpCap(policy)"
+        } else {
+            "IpCap(None)"
+        })
+    }
+}
+
+/// `per_ip`, or the policy's cap for `ip` if one is set, whichever is lower.
+fn cap_for(policy: Option<&Arc<dyn PeerIpCap>>, per_ip: usize, ip: IpAddr) -> usize {
+    policy.map_or(per_ip, |p| p.connections_to(ip).min(per_ip))
+}
+
 enum Cmd {
     SetWeight(SourceId, u32),
+    SetIpCap(Option<Arc<dyn PeerIpCap>>),
     Interest(InfoHash, oneshot::Sender<bool>),
     Snapshot(oneshot::Sender<Vec<QueuedKey>>),
     Queued(oneshot::Sender<Vec<(SourceId, usize)>>),
@@ -714,6 +748,14 @@ impl PoolHandle {
     /// lookups already out finish or time out as usual.
     pub async fn set_paused(&self, paused: bool) {
         let _ = self.cmds.send(Cmd::SetPaused(paused)).await;
+    }
+
+    /// Sets the per-peer-IP policy (WK-10e); `None` is `per_ip` alone, as
+    /// a single install. It applies to the next dial: a connection already
+    /// open finishes, and a peer the policy no longer allows is skipped
+    /// from then on.
+    pub async fn set_ip_cap(&self, cap: Option<Arc<dyn PeerIpCap>>) {
+        let _ = self.cmds.send(Cmd::SetIpCap(cap)).await;
     }
 
     /// Drops every key only `source` found, in whatever state (a fetch in
@@ -1209,6 +1251,7 @@ impl Pool {
                 }
                 let _ = reply.send(queue);
             }
+            Cmd::SetIpCap(cap) => self.cfg.ip_cap = IpCap(cap),
             Cmd::SetPaused(paused) => {
                 self.cfg.paused = paused;
                 // A paused pool grants nothing, so it keeps no permit back.
@@ -1364,6 +1407,10 @@ impl Pool {
             .map(lodestar_network_policy::normalize)
         {
             if !self.fetcher.allows(p) {
+                continue;
+            }
+            // Another member's bucket: never dialled from here.
+            if cap_for(self.cfg.ip_cap.0.as_ref(), self.cfg.per_ip, p.ip()) == 0 {
                 continue;
             }
             if e.peers.contains(&p) {
@@ -2103,6 +2150,19 @@ impl Pool {
     }
 
     /// Schedules the next lookup, or gives up if there won't be one.
+    /// A key with no peer left that this install may dial: a stream keeps
+    /// its lookup (its next batch or its end brings the key back), and any
+    /// other key backs off for its next lookup, as after a failure.
+    fn out_of_peers(&mut self, key: InfoHash) {
+        if self.requests.get(&key).is_some_and(|r| r.streaming) {
+            let e = self.entries.get_mut(&key).expect("present");
+            e.state = State::Lookup;
+            e.generation = next_generation(&mut self.generations);
+        } else {
+            self.back_off(key);
+        }
+    }
+
     fn back_off(&mut self, key: InfoHash) {
         let (base, max_attempts) = (self.cfg.retry_backoff, self.cfg.max_attempts);
         let e = self.entries.get_mut(&key).expect("present");
@@ -2152,13 +2212,29 @@ impl Pool {
             let Some(key) = self.next_ready() else {
                 break;
             };
-            let per_ip = self.cfg.per_ip;
+            let (per_ip, policy) = (self.cfg.per_ip, self.cfg.ip_cap.0.as_ref());
             let e = self.entries.get_mut(&key).expect("validated");
-            let pick = (e.tried..e.peers.len())
-                .find(|&i| self.per_ip.get(&e.peers[i].ip()).copied().unwrap_or(0) < per_ip);
+            let pick = (e.tried..e.peers.len()).find(|&i| {
+                let ip = e.peers[i].ip();
+                self.per_ip.get(&ip).copied().unwrap_or(0) < cap_for(policy, per_ip, ip)
+            });
             let Some(i) = pick else {
-                // Every untried peer's IP is busy; try again next round.
-                deferred.push(key);
+                // Peers the policy no longer lets this install dial (it
+                // changed since they were added) are dropped, so the key
+                // isn't put off for ever (WK-10e).
+                let tried = e.tried;
+                let mut at = 0;
+                e.peers.retain(|p| {
+                    let keep = at < tried || cap_for(policy, per_ip, p.ip()) > 0;
+                    at += 1;
+                    keep
+                });
+                if e.has_untried() {
+                    // Every untried peer's IP is busy; try again next round.
+                    deferred.push(key);
+                } else {
+                    self.out_of_peers(key);
+                }
                 continue;
             };
             e.peers.swap(e.tried, i);

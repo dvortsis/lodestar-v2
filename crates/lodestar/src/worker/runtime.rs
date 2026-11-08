@@ -33,7 +33,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use lodestar_cluster::assign::Assignment;
+use lodestar_cluster::assign::{Assignment, Politeness};
 use lodestar_cluster::proto::{
     ClaimItem, GrantItem, HintItem, MAX_HINTS, MAX_OPAQUE, MAX_OUTCOME_BATCH, Outcome, OutcomeItem,
     Payload, SnapshotAck, SnapshotChunk, SnapshotKind, ToCoordinator,
@@ -297,8 +297,13 @@ struct Shared {
     /// per stage run applies the latest value to the pool, so no caller
     /// waits on the pool's command channel (#601's review).
     pool_paused: watch::Sender<bool>,
+    /// This worker's per-peer-IP share for the pool (WK-10e), from the
+    /// current assignment; the pause task applies each change.
+    politeness: watch::Sender<Politeness>,
     /// What the pool was last told (`apply_pause`).
     pool_told: watch::Sender<bool>,
+    /// The share the pool was last told (`apply_pause`).
+    share_told: watch::Sender<Politeness>,
     /// Results waiting for a sealable key.
     waiting: std::sync::atomic::AtomicUsize,
     /// A new session's first `Assign` applies whatever its revision: a
@@ -424,6 +429,8 @@ impl Runtime {
             sampler: Mutex::new(config.seed.unwrap_or_else(super::session::random_jitter)),
             pool: Mutex::new(None),
             pool_paused: watch::channel(false).0,
+            politeness: watch::channel(Politeness::ALONE).0,
+            share_told: watch::channel(Politeness::ALONE).0,
             pool_told: watch::channel(false).0,
             failed: watch::channel(false).0,
             reconnect: watch::channel(0).0,
@@ -597,6 +604,11 @@ impl Runtime {
                     let fresh = s.fresh_session.swap(false, Ordering::AcqRel);
                     if fresh || current.is_none_or(|c| new.revision > c.revision) {
                         *current = Some(new);
+                        // The pool's share follows at once (WK-10e); a
+                        // payload with an invalid one never decoded.
+                        s.politeness.send_if_modified(|p| {
+                            std::mem::replace(p, new.politeness) != new.politeness
+                        });
                     }
                 }
                 start_if_ready(s);
@@ -936,6 +948,8 @@ fn start_if_ready(s: &Arc<Shared>) {
         pool: PoolConfig {
             max_pending: usize::try_from(limits.pool_cap).unwrap_or(usize::MAX),
             max_sockets: limits.max_sockets.min(s.config.pool.max_sockets),
+            // From its first dial (WK-10e); later changes by the pause task.
+            ip_cap: lodestar_sources::IpCap(Some(Arc::new(ShareCap(a.politeness)))),
             ..s.config.pool.clone()
         },
         fetcher: s.config.fetcher.clone(),
@@ -965,6 +979,8 @@ fn start_if_ready(s: &Arc<Shared>) {
         running.pool.clone(),
         s.pool_paused.subscribe(),
         s.pool_told.clone(),
+        s.politeness.subscribe(),
+        s.share_told.clone(),
     ));
     *lock(&s.pool) = Some(running.pool);
     *stages = Some(Stages {
@@ -1007,6 +1023,7 @@ fn want_dht(s: &Shared) {
         Desired::Run(Want {
             shard,
             intensity: super::budget::Limits::of(&a).intensity,
+            sample_scale: a.politeness.bep51_interval_scale,
         })
     };
     if let Some(tx) = lock(&s.dht_want).as_ref() {
@@ -1225,24 +1242,50 @@ impl Shared {
     }
 }
 
-/// Tells the pool the latest pause [`Shared::refresh_pause`] decided, in
-/// order, for as long as the stages run.
+/// This worker's per-peer-IP share, as the pool asks for it (WK-10e): 0
+/// for a peer IP in another same-IP member's bucket.
+pub(crate) struct ShareCap(pub(crate) Politeness);
+
+impl lodestar_sources::PeerIpCap for ShareCap {
+    fn connections_to(&self, ip: std::net::IpAddr) -> usize {
+        usize::from(self.0.connections_to(ip))
+    }
+}
+
+/// Tells the pool the latest pause [`Shared::refresh_pause`] decided, and
+/// the latest per-peer-IP share, in order, for as long as the stages run.
+/// A changed share applies to the pool's next dial: connections already
+/// open finish (WK-10e).
 async fn apply_pause(
     pool: lodestar_sources::PoolHandle,
     mut want: watch::Receiver<bool>,
     told_tx: watch::Sender<bool>,
+    mut share: watch::Receiver<Politeness>,
+    share_told: watch::Sender<Politeness>,
 ) {
-    // The pool starts unpaused.
+    // The pool starts unpaused, with the share it was built with.
     let mut told = false;
     told_tx.send_replace(false);
+    let mut shared = *share.borrow_and_update();
+    share_told.send_replace(shared);
     loop {
+        let now = *share.borrow_and_update();
+        if now != shared {
+            pool.set_ip_cap(Some(Arc::new(ShareCap(now)))).await;
+            shared = now;
+            share_told.send_replace(now);
+        }
         let pause = *want.borrow_and_update();
         if pause != told {
             pool.set_paused(pause).await;
             told = pause;
             told_tx.send_replace(pause);
         }
-        if want.changed().await.is_err() {
+        let changed = tokio::select! {
+            r = want.changed() => r,
+            r = share.changed() => r,
+        };
+        if changed.is_err() {
             return;
         }
     }
@@ -1963,7 +2006,7 @@ mod tests {
 
     /// WK-10c's gate: a live `Assign` with a new shard restarts the DHT
     /// node and nothing else: the stages and the session carry on. A new
-    /// intensity alone restarts nothing.
+    /// intensity alone restarts nothing, nor does a new BEP 51 scale.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_live_shard_change_restarts_only_the_dht() {
         let (mut rt, _coord, _session) = started_with_dht(super::super::dht::LINGER).await;
@@ -2000,8 +2043,20 @@ mod tests {
         })
         .await;
         assert_eq!(counts.starts.load(Ordering::Relaxed), 2, "no restart");
+        // Same shard, another BEP 51 share (WK-10e): applied, no restart.
+        let mut a = Assignment::from_message(&assign_dht(4, Some(b), Intensity::Low))
+            .unwrap()
+            .unwrap();
+        a.politeness.bep51_interval_scale = 3;
+        rt.event(WorkerEvent::Assign(a.to_message().unwrap()));
+        until("the node has the new scale", || {
+            let n = counts.scale_changes.load(Ordering::Relaxed);
+            (n == 1, n)
+        })
+        .await;
+        assert_eq!(counts.starts.load(Ordering::Relaxed), 2, "no restart");
         // An assignment without a DHT stops it, and only it.
-        rt.event(WorkerEvent::Assign(assign_dht(4, None, Intensity::Low)));
+        rt.event(WorkerEvent::Assign(assign_dht(5, None, Intensity::Low)));
         until("the DHT stopped", || {
             let now = *running.borrow();
             (now.is_none(), now)
@@ -2605,6 +2660,148 @@ mod tests {
         );
         assert!(d.reply);
         assert!(rx.try_recv().is_err());
+        rt.shutdown().await;
+    }
+
+    /// Holds every fetch until `open`, and records what it dialled, what
+    /// finished and what was dropped unfinished.
+    #[derive(Default)]
+    struct GatedState {
+        open: Mutex<Option<watch::Sender<bool>>>,
+        info: Mutex<HashMap<InfoHash, Vec<u8>>>,
+        dials: Mutex<Vec<SocketAddr>>,
+        finished: AtomicU64,
+        dropped: Arc<AtomicU64>,
+    }
+
+    struct Gated(Arc<GatedState>);
+
+    /// Counts a fetch dropped before it finished.
+    struct DropFlag(Option<Arc<AtomicU64>>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            if let Some(n) = self.0.take() {
+                n.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    impl Fetcher for Gated {
+        fn fetch(
+            &self,
+            peer: SocketAddr,
+            key: InfoHash,
+        ) -> BoxFuture<'static, Result<Fetched, FailureKind>> {
+            lock(&self.0.dials).push(peer);
+            let s = self.0.clone();
+            let mut open = lock(&s.open)
+                .get_or_insert_with(|| watch::channel(false).0)
+                .subscribe();
+            Box::pin(async move {
+                let mut flag = DropFlag(Some(s.dropped.clone()));
+                let _ = open.wait_for(|o| *o).await;
+                flag.0 = None;
+                s.finished.fetch_add(1, Ordering::Relaxed);
+                lock(&s.info)
+                    .get(&key)
+                    .cloned()
+                    .map(|info| Fetched {
+                        info,
+                        v2: false,
+                        encrypted: false,
+                        pex: Vec::new(),
+                        client: None,
+                    })
+                    .ok_or(FailureKind::Refused)
+            })
+        }
+    }
+
+    /// The brief's gate (WK-10e): an `Assign` that changes this worker's
+    /// share applies to the running pool with no restart. A fetch already
+    /// out to a peer IP that's no longer ours finishes; a new key's peer on
+    /// that IP is never dialled, and its peer on an IP still ours is.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_live_share_change_applies_without_a_restart() {
+        use lodestar_cluster::assign::peer_ip_bucket;
+        let gated = Arc::new(GatedState::default());
+        let mut rt = Runtime::start(config(Arc::new(Gated(gated.clone()))));
+        let (_coord, session) = session_pair_with(1).await;
+        rt.connected(session.handle());
+        rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
+        let (_, chunks) = filter_chunks().await;
+        for c in chunks {
+            rt.event(WorkerEvent::Snapshot(c));
+        }
+        until("started", || (rt.is_started(), ())).await;
+
+        // Two public addresses in different buckets of two.
+        let ours: SocketAddr = "203.0.113.9:6881".parse().unwrap();
+        let theirs = (1..=250u8)
+            .map(|i| SocketAddr::from(([198, 51, 100, i], 6881)))
+            .find(|p| peer_ip_bucket(p.ip(), 2) != peer_ip_bucket(ours.ip(), 2))
+            .unwrap();
+        let first = info("in flight");
+        lock(&gated.info).insert(key_of(&first), first.clone());
+        granted(
+            &rt.shared,
+            key_of(&first),
+            Token(1),
+            vec![theirs],
+            unix_now(),
+        );
+        until("dialled", || (lock(&gated.dials).contains(&theirs), ())).await;
+
+        // The new share: two groups, ours the one `ours` is in.
+        let share = Politeness {
+            peer_ip_groups: 2,
+            peer_ip_group: peer_ip_bucket(ours.ip(), 2),
+            per_peer_ip: 1,
+            bep51_interval_scale: 2,
+        };
+        let mut a = Assignment::from_message(&assignment(2, 0, 1))
+            .unwrap()
+            .unwrap();
+        a.politeness = share;
+        rt.event(WorkerEvent::Assign(a.to_message().unwrap()));
+        until("the pool told", || {
+            let told = *rt.shared.share_told.borrow();
+            (told == share, told)
+        })
+        .await;
+        // Ordered behind the pool's own commands, so it has the new cap.
+        let pool = lock(&rt.shared.pool).clone().unwrap();
+        pool.queued().await;
+
+        let second = info("after the change");
+        lock(&gated.info).insert(key_of(&second), second.clone());
+        granted(
+            &rt.shared,
+            key_of(&second),
+            Token(2),
+            vec![
+                SocketAddr::new(theirs.ip(), 6882),
+                SocketAddr::new(ours.ip(), 6881),
+            ],
+            unix_now(),
+        );
+        until("dialled ours", || (lock(&gated.dials).contains(&ours), ())).await;
+        lock(&gated.open)
+            .get_or_insert_with(|| watch::channel(false).0)
+            .send_replace(true);
+        until("both fetches finished", || {
+            let n = gated.finished.load(Ordering::Relaxed);
+            (n == 2, n)
+        })
+        .await;
+        let dials = lock(&gated.dials).clone();
+        assert_eq!(
+            dials.iter().filter(|p| p.ip() == theirs.ip()).count(),
+            1,
+            "only the fetch from before the change: {dials:?}"
+        );
+        assert_eq!(gated.dropped.load(Ordering::Relaxed), 0, "nothing dropped");
         rt.shutdown().await;
     }
 
@@ -3249,6 +3446,7 @@ mod tests {
                 clock: Arc::new(lodestar_cluster::SystemClock),
                 placement: Arc::new(Placement::new(false)),
                 coordinator_dht: None,
+                coordinator_share: None,
                 held: None,
                 fleet: Some(Fleet {
                     stored: Arc::new(monitor),

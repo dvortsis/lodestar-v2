@@ -580,10 +580,17 @@ impl Proof {
             // resumed one carries forward what it inherited (N1).
             let gate = self.gate_until;
             let now = clock.mono();
+            // A scaled cooldown (WK-10e, up to 48 h) is saved as at most
+            // the horizon: every node's own interval still holds across
+            // the restart; only a member's extra share of it is cut.
+            let horizon = now + self.horizon;
             let snapshot = restart::capture_now(
                 clock.as_ref(),
                 run,
-                sampler.restrictions(now).collect::<Vec<_>>(),
+                sampler
+                    .restrictions(now)
+                    .map(|(addr, until)| (addr, until.min(horizon)))
+                    .collect::<Vec<_>>(),
                 gate,
                 self.horizon_s,
             )

@@ -41,6 +41,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
+use lodestar_cluster::assign::Politeness;
 use lodestar_cluster::proto::{
     HintItem, Outcome, Payload, ReverifyReply, SnapshotAck, SnapshotKind,
 };
@@ -94,6 +95,9 @@ pub struct Wiring {
     /// handle): its address vote is the coordinator's public address for
     /// the planner (`set_coordinator_ips`, WK-5). `None`: no DHT.
     pub coordinator_dht: Option<CoordinatorDht>,
+    /// Applies the coordinator's own share of the plan to its pool and its
+    /// DHT (WK-10e, [`CoordinatorShare`]). `None`: nothing to apply it to.
+    pub coordinator_share: Option<Arc<dyn ApplyShare>>,
     /// The built-in worker's held set (`PipelineConfig::held`): a worker's
     /// floor report goes into it as the sink takes it, so the built-in worker refuses
     /// the key too (WK-10d). `None` in tests that need none.
@@ -102,6 +106,62 @@ pub struct Wiring {
 
 /// The coordinator DHT's handle slot, set while its node runs.
 pub type CoordinatorDht = Arc<std::sync::Mutex<Option<lodestar_dht::node::NodeHandle>>>;
+
+/// Where the coordinator's own share of the plan goes (WK-10e): its
+/// pool's per-peer-IP cap and its DHT's BEP 51 scale, so the coordinator
+/// and the workers behind its public address together act as one install.
+pub trait ApplyShare: Send + Sync + 'static {
+    fn apply(
+        &self,
+        share: Politeness,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
+}
+
+/// The coordinator's pool, and its DHT node while it runs.
+pub struct CoordinatorShare {
+    pub pool: lodestar_sources::PoolHandle,
+    pub dht: Option<CoordinatorDht>,
+}
+
+impl ApplyShare for CoordinatorShare {
+    fn apply(
+        &self,
+        share: Politeness,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
+        let pool = self.pool.clone();
+        let dht = self
+            .dht
+            .as_ref()
+            .and_then(|slot| slot.lock().unwrap_or_else(PoisonError::into_inner).clone());
+        Box::pin(async move {
+            let cap = crate::worker::runtime::ShareCap(share);
+            pool.set_ip_cap(Some(Arc::new(cap))).await;
+            if let Some(node) = dht {
+                node.set_sample_scale(share.bep51_interval_scale).await;
+            }
+        })
+    }
+}
+
+/// `share` if it's a share the protocol accepts (the same check an
+/// `Assign` gets, `AssignError::Field("politeness")` otherwise), so the
+/// coordinator never applies one a worker would refuse.
+fn checked_share(share: Politeness) -> Result<Politeness, lodestar_cluster::assign::AssignError> {
+    lodestar_cluster::assign::Assignment {
+        revision: 1,
+        dht: None,
+        fetch: true,
+        prepare: true,
+        intensity: lodestar_cluster::assign::Intensity::default(),
+        budget: lodestar_cluster::assign::Budget::default(),
+        pool_cap: 1,
+        dict_version: 0,
+        filter_version: 0,
+        politeness: share,
+    }
+    .validate()
+    .map(|()| share)
+}
 
 impl std::fmt::Debug for Wiring {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -967,6 +1027,8 @@ struct Seen {
     key_day: Option<(u32, u32)>,
     /// When the coordinator DHT's address vote was last read.
     address_at: Option<Instant>,
+    /// The coordinator's own share as last applied, and when (WK-10e).
+    share: Option<(Politeness, Instant)>,
 }
 
 /// How often the coordinator DHT's address vote is read.
@@ -994,6 +1056,29 @@ async fn coordinator_address(tick: &Tick, wiring: &Wiring, seen: &mut Seen) {
     if !ips.is_empty() {
         let _ = tick.placement.set_coordinator_ips(ips);
     }
+}
+
+/// Applies the coordinator's own share of the plan (WK-10e): at once when
+/// it changes, and again every [`ADDRESS_EVERY`], so a DHT node started
+/// meanwhile (a settings change restarts it) gets it within a minute. An
+/// invalid share is refused and the last one stands; the coordinator's
+/// DHT shard stays its own (`[dht]` settings), as before.
+async fn coordinator_share(tick: &Tick, wiring: &Wiring, seen: &mut Seen) {
+    let Some(apply) = &wiring.coordinator_share else {
+        return;
+    };
+    let Ok(share) = checked_share(tick.placement.coordinator().politeness) else {
+        return;
+    };
+    let fresh = seen
+        .share
+        .is_some_and(|(s, at)| s == share && at.elapsed() < ADDRESS_EVERY);
+    if fresh {
+        return;
+    }
+    seen.share = Some((share, Instant::now()));
+    // Bounded: a stuck pool or node never holds the tick.
+    let _ = tokio::time::timeout(Duration::from_secs(2), apply.apply(share)).await;
 }
 
 /// Only a public address enters the planner's set: never a loopback,
@@ -1072,10 +1157,9 @@ async fn step(tick: &Arc<Tick>, server: &Arc<ClusterServer>, wiring: &Wiring, se
     tick.steps.fetch_add(1, Ordering::Relaxed);
     let fleet_snapshot = server.snapshot();
     new_sessions(tick, &fleet_snapshot, seen);
-    // The coordinator's own share of a replan (its DHT's shard, its pool's
-    // politeness) is WK-10e's. Members whose queue was full are retried by
-    // the next tick's sync anyway.
+    // Members whose queue was full are retried by the next tick's sync.
     let _ = tick.placement.sync(&fleet_snapshot, server);
+    coordinator_share(tick, wiring, seen).await;
     coordinator_address(tick, wiring, seen).await;
     let Some(fleet) = &tick.fleet else { return };
     let now = wiring.clock.now_secs();
@@ -2108,6 +2192,7 @@ mod tests {
             placement: Arc::new(Placement::new(false)),
             fleet: None,
             coordinator_dht: None,
+            coordinator_share: None,
             held: None,
         }
     }
@@ -3423,6 +3508,80 @@ mod tests {
         s.report(vec![kept]).await.unwrap();
         s.heartbeat().await.unwrap();
         assert_eq!(r.server.snapshot().stale_reports, stale + 1);
+    }
+
+    /// The coordinator's shares as the tick applied them.
+    #[derive(Default)]
+    struct Shares(Mutex<Vec<Politeness>>);
+
+    impl ApplyShare for Shares {
+        fn apply(
+            &self,
+            share: Politeness,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
+            self.0.lock().unwrap().push(share);
+            Box::pin(async {})
+        }
+    }
+
+    /// WK-10e: the tick applies the coordinator's own share of the plan,
+    /// at once when it changes and not again while it holds; a worker that
+    /// may share its public address splits it.
+    #[tokio::test]
+    async fn the_coordinator_applies_its_own_share() {
+        let mut r = rig(None).await;
+        let shares = Arc::new(Shares::default());
+        r.wiring.coordinator_share = Some(shares.clone());
+        r.step().await;
+        r.step().await;
+        assert_eq!(
+            *shares.0.lock().unwrap(),
+            vec![Politeness::ALONE],
+            "alone, applied once"
+        );
+        // A worker whose address is unknown might be behind the
+        // coordinator's: the planner splits the coordinator's share.
+        let _link = session_at(&r.addr, &r.creds).await;
+        until("connected", || {
+            let s = r.sessions();
+            (s.1, s)
+        })
+        .await;
+        r.step().await;
+        let applied = shares.0.lock().unwrap().clone();
+        let now = r.tick.placement.coordinator().politeness;
+        assert_ne!(now, Politeness::ALONE, "the plan split it");
+        assert_eq!(applied, vec![Politeness::ALONE, now]);
+    }
+
+    /// WK-10e: a share the protocol wouldn't accept is refused, so the
+    /// last one stands; never "unlimited".
+    #[test]
+    fn an_invalid_share_is_refused() {
+        assert_eq!(checked_share(Politeness::ALONE), Ok(Politeness::ALONE));
+        for bad in [
+            Politeness {
+                peer_ip_groups: 0,
+                ..Politeness::ALONE
+            },
+            Politeness {
+                peer_ip_group: 1,
+                ..Politeness::ALONE
+            },
+            Politeness {
+                per_peer_ip: 0,
+                ..Politeness::ALONE
+            },
+            Politeness {
+                bep51_interval_scale: 0,
+                ..Politeness::ALONE
+            },
+        ] {
+            assert_eq!(
+                checked_share(bad),
+                Err(lodestar_cluster::assign::AssignError::Field("politeness"))
+            );
+        }
     }
 
     /// WK-8: a worker whose session restarted gets both snapshots again

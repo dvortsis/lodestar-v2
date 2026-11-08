@@ -52,6 +52,9 @@ const HARVEST_QUEUE: usize = 4096;
 pub struct Want {
     pub shard: ShardSpec,
     pub intensity: Intensity,
+    /// The BEP 51 share (`Politeness::bep51_interval_scale`, WK-10e):
+    /// applied to the running node from its next sample answer.
+    pub sample_scale: u8,
 }
 
 /// What the DHT should do now.
@@ -78,6 +81,8 @@ pub struct DhtCounts {
     pub resumes: AtomicU64,
     /// New intensities applied to a running node (no restart).
     pub intensity_changes: AtomicU64,
+    /// New BEP 51 scales applied to a running node (no restart, WK-10e).
+    pub scale_changes: AtomicU64,
     /// Keys the claims' queue had no room for (found again later).
     pub dropped: AtomicU64,
     /// Peer requests that arrived with no node running.
@@ -267,6 +272,12 @@ impl Driver {
                             .fetch_add(1, Ordering::Relaxed);
                     }
                 }
+                if live.want.sample_scale != t.sample_scale {
+                    live.want.sample_scale = t.sample_scale;
+                    if handle.set_sample_scale(t.sample_scale).await {
+                        self.counts.scale_changes.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
                 return Ok(());
             }
             (Some(_), Desired::Run(t)) => {
@@ -280,6 +291,7 @@ impl Driver {
         let config = dht::Config {
             shard: shard.filter(|s| !s.is_full()),
             intensity: dht_intensity(t.intensity),
+            sample_interval_scale: t.sample_scale,
             ..self.base.clone()
         };
         let (tx, harvests) = mpsc::channel(HARVEST_QUEUE);
@@ -493,6 +505,7 @@ mod tests {
         let (_want_tx, want) = watch::channel(Desired::Run(Want {
             shard,
             intensity: Intensity::Balanced,
+            sample_scale: 1,
         }));
         let (finds, _rx) = mpsc::channel(4);
         let (_requests, req_rx) = mpsc::channel(4);
