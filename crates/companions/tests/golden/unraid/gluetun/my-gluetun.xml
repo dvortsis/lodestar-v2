@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>gluetun</Name>
+  <Repository>docker.io/qmcgaw/gluetun@sha256:abababababababababababababababababababababababababababababababab</Repository>
+  <Network>lodestar</Network>
+  <MyIP/>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/qdm12/gluetun</Support>
+  <Project>https://github.com/qdm12/gluetun</Project>
+  <Overview>gluetun, the VPN client companion traffic goes through. Fill in the VPN settings yourself: Lodestar never asks for or stores them. Its firewall blocks all traffic while the VPN is down. Applying it replaces a container or template you already have with the same name: check first. Create the Docker network first: Unraid starts a container on a network it doesn&apos;t know with none.</Overview>
+  <Category>Network:VPN</Category>
+  <WebUI/>
+  <TemplateURL/>
+  <Icon/>
+  <ExtraParams>--cap-add=NET_ADMIN --device=/dev/net/tun</ExtraParams>
+  <PostArgs/>
+  <Config Name="TZ" Target="TZ" Default="Etc/UTC" Mode="rw" Description="Set by Lodestar." Type="Variable" Display="advanced" Required="true" Mask="false">Etc/UTC</Config>
+  <Config Name="VPN_SERVICE_PROVIDER" Target="VPN_SERVICE_PROVIDER" Default="" Mode="rw" Description="You fill this in, from your VPN provider. Lodestar never asks for or stores it." Type="Variable" Display="always" Required="true" Mask="false"/>
+  <Config Name="VPN_TYPE" Target="VPN_TYPE" Default="wireguard" Mode="rw" Description="Set by Lodestar." Type="Variable" Display="advanced" Required="true" Mask="false">wireguard</Config>
+  <Config Name="WIREGUARD_PRIVATE_KEY" Target="WIREGUARD_PRIVATE_KEY" Default="" Mode="rw" Description="You fill this in, from your VPN provider. Lodestar never asks for or stores it." Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="WIREGUARD_ADDRESSES" Target="WIREGUARD_ADDRESSES" Default="" Mode="rw" Description="You fill this in, from your VPN provider. Lodestar never asks for or stores it." Type="Variable" Display="always" Required="true" Mask="true"/>
+</Container>
