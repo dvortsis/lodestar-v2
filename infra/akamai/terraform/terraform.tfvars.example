@@ -1,0 +1,11 @@
+# Copy to terraform.tfvars and customize before any plan.
+region               = "us-east"
+deployment_id        = "test1"
+ssh_public_key_path  = "~/.ssh/lodestar_akamai_ed25519.pub"
+# Replace with your CURRENT public IPv4 followed by /32. Never use 0.0.0.0/0.
+ssh_admin_ipv4_cidr  = "203.0.113.20/32"
+
+# SAFE DEFAULT: no VMs. For first pilot use true + 1 worker.
+deploy_main           = false
+worker_count          = 0
+max_hourly_compute_usd = 0.12

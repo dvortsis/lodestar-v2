@@ -13,3 +13,30 @@ __pycache__/
 /soak-followups/target/
 /web/playwright.*.local.ts
 /node_modules/
+
+# BEGIN LODESTAR CLOUD MIGRATION (managed section)
+# Never commit provider secrets, local state, credential caches or generated plans.
+**/.terraform/
+**/.aws/
+**/.venv/
+**/__pycache__/
+**/.pytest_cache/
+**/terraform.tfvars
+**/*.auto.tfvars
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfplan
+infra/**/state/*.json
+**/secrets/**
+**/.env
+**/.env.*
+!**/.env.example
+**/*.pem
+**/*.key
+**/id_ed25519
+**/id_rsa
+**/*.p12
+**/*.pfx
+**/*.log
+infra/**/*.zip
+# END LODESTAR CLOUD MIGRATION
