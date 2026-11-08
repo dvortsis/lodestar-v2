@@ -11,7 +11,9 @@
 //!   ([`REQUEST`], a [`Request`]), the signed envelope it checked
 //!   ([`ENVELOPE`]) and the downloaded MSI ([`msi_name`]). The service
 //!   account can write all of them, so the helper trusts none of them
-//!   (Q13 rule 3): each is size-capped and parsed as untrusted input.
+//!   (Q13 rule 3): each is size-capped and parsed as untrusted input. The
+//!   helper deletes nothing there; it answers in [`RESULT`] (a
+//!   [`Answer`]), and the service cleans the folder.
 //! - **The staging folder** ([`Staging`]): `%ProgramFiles%\Lodestar\updates`,
 //!   created by the helper with a protected ACL that lets in SYSTEM and
 //!   Administrators only, and checked before every use (rules 1 and 2).
@@ -20,9 +22,9 @@
 //! The helper's steps are in [`super::helper`].
 
 use std::ffi::OsString;
-use std::io;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+
+use std::io;
 
 use lodestar_update::Channel;
 use lodestar_update::semver::Version;
@@ -35,7 +37,14 @@ pub const COMMAND: &str = "update-helper";
 /// `<data>\updates\`: what the service leaves for the helper.
 pub const UPDATES: &str = "updates";
 /// The service's request: which version to install, from which channel.
-pub const REQUEST: &str = "pending";
+/// Not Unix's `pending` (a probation record, which PK-win-upd-3 keeps in
+/// `<data>\bin`).
+pub const REQUEST: &str = "request.json";
+/// The helper's answer to a request.
+pub const RESULT: &str = "result.json";
+/// In staging: the last request the helper handled, so a request is
+/// acted on once (a boot run doesn't repeat it).
+pub const HANDLED: &str = "handled.json";
 /// The signed envelope the service checked, as fetched.
 pub const ENVELOPE: &str = "manifest.json";
 /// The largest request read.
@@ -43,15 +52,41 @@ pub const MAX_REQUEST: u64 = 4 * 1024;
 /// The request's format.
 pub const REQUEST_FORMAT: u32 = 1;
 
-/// `<data>\updates\pending`: the version the service asks for. Every
-/// field is checked again against the signed manifest; the channel must
-/// be the one the manifest is signed for.
+/// `<data>\updates\request.json`: the version the service asks for.
+/// Every field is checked again against the signed manifest; the channel
+/// must be the one the manifest is signed for. `id` is new for each
+/// Install (16 to 64 lowercase hex digits): the helper acts on an id
+/// once.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
     pub format: u32,
+    pub id: String,
     pub version: String,
     pub channel: Channel,
+}
+
+/// `<data>\updates\result.json`: what became of request `id`.
+/// `outcome` is [`super::helper::Outcome::code`] or, refused,
+/// `"refused"` with the refusal's code in `code`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Answer {
+    pub format: u32,
+    pub id: String,
+    pub version: String,
+    pub outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    /// Windows must restart to finish replacing an in-use file.
+    #[serde(default)]
+    pub restart: bool,
+    pub at: u64,
+}
+
+/// Whether `id` is a request id.
+pub fn valid_id(id: &str) -> bool {
+    (16..=64).contains(&id.len()) && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// Why the helper installs nothing. Each has a stable code for its log.
@@ -77,7 +112,8 @@ pub enum Refusal {
     Mismatch,
     /// The MSI carries an Authenticode signature that doesn't verify.
     Authenticode(String),
-    /// The service didn't stop, or `.lock` stayed held.
+    /// The service didn't stop, `.lock` stayed held, or Windows Installer
+    /// is busy with another install.
     Busy(&'static str),
     /// A file couldn't be read or written.
     Io(String),
@@ -122,6 +158,9 @@ pub fn parse_request(bytes: &[u8]) -> Result<(Request, Version), Refusal> {
         serde_json::from_slice(bytes).map_err(|_| Refusal::Request("request_unreadable"))?;
     if r.format != REQUEST_FORMAT {
         return Err(Refusal::Request("request_format"));
+    }
+    if !valid_id(&r.id) {
+        return Err(Refusal::Request("request_id"));
     }
     let v = super::super::layout::parse_version(&r.version)
         .filter(|v| v.to_string() == r.version)
@@ -169,7 +208,12 @@ pub enum Installed {
     Done,
     /// Installed; a restart finishes it (3010, 1641).
     RestartNeeded,
-    /// Not installed: Windows Installer rolled the attempt back.
+    /// Not installed, and not this MSI's fault: another install is running
+    /// (1618) or Windows Installer couldn't be reached (1601). The
+    /// version isn't skipped; a later Install tries again.
+    Busy(i32),
+    /// Not installed: Windows Installer rolled the attempt back. The
+    /// version is skipped as `failed`.
     Failed(i32),
 }
 
@@ -177,6 +221,7 @@ pub fn installed(code: i32) -> Installed {
     match code {
         0 => Installed::Done,
         3010 | 1641 => Installed::RestartNeeded,
+        1601 | 1618 => Installed::Busy(code),
         c => Installed::Failed(c),
     }
 }
@@ -276,41 +321,106 @@ pub struct Pins {
 
 pub const PINS: &str = "pins.json";
 
-/// Renames `from` to `to`, retrying for about 1.3 s while Windows
-/// reports a sharing conflict or a denied access: antivirus and the
-/// search indexer hold a new file open for a moment (architecture B5a),
-/// as `lodestar-search`'s index renames allow for. Elsewhere it's one
-/// attempt.
-pub fn rename_retrying(from: &Path, to: &Path) -> io::Result<()> {
-    retry(sharing_conflict, || std::fs::rename(from, to))
+/// The service's side of an MSI install: where the MSI comes from, and
+/// how the helper's task is started (tests replace both).
+pub struct Installer {
+    pub source: std::sync::Arc<dyn crate::update::download::Source>,
+    pub start: Box<dyn Fn() -> io::Result<()> + Send + Sync>,
 }
 
-/// A sharing conflict or denied access (os errors 32 and 5), Windows
-/// only.
-fn sharing_conflict(e: &io::Error) -> bool {
-    cfg!(windows) && matches!(e.raw_os_error(), Some(5 | 32))
+impl Installer {
+    /// The real one: the guarded download client, and `schtasks /Run`.
+    #[cfg(windows)]
+    pub fn system() -> Option<Installer> {
+        let source = crate::update::download::Guarded::new().ok()?;
+        Some(Installer {
+            source: std::sync::Arc::new(source),
+            start: Box::new(start_task),
+        })
+    }
 }
 
-const ATTEMPTS: u32 = 8;
-const FIRST_PAUSE: Duration = Duration::from_millis(5);
-const MAX_PAUSE: Duration = Duration::from_millis(320);
+/// Starts the task (`schtasks /Run`), the one thing the service may do
+/// with it.
+#[cfg(windows)]
+pub fn start_task() -> io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    let root =
+        std::env::var_os("SystemRoot").ok_or_else(|| io::Error::other("SystemRoot isn't set"))?;
+    let mut cmd = std::process::Command::new(Path::new(&root).join(r"System32\schtasks.exe"));
+    super::helper::clean_env(&mut cmd);
+    let out = cmd
+        .creation_flags(0x0800_0000)
+        .args(["/Run", "/TN", TASK])
+        .output()?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other("schtasks /Run failed"))
+    }
+}
 
-fn retry(
-    transient: fn(&io::Error) -> bool,
-    mut op: impl FnMut() -> io::Result<()>,
-) -> io::Result<()> {
-    let mut pause = FIRST_PAUSE;
-    let mut attempt = 1;
-    loop {
-        match op() {
-            Err(e) if attempt < ATTEMPTS && transient(&e) => {
-                std::thread::sleep(pause);
-                pause = (pause * 2).min(MAX_PAUSE);
-                attempt += 1;
+/// What the service leaves for the helper, in `<data>\updates\`, once the
+/// MSI is downloaded (to `part`, in `<data>\bin`, verified against the
+/// pin): the envelope it checked, the MSI, then the request (a new id),
+/// so the helper never sees a request without its files. Earlier files
+/// (an answered request, an old MSI) go first. Returns the request's id.
+pub fn hand_over(
+    data_dir: &Path,
+    part: &Path,
+    envelope: &[u8],
+    version: &Version,
+    channel: Channel,
+) -> io::Result<String> {
+    use crate::update::layout;
+    let updates = data_dir.join(UPDATES);
+    match std::fs::create_dir(&updates) {
+        Err(e) if e.kind() != io::ErrorKind::AlreadyExists => return Err(e),
+        _ => {}
+    }
+    let _pin = layout::pin_dir(&updates)?;
+    clean(&updates);
+    layout::write_atomic(&updates, ENVELOPE, envelope)?;
+    layout::rename_retrying(part, &updates.join(msi_name(version)))?;
+    let mut b = [0u8; 16];
+    getrandom::fill(&mut b).map_err(|_| io::Error::other("no randomness"))?;
+    let id: String = b.iter().map(|x| format!("{x:02x}")).collect();
+    let request = Request {
+        format: REQUEST_FORMAT,
+        id: id.clone(),
+        version: version.to_string(),
+        channel,
+    };
+    let bytes = serde_json::to_vec(&request).map_err(io::Error::other)?;
+    layout::write_atomic(&updates, REQUEST, &bytes)?;
+    Ok(id)
+}
+
+/// Removes what an earlier install left in `updates\`: the request, its
+/// answer, the envelope and any MSI. Best effort.
+pub fn clean(updates: &Path) {
+    for name in [REQUEST, RESULT, ENVELOPE] {
+        let _ = std::fs::remove_file(updates.join(name));
+    }
+    if let Ok(entries) = std::fs::read_dir(updates) {
+        for e in entries.flatten() {
+            let msi = e
+                .file_name()
+                .to_str()
+                .is_some_and(|n| n.starts_with("lodestar-") && n.ends_with(".msi"));
+            if msi && e.file_type().is_ok_and(|t| t.is_file()) {
+                let _ = std::fs::remove_file(e.path());
             }
-            result => return result,
         }
     }
+}
+
+/// The helper's answer, when it's there and readable (it's display
+/// only: the service can write the file too).
+pub fn answer(data_dir: &Path) -> Option<Answer> {
+    crate::update::layout::read_json(&data_dir.join(UPDATES).join(RESULT))
+        .ok()
+        .flatten()
 }
 
 /// The task's definition (Task Scheduler's XML). `exe` is
@@ -407,21 +517,35 @@ mod tests {
 
     #[test]
     fn a_request_is_untrusted_input() {
-        let ok = br#"{"format":1,"version":"0.7.0","channel":"stable"}"#;
+        let ok = br#"{"format":1,"id":"0123456789abcdef","version":"0.7.0","channel":"stable"}"#;
         let (r, v) = parse_request(ok).unwrap();
         assert_eq!((r.channel, v), (Channel::Stable, Version::new(0, 7, 0)));
         let refused = |b: &[u8]| parse_request(b).unwrap_err().code();
         assert_eq!(
-            refused(br#"{"format":1,"version":"0.7.0","channel":"stable","x":1}"#),
+            refused(br#"{"format":1,"id":"0123456789abcdef","version":"0.7.0","channel":"stable","x":1}"#),
             "request_unreadable"
         );
         assert_eq!(
-            refused(br#"{"format":2,"version":"0.7.0","channel":"stable"}"#),
+            refused(
+                br#"{"format":2,"id":"0123456789abcdef","version":"0.7.0","channel":"stable"}"#
+            ),
             "request_format"
         );
         for bad in ["../x", "0.7.0+evil", "v0.7.0", "0.7", "00.7.0"] {
-            let b = format!(r#"{{"format":1,"version":"{bad}","channel":"stable"}}"#);
+            let b = format!(
+                r#"{{"format":1,"id":"0123456789abcdef","version":"{bad}","channel":"stable"}}"#
+            );
             assert_eq!(refused(b.as_bytes()), "request_version", "{bad}");
+        }
+        for bad in [
+            "",
+            "0123",
+            "0123456789ABCDEF",
+            "0123456789abcdeg",
+            "../0123456789abcdef",
+        ] {
+            let b = format!(r#"{{"format":1,"id":"{bad}","version":"0.7.0","channel":"stable"}}"#);
+            assert_eq!(refused(b.as_bytes()), "request_id", "{bad}");
         }
         assert_eq!(refused(&vec![b' '; 5000]), "request_too_large");
         assert_eq!(refused(b"\xff"), "request_unreadable");
@@ -458,6 +582,8 @@ mod tests {
         assert_eq!(installed(1641), Installed::RestartNeeded);
         assert_eq!(installed(1603), Installed::Failed(1603));
         assert_eq!(installed(1638), Installed::Failed(1638));
+        assert_eq!(installed(1618), Installed::Busy(1618));
+        assert_eq!(installed(1601), Installed::Busy(1601));
     }
 
     #[test]
@@ -505,46 +631,6 @@ mod tests {
         assert!(task_xml(Path::new(r"C:\x\lodestar.exe"), "S-1-5-18").is_err());
         assert!(task_xml(Path::new(r"C:\x\lodestar.exe"), "S-1-5-80-1)(A;;FA;;;WD").is_err());
         assert!(task_xml(Path::new(r"C:\a&b\lodestar.exe"), SID).is_err());
-    }
-
-    #[test]
-    fn a_rename_retries_only_a_windows_sharing_conflict() {
-        let mut n = 0;
-        let r = retry(
-            |e| e.raw_os_error() == Some(32),
-            || {
-                n += 1;
-                if n < 3 {
-                    Err(io::Error::from_raw_os_error(32))
-                } else {
-                    Ok(())
-                }
-            },
-        );
-        assert!(r.is_ok());
-        assert_eq!(n, 3);
-        // Bounded: the last error comes back.
-        let mut n = 0;
-        let r = retry(
-            |_| true,
-            || {
-                n += 1;
-                Err(io::Error::from_raw_os_error(32))
-            },
-        );
-        assert_eq!(r.unwrap_err().raw_os_error(), Some(32));
-        assert_eq!(n, ATTEMPTS);
-        // Anything else isn't retried.
-        let mut n = 0;
-        let _ = retry(sharing_conflict, || {
-            n += 1;
-            Err(io::Error::from(io::ErrorKind::NotFound))
-        });
-        assert_eq!(n, 1);
-        assert_eq!(
-            sharing_conflict(&io::Error::from_raw_os_error(32)),
-            cfg!(windows)
-        );
     }
 
     /// Task Scheduler takes the definition as written: registered under
@@ -625,5 +711,38 @@ $t.SecurityDescriptor",
             !sd.contains(";WD)") && !sd.contains(";AU)") && !sd.contains(";BU)"),
             "{back}"
         );
+    }
+
+    #[test]
+    fn the_hand_over_leaves_the_files_then_the_request() {
+        let data = tempfile::tempdir().unwrap();
+        let updates = data.path().join(UPDATES);
+        std::fs::create_dir(&updates).unwrap();
+        // An earlier install's leftovers.
+        for name in [RESULT, REQUEST, "lodestar-0.6.0.msi"] {
+            std::fs::write(updates.join(name), b"old").unwrap();
+        }
+        let part = data.path().join("0.7.0.part");
+        std::fs::write(&part, b"msi").unwrap();
+        let v = Version::new(0, 7, 0);
+        let id = hand_over(data.path(), &part, b"{envelope}", &v, Channel::Stable).unwrap();
+        assert!(valid_id(&id), "{id}");
+        assert!(!part.exists());
+        let mut names: Vec<String> = std::fs::read_dir(&updates)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["lodestar-0.7.0.msi", ENVELOPE, REQUEST]);
+        let (r, rv) = parse_request(&std::fs::read(updates.join(REQUEST)).unwrap()).unwrap();
+        assert_eq!(
+            (r.id, r.channel, rv),
+            (id.clone(), Channel::Stable, v.clone())
+        );
+        // Each hand-over is a new request.
+        std::fs::write(&part, b"msi").unwrap();
+        let again = hand_over(data.path(), &part, b"{envelope}", &v, Channel::Stable).unwrap();
+        assert_ne!(again, id);
+        assert_eq!(answer(data.path()), None);
     }
 }

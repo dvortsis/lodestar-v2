@@ -12,9 +12,19 @@
 //!    `%ProgramData%\Lodestar`, whose ACL and reparse points are checked
 //!    as the service checks them at start. `--config` and
 //!    `LODESTAR_DATA_DIR` are never read.
-//! 3. **The request** (`<data>\updates\pending`) is parsed as untrusted
-//!    input; a version not newer than this build is refused (rule 4).
-//! 4. **Copy, then verify** (rule 1): the envelope and the MSI are copied
+//! 3. **Pinned folders.** `<data>` and `<data>\updates` are opened as
+//!    themselves (never through a link or junction) and held without
+//!    `FILE_SHARE_DELETE` for the whole run, and `<data>\bin` the same way
+//!    once the service has stopped ([`layout::pin_dir`], [`Bin`]), so
+//!    nothing the helper reads or writes beneath them can be redirected.
+//!    It deletes nothing in the data folder: the service cleans
+//!    `updates\`.
+//! 4. **The request** (`<data>\updates\request.json`) is parsed as
+//!    untrusted input and acted on once: its id is recorded in staging
+//!    whatever becomes of it, and the answer goes to
+//!    `<data>\updates\result.json`. A version not newer than this build
+//!    is refused (rule 4).
+//! 5. **Copy, then verify** (rule 1): the envelope and the MSI are copied
 //!    into the SYSTEM-only staging folder, and only the copies are read
 //!    after that. The envelope is verified against the embedded keys, the
 //!    request's channel and the clock (rule 5), over the helper's own
@@ -22,17 +32,19 @@
 //!    refused whatever the data folder holds. The MSI's copy must match
 //!    the pinned size and SHA-256, and an Authenticode signature, if it
 //!    carries one, must verify (§2.23).
-//! 5. **Stop the service and take `<data>\bin\.lock`,** which the
-//!    service holds for its whole run; remove the request, so a restart
-//!    doesn't repeat it; let go of the lock.
-//! 6. **Install the copy** with fixed arguments (rule 6) and an
+//! 6. **Stop the service and take `<data>\bin\.lock`,** which the
+//!    service holds for its whole run, then let go of it: the lock proves
+//!    the service has stopped.
+//! 7. **Install the copy** with fixed arguments (rule 6) and an
 //!    environment without `LODESTAR_*`. The MSI starts the service again.
-//!    A failed install marks the version `failed` in `skipped` and starts
-//!    the old service.
-//! 7. **Health check:** the service must be running within
-//!    [`HEALTH_WAIT`]. The installed MSI and its pins move into staging's
-//!    `current\` (the one before into `previous\`), for PK-win-upd-3's
-//!    rollback, which takes over a failed health check.
+//!    A failed install marks the version `failed` in `skipped` (under the
+//!    lock) and starts the old service; a busy Windows Installer skips
+//!    nothing.
+//! 8. **Health check:** the service must reach Running and stay there
+//!    for [`HEALTH_HOLD`], within [`HEALTH_WAIT`]. The installed MSI and
+//!    its pins move into staging's `current\` (the one before into
+//!    `previous\`), for PK-win-upd-3's rollback, which takes over a failed
+//!    health check.
 
 use std::ffi::OsString;
 use std::io::{self, Read, Write};
@@ -55,6 +67,8 @@ pub const STOP_WAIT: Duration = Duration::from_secs(120);
 pub const LOCK_WAIT: Duration = Duration::from_secs(30);
 /// How long the new service may take to reach Running.
 pub const HEALTH_WAIT: Duration = Duration::from_secs(5 * 60);
+/// How long it must stay Running to count as healthy.
+pub const HEALTH_HOLD: Duration = Duration::from_secs(60);
 
 /// What the helper knows about itself; none of it comes from the data
 /// folder.
@@ -124,10 +138,11 @@ pub trait System {
     fn start_service(&self);
     /// Runs `msiexec` with `args`; its exit code.
     fn msiexec(&self, args: &[OsString]) -> io::Result<i32>;
-    /// Whether the service reaches Running within [`HEALTH_WAIT`].
+    /// Whether the service reaches Running within [`HEALTH_WAIT`] and
+    /// stays there for [`HEALTH_HOLD`].
     fn healthy(&self) -> bool;
-    /// Called once each copy into staging is written (tests swap the
-    /// source here).
+    /// Called once each copy into staging is written (tests change the
+    /// data folder here).
     fn copied(&self, _name: &str) {}
 }
 
@@ -141,6 +156,9 @@ pub enum Outcome {
     Installed { version: Version, restart: bool },
     /// `msiexec` failed and rolled back; the version is skipped.
     Failed { version: Version, code: i32 },
+    /// Windows Installer was busy (another install); nothing changed and
+    /// nothing is skipped.
+    InstallerBusy { version: Version, code: i32 },
     /// Installed, but the service didn't reach Running: PK-win-upd-3's
     /// rollback takes over from here.
     Unhealthy { version: Version },
@@ -152,6 +170,7 @@ impl Outcome {
             Outcome::Nothing => "nothing",
             Outcome::Installed { .. } => "installed",
             Outcome::Failed { .. } => "install_failed",
+            Outcome::InstallerBusy { .. } => "installer_busy",
             Outcome::Unhealthy { .. } => "unhealthy",
         }
     }
@@ -164,31 +183,86 @@ fn io_refusal(what: &str) -> impl Fn(io::Error) -> Refusal + '_ {
 /// One run: the steps in the module docs.
 pub fn run(ctx: &Context, sys: &dyn System) -> Result<Outcome, Refusal> {
     let running = ctx.running.clone().ok_or(Refusal::BuildVersion)?;
+    let updates = ctx.updates();
+    // Cheap first: no request, nothing to check (as at most boots).
+    if std::fs::symlink_metadata(updates.join(REQUEST)).is_err() {
+        return Ok(Outcome::Nothing);
+    }
+    let data_pin =
+        layout::pin_dir(&ctx.data_dir).map_err(|e| Refusal::UncheckedBin(e.to_string()))?;
     sys.check_data(&ctx.data_dir)
         .map_err(Refusal::UncheckedBin)?;
-    let updates = ctx.updates();
-    match std::fs::symlink_metadata(&updates) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Outcome::Nothing),
-        Err(e) => return Err(io_refusal("updates")(e)),
-        Ok(m) if m.file_type().is_symlink() || !m.is_dir() => {
-            return Err(Refusal::UncheckedBin("updates isn't a plain folder".into()));
-        }
-        Ok(_) => {}
-    }
+    let updates_pin =
+        layout::pin_dir(&updates).map_err(|e| Refusal::UncheckedBin(e.to_string()))?;
     let Some(bytes) =
-        read_capped(&updates.join(REQUEST), msi::MAX_REQUEST).map_err(io_refusal("pending"))?
+        read_capped(&updates.join(REQUEST), msi::MAX_REQUEST).map_err(io_refusal("request"))?
     else {
         return Ok(Outcome::Nothing);
     };
     let (request, version) = msi::parse_request(&bytes)?;
-    if !msi::newer(&running, &version) {
+    let staging = &ctx.staging;
+    sys.secure_staging(&staging.dir).map_err(Refusal::Staging)?;
+    let handled = layout::read_json::<Handled>(&staging.dir.join(msi::HANDLED))
+        .ok()
+        .flatten();
+    if handled.is_some_and(|h| h.id == request.id) {
+        return Ok(Outcome::Nothing);
+    }
+    // Acted on once, whatever happens next.
+    let bytes = serde_json::to_vec(&Handled {
+        id: request.id.clone(),
+    })
+    .map_err(|e| Refusal::Io(e.to_string()))?;
+    layout::write_atomic(&staging.dir, msi::HANDLED, &bytes).map_err(io_refusal("handled"))?;
+    let result = attempt(ctx, sys, &running, &request, &version);
+    let answer = msi::Answer {
+        format: 1,
+        id: request.id.clone(),
+        version: version.to_string(),
+        outcome: match &result {
+            Ok(o) => o.code().to_string(),
+            Err(_) => "refused".into(),
+        },
+        code: match &result {
+            Ok(Outcome::Failed { code, .. } | Outcome::InstallerBusy { code, .. }) => {
+                Some(code.to_string())
+            }
+            Ok(_) => None,
+            Err(r) => Some(r.code().to_string()),
+        },
+        restart: matches!(result, Ok(Outcome::Installed { restart: true, .. })),
+        at: ctx.now,
+    };
+    // Written beneath the pinned folder; the service may read it.
+    if let Ok(bytes) = serde_json::to_vec_pretty(&answer) {
+        let _ = layout::write_atomic(&updates, msi::RESULT, &bytes);
+    }
+    drop((updates_pin, data_pin));
+    result
+}
+
+/// `handled.json` in staging.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Handled {
+    id: String,
+}
+
+/// The steps after the request is parsed and recorded.
+fn attempt(
+    ctx: &Context,
+    sys: &dyn System,
+    running: &Version,
+    request: &msi::Request,
+    version: &Version,
+) -> Result<Outcome, Refusal> {
+    let version = version.clone();
+    if !msi::newer(running, &version) {
         return Err(Refusal::NotNewer);
     }
     let target = ctx.target.ok_or(Refusal::NoArtifact)?;
-
-    // Staging: private, and an empty `incoming\`.
+    let updates = ctx.updates();
     let staging = &ctx.staging;
-    sys.secure_staging(&staging.dir).map_err(Refusal::Staging)?;
     let incoming = staging.incoming();
     remove_dir(&incoming).map_err(io_refusal("incoming"))?;
     std::fs::create_dir(&incoming).map_err(io_refusal("incoming"))?;
@@ -228,8 +302,10 @@ pub fn run(ctx: &Context, sys: &dyn System) -> Result<Outcome, Refusal> {
 
     // The MSI: copied, then the copy checked.
     let name = msi::msi_name(&version);
-    let staged = copy_capped(&updates.join(&name), &incoming.join(&name), pin.size)
-        .map_err(io_refusal("msi"))?;
+    let staged = match copy_capped(&updates.join(&name), &incoming.join(&name), pin.size) {
+        Err(e) if e.kind() == io::ErrorKind::FileTooLarge => return Err(Refusal::Mismatch),
+        other => other.map_err(io_refusal("msi"))?,
+    };
     sys.copied(&name);
     let (sha256, size) = hash(&staged).map_err(io_refusal("msi"))?;
     if size != pin.size || sha256 != pin.sha256 {
@@ -243,16 +319,17 @@ pub fn run(ctx: &Context, sys: &dyn System) -> Result<Outcome, Refusal> {
         size: pin.size,
     };
 
-    // The service stops; the request goes, under the lock.
-    sys.stop_service()
-        .map_err(|_| Refusal::Busy("service_running"))?;
-    let consumed = (|| {
-        let bin = Bin::open(&ctx.data_dir).map_err(io_refusal("bin"))?;
-        let _lock = take_lock(&bin, ctx.lock_wait)?;
-        let _ = std::fs::remove_file(updates.join(&name));
-        remove_file(&updates.join(REQUEST)).map_err(io_refusal("pending"))
-    })();
-    if let Err(e) = consumed {
+    // The service stops; `.lock` proves it.
+    if sys.stop_service().is_err() {
+        // It may still stop late: start it either way.
+        sys.start_service();
+        return Err(Refusal::Busy("service_running"));
+    }
+    let locked = Bin::existing(&ctx.data_dir)
+        .map_err(io_refusal("bin"))
+        .and_then(|b| b.ok_or(Refusal::Busy("bin_missing")))
+        .and_then(|bin| take_lock(&bin, ctx.lock_wait).map(drop));
+    if let Err(e) = locked {
         sys.start_service();
         return Err(e);
     }
@@ -260,9 +337,10 @@ pub fn run(ctx: &Context, sys: &dyn System) -> Result<Outcome, Refusal> {
     let args = msi::msiexec_args(&staged, &staging.log());
     let code = match sys.msiexec(&args) {
         Ok(c) => c,
-        Err(e) => {
+        Err(_) => {
+            // Never started: nothing changed.
             sys.start_service();
-            return Err(Refusal::Io(format!("msiexec: {e}")));
+            return Err(Refusal::Busy("msiexec_unavailable"));
         }
     };
     match msi::installed(code) {
@@ -271,8 +349,16 @@ pub fn run(ctx: &Context, sys: &dyn System) -> Result<Outcome, Refusal> {
             sys.start_service();
             Ok(Outcome::Failed { version, code })
         }
+        Installed::Busy(code) => {
+            sys.start_service();
+            Ok(Outcome::InstallerBusy { version, code })
+        }
         done => {
-            keep(staging, &staged, &pins).map_err(io_refusal("staging"))?;
+            // Installed: a staging problem doesn't undo that, so it's
+            // reported and the health check still runs.
+            if let Err(e) = keep(staging, &staged, &pins) {
+                eprintln!("lodestar update-helper: keeping the MSI for rollback: {e}");
+            }
             if sys.healthy() {
                 Ok(Outcome::Installed {
                     version,
@@ -301,10 +387,11 @@ fn take_lock(bin: &Bin, wait: Duration) -> Result<Lock, Refusal> {
 }
 
 /// A failed install's version is never offered again: `skipped`, reason
-/// `failed`. Best effort: when the lock or the file isn't available the
-/// next check offers it again, and it fails the same way.
+/// `failed`, written under `.lock` in the pinned `<data>\bin`. Best
+/// effort: when the lock or the file isn't available the next check
+/// offers it again, and it fails the same way.
 fn mark_failed(ctx: &Context, version: &Version) {
-    let Ok(bin) = Bin::open(&ctx.data_dir) else {
+    let Ok(Some(bin)) = Bin::existing(&ctx.data_dir) else {
         return;
     };
     let Ok(Some(_lock)) = bin.lock() else {
@@ -319,13 +406,13 @@ fn keep(staging: &Staging, staged: &Path, pins: &Pins) -> io::Result<()> {
     let (current, previous) = (staging.current(), staging.previous());
     if current.exists() {
         remove_dir(&previous)?;
-        msi::rename_retrying(&current, &previous)?;
+        layout::rename_retrying(&current, &previous)?;
     }
     std::fs::create_dir(&current)?;
     let name = staged
         .file_name()
         .ok_or_else(|| io::Error::other("no name"))?;
-    msi::rename_retrying(staged, &current.join(name))?;
+    layout::rename_retrying(staged, &current.join(name))?;
     let bytes = serde_json::to_vec_pretty(pins).map_err(io::Error::other)?;
     layout::write_atomic(&current, PINS, &bytes)
 }
@@ -357,7 +444,7 @@ fn copy_capped(from: &Path, to: &Path, cap: u64) -> io::Result<PathBuf> {
     if n > cap {
         drop(dst);
         let _ = std::fs::remove_file(to);
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "too large"));
+        return Err(io::Error::new(io::ErrorKind::FileTooLarge, "too large"));
     }
     dst.flush()?;
     dst.sync_all()?;
@@ -383,13 +470,6 @@ fn hash(path: &Path) -> io::Result<(Sha256, u64)> {
 
 fn remove_dir(path: &Path) -> io::Result<()> {
     match std::fs::remove_dir_all(path) {
-        Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
-        _ => Ok(()),
-    }
-}
-
-fn remove_file(path: &Path) -> io::Result<()> {
-    match std::fs::remove_file(path) {
         Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
         _ => Ok(()),
     }
@@ -496,6 +576,8 @@ impl System for Windows {
                 "-NoLogo",
                 "-NoProfile",
                 "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
                 "-Command",
                 AUTHENTICODE_SCRIPT,
             ])
@@ -525,8 +607,23 @@ impl System for Windows {
             .ok_or_else(|| io::Error::other("msiexec ended without a code"))
     }
 
+    /// Running within [`HEALTH_WAIT`], then still Running at every look
+    /// for [`HEALTH_HOLD`]: a service that starts and then crashes isn't
+    /// healthy.
     fn healthy(&self) -> bool {
-        Self::wait_for("RUNNING", HEALTH_WAIT)
+        if !Self::wait_for("RUNNING", HEALTH_WAIT) {
+            return false;
+        }
+        let until = Instant::now() + HEALTH_HOLD;
+        while Instant::now() < until {
+            std::thread::sleep(Duration::from_secs(2));
+            let running = Self::sc(&["query", crate::windows::service::NAME])
+                .is_ok_and(|out| service_state(&out).as_deref() == Some("RUNNING"));
+            if !running {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -645,6 +742,8 @@ mod tests {
                 lock_wait: Duration::from_millis(300),
             };
             std::fs::create_dir_all(ctx.updates()).unwrap();
+            // The service has run: `<data>\bin` exists.
+            drop(Bin::open(&ctx.data_dir).unwrap());
             Env {
                 _tmp: tmp,
                 ctx,
@@ -674,9 +773,13 @@ mod tests {
             envelope(&key.signed(&bytes(&m)), None)
         }
 
-        /// What the service leaves: the request, the envelope, the MSI.
+        /// What the service leaves: the request (a new id each time), the
+        /// envelope, the MSI.
         fn leave(&self, version: &str, channel: Channel, envelope: &[u8], msi: &[u8]) {
-            let req = json!({"format": 1, "version": version, "channel": channel});
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static NEXT: AtomicU64 = AtomicU64::new(1);
+            let id = format!("{:016x}", NEXT.fetch_add(1, Ordering::Relaxed));
+            let req = json!({"format": 1, "id": id, "version": version, "channel": channel});
             std::fs::write(self.updates(REQUEST), bytes(&req)).unwrap();
             std::fs::write(self.updates(ENVELOPE), envelope).unwrap();
             let v = Version::parse(version).unwrap();
@@ -690,6 +793,11 @@ mod tests {
 
         fn run(&self, fake: &Fake) -> Result<Outcome, Refusal> {
             run(&self.ctx, fake)
+        }
+
+        /// The helper's answer in `result.json`.
+        fn answer(&self) -> msi::Answer {
+            serde_json::from_slice(&std::fs::read(self.updates(msi::RESULT)).unwrap()).unwrap()
         }
     }
 
@@ -728,9 +836,14 @@ mod tests {
             "fixed arguments, from staging"
         );
         assert_eq!(bytes, MSI);
-        // The request is consumed; the data folder's MSI is gone.
-        assert!(!env.updates(REQUEST).exists());
-        assert!(!env.updates("lodestar-0.7.0.msi").exists());
+        // Nothing in the data folder is deleted; the answer is there.
+        assert!(env.updates(REQUEST).exists());
+        assert!(env.updates("lodestar-0.7.0.msi").exists());
+        let a = env.answer();
+        assert_eq!(
+            (a.outcome.as_str(), a.version.as_str(), a.code, a.restart),
+            ("installed", "0.7.0", None, false)
+        );
         // The MSI and its pins are kept for rollback.
         let current = env.ctx.staging.current();
         assert_eq!(
@@ -771,11 +884,7 @@ mod tests {
             env.offer("0.7.0");
             std::fs::write(env.updates("lodestar-0.7.0.msi"), evil).unwrap();
             let fake = Fake::default();
-            let r = env.run(&fake);
-            assert!(
-                matches!(r.as_ref().unwrap_err().code(), "artifact_mismatch" | "io"),
-                "{r:?}"
-            );
+            assert_eq!(refused(env.run(&fake)), "artifact_mismatch");
             assert!(fake.ran.lock().unwrap().is_none());
             assert!(!fake.calls().contains(&"stop".to_string()));
         }
@@ -936,9 +1045,16 @@ mod tests {
         let fake = Fake::default();
         assert_eq!(refused(env.run(&fake)), "bin_busy");
         assert_eq!(fake.calls().last().unwrap(), "start");
-        assert!(env.updates(REQUEST).exists());
         assert!(fake.ran.lock().unwrap().is_none());
+        assert_eq!(
+            (env.answer().outcome.as_str(), env.answer().code.as_deref()),
+            ("refused", Some("bin_busy"))
+        );
         drop(held);
+        // That request was answered; a boot run doesn't repeat it.
+        assert_eq!(env.run(&Fake::default()).unwrap(), Outcome::Nothing);
+        // A new Install (a new id) does.
+        env.offer("0.7.0");
         assert_eq!(env.run(&Fake::default()).unwrap().code(), "installed");
     }
 
@@ -951,7 +1067,113 @@ mod tests {
             ..Fake::default()
         };
         assert_eq!(refused(env.run(&fake)), "service_running");
-        assert!(env.updates(REQUEST).exists());
+        // Started anyway: it may stop late.
+        assert_eq!(
+            fake.calls(),
+            [
+                "copied manifest.json",
+                "copied lodestar-0.7.0.msi",
+                "stop",
+                "start"
+            ]
+        );
+    }
+
+    /// A busy Windows Installer (another install running) skips nothing.
+    #[test]
+    fn a_busy_installer_skips_nothing() {
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        let fake = Fake {
+            code: 1618,
+            ..Fake::default()
+        };
+        assert_eq!(env.run(&fake).unwrap().code(), "installer_busy");
+        assert_eq!(fake.calls().last().unwrap(), "start");
+        assert!(!env.ctx.data_dir.join("bin").join("skipped").exists());
+        assert_eq!(env.answer().code.as_deref(), Some("1618"));
+    }
+
+    /// Links in place of the folder or its files are never read through,
+    /// and an oversize envelope is refused.
+    #[cfg(unix)]
+    #[test]
+    fn links_and_oversize_files_are_refused() {
+        // `updates` itself a link.
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        let real = env.ctx.data_dir.join("real-updates");
+        std::fs::rename(env.ctx.updates(), &real).unwrap();
+        std::os::unix::fs::symlink(&real, env.ctx.updates()).unwrap();
+        assert_eq!(refused(env.run(&Fake::default())), "bin_unchecked");
+        // A link in place of each file.
+        for name in [REQUEST, ENVELOPE, "lodestar-0.7.0.msi"] {
+            let env = Env::new("0.6.0");
+            env.offer("0.7.0");
+            let elsewhere = env.ctx.data_dir.join("elsewhere");
+            std::fs::rename(env.updates(name), &elsewhere).unwrap();
+            std::os::unix::fs::symlink(&elsewhere, env.updates(name)).unwrap();
+            let fake = Fake::default();
+            assert_eq!(refused(env.run(&fake)), "io", "{name}");
+            assert!(fake.ran.lock().unwrap().is_none(), "{name}");
+        }
+        // An envelope past the cap.
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        std::fs::write(env.updates(ENVELOPE), vec![b' '; MAX_ENVELOPE + 1]).unwrap();
+        assert_eq!(refused(env.run(&Fake::default())), "io");
+    }
+
+    /// Held for the whole run: the service can't swap `<data>\updates` (or
+    /// `<data>`) for a junction once the helper has checked it.
+    #[cfg(windows)]
+    #[test]
+    fn the_data_folders_are_pinned_while_it_runs() {
+        struct Swapper {
+            fake: Fake,
+            updates: PathBuf,
+            data: PathBuf,
+            renamed: Mutex<Vec<bool>>,
+        }
+        impl System for Swapper {
+            fn check_data(&self, d: &Path) -> Result<(), String> {
+                self.fake.check_data(d)
+            }
+            fn secure_staging(&self, d: &Path) -> Result<(), String> {
+                self.fake.secure_staging(d)
+            }
+            fn authenticode(&self, m: &Path) -> Result<(), String> {
+                self.fake.authenticode(m)
+            }
+            fn stop_service(&self) -> io::Result<()> {
+                self.fake.stop_service()
+            }
+            fn start_service(&self) {
+                self.fake.start_service()
+            }
+            fn msiexec(&self, a: &[OsString]) -> io::Result<i32> {
+                self.fake.msiexec(a)
+            }
+            fn healthy(&self) -> bool {
+                true
+            }
+            fn copied(&self, _: &str) {
+                let moved = self.updates.with_file_name("moved");
+                let mut r = self.renamed.lock().unwrap();
+                r.push(std::fs::rename(&self.updates, &moved).is_ok());
+                r.push(std::fs::rename(&self.data, self.data.with_file_name("moved-data")).is_ok());
+            }
+        }
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        let sys = Swapper {
+            fake: Fake::default(),
+            updates: env.ctx.updates(),
+            data: env.ctx.data_dir.clone(),
+            renamed: Mutex::default(),
+        };
+        assert_eq!(run(&env.ctx, &sys).unwrap().code(), "installed");
+        assert!(sys.renamed.lock().unwrap().iter().all(|r| !r), "pinned");
     }
 
     #[test]

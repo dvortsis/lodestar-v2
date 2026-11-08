@@ -523,12 +523,102 @@ fn write_steps(
         fault(Step::Flush)?;
         f.sync_all()?;
         fault(Step::Rename)?;
-        fs::rename(&tmp, dir.join(name))
+        rename_retrying(&tmp, &dir.join(name))
     })();
     if written.is_err() {
         let _ = fs::remove_file(&tmp);
     }
     written
+}
+
+/// Opens the folder `path` as itself and holds it: never through a link
+/// or junction (the handle's own attributes are checked), and on Windows
+/// without `FILE_SHARE_DELETE`, so while the handle lives the folder
+/// can't be renamed, deleted or replaced by a junction. The update helper
+/// pins `<data>` and `<data>\updates` this way before it reads or writes
+/// beneath them as SYSTEM. On Unix it only refuses a link.
+pub fn pin_dir(path: &Path) -> io::Result<File> {
+    let refused = || {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "{}: not a folder (a link or junction isn't accepted)",
+                path.display()
+            ),
+        )
+    };
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        let pin = OpenOptions::new()
+            .read(true)
+            .share_mode(win::SHARE_READ | win::SHARE_WRITE)
+            .custom_flags(win::BACKUP_SEMANTICS | win::OPEN_REPARSE_POINT)
+            .open(path)?;
+        let attrs = win::attributes(&pin)?;
+        if attrs & win::ATTRIBUTE_REPARSE_POINT != 0 || attrs & win::ATTRIBUTE_DIRECTORY == 0 {
+            return Err(refused());
+        }
+        Ok(pin)
+    }
+    #[cfg(unix)]
+    {
+        let fd = rustix::fs::open(
+            path,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(|e| match e {
+            rustix::io::Errno::LOOP | rustix::io::Errno::NOTDIR => refused(),
+            e => io::Error::from(e),
+        })?;
+        Ok(File::from(fd))
+    }
+}
+
+/// Renames `from` to `to`. On Windows a rename refused with a sharing
+/// conflict or a denied access (os errors 32 and 5) is retried for about
+/// 1.3 s: antivirus and the search indexer hold a new file open for a
+/// moment (architecture B5a), as `lodestar-search`'s index renames allow
+/// for. Any other error comes back at once, and the last one when the
+/// retries run out. Elsewhere it's `fs::rename`.
+pub fn rename_retrying(from: &Path, to: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        retry(win::sharing_conflict, || fs::rename(from, to))
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(from, to)
+    }
+}
+
+/// The attempts [`rename_retrying`] makes, and the first pause between
+/// two; each pause doubles, up to [`RETRY_MAX_PAUSE`].
+const RETRY_ATTEMPTS: u32 = 8;
+const RETRY_FIRST_PAUSE: std::time::Duration = std::time::Duration::from_millis(5);
+const RETRY_MAX_PAUSE: std::time::Duration = std::time::Duration::from_millis(320);
+
+/// Runs `op` until it succeeds, fails with an error `transient` doesn't
+/// accept, or has made [`RETRY_ATTEMPTS`] attempts (the last error is
+/// returned).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn retry(
+    transient: fn(&io::Error) -> bool,
+    mut op: impl FnMut() -> io::Result<()>,
+) -> io::Result<()> {
+    let mut pause = RETRY_FIRST_PAUSE;
+    let mut attempt = 1;
+    loop {
+        match op() {
+            Err(e) if attempt < RETRY_ATTEMPTS && transient(&e) => {
+                std::thread::sleep(pause);
+                pause = (pause * 2).min(RETRY_MAX_PAUSE);
+                attempt += 1;
+            }
+            result => return result,
+        }
+    }
 }
 
 /// A new file (never an existing one, and never through a link): 0600 on
@@ -584,6 +674,12 @@ mod win {
     /// The attributes of the object the handle names.
     pub fn attributes(file: &File) -> io::Result<u32> {
         Ok(file.metadata()?.file_attributes())
+    }
+
+    /// A rename over a file another handle holds: `ERROR_ACCESS_DENIED`
+    /// (5) or `ERROR_SHARING_VIOLATION` (32).
+    pub fn sharing_conflict(e: &io::Error) -> bool {
+        matches!(e.raw_os_error(), Some(5 | 32))
     }
 
     /// Refuses a handle to a link, junction or other reparse point.
@@ -703,6 +799,49 @@ mod tests {
 #[cfg(all(test, windows))]
 mod windows_tests {
     use super::*;
+
+    /// A held file refuses the rename with 32; once it's let go (here,
+    /// right after the first refusal) the retry goes through. No waiting
+    /// on a clock: the release follows the refusal itself.
+    #[test]
+    fn a_briefly_held_file_is_renamed_over_once_its_let_go() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let (tmp, dst) = (dir.path().join("new"), dir.path().join("state"));
+        fs::write(&tmp, b"new").unwrap();
+        fs::write(&dst, b"old").unwrap();
+        // Read sharing only: no FILE_SHARE_DELETE, so 32.
+        let held = OpenOptions::new()
+            .read(true)
+            .share_mode(win::SHARE_READ)
+            .open(&dst)
+            .unwrap();
+        let held = std::cell::RefCell::new(Some(held));
+        let mut refusals = Vec::new();
+        retry(win::sharing_conflict, || {
+            let r = fs::rename(&tmp, &dst);
+            if let Err(e) = &r {
+                refusals.push(e.raw_os_error());
+                held.borrow_mut().take();
+            }
+            r
+        })
+        .unwrap();
+        assert_eq!(refusals, [Some(32)]);
+        assert_eq!(fs::read(&dst).unwrap(), b"new");
+        // A missing source isn't retried.
+        let mut n = 0;
+        let e = retry(win::sharing_conflict, || {
+            n += 1;
+            fs::rename(dir.path().join("gone"), &dst)
+        })
+        .unwrap_err();
+        assert_eq!((n, e.kind()), (1, io::ErrorKind::NotFound));
+        // rename_retrying itself, end to end.
+        fs::write(&tmp, b"newer").unwrap();
+        rename_retrying(&tmp, &dst).unwrap();
+        assert_eq!(fs::read(&dst).unwrap(), b"newer");
+    }
 
     /// A directory junction at `link` to `target` (`mklink /J` needs no
     /// privilege, unlike a symlink).
@@ -839,5 +978,33 @@ mod windows_tests {
         fs::write(bin.path("active"), vec![b' '; MAX_STATE as usize + 1]).unwrap();
         let e = bin.read::<serde_json::Value>("active").unwrap_err();
         assert_eq!(e.kind(), io::ErrorKind::InvalidData);
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+
+    #[test]
+    fn a_retry_is_bounded_and_returns_the_last_error() {
+        let mut n = 0;
+        let e = retry(
+            |_| true,
+            || {
+                n += 1;
+                Err(io::Error::from_raw_os_error(32))
+            },
+        )
+        .unwrap_err();
+        assert_eq!((n, e.raw_os_error()), (RETRY_ATTEMPTS, Some(32)));
+        let mut n = 0;
+        let _ = retry(
+            |e| e.raw_os_error() == Some(32),
+            || {
+                n += 1;
+                Err(io::Error::from(io::ErrorKind::NotFound))
+            },
+        );
+        assert_eq!(n, 1, "anything else comes back at once");
     }
 }

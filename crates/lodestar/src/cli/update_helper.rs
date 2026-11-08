@@ -7,17 +7,18 @@
 //!   refused, and the data folder is always the service's default.
 //! - `--register-task` is the MSI's: it registers the task
 //!   ([`msi::task_xml`]) as the installer's custom action, as SYSTEM.
-//! - Exit status: 0 installed or nothing to do, 1 the install failed or
-//!   the new service isn't healthy, 2 bad arguments or not Windows, 3
-//!   refused (nothing was changed). Task Scheduler shows it as the
-//!   task's last result.
+//! - Exit status: 0 installed or nothing to do, 1 the install failed,
+//!   Windows Installer was busy or the new service isn't healthy, 2 bad
+//!   arguments or not Windows, 3 refused. Task Scheduler shows it as the
+//!   task's last result; the detail is in `<data>\updates\result.json`
+//!   for every request the helper read.
 
 use std::path::Path;
 use std::process::ExitCode;
 
 use clap::Args;
 
-#[allow(unused_imports)]
+#[cfg(windows)]
 use crate::update::windows::{helper, msi};
 
 #[derive(Debug, Args, PartialEq, Eq)]
@@ -86,7 +87,9 @@ fn install() -> ExitCode {
             eprintln!("lodestar update-helper: {}", o.code());
             match o {
                 Outcome::Nothing | Outcome::Installed { .. } => ExitCode::SUCCESS,
-                Outcome::Failed { .. } | Outcome::Unhealthy { .. } => ExitCode::FAILURE,
+                Outcome::Failed { .. }
+                | Outcome::InstallerBusy { .. }
+                | Outcome::Unhealthy { .. } => ExitCode::FAILURE,
             }
         }
     }
@@ -125,6 +128,8 @@ fn register() -> Result<(), String> {
             "-NoLogo",
             "-NoProfile",
             "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
             "-Command",
             msi::REGISTER_SCRIPT,
         ])
