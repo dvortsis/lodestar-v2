@@ -681,6 +681,7 @@ mod tests {
             placement: placement.clone(),
             fleet: None,
             coordinator_dht: None,
+            coordinator_share: None,
             held: None,
         })
         .await

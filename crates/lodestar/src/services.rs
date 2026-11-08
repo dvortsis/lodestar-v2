@@ -371,6 +371,12 @@ impl Services {
             placement: placement.clone(),
             // Its address vote is the coordinator's public address (WK-5).
             coordinator_dht: dht_node.clone(),
+            // Its own share of the plan: the pool's per-peer-IP cap and the
+            // DHT's BEP 51 scale (WK-10e).
+            coordinator_share: Some(Arc::new(crate::cluster::serve::CoordinatorShare {
+                pool: pipeline.pool().clone(),
+                dht: dht_node.clone(),
+            })),
             // A worker's floor report reaches the built-in worker at once.
             held: Some(held.clone()),
             fleet: Some(crate::cluster::serve::Fleet {

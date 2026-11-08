@@ -52,6 +52,7 @@ jobs:
       fuzz: ${{ steps.c.outputs.fuzz }}
       soak_tools: ${{ steps.c.outputs.soak_tools }}
       infra: ${{ steps.c.outputs.infra }}
+      update_manifest: ${{ steps.c.outputs.update_manifest }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -490,9 +491,68 @@ jobs:
           }
           if ($failed) { exit 1 }
 
+  # The update manifest (PK-manifest): the builder's tests, then a round trip
+  # through the verifier clients run, signed with the minisign CLI as
+  # release.yml signs, by a throwaway key made here (never the real one).
+  update-manifest:
+    name: update manifest round trip
+    needs: changes
+    if: needs.changes.outputs.update_manifest == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: python3 .github/scripts/test_update_manifest.py
+      - name: round trip
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+          cargo build -q -p lodestar-update --example verify_envelope
+          work=$(mktemp -d "$RUNNER_TEMP/roundtrip.XXXXXX")
+          umask 077
+          trap 'rm -rf "$work"' EXIT
+          minisign -G -W -f -p "$work/test.pub" -s "$work/test.key" >/dev/null
+          minisign -G -W -f -p "$work/recovery.pub" -s "$work/recovery.key" >/dev/null
+          printf '%s' '{"level":"fix","security":false,"manual_steps":false,"min_from":null,"migrates":false,"reindex":false,"reindex_bytes":0}' >"$work/meta.json"
+          # A release candidate goes to Beta; the release to Stable and Beta,
+          # each carrying what the channel already lists; a re-run exits 3.
+          for step in 0.6.0-rc.1:beta 0.6.0:stable 0.6.0:beta 0.6.0:stable:rerun; do
+            IFS=: read -r v channel rerun <<<"$step"
+            files=()
+            for n in "lodestar-$v-x86_64-linux-musl" "lodestar-$v-aarch64-linux-musl" "lodestar-${v%%-*}-x86_64.msi" "lodestar-$v-x86_64-windows-portable.zip"; do
+              head -c 4096 /dev/urandom >"$work/$n"
+              files+=("$work/$n")
+            done
+            prev=()
+            if [ -f "$work/$channel.json" ]; then
+              python3 .github/scripts/update_manifest.py extract "$work/$channel.json" "$work/prev.body" "$work/prev.minisig"
+              minisign -V -q -p "$work/test.pub" -m "$work/prev.body" -x "$work/prev.minisig"
+              prev=(--previous "$work/prev.body")
+            fi
+            code=0
+            python3 .github/scripts/update_manifest.py build --channel "$channel" --version "$v" \
+              --repo dvortsis/lodestar-v2 --tag "v$v" --metadata "$work/meta.json" \
+              --x86-64-binary "${files[0]}" --aarch64-binary "${files[1]}" --msi "${files[2]}" --portable "${files[3]}" \
+              --statements crates/update/keys/statements.json "${prev[@]}" --out "$work/$channel.body" || code=$?
+            if [ -n "$rerun" ]; then
+              [ "$code" = 3 ] || { echo "::error::a re-run of $v on $channel exited $code, not 3"; exit 1; }
+              continue
+            fi
+            [ "$code" = 0 ] || exit "$code"
+            minisign -S -s "$work/test.key" -t "lodestar $channel manifest" -m "$work/$channel.body" -x "$work/$channel.minisig" </dev/null
+            python3 .github/scripts/update_manifest.py envelope "$work/$channel.body" "$work/$channel.minisig" "$work/$channel.json"
+            target/debug/examples/verify_envelope "$work/$channel.json" "$channel" "$work/test.pub" "$work/recovery.pub" "$(date -u +%s)"
+          done
+          # Beta lists the candidate and the release; Stable the release only.
+          python3 .github/scripts/update_manifest.py extract "$work/beta.json" "$work/b" "$work/s"
+          python3 -c 'import json,sys; v=[r["version"] for r in json.load(open(sys.argv[1]))["releases"]]; assert v == ["0.6.0", "0.6.0-rc.1"], v' "$work/b"
+          python3 .github/scripts/update_manifest.py extract "$work/stable.json" "$work/b" "$work/s"
+          python3 -c 'import json,sys; v=[r["version"] for r in json.load(open(sys.argv[1]))["releases"]]; assert v == ["0.6.0"], v' "$work/b"
+
   ci-ok:
     name: ci-ok
-    needs: [changes, lint, openapi, test, size-budget, relevance, importer, fuzz, log-bench, mmap-retention, soak-tools, soak-collector-windows, infra]
+    needs: [changes, lint, openapi, test, size-budget, relevance, importer, fuzz, log-bench, mmap-retention, soak-tools, soak-collector-windows, update-manifest, infra]
     if: always()
     runs-on: ubuntu-latest
     steps:

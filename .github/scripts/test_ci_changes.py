@@ -48,6 +48,16 @@ class Infra(unittest.TestCase):
         for f in ["docs/operations/lodestar-cloud-assets.md", ".agents/skills/lodestar-fleet/SKILL.md",
                   "crates/infra/src/lib.rs", "web/src/infra.ts"]:
             self.assertFalse(ci_changes.INFRA.match(f), f)
+class UpdateManifest(unittest.TestCase):
+    def test_the_builder_release_yml_and_the_verifier_apply(self):
+        for f in [".github/scripts/update_manifest.py", ".github/scripts/test_update_manifest.py",
+                  ".github/workflows/release.yml", "crates/update/src/doc.rs", "crates/update/examples/verify_envelope.rs"]:
+            self.assertTrue(ci_changes.UPDATE_MANIFEST.match(f), f)
+
+    def test_other_paths_dont(self):
+        for f in ["crates/updater/x.rs", "crates/lodestar/src/update/engine.rs", ".github/workflows/freshness.yml",
+                  "docs/decisions/2026-11-08-PK-manifest.md", ".github/scripts/update_manifest.pyc"]:
+            self.assertFalse(ci_changes.UPDATE_MANIFEST.match(f), f)
 
 
 class EndToEnd(unittest.TestCase):
@@ -78,6 +88,7 @@ class EndToEnd(unittest.TestCase):
             self.assertEqual((kv["web"], kv["e2e"]), ("false", "false"))
             self.assertEqual(kv["rust"], "false")
             self.assertEqual(kv["infra"], "false")
+            self.assertEqual(kv["update_manifest"], "false")
 
     def test_crash_exits_nonzero(self):
         # A bad base must fail the script (the workflow step then fails, not an empty output).
@@ -93,6 +104,7 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("e2e=true", out)
         self.assertIn("mmap_retention=true", out)
         self.assertIn("infra=true", out)
+        self.assertIn("update_manifest=true", out)
 
 
 if __name__ == "__main__":

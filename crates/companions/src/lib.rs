@@ -25,6 +25,7 @@
 //! - [`inputs`]: the closed, validated values generated compose services
 //!   and Unraid templates are built from, and the shared [`CompanionId`]
 //!   and [`Version`].
+//! - [`requires`]: which source plugins need which companion (CMP-10).
 //! - [`supervise`]: starting, restarting, health-checking and stopping
 //!   managed companions, their redacted log rings, and orphan cleanup
 //!   (CMP-4a).
@@ -43,6 +44,7 @@ pub mod fetch;
 pub mod inputs;
 pub mod layout;
 pub mod log_events;
+pub mod requires;
 pub mod supervise;
 pub mod unraid;
 pub mod verify;

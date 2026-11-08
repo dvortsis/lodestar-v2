@@ -50,6 +50,7 @@ env:
 jobs:
   smoke:
     name: smoke (linux/amd64)
+    needs: package-gate
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -66,9 +67,13 @@ jobs:
           load: true
           push: false
           tags: lodestar:smoke
+          # The same LODESTAR_* as `publish`, so it reuses these layers and
+          # pushes the build that was smoked.
           build-args: |
             VERSION=smoke
             REVISION=${{ github.sha }}
+            LODESTAR_VERSION=${{ needs.package-gate.outputs.version }}
+            LODESTAR_CHANNEL=${{ needs.package-gate.outputs.channel }}
           cache-from: type=gha,scope=amd64
           cache-to: type=gha,scope=amd64,mode=max
 
@@ -223,8 +228,8 @@ jobs:
   # has the `full-ci` label); tags, the nightly and manual runs always build it.
   build-arm64:
     name: build (linux/arm64)
-    needs: arm64-needed
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.arm64-needed.outputs.build == 'true') }}
+    needs: [arm64-needed, package-gate]
+    if: ${{ !cancelled() && needs.package-gate.result == 'success' && (github.event_name != 'pull_request' || needs.arm64-needed.outputs.build == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -242,18 +247,22 @@ jobs:
           build-args: |
             VERSION=smoke
             REVISION=${{ github.sha }}
+            LODESTAR_VERSION=${{ needs.package-gate.outputs.version }}
+            LODESTAR_CHANNEL=${{ needs.package-gate.outputs.channel }}
           cache-from: type=gha,scope=arm64
           cache-to: type=gha,scope=arm64,mode=max
 
   publish:
     name: publish (amd64 + arm64)
-    needs: [smoke, build-arm64]
+    needs: [smoke, build-arm64, package-gate]
     # Tags, and the nightly from main (schedule, or a manual run on main). The
     # results are checked explicitly: build-arm64 depends on a job that's skipped
     # outside pull requests, and a skip mustn't hide or fake a success here.
+    # package-gate gives LODESTAR_VERSION, the same as the packages'.
     if: >-
       !cancelled() &&
       needs.smoke.result == 'success' && needs.build-arm64.result == 'success' &&
+      needs.package-gate.result == 'success' &&
       github.event_name != 'pull_request' &&
       (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
@@ -303,6 +312,8 @@ jobs:
           build-args: |
             VERSION=${{ steps.meta.outputs.version }}
             REVISION=${{ github.sha }}
+            LODESTAR_VERSION=${{ needs.package-gate.outputs.version }}
+            LODESTAR_CHANNEL=${{ needs.package-gate.outputs.channel }}
           cache-from: |
             type=gha,scope=amd64
             type=gha,scope=arm64
@@ -322,6 +333,7 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
       msi_version: ${{ steps.meta.outputs.msi_version }}
       tag: ${{ steps.meta.outputs.tag }}
+      channel: ${{ steps.meta.outputs.channel }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -364,18 +376,30 @@ jobs:
               if ! echo "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'; then
                 echo "::error::$tag is not vMAJOR.MINOR.PATCH[-prerelease]"
                 exit 1
-              fi ;;
+              fi
+              # The channel a build is on (LODESTAR_CHANNEL, build.rs): unset
+              # it's `dev`, and a dev build never updates itself.
+              case "$version" in *-*) channel=beta ;; *) channel=stable ;; esac ;;
             *)
               tag=
-              if [ "$GITHUB_EVENT_NAME" = schedule ]; then
-                version="$base-nightly.$(date -u +%Y%m%d)"
+              # LODESTAR_VERSION (crates/lodestar/build.rs) must rise from one
+              # nightly to the next, by semver precedence: the date, then the
+              # run number (two runs on one day; a re-run keeps its number).
+              # The schedule and manual runs on main are the nightly (they
+              # publish :nightly). Anything else is a dev build; its `g`
+              # keeps an all-digit short SHA from being a numeric identifier
+              # with a leading zero, which isn't semver.
+              if [ "$GITHUB_EVENT_NAME" = schedule ] || { [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$GITHUB_REF" = refs/heads/main ]; }; then
+                version="$base-nightly.$(date -u +%Y%m%d).$GITHUB_RUN_NUMBER"
+                channel=nightly
               else
-                version="$base-dev.${GITHUB_SHA::7}"
+                version="$base-dev.$GITHUB_RUN_NUMBER.g${GITHUB_SHA::7}"
+                channel=dev
               fi ;;
           esac
           # The MSI wants plain MAJOR.MINOR.PATCH.
           msi_version=${version%%-*}
-          printf 'version=%s\nmsi_version=%s\ntag=%s\n' "$version" "$msi_version" "$tag" | tee -a "$GITHUB_OUTPUT"
+          printf 'version=%s\nmsi_version=%s\ntag=%s\nchannel=%s\n' "$version" "$msi_version" "$tag" "$channel" | tee -a "$GITHUB_OUTPUT"
 
   # The UI is embedded in every binary, so it is built once and shared.
   package-web:
@@ -428,6 +452,10 @@ jobs:
             smoke: false
     env:
       VERSION: ${{ needs.package-gate.outputs.version }}
+      # The version the binary reports and the updater compares, and its
+      # channel (build.rs; a `dev` build never updates itself).
+      LODESTAR_VERSION: ${{ needs.package-gate.outputs.version }}
+      LODESTAR_CHANNEL: ${{ needs.package-gate.outputs.channel }}
       # Same build settings as packaging/docker/Dockerfile.
       CARGO_TERM_COLOR: never
       CARGO_INCREMENTAL: 0
@@ -481,6 +509,18 @@ jobs:
         run: |
           packaging/linux/build-tarball.sh ${{ matrix.target }} "$VERSION" \
             target/${{ matrix.target }}/release/lodestar dist
+
+      # The update manifest's `binary` artifact is the bare executable: the
+      # updater stages the downloaded file itself as the new binary.
+      - name: Bare binary for the updater
+        run: |
+          name=lodestar-$VERSION-${{ matrix.arch }}-linux-musl
+          install -m 0755 target/${{ matrix.target }}/release/lodestar "dist/$name"
+          # build.rs falls back to Cargo.toml's version, with only a build
+          # warning, when LODESTAR_VERSION isn't strict semver on it.
+          grep -qaF -- "$VERSION" "dist/$name" ||
+            { echo "::error::the binary doesn't carry LODESTAR_VERSION=$VERSION"; exit 1; }
+          (cd dist && sha256sum "$name" >"$name.sha256" && cat "$name.sha256")
 
       - name: Smoke (unpack, serve, /healthz, stop)
         if: matrix.smoke
@@ -543,6 +583,8 @@ jobs:
     environment: ${{ startsWith(github.ref, 'refs/tags/v') && 'release' || (github.event_name != 'pull_request' && 'nightly' || '') }}
     env:
       VERSION: ${{ needs.package-gate.outputs.version }}
+      LODESTAR_VERSION: ${{ needs.package-gate.outputs.version }}
+      LODESTAR_CHANNEL: ${{ needs.package-gate.outputs.channel }}
       MSI_VERSION: ${{ needs.package-gate.outputs.msi_version }}
       CARGO_INCREMENTAL: 0
       CARGO_PROFILE_RELEASE_DEBUG: "false"
@@ -586,6 +628,16 @@ jobs:
       - name: Build
         # Without the `fixture` feature (`serve --fixture` test data): not for releases.
         run: cargo build --locked --release -p lodestar --bin lodestar --no-default-features --features web --target x86_64-pc-windows-msvc
+
+      # build.rs falls back to Cargo.toml's version, with only a build
+      # warning, when LODESTAR_VERSION isn't strict semver on it.
+      - name: The binary carries LODESTAR_VERSION
+        shell: pwsh
+        run: |
+          $bin = [IO.File]::ReadAllBytes('target/x86_64-pc-windows-msvc/release/lodestar.exe')
+          if (-not [Text.Encoding]::ASCII.GetString($bin).Contains($env:VERSION)) {
+            throw "lodestar.exe doesn't carry LODESTAR_VERSION=$($env:VERSION)"
+          }
 
       - name: Sign lodestar.exe (skipped without a certificate)
         shell: pwsh
@@ -739,7 +791,7 @@ jobs:
           case "$TAG" in *-*) prerelease=--prerelease ;; esac
           # An array, not `ls`: the .minisig only exists when the signing key does, and a missing
           # file must not stop the step (bash -e).
-          files=(dist/*.tar.gz dist/*.msi dist/*.zip dist/*.sha256 dist/SHA256SUMS)
+          files=(dist/*.tar.gz dist/*-linux-musl dist/*.msi dist/*.zip dist/*.sha256 dist/SHA256SUMS)
           [ -f dist/SHA256SUMS.minisig ] && files+=(dist/SHA256SUMS.minisig)
           if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             # A re-run must never overwrite files on a release the owner has published.
@@ -754,3 +806,209 @@ jobs:
               --notes "Draft. Windows files are not code-signed (SmartScreen will warn): check each download against SHA256SUMS, and SHA256SUMS against SHA256SUMS.minisig when that file is attached." \
               "${files[@]}"
           fi
+
+  # ===========================================================================
+  # The signed update manifest (architecture §12.2, crates/update/README.md):
+  # one `<channel>.json` envelope per channel on the rolling `update-manifest`
+  # release, which freshness.yml re-signs weekly. Format 1, unchanged.
+  #   tag vX.Y.Z      -> stable.json and beta.json (Beta also gets stable releases)
+  #   tag vX.Y.Z-rc.N -> beta.json only; a pre-release never reaches Stable
+  #   nightly         -> nightly.json, only once the `nightly` environment has
+  #                      NIGHTLY_SIGNING_KEY; until then a notice and a skip
+  # ===========================================================================
+  update-manifest:
+    name: update manifest
+    needs: [package-gate, package-linux, package-windows, package-release]
+    # Tags after the draft release; the nightly from main (no draft release).
+    if: >-
+      !cancelled() &&
+      github.event_name != 'pull_request' &&
+      needs.package-gate.outputs.run == 'true' &&
+      needs.package-linux.result == 'success' && needs.package-windows.result == 'success' &&
+      ((startsWith(github.ref, 'refs/tags/v') && needs.package-release.result == 'success') ||
+       (github.ref == 'refs/heads/main' && needs.package-release.result == 'skipped'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Each key only in its own environment (owner-decisions §2.21): tags use
+    # `release` (v* tags only, the owner approves), the nightly `nightly` (main only).
+    environment: ${{ startsWith(github.ref, 'refs/tags/v') && 'release' || 'nightly' }}
+    # One writer for `update-manifest` at a time, shared with freshness.yml
+    # (docs/decisions/2026-10-30-X-freshness-hardening.md).
+    concurrency:
+      group: update-manifest
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            .github/scripts
+            crates/update/keys
+            docs/releases
+            packaging/keys
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: package-{linux-*,windows}
+          merge-multiple: true
+          path: built
+
+      # Tags: the manifest pins the files on the PUBLISHED release, because a
+      # draft's download URLs don't work. The owner publishes the draft, then
+      # approves this job (or re-runs it). Those files must be byte for byte
+      # what this run built, and listed in the signed SHA256SUMS. A version
+      # already in a channel's manifest is left alone, so a re-run never
+      # replaces what clients may have installed.
+      # Nightly: inert until the nightly key and a public home for nightly
+      # files exist (Q8; the home is follow-up PK-nightly-host, the owner's call).
+      - name: Sign and publish the manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # One variable per key, each empty outside its own run kind, so a
+          # missing release key can never fall through to the nightly one.
+          RELEASE_SIGNING_KEY: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.RELEASE_SIGNING_KEY || '' }}
+          RELEASE_SIGNING_KEY_PASSWORD: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.RELEASE_SIGNING_KEY_PASSWORD || '' }}
+          NIGHTLY_SIGNING_KEY: ${{ !startsWith(github.ref, 'refs/tags/v') && secrets.NIGHTLY_SIGNING_KEY || '' }}
+          TAG: ${{ needs.package-gate.outputs.tag }}
+          VERSION: ${{ needs.package-gate.outputs.version }}
+          MSI_VERSION: ${{ needs.package-gate.outputs.msi_version }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TAG" ]; then
+            if [ -z "$NIGHTLY_SIGNING_KEY" ] || [ ! -f packaging/keys/lodestar-nightly.pub ]; then
+              echo "::notice::No nightly update manifest: the nightly key isn't set up (NIGHTLY_SIGNING_KEY in the nightly environment and packaging/keys/lodestar-nightly.pub; owner action, Q8)."
+            else
+              echo "::notice::No nightly update manifest: nightly files have no public home yet (PK-nightly-host, the owner's call)."
+            fi
+            exit 0
+          fi
+
+          pub=packaging/keys/lodestar-release.pub
+          if [ -z "$RELEASE_SIGNING_KEY" ]; then
+            echo "::error::RELEASE_SIGNING_KEY is not set in the release environment: no update manifest for $TAG (owner action)."
+            exit 1
+          fi
+          metaarg=()
+          meta=docs/releases/$TAG.update.json
+          if [ -f "$meta" ]; then
+            metaarg=(--metadata "$meta")
+          elif [ "${VERSION#*-}" = "$VERSION" ]; then
+            echo "::error::Add $meta (level, security, manual_steps, min_from, migrates, reindex, reindex_bytes; crates/update/README.md) on the tagged commit: a release's manifest needs it."
+            exit 1
+          fi
+          # Beta also receives stable releases (§12.2); a pre-release never reaches Stable.
+          case "$VERSION" in *-*) channels=(beta) ;; *) channels=(stable beta) ;; esac
+          if [ "$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq .isDraft)" != false ]; then
+            echo "::error::$TAG is still a draft (or missing): publish the release, then re-run this job."
+            exit 1
+          fi
+          sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+
+          work=$(mktemp -d "$RUNNER_TEMP/manifest.XXXXXX")
+          umask 077
+          trap 'rm -rf "$work"' EXIT
+          mkdir "$work/files" "$work/envelopes" "$work/recheck"
+          # The MSI's name has only MAJOR.MINOR.PATCH (build-msi.ps1).
+          names=("lodestar-$VERSION-x86_64-linux-musl" "lodestar-$VERSION-aarch64-linux-musl"
+                 "lodestar-$MSI_VERSION-x86_64.msi" "lodestar-$VERSION-x86_64-windows-portable.zip")
+          gh release download "$TAG" --repo "$REPO" --dir "$work/files" \
+            --pattern SHA256SUMS --pattern SHA256SUMS.minisig "${names[@]/#/--pattern=}"
+          for f in SHA256SUMS SHA256SUMS.minisig; do
+            [ -f "$work/files/$f" ] || { echo "::error::$TAG has no $f (the draft was made without the release key?): attach a signed one, then re-run."; exit 1; }
+          done
+          minisign -V -q -p "$pub" -m "$work/files/SHA256SUMS" -x "$work/files/SHA256SUMS.minisig"
+          for name in "${names[@]}"; do
+            cmp "$work/files/$name" "built/$name" ||
+              { echo "::error::$name on the release isn't the file this run built."; exit 1; }
+            sum=$(sha256sum "$work/files/$name" | awk '{print $1}')
+            awk -v n="$name" -v s="$sum" '$2 == n && $1 == s { found = 1 } END { exit !found }' "$work/files/SHA256SUMS" ||
+              { echo "::error::$name isn't in the signed SHA256SUMS with its hash."; exit 1; }
+          done
+          gh release view "$TAG" --repo "$REPO" --json body --jq .body >"$work/notes.md"
+
+          # The published envelopes. Starting fresh is only for a channel
+          # with no envelope yet; any other error, or one that doesn't
+          # verify, fails the job rather than drop the releases it lists.
+          if ! gh release view update-manifest --repo "$REPO" --json assets --jq '.assets[].name' >"$work/assets.txt" 2>"$work/view.err"; then
+            grep -q 'release not found' "$work/view.err" || { cat "$work/view.err" >&2; exit 1; }
+            gh release create update-manifest --repo "$REPO" --prerelease --latest=false \
+              --title "Update manifests" \
+              --notes "Signed update manifests, one per channel, read by Lodestar's updater. Not a release: don't download these by hand."
+            : >"$work/assets.txt"
+          fi
+
+          printf '%s\n' "$RELEASE_SIGNING_KEY" >"$work/signing.key"
+          sign() {
+            if [ -n "$RELEASE_SIGNING_KEY_PASSWORD" ]; then
+              printf '%s\n' "$RELEASE_SIGNING_KEY_PASSWORD" | minisign -S -s "$work/signing.key" "$@"
+            else
+              minisign -S -s "$work/signing.key" "$@" </dev/null
+            fi
+          }
+          um() { python3 .github/scripts/update_manifest.py "$@"; }
+          manifest_of() {
+            if [ -f "$1" ]; then python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))["manifest"]))' "$1"; else echo absent; fi
+          }
+
+          upload=()
+          for channel in "${channels[@]}"; do
+            prev=()
+            # `<channel>.published` marks a channel that has had an envelope:
+            # `gh release upload --clobber` deletes before it uploads, so a
+            # failed upload must not read as a first run and drop the history.
+            if ! grep -qxF "$channel.json" "$work/assets.txt" && grep -qxF "$channel.published" "$work/assets.txt"; then
+              echo "::error::update-manifest has $channel.published but no $channel.json: a failed upload lost it. Upload the last good $channel.json again, or delete $channel.published to start the channel over on purpose, then re-run."
+              exit 1
+            fi
+            if grep -qxF "$channel.json" "$work/assets.txt"; then
+              gh release download update-manifest --repo "$REPO" --pattern "$channel.json" --dir "$work/envelopes"
+              um extract "$work/envelopes/$channel.json" "$work/$channel.prev.body" "$work/$channel.prev.minisig"
+              minisign -V -q -p "$pub" -m "$work/$channel.prev.body" -x "$work/$channel.prev.minisig" ||
+                { echo "::error::The published $channel manifest doesn't verify against $pub: not replacing it."; exit 1; }
+              prev=(--previous "$work/$channel.prev.body")
+            fi
+            code=0
+            um build --channel "$channel" --version "$VERSION" --repo "$REPO" --tag "$TAG" \
+              --x86-64-binary "$work/files/${names[0]}" --aarch64-binary "$work/files/${names[1]}" \
+              --msi "$work/files/${names[2]}" --portable "$work/files/${names[3]}" \
+              --statements crates/update/keys/statements.json \
+              --notes-file "$work/notes.md" --notes-url "https://github.com/$REPO/releases/tag/$TAG" \
+              "${metaarg[@]}" "${prev[@]}" --out "$work/$channel.body" || code=$?
+            if [ "$code" = 3 ]; then
+              echo "::notice::$VERSION is already in the $channel manifest; left as it is."
+              continue
+            fi
+            [ "$code" = 0 ] || exit "$code"
+            ts=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["timestamp"])' "$work/$channel.body")
+            sign -t "lodestar $channel manifest $ts" -m "$work/$channel.body" -x "$work/$channel.minisig"
+            minisign -V -q -p "$pub" -m "$work/$channel.body" -x "$work/$channel.minisig"
+            um envelope "$work/$channel.body" "$work/$channel.minisig" "$work/$channel.json"
+            upload+=("$work/$channel.json")
+          done
+          rm -f "$work/signing.key"
+          if [ "${#upload[@]}" -eq 0 ]; then exit 0; fi
+
+          # Just before the upload: no envelope changed while this run signed
+          # (the concurrency group is the first guard; freshness.yml does the same).
+          gh release view update-manifest --repo "$REPO" --json assets --jq '.assets[].name' >"$work/recheck.txt"
+          for env_file in "${upload[@]}"; do
+            channel=$(basename "$env_file" .json)
+            if grep -qxF "$channel.json" "$work/recheck.txt"; then
+              gh release download update-manifest --repo "$REPO" --pattern "$channel.json" --dir "$work/recheck"
+            fi
+            [ "$(manifest_of "$work/recheck/$channel.json")" = "$(manifest_of "$work/envelopes/$channel.json")" ] ||
+              { echo "::error::The $channel manifest changed during this run; re-run this job."; exit 1; }
+          done
+          gh release upload update-manifest --repo "$REPO" --clobber "${upload[@]}"
+          markers=()
+          for env_file in "${upload[@]}"; do
+            channel=$(basename "$env_file" .json)
+            grep -qxF "$channel.published" "$work/assets.txt" && continue
+            printf 'Lodestar %s update channel: published.\n' "$channel" >"$work/$channel.published"
+            markers+=("$work/$channel.published")
+          done
+          if [ "${#markers[@]}" -gt 0 ]; then gh release upload update-manifest --repo "$REPO" "${markers[@]}"; fi
+          echo "Update manifest for $TAG published: ${upload[*]##*/}" | tee -a "$GITHUB_STEP_SUMMARY"
