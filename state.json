@@ -6385,6 +6385,10 @@
     {
       "at": "2026-11-08T17:55Z",
       "note": "Next runner PR: from PK-win-upd-1 self-review. (1) X-updates-api-text: crates/api/src/updates.rs and dto/updates.rs describe updates_unavailable as 'fixture or Windows' and omit not_built_yet; doc-only edit + regenerated openapi.json/schema.d.ts, after PK-win-upd-1. (2) PK-win-portable-upd notes gain a requirement: <data>\\bin owner-only via windows::acl (protected DACL: user, SYSTEM, Administrators) or refuse a non-private one, as log_folder does. (3) web Updates screen: rollback wording for not_built_yet (falls back to unknown)."
+    },
+    {
+      "at": "2026-11-08T18:07Z",
+      "note": "CMP-5 reviews relayed: #620 MERGE (N1-N6 into 5b round); #621 CHANGES (B1 recovery/install deletes foreign content in catalogue-id folder; B2 no race-guard tests); #619 CHANGES (B1 tests for serve start + CLI confirmation). CMP-5 pushes stack once, then fresh reviews of #621/#619. #629 gained c8be068c (seeded filter trail coverage test)."
     }
   ],
   "main_health": [
@@ -7184,5 +7188,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T17:55Z"
+  "updated": "2026-11-08T18:07Z"
 }
