@@ -6263,6 +6263,16 @@
       "id": "CMP-5-prs",
       "at": "2026-11-08T15:50:07Z",
       "note": "CMP-5 stacked: #620 CMP-5a (38e88b0f, base main), #621 CMP-5b (bfa63d69, base slice/CMP-5a, ~2.2k lines with reason), #619 CMP-5 (94ca499e, base slice/CMP-5b, ~710). not_wired holds; durable 'staged' state moves to CMP-5g (supersedes 14:38Z ask). stage_binary name from companion id via RelPath (accepted). CMP-10 contract (external_client/external_indexer, Some(rx), Prowlarr restart after hand-over) -> CMP-5g brief."
+    },
+    {
+      "id": "cr-ab-comp-1-finished",
+      "at": "2026-11-08T16:19:31Z",
+      "note": "cr-ab-comp-1 finished cleanly (baseline 2026-11-07T14:00:15Z to 2026-11-08T14:00:49Z, exited_0, 1,499 samples, finalization_complete true). Restore 14:10:16Z. Awaiting digests + analyze_cr.py segment output via dashboard. No Lodestar start before 2026-11-09T02:01Z (rc.2 B-E included). Next experiment booking held until runner reviews analyzer output. Replay prompt for r4/r5 screen lines: yes."
+    },
+    {
+      "id": "X-flake-query-token-style",
+      "at": "2026-11-08T16:19:31Z",
+      "note": "Runner PR #622 (claude/busy-allen-aptli2, ee825334): poll lazy token styles in search-query.routes e2e. Seen on #621. Self-checked test-only; merge on green."
     }
   ],
   "main_health": [
@@ -7054,5 +7064,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T15:50:07Z"
+  "updated": "2026-11-08T16:19:31Z"
 }
