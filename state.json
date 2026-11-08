@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-08T21:39Z",
+  "updated_at": "2026-11-08T22:52Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6515,6 +6515,11 @@
       "id": "owner-cloud-loosenings",
       "from": "owner, confirmed directly in the runner session 2026-11-08T22:13Z (relayed first by the dashboard session)",
       "what": "P-cloud-operator inferred items accepted as written: (a) GitHub App with Pull requests: write on lodestar-v2 with the plan's containment; (b) per-job /32 SSH firewall opening + firewall token + hourly audit. Record in docs/owner-decisions.md in the next runner PR; set the matching condition met. Runner adds to OP-2a/OP-G notes: install the App on this repo only; confirm main's protection blocks App bypass; OP-G dry cycle tests the stop switch before FLEET_LIVE=true. Owner setup step 1 answered (owner via dashboard, 2026-11-08T22:15Z): the AWS and Akamai accounts are empty apart from this fleet; no dedicated account needed. Record in the plan's owner-setup section / owner-decisions in the next runner PR."
+    },
+    {
+      "id": "X-flake-portable-restart",
+      "at": "2026-11-08T22:52Z",
+      "note": "windows_service.rs a_portable_restart_starts_a_new_copy failed \"no new copy served\" on #636 94b22698 and #637 0e79f478; main f5e2afff passed; #636 green on re-run. If it recurs, launch a fix slice: dump the relaunched copy jsonl on failure, then root-cause (PK-win-restart test; X-win-restart-followups owns windows_service.rs)"
     }
   ],
   "main_health": [
@@ -6983,6 +6988,12 @@
       "slice": "WK-17",
       "merge": "8d6c4c85",
       "at": "2026-11-08T00:55Z"
+    },
+    {
+      "pr": 636,
+      "slice": "OP-1",
+      "sha": "bc2a6e95122b25b6d718c24d6950f2a55e8f302c",
+      "at": "2026-11-08T22:52Z"
     }
   ],
   "active_sessions": {
@@ -7216,7 +7227,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T21:39Z",
+    "updated": "2026-11-08T22:52Z",
     "items": [
       {
         "slot": 1,
@@ -7228,11 +7239,11 @@
       },
       {
         "slot": 2,
-        "slice": "OP-1",
+        "slice": "OP-2a",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #636 both reviews MERGE; fixes at 94b22698 self-checked; merge on green",
-        "since": "2026-11-08T19:55:08Z"
+        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: OP-1 merged #636 (bc2a6e95); building OP-2a (brief briefs/OP-2a.md)",
+        "since": "2026-11-08T22:52Z"
       },
       {
         "slot": 3,
@@ -7247,7 +7258,7 @@
         "slice": "X-wk-busy-retry",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #638 merged (c5dd0fe7); #637 fix round 4a235ceb in delta review",
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #637 at 0e79f478, Windows re-run (attempt 2) of a_portable_restart_starts_a_new_copy in progress; merge on green",
         "since": "2026-11-08T19:55Z"
       },
       {
@@ -7315,5 +7326,5 @@
     }
   ],
   "heartbeat": "2026-11-08T21:39Z",
-  "updated": "2026-11-08T20:07Z"
+  "updated": "2026-11-08T22:52Z"
 }
