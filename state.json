@@ -6510,7 +6510,12 @@
       "from": "#639 review P1",
       "what": "Manager removal() lists both credential rows (webui_password, api_key) for every companion even when one can't exist; filter absent rows so the removal plan is literal."
     },
-    "2026-11-08: owner flag pending after #639 merges: CMP-6 regenerate skips the password (decisions file); credential_revealed made required."
+    "2026-11-08: owner flag pending after #639 merges: CMP-6 regenerate skips the password (decisions file); credential_revealed made required.",
+    {
+      "id": "owner-cloud-loosenings",
+      "from": "owner, confirmed directly in the runner session 2026-11-08T22:04Z (relayed first by the dashboard session)",
+      "what": "P-cloud-operator inferred items accepted as written: (a) GitHub App with Pull requests: write on lodestar-v2 with the plan's containment; (b) per-job /32 SSH firewall opening + firewall token + hourly audit. Record in docs/owner-decisions.md in the next runner PR; set the matching condition met. Runner adds to OP-2a/OP-G notes: install the App on this repo only; confirm main's protection blocks App bypass; OP-G dry cycle tests the stop switch before FLEET_LIVE=true. Open (not answered): whether the owner's AWS/Akamai accounts hold anything besides the fleet \u2014 dashboard asks when OP-2a is near; runner reminds it."
+    }
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
