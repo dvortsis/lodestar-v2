@@ -518,13 +518,27 @@ impl Install {
     /// every version folder. Each child then goes through [`Self::delete`]
     /// (folders by way of a `.deleting` tombstone), and the folder last.
     pub fn remove(self) -> Result<(), LayoutError> {
+        self.remove_last(None)
+    }
+
+    /// [`Install::remove`], keeping the direct child named `last` until
+    /// everything else is gone: a marker (CMP-5's journal) that says what
+    /// the folder is for as long as anything else is left in it.
+    pub fn remove_last(self, last: Option<&str>) -> Result<(), LayoutError> {
         self.remove_pointer()?;
         let mut names = Vec::new();
         for entry in fs::read_dir(&self.root)? {
-            names.push(entry?.file_name());
+            let name = entry?.file_name();
+            if last.is_none_or(|l| name != l) {
+                names.push(name);
+            }
         }
         for name in names {
             self.delete(&self.root.join(name))?;
+        }
+        if let Some(l) = last {
+            sync_dir(&self.root)?;
+            self.delete(&self.root.join(l))?;
         }
         self.recheck()?;
         fs::remove_dir(&self.root)?;
@@ -740,6 +754,59 @@ mod tests {
         assert_eq!(i.stage_binary(&v, &mut &b"full"[..], &name, 8).unwrap(), 4);
         assert!(!i.staging_dir(&v).exists());
         assert_eq!(fs::read(i.executable(&v, &name)).unwrap(), b"full");
+        let _ = fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn remove_last_keeps_its_marker_until_everything_else_is_gone() {
+        let d = tmp();
+        let i = Install::open(&d, &CompanionId::parse("prowlarr").unwrap()).unwrap();
+        fs::create_dir_all(i.root().join("home/a")).unwrap();
+        fs::write(i.root().join("state.json"), b"{}").unwrap();
+        fs::write(i.root().join("other"), b"x").unwrap();
+        let root = i.root().to_path_buf();
+        i.remove_last(Some("state.json")).unwrap();
+        assert!(!root.exists());
+        let _ = fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn stage_binary_refuses_links_and_cleans_up_a_failed_copy() {
+        struct Broken;
+        impl Read for Broken {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::other("cut"))
+            }
+        }
+        let d = tmp();
+        let mut i = Install::open(&d, &CompanionId::parse("qbittorrent").unwrap()).unwrap();
+        let v = Version::parse("5.0.3").unwrap();
+        let name = RelPath::parse("qbittorrent").unwrap();
+        // A reader error mid-copy leaves neither folder.
+        assert!(i.stage_binary(&v, &mut Broken, &name, 8).is_err());
+        assert!(!i.staging_dir(&v).exists());
+        assert!(!i.version_dir(&v).exists());
+        #[cfg(unix)]
+        {
+            let outside = tmp();
+            // A link in place of the staging folder or the version folder
+            // is refused, and its target is left alone.
+            std::os::unix::fs::symlink(&outside, i.staging_dir(&v)).unwrap();
+            assert!(i.stage_binary(&v, &mut &b"x"[..], &name, 8).is_err());
+            assert!(
+                fs::symlink_metadata(i.staging_dir(&v))
+                    .unwrap()
+                    .is_symlink()
+            );
+            fs::remove_file(i.staging_dir(&v)).unwrap();
+            std::os::unix::fs::symlink(&outside, i.version_dir(&v)).unwrap();
+            assert!(matches!(
+                i.stage_binary(&v, &mut &b"x"[..], &name, 8),
+                Err(LayoutError::AlreadyStaged)
+            ));
+            assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+            let _ = fs::remove_dir_all(outside);
+        }
         let _ = fs::remove_dir_all(d);
     }
 

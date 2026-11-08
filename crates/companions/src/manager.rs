@@ -124,6 +124,10 @@ pub enum Refusal {
     /// A credential is stored for a companion Lodestar didn't install (a
     /// detected or guided one): remove that first.
     Present,
+    /// `<data>/companions/<id>/` holds files Lodestar has no record of
+    /// (a compose companion's host folder can sit there): it's never
+    /// installed over or deleted.
+    FolderInUse,
 }
 
 impl Refusal {
@@ -141,6 +145,7 @@ impl Refusal {
             Refusal::Current => "already_current",
             Refusal::NotInstalled => "not_installed",
             Refusal::Present => "credential_present",
+            Refusal::FolderInUse => "folder_in_use",
         }
     }
 }
@@ -374,8 +379,11 @@ pub struct Parts {
 }
 
 /// The manager. One per data folder; one operation per companion at a
-/// time.
-pub struct Manager {
+/// time. A handle on shared state: the journal and disk work runs in
+/// `spawn_blocking`, off the async runtime, on that state.
+pub struct Manager(Arc<Inner>);
+
+struct Inner {
     p: Parts,
     /// `<data>/companions/.lock`, held for the manager's life: one
     /// journal writer per data folder across processes (serve and the CLI).
@@ -387,9 +395,9 @@ pub struct Manager {
 }
 
 /// Holds a companion's operation slot.
-struct Slot<'a>(&'a Manager, CompanionId);
+struct Slot(Arc<Inner>, CompanionId);
 
-impl Drop for Slot<'_> {
+impl Drop for Slot {
     fn drop(&mut self) {
         let mut b = self.0.busy.lock().unwrap_or_else(|e| e.into_inner());
         b.retain(|i| i != &self.1);
@@ -481,7 +489,7 @@ fn config_dir(home: &Path, parts: &[&str]) -> Result<PathBuf, ManagerError> {
 
 /// A companion's stored credential, opened on demand for CMP-8b.
 struct Stored<'a> {
-    m: &'a Manager,
+    m: &'a Inner,
     id: &'a CompanionId,
 }
 
@@ -501,39 +509,22 @@ impl Credentials for Stored<'_> {
     }
 }
 
-impl Manager {
-    /// Takes the data folder's companion lock; [`Refusal::Busy`] while
-    /// another process (serve, or a `lodestar companion` command) holds it.
-    pub fn open(parts: Parts) -> Result<Manager, ManagerError> {
-        let dir = parts.data.join("companions");
-        std::fs::create_dir_all(&dir).map_err(|_| failed("lock")("io"))?;
-        let lock = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(dir.join(".lock"))
-            .map_err(|_| failed("lock")("io"))?;
-        match lock.try_lock() {
-            Ok(()) => {}
-            Err(std::fs::TryLockError::WouldBlock) => return Err(Refusal::Busy.into()),
-            Err(std::fs::TryLockError::Error(_)) => return Err(failed("lock")("io")),
-        }
-        Ok(Manager {
-            p: parts,
-            _lock: lock,
-            busy: Mutex::new(Vec::new()),
-            snapshot: watch::channel(Snapshot::default()).0,
-            #[cfg(any(test, feature = "testing"))]
-            fault: Mutex::new(None),
-        })
-    }
+/// Whether a folder has nothing in it. An unreadable one counts as not
+/// empty, so it's never deleted as ours.
+fn empty(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|mut d| d.next().is_none())
+}
 
-    /// Stops the next operation at `fault`, as a crash would.
-    #[cfg(any(test, feature = "testing"))]
-    pub fn crash_at(&self, fault: Option<Fault>) {
-        *self.fault.lock().unwrap_or_else(|e| e.into_inner()) = fault;
-    }
+/// What recovery found that needs the async side.
+enum Found {
+    Done(Option<Version>),
+    /// A confirmed removal to finish: stop it, then the rest.
+    Remove(Record),
+}
 
+/// The synchronous core: the journal, the disk and the store. Every call
+/// that does I/O runs inside [`Manager::off`], in `spawn_blocking`.
+impl Inner {
     /// A test's fault point; nothing in other builds.
     #[cfg(any(test, feature = "testing"))]
     fn point(&self, here: Fault) -> Result<(), ManagerError> {
@@ -552,17 +543,6 @@ impl Manager {
             .map_err(|_| failed("credentials")("open"))
     }
 
-    /// The installed companions and their health (CMP-10).
-    pub fn snapshot(&self) -> watch::Receiver<Snapshot> {
-        self.snapshot.subscribe()
-    }
-
-    /// Whether any `integrations.clients` entry exists.
-    pub fn set_download_clients(&self, any: bool) {
-        self.snapshot
-            .send_if_modified(|s| std::mem::replace(&mut s.download_clients, any) != any);
-    }
-
     fn publish(&self, id: &CompanionId, now: Option<(Option<Version>, Health)>) {
         self.snapshot.send_modify(|s| {
             s.companions.retain(|c| &c.id != id);
@@ -578,13 +558,13 @@ impl Manager {
         });
     }
 
-    fn claim(&self, id: &CompanionId) -> Result<Slot<'_>, Refusal> {
+    fn claim(self: &Arc<Self>, id: &CompanionId) -> Result<Slot, Refusal> {
         let mut b = self.busy.lock().unwrap_or_else(|e| e.into_inner());
         if b.contains(id) {
             return Err(Refusal::Busy);
         }
         b.push(id.clone());
-        Ok(Slot(self, id.clone()))
+        Ok(Slot(self.clone(), id.clone()))
     }
 
     /// The catalogue's own spelling of `id`, for log labels.
@@ -624,6 +604,11 @@ impl Manager {
         Ok(Target::Loopback(port.number))
     }
 
+    /// The companion's folder, which must exist.
+    fn folder(&self, id: &CompanionId) -> Result<Install, ManagerError> {
+        Install::existing(&self.p.data, id)?.ok_or(failed("layout")("gone"))
+    }
+
     fn record(&self, id: &CompanionId) -> Result<Option<Record>, ManagerError> {
         match Install::existing(&self.p.data, id)? {
             None => Ok(None),
@@ -631,9 +616,7 @@ impl Manager {
         }
     }
 
-    /// What installing or updating `id` would fetch, to show before you
-    /// confirm.
-    pub fn offer(&self, id: &CompanionId) -> Result<Offer, ManagerError> {
+    fn offer(&self, id: &CompanionId) -> Result<Offer, ManagerError> {
         let (entry, _, pin) = self.installable(id)?;
         let replaces = self.record(id)?.and_then(|r| r.installed);
         if replaces
@@ -653,8 +636,7 @@ impl Manager {
         })
     }
 
-    /// What removing `id` deletes.
-    pub fn removal(&self, id: &CompanionId) -> Result<Removal, ManagerError> {
+    fn removal(&self, id: &CompanionId) -> Result<Removal, ManagerError> {
         let install = Install::existing(&self.p.data, id)?.ok_or(Refusal::NotInstalled)?;
         if state::load(install.root())?.is_none() {
             return Err(Refusal::NotInstalled.into());
@@ -668,36 +650,46 @@ impl Manager {
         })
     }
 
-    /// Records `step`; the in-memory record changes only once it's on
-    /// disk, so a failed write never reads as a step reached.
-    fn save(&self, install: &Install, rec: &mut Record, step: Step) -> Result<(), ManagerError> {
+    /// Records `step` and returns the record as written. The caller's copy
+    /// changes only once the file holds it, so a failed write never reads
+    /// as a step reached.
+    fn save(&self, id: &CompanionId, rec: &Record, step: Step) -> Result<Record, ManagerError> {
         let mut next = rec.clone();
         if let Some(op) = next.op.as_mut() {
             op.step = step;
         }
-        state::save(install.root(), &next)?;
-        *rec = next;
-        Ok(())
+        state::save(self.folder(id)?.root(), &next)?;
+        Ok(next)
     }
 
-    /// Installs or updates to the pinned version you confirmed.
-    pub async fn install(&self, token: &InstallToken) -> Result<Version, ManagerError> {
-        let (entry, artifact, pin) = self.installable(&token.id)?;
-        if token.version.as_str() != pin.version.as_str() || token.sha256 != pin.sha256 {
-            return Err(Refusal::Confirmation.into());
+    fn leftover(&self, id: &CompanionId, e: Option<LayoutError>) {
+        if let Some(e) = e {
+            lodestar_log::log_event!(
+                INSTALL_FAILED,
+                companion = self.label(id),
+                version = "",
+                step = "leftover",
+                reason = e.code()
+            );
         }
+    }
+
+    /// Before anything changes: the checks an install makes under its
+    /// slot, then the folder and the journal's `begun`.
+    fn begin(&self, entry: &Entry, pin: &Pin) -> Result<Record, ManagerError> {
         let id = &entry.id;
-        self.p.run.ready().map_err(failed("start"))?;
-        let _slot = self.claim(id)?;
-        if self.record(id)?.is_none() {
-            // A folder with a pointer but no record isn't ours to install
-            // over: recovery leaves it alone too.
-            let folder = Install::existing(&self.p.data, id)?;
-            if folder.map(|i| i.pointer()).transpose()?.flatten().is_some() {
-                return Err(failed("state")("no_record"));
-            }
+        let existing = Install::existing(&self.p.data, id)?;
+        let record = match &existing {
+            Some(i) => state::load(i.root())?,
+            None => None,
+        };
+        // A folder Lodestar has no record of isn't ours to install over or
+        // to roll back to nothing: a compose companion's host folder can
+        // sit there (CMP-7's validator allows it).
+        if record.is_none() && existing.as_ref().is_some_and(|i| !empty(i.root())) {
+            return Err(Refusal::FolderInUse.into());
         }
-        let installed = match self.record(id)? {
+        let installed = match record {
             Some(r) if r.op.is_some() => return Err(Refusal::Busy.into()),
             Some(r) => r.installed,
             None => None,
@@ -718,13 +710,13 @@ impl Manager {
                 return Err(Refusal::Present.into());
             }
         }
-        let mut install = Install::open(&self.p.data, id)?;
+        Install::open(&self.p.data, id)?;
         let kind = if installed.is_some() {
             OpKind::Update
         } else {
             OpKind::Install
         };
-        let mut rec = Record {
+        let rec = Record {
             installed,
             op: Some(Op {
                 kind,
@@ -732,308 +724,120 @@ impl Manager {
                 step: Step::Begun,
             }),
         };
-        self.save(&install, &mut rec, Step::Begun)?;
-        match self
-            .steps(entry, artifact, pin, &mut install, &mut rec)
-            .await
-        {
-            Ok(()) => {
-                lodestar_log::log_event!(
-                    INSTALLED,
-                    companion = self.label(id),
-                    version = pin.version.as_str()
-                );
-                Ok(pin.version.clone())
-            }
-            #[cfg(any(test, feature = "testing"))]
-            Err(ManagerError::Crashed) => Err(ManagerError::Crashed),
-            // Past the commit point it's installed: only deleting the
-            // previous version failed, and the next recovery finishes it.
-            Err(e) if rec.op.as_ref().is_some_and(|o| o.step >= Step::Configured) => {
-                lodestar_log::log_event!(
-                    INSTALL_FAILED,
-                    companion = self.label(id),
-                    version = pin.version.as_str(),
-                    step = "leftover",
-                    reason = e.code()
-                );
-                self.publish(id, Some((Some(pin.version.clone()), Health::Healthy)));
-                Ok(pin.version.clone())
-            }
-            Err(e) => {
-                let (step, code) = match &e {
-                    ManagerError::Step { step, code } => (*step, *code),
-                    other => ("install", other.code()),
-                };
-                lodestar_log::log_event!(
-                    INSTALL_FAILED,
-                    companion = self.label(id),
-                    version = pin.version.as_str(),
-                    step = step,
-                    reason = code
-                );
-                self.undo(entry, install, rec).await;
-                Err(e)
-            }
-        }
+        self.save(id, &rec, Step::Begun)
     }
 
-    async fn steps(
+    /// Step 1's disk half: stages the verified download.
+    fn stage(
         &self,
-        entry: &'static Entry,
-        artifact: &'static Artifact,
-        pin: &'static Pin,
-        install: &mut Install,
-        rec: &mut Record,
+        id: &CompanionId,
+        artifact: &Artifact,
+        pin: &Pin,
+        mut file: Verified,
+        exe: &RelPath,
     ) -> Result<(), ManagerError> {
-        let id = &entry.id;
-        let v = &pin.version;
-        let fresh = rec.installed.is_none();
-        let exe = executable(id, artifact)?;
-        let target = Self::target(entry)?;
-        let home = crate::supervise::process::home_dir(&self.p.data, id);
-
-        // Fetch, verify, extract.
-        fault!(self, Before(Step::Staged));
-        let mut file = self
-            .p
-            .downloader
-            .get(&self.p.data, entry, pin)
-            .await
-            .map_err(|e| failed("fetch")(e.code()))?;
-        let verify::Upstream::PinOnly = verify::upstream(pin);
-        let staged = {
-            let (kind, version, exe) = (artifact.archive, v.clone(), exe.clone());
-            let mut owned = Install::existing(&self.p.data, id)?.ok_or(failed("stage")("gone"))?;
-            tokio::task::spawn_blocking(move || {
-                let r = match kind {
-                    ArchiveKind::Binary => owned
-                        .stage_binary(&version, &mut file, &exe, pin.size)
-                        .map(drop),
-                    _ => owned.stage(&version, kind, &mut file, &exe).map(drop),
-                };
-                let _ = file.discard();
-                r
-            })
-            .await
-            .map_err(|_| failed("stage")("panicked"))?
+        let mut install = self.folder(id)?;
+        let r = match artifact.archive {
+            ArchiveKind::Binary => install
+                .stage_binary(&pin.version, &mut file, exe, pin.size)
+                .map(drop),
+            kind => install.stage(&pin.version, kind, &mut file, exe).map(drop),
         };
-        staged.map_err(|e| failed("stage")(e.code()))?;
-        fault!(self, After(Step::Staged));
-        self.save(install, rec, Step::Staged)?;
-
-        // Credentials and config file, first install only. The row is
-        // stored durably before anything uses the secret.
-        let mut secrets = Vec::new();
-        if fresh {
-            let field = field_of(id).ok_or(Refusal::NoProfile)?;
-            fault!(self, Before(Step::Credentials));
-            let issued =
-                credentials::generate(&self.p.secrets, &CredentialKey::new(id.clone(), field))
-                    .map_err(|_| failed("credentials")("generate"))?;
-            self.p
-                .rows
-                .put(&issued.row)
-                .map_err(|_| failed("credentials")("store"))?;
-            fault!(self, After(Step::Credentials));
-            self.save(install, rec, Step::Credentials)?;
-
-            fault!(self, Before(Step::Files));
-            let prof = profile(id, &home, 0).ok_or(Refusal::NoProfile)?;
-            let dir = config_dir(&home, prof.config.0)?;
-            let path = dir.join(prof.config.1);
-            let written = match field {
-                Field::WebUiPassword => {
-                    config_files::write_qbittorrent(&path, &Username::default(), &issued.secret)
-                }
-                Field::ApiKey => config_files::write_prowlarr(&path, &issued.secret),
-            };
-            written.map_err(|_| failed("files")("write"))?;
-            fault!(self, After(Step::Files));
-            self.save(install, rec, Step::Files)?;
-            secrets.push(issued.secret);
-        } else {
-            secrets.extend(self.secret(id)?);
-        }
-
-        // Commit: the old version stops first; the pointer keeps it as
-        // `previous`.
-        self.p.run.stop(id).await;
-        fault!(self, Before(Step::Committed));
-        let sw = install.commit(v, &exe)?;
-        self.leftover(id, sw.leftover);
-        fault!(self, After(Step::Committed));
-        self.save(install, rec, Step::Committed)?;
-
-        // Start and health.
-        fault!(self, Before(Step::Healthy));
-        self.launch(entry, install, v, &exe, &target, secrets)
-            .await?;
-        fault!(self, After(Step::Healthy));
-        self.save(install, rec, Step::Healthy)?;
-
-        // Configure through the API, with the receipt only this crate mints.
-        fault!(self, Before(Step::Configured));
-        self.p
-            .api
-            .configure(
-                id,
-                &target,
-                InstallReceipt::new(target.clone()),
-                &Stored { m: self, id },
-            )
-            .await
-            .map_err(|e| failed("configure")(configure::code(&e)))?;
-        fault!(self, After(Step::Configured));
-        let mut next = rec.clone();
-        next.installed = Some(v.clone());
-        self.save(install, &mut next, Step::Configured)?;
-        *rec = next;
-
-        // Done: the previous version goes.
-        self.finish(id, install, rec)?;
-        self.publish(id, Some((Some(v.clone()), Health::Healthy)));
-        Ok(())
+        let _ = file.discard();
+        r.map_err(|e| failed("stage")(e.code()))
     }
 
-    /// Starts `version` and waits for health.
-    async fn launch(
+    /// First install only: the credential row, stored durably before the
+    /// config file uses it, then the file. Returns the secret.
+    fn credentials_and_files(
         &self,
-        entry: &Entry,
-        install: &Install,
+        id: &CompanionId,
+        rec: &mut Record,
+    ) -> Result<Secret, ManagerError> {
+        let field = field_of(id).ok_or(Refusal::NoProfile)?;
+        let home = crate::supervise::process::home_dir(&self.p.data, id);
+        fault!(self, Before(Step::Credentials));
+        let issued = credentials::generate(&self.p.secrets, &CredentialKey::new(id.clone(), field))
+            .map_err(|_| failed("credentials")("generate"))?;
+        self.p
+            .rows
+            .put(&issued.row)
+            .map_err(|_| failed("credentials")("store"))?;
+        fault!(self, After(Step::Credentials));
+        *rec = self.save(id, rec, Step::Credentials)?;
+
+        fault!(self, Before(Step::Files));
+        let prof = profile(id, &home, 0).ok_or(Refusal::NoProfile)?;
+        let dir = config_dir(&home, prof.config.0)?;
+        let path = dir.join(prof.config.1);
+        let written = match field {
+            Field::WebUiPassword => {
+                config_files::write_qbittorrent(&path, &Username::default(), &issued.secret)
+            }
+            Field::ApiKey => config_files::write_prowlarr(&path, &issued.secret),
+        };
+        written.map_err(|_| failed("files")("write"))?;
+        fault!(self, After(Step::Files));
+        *rec = self.save(id, rec, Step::Files)?;
+        Ok(issued.secret)
+    }
+
+    /// Points `current` at the staged version, keeping the old one.
+    fn commit(
+        &self,
+        id: &CompanionId,
         version: &Version,
         exe: &RelPath,
-        target: &Target,
-        secrets: Vec<Secret>,
+        rec: &mut Record,
     ) -> Result<(), ManagerError> {
-        let id = &entry.id;
-        let home = crate::supervise::process::home_dir(&self.p.data, id);
-        let Target::Loopback(port) = target else {
-            return Err(Refusal::NoProfile.into());
-        };
-        let prof = profile(id, &home, port.get()).ok_or(Refusal::NoProfile)?;
-        self.p
-            .run
-            .start(Launch {
-                id: id.clone(),
-                executable: install.executable(version, exe),
-                install: install.version_dir(version),
-                args: prof.args,
-                target: target.clone(),
-                secrets,
-            })
-            .await
-            .map_err(failed("start"))?;
-        if !self.p.run.healthy(id, target).await {
-            return Err(failed("health")("unhealthy"));
-        }
+        fault!(self, Before(Step::Committed));
+        let sw = self.folder(id)?.commit(version, exe)?;
+        self.leftover(id, sw.leftover);
+        fault!(self, After(Step::Committed));
+        *rec = self.save(id, rec, Step::Committed)?;
         Ok(())
     }
 
-    fn leftover(&self, id: &CompanionId, e: Option<LayoutError>) {
-        if let Some(e) = e {
-            lodestar_log::log_event!(
-                INSTALL_FAILED,
-                companion = self.label(id),
-                version = "",
-                step = "leftover",
-                reason = e.code()
-            );
-        }
+    /// Where `version`'s program and folder are.
+    fn paths(
+        &self,
+        id: &CompanionId,
+        version: &Version,
+        exe: &RelPath,
+    ) -> Result<(PathBuf, PathBuf), ManagerError> {
+        let i = self.folder(id)?;
+        Ok((i.executable(version, exe), i.version_dir(version)))
     }
 
     /// After the commit point: deletes the previous version and clears
     /// the operation.
-    fn finish(
-        &self,
-        id: &CompanionId,
-        install: &mut Install,
-        rec: &mut Record,
-    ) -> Result<(), ManagerError> {
+    fn finish(&self, id: &CompanionId, rec: &mut Record) -> Result<(), ManagerError> {
         fault!(self, Prune);
+        let mut install = self.folder(id)?;
         if install.pointer()?.is_some_and(|p| p.previous.is_some()) {
             let sw = install.prune_previous()?;
             self.leftover(id, sw.leftover);
         }
-        rec.op = None;
-        state::save(install.root(), rec)?;
+        let mut next = rec.clone();
+        next.op = None;
+        state::save(install.root(), &next)?;
+        *rec = next;
         Ok(())
-    }
-
-    /// A live failure: rolls back as recovery would, then starts the
-    /// previous version again after a failed update.
-    async fn undo(&self, entry: &Entry, mut install: Install, mut rec: Record) {
-        let id = &entry.id;
-        // Before `staged` the running version was never stopped.
-        let touched = rec.op.as_ref().is_some_and(|o| o.step >= Step::Staged);
-        if touched {
-            self.p.run.stop(id).await;
-        }
-        match self.roll_back(id, &mut install, &mut rec) {
-            Ok(Some(_)) if !touched => {}
-            Ok(Some(prev)) => {
-                lodestar_log::log_event!(ROLLED_BACK, companion = self.label(id));
-                let restarted = self.start_installed(entry, &install, &prev).await;
-                let health = if restarted.is_ok() {
-                    Health::Healthy
-                } else {
-                    Health::Unhealthy
-                };
-                self.publish(id, Some((Some(prev), health)));
-            }
-            Ok(None) => self.publish(id, None),
-            Err(e) => lodestar_log::log_event!(
-                INSTALL_FAILED,
-                companion = self.label(id),
-                version = "",
-                step = "rollback",
-                reason = e.code()
-            ),
-        }
-    }
-
-    /// Starts an installed version and configures it (every start the
-    /// manager makes re-asserts the bind and proxy, #608's follow-up).
-    async fn start_installed(
-        &self,
-        entry: &Entry,
-        install: &Install,
-        version: &Version,
-    ) -> Result<(), ManagerError> {
-        let id = &entry.id;
-        let (platform, arch) = self.p.host.platform.ok_or(Refusal::UnsupportedPlatform)?;
-        let a = entry
-            .artifact(platform, arch)
-            .ok_or(Refusal::NotAvailable(NotAvailable::NoPlatform))?;
-        let exe = executable(id, a)?;
-        let target = Self::target(entry)?;
-        let secrets = self.secret(id)?.into_iter().collect();
-        self.launch(entry, install, version, &exe, &target, secrets)
-            .await?;
-        self.p
-            .api
-            .configure(
-                id,
-                &target,
-                InstallReceipt::new(target.clone()),
-                &Stored { m: self, id },
-            )
-            .await
-            .map_err(|e| failed("configure")(configure::code(&e)))
     }
 
     /// Rolls an operation that didn't reach its commit point back: an
     /// update to the version it replaces (returned), a first install to
-    /// nothing (`None`, the folder and credential rows gone).
+    /// nothing (`None`, the folder and credential rows gone, the journal
+    /// last).
     fn roll_back(
         &self,
         id: &CompanionId,
-        install: &mut Install,
         rec: &mut Record,
     ) -> Result<Option<Version>, ManagerError> {
         let Some(op) = rec.op.clone() else {
             return Ok(rec.installed.clone());
         };
+        let mut install = self.folder(id)?;
         match (op.kind, rec.installed.clone()) {
             (OpKind::Update, Some(prev)) => {
                 let p = install.pointer()?;
@@ -1047,8 +851,10 @@ impl Manager {
                     self.leftover(id, sw.leftover);
                 }
                 install.sweep()?;
-                rec.op = None;
-                state::save(install.root(), rec)?;
+                let mut next = rec.clone();
+                next.op = None;
+                state::save(install.root(), &next)?;
+                *rec = next;
                 Ok(Some(prev))
             }
             _ => {
@@ -1056,20 +862,16 @@ impl Manager {
                     .rows
                     .forget(id)
                     .map_err(|_| failed("credentials")("store"))?;
-                let i = Install::existing(&self.p.data, id)?.ok_or(failed("layout")("gone"))?;
-                i.remove()?;
+                install.remove_last(Some(state::STATE_FILE))?;
                 Ok(None)
             }
         }
     }
 
-    /// Uninstalls `id`: stop, credential rows, then the folder.
-    pub async fn remove(&self, id: &CompanionId) -> Result<Removal, ManagerError> {
-        self.entry(id)?;
-        let _slot = self.claim(id)?;
+    /// A removal's first step: what goes, and the journal's `begun`.
+    fn begin_remove(&self, id: &CompanionId) -> Result<(Removal, Record), ManagerError> {
         let what = self.removal(id)?;
-        let install = Install::existing(&self.p.data, id)?.ok_or(Refusal::NotInstalled)?;
-        let mut rec = state::load(install.root())?.unwrap_or_default();
+        let mut rec = self.record(id)?.unwrap_or_default();
         if rec.op.as_ref().is_some_and(|o| o.kind != OpKind::Remove) {
             return Err(Refusal::Busy.into());
         }
@@ -1078,82 +880,447 @@ impl Manager {
             version: None,
             step: Step::Begun,
         });
-        self.save(&install, &mut rec, Step::Begun)?;
-        self.finish_remove(id, install, rec).await?;
-        Ok(what)
+        let rec = self.save(id, &rec, Step::Begun)?;
+        Ok((what, rec))
     }
 
-    async fn finish_remove(
-        &self,
-        id: &CompanionId,
-        install: Install,
-        mut rec: Record,
-    ) -> Result<(), ManagerError> {
-        fault!(self, Before(Step::Stopped));
-        self.p.run.stop(id).await;
-        self.save(&install, &mut rec, Step::Stopped)?;
+    /// A removal once the companion is stopped: credential rows, then the
+    /// folder, the journal last, so a crash anywhere leaves a folder that
+    /// still says it's being removed.
+    fn end_remove(&self, id: &CompanionId, rec: &Record) -> Result<(), ManagerError> {
+        let rec = self.save(id, rec, Step::Stopped)?;
         fault!(self, Before(Step::Forgotten));
         self.p
             .rows
             .forget(id)
             .map_err(|_| failed("credentials")("store"))?;
-        self.save(&install, &mut rec, Step::Forgotten)?;
-        install.remove()?;
+        self.save(id, &rec, Step::Forgotten)?;
+        self.folder(id)?.remove_last(Some(state::STATE_FILE))?;
         self.publish(id, None);
         lodestar_log::log_event!(REMOVED, companion = self.label(id));
         Ok(())
     }
 
+    /// Recovery for one companion, as far as it can go without stopping
+    /// anything.
+    fn recover_sync(&self, id: &CompanionId) -> Result<Found, ManagerError> {
+        let Some(mut install) = Install::existing(&self.p.data, id)? else {
+            return Ok(Found::Done(None));
+        };
+        let Some(mut rec) = state::load(install.root())? else {
+            // No record. The only way Lodestar leaves a folder without one
+            // is a crash between creating it and journalling `begun`, which
+            // leaves it empty: only then is it deleted. Anything else (a
+            // compose companion's host folder, say) isn't ours.
+            if empty(install.root()) {
+                install.remove()?;
+                lodestar_log::log_event!(RECOVERED, companion = self.label(id), step = "empty");
+                return Ok(Found::Done(None));
+            }
+            return Err(failed("state")("not_ours"));
+        };
+        let Some(op) = rec.op.clone() else {
+            install.sweep()?;
+            return Ok(Found::Done(rec.installed));
+        };
+        let outcome = match op.kind {
+            OpKind::Remove => return Ok(Found::Remove(rec)),
+            _ if op.step >= Step::Configured => {
+                self.finish(id, &mut rec)?;
+                rec.installed
+            }
+            _ => self.roll_back(id, &mut rec)?,
+        };
+        lodestar_log::log_event!(RECOVERED, companion = self.label(id), step = op.step.code());
+        Ok(Found::Done(outcome))
+    }
+}
+
+impl Manager {
+    /// Takes the data folder's companion lock; [`Refusal::Busy`] while
+    /// another process (serve, or a `lodestar companion` command) holds it.
+    /// Blocking: call it from `spawn_blocking` in async code.
+    pub fn open(parts: Parts) -> Result<Manager, ManagerError> {
+        let dir = parts.data.join("companions");
+        std::fs::create_dir_all(&dir).map_err(|_| failed("lock")("io"))?;
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(dir.join(".lock"))
+            .map_err(|_| failed("lock")("io"))?;
+        match lock.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => return Err(Refusal::Busy.into()),
+            Err(std::fs::TryLockError::Error(_)) => return Err(failed("lock")("io")),
+        }
+        Ok(Manager(Arc::new(Inner {
+            p: parts,
+            _lock: lock,
+            busy: Mutex::new(Vec::new()),
+            snapshot: watch::channel(Snapshot::default()).0,
+            #[cfg(any(test, feature = "testing"))]
+            fault: Mutex::new(None),
+        })))
+    }
+
+    /// Runs `f` on the shared state in `spawn_blocking`.
+    async fn off<T, F>(&self, f: F) -> Result<T, ManagerError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&Inner) -> Result<T, ManagerError> + Send + 'static,
+    {
+        let inner = self.0.clone();
+        tokio::task::spawn_blocking(move || f(&inner))
+            .await
+            .map_err(|_| failed("blocking")("panicked"))?
+    }
+
+    /// Stops the next operation at `fault`, as a crash would.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn crash_at(&self, fault: Option<Fault>) {
+        *self.0.fault.lock().unwrap_or_else(|e| e.into_inner()) = fault;
+    }
+
+    /// The installed companions and their health (CMP-10).
+    pub fn snapshot(&self) -> watch::Receiver<Snapshot> {
+        self.0.snapshot.subscribe()
+    }
+
+    /// Whether any `integrations.clients` entry exists.
+    pub fn set_download_clients(&self, any: bool) {
+        self.0
+            .snapshot
+            .send_if_modified(|s| std::mem::replace(&mut s.download_clients, any) != any);
+    }
+
+    /// What installing or updating `id` would fetch, to show before you
+    /// confirm. Reads the journal: blocking.
+    pub fn offer(&self, id: &CompanionId) -> Result<Offer, ManagerError> {
+        self.0.offer(id)
+    }
+
+    /// What removing `id` deletes. Reads the journal: blocking.
+    pub fn removal(&self, id: &CompanionId) -> Result<Removal, ManagerError> {
+        self.0.removal(id)
+    }
+
+    /// Installs or updates to the pinned version you confirmed.
+    ///
+    /// **Run it to completion** (CMP-6: spawn it rather than awaiting it in
+    /// a request that can be cancelled). A future dropped part-way leaves
+    /// the operation in the journal, and the companion answers
+    /// [`Refusal::Busy`] until the next start's [`Manager::recover`] undoes
+    /// it.
+    pub async fn install(&self, token: &InstallToken) -> Result<Version, ManagerError> {
+        let m = &self.0;
+        let (entry, artifact, pin) = m.installable(&token.id)?;
+        if token.version.as_str() != pin.version.as_str() || token.sha256 != pin.sha256 {
+            return Err(Refusal::Confirmation.into());
+        }
+        let id = &entry.id;
+        m.p.run.ready().map_err(failed("start"))?;
+        let _slot = m.claim(id)?;
+        let mut rec = self.off(move |m| m.begin(entry, pin)).await?;
+        match self.steps(entry, artifact, pin, &mut rec).await {
+            Ok(()) => {
+                lodestar_log::log_event!(
+                    INSTALLED,
+                    companion = m.label(id),
+                    version = pin.version.as_str()
+                );
+                Ok(pin.version.clone())
+            }
+            #[cfg(any(test, feature = "testing"))]
+            Err(ManagerError::Crashed) => Err(ManagerError::Crashed),
+            // Past the commit point it's installed: only deleting the
+            // previous version failed, and the next recovery finishes it.
+            Err(e) if rec.op.as_ref().is_some_and(|o| o.step >= Step::Configured) => {
+                lodestar_log::log_event!(
+                    INSTALL_FAILED,
+                    companion = m.label(id),
+                    version = pin.version.as_str(),
+                    step = "leftover",
+                    reason = e.code()
+                );
+                m.publish(id, Some((Some(pin.version.clone()), Health::Healthy)));
+                Ok(pin.version.clone())
+            }
+            Err(e) => {
+                let (step, code) = match &e {
+                    ManagerError::Step { step, code } => (*step, *code),
+                    other => ("install", other.code()),
+                };
+                lodestar_log::log_event!(
+                    INSTALL_FAILED,
+                    companion = m.label(id),
+                    version = pin.version.as_str(),
+                    step = step,
+                    reason = code
+                );
+                self.undo(entry, rec).await;
+                Err(e)
+            }
+        }
+    }
+
+    async fn steps(
+        &self,
+        entry: &'static Entry,
+        artifact: &'static Artifact,
+        pin: &'static Pin,
+        rec: &mut Record,
+    ) -> Result<(), ManagerError> {
+        let m = &self.0;
+        let id = &entry.id;
+        let v = &pin.version;
+        let fresh = rec.installed.is_none();
+        let exe = executable(id, artifact)?;
+        let target = Inner::target(entry)?;
+
+        // Fetch, verify, extract.
+        fault!(m, Before(Step::Staged));
+        let file =
+            m.p.downloader
+                .get(&m.p.data, entry, pin)
+                .await
+                .map_err(|e| failed("fetch")(e.code()))?;
+        let verify::Upstream::PinOnly = verify::upstream(pin);
+        let x = exe.clone();
+        let r = rec.clone();
+        *rec = self
+            .off(move |m| {
+                m.stage(id, artifact, pin, file, &x)?;
+                fault!(m, After(Step::Staged));
+                m.save(id, &r, Step::Staged)
+            })
+            .await?;
+
+        // Credentials and config file, first install only.
+        let r = rec.clone();
+        let (r, secrets) = self
+            .off(move |m| {
+                let mut r = r;
+                let s = if fresh {
+                    Some(m.credentials_and_files(id, &mut r)?)
+                } else {
+                    m.secret(id)?
+                };
+                Ok((r, s))
+            })
+            .await?;
+        *rec = r;
+
+        // Commit: the old version stops first; the pointer keeps it as
+        // `previous`.
+        m.p.run.stop(id).await;
+        let (x, r) = (exe.clone(), rec.clone());
+        *rec = self
+            .off(move |m| {
+                let mut r = r;
+                m.commit(id, v, &x, &mut r)?;
+                Ok(r)
+            })
+            .await?;
+
+        // Start and health.
+        fault!(m, Before(Step::Healthy));
+        self.launch(entry, v, &exe, &target, secrets.into_iter().collect())
+            .await?;
+        fault!(m, After(Step::Healthy));
+        let r = rec.clone();
+        *rec = self.off(move |m| m.save(id, &r, Step::Healthy)).await?;
+
+        // Configure through the API, with the receipt only this crate mints.
+        fault!(m, Before(Step::Configured));
+        m.p.api
+            .configure(
+                id,
+                &target,
+                InstallReceipt::new(target.clone()),
+                &Stored { m, id },
+            )
+            .await
+            .map_err(|e| failed("configure")(configure::code(&e)))?;
+        fault!(m, After(Step::Configured));
+        let mut next = rec.clone();
+        next.installed = Some(v.clone());
+        *rec = self
+            .off(move |m| m.save(id, &next, Step::Configured))
+            .await?;
+
+        // Done: the previous version goes.
+        let r = rec.clone();
+        *rec = self
+            .off(move |m| {
+                let mut r = r;
+                m.finish(id, &mut r)?;
+                Ok(r)
+            })
+            .await?;
+        m.publish(id, Some((Some(v.clone()), Health::Healthy)));
+        Ok(())
+    }
+
+    /// Starts `version` and waits for health.
+    async fn launch(
+        &self,
+        entry: &'static Entry,
+        version: &Version,
+        exe: &RelPath,
+        target: &Target,
+        secrets: Vec<Secret>,
+    ) -> Result<(), ManagerError> {
+        let m = &self.0;
+        let id = &entry.id;
+        let home = crate::supervise::process::home_dir(&m.p.data, id);
+        let Target::Loopback(port) = target else {
+            return Err(Refusal::NoProfile.into());
+        };
+        let prof = profile(id, &home, port.get()).ok_or(Refusal::NoProfile)?;
+        let (v, x) = (version.clone(), exe.clone());
+        let (executable, install) = self.off(move |m| m.paths(id, &v, &x)).await?;
+        m.p.run
+            .start(Launch {
+                id: id.clone(),
+                executable,
+                install,
+                args: prof.args,
+                target: target.clone(),
+                secrets,
+            })
+            .await
+            .map_err(failed("start"))?;
+        if !m.p.run.healthy(id, target).await {
+            return Err(failed("health")("unhealthy"));
+        }
+        Ok(())
+    }
+
+    /// A live failure: rolls back as recovery would, then starts the
+    /// previous version again after a failed update.
+    async fn undo(&self, entry: &'static Entry, rec: Record) {
+        let m = &self.0;
+        let id = &entry.id;
+        // Before `staged` the running version was never stopped.
+        let touched = rec.op.as_ref().is_some_and(|o| o.step >= Step::Staged);
+        if touched {
+            m.p.run.stop(id).await;
+        }
+        let rolled = self
+            .off(move |m| {
+                let mut r = rec;
+                m.roll_back(id, &mut r)
+            })
+            .await;
+        match rolled {
+            Ok(Some(_)) if !touched => {}
+            Ok(Some(prev)) => {
+                lodestar_log::log_event!(ROLLED_BACK, companion = m.label(id));
+                let restarted = self.start_installed(entry, &prev).await;
+                let health = if restarted.is_ok() {
+                    Health::Healthy
+                } else {
+                    Health::Unhealthy
+                };
+                m.publish(id, Some((Some(prev), health)));
+            }
+            Ok(None) => m.publish(id, None),
+            Err(e) => lodestar_log::log_event!(
+                INSTALL_FAILED,
+                companion = m.label(id),
+                version = "",
+                step = "rollback",
+                reason = e.code()
+            ),
+        }
+    }
+
+    /// Starts an installed version and configures it (every start the
+    /// manager makes re-asserts the bind and proxy, #608's follow-up).
+    async fn start_installed(
+        &self,
+        entry: &'static Entry,
+        version: &Version,
+    ) -> Result<(), ManagerError> {
+        let m = &self.0;
+        let id = &entry.id;
+        let (platform, arch) = m.p.host.platform.ok_or(Refusal::UnsupportedPlatform)?;
+        let a = entry
+            .artifact(platform, arch)
+            .ok_or(Refusal::NotAvailable(NotAvailable::NoPlatform))?;
+        let exe = executable(id, a)?;
+        let target = Inner::target(entry)?;
+        let secrets = self.off(move |m| m.secret(id)).await?;
+        self.launch(entry, version, &exe, &target, secrets.into_iter().collect())
+            .await?;
+        m.p.api
+            .configure(
+                id,
+                &target,
+                InstallReceipt::new(target.clone()),
+                &Stored { m, id },
+            )
+            .await
+            .map_err(|e| failed("configure")(configure::code(&e)))
+    }
+
+    /// Uninstalls `id`: stop, credential rows, then the folder.
+    ///
+    /// **Run it to completion**, as [`Manager::install`] says: a dropped
+    /// future leaves the removal journalled until the next recovery
+    /// finishes it.
+    pub async fn remove(&self, id: &CompanionId) -> Result<Removal, ManagerError> {
+        let m = &self.0;
+        let entry = m.entry(id)?;
+        let id = &entry.id;
+        let _slot = m.claim(id)?;
+        let (what, rec) = self.off(move |m| m.begin_remove(id)).await?;
+        self.finish_remove(entry, rec).await?;
+        Ok(what)
+    }
+
+    async fn finish_remove(&self, entry: &'static Entry, rec: Record) -> Result<(), ManagerError> {
+        let m = &self.0;
+        let id = &entry.id;
+        fault!(m, Before(Step::Stopped));
+        m.p.run.stop(id).await;
+        self.off(move |m| m.end_remove(id, &rec)).await
+    }
+
     /// Finishes or undoes what a crash interrupted, for every catalogue
     /// companion with a folder, before anything starts. Returns what each
-    /// one ended as (`None`: nothing installed).
+    /// one ended as (`None`: nothing installed). Inside a container nothing
+    /// is native (Q17), so nothing is looked at.
     pub async fn recover(&self) -> Vec<(CompanionId, Result<Option<Version>, ManagerError>)> {
+        let m = &self.0;
         let mut out = Vec::new();
-        for entry in self.p.catalogue.entries() {
-            let r = self.recover_one(&entry.id).await;
+        if m.p.host.in_container {
+            return out;
+        }
+        for entry in m.p.catalogue.entries() {
+            let r = self.recover_one(entry).await;
             if let Ok(v) = &r {
-                self.publish(&entry.id, v.clone().map(|v| (Some(v), Health::Unknown)));
+                m.publish(&entry.id, v.clone().map(|v| (Some(v), Health::Unknown)));
             }
             out.push((entry.id.clone(), r));
         }
         out
     }
 
-    async fn recover_one(&self, id: &CompanionId) -> Result<Option<Version>, ManagerError> {
-        let _slot = self.claim(id)?;
-        let Some(mut install) = Install::existing(&self.p.data, id)? else {
-            return Ok(None);
-        };
-        let Some(mut rec) = state::load(install.root())? else {
-            // No record: a first install that crashed before its journal,
-            // or a removal that had deleted it. Without a pointer nothing
-            // ran; with one, it isn't ours to touch.
-            if install.pointer()?.is_some() {
-                return Err(failed("state")("no_record"));
+    async fn recover_one(&self, entry: &'static Entry) -> Result<Option<Version>, ManagerError> {
+        let m = &self.0;
+        let id = &entry.id;
+        let _slot = m.claim(id)?;
+        match self.off(move |m| m.recover_sync(id)).await? {
+            Found::Done(v) => Ok(v),
+            Found::Remove(rec) => {
+                let step = rec.op.as_ref().map_or(Step::Begun, |o| o.step);
+                self.finish_remove(entry, rec).await?;
+                lodestar_log::log_event!(RECOVERED, companion = m.label(id), step = step.code());
+                Ok(None)
             }
-            // Its credential rows aren't touched: neither path left any of
-            // ours, and a detected companion's must survive.
-            install.remove()?;
-            lodestar_log::log_event!(RECOVERED, companion = self.label(id), step = "no_record");
-            return Ok(None);
-        };
-        let Some(op) = rec.op.clone() else {
-            install.sweep()?;
-            return Ok(rec.installed);
-        };
-        let outcome = match op.kind {
-            OpKind::Remove => {
-                self.finish_remove(id, install, rec).await?;
-                None
-            }
-            _ if op.step >= Step::Configured => {
-                self.finish(id, &mut install, &mut rec)?;
-                rec.installed
-            }
-            _ => self.roll_back(id, &mut install, &mut rec)?,
-        };
-        lodestar_log::log_event!(RECOVERED, companion = self.label(id), step = op.step.code());
-        Ok(outcome)
+        }
     }
 }
 

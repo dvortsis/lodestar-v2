@@ -166,6 +166,11 @@ struct FakeRun {
     started: Mutex<Vec<String>>,
     stops: AtomicUsize,
     sick: AtomicBool,
+    /// When set, `start` says so on `parked` and waits for `release`:
+    /// an install held mid-step, for the operation guard's tests.
+    park: AtomicBool,
+    parked: tokio::sync::Notify,
+    release: tokio::sync::Notify,
 }
 
 impl Run for FakeRun {
@@ -179,7 +184,14 @@ impl Run for FakeRun {
             .to_string_lossy()
             .into_owned();
         self.started.lock().unwrap().push(version);
-        Box::pin(async { Ok(()) })
+        let park = self.park.load(Ordering::SeqCst);
+        Box::pin(async move {
+            if park {
+                self.parked.notify_one();
+                self.release.notified().await;
+            }
+            Ok(())
+        })
     }
     fn healthy<'a>(&'a self, _: &'a CompanionId, _: &'a Target) -> BoxFuture<'a, bool> {
         let ok = !self.sick.load(Ordering::SeqCst);
@@ -240,8 +252,8 @@ impl World {
         }
     }
 
-    fn manager(&self, cat: &'static Catalogue, host: Host) -> Manager {
-        Manager::open(Parts {
+    fn parts(&self, cat: &'static Catalogue, host: Host) -> Parts {
+        Parts {
             data: self.data.path().to_path_buf(),
             host,
             catalogue: cat,
@@ -250,8 +262,11 @@ impl World {
             rows: self.rows.clone(),
             run: self.run.clone(),
             api: self.api.clone(),
-        })
-        .unwrap()
+        }
+    }
+
+    fn manager(&self, cat: &'static Catalogue, host: Host) -> Manager {
+        Manager::open(self.parts(cat, host)).unwrap()
     }
 
     fn folder(&self) -> std::path::PathBuf {
@@ -712,12 +727,30 @@ async fn a_download_that_fails_verification_leaves_nothing() {
 #[tokio::test]
 async fn a_linked_config_folder_is_refused() {
     let _g = SERIAL.lock().await;
+    /// Serves the body after planting a link where the config folder
+    /// goes: the companion's home, between `begun` and `files`.
+    struct Planting(std::path::PathBuf, std::path::PathBuf);
+    impl Source for Planting {
+        fn open<'a>(&'a self, _: &'a Url) -> BoxFuture<'a, Result<Opened, FetchError>> {
+            std::fs::create_dir_all(&self.0).unwrap();
+            std::os::unix::fs::symlink(&self.1, self.0.join("qBittorrent")).unwrap();
+            Box::pin(async move {
+                Ok(Opened {
+                    status: 200,
+                    location: None,
+                    body: Box::new(Once(Some(body("5.0.3")))),
+                })
+            })
+        }
+    }
     let w = World::new();
     let outside = tempfile::tempdir().unwrap();
     let home = w.folder().join("home");
-    std::fs::create_dir_all(&home).unwrap();
-    std::os::unix::fs::symlink(outside.path(), home.join("qBittorrent")).unwrap();
-    let m = w.manager(catalogue("5.0.3"), LINUX);
+    let m = Manager::open(Parts {
+        downloader: Downloader::any(Arc::new(Planting(home, outside.path().to_path_buf()))),
+        ..w.parts(catalogue("5.0.3"), LINUX)
+    })
+    .unwrap();
     let e = m.install(&token("5.0.3")).await.unwrap_err();
     assert_eq!(
         e,
@@ -747,9 +780,122 @@ async fn a_folder_without_a_record_is_left_alone() {
     std::fs::remove_file(w.folder().join("state.json")).unwrap();
     let m = w.manager(cat, LINUX);
     let got = m.recover().await;
-    assert!(got.iter().any(|(_, r)| r.is_err()));
-    let e = m.install(&token("5.0.3")).await.unwrap_err();
-    assert_eq!(e.code(), "no_record");
+    assert!(
+        got.iter()
+            .any(|(_, r)| matches!(r, Err(e) if e.code() == "not_ours"))
+    );
+    assert_eq!(
+        m.install(&token("5.0.3")).await,
+        refused(Refusal::FolderInUse)
+    );
     assert!(w.folder().join("current").is_file());
     assert_eq!(w.rows.keys().len(), 1);
+}
+
+/// #621's review (B1): foreign files in a folder named for a catalogue id
+/// (a compose companion's host folder) survive recovery and an install
+/// attempt; an empty folder, all a crash before `begun` can leave, is
+/// tidied away.
+#[tokio::test]
+async fn foreign_content_survives_recovery_and_install() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let cat = catalogue("5.0.3");
+    let file = w.folder().join("downloads").join("user-file.iso");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, b"mine").unwrap();
+    let m = w.manager(cat, LINUX);
+    let got = m.recover().await;
+    assert!(
+        got.iter()
+            .any(|(_, r)| matches!(r, Err(e) if e.code() == "not_ours"))
+    );
+    assert_eq!(
+        m.install(&token("5.0.3")).await,
+        refused(Refusal::FolderInUse)
+    );
+    assert_eq!(std::fs::read(&file).unwrap(), b"mine");
+    assert!(w.run.started.lock().unwrap().is_empty());
+
+    // An empty folder is what a crash before `begun` leaves.
+    std::fs::remove_dir_all(w.folder()).unwrap();
+    std::fs::create_dir_all(w.folder()).unwrap();
+    let got = m.recover().await;
+    assert!(got.iter().all(|(_, r)| matches!(r, Ok(None))), "{got:?}");
+    assert!(!w.folder().exists());
+}
+
+/// Inside a container nothing is native (Q17): recovery looks at nothing,
+/// not even a folder it would otherwise tidy.
+#[tokio::test]
+async fn recovery_does_nothing_inside_a_container() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    std::fs::create_dir_all(w.folder()).unwrap();
+    let inside = Host {
+        in_container: true,
+        ..LINUX
+    };
+    assert!(
+        w.manager(catalogue("5.0.3"), inside)
+            .recover()
+            .await
+            .is_empty()
+    );
+    assert!(w.folder().exists());
+}
+
+/// A crashed removal keeps its journal to the end, so recovery always
+/// knows the folder is being removed.
+#[tokio::test]
+async fn a_removal_keeps_its_journal_until_last() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let cat = catalogue("5.0.3");
+    let m = w.manager(cat, LINUX);
+    m.install(&token("5.0.3")).await.unwrap();
+    m.crash_at(Some(Fault::Before(Step::Forgotten)));
+    assert_eq!(m.remove(&qbt()).await, Err(ManagerError::Crashed));
+    // The journal says what's going on, and recovery finishes it.
+    let rec = state::load(&w.folder()).unwrap().unwrap();
+    assert_eq!(rec.op.unwrap().step, Step::Stopped);
+    drop(m);
+    let got = w.manager(cat, LINUX).recover().await;
+    assert!(got.iter().all(|(_, r)| matches!(r, Ok(None))), "{got:?}");
+    assert!(!w.folder().exists());
+}
+
+/// #621's review (B2): the in-process guard. While an install is held
+/// mid-step, a second install, a removal and recovery of the same
+/// companion are refused as busy; once it finishes, they're not.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_operation_in_progress_refuses_others_on_the_same_companion() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let cat = catalogue("5.0.3");
+    let m = Arc::new(w.manager(cat, LINUX));
+    w.run.park.store(true, Ordering::SeqCst);
+    let held = tokio::spawn({
+        let m = m.clone();
+        async move { m.install(&token("5.0.3")).await }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), w.run.parked.notified())
+        .await
+        .expect("the install never reached its start");
+    let busy = refused::<Version>(Refusal::Busy);
+    assert_eq!(m.install(&token("5.0.3")).await, busy);
+    assert_eq!(m.remove(&qbt()).await, refused(Refusal::Busy));
+    let got = m.recover().await;
+    assert!(
+        got.iter()
+            .any(|(id, r)| id == &qbt() && r == &refused(Refusal::Busy))
+    );
+    w.run.park.store(false, Ordering::SeqCst);
+    w.run.release.notify_one();
+    let done = tokio::time::timeout(std::time::Duration::from_secs(10), held)
+        .await
+        .expect("the install didn't finish")
+        .unwrap();
+    assert_eq!(done.unwrap().as_str(), "5.0.3");
+    assert!(m.remove(&qbt()).await.is_ok());
 }
