@@ -130,8 +130,10 @@ try {
   # descriptor the first case would pass.
   $sy = @(New-Object Security.Principal.SecurityIdentifier 'S-1-5-18')
   $base = 'O:BAD:P(A;OICI;FA;;;SY)'
+  # An object entry needs an object type: written without one, Windows stores a plain Allow.
+  $objectAce = '(OA;;FA;bf967aba-0de6-11d0-a285-00aa003049e2;;WD)'
   foreach ($case in @(
-      @{ Name = 'an object entry'; Sddl = "$base(OA;;FA;;;WD)" },
+      @{ Name = 'an object entry'; Sddl = "$base$objectAce" },
       @{ Name = 'a callback entry'; Sddl = "$base(XA;;FA;;;WD;(Exists LodestarTest))" },
       @{ Name = 'a Deny entry'; Sddl = "$base(D;;FA;;;WD)" },
       @{ Name = 'another account'; Sddl = "$base(A;;FA;;;WD)" },
@@ -144,7 +146,7 @@ try {
     $failed += 'in memory, a plain Allow for SYSTEM was refused'
   }
   $dotnet = New-Object Security.AccessControl.DirectorySecurity
-  $dotnet.SetSecurityDescriptorSddlForm("$base(OA;;FA;;;WD)")
+  $dotnet.SetSecurityDescriptorSddlForm("$base$objectAce")
   Write-Host ".NET's view of an object entry: $($dotnet.Sddl)"
 
   # Re-secured: the administrator's entries go from the folder and everything in it.
@@ -217,7 +219,7 @@ try {
 
   # The same on the folder itself, where .NET's rule list would miss them too.
   $d = New-Secured 'top-object'; Add-Me $d
-  if (Add-Sddl $d '(OA;;FA;;;WD)') { Expect 'the administrator plus an object entry on the folder' 1 (Invoke-Secure $d $me) }
+  if (Add-Sddl $d $objectAce) { Expect 'the administrator plus an object entry on the folder' 1 (Invoke-Secure $d $me) }
   else { Write-Host '::warning::skipped the top object-entry case: this Windows would not store one' }
   $d = New-Secured 'top-callback'; Add-Me $d
   if (Add-Sddl $d '(XA;;FA;;;WD;(Exists LodestarTest))') { Expect 'the administrator plus a callback entry on the folder' 1 (Invoke-Secure $d $me) }

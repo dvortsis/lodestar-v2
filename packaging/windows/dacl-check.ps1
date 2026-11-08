@@ -5,11 +5,12 @@
   way crates/lodestar/src/windows/acl.rs (check_entries) does. Dot-sourced by
   secure-datadir.ps1 and tested by test-secure-datadir.ps1.
 
-  .NET's own view (Get-Acl, GetAccessRules, .Access, .Sddl) can't be used for this: it builds
-  a CommonSecurityDescriptor, which drops object entries (OA, OD and their callback forms)
-  from a file's access list altogether, and shows a callback (conditional) entry (XA, XD) as
-  an unconditional Allow or Deny. So the descriptor is read with GetNamedSecurityInfo and
-  kept as a RawSecurityDescriptor, which keeps every entry.
+  .NET's own view (Get-Acl, GetAccessRules, .Access, .Sddl) isn't relied on: its rule list
+  leaves object entries (OA, OD, with an object type) out, its descriptor for a file is
+  rebuilt as a non-directory-service CommonSecurityDescriptor that need not keep them, and it
+  shows a callback (conditional) entry (XA, XD) as an unconditional Allow or Deny. So the
+  descriptor is read with GetNamedSecurityInfo and kept as a RawSecurityDescriptor, which
+  keeps every entry as Windows stores it.
 #>
 
 # Compiles the reader once. Add-Type writes its source and output to the temp folder, so
