@@ -3,12 +3,18 @@
 //! - **`GET /v1/vpn/status`** answers `200` and `{"status":"running"}` (or
 //!   `starting`, `stopping`, `stopped`, `crashed`, `completed`: the VPN
 //!   loop's states, `internal/models`) when a role lets the request in.
-//!   Since v3.39.1 every route needs one unless you configured `auth =
-//!   "none"`, so without a credential it answers `401` and
-//!   `Unauthorized\n` (Go's `http.Error`, from
-//!   `internal/server/middlewares/auth`).
-//! - **A path outside its routes** answers `404` and `Not Found\n` from the
-//!   same middleware, before any role is checked. `GET /` is one.
+//!   - **Released versions (v3.40.0 to v3.41.1)** ship a default role that
+//!     leaves this route open, so it answers `200` unless you turned
+//!     authentication on for it. Then every path answers `401`
+//!     `Unauthorized\n`, which can't be told apart from any other server
+//!     that asks for authentication: detection reports it absent (a false
+//!     negative; enter its URL once it answers, or add a role).
+//!   - **`master`** (`qmcgaw/gluetun:latest` until the catalogue pins a
+//!     digest) has no open routes: without a credential the status route
+//!     answers `401` and `Unauthorized\n` (Go's `http.Error`, from
+//!     `internal/server/middlewares/auth`), and a path outside its routes,
+//!     such as `/`, answers `404` and `Not Found\n` before any role is
+//!     checked.
 //!
 //! So: a status answer is gluetun; a `401` with that exact body is gluetun
 //! only if `/` gives that exact `404` too.
@@ -81,14 +87,14 @@ impl Detect for Gluetun {
             }));
             let r = match get(http, target, STATUS_PATH).await {
                 Ok(r) => r,
-                Err(e) => return not_found_or(e),
+                Err(e) => return not_found_or(e, target),
             };
             match r.status() {
                 200 if parse_status(r.body()).is_some() => found,
                 401 if r.body() == UNAUTHORIZED => match get(http, target, NOT_A_ROUTE).await {
                     Ok(p) if p.status() == 404 && p.body() == NOT_FOUND => found,
                     Ok(_) => Ok(None),
-                    Err(e) => not_found_or(e),
+                    Err(e) => not_found_or(e, target),
                 },
                 _ => Ok(None),
             }

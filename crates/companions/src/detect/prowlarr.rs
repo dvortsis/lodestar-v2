@@ -76,14 +76,14 @@ impl Detect for Prowlarr {
         Box::pin(async move {
             let ping = match get(http, target, PING_PATH).await {
                 Ok(r) => r,
-                Err(e) => return not_found_or(e),
+                Err(e) => return not_found_or(e, target),
             };
             if !matches!(ping.status(), 200 | 500) || parse_ping(ping.body()).is_none() {
                 return Ok(None);
             }
             let page = match get(http, target, LOGIN_PATH).await {
                 Ok(r) => r,
-                Err(e) => return not_found_or(e),
+                Err(e) => return not_found_or(e, target),
             };
             if page.status() == 200 && is_login_page(page.body()) {
                 Ok(Some(Detected {
@@ -142,6 +142,7 @@ mod tests {
             br#"{"status":1}"#,
             br#"{"status":"OK"} x"#,
             br#"{"status":"OK","status":"OK"}"#,
+            br#"{"st\u0061tus":"Error","status":"OK"}"#,
             br#"{"status":"OK""#,
             br#"{"status":"OK",}"#,
             b"{\"status\":\"\xff\"}",

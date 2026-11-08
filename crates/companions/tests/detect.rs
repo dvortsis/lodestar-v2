@@ -12,7 +12,7 @@ use lodestar_companions::adapter::{
     AdapterError, BoxFuture, Detected, EnteredUrl, GuardedHttp, HealthStatus, Limits, ProbeRequest,
     ProbeResponse, RequestPath, Target,
 };
-use lodestar_companions::detect::{self, CompanionHttp};
+use lodestar_companions::detect::{self, CompanionHttp, Runtime};
 use lodestar_companions::inputs::{ContainerName, PortNumber};
 use lodestar_companions::{CompanionId, builtin};
 use lodestar_integrations::BoxFuture as NetFuture;
@@ -160,8 +160,12 @@ async fn serve(mut sock: TcpStream, handler: Handler, log: Arc<Mutex<Vec<Seen>>>
             }
             // Paces the writer only; the test waits on the client's
             // deadline, not on this.
-            while sock.write_all(b"a").await.is_ok() {
-                tokio::time::sleep(Duration::from_millis(50)).await;
+            let mut pace = tokio::time::interval(Duration::from_millis(50));
+            loop {
+                pace.tick().await;
+                if sock.write_all(b"a").await.is_err() {
+                    break;
+                }
             }
         }
         Reply::Silent => {
@@ -276,6 +280,9 @@ async fn recorded_answers() {
         ("gluetun", "vpn_stopped", Found(None), Unhealthy),
         ("gluetun", "auth_required", Found(None), Unhealthy),
         ("gluetun", "wrong_service", Absent, Unhealthy),
+        // A released gluetun with authentication turned on for every
+        // route answers like `wrong_service`: a documented false negative.
+        ("gluetun", "release_auth_on", Absent, Unhealthy),
     ];
     let http = http();
     for (companion, case, want, health) in cases {
@@ -357,6 +364,23 @@ async fn nothing_listening_is_not_found_and_unreachable() {
 }
 
 #[tokio::test]
+async fn nothing_on_a_loopback_port_is_not_found() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = PortNumber::new(listener.local_addr().unwrap().port()).unwrap();
+    drop(listener);
+    let http = http();
+    for c in ["qbittorrent", "prowlarr", "gluetun"] {
+        let got = detect::detector(&id(c))
+            .unwrap()
+            .detect(&http, &Target::Loopback(port))
+            .await;
+        assert_eq!(got, Ok(None), "{c}");
+    }
+}
+
+/// Skips, passing, on a runner without IPv6 loopback or when another
+/// program holds the same port on IPv4.
+#[tokio::test]
 async fn loopback_falls_back_to_ipv6() {
     let version: Handler = Arc::new(|_: &str| reply(200, b"v5.0.3"));
     // A runner without IPv6 loopback can't run this.
@@ -382,7 +406,7 @@ async fn loopback_falls_back_to_ipv6() {
 #[test]
 fn auto_detect_probes_exactly_the_fixed_list() {
     let c = builtin().unwrap();
-    let got: Vec<(String, Target)> = detect::auto_probes(c)
+    let got: Vec<(String, Target)> = detect::auto_probes(c, Runtime::Container)
         .into_iter()
         .map(|(id, t)| (id.as_str().to_owned(), t))
         .collect();
@@ -402,6 +426,13 @@ fn auto_detect_probes_exactly_the_fixed_list() {
         ("gluetun".to_owned(), ct("gluetun", 8000)),
     ];
     assert_eq!(got, want);
+    // A native install probes loopback only: a single-label name outside
+    // Docker would be asked of the LAN's broadcast name services.
+    let native: Vec<Target> = detect::auto_probes(c, Runtime::Native)
+        .into_iter()
+        .map(|(_, t)| t)
+        .collect();
+    assert_eq!(native, vec![lo(8080), lo(9696), lo(8000)]);
 }
 
 /// Records every request; nothing answers.
@@ -425,8 +456,15 @@ impl GuardedHttp for Recorder {
 async fn auto_detect_sends_only_to_the_fixed_list() {
     let c = builtin().unwrap();
     let rec = Recorder::default();
-    assert!(detect::auto_detect(&rec, c).await.is_empty());
-    let fixed: Vec<Target> = detect::auto_probes(c).into_iter().map(|(_, t)| t).collect();
+    assert!(
+        detect::auto_detect(&rec, c, Runtime::Container)
+            .await
+            .is_empty()
+    );
+    let fixed: Vec<Target> = detect::auto_probes(c, Runtime::Container)
+        .into_iter()
+        .map(|(_, t)| t)
+        .collect();
     let sent = rec.0.lock().unwrap();
     assert_eq!(
         sent.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>(),
@@ -460,12 +498,16 @@ impl Resolve for Table {
 
 #[tokio::test]
 async fn entered_link_local_and_metadata_are_refused_before_connecting() {
+    // A live server behind a name that also resolves to link-local: the
+    // whole answer is refused, so the server must see nothing.
+    let live = Server::start(|_| reply(200, b"v5.0.3")).await;
     let http = CompanionHttp::with_resolver(Arc::new(Table(vec![
         ("metadata.lan", "169.254.169.254".parse().unwrap()),
-        ("mixed.lan", "10.0.0.5".parse().unwrap()),
+        ("mixed.lan", "127.0.0.1".parse().unwrap()),
         ("mixed.lan", "fe80::1".parse().unwrap()),
     ])))
     .unwrap();
+    let mixed = format!("http://mixed.lan:{}", live.addr.port());
     for url in [
         "http://169.254.169.254/",
         "http://169.254.169.254:8080/latest",
@@ -475,11 +517,10 @@ async fn entered_link_local_and_metadata_are_refused_before_connecting() {
         "http://100.100.100.200/",
         "http://0.0.0.0:8080",
         "http://metadata.lan:9696",
-        "http://mixed.lan:9696",
+        mixed.as_str(),
     ] {
         let target = Target::Entered(EnteredUrl::parse(url).unwrap());
         for c in ["qbittorrent", "prowlarr", "gluetun"] {
-            let started = Instant::now();
             assert_eq!(
                 detect::detector(&id(c))
                     .unwrap()
@@ -488,14 +529,13 @@ async fn entered_link_local_and_metadata_are_refused_before_connecting() {
                 Err(AdapterError::Blocked),
                 "{c} {url}"
             );
-            // Refused at once, not after a connection attempt timed out.
-            assert!(started.elapsed() < Duration::from_secs(2), "{url}");
             assert_eq!(
                 detect::health(&id(c)).unwrap().check(&http, &target).await,
                 HealthStatus::Unreachable
             );
         }
     }
+    assert!(live.paths().is_empty(), "a refused name was connected to");
 }
 
 #[tokio::test]

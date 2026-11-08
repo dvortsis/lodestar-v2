@@ -74,7 +74,7 @@ impl Detect for QBittorrent {
         Box::pin(async move {
             let r = match get(http, target, VERSION_PATH).await {
                 Ok(r) => r,
-                Err(e) => return not_found_or(e),
+                Err(e) => return not_found_or(e, target),
             };
             let found = |version| {
                 Ok(Some(Detected {
@@ -90,7 +90,7 @@ impl Detect for QBittorrent {
                 403 => {
                     let page = match get(http, target, LOGIN_PATH).await {
                         Ok(p) => p,
-                        Err(e) => return not_found_or(e),
+                        Err(e) => return not_found_or(e, target),
                     };
                     if page.status() == 200 && is_login_page(page.body()) {
                         found(None)

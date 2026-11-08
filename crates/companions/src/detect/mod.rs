@@ -72,10 +72,23 @@ pub fn health(id: &CompanionId) -> Option<Box<dyn Health>> {
     }
 }
 
+/// Where Lodestar runs, which decides whether container names are probed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Runtime {
+    /// A native install. Docker's names resolve only inside a Docker
+    /// network, so a single-label lookup here would go to the LAN's
+    /// broadcast name services (LLMNR, NetBIOS, mDNS), where any host can
+    /// answer. Container names aren't probed.
+    Native,
+    /// Inside a container, where Docker's embedded DNS answers the names.
+    Container,
+}
+
 /// The fixed targets auto-detection probes for one entry (Q12): loopback
-/// on each internal TCP port, then the entry's container name on the same
-/// ports. A peer-to-peer port isn't an HTTP service, so it's never probed.
-pub fn probe_targets(entry: &Entry) -> Vec<Target> {
+/// on each internal TCP port, then, in a container, the entry's container
+/// name on the same ports. A peer-to-peer port isn't an HTTP service, so
+/// it's never probed.
+pub fn probe_targets(entry: &Entry, runtime: Runtime) -> Vec<Target> {
     let ports: Vec<_> = entry
         .ports
         .iter()
@@ -83,7 +96,7 @@ pub fn probe_targets(entry: &Entry) -> Vec<Target> {
         .map(|p| p.number)
         .collect();
     let mut targets: Vec<Target> = ports.iter().map(|p| Target::Loopback(*p)).collect();
-    if let Some(c) = &entry.container {
+    if let (Runtime::Container, Some(c)) = (runtime, &entry.container) {
         targets.extend(
             ports
                 .iter()
@@ -95,24 +108,31 @@ pub fn probe_targets(entry: &Entry) -> Vec<Target> {
 
 /// Every probe auto-detection makes: [`probe_targets`] for each entry this
 /// module has an adapter for, in catalogue order.
-pub fn auto_probes(catalogue: &Catalogue) -> Vec<(&CompanionId, Target)> {
+pub fn auto_probes(catalogue: &Catalogue, runtime: Runtime) -> Vec<(&CompanionId, Target)> {
     catalogue
         .entries()
         .iter()
         .filter(|e| ADAPTERS.contains(&e.id.as_str()))
-        .flat_map(|e| probe_targets(e).into_iter().map(move |t| (&e.id, t)))
+        .flat_map(move |e| {
+            probe_targets(e, runtime)
+                .into_iter()
+                .map(move |t| (&e.id, t))
+        })
         .collect()
 }
 
 /// Runs [`auto_probes`] one at a time and returns what was found. A probe
 /// that fails is skipped: each companion is reported at most once, at the
-/// first target that answered as it.
+/// first target that answered as it. At most six probes of up to two
+/// requests each, each within [`Limits::PROBE`]: a minute at worst, so a
+/// caller runs it off the request path.
 pub async fn auto_detect(
     http: &dyn GuardedHttp,
     catalogue: &Catalogue,
+    runtime: Runtime,
 ) -> Vec<(CompanionId, Detected)> {
     let mut found: Vec<(CompanionId, Detected)> = Vec::new();
-    for (id, target) in auto_probes(catalogue) {
+    for (id, target) in auto_probes(catalogue, runtime) {
         if found.iter().any(|(f, _)| f == id) {
             continue;
         }
@@ -138,11 +158,18 @@ pub(crate) async fn get(
 }
 
 /// What a failed probe means for detection: nothing listening is "not
-/// here"; anything else is the caller's to see.
-pub(crate) fn not_found_or(e: AdapterError) -> Result<Option<Detected>, AdapterError> {
-    match e {
-        AdapterError::Unreachable | AdapterError::NotThisCompanion => Ok(None),
-        e => Err(e),
+/// here", and so is nothing answering in time at a fixed target (on
+/// Windows a refused loopback connection takes about 2 s per address
+/// family). Anything else, and any failure at a URL you entered, is the
+/// caller's to see.
+pub(crate) fn not_found_or(
+    e: AdapterError,
+    target: &Target,
+) -> Result<Option<Detected>, AdapterError> {
+    match (e, target) {
+        (AdapterError::Unreachable | AdapterError::NotThisCompanion, _) => Ok(None),
+        (AdapterError::Timeout, Target::Loopback(_) | Target::Container(..)) => Ok(None),
+        (e, _) => Err(e),
     }
 }
 
@@ -168,9 +195,13 @@ const JSON_LIMITS: json::Limits = json::Limits {
 
 /// The string `status` of a JSON object, read with the bounded reader
 /// (`lodestar_sources_feeds::json`). `None` for a body that isn't UTF-8 or
-/// one JSON object, has no `status` string or has it twice, or whose value
-/// passes [`JSON_LIMITS`]. Other keys are passed over.
-pub fn status_field(body: &[u8]) -> Option<String> {
+/// one JSON object, has no `status` string or has it twice, has a key
+/// with an escape (so `st\u0061tus` can't hide a second one), or whose
+/// value passes [`JSON_LIMITS`]. Other keys are passed over.
+///
+/// Crate-private: the value is a companion's text, and only the adapters'
+/// closed enums leave this module.
+pub(crate) fn status_field(body: &[u8]) -> Option<String> {
     let s = std::str::from_utf8(body).ok()?;
     let mut j = json::Reader::new(s, JSON_LIMITS);
     if j.peek() != Some(b'{') {
@@ -178,6 +209,9 @@ pub fn status_field(body: &[u8]) -> Option<String> {
     }
     let mut status: Option<Option<String>> = None;
     j.object(|j, key| {
+        if key.contains('\\') {
+            return Err(json::Stop::Malformed);
+        }
         if key == "status" && status.is_none() && j.peek() == Some(b'"') {
             status = Some(j.text()?.ok());
         } else {
@@ -217,8 +251,10 @@ impl Resolve for LocalOnly {
 
 /// The [`GuardedHttp`] that `crates/lodestar` hands the adapters (CMP-5g).
 ///
-/// - **Policy:** the SSRF guard's download-client mode (private ranges and
-///   loopback; never link-local, metadata or reserved). Loopback and
+/// - **Policy:** the SSRF guard's download-client mode: public and private
+///   addresses and loopback; never link-local, metadata or reserved. A
+///   URL you enter may name a companion on this machine
+///   (`http://localhost:8080`, CMP-11's Windows qBittorrent). Loopback and
 ///   container targets are fixed by this crate; a container name must also
 ///   resolve to a private or loopback address. A URL you entered is checked
 ///   by the guard at connect time, its literal before any connection.
@@ -277,7 +313,7 @@ impl CompanionHttp {
         for (name, value) in &request.headers {
             let name = reqwest::header::HeaderName::from_bytes(name.as_str().as_bytes())
                 .map_err(|_| AdapterError::Protocol("header name"))?;
-            let mut v = ReqHeaderValue::from_str(value.expose())
+            let mut v = ReqHeaderValue::from_bytes(value.expose().as_bytes())
                 .map_err(|_| AdapterError::Protocol("header value"))?;
             v.set_sensitive(value.is_secret());
             headers.append(name, v);
@@ -405,9 +441,16 @@ mod tests {
         assert_eq!(health_of(AdapterError::Blocked), HealthStatus::Unreachable);
         assert_eq!(health_of(AdapterError::Timeout), HealthStatus::Unreachable);
         assert_eq!(health_of(AdapterError::TooLarge), HealthStatus::Unhealthy);
-        assert_eq!(not_found_or(AdapterError::Unreachable), Ok(None));
+        let lo = Target::Loopback(crate::inputs::PortNumber::new(8080).unwrap());
+        let entered = Target::Entered(EnteredUrl::parse("http://10.0.0.2").unwrap());
+        assert_eq!(not_found_or(AdapterError::Unreachable, &entered), Ok(None));
+        assert_eq!(not_found_or(AdapterError::Timeout, &lo), Ok(None));
         assert_eq!(
-            not_found_or(AdapterError::Blocked),
+            not_found_or(AdapterError::Timeout, &entered),
+            Err(AdapterError::Timeout)
+        );
+        assert_eq!(
+            not_found_or(AdapterError::Blocked, &lo),
             Err(AdapterError::Blocked)
         );
     }
