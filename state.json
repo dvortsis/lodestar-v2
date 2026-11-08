@@ -6128,6 +6128,11 @@
       "id": "CMP-5-CMP-G-from-608",
       "note": "From #608 reviews (for CMP-5 / CMP-G, not CMP-4b): gate never checks route-state freshness (monitor dead, PluginEgress alive -> stale Up keeps companion released); setsid grandchildren survive a hold on Linux (stop signals the process group only); re-assert qBittorrent bind / Prowlarr proxy on every start; config writers must not follow symlinked parents inside the companion's writable home. Owner FYI after #608 merges: sandbox reports 'partial' below Landlock ABI 9 where pathname unix sockets (systemd --user, D-Bus, docker.sock) are reachable; not reachable under the shipped unit.",
       "logged": "2026-11-08T11:09Z"
+    },
+    {
+      "id": "CMP-8b-put",
+      "note": "Runner approved for CMP-8b: adapter::Method::Put + detect/mod.rs match arm + ProbeRequest::put (Prowlarr PUT /api/v1/config/host/1 full resource). Condition: PUT built from Prowlarr's own GET, only proxy fields changed, auth/apiKey/bind/port echoed; verify upstream PUT handling of password/apiKey; stop if echo can reset auth.",
+      "logged": "2026-11-08T11:09Z"
     }
   ],
   "main_health": [
