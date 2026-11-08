@@ -13,3 +13,31 @@ __pycache__/
 /soak-followups/target/
 /web/playwright.*.local.ts
 /node_modules/
+
+# Cloud infrastructure (infra/, docs/decisions/2026-11-08-X-cloud-infra.md).
+# Terraform state, plans and variable files are never committed anywhere.
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfplan
+**/terraform.tfvars
+**/*.auto.tfvars
+# Credentials, local state and logs are scoped to infra/ so tracked test
+# fixtures (*.pem, *.key) and soak evidence (*.log) elsewhere stay visible.
+infra/**/.aws/
+infra/**/.venv/
+infra/**/.pytest_cache/
+infra/**/state/
+infra/**/logs/
+infra/**/secrets/**
+infra/**/.env
+infra/**/.env.*
+!infra/**/.env.example
+infra/**/*.pem
+infra/**/*.key
+infra/**/id_ed25519
+infra/**/id_rsa
+infra/**/*.p12
+infra/**/*.pfx
+infra/**/*.log
+infra/**/*.zip

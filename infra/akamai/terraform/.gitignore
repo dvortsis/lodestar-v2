@@ -1,0 +1,18 @@
+# Terraform local state and plans: never commit
+.terraform/
+.terraform.tfstate.lock.info
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+*.auto.tfvars
+terraform.tfvars
+# Private secrets / credentials
+.env
+.env.*
+**/secrets/**
+!**/secrets/.gitkeep
+*.pem
+*.key
+*.log
