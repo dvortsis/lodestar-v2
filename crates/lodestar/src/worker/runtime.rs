@@ -836,7 +836,7 @@ fn start_if_ready(s: &Arc<Shared>) {
     let Some(a) = *lock(&s.assignment) else {
         return;
     };
-    if !a.fetch || s.judge.version() == 0 {
+    if !a.fetch || !a.prepare || s.judge.version() == 0 {
         return;
     }
     let dict = {
@@ -988,6 +988,15 @@ impl Shared {
         z ^ (z >> 31)
     }
 
+    /// Whether the assignment lets this worker fetch: `fetch` and
+    /// `prepare` both on (a worker can't send results it didn't prepare).
+    /// Turned off after the stages started, the pool pauses and nothing is
+    /// claimed; turned on again, both resume. The planner sets both on
+    /// for every worker today (WK-5).
+    fn fetching(&self) -> bool {
+        lock(&self.assignment).is_some_and(|a| a.fetch && a.prepare)
+    }
+
     /// Whether sealing is down at `now`: a result found it so, and no key
     /// covers `now` yet. A key that does (a fresh install, or the clock
     /// moving back onto the key's day) ends it.
@@ -1114,7 +1123,8 @@ impl Shared {
             // A new session's first `Assign` may re-plan this worker: until
             // it comes, the pool waits, as the DHT does.
             let fresh = self.fresh_session.load(Ordering::Acquire);
-            let pause = self.waiting.load(Ordering::Acquire) > 0 || !up || fresh;
+            let pause =
+                self.waiting.load(Ordering::Acquire) > 0 || !up || fresh || !self.fetching();
             std::mem::replace(told, pause) != pause
         });
     }
@@ -1294,8 +1304,9 @@ fn sift(
 ) -> Option<(ClaimItem, Vec<std::net::SocketAddr>)> {
     bump(&s.counts.found);
     // Nothing is claimed while sealing is down: it couldn't be sent, and
-    // its lease would only wait (#599's review).
-    if s.sealing_down(unix_now()) {
+    // its lease would only wait (#599's review). Nor while the assignment
+    // turns fetching off.
+    if s.sealing_down(unix_now()) || !s.fetching() {
         bump(&s.counts.held_back);
         return None;
     }
@@ -2218,6 +2229,43 @@ mod tests {
         rt.shutdown().await;
     }
 
+    /// A later `Assign` with fetching off pauses the pool and claims
+    /// nothing; turned on again, both resume.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_late_fetch_off_pauses_the_pool_and_the_claims() {
+        let mut rt = Runtime::start(config(Arc::new(MapFetch::default())));
+        let (_coord, session) = session_pair().await;
+        rt.connected(session.handle());
+        rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
+        let (_, chunks) = filter_chunks().await;
+        for c in chunks {
+            rt.event(WorkerEvent::Snapshot(c));
+        }
+        until("started", || (rt.is_started(), ())).await;
+        let paused = |rt: &Runtime| *rt.shared.pool_told.borrow();
+        until("the pool runs", || (!paused(&rt), ())).await;
+        let off = |revision, fetch| {
+            let mut a = Assignment::from_message(&assignment(revision, 0, 1))
+                .unwrap()
+                .unwrap();
+            a.fetch = fetch;
+            a.to_message().unwrap()
+        };
+        rt.event(WorkerEvent::Assign(off(2, false)));
+        until("the pool paused", || (paused(&rt), ())).await;
+        let c = rt.counts();
+        assert!(rt.finds().found(found(77)));
+        until("the find was held back", || {
+            let n = c.held_back.load(Ordering::Relaxed);
+            (n == 1, n)
+        })
+        .await;
+        assert_eq!(c.claimed.load(Ordering::Relaxed), 0);
+        rt.event(WorkerEvent::Assign(off(3, true)));
+        until("the pool resumed", || (!paused(&rt), ())).await;
+        rt.shutdown().await;
+    }
+
     /// A dictionary named by `Assign` must arrive first too.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_named_dictionary_is_waited_for() {
@@ -2371,10 +2419,11 @@ mod tests {
     /// one in 16, drawn per sighting.
     #[tokio::test]
     async fn maybes_are_dropped_once_a_filter_is_complete_but_sampled() {
-        let rt = Runtime::start(Config {
+        let mut rt = Runtime::start(Config {
             seed: Some(7),
             ..Config::new(W, Arc::new(MapFetch::default()))
         });
+        rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
         let s = &rt.shared;
         // No filter: claimed, maybe or not.
         assert!(sift(s, found(1), false, true).is_some());
@@ -2409,10 +2458,11 @@ mod tests {
         // The production draw, over many seeds: the same key, sighted again
         // and again, is claimed within a few hundred sightings every time.
         for seed in 0..50u64 {
-            let rt = Runtime::start(Config {
+            let mut rt = Runtime::start(Config {
                 seed: Some(seed),
                 ..Config::new(W, Arc::new(MapFetch::default()))
             });
+            rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
             let first = (1..=400)
                 .find(|_| sift(&rt.shared, found(9), true, true).is_some())
                 .unwrap_or_else(|| panic!("seed {seed}: never claimed in 400 sightings"));
