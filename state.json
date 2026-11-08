@@ -6123,6 +6123,11 @@
       "id": "merged-610",
       "note": "#610 CMP-8a merged 9e567a21 (MERGE x2 + self-checked tests delta 90c89bba); session archived; owner FYI sent. #608 conflicts with main in Cargo.toml/Cargo.lock: session prepares merge locally, pushes with review fixes.",
       "logged": "2026-11-08T11:04Z"
+    },
+    {
+      "id": "CMP-5-CMP-G-from-608",
+      "note": "From #608 reviews (for CMP-5 / CMP-G, not CMP-4b): gate never checks route-state freshness (monitor dead, PluginEgress alive -> stale Up keeps companion released); setsid grandchildren survive a hold on Linux (stop signals the process group only); re-assert qBittorrent bind / Prowlarr proxy on every start; config writers must not follow symlinked parents inside the companion's writable home. Owner FYI after #608 merges: sandbox reports 'partial' below Landlock ABI 9 where pathname unix sockets (systemd --user, D-Bus, docker.sock) are reachable; not reachable under the shipped unit.",
+      "logged": "2026-11-08T11:09Z"
     }
   ],
   "main_health": [
@@ -6839,7 +6844,7 @@
         "slice": "CMP-4b",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCb1R6WRuMNMxCLNcn: #608 Opus review CHANGES (1 blocking: Gated drop race; cgroup detection; pub release); security review running; main merged locally 9b8da59c, unpushed",
+        "doing": "session_01MMjhnCb1R6WRuMNMxCLNcn: #608 CHANGES (Gated drop race; report 'full' overstated below ABI 9 unix sockets; cgroup detection; pub(crate) handle; bind-mount alias; grants_ok; ABI6 scopes); fix round + main merge b083428d as one push, then fresh delta review",
         "since": "2026-11-08T07:43Z"
       },
       {
@@ -6914,5 +6919,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T11:07Z"
+  "updated": "2026-11-08T11:09Z"
 }
