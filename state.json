@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-08T06:38:52Z",
+  "updated_at": "2026-11-08T09:38:58Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4114,7 +4114,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 32,
-  "last_heartbeat": "2026-11-08T06:38:52Z",
+  "last_heartbeat": "2026-11-08T09:38:58Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -6814,14 +6814,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T08:41Z",
+    "updated": "2026-11-08T09:38Z",
     "items": [
       {
         "slot": 1,
         "slice": "CMP-8a",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBU4Bgyb2nfsARB3x8: CMP-8a detection and health adapters",
+        "doing": "session_01MMjhnBU4Bgyb2nfsARB3x8: #610 open at b32e5f30; Opus review + /security-review running; CI running",
         "since": "2026-11-08T08:41Z"
       },
       {
@@ -6829,7 +6829,7 @@
         "slice": "CMP-4b",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCb1R6WRuMNMxCLNcn: CMP-4b limits, sandbox, egress",
+        "doing": "session_01MMjhnCb1R6WRuMNMxCLNcn: #608 at 24769baf; CI running; then Opus review + /security-review",
         "since": "2026-11-08T07:43Z"
       },
       {
@@ -6837,7 +6837,7 @@
         "slice": "CMP-7",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBuvgoPj7DQ8u9wewz: building (brief 57f0c248)",
+        "doing": "session_01MMjhnBuvgoPj7DQ8u9wewz: #606 CHANGES; fix round in progress, then fresh delta review",
         "since": "2026-11-08T06:06:52Z"
       },
       {
@@ -6845,12 +6845,12 @@
         "slice": "WK-10d",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #604 (store part) delta MERGE at e5242e50; merge on green; then main WK-10d PR (~1,700, accepted)",
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #607 CHANGES; fix round (regrant edit in crates/cluster approved), then fresh delta review; WK-10e next",
         "since": "2026-11-08T04:50:45Z"
       }
     ],
-    "limit": 8,
-    "limit_note": "Owner in chat 2026-11-05T16:15Z: \"Let's bring the slots down to 8. Complete the existing slices.\" Running slices finish; no refill while 8 or more run. The cut to 4 at 2026-11-06T00:00Z (trig_01RJzwL47gE81BrRv2vR2cx4) still applies. | Owner 2026-11-05T23:25Z via dashboard: \"Keep running. We have usage available.\" Usage pause lifted; fill up to 8 until 00:00Z; the cut to 4 at 00:00Z is unchanged. | Owner 2026-11-05T23:35Z: \"Use as many resources as needed to get as much done in the next 30 mins as possible.\" Owner ~23:45Z in the runner chat: \"There is no limit to slices or subagents for the next 30 mins if it would be useful to overall progress.\" Six planning slices launched 23:36-23:37Z; they finish under the 4-slot limit from 00:00Z. | 00:01Z: the weekly usage limit reset (status allowed). From ~00:15Z the 4-slot limit applies; running slices finish."
+    "limit": 4,
+    "limit_note": "Owner in chat 2026-11-05T16:15Z: \"Let's bring the slots down to 8. Complete the existing slices.\" Running slices finish; no refill while 8 or more run. The cut to 4 at 2026-11-06T00:00Z (trig_01RJzwL47gE81BrRv2vR2cx4) still applies. | Owner 2026-11-05T23:25Z via dashboard: \"Keep running. We have usage available.\" Usage pause lifted; fill up to 8 until 00:00Z; the cut to 4 at 00:00Z is unchanged. | Owner 2026-11-05T23:35Z: \"Use as many resources as needed to get as much done in the next 30 mins as possible.\" Owner ~23:45Z in the runner chat: \"There is no limit to slices or subagents for the next 30 mins if it would be useful to overall progress.\" Six planning slices launched 23:36-23:37Z; they finish under the 4-slot limit from 00:00Z. | 00:01Z: the weekly usage limit reset (status allowed). From ~00:15Z the 4-slot limit applies; running slices finish. | Owner \u00a72.42: limit is 4 slots (current)."
   },
   "soak_notes_r4": "h16.77 provisional fit 12.88 MiB/h [10.95,14.81] (h12-16.7, incomplete). Likely FAIL. Step up to 418-471 MiB band; collector CPU/h rising with corpus; mmap cache bounded. X-merge-policy prioritised; rc.4 path if fail.",
   "owner_actions": [
@@ -6904,5 +6904,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T09:35Z"
+  "updated": "2026-11-08T09:38Z"
 }
