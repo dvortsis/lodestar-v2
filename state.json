@@ -6153,6 +6153,16 @@
         "existing gluetun named 'lodestar' accepted: refuse or flag in CMP-5 UI"
       ],
       "logged": "2026-11-08T11:41Z"
+    },
+    {
+      "id": "merged-606",
+      "note": "#606 CMP-7 merged f61ffa33 12:3xZ; regenerate goldens when CMP-13 pins images; CMP-7-polish logged",
+      "logged": "2026-11-08T12:30Z"
+    },
+    {
+      "id": "X-flake-email-bcc",
+      "note": "runner PR #612 on claude/busy-allen-aptli2 (564d2a02): Bcc header-line check; flake seen on #607 windows",
+      "logged": "2026-11-08T12:30Z"
     }
   ],
   "main_health": [
@@ -6854,7 +6864,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T11:05Z",
+    "updated": "2026-11-08T12:30Z",
     "items": [
       {
         "slot": 1,
@@ -6874,11 +6884,12 @@
       },
       {
         "slot": 3,
-        "slice": "CMP-7",
+        "slice": "",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBuvgoPj7DQ8u9wewz: #606 CHANGES; fix round in progress, then fresh delta review",
-        "since": "2026-11-08T06:06:52Z"
+        "doing": "CMP-7 merged as #606 (f61ffa33); session archived; slot free",
+        "since": "2026-11-08T12:30Z",
+        "status": "idle"
       },
       {
         "slot": 4,
