@@ -5,6 +5,7 @@
 
 mod cli;
 mod cluster;
+mod companions;
 mod config;
 mod filter_load;
 mod fixture;
@@ -49,6 +50,13 @@ use crate::services::{BoxError, Services};
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() -> ExitCode {
+    // Started as the companion launcher (CMP-4b): apply the limits and
+    // exec the companion before anything reads arguments, config or
+    // logging. Returns only on failure. Linux only.
+    #[cfg(target_os = "linux")]
+    if let Some(code) = lodestar_companions::supervise::limits::launcher_main() {
+        std::process::exit(code);
+    }
     // Before any thread or arena growth; the `--child` inherits it (X-thp-off).
     thp::apply();
     if let Some(code) = windows::hook() {
@@ -80,7 +88,8 @@ fn main() -> ExitCode {
         | Command::Vacuum
         | Command::Reindex
         | Command::Rollup(_)
-        | Command::Worker(_) => Some(privdrop::Scope::DataDir),
+        | Command::Worker(_)
+        | Command::Companion(_) => Some(privdrop::Scope::DataDir),
         Command::Healthcheck | Command::Stats(_) => Some(privdrop::Scope::ProcessOnly),
         Command::Lists => None,
     };

@@ -19,8 +19,9 @@ Akamai's published plan description is *SSD*. This is not an assurance of a part
 
 ## Security properties
 
-- Akamai Cloud Firewall is **attached at Linode creation** (`firewall_id`) using explicit `interface_generation="legacy_config"`, inbound DROP except SSH TCP/22 from **your single explicit `/32`**. No inbound 8090/tcp or 6881/udp is opened on the Akamai host.
+- Akamai Cloud Firewall is **attached at Linode creation** (`firewall_id`) using explicit `interface_generation="legacy_config"`, inbound DROP except SSH TCP/22 from **your single explicit `/32`** (`ssh_admin_ipv4_cidr`). The main VM alone may also allow up to four more `/32`s in `main_extra_admin_ipv4_cidrs`, for example the AWS Windows VM's public IPv4 so it can SSH-tunnel to the UI. Every entry is validated as an IPv4 `/32`, and there is no IPv6 ingress. No inbound 8090/tcp or 6881/udp is opened on the Akamai host.
 - Root login by SSH is disabled by cloud-init; `lodestar` has the supplied public key and passwordless sudo. Do not grant the crawler container or VPN credentials sudo access.
+- Region is fixed to `us-east` (Newark): the 48-hour watchdog only reaps Linodes there, so Terraform refuses any other region.
 - Linode API token is read through the **local** `LINODE_TOKEN` environment variable; never placed in Terraform configuration or metadata.
 - No PIA credentials, WireGuard keys or torrent metadata are stored in cloud-init, Terraform state, logs or this repository.
 - OS: Ubuntu 24.04 LTS. cloud-init installs Docker Engine and Compose from Docker's **official apt repository**, plus WireGuard tools and security updates. It does **not start the crawler or VPN**.
@@ -174,7 +175,7 @@ You must type **`DESTROY LODESTAR`** after reviewing the resources. This permane
 - That the particular SSD plan achieves your search-index random-IOPS target.
 - That Akamai accepts your precise DHT workload: the published AUP does not explicitly name it as authorized.
 - An operational PIA WireGuard tunnel, port forwarding, the actual Lodestar image/MSI, or the crawling behavior.
-- Terraform provider `init`/`validate` against your account. This configuration has had static checks only and requires local Terraform validation before provisioning.
+- Anything against your account. CI checks `terraform fmt`, `terraform init` and `terraform validate` on every change (no credentials, no plan), but nothing has run `terraform plan` or `apply` from this repository.
 
 ## Authoritative references checked 2026-11-07
 

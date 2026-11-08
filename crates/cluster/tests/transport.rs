@@ -765,7 +765,7 @@ impl StoredKeys for RegrantCheck {
         vec![false; keys.len()]
     }
 
-    fn regrant_check(&self, keys: &[InfoHash]) -> Vec<KeyCheck> {
+    fn key_checks(&self, keys: &[InfoHash]) -> Vec<KeyCheck> {
         let gate = self.gate.lock().unwrap().take();
         if let Some((entered, release)) = gate {
             let _ = entered.send(());
@@ -824,12 +824,13 @@ async fn leases_left_by_a_silent_worker(c: &Coord, b: &WorkerSession, keys: &[u8
 async fn a_stored_or_held_key_is_never_granted_again() {
     guard(async {
         let check = Arc::new(RegrantCheck::default());
-        check.held.lock().unwrap().push(key(2));
-        check.stored.lock().unwrap().push(key(3));
         let losses = Arc::new(Losses::default());
         let c = coordinator_events(config(), Some(check.clone()), losses.clone()).await;
         let mut b = c.local().await;
         leases_left_by_a_silent_worker(&c, &b, &[1, 2, 3]).await;
+        // Stored or held since they were claimed.
+        check.held.lock().unwrap().push(key(2));
+        check.stored.lock().unwrap().push(key(3));
         c.server.tick().await;
         let WorkerEvent::Regranted(items) = event(&mut b).await else {
             panic!("no re-grant");
@@ -857,10 +858,10 @@ async fn a_stored_or_held_key_is_never_granted_again() {
 async fn a_regrant_whose_check_fails_grants_nothing() {
     guard(async {
         let check = Arc::new(RegrantCheck::default());
-        check.short.store(true, std::sync::atomic::Ordering::SeqCst);
         let c = coordinator_with(config(), Some(check.clone())).await;
         let mut b = c.local().await;
         leases_left_by_a_silent_worker(&c, &b, &[1, 2]).await;
+        check.short.store(true, std::sync::atomic::Ordering::SeqCst);
         c.server.tick().await;
         // The tick has finished its re-grant: nothing went out, nothing
         // ended, and both keys wait.
@@ -907,11 +908,11 @@ async fn a_key_that_changed_during_the_check_is_left_alone() {
         let (entered_tx, entered) = tokio::sync::oneshot::channel();
         let (release, release_rx) = std::sync::mpsc::channel();
         let check = Arc::new(RegrantCheck::default());
-        *check.gate.lock().unwrap() = Some((entered_tx, release_rx));
         let c = coordinator_with(config(), Some(check.clone())).await;
         let vps = c.join("vps").await;
         let b = c.session(&vps).await;
         leases_left_by_a_silent_worker(&c, &b, &[1]).await;
+        *check.gate.lock().unwrap() = Some((entered_tx, release_rx));
         let ticking = {
             let server = c.server.clone();
             tokio::spawn(async move { server.tick().await })
@@ -943,10 +944,10 @@ async fn a_cancelled_regrant_leaves_no_lease_behind() {
         let (entered_tx, entered) = tokio::sync::oneshot::channel();
         let (release, release_rx) = std::sync::mpsc::channel();
         let check = Arc::new(RegrantCheck::default());
-        *check.gate.lock().unwrap() = Some((entered_tx, release_rx));
         let c = coordinator_with(config(), Some(check.clone())).await;
         let mut b = c.local().await;
         leases_left_by_a_silent_worker(&c, &b, &[1]).await;
+        *check.gate.lock().unwrap() = Some((entered_tx, release_rx));
         let ticking = {
             let server = c.server.clone();
             tokio::spawn(async move { server.tick().await })
@@ -965,6 +966,38 @@ async fn a_cancelled_regrant_leaves_no_lease_behind() {
             panic!("no re-grant");
         };
         assert_eq!(items[0].key(), key(1));
+    })
+    .await;
+}
+
+/// #615's review: a claim grants only a free key. A stored or held one is
+/// denied as stored; one whose check couldn't answer as busy, so the worker
+/// asks again later instead of taking it as stored.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_claim_denies_an_unknown_key_as_busy() {
+    guard(async {
+        let check = Arc::new(RegrantCheck::default());
+        check.held.lock().unwrap().push(key(2));
+        check.stored.lock().unwrap().push(key(3));
+        check.unknown.lock().unwrap().push(key(4));
+        let c = coordinator_with(config(), Some(check.clone())).await;
+        let a = c.local().await;
+        let grants = a.claim(found(&*c.clock, &[1, 2, 3, 4])).await.unwrap();
+        assert_eq!(grants.len(), 4);
+        token_of(&grants[0]);
+        let denied = |n: u8, reason| GrantItem::Denied {
+            key: key(n),
+            reason,
+        };
+        assert_eq!(grants[1], denied(2, DenyReason::Stored));
+        assert_eq!(grants[2], denied(3, DenyReason::Stored));
+        assert_eq!(grants[3], denied(4, DenyReason::Busy));
+        // Once its check answers, the same key is granted.
+        check.unknown.lock().unwrap().clear();
+        let again = a.claim(found(&*c.clock, &[4])).await.unwrap();
+        token_of(&again[0]);
+        let s = c.server.snapshot();
+        assert_eq!((s.harvested, s.leases), (2, 2));
     })
     .await;
 }

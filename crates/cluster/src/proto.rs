@@ -281,8 +281,10 @@ pub enum DenyReason {
     HeldElsewhere,
     /// The worker is draining and gets no new leases.
     Draining,
-    /// The coordinator is behind (its writer's queue is full, §19.5):
-    /// claim again later.
+    /// Not now: claim again later. The coordinator is behind (its
+    /// writer's queue is full, §19.5), or its store check couldn't answer:
+    /// for the whole batch when the check died or came back short (#607),
+    /// and for one key when that key's read failed (#628).
     Busy,
 }
 

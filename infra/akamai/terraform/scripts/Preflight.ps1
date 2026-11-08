@@ -5,7 +5,7 @@ $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $logs = Join-Path $root 'logs'
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
-$log = Join-Path $logs ("preflight-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+$log = Join-Path $logs ("preflight-{0}.log" -f (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmssZ'))
 function Audit([string]$Message) {
     $line = '{0} {1}' -f (Get-Date).ToUniversalTime().ToString('o'), $Message
     Write-Host $line
@@ -37,6 +37,7 @@ try {
     $regionMatch = [regex]::Match($config, '(?m)^\s*region\s*=\s*"([a-z0-9-]+)"')
     if (-not $regionMatch.Success) { throw 'Missing region in terraform.tfvars.' }
     $region = $regionMatch.Groups[1].Value
+    if ($region -cne 'us-east') { throw "region is '$region'. Only us-east is supported: the 48-hour watchdog reaps nothing in other regions." }
     $keyMatch = [regex]::Match($config, '(?m)^\s*ssh_public_key_path\s*=\s*"([^\"]+)"')
     if (-not $keyMatch.Success) { throw 'Missing ssh_public_key_path in terraform.tfvars.' }
     $keyPath = $keyMatch.Groups[1].Value

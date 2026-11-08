@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $logs = Join-Path $root 'logs'
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
-$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmssZ')
 $log = Join-Path $logs "destroy-$stamp.log"
 $plan = Join-Path $root "lodestar-destroy-$stamp.tfplan"
 function Audit([string]$Message) {
@@ -13,6 +13,9 @@ function Audit([string]$Message) {
 }
 try {
     if ([string]::IsNullOrWhiteSpace($env:LINODE_TOKEN)) { throw 'LINODE_TOKEN environment variable is missing.' }
+    # The confirmation phrase must be typed at a console: refuse piped input up front.
+    . (Join-Path $PSScriptRoot 'Interactive.ps1')
+    Assert-InteractiveConfirmation
     Push-Location $root
     try {
         & terraform init -input=false -no-color 2>&1 | ForEach-Object { Audit ([string]$_) }

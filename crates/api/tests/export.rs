@@ -889,7 +889,11 @@ async fn the_wal_stays_bounded_beside_a_writer() {
         Opts {
             config: ExportConfig {
                 chunk: 16,
-                rows_per_sec: 400,
+                // 400 rows at 100 a second keep the export open for about
+                // 4 s, so even the slowest CI runner (Windows) fits several
+                // writer checkpoints inside it. At 400 a second (about 1 s)
+                // Windows sometimes managed only 2.
+                rows_per_sec: 100,
                 ..ExportConfig::default()
             },
             ..Opts::default()
@@ -933,8 +937,8 @@ async fn the_wal_stays_bounded_beside_a_writer() {
     assert_eq!(column(&body, "id").len(), 400);
     assert_eq!(finished(&f, &c, id).await["state"], "done");
     let (most, written) = (most.load(Ordering::SeqCst), written.load(Ordering::SeqCst));
-    // The writer checkpointed again and again while the export ran (a
-    // second at 400 rows a second), and every checkpoint emptied the
+    // The writer checkpointed again and again while the export ran (about
+    // 4 s at 100 rows a second), and every checkpoint emptied the
     // WAL: no read transaction outlived a chunk.
     assert!(written >= 3, "only {written} checkpoints");
     assert_eq!(most, 0, "the WAL kept {most} bytes after a checkpoint");

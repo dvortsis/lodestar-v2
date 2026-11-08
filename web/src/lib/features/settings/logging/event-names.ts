@@ -877,5 +877,25 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 	'companions.config_handed_over': [
 		m.settings_logging_ev_companions_config_handed_over_n,
 		m.settings_logging_ev_companions_config_handed_over_h
+	],
+	'companions.installed': [
+		m.settings_logging_ev_companions_installed_n,
+		m.settings_logging_ev_companions_installed_h
+	],
+	'companions.install_failed': [
+		m.settings_logging_ev_companions_install_failed_n,
+		m.settings_logging_ev_companions_install_failed_h
+	],
+	'companions.rolled_back': [
+		m.settings_logging_ev_companions_rolled_back_n,
+		m.settings_logging_ev_companions_rolled_back_h
+	],
+	'companions.removed': [
+		m.settings_logging_ev_companions_removed_n,
+		m.settings_logging_ev_companions_removed_h
+	],
+	'companions.recovered': [
+		m.settings_logging_ev_companions_recovered_n,
+		m.settings_logging_ev_companions_recovered_h
 	]
 };

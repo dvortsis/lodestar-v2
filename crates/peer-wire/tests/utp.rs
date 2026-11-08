@@ -272,18 +272,55 @@ async fn default_options_stay_on_tcp() {
     assert_eq!(o.stats.attempts(Transport::Utp), 0);
 }
 
-/// Drops 15% of outgoing packets and delays the rest by up to 30 ms, so
-/// they also arrive out of order.
+/// One direction of the lossy link: loses 15% of packets, but never two
+/// in a row, as the state machine's own simulation does
+/// (`lodestar-utp`, `conn/tests.rs`).
+///
+/// Independent drops can lose the same exchange again and again, and uTP
+/// must back off exponentially on consecutive timeouts: five or six lost
+/// round trips in a row take 30 s or more, past the deadline (the Windows
+/// CI flake on #196, #600 and #617).
+/// With at most one drop in a row each way, a resend and its ACK alone on
+/// the link fail at most three times running, which uTP's own limits
+/// absorb: it resends the SYN 3 times (`MAX_SYN_RETRIES`) and gives up on
+/// data after 6 silent timeouts (`MAX_TIMEOUTS`). The slowest handshake
+/// is then SYNs at 0, 1, 3 and 7 s, inside the 10 s connect timeout.
+struct Loss {
+    rng: StdRng,
+    dropped_last: bool,
+}
+
+impl Loss {
+    fn new(seed: u64) -> Loss {
+        Loss {
+            rng: StdRng::seed_from_u64(seed),
+            dropped_last: false,
+        }
+    }
+
+    fn drops(&mut self) -> bool {
+        // Always draw, so the pattern depends only on the seed and the
+        // packet count. A drop allowed only after a delivery, with chance
+        // p, loses p / (1 + p) of packets: 15% for p = 0.15 / 0.85.
+        let drop = self.rng.random_bool(0.15 / 0.85) && !self.dropped_last;
+        self.dropped_last = drop;
+        drop
+    }
+}
+
+/// Drops outgoing packets (see [`Loss`]) and delays the rest by up to
+/// 30 ms, so they also arrive out of order.
 struct LossySink {
     udp: Arc<std::net::UdpSocket>,
-    rng: Mutex<StdRng>,
+    loss: Mutex<Loss>,
 }
 
 impl PacketSink for LossySink {
     fn send_to(&self, packet: &[u8], to: SocketAddr) -> std::io::Result<()> {
         let (lost, delay) = {
-            let mut rng = self.rng.lock().unwrap();
-            (rng.random_bool(0.15), rng.random_range(0..30u64))
+            let mut loss = self.loss.lock().unwrap();
+            let lost = loss.drops();
+            (lost, loss.rng.random_range(0..30u64))
         };
         if !lost {
             let (udp, packet) = (self.udp.clone(), packet.to_vec());
@@ -303,7 +340,7 @@ fn lossy_client(seed: u64) -> UtpSocket {
     std.set_nonblocking(true).unwrap();
     let sink = Arc::new(LossySink {
         udp: Arc::new(std.try_clone().unwrap()),
-        rng: Mutex::new(StdRng::seed_from_u64(seed)),
+        loss: Mutex::new(Loss::new(seed)),
     });
     let utp = UtpSocket::with_sink(
         sink,
@@ -315,10 +352,10 @@ fn lossy_client(seed: u64) -> UtpSocket {
     let udp = tokio::net::UdpSocket::from_std(std).unwrap();
     let feeder = utp.clone();
     tokio::spawn(async move {
-        let mut rng = StdRng::seed_from_u64(seed ^ 0xff);
+        let mut loss = Loss::new(seed ^ 0xff);
         let mut buf = vec![0u8; 65_536];
         while let Ok((n, from)) = udp.recv_from(&mut buf).await {
-            if !rng.random_bool(0.15) {
+            if !loss.drops() {
                 feeder.feed(&buf[..n], from);
             }
         }

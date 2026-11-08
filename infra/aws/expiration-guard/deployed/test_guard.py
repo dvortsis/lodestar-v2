@@ -48,7 +48,8 @@ class GuardTests(unittest.TestCase):
             "TerminatingInstances": [{"InstanceId": InstanceIds[0], "CurrentState": {"Name": "shutting-down"}}]
         }
 
-    def instance(self, iid="i-0123456789abcdef0", launched_hours_ago=1, expires_in_hours=None, **over):
+    def instance(self, iid="i-0123456789abcdef0", launched_hours_ago=1, expires_in_hours=None,
+                 root_attached_hours_ago=None, **over):
         tags = {"Project": "Lodestar", "Environment": "Test", "ManagedBy": "Terraform"}
         if expires_in_hours is not None:
             tags["ExpiresAt"] = fmt(self.now + timedelta(hours=expires_in_hours))
@@ -60,6 +61,12 @@ class GuardTests(unittest.TestCase):
             "SecurityGroups": [{"GroupId": SG}],
             "LaunchTime": self.now - timedelta(hours=launched_hours_ago),
             "Tags": [{"Key": k, "Value": v} for k, v in tags.items()],
+            "RootDeviceName": "/dev/sda1",
+            "BlockDeviceMappings": [{
+                "DeviceName": "/dev/sda1",
+                "Ebs": {"AttachTime": self.now - timedelta(
+                    hours=launched_hours_ago if root_attached_hours_ago is None else root_attached_hours_ago)},
+            }],
         }
         inst.update(over)
         return inst
@@ -73,14 +80,48 @@ class GuardTests(unittest.TestCase):
     def terminated_ids(self):
         return [c.kwargs["InstanceIds"][0] for c in self.ec2.terminate_instances.call_args_list]
 
-    def test_filters_scope_server_side(self):
+    def test_scans_every_lodestar_instance(self):
+        # Only Project=Lodestar is filtered server side, so an instance outside
+        # the guard's scope is seen and reported instead of never listed.
         paginator = self.serve()
         mod.handler({}, None)
         names = {f["Name"]: f["Values"] for f in paginator.paginate.call_args.kwargs["Filters"]}
         self.assertEqual(names["tag:Project"], ["Lodestar"])
-        self.assertEqual(names["tag:Environment"], ["Test"])
-        self.assertEqual(names["tag:ManagedBy"], ["Terraform"])
-        self.assertEqual(names["vpc-id"], [VPC])
+        self.assertNotIn("vpc-id", names)
+        self.assertNotIn("tag:Environment", names)
+
+    def test_stop_start_does_not_reset_the_48h_clock(self):
+        # Started 49 h ago (root volume attached then), stopped and started 1 h ago.
+        self.serve(self.instance(launched_hours_ago=1, root_attached_hours_ago=49))
+        result = mod.handler({}, None)
+        self.assertEqual(result["requested"], 1)
+
+    def test_recent_root_attach_does_not_extend_life(self):
+        # The earliest of the two times wins.
+        self.serve(self.instance(launched_hours_ago=49, root_attached_hours_ago=1))
+        self.assertEqual(mod.handler({}, None)["requested"], 1)
+
+    def test_attach_time_of_non_root_volume_is_ignored(self):
+        inst = self.instance(launched_hours_ago=1)
+        inst["BlockDeviceMappings"].append({"DeviceName": "/dev/xvdf", "Ebs": {"AttachTime": self.now - timedelta(hours=60)}})
+        self.serve(inst)
+        self.assertEqual(mod.handler({}, None)["expired"], 0)
+
+    def test_falls_back_to_launch_time_without_root_attach_time(self):
+        for mappings in ([], [{"DeviceName": "/dev/sda1", "Ebs": {}}]):
+            self.ec2.terminate_instances.reset_mock()
+            inst = self.instance(launched_hours_ago=49)
+            inst["BlockDeviceMappings"] = mappings
+            self.serve(inst)
+            self.assertEqual(mod.handler({}, None)["requested"], 1, mappings)
+        inst = self.instance(launched_hours_ago=49)
+        del inst["BlockDeviceMappings"], inst["RootDeviceName"]
+        self.serve(inst)
+        self.assertEqual(mod.handler({}, None)["requested"], 1)
+
+    def test_expires_at_still_caps_before_48h(self):
+        self.serve(self.instance(launched_hours_ago=1, root_attached_hours_ago=2, expires_in_hours=-0.1))
+        self.assertEqual(mod.handler({}, None)["requested"], 1)
 
     def test_terminates_past_expires_at(self):
         self.serve(self.instance(expires_in_hours=-1))
@@ -115,8 +156,11 @@ class GuardTests(unittest.TestCase):
             self.instance(iid="i-00000000000000003", SecurityGroups=[{"GroupId": "sg-0other"}], **expired),
             self.instance(iid="i-00000000000000004", tags={"Environment": "Prod"}, **expired),
         )
-        result = mod.handler({}, None)
+        with self.assertLogs(mod.log, level="ERROR") as logs:
+            result = mod.handler({}, None)
         self.assertEqual(result["expired"], 0)
+        self.assertEqual(result["out_of_scope"], 4)
+        self.assertEqual(sum('"out_of_scope_instance"' in line for line in logs.output), 4)
         self.ec2.terminate_instances.assert_not_called()
 
     def test_dry_run_terminates_nothing(self):

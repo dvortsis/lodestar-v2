@@ -279,6 +279,67 @@ impl Install {
         Ok(done)
     }
 
+    /// Step 1 for a bare executable ([`ArchiveKind::Binary`]): copies
+    /// the verified download into `<version>.staging/<name>` (0700 on
+    /// Unix, created new, at most `max` bytes, fsynced) and renames the
+    /// folder to `<version>/`, as [`Install::stage`] does. `name` is one
+    /// component. The pointer is unchanged.
+    pub fn stage_binary(
+        &mut self,
+        version: &Version,
+        file: &mut dyn Read,
+        name: &RelPath,
+        max: u64,
+    ) -> Result<u64, LayoutError> {
+        if name.components().count() != 1 {
+            return Err(LayoutError::Extract(ExtractError::StagingInTheWay));
+        }
+        let target = self.version_dir(version);
+        if exists(&target)? {
+            return Err(LayoutError::AlreadyStaged);
+        }
+        let staging = self.staging_dir(version);
+        if exists(&staging)? {
+            if !real_dir(&staging)? {
+                return Err(LayoutError::Extract(ExtractError::StagingInTheWay));
+            }
+            self.delete(&staging)?;
+        }
+        let copied = (|| -> Result<u64, LayoutError> {
+            fs::create_dir(&staging)?;
+            let mut o = OpenOptions::new();
+            o.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                o.mode(0o700);
+            }
+            let mut out = o.open(staging.join(name.as_str()))?;
+            let n = io::copy(&mut file.take(max.saturating_add(1)), &mut out)?;
+            if n > max {
+                return Err(LayoutError::Io(io::ErrorKind::InvalidData));
+            }
+            out.sync_all()?;
+            // Closed before the rename: Windows refuses to rename a folder
+            // while a file inside it is open.
+            drop(out);
+            sync_dir(&staging)?;
+            fs::rename(&staging, &target)?;
+            Ok(n)
+        })();
+        match copied {
+            Ok(n) => {
+                sync_dir(&self.root)?;
+                Ok(n)
+            }
+            Err(e) => {
+                // Best effort: the next stage or sweep removes it otherwise.
+                let _ = self.delete(&staging);
+                Err(e)
+            }
+        }
+    }
+
     /// The pointer, or `None` before the first commit.
     pub fn pointer(&self) -> Result<Option<Pointer>, LayoutError> {
         let path = self.root.join(POINTER);
@@ -457,13 +518,27 @@ impl Install {
     /// every version folder. Each child then goes through [`Self::delete`]
     /// (folders by way of a `.deleting` tombstone), and the folder last.
     pub fn remove(self) -> Result<(), LayoutError> {
+        self.remove_last(None)
+    }
+
+    /// [`Install::remove`], keeping the direct child named `last` until
+    /// everything else is gone: a marker (CMP-5's journal) that says what
+    /// the folder is for as long as anything else is left in it.
+    pub fn remove_last(self, last: Option<&str>) -> Result<(), LayoutError> {
         self.remove_pointer()?;
         let mut names = Vec::new();
         for entry in fs::read_dir(&self.root)? {
-            names.push(entry?.file_name());
+            let name = entry?.file_name();
+            if last.is_none_or(|l| name != l) {
+                names.push(name);
+            }
         }
         for name in names {
             self.delete(&self.root.join(name))?;
+        }
+        if let Some(l) = last {
+            sync_dir(&self.root)?;
+            self.delete(&self.root.join(l))?;
         }
         self.recheck()?;
         fs::remove_dir(&self.root)?;
@@ -471,6 +546,50 @@ impl Install {
             sync_dir(parent)?;
         }
         Ok(())
+    }
+
+    /// Deletes only what this layout put in the folder (the pointer and
+    /// its temporary file, version, staging and tombstone folders) plus
+    /// the caller's own `extra` names, `last` after everything else, and
+    /// then the folder only if nothing is left: anything a third party
+    /// wrote there survives. Returns whether the folder is gone.
+    pub fn remove_own(self, extra: &[&str], last: Option<&str>) -> Result<bool, LayoutError> {
+        self.remove_pointer()?;
+        let ours = |name: &str| {
+            if extra.contains(&name) || name.ends_with(DELETING) {
+                return true;
+            }
+            let stem = name.strip_suffix(STAGING).unwrap_or(name);
+            Version::parse(stem).is_ok_and(|v| v.as_str() == stem)
+        };
+        let mut names = Vec::new();
+        for entry in fs::read_dir(&self.root)? {
+            let name = entry?.file_name();
+            if let Some(name) = name.to_str().filter(|n| ours(n) && last != Some(*n)) {
+                names.push(name.to_owned());
+            }
+        }
+        for name in names {
+            self.delete(&self.root.join(name))?;
+        }
+        if let Some(l) = last {
+            sync_dir(&self.root)?;
+            self.delete(&self.root.join(l))?;
+        }
+        self.recheck()?;
+        // `remove_dir` fails on a folder that isn't empty: what someone
+        // else put there keeps it.
+        match fs::remove_dir(&self.root) {
+            Ok(()) => {}
+            Err(_) if fs::read_dir(&self.root).is_ok_and(|mut d| d.next().is_some()) => {
+                return Ok(false);
+            }
+            Err(e) => return Err(e.into()),
+        }
+        if let Some(parent) = self.root.parent() {
+            sync_dir(parent)?;
+        }
+        Ok(true)
     }
 
     /// The first step of [`Install::remove`]: the pointer and any
@@ -612,6 +731,154 @@ mod tests {
         let _ = fs::remove_dir_all(&p);
         fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn a_bare_binary_is_staged_and_committed() {
+        let d = tmp();
+        let mut i = Install::open(&d, &CompanionId::parse("qbittorrent").unwrap()).unwrap();
+        let v = Version::parse("5.0.3").unwrap();
+        let name = RelPath::parse("qbittorrent-nox").unwrap();
+        let big = [7u8; 33];
+        assert!(i.stage_binary(&v, &mut &big[..], &name, 32).is_err());
+        assert!(!i.version_dir(&v).exists());
+        assert!(!i.staging_dir(&v).exists());
+        assert_eq!(i.stage_binary(&v, &mut &big[..32], &name, 32).unwrap(), 32);
+        assert!(matches!(
+            i.stage_binary(&v, &mut &big[..1], &name, 32),
+            Err(LayoutError::AlreadyStaged)
+        ));
+        let nested = RelPath::parse("a/b").unwrap();
+        let w = Version::parse("5.0.4").unwrap();
+        assert!(i.stage_binary(&w, &mut &big[..1], &nested, 32).is_err());
+        i.commit(&v, &name).unwrap();
+        assert_eq!(fs::read(i.executable(&v, &name)).unwrap(), big[..32]);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(i.executable(&v, &name))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
+        let _ = fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn a_hostile_binary_name_is_refused_before_anything_is_written() {
+        // The name is a catalogue `RelPath`: `..`, separators, an empty
+        // name and Windows device names never parse.
+        for bad in ["../x", "", "a\\b", "CON", "nul.exe", "x:y"] {
+            assert!(RelPath::parse(bad).is_err(), "{bad:?}");
+        }
+        // One that parses but has more than one component is refused by
+        // `stage_binary` itself, with nothing left behind.
+        let d = tmp();
+        let mut i = Install::open(&d, &CompanionId::parse("qbittorrent").unwrap()).unwrap();
+        let v = Version::parse("5.0.3").unwrap();
+        let nested = RelPath::parse("a/b").unwrap();
+        assert!(i.stage_binary(&v, &mut &b"x"[..], &nested, 8).is_err());
+        assert_eq!(fs::read_dir(i.root()).unwrap().count(), 0);
+        let _ = fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn an_interrupted_binary_stage_is_cleaned_up() {
+        let d = tmp();
+        let mut i = Install::open(&d, &CompanionId::parse("qbittorrent").unwrap()).unwrap();
+        let v = Version::parse("5.0.3").unwrap();
+        let name = RelPath::parse("qbittorrent").unwrap();
+        // A crash mid-copy leaves `<version>.staging/` with a partial file.
+        fs::create_dir(i.staging_dir(&v)).unwrap();
+        fs::write(i.staging_dir(&v).join("qbittorrent"), b"par").unwrap();
+        // The sweep at start-up removes it; so does the next stage.
+        assert_eq!(i.sweep().unwrap(), vec!["5.0.3.staging".to_owned()]);
+        fs::create_dir(i.staging_dir(&v)).unwrap();
+        assert_eq!(i.stage_binary(&v, &mut &b"full"[..], &name, 8).unwrap(), 4);
+        assert!(!i.staging_dir(&v).exists());
+        assert_eq!(fs::read(i.executable(&v, &name)).unwrap(), b"full");
+        let _ = fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn remove_last_keeps_its_marker_until_everything_else_is_gone() {
+        let d = tmp();
+        let i = Install::open(&d, &CompanionId::parse("prowlarr").unwrap()).unwrap();
+        fs::create_dir_all(i.root().join("home/a")).unwrap();
+        fs::write(i.root().join("state.json"), b"{}").unwrap();
+        fs::write(i.root().join("other"), b"x").unwrap();
+        let root = i.root().to_path_buf();
+        i.remove_last(Some("state.json")).unwrap();
+        assert!(!root.exists());
+        let _ = fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn stage_binary_refuses_links_and_cleans_up_a_failed_copy() {
+        struct Broken;
+        impl Read for Broken {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::other("cut"))
+            }
+        }
+        let d = tmp();
+        let mut i = Install::open(&d, &CompanionId::parse("qbittorrent").unwrap()).unwrap();
+        let v = Version::parse("5.0.3").unwrap();
+        let name = RelPath::parse("qbittorrent").unwrap();
+        // A reader error mid-copy leaves neither folder.
+        assert!(i.stage_binary(&v, &mut Broken, &name, 8).is_err());
+        assert!(!i.staging_dir(&v).exists());
+        assert!(!i.version_dir(&v).exists());
+        #[cfg(unix)]
+        {
+            let outside = tmp();
+            // A link in place of the staging folder or the version folder
+            // is refused, and its target is left alone.
+            std::os::unix::fs::symlink(&outside, i.staging_dir(&v)).unwrap();
+            assert!(i.stage_binary(&v, &mut &b"x"[..], &name, 8).is_err());
+            assert!(
+                fs::symlink_metadata(i.staging_dir(&v))
+                    .unwrap()
+                    .is_symlink()
+            );
+            fs::remove_file(i.staging_dir(&v)).unwrap();
+            std::os::unix::fs::symlink(&outside, i.version_dir(&v)).unwrap();
+            assert!(matches!(
+                i.stage_binary(&v, &mut &b"x"[..], &name, 8),
+                Err(LayoutError::AlreadyStaged)
+            ));
+            assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+            let _ = fs::remove_dir_all(outside);
+        }
+        let _ = fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn remove_own_spares_what_someone_else_wrote() {
+        let d = tmp();
+        let i = Install::open(&d, &CompanionId::parse("qbittorrent").unwrap()).unwrap();
+        for dir in ["5.0.3", "5.0.4.staging", "x.deleting", "home/a"] {
+            fs::create_dir_all(i.root().join(dir)).unwrap();
+        }
+        fs::write(i.root().join("current"), b"{}").unwrap();
+        fs::write(i.root().join("state.json"), b"{}").unwrap();
+        fs::write(i.root().join("theirs.iso"), b"mine").unwrap();
+        let root = i.root().to_path_buf();
+        assert!(!i.remove_own(&["home"], Some("state.json")).unwrap());
+        let left: Vec<_> = fs::read_dir(&root)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(left, ["theirs.iso"]);
+        // With nothing foreign left, the folder goes too.
+        fs::remove_file(root.join("theirs.iso")).unwrap();
+        let i = Install::existing(&d, &CompanionId::parse("qbittorrent").unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(i.remove_own(&[], None).unwrap());
+        assert!(!root.exists());
+        let _ = fs::remove_dir_all(d);
     }
 
     #[test]
