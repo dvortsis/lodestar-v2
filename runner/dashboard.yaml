@@ -302,6 +302,7 @@ placement:
   - P-v06-workers
   - WK-*
   - X-wk15-nits
+  - X-wk10d-unknown
 - ws: ws-web
   match:
   - W*
@@ -357,6 +358,18 @@ placement:
   - X-win-log-held-open
   - X-flake-states-clock
   - X-e2e-baseline-refresh
+  - X-natural-strict-parity
+  - X-flake-email-bcc
+  - X-flake-ops-pause
+  - X-flake-query-token-style
+  - X-flake-utp-lossy
+  - X-flake-export-wal
+  - X-soak-screen-calibrate
+  - X-collect-checklist-docker
+  - X-cloud-infra
+  - X-cloud-infra-2
+  - P-cloud-test-plan
+  - P-cloud-operator
 - ws: ws-cut
   match:
   - CR-COL
@@ -525,16 +538,20 @@ placement:
   - P-v06-companions
   - CMP-*
   - X-cmp0-polish
+  - X-cmp4b-mounts
+  - X-macos-pidfile-fifo
 - ws: ws-m6
   match:
   - E-M6
   - P-m6-audit
   - X-pack-static
   - PK-*
+  - X-pk-manifest-hardening
   - G-m6
 - ws: ws-m7-built
   match:
   - X-utp
+  - X-utp-backoff
   - X-integrations
   - X-clients
   - X-notify
@@ -612,6 +629,7 @@ expanded:
 - E-v08
 - E-M8
 state_override:
+  WK-10: done
   G-v051: done
   R-rc3-cut: done
   SRC-10b: closed
@@ -700,9 +718,9 @@ conditions:
     label: You tag and publish v0.5.1
     auto: tag:v0.5.1
   experiment-host:
-    met: true
+    met: false
     who: you
-    label: 'Booked for one run: cr-ab-comp-1, the bitmagnet comparator, 2026-11-07T13:00Z to about 2026-11-08T14:01Z on the Unraid box (§2.51). Back to false when it ends'
+    label: 'Not booked. cr-ab-comp-1 (the bitmagnet comparator) ended 2026-11-08T14:01Z and you accepted it: 317.8 stored/min over 24 h. Next booking: CR-AB-ADM, after 2026-11-09T02:01Z and rc.2 steps B-E'
   owner-checkpoint-1:
     met: false
     who: you
@@ -803,6 +821,10 @@ conditions:
     met: false
     who: you
     label: You do the M6 manual Unraid and MSI installs and approve the rc's signing (M6 Q14)
+  owner-pk-nightly-host:
+    met: false
+    who: you
+    label: You approve the host that serves the nightly update manifests (PK-nightly-host)
   owner-v08-q1:
     met: true
     who: you
@@ -1369,6 +1391,11 @@ owner_queue:
   action: Replace the published v0.5.1 release text with the runner's draft (runner-state notes/v051-release-body.md; §2.52)
   unblocks: A release page that matches docs/releases/v0.5.1.md
   when: Any time
+- n: 10
+  type: decision
+  action: 'PK-nightly-host: approve where nightly update manifests are published, signed with the nightly key (proposal in docs/decisions/2026-11-08-PK-manifest.md)'
+  unblocks: Automatic updates on the Nightly channel
+  when: Only if the Nightly channel is offered; pairs with item 3
 gates:
 - id: G-v05
   name: v0.5 MVP exit
@@ -1573,8 +1600,10 @@ soak:
   start: '2026-11-06T13:12:25Z'
   end: '2026-11-06T13:12:25Z'
 notes:
-  updated: '2026-11-07'
+  updated: '2026-11-08'
   now:
+  - label: A cloud screen before experiment-host runs
+    text: Before each run on your Unraid box, a candidate first runs a short screen on the two cloud Linodes. The screen can only stop a candidate that clearly fails (a crash, a memory or disk bound, nothing stored). It never counts as evidence of a gain, is never combined with Unraid runs, and never delays a booking. You approved adding this stage; the runner set its rules (P-cloud-test-plan).
   - label: v0.5.1 is published
     text: You published v0.5.1 on 2026-11-07 from 12cd25ca, after it passed the 24-hour memory test (0.91 MiB an hour, upper bound 1.35, bar 2.0), the VPN (gluetun) leg and the Windows MSI check. It carries the memory fixes (mimalloc serves the C code too, huge pages off, memory gauges), the log redaction security fix and the Legal Notice at setup, as you decided (§2.40). Soak r4 on release candidate 3 failed at 29.35 MiB an hour (bar 2.0). Rule packs on by default come in v0.5.2.
   - label: The crawler is the longest road
