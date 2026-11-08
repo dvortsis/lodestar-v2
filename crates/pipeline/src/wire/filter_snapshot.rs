@@ -915,7 +915,10 @@ struct Installed {
     version: u64,
     /// The worker engine's version this snapshot runs as.
     engine: u64,
-    key: WireKey,
+    /// `None` once its day has passed: dropped (and so overwritten) at
+    /// the first judgment that finds it expired, rather than kept until the
+    /// next snapshot (WK-10d).
+    key: Option<WireKey>,
 }
 
 /// A worker's filter: the engine its prepare stage judges with
@@ -985,7 +988,7 @@ impl Judge {
         *installed = Some(Installed {
             version,
             engine: self.filter.current().version,
-            key: snapshot.key.clone(),
+            key: Some(snapshot.key.clone()),
         });
         notes
     }
@@ -1037,13 +1040,19 @@ impl Judge {
             Some(_) => &self.counts.marked,
             None => &self.counts.clear,
         };
-        let (key, token, version, sealing) = (r.key, r.token, inst.version, inst.key.clone());
+        let (key, token, version) = (r.key, r.token, inst.version);
+        let Some(sealing) = inst.key.clone() else {
+            self.counts.refused.fetch_add(1, Ordering::Relaxed);
+            return Judged::NotReady { key, token };
+        };
         drop(installed);
         // Every record goes sealed (runner, §2.33): some holds are decided
         // only at commit (an always-adult source the worker doesn't know
         // of, SP-3 and SP-4), so a record the worker sees as clean can
         // still be one the commit quarantines.
         if now.div_euclid(86_400) > i64::from(sealing.id) {
+            drop(sealing);
+            self.forget_key(version);
             self.counts.refused.fetch_add(1, Ordering::Relaxed);
             return Judged::NotReady { key, token };
         }
@@ -1056,6 +1065,24 @@ impl Judge {
             }
             Err(e) => self.invalid(key, token, e),
         }
+    }
+
+    /// Drops the installed key of snapshot `version` (its day has passed),
+    /// unless a newer snapshot has been installed meanwhile.
+    fn forget_key(&self, version: u64) {
+        let mut installed = self.installed.write().unwrap_or_else(|e| e.into_inner());
+        if let Some(inst) = installed.as_mut().filter(|i| i.version == version) {
+            inst.key = None;
+        }
+    }
+
+    /// Whether a wire key is installed and not yet found expired.
+    pub fn has_key(&self) -> bool {
+        self.installed
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .is_some_and(|i| i.key.is_some())
     }
 
     fn invalid(&self, key: InfoHash, token: Token, e: Error) -> Judged {
@@ -1866,20 +1893,26 @@ mod tests {
         let name = format!("{SECRET} x");
         let r = prepared(&j.filter().current(), &name, 1 << 20);
         assert!(matches!(j.judge_at(r, day + 86_399), Judged::Send(_)));
+        // A clock behind the key's day still seals.
+        let r = prepared(&j.filter().current(), "plain", 1 << 20);
+        assert!(matches!(j.judge_at(r, day - 60), Judged::Send(_)));
+        assert!(j.has_key());
         let r = prepared(&j.filter().current(), &name, 1 << 20);
         assert!(matches!(
             j.judge_at(r, day + 86_400),
             Judged::NotReady { .. }
         ));
-        // Nor a record with no decision: every record goes sealed.
-        let r = prepared(&j.filter().current(), "plain", 1 << 20);
-        assert!(matches!(
-            j.judge_at(r, day + 86_400),
-            Judged::NotReady { .. }
-        ));
-        // A clock behind the key's day still seals.
-        let r = prepared(&j.filter().current(), "plain", 1 << 20);
-        assert!(matches!(j.judge_at(r, day - 60), Judged::Send(_)));
+        // The expired key is dropped (overwritten) at once, not kept until
+        // the next snapshot (WK-10d)...
+        assert!(!j.has_key());
+        // ...so nothing seals under it again, a record with no decision
+        // or a clock gone back included: a fresh snapshot is needed.
+        for at in [day + 86_400, day - 60] {
+            let r = prepared(&j.filter().current(), "plain", 1 << 20);
+            assert!(matches!(j.judge_at(r, at), Judged::NotReady { .. }));
+        }
+        j.install(&s, 2);
+        assert!(j.has_key(), "a new install brings a key");
     }
 
     /// The largest seal still fits a batch with its headers.

@@ -290,7 +290,7 @@ impl Services {
             store: store_config.clone(),
             dht: dht_node.clone(),
         });
-        let dht_ops_node = dht_node;
+        let dht_ops_node = dht_node.clone();
         let auth = Arc::new(
             lodestar_api::Auth::load(
                 &config.data_dir.join("auth.json"),
@@ -369,6 +369,10 @@ impl Services {
             },
             clock: Arc::new(lodestar_cluster::SystemClock),
             placement: placement.clone(),
+            // Its address vote is the coordinator's public address (WK-5).
+            coordinator_dht: dht_node.clone(),
+            // A worker's floor report reaches the built-in worker at once.
+            held: Some(held.clone()),
             fleet: Some(crate::cluster::serve::Fleet {
                 stored: Arc::new(pipeline.monitor()),
                 filter: filter.clone(),

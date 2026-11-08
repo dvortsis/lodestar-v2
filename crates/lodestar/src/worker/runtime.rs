@@ -78,9 +78,18 @@ const POLL_EVERY: Duration = Duration::from_secs(5);
 /// How often the heartbeat's stats are refreshed (the session sends the
 /// latest with each heartbeat).
 pub const STATS_EVERY: Duration = Duration::from_secs(5);
+/// A fresh session is asked for at most once per this long, so an address
+/// that flaps between votes can't cause a reconnect storm.
+pub const RECONNECT_DEBOUNCE: Duration = Duration::from_secs(600);
 /// Keys found here waiting to be checked and claimed. A full queue drops
 /// the newest: the DHT finds a key again.
 const FOUND_QUEUE: usize = 4096;
+/// Snapshot acknowledgements waiting for the session: well above the
+/// coordinator's window per transfer (four kinds at once).
+const ACK_QUEUE: usize = 1024;
+/// `Accepted` answers waiting for the session task: one per batch in
+/// flight, which the outbound byte budget bounds far below this.
+const ACCEPTED_QUEUE: usize = 4096;
 /// Room left in a `Results` payload for the batch's own header.
 const BATCH_SLACK: usize = 4 << 10;
 /// The source a worker's own finds are counted under (the DHT's). The
@@ -126,6 +135,11 @@ pub struct Config {
     pub dht_linger: Duration,
     /// How often the heartbeat's stats are refreshed ([`STATS_EVERY`]).
     pub stats_every: Duration,
+    /// At most one fresh session asked for per this long
+    /// ([`RECONNECT_DEBOUNCE`]).
+    pub reconnect_debounce: Duration,
+    /// How often refused result batches are sent again (5 s).
+    pub retry_every: Duration,
 }
 
 impl Config {
@@ -148,6 +162,8 @@ impl Config {
             dht: None,
             dht_linger: super::dht::LINGER,
             stats_every: STATS_EVERY,
+            reconnect_debounce: RECONNECT_DEBOUNCE,
+            retry_every: POLL_EVERY,
         }
     }
 }
@@ -189,6 +205,9 @@ pub struct Counts {
     pub hints_refused: AtomicU64,
     /// Snapshots that didn't decode or install.
     pub snapshot_errors: AtomicU64,
+    /// Fresh sessions asked for, and asks the debounce held back.
+    pub reconnects: AtomicU64,
+    pub reconnects_debounced: AtomicU64,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -234,8 +253,9 @@ struct Stages {
     stop: watch::Sender<bool>,
     pool: JoinHandle<Vec<QueuedKey>>,
     prepare: JoinHandle<()>,
-    /// The forwarder into the pool.
+    /// The forwarder into the pool, and the task that tells it to pause.
     forward: JoinHandle<()>,
+    pauser: JoinHandle<()>,
 }
 
 /// What the tasks and the message loop share.
@@ -257,8 +277,11 @@ struct Shared {
     /// (the pool's cap), and never dropped.
     into_pool: mpsc::UnboundedSender<Discovery>,
     pool_rx: Mutex<Option<mpsc::UnboundedReceiver<Discovery>>>,
-    acks: mpsc::UnboundedSender<SnapshotAck>,
-    accepted: mpsc::UnboundedSender<(u64, bool)>,
+    /// Bounded (#599's review): a lost acknowledgement stalls that
+    /// transfer, which the coordinator starts over, and a lost `Accepted`
+    /// leaves its batch to be sent again and answered again.
+    acks: mpsc::Sender<SnapshotAck>,
+    accepted: mpsc::Sender<(u64, bool)>,
     losses: Arc<Losses>,
     draining: AtomicBool,
     started: watch::Sender<bool>,
@@ -270,18 +293,29 @@ struct Shared {
     /// a key it can be sealed under, so no fetch is spent meanwhile, and
     /// while no session is up ([`Shared::refresh_pause`]).
     pool: Mutex<Option<lodestar_sources::PoolHandle>>,
-    /// Whether the pool was last told to pause; held across the telling,
-    /// so pauses and resumes reach the pool in the order they're decided.
-    pool_paused: tokio::sync::Mutex<bool>,
+    /// Whether the pool should pause ([`Shared::refresh_pause`]); one task
+    /// per stage run applies the latest value to the pool, so no caller
+    /// waits on the pool's command channel (#601's review).
+    pool_paused: watch::Sender<bool>,
+    /// What the pool was last told (`apply_pause`).
+    pool_told: watch::Sender<bool>,
     /// Results waiting for a sealable key.
     waiting: std::sync::atomic::AtomicUsize,
     /// A new session's first `Assign` applies whatever its revision: a
     /// coordinator whose clock went back numbers its plans lower (WK-5).
     fresh_session: AtomicBool,
     /// When sealing went down (no installed key covers now): results wait
-    /// until [`SEAL_WAIT`] after this, then go at once. Cleared by a
-    /// result that seals.
+    /// until [`SEAL_WAIT`] after this, then go at once. Cleared once a key
+    /// covers now again: by an install, by a result that seals, or by the
+    /// next look ([`Shared::sealing_down`], from `sift` and the claims).
     unsealable_since: Mutex<Option<std::time::Instant>>,
+    /// Set when a stage task ended by itself ([`supervise`]).
+    failed: watch::Sender<bool>,
+    /// Bumped to ask the session for a fresh one ([`Shared::ask_reconnect`]).
+    reconnect: watch::Sender<u64>,
+    last_reconnect: Mutex<Option<std::time::Instant>>,
+    /// The public address the last `Hello` carried.
+    hello_ip: Mutex<Option<std::net::IpAddr>>,
     /// Asks the session task to send everything it has now (a drain).
     flush: mpsc::UnboundedSender<tokio::sync::oneshot::Sender<()>>,
     /// What the DHT should run ([`want_dht`]).
@@ -337,8 +371,8 @@ impl Runtime {
     /// in (see the module docs). Must be called in a Tokio runtime.
     pub fn start(config: Config) -> Runtime {
         let (into_pool, pool_rx) = mpsc::unbounded_channel();
-        let (acks, ack_rx) = mpsc::unbounded_channel();
-        let (accepted, accepted_rx) = mpsc::unbounded_channel();
+        let (acks, ack_rx) = mpsc::channel(ACK_QUEUE);
+        let (accepted, accepted_rx) = mpsc::channel(ACCEPTED_QUEUE);
         let (loss_tx, loss_rx) = mpsc::unbounded_channel();
         let (found, found_rx) = mpsc::channel(FOUND_QUEUE);
         let (flush, flush_rx) = mpsc::unbounded_channel();
@@ -389,7 +423,12 @@ impl Runtime {
             key_day: watch::channel(u32::MAX).0,
             sampler: Mutex::new(config.seed.unwrap_or_else(super::session::random_jitter)),
             pool: Mutex::new(None),
-            pool_paused: tokio::sync::Mutex::new(false),
+            pool_paused: watch::channel(false).0,
+            pool_told: watch::channel(false).0,
+            failed: watch::channel(false).0,
+            reconnect: watch::channel(0).0,
+            last_reconnect: Mutex::new(None),
+            hello_ip: Mutex::new(None),
             waiting: std::sync::atomic::AtomicUsize::new(0),
             fresh_session: AtomicBool::new(false),
             flush,
@@ -405,6 +444,7 @@ impl Runtime {
             tokio::spawn(send_acks(shared.clone(), ack_rx)),
             tokio::spawn(claim(shared.clone(), found_rx)),
             tokio::spawn(heartbeat_stats(shared.clone())),
+            tokio::spawn(supervise(shared.clone())),
         ];
         // The DHT's task isn't aborted with the others: a stop (or a drop)
         // closes its `want`, and it ends after stopping its node, which
@@ -446,6 +486,17 @@ impl Runtime {
         self.dht_running.clone()
     }
 
+    /// Completes if the pool or the prepare stage ends by itself (a bug):
+    /// the worker can't fetch or prepare any more, so `lodestar worker`
+    /// stops with an error, and its service manager starts it again. The
+    /// coordinator re-grants the keys it held when their leases end.
+    pub fn failed(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
+        let mut rx = self.shared.failed.subscribe();
+        async move {
+            let _ = rx.wait_for(|f| *f).await;
+        }
+    }
+
     /// Whether the stages run: the snapshots are in.
     pub fn is_started(&self) -> bool {
         *self.shared.started.borrow()
@@ -477,9 +528,11 @@ impl Runtime {
             pool,
             prepare,
             forward,
+            pauser,
             ..
         } = stages;
         forward.abort();
+        pauser.abort();
         let (pool_abort, prepare_abort) = (pool.abort_handle(), prepare.abort_handle());
         let both = async {
             let _ = pool.await;
@@ -548,6 +601,9 @@ impl Runtime {
                 }
                 start_if_ready(s);
                 want_dht(s);
+                // The pool waits for a new session's first `Assign`, as the
+                // DHT does.
+                s.refresh_pause();
             }
             WorkerEvent::Regranted(items) => {
                 for item in items {
@@ -558,7 +614,7 @@ impl Runtime {
             }
             WorkerEvent::Hints(items) => hints(s, items),
             WorkerEvent::Accepted { batch, accepted } => {
-                let _ = s.accepted.send((batch, accepted));
+                let _ = s.accepted.try_send((batch, accepted));
             }
             WorkerEvent::Snapshot(c) => snapshot_chunk(s, c),
             WorkerEvent::HaveSnapshot(b) => {
@@ -568,7 +624,7 @@ impl Runtime {
             }
             WorkerEvent::HaveDelta(b) => {
                 if let (_, Some(ack)) = s.have.delta(&b) {
-                    let _ = s.acks.send(ack);
+                    let _ = s.acks.try_send(ack);
                 }
             }
             // Re-verification is WK-13's; the session handles the rest.
@@ -584,32 +640,52 @@ impl Work for Runtime {
     /// What `Hello` reports (WK-10c): the memory this process may use and
     /// the public address the DHT last voted. The session adds the cores.
     fn capabilities(&self) -> lodestar_cluster::proto::Capabilities {
+        let ip = self.shared.dht_counts.external_ip();
+        *lock(&self.shared.hello_ip) = ip;
         lodestar_cluster::proto::Capabilities {
             ram_mb: super::budget::ram_mb(),
-            external_ips: self.shared.dht_counts.external_ip().into_iter().collect(),
+            external_ips: ip.into_iter().collect(),
             ..Default::default()
         }
+    }
+
+    /// A changed public address, or a snapshot that didn't decode, asks
+    /// for a fresh session (debounced, [`RECONNECT_DEBOUNCE`]).
+    fn reconnects(&self) -> Option<watch::Receiver<u64>> {
+        Some(self.shared.reconnect.subscribe())
     }
 
     fn connected(&mut self, session: SessionHandle) {
         // Anything queued to the last session may be lost: ask for a fresh
         // have-filter snapshot (WK-3). The coordinator starts the filter
         // and dictionary snapshots over by itself (WK-10a).
-        let _ = self.shared.acks.send(self.shared.have.reconnected());
+        let _ = self.shared.acks.try_send(self.shared.have.reconnected());
         self.shared.fresh_session.store(true, Ordering::Release);
         self.shared.session.send_replace(Some(session));
         want_dht(&self.shared);
-        refresh_pause_soon(&self.shared);
+        self.shared.refresh_pause();
     }
 
     fn disconnected(&mut self) {
         self.shared.session.send_replace(None);
-        // The DHT pauses at once: the coordinator re-plans without this
-        // worker and widens the others' shares (WK-5); it stops if no
-        // session is back within its linger.
-        want_dht(&self.shared);
-        // The pool opens no new connection meanwhile.
-        refresh_pause_soon(&self.shared);
+        // The pool opens no new connection, then the DHT pauses: the
+        // coordinator re-plans without this worker and widens the others'
+        // shares (WK-5); the DHT stops if no session is back within its
+        // linger. The pool goes first so it isn't still asking a paused
+        // DHT, whose queued lookups would finish empty and each cost a key
+        // an attempt (#601's review).
+        let s = self.shared.clone();
+        s.refresh_pause();
+        tokio::spawn(async move {
+            if *s.started.borrow() {
+                let mut told = s.pool_told.subscribe();
+                // Bounded: a session back meanwhile leaves the pool running.
+                let _ =
+                    tokio::time::timeout(Duration::from_secs(1), told.wait_for(|paused| *paused))
+                        .await;
+            }
+            want_dht(&s);
+        });
     }
 
     fn event(&mut self, event: WorkerEvent) {
@@ -646,12 +722,16 @@ impl Drop for Runtime {
         // late install on a blocking thread then can't start stages nobody
         // owns.
         self.shared.draining.store(true, Ordering::Release);
+        // `Stop` first, then closed: a `Run` the DHT's task hadn't seen yet
+        // can't start a node during the teardown (#601's delta review).
+        want_dht(&self.shared);
         close_dht(&self.shared);
         if let Some(stages) = lock(&self.shared.stages).take() {
             let _ = stages.stop.send(true);
             stages.prepare.abort();
             stages.pool.abort();
             stages.forward.abort();
+            stages.pauser.abort();
         }
         self.abort_all();
     }
@@ -712,7 +792,7 @@ fn unix_now() -> i64 {
 fn snapshot_chunk(s: &Arc<Shared>, c: SnapshotChunk) {
     if c.kind == SnapshotKind::HaveFilter {
         if let Some(ack) = s.have.chunk(&c) {
-            let _ = s.acks.send(ack);
+            let _ = s.acks.try_send(ack);
         }
         return;
     }
@@ -727,11 +807,11 @@ fn snapshot_chunk(s: &Arc<Shared>, c: SnapshotChunk) {
     };
     let complete = match step {
         Ok(Step::Ack(ack)) => {
-            let _ = s.acks.send(ack);
+            let _ = s.acks.try_send(ack);
             return;
         }
         Ok(Step::Done(ack, complete)) => {
-            let _ = s.acks.send(ack);
+            let _ = s.acks.try_send(ack);
             complete
         }
         // Dropped; the coordinator starts it over after its stall.
@@ -773,6 +853,9 @@ fn snapshot_chunk(s: &Arc<Shared>, c: SnapshotChunk) {
                             let _notes = s.judge.install(&snapshot, complete.version);
                             // Results waiting for a sealable key look again.
                             s.key_day.send_replace(snapshot.key.id);
+                            // A key that covers now ends the outage at once,
+                            // not at the next result or find (#599's review).
+                            s.sealing_down(unix_now());
                             true
                         }
                         Err(_) => false,
@@ -793,6 +876,18 @@ fn snapshot_chunk(s: &Arc<Shared>, c: SnapshotChunk) {
         std::sync::atomic::compiler_fence(Ordering::SeqCst);
         if !ok {
             bump(&s.counts.snapshot_errors);
+            // Its last chunk was acknowledged, so the coordinator counts it
+            // delivered: said, so a stall until the next version is seen.
+            // A fresh session starts every snapshot over (WK-10a).
+            s.ask_reconnect();
+            lodestar_log::log_event!(
+                crate::logging::events::WORKER_SNAPSHOT_FAILED,
+                kind = if kind == SnapshotKind::Filter {
+                    "filter"
+                } else {
+                    "dictionary"
+                }
+            );
         }
         start_if_ready(&s);
     });
@@ -809,7 +904,7 @@ fn start_if_ready(s: &Arc<Shared>) {
     let Some(a) = *lock(&s.assignment) else {
         return;
     };
-    if !a.fetch || s.judge.version() == 0 {
+    if !a.fetch || !a.prepare || s.judge.version() == 0 {
         return;
     }
     let dict = {
@@ -866,17 +961,23 @@ fn start_if_ready(s: &Arc<Shared>) {
             out,
         },
     );
+    let pauser = tokio::spawn(apply_pause(
+        running.pool.clone(),
+        s.pool_paused.subscribe(),
+        s.pool_told.clone(),
+    ));
     *lock(&s.pool) = Some(running.pool);
     *stages = Some(Stages {
         stop,
         pool: running.pool_task,
         prepare: running.prepare,
         forward,
+        pauser,
     });
     s.started.send_replace(true);
     want_dht(s);
     // A session may have gone while the stages were built.
-    refresh_pause_soon(s);
+    s.refresh_pause();
 }
 
 /// What the DHT should do now ([`super::dht`]): run on the assignment's
@@ -955,6 +1056,38 @@ impl Shared {
         z ^ (z >> 31)
     }
 
+    /// Keys the pool can still take: its cap (the budget's, from the
+    /// assignment) less the leases held.
+    fn pool_room(&self) -> usize {
+        let cap = lock(&self.assignment).map_or(0, |a| super::budget::Limits::of(&a).pool_cap);
+        usize::try_from(cap)
+            .unwrap_or(usize::MAX)
+            .saturating_sub(self.leases.len())
+    }
+
+    /// Asks the session for a fresh one, at most once per
+    /// `reconnect_debounce`; `false` (and counted) when it's too soon.
+    fn ask_reconnect(&self) -> bool {
+        let mut last = lock(&self.last_reconnect);
+        if last.is_some_and(|at| at.elapsed() < self.config.reconnect_debounce) {
+            bump(&self.counts.reconnects_debounced);
+            return false;
+        }
+        *last = Some(std::time::Instant::now());
+        bump(&self.counts.reconnects);
+        self.reconnect.send_modify(|n| *n += 1);
+        true
+    }
+
+    /// Whether the assignment lets this worker fetch: `fetch` and
+    /// `prepare` both on (a worker can't send results it didn't prepare).
+    /// Turned off after the stages started, the pool pauses and nothing is
+    /// claimed; turned on again, both resume. The planner sets both on
+    /// for every worker today (WK-5).
+    fn fetching(&self) -> bool {
+        lock(&self.assignment).is_some_and(|a| a.fetch && a.prepare)
+    }
+
     /// Whether sealing is down at `now`: a result found it so, and no key
     /// covers `now` yet. A key that does (a fresh install, or the clock
     /// moving back onto the key's day) ends it.
@@ -970,7 +1103,11 @@ impl Shared {
     /// `now` is on or before its wire key's day (`Judge::judge_at`'s rule).
     fn sealable(&self, now: i64) -> bool {
         let day = *self.key_day.borrow();
-        day != u32::MAX && self.judge.version() != 0 && now.div_euclid(DAY) <= i64::from(day)
+        // The judge drops an expired key (WK-10d): with none, nothing seals.
+        day != u32::MAX
+            && self.judge.version() != 0
+            && self.judge.has_key()
+            && now.div_euclid(DAY) <= i64::from(day)
     }
 }
 
@@ -997,13 +1134,20 @@ impl<O: Outbox<SealedRecord>> Outbox<Results> for Sealing<O> {
                 let deadline = *lock(&s.unsealable_since)
                     .get_or_insert_with(std::time::Instant::now)
                     + s.config.seal_wait;
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                // Past the wait already: released at once, and the pool isn't
+                // paused for it (#599's review), so a backlog behind it goes
+                // the same way instead of waiting on a pause.
+                if left.is_zero() {
+                    release(&s, &reports, item.key, item.token);
+                    return Ok(());
+                }
                 // No fetch is started while a result waits: they'd only
                 // spend their keys waiting on the pool's byte budget.
                 if s.waiting.fetch_add(1, Ordering::AcqRel) == 0 {
-                    s.refresh_pause().await;
+                    s.refresh_pause();
                 }
                 let mut installs = s.key_day.subscribe();
-                let left = deadline.saturating_duration_since(std::time::Instant::now());
                 let ready = tokio::time::timeout(left, async {
                     while !s.sealable(unix_now()) {
                         // A new install, or the next minute (the clock may
@@ -1014,7 +1158,7 @@ impl<O: Outbox<SealedRecord>> Outbox<Results> for Sealing<O> {
                 })
                 .await;
                 if s.waiting.fetch_sub(1, Ordering::AcqRel) == 1 {
-                    s.refresh_pause().await;
+                    s.refresh_pause();
                 }
                 if ready.is_err() {
                     release(&s, &reports, item.key, item.token);
@@ -1060,32 +1204,48 @@ fn release(s: &Shared, reports: &Arc<dyn Reports>, key: InfoHash, token: Token) 
 impl Shared {
     /// Pauses the pool while a result waits for a sealable key or no
     /// session is up, and resumes it otherwise. Worked out from the state
-    /// now, under `pool_paused`, so calls in any order leave it right.
-    /// Paused, the pool opens no new connection; fetches under way finish
-    /// (WK-5: a worker without a session stops opening connections, since
-    /// the coordinator re-plans without it).
-    async fn refresh_pause(&self) {
-        let mut told = self.pool_paused.lock().await;
-        let up = self
-            .session
-            .borrow()
-            .as_ref()
-            .is_some_and(|h| !h.is_closed());
-        let pause = self.waiting.load(Ordering::Acquire) > 0 || !up;
-        let pool = lock(&self.pool).clone();
-        if let Some(p) = pool
-            && *told != pause
-        {
-            p.set_paused(pause).await;
-            *told = pause;
-        }
+    /// now, under the watch's write lock, so calls in any order leave it
+    /// right. Paused, the pool opens no new connection; fetches under way
+    /// finish (WK-5: a worker without a session stops opening connections,
+    /// since the coordinator re-plans without it).
+    fn refresh_pause(&self) {
+        self.pool_paused.send_if_modified(|told| {
+            let up = self
+                .session
+                .borrow()
+                .as_ref()
+                .is_some_and(|h| !h.is_closed());
+            // A new session's first `Assign` may re-plan this worker: until
+            // it comes, the pool waits, as the DHT does.
+            let fresh = self.fresh_session.load(Ordering::Acquire);
+            let pause =
+                self.waiting.load(Ordering::Acquire) > 0 || !up || fresh || !self.fetching();
+            std::mem::replace(told, pause) != pause
+        });
     }
 }
 
-/// [`Shared::refresh_pause`] from a caller that can't wait.
-fn refresh_pause_soon(s: &Arc<Shared>) {
-    let s = s.clone();
-    tokio::spawn(async move { s.refresh_pause().await });
+/// Tells the pool the latest pause [`Shared::refresh_pause`] decided, in
+/// order, for as long as the stages run.
+async fn apply_pause(
+    pool: lodestar_sources::PoolHandle,
+    mut want: watch::Receiver<bool>,
+    told_tx: watch::Sender<bool>,
+) {
+    // The pool starts unpaused.
+    let mut told = false;
+    told_tx.send_replace(false);
+    loop {
+        let pause = *want.borrow_and_update();
+        if pause != told {
+            pool.set_paused(pause).await;
+            told = pause;
+            told_tx.send_replace(pause);
+        }
+        if want.changed().await.is_err() {
+            return;
+        }
+    }
 }
 
 /// Aborts a task when dropped.
@@ -1121,6 +1281,36 @@ async fn current(s: &Shared) -> SessionHandle {
     }
 }
 
+/// How often [`supervise`] looks at the stage tasks.
+const SUPERVISE_EVERY: Duration = Duration::from_secs(1);
+
+/// Watches the pool and the prepare stage: one that ends while the
+/// runtime isn't stopping them has failed (a panic, or a bug that ended
+/// its loop). That's said once, and [`Runtime::failed`] completes.
+async fn supervise(s: Arc<Shared>) {
+    let mut every = tokio::time::interval(SUPERVISE_EVERY);
+    every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        every.tick().await;
+        let dead = lock(&s.stages).as_ref().and_then(|st| {
+            if st.pool.is_finished() {
+                Some("pool")
+            } else if st.prepare.is_finished() {
+                Some("prepare")
+            } else {
+                None
+            }
+        });
+        if let Some(stage) = dead
+            && !s.draining.load(Ordering::Acquire)
+        {
+            lodestar_log::log_event!(crate::logging::events::WORKER_STAGE_FAILED, stage = stage);
+            s.failed.send_replace(true);
+            return;
+        }
+    }
+}
+
 /// Refreshes the heartbeat's stats every `stats_every` (WK-10c):
 /// claimed, results sent ("fetched"), results the coordinator accepted
 /// ("processed"), CPU and resident memory. The spool is WK-11's.
@@ -1143,13 +1333,19 @@ async fn heartbeat_stats(s: Arc<Shared>) {
         let session = s.session.borrow().clone();
         if let Some(h) = session {
             let _ = h.set_stats(stats).await;
+            // A new public address reaches the coordinator only in `Hello`
+            // (WK-5): ask for a fresh session to carry it.
+            let voted = s.dht_counts.external_ip();
+            if voted.is_some() && voted != *lock(&s.hello_ip) {
+                s.ask_reconnect();
+            }
         }
     }
 }
 
 /// Sends snapshot acknowledgements, and the have-filter's resync request
 /// again while no header comes (WK-3).
-async fn send_acks(s: Arc<Shared>, mut acks: mpsc::UnboundedReceiver<SnapshotAck>) {
+async fn send_acks(s: Arc<Shared>, mut acks: mpsc::Receiver<SnapshotAck>) {
     let mut poll = tokio::time::interval(POLL_EVERY);
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
@@ -1181,6 +1377,28 @@ async fn claim(s: Arc<Shared>, found: mpsc::Receiver<Found>) {
     // `next_claims` isn't cancel-safe: it's awaited to its end.
     while let Some(batch) = next_claims(&mut batches).await {
         if s.draining.load(Ordering::Acquire) {
+            continue;
+        }
+        // Sifted before sealing went down, claimed after: dropped as `sift`
+        // would drop them now (#599's review). The DHT finds them again.
+        if s.sealing_down(unix_now()) {
+            s.counts
+                .held_back
+                .fetch_add(batch.len() as u64, Ordering::Relaxed);
+            continue;
+        }
+        // Only as many as the pool has room for: the leases held never
+        // pass the pool's cap, which bounds the queue into the pool and the
+        // losses queued (#599's review). The rest are found again later.
+        let mut batch = batch;
+        let room = s.pool_room();
+        if batch.len() > room {
+            s.counts
+                .held_back
+                .fetch_add((batch.len() - room) as u64, Ordering::Relaxed);
+            batch.truncate(room);
+        }
+        if batch.is_empty() {
             continue;
         }
         let peers: BTreeMap<[u8; 20], Vec<_>> =
@@ -1231,8 +1449,9 @@ fn sift(
 ) -> Option<(ClaimItem, Vec<std::net::SocketAddr>)> {
     bump(&s.counts.found);
     // Nothing is claimed while sealing is down: it couldn't be sent, and
-    // its lease would only wait (#599's review).
-    if s.sealing_down(unix_now()) {
+    // its lease would only wait (#599's review). Nor while the assignment
+    // turns fetching off.
+    if s.sealing_down(unix_now()) || !s.fetching() {
         bump(&s.counts.held_back);
         return None;
     }
@@ -1349,41 +1568,57 @@ fn batch_up(
     }
 }
 
+/// Sends every batch not on the wire on `session` (and, with
+/// `refused_too`, those refused for now), counting each in
+/// `Counts::sent` once, however often it's sent.
+async fn send_due(
+    s: &Shared,
+    session: Option<SessionHandle>,
+    flight: &mut BTreeMap<u64, InFlight>,
+    refused_too: bool,
+) {
+    let Some(h) = session.filter(|h| !h.is_closed()) else {
+        return;
+    };
+    for (&batch, f) in flight
+        .iter_mut()
+        .filter(|(_, f)| !f.sent || (refused_too && f.refused))
+    {
+        let msg = ToCoordinator::Results(Payload {
+            batch,
+            bytes: f.payload.clone(),
+        });
+        if h.send(msg).await.is_err() {
+            break;
+        }
+        f.sent = true;
+        f.refused = false;
+        if !f.counted {
+            f.counted = true;
+            s.counts
+                .sent
+                .fetch_add(f.leases.len() as u64, Ordering::Relaxed);
+        }
+    }
+}
+
 /// The session task: sealed results into `Results` batches, kept until
 /// accepted, sent again on a new session and after a refusal.
 async fn send_results(
     s: Arc<Shared>,
     mut outbound: ByteReceiver<SealedRecord>,
-    mut accepted: mpsc::UnboundedReceiver<(u64, bool)>,
+    mut accepted: mpsc::Receiver<(u64, bool)>,
     mut flush: mpsc::UnboundedReceiver<tokio::sync::oneshot::Sender<()>>,
 ) {
     let mut next_batch: u64 = 1;
     let mut flight: BTreeMap<u64, InFlight> = BTreeMap::new();
     let mut sessions = s.session.subscribe();
-    let mut retry = tokio::time::interval(POLL_EVERY);
+    let mut retry = tokio::time::interval(s.config.retry_every);
     retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         // Send whatever is due on the current session.
         let session = sessions.borrow_and_update().clone();
-        if let Some(h) = session.filter(|h| !h.is_closed()) {
-            for (&batch, f) in flight.iter_mut().filter(|(_, f)| !f.sent) {
-                let msg = ToCoordinator::Results(Payload {
-                    batch,
-                    bytes: f.payload.clone(),
-                });
-                if h.send(msg).await.is_err() {
-                    break;
-                }
-                f.sent = true;
-                // Counted once, not on every resend.
-                if !f.counted {
-                    f.counted = true;
-                    s.counts
-                        .sent
-                        .fetch_add(f.leases.len() as u64, Ordering::Relaxed);
-                }
-            }
-        }
+        send_due(&s, session, &mut flight, false).await;
         tokio::select! {
             record = outbound.recv() => {
                 let Some(first) = record else { return };
@@ -1405,16 +1640,10 @@ async fn send_results(
                     held.push(more);
                 }
                 batch_up(&s, held, &mut next_batch, &mut flight);
+                // A drain doesn't wait for the retry tick: refused batches
+                // go again too.
                 let session = s.session.borrow().clone();
-                if let Some(h) = session.filter(|h| !h.is_closed()) {
-                    for (&batch, f) in flight.iter_mut().filter(|(_, f)| !f.sent) {
-                        let msg = ToCoordinator::Results(Payload { batch, bytes: f.payload.clone() });
-                        if h.send(msg).await.is_err() {
-                            break;
-                        }
-                        f.sent = true;
-                    }
-                }
+                send_due(&s, session, &mut flight, true).await;
                 let _ = done.send(());
             }
             Some((batch, ok)) = accepted.recv() => {
@@ -1591,7 +1820,19 @@ mod tests {
 
     /// The coordinator's filter snapshot for today, from an empty store,
     /// as its chunks.
-    fn filter_chunks() -> (u64, Vec<SnapshotChunk>) {
+    ///
+    /// Waits out the last minute before midnight UTC first: a test that
+    /// seals under today's key would otherwise see the day turn under it
+    /// (a condition with a deadline, not a fixed sleep).
+    async fn filter_chunks() -> (u64, Vec<SnapshotChunk>) {
+        let start = Instant::now();
+        while unix_now().rem_euclid(DAY) >= DAY - 60 {
+            assert!(
+                start.elapsed() < Duration::from_secs(90),
+                "midnight never came"
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
         filter_chunks_at(unix_now())
     }
 
@@ -1627,7 +1868,7 @@ mod tests {
         assert!(!rt.is_started());
         assert_eq!(rt.filter_version(), 0);
 
-        let (version, chunks) = filter_chunks();
+        let (version, chunks) = filter_chunks().await;
         for c in chunks {
             rt.event(WorkerEvent::Snapshot(c));
         }
@@ -1707,7 +1948,7 @@ mod tests {
             Some(a),
             Intensity::Balanced,
         )));
-        let (_, chunks) = filter_chunks();
+        let (_, chunks) = filter_chunks().await;
         for c in chunks {
             rt.event(WorkerEvent::Snapshot(c));
         }
@@ -1817,7 +2058,7 @@ mod tests {
     async fn a_lost_session_pauses_the_pool() {
         let (mut rt, _coord, _session) = started_with_dht(super::super::dht::LINGER).await;
         // `Some(paused)` once no refresh holds the lock.
-        let paused = |rt: &Runtime| rt.shared.pool_paused.try_lock().ok().map(|g| *g);
+        let paused = |rt: &Runtime| Some(*rt.shared.pool_told.borrow());
         // A refresh spawned at start may still hold the lock.
         until("the pool runs", || {
             (paused(&rt) == Some(false), paused(&rt))
@@ -1830,6 +2071,16 @@ mod tests {
         .await;
         let (_coord2, session2) = session_pair().await;
         rt.connected(session2.handle());
+        // Still paused until the new session's first `Assign`: wanted so,
+        // and so told.
+        assert!(*rt.shared.pool_paused.borrow(), "wanted paused");
+        assert_eq!(paused(&rt), Some(true));
+        let a = ShardSpec::new(64..128, 0xff).unwrap();
+        rt.event(WorkerEvent::Assign(assign_dht(
+            2,
+            Some(a),
+            Intensity::Balanced,
+        )));
         until("the pool resumed", || {
             (paused(&rt) == Some(false), paused(&rt))
         })
@@ -1885,14 +2136,27 @@ mod tests {
             })
             .await;
             assert!(!path.exists(), "nothing saved while it runs");
+            let started = Instant::now();
             if drop_it {
                 let running = rt.dht_running().unwrap();
+                // Something else still holds the shared state (an install
+                // on a blocking thread, say): the drop must still end the
+                // DHT's task, not wait for the last `Arc` to go.
+                let held = rt.shared.clone();
                 drop(rt);
                 super::super::dht::stopped(running).await;
+                drop(held);
             } else {
                 rt.shutdown().await;
             }
             assert!(path.exists(), "saved (drop: {drop_it})");
+            // Well inside `stopped`'s 11 s: the task ended because the stop
+            // closed its channel, not at the timeout (#601's delta review).
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "took {:?} (drop: {drop_it})",
+                started.elapsed()
+            );
             drop(session);
         }
     }
@@ -1911,7 +2175,7 @@ mod tests {
         let (mut coord, session) = session_pair().await;
         rt.connected(session.handle());
         rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
-        let (_, chunks) = filter_chunks();
+        let (_, chunks) = filter_chunks().await;
         for c in chunks {
             rt.event(WorkerEvent::Snapshot(c));
         }
@@ -1947,6 +2211,50 @@ mod tests {
                 break;
             }
         }
+        rt.shutdown().await;
+    }
+
+    /// A new public address from the DHT asks for a fresh session, so the
+    /// next `Hello` carries it; a flapping one asks at most once per
+    /// debounce window.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_new_address_asks_for_a_fresh_session_debounced() {
+        let mut rt = Runtime::start(Config {
+            stats_every: Duration::from_millis(50),
+            ..config(Arc::new(MapFetch::default()))
+        });
+        let asks = rt.reconnects().unwrap();
+        // The Hello before connecting carried no address.
+        assert!(rt.capabilities().external_ips.is_empty());
+        let (_coord, session) = session_pair().await;
+        rt.connected(session.handle());
+        let c = rt.counts();
+        rt.shared
+            .dht_counts
+            .set_external_ip(Some("81.2.69.7".parse().unwrap()));
+        until("a fresh session asked for", || {
+            let n = c.reconnects.load(Ordering::Relaxed);
+            (n == 1, n)
+        })
+        .await;
+        assert_eq!(*asks.borrow(), 1);
+        // The address flaps: held back until the window passes.
+        rt.shared
+            .dht_counts
+            .set_external_ip(Some("81.2.69.8".parse().unwrap()));
+        until("the flap was debounced", || {
+            let n = c.reconnects_debounced.load(Ordering::Relaxed);
+            (n > 0, n)
+        })
+        .await;
+        assert_eq!(c.reconnects.load(Ordering::Relaxed), 1);
+        assert_eq!(*asks.borrow(), 1);
+        // The next Hello carries the address; it then matches, and nothing
+        // more is asked for.
+        assert_eq!(
+            rt.capabilities().external_ips,
+            vec!["81.2.69.8".parse::<std::net::IpAddr>().unwrap()]
+        );
         rt.shutdown().await;
     }
 
@@ -2003,7 +2311,7 @@ mod tests {
             .unwrap();
         a.pool_cap = KEYS;
         rt.event(WorkerEvent::Assign(a.to_message().unwrap()));
-        let (_, chunks) = filter_chunks();
+        let (_, chunks) = filter_chunks().await;
         for c in chunks {
             rt.event(WorkerEvent::Snapshot(c));
         }
@@ -2104,12 +2412,154 @@ mod tests {
         rt.shutdown().await;
     }
 
+    /// WK-5: a new session's first `Assign` applies whatever its revision
+    /// (a coordinator whose clock went back numbers its plans lower); after
+    /// it, only a newer one does.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_new_sessions_first_assign_applies_a_lower_revision() {
+        let mut rt = Runtime::start(config(Arc::new(MapFetch::default())));
+        let (_coord, session) = session_pair().await;
+        rt.connected(session.handle());
+        rt.event(WorkerEvent::Assign(assignment(50, 0, 1)));
+        assert_eq!(rt.assignment().map(|a| a.revision), Some(50));
+        rt.disconnected();
+        let (_coord2, session2) = session_pair().await;
+        rt.connected(session2.handle());
+        rt.event(WorkerEvent::Assign(assignment(7, 0, 1)));
+        assert_eq!(
+            rt.assignment().map(|a| a.revision),
+            Some(7),
+            "the first applies"
+        );
+        rt.event(WorkerEvent::Assign(assignment(6, 0, 1)));
+        assert_eq!(
+            rt.assignment().map(|a| a.revision),
+            Some(7),
+            "then only newer"
+        );
+        rt.event(WorkerEvent::Assign(assignment(8, 0, 1)));
+        assert_eq!(rt.assignment().map(|a| a.revision), Some(8));
+        rt.shutdown().await;
+    }
+
+    /// A later `Assign` with fetching off pauses the pool and claims
+    /// nothing; turned on again, both resume.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_late_fetch_off_pauses_the_pool_and_the_claims() {
+        let mut rt = Runtime::start(config(Arc::new(MapFetch::default())));
+        let (_coord, session) = session_pair().await;
+        rt.connected(session.handle());
+        rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
+        let (_, chunks) = filter_chunks().await;
+        for c in chunks {
+            rt.event(WorkerEvent::Snapshot(c));
+        }
+        until("started", || (rt.is_started(), ())).await;
+        let paused = |rt: &Runtime| *rt.shared.pool_told.borrow();
+        until("the pool runs", || (!paused(&rt), ())).await;
+        let off = |revision, fetch| {
+            let mut a = Assignment::from_message(&assignment(revision, 0, 1))
+                .unwrap()
+                .unwrap();
+            a.fetch = fetch;
+            a.to_message().unwrap()
+        };
+        rt.event(WorkerEvent::Assign(off(2, false)));
+        until("the pool paused", || (paused(&rt), ())).await;
+        let c = rt.counts();
+        assert!(rt.finds().found(found(77)));
+        until("the find was held back", || {
+            let n = c.held_back.load(Ordering::Relaxed);
+            (n == 1, n)
+        })
+        .await;
+        assert_eq!(c.claimed.load(Ordering::Relaxed), 0);
+        rt.event(WorkerEvent::Assign(off(3, true)));
+        until("the pool resumed", || (!paused(&rt), ())).await;
+        rt.shutdown().await;
+    }
+
+    /// A stage task that ends by itself is noticed: `failed` completes, so
+    /// `lodestar worker` stops with an error and is started again. A stop
+    /// the runtime asked for isn't a failure.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_stage_that_dies_is_noticed() {
+        let mut rt = Runtime::start(config(Arc::new(MapFetch::default())));
+        let (_coord, session) = session_pair().await;
+        rt.connected(session.handle());
+        rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
+        let (_, chunks) = filter_chunks().await;
+        for c in chunks {
+            rt.event(WorkerEvent::Snapshot(c));
+        }
+        until("started", || (rt.is_started(), ())).await;
+        let failed = rt.failed();
+        // As a panic would end it.
+        lock(&rt.shared.stages).as_ref().unwrap().pool.abort();
+        tokio::time::timeout(DEADLINE, failed)
+            .await
+            .expect("the dead pool was noticed");
+        rt.shutdown().await;
+
+        // A drain stops the stages: not a failure.
+        let mut rt = Runtime::start(config(Arc::new(MapFetch::default())));
+        let (_coord2, session2) = session_pair().await;
+        rt.connected(session2.handle());
+        rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
+        let (_, chunks) = filter_chunks().await;
+        for c in chunks {
+            rt.event(WorkerEvent::Snapshot(c));
+        }
+        until("started", || (rt.is_started(), ())).await;
+        let _ = rt.drain().await;
+        let failed = rt.failed();
+        assert!(
+            tokio::time::timeout(SUPERVISE_EVERY * 3, failed)
+                .await
+                .is_err(),
+            "a drain isn't a failure"
+        );
+        rt.shutdown().await;
+    }
+
+    /// Claims stop at the pool's room: leases held never pass its cap.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn claims_stop_at_the_pools_room() {
+        let mut rt = Runtime::start(config(Arc::new(MapFetch::default())));
+        let (_coord, session) = session_pair().await;
+        rt.connected(session.handle());
+        let mut a = Assignment::from_message(&assignment(1, 0, 1))
+            .unwrap()
+            .unwrap();
+        a.pool_cap = 2;
+        rt.event(WorkerEvent::Assign(a.to_message().unwrap()));
+        let (_, chunks) = filter_chunks().await;
+        for c in chunks {
+            rt.event(WorkerEvent::Snapshot(c));
+        }
+        until("started", || (rt.is_started(), ())).await;
+        assert_eq!(rt.shared.pool_room(), 2);
+        // The pool is full: two keys held.
+        rt.shared.leases.insert(InfoHash([1; 20]), Token(1));
+        rt.shared.leases.insert(InfoHash([2; 20]), Token(2));
+        assert_eq!(rt.shared.pool_room(), 0);
+        let c = rt.counts();
+        assert!(rt.finds().found(found(9)));
+        until("held back", || {
+            let n = c.held_back.load(Ordering::Relaxed);
+            (n == 1, n)
+        })
+        .await;
+        assert_eq!(c.claimed.load(Ordering::Relaxed), 0);
+        rt.shutdown().await;
+    }
+
     /// A dictionary named by `Assign` must arrive first too.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_named_dictionary_is_waited_for() {
         let mut rt = Runtime::start(config(Arc::new(MapFetch::default())));
         rt.event(WorkerEvent::Assign(assignment(1, 9, 1)));
-        let (version, chunks) = filter_chunks();
+        let (version, chunks) = filter_chunks().await;
         for c in chunks {
             rt.event(WorkerEvent::Snapshot(c));
         }
@@ -2190,7 +2640,7 @@ mod tests {
         let (_coord, session) = session_pair_with(1).await;
         rt.connected(session.handle());
         rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
-        let (_, chunks) = filter_chunks();
+        let (_, chunks) = filter_chunks().await;
         for c in chunks {
             rt.event(WorkerEvent::Snapshot(c));
         }
@@ -2226,7 +2676,7 @@ mod tests {
         let (_coord2, session2) = session_pair_with(1).await;
         rt.connected(session2.handle());
         rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
-        let (_, chunks) = filter_chunks();
+        let (_, chunks) = filter_chunks().await;
         for c in chunks {
             rt.event(WorkerEvent::Snapshot(c));
         }
@@ -2257,10 +2707,11 @@ mod tests {
     /// one in 16, drawn per sighting.
     #[tokio::test]
     async fn maybes_are_dropped_once_a_filter_is_complete_but_sampled() {
-        let rt = Runtime::start(Config {
+        let mut rt = Runtime::start(Config {
             seed: Some(7),
             ..Config::new(W, Arc::new(MapFetch::default()))
         });
+        rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
         let s = &rt.shared;
         // No filter: claimed, maybe or not.
         assert!(sift(s, found(1), false, true).is_some());
@@ -2295,10 +2746,11 @@ mod tests {
         // The production draw, over many seeds: the same key, sighted again
         // and again, is claimed within a few hundred sightings every time.
         for seed in 0..50u64 {
-            let rt = Runtime::start(Config {
+            let mut rt = Runtime::start(Config {
                 seed: Some(seed),
                 ..Config::new(W, Arc::new(MapFetch::default()))
             });
+            rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
             let first = (1..=400)
                 .find(|_| sift(&rt.shared, found(9), true, true).is_some())
                 .unwrap_or_else(|| panic!("seed {seed}: never claimed in 400 sightings"));
@@ -2384,12 +2836,23 @@ mod tests {
             j.clear.load(Ordering::Relaxed) + j.marked.load(Ordering::Relaxed)
         };
         assert_eq!(sealed(), 0);
-        // Today's arrives: the result is judged and sealed.
-        let (_, chunks) = filter_chunks();
+        let paused = |rt: &Runtime| Some(*rt.shared.pool_told.borrow());
+        until("the pool paused while it waits", || {
+            (paused(&rt) == Some(true), paused(&rt))
+        })
+        .await;
+        // Today's arrives: the result is judged and sealed, the outage ends
+        // with the install, and the pool resumes (#599's review).
+        let (_, chunks) = filter_chunks().await;
         for c in chunks {
             rt.event(WorkerEvent::Snapshot(c));
         }
         until("sealed", || (sealed() == 1, sealed())).await;
+        until("the pool resumed", || {
+            (paused(&rt) == Some(false), paused(&rt))
+        })
+        .await;
+        assert!(lock(&rt.shared.unsealable_since).is_none());
         assert_eq!(c.lost.load(Ordering::Relaxed), 0, "nothing reported lost");
         assert_eq!(c.released.load(Ordering::Relaxed), 0);
         rt.shutdown().await;
@@ -2562,7 +3025,7 @@ mod tests {
         assert!(sift(&rt.shared, found(4), false, false).is_none());
         assert_eq!(c.held_back.load(Ordering::Relaxed), 1);
         // A fresh snapshot ends it.
-        let (_, chunks) = filter_chunks();
+        let (_, chunks) = filter_chunks().await;
         for ch in chunks {
             rt.event(WorkerEvent::Snapshot(ch));
         }
@@ -2703,6 +3166,44 @@ mod tests {
         rt.shutdown().await;
     }
 
+    /// A drain sends a batch refused for now at once (not on the next
+    /// retry tick), and counts it as sent once.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_drain_resends_a_refused_batch_and_counts_it_once() {
+        use lodestar_cluster::proto::ToWorker;
+        // The retry tick never fires here: only the drain can resend.
+        let mut rt = Runtime::start(Config {
+            retry_every: Duration::from_secs(3600),
+            ..config(Arc::new(MapFetch::default()))
+        });
+        let (mut coord, mut session) = session_pair().await;
+        rt.connected(session.handle());
+        let out = lock(&rt.shared.out).take().unwrap();
+        out.send(sealed(1)).await.unwrap();
+        let first = next_results(&mut coord).await;
+        coord
+            .send(ToWorker::Accepted {
+                batch: first.batch,
+                accepted: false,
+            })
+            .await
+            .unwrap();
+        let e = tokio::time::timeout(DEADLINE, session.next_event())
+            .await
+            .unwrap()
+            .unwrap();
+        rt.event(e);
+        // The refusal is in before the drain asks.
+        until("refused", || {
+            (rt.shared.accepted.capacity() == ACCEPTED_QUEUE, ())
+        })
+        .await;
+        let (_, again) = tokio::join!(rt.drain(), next_results(&mut coord));
+        assert_eq!(again.batch, first.batch, "sent again by the drain");
+        assert_eq!(rt.counts().sent.load(Ordering::Relaxed), 1, "counted once");
+        rt.shutdown().await;
+    }
+
     mod end_to_end {
         use lodestar_cluster::{JoinToken, Joining, LeaseAuthority};
         use lodestar_pipeline::{Pipeline, PipelineConfig};
@@ -2747,6 +3248,8 @@ mod tests {
                 },
                 clock: Arc::new(lodestar_cluster::SystemClock),
                 placement: Arc::new(Placement::new(false)),
+                coordinator_dht: None,
+                held: None,
                 fleet: Some(Fleet {
                     stored: Arc::new(monitor),
                     filter,

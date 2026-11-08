@@ -32,6 +32,12 @@
 //! request if it has one, [`Timings::stop_deadline`], then a kill. Each
 //! step is bounded, so the whole is bounded.
 
+pub mod egress;
+pub mod limits;
+#[cfg(target_os = "linux")]
+pub mod limits_linux;
+#[cfg(windows)]
+pub mod limits_windows;
 pub mod logs;
 pub mod pidfile;
 pub mod process;
@@ -52,6 +58,7 @@ use tokio::time::Instant;
 use crate::adapter::{BoxFuture, GuardedHttp, Health, HealthStatus, Target};
 use crate::inputs::CompanionId;
 
+pub use limits::{Confinement, Launcher, Limits, Report, Sandbox};
 pub use logs::LogRing;
 pub use process::{AfterSpawn, EnvName, NoHook, SpawnError, SpawnSpec};
 
@@ -134,6 +141,9 @@ pub enum State {
     },
     /// Not restarting until [`Supervisor::restart`].
     NeedsAttention(Attention),
+    /// Stopped and kept stopped by a hold (CMP-4b's route
+    /// gate: its route is down) until released. Not a crash.
+    Held,
     Stopped,
 }
 
@@ -145,6 +155,7 @@ impl State {
             State::Unhealthy { .. } => "unhealthy",
             State::BackingOff { .. } => "backing_off",
             State::NeedsAttention(_) => "needs_attention",
+            State::Held => "held",
             State::Stopped => "stopped",
         }
     }
@@ -247,6 +258,30 @@ enum Control {
     /// Start it again now (clears Needs attention and the backoff).
     Restart,
     Stop,
+    /// Stop it and keep it stopped until [`Control::Release`].
+    Hold,
+    Release,
+}
+
+/// Holds and releases one companion: CMP-4b's route gate. A held
+/// companion is stopped and doesn't start or restart until released; the
+/// stop isn't a crash.
+#[derive(Debug, Clone)]
+pub(crate) struct Handle {
+    control: mpsc::UnboundedSender<Control>,
+}
+
+impl Handle {
+    /// `false` once the companion is no longer supervised.
+    pub(crate) fn hold(&self) -> bool {
+        self.control.send(Control::Hold).is_ok()
+    }
+
+    /// Lets it start again. One that needed your attention before the
+    /// hold still does: only [`Supervisor::restart`] clears that.
+    pub(crate) fn release(&self) -> bool {
+        self.control.send(Control::Release).is_ok()
+    }
 }
 
 struct Supervised {
@@ -295,6 +330,16 @@ impl Supervisor {
     /// Starts supervising `c`. Everything it depends on must be added
     /// first.
     pub fn add(&mut self, c: Companion) -> Result<(), SuperviseError> {
+        self.insert(c, false)
+    }
+
+    /// Like [`Supervisor::add`], but held: it doesn't start until the route
+    /// gate releases it.
+    pub(crate) fn add_held(&mut self, c: Companion) -> Result<(), SuperviseError> {
+        self.insert(c, true)
+    }
+
+    fn insert(&mut self, c: Companion, held: bool) -> Result<(), SuperviseError> {
         let id = c.spawn.id.clone();
         if self.find(&id).is_some() {
             return Err(SuperviseError::Duplicate);
@@ -309,7 +354,7 @@ impl Supervisor {
             return Err(SuperviseError::OtherDataDir);
         }
         let (status_tx, status) = watch::channel(Status {
-            state: State::Starting,
+            state: if held { State::Held } else { State::Starting },
             restarts: 0,
             last_exit: None,
         });
@@ -322,6 +367,7 @@ impl Supervisor {
             status_tx,
             logs.clone(),
             control_rx,
+            held,
         ));
         self.running.push(Supervised {
             id,
@@ -340,6 +386,14 @@ impl Supervisor {
     /// The companion's status channel.
     pub fn status(&self, id: &CompanionId) -> Option<watch::Receiver<Status>> {
         self.find(id).map(|s| s.status.clone())
+    }
+
+    /// Its hold and release: the route gate's alone, so nothing outside the
+    /// crate can start a gated companion while its route is down.
+    pub(crate) fn handle(&self, id: &CompanionId) -> Option<Handle> {
+        self.find(id).map(|s| Handle {
+            control: s.control.clone(),
+        })
     }
 
     /// The companion's output ring.
@@ -408,6 +462,8 @@ enum Ended {
     },
     /// You asked for a restart.
     Restart,
+    /// It was held.
+    Held,
     Stopped,
 }
 
@@ -419,12 +475,68 @@ async fn supervise(
     status: watch::Sender<Status>,
     logs: LogRing,
     mut control: mpsc::UnboundedReceiver<Control>,
+    mut held: bool,
 ) {
     let redactor = Arc::new(logs::Redactor::new(&c.secrets));
     let set = |state: State| status.send_modify(|s| s.state = state);
     let mut crashes: VecDeque<Instant> = VecDeque::new();
     let mut in_a_row = 0u32;
+    // Needs attention survives a hold: a route that comes back doesn't
+    // clear it, only your restart does.
+    let mut parked: Option<Attention> = None;
     loop {
+        if held {
+            set(State::Held);
+            match control.recv().await.unwrap_or(Control::Stop) {
+                Control::Stop => break,
+                Control::Release => {
+                    held = false;
+                    // The route is back: start promptly, not after a backoff.
+                    in_a_row = 0;
+                }
+                Control::Restart => {
+                    parked = None;
+                    crashes.clear();
+                    in_a_row = 0;
+                }
+                Control::Hold => {}
+            }
+            continue;
+        }
+        if let Some(why) = parked {
+            set(State::NeedsAttention(why));
+            match wait_for_you(&mut control).await {
+                Control::Restart => {
+                    parked = None;
+                    crashes.clear();
+                    in_a_row = 0;
+                }
+                Control::Hold => held = true,
+                Control::Stop | Control::Release => break,
+            }
+            continue;
+        }
+        // Commands that queued up during a stop (after a restart, say):
+        // the last hold or release wins over the start it would race.
+        let mut stop = false;
+        while let Ok(cmd) = control.try_recv() {
+            match cmd {
+                Control::Hold => held = true,
+                Control::Release => held = false,
+                Control::Stop => {
+                    stop = true;
+                    break;
+                }
+                Control::Restart => {}
+            }
+        }
+        // A stop, or nobody left to send one.
+        if stop || (control.is_closed() && control.is_empty()) {
+            break;
+        }
+        if held {
+            continue;
+        }
         set(State::Starting);
         let (spec, h) = (c.spawn.clone(), hook.clone());
         let spawned = tokio::task::spawn_blocking(move || process::spawn(&spec, h.as_ref()))
@@ -439,11 +551,8 @@ async fn supervise(
                 | SpawnError::BadEnvName
                 | SpawnError::ReservedId),
             ) => {
-                set(State::NeedsAttention(Attention::Refused(e.code())));
-                match wait_for_you(&mut control).await {
-                    Control::Restart => Ended::Restart,
-                    Control::Stop => Ended::Stopped,
-                }
+                parked = Some(Attention::Refused(e.code()));
+                continue;
             }
             Err(_) => Ended::Crashed {
                 ran: Duration::ZERO,
@@ -451,10 +560,10 @@ async fn supervise(
         };
         match ended {
             Ended::Stopped => break,
+            Ended::Held => held = true,
             Ended::Restart => {
                 crashes.clear();
                 in_a_row = 0;
-                continue;
             }
             Ended::Crashed { ran } => {
                 status.send_modify(|s| s.restarts = s.restarts.saturating_add(1));
@@ -470,31 +579,41 @@ async fn supervise(
                 {
                     crashes.pop_front();
                 }
-                let next = if crashes.len() >= t.crash_limit {
-                    set(State::NeedsAttention(Attention::CrashLoop));
-                    wait_for_you(&mut control).await
-                } else {
-                    let delay = backoff(in_a_row, &t);
-                    set(State::BackingOff { delay });
-                    tokio::select! {
-                        () = tokio::time::sleep(delay) => continue,
-                        c = control.recv() => c.unwrap_or(Control::Stop),
-                    }
-                };
-                if next == Control::Stop {
-                    break;
+                if crashes.len() >= t.crash_limit {
+                    parked = Some(Attention::CrashLoop);
+                    continue;
                 }
-                crashes.clear();
-                in_a_row = 0;
+                let delay = backoff(in_a_row, &t);
+                set(State::BackingOff { delay });
+                let next = tokio::select! {
+                    () = tokio::time::sleep(delay) => continue,
+                    c = wait_for_you(&mut control) => c,
+                };
+                match next {
+                    Control::Stop | Control::Release => break,
+                    Control::Hold => held = true,
+                    Control::Restart => {
+                        crashes.clear();
+                        in_a_row = 0;
+                    }
+                }
             }
         }
     }
     set(State::Stopped);
 }
 
-/// Waits for a restart or stop; a closed channel is a stop.
+/// Waits for a restart, stop or hold; a closed channel is a stop. A
+/// release means nothing to a companion that isn't held, so it's skipped
+/// (never returned).
 async fn wait_for_you(control: &mut mpsc::UnboundedReceiver<Control>) -> Control {
-    control.recv().await.unwrap_or(Control::Stop)
+    loop {
+        match control.recv().await {
+            Some(Control::Release) => continue,
+            Some(c) => return c,
+            None => return Control::Stop,
+        }
+    }
 }
 
 type Check<'a> = Pin<Box<dyn Future<Output = Option<HealthStatus>> + Send + 'a>>;
@@ -567,11 +686,14 @@ async fn run(
                 }
             }
             cmd = control.recv() => {
-                let exit = stop_child(&mut child, c.stop.as_deref(), t.stop_deadline).await;
                 let ended = match cmd {
+                    // It isn't held: nothing to release.
+                    Some(Control::Release) => continue,
                     Some(Control::Restart) => Ended::Restart,
+                    Some(Control::Hold) => Ended::Held,
                     Some(Control::Stop) | None => Ended::Stopped,
                 };
+                let exit = stop_child(&mut child, c.stop.as_deref(), t.stop_deadline).await;
                 break (ended, exit);
             }
         }
