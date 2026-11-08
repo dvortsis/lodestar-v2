@@ -6916,7 +6916,7 @@
         "slice": "CMP-5",
         "role": "build",
         "agent": "claude",
-        "doing": "launching: CMP-5 companion manager (brief briefs/CMP-5.md)",
+        "doing": "session_01MMjhn8X2TF9tNCnNecmH9G: CMP-5 companion manager (brief briefs/CMP-5.md)",
         "since": "2026-11-08T14:32Z"
       },
       {
