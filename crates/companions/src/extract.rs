@@ -31,7 +31,8 @@
 //!   bounded on its own by [`MAX_OVERHEAD`], so no header can make the
 //!   parser hold more than that in memory (about twice that at peak). A
 //!   zip's index is read under the same budget, so an index of millions of
-//!   records is refused before it's in memory.
+//!   records is refused, or opens and hits the entry cap, with peak memory
+//!   about four times the budget (about 250 MB).
 //! - **Writing:** every file is created new (`O_CREAT|O_EXCL` on Unix,
 //!   `CREATE_NEW` on Windows), which never opens through an existing
 //!   symlink. Every directory is one this extraction created into a

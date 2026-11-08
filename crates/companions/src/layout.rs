@@ -334,12 +334,23 @@ impl Install {
     /// Writes `new`, then deletes what it no longer names.
     fn switch(&mut self, new: Pointer) -> Result<Switched, LayoutError> {
         let unsynced = self.write_pointer(&new)?;
-        let swept = self.sweep().err();
-        let leftover = unsynced.or(swept);
-        Ok(Switched {
+        Ok(self.after_switch(new, unsynced))
+    }
+
+    /// The cleanup after the pointer's rename. If the folder's fsync
+    /// failed, the rename may not survive a crash, and the old pointer
+    /// could come back naming what a sweep would delete now: so nothing
+    /// is swept, and the fsync error is the leftover. A later sweep, on a
+    /// pointer that's durable, finishes the job.
+    fn after_switch(&mut self, new: Pointer, unsynced: Option<LayoutError>) -> Switched {
+        let leftover = match unsynced {
+            Some(e) => Some(e),
+            None => self.sweep().err(),
+        };
+        Switched {
             pointer: new,
             leftover,
-        })
+        }
     }
 
     /// Step 2: points `current` at the staged `version`, keeping the one
@@ -687,6 +698,31 @@ mod tests {
         assert_eq!(i.sweep().unwrap(), ["1.0"]);
         i.remove().unwrap();
         assert!(!d.join("companions/prowlarr").exists());
+        let _ = fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn nothing_is_swept_when_the_pointer_may_not_be_durable() {
+        let d = tmp();
+        let mut i = Install::open(&d, &CompanionId::parse("prowlarr").unwrap()).unwrap();
+        for v in ["1.0", "2.0"] {
+            fs::create_dir_all(i.root().join(v)).unwrap();
+        }
+        // A rollback from 2.0 to 1.0 whose rename wasn't fsynced: 2.0,
+        // which the old pointer named, must survive.
+        let new = Pointer {
+            current: Version::parse("1.0").unwrap(),
+            previous: None,
+        };
+        assert!(i.write_pointer(&new).unwrap().is_none());
+        let unsynced = Some(LayoutError::Io(io::ErrorKind::Other));
+        let done = i.after_switch(new.clone(), unsynced);
+        assert!(matches!(done.leftover, Some(LayoutError::Io(_))));
+        assert!(i.root().join("2.0").is_dir());
+        // With the fsync done, the cleanup runs.
+        let done = i.after_switch(new, None);
+        assert!(done.leftover.is_none());
+        assert!(!i.root().join("2.0").exists());
         let _ = fs::remove_dir_all(d);
     }
 }
