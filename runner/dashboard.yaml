@@ -303,6 +303,8 @@ placement:
   - WK-*
   - X-wk15-nits
   - X-wk10d-unknown
+  - X-wk-busy-retry
+  - X-wk-pause-text
 - ws: ws-web
   match:
   - W*
@@ -371,6 +373,7 @@ placement:
   - X-cloud-infra-2
   - P-cloud-test-plan
   - P-cloud-operator
+  - OP-*
 - ws: ws-cut
   match:
   - CR-COL
@@ -548,6 +551,7 @@ placement:
   - X-pack-static
   - PK-*
   - X-pk-manifest-hardening
+  - X-updates-api-text
   - G-m6
 - ws: ws-m7-built
   match:
@@ -858,6 +862,14 @@ conditions:
     met: true
     who: you
     label: You choose SECURITY.md's contact and switch on private vulnerability reporting (M8 OQ6)
+  owner-operator-answers:
+    met: true
+    who: you
+    label: You answer the cloud operator plan's questions (Q1-Q6)
+  owner-operator-setup:
+    met: false
+    who: you
+    label: You complete the cloud operator setup steps (GitHub App, environments, AWS stacks, Akamai tokens, agent, pia-delivery environment); the runner then checks the first-run test
   bench-runner:
     met: false
     who: you
