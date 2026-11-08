@@ -516,15 +516,26 @@ async fn supervise(
             }
             continue;
         }
-        // A hold that queued up during a stop (a restart, say) wins over
-        // the start it would otherwise race.
-        match control.try_recv() {
-            Ok(Control::Hold) => {
-                held = true;
-                continue;
+        // Commands that queued up during a stop (after a restart, say):
+        // the last hold or release wins over the start it would race.
+        let mut stop = false;
+        while let Ok(cmd) = control.try_recv() {
+            match cmd {
+                Control::Hold => held = true,
+                Control::Release => held = false,
+                Control::Stop => {
+                    stop = true;
+                    break;
+                }
+                Control::Restart => {}
             }
-            Ok(Control::Stop) | Err(mpsc::error::TryRecvError::Disconnected) => break,
-            Ok(Control::Restart | Control::Release) | Err(mpsc::error::TryRecvError::Empty) => {}
+        }
+        // A stop, or nobody left to send one.
+        if stop || (control.is_closed() && control.is_empty()) {
+            break;
+        }
+        if held {
+            continue;
         }
         set(State::Starting);
         let (spec, h) = (c.spawn.clone(), hook.clone());

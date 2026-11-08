@@ -456,6 +456,52 @@ mod linux {
         (sup, ring)
     }
 
+    /// Under `DynamicUser=yes`, `/var/lib/lodestar` is a link to
+    /// `/var/lib/private/lodestar`: everything still starts, and stays
+    /// confined, when the data folder is reached through a link.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_data_folder_reached_through_a_link_still_starts() {
+        let Setup {
+            _tmp,
+            data,
+            install: _,
+            exe: _,
+        } = setup("qbittorrent");
+        let link = data.parent().unwrap_or(&data).join("link");
+        std::os::unix::fs::symlink(&data, &link).unwrap_or_else(|e| panic!("{e}"));
+        let install = link.join("companions").join("qbittorrent").join("1.0.0");
+        let s = Setup {
+            _tmp,
+            exe: install.join("fake"),
+            install,
+            data: link,
+        };
+        let sb = sandbox(Limits::default());
+        let (sup, ring) = run_one(&s, &sb, "probe").await;
+        let lines = wait_lines(&ring, "WRITE_HOME", 1).await;
+        assert_eq!(lines, ["WRITE_HOME ok"]);
+        let all = ring.lines();
+        if landlock_enforced(&s, &sb) {
+            for want in ["READ_DATA denied", "READ_RUN denied", "READ_OTHER denied"] {
+                assert!(all.iter().any(|l| l == want), "no {want:?} in {all:?}");
+            }
+        }
+        sup.shutdown().await;
+    }
+
+    fn landlock_enforced(s: &Setup, sb: &Sandbox) -> bool {
+        let (_, report) = sb
+            .prepare(
+                spec(&s.data, "qbittorrent", s.exe.clone(), &[]),
+                &Confinement {
+                    install: s.install.clone(),
+                    downloads: None,
+                },
+            )
+            .unwrap_or_else(|e| panic!("{e}"));
+        report.sandbox.level != Level::None
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn the_companion_runs_with_its_rlimits() {
         let s = setup("qbittorrent");

@@ -428,28 +428,88 @@ fn fs_view(mountinfo: &str, p: &Path) -> Option<(String, PathBuf)> {
     Some((dev, root.join(rest)))
 }
 
-/// Whether `grant` stays clear of the data folder on the filesystem
-/// itself: a bind mount can show one folder at two paths. Off the data
-/// folder's device, or with no readable mount table, it's clear.
-pub(crate) fn mount_separate(grant: &Path, data: &Path, own: &Path) -> bool {
-    let Ok(table) = std::fs::read_to_string("/proc/self/mountinfo") else {
-        return true;
-    };
-    separate_in(&table, grant, data, own)
+/// A folder as its filesystem sees it: the device, and the path from the
+/// filesystem's root.
+type View = (String, PathBuf);
+
+/// The folders a writable grant is checked against, as views.
+struct Views {
+    data: View,
+    own: View,
+    home: View,
+    install: View,
 }
 
-fn separate_in(table: &str, grant: &Path, data: &Path, own: &Path) -> bool {
-    let (Some((gd, g)), Some((dd, d))) = (fs_view(table, grant), fs_view(table, data)) else {
-        return true;
-    };
-    if gd != dd {
-        return true;
+/// What a writable grant, seen as `(dev, path)`, would reach that the
+/// path checks refuse: the data folder (or a folder holding it), the
+/// data folder outside the companion's own, the companion's own folder
+/// itself, or its home or install folder. `in_home` skips the last two
+/// rules for what lies inside home, which home's own grant covers.
+fn clash(v: &Views, dev: &str, p: &Path, in_home: bool) -> Option<LimitsError> {
+    let on = |w: &View| w.0 == dev;
+    let (data, own) = (&v.data.1, &v.own.1);
+    if on(&v.data) && (data.starts_with(p) || (p.starts_with(data) && !p.starts_with(own))) {
+        return Some(LimitsError::DownloadsOverlapData);
     }
-    let own = own
-        .strip_prefix(data)
-        .map(|rest| d.join(rest))
-        .unwrap_or_default();
-    !(d.starts_with(&g) || (g.starts_with(&d) && !g.starts_with(&own)))
+    let inside = (on(&v.install) && p.starts_with(&v.install.1))
+        || (!in_home && ((on(&v.own) && p == own) || (on(&v.home) && p.starts_with(&v.home.1))));
+    inside.then_some(LimitsError::DownloadsInsideCompanion)
+}
+
+/// The path checks again, on the filesystem itself, for each writable
+/// grant (downloads, home) and every mount at or below it, which the
+/// grant's rule covers too. A bind mount can show one folder at two
+/// paths. Fails closed: no readable mount table, or a folder it can't
+/// place, refuses.
+pub(crate) fn mounts_ok(
+    downloads: Option<&Path>,
+    home: &Path,
+    data: &Path,
+    own: &Path,
+    install: &Path,
+) -> Result<(), LimitsError> {
+    let table = std::fs::read_to_string("/proc/self/mountinfo")
+        .map_err(|_| LimitsError::DownloadsOverlapData)?;
+    mounts_ok_in(&table, downloads, home, data, own, install)
+}
+
+fn mounts_ok_in(
+    table: &str,
+    downloads: Option<&Path>,
+    home: &Path,
+    data: &Path,
+    own: &Path,
+    install: &Path,
+) -> Result<(), LimitsError> {
+    let view = |p: &Path| fs_view(table, p).ok_or(LimitsError::DownloadsOverlapData);
+    let v = Views {
+        data: view(data)?,
+        own: view(own)?,
+        home: view(home)?,
+        install: view(install)?,
+    };
+    let grants = downloads
+        .map(|d| (d, false))
+        .into_iter()
+        .chain([(home, true)]);
+    for (grant, in_home) in grants {
+        let (dev, p) = view(grant)?;
+        if let Some(e) = clash(&v, &dev, &p, in_home) {
+            return Err(e);
+        }
+        for line in table.lines() {
+            let f: Vec<&str> = line.split(' ').collect();
+            let (Some(dev), Some(root), Some(point)) = (f.get(2), f.get(3), f.get(4)) else {
+                continue;
+            };
+            if unescape(point).starts_with(grant)
+                && let Some(e) = clash(&v, dev, &unescape(root), in_home)
+            {
+                return Err(e);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The spec that starts `spec` through the launcher, and the report.
@@ -475,7 +535,7 @@ pub(crate) fn prepare(
         read_exec,
         read: system(SYSTEM_READ, &f.data),
         data: f.data.clone(),
-        exe: spec.executable.clone(),
+        exe: f.exe.clone(),
         args: spec.args.clone(),
     };
     let report = Report {
@@ -825,29 +885,63 @@ mod tests {
     }
 
     #[test]
-    fn a_second_mount_of_the_data_folder_is_caught() {
-        // `/` is /dev/sda1; /mnt/alias is a bind mount of /var/lib on it;
-        // /media/usb is another device.
-        let table = "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n\
-                     2 1 8:1 /var/lib /mnt/alias rw - ext4 /dev/sda1 rw\n\
-                     3 1 8:1 /srv/dl /mnt/my\\040dl rw - ext4 /dev/sda1 rw\n\
-                     4 1 8:17 / /media/usb rw - ext4 /dev/sdb1 rw\n";
-        let data = Path::new("/var/lib/lodestar");
+    fn second_mounts_are_caught_on_the_filesystem_itself() {
+        // `/` is /dev/sda1. /mnt/alias is a bind mount of /var/lib on it;
+        // /mnt/my dl a bind of /srv/dl; /media/usb another device.
+        let base = "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n\
+                    2 1 8:1 /var/lib /mnt/alias rw - ext4 /dev/sda1 rw\n\
+                    3 1 8:1 /srv/dl /mnt/my\\040dl rw - ext4 /dev/sda1 rw\n\
+                    4 1 8:17 / /media/usb rw - ext4 /dev/sdb1 rw\n";
         let own = Path::new("/var/lib/lodestar/companions/q");
-        let sep = |g: &str| separate_in(table, Path::new(g), data, own);
+        let check = |table: &str, dl: &str| {
+            mounts_ok_in(
+                table,
+                Some(Path::new(dl)),
+                &own.join("home"),
+                Path::new("/var/lib/lodestar"),
+                own,
+                &own.join("5.0.3"),
+            )
+        };
+        let overlap = Err(LimitsError::DownloadsOverlapData);
+        let inside = Err(LimitsError::DownloadsInsideCompanion);
         // An alias above the data folder, of it, or of another companion.
-        assert!(!sep("/mnt/alias"));
-        assert!(!sep("/mnt/alias/lodestar"));
-        assert!(!sep("/mnt/alias/lodestar/companions/p"));
-        // Its own folder through the alias, another device, a plain folder.
-        assert!(sep("/mnt/alias/lodestar/companions/q/downloads"));
-        assert!(sep("/media/usb/dl"));
-        assert!(sep("/srv/dl"));
-        assert!(sep("/mnt/my dl"));
+        assert_eq!(check(base, "/mnt/alias"), overlap);
+        assert_eq!(check(base, "/mnt/alias/lodestar"), overlap);
+        assert_eq!(check(base, "/mnt/alias/lodestar/companions/p"), overlap);
+        // (c) An alias of its own folder, home or install folder.
+        assert_eq!(check(base, "/mnt/alias/lodestar/companions/q"), inside);
         assert_eq!(
-            fs_view(table, Path::new("/mnt/my dl/x")),
+            check(base, "/mnt/alias/lodestar/companions/q/home/dl"),
+            inside
+        );
+        assert_eq!(
+            check(base, "/mnt/alias/lodestar/companions/q/5.0.3"),
+            inside
+        );
+        // Its downloads folder through the alias, another device, plain
+        // folders.
+        assert_eq!(
+            check(base, "/mnt/alias/lodestar/companions/q/downloads"),
+            Ok(())
+        );
+        assert_eq!(check(base, "/media/usb/dl"), Ok(()));
+        assert_eq!(check(base, "/srv/dl"), Ok(()));
+        assert_eq!(check(base, "/mnt/my dl"), Ok(()));
+        assert_eq!(
+            fs_view(base, Path::new("/mnt/my dl/x")),
             Some(("8:1".to_owned(), PathBuf::from("/srv/dl/x")))
         );
+        // (b) A bind of the data folder below the downloads folder, or
+        // below home.
+        let below = format!("{base}5 1 8:1 /var/lib/lodestar /srv/dl/sub rw - ext4 /dev/sda1 rw\n");
+        assert_eq!(check(&below, "/srv/dl"), overlap);
+        let under_home = format!(
+            "{base}6 1 8:1 /var/lib /var/lib/lodestar/companions/q/home/x rw - ext4 /dev/sda1 rw\n"
+        );
+        assert_eq!(check(&under_home, "/srv/dl"), overlap);
+        // (a) Fails closed: a table that can't place a folder refuses.
+        assert_eq!(check("", "/srv/dl"), overlap);
     }
 
     #[test]

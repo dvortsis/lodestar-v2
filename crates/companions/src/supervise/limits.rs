@@ -361,6 +361,10 @@ pub(crate) struct Folders {
     pub downloads: Option<PathBuf>,
     /// Lodestar's data folder: nothing may grant access above or to it.
     pub data: PathBuf,
+    /// The executable, canonical: the launcher's checks compare it with
+    /// the canonical data folder (`/var/lib/lodestar` is a link under
+    /// `DynamicUser=yes`), and it runs it by this path.
+    pub exe: PathBuf,
 }
 
 fn canonical_dir(p: &Path) -> Result<PathBuf, LimitsError> {
@@ -386,10 +390,8 @@ pub(crate) fn check(spec: &SpawnSpec, conf: &Confinement) -> Result<Folders, Lim
     }
     let exe = std::fs::canonicalize(&spec.executable)
         .ok()
-        .filter(|e| e.starts_with(&install) && e.is_file());
-    if exe.is_none() {
-        return Err(LimitsError::ExecutableOutsideInstall);
-    }
+        .filter(|e| e.starts_with(&install) && e.is_file())
+        .ok_or(LimitsError::ExecutableOutsideInstall)?;
     let downloads = match &conf.downloads {
         None => None,
         Some(d) => {
@@ -402,15 +404,13 @@ pub(crate) fn check(spec: &SpawnSpec, conf: &Confinement) -> Result<Folders, Lim
             if d == own || d.starts_with(&home) || d.starts_with(&install) {
                 return Err(LimitsError::DownloadsInsideCompanion);
             }
-            // The same checks on the filesystem itself, so a second mount
-            // of a folder above the data folder can't pass for another.
-            #[cfg(target_os = "linux")]
-            if !super::limits_linux::mount_separate(&d, &data, &own) {
-                return Err(LimitsError::DownloadsOverlapData);
-            }
             Some(d)
         }
     };
+    // The same checks on the filesystem itself, so a second mount can't
+    // show a folder they refuse under another path.
+    #[cfg(target_os = "linux")]
+    super::limits_linux::mounts_ok(downloads.as_deref(), &home, &data, &own, &install)?;
     // CMP-4a's spawn creates `home` (it may not exist yet); the path is
     // made canonical through the data folder.
     Ok(Folders {
@@ -418,6 +418,7 @@ pub(crate) fn check(spec: &SpawnSpec, conf: &Confinement) -> Result<Folders, Lim
         install,
         downloads,
         data,
+        exe,
     })
 }
 
