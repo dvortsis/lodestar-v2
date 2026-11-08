@@ -6178,6 +6178,11 @@
       "id": "CMP-5g-guided-origin-switch",
       "note": "CMP-8b: guided plan under a whitelist auth bypass is never empty; CMP-5g must switch origin Guided->Confirmed after a successful guided apply and re-plan only after; local_auth_restore_failed must reach the user",
       "logged": "2026-11-08T13:14Z"
+    },
+    {
+      "id": "merged-607-608",
+      "note": "#608 CMP-4b c748dba9, #607 WK-10d ed25b460 merged ~13:4xZ; owner FYIs sent; CMP-5 now unblocked (launch on next free slot); X-cmp4b-mounts L-1/L-2 residuals recorded",
+      "logged": "2026-11-08T13:29Z"
     }
   ],
   "main_health": [
@@ -6879,7 +6884,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T12:39:02Z",
+    "updated": "2026-11-08T13:29Z",
     "items": [
       {
         "slot": 1,
@@ -6891,11 +6896,11 @@
       },
       {
         "slot": 2,
-        "slice": "CMP-4b",
+        "slice": "X-cmp4b-mounts",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCb1R6WRuMNMxCLNcn: #608 CHANGES (Gated drop race; report 'full' overstated below ABI 9 unix sockets; cgroup detection; pub(crate) handle; bind-mount alias; grants_ok; ABI6 scopes); fix round + main merge b083428d as one push, then fresh delta review",
-        "since": "2026-11-08T07:43Z"
+        "doing": "session_01MMjhnCb1R6WRuMNMxCLNcn: #608 CMP-4b merged c748dba9; follow-up X-cmp4b-mounts (I-1 own alias under home, non-UTF-8 mountinfo, residuals)",
+        "since": "2026-11-08T13:29Z"
       },
       {
         "slot": 3,
@@ -6907,11 +6912,11 @@
       },
       {
         "slot": 4,
-        "slice": "WK-10d",
+        "slice": "WK-10e",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #607 delta CHANGES at 3b22dc5f (pending-map cap fill by one worker; cap/pause untested + bug; claim check join-error fail-open; durable budget pause; regrant cancel leak); round 3, then fresh delta review",
-        "since": "2026-11-08T04:50:45Z"
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #607 WK-10d merged ed25b460; WK-10e next with review polish",
+        "since": "2026-11-08T13:29Z"
       }
     ],
     "limit": 4,
