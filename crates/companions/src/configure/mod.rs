@@ -100,10 +100,6 @@ pub struct InstallReceipt {
 
 impl InstallReceipt {
     /// For CMP-5's manager, after it installed the companion at `target`.
-    #[cfg_attr(
-        not(any(test, feature = "testing")),
-        expect(dead_code, reason = "CMP-5's manager is its first caller")
-    )]
     pub(crate) fn new(target: Target) -> InstallReceipt {
         InstallReceipt { target }
     }

@@ -11,12 +11,15 @@
 //!   server stopped;
 //! - `stats`: counts, sizes and the index's state, read-only;
 //! - `import`: bring a Magnetico or Bitmagnet database in (IMP-4), with
-//!   `import-bitmagnet` kept as its old name.
+//!   `import-bitmagnet` kept as its old name;
+//! - `companion`: list, install, remove or print a compose service for
+//!   a companion (CMP-5).
 //!
 //! Each refuses while B-update's rollback journal exists (§12.2), and the
 //! offline ones refuse while anything has the store open ([`lock`]).
 
 mod backup;
+pub(crate) mod companion;
 mod import;
 mod lock;
 mod reindex;
@@ -117,6 +120,9 @@ pub enum Command {
     /// Run as a remote worker: join a coordinator with a one-time token
     /// (--join, --token-file), then run from the saved credentials
     Worker(worker::WorkerArgs),
+    /// Companions: list, install, remove (server stopped), or print a
+    /// compose service (see `lodestar companion --help`)
+    Companion(companion::CompanionArgs),
 }
 
 /// Where the bitmagnet database is. The password comes from
@@ -255,6 +261,7 @@ pub fn run(command: Command, config_path: Option<&Path>, dropped: &privdrop::Rep
         Command::Import(a) => ("import", import::run(&config, a)),
         Command::ImportBitmagnet(a) => ("import-bitmagnet", import::legacy(&config, a)),
         Command::Worker(a) => ("worker", worker::run(&config, a)),
+        Command::Companion(a) => ("companion", companion::run(&config, a)),
         Command::Serve { .. } | Command::Healthcheck | Command::Lists => {
             unreachable!("main.rs runs these")
         }
@@ -303,6 +310,36 @@ mod tests {
     fn cmd(s: &str) -> (Option<PathBuf>, Option<Command>) {
         let c = args(s).unwrap();
         (c.config, c.command)
+    }
+
+    /// #619's review: an install needs the shown SHA-256, never a bare
+    /// yes; a removal without `--yes` only shows what it would delete.
+    #[test]
+    fn companion_confirmation_is_explicit() {
+        use companion::{CompanionArgs, CompanionCommand};
+        assert_eq!(
+            args("companion install qbittorrent --yes").unwrap_err(),
+            clap::error::ErrorKind::UnknownArgument
+        );
+        let hex = "ab".repeat(32);
+        assert_eq!(
+            cmd(&format!("companion install qbittorrent --sha256 {hex}")).1,
+            Some(Command::Companion(CompanionArgs {
+                command: CompanionCommand::Install {
+                    id: "qbittorrent".into(),
+                    sha256: Some(hex),
+                }
+            }))
+        );
+        assert_eq!(
+            cmd("companion remove x").1,
+            Some(Command::Companion(CompanionArgs {
+                command: CompanionCommand::Remove {
+                    id: "x".into(),
+                    yes: false
+                }
+            }))
+        );
     }
 
     #[test]

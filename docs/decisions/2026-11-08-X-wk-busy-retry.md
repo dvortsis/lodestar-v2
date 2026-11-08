@@ -27,6 +27,10 @@ The worker claims a `Busy` key again instead of dropping it (#628's review; runn
 - When keys use up their attempts, the worker logs `worker.claims_gave_up` (Warn, the number of keys), once per streak. The streak ends with a batch answered with no `Busy` at all. So a stuck coordinator can't flood the log.
 - The counters `busy_retried`, `busy_gave_up` and `busy_dropped` count every case.
 
+## The event-names budget (runner-approved, §2.26, 2026-11-08T20:29Z)
+- The new event's labels put the "Settings logging event names (on demand)" chunk over its 14.9 KB budget once `main`'s newer events were in: it measured 15,056 B.
+- By S-logs-3's rule (measured + 10%), the budget is now **16.6 KB**, up from 14.9 KB. It leaves room for CMP-6's one event. The chunk grows with every wave of events, and splitting it by component is the runner's follow-up. The runner flags the change to the owner (§2.19).
+
 ## For the runner
 - `crates/cluster/src/server.rs`'s `KeyCheck` doc still says "(Today's worker drops any denied key; a busy retry is a follow-up.)". That file is outside this PR, so the runner updates the line or folds it into the next cluster PR.
 

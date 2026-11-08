@@ -38,7 +38,9 @@ use crate::inputs::Version;
 
 /// The record's file name inside `<data>/companions/<id>/`.
 pub const STATE_FILE: &str = "state.json";
-const STATE_TMP: &str = "state.json.tmp";
+/// The temporary file [`save`] writes before renaming it into place. A
+/// crash before the rename can leave it alone in a new folder.
+pub const STATE_TMP: &str = "state.json.tmp";
 const FORMAT: u32 = 1;
 const MAX_STATE: u64 = 4096;
 
@@ -196,19 +198,60 @@ pub fn load(dir: &Path) -> Result<Option<Record>, StateError> {
             step: o.step,
         }),
     };
-    if op
+    let record = Record {
+        installed: file.installed.as_deref().map(version).transpose()?,
+        op,
+    };
+    if !record
+        .op
         .as_ref()
-        .is_some_and(|o| o.version.is_none() != (o.kind == OpKind::Remove))
+        .is_none_or(|o| o.consistent(&record.installed))
     {
         return Err(StateError::Bad);
     }
-    Ok(Some(Record {
-        installed: file.installed.as_deref().map(version).transpose()?,
-        op,
-    }))
+    Ok(Some(record))
 }
 
-/// Writes `record` into `dir` atomically.
+impl Op {
+    /// Whether the writer can have produced this operation beside
+    /// `installed`: a removal names no version and only its own steps; an
+    /// update replaces an installed version and never writes credentials
+    /// or files; a first install has nothing installed until its commit
+    /// point. Anything else is refused on load, so recovery never acts on
+    /// a step another kind of operation would have meant.
+    fn consistent(&self, installed: &Option<Version>) -> bool {
+        use Step::*;
+        match self.kind {
+            OpKind::Remove => {
+                self.version.is_none() && matches!(self.step, Begun | Stopped | Forgotten)
+            }
+            OpKind::Update => {
+                self.version.is_some()
+                    && installed.is_some()
+                    && matches!(self.step, Begun | Staged | Committed | Healthy | Configured)
+            }
+            OpKind::Install => {
+                self.version.is_some()
+                    && !matches!(self.step, Stopped | Forgotten)
+                    && (installed.is_none()
+                        || (self.step == Configured && installed == &self.version))
+            }
+        }
+    }
+}
+
+/// Writes `record` into `dir` (the companion's folder,
+/// [`crate::layout::Install::root`]) atomically.
+///
+/// The caller holds the companion's operation slot and the data folder's
+/// manager lock (CMP-5's `Manager`): the temporary file has a fixed name,
+/// so two writers at once would race on it.
+///
+/// Once the rename has happened, a failed fsync of the folder is still an
+/// error ([`StateError::Io`]), as the layout's pointer reports it: the new
+/// record may not survive a crash, and a caller that went on (deleting the
+/// previous version after the commit point, say) could be left with a
+/// journal that names something already gone.
 pub fn save(dir: &Path, record: &Record) -> Result<(), StateError> {
     let bytes = serde_json::to_vec(&RecordFile {
         format: FORMAT,
@@ -225,21 +268,27 @@ pub fn save(dir: &Path, record: &Record) -> Result<(), StateError> {
         Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e.into()),
         _ => {}
     }
-    let mut o = OpenOptions::new();
-    o.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        o.mode(0o600);
+    let written = (|| -> io::Result<()> {
+        let mut o = OpenOptions::new();
+        o.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            o.mode(0o600);
+        }
+        let mut f = o.open(&tmp)?;
+        f.write_all(&bytes)?;
+        f.sync_all()?;
+        drop(f);
+        fs::rename(&tmp, dir.join(STATE_FILE))
+    })();
+    if let Err(e) = written {
+        // Best effort: a failed write leaves no temporary file behind (a
+        // crash still can, and recovery takes it).
+        let _ = fs::remove_file(&tmp);
+        return Err(e.into());
     }
-    let mut f = o.open(&tmp)?;
-    f.write_all(&bytes)?;
-    f.sync_all()?;
-    drop(f);
-    fs::rename(&tmp, dir.join(STATE_FILE))?;
-    // The rename has happened; as CMP-3's writer, a failed folder fsync
-    // isn't reported as an unwritten record.
-    let _ = sync_dir(dir);
+    sync_dir(dir)?;
     Ok(())
 }
 
@@ -275,6 +324,72 @@ mod tests {
         ] {
             fs::write(d.path().join(STATE_FILE), bad).unwrap();
             assert_eq!(load(d.path()), Err(StateError::Bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn pairs_the_writer_never_produces_are_refused() {
+        let d = tempfile::tempdir().unwrap();
+        for bad in [
+            // An install journalled with a removal's step.
+            r#"{"format":1,"installed":null,"op":{"kind":"install","version":"1","step":"stopped"}}"#,
+            // A removal with an install's step.
+            r#"{"format":1,"installed":"1","op":{"kind":"remove","step":"configured"}}"#,
+            // An update with nothing installed, or writing credentials.
+            r#"{"format":1,"installed":null,"op":{"kind":"update","version":"2","step":"staged"}}"#,
+            r#"{"format":1,"installed":"1","op":{"kind":"update","version":"2","step":"credentials"}}"#,
+            // An install with something else installed before its commit point.
+            r#"{"format":1,"installed":"1","op":{"kind":"install","version":"2","step":"healthy"}}"#,
+        ] {
+            fs::write(d.path().join(STATE_FILE), bad).unwrap();
+            assert_eq!(load(d.path()), Err(StateError::Bad), "{bad}");
+        }
+        for good in [
+            r#"{"format":1,"installed":"2","op":{"kind":"install","version":"2","step":"configured"}}"#,
+            r#"{"format":1,"installed":"1","op":{"kind":"update","version":"2","step":"committed"}}"#,
+            r#"{"format":1,"installed":"1","op":{"kind":"remove","step":"forgotten"}}"#,
+        ] {
+            fs::write(d.path().join(STATE_FILE), good).unwrap();
+            assert!(load(d.path()).unwrap().is_some(), "{good}");
+        }
+    }
+
+    #[test]
+    fn odd_files_are_refused_and_never_followed() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join(STATE_FILE);
+        // Over 4 KiB, not UTF-8, a directory.
+        fs::write(&path, vec![b' '; 5000]).unwrap();
+        assert_eq!(load(d.path()), Err(StateError::Bad));
+        fs::write(&path, [0xff, 0xfe, b'{']).unwrap();
+        assert_eq!(load(d.path()), Err(StateError::Bad));
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert_eq!(load(d.path()), Err(StateError::Bad));
+        fs::remove_dir(&path).unwrap();
+        // A leftover temporary file is replaced, not appended to.
+        fs::write(d.path().join(STATE_TMP), b"junk").unwrap();
+        save(d.path(), &Record::default()).unwrap();
+        assert_eq!(load(d.path()).unwrap(), Some(Record::default()));
+        #[cfg(unix)]
+        {
+            let outside = tempfile::tempdir().unwrap();
+            let target = outside.path().join("t");
+            fs::write(&target, br#"{"format":1,"installed":null,"op":null}"#).unwrap();
+            // A linked record is refused, not read through.
+            fs::remove_file(&path).unwrap();
+            std::os::unix::fs::symlink(&target, &path).unwrap();
+            assert_eq!(load(d.path()), Err(StateError::Bad));
+            fs::remove_file(&path).unwrap();
+            // A linked temporary file is replaced as a link; its target
+            // isn't written.
+            std::os::unix::fs::symlink(&target, d.path().join(STATE_TMP)).unwrap();
+            save(d.path(), &Record::default()).unwrap();
+            assert_eq!(
+                fs::read_to_string(&target).unwrap(),
+                r#"{"format":1,"installed":null,"op":null}"#
+            );
+            assert!(fs::symlink_metadata(&path).unwrap().is_file());
         }
     }
 }
