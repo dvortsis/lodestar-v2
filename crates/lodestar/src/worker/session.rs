@@ -68,6 +68,10 @@ impl Connect for Tcp {
 /// What runs on the worker. WK-2's is [`Idle`]; WK-10 (`worker/runtime.rs`)
 /// puts the DHT and the fetch pool behind it.
 pub trait Work: Send {
+    /// What `Hello` reports besides the cores, asked before each connect.
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
     /// A session started: its handle for claims, reports and results, until
     /// [`disconnected`](Self::disconnected). Called before any of its
     /// events.
@@ -253,16 +257,10 @@ impl<C: Connect> Worker<C> {
         self.clock.now_secs() > self.creds.not_after()
     }
 
-    fn hello(&self) -> Hello {
-        let cores = std::thread::available_parallelism()
+    fn hello(&self, mut caps: Capabilities) -> Hello {
+        caps.cores = std::thread::available_parallelism()
             .map_or(1, |n| u16::try_from(n.get()).unwrap_or(u16::MAX));
-        Hello::new(
-            self.creds.worker().0,
-            Capabilities {
-                cores,
-                ..Capabilities::default()
-            },
-        )
+        Hello::new(self.creds.worker().0, caps)
     }
 
     /// Runs until the worker must stop, connecting again whenever the
@@ -275,11 +273,12 @@ impl<C: Connect> Worker<C> {
             if self.expired() {
                 return Exit::Expired;
             }
+            let hello = self.hello(work.capabilities());
             let attempt = async {
                 let link = self.connect.link(&self.creds).await?;
                 WorkerSession::start(
                     link,
-                    self.hello(),
+                    hello,
                     self.clock.clone(),
                     self.settings.session.clone(),
                 )

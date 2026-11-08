@@ -390,6 +390,14 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_cluster_snapshot_failed_n,
 		m.settings_logging_ev_cluster_snapshot_failed_h
 	],
+	'worker.dht_started': [
+		m.settings_logging_ev_worker_dht_started_n,
+		m.settings_logging_ev_worker_dht_started_h
+	],
+	'worker.dht_start_failed': [
+		m.settings_logging_ev_worker_dht_start_failed_n,
+		m.settings_logging_ev_worker_dht_start_failed_h
+	],
 	'workers.join_refused': [
 		m.settings_logging_ev_workers_join_refused_n,
 		m.settings_logging_ev_workers_join_refused_h

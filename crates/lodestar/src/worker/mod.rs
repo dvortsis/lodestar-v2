@@ -24,6 +24,8 @@
 //! `Debug`, and every message the worker prints is fixed text plus names,
 //! paths and addresses.
 
+pub mod budget;
+pub mod dht;
 pub mod have;
 pub mod runtime;
 pub mod session;

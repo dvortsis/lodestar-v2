@@ -950,6 +950,27 @@ lodestar_log::catalogue! {
         fields: { error: Error },
     }
 
+    // ── Worker runtime (WK-10c, §19.5) ──
+    /// The worker's DHT started on its assigned shard: target prefixes
+    /// `first..end` of 256 and its BEP 42 id slots. A new shard restarts
+    /// the DHT, not the worker (WK-4).
+    WORKER_DHT_STARTED {
+        id: "worker.dht_started",
+        component: Workers,
+        level: Info,
+        message: "The worker's DHT started on its assigned part of the keyspace",
+        fields: { first: Label, end: Label, slots: Label },
+    }
+    /// The worker's DHT couldn't bind its address; it tries again after a
+    /// back-off of up to a minute.
+    WORKER_DHT_START_FAILED {
+        id: "worker.dht_start_failed",
+        component: Workers,
+        level: Warn,
+        message: "The worker's DHT couldn't start; it tries again shortly",
+        fields: { error: Error },
+    }
+
     // ── Workers API (WK-14, §19.6, §19.7) ──
     /// A worker connected while the planner already had 4,096 workers: it
     /// gets no assignment until one leaves, and is tried again then. Said
