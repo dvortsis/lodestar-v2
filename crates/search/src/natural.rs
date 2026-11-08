@@ -597,6 +597,13 @@ pub fn pieces(input: &str) -> Result<Vec<Piece>, NaturalError> {
     Ok(build(input)?.0)
 }
 
+/// How many tokens (words, operators and brackets) [`MAX_NATURAL_WORDS`]
+/// counts in `input`: what the tests check a `TooManyWords` refusal by.
+#[doc(hidden)]
+pub fn tokens(input: &str) -> usize {
+    caret::split(input).len()
+}
+
 /// The pieces as query text, each run `i` as `placeholder(i)` if given.
 #[doc(hidden)]
 pub fn join(pieces: &[Piece], placeholder: Option<&dyn Fn(usize) -> String>) -> String {
@@ -983,6 +990,16 @@ mod tests {
     #[test]
     fn limits() {
         assert_eq!(natural(&"a ".repeat(40)), Err(NaturalError::TooManyWords));
+        // The cap is on tokens, brackets and operators included, and is
+        // natural phrasing's own: a valid query past it is refused as too
+        // long, not as a syntax error, and the strict parse still reads it.
+        let at = "(a | b) ".repeat(MAX_NATURAL_WORDS / 5) + &"c ".repeat(MAX_NATURAL_WORDS % 5);
+        assert_eq!(tokens(&at), MAX_NATURAL_WORDS);
+        assert!(natural(&at).is_ok());
+        let over = at + "d";
+        assert_eq!(tokens(&over), MAX_NATURAL_WORDS + 1);
+        assert!(query::parse(&over).is_ok());
+        assert_eq!(natural(&over), Err(NaturalError::TooManyWords));
         assert_eq!(natural("a (b"), Err(NaturalError::Syntax));
         assert_eq!(natural(&"x".repeat(600)), Err(NaturalError::TooLong));
         assert_eq!(natural("").unwrap().ast, Node::All);
