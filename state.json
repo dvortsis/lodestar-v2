@@ -6090,7 +6090,9 @@
         "windows_service.rs: a fixed-port relaunch test to exercise the port-release wait",
         "icacls children inherit LODESTAR_RELAUNCH_TOKEN (harmless; rule noted for PK-win-portable-upd)"
       ]
-    }
+    },
+    "2026-11-08T07:48Z: CMP-4b: runner approved win32job =2.0.3 (Windows-only; pulls windows 0.61 + 12 crates, ~190 lock lines incl. landlock) under Q13; Job Object assign-after-CreateProcess race accepted (residual, like prlimit window); Linux Landlock via re-exec launcher approved with conditions; supervise/mod.rs hold/release ~50 lines approved. Owner FYI after merge (\u00a72.19).",
+    "2026-11-08T07:48Z: CMP-5 brief must include: call lodestar_companions::supervise::limits::launcher_main() first thing in crates/lodestar main (argv sentinel contract from CMP-4b PR) + test that launcher mode does nothing else."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -6881,5 +6883,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T07:44Z"
+  "updated": "2026-11-08T07:48Z"
 }
