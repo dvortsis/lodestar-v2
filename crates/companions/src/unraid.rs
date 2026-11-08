@@ -22,7 +22,7 @@ use quick_xml::events::{BytesDecl, BytesText, Event};
 
 use crate::catalogue::{Catalogue, Proto, TemplateId};
 use crate::compose::{
-    Bind, Checked, GLUETUN, GLUETUN_CAP, ServiceInput, TemplateError, check_pair, proto_name,
+    Bind, Checked, GLUETUN, GLUETUN_CAP, Route, ServiceInput, TemplateError, check_pair, proto_name,
 };
 use crate::inputs::CompanionId;
 
@@ -52,8 +52,14 @@ impl UnraidTemplate {
     }
 }
 
-/// The templates for companion `id`: its own, then gluetun's when
-/// `input.route` is [`Route::Gluetun`](crate::compose::Route::Gluetun).
+/// The templates for companion `id`: gluetun's first when `input.route`
+/// is [`Route::Gluetun`], then the companion's.
+///
+/// A template is saved as `my-<name>.xml`, the name Community
+/// Applications also uses, so saving it replaces a template of the same
+/// name, and applying it replaces a container of the same name (with its
+/// settings, a VPN key among them). To keep a gluetun you already run, use
+/// [`Route::ExistingGluetun`].
 pub fn unraid(
     catalogue: &Catalogue,
     id: &CompanionId,
@@ -62,17 +68,20 @@ pub fn unraid(
     let (main, vpn) = check_pair(catalogue, id, input, TemplateId::UnraidTemplate)?;
     let net = input.network.as_str();
     let mut out = Vec::new();
-    match &vpn {
-        Some(v) => {
-            out.push(render(
-                &main,
-                "none",
-                &["--network=container:gluetun".to_owned()],
-            )?);
+    // Each flag is fixed text plus a closed ContainerName.
+    let join = |name: &str| format!("--network=container:{name}");
+    match (&vpn, &input.route) {
+        // gluetun first: the companion's template can't be applied until
+        // the container it shares a network with exists.
+        (Some(v), _) => {
             let alias = format!("--network-alias={}", main.name.as_str());
             out.push(render(v, net, &[alias])?);
+            out.push(render(&main, "none", &[join(v.name.as_str())])?);
         }
-        None => out.push(render(&main, net, &[])?),
+        (None, Route::ExistingGluetun(name)) => {
+            out.push(render(&main, "none", &[join(name.as_str())])?);
+        }
+        (None, _) => out.push(render(&main, net, &[])?),
     }
     Ok(out)
 }
@@ -101,16 +110,18 @@ struct Config<'a> {
     help: &'a str,
     kind: &'a str,
     required: bool,
+    /// You fill it in: shown always, with no default.
+    fill: bool,
     mask: bool,
 }
 
 fn config(w: &mut W, c: &Config<'_>) -> Result<(), TemplateError> {
-    let display = if c.kind == "Variable" && !c.mask {
+    let display = if c.kind == "Variable" && !c.fill {
         "advanced"
     } else {
         "always"
     };
-    let default = if c.mask { "" } else { c.value.as_str() };
+    let default = if c.fill { "" } else { c.value.as_str() };
     let e = w.create_element("Config").with_attributes([
         ("Name", c.name),
         ("Target", c.target.as_str()),
@@ -131,6 +142,7 @@ fn config(w: &mut W, c: &Config<'_>) -> Result<(), TemplateError> {
 }
 
 const PATH_NOTE: &str = "Mount real folders only, never a link to somewhere else.";
+const REPLACE_NOTE: &str = "Applying it replaces a container or template you already have with the same name: check first.";
 const NETWORK_NOTE: &str = "Create the Docker network first: Unraid starts a container on a network it doesn't know with none.";
 const VPN_NOTE: &str =
     "You fill this in, from your VPN provider. Lodestar never asks for or stores it.";
@@ -155,20 +167,29 @@ fn render(
             help: m.help,
             kind: "Path",
             required: true,
+            fill: false,
             mask: false,
         });
     }
-    for (key, value, help) in &c.env {
-        let vpn = help.is_some();
+    for (key, value, vpn) in &c.env {
         configs.push(Config {
             name: key,
             target: (*key).to_owned(),
-            value: if vpn { String::new() } else { value.clone() },
-            mode: "",
-            help: if vpn { VPN_NOTE } else { "Set by Lodestar." },
+            value: if vpn.is_some() {
+                String::new()
+            } else {
+                value.clone()
+            },
+            mode: "rw",
+            help: if vpn.is_some() {
+                VPN_NOTE
+            } else {
+                "Set by Lodestar."
+            },
             kind: "Variable",
             required: true,
-            mask: vpn,
+            fill: vpn.is_some(),
+            mask: vpn.is_some_and(|(_, secret)| secret),
         });
     }
     let mut webui = String::new();
@@ -193,6 +214,7 @@ fn render(
                     help: "Published on your network.",
                     kind: "Port",
                     required: false,
+                    fill: false,
                     mask: false,
                 });
             }
@@ -204,6 +226,8 @@ fn render(
         overview.push(' ');
         overview.push_str(PATH_NOTE);
     }
+    overview.push(' ');
+    overview.push_str(REPLACE_NOTE);
     if network != "none" {
         overview.push(' ');
         overview.push_str(NETWORK_NOTE);
@@ -256,4 +280,63 @@ fn render(
         xml,
         fields,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn written(c: &Config<'_>) -> String {
+        let mut w = Writer::new(Vec::new());
+        config(&mut w, c).expect("config");
+        String::from_utf8(w.into_inner()).expect("utf8")
+    }
+
+    fn cfg(value: &str, fill: bool, mask: bool) -> Config<'_> {
+        Config {
+            name: "K",
+            target: "K".to_owned(),
+            value: value.to_owned(),
+            mode: "rw",
+            help: "a <b> & \"c\"",
+            kind: "Variable",
+            required: true,
+            fill,
+            mask,
+        }
+    }
+
+    #[test]
+    fn a_setting_you_fill_in_is_shown_empty_and_masked_if_secret() {
+        let secret = written(&cfg("", true, true));
+        assert!(secret.contains("Default=\"\""));
+        assert!(secret.contains("Display=\"always\""));
+        assert!(secret.contains("Mask=\"true\""));
+        assert!(secret.ends_with("/>"));
+        let provider = written(&cfg("", true, false));
+        assert!(provider.contains("Mask=\"false\""));
+        let fixed = written(&cfg("022", false, false));
+        assert!(fixed.contains("Default=\"022\"") && fixed.contains("Display=\"advanced\""));
+        assert!(fixed.ends_with(">022</Config>"));
+    }
+
+    #[test]
+    fn attribute_values_are_escaped() {
+        let x = written(&cfg("a<b", false, false));
+        assert!(x.contains("Description=\"a &lt;b&gt; &amp; &quot;c&quot;\""));
+        assert!(x.contains(">a&lt;b</Config>"));
+    }
+
+    #[test]
+    fn the_link_names_the_saved_file() {
+        let t = UnraidTemplate {
+            file_name: "my-prowlarr.xml".to_owned(),
+            xml: String::new(),
+            fields: Vec::new(),
+        };
+        assert_eq!(
+            t.add_container_path(),
+            "/Docker/AddContainer?xmlTemplate=user:/boot/config/plugins/dockerMan/templates-user/my-prowlarr.xml"
+        );
+    }
 }

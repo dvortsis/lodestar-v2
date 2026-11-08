@@ -15,7 +15,7 @@ use lodestar_companions::compose::{
     Bind, DataFolder, DataFolders, Paths, Publish, Route, ServiceInput, TemplateError, compose,
 };
 use lodestar_companions::inputs::{
-    CompanionId, HostPath, InputError, NetworkName, Pgid, PortNumber, Puid,
+    CompanionId, ContainerName, HostPath, InputError, NetworkName, Pgid, PortNumber, Puid,
 };
 use lodestar_companions::unraid::{UnraidTemplate, unraid};
 use proptest::prelude::*;
@@ -61,6 +61,10 @@ fn path(s: &str) -> HostPath {
     HostPath::parse(s).expect("host path")
 }
 
+fn name(s: &str) -> ContainerName {
+    ContainerName::parse(s).expect("container name")
+}
+
 fn port(s: &str) -> PortName {
     PortName::parse(s).expect("port name")
 }
@@ -88,7 +92,7 @@ fn input(companion: &str, route: Route) -> ServiceInput {
                 },
                 Publish {
                     port: port("p2p_udp"),
-                    bind: Bind::Loopback,
+                    bind: Bind::Lan,
                     host_port: num(6882),
                 },
             ],
@@ -122,6 +126,7 @@ fn input(companion: &str, route: Route) -> ServiceInput {
             None,
         )
         .expect("data folders"),
+        taken: Vec::new(),
     }
 }
 
@@ -197,13 +202,16 @@ fn invariants(yaml: &str, xml: &[UnraidTemplate]) {
 fn golden_per_companion() {
     let cat = golden_catalogue();
     for companion in ["qbittorrent", "prowlarr", "flaresolverr", "gluetun"] {
-        let routes: &[(Route, &str)] = if companion == "gluetun" {
-            &[(Route::Direct, "")]
-        } else {
-            &[(Route::Direct, ""), (Route::Gluetun, "-gluetun")]
-        };
-        for &(route, suffix) in routes {
-            let inp = input(companion, route);
+        let mut routes = vec![(Route::Direct, "")];
+        if companion != "gluetun" {
+            routes.push((Route::Gluetun, "-gluetun"));
+            routes.push((Route::ExistingGluetun(name("my-vpn")), "-existing"));
+        }
+        for (route, suffix) in routes {
+            let mut inp = input(companion, route.clone());
+            if matches!(route, Route::ExistingGluetun(_)) {
+                inp.publish.clear();
+            }
             let yaml = compose(&cat, &id(companion), &inp).expect("compose");
             let xml = unraid(&cat, &id(companion), &inp).expect("unraid");
             invariants(&yaml, &xml);
@@ -221,6 +229,9 @@ fn golden_per_companion() {
                 );
             }
             assert_eq!(xml.len(), if route == Route::Gluetun { 2 } else { 1 });
+            if route == Route::Gluetun {
+                assert_eq!(xml[0].file_name, "my-gluetun.xml", "gluetun comes first");
+            }
         }
     }
 }
@@ -251,6 +262,7 @@ fn golden_yaml_keywords() {
 #[test]
 fn packaging_snippets_match() {
     let cat = catalogue(&format!("{}1", "0".repeat(63)));
+    let mut written = Vec::new();
     for companion in ["qbittorrent", "prowlarr", "gluetun"] {
         for route in [Route::Direct, Route::Gluetun] {
             if companion == "gluetun" && route == Route::Gluetun {
@@ -261,7 +273,7 @@ fn packaging_snippets_match() {
             } else {
                 ""
             };
-            let mut compose_in = input(companion, route);
+            let mut compose_in = input(companion, route.clone());
             compose_in.puid = Puid::new(1000).expect("puid");
             compose_in.pgid = Pgid::new(1000).expect("pgid");
             compose_in.data = DataFolders::new("/srv/lodestar", None, None).expect("data");
@@ -271,10 +283,13 @@ fn packaging_snippets_match() {
             if compose_in.paths.downloads.is_some() {
                 compose_in.paths.downloads = Some(path("/srv/downloads"));
             }
+            // The web UI on 127.0.0.1 only; no peer port.
+            compose_in.publish.retain(|p| p.port.as_str() == "webui");
             for p in &mut compose_in.publish {
                 p.bind = Bind::Loopback;
             }
             let yaml = compose(&cat, &id(companion), &compose_in).expect("compose");
+            written.push(format!("compose/{companion}{suffix}.yml"));
             golden(
                 &here(&format!(
                     "../../packaging/companions/compose/{companion}{suffix}.yml"
@@ -282,6 +297,7 @@ fn packaging_snippets_match() {
                 &yaml,
             );
             for t in unraid(&cat, &id(companion), &input(companion, route)).expect("unraid") {
+                written.push(format!("unraid/{companion}{suffix}/{}", t.file_name));
                 golden(
                     &here(&format!(
                         "../../packaging/companions/unraid/{companion}{suffix}/{}",
@@ -290,6 +306,34 @@ fn packaging_snippets_match() {
                     &t.xml,
                 );
             }
+        }
+    }
+    // No file left over from an earlier layout.
+    let root = here("../../packaging/companions");
+    let mut found = Vec::new();
+    for dir in ["compose", "unraid"] {
+        list(&root.join(dir), &root, &mut found);
+    }
+    found.sort();
+    written.sort();
+    assert_eq!(
+        found, written,
+        "packaging/companions holds files the code doesn't write"
+    );
+}
+
+fn list(dir: &Path, root: &Path, out: &mut Vec<String>) {
+    for e in std::fs::read_dir(dir).expect("read dir") {
+        let p = e.expect("entry").path();
+        if p.is_dir() {
+            list(&p, root, out);
+        } else {
+            let rel = p.strip_prefix(root).expect("under root");
+            let parts: Vec<_> = rel
+                .iter()
+                .map(|c| c.to_string_lossy().into_owned())
+                .collect();
+            out.push(parts.join("/"));
         }
     }
 }
@@ -412,6 +456,72 @@ fn refuses_overlaps_with_lodestar_data() {
         inside("/mnt/c/Users/me/.ssh"),
         TemplateError::DotFolder,
     );
+    // One Unraid share through any pool or disk is the same folder.
+    for alias in [
+        "/mnt/user/lodestar/x",
+        "/mnt/user0/lodestar",
+        "/mnt/disk1/lodestar/db",
+    ] {
+        refuse(
+            "prowlarr",
+            move |i| {
+                i.data = DataFolders::new("/mnt/cache/lodestar", Some(""), Some("")).expect("data");
+                i.paths.config = Some(path(alias));
+            },
+            TemplateError::DataFolder,
+        );
+    }
+    refuse(
+        "prowlarr",
+        inside("/mnt/user/lodestar-hot/x"),
+        TemplateError::DataFolder,
+    );
+    // Another companion's folder, either way round, through aliases too.
+    refuse(
+        "qbittorrent",
+        |i| {
+            i.taken = vec![path("/srv/companions/prowlarr")];
+            i.paths.config = Some(path("/srv/companions"));
+        },
+        TemplateError::OtherCompanion,
+    );
+    refuse(
+        "prowlarr",
+        |i| {
+            i.taken = vec![path("/mnt/cache/stuff/qbittorrent")];
+            i.paths.config = Some(path("/mnt/user/stuff"));
+        },
+        TemplateError::OtherCompanion,
+    );
+}
+
+/// The running instance's folder is compared after resolving links.
+#[cfg(target_os = "linux")]
+#[test]
+fn refuses_the_running_data_folder_through_a_link() {
+    let dir = tempfile::Builder::new()
+        .prefix("cmp7")
+        .tempdir()
+        .expect("tempdir");
+    let real = dir.path().join("real");
+    std::fs::create_dir(&real).expect("mkdir");
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).expect("symlink");
+    let real = std::fs::canonicalize(&real).expect("canonical");
+    let folder = DataFolder::from_running(&link).expect("resolves");
+    let sub = real.join("sub");
+    refuse(
+        "prowlarr",
+        move |i| {
+            i.data = DataFolders::none().with(folder);
+            i.paths.config = Some(path(sub.to_str().expect("utf8")));
+        },
+        TemplateError::DataFolder,
+    );
+    assert_eq!(
+        DataFolder::from_running(&dir.path().join("missing")),
+        Err(TemplateError::DataFolderUnreadable)
+    );
 }
 
 #[test]
@@ -450,6 +560,37 @@ fn refuses_wrong_shapes() {
         "qbittorrent",
         |i| i.route = Route::Gluetun,
         TemplateError::P2pThroughVpn,
+    );
+    refuse(
+        "qbittorrent",
+        |i| i.publish[2].bind = Bind::Loopback,
+        TemplateError::P2pLoopback,
+    );
+    refuse(
+        "qbittorrent",
+        |i| i.publish[0].host_port = num(8081),
+        TemplateError::PortRemap,
+    );
+    refuse(
+        "qbittorrent",
+        |i| i.publish[2].host_port = num(6883),
+        TemplateError::PortRemap,
+    );
+    refuse(
+        "gluetun",
+        |i| {
+            i.publish = vec![Publish {
+                port: port("control"),
+                bind: Bind::Lan,
+                host_port: num(8000),
+            }]
+        },
+        TemplateError::LanRefused,
+    );
+    refuse(
+        "prowlarr",
+        |i| i.route = Route::ExistingGluetun(name("my-vpn")),
+        TemplateError::PublishOnExisting,
     );
     let cat = golden_catalogue();
     assert_eq!(
