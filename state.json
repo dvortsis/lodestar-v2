@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-08T02:13Z",
+  "updated_at": "2026-11-08T02:17Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5969,6 +5969,11 @@
     {
       "id": "CMP-3-merged",
       "note": "2026-11-08T02:13Z: #598 merged 7f641d94 (3 runner review rounds). CMP-5 notes: wire is_secret_row into export/import/bundle filters; chown for other uid; write only while qBittorrent stopped; handle PendingRewrite (tell user / remove leftover _new and retry with qB stopped); \"three keys\" comments (config_files.rs:205, decisions :17) now five; ini_entries oracle panic message; check qB build for WebUI API key, CSRFProtection/HostHeaderValidation; log-leak test capture tracing if events added."
+    },
+    {
+      "id": "X-cmp-minisign-variant",
+      "at": "2026-11-08T02:17Z",
+      "what": "Add catalogue UpstreamSig::Minisign{public_key, sig_url} variant (CMP-0 catalogue.rs) to reach CMP-1 verify::minisign; and a streaming verify_prehashed in crates/update so the check needn't read the whole file (<=512 MiB) into memory. No v0.6 companion publishes minisign, so not urgent. From CMP-1 session."
     }
   ],
   "main_health": [
