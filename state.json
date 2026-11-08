@@ -3711,6 +3711,9 @@
       "pr": 603,
       "session": "session_01MMjhn9UTgWx4UJ4Ae7mhXJ",
       "notes": "2026-11-08T05:50:30Z: #603 48598f18 both fresh Opus reviews MERGE (correctness + security). Hardening round asked: pid<=1/self refusal + pgrp check + exe under <data>/companions; group kill before readers; keep record if unreaped; read_record O_NOFOLLOW|O_NONBLOCK + filter before take; ring per-line overhead + strip control bytes; reserve id run; send_if_modified; cfg data_dir; remove() doc. Runner self-checks delta (concurrency ordering: look closely)."
+    },
+    "WK-10d": {
+      "notes": "2026-11-08T05:58:58Z: split: #604 store floor holds (slice/WK-10d-store, 03310790, ~275). Fresh Opus CHANGES: B1 filter::write INSERT OR REPLACE overwrites worker-floor rows (then release frees); N1 single predicate, N5 exact prefix match, N2 docs, N6 release_rule_hashes guard, N7 hold_rank local floor 3 / worker 2, N3 doc. N4 (UI gone() message), N8 (stored torrent under held hash) -> main WK-10d PR. Floor's own CS tombstones stay releasable (runner, owner FYI). Delta review after push."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -6756,7 +6759,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T05:50:30Z",
+    "updated": "2026-11-08T05:58:58Z",
     "items": [
       {
         "slot": 1,
@@ -6787,7 +6790,7 @@
         "slice": "WK-10d",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: WK-10d hardening (after #601 merged 34bd24b1); file list for pipeline/cluster edits due first",
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #604 (store part) CHANGES relayed (B1 + nits); main WK-10d PR (~1,350) after #604 merges",
         "since": "2026-11-08T04:50:45Z"
       }
     ],
