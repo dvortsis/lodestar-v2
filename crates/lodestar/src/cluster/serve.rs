@@ -2059,9 +2059,15 @@ mod tests {
         // `open_keys` says for now (the test may run either side of 23:00Z
         // or of midnight, so the expectation follows the clock).
         let keys = format!("{:?}", lock(&h.0.tick.keys));
-        let today = day_of(now);
-        assert!(keys.contains(&format!("{}, {today}", today - 1)), "{keys}");
         let later = w_clock.now_secs();
+        // Midnight may pass between `now` and the build: either day's pair.
+        assert!(
+            [now, later].iter().any(|&t| {
+                let today = day_of(t);
+                keys.contains(&format!("{}, {today}", today - 1))
+            }),
+            "{keys}"
+        );
         let want = |at: i64| {
             let ids: Vec<String> = open_keys(&[7; 32], at)
                 .iter()

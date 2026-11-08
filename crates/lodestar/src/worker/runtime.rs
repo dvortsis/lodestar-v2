@@ -279,8 +279,9 @@ struct Shared {
     /// coordinator whose clock went back numbers its plans lower (WK-5).
     fresh_session: AtomicBool,
     /// When sealing went down (no installed key covers now): results wait
-    /// until [`SEAL_WAIT`] after this, then go at once. Cleared by a
-    /// result that seals.
+    /// until [`SEAL_WAIT`] after this, then go at once. Cleared once a key
+    /// covers now again: by an install, by a result that seals, or by the
+    /// next look ([`Shared::sealing_down`], from `sift` and the claims).
     unsealable_since: Mutex<Option<std::time::Instant>>,
     /// Asks the session task to send everything it has now (a drain).
     flush: mpsc::UnboundedSender<tokio::sync::oneshot::Sender<()>>,
@@ -773,6 +774,9 @@ fn snapshot_chunk(s: &Arc<Shared>, c: SnapshotChunk) {
                             let _notes = s.judge.install(&snapshot, complete.version);
                             // Results waiting for a sealable key look again.
                             s.key_day.send_replace(snapshot.key.id);
+                            // A key that covers now ends the outage at once,
+                            // not at the next result or find (#599's review).
+                            s.sealing_down(unix_now());
                             true
                         }
                         Err(_) => false,
@@ -997,13 +1001,20 @@ impl<O: Outbox<SealedRecord>> Outbox<Results> for Sealing<O> {
                 let deadline = *lock(&s.unsealable_since)
                     .get_or_insert_with(std::time::Instant::now)
                     + s.config.seal_wait;
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                // Past the wait already: released at once, and the pool isn't
+                // paused for it (#599's review), so a backlog behind it goes
+                // the same way instead of waiting on a pause.
+                if left.is_zero() {
+                    release(&s, &reports, item.key, item.token);
+                    return Ok(());
+                }
                 // No fetch is started while a result waits: they'd only
                 // spend their keys waiting on the pool's byte budget.
                 if s.waiting.fetch_add(1, Ordering::AcqRel) == 0 {
                     s.refresh_pause().await;
                 }
                 let mut installs = s.key_day.subscribe();
-                let left = deadline.saturating_duration_since(std::time::Instant::now());
                 let ready = tokio::time::timeout(left, async {
                     while !s.sealable(unix_now()) {
                         // A new install, or the next minute (the clock may
@@ -1181,6 +1192,14 @@ async fn claim(s: Arc<Shared>, found: mpsc::Receiver<Found>) {
     // `next_claims` isn't cancel-safe: it's awaited to its end.
     while let Some(batch) = next_claims(&mut batches).await {
         if s.draining.load(Ordering::Acquire) {
+            continue;
+        }
+        // Sifted before sealing went down, claimed after: dropped as `sift`
+        // would drop them now (#599's review). The DHT finds them again.
+        if s.sealing_down(unix_now()) {
+            s.counts
+                .held_back
+                .fetch_add(batch.len() as u64, Ordering::Relaxed);
             continue;
         }
         let peers: BTreeMap<[u8; 20], Vec<_>> =
@@ -1591,7 +1610,19 @@ mod tests {
 
     /// The coordinator's filter snapshot for today, from an empty store,
     /// as its chunks.
-    fn filter_chunks() -> (u64, Vec<SnapshotChunk>) {
+    ///
+    /// Waits out the last minute before midnight UTC first: a test that
+    /// seals under today's key would otherwise see the day turn under it
+    /// (a condition with a deadline, not a fixed sleep).
+    async fn filter_chunks() -> (u64, Vec<SnapshotChunk>) {
+        let start = Instant::now();
+        while unix_now().rem_euclid(DAY) >= DAY - 60 {
+            assert!(
+                start.elapsed() < Duration::from_secs(90),
+                "midnight never came"
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
         filter_chunks_at(unix_now())
     }
 
@@ -1627,7 +1658,7 @@ mod tests {
         assert!(!rt.is_started());
         assert_eq!(rt.filter_version(), 0);
 
-        let (version, chunks) = filter_chunks();
+        let (version, chunks) = filter_chunks().await;
         for c in chunks {
             rt.event(WorkerEvent::Snapshot(c));
         }
@@ -1707,7 +1738,7 @@ mod tests {
             Some(a),
             Intensity::Balanced,
         )));
-        let (_, chunks) = filter_chunks();
+        let (_, chunks) = filter_chunks().await;
         for c in chunks {
             rt.event(WorkerEvent::Snapshot(c));
         }
@@ -1911,7 +1942,7 @@ mod tests {
         let (mut coord, session) = session_pair().await;
         rt.connected(session.handle());
         rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
-        let (_, chunks) = filter_chunks();
+        let (_, chunks) = filter_chunks().await;
         for c in chunks {
             rt.event(WorkerEvent::Snapshot(c));
         }
@@ -2003,7 +2034,7 @@ mod tests {
             .unwrap();
         a.pool_cap = KEYS;
         rt.event(WorkerEvent::Assign(a.to_message().unwrap()));
-        let (_, chunks) = filter_chunks();
+        let (_, chunks) = filter_chunks().await;
         for c in chunks {
             rt.event(WorkerEvent::Snapshot(c));
         }
@@ -2104,12 +2135,42 @@ mod tests {
         rt.shutdown().await;
     }
 
+    /// WK-5: a new session's first `Assign` applies whatever its revision
+    /// (a coordinator whose clock went back numbers its plans lower); after
+    /// it, only a newer one does.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_new_sessions_first_assign_applies_a_lower_revision() {
+        let mut rt = Runtime::start(config(Arc::new(MapFetch::default())));
+        let (_coord, session) = session_pair().await;
+        rt.connected(session.handle());
+        rt.event(WorkerEvent::Assign(assignment(50, 0, 1)));
+        assert_eq!(rt.assignment().map(|a| a.revision), Some(50));
+        rt.disconnected();
+        let (_coord2, session2) = session_pair().await;
+        rt.connected(session2.handle());
+        rt.event(WorkerEvent::Assign(assignment(7, 0, 1)));
+        assert_eq!(
+            rt.assignment().map(|a| a.revision),
+            Some(7),
+            "the first applies"
+        );
+        rt.event(WorkerEvent::Assign(assignment(6, 0, 1)));
+        assert_eq!(
+            rt.assignment().map(|a| a.revision),
+            Some(7),
+            "then only newer"
+        );
+        rt.event(WorkerEvent::Assign(assignment(8, 0, 1)));
+        assert_eq!(rt.assignment().map(|a| a.revision), Some(8));
+        rt.shutdown().await;
+    }
+
     /// A dictionary named by `Assign` must arrive first too.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_named_dictionary_is_waited_for() {
         let mut rt = Runtime::start(config(Arc::new(MapFetch::default())));
         rt.event(WorkerEvent::Assign(assignment(1, 9, 1)));
-        let (version, chunks) = filter_chunks();
+        let (version, chunks) = filter_chunks().await;
         for c in chunks {
             rt.event(WorkerEvent::Snapshot(c));
         }
@@ -2190,7 +2251,7 @@ mod tests {
         let (_coord, session) = session_pair_with(1).await;
         rt.connected(session.handle());
         rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
-        let (_, chunks) = filter_chunks();
+        let (_, chunks) = filter_chunks().await;
         for c in chunks {
             rt.event(WorkerEvent::Snapshot(c));
         }
@@ -2226,7 +2287,7 @@ mod tests {
         let (_coord2, session2) = session_pair_with(1).await;
         rt.connected(session2.handle());
         rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
-        let (_, chunks) = filter_chunks();
+        let (_, chunks) = filter_chunks().await;
         for c in chunks {
             rt.event(WorkerEvent::Snapshot(c));
         }
@@ -2384,12 +2445,23 @@ mod tests {
             j.clear.load(Ordering::Relaxed) + j.marked.load(Ordering::Relaxed)
         };
         assert_eq!(sealed(), 0);
-        // Today's arrives: the result is judged and sealed.
-        let (_, chunks) = filter_chunks();
+        let paused = |rt: &Runtime| rt.shared.pool_paused.try_lock().ok().map(|g| *g);
+        until("the pool paused while it waits", || {
+            (paused(&rt) == Some(true), paused(&rt))
+        })
+        .await;
+        // Today's arrives: the result is judged and sealed, the outage ends
+        // with the install, and the pool resumes (#599's review).
+        let (_, chunks) = filter_chunks().await;
         for c in chunks {
             rt.event(WorkerEvent::Snapshot(c));
         }
         until("sealed", || (sealed() == 1, sealed())).await;
+        until("the pool resumed", || {
+            (paused(&rt) == Some(false), paused(&rt))
+        })
+        .await;
+        assert!(lock(&rt.shared.unsealable_since).is_none());
         assert_eq!(c.lost.load(Ordering::Relaxed), 0, "nothing reported lost");
         assert_eq!(c.released.load(Ordering::Relaxed), 0);
         rt.shutdown().await;
@@ -2562,7 +2634,7 @@ mod tests {
         assert!(sift(&rt.shared, found(4), false, false).is_none());
         assert_eq!(c.held_back.load(Ordering::Relaxed), 1);
         // A fresh snapshot ends it.
-        let (_, chunks) = filter_chunks();
+        let (_, chunks) = filter_chunks().await;
         for ch in chunks {
             rt.event(WorkerEvent::Snapshot(ch));
         }
