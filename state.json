@@ -6412,6 +6412,10 @@
     {
       "at": "2026-11-08T19:58Z",
       "note": "#633 merged (107c3d1b). #625 X-cloud-infra merged (6e6a1135) on Opus MERGE + security MERGE (1 LOW region). #623 closed; owner deletes chore/lodestar-cloud-reconciliation-20261108. X-cloud-infra-2 brief in briefs/X-cloud-infra-2.md, same session. Next runner PR: X-cloud-infra owns add .gitignore (reviewer note 5); X-cloud-infra-2 owns add docs/decisions/2026-11-08-X-cloud-infra-2.md, .github/workflows/ci.yml (infra job), .github/scripts/test_ci_changes.py; #627 plan's VPN-example TZ line is stale (now Etc/UTC). OP-1 now ready (deps P-cloud-operator, X-cloud-infra, ext:owner-operator-answers) - launch when a slot frees."
+    },
+    {
+      "at": "2026-11-08T19:55Z",
+      "note": "#628 X-wk10d-unknown merged (6c915427). Slot 4 -> X-wk-busy-retry then X-wk-pause-text in the same session."
     }
   ],
   "main_health": [
@@ -7113,7 +7117,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T19:58:00Z",
+    "updated": "2026-11-08T19:55:00Z",
     "items": [
       {
         "slot": 1,
@@ -7141,11 +7145,11 @@
       },
       {
         "slot": 4,
-        "slice": "X-wk10d-unknown",
+        "slice": "X-wk-busy-retry",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: X-wk10d-unknown follow-up; awaiting its ready report",
-        "since": "2026-11-08T17:20Z"
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #628 merged (6c915427); X-wk-busy-retry then X-wk-pause-text per briefs/X-wk-busy-retry.md",
+        "since": "2026-11-08T19:55Z"
       },
       {
         "slot": 5,
