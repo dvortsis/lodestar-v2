@@ -517,7 +517,11 @@ fn leftovers_only(dir: &Path) -> bool {
         return false;
     };
     let mut entries = entries;
-    entries.all(|e| e.is_ok_and(|e| e.file_name() == state::STATE_TMP))
+    entries.all(|e| {
+        e.is_ok_and(|e| {
+            e.file_name() == state::STATE_TMP && e.file_type().is_ok_and(|t| t.is_file())
+        })
+    })
 }
 
 /// Deletes a folder [`leftovers_only`] accepted: the temporary file, then
