@@ -1,0 +1,4 @@
+GET /ping
+
+HTTP 401
+Content-Type: text/html
