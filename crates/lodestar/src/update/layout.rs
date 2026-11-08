@@ -810,11 +810,14 @@ mod windows_tests {
         let (tmp, dst) = (dir.path().join("new"), dir.path().join("state"));
         fs::write(&tmp, b"new").unwrap();
         fs::write(&dst, b"old").unwrap();
-        // Read sharing only: no FILE_SHARE_DELETE, so 32.
+        // The new file held open with read sharing only (no
+        // FILE_SHARE_DELETE), as a scanner holds it: renaming it is a
+        // sharing violation, 32. (A held destination answers 5, which is
+        // retried too.)
         let held = OpenOptions::new()
             .read(true)
             .share_mode(win::SHARE_READ)
-            .open(&dst)
+            .open(&tmp)
             .unwrap();
         let held = std::cell::RefCell::new(Some(held));
         let mut refusals = Vec::new();

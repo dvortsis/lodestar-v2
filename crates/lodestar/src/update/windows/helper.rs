@@ -1328,19 +1328,14 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("updates");
         Windows.secure_staging(&dir).unwrap();
-        let sddl = crate::windows::acl::parse_sddl(
-            &std::process::Command::new("powershell.exe")
-                .args([
-                    "-NoProfile",
-                    "-Command",
-                    "(Get-Acl -LiteralPath $env:P).Sddl",
-                ])
-                .env("P", &dir)
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-                .unwrap(),
-        )
-        .unwrap();
+        let seen = {
+            use crate::windows::acl::Ops;
+            crate::windows::acl::Windows { own_sid: None }
+                .inspect(&dir)
+                .unwrap()
+                .unwrap()
+        };
+        let sddl = crate::windows::acl::parse_sddl(&seen.folder.sddl).unwrap();
         assert!(sddl.dacl.starts_with("PAI"), "{sddl:?}");
         assert!(!sddl.dacl.contains("S-1-5-80-"), "{sddl:?}");
         Windows.secure_staging(&dir).unwrap();
