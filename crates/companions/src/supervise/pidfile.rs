@@ -625,14 +625,13 @@ mod tests {
     fn a_fifo_in_place_of_a_record_does_not_block() {
         let data = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let fifo = data.path().join("a.json");
-        rustix::fs::mknodat(
-            rustix::fs::CWD,
-            &fifo,
-            rustix::fs::FileType::Fifo,
-            rustix::fs::Mode::from_raw_mode(0o600),
-            0,
-        )
-        .unwrap_or_else(|e| panic!("{e}"));
+        // rustix has no mknodat/mkfifoat on macOS, and the workspace forbids
+        // unsafe, so the FIFO comes from mkfifo(1), which every Unix ships.
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(made.success(), "mkfifo failed: {made}");
         assert_eq!(read_record(&fifo), None);
     }
 
