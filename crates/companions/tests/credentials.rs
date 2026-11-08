@@ -84,7 +84,7 @@ fn qbittorrent_golden_new_file() {
     assert_eq!(
         out,
         format!(
-            "[Preferences]\nWebUI\\Address=127.0.0.1\nWebUI\\Password_PBKDF2={}\nWebUI\\Username=lodestar\n",
+            "[Preferences]\nWebUI\\Address=127.0.0.1\nWebUI\\AuthSubnetWhitelistEnabled=false\nWebUI\\LocalHostAuth=true\nWebUI\\Password_PBKDF2={}\nWebUI\\Username=lodestar\n",
             hash_value()
         )
     );
@@ -118,7 +118,7 @@ fn qbittorrent_updates_only_its_keys() {
     assert_eq!(
         out,
         format!(
-            "[Application]\nFileLogger\\Enabled=true\n\n[BitTorrent]\nSession\\Port=6881\n\n[Preferences]\nGeneral\\Locale=en\nWebUI\\Address=127.0.0.1\nWebUI\\Port=8080\nWebUI\\Password_PBKDF2={}\nWebUI\\Username=lodestar\n; a comment\n\n[LegalNotice]\nAccepted=true\n",
+            "[Application]\nFileLogger\\Enabled=true\n\n[BitTorrent]\nSession\\Port=6881\n\n[Preferences]\nGeneral\\Locale=en\nWebUI\\Address=127.0.0.1\nWebUI\\Port=8080\nWebUI\\AuthSubnetWhitelistEnabled=false\nWebUI\\LocalHostAuth=true\nWebUI\\Password_PBKDF2={}\nWebUI\\Username=lodestar\n; a comment\n\n[LegalNotice]\nAccepted=true\n",
             hash_value()
         )
     );
@@ -138,7 +138,7 @@ fn qbittorrent_finds_its_keys_however_qt_spells_them() {
     assert_eq!(
         out,
         format!(
-            "[General]\r\nPreferences/WebUI/Address=127.0.0.1\r\n[Preferences\\WebUI]\r\nUsername=lodestar\r\n[Preferences]\r\nWebUI\\Password_PBKDF2={}\r\n",
+            "[General]\r\nPreferences/WebUI/Address=127.0.0.1\r\n[Preferences\\WebUI]\r\nUsername=lodestar\r\n[Preferences]\r\nWebUI\\Password_PBKDF2={}\r\nWebUI\\AuthSubnetWhitelistEnabled=false\r\nWebUI\\LocalHostAuth=true\r\n",
             hash_value()
         )
     );
@@ -162,7 +162,7 @@ fn qbittorrent_adds_a_section_to_a_file_without_one() {
     assert_eq!(
         out,
         format!(
-            "[BitTorrent]\nSession\\Port=6881\n\n[Preferences]\nWebUI\\Address=127.0.0.1\nWebUI\\Password_PBKDF2={}\nWebUI\\Username=me\n",
+            "[BitTorrent]\nSession\\Port=6881\n\n[Preferences]\nWebUI\\Address=127.0.0.1\nWebUI\\AuthSubnetWhitelistEnabled=false\nWebUI\\LocalHostAuth=true\nWebUI\\Password_PBKDF2={}\nWebUI\\Username=me\n",
             hash_value()
         )
     );
@@ -208,6 +208,8 @@ fn qbittorrent_refuses_malformed_files() {
         ("[Preferences]x\nWebUI\\Address=*\n", Some(1)),
         ("[Preferences]\nWebUI\\Address;x=*\n", Some(2)),
         ("[Preferences]\nWebUI\\Port=1\nWebUI%5CAddress=*\n", Some(3)),
+        // Qt decodes `%2F` to `/`.
+        ("[Preferences]\nWebUI%2FAddress=*\n", Some(2)),
         // A quoted value running on hides the lines inside it.
         (
             "[Preferences]\nWebUI\\Locale=\"x\nWebUI\\Address=0.0.0.0\n\"\n",
@@ -355,6 +357,30 @@ fn files_are_written_atomically_and_privately() {
             assert_eq!(mode & 0o777, 0o600, "{p:?}");
         }
     }
+}
+
+/// qBittorrent loads `qBittorrent_new.conf` first and renames it over the
+/// config, so a leftover one would undo our write: refused, both left as
+/// they were.
+#[test]
+fn a_leftover_qbittorrent_new_conf_is_refused() {
+    let dir = TestDir::new();
+    let conf = dir.path().join("qBittorrent.conf");
+    let pending = dir.path().join("qBittorrent_new.conf");
+    std::fs::write(&conf, "[Preferences]\nWebUI\\Address=*\n").unwrap();
+    std::fs::write(&pending, "[Preferences]\nWebUI\\Address=*\n").unwrap();
+    assert_eq!(
+        write_qbittorrent(&conf, &Username::default(), &Secret::new(PASSWORD)),
+        Err(ConfigError::PendingRewrite)
+    );
+    for p in [&conf, &pending] {
+        assert_eq!(
+            std::fs::read_to_string(p).unwrap(),
+            "[Preferences]\nWebUI\\Address=*\n"
+        );
+    }
+    std::fs::remove_file(&pending).unwrap();
+    write_qbittorrent(&conf, &Username::default(), &Secret::new(PASSWORD)).unwrap();
 }
 
 #[test]
@@ -612,8 +638,10 @@ fn ini_entries(text: &str) -> Vec<(String, String)> {
     out
 }
 
-const OURS: [&str; 3] = [
+const OURS: [&str; 5] = [
     "Preferences\\WebUI\\Address",
+    "Preferences\\WebUI\\AuthSubnetWhitelistEnabled",
+    "Preferences\\WebUI\\LocalHostAuth",
     "Preferences\\WebUI\\Password_PBKDF2",
     "Preferences\\WebUI\\Username",
 ];
@@ -635,7 +663,9 @@ fn ini_line() -> impl Strategy<Value = String> {
     prop_oneof![
         Just(String::new()),
         "; [a-zA-Z0-9 =]{0,12}".prop_map(|s| s),
-        "\\[ ?(Preferences|preferences|BitTorrent|General|general) ?\\]".prop_map(|s| s),
+        "\\[ ?(Preferences|preferences|BitTorrent|General|general|) ?(; ?x)?\\]".prop_map(|s| s),
+        Just("Preferences\\WebUI\\Address=*".to_owned()),
+        "WebUI\\\\(LocalHostAuth|AuthSubnetWhitelistEnabled)=(true|false)".prop_map(|s| s),
         "(Session\\\\Port|Accepted|Preferences/WebUI/Address)=[a-zA-Z0-9*.\" ]{0,8}".prop_map(|s| s),
         "(WebUI|webui)\\\\(Address|address|Port|Username|Password_PBKDF2|Locale)=[a-zA-Z0-9*.,\" ]{0,12}"
             .prop_map(|s| s),
@@ -705,7 +735,13 @@ proptest! {
         };
         let entries = ini_entries(&out);
         assert_ours_once(&entries, &out);
-        let want = ["127.0.0.1".to_owned(), hash_value(), "lodestar".to_owned()];
+        let want = [
+            "127.0.0.1".to_owned(),
+            "false".to_owned(),
+            "true".to_owned(),
+            hash_value(),
+            "lodestar".to_owned(),
+        ];
         for (k, v) in OURS.iter().zip(&want) {
             let found: Vec<_> = entries.iter().filter(|(e, _)| e == k).collect();
             prop_assert_eq!(found.len(), 1, "{}", out);
@@ -732,8 +768,8 @@ proptest! {
         if let Ok(u) = Username::parse(&s) {
             let out = qbittorrent_conf(None, &u, fixed_hash()).unwrap();
             let entries = ini_entries(&out);
-            prop_assert!(entries.contains(&(OURS[2].to_owned(), s.clone())));
-            prop_assert_eq!(entries.len(), 3);
+            prop_assert!(entries.contains(&(OURS[4].to_owned(), s.clone())));
+            prop_assert_eq!(entries.len(), 5);
         }
     }
 

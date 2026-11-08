@@ -66,6 +66,10 @@ pub enum ConfigError {
     Rejected(InputError),
     /// The OS RNG failed.
     Random,
+    /// qBittorrent left a `qBittorrent_new.conf` beside the file (an
+    /// unclean exit). It loads that one first and renames it over ours, so
+    /// nothing is written until it's dealt with.
+    PendingRewrite,
 }
 
 impl fmt::Display for ConfigError {
@@ -83,6 +87,9 @@ impl fmt::Display for ConfigError {
             }
             ConfigError::Rejected(e) => write!(f, "a config value was refused: it is {e}"),
             ConfigError::Random => f.write_str("the system's random generator failed"),
+            ConfigError::PendingRewrite => {
+                f.write_str("qBittorrent left an unfinished settings file beside its config")
+            }
         }
     }
 }
@@ -177,9 +184,17 @@ impl fmt::Debug for PasswordHash {
 }
 
 /// qBittorrent's keys, as logical paths (`/` and `\` alike), with the
-/// spelling written into `[Preferences]` when a key is missing.
-const QBIT_KEYS: [(&str, &str); 3] = [
+/// spelling written into `[Preferences]` when a key is missing, in Qt's
+/// sorted order. Besides the bind address and the login, two keys that
+/// would let a request skip the password: localhost bypass and the subnet
+/// whitelist (runner, CMP-3 review).
+const QBIT_KEYS: [(&str, &str); 5] = [
     ("Preferences\\WebUI\\Address", "WebUI\\Address"),
+    (
+        "Preferences\\WebUI\\AuthSubnetWhitelistEnabled",
+        "WebUI\\AuthSubnetWhitelistEnabled",
+    ),
+    ("Preferences\\WebUI\\LocalHostAuth", "WebUI\\LocalHostAuth"),
     (
         "Preferences\\WebUI\\Password_PBKDF2",
         "WebUI\\Password_PBKDF2",
@@ -200,6 +215,8 @@ pub fn qbittorrent_conf(
 ) -> Result<Secret, ConfigError> {
     let values = [
         BIND_ADDRESS.to_owned(),
+        "false".to_owned(),
+        "true".to_owned(),
         format!("\"{}\"", hash.to_qbittorrent()),
         username.as_str().to_owned(),
     ];
@@ -212,7 +229,7 @@ pub fn qbittorrent_conf(
     // Lines of the existing file, which may hold other plaintext secrets
     // (`Network\Proxy\Password`): zeroed on drop.
     let mut out: Vec<Zeroizing<String>> = Vec::new();
-    let mut written = [false; 3];
+    let mut written = [false; QBIT_KEYS.len()];
     let mut section = String::new();
     // Where missing keys go: after the last entry of the first
     // `[Preferences]`.
@@ -323,7 +340,7 @@ pub fn qbittorrent_conf(
         }
     }
 
-    let missing: Vec<Zeroizing<String>> = (0..3)
+    let missing: Vec<Zeroizing<String>> = (0..QBIT_KEYS.len())
         .filter(|&i| !written[i])
         .map(|i| Zeroizing::new(format!("{}={}{eol}", QBIT_KEYS[i].1, values[i])))
         .collect();
@@ -332,7 +349,12 @@ pub fn qbittorrent_conf(
         if let Some(last) = out.last_mut()
             && !last.ends_with('\n')
         {
-            last.push_str(eol);
+            // A fresh buffer rather than a regrowth, which would free the
+            // old one unzeroed.
+            let mut line = Zeroizing::new(String::with_capacity(last.len() + eol.len()));
+            line.push_str(last);
+            line.push_str(eol);
+            *last = line;
         }
         match insert_at {
             Some(at) => {
@@ -402,6 +424,7 @@ pub fn write_qbittorrent(
     username: &Username,
     password: &Secret,
 ) -> Result<(), ConfigError> {
+    refuse_pending_rewrite(path)?;
     let existing = read_existing(path)?;
     let text = qbittorrent_conf(
         existing.as_deref().map(String::as_str),
@@ -409,6 +432,24 @@ pub fn write_qbittorrent(
         &PasswordHash::new(password)?,
     )?;
     write_atomic(path, text.expose().as_bytes())
+}
+
+/// qBittorrent's `SettingsStorage` loads `<stem>_new.<ext>` first when it
+/// has any keys, then deletes the config and renames that file over it. An
+/// unclean exit leaves one behind, which would undo our write.
+fn refuse_pending_rewrite(path: &Path) -> Result<(), ConfigError> {
+    let stem = path.file_stem().ok_or(ConfigError::NotAFile)?;
+    let mut name = stem.to_os_string();
+    name.push("_new");
+    if let Some(ext) = path.extension() {
+        name.push(".");
+        name.push(ext);
+    }
+    match fs::symlink_metadata(path.with_file_name(name)) {
+        Ok(_) => Err(ConfigError::PendingRewrite),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(io_err("inspect")(e)),
+    }
 }
 
 /// Prowlarr's elements, children of `<Config>`, in the order they're
@@ -636,14 +677,25 @@ fn read_existing(path: &Path) -> Result<Option<Zeroizing<String>>, ConfigError> 
     if meta.len() > MAX_EXISTING {
         return Err(ConfigError::TooLarge);
     }
-    let file = File::open(path).map_err(io_err("open"))?;
+    let mut opts = OpenOptions::new();
+    opts.read(true);
+    // Windows: open a reparse point itself rather than its target, so the
+    // type check below sees it (`FILE_FLAG_OPEN_REPARSE_POINT`).
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        opts.custom_flags(0x0020_0000);
+    }
+    let file = opts.open(path).map_err(io_err("open"))?;
     // `open` follows a symlink swapped in after the check above: make sure
     // the handle is the regular file we inspected.
     let opened = file.metadata().map_err(io_err("inspect"))?;
     if !opened.file_type().is_file() || !same_file(&meta, &opened) {
         return Err(ConfigError::NotAFile);
     }
-    let mut buf = Zeroizing::new(Vec::new());
+    // Sized up front: a regrowth during the read would free the old buffer
+    // unzeroed.
+    let mut buf = Zeroizing::new(Vec::with_capacity(meta.len() as usize + 1));
     file.take(MAX_EXISTING + 1)
         .read_to_end(&mut buf)
         .map_err(io_err("read"))?;
