@@ -6308,6 +6308,11 @@
       "id": "X-flake-utp-lossy-patch",
       "at": "2026-11-08T17:12Z",
       "note": "Root cause found: conn.rs keeps RTO backoff across ACK progress (reset only on fresh RTT sample) + test independent-drop model. Patch in runner scratchpad; fresh Opus review running. Open runner PR on claude/busy-allen-aptli2 after #624 merges; \u00a72.19 flag timer refinement to owner."
+    },
+    {
+      "id": "merged-618",
+      "at": "2026-11-08T17:16Z",
+      "note": "#618 PK-manifest merged 4f36875d (Opus MERGE, manual security pass). Owner flags sent via dashboard. Still to do: check release/v0.5.2 release.yml LODESTAR_CHANNEL gap before v0.5.2 final; tell PK-smoke owner smoke job changed when it next runs."
     }
   ],
   "main_health": [
@@ -7009,7 +7014,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T16:52:18Z",
+    "updated": "2026-11-08T17:16:00Z",
     "items": [
       {
         "slot": 1,
@@ -7021,11 +7026,11 @@
       },
       {
         "slot": 2,
-        "slice": "PK-manifest",
+        "slice": "X-pk-manifest-hardening",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCXsenhYx7tX8TeoyN: PR #618 open, CI running",
-        "since": "2026-11-08T15:04Z"
+        "doing": "session_01MMjhnCXsenhYx7tX8TeoyN: #618 merged (4f36875d); small hardening follow-up PR (review notes 1-6); then PK-win-upd-1",
+        "since": "2026-11-08T17:16Z"
       },
       {
         "slot": 3,
@@ -7048,7 +7053,7 @@
         "slice": "X-cloud-infra",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCot56kB5kgihYEBsx: fix #623 on fresh slice/X-cloud-infra (owner's one-off 5th slot)",
+        "doing": "session_01MMjhnCot56kB5kgihYEBsx: PR #625 (supersedes #623), adding infra CI job (owns + ci.yml/ci_changes.py/test_ci_changes.py)",
         "since": "2026-11-08T16:52:18Z"
       }
     ],
