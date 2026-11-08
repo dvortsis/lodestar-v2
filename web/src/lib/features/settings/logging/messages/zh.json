@@ -371,6 +371,8 @@
 	"settings_logging_ev_cluster_snapshot_failed_h": "发送给远程工作节点的过滤规则无法生成，因此它们继续使用上次收到的规则。错误信息会说明超过了哪个限制。",
 	"settings_logging_ev_worker_dht_started_n": "工作节点 DHT 已启动",
 	"settings_logging_ev_worker_dht_started_h": "此工作节点的 DHT 已在协调节点分配给它的密钥空间部分上启动。分配变化时，只重启 DHT，而不重启工作节点。",
+	"settings_logging_ev_worker_stage_failed_n": "工作节点处理阶段已停止",
+	"settings_logging_ev_worker_stage_failed_h": "此工作节点的获取或准备阶段意外停止，这是一个程序错误。工作节点会报错退出，以便 Docker 或其服务管理器重新启动它；在此期间，协调节点会把它的工作交给其他工作节点。",
 	"settings_logging_ev_worker_dht_start_failed_n": "工作节点 DHT 无法启动",
 	"settings_logging_ev_worker_dht_start_failed_h": "此工作节点的 DHT 无法打开其网络端口，通常是因为其他程序正在使用该端口。它会在最多一分钟的短暂等待后重试。",
 	"settings_logging_ev_cluster_tick_failed_n": "集群定时任务已停止",

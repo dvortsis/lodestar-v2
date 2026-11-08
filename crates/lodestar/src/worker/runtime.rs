@@ -287,6 +287,8 @@ struct Shared {
     /// covers now again: by an install, by a result that seals, or by the
     /// next look ([`Shared::sealing_down`], from `sift` and the claims).
     unsealable_since: Mutex<Option<std::time::Instant>>,
+    /// Set when a stage task ended by itself ([`supervise`]).
+    failed: watch::Sender<bool>,
     /// Asks the session task to send everything it has now (a drain).
     flush: mpsc::UnboundedSender<tokio::sync::oneshot::Sender<()>>,
     /// What the DHT should run ([`want_dht`]).
@@ -396,6 +398,7 @@ impl Runtime {
             pool: Mutex::new(None),
             pool_paused: watch::channel(false).0,
             pool_told: watch::channel(false).0,
+            failed: watch::channel(false).0,
             waiting: std::sync::atomic::AtomicUsize::new(0),
             fresh_session: AtomicBool::new(false),
             flush,
@@ -411,6 +414,7 @@ impl Runtime {
             tokio::spawn(send_acks(shared.clone(), ack_rx)),
             tokio::spawn(claim(shared.clone(), found_rx)),
             tokio::spawn(heartbeat_stats(shared.clone())),
+            tokio::spawn(supervise(shared.clone())),
         ];
         // The DHT's task isn't aborted with the others: a stop (or a drop)
         // closes its `want`, and it ends after stopping its node, which
@@ -450,6 +454,17 @@ impl Runtime {
     /// The running DHT node's shard (`None` with no DHT configured).
     pub fn dht_running(&self) -> Option<super::dht::Running> {
         self.dht_running.clone()
+    }
+
+    /// Completes if the pool or the prepare stage ends by itself (a bug):
+    /// the worker can't fetch or prepare any more, so `lodestar worker`
+    /// stops with an error, and its service manager starts it again. The
+    /// coordinator re-grants the keys it held when their leases end.
+    pub fn failed(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
+        let mut rx = self.shared.failed.subscribe();
+        async move {
+            let _ = rx.wait_for(|f| *f).await;
+        }
     }
 
     /// Whether the stages run: the snapshots are in.
@@ -1182,6 +1197,36 @@ async fn current(s: &Shared) -> SessionHandle {
         }
         if rx.changed().await.is_err() {
             std::future::pending::<()>().await;
+        }
+    }
+}
+
+/// How often [`supervise`] looks at the stage tasks.
+const SUPERVISE_EVERY: Duration = Duration::from_secs(1);
+
+/// Watches the pool and the prepare stage: one that ends while the
+/// runtime isn't stopping them has failed (a panic, or a bug that ended
+/// its loop). That's said once, and [`Runtime::failed`] completes.
+async fn supervise(s: Arc<Shared>) {
+    let mut every = tokio::time::interval(SUPERVISE_EVERY);
+    every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        every.tick().await;
+        let dead = lock(&s.stages).as_ref().and_then(|st| {
+            if st.pool.is_finished() {
+                Some("pool")
+            } else if st.prepare.is_finished() {
+                Some("prepare")
+            } else {
+                None
+            }
+        });
+        if let Some(stage) = dead
+            && !s.draining.load(Ordering::Acquire)
+        {
+            lodestar_log::log_event!(crate::logging::events::WORKER_STAGE_FAILED, stage = stage);
+            s.failed.send_replace(true);
+            return;
         }
     }
 }
@@ -2263,6 +2308,49 @@ mod tests {
         assert_eq!(c.claimed.load(Ordering::Relaxed), 0);
         rt.event(WorkerEvent::Assign(off(3, true)));
         until("the pool resumed", || (!paused(&rt), ())).await;
+        rt.shutdown().await;
+    }
+
+    /// A stage task that ends by itself is noticed: `failed` completes, so
+    /// `lodestar worker` stops with an error and is started again. A stop
+    /// the runtime asked for isn't a failure.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_stage_that_dies_is_noticed() {
+        let mut rt = Runtime::start(config(Arc::new(MapFetch::default())));
+        let (_coord, session) = session_pair().await;
+        rt.connected(session.handle());
+        rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
+        let (_, chunks) = filter_chunks().await;
+        for c in chunks {
+            rt.event(WorkerEvent::Snapshot(c));
+        }
+        until("started", || (rt.is_started(), ())).await;
+        let failed = rt.failed();
+        // As a panic would end it.
+        lock(&rt.shared.stages).as_ref().unwrap().pool.abort();
+        tokio::time::timeout(DEADLINE, failed)
+            .await
+            .expect("the dead pool was noticed");
+        rt.shutdown().await;
+
+        // A drain stops the stages: not a failure.
+        let mut rt = Runtime::start(config(Arc::new(MapFetch::default())));
+        let (_coord2, session2) = session_pair().await;
+        rt.connected(session2.handle());
+        rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
+        let (_, chunks) = filter_chunks().await;
+        for c in chunks {
+            rt.event(WorkerEvent::Snapshot(c));
+        }
+        until("started", || (rt.is_started(), ())).await;
+        let _ = rt.drain().await;
+        let failed = rt.failed();
+        assert!(
+            tokio::time::timeout(SUPERVISE_EVERY * 3, failed)
+                .await
+                .is_err(),
+            "a drain isn't a failure"
+        );
         rt.shutdown().await;
     }
 

@@ -394,6 +394,10 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_worker_dht_started_n,
 		m.settings_logging_ev_worker_dht_started_h
 	],
+	'worker.stage_failed': [
+		m.settings_logging_ev_worker_stage_failed_n,
+		m.settings_logging_ev_worker_stage_failed_h
+	],
 	'worker.dht_start_failed': [
 		m.settings_logging_ev_worker_dht_start_failed_n,
 		m.settings_logging_ev_worker_dht_start_failed_h

@@ -961,8 +961,18 @@ lodestar_log::catalogue! {
         message: "The worker's DHT started on its assigned part of the keyspace",
         fields: { first: Label, end: Label, slots: Label },
     }
+    /// The worker's fetch pool or prepare stage ended by itself (a bug):
+    /// the worker stops with an error so its service manager starts it
+    /// again, and the coordinator re-grants its keys (WK-10d).
+    WORKER_STAGE_FAILED {
+        id: "worker.stage_failed",
+        component: Workers,
+        level: Error,
+        message: "The worker's fetch or prepare stage stopped unexpectedly; the worker stops so it can be started again",
+        fields: { stage: Label },
+    }
     /// The worker's DHT couldn't bind its address; it tries again after a
-    /// back-off of up to a minute.
+    /// back-off of up to a minute. Said once per streak of failures.
     WORKER_DHT_START_FAILED {
         id: "worker.dht_start_failed",
         component: Workers,
