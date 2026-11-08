@@ -6223,6 +6223,11 @@
       "id": "CMP-10-round2",
       "at": "2026-11-08T15:01Z",
       "note": "#616 MERGE at d9228270 but conflicted with main (golden). Round: rebless, Jackett ExternalIndexer (runner option a; owner flag at merge), purge race re-check, spin test, doc fixes. Narrow delta review then merge. CMP-5 told: external_indexer, restart source after hand-over, worker gate None."
+    },
+    {
+      "id": "merged-613",
+      "at": "2026-11-08T15:04Z",
+      "note": "#613 X-cmp4b-mounts merged 29107fc8 (round-1 Opus+security CHANGES; delta self-checked: proptests, install parent==own). Session archived; owner FYI. Slot 2 -> PK-manifest (M6 critical path)."
     }
   ],
   "main_health": [
@@ -6924,7 +6929,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T15:01Z",
+    "updated": "2026-11-08T15:04Z",
     "items": [
       {
         "slot": 1,
@@ -6936,11 +6941,11 @@
       },
       {
         "slot": 2,
-        "slice": "X-cmp4b-mounts",
+        "slice": "PK-manifest",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCb1R6WRuMNMxCLNcn: #608 CMP-4b merged c748dba9; follow-up X-cmp4b-mounts (I-1 own alias under home, non-UTF-8 mountinfo, residuals)",
-        "since": "2026-11-08T13:29Z"
+        "doing": "launching: PK-manifest (brief briefs/PK-manifest.md)",
+        "since": "2026-11-08T15:04Z"
       },
       {
         "slot": 3,
