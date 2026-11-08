@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-08T03:49:29Z",
+  "updated_at": "2026-11-08T03:56:44Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6715,7 +6715,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T03:49:29Z",
+    "updated": "2026-11-08T03:56:44Z",
     "items": [
       {
         "slot": 1,
@@ -6738,7 +6738,7 @@
         "slice": "CMP-2",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBjswJ9d8Qu8vvTvyu; #600 0dd26ba5: security delta CHANGES (zip EOCD precheck gaps, B1); second read running",
+        "doing": "session_01MMjhnBjswJ9d8Qu8vvTvyu; #600 0dd26ba5 2R delta CHANGES (zip EOCD precheck bypass -> byte budget on ZipArchive::new; remove() pointer-first); round 3 push pending",
         "since": "2026-11-08T00:55Z"
       },
       {
