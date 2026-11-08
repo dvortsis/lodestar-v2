@@ -75,6 +75,9 @@ pub const DRAIN_DEADLINE: Duration = Duration::from_secs(10);
 /// How often the have-filter's resync request is retried and refused
 /// result batches are sent again.
 const POLL_EVERY: Duration = Duration::from_secs(5);
+/// How often the heartbeat's stats are refreshed (the session sends the
+/// latest with each heartbeat).
+const STATS_EVERY: Duration = Duration::from_secs(5);
 /// Keys found here waiting to be checked and claimed. A full queue drops
 /// the newest: the DHT finds a key again.
 const FOUND_QUEUE: usize = 4096;
@@ -115,6 +118,12 @@ pub struct Config {
     /// fix it.
     pub seed: Option<u64>,
     pub seal_wait: Duration,
+    /// The DHT's settings (bind, bootstrap, state); the shard and
+    /// intensity come from `Assign`. `None` runs no DHT (tests, or the
+    /// DHT turned off in the worker's config).
+    pub dht: Option<lodestar_dht::node::Config>,
+    /// How long the DHT stays paused for a lost session before it stops.
+    pub dht_linger: Duration,
 }
 
 impl Config {
@@ -134,6 +143,8 @@ impl Config {
             drain_deadline: DRAIN_DEADLINE,
             seed: None,
             seal_wait: SEAL_WAIT,
+            dht: None,
+            dht_linger: super::dht::LINGER,
         }
     }
 }
@@ -253,8 +264,12 @@ struct Shared {
     key_day: watch::Sender<u32>,
     sampler: Mutex<u64>,
     /// The pool's controls, once it runs: paused while a result waits for
-    /// a key it can be sealed under, so no fetch is spent meanwhile.
+    /// a key it can be sealed under, so no fetch is spent meanwhile, and
+    /// while no session is up ([`Shared::refresh_pause`]).
     pool: Mutex<Option<lodestar_sources::PoolHandle>>,
+    /// Whether the pool was last told to pause; held across the telling,
+    /// so pauses and resumes reach the pool in the order they're decided.
+    pool_paused: tokio::sync::Mutex<bool>,
     /// Results waiting for a sealable key.
     waiting: std::sync::atomic::AtomicUsize,
     /// A new session's first `Assign` applies whatever its revision: a
@@ -266,6 +281,11 @@ struct Shared {
     unsealable_since: Mutex<Option<std::time::Instant>>,
     /// Asks the session task to send everything it has now (a drain).
     flush: mpsc::UnboundedSender<tokio::sync::oneshot::Sender<()>>,
+    /// What the DHT should run ([`want_dht`]).
+    dht_want: watch::Sender<super::dht::Desired>,
+    /// The pool's peer requests, to the DHT; `None` with no DHT.
+    peer_requests: Option<mpsc::Sender<lodestar_sources::PeerRequest>>,
+    dht_counts: Arc<super::dht::DhtCounts>,
 }
 
 /// The runtime (see the module docs).
@@ -278,6 +298,8 @@ pub struct Runtime {
     results: Option<JoinHandle<()>>,
     /// The outcome task; it hands its queue back when stopped.
     reporter: Option<(watch::Sender<bool>, JoinHandle<Vec<OutcomeItem>>)>,
+    /// The running DHT node's shard.
+    dht_running: Option<super::dht::Running>,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -317,6 +339,22 @@ impl Runtime {
         let (flush, flush_rx) = mpsc::unbounded_channel();
         let (out, outbound) = byte_queue::<SealedRecord>(config.outbound_bytes, 4096);
         let counts = Arc::new(Counts::default());
+        let dht_counts = Arc::new(super::dht::DhtCounts::default());
+        let (dht_want, want_rx) = watch::channel(super::dht::Desired::Stop);
+        let mut dht = None;
+        let mut peer_requests = None;
+        if let Some(base) = config.dht.clone() {
+            let (tx, rx) = mpsc::channel(lodestar_dht::node::PEER_REQUEST_CAPACITY);
+            peer_requests = Some(tx);
+            dht = Some(super::dht::spawn(
+                base,
+                want_rx,
+                found.clone(),
+                rx,
+                dht_counts.clone(),
+                config.dht_linger,
+            ));
+        }
         let shared = Arc::new(Shared {
             have: WorkerHave::new(),
             judge: Arc::new(Judge::new(config.worker)),
@@ -346,18 +384,27 @@ impl Runtime {
             key_day: watch::channel(u32::MAX).0,
             sampler: Mutex::new(config.seed.unwrap_or_else(super::session::random_jitter)),
             pool: Mutex::new(None),
+            pool_paused: tokio::sync::Mutex::new(false),
             waiting: std::sync::atomic::AtomicUsize::new(0),
             fresh_session: AtomicBool::new(false),
             flush,
             unsealable_since: Mutex::new(None),
+            dht_want,
+            peer_requests,
+            dht_counts,
             config,
         });
         let (stop_reports, reports_stopped) = watch::channel(false);
+        let (dht_task, dht_running) = dht.unzip();
+        let mut tasks = vec![
+            tokio::spawn(send_acks(shared.clone(), ack_rx)),
+            tokio::spawn(claim(shared.clone(), found_rx)),
+            tokio::spawn(heartbeat_stats(shared.clone())),
+        ];
+        tasks.extend(dht_task);
         Runtime {
-            tasks: vec![
-                tokio::spawn(send_acks(shared.clone(), ack_rx)),
-                tokio::spawn(claim(shared.clone(), found_rx)),
-            ],
+            tasks,
+            dht_running,
             results: Some(tokio::spawn(send_results(
                 shared.clone(),
                 outbound,
@@ -381,6 +428,16 @@ impl Runtime {
         self.shared.counts.clone()
     }
 
+    /// The DHT's counters.
+    pub fn dht_counts(&self) -> Arc<super::dht::DhtCounts> {
+        self.shared.dht_counts.clone()
+    }
+
+    /// The running DHT node's shard (`None` with no DHT configured).
+    pub fn dht_running(&self) -> Option<super::dht::Running> {
+        self.dht_running.clone()
+    }
+
     /// Whether the stages run: the snapshots are in.
     pub fn is_started(&self) -> bool {
         *self.shared.started.borrow()
@@ -402,6 +459,7 @@ impl Runtime {
     /// the coordinator when their leases end.
     async fn stop_stages(&self) {
         self.shared.draining.store(true, Ordering::Release);
+        want_dht(&self.shared);
         let Some(stages) = lock(&self.shared.stages).take() else {
             return;
         };
@@ -431,6 +489,12 @@ impl Runtime {
     /// Stops everything (a local shutdown) within the drain deadline.
     pub async fn shutdown(mut self) {
         self.stop_stages().await;
+        // The DHT saves its state as it stops (within its own deadline).
+        if let Some(mut running) = self.dht_running.clone() {
+            let _ =
+                tokio::time::timeout(super::dht::STOP_DEADLINE, running.wait_for(Option::is_none))
+                    .await;
+        }
         self.abort_all();
     }
 
@@ -476,6 +540,7 @@ impl Runtime {
                     }
                 }
                 start_if_ready(s);
+                want_dht(s);
             }
             WorkerEvent::Regranted(items) => {
                 for item in items {
@@ -516,10 +581,18 @@ impl Work for Runtime {
         let _ = self.shared.acks.send(self.shared.have.reconnected());
         self.shared.fresh_session.store(true, Ordering::Release);
         self.shared.session.send_replace(Some(session));
+        want_dht(&self.shared);
+        refresh_pause_soon(&self.shared);
     }
 
     fn disconnected(&mut self) {
         self.shared.session.send_replace(None);
+        // The DHT pauses at once: the coordinator re-plans without this
+        // worker and widens the others' shares (WK-5); it stops if no
+        // session is back within its linger.
+        want_dht(&self.shared);
+        // The pool opens no new connection meanwhile.
+        refresh_pause_soon(&self.shared);
     }
 
     fn event(&mut self, event: WorkerEvent) {
@@ -556,6 +629,7 @@ impl Drop for Runtime {
         // late install on a blocking thread then can't start stages nobody
         // owns.
         self.shared.draining.store(true, Ordering::Release);
+        want_dht(&self.shared);
         if let Some(stages) = lock(&self.shared.stages).take() {
             let _ = stages.stop.send(true);
             stages.prepare.abort();
@@ -738,6 +812,9 @@ fn start_if_ready(s: &Arc<Shared>) {
     let (Some(out), Some(pool_rx)) = (lock(&s.out).take(), lock(&s.pool_rx).take()) else {
         return;
     };
+    // The pool's caps are fixed for the stages' run (the pool has no
+    // setters); the DHT's intensity follows each `Assign`.
+    let limits = super::budget::Limits::of(&a);
     let (discoveries, rx) = mpsc::channel(256);
     let forward = tokio::spawn(forward(pool_rx, discoveries));
     let (stop, shutdown): (watch::Sender<bool>, Shutdown) = Shutdown::new();
@@ -745,11 +822,12 @@ fn start_if_ready(s: &Arc<Shared>) {
     let running = WorkerStages {
         worker: s.config.worker,
         pool: PoolConfig {
-            max_pending: usize::try_from(a.pool_cap).unwrap_or(usize::MAX),
+            max_pending: usize::try_from(limits.pool_cap).unwrap_or(usize::MAX),
+            max_sockets: limits.max_sockets.min(s.config.pool.max_sockets),
             ..s.config.pool.clone()
         },
         fetcher: s.config.fetcher.clone(),
-        peer_finders: Vec::new(),
+        peer_finders: s.peer_requests.iter().cloned().collect(),
         weights: Default::default(),
         restore: Vec::new(),
         preparer: Preparer::from_dict(dict, s.config.compression_level, false),
@@ -779,6 +857,46 @@ fn start_if_ready(s: &Arc<Shared>) {
         forward,
     });
     s.started.send_replace(true);
+    want_dht(s);
+    // A session may have gone while the stages were built.
+    refresh_pause_soon(s);
+}
+
+/// What the DHT should do now ([`super::dht`]): run on the assignment's
+/// shard while a session is up and has sent its first `Assign`, the
+/// stages run and nothing drains; pause while a session is missing or
+/// its first `Assign` hasn't come; otherwise stop.
+///
+/// Worked out under the watch's write lock, so callers on different
+/// threads (the message loop, an install's blocking thread) can't leave
+/// an older answer last.
+fn want_dht(s: &Shared) {
+    use super::dht::{Desired, Want};
+    let want = || {
+        if s.draining.load(Ordering::Acquire) || !*s.started.borrow() {
+            return Desired::Stop;
+        }
+        let Some(a) = *lock(&s.assignment) else {
+            return Desired::Stop;
+        };
+        let Some(shard) = a.dht else {
+            return Desired::Stop;
+        };
+        let up = s.session.borrow().as_ref().is_some_and(|h| !h.is_closed());
+        if !up || s.fresh_session.load(Ordering::Acquire) {
+            return Desired::Pause;
+        }
+        Desired::Run(Want {
+            shard,
+            intensity: super::budget::Limits::of(&a).intensity,
+        })
+    };
+    s.dht_want.send_if_modified(|w| {
+        let now = want();
+        let changed = *w != now;
+        *w = now;
+        changed
+    });
 }
 
 /// What to do with a key found here (runner, 2026-11-07T20:34Z):
@@ -858,7 +976,7 @@ impl<O: Outbox<SealedRecord>> Outbox<Results> for Sealing<O> {
                 // No fetch is started while a result waits: they'd only
                 // spend their keys waiting on the pool's byte budget.
                 if s.waiting.fetch_add(1, Ordering::AcqRel) == 0 {
-                    s.pause_pool(true).await;
+                    s.refresh_pause().await;
                 }
                 let mut installs = s.key_day.subscribe();
                 let left = deadline.saturating_duration_since(std::time::Instant::now());
@@ -872,7 +990,7 @@ impl<O: Outbox<SealedRecord>> Outbox<Results> for Sealing<O> {
                 })
                 .await;
                 if s.waiting.fetch_sub(1, Ordering::AcqRel) == 1 {
-                    s.pause_pool(false).await;
+                    s.refresh_pause().await;
                 }
                 if ready.is_err() {
                     release(&s, &reports, item.key, item.token);
@@ -916,12 +1034,34 @@ fn release(s: &Shared, reports: &Arc<dyn Reports>, key: InfoHash, token: Token) 
 }
 
 impl Shared {
-    async fn pause_pool(&self, paused: bool) {
+    /// Pauses the pool while a result waits for a sealable key or no
+    /// session is up, and resumes it otherwise. Worked out from the state
+    /// now, under `pool_paused`, so calls in any order leave it right.
+    /// Paused, the pool opens no new connection; fetches under way finish
+    /// (WK-5: a worker without a session stops opening connections, since
+    /// the coordinator re-plans without it).
+    async fn refresh_pause(&self) {
+        let mut told = self.pool_paused.lock().await;
+        let up = self
+            .session
+            .borrow()
+            .as_ref()
+            .is_some_and(|h| !h.is_closed());
+        let pause = self.waiting.load(Ordering::Acquire) > 0 || !up;
         let pool = lock(&self.pool).clone();
-        if let Some(p) = pool {
-            p.set_paused(paused).await;
+        if let Some(p) = pool
+            && *told != pause
+        {
+            p.set_paused(pause).await;
+            *told = pause;
         }
     }
+}
+
+/// [`Shared::refresh_pause`] from a caller that can't wait.
+fn refresh_pause_soon(s: &Arc<Shared>) {
+    let s = s.clone();
+    tokio::spawn(async move { s.refresh_pause().await });
 }
 
 /// Aborts a task when dropped.
@@ -953,6 +1093,32 @@ async fn current(s: &Shared) -> SessionHandle {
         }
         if rx.changed().await.is_err() {
             std::future::pending::<()>().await;
+        }
+    }
+}
+
+/// Refreshes the heartbeat's stats every [`STATS_EVERY`] (WK-10c):
+/// claimed, results sent ("fetched"), results the coordinator accepted
+/// ("processed"), CPU and resident memory. The spool is WK-11's.
+async fn heartbeat_stats(s: Arc<Shared>) {
+    let mut process = super::budget::Process::default();
+    let mut every = tokio::time::interval(STATS_EVERY);
+    every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        every.tick().await;
+        let (cpu_permille, rss_mb) = process.sample();
+        let get = |n: &AtomicU64| n.load(Ordering::Relaxed);
+        let stats = lodestar_cluster::proto::Stats {
+            claimed: get(&s.counts.claimed),
+            fetched: get(&s.counts.sent),
+            processed: get(&s.counts.committed),
+            cpu_permille,
+            rss_mb,
+            spool_bytes: 0,
+        };
+        let session = s.session.borrow().clone();
+        if let Some(h) = session {
+            let _ = h.set_stats(stats).await;
         }
     }
 }
@@ -1308,7 +1474,7 @@ mod tests {
     use std::net::SocketAddr;
     use std::time::Instant;
 
-    use lodestar_cluster::assign::{Budget, Intensity, Politeness};
+    use lodestar_cluster::assign::{Budget, Intensity, Politeness, ShardSpec};
     use lodestar_cluster::proto::Assign;
     use lodestar_peer_wire::{FailureKind, Fetched};
     #[allow(unused_imports)]
@@ -1451,6 +1617,341 @@ mod tests {
         rt.shutdown().await;
     }
 
+    /// A DHT on loopback with no bootstrap: it binds, but finds nothing.
+    fn dht_config() -> lodestar_dht::node::Config {
+        lodestar_dht::node::Config {
+            bind: vec!["127.0.0.1:0".parse().unwrap()],
+            bootstrap: Vec::new(),
+            state_path: None,
+            allow_private: true,
+            ..lodestar_dht::node::Config::default()
+        }
+    }
+
+    fn assign_dht(revision: u64, shard: Option<ShardSpec>, intensity: Intensity) -> Assign {
+        Assignment {
+            revision,
+            dht: shard,
+            fetch: true,
+            prepare: true,
+            intensity,
+            budget: Budget::default(),
+            pool_cap: 1000,
+            dict_version: 0,
+            filter_version: 1,
+            politeness: Politeness::ALONE,
+        }
+        .to_message()
+        .unwrap()
+    }
+
+    fn prepare_task(rt: &Runtime) -> Option<tokio::task::Id> {
+        lock(&rt.shared.stages).as_ref().map(|s| s.prepare.id())
+    }
+
+    /// A runtime with a DHT, connected, its stages and DHT running; the
+    /// link and the session are kept by the test.
+    async fn started_with_dht(
+        linger: Duration,
+    ) -> (
+        Runtime,
+        lodestar_cluster::CoordinatorLink,
+        lodestar_cluster::WorkerSession,
+    ) {
+        let mut rt = Runtime::start(Config {
+            dht: Some(dht_config()),
+            dht_linger: linger,
+            ..config(Arc::new(MapFetch::default()))
+        });
+        let (coord, session) = session_pair().await;
+        rt.connected(session.handle());
+        let a = ShardSpec::new(64..128, 0xff).unwrap();
+        rt.event(WorkerEvent::Assign(assign_dht(
+            1,
+            Some(a),
+            Intensity::Balanced,
+        )));
+        let (_, chunks) = filter_chunks();
+        for c in chunks {
+            rt.event(WorkerEvent::Snapshot(c));
+        }
+        let running = rt.dht_running().expect("a DHT is configured");
+        until("the DHT runs on its shard", || {
+            let now = *running.borrow();
+            (now == Some(a), now)
+        })
+        .await;
+        (rt, coord, session)
+    }
+
+    /// WK-10c's gate: a live `Assign` with a new shard restarts the DHT
+    /// node and nothing else: the stages and the session carry on. A new
+    /// intensity alone restarts nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_live_shard_change_restarts_only_the_dht() {
+        let (mut rt, _coord, _session) = started_with_dht(super::super::dht::LINGER).await;
+        let counts = rt.dht_counts();
+        let running = rt.dht_running().unwrap();
+        let stages = prepare_task(&rt).expect("the stages run");
+        assert_eq!(counts.starts.load(Ordering::Relaxed), 1);
+
+        let b = ShardSpec::new(128..256, 0x0f).unwrap();
+        rt.event(WorkerEvent::Assign(assign_dht(
+            2,
+            Some(b),
+            Intensity::Balanced,
+        )));
+        until("the DHT runs on the new shard", || {
+            let now = *running.borrow();
+            (now == Some(b), now)
+        })
+        .await;
+        assert_eq!(counts.starts.load(Ordering::Relaxed), 2);
+        assert_eq!(counts.stops.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            prepare_task(&rt),
+            Some(stages),
+            "the stages weren't restarted"
+        );
+        assert!(rt.is_started());
+
+        // Same shard, another intensity: applied to the running node.
+        rt.event(WorkerEvent::Assign(assign_dht(3, Some(b), Intensity::Low)));
+        assert_eq!(
+            *rt.shared.dht_want.borrow(),
+            super::super::dht::Desired::Run(super::super::dht::Want {
+                shard: b,
+                intensity: Intensity::Low
+            })
+        );
+        // An assignment without a DHT stops it, and only it.
+        rt.event(WorkerEvent::Assign(assign_dht(4, None, Intensity::Low)));
+        until("the DHT stopped", || {
+            let now = *running.borrow();
+            (now.is_none(), now)
+        })
+        .await;
+        assert_eq!(counts.starts.load(Ordering::Relaxed), 2);
+        assert_eq!(prepare_task(&rt), Some(stages));
+        rt.shutdown().await;
+    }
+
+    /// A lost session pauses the DHT at once; one back in time resumes
+    /// it without a restart (its first `Assign` names the same shard).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_lost_session_pauses_the_dht_and_a_quick_return_resumes_it() {
+        let (mut rt, _coord, _session) = started_with_dht(super::super::dht::LINGER).await;
+        let counts = rt.dht_counts();
+        rt.disconnected();
+        until("paused", || {
+            let n = counts.pauses.load(Ordering::Relaxed);
+            (n == 1, n)
+        })
+        .await;
+        let (_coord2, session2) = session_pair().await;
+        rt.connected(session2.handle());
+        // Until the new session's first `Assign`, it stays paused.
+        assert_eq!(
+            *rt.shared.dht_want.borrow(),
+            super::super::dht::Desired::Pause
+        );
+        let a = ShardSpec::new(64..128, 0xff).unwrap();
+        rt.event(WorkerEvent::Assign(assign_dht(
+            1,
+            Some(a),
+            Intensity::Balanced,
+        )));
+        until("resumed", || {
+            let n = counts.resumes.load(Ordering::Relaxed);
+            (n == 1, n)
+        })
+        .await;
+        assert_eq!(counts.starts.load(Ordering::Relaxed), 1, "no restart");
+        assert_eq!(counts.stops.load(Ordering::Relaxed), 0);
+        rt.shutdown().await;
+        assert_eq!(
+            counts.stops.load(Ordering::Relaxed),
+            1,
+            "stopped (and saved) at shutdown"
+        );
+    }
+
+    /// WK-5: a worker without a session opens no new connection. The pool
+    /// pauses when the session goes and resumes when one is back.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_lost_session_pauses_the_pool() {
+        let (mut rt, _coord, _session) = started_with_dht(super::super::dht::LINGER).await;
+        // `Some(paused)` once no refresh holds the lock.
+        let paused = |rt: &Runtime| rt.shared.pool_paused.try_lock().ok().map(|g| *g);
+        assert_eq!(paused(&rt), Some(false));
+        rt.disconnected();
+        until("the pool paused", || {
+            (paused(&rt) == Some(true), paused(&rt))
+        })
+        .await;
+        let (_coord2, session2) = session_pair().await;
+        rt.connected(session2.handle());
+        until("the pool resumed", || {
+            (paused(&rt) == Some(false), paused(&rt))
+        })
+        .await;
+        rt.shutdown().await;
+    }
+
+    /// A session that doesn't come back within the linger stops the DHT.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_session_gone_past_the_linger_stops_the_dht() {
+        let (mut rt, _coord, _session) = started_with_dht(Duration::from_millis(200)).await;
+        let counts = rt.dht_counts();
+        let running = rt.dht_running().unwrap();
+        rt.disconnected();
+        until("stopped", || {
+            let now = *running.borrow();
+            (now.is_none(), now)
+        })
+        .await;
+        assert_eq!(counts.pauses.load(Ordering::Relaxed), 1);
+        assert_eq!(counts.stops.load(Ordering::Relaxed), 1);
+        rt.shutdown().await;
+    }
+
+    /// Plan Q6's measured breakdown (WK-10c): resident memory as each part
+    /// of a worker fills to its default size, with a have-filter for 10M
+    /// stored swarm hashes. Linux only; run it alone, since RSS is the
+    /// process's:
+    /// `cargo test -p lodestar --bin lodestar -- --ignored --exact --nocapture worker::runtime::tests::rss_breakdown`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "a measurement, run on its own"]
+    async fn rss_breakdown() {
+        use lodestar_cluster::have::{HaveHeader, HaveKey, chunk_range, chunks_for};
+        use lodestar_cluster::proto::SnapshotKind;
+        const KEYS: u32 = 50_000;
+        const STORED: u64 = 10_000_000;
+        let mib = || super::super::budget::rss_kib().unwrap_or(0) as f64 / 1024.0;
+        let mut rows: Vec<(&str, f64)> = Vec::new();
+        let mut last = mib();
+        let row = |rows: &mut Vec<(&str, f64)>, name, last: &mut f64| {
+            let now = mib();
+            rows.push((name, now - *last));
+            *last = now;
+        };
+        rows.push(("process and Tokio before the runtime", last));
+
+        let mut rt = Runtime::start(Config {
+            dht: Some(dht_config()),
+            ..config(Arc::new(Stalled))
+        });
+        let (_coord, session) = session_pair().await;
+        rt.connected(session.handle());
+        row(&mut rows, "runtime, session, idle", &mut last);
+
+        let shard = ShardSpec::new(0..128, 0x0f).unwrap();
+        let mut a = Assignment::from_message(&assign_dht(1, Some(shard), Intensity::Balanced))
+            .unwrap()
+            .unwrap();
+        a.pool_cap = KEYS;
+        rt.event(WorkerEvent::Assign(a.to_message().unwrap()));
+        let (_, chunks) = filter_chunks();
+        for c in chunks {
+            rt.event(WorkerEvent::Snapshot(c));
+        }
+        let running = rt.dht_running().unwrap();
+        until("started", || {
+            (
+                rt.is_started() && running.borrow().is_some(),
+                rt.is_started(),
+            )
+        })
+        .await;
+        row(
+            &mut rows,
+            "filter snapshot, stages, DHT node (no peers)",
+            &mut last,
+        );
+
+        // The have-filter for 10M stored, as the coordinator sizes it.
+        let (capacity, per_key, hashes) = crate::cluster::have::worker_params(STORED);
+        let bits = (capacity * per_key).div_ceil(64) * 64;
+        let header = |generation, serial| HaveHeader {
+            generation,
+            serial,
+            next_delta: 0,
+            key: HaveKey::from_bytes([9; 16]),
+            bits,
+            hashes,
+            capacity,
+            count: STORED,
+            chunks: chunks_for(bits),
+        };
+        let send = |rt: &mut Runtime, generation, serial, upto: u32| {
+            rt.event(WorkerEvent::HaveSnapshot(
+                header(generation, serial).encode(),
+            ));
+            for seq in 0..upto {
+                let r = chunk_range(bits, seq);
+                rt.event(WorkerEvent::Snapshot(SnapshotChunk {
+                    kind: SnapshotKind::HaveFilter,
+                    version: serial,
+                    seq,
+                    total: chunks_for(bits),
+                    bytes: vec![0x55; r.len()],
+                }));
+            }
+        };
+        send(&mut rt, 1, 1, chunks_for(bits));
+        until("the have-filter is in", || (rt.shared.have.is_ready(), ())).await;
+        row(&mut rows, "have-filter, 10M stored", &mut last);
+        // A swap: the next generation all but its last chunk, both held.
+        send(&mut rt, 2, 2, chunks_for(bits) - 1);
+        row(&mut rows, "have-filter swap (both held)", &mut last);
+
+        // The pool at its cap: keys that never fetch.
+        let grants = (0..KEYS)
+            .map(|i| {
+                let mut key = [0u8; 20];
+                key[..4].copy_from_slice(&i.to_be_bytes());
+                key[4] = 0xa5;
+                GrantItem::Granted {
+                    key,
+                    token: u64::from(i) + 1,
+                    ttl_secs: 600,
+                }
+            })
+            .collect();
+        rt.event(WorkerEvent::Regranted(grants));
+        let pool = lock(&rt.shared.pool).clone().unwrap();
+        until("the pool holds its cap", || {
+            let st = pool.stats();
+            let held = st.pending.load(Ordering::Relaxed)
+                + st.active.load(Ordering::Relaxed)
+                + st.waiting.load(Ordering::Relaxed);
+            (held >= u64::from(KEYS) * 99 / 100, held)
+        })
+        .await;
+        row(
+            &mut rows,
+            "pool at 50,000 keys (and their leases)",
+            &mut last,
+        );
+
+        let total = mib();
+        println!(
+            "\nWorker RSS breakdown (MiB, deltas; {} build):",
+            if cfg!(debug_assertions) {
+                "debug"
+            } else {
+                "release"
+            }
+        );
+        for (name, d) in &rows {
+            println!("  {name:<48} {d:>7.1}");
+        }
+        println!("  {:<48} {total:>7.1}", "total");
+        assert!(total > 0.0 || !cfg!(target_os = "linux"));
+        drop(session);
+        rt.shutdown().await;
+    }
+
     /// A dictionary named by `Assign` must arrive first too.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_named_dictionary_is_waited_for() {
@@ -1520,7 +2021,7 @@ mod tests {
     }
 
     /// The brief's gate: a shutdown whose session never takes anything
-    /// (here no session at all, and the outbound queue full) finishes
+    /// (a coordinator that never reads, and the outbound queue full) finishes
     /// within its drain deadline. Fetched results wait on the outbound
     /// queue and fetches hang; neither holds the stop up.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1534,6 +2035,8 @@ mod tests {
         // One record fills it.
         cfg.outbound_bytes = 1;
         let mut rt = Runtime::start(cfg);
+        let (_coord, session) = session_pair_with(1).await;
+        rt.connected(session.handle());
         rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
         let (_, chunks) = filter_chunks();
         for c in chunks {
@@ -1568,6 +2071,8 @@ mod tests {
 
         // And with fetches that never finish, the same.
         let mut rt = Runtime::start(config(Arc::new(Stalled)));
+        let (_coord2, session2) = session_pair_with(1).await;
+        rt.connected(session2.handle());
         rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
         let (_, chunks) = filter_chunks();
         for c in chunks {
@@ -1698,6 +2203,9 @@ mod tests {
         let raw = info("Fetched before the new day's key");
         lock(&fetch.0).insert(key_of(&raw), raw.clone());
         let mut rt = Runtime::start(config(fetch));
+        // Fetching needs a session up.
+        let (_coord, session) = session_pair().await;
+        rt.connected(session.handle());
         rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
         // Yesterday's snapshot: its key can't seal today.
         let (_, chunks) = filter_chunks_at(unix_now() - DAY);
@@ -1797,6 +2305,9 @@ mod tests {
             seal_wait: Duration::from_millis(300),
             ..config(fetch)
         });
+        // Fetching needs a session up.
+        let (mut coord, session) = session_pair().await;
+        rt.connected(session.handle());
         rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
         let (_, chunks) = filter_chunks_at(unix_now() - DAY);
         for c in chunks {
@@ -1816,8 +2327,22 @@ mod tests {
             (n == 1, n)
         })
         .await;
-        // No session: the drain hands the loss back to report.
-        let outcomes = rt.drain().await;
+        // Reported over the session (or, if it hadn't gone yet, handed
+        // back by the drain).
+        let mut outcomes = rt.drain().await;
+        if outcomes.is_empty() {
+            outcomes = tokio::time::timeout(DEADLINE, async {
+                loop {
+                    match coord.recv().await {
+                        Ok(Some(ToCoordinator::Outcome(b))) => return b.items,
+                        Ok(Some(_)) => {}
+                        other => panic!("the link ended: {other:?}"),
+                    }
+                }
+            })
+            .await
+            .expect("an outcome report");
+        }
         assert_eq!(
             outcomes,
             vec![OutcomeItem {
@@ -1845,6 +2370,9 @@ mod tests {
             seal_wait: Duration::from_secs(1),
             ..config(fetch)
         });
+        // Fetching needs a session up.
+        let (_coord, session) = session_pair().await;
+        rt.connected(session.handle());
         rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
         let (_, chunks) = filter_chunks_at(unix_now() - DAY);
         for c in chunks {
@@ -1900,10 +2428,21 @@ mod tests {
         lodestar_cluster::CoordinatorLink,
         lodestar_cluster::WorkerSession,
     ) {
+        session_pair_with(64).await
+    }
+
+    /// A session over a link of `capacity` frames: at 1, a coordinator
+    /// that never reads stalls it after the handshake.
+    async fn session_pair_with(
+        capacity: usize,
+    ) -> (
+        lodestar_cluster::CoordinatorLink,
+        lodestar_cluster::WorkerSession,
+    ) {
         use lodestar_cluster::proto::{
             Capabilities, Hello, PROTOCOL_MAJOR, PROTOCOL_MINOR, ToWorker, Welcome,
         };
-        let (mut coord, worker) = lodestar_cluster::local_pair(64);
+        let (mut coord, worker) = lodestar_cluster::local_pair(capacity);
         let config = lodestar_cluster::WorkerConfig {
             auto_heartbeat: false,
             ..lodestar_cluster::WorkerConfig::default()

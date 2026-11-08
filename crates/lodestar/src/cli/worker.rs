@@ -321,10 +321,14 @@ fn run_with(config: &Config, args: WorkerArgs, env: &dyn Fn(&str) -> Option<Stri
                 ..lodestar_peer_wire::FetchOptions::default()
             },
         ));
-        let runtime = crate::worker::runtime::Runtime::start(crate::worker::runtime::Config::new(
-            creds.worker(),
-            fetcher,
-        ));
+        let mut runtime_config = crate::worker::runtime::Config::new(creds.worker(), fetcher);
+        // The worker's DHT (WK-10c): the `[dht]` settings, its state in
+        // the worker's own folder; the shard and intensity come from Assign.
+        runtime_config.dht = config.dht.enabled.then(|| lodestar_dht::node::Config {
+            state_path: Some(layout.data.join("dht-state.bin")),
+            ..config.dht_config()
+        });
+        let runtime = crate::worker::runtime::Runtime::start(runtime_config);
         let worker = Worker {
             layout,
             creds,
