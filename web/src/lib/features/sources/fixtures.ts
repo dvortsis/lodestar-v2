@@ -6,6 +6,7 @@ type Source = components['schemas']['Source'];
 
 export const source = (over: Partial<Source> & { id: number; name: string }): Source => ({
 	agents: { count: 1, enforced: false, max: 1 },
+	companion_need: null,
 	config_schema: {
 		$schema: 'https://json-schema.org/draft/2020-12/schema',
 		type: 'object',

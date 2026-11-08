@@ -167,6 +167,35 @@ lodestar_log::catalogue! {
         message: "Source not started: it isn't enabled",
         fields: { plugin: Label, state: Label },
     }
+    /// A source wasn't started: the companion it needs (`companion`, a
+    /// catalogue id) isn't installed or detected, or its state isn't
+    /// known yet (CMP-10). Logged once; it starts when the companion is
+    /// there and healthy.
+    SOURCE_NEEDS_COMPANION {
+        id: "pipeline.source_needs_companion",
+        component: Pipeline,
+        level: Info,
+        message: "Source waiting for a companion it needs",
+        fields: { plugin: Label, companion: Label },
+    }
+    /// A source was paused, or not started: the companion it needs is
+    /// failing its health check (CMP-10). Logged once.
+    SOURCE_COMPANION_UNHEALTHY {
+        id: "pipeline.source_companion_unhealthy",
+        component: Pipeline,
+        level: Warn,
+        message: "Source held: the companion it needs is unhealthy",
+        fields: { plugin: Label, companion: Label },
+    }
+    /// A source held for its companion started: the companion is there
+    /// and healthy (CMP-10).
+    SOURCE_COMPANION_READY {
+        id: "pipeline.source_companion_ready",
+        component: Pipeline,
+        level: Info,
+        message: "Source started: the companion it needs is ready",
+        fields: { plugin: Label, companion: Label },
+    }
     /// A running source stopped with an error.
     SOURCE_FAILED {
         id: "pipeline.source_failed",
