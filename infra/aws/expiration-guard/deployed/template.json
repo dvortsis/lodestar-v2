@@ -102,7 +102,7 @@
         "Runtime": "python3.13",
         "Handler": "index.handler",
         "Code": {
-          "ZipFile": "import json\nimport logging\nimport os\nfrom datetime import datetime, timezone, timedelta\nimport boto3\nfrom botocore.config import Config\n\nlog = logging.getLogger()\nlog.setLevel(logging.INFO)\nretry_config = Config(retries={\"mode\": \"standard\", \"max_attempts\": 4})\nec2 = boto3.client(\"ec2\", config=retry_config)\nsns = boto3.client(\"sns\", config=retry_config)\n\nREQUIRED = {\"Project\": \"Lodestar\", \"Environment\": \"Test\", \"ManagedBy\": \"Terraform\"}\nVPC = os.environ[\"EXPECTED_VPC\"]\nSG = os.environ[\"EXPECTED_SECURITY_GROUP\"]\nTOPIC = os.environ[\"ALERT_TOPIC_ARN\"]\n\ndef expires_at(value):\n    try:\n        return datetime.strptime(value, \"%Y-%m-%dT%H:%M:%SZ\").replace(tzinfo=timezone.utc)\n    except (ValueError, TypeError):\n        return None\n\ndef handler(event, context):\n    dry_run = isinstance(event, dict) and event.get(\"dry_run\") is True\n    now = datetime.now(timezone.utc)\n    expired = []\n    scanned = 0\n    for page in ec2.get_paginator(\"describe_instances\").paginate(Filters=[\n        {\"Name\": \"tag:Project\", \"Values\": [\"Lodestar\"]},\n        {\"Name\": \"tag:Environment\", \"Values\": [\"Test\"]},\n        {\"Name\": \"tag:ManagedBy\", \"Values\": [\"Terraform\"]},\n        {\"Name\": \"vpc-id\", \"Values\": [VPC]},\n        {\"Name\": \"instance-state-name\", \"Values\": [\"pending\", \"running\", \"stopping\", \"stopped\"]},\n    ]):\n        for reservation in page.get(\"Reservations\", []):\n            for instance in reservation.get(\"Instances\", []):\n                scanned += 1\n                tags = {x[\"Key\"]: x[\"Value\"] for x in instance.get(\"Tags\", [])}\n                if not (\n                    all(tags.get(k) == v for k,v in REQUIRED.items()) and\n                    instance.get(\"VpcId\") == VPC and\n                    instance.get(\"InstanceType\") == \"c6a.xlarge\" and\n                    any(s.get(\"GroupId\") == SG for s in instance.get(\"SecurityGroups\", []))\n                ):\n                    log.warning(json.dumps({\"event\": \"out_of_scope\", \"id\": instance[\"InstanceId\"]}))\n                    continue\n                launched = instance[\"LaunchTime\"].astimezone(timezone.utc)\n                latest = launched + timedelta(hours=48)\n                tagged = expires_at(tags.get(\"ExpiresAt\"))\n                if tagged is None:\n                    log.warning(json.dumps({\"event\": \"invalid_or_missing_expiration\", \"id\": instance[\"InstanceId\"]}))\n                deadline = min(tagged, latest) if tagged is not None else latest\n                if now >= deadline:\n                    expired.append(instance[\"InstanceId\"])\n    terminated = []\n    errors = []\n    for instance_id in expired[:15]:\n        if dry_run:\n            log.info(json.dumps({\"event\": \"would_terminate\", \"id\": instance_id}))\n            continue\n        try:\n            result = ec2.terminate_instances(InstanceIds=[instance_id])\n            states = result.get(\"TerminatingInstances\", [])\n            if not any(x.get(\"InstanceId\") == instance_id and x.get(\"CurrentState\", {}).get(\"Name\") in (\"shutting-down\", \"terminated\") for x in states):\n                raise RuntimeError(\"Termination not acknowledged\")\n            terminated.append(instance_id)\n            log.info(json.dumps({\"event\": \"termination_accepted\", \"id\": instance_id}))\n        except Exception as exc:\n            log.exception(\"termination_failed id=%s\", instance_id)\n            errors.append(instance_id + \":\" + type(exc).__name__)\n    if terminated:\n        try:\n            sns.publish(TopicArn=TOPIC, Subject=\"Lodestar EC2 expiration: termination started\",\n                        Message=json.dumps({\"instance_ids\": terminated, \"utc\": now.isoformat(), \"state\": \"termination initiated, not yet confirmed final\"}))\n        except Exception:\n            log.exception(\"notification_failed\")\n            errors.append(\"notification_failed\")\n    log.info(json.dumps({\"event\": \"scan_summary\", \"scanned\": scanned, \"expired\": len(expired),\n                         \"requested\": len(terminated), \"dry_run\": dry_run}))\n    if errors:\n        raise RuntimeError(\"Expiration processing failed: \" + \",\".join(errors))\n    return {\"scanned\": scanned, \"expired\": len(expired), \"requested\": len(terminated), \"dry_run\": dry_run}\n"
+          "ZipFile": "import json\nimport logging\nimport os\nfrom datetime import datetime, timezone, timedelta\nimport boto3\nfrom botocore.config import Config\n\nlog = logging.getLogger()\nlog.setLevel(logging.INFO)\nretry_config = Config(retries={\"mode\": \"standard\", \"max_attempts\": 4})\nec2 = boto3.client(\"ec2\", config=retry_config)\nsns = boto3.client(\"sns\", config=retry_config)\n\nREQUIRED = {\"Project\": \"Lodestar\", \"Environment\": \"Test\", \"ManagedBy\": \"Terraform\"}\nVPC = os.environ[\"EXPECTED_VPC\"]\nSG = os.environ[\"EXPECTED_SECURITY_GROUP\"]\nTOPIC = os.environ[\"ALERT_TOPIC_ARN\"]\n\ndef expires_at(value):\n    try:\n        return datetime.strptime(value, \"%Y-%m-%dT%H:%M:%SZ\").replace(tzinfo=timezone.utc)\n    except (ValueError, TypeError):\n        return None\n\ndef started_at(instance):\n    \"\"\"When the instance first started: the earliest of LaunchTime and the root\n    EBS volume's AttachTime. A stop/start resets LaunchTime, but the root volume\n    stays attached, so its AttachTime keeps the original start and the 48-hour\n    clock can't be reset by stopping and starting the instance.\"\"\"\n    times = [instance[\"LaunchTime\"].astimezone(timezone.utc)]\n    root = instance.get(\"RootDeviceName\")\n    for mapping in instance.get(\"BlockDeviceMappings\", []):\n        attached = mapping.get(\"Ebs\", {}).get(\"AttachTime\")\n        if root and mapping.get(\"DeviceName\") == root and attached is not None:\n            times.append(attached.astimezone(timezone.utc))\n    return min(times)\n\n\ndef handler(event, context):\n    dry_run = isinstance(event, dict) and event.get(\"dry_run\") is True\n    now = datetime.now(timezone.utc)\n    expired = []\n    scanned = 0\n    out_of_scope = 0\n    for page in ec2.get_paginator(\"describe_instances\").paginate(Filters=[\n        {\"Name\": \"tag:Project\", \"Values\": [\"Lodestar\"]},\n        {\"Name\": \"instance-state-name\", \"Values\": [\"pending\", \"running\", \"stopping\", \"stopped\"]},\n    ]):\n        for reservation in page.get(\"Reservations\", []):\n            for instance in reservation.get(\"Instances\", []):\n                scanned += 1\n                tags = {x[\"Key\"]: x[\"Value\"] for x in instance.get(\"Tags\", [])}\n                if not (\n                    all(tags.get(k) == v for k,v in REQUIRED.items()) and\n                    instance.get(\"VpcId\") == VPC and\n                    instance.get(\"InstanceType\") == \"c6a.xlarge\" and\n                    any(s.get(\"GroupId\") == SG for s in instance.get(\"SecurityGroups\", []))\n                ):\n                    # Tagged Project=Lodestar but not something this guard may\n                    # terminate: the OutOfScope alarm counts this log line.\n                    log.error(json.dumps({\"event\": \"out_of_scope_instance\", \"id\": instance[\"InstanceId\"]}))\n                    out_of_scope += 1\n                    continue\n                latest = started_at(instance) + timedelta(hours=48)\n                tagged = expires_at(tags.get(\"ExpiresAt\"))\n                if tagged is None:\n                    log.warning(json.dumps({\"event\": \"invalid_or_missing_expiration\", \"id\": instance[\"InstanceId\"]}))\n                deadline = min(tagged, latest) if tagged is not None else latest\n                if now >= deadline:\n                    expired.append(instance[\"InstanceId\"])\n    terminated = []\n    errors = []\n    for instance_id in expired[:15]:\n        if dry_run:\n            log.info(json.dumps({\"event\": \"would_terminate\", \"id\": instance_id}))\n            continue\n        try:\n            result = ec2.terminate_instances(InstanceIds=[instance_id])\n            states = result.get(\"TerminatingInstances\", [])\n            if not any(x.get(\"InstanceId\") == instance_id and x.get(\"CurrentState\", {}).get(\"Name\") in (\"shutting-down\", \"terminated\") for x in states):\n                raise RuntimeError(\"Termination not acknowledged\")\n            terminated.append(instance_id)\n            log.info(json.dumps({\"event\": \"termination_accepted\", \"id\": instance_id}))\n        except Exception as exc:\n            log.exception(\"termination_failed id=%s\", instance_id)\n            errors.append(instance_id + \":\" + type(exc).__name__)\n    if terminated:\n        try:\n            sns.publish(TopicArn=TOPIC, Subject=\"Lodestar EC2 expiration: termination started\",\n                        Message=json.dumps({\"instance_ids\": terminated, \"utc\": now.isoformat(), \"state\": \"termination initiated, not yet confirmed final\"}))\n        except Exception:\n            log.exception(\"notification_failed\")\n            errors.append(\"notification_failed\")\n    log.info(json.dumps({\"event\": \"scan_summary\", \"scanned\": scanned, \"expired\": len(expired),\n                         \"out_of_scope_count\": out_of_scope, \"requested\": len(terminated), \"dry_run\": dry_run}))\n    if errors:\n        raise RuntimeError(\"Expiration processing failed: \" + \",\".join(errors))\n    return {\"scanned\": scanned, \"expired\": len(expired), \"out_of_scope\": out_of_scope,\n            \"requested\": len(terminated), \"dry_run\": dry_run}\n"
         },
         "Role": {
           "Fn::GetAtt": [
@@ -210,6 +210,71 @@
         "Endpoint": {
           "Ref": "NotificationEmail"
         }
+      }
+    },
+    "OutOfScopeMetric": {
+      "Type": "AWS::Logs::MetricFilter",
+      "Properties": {
+        "LogGroupName": {
+          "Ref": "LogGroup"
+        },
+        "FilterPattern": "\"out_of_scope_instance\"",
+        "MetricTransformations": [
+          {
+            "MetricNamespace": "Lodestar/ExpirationGuard",
+            "MetricName": "OutOfScope",
+            "MetricValue": "1",
+            "DefaultValue": 0
+          }
+        ]
+      }
+    },
+    "OutOfScopeAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmName": "lodestar-expiration-guard-out-of-scope",
+        "AlarmDescription": "A Project=Lodestar EC2 instance the guard may not terminate (wrong VPC, security group, type or tags): it will never be cleaned up automatically.",
+        "Namespace": "Lodestar/ExpirationGuard",
+        "MetricName": "OutOfScope",
+        "Statistic": "Sum",
+        "Period": 3600,
+        "EvaluationPeriods": 1,
+        "Threshold": 0,
+        "ComparisonOperator": "GreaterThanThreshold",
+        "TreatMissingData": "notBreaching",
+        "AlarmActions": [
+          {
+            "Ref": "Topic"
+          }
+        ]
+      }
+    },
+    "HeartbeatAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmName": "lodestar-expiration-guard-heartbeat",
+        "AlarmDescription": "No invocation in the last hour: the schedule is disabled or broken, so expired machines are not being cleaned up.",
+        "Namespace": "AWS/Lambda",
+        "MetricName": "Invocations",
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "Function"
+            }
+          }
+        ],
+        "Statistic": "Sum",
+        "Period": 3600,
+        "EvaluationPeriods": 1,
+        "Threshold": 1,
+        "ComparisonOperator": "LessThanThreshold",
+        "TreatMissingData": "breaching",
+        "AlarmActions": [
+          {
+            "Ref": "Topic"
+          }
+        ]
       }
     }
   },

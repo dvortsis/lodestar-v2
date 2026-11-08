@@ -4,6 +4,10 @@ locals {
   worker_hourly_usd    = 0.0075
   estimated_hourly_usd = (var.deploy_main ? local.main_hourly_usd : 0) + var.worker_count * local.worker_hourly_usd
   ssh_authorized_key   = trimspace(file(pathexpand(var.ssh_public_key_path)))
+
+  # Main's SSH allowlist: the primary admin /32 plus any extra /32s (OP-2's
+  # firewall audit reads this list).
+  main_admin_ipv4_cidrs = distinct(concat([var.ssh_admin_ipv4_cidr], var.main_extra_admin_ipv4_cidrs))
 }
 
 # Separate main and worker firewalls, so all rules are in place
@@ -20,7 +24,9 @@ resource "linode_firewall" "main" {
     action   = "ACCEPT"
     protocol = "TCP"
     ports    = "22"
-    ipv4     = [var.ssh_admin_ipv4_cidr]
+
+    # IPv4 /32s only (validated in variables.tf); no ipv6 list, so no IPv6 ingress.
+    ipv4 = local.main_admin_ipv4_cidrs
   }
 }
 
