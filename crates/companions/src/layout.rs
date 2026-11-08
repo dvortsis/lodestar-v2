@@ -320,6 +320,9 @@ impl Install {
                 return Err(LayoutError::Io(io::ErrorKind::InvalidData));
             }
             out.sync_all()?;
+            // Closed before the rename: Windows refuses to rename a folder
+            // while a file inside it is open.
+            drop(out);
             sync_dir(&staging)?;
             fs::rename(&staging, &target)?;
             Ok(n)
