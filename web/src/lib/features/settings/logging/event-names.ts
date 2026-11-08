@@ -833,5 +833,17 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 	'companions.catalogue_invalid': [
 		m.settings_logging_ev_companions_catalogue_invalid_n,
 		m.settings_logging_ev_companions_catalogue_invalid_h
+	],
+	'companions.config_applied': [
+		m.settings_logging_ev_companions_config_applied_n,
+		m.settings_logging_ev_companions_config_applied_h
+	],
+	'companions.config_failed': [
+		m.settings_logging_ev_companions_config_failed_n,
+		m.settings_logging_ev_companions_config_failed_h
+	],
+	'companions.config_handed_over': [
+		m.settings_logging_ev_companions_config_handed_over_n,
+		m.settings_logging_ev_companions_config_handed_over_h
 	]
 };

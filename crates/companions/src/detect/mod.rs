@@ -30,13 +30,14 @@ use lodestar_integrations::BoxFuture as NetFuture;
 use lodestar_integrations::net::{
     AddrClass, GuardedClient, NetError, NetPolicy, Resolve, SystemResolver, classify, read_limited,
 };
+use lodestar_integrations::secret::Secret;
 use lodestar_sources_feeds::json::{self, Walk};
 use reqwest::Url;
-use reqwest::header::{HeaderValue as ReqHeaderValue, USER_AGENT};
+use reqwest::header::{HeaderValue as ReqHeaderValue, SET_COOKIE, USER_AGENT};
 
 use crate::adapter::{
     AdapterError, BoxFuture, Detect, Detected, EnteredUrl, GuardedHttp, Health, HealthStatus,
-    Limits, Method, ProbeRequest, ProbeResponse, RequestPath, TIMEOUT_MAX, Target,
+    Limits, Method, ProbeRequest, ProbeResponse, RequestPath, TIMEOUT_MAX, Target, cookie_value_ok,
 };
 use crate::catalogue::{Catalogue, Entry, Exposure, Proto};
 use crate::inputs::CompanionId;
@@ -263,8 +264,10 @@ impl Resolve for LocalOnly {
 /// - **Bounds:** the request's [`Limits`] cover the whole exchange, from
 ///   connecting to the last body byte; one byte past the cap fails with
 ///   [`AdapterError::TooLarge`].
-/// - **Nothing kept:** no cookies, no proxy, no `Referer`; only the
-///   request's own headers and [`PROBE_USER_AGENT`].
+/// - **Nothing kept:** no cookie jar, no proxy, no `Referer`; only the
+///   request's own headers and [`PROBE_USER_AGENT`]. The one session cookie
+///   a request names is handed back in the answer, for the adapter to send
+///   itself (CMP-8b's qBittorrent sign-in).
 pub struct CompanionHttp {
     fixed: GuardedClient,
     entered: GuardedClient,
@@ -305,6 +308,7 @@ impl CompanionHttp {
         let method = match request.method {
             Method::Get => reqwest::Method::GET,
             Method::Post => reqwest::Method::POST,
+            Method::Put => reqwest::Method::PUT,
         };
         let mut req = reqwest::Request::new(method, url);
         *req.timeout_mut() = Some(request.limits.timeout());
@@ -322,14 +326,29 @@ impl CompanionHttp {
             *req.body_mut() = Some(body.clone().into());
         }
         let cap = request.limits.body_cap();
-        let (status, body) = async {
+        let (status, session, body) = async {
             let resp = client.send(req).await?;
             let status = resp.status().as_u16();
-            Ok::<_, NetError>((status, read_limited(resp, cap).await?))
+            // Only the one cookie the request names is read, and only its
+            // value; no other header of the answer is.
+            let session = request.session_cookie.and_then(|name| {
+                session_cookie(
+                    resp.headers()
+                        .get_all(SET_COOKIE)
+                        .iter()
+                        .filter_map(|v| v.to_str().ok()),
+                    name.as_str(),
+                )
+            });
+            Ok::<_, NetError>((status, session, read_limited(resp, cap).await?))
         }
         .await
         .map_err(net_error)?;
-        ProbeResponse::new(status, body, &request.limits)
+        let response = ProbeResponse::new(status, body, &request.limits)?;
+        match session {
+            Some(value) => response.with_session_cookie(Secret::new(value)),
+            None => Ok(response),
+        }
     }
 
     async fn dispatch(&self, request: &ProbeRequest<'_>) -> Result<ProbeResponse, AdapterError> {
@@ -375,6 +394,17 @@ impl GuardedHttp for CompanionHttp {
     }
 }
 
+/// The value of the first `Set-Cookie` whose name is exactly `name` and
+/// whose value passes [`cookie_value_ok`]; attributes after `;` are
+/// ignored. Values that fail are passed over, never returned.
+fn session_cookie<'a>(headers: impl Iterator<Item = &'a str>, name: &str) -> Option<String> {
+    headers
+        .filter_map(|h| h.split(';').next())
+        .filter_map(|pair| pair.trim().split_once('='))
+        .find(|(n, v)| *n == name && cookie_value_ok(v))
+        .map(|(_, v)| v.to_owned())
+}
+
 fn parse(s: &str) -> Result<Url, AdapterError> {
     Url::parse(s).map_err(|_| AdapterError::Protocol("URL"))
 }
@@ -418,6 +448,23 @@ mod tests {
             let u = join(&EnteredUrl::parse(base).unwrap(), &p).unwrap();
             assert_eq!(u.as_str(), want);
         }
+    }
+
+    #[test]
+    fn only_the_named_session_cookie_is_read() {
+        let pick = |hs: &[&str]| session_cookie(hs.iter().copied(), "SID");
+        assert_eq!(
+            pick(&["SID=abc123; HttpOnly; path=/"]),
+            Some("abc123".into())
+        );
+        assert_eq!(pick(&["X=1", "SID=b"]), Some("b".into()));
+        assert_eq!(pick(&["QBT_SID_8080=a"]), None);
+        assert_eq!(pick(&["sid=a"]), None);
+        assert_eq!(pick(&["SID="]), None);
+        assert_eq!(pick(&["SID=a b", "SID=ok"]), Some("ok".into()));
+        assert_eq!(pick(&["SID=a,b=c"]), None);
+        assert_eq!(pick(&[&format!("SID={}", "a".repeat(513))]), None);
+        assert_eq!(pick(&[]), None);
     }
 
     #[test]
