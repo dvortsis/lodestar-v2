@@ -33,7 +33,7 @@ Akamai's published plan description is *SSD*. This is not an assurance of a part
 
 ## Prerequisites on Windows 11 (PowerShell)
 
-1. Install Terraform locally if needed. Official install: https://developer.hashicorp.com/terraform/install. You must have a working `terraform` command. `ssh-keygen` is provided by Windows OpenSSH on many installations. Check:
+1. Install Terraform **1.10 or later** locally if needed (1.10 added the S3 state locking these scripts use). Official install: https://developer.hashicorp.com/terraform/install. You must have a working `terraform` command. `ssh-keygen` is provided by Windows OpenSSH on many installations. Check:
 
    ```powershell
    terraform version
@@ -61,7 +61,17 @@ Akamai's published plan description is *SSD*. This is not an assurance of a part
 
    The environment variable still resides in your current process and any processes it launches. Close PowerShell to clear it. Never run debug logging that could disclose it.
 
-5. In `infra/akamai/terraform`, copy the example and edit the configuration:
+5. **Point Terraform at the shared state.** Terraform keeps its record of the machines it created (its *state*) in the fleet's private S3 bucket, shared with the automated control plane, so the two never disagree about which Linodes exist. The scripts refuse to run without these two settings and never fall back to a local state file. In the same PowerShell session:
+
+   ```powershell
+   $env:LODESTAR_TF_STATE_BUCKET = '<StateBucketName from the fleet-control stack outputs>'
+   $env:LODESTAR_TF_STATE_REGION = 'us-east-1'
+   $env:AWS_PROFILE = '<your admin profile that may use that bucket>'
+   ```
+
+   The bucket name is private configuration: keep it out of the repository and chat. If an older local `.terraform` folder exists here, `terraform init` stops and asks about a backend change. Don't migrate the old local state: delete the `.terraform` folder and run the script again (the cloud-operator plan: a fresh S3 state is the reconciliation, and no old local state is imported).
+
+6. In `infra/akamai/terraform`, copy the example and edit the configuration:
 
    ```powershell
    Copy-Item .\terraform.tfvars.example .\terraform.tfvars
@@ -70,7 +80,7 @@ Akamai's published plan description is *SSD*. This is not an assurance of a part
 
    Replace `203.0.113.20/32` with your actual *current management public IPv4* followed by `/32`. You can check your egress IP with `Invoke-RestMethod https://checkip.amazonaws.com` (this external service sees your current public IP). If you change commercial VPN exit IPs, SSH access may be blocked until you update the firewall via Terraform or use Akamai LISH console.
 
-6. Run the **read-only** preflight and note any API permission/region failure:
+7. Run the **read-only** preflight and note any API permission/region failure:
 
    ```powershell
    .\scripts\Preflight.ps1

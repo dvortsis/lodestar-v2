@@ -458,6 +458,12 @@ jobs:
         run: |
           python -m pip install --no-deps --require-hashes -r infra/fleet/requirements-test.txt
           ./infra/fleet/run_tests.sh -v
+      # The fleet's CloudFormation templates (OP-2a): built from build_templates.py,
+      # then policy tests over the parsed JSON. Standard library only; no cloud call.
+      - name: Fleet AWS templates
+        run: |
+          python infra/aws/fleet-control/build_templates.py --check
+          python -m unittest discover -s infra/aws/fleet-control -p 'test_*.py' -v
       # Each template inlines its index.py; the committed JSON must be exactly
       # what build_template.py produces from the committed source.
       - name: Templates match their Lambda source
@@ -467,7 +473,7 @@ jobs:
           git diff --exit-code -- infra/
       - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
-          terraform_version: "1.9.8"
+          terraform_version: "1.10.5" # >= 1.10 for the S3 backend's native locking (OP-2a)
           terraform_wrapper: false
       - name: terraform fmt
         run: terraform fmt -check -recursive -diff infra/

@@ -1,0 +1,709 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Lodestar cloud fleet control plane: OIDC provider, LodestarFleetOperator, LodestarOperatorBridge, state/evidence/control buckets, fleet token secret shell, deny-all policy (OP-2a).",
+  "Parameters": {
+    "ExistingOidcProviderArn": {
+      "Type": "String",
+      "Default": "",
+      "AllowedPattern": "^$|^arn:aws[a-z-]*:iam::[0-9]{12}:oidc-provider/token\\.actions\\.githubusercontent\\.com$",
+      "Description": "Leave empty to create the GitHub OIDC provider. If this account already has one (an account holds one per URL), give its ARN."
+    },
+    "PiaDeliveryRoleArn": {
+      "Type": "String",
+      "Default": "",
+      "AllowedPattern": "^$|^arn:aws[a-z-]*:iam::[0-9]{12}:role/LodestarPiaDelivery$",
+      "Description": "Only if LodestarPiaDelivery sits in another account: its role ARN, granted s3:GetObject on fleet/fleet.json alone. Leave empty when it is in this account."
+    }
+  },
+  "Conditions": {
+    "CreateOidcProvider": {
+      "Fn::Equals": [
+        {
+          "Ref": "ExistingOidcProviderArn"
+        },
+        ""
+      ]
+    },
+    "GrantPiaDelivery": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "PiaDeliveryRoleArn"
+            },
+            ""
+          ]
+        }
+      ]
+    }
+  },
+  "Resources": {
+    "GitHubOidcProvider": {
+      "Type": "AWS::IAM::OIDCProvider",
+      "Condition": "CreateOidcProvider",
+      "Properties": {
+        "Url": "https://token.actions.githubusercontent.com",
+        "ClientIdList": [
+          "sts.amazonaws.com"
+        ]
+      }
+    },
+    "StateBucket": {
+      "Type": "AWS::S3::Bucket",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              },
+              "BucketKeyEnabled": true
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "Id": "AbortIncompleteUploads",
+              "Status": "Enabled",
+              "AbortIncompleteMultipartUpload": {
+                "DaysAfterInitiation": 1
+              }
+            },
+            {
+              "Id": "ExpireOldVersions",
+              "Status": "Enabled",
+              "NoncurrentVersionExpiration": {
+                "NoncurrentDays": 30
+              }
+            }
+          ]
+        }
+      }
+    },
+    "StateBucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "StateBucket"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "DenyNonTls",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "StateBucket",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Sub": "${StateBucket.Arn}/*"
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            },
+            {
+              "Fn::If": [
+                "GrantPiaDelivery",
+                {
+                  "Sid": "PiaDeliveryReadsFleetJson",
+                  "Effect": "Allow",
+                  "Principal": {
+                    "AWS": {
+                      "Ref": "PiaDeliveryRoleArn"
+                    }
+                  },
+                  "Action": "s3:GetObject",
+                  "Resource": {
+                    "Fn::Sub": "${StateBucket.Arn}/fleet/fleet.json"
+                  }
+                },
+                {
+                  "Ref": "AWS::NoValue"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "EvidenceBucket": {
+      "Type": "AWS::S3::Bucket",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              },
+              "BucketKeyEnabled": true
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "Id": "AbortIncompleteUploads",
+              "Status": "Enabled",
+              "AbortIncompleteMultipartUpload": {
+                "DaysAfterInitiation": 1
+              }
+            },
+            {
+              "Id": "Expire",
+              "Status": "Enabled",
+              "ExpirationInDays": 14
+            }
+          ]
+        }
+      }
+    },
+    "EvidenceBucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "EvidenceBucket"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "DenyNonTls",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "EvidenceBucket",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Sub": "${EvidenceBucket.Arn}/*"
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "ControlBucket": {
+      "Type": "AWS::S3::Bucket",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              },
+              "BucketKeyEnabled": true
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "Id": "AbortIncompleteUploads",
+              "Status": "Enabled",
+              "AbortIncompleteMultipartUpload": {
+                "DaysAfterInitiation": 1
+              }
+            }
+          ]
+        }
+      }
+    },
+    "ControlBucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "ControlBucket"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "DenyNonTls",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "ControlBucket",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Sub": "${ControlBucket.Arn}/*"
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "AkamaiFleetToken": {
+      "Type": "AWS::SecretsManager::Secret",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "Name": "lodestar/akamai-fleet-token",
+        "Description": "Linode token for the fleet's dedicated Akamai account (plan \u00a74). Empty: the owner sets the value in the console. Never the watchdog's lodestar/akamai-token."
+      }
+    },
+    "LodestarFleetOperator": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": "LodestarFleetOperator",
+        "Description": "fleet.yml in the cloud-fleet environment at refs/heads/main. No EC2, SSM or IAM.",
+        "MaxSessionDuration": 3600,
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Federated": {
+                  "Fn::If": [
+                    "CreateOidcProvider",
+                    {
+                      "Ref": "GitHubOidcProvider"
+                    },
+                    {
+                      "Ref": "ExistingOidcProviderArn"
+                    }
+                  ]
+                }
+              },
+              "Action": "sts:AssumeRoleWithWebIdentity",
+              "Condition": {
+                "StringEquals": {
+                  "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+                  "token.actions.githubusercontent.com:sub": "repo:dvortsis/lodestar-v2:environment:cloud-fleet:job_workflow_ref:dvortsis/lodestar-v2/.github/workflows/fleet.yml@refs/heads/main"
+                }
+              }
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "LodestarFleetOperatorAccess",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "FleetToken",
+                  "Effect": "Allow",
+                  "Action": "secretsmanager:GetSecretValue",
+                  "Resource": {
+                    "Ref": "AkamaiFleetToken"
+                  }
+                },
+                {
+                  "Sid": "TerraformStateAndFleetJson",
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:PutObject"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": [
+                        "arn:${AWS::Partition}:s3:::${B}/terraform/lodestar.tfstate",
+                        {
+                          "B": {
+                            "Ref": "StateBucket"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "Fn::Sub": [
+                        "arn:${AWS::Partition}:s3:::${B}/terraform/lodestar.tfstate.tflock",
+                        {
+                          "B": {
+                            "Ref": "StateBucket"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "Fn::Sub": [
+                        "arn:${AWS::Partition}:s3:::${B}/fleet/fleet.json",
+                        {
+                          "B": {
+                            "Ref": "StateBucket"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Sid": "DeleteTerraformLockAndFleetJson",
+                  "Effect": "Allow",
+                  "Action": "s3:DeleteObject",
+                  "Resource": [
+                    {
+                      "Fn::Sub": [
+                        "arn:${AWS::Partition}:s3:::${B}/terraform/lodestar.tfstate.tflock",
+                        {
+                          "B": {
+                            "Ref": "StateBucket"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "Fn::Sub": [
+                        "arn:${AWS::Partition}:s3:::${B}/fleet/fleet.json",
+                        {
+                          "B": {
+                            "Ref": "StateBucket"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Sid": "ListStateKeys",
+                  "Effect": "Allow",
+                  "Action": "s3:ListBucket",
+                  "Resource": {
+                    "Fn::Sub": [
+                      "arn:${AWS::Partition}:s3:::${B}",
+                      {
+                        "B": {
+                          "Ref": "StateBucket"
+                        }
+                      }
+                    ]
+                  },
+                  "Condition": {
+                    "StringEquals": {
+                      "s3:prefix": [
+                        "terraform/lodestar.tfstate",
+                        "terraform/lodestar.tfstate.tflock",
+                        "fleet/fleet.json"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "Sid": "Evidence",
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:PutObject"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": [
+                      "arn:${AWS::Partition}:s3:::${B}/fleet/*",
+                      {
+                        "B": {
+                          "Ref": "EvidenceBucket"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "Sid": "FleetLock",
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:PutObject",
+                    "s3:DeleteObject"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": [
+                      "arn:${AWS::Partition}:s3:::${B}/locks/fleet.json",
+                      {
+                        "B": {
+                          "Ref": "ControlBucket"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "Sid": "ListFleetLock",
+                  "Effect": "Allow",
+                  "Action": "s3:ListBucket",
+                  "Resource": {
+                    "Fn::Sub": [
+                      "arn:${AWS::Partition}:s3:::${B}",
+                      {
+                        "B": {
+                          "Ref": "ControlBucket"
+                        }
+                      }
+                    ]
+                  },
+                  "Condition": {
+                    "StringEquals": {
+                      "s3:prefix": [
+                        "locks/fleet.json"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "LodestarOperatorBridge": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": "LodestarOperatorBridge",
+        "Description": "operator-wake, operator-apply and operator-injection in the cloud-operator environment at refs/heads/main.",
+        "MaxSessionDuration": 3600,
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Federated": {
+                  "Fn::If": [
+                    "CreateOidcProvider",
+                    {
+                      "Ref": "GitHubOidcProvider"
+                    },
+                    {
+                      "Ref": "ExistingOidcProviderArn"
+                    }
+                  ]
+                }
+              },
+              "Action": "sts:AssumeRoleWithWebIdentity",
+              "Condition": {
+                "StringEquals": {
+                  "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+                  "token.actions.githubusercontent.com:sub": [
+                    "repo:dvortsis/lodestar-v2:environment:cloud-operator:job_workflow_ref:dvortsis/lodestar-v2/.github/workflows/operator-wake.yml@refs/heads/main",
+                    "repo:dvortsis/lodestar-v2:environment:cloud-operator:job_workflow_ref:dvortsis/lodestar-v2/.github/workflows/operator-apply.yml@refs/heads/main",
+                    "repo:dvortsis/lodestar-v2:environment:cloud-operator:job_workflow_ref:dvortsis/lodestar-v2/.github/workflows/operator-injection.yml@refs/heads/main"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "LodestarOperatorBridgeAccess",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "OperatorLocks",
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:PutObject",
+                    "s3:DeleteObject"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": [
+                      "arn:${AWS::Partition}:s3:::${B}/locks/operator*",
+                      {
+                        "B": {
+                          "Ref": "ControlBucket"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "Sid": "ClaudeLock",
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:PutObject"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": [
+                      "arn:${AWS::Partition}:s3:::${B}/operator/claude-lock.json",
+                      {
+                        "B": {
+                          "Ref": "ControlBucket"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "Sid": "ListOperatorKeys",
+                  "Effect": "Allow",
+                  "Action": "s3:ListBucket",
+                  "Resource": {
+                    "Fn::Sub": [
+                      "arn:${AWS::Partition}:s3:::${B}",
+                      {
+                        "B": {
+                          "Ref": "ControlBucket"
+                        }
+                      }
+                    ]
+                  },
+                  "Condition": {
+                    "StringLike": {
+                      "s3:prefix": [
+                        "locks/operator*",
+                        "operator/claude-lock.json"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "Sid": "ReadFleetJsonOnly",
+                  "Effect": "Allow",
+                  "Action": "s3:GetObject",
+                  "Resource": {
+                    "Fn::Sub": [
+                      "arn:${AWS::Partition}:s3:::${B}/fleet/fleet.json",
+                      {
+                        "B": {
+                          "Ref": "StateBucket"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "LodestarFleetDenyAll": {
+      "Type": "AWS::IAM::ManagedPolicy",
+      "Properties": {
+        "ManagedPolicyName": "LodestarFleetDenyAll",
+        "Description": "Revocation: attach to the fleet roles to cut all access (plan \u00a74, kill switch step 4). Unattached by design.",
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Deny",
+              "Action": "*",
+              "Resource": "*"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "StateBucketName": {
+      "Value": {
+        "Ref": "StateBucket"
+      },
+      "Description": "GitHub secret STATE_BUCKET (cloud-fleet, pia-delivery)"
+    },
+    "EvidenceBucketName": {
+      "Value": {
+        "Ref": "EvidenceBucket"
+      },
+      "Description": "GitHub secret EVIDENCE_BUCKET (cloud-fleet)"
+    },
+    "ControlBucketName": {
+      "Value": {
+        "Ref": "ControlBucket"
+      },
+      "Description": "GitHub secret CONTROL_BUCKET (cloud-fleet, cloud-operator)"
+    },
+    "FleetOperatorRoleArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "LodestarFleetOperator",
+          "Arn"
+        ]
+      },
+      "Description": "GitHub secret AWS_FLEET_ROLE_ARN (cloud-fleet)"
+    },
+    "BridgeRoleArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "LodestarOperatorBridge",
+          "Arn"
+        ]
+      },
+      "Description": "GitHub secret AWS_BRIDGE_ROLE_ARN (cloud-operator)"
+    }
+  }
+}
