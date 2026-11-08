@@ -23,8 +23,10 @@ pub mod adapter;
 pub mod catalogue;
 pub mod config_files;
 pub mod credentials;
+pub mod extract;
 pub mod fetch;
 pub mod inputs;
+pub mod layout;
 pub mod log_events;
 pub mod verify;
 

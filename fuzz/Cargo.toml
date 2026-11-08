@@ -13,6 +13,7 @@ libfuzzer-sys = "0.4"
 lodestar-bencode = { path = "../crates/bencode" }
 lodestar-classify = { path = "../crates/classify" }
 lodestar-cluster = { path = "../crates/cluster" }
+lodestar-companions = { path = "../crates/companions", features = ["testing"] }
 lodestar-dht = { path = "../crates/dht" }
 lodestar-filter = { path = "../crates/filter" }
 lodestar-integrations = { path = "../crates/integrations" }
@@ -256,6 +257,13 @@ bench = false
 [[bin]]
 name = "verified_claims"
 path = "fuzz_targets/verified_claims.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "companion_archive"
+path = "fuzz_targets/companion_archive.rs"
 test = false
 doc = false
 bench = false
