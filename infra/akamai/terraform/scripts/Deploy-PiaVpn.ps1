@@ -15,8 +15,6 @@
     Action to perform: FullWorkflow, Provision, StartVpn, VerifyTunnel, StartCrawler, Health, Cleanup.
 .PARAMETER VerifyOnly
     Test AWS secret access and exit.
-.PARAMETER GenerateOnly
-    Generate WireGuard config locally and print without provisioning.
 .PARAMETER StartCrawler
     Launch the crawler container after leak verification passes.
 .PARAMETER DryRun
@@ -45,9 +43,6 @@ param(
 
     [Parameter(Mandatory = $false)]
     [switch]$VerifyOnly,
-
-    [Parameter(Mandatory = $false)]
-    [switch]$GenerateOnly,
 
     [Parameter(Mandatory = $false)]
     [switch]$StartCrawler,
@@ -106,13 +101,6 @@ if ($VerifyOnly) {
     } else {
         Audit "AWS verification failed with exit code $LASTEXITCODE."
     }
-    return
-}
-
-# Case 2: Generate Config Locally only
-if ($GenerateOnly) {
-    Audit "Generating WireGuard configuration for region '$Region'..."
-    & $pythonExe $bridgeScript generate-config --pia-region $Region @accountArgs
     return
 }
 

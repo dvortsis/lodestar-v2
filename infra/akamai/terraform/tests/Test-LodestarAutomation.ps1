@@ -216,7 +216,7 @@ Run-Test "Akamai Reconcile: terraform plan -refresh-only succeeds" {
 # -----------------------------------------------------------------------------
 # 7. Secure PIA VPN Bridge Automation Tests
 # -----------------------------------------------------------------------------
-Run-Test "PIA VPN: Automated unit test suite passes (all 16 security controls)" {
+Run-Test "PIA VPN: Automated unit test suite passes (all 26 security controls)" {
     $testScript = Join-Path $projectRoot 'tests\test_pia_bridge.py'
     $py = Get-Command python -ErrorAction SilentlyContinue
     if (-not $py) { $py = Get-Command py -ErrorAction SilentlyContinue }

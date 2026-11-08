@@ -17,7 +17,10 @@
 
 services:
   gluetun:
-    image: qmcgaw/gluetun:v3.40.0@sha256:4af0c804003481e100180e1f8d4d5e9c48163fedc0f88d061881b615aef9d183
+    # Verified official image reference from Docker Hub registry-1.docker.io:
+    # Multi-platform index digest: sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00
+    # Linux AMD64 platform manifest digest: sha256:8ec31c4b83e1f3173d43728f78a4a7ad45237fef366a4b5461e5aee93f517fba
+    image: qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00
     container_name: gluetun
     cap_drop:
       - ALL
@@ -27,6 +30,9 @@ services:
       - /dev/net/tun:/dev/net/tun
     security_opt:
       - no-new-privileges:true
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
+      - net.ipv6.conf.default.disable_ipv6=1
     environment:
       - VPN_SERVICE_PROVIDER=custom
       - VPN_TYPE=wireguard

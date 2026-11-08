@@ -127,11 +127,15 @@ lsblk -o NAME,SIZE,TYPE,ROTA,TRAN,MOUNTPOINTS
 
 The `pia-example/` directory contains the VPN gateway Compose stack and the crawler service template. Credentials delivery is automated via the secure bridge (`scripts/Deploy-PiaVpn.ps1` and `scripts/lodestar_pia_bridge.py`):
 
-1. **Central AWS Credential Store**: `lodestar/pia-vpn` in AWS Secrets Manager (`us-east-1`), read exclusively via the restricted `LodestarPiaSecretReader` role by the trusted deployment host.
-2. **Zero Linode AWS Credentials**: No AWS keys, IAM profiles, or Secrets Manager access on the Linode.
-3. **Ephemeral Runtime Storage**: Ephemeral `wg0.conf` is dynamically negotiated via PIA's authenticated REST API with Curve25519 key generation and streamed directly to `/run/lodestar/vpn/wg0.conf` (root-only mode `0600` on RAM-backed `tmpfs`).
-4. **Survives Container Restarts**: Persists in `/run` across container restarts while the VM remains active; cleanly wiped on VM reboot.
-5. **Independent Leak Verification**: Egress IP and local DNS resolution are verified from inside the Gluetun container before the crawler container is permitted to start. Never falls back to unencrypted host networking.
+1. **Central AWS Credential Store**: `lodestar/pia-vpn` in AWS Secrets Manager (`us-east-1`), read exclusively via the restricted `LodestarPiaSecretReader` role by the trusted deployment host with MFA enforcement.
+2. **Zero Linode AWS Credentials**: No AWS keys, IAM profiles, session tokens, or Secrets Manager access on any Linode.
+3. **Verified Cryptography & Dynamic Discovery**: Ephemeral WireGuard keypair generated with verified X25519 (`cryptography` library, matching RFC 7748 test vectors). WireGuard endpoints dynamically discovered via PIA authoritative server list (`serverlist.piaservers.net/vpninfo/servers/v4`).
+4. **Ephemeral Runtime Storage in `/run` tmpfs**: Ephemeral `wg0.conf` is streamed directly to `/run/lodestar/vpn/wg0.conf` (root-only mode `0600` on RAM-backed `tmpfs`). No persistent plaintext credentials on disk.
+5. **Auditable Sudo Execution Model**: Scoped non-interactive sudo (`/etc/sudoers.d/99-lodestar-automation`) restricts `lodestar` user to deployment binaries (`docker`, `install`, `rm`, `stat`, `sha256sum`, `test`) without granting unrestricted `docker` group membership.
+6. **Compose Delivery & Checksum Verification**: Compose files are validated locally, transferred over SSH, checksum-verified (`sha256sum`), and validated remotely before VPN startup.
+7. **Pinned Immutable Gluetun Digest**: Gluetun pinned to verified multi-platform index digest `sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00` (Linux AMD64 manifest `sha256:8ec31c4b83e1f3173d43728f78a4a7ad45237fef366a4b5461e5aee93f517fba`) with IPv6 disabled and strict kill switch (`FIREWALL=on`).
+8. **Independent Leak Gate**: Pre-crawler verification validates active WireGuard handshake, public egress IP mismatch against host IP, non-Akamai ISP/ASN, internal DNS resolution, and iptables `OUTPUT DROP` rules. If any check fails, containers are shut down and crawler startup is blocked.
+9. **Zero Plaintext Secret Exposure**: Private keys, tokens, and passwords are strictly redacted from logs, stdout, and error traces. Local configuration export requires explicit destination path.
 
 ```powershell
 # Verify AWS access to PIA secret:

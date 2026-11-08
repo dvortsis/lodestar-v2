@@ -19,10 +19,15 @@ users:
     groups: [sudo]
     shell: /bin/bash
     lock_passwd: true
-    sudo: "ALL=(ALL) NOPASSWD:ALL"
     ssh_authorized_keys:
       - ${ssh_public_key}
 write_files:
+  - path: /etc/sudoers.d/99-lodestar-automation
+    owner: root:root
+    permissions: '0440'
+    content: |
+      # Narrowed, auditable non-interactive sudoers permissions for automated deployment operations
+      lodestar ALL=(root) NOPASSWD: /usr/bin/docker, /usr/bin/install, /usr/bin/rm, /usr/bin/stat, /usr/bin/sha256sum, /usr/bin/test, /usr/bin/systemctl, /usr/bin/journalctl
   - path: /etc/ssh/sshd_config.d/99-lodestar.conf
     owner: root:root
     permissions: '0644'
