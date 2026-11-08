@@ -6545,6 +6545,11 @@
       "id": "X-wk-busy-metrics-scope",
       "at": "2026-11-08T23:14Z",
       "note": "Runner call: worker counters live in the remote worker process (no /metrics); X-wk-busy-metrics becomes coordinator-side cluster_claims_busy_total{cause=queue_full|store_check|unknown_read}; owns += the three Busy sites in crates/cluster/src/server.rs. Next runner PR updates its slices.yaml owns. Option 2 (worker counters in heartbeat proto::Stats, a wire change) logged, not queued."
+    },
+    {
+      "id": "X-updates-api-text-codes",
+      "at": "2026-11-08T23:56Z",
+      "note": "From #640: X-updates-api-text also documents capability.reason install_kind_unknown, data_folder_unchecked, notice install_failed, installing set during download (string codes, no shape change)."
     }
   ],
   "main_health": [
@@ -7258,14 +7263,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T23:13Z",
+    "updated": "2026-11-08T23:56Z",
     "items": [
       {
         "slot": 1,
         "slice": "CMP-6",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: #639 told to bring main in after #637 merge and push its fix round; then delta review",
+        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: #639 ready at 1ef6844c (main e964b487 merged); fresh delta Opus review running",
         "since": "2026-11-08T20:07Z"
       },
       {
@@ -7281,7 +7286,7 @@
         "slice": "PK-win-upd-2",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAC9TBdvBgyLvxSjGf: building Windows MSI install through the SYSTEM update helper (Q13)",
+        "doing": "session_01MMjhnAC9TBdvBgyLvxSjGf: #640 ready at e91851b3 (green); Opus review + security review running",
         "since": "2026-11-08T20:17Z"
       },
       {
@@ -7357,5 +7362,5 @@
     }
   ],
   "heartbeat": "2026-11-08T21:39Z",
-  "updated": "2026-11-08T23:14Z"
+  "updated": "2026-11-08T23:56Z"
 }
