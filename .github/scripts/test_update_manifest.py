@@ -11,6 +11,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -218,24 +219,41 @@ class Builder(unittest.TestCase):
         self.assertIn("twice", out)
 
     def test_statement_fields_must_be_strings_and_json_finite(self):
-        for st in [{"body": 1, "minisig": SIG}, {"body": "e30=", "minisig": None},
-                   {"body": "e30=", "minisig": SIG, "cosig": 7}]:
+        # A body with a timestamp, so only the check under test can refuse.
+        good = base64.b64encode(b'{"timestamp":1}').decode()
+        self.statements.write_text(json.dumps([{"body": good, "minisig": SIG, "cosig": SIG}]))
+        self.assertEqual(self.build()[0], 0, "the control case builds")
+        for st in [{"body": good, "minisig": None}, {"body": good, "minisig": 7},
+                   {"body": good, "minisig": SIG, "cosig": 7}, {"body": good, "minisig": SIG, "cosig": None}]:
             with self.subTest(st=st):
                 self.statements.write_text(json.dumps([st]))
                 self.assertEqual(self.build()[0], 1)
-        for raw in ['[{"body": "e30=", "minisig": NaN}]', '[{"body": "e30=", "minisig": Infinity}]']:
+        for raw in [f'[{{"body": "{good}", "minisig": NaN}}]', f'[{{"body": "{good}", "minisig": "x", "cosig": Infinity}}]']:
             with self.subTest(raw=raw):
                 self.statements.write_text(raw)
                 self.assertEqual(self.build()[0], 1)
+        for body in [b'{"timestamp":1,"x":NaN}', b'{"timestamp":1,"x":-Infinity}']:
+            with self.subTest(body=body):
+                st = {"body": base64.b64encode(body).decode(), "minisig": SIG}
+                self.statements.write_text(json.dumps([st]))
+                self.assertEqual(self.build()[0], 1)
+
+    def test_the_real_key_chain_loads(self):
+        path = Path(um.__file__).resolve().parents[2] / "crates/update/keys/statements.json"
+        for s in um.load_statements(path):
+            self.assertGreater(um.statement_time(s), 0)
 
     def test_check_version_is_the_tag_check(self):
         for good in ["0.6.0", "0.6.0-rc.1", "0.6.0-rc.10", "1.0.0-beta.2", "0.6.1-nightly.20261108.57"]:
             with self.subTest(version=good):
-                self.assertEqual(self.run_cli("check-version", good)[0], 0)
+                self.assertEqual(self.run_cli("check-version", "--", good)[0], 0)
         for bad in ["0.6.0-rc.01", "0.6.0-01", "0.6.0-", "0.6.0-rc..1", "0.6.0+b", "v0.6.0", "00.6.0",
-                    "0.6.0-rc.1\n", "0.6.0-" + "a" * 64]:
+                    "0.6.0-rc.1\n", "0.6.0-" + "a" * 64, "-h.1.1", "-hh.1.1", "-h", "--help", "--he"]:
             with self.subTest(version=bad):
-                self.assertEqual(self.run_cli("check-version", bad)[0], 1)
+                self.assertEqual(self.run_cli("check-version", "--", bad)[0], 1)
+                # Without `--` an option-like tag is an argparse error, never a pass.
+                r = subprocess.run([sys.executable, um.__file__, "check-version", bad], capture_output=True)
+                self.assertNotEqual(r.returncode, 0)
 
     def test_a_previous_manifest_of_another_channel_is_refused(self):
         prev = self.previous(["0.5.2"], channel="beta")

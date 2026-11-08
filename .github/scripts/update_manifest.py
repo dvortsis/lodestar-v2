@@ -403,7 +403,8 @@ def parser() -> argparse.ArgumentParser:
     for name in ("body", "minisig", "out"):
         w.add_argument(name)
     w.set_defaults(run=envelope)
-    c = sub.add_parser("check-version")
+    # No -h: a tag such as `v-h.1.1` must reach the check, not argparse's help.
+    c = sub.add_parser("check-version", add_help=False)
     c.add_argument("version")
     c.set_defaults(run=check_version_cmd)
     return p

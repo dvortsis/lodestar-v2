@@ -279,7 +279,7 @@ jobs:
           # Strict semver (no leading zeros in numeric pre-release parts), the
           # same check as the update manifest's (update_manifest.py).
           if [ "${GITHUB_REF_NAME#v}" = "$GITHUB_REF_NAME" ] ||
-            ! python3 .github/scripts/update_manifest.py check-version "${GITHUB_REF_NAME#v}"; then
+            ! python3 .github/scripts/update_manifest.py check-version -- "${GITHUB_REF_NAME#v}"; then
             echo "::error::$GITHUB_REF_NAME is not vMAJOR.MINOR.PATCH[-prerelease]; nothing to publish"
             exit 1
           fi
@@ -378,7 +378,7 @@ jobs:
               fi
               # Strict semver, as the update manifest and build.rs need it
               # (`-rc.01` is refused: a numeric part has no leading zero).
-              if ! python3 .github/scripts/update_manifest.py check-version "$version"; then
+              if ! python3 .github/scripts/update_manifest.py check-version -- "$version"; then
                 echo "::error::$tag is not vMAJOR.MINOR.PATCH[-prerelease]"
                 exit 1
               fi
@@ -890,6 +890,7 @@ jobs:
             else
               echo "::notice::No nightly update manifest: nightly files have no public home yet (PK-nightly-host, the owner's call)."
             fi
+            # PK-nightly-host: once this signs, the job's concurrency group must be `update-manifest` on main too.
             exit 0
           fi
 
