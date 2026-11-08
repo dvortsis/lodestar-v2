@@ -319,6 +319,18 @@ async fn node_paused(dht: &DhtSource) -> Option<bool> {
     Some(handle.snapshot().await?.paused)
 }
 
+/// Waits until the DHT node reports `want`. The node applies a pause or
+/// resume in its own task, after the API has answered and the event has
+/// been recorded, so a bare read right after either can see the old
+/// state.
+async fn node_paused_becomes(dht: &DhtSource, want: bool, what: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    while node_paused(dht).await != Some(want) && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(node_paused(dht).await, Some(want), "{what}");
+}
+
 /// Whether the node answers a ping.
 async fn answers(addr: SocketAddr) -> bool {
     use lodestar_dht::krpc::{self, Body as Krpc, Message, Method, Query};
@@ -392,7 +404,7 @@ async fn pause_resume_and_intensity_through_the_api() {
         0,
         "a paused pool starts nothing"
     );
-    assert_eq!(node_paused(&f.dht).await, Some(true));
+    node_paused_becomes(&f.dht, true, "the node pauses").await;
     assert!(answers(f.dht_addr).await, "a paused node still answers");
     assert_eq!(f.events(event::PAUSE).len(), 1);
     // Idempotent: a second pause changes and records nothing.
@@ -413,7 +425,7 @@ async fn pause_resume_and_intensity_through_the_api() {
         .await;
     assert_eq!((status, resumed["state"].clone()), (200, json!("running")));
     assert!(starts_during(&f, 400).await > 0, "fetching resumes");
-    assert_eq!(node_paused(&f.dht).await, Some(false));
+    node_paused_becomes(&f.dht, false, "the node resumes").await;
     assert_eq!(f.events(event::RESUME).len(), 1);
 
     // Intensity: /crawler and /settings/crawler are one value.
@@ -476,7 +488,7 @@ async fn pause_resume_and_intensity_through_the_api() {
         || f.events(event::PAUSE).len() == 2,
     )
     .await;
-    assert_eq!(node_paused(&f.dht).await, Some(true));
+    node_paused_becomes(&f.dht, true, "a settings pause reaches the node").await;
     assert!(f.ops.control.status().paused);
     f.stop().await;
 }
@@ -765,11 +777,7 @@ async fn concurrent_toggles_leave_the_process_as_the_registry_says() {
         let saved = f.registry.get::<settings::crawler::Crawler>().paused;
         assert_eq!(f.ops.control.status().paused, saved, "round {round}");
         // And so is the DHT node, which applies it in its own task.
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-        while node_paused(&f.dht).await != Some(saved) && tokio::time::Instant::now() < deadline {
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-        assert_eq!(node_paused(&f.dht).await, Some(saved), "round {round}");
+        node_paused_becomes(&f.dht, saved, &format!("round {round}")).await;
     }
 }
 
