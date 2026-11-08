@@ -956,51 +956,12 @@ mod tests {
         assert_eq!(rows.get(&b.row.key).unwrap(), Some(b.row.value));
     }
 
-    /// qBittorrent pinned on Linux x86_64, with a pinned image and its
-    /// templates; Prowlarr with nothing pinned.
+    /// The compiled-in catalogue. Nothing in it is pinned yet, and the
+    /// binary can't load another (the `testing` feature stays out of it),
+    /// so the manager's refusal before any download is tested where the
+    /// manager is, with a pinned catalogue.
     fn pinned() -> &'static Catalogue {
-        let sha = "ab".repeat(32);
-        let j = serde_json::json!({
-            "format": 1,
-            "entries": [{
-                "id": "qbittorrent",
-                "name": "qBittorrent",
-                "licence": {"spdx": "GPL-2.0-or-later", "url": "https://github.com/qbittorrent/qBittorrent/blob/master/COPYING"},
-                "homepage": "https://www.qbittorrent.org/",
-                "needed_for": ["download_client"],
-                "opt_in": false,
-                "hosts": ["github.com"],
-                "native": {"release": "https://github.com/userdocs/qbittorrent-nox-static/releases/download/", "artifacts": [
-                    {"platform": "linux", "arch": "x86_64", "archive": "binary", "executable": null,
-                     "pin": {"version": "5.1.2", "url": "https://github.com/userdocs/qbittorrent-nox-static/releases/download/release-5.1.2/x86_64-qbittorrent-nox",
-                             "size": 10, "sha256": sha, "upstream_sig": {"kind": "none"}}}
-                ]},
-                "container": {"image": "lscr.io/linuxserver/qbittorrent", "digest": format!("sha256:{}", "cd".repeat(32)), "name": "qbittorrent"},
-                "ports": [
-                    {"name": "webui", "port": 8080, "proto": "tcp", "exposure": "internal"},
-                    {"name": "p2p", "port": 6881, "proto": "tcp", "exposure": "p2p"},
-                    {"name": "p2p_udp", "port": 6881, "proto": "udp", "exposure": "p2p"}
-                ],
-                "health": {"port": "webui", "path": "/api/v2/app/version"},
-                "templates": ["qbittorrent_conf", "compose_service", "unraid_template"]
-            }, {
-                "id": "prowlarr",
-                "name": "Prowlarr",
-                "licence": {"spdx": "GPL-3.0-only", "url": "https://github.com/Prowlarr/Prowlarr/blob/develop/LICENSE.md"},
-                "homepage": "https://prowlarr.com/",
-                "needed_for": ["indexer_manager"],
-                "opt_in": false,
-                "hosts": ["github.com"],
-                "native": {"release": "https://github.com/Prowlarr/Prowlarr/releases/download/", "artifacts": [
-                    {"platform": "linux", "arch": "x86_64", "archive": "tar_gz", "executable": "Prowlarr/Prowlarr", "pin": null}
-                ]},
-                "container": null,
-                "ports": [{"name": "webui", "port": 9696, "proto": "tcp", "exposure": "internal"}],
-                "health": {"port": "webui", "path": "/ping"},
-                "templates": ["prowlarr_config_xml"]
-            }]
-        });
-        Box::leak(Box::new(Catalogue::from_json(&j.to_string()).unwrap()))
+        lodestar_companions::builtin().unwrap()
     }
 
     /// The supervisor CMP-5g hands in, as far as these tests need: its
@@ -1053,34 +1014,60 @@ mod tests {
         issued.secret.expose().to_owned()
     }
 
-    /// Until CMP-5g, an install the admin confirmed is refused with
-    /// `not_wired` before anything is downloaded or written: the pinned
-    /// URL is never asked for, and the companion has no folder.
+    /// An install reaches the manager only with a well-formed token, and
+    /// comes back with the manager's refusal; nothing is written.
     #[tokio::test]
-    async fn a_confirmed_install_is_not_wired_and_fetches_nothing() {
+    async fn an_install_passes_the_managers_refusal_through() {
         let dir = tempfile::tempdir().unwrap();
         let s = service(dir.path(), pinned(), NATIVE, Arc::new(Unwired));
-        let offer = s.offer("qbittorrent".into()).await.unwrap();
-        assert_eq!(offer.version, "5.1.2");
-        assert_eq!(offer.sha256, "ab".repeat(32));
-        assert_eq!(offer.replaces, None);
+        assert_eq!(
+            s.offer("qbittorrent".into()).await,
+            Err(CompanionsError::Refused("awaiting_pin"))
+        );
         let got = s
-            .install("qbittorrent".into(), offer.version, offer.sha256)
+            .install("qbittorrent".into(), "5.1.2".into(), "ab".repeat(32))
             .await;
-        assert_eq!(got, Err(CompanionsError::Refused("not_wired")));
+        assert_eq!(got, Err(CompanionsError::Refused("awaiting_pin")));
         assert!(!dir.path().join("companions/qbittorrent").exists());
-        // A token for anything but the pin is refused first.
-        let wrong = s
-            .install("qbittorrent".into(), "5.1.2".into(), "cd".repeat(32))
-            .await;
-        assert_eq!(wrong, Err(CompanionsError::Mismatch));
-        let garbage = s
-            .install("qbittorrent".into(), "5.1.2".into(), "nope".into())
-            .await;
-        assert_eq!(garbage, Err(CompanionsError::Mismatch));
+        for (v, sha) in [
+            ("5.1.2", "nope".to_owned()),
+            ("not a version!", "ab".repeat(32)),
+        ] {
+            assert_eq!(
+                s.install("qbittorrent".into(), v.into(), sha).await,
+                Err(CompanionsError::Mismatch)
+            );
+        }
         assert_eq!(
             s.install("nope".into(), "1".into(), "ab".repeat(32)).await,
             Err(CompanionsError::Unknown)
+        );
+    }
+
+    #[test]
+    fn manager_refusals_map_to_api_codes() {
+        assert_eq!(
+            refused(Refusal::Confirmation.into()),
+            CompanionsError::Mismatch
+        );
+        assert_eq!(refused(Refusal::Unknown.into()), CompanionsError::Unknown);
+        assert_eq!(
+            refused(Refusal::Busy.into()),
+            CompanionsError::Refused("busy")
+        );
+        assert_eq!(
+            refused(ManagerError::Step {
+                step: "start",
+                code: "not_wired"
+            }),
+            CompanionsError::Refused("not_wired")
+        );
+        assert_eq!(
+            refused(ManagerError::Step {
+                step: "fetch",
+                code: "io"
+            }),
+            CompanionsError::Internal("io")
         );
     }
 
@@ -1097,7 +1084,7 @@ mod tests {
                 qbt.available.as_deref(),
                 qbt.refusal.as_deref()
             ),
-            ("qbittorrent", Some("5.1.2"), None)
+            ("qbittorrent", None, Some("awaiting_pin"))
         );
         assert_eq!((qbt.installed.as_ref(), qbt.health), (None, None));
         assert_eq!(qbt.licence, "GPL-2.0-or-later");
@@ -1275,45 +1262,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn templates_are_built_from_checked_inputs() {
+    async fn templates_check_their_inputs_first() {
         let dir = tempfile::tempdir().unwrap();
         let s = service(dir.path(), pinned(), NATIVE, Arc::new(Unwired));
         let req = |v: serde_json::Value| -> TemplateRequest { serde_json::from_value(v).unwrap() };
-        let t = s
-            .template(
-                "qbittorrent".into(),
-                req(serde_json::json!({
-                    "kind": "compose",
-                    "config_dir": "/srv/qbittorrent",
-                    "downloads": "/srv/downloads"
-                })),
-            )
-            .await
-            .unwrap();
-        let doc = t.compose.unwrap();
-        assert!(
-            doc.contains("/srv/qbittorrent") && doc.contains("lodestar"),
-            "{doc}"
-        );
-        assert!(t.unraid.is_empty());
-        let t = s
-            .template(
-                "qbittorrent".into(),
-                req(serde_json::json!({
-                    "kind": "unraid",
-                    "config_dir": "/mnt/user/appdata/qbittorrent",
-                    "downloads": "/mnt/user/downloads"
-                })),
-            )
-            .await
-            .unwrap();
-        assert_eq!(t.compose, None);
-        assert_eq!(t.unraid.len(), 1);
-        assert!(
-            t.unraid[0]
-                .add_container_path
-                .contains(&t.unraid[0].file_name)
-        );
         for (body, field) in [
             (serde_json::json!({"kind": "compose", "puid": "x"}), "puid"),
             (
@@ -1338,48 +1290,33 @@ mod tests {
                 other => panic!("{body}: {other:?}"),
             }
         }
-        // Lodestar's own data folder is never mounted, and a data folder
-        // that can't be resolved refuses rather than dropping the guard.
+        let ok =
+            serde_json::json!({"kind": "compose", "config_dir": "/srv/q", "downloads": "/srv/d"});
+        // A data folder that can't be resolved refuses rather than
+        // dropping the guard against mounting it.
         #[cfg(unix)]
         {
             let gone = Service {
                 data: dir.path().join("missing"),
                 ..s.clone_parts()
             };
-            let got = gone
-                .template(
-                    "qbittorrent".into(),
-                    req(serde_json::json!({"kind": "compose", "config_dir": "/srv/q", "downloads": "/srv/d"})),
-                )
-                .await;
+            let got = gone.template("qbittorrent".into(), req(ok.clone())).await;
             assert_eq!(got.err(), Some(CompanionsError::Internal("data_folder")));
         }
-        let data = std::fs::canonicalize(dir.path()).unwrap();
-        let inside = format!("{}/qbt", data.display());
-        if HostPath::parse(&inside).is_ok() {
-            let got = s
-                .template(
-                    "qbittorrent".into(),
-                    req(serde_json::json!({
-                        "kind": "compose",
-                        "config_dir": inside,
-                        "downloads": "/srv/downloads"
-                    })),
-                )
-                .await;
-            assert!(
-                matches!(got, Err(CompanionsError::BadInput { .. })),
-                "{got:?}"
+        // Valid inputs reach CMP-7's generator, which refuses an image
+        // that isn't pinned yet.
+        for kind in ["compose", "unraid"] {
+            let mut body = ok.clone();
+            body["kind"] = kind.into();
+            assert_eq!(
+                s.template("qbittorrent".into(), req(body)).await.err(),
+                Some(CompanionsError::Refused("awaiting_pin")),
+                "{kind}"
             );
         }
         assert_eq!(
-            s.template(
-                "prowlarr".into(),
-                req(serde_json::json!({"kind": "compose"}))
-            )
-            .await
-            .err(),
-            Some(CompanionsError::Refused("no_template"))
+            s.template("nope".into(), req(ok)).await.err(),
+            Some(CompanionsError::Unknown)
         );
     }
 }

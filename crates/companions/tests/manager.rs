@@ -1044,3 +1044,63 @@ async fn a_directory_named_like_the_temporary_journal_is_not_ours() {
     );
     assert!(w.folder().join(state::STATE_TMP).is_dir());
 }
+
+/// A `Run` that can't start anything: serve's `Unwired` until CMP-5g.
+struct NotWired;
+
+impl Run for NotWired {
+    fn ready(&self) -> Result<(), &'static str> {
+        Err("not_wired")
+    }
+    fn start(&self, _: Launch) -> BoxFuture<'_, Result<(), &'static str>> {
+        Box::pin(async { Err("not_wired") })
+    }
+    fn healthy<'a>(&'a self, _: &'a CompanionId, _: &'a Target) -> BoxFuture<'a, bool> {
+        Box::pin(async { false })
+    }
+    fn stop<'a>(&'a self, _: &'a CompanionId) -> BoxFuture<'a, ()> {
+        Box::pin(async {})
+    }
+}
+
+/// [`Net`], counting what's asked for.
+#[derive(Default)]
+struct Counting(AtomicUsize);
+
+impl Source for Counting {
+    fn open<'a>(&'a self, u: &'a Url) -> BoxFuture<'a, Result<Opened, FetchError>> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Net.open(u)
+    }
+}
+
+/// CMP-6: an install confirmed through the API, while the `Run` can't
+/// start anything, is refused with `not_wired` before anything is
+/// fetched or written, and leaves no journal behind.
+#[tokio::test]
+async fn an_unready_run_refuses_before_anything_is_fetched() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let fetched = Arc::new(Counting::default());
+    let m = Manager::open(Parts {
+        downloader: Downloader::any(fetched.clone()),
+        run: Arc::new(NotWired),
+        ..w.parts(catalogue("5.0.3"), LINUX)
+    })
+    .unwrap();
+    assert_eq!(
+        m.install(&token("5.0.3")).await,
+        Err(ManagerError::Step {
+            step: "start",
+            code: "not_wired"
+        })
+    );
+    assert_eq!(fetched.0.load(Ordering::SeqCst), 0);
+    assert!(!w.folder().exists());
+    assert!(w.rows.keys().is_empty());
+    // A wrong confirmation is refused before even that.
+    let mut wrong = token("5.0.3");
+    wrong.sha256 = Sha256::parse_hex(&"ab".repeat(32)).unwrap();
+    assert_eq!(m.install(&wrong).await, refused(Refusal::Confirmation));
+    assert_eq!(fetched.0.load(Ordering::SeqCst), 0);
+}

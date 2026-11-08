@@ -92,9 +92,6 @@ lodestar-classify.workspace = true
 lodestar-metainfo.workspace = true
 # TEST ONLY signing for tests/supervisor.rs's overlays.
 lodestar-update = { workspace = true, features = ["testing"] }
-# TEST ONLY: a pinned catalogue for `/companions`' tests (CMP-6). Resolver
-# 3 keeps dev features out of the shipped build.
-lodestar-companions = { workspace = true, features = ["testing"] }
 tempfile = "3.27.0"
 
 [target.'cfg(windows)'.dependencies]
