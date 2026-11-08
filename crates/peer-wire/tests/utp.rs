@@ -282,7 +282,7 @@ async fn default_options_stay_on_tcp() {
 /// CI flake on #196, #600 and #617).
 /// With at most one drop in a row each way, a resend and its ACK alone on
 /// the link fail at most three times running, which uTP's own limits
-/// absorb: it sends the SYN 4 times (`MAX_SYN_RETRIES`) and gives up on
+/// absorb: it resends the SYN 3 times (`MAX_SYN_RETRIES`) and gives up on
 /// data after 6 silent timeouts (`MAX_TIMEOUTS`). The slowest handshake
 /// is then SYNs at 0, 1, 3 and 7 s, inside the 10 s connect timeout.
 struct Loss {

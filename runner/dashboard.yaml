@@ -364,6 +364,7 @@ placement:
   - X-flake-query-token-style
   - X-flake-utp-lossy
   - X-flake-export-wal
+  - X-flake-filter-trails
   - X-soak-screen-calibrate
   - X-collect-checklist-docker
   - X-cloud-infra

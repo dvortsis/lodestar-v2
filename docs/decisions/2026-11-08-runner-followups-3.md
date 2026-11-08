@@ -1,4 +1,4 @@
-# Runner follow-ups, 2026-11-08 (runner PR)
+# Runner follow-ups, 2026-11-08 (#629)
 
 **Decided by:** the build runner, 2026-11-08. Runner calls under §2.26 and §2.33, flagged to the owner under §2.19. No owner decision is loosened.
 
@@ -24,11 +24,14 @@ The proposed product change (reset the backoff on any progressing ACK) was **rej
 ## 2a. The export WAL flake: the test fix only (X-flake-export-wal)
 `the_wal_stays_bounded_beside_a_writer` (`crates/api/tests/export.rs`) failed on Windows with "only 2 checkpoints" (CMP-5's runs). The export streamed 400 rows at 400 a second, so it stayed open for only about 1 s, and the slowest runner sometimes fitted just 2 writer checkpoints inside it. The export now streams at 100 rows a second (about 4 s). The assertion is unchanged. No product code changes.
 
+## 2b. The filter trail coverage flake: a fixed seed (X-flake-filter-trails)
+`reuse::the_property_reads_trails` (`crates/filter/tests/props.rs`) checks that the property's random draws reach SP-3 and SP-4 in over 10% of the cases that read a trail. It is a check on the generators, not a property. Unseeded, a Windows run on #621 drew 22 of 250 (8.8%). The runner now uses proptest's ChaCha `deterministic_rng`, so every platform draws the same cases: 234 of 380 read, 36 SP-3/SP-4 (15%), 115 Adult, all clear of the thresholds. A generator change that loses coverage now fails on the PR that makes it. (The commit message says this follows `query_props.rs`; that file uses `TestRunner::deterministic()` only for one count check, so the pattern is the same idea, not the same call.)
+
 ## 3. New slices
 | Slice | Why |
 |---|---|
 | **X-pk-manifest-hardening** | #618's non-blocking review notes: duplicate versions, strict semver prerelease tags, the nightly job outside the `update-manifest` concurrency group, carried-statement types, a key-rotation note. |
-| **PK-nightly-host** | Publishing nightly manifests needs a host and key arrangement the owner approves (`ext:owner-pk-nightly-host`). The proposal is in `docs/decisions/2026-11-08-PK-manifest.md`. |
+| **PK-nightly-host** | Publishing nightly manifests needs a host and key arrangement the owner approves (`ext:owner-pk-nightly-host`). The proposal is in `docs/decisions/2026-11-08-PK-manifest.md`. It follows X-pk-manifest-hardening, which edits the same `release.yml` and `update_manifest.py`. |
 | **X-wk10d-unknown** | #615's review notes, done after WK-10e. |
 | **X-utp-backoff** | See §2. |
 | **X-soak-screen-calibrate** | Replayed on r4 and r5, the advisory screen didn't separate pass from fail. It tripped on the passing r5 (mimalloc growth 37.79 against 20) and couldn't evaluate the failing r4 (`mmap_cache_excess` absent). It stays advisory. |
