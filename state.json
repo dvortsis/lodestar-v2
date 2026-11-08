@@ -6540,6 +6540,11 @@
       "id": "runner-pr-1108-late",
       "at": "2026-11-08T23:13Z",
       "note": "Next runner PR slices.yaml: add X-wk-busy-metrics (owns metrics.rs, docs/metrics.md, server.rs doc line, runtime.rs accessors) and X-event-names-split; X-lease-report-atomic after it."
+    },
+    {
+      "id": "X-wk-busy-metrics-scope",
+      "at": "2026-11-08T23:14Z",
+      "note": "Runner call: worker counters live in the remote worker process (no /metrics); X-wk-busy-metrics becomes coordinator-side cluster_claims_busy_total{cause=queue_full|store_check|unknown_read}; owns += the three Busy sites in crates/cluster/src/server.rs. Next runner PR updates its slices.yaml owns. Option 2 (worker counters in heartbeat proto::Stats, a wire change) logged, not queued."
     }
   ],
   "main_health": [
@@ -7352,5 +7357,5 @@
     }
   ],
   "heartbeat": "2026-11-08T21:39Z",
-  "updated": "2026-11-08T23:13Z"
+  "updated": "2026-11-08T23:14Z"
 }
