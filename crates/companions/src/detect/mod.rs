@@ -463,6 +463,11 @@ mod tests {
             assert_eq!(detector(id).unwrap().companion(), id);
             assert_eq!(health(id).unwrap().companion(), id);
         }
+        // Health asks the path the catalogue names, where it names one.
+        let path = |id: &str| c.get(id).unwrap().health.as_ref().map(|h| h.path.as_str());
+        assert_eq!(path(qbittorrent::ID), Some(qbittorrent::VERSION_PATH));
+        assert_eq!(path(prowlarr::ID), Some(prowlarr::PING_PATH));
+        assert_eq!(path(gluetun::ID), None);
         let other = CompanionId::parse("flaresolverr").unwrap();
         assert!(detector(&other).is_none() && health(&other).is_none());
     }

@@ -25,7 +25,7 @@ use super::{get, health_of, not_found_or};
 /// Its catalogue id.
 pub const ID: &str = "qbittorrent";
 
-const VERSION_PATH: &str = "/api/v2/app/version";
+pub(crate) const VERSION_PATH: &str = "/api/v2/app/version";
 const LOGIN_PATH: &str = "/";
 /// The two markers of the login page, both required.
 const LOGIN_MARKERS: [&str; 2] = ["id=\"loginform\"", "images/qbittorrent-tray.svg"];

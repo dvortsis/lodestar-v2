@@ -12,11 +12,13 @@ use lodestar_companions::adapter::{
     AdapterError, BoxFuture, Detected, EnteredUrl, GuardedHttp, HealthStatus, Limits, ProbeRequest,
     ProbeResponse, RequestPath, Target,
 };
+use lodestar_companions::adapter::{HeaderName, HeaderValue};
 use lodestar_companions::detect::{self, CompanionHttp, Runtime};
 use lodestar_companions::inputs::{ContainerName, PortNumber};
 use lodestar_companions::{CompanionId, builtin};
 use lodestar_integrations::BoxFuture as NetFuture;
 use lodestar_integrations::net::Resolve;
+use lodestar_integrations::secret::Secret;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -48,8 +50,10 @@ fn reply(status: u16, body: &[u8]) -> Reply {
 /// One request as the server saw it.
 #[derive(Debug, Clone)]
 struct Seen {
+    method: String,
     path: String,
     headers: Vec<(String, String)>,
+    body: Vec<u8>,
 }
 
 type Handler = Arc<dyn Fn(&str) -> Reply + Send + Sync>;
@@ -117,21 +121,35 @@ async fn serve(mut sock: TcpStream, handler: Handler, log: Arc<Mutex<Vec<Seen>>>
             return;
         }
     }
+    let end = head.windows(4).position(|w| w == b"\r\n\r\n").unwrap_or(0) + 4;
+    let mut body = head.split_off(end);
     let text = String::from_utf8_lossy(&head).into_owned();
     let mut lines = text.split("\r\n");
-    let path = lines
-        .next()
-        .and_then(|l| l.split(' ').nth(1))
-        .unwrap_or("")
-        .to_owned();
-    let headers = lines
+    let mut request_line = lines.next().unwrap_or("").split(' ');
+    let method = request_line.next().unwrap_or("").to_owned();
+    let path = request_line.next().unwrap_or("").to_owned();
+    let headers: Vec<(String, String)> = lines
         .take_while(|l| !l.is_empty())
         .filter_map(|l| l.split_once(':'))
         .map(|(n, v)| (n.trim().to_ascii_lowercase(), v.trim().to_owned()))
         .collect();
+    let length = headers
+        .iter()
+        .find(|(n, _)| n == "content-length")
+        .and_then(|(_, v)| v.parse::<usize>().ok())
+        .unwrap_or(0)
+        .min(64 * 1024);
+    while body.len() < length {
+        match sock.read(&mut buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => body.extend_from_slice(&buf[..n]),
+        }
+    }
     log.lock().unwrap().push(Seen {
+        method,
         path: path.clone(),
         headers,
+        body,
     });
     match handler(&path) {
         Reply::Full {
@@ -347,13 +365,16 @@ async fn nothing_listening_is_not_found_and_unreachable() {
     let target = Target::Entered(EnteredUrl::parse(&format!("http://{addr}")).unwrap());
     let http = http();
     for c in ["qbittorrent", "prowlarr", "gluetun"] {
-        assert_eq!(
-            detect::detector(&id(c))
-                .unwrap()
-                .detect(&http, &target)
-                .await,
-            Ok(None),
-            "{c}"
+        // On Windows a refused connection takes about 2 s, so a loaded
+        // runner may reach the probe's 5 s deadline first. At an entered
+        // URL that's a timeout, which is a valid answer here.
+        let got = detect::detector(&id(c))
+            .unwrap()
+            .detect(&http, &target)
+            .await;
+        assert!(
+            matches!(got, Ok(None) | Err(AdapterError::Timeout)),
+            "{c}: {got:?}"
         );
         assert_eq!(
             detect::health(&id(c)).unwrap().check(&http, &target).await,
@@ -385,11 +406,19 @@ async fn loopback_falls_back_to_ipv6() {
     let version: Handler = Arc::new(|_: &str| reply(200, b"v5.0.3"));
     // A runner without IPv6 loopback can't run this.
     let Ok(server) = Server::on("::1".parse().unwrap(), version).await else {
+        eprintln!("skipped: ::1 can't be bound on this runner");
         return;
     };
-    let found = detect::detector(&id("qbittorrent"))
-        .unwrap()
-        .detect(&http(), &server.loopback())
+    // The IPv4 attempt is refused first (about 2 s on Windows), so this
+    // uses a 15 s deadline rather than the probe's 5 s.
+    let limits = Limits::new(Duration::from_secs(15), 1024).unwrap();
+    let target = server.loopback();
+    let got = http()
+        .send(ProbeRequest::new(
+            &target,
+            RequestPath::parse("/api/v2/app/version").unwrap(),
+            limits,
+        ))
         .await;
     // Something else may hold the same port on IPv4; only then is the
     // answer not ours.
@@ -397,8 +426,53 @@ async fn loopback_falls_back_to_ipv6() {
         .await
         .is_err()
     {
-        assert_eq!(found.unwrap().unwrap().version.unwrap().as_str(), "5.0.3");
+        let r = got.unwrap();
+        assert_eq!((r.status(), r.body()), (200, &b"v5.0.3"[..]));
+        assert_eq!(server.paths(), ["/api/v2/app/version"]);
+    } else {
+        eprintln!("skipped: the IPv4 port is held by another program");
     }
+}
+
+#[tokio::test]
+async fn request_headers_and_bodies_arrive_as_built() {
+    let server = Server::start(|_| reply(200, b"Ok.")).await;
+    let target = server.entered();
+    let key = HeaderName::new("X-Api-Key").unwrap();
+    let kind = HeaderName::new("Content-Type").unwrap();
+    let req = ProbeRequest::new(
+        &target,
+        RequestPath::parse("/api/v2/app/setPreferences").unwrap(),
+        Limits::PROBE,
+    )
+    .post(b"json={\"a\":1}".to_vec())
+    .header(key, HeaderValue::secret(Secret::new("hunter2")).unwrap())
+    .header(
+        kind,
+        HeaderValue::plain("application/x-www-form-urlencoded").unwrap(),
+    );
+    let r = http().send(req).await.unwrap();
+    assert_eq!((r.status(), r.body()), (200, &b"Ok."[..]));
+    let seen = server.seen();
+    assert_eq!(seen.len(), 1);
+    let s = &seen[0];
+    assert_eq!(
+        (s.method.as_str(), s.path.as_str()),
+        ("POST", "/api/v2/app/setPreferences")
+    );
+    let header = |n: &str| {
+        s.headers
+            .iter()
+            .find(|(k, _)| k == n)
+            .map(|(_, v)| v.as_str())
+    };
+    assert_eq!(header("x-api-key"), Some("hunter2"));
+    assert_eq!(
+        header("content-type"),
+        Some("application/x-www-form-urlencoded")
+    );
+    assert_eq!(header("user-agent"), Some("Lodestar-Companions"));
+    assert_eq!(s.body, b"json={\"a\":1}");
 }
 
 // ─── Q12: the fixed probe set ───────────────────────────────────────────

@@ -10,7 +10,10 @@ case, in the recorded-exchange layout the source plugins use (SRC-7):
 The test server answers each path with its recording, and the test checks
 that detection asked for exactly these paths, in this order.
 
-They are reconstructed from upstream source and one earlier recording, not captured from the pinned images: the catalogue pins none yet. Sources (`docs/decisions/2026-11-08-CMP-8a.md`):
+They are reconstructed from upstream source and one earlier recording,
+not captured from the pinned images: the catalogue pins none yet.
+
+Sources (`docs/decisions/2026-11-08-CMP-8a.md`):
 
 - **qBittorrent:** `403 Forbidden` from the integrations crate's 4.6.3
   recording; the login pages are upstream's `src/webui/www/public/index.html`

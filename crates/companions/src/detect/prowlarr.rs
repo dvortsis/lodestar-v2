@@ -24,7 +24,7 @@ use super::{get, health_of, not_found_or, status_field};
 /// Its catalogue id.
 pub const ID: &str = "prowlarr";
 
-const PING_PATH: &str = "/ping";
+pub(crate) const PING_PATH: &str = "/ping";
 const LOGIN_PATH: &str = "/login";
 const LOGIN_MARKER: &str = "<title>Login - Prowlarr</title>";
 

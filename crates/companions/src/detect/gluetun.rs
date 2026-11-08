@@ -23,7 +23,9 @@
 //! is personal data, and the status route says what health needs. Health is
 //! `running` or not; a `401` is [`HealthStatus::Unhealthy`], because a VPN
 //! that can't be seen to be up must not be taken as up (it carries the
-//! kill-switch's traffic, §18.10). The control server reports no version.
+//! kill-switch's traffic, §18.10). Its `GET /v1/version` is behind
+//! authentication on `master` and isn't read, so [`Detected::version`] is
+//! `None`.
 
 use crate::adapter::{
     AdapterError, BoxFuture, Detect, Detected, GuardedHttp, Health, HealthStatus, Target,
