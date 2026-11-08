@@ -548,6 +548,50 @@ impl Install {
         Ok(())
     }
 
+    /// Deletes only what this layout put in the folder (the pointer and
+    /// its temporary file, version, staging and tombstone folders) plus
+    /// the caller's own `extra` names, `last` after everything else, and
+    /// then the folder only if nothing is left: anything a third party
+    /// wrote there survives. Returns whether the folder is gone.
+    pub fn remove_own(self, extra: &[&str], last: Option<&str>) -> Result<bool, LayoutError> {
+        self.remove_pointer()?;
+        let ours = |name: &str| {
+            if extra.contains(&name) || name.ends_with(DELETING) {
+                return true;
+            }
+            let stem = name.strip_suffix(STAGING).unwrap_or(name);
+            Version::parse(stem).is_ok_and(|v| v.as_str() == stem)
+        };
+        let mut names = Vec::new();
+        for entry in fs::read_dir(&self.root)? {
+            let name = entry?.file_name();
+            if let Some(name) = name.to_str().filter(|n| ours(n) && last != Some(*n)) {
+                names.push(name.to_owned());
+            }
+        }
+        for name in names {
+            self.delete(&self.root.join(name))?;
+        }
+        if let Some(l) = last {
+            sync_dir(&self.root)?;
+            self.delete(&self.root.join(l))?;
+        }
+        self.recheck()?;
+        // `remove_dir` fails on a folder that isn't empty: what someone
+        // else put there keeps it.
+        match fs::remove_dir(&self.root) {
+            Ok(()) => {}
+            Err(_) if fs::read_dir(&self.root).is_ok_and(|mut d| d.next().is_some()) => {
+                return Ok(false);
+            }
+            Err(e) => return Err(e.into()),
+        }
+        if let Some(parent) = self.root.parent() {
+            sync_dir(parent)?;
+        }
+        Ok(true)
+    }
+
     /// The first step of [`Install::remove`]: the pointer and any
     /// temporary pointer, then an fsync of the folder.
     fn remove_pointer(&self) -> Result<(), LayoutError> {
@@ -807,6 +851,33 @@ mod tests {
             assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
             let _ = fs::remove_dir_all(outside);
         }
+        let _ = fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn remove_own_spares_what_someone_else_wrote() {
+        let d = tmp();
+        let i = Install::open(&d, &CompanionId::parse("qbittorrent").unwrap()).unwrap();
+        for dir in ["5.0.3", "5.0.4.staging", "x.deleting", "home/a"] {
+            fs::create_dir_all(i.root().join(dir)).unwrap();
+        }
+        fs::write(i.root().join("current"), b"{}").unwrap();
+        fs::write(i.root().join("state.json"), b"{}").unwrap();
+        fs::write(i.root().join("theirs.iso"), b"mine").unwrap();
+        let root = i.root().to_path_buf();
+        assert!(!i.remove_own(&["home"], Some("state.json")).unwrap());
+        let left: Vec<_> = fs::read_dir(&root)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(left, ["theirs.iso"]);
+        // With nothing foreign left, the folder goes too.
+        fs::remove_file(root.join("theirs.iso")).unwrap();
+        let i = Install::existing(&d, &CompanionId::parse("qbittorrent").unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(i.remove_own(&[], None).unwrap());
+        assert!(!root.exists());
         let _ = fs::remove_dir_all(d);
     }
 

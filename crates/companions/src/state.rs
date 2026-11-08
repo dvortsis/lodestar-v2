@@ -38,7 +38,9 @@ use crate::inputs::Version;
 
 /// The record's file name inside `<data>/companions/<id>/`.
 pub const STATE_FILE: &str = "state.json";
-const STATE_TMP: &str = "state.json.tmp";
+/// The temporary file [`save`] writes before renaming it into place. A
+/// crash before the rename can leave it alone in a new folder.
+pub const STATE_TMP: &str = "state.json.tmp";
 const FORMAT: u32 = 1;
 const MAX_STATE: u64 = 4096;
 
@@ -266,18 +268,26 @@ pub fn save(dir: &Path, record: &Record) -> Result<(), StateError> {
         Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e.into()),
         _ => {}
     }
-    let mut o = OpenOptions::new();
-    o.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        o.mode(0o600);
+    let written = (|| -> io::Result<()> {
+        let mut o = OpenOptions::new();
+        o.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            o.mode(0o600);
+        }
+        let mut f = o.open(&tmp)?;
+        f.write_all(&bytes)?;
+        f.sync_all()?;
+        drop(f);
+        fs::rename(&tmp, dir.join(STATE_FILE))
+    })();
+    if let Err(e) = written {
+        // Best effort: a failed write leaves no temporary file behind (a
+        // crash still can, and recovery takes it).
+        let _ = fs::remove_file(&tmp);
+        return Err(e.into());
     }
-    let mut f = o.open(&tmp)?;
-    f.write_all(&bytes)?;
-    f.sync_all()?;
-    drop(f);
-    fs::rename(&tmp, dir.join(STATE_FILE))?;
     sync_dir(dir)?;
     Ok(())
 }

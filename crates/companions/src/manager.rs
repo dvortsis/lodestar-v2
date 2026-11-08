@@ -509,10 +509,39 @@ impl Credentials for Stored<'_> {
     }
 }
 
-/// Whether a folder has nothing in it. An unreadable one counts as not
-/// empty, so it's never deleted as ours.
-fn empty(dir: &Path) -> bool {
-    std::fs::read_dir(dir).is_ok_and(|mut d| d.next().is_none())
+/// Whether a folder holds nothing but what a crash before `begun` can
+/// leave: nothing at all, or the journal's own temporary file. An
+/// unreadable folder doesn't qualify, so it's never deleted as ours.
+fn leftovers_only(dir: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    let mut entries = entries;
+    entries.all(|e| e.is_ok_and(|e| e.file_name() == state::STATE_TMP))
+}
+
+/// Deletes a folder [`leftovers_only`] accepted: the temporary file, then
+/// the folder with `remove_dir`, which fails rather than delete anything
+/// written there since the check.
+fn remove_leftovers(dir: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(dir.join(state::STATE_TMP)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    std::fs::remove_dir(dir)
+}
+
+/// A credential opened before an API call, so the adapter's synchronous
+/// `Credentials::get` doesn't touch the store on the async runtime.
+struct Opened {
+    field: &'static str,
+    secret: Option<Secret>,
+}
+
+impl Credentials for Opened {
+    fn get(&self, field: &str) -> Result<Option<Secret>, CredentialError> {
+        Ok((field == self.field).then(|| self.secret.clone()).flatten())
+    }
 }
 
 /// What recovery found that needs the async side.
@@ -686,8 +715,12 @@ impl Inner {
         // A folder Lodestar has no record of isn't ours to install over or
         // to roll back to nothing: a compose companion's host folder can
         // sit there (CMP-7's validator allows it).
-        if record.is_none() && existing.as_ref().is_some_and(|i| !empty(i.root())) {
-            return Err(Refusal::FolderInUse.into());
+        if let (None, Some(i)) = (&record, &existing) {
+            if !leftovers_only(i.root()) {
+                return Err(Refusal::FolderInUse.into());
+            }
+            // An earlier first install that failed before `begun`.
+            remove_leftovers(i.root()).map_err(|_| failed("layout")("leftover"))?;
         }
         let installed = match record {
             Some(r) if r.op.is_some() => return Err(Refusal::Busy.into()),
@@ -862,7 +895,9 @@ impl Inner {
                     .rows
                     .forget(id)
                     .map_err(|_| failed("credentials")("store"))?;
-                install.remove_last(Some(state::STATE_FILE))?;
+                // Only what Lodestar put there goes; the folder stays if
+                // anything else is in it.
+                install.remove_own(&["home", state::STATE_TMP], Some(state::STATE_FILE))?;
                 Ok(None)
             }
         }
@@ -909,11 +944,11 @@ impl Inner {
         };
         let Some(mut rec) = state::load(install.root())? else {
             // No record. The only way Lodestar leaves a folder without one
-            // is a crash between creating it and journalling `begun`, which
-            // leaves it empty: only then is it deleted. Anything else (a
-            // compose companion's host folder, say) isn't ours.
-            if empty(install.root()) {
-                install.remove()?;
+            // is a crash (or a failed write) between creating it and
+            // journalling `begun`, which leaves it empty or holding the
+            // journal's temporary file: only then is it deleted. Anything
+            // else (a compose companion's host folder, say) isn't ours.
+            if leftovers_only(install.root()) && remove_leftovers(install.root()).is_ok() {
                 lodestar_log::log_event!(RECOVERED, companion = self.label(id), step = "empty");
                 return Ok(Found::Done(None));
             }
@@ -1007,12 +1042,18 @@ impl Manager {
 
     /// Installs or updates to the pinned version you confirmed.
     ///
-    /// **Run it to completion** (CMP-6: spawn it rather than awaiting it in
-    /// a request that can be cancelled). A future dropped part-way leaves
-    /// the operation in the journal, and the companion answers
-    /// [`Refusal::Busy`] until the next start's [`Manager::recover`] undoes
-    /// it.
+    /// The operation runs in a task of its own: dropping this future
+    /// doesn't stop it part-way, and its slot is held until it has finished
+    /// (so two writers never share the journal's temporary file).
     pub async fn install(&self, token: &InstallToken) -> Result<Version, ManagerError> {
+        let me = Manager(self.0.clone());
+        let token = token.clone();
+        tokio::spawn(async move { me.install_now(&token).await })
+            .await
+            .map_err(|_| failed("install")("panicked"))?
+    }
+
+    async fn install_now(&self, token: &InstallToken) -> Result<Version, ManagerError> {
         let m = &self.0;
         let (entry, artifact, pin) = m.installable(&token.id)?;
         if token.version.as_str() != pin.version.as_str() || token.sha256 != pin.sha256 {
@@ -1133,13 +1174,13 @@ impl Manager {
 
         // Configure through the API, with the receipt only this crate mints.
         fault!(m, Before(Step::Configured));
+        let secret = self.off(move |m| m.secret(id)).await?;
+        let opened = Opened {
+            field: field_name(id),
+            secret,
+        };
         m.p.api
-            .configure(
-                id,
-                &target,
-                InstallReceipt::new(target.clone()),
-                &Stored { m, id },
-            )
+            .configure(id, &target, InstallReceipt::new(target.clone()), &opened)
             .await
             .map_err(|e| failed("configure")(configure::code(&e)))?;
         fault!(m, After(Step::Configured));
@@ -1254,23 +1295,28 @@ impl Manager {
         let secrets = self.off(move |m| m.secret(id)).await?;
         self.launch(entry, version, &exe, &target, secrets.into_iter().collect())
             .await?;
+        let secret = self.off(move |m| m.secret(id)).await?;
+        let opened = Opened {
+            field: field_name(id),
+            secret,
+        };
         m.p.api
-            .configure(
-                id,
-                &target,
-                InstallReceipt::new(target.clone()),
-                &Stored { m, id },
-            )
+            .configure(id, &target, InstallReceipt::new(target.clone()), &opened)
             .await
             .map_err(|e| failed("configure")(configure::code(&e)))
     }
 
-    /// Uninstalls `id`: stop, credential rows, then the folder.
-    ///
-    /// **Run it to completion**, as [`Manager::install`] says: a dropped
-    /// future leaves the removal journalled until the next recovery
-    /// finishes it.
+    /// Uninstalls `id`: stop, credential rows, then the folder. Like
+    /// [`Manager::install`], it runs to completion in a task of its own.
     pub async fn remove(&self, id: &CompanionId) -> Result<Removal, ManagerError> {
+        let me = Manager(self.0.clone());
+        let id = id.clone();
+        tokio::spawn(async move { me.remove_now(&id).await })
+            .await
+            .map_err(|_| failed("remove")("panicked"))?
+    }
+
+    async fn remove_now(&self, id: &CompanionId) -> Result<Removal, ManagerError> {
         let m = &self.0;
         let entry = m.entry(id)?;
         let id = &entry.id;
