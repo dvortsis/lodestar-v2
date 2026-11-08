@@ -107,6 +107,7 @@ pub fn run_dir(data_dir: &Path) -> PathBuf {
 /// Creates `dir` 0700 if it's missing (never through a link) and checks
 /// it's a real directory.
 pub(crate) fn private_dir(dir: &Path) -> Result<(), PidfileError> {
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut builder = fs::DirBuilder::new();
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
@@ -494,7 +495,7 @@ pub(crate) mod windows {
             .creation_flags(NO_WINDOW)
             .spawn()
             .ok()?;
-        let mut stdout = child.stdout.take()?;
+        let stdout = child.stdout.take()?;
         // Read on its own thread so a chatty script can't fill the pipe
         // while this one waits.
         let reader = std::thread::spawn(move || {
