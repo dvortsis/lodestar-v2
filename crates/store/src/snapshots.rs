@@ -1335,15 +1335,17 @@ fn scrub_source(tx: &Connection, plugin: &str, at: i64) -> rusqlite::Result<()> 
 }
 
 /// How strong a tombstone or quarantine hold under `rule` is, in SQL with
-/// the adult mark as `?4` (`?1`–`?3` are still bound, but the floor test
-/// is [`crate::filter::floor_hold_sql`], which also counts a worker's
-/// floor report): a floor hold first, then an adult hold (the one
-/// filtering can't rebuild, see `Store::purge_filter`), then any other.
+/// the adult mark as `?4` (`?1`–`?3` are still bound but unused): the
+/// locked floor's own rules first, then a worker's floor report (so a
+/// carry never renames a local floor row to one, which WK-13's purge
+/// could later delete), then an adult hold (the one filtering can't
+/// rebuild, see `Store::purge_filter`), then any other.
 fn hold_rank(rule: &str) -> String {
     format!(
-        "CASE WHEN {} THEN 2 \
+        "CASE WHEN {} THEN 3 WHEN {} THEN 2 \
          WHEN substr({rule}, -length(?4)) = ?4 THEN 1 ELSE 0 END",
-        crate::filter::floor_hold_sql(rule)
+        crate::filter::local_floor_sql(rule),
+        crate::filter::worker_floor_sql(rule)
     )
 }
 
@@ -2068,6 +2070,9 @@ mod tests {
         // A worker's floor report is a floor hold: it outranks the copy's
         // later, weaker row (WK-10d).
         tomb(20, "worker-floor:7", T + DAY);
+        // ...but never over the locked floor's own row, which WK-13's
+        // purge-by-worker must not be able to delete.
+        tomb(21, "worker-floor:7", T + DAY);
         // Expired: carried, then turned into a tombstone as live.
         quarantine(c, [16; 20], "CS-9+adult", b"sealed-expired", T);
         store.add_cs_hashes(&[[1; 20]], 1, T + DAY).unwrap();
@@ -2103,6 +2108,7 @@ mod tests {
                 quarantine(&conn, [18; 20], "CS-2a", b"sealed-copy18", T + 40 * DAY);
                 quarantine(&conn, [19; 20], "CS-2a", b"sealed-copy19", T + 40 * DAY);
                 tomb(20, "CS-3", T + 5 * DAY);
+                tomb(21, "CS-1a", T - DAY);
                 conn.execute_batch(
                     "INSERT INTO cs_sigs (sig, added_at) VALUES (7, 0);
                      INSERT INTO core_membership (rule, enabled)
@@ -2150,6 +2156,7 @@ mod tests {
                     format!("h17 CS-3 {}", d(5)),
                     format!("h19 CS-3 {}", d(1)),
                     format!("h20 worker-floor:7 {}", d(1)),
+                    format!("h21 CS-1a {}", d(-1)),
                 ],
                 "v{version}"
             );
