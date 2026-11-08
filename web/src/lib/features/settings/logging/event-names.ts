@@ -439,6 +439,10 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_workers_prefs_skipped_n,
 		m.settings_logging_ev_workers_prefs_skipped_h
 	],
+	'workers.pause_not_saved': [
+		m.settings_logging_ev_workers_pause_not_saved_n,
+		m.settings_logging_ev_workers_pause_not_saved_h
+	],
 	'workers.token_created': [
 		m.settings_logging_ev_workers_token_created_n,
 		m.settings_logging_ev_workers_token_created_h

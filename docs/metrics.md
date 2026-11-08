@@ -918,7 +918,7 @@ See [the decision](decisions/2026-11-06-WK-1.md). Every series renders on every 
 | `cluster_skew_flags_total` | counter | Times a worker's clock was flagged as more than `max_skew_ms` off. |
 | `cluster_pki_errors_total` | counter | Heartbeat ticks whose PKI reload or hourly upkeep failed; the previous state stays in force. |
 | `cluster_start_failures_total` | counter | Times turning the port on failed (binding it or opening the PKI). |
-| `cluster_store_check_errors_total` | counter | Claimed keys whose "already stored?" read failed. They're granted; the commit refuses a duplicate. |
+| `cluster_store_check_errors_total` | counter | Store reads that failed in the check before a grant, and checks that died or came back short. The check fails closed: a claim is denied (a short or failed check denies its whole batch as busy), and a re-grant leaves the key waiting for the next one (WK-10d). |
 
 ### The cluster tick (WK-10a, 2026-11-07)
 Every second while the port is served, the coordinator plans the fleet and sends each remote worker its assignment, the workers' have-filter and the filter and dictionary snapshots. With no remote worker connected, nothing is built.
@@ -932,12 +932,12 @@ Every second while the port is served, the coordinator plans the fleet and sends
 | `cluster_snapshot_installs_total` | counter | Filter and dictionary snapshots built for remote workers: on a new filter engine, a new UTC day (the wire key) or a new dictionary. |
 | `cluster_snapshot_install_failures_total` | counter | Snapshot builds or reads that failed; workers keep the snapshots they have. See the `cluster.snapshot_failed` log line, whose error names the cap passed. |
 | `cluster_snapshot_acks_dropped_total` | counter | Snapshot acknowledgements dropped because that worker already had 16 waiting for the tick (an honest worker has at most 8). That transfer starts over after 60 s without progress. |
-| `cluster_floor_reports_pending` | gauge | Remote workers' floor drops (`Lost` as `blocked`) not yet written as `worker-floor:<id>` tombstones, plus those over a worker's budget (never written). They're refused to every claim meanwhile. Normally 0: each is written within about a second (WK-10d). At most 100,000. |
+| `cluster_floor_reports_pending` | gauge | Remote workers' floor drops (`Lost` as `blocked`) not yet written as `worker-floor:<id>` tombstones. They're refused to every claim meanwhile. Normally 0: each is written within about a second (WK-10d). At most 100,000. |
 | `cluster_floor_reports_total` | counter | Floor drops remote workers reported. |
 | `cluster_floor_reports_written_total` | counter | Workers' floor drops written as tombstones (a key already tombstoned keeps its row and is counted too). |
 | `cluster_floor_report_write_failures_total` | counter | Writes of workers' floor drops the store refused. The reports are kept, still refused, and tried again after 5 s; the `cluster.floor_report_failed` log line says so once per streak. |
-| `cluster_floor_reports_over_budget_total` | counter | Floor drops a worker reported past its budget (100 in a rolling hour). They're refused in memory and in the built-in worker's held set, but never written; the first one pauses the worker and says so (`cluster.floor_reports_over_budget`). |
-| `cluster_floor_reports_turned_away_total` | counter | Floor drops reported while 100,000 were already pending (writes failing for a long time): counted, nothing else. |
+| `cluster_floor_reports_over_budget_total` | counter | Floor drops a worker reported past its budget (100 in a rolling hour). They're dropped: the worker is untrusted by then, and the floor still applies to whoever fetches the key next. The first one pauses the worker (a saved pause), takes its leases back and says so (`cluster.floor_reports_over_budget`). |
+| `cluster_floor_reports_turned_away_total` | counter | Floor drops within a worker's budget reported while 100,000 were already pending (writes failing for a long time): counted, nothing else, and they use up no budget. |
 
 ## Remote intake (WK-9, 2026-11-07)
 

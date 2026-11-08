@@ -1009,10 +1009,12 @@ lodestar_log::catalogue! {
     }
 
     /// A remote worker reported far more floor drops than an honest one
-    /// does (more than 100 in an hour), so it's paused: Workers shows it
-    /// paused. What it reports from now on is refused but not recorded.
-    /// Check that machine; remove the worker if it can't be trusted, which
-    /// also clears its blocks (WK-10d).
+    /// does (more than 100 in an hour), so it's paused and its work is
+    /// taken back. The pause is saved: Workers shows it paused, and it
+    /// stays paused across a restart until an admin resumes it. What it
+    /// reports from now on isn't recorded. Check that machine; remove the
+    /// worker if it can't be trusted, which also drops the reports not yet
+    /// recorded (WK-10d).
     CLUSTER_FLOOR_REPORTS_OVER_BUDGET {
         id: "cluster.floor_reports_over_budget",
         component: Workers,
@@ -1082,6 +1084,17 @@ lodestar_log::catalogue! {
         level: Warn,
         message: "A worker's saved settings couldn't be read; it uses the defaults",
         fields: { worker: Label },
+    }
+    /// A worker paused for too many floor reports couldn't have its pause
+    /// saved (too many workers' settings, or the write failed). It stays
+    /// paused until the coordinator restarts; pause it in Workers to keep
+    /// it paused after that (WK-10d).
+    WORKERS_PAUSE_NOT_SAVED {
+        id: "workers.pause_not_saved",
+        component: Workers,
+        level: Warn,
+        message: "A worker's pause couldn't be saved; it stays paused until a restart",
+        fields: { worker: Label, code: Label },
     }
     /// The admin created a one-time join token (shown once, never logged).
     WORKERS_TOKEN_CREATED {

@@ -44,6 +44,15 @@ async fn coordinator(config: ServerConfig) -> Coord {
 }
 
 async fn coordinator_with(config: ServerConfig, stored: Option<Arc<dyn StoredKeys>>) -> Coord {
+    coordinator_events(config, stored, Arc::new(NoEvents)).await
+}
+
+/// A coordinator whose lease authority reports to `events`.
+async fn coordinator_events(
+    config: ServerConfig,
+    stored: Option<Arc<dyn StoredKeys>>,
+    events: Arc<dyn LeaseEvents>,
+) -> Coord {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("lodestar.db");
     let mut store = Store::open(&db, StoreConfig::default()).unwrap();
@@ -55,7 +64,14 @@ async fn coordinator_with(config: ServerConfig, stored: Option<Arc<dyn StoredKey
         store,
         secrets,
     };
-    let server = ClusterServer::new(pki, clock.clone(), config, stored).unwrap();
+    let epoch = u32::try_from(clock.now_secs().rem_euclid(1 << 32)).unwrap_or(0);
+    let hooks = ServerHooks {
+        authority: Arc::new(LeaseAuthority::new(epoch, config.lease_ttl_secs, events)),
+        stored,
+        sink: None,
+        admission: None,
+    };
+    let server = ClusterServer::with_hooks(pki, clock.clone(), config, hooks).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap().to_string();
     tokio::spawn(server.clone().serve(listener));
@@ -726,13 +742,16 @@ impl StoredKeys for HighKeysStored {
     }
 }
 
-/// A store check for re-grants (#607's review): claims see nothing
-/// stored; a re-grant's check refuses `refuse`, answers nothing while
-/// `unknown`, and with a `gate`, signals and waits once before answering.
+/// A store check for re-grants (#607's reviews): claims see nothing
+/// stored; a re-grant's check answers `Held`, `Stored` or `Unknown` for
+/// the keys listed, comes back short while `short`, and with a `gate`,
+/// signals and waits once before answering.
 #[derive(Default)]
 struct RegrantCheck {
-    refuse: std::sync::Mutex<Vec<[u8; 20]>>,
-    unknown: std::sync::atomic::AtomicBool,
+    held: std::sync::Mutex<Vec<[u8; 20]>>,
+    stored: std::sync::Mutex<Vec<[u8; 20]>>,
+    unknown: std::sync::Mutex<Vec<[u8; 20]>>,
+    short: std::sync::atomic::AtomicBool,
     gate: std::sync::Mutex<
         Option<(
             tokio::sync::oneshot::Sender<()>,
@@ -746,17 +765,43 @@ impl StoredKeys for RegrantCheck {
         vec![false; keys.len()]
     }
 
-    fn stored_or_unknown(&self, keys: &[InfoHash]) -> Option<Vec<bool>> {
+    fn regrant_check(&self, keys: &[InfoHash]) -> Vec<KeyCheck> {
         let gate = self.gate.lock().unwrap().take();
         if let Some((entered, release)) = gate {
             let _ = entered.send(());
             let _ = release.recv();
         }
-        if self.unknown.load(std::sync::atomic::Ordering::SeqCst) {
-            return None;
+        if self.short.load(std::sync::atomic::Ordering::SeqCst) {
+            return Vec::new();
         }
-        let refuse = self.refuse.lock().unwrap();
-        Some(keys.iter().map(|k| refuse.contains(&k.0)).collect())
+        let (held, stored, unknown) = (
+            self.held.lock().unwrap(),
+            self.stored.lock().unwrap(),
+            self.unknown.lock().unwrap(),
+        );
+        keys.iter()
+            .map(|k| {
+                if held.contains(&k.0) {
+                    KeyCheck::Held
+                } else if stored.contains(&k.0) {
+                    KeyCheck::Stored
+                } else if unknown.contains(&k.0) {
+                    KeyCheck::Unknown
+                } else {
+                    KeyCheck::Free
+                }
+            })
+            .collect()
+    }
+}
+
+/// The losses the lease authority reported: key, holder, reason.
+#[derive(Default)]
+struct Losses(std::sync::Mutex<Vec<([u8; 20], WorkerId, u8)>>);
+
+impl LeaseEvents for Losses {
+    fn lost(&self, key: &InfoHash, lease: &Lease, reason: u8) {
+        self.0.lock().unwrap().push((key.0, lease.holder, reason));
     }
 }
 
@@ -779,18 +824,29 @@ async fn leases_left_by_a_silent_worker(c: &Coord, b: &WorkerSession, keys: &[u8
 async fn a_stored_or_held_key_is_never_granted_again() {
     guard(async {
         let check = Arc::new(RegrantCheck::default());
-        check.refuse.lock().unwrap().push(key(2));
-        let c = coordinator_with(config(), Some(check.clone())).await;
+        check.held.lock().unwrap().push(key(2));
+        check.stored.lock().unwrap().push(key(3));
+        let losses = Arc::new(Losses::default());
+        let c = coordinator_events(config(), Some(check.clone()), losses.clone()).await;
         let mut b = c.local().await;
-        leases_left_by_a_silent_worker(&c, &b, &[1, 2]).await;
+        leases_left_by_a_silent_worker(&c, &b, &[1, 2, 3]).await;
         c.server.tick().await;
         let WorkerEvent::Regranted(items) = event(&mut b).await else {
             panic!("no re-grant");
         };
         let keys: Vec<[u8; 20]> = items.iter().map(|i| i.key()).collect();
         assert_eq!(keys, vec![key(1)]);
-        // Key 2 ended (lost, blocked) instead of waiting or going out.
+        // Key 2 ended lost, blocked; key 3, stored, ended with no loss.
         assert!(c.server.lease(&InfoHash(key(2))).is_none());
+        assert!(c.server.lease(&InfoHash(key(3))).is_none());
+        let reported: Vec<([u8; 20], u8)> = losses
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|&(k, _, r)| (k, r))
+            .collect();
+        assert_eq!(reported, vec![(key(2), 7)]);
         let s = c.server.snapshot();
         assert_eq!((s.regrants, s.leases, s.pending), (1, 1, 0));
     })
@@ -801,9 +857,7 @@ async fn a_stored_or_held_key_is_never_granted_again() {
 async fn a_regrant_whose_check_fails_grants_nothing() {
     guard(async {
         let check = Arc::new(RegrantCheck::default());
-        check
-            .unknown
-            .store(true, std::sync::atomic::Ordering::SeqCst);
+        check.short.store(true, std::sync::atomic::Ordering::SeqCst);
         let c = coordinator_with(config(), Some(check.clone())).await;
         let mut b = c.local().await;
         leases_left_by_a_silent_worker(&c, &b, &[1, 2]).await;
@@ -812,17 +866,31 @@ async fn a_regrant_whose_check_fails_grants_nothing() {
         // ended, and both keys wait.
         let s = c.server.snapshot();
         assert_eq!((s.regrants, s.leases, s.pending), (0, 0, 2));
+        assert_eq!(s.check_failures, 1);
 
-        // Once the check answers, the next tick grants them.
+        // A key whose read fails waits; the other goes out.
         check
-            .unknown
+            .short
             .store(false, std::sync::atomic::Ordering::SeqCst);
+        check.unknown.lock().unwrap().push(key(2));
         b.heartbeat().await.unwrap();
         c.server.tick().await;
         let WorkerEvent::Regranted(items) = event(&mut b).await else {
             panic!("no re-grant");
         };
-        assert_eq!(items.len(), 2);
+        let keys: Vec<[u8; 20]> = items.iter().map(|i| i.key()).collect();
+        assert_eq!(keys, vec![key(1)]);
+        let s = c.server.snapshot();
+        assert_eq!((s.regrants, s.leases, s.pending), (1, 1, 1));
+
+        // Once it answers, the next tick grants it.
+        check.unknown.lock().unwrap().clear();
+        b.heartbeat().await.unwrap();
+        c.server.tick().await;
+        let WorkerEvent::Regranted(items) = event(&mut b).await else {
+            panic!("no re-grant");
+        };
+        assert_eq!(items[0].key(), key(2));
         let s = c.server.snapshot();
         assert_eq!((s.regrants, s.leases, s.pending), (2, 2, 0));
     })
@@ -861,6 +929,72 @@ async fn a_key_that_changed_during_the_check_is_left_alone() {
         let s = c.server.snapshot();
         assert_eq!((s.regrants, s.leases, s.pending), (0, 0, 1));
         assert!(b.leases() == 0);
+    })
+    .await;
+}
+
+/// A re-grant cancelled while its check runs (an admin's revoke whose
+/// request went away) leaves no key reserved for its target.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_regrant_leaves_no_lease_behind() {
+    guard(async {
+        let (entered_tx, entered) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = std::sync::mpsc::channel();
+        let check = Arc::new(RegrantCheck::default());
+        *check.gate.lock().unwrap() = Some((entered_tx, release_rx));
+        let c = coordinator_with(config(), Some(check.clone())).await;
+        let mut b = c.local().await;
+        leases_left_by_a_silent_worker(&c, &b, &[1]).await;
+        let ticking = {
+            let server = c.server.clone();
+            tokio::spawn(async move { server.tick().await })
+        };
+        entered.await.unwrap();
+        assert_eq!(c.server.snapshot().leases, 1, "reserved for b");
+        ticking.abort();
+        assert!(ticking.await.unwrap_err().is_cancelled());
+        let s = c.server.snapshot();
+        assert_eq!((s.regrants, s.leases, s.pending), (0, 0, 1));
+        // The check's thread finishes on its own; the next tick grants.
+        release.send(()).unwrap();
+        b.heartbeat().await.unwrap();
+        c.server.tick().await;
+        let WorkerEvent::Regranted(items) = event(&mut b).await else {
+            panic!("no re-grant");
+        };
+        assert_eq!(items[0].key(), key(1));
+    })
+    .await;
+}
+
+/// A store check that comes back short.
+struct ShortCheck;
+
+impl StoredKeys for ShortCheck {
+    fn stored(&self, _keys: &[InfoHash]) -> Vec<bool> {
+        Vec::new()
+    }
+}
+
+/// A claim whose store check fails is denied whole (#607's review): it
+/// fails closed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_claim_whose_check_fails_is_denied() {
+    guard(async {
+        let c = coordinator_with(config(), Some(Arc::new(ShortCheck))).await;
+        let a = c.local().await;
+        let grants = a.claim(found(&*c.clock, &[1, 2])).await.unwrap();
+        for (g, n) in grants.iter().zip([1, 2]) {
+            assert_eq!(
+                *g,
+                GrantItem::Denied {
+                    key: key(n),
+                    reason: DenyReason::Busy
+                }
+            );
+        }
+        let s = c.server.snapshot();
+        assert_eq!((s.harvested, s.leases, s.check_failures), (0, 0, 1));
     })
     .await;
 }

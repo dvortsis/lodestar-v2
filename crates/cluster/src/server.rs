@@ -127,14 +127,31 @@ impl Default for ServerConfig {
 /// grant, §19.3). It runs on a blocking thread.
 pub trait StoredKeys: Send + Sync + 'static {
     fn stored(&self, keys: &[InfoHash]) -> Vec<bool>;
-    /// The check before a re-grant: as [`stored`](Self::stored), `true`
-    /// for a key in the store or held, but `None` if the answer can't be
-    /// known (a read failed). A re-grant then sends nothing and the keys
-    /// wait for the next one: an error never grants a key, and never ends
-    /// one as blocked either (#607's review).
-    fn stored_or_unknown(&self, keys: &[InfoHash]) -> Option<Vec<bool>> {
-        Some(self.stored(keys))
+    /// The check before a re-grant, one answer per key (#607's review).
+    /// By default [`stored`](Self::stored)'s: `true` reads as stored.
+    fn regrant_check(&self, keys: &[InfoHash]) -> Vec<KeyCheck> {
+        self.stored(keys)
+            .into_iter()
+            .map(|s| if s { KeyCheck::Stored } else { KeyCheck::Free })
+            .collect()
     }
+}
+
+/// One key's answer before a re-grant ([`StoredKeys::regrant_check`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyCheck {
+    /// Neither stored nor held: it may go out.
+    Free,
+    /// Already stored: the lease ends with no loss (nothing was lost, and
+    /// the target never had it).
+    Stored,
+    /// Held (a tombstone, a quarantine, a worker's floor report or the
+    /// floor's hash lists): the lease ends as lost, blocked, as the
+    /// target's floor would have ended it.
+    Held,
+    /// The read failed: the key waits for the next re-grant. An error
+    /// never grants a key, and never ends one.
+    Unknown,
 }
 
 /// `funnel::Loss::Blocked` (`lodestar-sources`, persisted): the loss a
@@ -337,6 +354,7 @@ struct Counters {
     skew_flags: AtomicU64,
     pki_errors: AtomicU64,
     ticks: AtomicU64,
+    check_failures: AtomicU64,
 }
 
 fn bump(c: &AtomicU64) {
@@ -401,6 +419,9 @@ pub struct FleetSnapshot {
     pub skew_flags: u64,
     pub pki_errors: u64,
     pub ticks: u64,
+    /// Store checks that failed or came back short: the claim batch was
+    /// denied as busy, or the re-grant's keys waited (#607's review).
+    pub check_failures: u64,
 }
 
 /// Who is on the other end of a session.
@@ -473,6 +494,30 @@ enum Flow {
 /// then as seen, so `changed` alone would wait forever).
 async fn stopped(stop: &mut watch::Receiver<bool>) {
     let _ = stop.wait_for(|s| *s).await;
+}
+
+/// Keys a re-grant reserved for their targets while its store check runs:
+/// dropped armed (the future cancelled), each goes back to waiting
+/// (`requeue` checks the token, so one that changed meanwhile is left).
+struct Reserved<'a> {
+    leases: &'a LeaseAuthority,
+    batches: Vec<(WorkerId, Regranted)>,
+}
+
+impl Reserved<'_> {
+    fn disarm(mut self) -> Vec<(WorkerId, Regranted)> {
+        std::mem::take(&mut self.batches)
+    }
+}
+
+impl Drop for Reserved<'_> {
+    fn drop(&mut self) {
+        for (_, keys) in self.batches.drain(..) {
+            for (key, token) in keys {
+                self.leases.requeue(&key, token);
+            }
+        }
+    }
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -827,6 +872,7 @@ impl ClusterServer {
             skew_flags: get(&c.skew_flags),
             pki_errors: get(&c.pki_errors),
             ticks: get(&c.ticks),
+            check_failures: get(&c.check_failures),
         }
     }
 
@@ -1354,13 +1400,28 @@ impl ClusterServer {
                         let keys: Vec<InfoHash> =
                             batch.items.iter().map(|i| InfoHash(i.key)).collect();
                         match tokio::task::spawn_blocking(move || check.stored(&keys)).await {
-                            Ok(s) if s.len() == batch.items.len() => s,
-                            _ => vec![false; batch.items.len()],
+                            Ok(s) if s.len() == batch.items.len() => Some(s),
+                            // Fails closed: a check that died or came back
+                            // short grants nothing (#607's review).
+                            _ => None,
                         }
                     }
-                    None => vec![false; batch.items.len()],
+                    None => Some(vec![false; batch.items.len()]),
                 };
-                let items = self.claim(peer, &mut batch.items, &stored, checked_at);
+                let items = match stored {
+                    Some(stored) => self.claim(peer, &mut batch.items, &stored, checked_at),
+                    None => {
+                        bump(&self.counters.check_failures);
+                        batch
+                            .items
+                            .iter()
+                            .map(|i| GrantItem::Denied {
+                                key: i.key,
+                                reason: DenyReason::Busy,
+                            })
+                            .collect()
+                    }
+                };
                 self.reply(
                     link,
                     ToWorker::Grants(GrantBatch {
@@ -1787,9 +1848,8 @@ impl ClusterServer {
     /// (#607's review): the keys are leased to their targets under the
     /// fleet lock, the lock is released for the check, and once it's taken
     /// again each key is acted on only if its target still holds it under
-    /// the same token. A key the check refuses (stored, held, or a
-    /// worker's floor report) ends as lost, blocked; one it can't answer
-    /// waits for the next re-grant; the rest go out.
+    /// the same token ([`KeyCheck`] says what becomes of it). Cancelled
+    /// during the check, every reserved key waits again.
     async fn regrant(&self) {
         let Some(check) = self.stored.clone() else {
             let mut fleet = lock(&self.fleet);
@@ -1810,32 +1870,33 @@ impl ClusterServer {
         if batches.is_empty() {
             return;
         }
-        let keys: Vec<InfoHash> = batches
+        // Requeued if this future is dropped while the check runs (an
+        // admin's revoke whose request went away): nothing stays reserved.
+        let reserved = Reserved {
+            leases: &self.leases,
+            batches,
+        };
+        let keys: Vec<InfoHash> = reserved
+            .batches
             .iter()
             .flat_map(|(_, ks)| ks.iter().map(|&(k, _)| k))
             .collect();
         let n = keys.len();
-        let answer = tokio::task::spawn_blocking(move || check.stored_or_unknown(&keys))
+        let answer = tokio::task::spawn_blocking(move || check.regrant_check(&keys))
             .await
             .ok()
-            .flatten()
             .filter(|a| a.len() == n);
+        let batches = reserved.disarm();
         let mut fleet = lock(&self.fleet);
-        let Some(refused) = answer else {
-            // Unknown: nothing is granted. Each key the target still holds
-            // under its token waits again (`requeue` checks the token).
-            for (_, ks) in batches {
-                for (key, token) in ks {
-                    self.leases.requeue(&key, token);
-                }
-            }
-            return;
-        };
-        let mut refused = refused.into_iter();
+        let answer = answer.unwrap_or_else(|| vec![KeyCheck::Unknown; n]);
+        if answer.contains(&KeyCheck::Unknown) {
+            bump(&self.counters.check_failures);
+        }
+        let mut answer = answer.into_iter();
         for (w, ks) in batches {
             let mut send = Vec::with_capacity(ks.len());
             for (key, token) in ks {
-                let refused = refused.next().unwrap_or(true);
+                let check = answer.next().unwrap_or(KeyCheck::Unknown);
                 // Re-validated under the lock: a key whose lease changed
                 // while the check ran (expired, evicted, granted again)
                 // is left alone.
@@ -1846,11 +1907,18 @@ impl ClusterServer {
                 if !current {
                     continue;
                 }
-                if refused {
-                    // Ends only under `w`'s current token, reported once.
-                    self.leases.report(w, &key, token, Some(LOSS_BLOCKED));
-                } else {
-                    send.push((key, token));
+                // Each ends only under `w`'s current token.
+                match check {
+                    KeyCheck::Free => send.push((key, token)),
+                    KeyCheck::Stored => {
+                        self.leases.report(w, &key, token, None);
+                    }
+                    KeyCheck::Held => {
+                        self.leases.report(w, &key, token, Some(LOSS_BLOCKED));
+                    }
+                    KeyCheck::Unknown => {
+                        self.leases.requeue(&key, token);
+                    }
                 }
             }
             if send.is_empty() {
