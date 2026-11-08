@@ -6103,6 +6103,11 @@
       "id": "X-lease-report-atomic",
       "note": "WK-10d #607 item 7: LeaseAuthority::report in crates/cluster does not refuse a reported key to every claim at once; residual window documented in WK-10d decisions. Close it with a report change in crates/cluster.",
       "logged": "2026-11-08T09:30Z"
+    },
+    {
+      "id": "X-natural-wording",
+      "note": "#609 merged d9d7160c: natural refusal text, /parse doc and schema.d.ts say '32 words'; the cap counts brackets and lone '-' too (B7). Align the user-visible wording (UX). Also add X-natural-strict-parity to slices.yaml in the next runner PR.",
+      "logged": "2026-11-08T09:34Z"
     }
   ],
   "main_health": [
@@ -6894,5 +6899,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T09:30Z"
+  "updated": "2026-11-08T09:34Z"
 }
