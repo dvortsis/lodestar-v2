@@ -79,10 +79,13 @@ fuzz_target!(|data: &[u8]| {
     let exe = RelPath::parse(EXE).expect("valid");
     let r = extract_limited(limits, kind, &mut Cursor::new(archive), &exe, &staging);
 
+    // The whole temporary root, not only `work`: an escape anywhere in
+    // it is caught.
     let mut all = Vec::new();
-    walk(&work, &mut all);
+    walk(base(), &mut all);
     for p in &all {
-        let allowed = p == &outside
+        let allowed = p == &work
+            || p == &outside
             || p == &outside.join("keep")
             || p == &work.join("root")
             || (r.is_ok() && p.starts_with(&staging));

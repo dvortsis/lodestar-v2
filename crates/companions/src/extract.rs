@@ -25,10 +25,12 @@
 //!   counted as they're written (one byte past stops it, whatever a header
 //!   claimed); and [`MAX_RATIO`]:1, checked as bytes are written, for the
 //!   entry and for the archive. An entry whose written size differs from
-//!   its header's is refused. Everything a tar.gz decompresses (headers,
-//!   long names, pax records, skipped bodies) is bounded too, by
-//!   [`MAX_TOTAL`] plus [`MAX_OVERHEAD`] and the ratio, so no header can
-//!   make the parser read gigabytes before a cap runs.
+//!   its header's is refused. Directories a name creates without listing
+//!   them count toward the entry cap too. Everything else a tar.gz
+//!   decompresses (headers, long names, pax records, skipped bodies) is
+//!   bounded on its own by [`MAX_OVERHEAD`], so no header can make the
+//!   parser hold more than that in memory. A zip whose index claims more
+//!   entries than the cap is refused before the index is read.
 //! - **Writing:** every file is created new (`O_CREAT|O_EXCL` on Unix,
 //!   `CREATE_NEW` on Windows), which never opens through an existing
 //!   symlink. Every directory is one this extraction created into a
@@ -559,6 +561,9 @@ struct Out<'a> {
     entries: usize,
     files: usize,
     total: u64,
+    /// The same running total, shared with a tar.gz's [`Guard`], which
+    /// counts everything else it decompresses as overhead.
+    body: Rc<Cell<u64>>,
     /// Whether the catalogue's executable, spelt exactly, was written.
     executable_written: bool,
 }
@@ -574,11 +579,13 @@ impl<'a> Out<'a> {
             entries: 0,
             files: 0,
             total: 0,
+            body: Rc::new(Cell::new(0)),
             executable_written: false,
         }
     }
 
-    /// Counts one entry against [`MAX_ENTRIES`].
+    /// Counts one entry, or one directory a name created without listing
+    /// it, against [`MAX_ENTRIES`].
     fn count(&mut self, raw: &[u8]) -> Result<(), ExtractError> {
         self.entries += 1;
         if self.entries > self.limits.entries {
@@ -603,6 +610,9 @@ impl<'a> Out<'a> {
                 Some(Node::File) => return Err(ExtractError::refused(Refusal::NotADirectory, raw)),
                 Some(Node::Dir { rel: on_disk, .. }) => rel = on_disk.clone(),
                 None => {
+                    // A deep name creates many folders from one entry;
+                    // each counts, so the cap bounds what's on disk.
+                    self.count(raw)?;
                     rel = join(&rel, c);
                     let p = self.at(&rel);
                     create_dir(&p).map_err(|e| self.create_failed(e, raw))?;
@@ -703,6 +713,7 @@ impl<'a> Out<'a> {
             let n64 = n as u64;
             written += n64;
             self.total += n64;
+            self.body.set(self.total);
             if self.total > self.limits.total {
                 return Err(ExtractError::refused(Refusal::TooLarge, raw));
             }
@@ -863,15 +874,18 @@ type Tripped = Rc<Cell<Option<Refusal>>>;
 
 /// Bounds everything a tar parser decompresses, not only the file bodies
 /// [`Out::file`] sees: headers, GNU long names, pax records and the data
-/// of entries it skips. More than [`Limits::total`] plus
-/// [`Limits::overhead`] stops it, and so does a ratio over the cap
-/// against the compressed bytes read. Without it, one long-name header
-/// claiming gigabytes would be read into memory before any cap ran.
+/// of entries it skips. The tar parser reads a long name or pax record
+/// whole into memory, so what isn't a file body is capped on its own at
+/// [`Limits::overhead`]; a ratio over the cap against the compressed
+/// bytes read stops it too. Without it, one long-name header claiming
+/// gigabytes would be read into memory before any cap ran.
 struct Guard<R> {
     inner: R,
     limits: Limits,
     inflated: u64,
     read: Rc<Cell<u64>>,
+    /// File bytes written so far ([`Out::body`]).
+    body: Rc<Cell<u64>>,
     tripped: Tripped,
 }
 
@@ -879,7 +893,12 @@ impl<R: Read> Read for Guard<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let n = self.inner.read(buf)?;
         self.inflated = self.inflated.saturating_add(n as u64);
-        let refusal = if self.inflated > self.limits.total.saturating_add(self.limits.overhead) {
+        // The read being returned is at most one copy buffer ahead of the
+        // body count, which is part of the allowance.
+        let overhead = self.inflated.saturating_sub(self.body.get());
+        let refusal = if overhead > self.limits.overhead.saturating_add(COPY_BUF as u64)
+            || self.inflated > self.limits.total.saturating_add(self.limits.overhead)
+        {
             Some(Refusal::TooLarge)
         } else if !self.limits.ratio_ok(self.inflated, self.read.get()) {
             Some(Refusal::Ratio)
@@ -919,7 +938,88 @@ const SPECIAL_BITS: u32 = 0o7000;
 /// entry being decoded.
 const ZIP_READ_AHEAD: u64 = 8 * 1024;
 
+/// How far from the end an end-of-central-directory record can start:
+/// its 22 bytes plus a comment of up to 65,535.
+const EOCD_WINDOW: u64 = 22 + 65_535;
+
+fn le16(b: &[u8], at: usize) -> u64 {
+    b.get(at..at + 2)
+        .map_or(0, |x| u64::from(u16::from_le_bytes([x[0], x[1]])))
+}
+
+fn le64(b: &[u8], at: usize) -> Option<u64> {
+    let x: [u8; 8] = b.get(at..at + 8)?.try_into().ok()?;
+    Some(u64::from_le_bytes(x))
+}
+
+/// The most entries any end-of-central-directory record near the end of
+/// the archive claims, zip64's included, read before the zip crate reads
+/// the index (which it allocates for). Every candidate record counts, so
+/// a decoy can't hide the one the zip crate would use. A zip64 marker
+/// whose record can't be found is corrupt.
+fn zip_claimed_entries(archive: &mut dyn Archive, len: u64) -> Result<u64, ExtractError> {
+    let start = len.saturating_sub(EOCD_WINDOW);
+    let mut tail = Vec::new();
+    archive
+        .seek(SeekFrom::Start(start))
+        .and_then(|_| archive.take(EOCD_WINDOW).read_to_end(&mut tail))
+        .map_err(|_| ExtractError::Corrupt)?;
+    let mut most = 0u64;
+    for i in (0..tail.len().saturating_sub(21)).rev() {
+        if &tail[i..i + 4] != b"PK\x05\x06" {
+            continue;
+        }
+        let (on_disk, total) = (le16(&tail, i + 8), le16(&tail, i + 10));
+        most = most.max(on_disk).max(total);
+        if on_disk == 0xFFFF || total == 0xFFFF {
+            most = most.max(zip64_entries(archive, &tail, start, i)?);
+        }
+    }
+    archive
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| ExtractError::Corrupt)?;
+    Ok(most)
+}
+
+/// The entry count of the zip64 record a zip64 locator before the record
+/// at `tail[eocd]` points to, or of one just before the locator.
+fn zip64_entries(
+    archive: &mut dyn Archive,
+    tail: &[u8],
+    start: u64,
+    eocd: usize,
+) -> Result<u64, ExtractError> {
+    let locator = eocd
+        .checked_sub(20)
+        .filter(|&l| &tail[l..l + 4] == b"PK\x06\x07");
+    let mut at = Vec::new();
+    if let Some(l) = locator {
+        at.extend(le64(tail, l + 8));
+        at.push((start + l as u64).saturating_sub(56));
+    }
+    for offset in at {
+        let mut rec = [0u8; 56];
+        let found = archive
+            .seek(SeekFrom::Start(offset))
+            .and_then(|_| archive.read_exact(&mut rec))
+            .is_ok()
+            && &rec[..4] == b"PK\x06\x06";
+        if found {
+            let on_disk = le64(&rec, 24).unwrap_or(u64::MAX);
+            let total = le64(&rec, 32).unwrap_or(u64::MAX);
+            return Ok(on_disk.max(total));
+        }
+    }
+    Err(ExtractError::Corrupt)
+}
+
 fn zip_entries(archive: &mut dyn Archive, len: u64, out: &mut Out<'_>) -> Result<(), ExtractError> {
+    if zip_claimed_entries(archive, len)? > out.limits.entries as u64 {
+        return Err(ExtractError::Refused {
+            refusal: Refusal::TooManyEntries,
+            entry: None,
+        });
+    }
     let read = Rc::new(Cell::new(0u64));
     let counting = Counting {
         inner: archive,
@@ -940,6 +1040,10 @@ fn zip_entries(archive: &mut dyn Archive, len: u64, out: &mut Out<'_>) -> Result
             entry: None,
         });
     }
+    // Defence in depth: every local header matches the index, none is
+    // missing, and no two entries overlap.
+    zip.validate_header_consistency()
+        .map_err(|_| ExtractError::Corrupt)?;
     for i in 0..zip.len() {
         // The raw view first: `by_index` fails an encrypted entry before
         // it could be named.
@@ -1020,6 +1124,7 @@ fn tar_gz_entries(archive: &mut dyn Archive, out: &mut Out<'_>) -> Result<(), Ex
         limits: out.limits,
         inflated: 0,
         read: read.clone(),
+        body: out.body.clone(),
         tripped: tripped.clone(),
     };
     let mut tar = tar::Archive::new(guard);

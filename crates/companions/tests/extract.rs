@@ -445,7 +445,7 @@ fn the_entry_cap_is_q16s() {
 #[test]
 fn one_entry_past_the_cap_is_refused() {
     let limits = Limits {
-        entries: 4,
+        entries: 6,
         ..Limits::Q16
     };
     let mut parts = vec![exe_tar()];
@@ -454,7 +454,8 @@ fn one_entry_past_the_cap_is_refused() {
         parts.push(tfile(&format!("app/f{i}"), b""));
         entries.push((format!("app/f{i}"), Vec::new()));
     }
-    // exe + 3 files + the two folders tar lists implicitly = 4 entries.
+    // exe + 3 files + the two folders the names create (`app`, `app/bin`)
+    // = 6: directories nobody listed count too.
     assert!(run_with(limits, ArchiveKind::TarGz, &tgz(&parts)).0.is_ok());
     parts.push(tfile("app/f3", b""));
     let r = run_with(limits, ArchiveKind::TarGz, &tgz(&parts)).0;
@@ -556,10 +557,111 @@ fn a_long_name_or_pax_header_cannot_inflate_past_the_caps() {
             ty as char
         );
     }
-    // Q16's own caps: a 256 MiB long name is stopped by the ratio long
-    // before it's in memory.
+    // Q16's own caps: a 256 MiB long name of zeros is stopped by the
+    // ratio after a few megabytes.
     let r = run(ArchiveKind::TarGz, &header_bomb(b'L', 256 * 1024 * 1024)).0;
     assert_eq!(r.unwrap_err().refusal(), Some(Refusal::Ratio));
+}
+
+/// A tgz of `prefix` (raw tar bytes), then one raw `ty` header claiming
+/// `size` bytes, its body `chunk` repeated, streamed so the test never
+/// holds it.
+fn streamed_header(prefix: &[u8], ty: u8, size: u64, chunk: &[u8]) -> Vec<u8> {
+    let mut h = Header::new_gnu();
+    h.as_mut_bytes()[..13].copy_from_slice(b"././@LongLink");
+    h.set_entry_type(EntryType::new(ty));
+    h.set_mode(0o644);
+    h.set_size(size);
+    h.set_cksum();
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    gz.write_all(prefix).unwrap();
+    gz.write_all(h.as_bytes()).unwrap();
+    let mut left = size;
+    while left > 0 {
+        let n = left.min(chunk.len() as u64) as usize;
+        gz.write_all(&chunk[..n]).unwrap();
+        left -= n as u64;
+    }
+    gz.finish().unwrap()
+}
+
+/// `n` bytes from a fixed LCG: `every`th byte pseudo-random, the rest
+/// zero (`every` = 1 is incompressible).
+fn noise(n: usize, every: usize) -> Vec<u8> {
+    let mut x = 0x2545_f491_u32;
+    (0..n)
+        .map(|i| {
+            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            if i % every == 0 { (x >> 24) as u8 } else { 0 }
+        })
+        .collect()
+}
+
+#[test]
+fn header_bodies_are_capped_on_their_own_not_by_the_total() {
+    // The tar parser holds a long name or pax record whole in memory, so
+    // the overhead cap applies to them by itself, whatever the 2 GiB
+    // total and the ratio would still allow.
+    let limits = Limits {
+        total: 256 * 1024 * 1024,
+        overhead: 256 * 1024,
+        ..Limits::Q16
+    };
+    // A long-name body that compresses at well under 100:1, so the ratio
+    // never trips.
+    let body = noise(1 << 20, 40);
+    let r = run_with(
+        limits,
+        ArchiveKind::TarGz,
+        &streamed_header(b"", b'L', 8 << 20, &body),
+    )
+    .0;
+    assert_eq!(r.unwrap_err().refusal(), Some(Refusal::TooLarge));
+    // An incompressible file first raises the ratio's denominator; the
+    // header after it still can't pass the overhead cap.
+    let file = tar_entry(b"app/noise", EntryType::Regular, 0o644, &noise(2 << 20, 1));
+    for ty in *b"LKx" {
+        let bomb = streamed_header(&file, ty, 8 << 20, &[0u8; 1 << 16]);
+        let r = run_with(limits, ArchiveKind::TarGz, &bomb).0;
+        assert_eq!(
+            r.unwrap_err().refusal(),
+            Some(Refusal::TooLarge),
+            "{}",
+            ty as char
+        );
+    }
+}
+
+#[test]
+fn folders_a_deep_name_creates_count_toward_the_entry_cap() {
+    let limits = Limits {
+        entries: 10,
+        ..Limits::Q16
+    };
+    let deep = format!("{}f", "d/".repeat(20));
+    let t = tgz(&[exe_tar(), tfile(&deep, b"")]);
+    let r = run_with(limits, ArchiveKind::TarGz, &t).0;
+    assert_eq!(r.unwrap_err().refusal(), Some(Refusal::TooManyEntries));
+    let z = zip_of(&[(EXE, E::File(b"#!")), (deep.as_str(), E::File(b""))]);
+    let r = run_with(limits, ArchiveKind::Zip, &z).0;
+    assert_eq!(r.unwrap_err().refusal(), Some(Refusal::TooManyEntries));
+}
+
+#[test]
+fn a_zip_index_claiming_too_many_entries_is_refused_before_it_is_read() {
+    let mut z = zip_of(&[(EXE, E::File(b"#!"))]);
+    let eocd = z.len() - 22;
+    assert_eq!(&z[eocd..eocd + 4], b"PK\x05\x06");
+    for at in [eocd + 8, eocd + 10] {
+        z[at..at + 2].copy_from_slice(&30_000u16.to_le_bytes());
+    }
+    assert_eq!(refusal(ArchiveKind::Zip, &z), Some(Refusal::TooManyEntries));
+    // A zip64 marker with no zip64 record is corrupt.
+    let mut z = zip_of(&[(EXE, E::File(b"#!"))]);
+    let eocd = z.len() - 22;
+    z[eocd + 10..eocd + 12].copy_from_slice(&0xFFFFu16.to_le_bytes());
+    let (r, _tmp) = run(ArchiveKind::Zip, &z);
+    assert!(matches!(r, Err(ExtractError::Corrupt)), "{r:?}");
 }
 
 #[test]
@@ -860,7 +962,7 @@ fn stage_commit_prune_and_rollback() {
     assert_eq!(install.pointer().unwrap(), None);
     assert!(matches!(install.rollback(), Err(LayoutError::NoCurrent)));
     assert!(matches!(
-        install.commit(&v("1.0")),
+        install.commit(&v("1.0"), &exe()),
         Err(LayoutError::NotStaged)
     ));
 
@@ -870,7 +972,7 @@ fn stage_commit_prune_and_rollback() {
         Err(LayoutError::AlreadyStaged)
     ));
     assert_eq!(install.pointer().unwrap(), None, "staging doesn't switch");
-    install.commit(&v("1.0")).unwrap();
+    install.commit(&v("1.0"), &exe()).unwrap();
     assert_eq!(install.pointer().unwrap(), pointer("1.0", None));
     assert!(matches!(
         install.prune_previous(),
@@ -880,7 +982,7 @@ fn stage_commit_prune_and_rollback() {
 
     // An update keeps the old version until it's pruned.
     stage(&mut install, "2.0", b"two");
-    install.commit(&v("2.0")).unwrap();
+    install.commit(&v("2.0"), &exe()).unwrap();
     assert_eq!(install.pointer().unwrap(), pointer("2.0", Some("1.0")));
     assert_eq!(names(&install), ["1.0", "2.0", POINTER]);
     let exe_path = install.executable(&v("2.0"), &exe());
@@ -891,16 +993,16 @@ fn stage_commit_prune_and_rollback() {
 
     // A failed update rolls back and the bad version goes.
     stage(&mut install, "3.0", b"three");
-    install.commit(&v("3.0")).unwrap();
+    install.commit(&v("3.0"), &exe()).unwrap();
     install.rollback().unwrap();
     assert_eq!(install.pointer().unwrap(), pointer("2.0", None));
     assert_eq!(names(&install), ["2.0", POINTER]);
 
     // Two updates without a prune: the oldest goes, one previous is kept.
     stage(&mut install, "4.0", b"4");
-    install.commit(&v("4.0")).unwrap();
+    install.commit(&v("4.0"), &exe()).unwrap();
     stage(&mut install, "5.0", b"5");
-    install.commit(&v("5.0")).unwrap();
+    install.commit(&v("5.0"), &exe()).unwrap();
     assert_eq!(install.pointer().unwrap(), pointer("5.0", Some("4.0")));
     assert_eq!(names(&install), ["4.0", "5.0", POINTER]);
 }
@@ -911,7 +1013,7 @@ fn a_crash_between_any_two_steps_recovers() {
     let reopen = || Install::open(&tmp.0, &id()).unwrap();
     let mut install = reopen();
     stage(&mut install, "1.0", b"one");
-    install.commit(&v("1.0")).unwrap();
+    install.commit(&v("1.0"), &exe()).unwrap();
 
     // Crashed mid-extraction: a staging folder is left.
     let root = install.root().to_path_buf();
@@ -931,7 +1033,7 @@ fn a_crash_between_any_two_steps_recovers() {
     assert_eq!(install.pointer().unwrap(), pointer("1.0", None));
     assert_eq!(install.sweep().unwrap(), ["2.0"]);
     stage(&mut install, "2.0", b"two");
-    install.commit(&v("2.0")).unwrap();
+    install.commit(&v("2.0"), &exe()).unwrap();
 
     // Crashed while writing the pointer: the temporary file is ignored
     // and swept, and the old pointer stands.
@@ -975,7 +1077,7 @@ fn remove_deletes_the_companion_folder_only() {
     fs::write(tmp.0.join("keep"), b"k").unwrap();
     let mut install = Install::open(&tmp.0, &id()).unwrap();
     stage(&mut install, "1.0", b"one");
-    install.commit(&v("1.0")).unwrap();
+    install.commit(&v("1.0"), &exe()).unwrap();
     let other = Install::open(&tmp.0, &CompanionId::parse("qbittorrent").unwrap()).unwrap();
     install.remove().unwrap();
     assert!(!tmp.0.join("companions/prowlarr").exists());
@@ -1019,6 +1121,7 @@ fn removal_never_follows_a_link() {
     let data2 = tmp.0.join("data2");
     fs::create_dir(&data2).unwrap();
     symlink(&data, data2.join("companions")).unwrap();
+    assert!(!data.join("prowlarr").exists());
     assert!(matches!(
         Install::open(&data2, &id()),
         Err(LayoutError::OutsideRoot)
@@ -1074,7 +1177,7 @@ fn junctions_are_never_followed_on_windows() {
         .stage(&v("1.0"), ArchiveKind::TarGz, &mut Cursor::new(&t), &exe())
         .unwrap();
     assert_eq!(fs::read(outside.join("keep")).unwrap(), b"k");
-    install.commit(&v("1.0")).unwrap();
+    install.commit(&v("1.0"), &exe()).unwrap();
     // A staging or version path that's a junction refuses.
     junction(&install.root().join("2.0.staging"), &outside);
     let r = install.stage(&v("2.0"), ArchiveKind::TarGz, &mut Cursor::new(&t), &exe());
@@ -1101,4 +1204,47 @@ fn junctions_are_never_followed_on_windows() {
         Install::existing(&data, &id()),
         Err(LayoutError::OutsideRoot)
     ));
+}
+
+#[test]
+fn versions_compare_by_their_text() {
+    let tmp = Tmp::new();
+    let mut install = Install::open(&tmp.0, &id()).unwrap();
+    stage(&mut install, "1.0", b"a");
+    install.commit(&v("1.0"), &exe()).unwrap();
+    stage(&mut install, "1", b"b");
+    let done = install.commit(&v("1"), &exe()).unwrap();
+    assert!(done.leftover.is_none());
+    assert_eq!(done.pointer.current.as_str(), "1");
+    assert_eq!(
+        done.pointer.previous.as_ref().map(Version::as_str),
+        Some("1.0")
+    );
+    // `1.0.0` is a different folder; nothing names it, so it's swept.
+    fs::create_dir(install.root().join("1.0.0")).unwrap();
+    assert_eq!(install.sweep().unwrap(), ["1.0.0"]);
+    assert_eq!(names(&install), ["1", "1.0", POINTER]);
+}
+
+#[test]
+fn a_partial_version_is_never_committed_and_tombstones_are_swept() {
+    let tmp = Tmp::new();
+    let mut install = Install::open(&tmp.0, &id()).unwrap();
+    // A folder without the executable, or with a folder in its place,
+    // isn't staged.
+    fs::create_dir_all(install.root().join("3.0/app/bin")).unwrap();
+    assert!(matches!(
+        install.commit(&v("3.0"), &exe()),
+        Err(LayoutError::NotStaged)
+    ));
+    fs::create_dir(install.root().join("3.0/app/bin/app")).unwrap();
+    assert!(matches!(
+        install.commit(&v("3.0"), &exe()),
+        Err(LayoutError::NotStaged)
+    ));
+    // A crash partway through a delete leaves a tombstone; sweep takes it.
+    fs::create_dir_all(install.root().join("2.0.deleting/app")).unwrap();
+    fs::write(install.root().join("2.0.deleting/app/x"), b"x").unwrap();
+    assert_eq!(install.sweep().unwrap(), ["2.0.deleting", "3.0"]);
+    assert!(names(&install).is_empty());
 }

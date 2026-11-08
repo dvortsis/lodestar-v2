@@ -20,14 +20,21 @@
 //!    ([`crate::extract`]) and renames it to `<version>/` once it's
 //!    complete and fsynced. The pointer doesn't change.
 //! 2. [`Install::commit`] points `current` at it, keeping the version it
-//!    replaces as `previous`.
+//!    replaces as `previous`. The folder must hold the catalogue's
+//!    executable as a regular file.
 //! 3. After the new version passes health, [`Install::prune_previous`]
 //!    deletes the previous one; if it fails, [`Install::rollback`] points
 //!    back to it and deletes the new one.
 //!
+//! Steps 2 and 3 succeed once the pointer is written; a failure to delete
+//! what it no longer names comes back in [`Switched::leftover`].
+//! Versions are compared by their text (`1` and `1.0` are different
+//! folders). A folder is deleted by renaming it to `<name>.deleting`
+//! first, so a crash never leaves a partial `<version>/`.
+//!
 //! [`Install::sweep`] finishes whatever a crash interrupted: it deletes
-//! version and staging folders the pointer doesn't name, and a leftover
-//! temporary pointer. Nothing else in the folder is touched, so other
+//! version and staging folders the pointer doesn't name, tombstones and a
+//! leftover temporary pointer. Nothing else in the folder is touched, so other
 //! slices' files there are safe. [`Install::remove`] deletes the whole
 //! folder.
 //!
@@ -57,6 +64,10 @@ use crate::inputs::{CompanionId, Version};
 pub const POINTER: &str = "current";
 const POINTER_TMP: &str = "current.tmp";
 const STAGING: &str = ".staging";
+/// A folder being deleted is renamed to `<name>.deleting` first, so a
+/// crash partway through leaves a name only [`Install::sweep`] wants,
+/// never a partial `<version>/` that looks staged.
+const DELETING: &str = ".deleting";
 const POINTER_FORMAT: u32 = 1;
 const MAX_POINTER: u64 = 4096;
 
@@ -74,6 +85,22 @@ struct PointerFile {
     current: String,
     #[serde(default)]
     previous: Option<String>,
+}
+
+/// What a switch (commit, rollback, prune) did. Once the pointer is
+/// written the switch has happened, so it's returned as a success even if
+/// deleting what's no longer named then fails (on Windows, a running
+/// program's files can't be deleted): `leftover` holds that error, and a
+/// later [`Install::sweep`] finishes the job.
+#[derive(Debug)]
+pub struct Switched {
+    pub pointer: Pointer,
+    pub leftover: Option<LayoutError>,
+}
+
+/// Versions compare by their text: `1` and `1.0` are different folders.
+fn same(a: &Version, b: &Version) -> bool {
+    a.as_str() == b.as_str()
 }
 
 /// Why a layout step failed.
@@ -149,6 +176,11 @@ impl Install {
         let data = fs::canonicalize(data_dir)?;
         let companions = data.join("companions");
         ensure_dir(&companions)?;
+        // Checked before `<id>` is created, so a linked `companions` never
+        // gets a folder made inside its target.
+        if !real_dir(&companions)? || fs::canonicalize(&companions)? != companions {
+            return Err(LayoutError::OutsideRoot);
+        }
         let root = companions.join(id.as_str());
         ensure_dir(&root)?;
         Install::check(&data, id).map(|root| Install { root })
@@ -277,78 +309,109 @@ impl Install {
         }))
     }
 
+    /// Whether `version` is staged: a real `<version>/` folder holding
+    /// the catalogue's `executable` as a regular file. An I/O error other
+    /// than "not found" is returned, not read as "not staged".
+    fn staged(&self, version: &Version, executable: Option<&RelPath>) -> Result<bool, LayoutError> {
+        let not_found = |e: &io::Error| e.kind() == io::ErrorKind::NotFound;
+        match real_dir(&self.version_dir(version)) {
+            Ok(true) => {}
+            Ok(false) => return Ok(false),
+            Err(e) if not_found(&e) => return Ok(false),
+            Err(e) => return Err(e.into()),
+        }
+        let Some(x) = executable else {
+            return Ok(true);
+        };
+        match fs::symlink_metadata(self.executable(version, x)) {
+            Ok(m) => Ok(m.is_file()),
+            Err(e) if not_found(&e) => Ok(false),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Writes `new`, then deletes what it no longer names.
+    fn switch(&mut self, new: Pointer) -> Result<Switched, LayoutError> {
+        self.write_pointer(&new)?;
+        let leftover = self.sweep().err();
+        Ok(Switched {
+            pointer: new,
+            leftover,
+        })
+    }
+
     /// Step 2: points `current` at the staged `version`, keeping the one
-    /// it replaces as `previous`. A version two commits old that nothing
-    /// names any more is deleted afterwards.
-    pub fn commit(&mut self, version: &Version) -> Result<Pointer, LayoutError> {
-        if !real_dir(&self.version_dir(version)).unwrap_or(false) {
+    /// it replaces as `previous`. `version` must hold the catalogue's
+    /// `executable` as a regular file. A version two commits old that
+    /// nothing names any more is deleted afterwards ([`Switched`]).
+    pub fn commit(
+        &mut self,
+        version: &Version,
+        executable: &RelPath,
+    ) -> Result<Switched, LayoutError> {
+        if !self.staged(version, Some(executable))? {
             return Err(LayoutError::NotStaged);
         }
         let old = self.pointer()?;
         let previous = match old {
-            Some(p) if &p.current != version => Some(p.current),
+            Some(p) if !same(&p.current, version) => Some(p.current),
             Some(p) => p.previous,
             None => None,
         };
-        let new = Pointer {
+        self.switch(Pointer {
             current: version.clone(),
             previous,
-        };
-        self.write_pointer(&new)?;
-        self.sweep()?;
-        Ok(new)
+        })
     }
 
     /// Points back to the previous version and deletes the one rolled
-    /// back from.
-    pub fn rollback(&mut self) -> Result<Pointer, LayoutError> {
+    /// back from ([`Switched`]).
+    pub fn rollback(&mut self) -> Result<Switched, LayoutError> {
         let old = self.pointer()?.ok_or(LayoutError::NoCurrent)?;
         let previous = old.previous.ok_or(LayoutError::NoPrevious)?;
-        if !real_dir(&self.version_dir(&previous)).unwrap_or(false) {
+        if !self.staged(&previous, None)? {
             return Err(LayoutError::NotStaged);
         }
-        let new = Pointer {
+        self.switch(Pointer {
             current: previous,
             previous: None,
-        };
-        self.write_pointer(&new)?;
-        self.sweep()?;
-        Ok(new)
+        })
     }
 
-    /// Step 3, once the new version is healthy: deletes the previous one.
-    pub fn prune_previous(&mut self) -> Result<Pointer, LayoutError> {
+    /// Step 3, once the new version is healthy: deletes the previous one
+    /// ([`Switched`]).
+    pub fn prune_previous(&mut self) -> Result<Switched, LayoutError> {
         let old = self.pointer()?.ok_or(LayoutError::NoCurrent)?;
         if old.previous.is_none() {
             return Err(LayoutError::NoPrevious);
         }
-        let new = Pointer {
+        self.switch(Pointer {
             current: old.current,
             previous: None,
-        };
-        self.write_pointer(&new)?;
-        self.sweep()?;
-        Ok(new)
+        })
     }
 
     /// Deletes every `<version>/` and `<version>.staging/` the pointer
-    /// doesn't name, and a leftover temporary pointer: what a crash
-    /// between the steps leaves. Returns the names it deleted. Run by
+    /// doesn't name, every `*.deleting` folder and a leftover temporary
+    /// pointer: what a crash between the steps leaves. Returns the names it deleted. Run by
     /// CMP-5 at start, before any step.
     pub fn sweep(&mut self) -> Result<Vec<String>, LayoutError> {
         let pointer = self.pointer()?;
         let keep = |v: &Version| {
-            pointer
-                .as_ref()
-                .is_some_and(|p| &p.current == v || p.previous.as_ref() == Some(v))
+            pointer.as_ref().is_some_and(|p| {
+                same(&p.current, v) || p.previous.as_ref().is_some_and(|q| same(q, v))
+            })
         };
-        let mut gone = Vec::new();
+        // Names first: deleting renames folders inside this one.
+        let mut names = Vec::new();
         for entry in fs::read_dir(&self.root)? {
-            let entry = entry?;
-            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-                continue;
-            };
-            let ours = if name == POINTER_TMP {
+            if let Some(name) = entry?.file_name().to_str() {
+                names.push(name.to_owned());
+            }
+        }
+        let mut gone = Vec::new();
+        for name in names {
+            let ours = if name == POINTER_TMP || name.ends_with(DELETING) {
                 true
             } else {
                 let (stem, staging) = match name.strip_suffix(STAGING) {
@@ -361,7 +424,7 @@ impl Install {
                 }
             };
             if ours {
-                self.delete(&entry.path())?;
+                self.delete(&self.root.join(&name))?;
                 gone.push(name);
             }
         }
@@ -384,19 +447,35 @@ impl Install {
     }
 
     /// Deletes one direct child of the folder without following a link:
-    /// a directory with `remove_dir_all`, anything else (a link included)
-    /// as a file.
+    /// a directory by renaming it to `<name>.deleting` and then
+    /// `remove_dir_all`, anything else (a link included) as a file.
+    /// Something already gone is fine.
     fn delete(&self, path: &Path) -> Result<(), LayoutError> {
         if path.parent() != Some(self.root.as_path()) {
             return Err(LayoutError::OutsideRoot);
         }
         self.recheck()?;
-        let meta = fs::symlink_metadata(path)?;
-        if meta.is_dir() {
-            fs::remove_dir_all(path)?;
-        } else {
+        let meta = match fs::symlink_metadata(path) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            other => other?,
+        };
+        if !meta.is_dir() {
             remove_link_or_file(path)?;
+            return Ok(());
         }
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or(LayoutError::OutsideRoot)?;
+        if name.ends_with(DELETING) {
+            fs::remove_dir_all(path)?;
+            return Ok(());
+        }
+        let tomb = self.root.join(format!("{name}{DELETING}"));
+        self.delete(&tomb)?;
+        fs::rename(path, &tomb)?;
+        sync_dir(&self.root)?;
+        fs::remove_dir_all(&tomb)?;
         Ok(())
     }
 
