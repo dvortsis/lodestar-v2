@@ -6404,7 +6404,11 @@
     "2026-11-08T18:52Z: #631 at 9976485a MERGE (narrow security review). Last push asked: D:76-77 match P (3 workflows, fleet.json GetObject) + N2-N6 as OP-row build reqs; self-check docs delta, then merge on green CI.",
     "2026-11-08T18:55Z: #619 at 7b233d13 MERGE (fresh Opus). CMP-5 told to push #621 fixes + #619 (merge of new 5b). Next: fresh delta review of #621, self-check #619 delta, merge #621, retarget #619, merge. #631 docs delta 6fc3b0b2 self-checked; merge on green CI.",
     "2026-11-08T18:59Z: main macOS red on 11267a21: companions tests/supervise.rs:255 env test sees __CF_USER_TEXT_ENCODING (macOS CoreFoundation sets it in the child). Fix folded into CMP-5 #621 push (test-side macOS allowance after confirming env_clear). Verify on the next main macOS run after #621 merges.",
-    "2026-11-08T19:00Z: #628 at 0548410a CHANGES (docs only: record claims a worker Busy retry that doesn't exist; proto.rs Busy doc; leases order docs; heading). Self-check the docs delta, merge on green. New follow-ups to queue: X-wk-busy-retry (worker-side Busy retry with backoff, runtime.rs claim loop drops all denials); X-wk-pause-text (workers.pause_not_saved message + web help wrong for removed worker, en/zh)."
+    "2026-11-08T19:00Z: #628 at 0548410a CHANGES (docs only: record claims a worker Busy retry that doesn't exist; proto.rs Busy doc; leases order docs; heading). Self-check the docs delta, merge on green. New follow-ups to queue: X-wk-busy-retry (worker-side Busy retry with backoff, runtime.rs claim loop drops all denials); X-wk-pause-text (workers.pause_not_saved message + web help wrong for removed worker, en/zh).",
+    {
+      "at": "2026-11-08T19:30Z",
+      "note": "#629 merged (edf2d554). #631 P-cloud-operator merged (33d45c81); planning session archived. Runner PR #633 (OP-1..OP-G, ext:owner-operator-answers met + ext:owner-operator-setup, unedited-comment rule in steward + runner/README, X-wk-busy-retry, X-wk-pause-text, X-updates-api-text, PK-win-portable-upd bin ACL) opened; Opus review running. Owner sent Loosenings \u00a72.19 flags (inferred: repo-wide PR write; runtime firewall /32 + whole-firewall token) and setup timing via dashboard. OP-1 waits on #625. #621 2601b6ef / #619 cf90dea9 self-checked (macOS env fix, N1 rollback test, N3 is_file); merge on green. Seven-day usage status: allowed_warning (seen on an archived session record)."
+    }
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7202,6 +7206,6 @@
       "answers": "runner recommendation on all items: X-refetch-private ships in v0.5.2; installer Repair may re-secure admin-ACE-only folder (X-win-refusal-ux); v0.5.1 release body replacement (notes/v051-release-body.md); web-ok+e2e-ok required; delete wip/CMP-0-catalogue; Q13 stands, Q14 at G-m6; import host = Unraid box; nightly key deferred; counsel advisory, no reminders; package installers after 1.0"
     }
   ],
-  "heartbeat": "2026-11-07T22:05Z",
+  "heartbeat": "2026-11-08T19:30:00Z",
   "updated": "2026-11-08T19:00Z"
 }
