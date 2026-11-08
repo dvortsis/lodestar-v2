@@ -6208,6 +6208,11 @@
       "id": "merged-611-614",
       "at": "2026-11-08T14:32Z",
       "note": "#611 CMP-8b merged 2ab8f4b4 (delta self-checked: test + logging polish); #614 X-flake-ops-pause merged 506a30d5. CMP-8b session to archive; owner FYI sent. Slot 1 -> CMP-5."
+    },
+    {
+      "id": "CMP-5g-brief-additions",
+      "at": "2026-11-08T14:38Z",
+      "note": "From CMP-5 scoping (runner): CMP-5g owns the companions.<id>.egress setting (Q18) and serve-time start of installed companions with their route; it must continue CMP-5 \"staged\" installs (CLI install stops at files; recovery leaves staged intact). CMP-5 adds layout.rs stage_binary (approved) and tests/companion_launcher.rs."
     }
   ],
   "main_health": [
