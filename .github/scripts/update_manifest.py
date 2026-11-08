@@ -15,10 +15,9 @@ Usage:
       [--notes-url URL] [--keep N] [--now SECONDS]
   update_manifest.py extract ENVELOPE BODY_OUT MINISIG_OUT
   update_manifest.py envelope BODY MINISIG OUT
-  update_manifest.py names BODY
 
-Every artifact URL is under `https://github.com/<repo>/releases/download/`,
-and this release's under its own tag (`v<version>`; `nightly` for a
+Every artifact URL is under `https://github.com/dvortsis/lodestar-v2/releases/download/`
+(`--repo` must be that repository), and this release's under its own tag (`v<version>`; `nightly` for a
 nightly). A release without a pre-release part needs `--metadata` (its
 level and flags); a pre-release without one gets the most cautious values
 and a warning.
@@ -41,7 +40,6 @@ import re
 import sys
 import time
 from pathlib import Path
-from urllib.parse import urlsplit
 
 # The README's caps (crates/update/src/doc.rs).
 MAX_ENVELOPE = 512 * 1024
@@ -76,21 +74,36 @@ CONSERVATIVE = {
 RELEASE_FIELDS = ("version", "date", "level", "security", "manual_steps", "min_from", "withdrawn",
                   "migrates", "reindex", "reindex_bytes", "notes", "notes_url", "artifacts")
 ARTIFACT_FIELDS = ("target", "kind", "url", "sha256", "size")
-REPO = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]*/[A-Za-z0-9_-][A-Za-z0-9_.-]*$")
-SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-SEMVER = re.compile(
-    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
-    r"(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?$"
-)
+# The only repository a manifest may point into (the runner, PK-manifest).
+REPOSITORY = "dvortsis/lodestar-v2"
+# fullmatch with ASCII digits only: `$` would let a final newline through,
+# and `\d` matches any Unicode digit.
+SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+IDENT = r"(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
+SEMVER = re.compile(rf"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-({IDENT}(?:\.{IDENT})*))?")
+# doc.rs `url_ok`: lower-case LDH host labels, then a path from this set.
+HOST_LABEL = re.compile(r"[a-z0-9-]+")
+PATH = re.compile(r"/[A-Za-z0-9/\-._~%!$&'()*+,;=:@]*")
+DRAFT_NOTES = "Draft. "  # the draft release's placeholder text (package-release)
 
 
 class Refused(Exception):
     """The input or the output breaks the contract."""
 
 
+def strict_json(raw: bytes | str):
+    """JSON that refuses a duplicate key, as the verifier's parser does."""
+    def pairs(items):
+        keys = [k for k, _ in items]
+        if len(keys) != len(set(keys)):
+            raise Refused(f"duplicate key in {keys}")
+        return dict(items)
+    return json.loads(raw, object_pairs_hook=pairs)
+
+
 def version_key(v: str) -> tuple:
     """Semver 2.0 precedence; `v` already passed `check_version`."""
-    m = SEMVER.match(v)
+    m = SEMVER.fullmatch(v)
     core = tuple(int(m.group(i)) for i in (1, 2, 3))
     if m.group(4) is None:
         return core, (1,)
@@ -99,19 +112,22 @@ def version_key(v: str) -> tuple:
 
 
 def check_version(v: object, what: str = "version") -> str:
-    if not isinstance(v, str) or len(v.encode()) > MAX_VERSION or not SEMVER.match(v):
+    if not isinstance(v, str) or len(v.encode()) > MAX_VERSION or not SEMVER.fullmatch(v):
         raise Refused(f"{what} {v!r} is not strict semver without build metadata, at most {MAX_VERSION} bytes")
     return v
 
 
 def check_url(url: object, hosts: tuple[str, ...] | None, what: str) -> str:
-    if not isinstance(url, str) or len(url.encode()) > MAX_URL or not url.isascii():
-        raise Refused(f"{what} must be an ASCII URL of at most {MAX_URL} bytes")
-    parts = urlsplit(url)
-    host = parts.hostname or ""
-    if (parts.scheme != "https" or parts.netloc != host or host != host.lower() or not host
-            or parts.query or parts.fragment or "?" in url or "#" in url or "@" in url):
-        raise Refused(f"{what} {url!r} must be https with a lower-case host, no user, port, query or fragment")
+    """Mirrors doc.rs `url_ok`."""
+    if not isinstance(url, str) or len(url.encode()) > MAX_URL or not url.startswith("https://"):
+        raise Refused(f"{what} must be an https URL of at most {MAX_URL} bytes")
+    rest = url[len("https://"):]
+    host, slash, path = rest.partition("/")
+    if (not slash or not all(HOST_LABEL.fullmatch(l) and not l.startswith("-") and not l.endswith("-")
+                             for l in host.split("."))
+            or not PATH.fullmatch("/" + path)):
+        raise Refused(f"{what} {url!r} must be https with a lower-case host and a plain path "
+                      "(no user, port, query or fragment)")
     if hosts is not None and host not in hosts:
         raise Refused(f"{what} {url!r} is not on the download allowlist {hosts}")
     return url
@@ -143,7 +159,7 @@ def artifact(target: str, kind: str, path: Path, url_base: str) -> dict:
     """An artifact entry from a real file: its URL, SHA-256 and size."""
     if not path.is_file():
         raise Refused(f"the {kind} for {target} is missing: {path}")
-    if not SAFE_NAME.match(path.name):
+    if not SAFE_NAME.fullmatch(path.name):
         raise Refused(f"{path.name!r} isn't a safe release asset name")
     digest = hashlib.sha256()
     size = 0
@@ -208,7 +224,7 @@ def normalise_release(r: object, what: str) -> dict:
 
 def load_statements(path: Path) -> list:
     """The key chain from `crates/update/keys/statements.json`, carried whole."""
-    stmts = json.loads(path.read_text(encoding="utf-8"))
+    stmts = strict_json(path.read_text(encoding="utf-8"))
     if not isinstance(stmts, list) or len(stmts) > MAX_STATEMENTS:
         raise Refused(f"{path}: at most {MAX_STATEMENTS} statements")
     for i, s in enumerate(stmts):
@@ -219,7 +235,7 @@ def load_statements(path: Path) -> list:
 
 
 def statement_time(s: dict) -> int:
-    body = json.loads(base64.b64decode(s["body"], validate=True))
+    body = strict_json(base64.b64decode(s["body"], validate=True))
     return check_int(body.get("timestamp"), "a statement's timestamp")
 
 
@@ -231,7 +247,7 @@ def load_metadata(path: Path | None, version: str) -> dict:
         print("::warning::No release metadata file: the manifest uses the conservative values "
               f"{json.dumps(CONSERVATIVE)}", file=sys.stderr)
         return dict(CONSERVATIVE)
-    meta = check_fields(json.loads(path.read_text(encoding="utf-8")), tuple(CONSERVATIVE), ("min_from",), str(path))
+    meta = check_fields(strict_json(path.read_text(encoding="utf-8")), tuple(CONSERVATIVE), ("min_from",), str(path))
     return {**CONSERVATIVE, **meta}
 
 
@@ -241,8 +257,8 @@ def build(a: argparse.Namespace) -> int:
         raise Refused(f"{version} is a pre-release: it never goes on the stable channel")
     if channel == "nightly" and "-nightly." not in version:
         raise Refused(f"{version} isn't a nightly version")
-    if not REPO.match(a.repo):
-        raise Refused(f"--repo {a.repo!r} isn't OWNER/NAME")
+    if a.repo != REPOSITORY:
+        raise Refused(f"--repo must be {REPOSITORY}, not {a.repo!r}")
     want = "nightly" if channel == "nightly" else f"v{version}"
     if a.tag != want:
         raise Refused(f"--tag must be {want!r} for {channel} {version}, not {a.tag!r}")
@@ -253,7 +269,7 @@ def build(a: argparse.Namespace) -> int:
     previous: list = []
     timestamp = now
     if a.previous:
-        prev = json.loads(Path(a.previous).read_bytes())
+        prev = strict_json(Path(a.previous).read_bytes())
         check_fields(prev, ("type", "format", "channel", "timestamp", "expires", "statements", "releases"),
                      (), "the previous manifest")
         if prev["type"] != "lodestar-manifest" or prev["format"] != 1 or prev["channel"] != channel:
@@ -274,6 +290,8 @@ def build(a: argparse.Namespace) -> int:
 
     meta = load_metadata(Path(a.metadata) if a.metadata else None, version)
     notes = Path(a.notes_file).read_text(encoding="utf-8") if a.notes_file else ""
+    if notes.lstrip().startswith(DRAFT_NOTES):
+        raise Refused("the release text is still the draft's placeholder: write the release notes, then re-run")
     files = [
         ("x86_64-unknown-linux-musl", "binary", a.x86_64_binary),
         ("aarch64-unknown-linux-musl", "binary", a.aarch64_binary),
@@ -321,7 +339,7 @@ def extract(a: argparse.Namespace) -> int:
     raw = Path(a.envelope).read_bytes()
     if len(raw) > MAX_ENVELOPE:
         raise Refused(f"the envelope is over {MAX_ENVELOPE} bytes")
-    env = check_fields(json.loads(raw), ("manifest", "freshness"), ("freshness",), "the envelope")
+    env = check_fields(strict_json(raw), ("manifest", "freshness"), ("freshness",), "the envelope")
     m = check_fields(env["manifest"], ("body", "minisig"), (), "the envelope's manifest")
     body = base64.b64decode(m["body"], validate=True)
     if len(body) > MAX_MANIFEST:
@@ -344,15 +362,6 @@ def envelope(a: argparse.Namespace) -> int:
     if len(out) > MAX_ENVELOPE:
         raise Refused(f"the envelope is {len(out)} bytes, over the {MAX_ENVELOPE}-byte cap")
     Path(a.out).write_bytes(out)
-    return 0
-
-
-def names(a: argparse.Namespace) -> int:
-    """The asset names a manifest body's artifact URLs end in, one per line."""
-    body = json.loads(Path(a.body).read_bytes())
-    for r in body["releases"]:
-        for art in r["artifacts"]:
-            print(art["url"].rsplit("/", 1)[1])
     return 0
 
 
@@ -381,9 +390,6 @@ def parser() -> argparse.ArgumentParser:
     for name in ("body", "minisig", "out"):
         w.add_argument(name)
     w.set_defaults(run=envelope)
-    n = sub.add_parser("names")
-    n.add_argument("body")
-    n.set_defaults(run=names)
     return p
 
 

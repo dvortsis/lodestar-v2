@@ -118,6 +118,12 @@ class Builder(unittest.TestCase):
         self.assertEqual(r["notes"], "Lodestar 0.6.0-rc.1.")
         self.assertIn("::warning::", out)
 
+    def test_the_drafts_placeholder_is_refused_as_notes(self):
+        notes = self.write("notes.md", b"Draft. Windows files are not code-signed (SmartScreen will warn).")
+        code, out = self.build("--notes-file", notes)
+        self.assertEqual(code, 1)
+        self.assertIn("placeholder", out)
+
     def test_a_missing_artifact_fails_loudly(self):
         self.files["msi"].unlink()
         code, out = self.build()
@@ -130,7 +136,7 @@ class Builder(unittest.TestCase):
         self.assertEqual(self.build()[0], 1)
 
     def test_urls_are_under_this_tag_only(self):
-        for repo in ["dvortsis", "../..", "a/b/c", "a/b?x=1", "a@b/c", "a/" + "b" * 600]:
+        for repo in ["dvortsis", "../..", "a/b/c", "a/b?x=1", "a@b/c", "someone/lodestar-v2", "a/" + "b" * 600]:
             with self.subTest(repo=repo):
                 self.assertEqual(self.build(repo=repo)[0], 1)
         for tag in ["v0.5.2", "0.6.0", "nightly", "v0.6.0/../v0.5.2"]:
@@ -141,10 +147,13 @@ class Builder(unittest.TestCase):
     def test_url_checks(self):
         for url in ["http://github.com/x", "https://evil.example/x", "https://GitHub.com/x",
                     "https://github.com:8443/x", "https://u@github.com/x", "https://github.com/x?y=1",
-                    "https://github.com/x#y", "https://github.com/" + "a" * 600]:
+                    "https://github.com/x#y", "https://github.com/" + "a" * 600, "https://github.com",
+                    "https://a_b.example/x", "https://-a.example/x", "https://a..b/x", "https://github.com/a b",
+                    "https://github.com/x\n", "https://github.com/\u00e9"]:
             with self.subTest(url=url), self.assertRaises(um.Refused):
                 um.check_url(url, um.DOWNLOAD_HOSTS, "url")
         um.check_url(BASE + "/x", um.DOWNLOAD_HOSTS, "url")
+        um.check_url("https://example.org/notes/v0.6.0", None, "notes_url")
 
     def test_a_previous_release_hosted_elsewhere_is_refused(self):
         prev = self.previous(["0.5.2"])
@@ -160,7 +169,8 @@ class Builder(unittest.TestCase):
         self.assertEqual(self.build(channel="beta", version="0.6.0-rc.1")[0], 0)
         self.assertEqual(self.build(channel="nightly", version="0.6.0")[0], 1)
         self.assertEqual(self.build(channel="nightly", version="0.6.1-nightly.20261108.57")[0], 0)
-        for bad in ["v0.6.0", "0.6.0+build.1", "0.6", "0.06.0", "0.6.0-01", "0.6.0-" + "a" * 64]:
+        for bad in ["v0.6.0", "0.6.0+build.1", "0.6", "0.06.0", "0.6.0-01", "0.6.0-" + "a" * 64,
+                    "0.6.0\n", "1\u0663.0.0", "0.6.0-rc.\u0661"]:
             with self.subTest(version=bad):
                 self.assertEqual(self.build(channel="beta", version=bad)[0], 1)
 
@@ -215,6 +225,8 @@ class Builder(unittest.TestCase):
     def test_caps(self):
         notes = self.write("notes.md", b"n" * (16 * 1024 + 1))
         self.assertEqual(self.build("--notes-file", notes)[0], 1, "notes over 16 KiB")
+        notes.write_bytes("\u00e9".encode() * (8 * 1024 + 1))
+        self.assertEqual(self.build("--notes-file", notes)[0], 1, "16 KiB counts bytes, not characters")
         notes.write_bytes(b"n" * (16 * 1024))
         self.assertEqual(self.build("--notes-file", notes)[0], 0, "notes at 16 KiB")
         prev = self.previous([f"0.5.{i}" for i in range(64)])
@@ -229,6 +241,12 @@ class Builder(unittest.TestCase):
         self.assertEqual(self.build("--metadata", meta)[0], 1)
         meta.write_text(json.dumps({**um.CONSERVATIVE, "surprise": True}))
         self.assertEqual(self.build("--metadata", meta)[0], 1, "unknown metadata field")
+        meta.write_text(json.dumps(um.CONSERVATIVE)[:-1] + ', "level": "fix"}')
+        self.assertEqual(self.build("--metadata", meta)[0], 1, "a duplicate key")
+        meta.write_text(json.dumps({**um.CONSERVATIVE, "min_from": "0.5.1\n"}))
+        self.assertEqual(self.build("--metadata", meta)[0], 1, "min_from with a newline")
+        meta.write_text(json.dumps({**um.CONSERVATIVE, "min_from": "1\u0663.0.0"}))
+        self.assertEqual(self.build("--metadata", meta)[0], 1, "min_from with a non-ASCII digit")
 
     def test_a_body_over_384_kib_is_refused(self):
         notes = self.write("notes.md", b"n" * (16 * 1024))
@@ -266,12 +284,6 @@ class Builder(unittest.TestCase):
         self.assertEqual(sig2.read_text(), SIG)
         sig.write_text("one line\n")
         self.assertEqual(self.run_cli("envelope", self.out, sig, env)[0], 1)
-
-    def test_names_lists_the_asset_names(self):
-        self.assertEqual(self.build()[0], 0)
-        code, out = self.run_cli("names", self.out)
-        self.assertEqual(code, 0)
-        self.assertEqual(out.split(), [p.name for p in self.files.values()])
 
     def test_no_secret_reaches_the_output(self):
         secret = "untrusted comment: minisign encrypted secret key\nRWRTY0IySECRETSENTINEL"
