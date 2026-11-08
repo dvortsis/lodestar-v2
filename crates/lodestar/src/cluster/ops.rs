@@ -267,7 +267,9 @@ impl Workers {
             else {
                 return;
             };
-            rt.spawn(async move { workers.save_floor_pause(w).await });
+            rt.spawn(async move {
+                workers.save_floor_pause(w).await;
+            });
         }));
         let weak = Arc::downgrade(&workers);
         tokio::spawn(async move {
@@ -493,28 +495,34 @@ impl Workers {
     /// worker revoked meanwhile isn't saved again, and one an admin resumed
     /// meanwhile is paused again with the save, so the saved and live states
     /// agree.
-    async fn save_floor_pause(&self, w: WorkerId) {
+    ///
+    /// Returns the code it logged (`workers.pause_not_saved`), if any:
+    /// `unknown_worker` for a worker removed meanwhile (#615's review),
+    /// `prefs_full` or `failed` for a save that didn't land.
+    async fn save_floor_pause(&self, w: WorkerId) -> Option<&'static str> {
         let _edit = self.edits.lock().await;
-        if let Some(server) = self.follow()
+        let code = if let Some(server) = self.follow()
             && self.check(&server, w).await.is_err()
         {
-            return;
-        }
-        let saved = self.set_paused(w, true).await;
-        if let Some(server) = self.follow() {
-            server.pause(w);
-        }
-        if let Err(e) = saved {
-            let code = match e {
+            Some("unknown_worker")
+        } else {
+            let saved = self.set_paused(w, true).await;
+            if let Some(server) = self.follow() {
+                server.pause(w);
+            }
+            saved.err().map(|e| match e {
                 WorkersError::PrefsFull => "prefs_full",
                 _ => "failed",
-            };
+            })
+        };
+        if let Some(code) = code {
             lodestar_log::log_event!(
                 events::WORKERS_PAUSE_NOT_SAVED,
                 worker = lodestar_log::Count(u64::from(w.0)),
                 code = code
             );
         }
+        code
     }
 
     /// Saves a pause or its end. The caller holds `edits`.
@@ -1032,7 +1040,7 @@ mod tests {
         assert!(server.pause(w1));
         c.workers.resume(w1.0).await.unwrap();
         assert!(!paused(w1));
-        c.workers.save_floor_pause(w1).await;
+        assert_eq!(c.workers.save_floor_pause(w1).await, None);
         assert!(
             c.workers.saved(w1).paused && paused(w1),
             "saved and live agree"
@@ -1043,7 +1051,8 @@ mod tests {
         let w2 = two.worker();
         assert!(server.pause(w2));
         c.workers.revoke(w2.0).await.unwrap();
-        c.workers.save_floor_pause(w2).await;
+        // Removed meanwhile: not saved, and said so (#615's review).
+        assert_eq!(c.workers.save_floor_pause(w2).await, Some("unknown_worker"));
         assert!(!c.workers.saved(w2).paused);
         let store = Store::open(dir.path().join("lodestar.db"), StoreConfig::default()).unwrap();
         assert!(

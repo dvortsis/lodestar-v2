@@ -127,9 +127,10 @@ impl Default for ServerConfig {
 /// grant, §19.3). It runs on a blocking thread.
 pub trait StoredKeys: Send + Sync + 'static {
     fn stored(&self, keys: &[InfoHash]) -> Vec<bool>;
-    /// The check before a re-grant, one answer per key (#607's review).
-    /// By default [`stored`](Self::stored)'s: `true` reads as stored.
-    fn regrant_check(&self, keys: &[InfoHash]) -> Vec<KeyCheck> {
+    /// The check before a grant or a re-grant, one answer per key (#607's
+    /// and #615's reviews). By default [`stored`](Self::stored)'s: `true`
+    /// reads as stored.
+    fn key_checks(&self, keys: &[InfoHash]) -> Vec<KeyCheck> {
         self.stored(keys)
             .into_iter()
             .map(|s| if s { KeyCheck::Stored } else { KeyCheck::Free })
@@ -137,7 +138,11 @@ pub trait StoredKeys: Send + Sync + 'static {
     }
 }
 
-/// One key's answer before a re-grant ([`StoredKeys::regrant_check`]).
+/// One key's answer before a grant or a re-grant
+/// ([`StoredKeys::key_checks`]). A claim grants only a `Free` key: it
+/// denies a stored or held one as stored, and an `Unknown` one as busy
+/// ("claim again later"), not as stored: it isn't known to be. (Today's
+/// worker drops any denied key; a busy retry is a follow-up.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyCheck {
     /// Neither stored nor held: it may go out.
@@ -149,8 +154,8 @@ pub enum KeyCheck {
     /// floor's hash lists): the lease ends as lost, blocked, as the
     /// target's floor would have ended it.
     Held,
-    /// The read failed: the key waits for the next re-grant. An error
-    /// never grants a key, and never ends one.
+    /// The read failed: the key waits for the next re-grant, behind the
+    /// rest. An error never grants a key, and never ends one.
     Unknown,
 }
 
@@ -1394,22 +1399,22 @@ impl ClusterServer {
                 // Commits from here on are remembered, so one racing the
                 // store check is still caught (`claim_batch`).
                 let checked_at = self.leases.commit_seq();
-                let stored = match &self.stored {
+                let checks = match &self.stored {
                     Some(check) => {
                         let check = check.clone();
                         let keys: Vec<InfoHash> =
                             batch.items.iter().map(|i| InfoHash(i.key)).collect();
-                        match tokio::task::spawn_blocking(move || check.stored(&keys)).await {
+                        match tokio::task::spawn_blocking(move || check.key_checks(&keys)).await {
                             Ok(s) if s.len() == batch.items.len() => Some(s),
                             // Fails closed: a check that died or came back
                             // short grants nothing (#607's review).
                             _ => None,
                         }
                     }
-                    None => Some(vec![false; batch.items.len()]),
+                    None => Some(vec![KeyCheck::Free; batch.items.len()]),
                 };
-                let items = match stored {
-                    Some(stored) => self.claim(peer, &mut batch.items, &stored, checked_at),
+                let items = match checks {
+                    Some(checks) => self.claim(peer, &mut batch.items, &checks, checked_at),
                     None => {
                         bump(&self.counters.check_failures);
                         batch
@@ -1561,7 +1566,7 @@ impl ClusterServer {
         &self,
         peer: &Peer,
         items: &mut [ClaimItem],
-        stored: &[bool],
+        checks: &[KeyCheck],
         checked_at: u64,
     ) -> Vec<GrantItem> {
         let w = peer.worker;
@@ -1580,13 +1585,16 @@ impl ClusterServer {
         let draining = draining || fleet.workers.get(&w).is_some_and(|s| s.paused);
         let mut out: Vec<Option<GrantItem>> = vec![None; items.len()];
         let mut asks: Vec<(usize, Claim)> = Vec::with_capacity(items.len());
-        for (i, (item, &stored)) in items.iter().zip(stored).enumerate() {
+        for (i, (item, &check)) in items.iter().zip(checks).enumerate() {
             let key = item.key;
             let deny = |reason| Some(GrantItem::Denied { key, reason });
             if draining {
                 out[i] = deny(DenyReason::Draining);
-            } else if stored {
+            } else if matches!(check, KeyCheck::Stored | KeyCheck::Held) {
                 out[i] = deny(DenyReason::Stored);
+            } else if check == KeyCheck::Unknown {
+                // Not known to be stored: "claim again later" (#615's review).
+                out[i] = deny(DenyReason::Busy);
             } else if let Some(source) = SourceId::new(item.source) {
                 // Discovery times are the worker's clock; correct them (§19.3).
                 // Then clamped to now ± the skew limit: a worker's clock
@@ -1882,7 +1890,7 @@ impl ClusterServer {
             .flat_map(|(_, ks)| ks.iter().map(|&(k, _)| k))
             .collect();
         let n = keys.len();
-        let answer = tokio::task::spawn_blocking(move || check.regrant_check(&keys))
+        let answer = tokio::task::spawn_blocking(move || check.key_checks(&keys))
             .await
             .ok()
             .filter(|a| a.len() == n);
@@ -1919,7 +1927,7 @@ impl ClusterServer {
                         self.leases.report(w, &key, token, Some(LOSS_BLOCKED));
                     }
                     KeyCheck::Unknown => {
-                        self.leases.requeue(&key, token);
+                        self.leases.requeue_back(&key, token);
                     }
                 }
             }
