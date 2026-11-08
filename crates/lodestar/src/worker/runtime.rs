@@ -3149,6 +3149,7 @@ mod tests {
                 },
                 clock: Arc::new(lodestar_cluster::SystemClock),
                 placement: Arc::new(Placement::new(false)),
+                coordinator_dht: None,
                 fleet: Some(Fleet {
                     stored: Arc::new(monitor),
                     filter,

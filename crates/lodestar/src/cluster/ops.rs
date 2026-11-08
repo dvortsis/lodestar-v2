@@ -635,6 +635,7 @@ mod tests {
             clock: Arc::new(SystemClock),
             placement: placement.clone(),
             fleet: None,
+            coordinator_dht: None,
         })
         .await
         .unwrap();

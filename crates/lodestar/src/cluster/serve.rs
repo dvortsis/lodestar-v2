@@ -90,7 +90,14 @@ pub struct Wiring {
     /// (WK-3, WK-8). Without it no snapshot is built or sent and no
     /// sealed record opens.
     pub fleet: Option<Fleet>,
+    /// The coordinator's own DHT node, while it runs (`DhtSource`'s
+    /// handle): its address vote is the coordinator's public address for
+    /// the planner (`set_coordinator_ips`, WK-5). `None`: no DHT.
+    pub coordinator_dht: Option<CoordinatorDht>,
 }
+
+/// The coordinator DHT's handle slot, set while its node runs.
+pub type CoordinatorDht = Arc<std::sync::Mutex<Option<lodestar_dht::node::NodeHandle>>>;
 
 impl std::fmt::Debug for Wiring {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -572,6 +579,45 @@ struct Seen {
     sessions: BTreeMap<WorkerId, u64>,
     /// The day and key day the open keys were last set for.
     key_day: Option<(u32, u32)>,
+    /// When the coordinator DHT's address vote was last read.
+    address_at: Option<Instant>,
+}
+
+/// How often the coordinator DHT's address vote is read.
+const ADDRESS_EVERY: Duration = Duration::from_secs(60);
+
+/// Hands the planner the coordinator's public address from its DHT's
+/// vote, every [`ADDRESS_EVERY`] (WK-5: without it every plan treats the
+/// fleet as one address). A missing vote, or one that isn't public,
+/// changes nothing; the planner itself ignores an unchanged set.
+async fn coordinator_address(tick: &Tick, wiring: &Wiring, seen: &mut Seen) {
+    let due = seen
+        .address_at
+        .is_none_or(|at| at.elapsed() >= ADDRESS_EVERY);
+    let Some(slot) = wiring.coordinator_dht.as_ref().filter(|_| due) else {
+        return;
+    };
+    seen.address_at = Some(Instant::now());
+    let handle = slot.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    let Some(handle) = handle else { return };
+    let Ok(Some(snap)) = tokio::time::timeout(Duration::from_secs(2), handle.snapshot()).await
+    else {
+        return;
+    };
+    let ips = public_ips(snap.external_ip);
+    if !ips.is_empty() {
+        let _ = tick.placement.set_coordinator_ips(ips);
+    }
+}
+
+/// Only a public address enters the planner's set: never a loopback,
+/// private, link-local, CGNAT or unspecified one (the same filter as a
+/// worker's `Hello`). A v4-mapped v6 address counts as its v4.
+fn public_ips(vote: Option<std::net::IpAddr>) -> Vec<std::net::IpAddr> {
+    vote.map(|ip| ip.to_canonical())
+        .filter(|ip| lodestar_network_policy::allows(SocketAddr::new(*ip, 1), false))
+        .into_iter()
+        .collect()
 }
 
 /// One server's tick: runs every [`TICK`] and applies acknowledgements as
@@ -640,10 +686,11 @@ async fn step(tick: &Arc<Tick>, server: &Arc<ClusterServer>, wiring: &Wiring, se
     tick.steps.fetch_add(1, Ordering::Relaxed);
     let fleet_snapshot = server.snapshot();
     new_sessions(tick, &fleet_snapshot, seen);
-    // WK-10c: apply the returned replan's coordinator share (its DHT's
-    // shard, its pool's politeness). Members whose queue was full are
-    // retried by the next tick's sync anyway.
+    // The coordinator's own share of a replan (its DHT's shard, its pool's
+    // politeness) is WK-10e's. Members whose queue was full are retried by
+    // the next tick's sync anyway.
     let _ = tick.placement.sync(&fleet_snapshot, server);
+    coordinator_address(tick, wiring, seen).await;
     let Some(fleet) = &tick.fleet else { return };
     let now = wiring.clock.now_secs();
     if let Some(k) = lock(&tick.keys).as_ref() {
@@ -833,7 +880,7 @@ async fn snapshot_step(
     });
     // Every tick (the review's N1): a change made while the snapshots were
     // out of their slot still reaches the plan. An unchanged pair is a
-    // no-op. WK-10c: apply the returned replan's coordinator share.
+    // no-op. The coordinator's share of the replan is WK-10e's.
     if let Some((dict, filter)) = versions {
         let _ = tick.placement.set_versions(dict, filter);
     }
@@ -1545,6 +1592,7 @@ mod tests {
             clock: Arc::new(SystemClock),
             placement: Arc::new(Placement::new(false)),
             fleet: None,
+            coordinator_dht: None,
         }
     }
 
@@ -2118,6 +2166,33 @@ mod tests {
         assert!(nine.is_some_and(|s| s.paused), "{:?}", snap.workers);
         assert!(!snap.workers.iter().any(|s| s.worker == WorkerId(10)));
         cluster.shutdown().await;
+    }
+
+    /// Only public addresses reach the planner from the DHT's vote.
+    #[test]
+    fn only_a_public_vote_is_the_coordinators_address() {
+        let ip = |s: &str| Some(s.parse::<std::net::IpAddr>().unwrap());
+        assert_eq!(public_ips(ip("81.2.69.7")), vec![ip("81.2.69.7").unwrap()]);
+        assert_eq!(
+            public_ips(ip("::ffff:81.2.69.7")),
+            vec![ip("81.2.69.7").unwrap()]
+        );
+        assert_eq!(public_ips(ip("2a00:1450::1")).len(), 1);
+        for not in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "192.168.0.9",
+            "169.254.1.1",
+            "100.64.0.1",
+            "0.0.0.0",
+            "::1",
+            "::",
+            "fe80::1",
+            "fd00::1",
+        ] {
+            assert!(public_ips(ip(not)).is_empty(), "{not}");
+        }
+        assert!(public_ips(None).is_empty());
     }
 
     /// Once a shutdown returns, nothing of the old tick holds the server.
