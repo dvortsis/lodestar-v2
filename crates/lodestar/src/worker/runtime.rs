@@ -574,6 +574,16 @@ impl Runtime {
 }
 
 impl Work for Runtime {
+    /// What `Hello` reports (WK-10c): the memory this process may use and
+    /// the public address the DHT last voted. The session adds the cores.
+    fn capabilities(&self) -> lodestar_cluster::proto::Capabilities {
+        lodestar_cluster::proto::Capabilities {
+            ram_mb: super::budget::ram_mb(),
+            external_ips: self.shared.dht_counts.external_ip().into_iter().collect(),
+            ..Default::default()
+        }
+    }
+
     fn connected(&mut self, session: SessionHandle) {
         // Anything queued to the last session may be lost: ask for a fresh
         // have-filter snapshot (WK-3). The coordinator starts the filter
@@ -1796,6 +1806,38 @@ mod tests {
         })
         .await;
         rt.shutdown().await;
+    }
+
+    /// `Hello` carries the memory this process may use and the public
+    /// address the DHT voted last run (from its saved state); a private
+    /// address is never reported.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn hello_reports_the_saved_public_address_and_the_memory() {
+        for (saved, reported) in [("81.2.69.7", true), ("192.168.1.2", false)] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("dht-state.bin");
+            let ip: std::net::IpAddr = saved.parse().unwrap();
+            lodestar_dht::state::State {
+                external_ip: Some(ip),
+                ..Default::default()
+            }
+            .save(&path)
+            .unwrap();
+            let rt = Runtime::start(Config {
+                dht: Some(lodestar_dht::node::Config {
+                    state_path: Some(path),
+                    ..dht_config()
+                }),
+                ..config(Arc::new(MapFetch::default()))
+            });
+            let caps = rt.capabilities();
+            let want = if reported { vec![ip] } else { Vec::new() };
+            assert_eq!(caps.external_ips, want, "{saved}");
+            if cfg!(target_os = "linux") {
+                assert!(caps.ram_mb > 0);
+            }
+            rt.shutdown().await;
+        }
     }
 
     /// A session that doesn't come back within the linger stops the DHT.

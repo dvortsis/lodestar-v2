@@ -38,6 +38,8 @@ const RETRY_FIRST: Duration = Duration::from_secs(1);
 const RETRY_MAX: Duration = Duration::from_secs(60);
 /// How long a paused node waits for a session before it's stopped.
 pub const LINGER: Duration = Duration::from_secs(60);
+/// How often the running node's voted address is read, for `Hello`.
+const ADDRESS_EVERY: Duration = Duration::from_secs(60);
 /// Harvests waiting for the claims' queue; the node drops and counts the
 /// rest, so the DHT never blocks.
 const HARVEST_QUEUE: usize = 4096;
@@ -75,6 +77,25 @@ pub struct DhtCounts {
     pub dropped: AtomicU64,
     /// Peer requests that arrived with no node running.
     pub refused: AtomicU64,
+    /// This worker's public address as its DHT last voted it (from the
+    /// saved state at start, then the running node), for `Hello`. Only a
+    /// public address is kept.
+    pub external_ip: std::sync::Mutex<Option<std::net::IpAddr>>,
+}
+
+impl DhtCounts {
+    pub fn external_ip(&self) -> Option<std::net::IpAddr> {
+        *self.external_ip.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn set_external_ip(&self, ip: Option<std::net::IpAddr>) {
+        // A private or reserved address says nothing to the planner.
+        let ip = ip
+            .filter(|ip| lodestar_network_policy::allows(std::net::SocketAddr::new(*ip, 1), false));
+        if ip.is_some() {
+            *self.external_ip.lock().unwrap_or_else(|e| e.into_inner()) = ip;
+        }
+    }
 }
 
 /// The running node's shard, `None` while none runs.
@@ -91,6 +112,12 @@ pub fn spawn(
     linger: Duration,
 ) -> (tokio::task::JoinHandle<()>, Running) {
     let (running, rx) = watch::channel(None);
+    // The address the last run voted, so the first `Hello` can carry it.
+    if let Some(path) = &base.state_path
+        && let Ok(Some(state)) = lodestar_dht::state::State::load(path)
+    {
+        counts.set_external_ip(state.external_ip);
+    }
     let task = tokio::spawn(
         Driver {
             base,
@@ -130,6 +157,8 @@ impl Driver {
     ) {
         let mut requests_open = true;
         let mut retry: Option<(Instant, Duration)> = None;
+        let mut address = tokio::time::interval(ADDRESS_EVERY);
+        address.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             let target = *want.borrow_and_update();
             let due = retry.is_none_or(|(at, _)| Instant::now() >= at);
@@ -156,6 +185,13 @@ impl Driver {
                     }
                 },
                 () = sleep_until(wake) => {}
+                _ = address.tick(), if self.node.is_some() => {
+                    if let Some(live) = &self.node
+                        && let Some(snap) = live.node.snapshot().await
+                    {
+                        self.counts.set_external_ip(snap.external_ip);
+                    }
+                }
                 // No session came back in time.
                 () = sleep_until(linger) => self.stop().await,
             }

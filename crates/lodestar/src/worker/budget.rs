@@ -120,6 +120,46 @@ impl Process {
     }
 }
 
+/// The memory this process may use, in MB, for `Hello`: the cgroup's
+/// limit when one is set (a container's), else the machine's. 0 where
+/// neither reads (not Linux).
+pub fn ram_mb() -> u32 {
+    let machine = std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|m| parse_meminfo(&m));
+    let limit = [
+        "/sys/fs/cgroup/memory.max",
+        "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+    ]
+    .iter()
+    .find_map(|p| {
+        std::fs::read_to_string(p)
+            .ok()
+            .and_then(|v| parse_limit(&v))
+    });
+    let bytes = match (limit, machine) {
+        (Some(l), Some(m)) => l.min(m),
+        (l, m) => l.or(m).unwrap_or(0),
+    };
+    u32::try_from(bytes >> 20).unwrap_or(u32::MAX)
+}
+
+/// `MemTotal` from `/proc/meminfo`, in bytes.
+fn parse_meminfo(m: &str) -> Option<u64> {
+    let line = m.lines().find(|l| l.starts_with("MemTotal:"))?;
+    let kib: u64 = line["MemTotal:".len()..]
+        .split_ascii_whitespace()
+        .next()?
+        .parse()
+        .ok()?;
+    Some(kib << 10)
+}
+
+/// A cgroup limit in bytes; `max` (v2) is none.
+fn parse_limit(v: &str) -> Option<u64> {
+    v.trim().parse().ok()
+}
+
 /// `utime + stime` from `/proc/self/stat`, in clock ticks.
 fn cpu_ticks() -> Option<u64> {
     let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
@@ -246,6 +286,12 @@ mod tests {
         let status = "Name:\tlodestar\nVmPeak:\t  9000 kB\nVmRSS:\t  204800 kB\n";
         assert_eq!(parse_status(status), Some(204_800));
         assert_eq!(parse_status("Name: x\n"), None);
+        assert_eq!(
+            parse_meminfo("MemTotal:  2048 kB\nMemFree: 1 kB\n"),
+            Some(2 << 20)
+        );
+        assert_eq!(parse_limit("max\n"), None);
+        assert_eq!(parse_limit("268435456\n"), Some(256 << 20));
     }
 
     #[test]
@@ -258,5 +304,8 @@ mod tests {
         }
         let (cpu, _) = p.sample();
         assert!(cpu <= 1000);
+        if cfg!(target_os = "linux") {
+            assert!(ram_mb() > 0);
+        }
     }
 }
