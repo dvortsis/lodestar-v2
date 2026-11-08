@@ -6243,6 +6243,11 @@
       "id": "PK-manifest-calls",
       "at": "2026-11-08T15:11:10Z",
       "note": "Approved: verify_envelope example; gated update-manifest CI job in ci-ok. A accepted (+URL prefix check); owner release steps change (publish draft, then approve manifest job) -> owner checklist + \u00a72.19 flag at merge. B, C accepted. D: stable tag without docs/releases/<tag>.update.json fails; runner writes that file per release. E: NIGHTLY_SIGNING_KEY names ok; rolling public nightly prerelease deferred as PK-nightly-host -> owner queue."
+    },
+    {
+      "id": "review-617-changes",
+      "at": "2026-11-08T15:25:48Z",
+      "note": "#617 WK-10e at 48be1bb4: CHANGES, 1 blocker (apply_pause initial share read on first poll, not the pool's built share; runtime.rs ~952/~1269). Relayed with fix; delta review next. /security-review skill could not run (no origin/HEAD); manual security pass clean. PK-manifest ~1,120 lines, one PR, accepted."
     }
   ],
   "main_health": [
@@ -7034,5 +7039,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T15:11:10Z"
+  "updated": "2026-11-08T15:25:48Z"
 }
