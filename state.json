@@ -6328,6 +6328,16 @@
       "id": "merged-617",
       "at": "2026-11-08T17:20Z",
       "note": "#617 WK-10e merged 977f59ea; owner flags sent (48 h cooldown bound, snapshot bound). Slot 4 \u2192 X-wk10d-unknown, same session."
+    },
+    {
+      "id": "cr-ab-comp-1-accepted",
+      "at": "2026-11-08T17:21Z",
+      "note": "Owner (relayed by dashboard 17:19Z, genuine owner message 'I follow the runners recommendation on both items'): cr-ab-comp-1 ACCEPTED. Verdict recorded as invalid (host_checklist_complete) plus the acceptance; comparator 317.8 stored/min over 24 h. Run sheet fixed (backup=excluded + next run). Decisions file docs/decisions/2026-11-08-cr-ab-comp-1-accepted.md goes in the next runner PR. No Lodestar on the host before 2026-11-09T02:01Z; then rc.2 steps B-E, then CR-AB-ADM (run sheet must use backup=excluded)."
+    },
+    {
+      "id": "X-collect-checklist-docker",
+      "at": "2026-11-08T17:21Z",
+      "note": "collect.py accepts backup=not_applicable, but analyze_cr.py's host_checklist() requires excluded + next_run in docker mode (CR-SPEC rule 5). Collector should refuse not_applicable in --mode docker at start, failing early instead of invalidating a 25 h segment."
     }
   ],
   "main_health": [

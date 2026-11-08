@@ -10,7 +10,7 @@ bitmagnet crawls the DHT on your Unraid box for 25 hours: 60 min warm-up, then 2
 - [ ] Every Lodestar container on the box is stopped and removed. The evidence folders are kept, not deleted.
 - [ ] Nothing crawls on the box or from the home public IP for 12 h before bitmagnet starts (no Lodestar, no other crawler, no torrent client doing DHT).
 - [ ] Parity check, mover and auto-updates are paused. Write down each one's next normal run time (UTC): parity ____ mover ____ auto-update ____
-- [ ] Appdata Backup stays disabled (so the collector gets `backup=not_applicable`).
+- [ ] Appdata Backup excludes the run's containers and folders, or stays disabled for the run. Either way it is recorded as `backup=excluded` with a next run time (UTC): the next scheduled run, or when you'll re-enable it ____. CR-SPEC rule 5 requires `excluded` with a next run in Docker mode; `not_applicable` makes the segment invalid (cr-ab-comp-1).
 - [ ] No imports of any kind on the box.
 - [ ] Router and network unchanged since the last run. Do not touch the router during the run.
 - [ ] Port 3334 (bitmagnet's DHT port) is NOT forwarded. Do not publish it with `-p` either.
@@ -73,7 +73,7 @@ docker run -d --name cr-ab-comp-collector --restart no --network host \
     --spec-commit c011f8a679e80875e5369b56328bc1376fee2da7 \
     --run-kind comparator --stop \
     --checklist auto_update=excluded --next-run auto_update=<UTC time from step 1> \
-    --checklist backup=not_applicable
+    --checklist backup=excluded --next-run backup=<UTC time from step 1>
 ```
 The Docker socket is full control of the box. Use the pinned `python:3.12-slim` you already use for other runs.
 
@@ -111,7 +111,7 @@ The raw evidence folder stays private on the box. Do not send it, `samples.jsonl
 - **Version:** bitmagnet v0.10.1 (the highest non-beta tag; `latest` and `v0.10` share its digest). If a newer stable appears before the run, keep v0.10.1: the comparator is pinned, and changing it later means re-running it.
 - **TMDB off:** see section 3.
 - **`--commit`:** the image's revision label (3a.1). **`--spec-commit`:** `c011f8a679e80875e5369b56328bc1376fee2da7`, the commit of `docs/decisions/2026-11-02-CR-SPEC.md` on `main`.
-- **Backup:** `not_applicable`, because Appdata Backup is disabled. Auto-updates are `excluded` with their next run time.
+- **Backup:** ~~`not_applicable`~~ superseded 2026-11-08: `excluded` with its next run time, like auto-updates (see Corrections, 2026-11-08).
 - **Worker keys, the 180 s first count, `--stop` and the `/proc` mount:** checked by the rehearsal (3a.3) before the real run.
 - **The note command** runs in a container, because stock Unraid has no python3.
 
@@ -121,3 +121,7 @@ The raw evidence folder stays private on the box. Do not send it, `samples.jsonl
 - **First count:** the collector's first count is the one rule 5.4 checks (the analyzer voids on it). Scripts must not take their own count; they check that the torrents table does not exist before bitmagnet starts, and that status.json appears within 180 s of bitmagnet's StartedAt.
 - **End:** wait for the collector to exit before stopping Postgres or restoring schedules; the next Lodestar start is result.json `ended` + 12 h.
 - **Schedules:** restore from saved copies of exactly what was paused (parity, mover, auto-update, TRIM).
+
+## Corrections (runner, 2026-11-08T17:21Z, after cr-ab-comp-1)
+- **Backup is `excluded` with a next run, never `not_applicable`.** The analyzer (`analyze_cr.py` `host_checklist()`) requires state `excluded` with `next_run_utc` for every checklist item in Docker mode, as CR-SPEC rule 5 says. This sheet's earlier `backup=not_applicable` wording made cr-ab-comp-1 come out `invalid (host_checklist_complete)`. That was the runner's error, not the owner's. The owner accepted the segment on 2026-11-08 (recorded in `docs/decisions/2026-11-08-cr-ab-comp-1-accepted.md`). The comparator result stands at 317.8 stored/min over 24 h.
+- Every later run sheet (CR-AB-ADM and on) uses `--checklist backup=excluded --next-run backup=<UTC>`.
