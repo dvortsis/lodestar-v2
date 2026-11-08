@@ -267,13 +267,19 @@ pub struct Supervisor {
 
 impl Supervisor {
     /// Kills orphans recorded by an earlier run (pidfile), before anything
-    /// starts. Must run inside a Tokio runtime.
-    pub fn new(
+    /// starts. One supervisor per data folder: a second one would kill the
+    /// first one's companions as orphans.
+    pub async fn new(
         data_dir: PathBuf,
         hook: Arc<dyn AfterSpawn>,
         timings: Timings,
     ) -> Result<Supervisor, SuperviseError> {
-        let orphans = pidfile::kill_orphans(&data_dir).map_err(SuperviseError::Records)?;
+        let dir = data_dir.clone();
+        // Blocking: on Windows each identity check runs PowerShell.
+        let orphans = tokio::task::spawn_blocking(move || pidfile::kill_orphans(&dir))
+            .await
+            .unwrap_or(Err(pidfile::PidfileError::Io(std::io::ErrorKind::Other)))
+            .map_err(SuperviseError::Records)?;
         Ok(Supervisor {
             data_dir,
             hook,
@@ -412,7 +418,11 @@ async fn supervise(
     let mut in_a_row = 0u32;
     loop {
         set(State::Starting);
-        let ended = match process::spawn(&c.spawn, hook.as_ref()) {
+        let (spec, h) = (c.spawn.clone(), hook.clone());
+        let spawned = tokio::task::spawn_blocking(move || process::spawn(&spec, h.as_ref()))
+            .await
+            .unwrap_or(Err(SpawnError::Start(std::io::ErrorKind::Other)));
+        let ended = match spawned {
             Ok(started) => run(&c, started, &t, &status, &logs, &redactor, &mut control).await,
             Err(
                 e @ (SpawnError::Privileged
@@ -491,13 +501,20 @@ async fn run(
     redactor: &Arc<logs::Redactor>,
     control: &mut mpsc::UnboundedReceiver<Control>,
 ) -> Ended {
-    let process::Started { mut child, .. } = started;
-    let mut readers: Vec<JoinHandle<()>> = Vec::new();
+    let process::Started { mut child, pid } = started;
+    // Declared first so it drops last: whatever the companion started is
+    // killed once it has gone, or if this future is dropped.
+    let _group = Group(pid);
+    let mut readers = Readers(Vec::new());
     if let Some(out) = child.stdout.take() {
-        readers.push(tokio::spawn(read_into(out, ring.clone(), redactor.clone())));
+        readers
+            .0
+            .push(tokio::spawn(read_into(out, ring.clone(), redactor.clone())));
     }
     if let Some(err) = child.stderr.take() {
-        readers.push(tokio::spawn(read_into(err, ring.clone(), redactor.clone())));
+        readers
+            .0
+            .push(tokio::spawn(read_into(err, ring.clone(), redactor.clone())));
     }
     status.send_modify(|s| s.state = State::Running);
     let began = Instant::now();
@@ -547,12 +564,45 @@ async fn run(
     status.send_modify(|s| s.last_exit = exit);
     // Its pid isn't ours any more once it has been reaped (or abandoned).
     pidfile::remove(&c.spawn.data_dir, &c.spawn.id);
-    for mut r in readers {
-        if tokio::time::timeout(READER_WAIT, &mut r).await.is_err() {
+    for r in &mut readers.0 {
+        let _ = tokio::time::timeout(READER_WAIT, r).await;
+    }
+    ended
+}
+
+/// The output readers, aborted when dropped, so none outlives its run
+/// even when the run itself is cancelled.
+struct Readers(Vec<JoinHandle<()>>);
+
+impl Drop for Readers {
+    fn drop(&mut self) {
+        for r in &self.0 {
             r.abort();
         }
     }
-    ended
+}
+
+/// A companion's process group (Unix), killed when dropped: what it
+/// started dies with it. The leader is reaped (or being killed) by then;
+/// the group's id stays reserved while any member lives, so only members
+/// can be hit.
+struct Group(u32);
+
+impl Drop for Group {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        signal_group(self.0, rustix::process::Signal::KILL);
+    }
+}
+
+#[cfg(unix)]
+fn signal_group(pgid: u32, sig: rustix::process::Signal) {
+    if let Some(p) = i32::try_from(pgid)
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+    {
+        let _ = rustix::process::kill_process_group(p, sig);
+    }
 }
 
 /// Stops the child: SIGTERM (Unix) and its [`Stop`] request, the deadline,
@@ -562,13 +612,11 @@ async fn stop_child(
     stop: Option<&dyn Stop>,
     deadline: Duration,
 ) -> Option<i32> {
-    // `id()` is `None` once Tokio has reaped it: no signal to a reused pid.
+    // `id()` is `None` once Tokio has reaped it: no signal to a reused
+    // pid. The leader's pid is its group's id.
     #[cfg(unix)]
-    if let Some(pid) = child
-        .id()
-        .and_then(|p| rustix::process::Pid::from_raw(p as i32))
-    {
-        let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+    if let Some(pid) = child.id() {
+        signal_group(pid, rustix::process::Signal::TERM);
     }
     if cfg!(unix) || stop.is_some() {
         let graceful = async {
@@ -580,6 +628,10 @@ async fn stop_child(
         if let Ok(r) = tokio::time::timeout(deadline, graceful).await {
             return r.ok().map(exit_code);
         }
+    }
+    #[cfg(unix)]
+    if let Some(pid) = child.id() {
+        signal_group(pid, rustix::process::Signal::KILL);
     }
     let _ = child.start_kill();
     match tokio::time::timeout(KILL_WAIT, child.wait()).await {

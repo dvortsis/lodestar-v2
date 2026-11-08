@@ -27,7 +27,9 @@ use lodestar_companions::supervise::{
 use lodestar_integrations::secret::Secret;
 use tokio::sync::watch;
 
-const DEADLINE: Duration = Duration::from_secs(20);
+/// Generous: on Windows each start also runs PowerShell, and a crash
+/// loop is five starts.
+const DEADLINE: Duration = Duration::from_secs(60);
 const SECRET: &str = "Hunter2-Very-Secret-Value";
 
 /// The fake companion's modes. Never returns when `FAKE_MODE` is set.
@@ -59,6 +61,22 @@ fn fake_companion() {
             hang()
         }
         "crash" => std::process::exit(3),
+        // Starts a grandchild of its own, as FlareSolverr starts a browser.
+        "parent" => {
+            let child = std::process::Command::new(std::env::current_exe().unwrap_or_default())
+                .args(fake_args())
+                .env("FAKE_MODE", "hang")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap_or_else(|e| panic!("{e}"));
+            let _ = writeln!(out, "CHILD {}", child.id());
+            let _ = out.flush();
+            // Waits on the grandchild forever (it hangs).
+            let mut child = child;
+            let _ = child.wait();
+            hang()
+        }
         "hang" => {
             let _ = writeln!(out, "READY");
             let _ = out.flush();
@@ -89,6 +107,7 @@ fn fake_companion() {
             let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| panic!("{e}"));
             rt.block_on(async move {
                 let mut sup = Supervisor::new(data.clone(), Arc::new(NoHook), Timings::default())
+                    .await
                     .unwrap_or_else(|e| panic!("{e}"));
                 sup.add(companion(&data, "qbittorrent", "hang", &[]))
                     .unwrap_or_else(|e| panic!("{e}"));
@@ -205,6 +224,7 @@ async fn wait_line(ring: &LogRing, prefix: &str) -> String {
 async fn the_companion_gets_a_minimal_env_its_folder_and_no_stdin() {
     let data = data_dir();
     let mut sup = Supervisor::new(data.path().to_owned(), Arc::new(NoHook), fast())
+        .await
         .unwrap_or_else(|e| panic!("{e}"));
     sup.add(companion(
         data.path(),
@@ -255,6 +275,7 @@ async fn the_companion_gets_a_minimal_env_its_folder_and_no_stdin() {
 async fn crashes_back_off_then_need_attention_until_restarted() {
     let data = data_dir();
     let mut sup = Supervisor::new(data.path().to_owned(), Arc::new(NoHook), fast())
+        .await
         .unwrap_or_else(|e| panic!("{e}"));
     sup.add(companion(data.path(), "prowlarr", "crash", &[]))
         .unwrap_or_else(|e| panic!("{e}"));
@@ -285,9 +306,90 @@ async fn crashes_back_off_then_need_attention_until_restarted() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn crashes_outside_the_window_never_need_attention() {
+    let data = data_dir();
+    let t = Timings {
+        crash_window: Duration::from_millis(1),
+        ..fast()
+    };
+    let mut sup = Supervisor::new(data.path().to_owned(), Arc::new(NoHook), t)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    sup.add(companion(data.path(), "prowlarr", "crash", &[]))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let mut rx = sup
+        .status(&id("prowlarr"))
+        .unwrap_or_else(|| panic!("no status"));
+    let s = wait_status(&mut rx, "eight restarts", |s| {
+        s.restarts >= 8 || matches!(s.state, State::NeedsAttention(_))
+    })
+    .await;
+    assert!(!matches!(s.state, State::NeedsAttention(_)), "{s:?}");
+    sup.shutdown().await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn what_a_companion_starts_is_stopped_with_it() {
+    let data = data_dir();
+    let mut sup = Supervisor::new(data.path().to_owned(), Arc::new(NoHook), fast())
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    sup.add(companion(data.path(), "flaresolverr", "parent", &[]))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let ring = sup
+        .logs(&id("flaresolverr"))
+        .unwrap_or_else(|| panic!("no ring"));
+    let line = wait_line(&ring, "CHILD ").await;
+    let pid: u32 = line["CHILD ".len()..]
+        .parse()
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(alive(pid));
+    sup.shutdown().await;
+    let until = Instant::now() + DEADLINE;
+    while alive(pid) {
+        assert!(Instant::now() < until, "the grandchild survived");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// Running, not a zombie or gone.
+#[cfg(target_os = "linux")]
+fn alive(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()
+        .and_then(|s| {
+            s.rfind(')')
+                .map(|i| s[i + 1..].trim_start().starts_with(['R', 'S', 'D']))
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn the_init_hook_kills_only_its_own_children() {
+    let data = data_dir();
+    records_dir(data.path());
+    let mut child = unsupervised();
+    pidfile::record(data.path(), &id("prowlarr"), child.id()).unwrap_or_else(|e| panic!("{e}"));
+    // The test process isn't pid 1, so pid 1 isn't this child's parent.
+    let done = pidfile::kill_adopted(data.path(), 1).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(done.killed, 0);
+    assert!(
+        matches!(child.try_wait(), Ok(None)),
+        "a stranger's child was killed"
+    );
+    let me = std::process::id();
+    let done = pidfile::kill_adopted(data.path(), me).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(done.killed, 1);
+    assert!(wait_exit(&mut child));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_refused_spawn_needs_attention_at_once() {
     let data = data_dir();
     let mut sup = Supervisor::new(data.path().to_owned(), Arc::new(NoHook), fast())
+        .await
         .unwrap_or_else(|e| panic!("{e}"));
     let mut c = companion(data.path(), "prowlarr", "hang", &[]);
     c.spawn.executable = data.path().join("missing");
@@ -365,6 +467,7 @@ fn probe(health: Arc<FakeHealth>) -> Probe {
 async fn three_failed_health_checks_restart_it() {
     let data = data_dir();
     let mut sup = Supervisor::new(data.path().to_owned(), Arc::new(NoHook), fast())
+        .await
         .unwrap_or_else(|e| panic!("{e}"));
     let health = Arc::new(FakeHealth {
         id: id("prowlarr"),
@@ -391,6 +494,7 @@ async fn three_failed_health_checks_restart_it() {
 async fn a_healthy_companion_keeps_running() {
     let data = data_dir();
     let mut sup = Supervisor::new(data.path().to_owned(), Arc::new(NoHook), fast())
+        .await
         .unwrap_or_else(|e| panic!("{e}"));
     let health = Arc::new(FakeHealth {
         id: id("prowlarr"),
@@ -429,6 +533,7 @@ async fn shutdown_stops_in_reverse_dependency_order() {
     let data = data_dir();
     let order = Arc::new(Mutex::new(Vec::new()));
     let mut sup = Supervisor::new(data.path().to_owned(), Arc::new(NoHook), fast())
+        .await
         .unwrap_or_else(|e| panic!("{e}"));
     let mut flare = companion(data.path(), "flaresolverr", "hang", &[]);
     flare.stop = Some(Arc::new(Order(order.clone(), "flaresolverr")));
@@ -468,6 +573,7 @@ async fn shutdown_stops_in_reverse_dependency_order() {
 async fn a_companion_ignoring_sigterm_is_killed_after_the_deadline() {
     let data = data_dir();
     let mut sup = Supervisor::new(data.path().to_owned(), Arc::new(NoHook), fast())
+        .await
         .unwrap_or_else(|e| panic!("{e}"));
     sup.add(companion(data.path(), "prowlarr", "stubborn", &[]))
         .unwrap_or_else(|e| panic!("{e}"));
@@ -531,7 +637,8 @@ fn a_matching_orphan_is_killed_at_start() {
         done,
         pidfile::Cleanup {
             killed: 1,
-            stale: 0
+            stale: 0,
+            group: 0
         }
     );
     assert!(wait_exit(&mut child), "the orphan survived");
@@ -574,7 +681,8 @@ fn a_partial_match_is_never_killed() {
         done,
         pidfile::Cleanup {
             killed: 0,
-            stale: 2
+            stale: 2,
+            group: 0
         }
     );
     assert!(
@@ -654,7 +762,8 @@ fn no_companion_survives_a_killed_work_child() {
         done,
         pidfile::Cleanup {
             killed: 0,
-            stale: 1
+            stale: 1,
+            group: 0
         }
     );
     assert!(

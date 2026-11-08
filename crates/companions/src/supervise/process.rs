@@ -66,8 +66,8 @@ impl EnvName {
     }
 }
 
-/// What to start.
-#[derive(Debug, Clone)]
+/// What to start. Its `Debug` shows env names, never values.
+#[derive(Clone)]
 pub struct SpawnSpec {
     pub id: CompanionId,
     /// `Install::executable(version, entry's executable)`.
@@ -78,10 +78,23 @@ pub struct SpawnSpec {
     pub env: Vec<(EnvName, OsString)>,
     /// Lodestar's data folder.
     pub data_dir: PathBuf,
-    /// Tests only: start even though Lodestar runs as root or an
-    /// administrator (CI runners do).
-    #[cfg(any(test, feature = "testing"))]
+    /// Honoured only in test builds (`cfg(test)` or the `testing`
+    /// feature), where CI runners are root or elevated: start anyway.
+    /// Ignored in every other build, so shipped callers set `false`.
     pub allow_privileged: bool,
+}
+
+impl fmt::Debug for SpawnSpec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let names: Vec<&str> = self.env.iter().map(|(k, _)| k.as_str()).collect();
+        f.debug_struct("SpawnSpec")
+            .field("id", &self.id)
+            .field("executable", &self.executable)
+            .field("args", &self.args.len())
+            .field("env", &names)
+            .field("data_dir", &self.data_dir)
+            .finish()
+    }
 }
 
 /// Why a companion wasn't started. Codes only: no paths, env values or
@@ -195,18 +208,23 @@ pub fn privileged() -> Result<bool, SpawnError> {
     }
     #[cfg(windows)]
     {
-        static ADMIN: std::sync::OnceLock<Option<bool>> = std::sync::OnceLock::new();
-        let admin = ADMIN.get_or_init(|| {
-            let script = "$i = [Security.Principal.WindowsIdentity]::GetCurrent(); \
-                 $p = [Security.Principal.WindowsPrincipal]::new($i); \
-                 $i.IsSystem -or $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)";
-            match pidfile::windows::powershell(script).as_deref().map(str::trim) {
-                Some("True") => Some(true),
-                Some("False") => Some(false),
-                _ => None,
-            }
-        });
-        (*admin).ok_or(SpawnError::PrivilegeUnknown)
+        // Only a definite answer is kept: a failed probe is asked again.
+        static ADMIN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if let Some(admin) = ADMIN.get() {
+            return Ok(*admin);
+        }
+        let script = "$i = [Security.Principal.WindowsIdentity]::GetCurrent(); \
+             $p = [Security.Principal.WindowsPrincipal]::new($i); \
+             $i.IsSystem -or $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)";
+        let admin = match pidfile::windows::powershell(script)
+            .as_deref()
+            .map(str::trim)
+        {
+            Some("True") => true,
+            Some("False") => false,
+            _ => return Err(SpawnError::PrivilegeUnknown),
+        };
+        Ok(*ADMIN.get_or_init(|| admin))
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -246,6 +264,19 @@ fn environment(spec: &SpawnSpec, home: &Path) -> Vec<(OsString, OsString)> {
     env
 }
 
+/// Kills the group a just-spawned, unreaped companion leads (Unix).
+fn kill_group(pid: u32) {
+    #[cfg(unix)]
+    if let Some(p) = i32::try_from(pid)
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+    {
+        let _ = rustix::process::kill_process_group(p, rustix::process::Signal::KILL);
+    }
+    #[cfg(not(unix))]
+    let _ = pid;
+}
+
 /// A started companion: the child (stdout and stderr still piped) and
 /// its pid.
 #[derive(Debug)]
@@ -255,12 +286,17 @@ pub struct Started {
 }
 
 /// Starts the companion: checks, folders, spawn, the hook, the record.
-/// Must run inside a Tokio runtime.
+/// Must run inside a Tokio runtime, on a thread that may block (on
+/// Windows the identity checks run PowerShell): the supervisor calls it
+/// through `spawn_blocking`.
 pub fn spawn(spec: &SpawnSpec, hook: &dyn AfterSpawn) -> Result<Started, SpawnError> {
     #[cfg(any(test, feature = "testing"))]
     let allow = spec.allow_privileged;
     #[cfg(not(any(test, feature = "testing")))]
-    let allow = false;
+    let allow = {
+        let _ = spec.allow_privileged;
+        false
+    };
     if !allow && privileged()? {
         return Err(SpawnError::Privileged);
     }
@@ -280,6 +316,10 @@ pub fn spawn(spec: &SpawnSpec, hook: &dyn AfterSpawn) -> Result<Started, SpawnEr
         .stderr(Stdio::piped())
         // If the supervising task is dropped, the companion dies with it.
         .kill_on_drop(true);
+    // Its own process group, so a stop or kill reaches whatever it starts
+    // (FlareSolverr's browser). Windows uses CMP-4b's Job Object instead.
+    #[cfg(unix)]
+    cmd.process_group(0);
     #[cfg(windows)]
     cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     let mut child = cmd.spawn().map_err(|e| SpawnError::Start(e.kind()))?;
@@ -287,6 +327,7 @@ pub fn spawn(spec: &SpawnSpec, hook: &dyn AfterSpawn) -> Result<Started, SpawnEr
         return Err(SpawnError::Start(io::ErrorKind::Other));
     };
     if let Err(code) = hook.applied(&child) {
+        kill_group(pid);
         let _ = child.start_kill();
         return Err(SpawnError::Hook(code));
     }
@@ -298,6 +339,7 @@ pub fn spawn(spec: &SpawnSpec, hook: &dyn AfterSpawn) -> Result<Started, SpawnEr
         let exited = matches!(child.try_wait(), Ok(Some(_)));
         let unsupported = !cfg!(any(target_os = "linux", windows));
         if !(e == PidfileError::NoIdentity && (exited || unsupported)) {
+            kill_group(pid);
             let _ = child.start_kill();
             return Err(SpawnError::Record(e));
         }

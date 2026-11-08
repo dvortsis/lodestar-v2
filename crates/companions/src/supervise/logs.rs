@@ -6,9 +6,9 @@
 //!   [`LINE_BYTES`], so output without a newline can't grow without limit.
 //! - **Redacted first.** A [`Lines`] assembler joins reads into whole lines
 //!   before [`Redactor::redact`] sees them, so a secret split across two
-//!   reads is still found. A long line is redacted over a window
-//!   [`MAX_SECRET`] bytes wider than the cut, then cut, so no prefix of a
-//!   secret survives at the cut.
+//!   reads is still found. A long line's matches are found over a window
+//!   [`MAX_SECRET`] bytes wider than the cut, and only raw text before the
+//!   cut is kept, so a secret up to that long leaves no prefix at the cut.
 //! - **Lossy.** Output that isn't UTF-8 is read lossily; nothing panics.
 
 use std::collections::VecDeque;
@@ -28,8 +28,9 @@ pub const MAX_SECRET: usize = 512;
 pub const REDACTED: &str = "[redacted]";
 /// Appended to a line that was cut.
 const CUT: &str = " [cut]";
-/// Known secrets shorter than this aren't matched by value: they would
-/// redact ordinary words. Generated and pasted credentials are far longer.
+/// Known secrets shorter than this are matched only as whole tokens
+/// (between bytes that can't be part of a word): anywhere, they would
+/// redact parts of ordinary words.
 const MIN_SECRET: usize = 6;
 
 /// Keys whose value is redacted wherever it follows `=` or `:`
@@ -44,18 +45,22 @@ const KEYS: &[&str] = &[
     "accesstoken",
     "secret",
     "clientsecret",
-    "cookie",
-    "setcookie",
     "sid",
     "session",
 ];
-/// Keys whose whole remaining line is redacted (`Authorization: Basic …`).
-const LINE_KEYS: &[&str] = &["authorization", "proxyauthorization", "xapikey"];
+/// Keys whose whole remaining line is redacted (`Authorization: Basic …`,
+/// every pair of a `Cookie:` header).
+const LINE_KEYS: &[&str] = &[
+    "authorization",
+    "proxyauthorization",
+    "xapikey",
+    "cookie",
+    "setcookie",
+];
 
 /// Removes credentials from a line of a companion's output.
 #[derive(Default)]
 pub struct Redactor {
-    /// Longest first, so a secret containing another goes whole.
     secrets: Vec<Zeroizing<String>>,
 }
 
@@ -72,24 +77,67 @@ impl Redactor {
         let mut secrets: Vec<Zeroizing<String>> = secrets
             .into_iter()
             .map(|s| s.expose())
-            .filter(|s| s.len() >= MIN_SECRET)
+            .filter(|s| !s.is_empty())
             .map(|s| Zeroizing::new(s.to_owned()))
             .collect();
-        secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
-        secrets.dedup();
+        secrets.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        secrets.dedup_by(|a, b| a.as_str() == b.as_str());
         Redactor { secrets }
     }
 
     /// The line with every known secret and every value after a known key
     /// replaced by [`REDACTED`].
     pub fn redact(&self, line: &str) -> String {
-        let mut out = line.to_owned();
+        self.redact_to(line, line.len())
+    }
+
+    /// The first `cut` bytes of `line`, redacted. Matches are found in the
+    /// whole of `line`, so one that crosses the cut is still replaced and
+    /// leaves no prefix; the result never holds text from past the cut.
+    pub fn redact_to(&self, line: &str, cut: usize) -> String {
+        let mut cut = cut.min(line.len());
+        while !line.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let mut out = String::with_capacity(cut);
+        let mut copied = 0;
+        for (start, end) in self.spans(line) {
+            if start >= cut {
+                break;
+            }
+            out.push_str(&line[copied..start]);
+            out.push_str(REDACTED);
+            copied = end;
+        }
+        if copied < cut {
+            out.push_str(&line[copied..cut]);
+        }
+        out
+    }
+
+    /// Byte ranges to redact, sorted and merged.
+    fn spans(&self, line: &str) -> Vec<(usize, usize)> {
+        let b = line.as_bytes();
+        let mut spans = key_spans(line);
         for s in &self.secrets {
-            if out.contains(s.as_str()) {
-                out = out.replace(s.as_str(), REDACTED);
+            for (at, m) in line.match_indices(s.as_str()) {
+                let end = at + m.len();
+                let token = s.len() >= MIN_SECRET
+                    || ((at == 0 || !key_byte(b[at - 1])) && (end == b.len() || !key_byte(b[end])));
+                if token {
+                    spans.push((at, end));
+                }
             }
         }
-        redact_keys(&out)
+        spans.sort_unstable();
+        let mut merged: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
+        for (s, e) in spans {
+            match merged.last_mut() {
+                Some(last) if s <= last.1 => last.1 = last.1.max(e),
+                _ => merged.push((s, e)),
+            }
+        }
+        merged
     }
 }
 
@@ -103,15 +151,14 @@ fn key_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'-' || b == b'_'
 }
 
-/// Redacts the value after each key in [`KEYS`] and the rest of the line
-/// after each key in [`LINE_KEYS`]. A key is a run of letters, digits,
-/// `-` and `_` (compared without case, ignoring `-` and `_`), followed by
-/// optional quotes and spaces, then `=` or `:`.
-fn redact_keys(line: &str) -> String {
+/// The value after each key in [`KEYS`] and the rest of the line after
+/// each key in [`LINE_KEYS`]. A key is a run of letters, digits, `-` and
+/// `_` (compared without case, ignoring `-` and `_`), followed by optional
+/// quotes and spaces, then `=` or `:`.
+fn key_spans(line: &str) -> Vec<(usize, usize)> {
     let b = line.as_bytes();
-    let mut out = String::with_capacity(line.len());
+    let mut spans = Vec::new();
     let mut i = 0;
-    let mut copied = 0;
     while i < b.len() {
         if !key_byte(b[i]) || (i > 0 && key_byte(b[i - 1])) {
             i += 1;
@@ -151,14 +198,11 @@ fn redact_keys(line: &str) -> String {
             k
         };
         if end > j {
-            out.push_str(&line[copied..j]);
-            out.push_str(REDACTED);
-            copied = end;
+            spans.push((j, end));
         }
         i = end.max(i);
     }
-    out.push_str(&line[copied..]);
-    out
+    spans
 }
 
 /// The ring itself: whole, redacted lines, oldest first.
@@ -277,9 +321,13 @@ impl Lines {
     fn emit(&mut self, cut: bool) {
         let text = String::from_utf8_lossy(&self.buf);
         let text = text.trim_end_matches(['\n', '\r']);
-        let mut line = self.redactor.redact(text);
-        let cut = cut || line.len() > LINE_BYTES;
+        let cut = cut || text.len() > LINE_BYTES;
+        // Only raw text before the cut can reach the ring; matches are
+        // found over the whole window.
+        let mut line = self.redactor.redact_to(text, LINE_BYTES);
         if cut {
+            // Replacements can lengthen it; what's trimmed now is already
+            // redacted.
             let mut at = LINE_BYTES.min(line.len());
             while !line.is_char_boundary(at) {
                 at -= 1;
@@ -328,6 +376,10 @@ mod tests {
         assert_eq!(r.redact("X-Api-Key: 0123abcd"), "X-Api-Key: [redacted]");
         assert_eq!(r.redact("api_key = zzz; ok"), "api_key = [redacted]; ok");
         assert_eq!(r.redact("Set-Cookie: SID=abc"), "Set-Cookie: [redacted]");
+        assert_eq!(
+            r.redact("token=a password=b"),
+            "token=[redacted] password=[redacted]"
+        );
         // Not keys: part of a longer word, or no separator.
         assert_eq!(
             r.redact("passport=1 password reset"),
@@ -337,10 +389,40 @@ mod tests {
     }
 
     #[test]
-    fn short_secrets_are_not_matched_by_value() {
+    fn short_secrets_are_matched_as_whole_tokens_only() {
         let (ring, mut lines) = lines_with(&["abc", "longer-secret"]);
-        lines.feed(b"abc longer-secret\n");
-        assert_eq!(ring.lines(), ["abc [redacted]"]);
+        lines.feed(b"abc longer-secret abcd xabc (abc)\n");
+        assert_eq!(
+            ring.lines(),
+            ["[redacted] [redacted] abcd xabc ([redacted])"]
+        );
+    }
+
+    #[test]
+    fn earlier_redactions_pull_no_secret_prefix_under_the_cut() {
+        // Each replacement shortens the line; a secret partly past the
+        // window must still not show at the cut.
+        let s = "S".repeat(50) + &"T".repeat(50);
+        let (ring, mut lines) = lines_with(&[&s]);
+        let mut line = s.repeat(6).into_bytes();
+        line.extend_from_slice(&[b'a'; 8054]);
+        line.extend_from_slice(&s.as_bytes()[..50]);
+        for chunk in line.chunks(13) {
+            lines.feed(chunk);
+        }
+        let got = ring.lines();
+        assert_eq!(got.len(), 1);
+        assert!(!got[0].contains('S'), "a prefix leaked");
+        assert!(!got[0].contains('T'));
+    }
+
+    #[test]
+    fn every_cookie_pair_is_redacted() {
+        let r = Redactor::new([]);
+        assert_eq!(
+            r.redact("Cookie: SID=x; other_session=y"),
+            "Cookie: [redacted]"
+        );
     }
 
     #[test]

@@ -94,6 +94,9 @@ pub struct Cleanup {
     /// Records that didn't match (gone, or the pid reused) or were
     /// unreadable.
     pub stale: usize,
+    /// Other adopted processes killed because they were in a recorded
+    /// companion's process group ([`kill_adopted`] only).
+    pub group: usize,
 }
 
 /// `<data>/companions/run`.
@@ -218,14 +221,19 @@ pub fn kill_orphans(data_dir: &Path) -> Result<Cleanup, PidfileError> {
 
 /// For the init when its work child has died (Linux): kills each recorded
 /// companion that matches **and** is now `parent`'s own child (adopted by
-/// the subreaper). Records stay for the next start-up's
+/// the subreaper), with its process group, and any other adopted child
+/// still in a recorded companion's group. Records stay for the next start-up's
 /// [`kill_orphans`]. `parent` must not reap concurrently with this call.
 pub fn kill_adopted(data_dir: &Path, parent: u32) -> Result<Cleanup, PidfileError> {
     let mut done = Cleanup::default();
     for (_, rec) in records(&run_dir(data_dir))? {
-        match rec {
-            Some(r) if kill_if_same(&r, Some(parent)) => done.killed += 1,
+        match &rec {
+            Some(r) if kill_if_same(r, Some(parent)) => done.killed += 1,
             _ => done.stale += 1,
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(r) = &rec {
+            done.group += kill_adopted_group(parent, r.pid);
         }
     }
     Ok(done)
@@ -250,12 +258,56 @@ fn kill_if_same(rec: &Record, parent: Option<u32>) -> bool {
     match pidfd_open(pid, PidfdFlags::empty()) {
         // The pidfd pins this process: a reuse after this point makes the
         // signal fail rather than reach the new one.
-        Ok(fd) => matches(rec, parent) && pidfd_send_signal(&fd, Signal::KILL).is_ok(),
+        Ok(fd) => {
+            if !matches(rec, parent) {
+                return false;
+            }
+            // Its process group (whatever it started) first, while the
+            // leader is alive and holds the group's id; then the leader
+            // itself through the pidfd.
+            let _ = rustix::process::kill_process_group(pid, Signal::KILL);
+            pidfd_send_signal(&fd, Signal::KILL).is_ok()
+        }
         Err(rustix::io::Errno::NOSYS) => {
-            matches(rec, parent) && rustix::process::kill_process(pid, Signal::KILL).is_ok()
+            if !matches(rec, parent) {
+                return false;
+            }
+            let _ = rustix::process::kill_process_group(pid, Signal::KILL);
+            rustix::process::kill_process(pid, Signal::KILL).is_ok()
         }
         Err(_) => false,
     }
+}
+
+/// Kills `parent`'s own children in the process group `pgid`: what a
+/// companion started, adopted by the init after both the work child and
+/// the companion died. Being `parent`'s children, none can be reaped (and
+/// its pid reused) before `parent` reaps again.
+#[cfg(target_os = "linux")]
+fn kill_adopted_group(parent: u32, pgid: u32) -> usize {
+    use rustix::process::{Pid, Signal};
+    let Ok(dir) = fs::read_dir("/proc") else {
+        return 0;
+    };
+    let mut killed = 0;
+    for entry in dir.flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|n| n.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let ours = parent_of(pid) == Some(parent)
+            && stat_field(pid, 5).and_then(|g| g.parse::<u32>().ok()) == Some(pgid);
+        if ours
+            && let Some(p) = i32::try_from(pid).ok().and_then(Pid::from_raw)
+            && rustix::process::kill_process(p, Signal::KILL).is_ok()
+        {
+            killed += 1;
+        }
+    }
+    killed
 }
 
 #[cfg(windows)]
@@ -266,7 +318,7 @@ fn kill_if_same(rec: &Record, parent: Option<u32>) -> bool {
     // Checked again inside the one PowerShell call that kills, against the
     // start time, so a pid reused since is left alone.
     let script = format!(
-        "$p = Get-Process -Id {} -ErrorAction Stop; \
+        "$p = Get-Process -Id {} -ErrorAction Stop; $null = $p.Handle; \
          if ($p.StartTime.ToFileTimeUtc() -eq {}) {{ $p.Kill(); 'killed' }}",
         rec.pid, rec.start
     );
@@ -283,6 +335,12 @@ fn kill_if_same(_: &Record, _: Option<u32>) -> bool {
 pub fn identity(pid: u32) -> Option<(u64, PathBuf)> {
     let start = stat_field(pid, 22)?.parse().ok()?;
     let exe = fs::read_link(format!("/proc/{pid}/exe")).ok()?;
+    // A running program whose file was since deleted (an old version
+    // swept) reads "<path> (deleted)"; the start time still pins it.
+    let exe = match exe.to_str().and_then(|e| e.strip_suffix(" (deleted)")) {
+        Some(e) => PathBuf::from(e),
+        None => exe,
+    };
     Some((start, exe))
 }
 
@@ -327,30 +385,58 @@ fn parent_of(_: u32) -> Option<u32> {
 
 #[cfg(windows)]
 pub(crate) mod windows {
+    use std::io::Read;
     use std::os::windows::process::CommandExt;
     use std::path::Path;
     use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
 
     /// `CREATE_NO_WINDOW`.
     const NO_WINDOW: u32 = 0x0800_0000;
 
+    /// How long one PowerShell call may take before it's killed.
+    const LIMIT: Duration = Duration::from_secs(30);
+
     /// Runs Windows PowerShell 5.1 from System32 by absolute path; its
-    /// standard output, or `None` if it failed.
+    /// standard output, or `None` if it failed or overran [`LIMIT`]. It
+    /// blocks: call it from a blocking thread.
     pub(crate) fn powershell(script: &str) -> Option<String> {
         let root = std::env::var_os("SystemRoot")?;
         let exe = Path::new(&root).join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
-        let out = Command::new(exe)
+        let mut child = Command::new(exe)
             .args(["-NoProfile", "-NonInteractive", "-Command", script])
             .env_remove("PSModulePath")
             .stdin(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .creation_flags(NO_WINDOW)
-            .output()
+            .spawn()
             .ok()?;
-        if !out.status.success() {
+        let mut stdout = child.stdout.take()?;
+        // Read on its own thread so a chatty script can't fill the pipe
+        // while this one waits.
+        let reader = std::thread::spawn(move || {
+            let mut out = Vec::new();
+            let _ = stdout.take(64 * 1024).read_to_end(&mut out);
+            out
+        });
+        let until = Instant::now() + LIMIT;
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(s)) => break s,
+                Ok(None) if Instant::now() < until => std::thread::sleep(Duration::from_millis(20)),
+                _ => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+            }
+        };
+        let out = reader.join().ok()?;
+        if !status.success() {
             return None;
         }
-        String::from_utf8(out.stdout).ok()
+        String::from_utf8(out).ok()
     }
 }
 
@@ -416,7 +502,8 @@ mod tests {
             done,
             Cleanup {
                 killed: 0,
-                stale: 1
+                stale: 1,
+                group: 0
             }
         );
         assert!(!dir.join("a.json").exists());
