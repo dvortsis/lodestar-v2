@@ -6072,7 +6072,10 @@
       "note": "For CMP-5: auto-redact env values marked secret + percent/JSON-escaped forms + suffix key shapes (PROWLARR__AUTH__APIKEY, db_password, adminPassword), quoted values with spaces; Windows companions need a Stop (else killed at once); sequential shutdown ~17 s each can exceed init's 30 s grace. For CMP-4b: keep <data>/companions/run/ out of any companion-writable sandbox path. Later: executable fd hand-off (H7); runtime-injection env denylist (DOTNET_STARTUP_HOOKS, NODE_OPTIONS, PYTHONPATH...) if env names become user-supplied (H8). CMP-G: test the update/supervisor.rs orphan hook call site."
     },
     "2026-11-08T06:52Z: #603 CMP-4a delta 73d82227..12e6f7b2 self-checked OK, green; conflicts with main on companions/Cargo.toml after #600; session asked to merge main, then runner self-checks and merges.",
-    "2026-11-08T07:03Z: #604 WK-10d-store merged (82450892). Owner flags owed after WK-10d main PR: worker-floor rows are floor holds (only WK-13 purge-by-worker removes them); floor's own CS tombstones stay releasable. WK-10d main PR next in slot 4."
+    "2026-11-08T07:03Z: #604 WK-10d-store merged (82450892). Owner flags owed after WK-10d main PR: worker-floor rows are floor holds (only WK-13 purge-by-worker removes them); floor's own CS tombstones stay releasable. WK-10d main PR next in slot 4.",
+    "2026-11-08T07:28Z: #605 PK-win-restart (cc6dd29b) and #606 CMP-7 (d5dc3a18) green; reviews launched: #605 Opus + security, #606 Opus; #606 security queued (3-reviewer cap).",
+    "2026-11-08T07:28Z: from #605: (a) crates/api restart handler sends 202 before portable spawn; a failed spawn leaves the dialog waiting its timeout (needs crates/api change, follow-up); (b) packaging/windows/portable 'Start Lodestar.cmd' prints 'Lodestar stopped.' after relaunch while new copy runs in the window \u2014 follow-up + PK-guide-3 note; (c) exit-3 refused starts not counted in 24h record (recorded gap).",
+    "2026-11-08T07:28Z: from #606: CMP-13 must regenerate packaging/companions/** and golden with UPDATE_GOLDEN=1 when it pins digests; catalogue gluetun container_name 'gluetun' collides with Lodestar's own VPN template \u2014 CMP-0/CMP-13 catalogue call (runner to decide)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -6863,5 +6866,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T07:03Z"
+  "updated": "2026-11-08T07:28Z"
 }
