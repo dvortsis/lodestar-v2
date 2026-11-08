@@ -2381,7 +2381,16 @@ mod reuse {
     /// property tests the path it's about.
     #[test]
     fn the_property_reads_trails() {
-        let mut runner = proptest::test_runner::TestRunner::new(ProptestConfig::with_cases(600));
+        // A fixed seed: this test checks that the draws reach the paths the
+        // property is about, so the same draws on every run keep its counts
+        // steady. Unseeded, SP-3 and SP-4 sometimes fell under 10% (22 of
+        // 250 on a Windows run).
+        let mut runner = proptest::test_runner::TestRunner::new_with_rng(
+            ProptestConfig::with_cases(600),
+            proptest::test_runner::TestRng::deterministic_rng(
+                proptest::test_runner::RngAlgorithm::ChaCha,
+            ),
+        );
         let counts = std::cell::Cell::new([0usize; 4]);
         let cases = (setup(), torrent(), 95i64..106, 95i64..106, any::<bool>());
         runner
