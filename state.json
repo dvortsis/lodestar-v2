@@ -6514,7 +6514,7 @@
     {
       "id": "owner-cloud-loosenings",
       "from": "owner, confirmed directly in the runner session 2026-11-08T22:13Z (relayed first by the dashboard session)",
-      "what": "P-cloud-operator inferred items accepted as written: (a) GitHub App with Pull requests: write on lodestar-v2 with the plan's containment; (b) per-job /32 SSH firewall opening + firewall token + hourly audit. Record in docs/owner-decisions.md in the next runner PR; set the matching condition met. Runner adds to OP-2a/OP-G notes: install the App on this repo only; confirm main's protection blocks App bypass; OP-G dry cycle tests the stop switch before FLEET_LIVE=true. Open (not answered): whether the owner's AWS/Akamai accounts hold anything besides the fleet \u2014 dashboard asks when OP-2a is near; runner reminds it."
+      "what": "P-cloud-operator inferred items accepted as written: (a) GitHub App with Pull requests: write on lodestar-v2 with the plan's containment; (b) per-job /32 SSH firewall opening + firewall token + hourly audit. Record in docs/owner-decisions.md in the next runner PR; set the matching condition met. Runner adds to OP-2a/OP-G notes: install the App on this repo only; confirm main's protection blocks App bypass; OP-G dry cycle tests the stop switch before FLEET_LIVE=true. Owner setup step 1 answered (owner via dashboard, 2026-11-08T22:15Z): the AWS and Akamai accounts are empty apart from this fleet; no dedicated account needed. Record in the plan's owner-setup section / owner-decisions in the next runner PR."
     }
   ],
   "main_health": [
