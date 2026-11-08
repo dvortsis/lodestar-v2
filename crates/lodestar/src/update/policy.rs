@@ -50,6 +50,9 @@ pub enum Reason {
     SkippedUnreadable,
     /// No key is known for the channel (Nightly, until it exists).
     ChannelUnavailable,
+    /// Installing isn't built for this platform yet (Windows, until
+    /// PK-win-upd-2 and PK-win-portable-upd).
+    NotBuiltYet,
 }
 
 impl Reason {
@@ -65,6 +68,7 @@ impl Reason {
             Reason::TrustDamaged => "trust_damaged",
             Reason::SkippedUnreadable => "skipped_unreadable",
             Reason::ChannelUnavailable => "channel_unavailable",
+            Reason::NotBuiltYet => "not_built_yet",
         }
     }
 }

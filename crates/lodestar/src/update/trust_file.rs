@@ -2,7 +2,9 @@
 //!
 //! - **Written** forward-only (`TrustState::merge`: the sequence and the
 //!   marks never go down), by temporary file, fsync, rename and a folder
-//!   fsync. An unchanged state isn't rewritten.
+//!   fsync ([`super::layout`], on Unix and on Windows, where it's opened
+//!   without following a reparse point). An unchanged state isn't
+//!   rewritten.
 //! - **Missing:** rebuilt from the floor (the embedded statements and
 //!   those of every verified overlay), with high-water marks from the
 //!   newest verified overlay of each channel, so deleting it never brings
