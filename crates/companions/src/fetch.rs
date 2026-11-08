@@ -342,9 +342,23 @@ fn file_name(entry: &Entry, pin: &Pin, ext: &str) -> String {
     format!("{}_{}.{ext}", entry.id, pin.version)
 }
 
-/// Downloads `pin` (one of `entry`'s) within [`Limits::DEFAULT`];
-/// `progress` gets the bytes so far after each chunk.
+/// Downloads `pin` (one of `entry`'s) through `src` within
+/// [`Limits::DEFAULT`]; `progress` gets the bytes so far after each chunk.
+/// It takes a [`Guarded`] only, so every download goes through the
+/// egress route and the SSRF guard; other sources are for tests.
 pub async fn fetch(
+    src: &Guarded,
+    data: &Path,
+    entry: &Entry,
+    pin: &Pin,
+    progress: &mut (dyn FnMut(u64) + Send),
+) -> Result<Verified, FetchError> {
+    fetch_with(src, data, entry, pin, progress, Limits::DEFAULT, None).await
+}
+
+/// [`fetch`] from any source, for tests only.
+#[cfg(any(test, feature = "testing"))]
+pub async fn fetch_from(
     src: &dyn Source,
     data: &Path,
     entry: &Entry,
@@ -354,7 +368,7 @@ pub async fn fetch(
     fetch_with(src, data, entry, pin, progress, Limits::DEFAULT, None).await
 }
 
-/// [`fetch`] within other limits, for tests only.
+/// [`fetch`] from any source within other limits, for tests only.
 #[cfg(any(test, feature = "testing"))]
 pub async fn fetch_limited(
     src: &dyn Source,
@@ -521,10 +535,24 @@ pub const SIGNATURE_LIMITS: Limits = Limits {
 /// same hops as an artifact within [`SIGNATURE_LIMITS`], refusing a body
 /// over [`MAX_SIGNATURE`] or one that isn't UTF-8.
 pub async fn fetch_signature(
+    src: &Guarded,
+    entry: &Entry,
+    url: &str,
+) -> Result<String, FetchError> {
+    signature_with(src, entry, url).await
+}
+
+/// [`fetch_signature`] from any source, for tests only.
+#[cfg(any(test, feature = "testing"))]
+pub async fn fetch_signature_from(
     src: &dyn Source,
     entry: &Entry,
     url: &str,
 ) -> Result<String, FetchError> {
+    signature_with(src, entry, url).await
+}
+
+async fn signature_with(src: &dyn Source, entry: &Entry, url: &str) -> Result<String, FetchError> {
     let limits = SIGNATURE_LIMITS;
     let deadline = tokio::time::Instant::now() + limits.overall;
     let read = async {

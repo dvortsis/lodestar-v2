@@ -177,7 +177,7 @@ impl Source for Drip {
 }
 
 async fn get(src: &dyn Source, data: &Path, c: &Catalogue) -> Result<Verified, FetchError> {
-    fetch::fetch(src, data, entry(c), pin(c), &mut |_| {}).await
+    fetch::fetch_from(src, data, entry(c), pin(c), &mut |_| {}).await
 }
 
 #[tokio::test]
@@ -191,7 +191,7 @@ async fn the_pinned_bytes_arrive_verified_and_private() {
     f.serve(URL, 302, Some(ASSET), b"");
     f.serve(ASSET, 200, None, &b);
     let mut seen = vec![];
-    let mut v = fetch::fetch(&f, data.path(), entry(&c), pin(&c), &mut |n| seen.push(n))
+    let mut v = fetch::fetch_from(&f, data.path(), entry(&c), pin(&c), &mut |n| seen.push(n))
         .await
         .unwrap();
     assert_eq!(seen, [1000, 2000, 3000, 4000, 4500], "progress per chunk");
@@ -253,7 +253,7 @@ async fn a_long_body_stops_at_the_cap_unread() {
         every: Duration::from_millis(1),
     };
     let mut last = 0;
-    let got = fetch::fetch(&src, data.path(), entry(&c), pin(&c), &mut |n| last = n).await;
+    let got = fetch::fetch_from(&src, data.path(), entry(&c), pin(&c), &mut |n| last = n).await;
     assert_eq!(got.err(), Some(FetchError::TooLarge));
     assert_eq!(last, 4500, "nothing past the pin was passed on");
     assert!(downloads(data.path()).is_empty());
@@ -351,6 +351,41 @@ async fn a_stalled_body_hits_the_idle_limit() {
     let started = std::time::Instant::now();
     let got =
         fetch::fetch_limited(&src, data.path(), entry(&c), pin(&c), &mut |_| {}, limits).await;
+    assert_eq!(got.err(), Some(FetchError::Timeout));
+    assert!(
+        started.elapsed() < Duration::from_secs(300),
+        "idle, not overall"
+    );
+    assert!(downloads(data.path()).is_empty());
+}
+
+/// A hop whose response headers never come hits the idle limit, before
+/// any `.part` file exists.
+#[tokio::test]
+async fn a_hop_that_never_answers_hits_the_idle_limit() {
+    struct Silent;
+    impl Source for Silent {
+        fn open<'a>(&'a self, _: &'a Url) -> BoxFuture<'a, Result<Opened, FetchError>> {
+            Box::pin(std::future::pending())
+        }
+    }
+    let _turn = SERIAL.lock().await;
+    let data = tempfile::tempdir().unwrap();
+    let c = catalogue(&binary());
+    let limits = Limits {
+        overall: Duration::from_secs(600),
+        idle: Duration::from_millis(100),
+    };
+    let started = std::time::Instant::now();
+    let got = fetch::fetch_limited(
+        &Silent,
+        data.path(),
+        entry(&c),
+        pin(&c),
+        &mut |_| {},
+        limits,
+    )
+    .await;
     assert_eq!(got.err(), Some(FetchError::Timeout));
     assert!(
         started.elapsed() < Duration::from_secs(300),
@@ -727,6 +762,24 @@ async fn a_minisign_signature_verifies_with_the_pinned_key_only() {
         verify::minisign(&mut v, &key.public(), &key.sign_legacy(&b)),
         Err(VerifyError::SignatureFile)
     );
+    // A trusted comment changed after signing: the global signature fails.
+    let good = key.sign(&b);
+    let tampered: String = good
+        .lines()
+        .map(|l| {
+            if l.starts_with("trusted comment: ") {
+                "trusted comment: timestamp:0\tfile:other".to_string()
+            } else {
+                l.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_ne!(tampered.trim_end(), good.trim_end());
+    assert_eq!(
+        verify::minisign(&mut v, &key.public(), &tampered),
+        Err(VerifyError::BadSignature)
+    );
     assert_eq!(
         verify::minisign(&mut v, &key.public(), "not a signature"),
         Err(VerifyError::SignatureFile)
@@ -742,22 +795,22 @@ async fn a_signature_comes_through_the_same_hops_within_its_cap() {
     let f = Fake::default();
     f.serve(&sig_url, 302, Some("https://evil.example/s.minisig"), b"");
     assert_eq!(
-        fetch::fetch_signature(&f, entry(&c), &sig_url).await,
+        fetch::fetch_signature_from(&f, entry(&c), &sig_url).await,
         Err(FetchError::Redirect)
     );
     f.serve(&sig_url, 200, None, sig.as_bytes());
     assert_eq!(
-        fetch::fetch_signature(&f, entry(&c), &sig_url).await,
+        fetch::fetch_signature_from(&f, entry(&c), &sig_url).await,
         Ok(sig)
     );
     f.serve(&sig_url, 200, None, &vec![b'a'; MAX_SIGNATURE as usize + 1]);
     assert_eq!(
-        fetch::fetch_signature(&f, entry(&c), &sig_url).await,
+        fetch::fetch_signature_from(&f, entry(&c), &sig_url).await,
         Err(FetchError::TooLarge)
     );
     f.serve(&sig_url, 200, None, &[0xff, 0xfe]);
     assert_eq!(
-        fetch::fetch_signature(&f, entry(&c), &sig_url).await,
+        fetch::fetch_signature_from(&f, entry(&c), &sig_url).await,
         Err(FetchError::SignatureText)
     );
 }
