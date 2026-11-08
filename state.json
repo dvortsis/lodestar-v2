@@ -6399,7 +6399,8 @@
       "note": "Next runner PR: steward/runner rule that edited GitHub comments are not trusted (check updated_at == created_at, or verify against the Actions run) because the operator App can edit others' comments with author preserved (#631 B2'). #631 at ea5fa600 CHANGES (B1' deliver-pia can't open firewall, B2' App repo-wide powers, B3' no AWS identity for bridge/apply) relayed."
     },
     "2026-11-08T18:36Z: CMP-5 stack pushed: #621 5e0b6014 (base main), #619 7b233d13; #631 at 8e38be68. Fresh Opus reviews running on all three.",
-    "2026-11-08T18:41Z: #631 at 8e38be68 CHANGES (B1 firewall-token powers + kill switch, B2 delivery outside fleet lock + two firewall writers, B3 tripwire pull_request triggers miss PRs, B4 injection harness can post real /fleet) + N1-N8, relayed. Await next head, fresh delta review."
+    "2026-11-08T18:41Z: #631 at 8e38be68 CHANGES (B1 firewall-token powers + kill switch, B2 delivery outside fleet lock + two firewall writers, B3 tripwire pull_request triggers miss PRs, B4 injection harness can post real /fleet) + N1-N8, relayed. Await next head, fresh delta review.",
+    "2026-11-08T18:47Z: #631 at 9c326ada CHANGES (B1 emergency down waits on fleet lock; lock expiry vs 3-job chain) + N1 wording required; N2-N7 into plan or OP rows. #621 at 5e0b6014 CHANGES (B1 leftover state.json.tmp; N1 atomic delete required) relayed; #619 review running. #628 X-wk10d-unknown ready at 0548410a, green, review running."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7198,5 +7199,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T18:41Z"
+  "updated": "2026-11-08T18:47Z"
 }
