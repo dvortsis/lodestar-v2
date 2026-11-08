@@ -103,7 +103,7 @@ pub const BANNED: &str = "banned_after_failed_sign_ins";
 /// The refusal when the new password doesn't sign in after it was set.
 pub const PASSWORD_NOT_TAKEN: &str = "password_not_taken";
 /// The refusal when turning the localhost bypass off would lock Lodestar
-/// out; the bypass is put back first.
+/// out. The bypass is put back first if this run turned it off.
 pub const LOCAL_AUTH_LOCKOUT: &str = "local_auth_would_lock_out";
 /// The refusal when the localhost bypass couldn't be put back: it's off and
 /// the stored password doesn't sign in, so you have to fix the password in
@@ -589,12 +589,17 @@ impl QBittorrent {
         plan: &ConfigPlan,
     ) -> Result<(), AdapterError> {
         consent(input, target)?;
-        let w = wanted(input, target)?;
-        check_plan(plan, input, &w)?;
+        let w = wanted(input, target).map_err(|e| failed(ID, "apply", e))?;
+        check_plan(plan, input, &w).map_err(|e| failed(ID, "apply", e))?;
         let listed = |k: &SettingKey| plan.changes().contains(k);
-        let bypassed = listed(&PASSWORD) && auth_bypassed(http, target).await?;
-        let (session, _) = sign_in(http, target, input, listed(&PASSWORD)).await?;
-        let stored = credential(input, Field::WebUiPassword)?;
+        let bypassed = listed(&PASSWORD)
+            && auth_bypassed(http, target)
+                .await
+                .map_err(|e| failed(ID, "apply", e))?;
+        let (session, _) = sign_in(http, target, input, listed(&PASSWORD))
+            .await
+            .map_err(|e| failed(ID, "apply", e))?;
+        let stored = credential(input, Field::WebUiPassword).map_err(|e| failed(ID, "apply", e))?;
 
         // The password first: qBittorrent printed the temporary one to its
         // log, so no later failure may leave it valid.
@@ -619,7 +624,9 @@ impl QBittorrent {
         }
 
         if listed(&CATEGORY_SET) {
-            let have = read_categories(http, target, &session).await?;
+            let have = read_categories(http, target, &session)
+                .await
+                .map_err(|e| failed(ID, CATEGORY_SET.as_str(), e))?;
             let changes = category_changes(input, &have);
             for (name, save_path, exists) in &changes {
                 let endpoint = if *exists {
@@ -643,7 +650,11 @@ impl QBittorrent {
         let before = if (w.yours && (listed(&INTERFACE) || listed(&INTERFACE_ADDRESS)))
             || listed(&LOCAL_AUTH)
         {
-            Some(read_prefs(http, target, &session).await?)
+            Some(
+                read_prefs(http, target, &session)
+                    .await
+                    .map_err(|e| failed(ID, "apply", e))?,
+            )
         } else {
             None
         };
@@ -693,7 +704,14 @@ impl QBittorrent {
             // Any failure counts, not only a refused password: after
             // failed sign-ins qBittorrent bans the address (`403`), and a
             // transport error proves nothing either.
-            if listed(&LOCAL_AUTH) && login(http, target, input, &stored).await.is_err() {
+            let fresh = if listed(&LOCAL_AUTH) {
+                login(http, target, input, &stored).await.err()
+            } else {
+                None
+            };
+            if let Some(e) = fresh {
+                // The fresh sign-in's own failure, then the refusal.
+                failed(ID, "webui.local_auth.sign_in", e);
                 let turned_off_here = before.as_ref().is_some_and(|p| p.bypass_local_auth);
                 let code = if !turned_off_here {
                     LOCAL_AUTH_LOCKOUT

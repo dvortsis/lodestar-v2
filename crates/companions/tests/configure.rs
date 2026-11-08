@@ -309,6 +309,8 @@ struct QState {
     banned_unless_bypassed: bool,
     /// Refuses a write that turns the localhost bypass back on.
     refuse_restore: bool,
+    /// Sign-ins that may still succeed; after that every one is refused.
+    logins_left: Option<u32>,
 }
 
 type Qbit = Arc<Mutex<QState>>;
@@ -332,6 +334,7 @@ fn qbit_state(password: &str) -> Qbit {
         silent_password_once: false,
         banned_unless_bypassed: false,
         refuse_restore: false,
+        logins_left: None,
     }))
 }
 
@@ -357,7 +360,11 @@ fn qbit_handler(state: Qbit) -> Handler {
             let f = form_decode(&seen.body);
             let matches =
                 f.get("username") == Some(&s.username) && f.get("password") == Some(&s.password);
-            if matches || bypassing {
+            let allowed = s.logins_left.is_none_or(|n| n > 0);
+            if (matches || bypassing) && allowed {
+                if let Some(n) = s.logins_left.as_mut() {
+                    *n -= 1;
+                }
                 let sid = format!("{SID_PREFIX}{}", s.sessions.len());
                 s.sessions.push(sid.clone());
                 let name = if s.v52 { "QBT_SID_8080" } else { "SID" };
@@ -1492,6 +1499,7 @@ async fn turning_local_auth_on_never_locks_lodestar_out() {
         .await
         .unwrap_err();
     assert_eq!(e, AdapterError::Refused(qbittorrent::LOCAL_AUTH_LOCKOUT));
+    clean_error(&e);
     assert_eq!(state.lock().unwrap().prefs["bypass_local_auth"], true);
 
     // If putting it back fails, that's its own code: the bypass is off and
@@ -1506,11 +1514,54 @@ async fn turning_local_auth_on_never_locks_lodestar_out() {
         e,
         AdapterError::Refused(qbittorrent::LOCAL_AUTH_RESTORE_FAILED)
     );
+    clean_error(&e);
     assert_eq!(state.lock().unwrap().prefs["bypass_local_auth"], false);
     {
         let mut s = state.lock().unwrap();
         s.banned_unless_bypassed = false;
         s.refuse_restore = false;
+        s.prefs.insert("bypass_local_auth".into(), true.into());
+    }
+
+    // Only what this run turned off is put back. The plan is made while
+    // the bypass is on; by the apply someone else has turned it off. The
+    // apply's own sign-in works and the fresh one after the batch doesn't:
+    // the refusal comes back, and the bypass is left off as found.
+    let good = qbit_creds(GENERATED);
+    let input = ConfigureInput::new(&good).installed(receipt(&target));
+    {
+        let mut s = state.lock().unwrap();
+        s.bypass_from_prefs = false;
+        s.prefs.insert("bypass_local_auth".into(), true.into());
+    }
+    let plan = qbit().plan(&http, &target, &input).await.unwrap();
+    assert_eq!(names(&plan), ["webui.local_auth"]);
+    {
+        let mut s = state.lock().unwrap();
+        s.prefs.insert("bypass_local_auth".into(), false.into());
+        s.logins_left = Some(1);
+    }
+    let before = server.count();
+    let e = qbit()
+        .apply(&http, &target, &input, &plan)
+        .await
+        .unwrap_err();
+    assert_eq!(e, AdapterError::Refused(qbittorrent::LOCAL_AUTH_LOCKOUT));
+    clean_error(&e);
+    assert_eq!(state.lock().unwrap().prefs["bypass_local_auth"], false);
+    let restores = server.seen()[before..]
+        .iter()
+        .filter(|s| s.path.ends_with("/setPreferences"))
+        .filter(|s| {
+            let json: Value = serde_json::from_str(&form_decode(&s.body)["json"]).unwrap();
+            json.get("bypass_local_auth") == Some(&json!(true))
+        })
+        .count();
+    assert_eq!(restores, 0, "nothing this run didn't turn off is put back");
+    {
+        let mut s = state.lock().unwrap();
+        s.logins_left = None;
+        s.bypass_from_prefs = true;
         s.prefs.insert("bypass_local_auth".into(), true.into());
     }
 
