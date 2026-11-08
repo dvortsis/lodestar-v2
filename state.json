@@ -6377,6 +6377,10 @@
     {
       "at": "2026-11-08T17:43Z",
       "note": "#627 P-cloud-test-plan merged (220a4cfd). Cloud plan session asked to write P-cloud-operator with owner Q1-Q6. PK-win-upd-1: one PR approved, engine.rs helpers pub(crate) approved."
+    },
+    {
+      "at": "2026-11-08T17:54Z",
+      "note": "#624 merged (b20fde51); main macOS watch running. Runner PR #629 open (cr-ab-comp-1, followups-3, plan entries incl. P-cloud-operator, uTP + export test-only flake fixes); Opus review running. #620 CMP-5a review MERGE (notes N1-N6 to relay with 5b/5 reviews); merge on green CI."
     }
   ],
   "main_health": [
@@ -7176,5 +7180,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T17:43Z"
+  "updated": "2026-11-08T17:54Z"
 }
