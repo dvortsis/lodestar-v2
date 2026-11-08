@@ -763,6 +763,52 @@ fn exit_reason(stat: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    /// Escapes the way the kernel writes mountinfo: space, tab, newline
+    /// and backslash as `\ooo`.
+    fn kernel_escape(b: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for c in b {
+            if matches!(c, b' ' | b'\t' | b'\n' | b'\\') {
+                out.extend_from_slice(format!("\\{c:03o}").as_bytes());
+            } else {
+                out.push(*c);
+            }
+        }
+        out
+    }
+
+    proptest! {
+        #[test]
+        fn unescape_undoes_the_kernels_escapes(b in proptest::collection::vec(any::<u8>(), 0..64)) {
+            prop_assert_eq!(unescape(&kernel_escape(&b)).into_os_string().into_vec(), b);
+        }
+
+        #[test]
+        fn the_parser_never_panics(
+            table in proptest::collection::vec(any::<u8>(), 0..512),
+            path in proptest::collection::vec(any::<u8>(), 0..64),
+        ) {
+            let _ = mounts(&table).count();
+            let _ = fs_view(&table, Path::new(OsStr::from_bytes(&path)));
+        }
+    }
+
+    #[test]
+    fn unescape_fixed_cases() {
+        let u = |b: &[u8]| unescape(b).into_os_string().into_vec();
+        assert_eq!(u(b"\\011"), b"\t");
+        assert_eq!(u(b"\\012"), b"\n");
+        assert_eq!(u(b"\\134"), b"\\");
+        // An escaped backslash followed by digits stays digits.
+        assert_eq!(u(b"\\134040"), b"\\040");
+        // Cut short at the end of the field, or not octal: kept as is.
+        assert_eq!(u(b"a\\01"), b"a\\01");
+        assert_eq!(u(b"a\\"), b"a\\");
+        assert_eq!(u(b"\\8"), b"\\8");
+        assert_eq!(u(b"\\078"), b"\\078");
+    }
 
     fn sample() -> Plan {
         Plan {
@@ -951,6 +997,11 @@ mod tests {
             "{base}7 1 8:1 /var/lib/lodestar/companions/q /var/lib/lodestar/companions/q/home/o rw - ext4 /dev/sda1 rw\n"
         );
         assert_eq!(check(&own_under_home, "/srv/dl"), inside);
+        // Home itself a bind of the companion's own folder.
+        let home_is_own = format!(
+            "{base}9 1 8:1 /var/lib/lodestar/companions/q /var/lib/lodestar/companions/q/home rw - ext4 /dev/sda1 rw\n"
+        );
+        assert_eq!(check(&home_is_own, "/srv/dl"), inside);
         // (a) Fails closed, with its own reason: a table that can't place
         // a folder refuses.
         assert_eq!(check("", "/srv/dl"), Err(LimitsError::MountsUnreadable));
@@ -970,6 +1021,23 @@ mod tests {
             )
         };
         assert_eq!(run("/srv/dl"), Ok(()));
+        // A refusal through a mount point that isn't UTF-8: the data
+        // folder bound below it.
+        let mut bound = latin1.clone();
+        bound.extend_from_slice(
+            b"10 8 8:1 /var/lib/lodestar /media/caf\xe9/x rw - ext4 /dev/sda1 rw\n",
+        );
+        assert_eq!(
+            mounts_ok_in(
+                &bound,
+                Some(Path::new(OsStr::from_bytes(b"/media/caf\xe9"))),
+                &own_home,
+                Path::new("/var/lib/lodestar"),
+                own,
+                &own.join("5.0.3"),
+            ),
+            overlap
+        );
         // A downloads folder on that disk, end to end.
         assert_eq!(
             mounts_ok_in(
