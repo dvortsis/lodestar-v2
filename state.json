@@ -6944,7 +6944,7 @@
         "slice": "PK-manifest",
         "role": "build",
         "agent": "claude",
-        "doing": "launching: PK-manifest (brief briefs/PK-manifest.md)",
+        "doing": "session_01MMjhnCXsenhYx7tX8TeoyN: PK-manifest (brief briefs/PK-manifest.md)",
         "since": "2026-11-08T15:04Z"
       },
       {
