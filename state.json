@@ -3636,7 +3636,7 @@
       "brief": "briefs/P-v052-cut.md",
       "since": "2026-11-07T14:43Z",
       "session": "session_01MMjhnABi9mwqkZULms8pjL",
-      "notes": "16:3xZ: #582 PR A merged (64870dc5) on fresh Opus MERGE; cut approved sent; next: release/v0.5.2 at 045d4a38, PR B rc.1. | 16:56Z: release/v0.5.2 created; PR B #584 (a753c5c7) into release/v0.5.2. Reporting-overhead bench red on main nightly since 11-06 (setup lacks notice_version since #472): fix in #584 + one-line main follow-up X-bench-notice-version (same session). Refinements accepted: webhooks notes line; Cargo 0.5.2 for rc tag. Supervisor check passed. | 17:07Z: #584 head 2eb03f58 (bench fix + delta notes), workflows re-dispatched. #586 X-bench-notice-version on main (9c51caa3), 1 line, runner self-checked; merge on ci-ok + #584 reporting-overhead green. | 17:2xZ: #584 fresh Opus CHANGES at 87703908: B1 delta report wrongly says smoke.ps1/collect.py byte-identical to #582 (2d6f3a29 nits release-only). Relayed + soak-evidence section, notes Action Needed fixes, forward-port PR X-v052-nits-forward on main. Then delta check. | 17:4xZ: #584 head 4dc18ffa answers B1+N1-N4; runner delta-checked (docs only). #587 X-v052-nits-forward (a3bc43ab) = 2d6f3a29 hunks exactly. Merge both when dispatched runs / ci-ok green."
+      "notes": "16:3xZ: #582 PR A merged (64870dc5) on fresh Opus MERGE; cut approved sent; next: release/v0.5.2 at 045d4a38, PR B rc.1. | 16:56Z: release/v0.5.2 created; PR B #584 (a753c5c7) into release/v0.5.2. Reporting-overhead bench red on main nightly since 11-06 (setup lacks notice_version since #472): fix in #584 + one-line main follow-up X-bench-notice-version (same session). Refinements accepted: webhooks notes line; Cargo 0.5.2 for rc tag. Supervisor check passed. | 17:07Z: #584 head 2eb03f58 (bench fix + delta notes), workflows re-dispatched. #586 X-bench-notice-version on main (9c51caa3), 1 line, runner self-checked; merge on ci-ok + #584 reporting-overhead green. | 17:2xZ: #584 fresh Opus CHANGES at 87703908: B1 delta report wrongly says smoke.ps1/collect.py byte-identical to #582 (2d6f3a29 nits release-only). Relayed + soak-evidence section, notes Action Needed fixes, forward-port PR X-v052-nits-forward on main. Then delta check. | 17:4xZ: #584 head 4dc18ffa answers B1+N1-N4; runner delta-checked (docs only). #587 X-v052-nits-forward (a3bc43ab) = 2d6f3a29 hunks exactly. Merge both when dispatched runs / ci-ok green. | 2026-11-08T05:04:58Z: #597 merged; session back to release-only, no slot, idle until owner rc.2 results. #597 backport owed in next release PR."
     },
     "WK-15": {
       "state": "running",
@@ -3692,6 +3692,19 @@
       "status": "running",
       "session": "session_01MMjhnCVN68eUViVowdQeWw",
       "brief": "briefs/X-menu-keyboard-focus.md"
+    },
+    "X-win-refusal-ux": {
+      "state": "merged",
+      "pr": 597,
+      "merge": "f90344f01b2d3175882405b5b293f9c065861bf2",
+      "session": "session_01MMjhnABi9mwqkZULms8pjL",
+      "notes": "2026-11-08T05:04:58Z: merged after runner self-check of docs push 190a438f (N1-N5). Backport to release/v0.5.2 rides with next release PR (rc.3/final) with owed backports; MSI smoke covers Repair. Owner FYI + 5 flags sent."
+    },
+    "PK-win-restart": {
+      "state": "running",
+      "brief": "briefs/PK-win-restart.md",
+      "since": "2026-11-08T05:04:58Z",
+      "session": "session_01MMjhnCQQBy5wXCeS23fHo4"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -6733,15 +6746,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T04:50:45Z",
+    "updated": "2026-11-08T05:04:58Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-win-refusal-ux",
+        "slice": "PK-win-restart",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnABi9mwqkZULms8pjL: #597 round-4 delta MERGE at 4e01762a; docs-only push asked (guide N1-N5); runner self-checks then merges",
-        "since": "2026-11-07T21:10Z"
+        "doing": "session_01MMjhnCQQBy5wXCeS23fHo4: building (brief c88fbf34)",
+        "since": "2026-11-08T05:04:58Z"
       },
       {
         "slot": 2,
