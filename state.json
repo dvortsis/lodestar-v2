@@ -6183,6 +6183,11 @@
       "id": "merged-607-608",
       "note": "#608 CMP-4b c748dba9, #607 WK-10d ed25b460 merged ~13:4xZ; owner FYIs sent; CMP-5 now unblocked (launch on next free slot); X-cmp4b-mounts L-1/L-2 residuals recorded",
       "logged": "2026-11-08T13:29Z"
+    },
+    {
+      "id": "WK-10e-sequence",
+      "at": "2026-11-08T13:34Z",
+      "note": "Runner approved WK-10d-polish as its own PR first, then WK-10e per briefs/WK-10e.md. Runner adds slices.yaml entries for both in the next runner PR."
     }
   ],
   "main_health": [
@@ -6884,7 +6889,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T13:29Z",
+    "updated": "2026-11-08T13:34Z",
     "items": [
       {
         "slot": 1,
@@ -6912,11 +6917,11 @@
       },
       {
         "slot": 4,
-        "slice": "WK-10e",
+        "slice": "WK-10d-polish",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #607 WK-10d merged ed25b460; WK-10e next with review polish",
-        "since": "2026-11-08T13:29Z"
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: WK-10d-polish first (#607 review items 1-7), then WK-10e (brief briefs/WK-10e.md)",
+        "since": "2026-11-08T13:34Z"
       }
     ],
     "limit": 4,
