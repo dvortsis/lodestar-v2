@@ -10,12 +10,12 @@ The plan is `docs/plan/2026-11-08-cloud-operator.md`: an AI operator on Anthropi
 
 **Owner-approved loosenings.** Seven loosenings of `#625`'s access model are named in the plan's "Loosenings of `#625`, named" table, each with the owner answer that approved it:
 1. unattended create and destroy of Linodes;
-2. Terraform's non-interactive mode, without the typed phrase;
+2. Terraform run without the typed phrase, through the control plane's own entry point; the `.ps1` scripts stay phrase-only;
 3. unattended root step scripts over SSH;
 4. the PIA login read unattended by the `deliver-pia` job, not only behind MFA;
 5. control-plane changes merging on the runner's review, with no owner approval;
-6. the operator App's Pull requests write, which reaches beyond Q4's "comments only";
-7. per-job SSH ingress from the job's GitHub-hosted runner `/32`, with runtime firewall writes.
+6. the operator App's Pull requests write, which reaches every PR in the repo, beyond Q4's "comments only". It's contained by a tripwire workflow, the stop variable, unedited-comment trust and no state in comments;
+7. per-job SSH ingress from the job's GitHub-hosted runner `/32`, with runtime firewall writes, including a firewall-only Linode token in `pia-delivery`.
 
 All seven are for the control plane only. The sixth and seventh are inferred from Q4, and from Q1 and Q3, rather than quoted, so the runner flags them to the owner.
 
@@ -49,14 +49,14 @@ All seven are for the control plane only. The sixth and seventh are inferred fro
     - it delivers only to a fleet whose pinned commit is an ancestor of `main`;
     - its role lives in the secret's own account.
   - **The Unraid host's exit** is re-confirmed against `PIA_SERVERS` when each fleet session is booked.
-  - **Residual risk:** a malicious merged change to the delivery code could leak the password, and `main`'s protection needs no approvals, so the merge guard is procedural. The guards are the runner's `/security-review` on those paths, the separate role and environment, and a dedicated test-only PIA login. The owner's MFA path stays for manual use.
+  - **Residual risk:** a malicious merged change to the delivery code could leak the password, and `main`'s protection needs no approvals, so the merge guard is procedural. The same holds for any newly merged workflow that declares one of the three environments and reads their secrets. The guards are the runner's `/security-review` on those paths, the separate role and environment, and a dedicated test-only PIA login. The owner's MFA path stays for manual use.
 - **SSH stays on the Linodes:** from the owner's admin `/32`, and from a job's own `/32` only while that job runs. The first draft's recommendation to drop SSH for SSM no longer applies (see the previous item).
 - **The first version runs `screen` only (Main and Worker).**
   - The Windows lanes stay human-run, so the control plane has no EC2, SSM, `iam:PassRole` or root SSM access at all.
   - A Windows preset needs its own slice and approval.
 - **Public logs carry nothing private.** Every ID and ARN is an environment secret, cloud-tool output goes only to a private bucket, plan output and user data are never printed, and there are no artifacts. OP-1 tests this.
 - **Commit arguments must be ancestors of `main`,** not just 40 hex characters, because a fork PR's commit is fetchable. Image digests come only from that commit's files, and the per-fleet pin lives in the state bucket.
-- **Lifetime is enforced twice.** An hourly reaper in `fleet.yml` runs `down` at the expiry recorded at `up` (at most 44 h). The watchdog follows at 48 h; it's pointed at the fleet's account in setup, and OP-G proves it with #627's 0a canary, because its deletion path is unproven (#625).
+- **Lifetime is enforced twice.** An hourly reaper in `fleet.yml` runs `down` at the expiry in `fleet.json` (at most 44 h), and also reaps any Lodestar Linode older than 44 h by creation time. `OPERATOR_STOP` exempts `down` and the reaper. The watchdog follows at 48 h; it's pointed at the fleet's account in setup, and OP-G proves it with #627's 0a canary, because its deletion path is unproven (#625).
 - **Limits are code in the control plane:**
   - one preset and one fleet;
   - no extend;
@@ -73,6 +73,9 @@ All seven are for the control plane only. The sixth and seventh are inferred fro
 
   These are runner parameters under §2.26.
 - **OIDC trust is pinned to `aud` and to a `sub` naming the environment and `fleet.yml@refs/heads/main`.** The repo's subject template is customized to include `job_workflow_ref`.
+- **A third OIDC role, `LodestarOperatorBridge`,** gives the bridge and `operator-apply.yml` the lock prefix and the lock-file object only, never the state bucket.
+- **`deliver-pia` reads only `fleet.json`** (addresses, fingerprints, firewall IDs, pin, expiry), never the whole Terraform state, which holds host private keys. It reaches the Linodes with a firewall-only Linode token that opens its own `/32`.
+- **`fleet.yml` has no `workflow_call` and uses no reusable workflow,** so the `job_workflow_ref` pin can't be sidestepped.
 - **The runner never holds the Anthropic workspace key.** `ant apply` runs from `operator-apply.yml` in `cloud-operator`, which renders the model from the variables at apply time. `claude-lock.json` stays in the private bucket, because it holds resource IDs.
 - **Terraform state moves to an S3 backend,** with Terraform 1.10 or later for native locking. An unattended control plane can't use the operator's local state, and `#625` already blocks `apply` until state ownership is reconciled.
 - **Models:** Sonnet 5.5 at medium (set explicitly; its default is high) for the routine loop, and Opus 5.5 at high (set explicitly; its default is medium) for triage. Max is never used.
