@@ -8,7 +8,8 @@
          REMOVE_DATA=1 (data goes).
   -Zip : unpack the portable zip, run it with a temporary data folder, check /healthz.
 
-  The installed service is started for real: Start-Service, /healthz on 8090, Stop-Service.
+  The installed service is started for real: Start-Service, /healthz on 8090, Restart now
+  (the SCM starts it again after 60 s), Stop-Service.
 #>
 param(
   [string]$Msi,
@@ -169,6 +170,42 @@ if ($Msi) {
   Assert ($index -notmatch 'UI not built') '/ served the stub page: the web UI was not embedded'
   Assert (Test-Path "$dataDir\.lodestar-secured") 'the service did not write its .lodestar-secured marker'
   Assert (Test-Path "$dataDir\logs\lodestar.log") 'the service did not write logs\lodestar.log'
+
+  # --- Restart now: a clean stop with code 0x20000050, then the SCM's recovery action starts it
+  # again after 60 s (main.wxs), and /healthz returns. Every wait has a deadline. ---
+  $api = 'http://127.0.0.1:8090/api/v1'
+  $tokenLine = Select-String -LiteralPath "$dataDir\logs\lodestar.log" -Pattern 'setup token (\S+)' | Select-Object -Last 1
+  Assert ($null -ne $tokenLine) 'no setup token in the service log'
+  $notice = (Invoke-RestMethod -UseBasicParsing "$api/legal/notice").version
+  $claim = @{ token = $tokenLine.Matches[0].Groups[1].Value; password = 'smoke test password'; notice_version = $notice } | ConvertTo-Json -Compress
+  Invoke-RestMethod -UseBasicParsing -Method Post -Uri "$api/setup" -ContentType 'application/json' -Body $claim -SessionVariable session | Out-Null
+  $restart = (Invoke-RestMethod -UseBasicParsing -Uri "$api/system" -WebSession $session).restart
+  Assert ($restart.available -and $restart.method -eq 'service') "Restart now is not offered on the service: $($restart | ConvertTo-Json -Compress)"
+  Assert ($restart.estimated_seconds -gt 60) "Restart now says $($restart.estimated_seconds) s; the SCM waits 60 s before starting it again"
+  $r = Invoke-WebRequest -UseBasicParsing -Method Post -Uri "$api/system/restart" -ContentType 'application/json' -Body '{}' -WebSession $session
+  Assert ($r.StatusCode -eq 202) "POST /system/restart answered $($r.StatusCode)"
+  $deadline = (Get-Date).AddSeconds(90)
+  do {
+    $svc = Get-CimInstance Win32_Service -Filter "Name='Lodestar'"
+    if ($svc.State -eq 'Stopped') { break }
+    Start-Sleep -Milliseconds 500
+  } while ((Get-Date) -lt $deadline)
+  Assert ($svc.State -eq 'Stopped') "the service is $($svc.State) after Restart now; it must stop first"
+  Assert ($svc.ServiceSpecificExitCode -eq 536870992) "Restart now's service-specific code is $($svc.ServiceSpecificExitCode), expected 536870992 (0x20000050)"
+  $up = $false
+  $deadline = (Get-Date).AddSeconds(180)
+  do {
+    try { $up = ((Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 'http://127.0.0.1:8090/healthz').StatusCode -eq 200) } catch { Start-Sleep -Seconds 1 }
+  } while (-not $up -and (Get-Date) -lt $deadline)
+  if (-not $up) {
+    Write-Host '--- sc query'; sc.exe query Lodestar
+    Write-Host '--- event log'; Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Service Control Manager' } -MaxEvents 8 -ErrorAction SilentlyContinue | Format-List TimeCreated, Message
+  }
+  Assert $up 'the SCM did not start the service again after Restart now (no /healthz on 8090 within 180 s)'
+  # Within the day a second one would leave a crash without a recovery: paused, with the hint.
+  $restart = (Invoke-RestMethod -UseBasicParsing -Uri "$api/system" -WebSession $session).restart
+  Assert (-not $restart.available -and $restart.method -eq 'manual' -and $restart.hint -match 'Windows Services') "after Restart now, /system says $($restart | ConvertTo-Json -Compress); expected it paused"
+  Write-Host 'restart now on the service ok'
   Stop-Service Lodestar
   $svc = Get-CimInstance Win32_Service -Filter "Name='Lodestar'"
   Assert ($svc.State -eq 'Stopped') "service is $($svc.State) after Stop-Service"

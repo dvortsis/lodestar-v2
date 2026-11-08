@@ -108,8 +108,10 @@ pub fn host() -> HostInfo {
     }
 }
 
-/// Linux: `MemTotal`, or a cgroup v2 limit when lower. Elsewhere unknown
-/// until a platform slice measures it.
+/// Linux: `MemTotal`, or a cgroup v2 limit when lower. Elsewhere unknown:
+/// on Windows it would take `GlobalMemoryStatusEx`, which only `unsafe`
+/// code (forbidden in the workspace) or a crate outside the lock can
+/// call (PK-win-restart, plan Q9).
 fn memory_bytes() -> Option<u64> {
     #[cfg(target_os = "linux")]
     {
@@ -241,15 +243,20 @@ impl Sizes {
     }
 }
 
-/// Bytes free to an unprivileged user on `dir`'s volume (Unix); unknown
-/// elsewhere until a platform slice measures it.
+/// Bytes free to this user on `dir`'s volume: `statvfs` on Unix, and
+/// `GetDiskFreeSpaceExW` through `fs4` on Windows (which honours quotas);
+/// unknown elsewhere.
 fn free_bytes(dir: &Path) -> Option<u64> {
     #[cfg(unix)]
     {
         let s = rustix::fs::statvfs(dir).ok()?;
         s.f_bavail.checked_mul(s.f_frsize)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        fs4::available_space(dir).ok()
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = dir;
         None
@@ -351,7 +358,7 @@ mod tests {
         // No cold store or log files: unknown, not 0.
         assert_eq!(info.cold_bytes, None);
         assert_eq!(info.logs_bytes, None);
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         assert!(info.free_bytes.is_some_and(|b| b > 0));
         // Within the minute it isn't measured again.
         std::fs::write(dir.path().join("index/v1-t1/seg2"), vec![0u8; 50]).unwrap();
