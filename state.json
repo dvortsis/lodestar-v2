@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-08T01:54Z",
+  "updated_at": "2026-11-08T02:07Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4218,6 +4218,11 @@
       "at": "2026-11-08T01:08Z",
       "pr": 598,
       "flag": "CMP-3 writer also owns WebUI\\LocalHostAuth=true and WebUI\\AuthSubnetWhitelistEnabled=false (runner tightening, \u00a72.33/\u00a72.19)"
+    },
+    {
+      "at": "2026-11-08T02:07Z",
+      "pr": 600,
+      "flag": "CMP-2: 64 KiB ratio floor (no ratio refusal below 64 KiB out, per entry or total; 100:1 above), runner \u00a72.26 on a Q16 number; size ~2.6k kept as one PR"
     }
   ],
   "decisions_log": [
@@ -6661,7 +6666,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T01:53Z",
+    "updated": "2026-11-08T02:07Z",
     "items": [
       {
         "slot": 1,
@@ -6676,7 +6681,7 @@
         "slice": "CMP-3",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnA1oLZ56UoBFFMwUoU: #598 delta review CHANGES (N1 stale qBittorrent_new.conf; LocalHostAuth/whitelist keys; proptest oracle); fix round requested 2026-11-08T01:08Z",
+        "doing": "session_01MMjhnA1oLZ56UoBFFMwUoU: #598 round 3 green f0f5d97f; runner delta security review running",
         "since": "2026-11-07T22:46Z"
       },
       {
@@ -6684,7 +6689,7 @@
         "slice": "CMP-2",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBjswJ9d8Qu8vvTvyu: CMP-2 companion archive extraction + layout (Opus, 2R, /security-review)",
+        "doing": "session_01MMjhnBjswJ9d8Qu8vvTvyu: #600 open ec3f3a86, CI running; runner calls: one PR (~2.6k), 64 KiB ratio floor, fuzz README row",
         "since": "2026-11-08T00:55Z"
       },
       {
