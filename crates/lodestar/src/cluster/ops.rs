@@ -65,7 +65,7 @@ fn prefs_key(worker: WorkerId) -> String {
 /// One worker's saved settings, as its row holds them (JSON, version 1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Saved {
+pub(crate) struct Saved {
     v: u8,
     dht_off: bool,
     intensity: u8,
@@ -133,7 +133,7 @@ impl Saved {
 
     /// A row this version wrote, within the API's ranges; anything else is
     /// skipped (the worker gets the defaults) rather than trusted.
-    fn parse(text: &str) -> Option<Saved> {
+    pub(crate) fn parse(text: &str) -> Option<Saved> {
         let s: Saved = serde_json::from_str(text).ok()?;
         let ok = s.v == 1
             && s.intensity <= 2
@@ -143,6 +143,11 @@ impl Saved {
             && lodestar_api::workers::KBPS.contains(&s.down_kbps)
             && lodestar_api::workers::POOL_CAP.contains(&s.pool_cap);
         ok.then_some(s)
+    }
+
+    /// Saved paused (the cluster tick seeds a new server with it, WK-10d).
+    pub(crate) fn paused(&self) -> bool {
+        self.paused
     }
 
     fn text(&self) -> String {

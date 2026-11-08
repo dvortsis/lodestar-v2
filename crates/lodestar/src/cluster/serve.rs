@@ -987,6 +987,30 @@ struct Inner {
     tick: Arc<Tick>,
 }
 
+/// The workers saved as paused (WK-14's rows), for a new server. A store
+/// that won't open, or a row that won't read, pauses nobody here; `Workers`
+/// applies its own copy once it follows the server.
+fn saved_pauses(db: &std::path::Path, config: StoreConfig) -> Vec<WorkerId> {
+    let Ok(store) = Store::open(db, config) else {
+        return Vec::new();
+    };
+    let Ok(rows) = store.settings_with_prefix(super::ops::PREFS_PREFIX) else {
+        return Vec::new();
+    };
+    rows.into_iter()
+        .filter_map(|(key, text)| {
+            let id = key
+                .strip_prefix(super::ops::PREFS_PREFIX)?
+                .parse::<u32>()
+                .ok()
+                .filter(|&id| id != 0)?;
+            super::ops::Saved::parse(&text)
+                .filter(super::ops::Saved::paused)
+                .map(|_| WorkerId(id))
+        })
+        .collect()
+}
+
 /// How long `close` waits for an aborted tick to go.
 const CLOSE_TICK: Duration = Duration::from_secs(10);
 
@@ -1018,6 +1042,10 @@ impl Inner {
         let (pki, check) = tokio::task::spawn_blocking(move || open_pki(&w, errors))
             .await
             .map_err(|_| StartError::task())??;
+        let (db, store) = (self.wiring.db.clone(), self.wiring.store.clone());
+        let paused = tokio::task::spawn_blocking(move || saved_pauses(&db, store))
+            .await
+            .unwrap_or_default();
         let preparer = check
             .reader
             .lock()
@@ -1060,6 +1088,12 @@ impl Inner {
         // The last server's queue went with it.
         lock(&self.tick.queued_acks).clear();
         self.tick.observe();
+        // The saved pauses are in before the first connection is served:
+        // a paused worker that reconnects at once is never granted a key
+        // (WK-14's window; `Workers` re-applies them too, later).
+        for w in paused {
+            server.pause(w);
+        }
         let task = tokio::spawn(server.clone().serve(listener));
         let (gone, tick_gone) = watch::channel(());
         let tick = run_tick(
@@ -2053,6 +2087,37 @@ mod tests {
 
     fn ticks(h: &ClusterHandle) -> u64 {
         h.0.tick.steps.load(Ordering::Relaxed)
+    }
+
+    /// WK-14's window: a worker saved as paused is paused on a new server
+    /// before it serves anyone, so one that reconnects at once is never
+    /// granted a key. A row that doesn't read pauses nobody.
+    #[tokio::test]
+    async fn saved_pauses_are_in_before_the_server_serves() {
+        let dir = tempfile::tempdir().unwrap();
+        let w = wiring(dir.path(), true, any_port());
+        {
+            let mut store = Store::open(&w.db, w.store.clone()).unwrap();
+            let paused = r#"{"v":1,"dht_off":false,"intensity":1,"cpu_permille":1000,"ram_mb":0,"up_kbps":0,"down_kbps":0,"pool_cap":50000,"paused":true}"#;
+            let running = paused.replace("\"paused\":true", "\"paused\":false");
+            store
+                .set_settings_text(&[
+                    ("workers.prefs.9", paused),
+                    ("workers.prefs.10", &running),
+                    ("workers.prefs.11", "not json"),
+                ])
+                .unwrap();
+        }
+        let saved = saved_pauses(&w.db, w.store.clone());
+        assert_eq!(saved, vec![WorkerId(9)]);
+        let cluster = Cluster::start(w).await.unwrap();
+        let h = cluster.handle();
+        // Paused already: in the server's fleet before any connection.
+        let snap = h.server().unwrap().snapshot();
+        let nine = snap.workers.iter().find(|s| s.worker == WorkerId(9));
+        assert!(nine.is_some_and(|s| s.paused), "{:?}", snap.workers);
+        assert!(!snap.workers.iter().any(|s| s.worker == WorkerId(10)));
+        cluster.shutdown().await;
     }
 
     /// Once a shutdown returns, nothing of the old tick holds the server.
