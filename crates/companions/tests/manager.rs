@@ -899,3 +899,89 @@ async fn an_operation_in_progress_refuses_others_on_the_same_companion() {
     assert_eq!(done.unwrap().as_str(), "5.0.3");
     assert!(m.remove(&qbt()).await.is_ok());
 }
+
+/// #621's re-review (B1): a first save that failed before its rename (a
+/// crash, a full disk) leaves only the journal's temporary file. Recovery
+/// takes that folder as Lodestar's own, an install goes ahead over it,
+/// and with anything else beside it the folder is still not ours.
+#[tokio::test]
+async fn a_leftover_temporary_journal_never_blocks_the_companion() {
+    let _g = SERIAL.lock().await;
+    let cat = catalogue("5.0.3");
+    let leave = |w: &World| {
+        std::fs::create_dir_all(w.folder()).unwrap();
+        std::fs::write(w.folder().join(state::STATE_TMP), b"{\"for").unwrap();
+    };
+
+    let w = World::new();
+    leave(&w);
+    let got = w.manager(cat, LINUX).recover().await;
+    assert!(got.iter().all(|(_, r)| matches!(r, Ok(None))), "{got:?}");
+    assert!(!w.folder().exists());
+
+    let w = World::new();
+    leave(&w);
+    let m = w.manager(cat, LINUX);
+    assert_eq!(m.install(&token("5.0.3")).await.unwrap().as_str(), "5.0.3");
+    assert_eq!(w.on_disk(), Some(("5.0.3".into(), None)));
+
+    let w = World::new();
+    leave(&w);
+    std::fs::write(w.folder().join("theirs.iso"), b"mine").unwrap();
+    let m = w.manager(cat, LINUX);
+    let got = m.recover().await;
+    assert!(
+        got.iter()
+            .any(|(_, r)| matches!(r, Err(e) if e.code() == "not_ours"))
+    );
+    assert_eq!(
+        m.install(&token("5.0.3")).await,
+        refused(Refusal::FolderInUse)
+    );
+    assert_eq!(
+        std::fs::read(w.folder().join("theirs.iso")).unwrap(),
+        b"mine"
+    );
+}
+
+/// A dropped install future doesn't stop the install part-way: it runs to
+/// completion in its own task, holding its slot until then, and the
+/// companion is free afterwards (#621's re-review, N2).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dropped_install_still_runs_to_completion() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let m = Arc::new(w.manager(catalogue("5.0.3"), LINUX));
+    w.run.park.store(true, Ordering::SeqCst);
+    let caller = tokio::spawn({
+        let m = m.clone();
+        async move { m.install(&token("5.0.3")).await }
+    });
+    let deadline = std::time::Duration::from_secs(10);
+    tokio::time::timeout(deadline, w.run.parked.notified())
+        .await
+        .expect("the install never reached its start");
+    // The caller gives up; the install keeps its slot.
+    caller.abort();
+    let _ = caller.await;
+    assert_eq!(m.remove(&qbt()).await, refused(Refusal::Busy));
+    w.run.park.store(false, Ordering::SeqCst);
+    w.run.release.notify_one();
+    // Once it has finished (and only then) the slot is free: the install
+    // completed, so the removal finds it installed.
+    let start = std::time::Instant::now();
+    let removed = loop {
+        match m.remove(&qbt()).await {
+            Err(ManagerError::Refused(Refusal::Busy)) => {
+                assert!(
+                    start.elapsed() < deadline,
+                    "the dropped install never finished"
+                );
+                tokio::task::yield_now().await;
+            }
+            other => break other,
+        }
+    };
+    assert!(removed.is_ok(), "{removed:?}");
+    assert_eq!(*w.run.started.lock().unwrap(), ["5.0.3"]);
+}
