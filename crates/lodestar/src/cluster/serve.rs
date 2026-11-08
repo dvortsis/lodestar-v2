@@ -230,9 +230,12 @@ fn cluster_kind(e: &ClusterError) -> &'static str {
 }
 
 /// Whether claimed keys are stored (§19.3's authoritative check before a
-/// grant), on a read-only connection of its own. A read that fails counts
-/// as not stored: the commit still refuses a duplicate, so the worst case
-/// is one fetch too many, never a lost key.
+/// grant), on a read-only connection of its own. A key that's tombstoned
+/// or quarantined counts as stored too: it's never granted, so a held key
+/// (a floor drop above all) is never fetched again by a worker, as the
+/// built-in worker's intake refuses it (WK-10d). A read that fails counts
+/// as not stored: the commit still refuses a duplicate or a held key, so
+/// the worst case is one fetch too many, never a lost key.
 struct StoreCheck {
     reader: Mutex<Store>,
     errors: Arc<AtomicU64>,
@@ -241,12 +244,20 @@ struct StoreCheck {
 impl StoredKeys for StoreCheck {
     fn stored(&self, keys: &[InfoHash]) -> Vec<bool> {
         let reader = self.reader.lock().unwrap_or_else(PoisonError::into_inner);
+        let hashes: Vec<[u8; 20]> = keys.iter().map(|k| k.0).collect();
+        let held = reader.held_among(&hashes).unwrap_or_else(|_| {
+            self.errors.fetch_add(1, Ordering::Relaxed);
+            vec![false; keys.len()]
+        });
         keys.iter()
-            .map(|k| match reader.find(k) {
-                Ok(found) => found.is_some(),
-                Err(_) => {
-                    self.errors.fetch_add(1, Ordering::Relaxed);
-                    false
+            .zip(held)
+            .map(|(k, held)| {
+                held || match reader.find(k) {
+                    Ok(found) => found.is_some(),
+                    Err(_) => {
+                        self.errors.fetch_add(1, Ordering::Relaxed);
+                        false
+                    }
                 }
             })
             .collect()
@@ -2166,6 +2177,42 @@ mod tests {
         assert!(nine.is_some_and(|s| s.paused), "{:?}", snap.workers);
         assert!(!snap.workers.iter().any(|s| s.worker == WorkerId(10)));
         cluster.shutdown().await;
+    }
+
+    /// A held key (tombstoned here, as a floor drop leaves it) counts as
+    /// stored for a claim, so no worker is granted it to fetch; a read
+    /// error counts as not stored and is counted.
+    #[test]
+    fn a_held_key_is_never_granted_to_a_worker() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        store
+            .write(&lodestar_store::WriteBatch {
+                filtered: &[lodestar_store::Filtered {
+                    hashes: &[[3; 20]],
+                    rule: "CS-8a",
+                    action: 4,
+                    held: Some(lodestar_store::Held::Tombstone),
+                    sealed: None,
+                    evidence: &[],
+                    at: 1,
+                    expires_at: 0,
+                    adult_hold: false,
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+        let check = StoreCheck {
+            reader: Mutex::new(Store::open_reader(&db, StoreConfig::default()).unwrap()),
+            errors: Arc::default(),
+        };
+        assert_eq!(
+            check.stored(&[InfoHash([3; 20]), InfoHash([4; 20])]),
+            vec![true, false],
+            "the tombstoned key is refused; the other is free"
+        );
+        assert_eq!(check.errors.load(Ordering::Relaxed), 0);
     }
 
     /// Only public addresses reach the planner from the DHT's vote.
