@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-08T02:21Z",
+  "updated_at": "2026-11-08T02:27Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5984,6 +5984,11 @@
       "id": "wk10c-runner-calls",
       "at": "2026-11-08T02:21Z",
       "note": "Approved: worker/session.rs ~12 lines (Hello capabilities: ram_mb cgroup/MemTotal, external_ips public only); worker/dht.rs new in WK-10 owns (add to slices.yaml). Accepted: 60 s DHT grace after lost session (pool+DHT pause at once) - owner flag; bandwidth caps unapplied - owner flag. RSS 114-124 MiB measured, ~212 worst case."
+    },
+    {
+      "id": "WK-10e",
+      "at": "2026-11-08T02:27Z",
+      "what": "New slice WK-10e worker politeness (Opus): apply Assign.politeness - per-IP connections_to(ip) cap in crates/sources/src/pool.rs, bep51_interval_scale in crates/dht sampler, coordinator share in serve.rs + services.rs wiring. After WK-10c and WK-10d. WK-G depends on it. Add WK-10d + WK-10e to slices.yaml in next runner PR."
     }
   ],
   "main_health": [
