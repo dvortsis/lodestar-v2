@@ -5,6 +5,11 @@
 //!   companion's adapter implements.
 //! - [`catalogue`]: the compiled-in companion catalogue, its strict format
 //!   and validation, and the trust root (owner §2.46, cq1 (a)).
+//! - [`credentials`]: companion credentials, generated, sealed in
+//!   `settings` rows, resealed on key rotation (CMP-3).
+//! - [`config_files`]: `qBittorrent.conf` and Prowlarr's `config.xml`,
+//!   written before first start with the credential and a loopback bind
+//!   (CMP-3).
 //! - [`inputs`]: the closed, validated values generated compose services
 //!   and Unraid templates are built from, and the shared [`CompanionId`]
 //!   and [`Version`].
@@ -13,6 +18,8 @@
 
 pub mod adapter;
 pub mod catalogue;
+pub mod config_files;
+pub mod credentials;
 pub mod inputs;
 pub mod log_events;
 
