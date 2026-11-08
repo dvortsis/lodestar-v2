@@ -56,6 +56,10 @@ pub struct Present {
     /// Lodestar doesn't manage (one it manages is in `companions`, with
     /// its health). Its own health isn't judged here.
     pub external_client: bool,
+    /// The Prowlarr/Jackett source points at an indexer the user set up
+    /// themselves (not a companion Lodestar manages). Its own health
+    /// isn't judged here.
+    pub external_indexer: bool,
 }
 
 /// The companion manager's latest word.
@@ -80,7 +84,7 @@ pub enum State {
 }
 
 /// `requirement`'s state on `snapshot`. A healthy companion that can meet
-/// it, or an external client where one counts, makes it `Ok`. Otherwise
+/// it, or an external client or indexer where one counts, makes it `Ok`. Otherwise
 /// the first present (unhealthy) companion makes it [`State::Unhealthy`],
 /// and with none it's [`State::Needs`] the suggested one. An unknown
 /// snapshot reads as needing it.
@@ -92,7 +96,9 @@ pub fn evaluate(
     let Snapshot::Known(present) = snapshot else {
         return State::Needs(requirement.suggest);
     };
-    if present.external_client && requirement.takes_external_client() {
+    if (present.external_client && requirement.takes_external_client())
+        || (present.external_indexer && requirement.takes_external_indexer())
+    {
         return State::Ok;
     }
     let ids = requirement.companions(catalogue);
@@ -207,8 +213,8 @@ fn for_run(ctx: &mut SourceCtx, shutdown: Shutdown) -> SourceCtx {
 /// needs something and `companions` is set; otherwise just `run(ctx)`.
 ///
 /// `running` reads `false` while it waits, and once a paused run has
-/// ended (or been dropped), never while one is still winding down, so a
-/// purge's stop still waits for it. It returns when the context's
+/// ended or been dropped, never while one is still winding down. A stop
+/// during that wind-down (a purge's, or shutdown) drops the run at once. It returns when the context's
 /// shutdown fires (a pause winding down is cut short), or when a run ends
 /// on its own, with that run's result.
 pub(crate) async fn run<'a>(
@@ -242,12 +248,18 @@ pub(crate) async fn run<'a>(
             }
         }
         running.store(true, Ordering::Relaxed);
+        // A stop that landed since the check above starts nothing: a
+        // purge that already read `running` as false mustn't race a start.
+        if stop.is_requested() {
+            running.store(false, Ordering::Relaxed);
+            return Ok(());
+        }
         let (pause, shutdown) = Shutdown::new();
         let mut fut = run(for_run(&mut ctx, shutdown));
         loop {
+            // A stop or a new snapshot is seen before the run is polled.
             tokio::select! {
                 biased;
-                r = &mut fut => return r,
                 go_on = next(&mut stop, &mut rx, &mut closed) => {
                     if !go_on {
                         let _ = pause.send(true);
@@ -277,6 +289,7 @@ pub(crate) async fn run<'a>(
                     running.store(false, Ordering::Relaxed);
                     break;
                 }
+                r = &mut fut => return r,
             }
         }
     }
@@ -300,7 +313,39 @@ mod tests {
         Snapshot::Known(Present {
             companions: pairs.iter().map(|(k, h)| (k.to_string(), *h)).collect(),
             external_client,
+            external_indexer: false,
         })
+    }
+
+    fn indexer(pairs: &[(&str, Health)]) -> Snapshot {
+        Snapshot::Known(Present {
+            companions: pairs.iter().map(|(k, h)| (k.to_string(), *h)).collect(),
+            external_client: false,
+            external_indexer: true,
+        })
+    }
+
+    /// A closed channel is never waited on again: `next` stays pending
+    /// until the stop, rather than returning at once in a loop.
+    #[tokio::test(start_paused = true)]
+    async fn next_on_a_closed_channel_waits_for_the_stop() {
+        let (tx, mut rx) = watch::channel(Snapshot::Unknown);
+        drop(tx);
+        let (stop_tx, mut stop) = Shutdown::new();
+        let mut closed = false;
+        // The first call sees the close and reports it once.
+        assert!(next(&mut stop, &mut rx, &mut closed).await);
+        assert!(closed);
+        // From then on it waits: an hour of (paused, auto-advanced) time
+        // passes without it returning.
+        let waited = tokio::time::timeout(
+            std::time::Duration::from_secs(3600),
+            next(&mut stop, &mut rx, &mut closed),
+        )
+        .await;
+        assert!(waited.is_err(), "a closed channel must not wake it");
+        stop_tx.send_replace(true);
+        assert!(!next(&mut stop, &mut rx, &mut closed).await);
     }
 
     #[test]
@@ -335,6 +380,11 @@ mod tests {
                 known(&[("qbittorrent", Unhealthy)], false),
                 State::Unhealthy("qbittorrent"),
             ),
+            // An external indexer meets Prowlarr's need whatever a managed
+            // Prowlarr's health, and never the download-client source's.
+            (p, indexer(&[]), State::Ok),
+            (p, indexer(&[("prowlarr", Unhealthy)]), State::Ok),
+            (d, indexer(&[]), State::Needs("qbittorrent")),
             // Not a download client, and not in the catalogue.
             (
                 d,
@@ -359,8 +409,8 @@ mod tests {
         let ids = ["qbittorrent", "prowlarr", "gluetun", "other"];
         prop_oneof![
             1 => Just(Snapshot::Unknown),
-            4 => (proptest::collection::vec(health(), 4), any::<bool>()).prop_map(
-                move |(hs, external_client)| {
+            4 => (proptest::collection::vec(health(), 4), any::<bool>(), any::<bool>()).prop_map(
+                move |(hs, external_client, external_indexer)| {
                     Snapshot::Known(Present {
                         companions: ids
                             .iter()
@@ -368,6 +418,7 @@ mod tests {
                             .filter_map(|(id, h)| h.map(|h| (id.to_string(), h)))
                             .collect(),
                         external_client,
+                        external_indexer,
                     })
                 }
             ),
@@ -389,6 +440,7 @@ mod tests {
                 Snapshot::Unknown => false,
                 Snapshot::Known(p) => {
                     (p.external_client && r.takes_external_client())
+                        || (p.external_indexer && r.takes_external_indexer())
                         || ids.iter().any(|id| p.companions.get(*id) == Some(&Health::Healthy))
                 }
             };

@@ -7,7 +7,11 @@
 //! whether a plugin may start; a plugin with no entry is never held for a
 //! companion.
 //!
-//! - The Prowlarr plugin needs Prowlarr itself.
+//! - The Prowlarr plugin (the "Prowlarr/Jackett" source) needs an indexer
+//!   manager (runner, 2026-11-08): a healthy Prowlarr companion, or an
+//!   indexer the user pointed the source at themselves (Prowlarr or
+//!   Jackett, not managed by Lodestar). An external indexer's health
+//!   isn't judged here.
 //! - The download-client source needs a download client (runner,
 //!   2026-11-08): a client configured in Settings → Integrations that
 //!   Lodestar doesn't manage, or any catalogue companion needed for
@@ -37,6 +41,10 @@ pub enum Satisfier {
     /// A download client configured in Settings → Integrations that
     /// Lodestar doesn't manage. Its health isn't judged here.
     ExternalClient,
+    /// An indexer the user set as the source's own endpoint (a Prowlarr or
+    /// Jackett that Lodestar doesn't manage). Its health isn't judged
+    /// here.
+    ExternalIndexer,
 }
 
 /// What a plugin needs before it may start: any one of its satisfiers,
@@ -72,7 +80,7 @@ impl Requirement {
                         }
                     }
                 }
-                Satisfier::ExternalClient => {}
+                Satisfier::ExternalClient | Satisfier::ExternalIndexer => {}
             }
         }
         ids
@@ -82,6 +90,11 @@ impl Requirement {
     pub fn takes_external_client(&self) -> bool {
         self.satisfiers.contains(&Satisfier::ExternalClient)
     }
+
+    /// Whether an indexer the user configured themselves meets it.
+    pub fn takes_external_indexer(&self) -> bool {
+        self.satisfiers.contains(&Satisfier::ExternalIndexer)
+    }
 }
 
 /// The map: plugin manifest id → what it needs.
@@ -89,7 +102,7 @@ const MAP: &[(&str, Requirement)] = &[
     (
         "prowlarr",
         Requirement {
-            satisfiers: &[Satisfier::Companion("prowlarr")],
+            satisfiers: &[Satisfier::ExternalIndexer, Satisfier::Companion("prowlarr")],
             suggest: "prowlarr",
         },
     ),
@@ -137,13 +150,13 @@ mod tests {
         assert_eq!(requirement(""), None);
         assert_eq!(requirement("PROWLARR"), None, "ids match exactly");
         let p = requirement("prowlarr").unwrap();
-        assert_eq!(p.satisfiers, &[Satisfier::Companion("prowlarr")]);
-        assert!(!p.takes_external_client(), "Prowlarr is a hard need");
-        assert!(
-            requirement("download_clients")
-                .unwrap()
-                .takes_external_client()
+        assert_eq!(
+            p.satisfiers,
+            &[Satisfier::ExternalIndexer, Satisfier::Companion("prowlarr")]
         );
+        assert!(p.takes_external_indexer() && !p.takes_external_client());
+        let d = requirement("download_clients").unwrap();
+        assert!(d.takes_external_client() && !d.takes_external_indexer());
     }
 
     #[test]

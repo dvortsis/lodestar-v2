@@ -208,12 +208,23 @@ fn known(pairs: &[(&str, Health)]) -> Snapshot {
 /// `pairs`, and whether a download client Lodestar doesn't manage is
 /// configured in Integrations.
 fn with_client(pairs: &[(&str, Health)], external_client: bool) -> Snapshot {
+    present(pairs, external_client, false)
+}
+
+/// `pairs`, and whether the Prowlarr/Jackett source points at an indexer
+/// the user set up themselves.
+fn with_indexer(pairs: &[(&str, Health)], external_indexer: bool) -> Snapshot {
+    present(pairs, false, external_indexer)
+}
+
+fn present(pairs: &[(&str, Health)], external_client: bool, external_indexer: bool) -> Snapshot {
     Snapshot::Known(Present {
         companions: pairs
             .iter()
             .map(|(k, h)| (k.to_string(), *h))
             .collect::<BTreeMap<_, _>>(),
         external_client,
+        external_indexer,
     })
 }
 
@@ -473,5 +484,39 @@ async fn a_client_configured_in_integrations_meets_the_download_client_source() 
         State::Needs("qbittorrent")
     );
     assert_eq!(s.clients.starts(), 1);
+    s.pipeline.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_indexer_the_user_set_up_meets_the_prowlarr_source() {
+    let _serial = SERIAL.lock().await;
+    let unhealthy0 = logged(UNHEALTHY, "prowlarr");
+    // A Jackett (or Prowlarr) the user runs themselves, and an unhealthy
+    // managed Prowlarr: the external one meets it. It isn't a download
+    // client, so the client source stays held.
+    let (tx, rx) = watch::channel(with_indexer(&[("prowlarr", Health::Unhealthy)], true));
+    let s = start(Some(rx)).await;
+    until("prowlarr to start", || s.prowlarr.live() == 1).await;
+    assert_eq!(s.monitor().companion_state("prowlarr"), State::Ok);
+    settle().await;
+    assert_eq!(s.clients.starts(), 0, "an indexer isn't a download client");
+
+    // The external indexer is removed: only the unhealthy companion is left.
+    tx.send_replace(with_indexer(&[("prowlarr", Health::Unhealthy)], false));
+    until("prowlarr to pause", || s.prowlarr.live() == 0).await;
+    until("it reads stopped", || !s.running("prowlarr")).await;
+    assert_eq!(
+        s.monitor().companion_state("prowlarr"),
+        State::Unhealthy("prowlarr")
+    );
+    assert_eq!(logged(UNHEALTHY, "prowlarr"), unhealthy0 + 1);
+    // And with neither, it needs Prowlarr.
+    tx.send_replace(with_indexer(&[], false));
+    settle().await;
+    assert_eq!(
+        s.monitor().companion_state("prowlarr"),
+        State::Needs("prowlarr")
+    );
+    assert_eq!(s.prowlarr.starts(), 1);
     s.pipeline.shutdown().await.unwrap();
 }
