@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-08T02:29Z",
+  "updated_at": "2026-11-08T03:03:10Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5999,6 +5999,11 @@
       "id": "X-win-temp-log-owner",
       "at": "2026-11-08T02:29Z",
       "what": "temp_log.rs: refuse a pre-created lodestar-service.log in C:\\Windows\\Temp owned by anyone but SYSTEM/Administrators/the service. From #597 review."
+    },
+    {
+      "id": "X-filter-props-flake",
+      "what": "lodestar-filter tests/props.rs reuse::the_property_reads_trails failed its statistical floor once locally (18 of 224 decided by SP-3/SP-4, needs >10%); passed on re-run. Reported by CMP-1's session. No issue or fix PR yet. Fix once (widen sample or fixed seed), runner assigns.",
+      "logged": "2026-11-08T03:03:10Z"
     }
   ],
   "main_health": [
@@ -6700,7 +6705,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T02:29Z",
+    "updated": "2026-11-08T03:03:10Z",
     "items": [
       {
         "slot": 1,
@@ -6715,7 +6720,7 @@
         "slice": "CMP-1",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBUJa6y4tEEAzxmMJs: CMP-1 companion fetch + verify (Opus, 2R, /security-review)",
+        "doing": "session_01MMjhnBUJa6y4tEEAzxmMJs; PR #602 open (925d94fd), CI running",
         "since": "2026-11-08T02:13Z"
       },
       {
