@@ -108,17 +108,25 @@ pub fn host() -> HostInfo {
     }
 }
 
-/// Linux: `MemTotal`, or a cgroup v2 limit when lower. Elsewhere unknown
-/// until a platform slice measures it.
-fn memory_bytes() -> Option<u64> {
+/// Linux: `MemTotal`, or a cgroup limit when lower (v2 `memory.max`, else
+/// v1 `memory.limit_in_bytes`; `max` is none). Elsewhere unknown until a
+/// platform slice measures it. Also the worker's `Hello` (WK-10d).
+pub(crate) fn memory_bytes() -> Option<u64> {
     #[cfg(target_os = "linux")]
     {
         let total = std::fs::read_to_string("/proc/meminfo")
             .ok()
             .and_then(|m| mem_total(&m));
-        let limit = std::fs::read_to_string("/sys/fs/cgroup/memory.max")
-            .ok()
-            .and_then(|l| l.trim().parse::<u64>().ok());
+        let limit = [
+            "/sys/fs/cgroup/memory.max",
+            "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+        ]
+        .iter()
+        .find_map(|p| {
+            std::fs::read_to_string(p)
+                .ok()
+                .and_then(|l| l.trim().parse::<u64>().ok())
+        });
         match (total, limit) {
             (Some(t), Some(l)) => Some(t.min(l)),
             (t, l) => t.or(l),
