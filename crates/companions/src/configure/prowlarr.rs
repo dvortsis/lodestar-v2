@@ -16,7 +16,8 @@
 //! else): for a direct route, `proxy.enabled` (`proxyEnabled`) off; for a
 //! SOCKS5 route, `proxy.enabled` on, `proxy.type` (`proxyType`) `socks5`,
 //! `proxy.hostname` (`proxyHostname`) and `proxy.port` (`proxyPort`) the
-//! route's. An interface or bind-address route is refused
+//! route's, and `proxy.bypass_filter` (`proxyBypassFilter`) empty, so no
+//! indexer host is left on the direct route. An interface or bind-address route is refused
 //! ([`ROUTE_UNSUPPORTED`](super::ROUTE_UNSUPPORTED)). With no route
 //! nothing is planned and nothing sent.
 
@@ -47,8 +48,15 @@ pub const PROXY_ENABLED: SettingKey = key("proxy.enabled");
 pub const PROXY_TYPE: SettingKey = key("proxy.type");
 pub const PROXY_HOSTNAME: SettingKey = key("proxy.hostname");
 pub const PROXY_PORT: SettingKey = key("proxy.port");
+pub const PROXY_BYPASS: SettingKey = key("proxy.bypass_filter");
 
-const ORDER: [SettingKey; 4] = [PROXY_ENABLED, PROXY_TYPE, PROXY_HOSTNAME, PROXY_PORT];
+const ORDER: [SettingKey; 5] = [
+    PROXY_ENABLED,
+    PROXY_TYPE,
+    PROXY_HOSTNAME,
+    PROXY_PORT,
+    PROXY_BYPASS,
+];
 
 fn limits() -> Limits {
     Limits::new(Duration::from_secs(10), 64 * 1024).unwrap_or(Limits::PROBE)
@@ -73,6 +81,8 @@ pub(crate) struct Proxy {
     pub kind: String,
     pub hostname: String,
     pub port: u32,
+    /// `proxyBypassFilter`, empty for `null`.
+    pub bypass: String,
 }
 
 /// What the route asks for: `None` for a direct route (proxy off), the
@@ -109,7 +119,8 @@ pub(crate) fn parse_host(body: &[u8]) -> Option<Proxy> {
     if j.peek() != Some(b'{') {
         return None;
     }
-    let (mut id, mut enabled, mut kind, mut hostname, mut port) = (None, None, None, None, None);
+    let (mut id, mut enabled, mut kind, mut hostname, mut port, mut bypass) =
+        (None, None, None, None, None, None);
     j.object(|j, k| {
         if k.contains('\\') {
             return Err(json::Stop::Malformed);
@@ -136,18 +147,19 @@ pub(crate) fn parse_host(body: &[u8]) -> Option<Proxy> {
                 j.skip()?;
                 enabled = Some(v);
             }
-            "proxyType" | "proxyHostname" => {
-                let slot = if k == "proxyType" {
-                    &mut kind
-                } else {
-                    &mut hostname
+            "proxyType" | "proxyHostname" | "proxyBypassFilter" => {
+                let nullable = k != "proxyType";
+                let slot = match k {
+                    "proxyType" => &mut kind,
+                    "proxyHostname" => &mut hostname,
+                    _ => &mut bypass,
                 };
                 if slot.is_some() {
                     return Err(bad);
                 }
                 *slot = Some(match j.peek() {
                     Some(b'"') => j.text()?.map_err(|_| bad)?,
-                    Some(b'n') if k == "proxyHostname" => {
+                    Some(b'n') if nullable => {
                         j.skip()?;
                         String::new()
                     }
@@ -174,6 +186,7 @@ pub(crate) fn parse_host(body: &[u8]) -> Option<Proxy> {
         kind: kind?,
         hostname: hostname?,
         port: port?,
+        bypass: bypass?,
     })
 }
 
@@ -198,6 +211,11 @@ fn differing(want: &Option<(String, u32)>, have: &Proxy) -> Vec<SettingKey> {
             }
             if have.port != *port {
                 out.push(PROXY_PORT);
+            }
+            // A bypass filter would send the hosts it names on the direct
+            // route, which Q8 forbids.
+            if !have.bypass.is_empty() {
+                out.push(PROXY_BYPASS);
             }
         }
     }
@@ -278,6 +296,7 @@ impl Prowlarr {
                 (k, Some(_)) if *k == PROXY_TYPE => ("proxyType", "socks5".into()),
                 (k, Some((h, _))) if *k == PROXY_HOSTNAME => ("proxyHostname", h.clone().into()),
                 (k, Some((_, p))) if *k == PROXY_PORT => ("proxyPort", (*p).into()),
+                (k, Some(_)) if *k == PROXY_BYPASS => ("proxyBypassFilter", "".into()),
                 _ => return Err(AdapterError::Refused("the plan doesn't match the input")),
             };
             host.insert(name.to_owned(), value);
@@ -350,7 +369,7 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    const HOST_JSON: &str = r#"{"bindAddress":"*","port":9696,"apiKey":"k","proxyEnabled":false,"proxyType":"http","proxyHostname":null,"proxyPort":8080,"proxyUsername":null,"id":1}"#;
+    const HOST_JSON: &str = r#"{"bindAddress":"*","port":9696,"apiKey":"k","proxyEnabled":false,"proxyType":"http","proxyHostname":null,"proxyPort":8080,"proxyUsername":null,"proxyBypassFilter":null,"id":1}"#;
 
     #[test]
     fn host_settings() {
@@ -361,7 +380,8 @@ mod tests {
                 enabled: false,
                 kind: "http".into(),
                 hostname: String::new(),
-                port: 8080
+                port: 8080,
+                bypass: String::new(),
             }
         );
         for bad in [
@@ -393,18 +413,36 @@ mod tests {
             kind: "http".into(),
             hostname: String::new(),
             port: 8080,
+            bypass: String::new(),
         };
         assert!(differing(&None, &off).is_empty());
         let want = Some(("172.17.0.2".to_owned(), 1080));
-        assert_eq!(differing(&want, &off), ORDER.to_vec());
+        assert_eq!(differing(&want, &off), ORDER[..4].to_vec());
         let on = Proxy {
             enabled: true,
             kind: "Socks5".into(),
             hostname: "172.17.0.2".into(),
             port: 1080,
+            bypass: String::new(),
         };
         assert!(differing(&want, &on).is_empty());
         assert_eq!(differing(&None, &on), vec![PROXY_ENABLED]);
+        let leaky = Proxy {
+            bypass: "*.org".into(),
+            ..on
+        };
+        assert_eq!(differing(&want, &leaky), vec![PROXY_BYPASS]);
+        // Off, a filter doesn't matter.
+        assert!(
+            differing(
+                &None,
+                &Proxy {
+                    enabled: false,
+                    ..leaky
+                }
+            )
+            .is_empty()
+        );
     }
 
     proptest! {
@@ -418,9 +456,10 @@ mod tests {
             let body = serde_json::json!({
                 "id": 1, "proxyEnabled": enabled, "proxyType": "socks5",
                 "proxyHostname": host, "proxyPort": port, "apiKey": "x", "port": 9696,
+                "proxyBypassFilter": null,
             }).to_string();
             let p = parse_host(body.as_bytes()).unwrap();
-            prop_assert_eq!(p, Proxy { enabled, kind: "socks5".into(), hostname: host, port });
+            prop_assert_eq!(p, Proxy { enabled, kind: "socks5".into(), hostname: host, port, bypass: String::new() });
         }
     }
 }

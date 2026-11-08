@@ -1,13 +1,16 @@
 //! qBittorrent through its WebUI API v2 (checked against upstream
-//! `release-4.6.3` and `release-5.0.3`, `src/webui/api/`; sources in
+//! `release-4.6.3`, `release-5.0.3`, `release-5.1.2` and `release-5.2.0`,
+//! `src/webui/api/`; sources in
 //! `docs/decisions/2026-11-08-CMP-8b.md`).
 //!
 //! - **Sign-in:** `POST /api/v2/auth/login`, a form of `username` and
-//!   `password`. `200 Ok.` with the `SID` cookie is a session; `200 Fails.`
-//!   is a wrong password; `403` is a ban after failed sign-ins, never
-//!   retried. Requests carry no `Origin` or `Referer`, which qBittorrent's
-//!   cross-site check passes. A custom `WebUI\SessionCookieName` isn't
-//!   supported: the sign-in fails as a protocol error.
+//!   `password`. Up to 5.1, `200 Ok.` with the `SID` cookie is a session
+//!   and `200 Fails.` a wrong password; from 5.2, `204` with the
+//!   `QBT_SID_<port>` cookie is a session and `401` a wrong password. `403`
+//!   is a ban after failed sign-ins in both, never retried. Requests carry
+//!   no `Origin` or `Referer`, which qBittorrent's cross-site check passes.
+//!   A custom `WebUI\SessionCookieName` (up to 5.1) isn't supported: the
+//!   sign-in fails as a protocol error.
 //! - **Reading:** `GET /api/v2/app/preferences` and
 //!   `GET /api/v2/torrents/categories`, with the session cookie.
 //! - **Writing:** `POST /api/v2/app/setPreferences` with `json=` and only
@@ -62,7 +65,14 @@ const CATEGORIES: &str = "/api/v2/torrents/categories";
 const CREATE_CATEGORY: &str = "/api/v2/torrents/createCategory";
 const EDIT_CATEGORY: &str = "/api/v2/torrents/editCategory";
 
-const SID: CookieName = cookie("SID");
+/// The session cookie: `SID` up to 5.1 (or a custom
+/// `WebUI\SessionCookieName`, unsupported), `QBT_SID_<WebUI port>` from
+/// 5.2. The port inside a container can differ from the target's, so any
+/// digits match.
+const SESSION: &[CookieName] = &[
+    cookie(CookieName::new("SID")),
+    cookie(CookieName::numbered("QBT_SID_")),
+];
 const COOKIE: HeaderName = header("Cookie");
 const FORM: &str = "application/x-www-form-urlencoded";
 
@@ -277,13 +287,12 @@ fn same_address(have: &str, want: &str) -> bool {
     }
 }
 
-/// A session: the `SID` cookie's value.
+/// A session: the session cookie as `name=value`.
 struct Session(Secret);
 
 impl Session {
     fn header(&self) -> Result<HeaderValue, AdapterError> {
-        HeaderValue::secret(Secret::new(format!("SID={}", self.0.expose())))
-            .map_err(|_| AdapterError::Protocol("session cookie"))
+        HeaderValue::secret(self.0.clone()).map_err(|_| AdapterError::Protocol("session cookie"))
     }
 }
 
@@ -305,15 +314,17 @@ async fn login(
     let req = ProbeRequest::new(target, path(LOGIN)?, limits())
         .post(body)
         .header(CONTENT_TYPE, plain(FORM)?)
-        .session_cookie(SID);
+        .session_cookie(SESSION);
     let r = http.send(req).await?;
+    // Up to 5.1: `200 Ok.` or `200 Fails.`. From 5.2: `204` with no body,
+    // or `401`. A ban is `403` in both.
     match (r.status(), r.body().trim_ascii()) {
-        (200, b"Ok.") => r
+        (200, b"Ok.") | (204, b"") => r
             .session_cookie()
             .cloned()
             .map(Session)
             .ok_or(AdapterError::Protocol("no session cookie")),
-        (200, b"Fails.") => Err(AdapterError::Unauthorized),
+        (200, b"Fails.") | (401, _) => Err(AdapterError::Unauthorized),
         (403, _) => Err(AdapterError::Refused(BANNED)),
         _ => Err(AdapterError::Protocol("sign-in answer")),
     }
@@ -360,10 +371,11 @@ async fn call(
         req = req.post(b).header(CONTENT_TYPE, plain(FORM)?);
     }
     let r = http.send(req).await?;
+    // Writes answer `200` with an empty body up to 5.1, `204` from 5.2.
     match r.status() {
-        200 => Ok(r),
-        403 => Err(AdapterError::Unauthorized),
-        400 | 409 => Err(AdapterError::Refused("qBittorrent refused the setting")),
+        200 | 204 => Ok(r),
+        401 | 403 => Err(AdapterError::Unauthorized),
+        400 | 404 | 409 => Err(AdapterError::Refused("qBittorrent refused the setting")),
         _ => Err(AdapterError::Protocol("HTTP status")),
     }
 }

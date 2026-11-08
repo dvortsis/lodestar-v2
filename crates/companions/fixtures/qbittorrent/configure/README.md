@@ -11,6 +11,10 @@ these files and changes its copy as `setPreferences`, `createCategory` and
   It keeps the five keys CMP-8b compares, a nested object (`scan_dirs`)
   and a list (`websocket_trackers`), so the bounded reader passes over
   both.
+- The fake also answers as qBittorrent 5.2 does when a test asks
+  (`release-5.2.0`'s `authcontroller.cpp` and `webapplication.cpp`): the
+  `QBT_SID_<port>` cookie, `204` for a sign-in or a write, and `401` for a
+  wrong password. The preference keys are the same from 4.6 to 5.2.
 - `categories.json`: one category, in `categoriesAction`'s shape
   (`name`, `savePath`, `download_path`).
 

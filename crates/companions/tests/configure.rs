@@ -17,8 +17,8 @@ use lodestar_companions::adapter::{
 use lodestar_companions::config_files::Username;
 use lodestar_companions::configure::{
     self, BIND_UNSUITED, Category, CategoryName, ConfigSink, Confirmation, DownloadClientEntry,
-    Downloads, IndexerManagerEntry, InterfaceName, NOT_CONFIRMED, ROUTE_UNSUPPORTED, Route,
-    SINK_REFUSED, SinkError, Socks5Proxy, WebUiBind, qbittorrent,
+    Downloads, IndexerManagerEntry, InstallReceipt, InterfaceName, NOT_CONFIRMED,
+    ROUTE_UNSUPPORTED, Route, SINK_REFUSED, SinkError, Socks5Proxy, WebUiBind, qbittorrent,
 };
 use lodestar_companions::detect::CompanionHttp;
 use lodestar_companions::inputs::{HostPath, PortNumber};
@@ -249,6 +249,10 @@ fn qbit_creds(password: &'static str) -> Creds {
     Creds(HashMap::from([("webui_password", password)]))
 }
 
+fn receipt(target: &Target) -> InstallReceipt {
+    InstallReceipt::for_tests(target.clone())
+}
+
 fn http() -> CompanionHttp {
     CompanionHttp::new().unwrap()
 }
@@ -286,6 +290,9 @@ struct QState {
     hostile: Option<fn() -> Reply>,
     /// Login answers without a usable cookie.
     no_cookie: bool,
+    /// Answer as qBittorrent 5.2 does: `QBT_SID_<port>`, `204` for a
+    /// sign-in or a write, `401` for a wrong password.
+    v52: bool,
 }
 
 type Qbit = Arc<Mutex<QState>>;
@@ -301,6 +308,7 @@ fn qbit_state(password: &str) -> Qbit {
         ignore_password: false,
         hostile: None,
         no_cookie: false,
+        v52: false,
     }))
 }
 
@@ -315,22 +323,33 @@ fn qbit_handler(state: Qbit) -> Handler {
             if f.get("username") == Some(&s.username) && f.get("password") == Some(&s.password) {
                 let sid = format!("{SID_PREFIX}{}", s.sessions.len());
                 s.sessions.push(sid.clone());
+                let name = if s.v52 { "QBT_SID_8080" } else { "SID" };
                 let cookie = if s.no_cookie {
-                    "SID=bad value; HttpOnly".to_owned()
+                    format!("{name}=bad value; HttpOnly")
                 } else {
-                    format!("SID={sid}; HttpOnly; SameSite=Strict; path=/")
+                    format!("{name}={sid}; HttpOnly; SameSite=Strict; path=/")
+                };
+                let (status, body) = if s.v52 {
+                    (204, &b""[..])
+                } else {
+                    (200, &b"Ok."[..])
                 };
                 return Reply::Full {
-                    status: 200,
+                    status,
                     headers: vec![("Set-Cookie".into(), cookie)],
-                    body: b"Ok.".to_vec(),
+                    body: body.to_vec(),
                 };
             }
-            return reply(200, "Fails.");
+            return if s.v52 {
+                reply(401, "")
+            } else {
+                reply(200, "Fails.")
+            };
         }
+        let prefix = if s.v52 { "QBT_SID_8080=" } else { "SID=" };
         let authed = seen
             .header("cookie")
-            .and_then(|c| c.strip_prefix("SID="))
+            .and_then(|c| c.strip_prefix(prefix))
             .is_some_and(|sid| s.sessions.iter().any(|x| x == sid));
         if !authed {
             return reply(403, "Forbidden");
@@ -357,7 +376,7 @@ fn qbit_handler(state: Qbit) -> Handler {
                         s.prefs.insert(k, v);
                     }
                 }
-                reply(200, "")
+                reply(if s.v52 { 204 } else { 200 }, "")
             }
             ("POST", p @ ("/api/v2/torrents/createCategory" | "/api/v2/torrents/editCategory")) => {
                 let f = form_decode(&seen.body);
@@ -370,7 +389,7 @@ fn qbit_handler(state: Qbit) -> Handler {
                     name.clone(),
                     json!({"name": name, "savePath": f["savePath"], "download_path": null}),
                 );
-                reply(200, "")
+                reply(if s.v52 { 204 } else { 200 }, "")
             }
             _ => reply(404, "Not Found"),
         }
@@ -420,7 +439,7 @@ async fn qbittorrent_first_configuration_then_an_empty_plan() {
     let target = server.loopback();
     let creds = qbit_creds(GENERATED);
     let input = ConfigureInput::new(&creds)
-        .installed()
+        .installed(receipt(&target))
         .webui(WebUiBind::Loopback)
         .downloads(downloads())
         .route(tun0());
@@ -503,7 +522,7 @@ async fn qbittorrent_already_configured_writes_nothing() {
     let target = server.loopback();
     let creds = qbit_creds(GENERATED);
     let input = ConfigureInput::new(&creds)
-        .installed()
+        .installed(receipt(&target))
         .webui(WebUiBind::Loopback)
         .downloads(downloads())
         .route(tun0());
@@ -530,7 +549,7 @@ async fn qbittorrent_partly_configured_writes_only_what_differs() {
     let target = server.loopback();
     let creds = qbit_creds(GENERATED);
     let input = ConfigureInput::new(&creds)
-        .installed()
+        .installed(receipt(&target))
         .downloads(Downloads::new(HostPath::parse("/downloads").unwrap(), Vec::new()).unwrap())
         .route(Route::Direct);
     let http = http();
@@ -562,7 +581,7 @@ async fn qbittorrent_refused_credentials_and_a_ban() {
     let server = Server::start(qbit_handler(Arc::clone(&state))).await;
     let target = server.loopback();
     let creds = qbit_creds(WRONG);
-    let input = ConfigureInput::new(&creds).installed();
+    let input = ConfigureInput::new(&creds).installed(receipt(&target));
     let e = qbit().plan(&http(), &target, &input).await.unwrap_err();
     assert_eq!(e, AdapterError::Unauthorized);
     clean_error(&e);
@@ -570,13 +589,13 @@ async fn qbittorrent_refused_credentials_and_a_ban() {
 
     state.lock().unwrap().banned = true;
     let creds = qbit_creds(GENERATED);
-    let input = ConfigureInput::new(&creds).installed();
+    let input = ConfigureInput::new(&creds).installed(receipt(&target));
     let e = qbit().plan(&http(), &target, &input).await.unwrap_err();
     assert_eq!(e, AdapterError::Refused(qbittorrent::BANNED));
     assert_eq!(server.count(), 2, "a ban is never retried");
 
     let none = Creds(HashMap::new());
-    let input = ConfigureInput::new(&none).installed();
+    let input = ConfigureInput::new(&none).installed(receipt(&target));
     assert_eq!(
         qbit().plan(&http(), &target, &input).await,
         Err(AdapterError::Unauthorized)
@@ -647,7 +666,9 @@ async fn qbittorrent_refuses_a_socks5_route_and_unsuited_bindings_before_sending
     let creds = qbit_creds(GENERATED);
     let socks = Route::Socks5(Socks5Proxy::new("172.17.0.2:1080".parse().unwrap()).unwrap());
     let lo = server.loopback();
-    let input = ConfigureInput::new(&creds).installed().route(socks);
+    let input = ConfigureInput::new(&creds)
+        .installed(receipt(&lo))
+        .route(socks);
     assert_eq!(
         qbit().plan(&http(), &lo, &input).await,
         Err(AdapterError::Refused(ROUTE_UNSUPPORTED))
@@ -662,7 +683,7 @@ async fn qbittorrent_refuses_a_socks5_route_and_unsuited_bindings_before_sending
         Err(AdapterError::Refused(BIND_UNSUITED))
     );
     let input = ConfigureInput::new(&creds)
-        .installed()
+        .installed(receipt(&lo))
         .webui(WebUiBind::ContainerNetwork);
     assert_eq!(
         qbit().plan(&http(), &lo, &input).await,
@@ -689,7 +710,13 @@ async fn unconfirmed_targets_are_refused_before_anything_is_sent() {
             // Nothing stated.
             ConfigureInput::new(creds).route(Route::Direct),
             // Lodestar never installs at a URL you entered.
-            ConfigureInput::new(creds).installed().route(Route::Direct),
+            ConfigureInput::new(creds)
+                .installed(receipt(&entered))
+                .route(Route::Direct),
+            // A receipt for another target.
+            ConfigureInput::new(creds)
+                .installed(receipt(&lo))
+                .route(Route::Direct),
             // A confirmation for another target.
             ConfigureInput::new(creds)
                 .confirmed(Confirmation::of(lo.clone()))
@@ -705,7 +732,9 @@ async fn unconfirmed_targets_are_refused_before_anything_is_sent() {
                 .plan(
                     &http(),
                     &lo,
-                    &ConfigureInput::new(creds).installed().route(Route::Direct),
+                    &ConfigureInput::new(creds)
+                        .installed(receipt(&lo))
+                        .route(Route::Direct),
                 )
                 .await;
             if let Ok(plan) = plan {
@@ -774,7 +803,7 @@ async fn qbittorrent_hostile_answers() {
         state.lock().unwrap().hostile = Some(hostile);
         let server = Server::start(qbit_handler(state)).await;
         let target = server.loopback();
-        let input = ConfigureInput::new(&creds).installed();
+        let input = ConfigureInput::new(&creds).installed(receipt(&target));
         let started = std::time::Instant::now();
         let e = qbit().plan(&http, &target, &input).await.unwrap_err();
         assert_eq!(e, want);
@@ -786,7 +815,7 @@ async fn qbittorrent_hostile_answers() {
     let state = qbit_state(GENERATED);
     state.lock().unwrap().no_cookie = true;
     let server = Server::start(qbit_handler(state)).await;
-    let input = ConfigureInput::new(&creds).installed();
+    let input = ConfigureInput::new(&creds).installed(receipt(&server.loopback()));
     assert_eq!(
         qbit().plan(&http, &server.loopback(), &input).await,
         Err(AdapterError::Protocol("no session cookie"))
@@ -799,14 +828,16 @@ async fn apply_refuses_another_companions_plan() {
     let p = Server::start(prowlarr_handler(prowlarr_state())).await;
     let q = Server::start(qbit_handler(qbit_state(GENERATED))).await;
     let pcreds = Creds(HashMap::from([("api_key", API_KEY)]));
-    let pin = ConfigureInput::new(&pcreds).installed().route(socks5());
+    let pin = ConfigureInput::new(&pcreds)
+        .installed(receipt(&p.loopback()))
+        .route(socks5());
     let plan = prowlarr_adapter()
         .plan(&http(), &p.loopback(), &pin)
         .await
         .unwrap();
     assert!(!plan.changes().is_empty());
     let qcreds = qbit_creds(GENERATED);
-    let qin = ConfigureInput::new(&qcreds).installed();
+    let qin = ConfigureInput::new(&qcreds).installed(receipt(&q.loopback()));
     assert_eq!(
         qbit().apply(&http(), &q.loopback(), &qin, &plan).await,
         Err(AdapterError::Refused("the plan is for another companion"))
@@ -867,7 +898,9 @@ async fn prowlarr_first_configuration_then_an_empty_plan() {
     let server = Server::start(prowlarr_handler(Arc::clone(&state))).await;
     let target = server.loopback();
     let creds = Creds(HashMap::from([("api_key", API_KEY)]));
-    let input = ConfigureInput::new(&creds).installed().route(socks5());
+    let input = ConfigureInput::new(&creds)
+        .installed(receipt(&target))
+        .route(socks5());
     let http = http();
     let adapter = prowlarr_adapter();
     let plan = adapter.plan(&http, &target, &input).await.unwrap();
@@ -921,7 +954,9 @@ async fn prowlarr_first_configuration_then_an_empty_plan() {
     assert!(again.changes().is_empty());
 
     // Back to direct: only the switch changes.
-    let input = ConfigureInput::new(&creds).installed().route(Route::Direct);
+    let input = ConfigureInput::new(&creds)
+        .installed(receipt(&target))
+        .route(Route::Direct);
     let plan = adapter.plan(&http, &target, &input).await.unwrap();
     assert_eq!(names(&plan), ["proxy.enabled"]);
     adapter.apply(&http, &target, &input, &plan).await.unwrap();
@@ -938,7 +973,9 @@ async fn prowlarr_already_and_partly_configured() {
     let creds = Creds(HashMap::from([("api_key", API_KEY)]));
     let http = http();
     // Direct, and the proxy is already off.
-    let input = ConfigureInput::new(&creds).installed().route(Route::Direct);
+    let input = ConfigureInput::new(&creds)
+        .installed(receipt(&target))
+        .route(Route::Direct);
     assert!(
         prowlarr_adapter()
             .plan(&http, &target, &input)
@@ -951,7 +988,7 @@ async fn prowlarr_already_and_partly_configured() {
 
     // No route: nothing planned and nothing sent.
     let before = server.count();
-    let input = ConfigureInput::new(&creds).installed();
+    let input = ConfigureInput::new(&creds).installed(receipt(&target));
     assert!(
         prowlarr_adapter()
             .plan(&http, &target, &input)
@@ -962,19 +999,26 @@ async fn prowlarr_already_and_partly_configured() {
     );
     assert_eq!(server.count(), before);
 
-    // On, SOCKS5, another host and port: only those two change.
+    // On, SOCKS5, another host and port, and a bypass filter: only those
+    // three change.
     {
         let mut s = state.lock().unwrap();
         s.host.insert("proxyEnabled".into(), true.into());
         s.host.insert("proxyType".into(), "socks5".into());
         s.host.insert("proxyHostname".into(), "10.0.0.9".into());
+        s.host.insert("proxyBypassFilter".into(), "*.org".into());
     }
-    let input = ConfigureInput::new(&creds).installed().route(socks5());
+    let input = ConfigureInput::new(&creds)
+        .installed(receipt(&target))
+        .route(socks5());
     let plan = prowlarr_adapter()
         .plan(&http, &target, &input)
         .await
         .unwrap();
-    assert_eq!(names(&plan), ["proxy.hostname", "proxy.port"]);
+    assert_eq!(
+        names(&plan),
+        ["proxy.hostname", "proxy.port", "proxy.bypass_filter"]
+    );
     prowlarr_adapter()
         .apply(&http, &target, &input, &plan)
         .await
@@ -1003,7 +1047,9 @@ async fn prowlarr_refusals_and_hostile_answers() {
         tun0(),
         Route::BindAddress(configure::BindIp::new("10.8.0.2".parse().unwrap()).unwrap()),
     ] {
-        let input = ConfigureInput::new(&creds).installed().route(route);
+        let input = ConfigureInput::new(&creds)
+            .installed(receipt(&target))
+            .route(route);
         assert_eq!(
             prowlarr_adapter().plan(&http, &target, &input).await,
             Err(AdapterError::Refused(ROUTE_UNSUPPORTED))
@@ -1016,7 +1062,9 @@ async fn prowlarr_refusals_and_hostile_answers() {
         "api_key",
         "ffffffffffffffffffffffffffffffff",
     )]));
-    let input = ConfigureInput::new(&wrong).installed().route(socks5());
+    let input = ConfigureInput::new(&wrong)
+        .installed(receipt(&target))
+        .route(socks5());
     let e = prowlarr_adapter()
         .plan(&http, &target, &input)
         .await
@@ -1032,7 +1080,9 @@ async fn prowlarr_refusals_and_hostile_answers() {
     );
     clean_urls(&server.seen());
 
-    let input = ConfigureInput::new(&creds).installed().route(socks5());
+    let input = ConfigureInput::new(&creds)
+        .installed(receipt(&target))
+        .route(socks5());
     for (hostile, want) in [
         (
             (|| reply(200, vec![b' '; 65 * 1024])) as fn() -> Reply,
@@ -1113,12 +1163,12 @@ async fn hand_over_writes_lodestars_entries_from_its_own_values() {
     let sink = FakeSink::default();
     let qcreds = qbit_creds(GENERATED);
     let input = ConfigureInput::new(&qcreds)
-        .installed()
+        .installed(receipt(&lo))
         .downloads(downloads());
     let q = CompanionId::parse("qbittorrent").unwrap();
     configure::hand_over(&sink, &q, &lo, &input).await.unwrap();
     let pcreds = Creds(HashMap::from([("api_key", API_KEY)]));
-    let input = ConfigureInput::new(&pcreds).installed();
+    let input = ConfigureInput::new(&pcreds).installed(receipt(&lo));
     let p = CompanionId::parse("prowlarr").unwrap();
     configure::hand_over(&sink, &p, &lo, &input).await.unwrap();
     assert_eq!(
@@ -1134,7 +1184,7 @@ async fn hand_over_writes_lodestars_entries_from_its_own_values() {
         refuse: true,
         ..FakeSink::default()
     };
-    let input = ConfigureInput::new(&qcreds).installed();
+    let input = ConfigureInput::new(&qcreds).installed(receipt(&lo));
     assert_eq!(
         configure::hand_over(&refusing, &q, &lo, &input).await,
         Err(AdapterError::Refused(SINK_REFUSED))
@@ -1159,7 +1209,11 @@ async fn no_secret_reaches_a_log_line() {
     qbit().apply(&http, &target, &input, &plan).await.unwrap();
     let wrong = qbit_creds(WRONG);
     let _ = qbit()
-        .plan(&http, &target, &ConfigureInput::new(&wrong).installed())
+        .plan(
+            &http,
+            &target,
+            &ConfigureInput::new(&wrong).installed(receipt(&target)),
+        )
         .await;
 
     let lines = sink.0.lock().unwrap().clone();
@@ -1188,4 +1242,62 @@ async fn no_secret_reaches_a_log_line() {
             assert!(!l.contains(s), "{l}");
         }
     }
+}
+
+#[tokio::test]
+async fn qbittorrent_5_2_sign_in_cookie_and_answers() {
+    capture();
+    let state = qbit_state(TEMPORARY);
+    {
+        let mut s = state.lock().unwrap();
+        s.v52 = true;
+        s.username = "admin".into();
+    }
+    let server = Server::start(qbit_handler(Arc::clone(&state))).await;
+    let target = server.entered();
+    let creds = qbit_creds(GENERATED);
+    let input = ConfigureInput::new(&creds)
+        .guided(Confirmation::of(target.clone()), Secret::new(TEMPORARY))
+        .username(Username::parse("admin").unwrap())
+        .downloads(downloads())
+        .route(tun0());
+    let http = http();
+    // The stored password is refused with 401, so the temporary one is
+    // tried, and 5.2's `204` and `QBT_SID_<port>` make a session.
+    let plan = qbit().plan(&http, &target, &input).await.unwrap();
+    assert_eq!(
+        names(&plan),
+        [
+            "downloads.categories",
+            "downloads.save_path",
+            "network.interface",
+            "webui.password"
+        ]
+    );
+    qbit().apply(&http, &target, &input, &plan).await.unwrap();
+    assert_eq!(state.lock().unwrap().password, GENERATED);
+    assert!(
+        qbit()
+            .plan(&http, &target, &input)
+            .await
+            .unwrap()
+            .changes()
+            .is_empty()
+    );
+    for s in server.seen().iter().filter(|s| !s.path.ends_with("/login")) {
+        assert!(
+            s.header("cookie")
+                .unwrap()
+                .starts_with("QBT_SID_8080=sessionvalue")
+        );
+    }
+    clean_urls(&server.seen());
+
+    // A wrong password on 5.2 is `Unauthorized`, as on 5.1.
+    let wrong = qbit_creds(WRONG);
+    let input = ConfigureInput::new(&wrong).confirmed(Confirmation::of(target.clone()));
+    assert_eq!(
+        qbit().plan(&http, &target, &input).await,
+        Err(AdapterError::Unauthorized)
+    );
 }

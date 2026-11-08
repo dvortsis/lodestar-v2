@@ -81,6 +81,33 @@ impl Confirmation {
     }
 }
 
+/// Proof that Lodestar installed the companion at this target. Only this
+/// crate mints one (CMP-5's manager, from its own state row), so no caller
+/// can claim an install it didn't make: a detected companion on a fixed
+/// target needs your [`Confirmation`] instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstallReceipt {
+    target: Target,
+}
+
+impl InstallReceipt {
+    /// For CMP-5's manager, after it installed the companion at `target`.
+    #[cfg_attr(
+        not(any(test, feature = "testing")),
+        expect(dead_code, reason = "CMP-5's manager is its first caller")
+    )]
+    pub(crate) fn new(target: Target) -> InstallReceipt {
+        InstallReceipt { target }
+    }
+
+    /// For other crates' and this crate's `tests/`. Only under the
+    /// `testing` feature, which only dev-dependencies enable.
+    #[cfg(feature = "testing")]
+    pub fn for_tests(target: Target) -> InstallReceipt {
+        InstallReceipt::new(target)
+    }
+}
+
 /// Where the companion came from, which decides whether Lodestar may
 /// configure it.
 #[derive(Debug, Clone, Default)]
@@ -89,7 +116,7 @@ pub enum Origin {
     #[default]
     Unstated,
     /// Lodestar installed it, on loopback or as a container.
-    Installed,
+    Installed(InstallReceipt),
     /// Detected or entered, and you confirmed it.
     Confirmed(Confirmation),
     /// A guided install you confirmed (Q19): Lodestar signs in with the
@@ -101,12 +128,13 @@ pub enum Origin {
     },
 }
 
-/// Checks consent before anything is sent: an installed companion is never
-/// at a URL you entered, and a confirmation must name this target.
+/// Checks consent before anything is sent: an install receipt or a
+/// confirmation must name this target, and an installed companion is never
+/// at a URL you entered.
 pub(crate) fn consent(input: &ConfigureInput<'_>, target: &Target) -> Result<(), AdapterError> {
     let ok = match &input.origin {
         Origin::Unstated => false,
-        Origin::Installed => !matches!(target, Target::Entered(_)),
+        Origin::Installed(r) => r.target == *target && !matches!(target, Target::Entered(_)),
         Origin::Confirmed(c)
         | Origin::Guided {
             confirmation: c, ..
@@ -430,8 +458,8 @@ pub(crate) const fn header(name: &'static str) -> HeaderName {
     }
 }
 
-pub(crate) const fn cookie(name: &'static str) -> CookieName {
-    match CookieName::new(name) {
+pub(crate) const fn cookie(c: Option<CookieName>) -> CookieName {
+    match c {
         Some(c) => c,
         None => panic!("cookie name outside the grammar"),
     }

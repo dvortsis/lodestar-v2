@@ -36,8 +36,9 @@ use reqwest::Url;
 use reqwest::header::{HeaderValue as ReqHeaderValue, SET_COOKIE, USER_AGENT};
 
 use crate::adapter::{
-    AdapterError, BoxFuture, Detect, Detected, EnteredUrl, GuardedHttp, Health, HealthStatus,
-    Limits, Method, ProbeRequest, ProbeResponse, RequestPath, TIMEOUT_MAX, Target, cookie_value_ok,
+    AdapterError, BoxFuture, CookieName, Detect, Detected, EnteredUrl, GuardedHttp, Health,
+    HealthStatus, Limits, Method, ProbeRequest, ProbeResponse, RequestPath, TIMEOUT_MAX, Target,
+    cookie_value_ok,
 };
 use crate::catalogue::{Catalogue, Entry, Exposure, Proto};
 use crate::inputs::CompanionId;
@@ -331,13 +332,13 @@ impl CompanionHttp {
             let status = resp.status().as_u16();
             // Only the one cookie the request names is read, and only its
             // value; no other header of the answer is.
-            let session = request.session_cookie.and_then(|name| {
+            let session = request.session_cookie.and_then(|names| {
                 session_cookie(
                     resp.headers()
                         .get_all(SET_COOKIE)
                         .iter()
                         .filter_map(|v| v.to_str().ok()),
-                    name.as_str(),
+                    names,
                 )
             });
             Ok::<_, NetError>((status, session, read_limited(resp, cap).await?))
@@ -394,15 +395,18 @@ impl GuardedHttp for CompanionHttp {
     }
 }
 
-/// The value of the first `Set-Cookie` whose name is exactly `name` and
-/// whose value passes [`cookie_value_ok`]; attributes after `;` are
-/// ignored. Values that fail are passed over, never returned.
-fn session_cookie<'a>(headers: impl Iterator<Item = &'a str>, name: &str) -> Option<String> {
+/// The `name=value` of the first `Set-Cookie` whose name one of `names`
+/// matches and whose value passes [`cookie_value_ok`]; attributes after
+/// `;` are ignored. Cookies that fail are passed over, never returned.
+fn session_cookie<'a>(
+    headers: impl Iterator<Item = &'a str>,
+    names: &[CookieName],
+) -> Option<String> {
     headers
         .filter_map(|h| h.split(';').next())
         .filter_map(|pair| pair.trim().split_once('='))
-        .find(|(n, v)| *n == name && cookie_value_ok(v))
-        .map(|(_, v)| v.to_owned())
+        .find(|(n, v)| names.iter().any(|c| c.matches(n)) && cookie_value_ok(v))
+        .map(|(n, v)| format!("{n}={v}"))
 }
 
 fn parse(s: &str) -> Result<Url, AdapterError> {
@@ -452,19 +456,36 @@ mod tests {
 
     #[test]
     fn only_the_named_session_cookie_is_read() {
-        let pick = |hs: &[&str]| session_cookie(hs.iter().copied(), "SID");
+        const NAMES: &[CookieName] = &[
+            match CookieName::new("SID") {
+                Some(c) => c,
+                None => panic!(),
+            },
+            match CookieName::numbered("QBT_SID_") {
+                Some(c) => c,
+                None => panic!(),
+            },
+        ];
+        let pick = |hs: &[&str]| session_cookie(hs.iter().copied(), NAMES);
         assert_eq!(
             pick(&["SID=abc123; HttpOnly; path=/"]),
-            Some("abc123".into())
+            Some("SID=abc123".into())
         );
-        assert_eq!(pick(&["X=1", "SID=b"]), Some("b".into()));
-        assert_eq!(pick(&["QBT_SID_8080=a"]), None);
-        assert_eq!(pick(&["sid=a"]), None);
-        assert_eq!(pick(&["SID="]), None);
-        assert_eq!(pick(&["SID=a b", "SID=ok"]), Some("ok".into()));
-        assert_eq!(pick(&["SID=a,b=c"]), None);
+        assert_eq!(pick(&["X=1", "SID=b"]), Some("SID=b".into()));
+        assert_eq!(pick(&["QBT_SID_8080=a"]), Some("QBT_SID_8080=a".into()));
+        for none in [
+            &["QBT_SID_=a"][..],
+            &["QBT_SID_123456=a"],
+            &["QBT_SID_80x=a"],
+            &["sid=a"],
+            &["SID="],
+            &["SID=a,b=c"],
+            &[],
+        ] {
+            assert_eq!(pick(none), None, "{none:?}");
+        }
+        assert_eq!(pick(&["SID=a b", "SID=ok"]), Some("SID=ok".into()));
         assert_eq!(pick(&[&format!("SID={}", "a".repeat(513))]), None);
-        assert_eq!(pick(&[]), None);
     }
 
     #[test]

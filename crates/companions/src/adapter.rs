@@ -29,7 +29,7 @@ use std::time::Duration;
 use lodestar_integrations::secret::Secret;
 
 use crate::config_files::Username;
-use crate::configure::{Confirmation, Downloads, Origin, Route, WebUiBind};
+use crate::configure::{Confirmation, Downloads, InstallReceipt, Origin, Route, WebUiBind};
 use crate::inputs::{CompanionId, ContainerName, InputError, PortNumber, Version};
 
 /// A boxed, sendable future.
@@ -490,30 +490,61 @@ impl fmt::Debug for HeaderValue {
 /// bytes.
 pub const COOKIE_VALUE_MAX: usize = 512;
 
-/// The name of a session cookie an adapter asks for, from its own
-/// constants (qBittorrent's `SID`): an RFC 6265 token of letters, digits,
-/// `_` and `-`, at most 64 bytes.
+/// A session cookie's name an adapter asks for, from its own constants:
+/// exactly a name (qBittorrent up to 5.1's `SID`), or a prefix followed by
+/// one to five digits (5.2's `QBT_SID_<WebUI port>`). Names are RFC 6265
+/// tokens of letters, digits, `_` and `-`, at most 64 bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CookieName(&'static str);
+pub struct CookieName {
+    name: &'static str,
+    numbered: bool,
+}
+
+const fn cookie_token(b: &[u8]) -> bool {
+    if b.is_empty() || b.len() > 64 {
+        return false;
+    }
+    let mut i = 0;
+    while i < b.len() {
+        if !(b[i].is_ascii_alphanumeric() || b[i] == b'_' || b[i] == b'-') {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
 
 impl CookieName {
+    /// Exactly this name.
     pub const fn new(name: &'static str) -> Option<CookieName> {
-        let b = name.as_bytes();
-        if b.is_empty() || b.len() > 64 {
+        if !cookie_token(name.as_bytes()) {
             return None;
         }
-        let mut i = 0;
-        while i < b.len() {
-            if !(b[i].is_ascii_alphanumeric() || b[i] == b'_' || b[i] == b'-') {
-                return None;
-            }
-            i += 1;
-        }
-        Some(CookieName(name))
+        Some(CookieName {
+            name,
+            numbered: false,
+        })
     }
 
-    pub fn as_str(&self) -> &'static str {
-        self.0
+    /// This prefix, then one to five ASCII digits.
+    pub const fn numbered(prefix: &'static str) -> Option<CookieName> {
+        if !cookie_token(prefix.as_bytes()) || prefix.len() > 59 {
+            return None;
+        }
+        Some(CookieName {
+            name: prefix,
+            numbered: true,
+        })
+    }
+
+    /// Whether a cookie called `name` is this one.
+    pub fn matches(&self, name: &str) -> bool {
+        if !self.numbered {
+            return name == self.name;
+        }
+        name.strip_prefix(self.name).is_some_and(|digits| {
+            (1..=5).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit())
+        })
     }
 }
 
@@ -528,8 +559,14 @@ pub fn cookie_value_ok(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"_-.+/=%:".contains(&b))
 }
 
+/// Whether `pair` is a `name=value` cookie a [`GuardedHttp`] may hand back:
+/// a token name and a value that passes [`cookie_value_ok`].
+fn cookie_pair_ok(pair: &str) -> bool {
+    pair.split_once('=')
+        .is_some_and(|(n, v)| cookie_token(n.as_bytes()) && cookie_value_ok(v))
+}
+
 /// One request to a companion, built with [`ProbeRequest::new`].
-#[derive(Debug)]
 #[non_exhaustive]
 pub struct ProbeRequest<'a> {
     pub target: &'a Target,
@@ -538,10 +575,26 @@ pub struct ProbeRequest<'a> {
     pub headers: Vec<(HeaderName, HeaderValue)>,
     pub body: Option<Vec<u8>>,
     pub limits: Limits,
-    /// The one session cookie the answer may carry back
-    /// ([`ProbeResponse::session_cookie`]). No other header of the answer
-    /// is ever read.
-    pub session_cookie: Option<CookieName>,
+    /// The session cookie the answer may carry back, as the first of these
+    /// names it sets ([`ProbeResponse::session_cookie`]). No other header
+    /// of the answer is ever read.
+    pub session_cookie: Option<&'static [CookieName]>,
+}
+
+/// A body may hold a password or a key (a sign-in form, Prowlarr's host
+/// settings), so `Debug` shows only its length.
+impl fmt::Debug for ProbeRequest<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProbeRequest")
+            .field("target", self.target)
+            .field("method", &self.method)
+            .field("path", &self.path)
+            .field("headers", &self.headers)
+            .field("body_len", &self.body.as_ref().map(Vec::len))
+            .field("limits", &self.limits)
+            .field("session_cookie", &self.session_cookie)
+            .finish()
+    }
 }
 
 impl<'a> ProbeRequest<'a> {
@@ -565,10 +618,10 @@ impl<'a> ProbeRequest<'a> {
         self
     }
 
-    /// Asks for the session cookie of this name from the answer's
-    /// `Set-Cookie` headers.
-    pub fn session_cookie(mut self, name: CookieName) -> ProbeRequest<'a> {
-        self.session_cookie = Some(name);
+    /// Asks for the session cookie with the first of these names among the
+    /// answer's `Set-Cookie` headers.
+    pub fn session_cookie(mut self, names: &'static [CookieName]) -> ProbeRequest<'a> {
+        self.session_cookie = Some(names);
         self
     }
 
@@ -586,9 +639,9 @@ impl<'a> ProbeRequest<'a> {
 }
 
 /// A companion's answer: its status, a body no larger than the request's
-/// cap and, when the request asked for one, its session cookie's value.
-/// Fields are private, so the cap can't be skipped.
-#[derive(Debug, Clone)]
+/// cap and, when the request asked for one, its session cookie. Fields are
+/// private, so the cap can't be skipped.
+#[derive(Clone)]
 pub struct ProbeResponse {
     status: u16,
     body: Vec<u8>,
@@ -605,6 +658,18 @@ impl PartialEq for ProbeResponse {
 }
 
 impl Eq for ProbeResponse {}
+
+/// The body may hold a key or a password hash (Prowlarr's host settings),
+/// so `Debug` shows only its length.
+impl fmt::Debug for ProbeResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProbeResponse")
+            .field("status", &self.status)
+            .field("body_len", &self.body.len())
+            .field("session", &self.session.is_some())
+            .finish()
+    }
+}
 
 impl ProbeResponse {
     /// Refuses a body over `limits.body_cap()` ([`AdapterError::TooLarge`])
@@ -623,18 +688,19 @@ impl ProbeResponse {
         })
     }
 
-    /// Adds the session cookie's value the request asked for. Refused
-    /// ([`AdapterError::Protocol`]) unless [`cookie_value_ok`].
-    pub fn with_session_cookie(mut self, value: Secret) -> Result<ProbeResponse, AdapterError> {
-        if !cookie_value_ok(value.expose()) {
+    /// Adds the session cookie the request asked for, as `name=value`.
+    /// Refused ([`AdapterError::Protocol`]) unless the name is a token and
+    /// the value passes [`cookie_value_ok`].
+    pub fn with_session_cookie(mut self, pair: Secret) -> Result<ProbeResponse, AdapterError> {
+        if !cookie_pair_ok(pair.expose()) {
             return Err(AdapterError::Protocol("session cookie"));
         }
-        self.session = Some(value);
+        self.session = Some(pair);
         Ok(self)
     }
 
-    /// The session cookie's value, when the request asked for it and the
-    /// answer set it.
+    /// The session cookie as `name=value`, ready for a `Cookie` header,
+    /// when the request asked for it and the answer set it.
     pub fn session_cookie(&self) -> Option<&Secret> {
         self.session.as_ref()
     }
@@ -894,9 +960,10 @@ impl<'a> ConfigureInput<'a> {
         }
     }
 
-    /// A companion Lodestar installed.
-    pub fn installed(mut self) -> ConfigureInput<'a> {
-        self.origin = Origin::Installed;
+    /// A companion Lodestar installed, with the receipt CMP-5's manager
+    /// mints for it.
+    pub fn installed(mut self, receipt: InstallReceipt) -> ConfigureInput<'a> {
+        self.origin = Origin::Installed(receipt);
         self
     }
 
@@ -1255,6 +1322,39 @@ mod tests {
         let v = HeaderValue::plain("SID=abc").unwrap();
         assert!(!v.is_secret());
         assert!(!format!("{v:?}").contains("abc"));
+    }
+
+    #[test]
+    fn debug_never_shows_a_body_or_a_cookie() {
+        let t = Target::Loopback(PortNumber::new(8080).unwrap());
+        let req = ProbeRequest::new(&t, RequestPath::parse("/x").unwrap(), Limits::PROBE)
+            .post(b"password=hunter2".to_vec());
+        let text = format!("{req:?}");
+        assert!(!text.contains("hunter2") && !text.contains("104"), "{text}");
+        assert!(text.contains("body_len: Some(16)"));
+        let r = ProbeResponse::new(200, br#"{"apiKey":"k3y"}"#.to_vec(), &Limits::PROBE)
+            .unwrap()
+            .with_session_cookie(Secret::new("SID=s3cr3t"))
+            .unwrap();
+        let text = format!("{r:?}");
+        assert!(!text.contains("k3y") && !text.contains("s3cr3t"), "{text}");
+        assert_eq!(r.session_cookie().unwrap().expose(), "SID=s3cr3t");
+        for bad in ["s3cr3t", "=v", "SID=", "S D=v", "SID=a b", "SID=a;b"] {
+            let r = ProbeResponse::new(200, Vec::new(), &Limits::PROBE).unwrap();
+            assert!(r.with_session_cookie(Secret::new(bad)).is_err(), "{bad}");
+        }
+        assert!(
+            CookieName::numbered("QBT_SID_")
+                .unwrap()
+                .matches("QBT_SID_8080")
+        );
+        assert!(
+            !CookieName::numbered("QBT_SID_")
+                .unwrap()
+                .matches("QBT_SID_")
+        );
+        assert!(!CookieName::new("SID").unwrap().matches("SIDX"));
+        assert!(CookieName::new("a b").is_none());
     }
 
     #[test]
