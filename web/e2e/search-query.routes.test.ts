@@ -107,13 +107,15 @@ test('typed tokens get their classes', async ({ page, go }) => {
 	await expect(bar.locator('.qt-phrase.qt-quote')).toHaveText(['"', '"']);
 	await expect(bar.locator('.qt-operator')).toHaveText('-');
 	await expect(bar).toHaveText('size:>4GB res:1080p "big buck" -cam');
-	// Weight, mono and colour (§10.4), from the lazy stylesheet.
-	const style = await bar
-		.locator('.qt-field')
-		.first()
-		.evaluate((el) => [getComputedStyle(el).fontFamily, getComputedStyle(el).fontWeight]);
-	expect(style[0]).toContain('Atkinson Hyperlegible Mono');
-	expect(style[1]).toBe('600');
+	// Weight, mono and colour (§10.4), from the lazy stylesheet. It can apply
+	// after the first read on a slow runner, so poll until it has.
+	const field = bar.locator('.qt-field').first();
+	await expect
+		.poll(() => field.evaluate((el) => getComputedStyle(el).fontFamily), { timeout: 15_000 })
+		.toContain('Atkinson Hyperlegible Mono');
+	await expect
+		.poll(() => field.evaluate((el) => getComputedStyle(el).fontWeight), { timeout: 15_000 })
+		.toBe('600');
 	// The caret stayed at the end through every re-render.
 	await page.keyboard.type('x');
 	await expect(bar).toHaveText('size:>4GB res:1080p "big buck" -camx');
