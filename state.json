@@ -6273,6 +6273,11 @@
       "id": "X-flake-query-token-style",
       "at": "2026-11-08T16:19:31Z",
       "note": "Runner PR #622 (claude/busy-allen-aptli2, ee825334): poll lazy token styles in search-query.routes e2e. Seen on #621. Self-checked test-only; merge on green."
+    },
+    {
+      "id": "merged-622",
+      "at": "2026-11-08T16:38:42Z",
+      "note": "#622 X-flake-query-token-style merged (ec3d69ea), all 34 checks green incl. e2e. Add to slices.yaml in next runner PR."
     }
   ],
   "main_health": [
@@ -7064,5 +7069,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T16:19:31Z"
+  "updated": "2026-11-08T16:38:42Z"
 }
