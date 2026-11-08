@@ -234,8 +234,9 @@ struct Stages {
     stop: watch::Sender<bool>,
     pool: JoinHandle<Vec<QueuedKey>>,
     prepare: JoinHandle<()>,
-    /// The forwarder into the pool.
+    /// The forwarder into the pool, and the task that tells it to pause.
     forward: JoinHandle<()>,
+    pauser: JoinHandle<()>,
 }
 
 /// What the tasks and the message loop share.
@@ -270,9 +271,12 @@ struct Shared {
     /// a key it can be sealed under, so no fetch is spent meanwhile, and
     /// while no session is up ([`Shared::refresh_pause`]).
     pool: Mutex<Option<lodestar_sources::PoolHandle>>,
-    /// Whether the pool was last told to pause; held across the telling,
-    /// so pauses and resumes reach the pool in the order they're decided.
-    pool_paused: tokio::sync::Mutex<bool>,
+    /// Whether the pool should pause ([`Shared::refresh_pause`]); one task
+    /// per stage run applies the latest value to the pool, so no caller
+    /// waits on the pool's command channel (#601's review).
+    pool_paused: watch::Sender<bool>,
+    /// What the pool was last told (`apply_pause`).
+    pool_told: watch::Sender<bool>,
     /// Results waiting for a sealable key.
     waiting: std::sync::atomic::AtomicUsize,
     /// A new session's first `Assign` applies whatever its revision: a
@@ -390,7 +394,8 @@ impl Runtime {
             key_day: watch::channel(u32::MAX).0,
             sampler: Mutex::new(config.seed.unwrap_or_else(super::session::random_jitter)),
             pool: Mutex::new(None),
-            pool_paused: tokio::sync::Mutex::new(false),
+            pool_paused: watch::channel(false).0,
+            pool_told: watch::channel(false).0,
             waiting: std::sync::atomic::AtomicUsize::new(0),
             fresh_session: AtomicBool::new(false),
             flush,
@@ -478,9 +483,11 @@ impl Runtime {
             pool,
             prepare,
             forward,
+            pauser,
             ..
         } = stages;
         forward.abort();
+        pauser.abort();
         let (pool_abort, prepare_abort) = (pool.abort_handle(), prepare.abort_handle());
         let both = async {
             let _ = pool.await;
@@ -549,6 +556,9 @@ impl Runtime {
                 }
                 start_if_ready(s);
                 want_dht(s);
+                // The pool waits for a new session's first `Assign`, as the
+                // DHT does.
+                s.refresh_pause();
             }
             WorkerEvent::Regranted(items) => {
                 for item in items {
@@ -600,17 +610,29 @@ impl Work for Runtime {
         self.shared.fresh_session.store(true, Ordering::Release);
         self.shared.session.send_replace(Some(session));
         want_dht(&self.shared);
-        refresh_pause_soon(&self.shared);
+        self.shared.refresh_pause();
     }
 
     fn disconnected(&mut self) {
         self.shared.session.send_replace(None);
-        // The DHT pauses at once: the coordinator re-plans without this
-        // worker and widens the others' shares (WK-5); it stops if no
-        // session is back within its linger.
-        want_dht(&self.shared);
-        // The pool opens no new connection meanwhile.
-        refresh_pause_soon(&self.shared);
+        // The pool opens no new connection, then the DHT pauses: the
+        // coordinator re-plans without this worker and widens the others'
+        // shares (WK-5); the DHT stops if no session is back within its
+        // linger. The pool goes first so it isn't still asking a paused
+        // DHT, whose queued lookups would finish empty and each cost a key
+        // an attempt (#601's review).
+        let s = self.shared.clone();
+        s.refresh_pause();
+        tokio::spawn(async move {
+            if *s.started.borrow() {
+                let mut told = s.pool_told.subscribe();
+                // Bounded: a session back meanwhile leaves the pool running.
+                let _ =
+                    tokio::time::timeout(Duration::from_secs(1), told.wait_for(|paused| *paused))
+                        .await;
+            }
+            want_dht(&s);
+        });
     }
 
     fn event(&mut self, event: WorkerEvent) {
@@ -653,6 +675,7 @@ impl Drop for Runtime {
             stages.prepare.abort();
             stages.pool.abort();
             stages.forward.abort();
+            stages.pauser.abort();
         }
         self.abort_all();
     }
@@ -870,17 +893,23 @@ fn start_if_ready(s: &Arc<Shared>) {
             out,
         },
     );
+    let pauser = tokio::spawn(apply_pause(
+        running.pool.clone(),
+        s.pool_paused.subscribe(),
+        s.pool_told.clone(),
+    ));
     *lock(&s.pool) = Some(running.pool);
     *stages = Some(Stages {
         stop,
         pool: running.pool_task,
         prepare: running.prepare,
         forward,
+        pauser,
     });
     s.started.send_replace(true);
     want_dht(s);
     // A session may have gone while the stages were built.
-    refresh_pause_soon(s);
+    s.refresh_pause();
 }
 
 /// What the DHT should do now ([`super::dht`]): run on the assignment's
@@ -1012,7 +1041,7 @@ impl<O: Outbox<SealedRecord>> Outbox<Results> for Sealing<O> {
                 // No fetch is started while a result waits: they'd only
                 // spend their keys waiting on the pool's byte budget.
                 if s.waiting.fetch_add(1, Ordering::AcqRel) == 0 {
-                    s.refresh_pause().await;
+                    s.refresh_pause();
                 }
                 let mut installs = s.key_day.subscribe();
                 let ready = tokio::time::timeout(left, async {
@@ -1025,7 +1054,7 @@ impl<O: Outbox<SealedRecord>> Outbox<Results> for Sealing<O> {
                 })
                 .await;
                 if s.waiting.fetch_sub(1, Ordering::AcqRel) == 1 {
-                    s.refresh_pause().await;
+                    s.refresh_pause();
                 }
                 if ready.is_err() {
                     release(&s, &reports, item.key, item.token);
@@ -1071,32 +1100,47 @@ fn release(s: &Shared, reports: &Arc<dyn Reports>, key: InfoHash, token: Token) 
 impl Shared {
     /// Pauses the pool while a result waits for a sealable key or no
     /// session is up, and resumes it otherwise. Worked out from the state
-    /// now, under `pool_paused`, so calls in any order leave it right.
-    /// Paused, the pool opens no new connection; fetches under way finish
-    /// (WK-5: a worker without a session stops opening connections, since
-    /// the coordinator re-plans without it).
-    async fn refresh_pause(&self) {
-        let mut told = self.pool_paused.lock().await;
-        let up = self
-            .session
-            .borrow()
-            .as_ref()
-            .is_some_and(|h| !h.is_closed());
-        let pause = self.waiting.load(Ordering::Acquire) > 0 || !up;
-        let pool = lock(&self.pool).clone();
-        if let Some(p) = pool
-            && *told != pause
-        {
-            p.set_paused(pause).await;
-            *told = pause;
-        }
+    /// now, under the watch's write lock, so calls in any order leave it
+    /// right. Paused, the pool opens no new connection; fetches under way
+    /// finish (WK-5: a worker without a session stops opening connections,
+    /// since the coordinator re-plans without it).
+    fn refresh_pause(&self) {
+        self.pool_paused.send_if_modified(|told| {
+            let up = self
+                .session
+                .borrow()
+                .as_ref()
+                .is_some_and(|h| !h.is_closed());
+            // A new session's first `Assign` may re-plan this worker: until
+            // it comes, the pool waits, as the DHT does.
+            let fresh = self.fresh_session.load(Ordering::Acquire);
+            let pause = self.waiting.load(Ordering::Acquire) > 0 || !up || fresh;
+            std::mem::replace(told, pause) != pause
+        });
     }
 }
 
-/// [`Shared::refresh_pause`] from a caller that can't wait.
-fn refresh_pause_soon(s: &Arc<Shared>) {
-    let s = s.clone();
-    tokio::spawn(async move { s.refresh_pause().await });
+/// Tells the pool the latest pause [`Shared::refresh_pause`] decided, in
+/// order, for as long as the stages run.
+async fn apply_pause(
+    pool: lodestar_sources::PoolHandle,
+    mut want: watch::Receiver<bool>,
+    told_tx: watch::Sender<bool>,
+) {
+    // The pool starts unpaused.
+    let mut told = false;
+    told_tx.send_replace(false);
+    loop {
+        let pause = *want.borrow_and_update();
+        if pause != told {
+            pool.set_paused(pause).await;
+            told = pause;
+            told_tx.send_replace(pause);
+        }
+        if want.changed().await.is_err() {
+            return;
+        }
+    }
 }
 
 /// Aborts a task when dropped.
@@ -1848,7 +1892,7 @@ mod tests {
     async fn a_lost_session_pauses_the_pool() {
         let (mut rt, _coord, _session) = started_with_dht(super::super::dht::LINGER).await;
         // `Some(paused)` once no refresh holds the lock.
-        let paused = |rt: &Runtime| rt.shared.pool_paused.try_lock().ok().map(|g| *g);
+        let paused = |rt: &Runtime| Some(*rt.shared.pool_told.borrow());
         // A refresh spawned at start may still hold the lock.
         until("the pool runs", || {
             (paused(&rt) == Some(false), paused(&rt))
@@ -1861,6 +1905,15 @@ mod tests {
         .await;
         let (_coord2, session2) = session_pair().await;
         rt.connected(session2.handle());
+        // Still paused until the new session's first `Assign`.
+        until("the refresh settled", || (paused(&rt).is_some(), ())).await;
+        assert_eq!(paused(&rt), Some(true));
+        let a = ShardSpec::new(64..128, 0xff).unwrap();
+        rt.event(WorkerEvent::Assign(assign_dht(
+            2,
+            Some(a),
+            Intensity::Balanced,
+        )));
         until("the pool resumed", || {
             (paused(&rt) == Some(false), paused(&rt))
         })
@@ -2445,7 +2498,7 @@ mod tests {
             j.clear.load(Ordering::Relaxed) + j.marked.load(Ordering::Relaxed)
         };
         assert_eq!(sealed(), 0);
-        let paused = |rt: &Runtime| rt.shared.pool_paused.try_lock().ok().map(|g| *g);
+        let paused = |rt: &Runtime| Some(*rt.shared.pool_told.borrow());
         until("the pool paused while it waits", || {
             (paused(&rt) == Some(true), paused(&rt))
         })
