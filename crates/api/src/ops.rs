@@ -47,12 +47,12 @@ use crate::ApiState;
 use crate::auth;
 use crate::dto::jobs::{BackgroundJob, PurgeJob, PurgePreview, PurgeRequest, PurgeStage};
 pub use crate::dto::ops::{
-    ConsentClass, CrawlerIntensity, CrawlerPatch, CrawlerState, CrawlerStatus, CredentialField,
-    CredentialKind, CredentialsPatch, DhtStatus, EgressCounts, EgressLive, EgressRoute,
-    EgressSetting, EgressState, ExternalAddress, FetchStatus, NetworkCheck, PortMapping,
-    ReachReason, RiskLevel, SamplingBlocked, SocksDns, Source, SourceAgents, SourceEgress,
-    SourceHealth, SourceKind, SourceList, SourceNeed, SourcePatch, SourcePriority, SourceSchedule,
-    SourceState, StatsResponse,
+    CompanionNeed, CompanionNeedState, ConsentClass, CrawlerIntensity, CrawlerPatch, CrawlerState,
+    CrawlerStatus, CredentialField, CredentialKind, CredentialsPatch, DhtStatus, EgressCounts,
+    EgressLive, EgressRoute, EgressSetting, EgressState, ExternalAddress, FetchStatus,
+    NetworkCheck, PortMapping, ReachReason, RiskLevel, SamplingBlocked, SocksDns, Source,
+    SourceAgents, SourceEgress, SourceHealth, SourceKind, SourceList, SourceNeed, SourcePatch,
+    SourcePriority, SourceSchedule, SourceState, StatsResponse,
 };
 use crate::error::{ApiError, ApiResult, internal};
 use crate::events::EventHub;

@@ -8609,6 +8609,23 @@ export interface components {
                 max: number;
             };
             /**
+             * @description The companion it waits for before it runs (§18.10); null when it
+             *     needs none, or has it and it's healthy. Not the same as `needs`,
+             *     which is what enabling it asks for.
+             */
+            companion_need: null | {
+                /**
+                 * @description The companion's catalogue id, such as `prowlarr` or `qbittorrent`
+                 *     (for a source any download client satisfies, the suggested one).
+                 */
+                companion: string;
+                /**
+                 * @description Why a source waits for its companion.
+                 * @enum {string}
+                 */
+                state: "missing" | "unhealthy";
+            };
+            /**
              * @description The JSON Schema (draft 2020-12) of its settings, as its plugin
              *     declares it: the settings form is generated from it, and `config`
              *     in `PATCH /sources/{id}` is checked against the plugin's own rules
@@ -8867,6 +8884,7 @@ export interface components {
          *             "enforced": false,
          *             "max": 1
          *           },
+         *           "companion_need": null,
          *           "config_schema": {
          *             "$schema": "https://json-schema.org/draft/2020-12/schema",
          *             "additionalProperties": false,
