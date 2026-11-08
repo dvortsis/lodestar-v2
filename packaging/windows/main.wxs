@@ -90,14 +90,15 @@
         <File Id="LodestarExe" Name="lodestar.exe" Source="$(var.CargoTargetBinDir)\lodestar.exe" KeyPath="yes" />
         <File Id="SecureDataDir" Name="secure-datadir.ps1" Source="$(env.LODESTAR_PACKAGING)\windows\secure-datadir.ps1" />
         <File Id="ServiceSid" Name="service-sid.ps1" Source="$(env.LODESTAR_PACKAGING)\windows\service-sid.ps1" />
+        <File Id="DaclCheck" Name="dacl-check.ps1" Source="$(env.LODESTAR_PACKAGING)\windows\dacl-check.ps1" />
         <File Id="RemoveDataDir" Name="remove-datadir.ps1" Source="$(env.LODESTAR_PACKAGING)\windows\remove-datadir.ps1" />
 
         <!-- The service runs as its own virtual account, NT SERVICE\Lodestar (no password; not
              LocalSystem and not the shared LocalService). It lives in this component, whose
              key path is the program file: Windows Installer skipped it in a component keyed by a
              registry value. Delayed automatic start; restarted after a failure, also when it exits
-             with an error code (exit 1 and 3), twice, then not again until the counter resets after
-             a day; 60 s for the final commit at shutdown; its own service SID. -->
+             with an error code (0x20000001 and 0x20000003), twice, then not again until the counter
+             resets after a day; 60 s for the final commit at shutdown; its own service SID. -->
         <ServiceInstall Id="LodestarService"
                         Name="Lodestar"
                         DisplayName="Lodestar"
@@ -172,6 +173,13 @@
          not secure, or contains a link. The MSI's ACL is what the service later
          verifies (windows/acl.rs). See secure-datadir.ps1. -->
     <CustomAction Id="SetSecureDataFolder" Property="SecureDataFolder" Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]secure-datadir.ps1&quot; -Path &quot;[DataFolderDir].&quot;" />
+    <!-- Owner §2.52: Repair may re-secure a folder whose one problem is the installing
+         administrator's own Allow entry (Explorer adds it on "Continue"), so the install
+         names the installing account. secure-datadir.ps1 uses it only if that account is in
+         the local Administrators group. AdminUser can't tell: a per-machine install sets it
+         for every user, and with MSIUSEREALADMINDETECTION a Repair started from Control
+         Panel under UAC doesn't get it. -->
+    <CustomAction Id="SetSecureDataFolderAdmin" Property="SecureDataFolder" Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]secure-datadir.ps1&quot; -Path &quot;[DataFolderDir].&quot; -InstallerSid &quot;[UserSID]&quot;" />
     <CustomAction Id="SecureDataFolder" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Return="check" Impersonate="no" />
 
     <!-- Take privileges away from the service: with the defaults it also holds SeImpersonate
@@ -207,7 +215,8 @@
            through WixQuietExec64, so no console window opens on a desktop and their output lands in
            the MSI log. -->
       <Custom Action="SetSecureDataFolder" After="ServicePrivileges">NOT (REMOVE="ALL")</Custom>
-      <Custom Action="SecureDataFolder" After="SetSecureDataFolder">NOT (REMOVE="ALL")</Custom>
+      <Custom Action="SetSecureDataFolderAdmin" After="SetSecureDataFolder">NOT (REMOVE="ALL") AND UserSID</Custom>
+      <Custom Action="SecureDataFolder" After="SetSecureDataFolderAdmin">NOT (REMOVE="ALL")</Custom>
       <!-- The exclusion goes in last, after the folder is known to be ours, and comes out again
            if a later step rolls the install back. -->
       <Custom Action="SetRemoveDefenderExclusionRollback" After="SecureDataFolder">NOT Installed AND DEFENDER_EXCLUSION="1"</Custom>

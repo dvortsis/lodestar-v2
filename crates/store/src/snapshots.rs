@@ -1119,15 +1119,18 @@ fn purge_one(
                 )?;
             }
             // As `Store::purge_filter`: an expired adult hold becomes a
-            // tombstone, replacing any but the floor's.
-            let floor = crate::filter::FLOOR_RULES;
+            // tombstone, replacing any but a floor hold (a worker's floor
+            // report included).
             tx.execute(
-                "INSERT INTO tombstones (hash, rule, at)
-                 SELECT hash, rule, at FROM quarantine
-                 WHERE expires_at <= ?1 AND substr(rule, -length(?2)) = ?2
-                 ON CONFLICT (hash) DO UPDATE SET rule = excluded.rule, at = excluded.at
-                 WHERE tombstones.rule NOT IN (?3, ?4, ?5)",
-                params![now, ADULT_HOLD, floor[0], floor[1], floor[2]],
+                &format!(
+                    "INSERT INTO tombstones (hash, rule, at)
+                     SELECT hash, rule, at FROM quarantine
+                     WHERE expires_at <= ?1 AND substr(rule, -length(?2)) = ?2
+                     ON CONFLICT (hash) DO UPDATE SET rule = excluded.rule, at = excluded.at
+                     WHERE NOT {}",
+                    crate::filter::floor_hold_sql("tombstones.rule")
+                ),
+                params![now, ADULT_HOLD],
             )?;
             quarantine += tx.execute("DELETE FROM quarantine WHERE expires_at <= ?1", [now])?;
             tx.execute("DELETE FROM filter_hits WHERE at < ?1", [hits_before])?;
@@ -1332,13 +1335,15 @@ fn scrub_source(tx: &Connection, plugin: &str, at: i64) -> rusqlite::Result<()> 
 }
 
 /// How strong a tombstone or quarantine hold under `rule` is, in SQL with
-/// the floor's rules as `?1`–`?3` and the adult mark as `?4`: the floor's
-/// can't be released, then an adult hold (the one filtering can't
-/// rebuild, see `Store::purge_filter`), then any other.
+/// the adult mark as `?4` (`?1`–`?3` are still bound, but the floor test
+/// is [`crate::filter::floor_hold_sql`], which also counts a worker's
+/// floor report): a floor hold first, then an adult hold (the one
+/// filtering can't rebuild, see `Store::purge_filter`), then any other.
 fn hold_rank(rule: &str) -> String {
     format!(
-        "CASE WHEN {rule} IN (?1, ?2, ?3) THEN 2 \
-         WHEN substr({rule}, -length(?4)) = ?4 THEN 1 ELSE 0 END"
+        "CASE WHEN {} THEN 2 \
+         WHEN substr({rule}, -length(?4)) = ?4 THEN 1 ELSE 0 END",
+        crate::filter::floor_hold_sql(rule)
     )
 }
 
@@ -2060,6 +2065,9 @@ mod tests {
         quarantine(c, [18; 20], "CS-2a", b"sealed-live18", T + 10 * DAY);
         // Tombstoned here, quarantined in the copy: the tombstone wins.
         tomb(19, "CS-3", T + DAY);
+        // A worker's floor report is a floor hold: it outranks the copy's
+        // later, weaker row (WK-10d).
+        tomb(20, "worker-floor:7", T + DAY);
         // Expired: carried, then turned into a tombstone as live.
         quarantine(c, [16; 20], "CS-9+adult", b"sealed-expired", T);
         store.add_cs_hashes(&[[1; 20]], 1, T + DAY).unwrap();
@@ -2094,6 +2102,7 @@ mod tests {
                 tomb(17, "CS-3", T + 5 * DAY);
                 quarantine(&conn, [18; 20], "CS-2a", b"sealed-copy18", T + 40 * DAY);
                 quarantine(&conn, [19; 20], "CS-2a", b"sealed-copy19", T + 40 * DAY);
+                tomb(20, "CS-3", T + 5 * DAY);
                 conn.execute_batch(
                     "INSERT INTO cs_sigs (sig, added_at) VALUES (7, 0);
                      INSERT INTO core_membership (rule, enabled)
@@ -2140,6 +2149,7 @@ mod tests {
                     format!("h16 CS-9+adult {}", d(-30)),
                     format!("h17 CS-3 {}", d(5)),
                     format!("h19 CS-3 {}", d(1)),
+                    format!("h20 worker-floor:7 {}", d(1)),
                 ],
                 "v{version}"
             );
@@ -2837,7 +2847,14 @@ mod tests {
         quarantine(c, [3; 20], "CS-4+adult", b"c", T + DAY);
         quarantine(c, [4; 20], "CS-3", b"d", T + 5 * DAY);
         quarantine(c, [5; 20], "CS-4+adult", b"e", T + 5 * DAY);
-        for (h, rule) in [([3u8; 20], "CS-2"), ([2; 20], "CS-1a")] {
+        // An expiring adult hold over a worker's floor report: the report
+        // stays, in both purges (WK-10d).
+        quarantine(c, [6; 20], "CS-4+adult", b"f", T + DAY);
+        for (h, rule) in [
+            ([3u8; 20], "CS-2"),
+            ([2; 20], "CS-1a"),
+            ([6; 20], "worker-floor:7"),
+        ] {
             c.execute(
                 "INSERT INTO tombstones (hash, rule, at) VALUES (?1, ?2, 5)",
                 params![&h[..], rule],
@@ -2877,6 +2894,16 @@ mod tests {
         };
         let snap_conn = Connection::open(&snap).unwrap();
         assert_eq!(dump(&snap_conn), dump(store.connection()));
+        let rule_of = |conn: &Connection| -> String {
+            conn.query_row(
+                "SELECT rule FROM tombstones WHERE hash = ?1",
+                [&[6u8; 20][..]],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(rule_of(store.connection()), "worker-floor:7");
+        assert_eq!(rule_of(&snap_conn), "worker-floor:7");
     }
 
     /// Snapshots of older schemas purge what their schema has; unknown

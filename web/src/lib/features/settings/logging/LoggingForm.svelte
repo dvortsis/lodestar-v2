@@ -1,7 +1,7 @@
 <script lang="ts">
 	// Settings → Logging's staged settings on the form engine (§10.10.4): the events (Verbosity, the
 	// event list, per-component levels under Advanced, the Libraries filter under Expert) and the
-	// outputs (console, log file, Windows Event Log on a Windows service). They're Safe changes
+	// outputs (console, log file). They're Safe changes
 	// (§10.10.7): staged, saved, Undo; the console's detail asks first (Privacy). The widgets, the
 	// preview and the gate's dialog load on demand.
 	import { onDestroy, untrack } from 'svelte';

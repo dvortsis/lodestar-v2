@@ -92,6 +92,34 @@ pub fn check_dacl(dacl: &str, own_sid: Option<&str>) -> Result<(), String> {
     check_entries(dacl, true, &|sid| trusted(sid, own_sid))
 }
 
+/// The accounts a DACL lets in beyond [trusted] ones, when that is all
+/// that's wrong with it: otherwise [`check_dacl`]'s rules hold (protected,
+/// known flags, allow and deny entries only). `None` when the DACL passes
+/// [`check_dacl`] as it is, fails it for any other reason, or holds a deny
+/// entry. Explorer's
+/// **Continue** on the folder's permission prompt adds exactly one such
+/// entry, for the administrator who clicked it (owner §2.52).
+pub fn extra_accounts(dacl: &str, own_sid: Option<&str>) -> Option<Vec<String>> {
+    let extra = std::cell::RefCell::new(Vec::<String>::new());
+    let allowed = |sid: &str| {
+        if !trusted(sid, own_sid) {
+            let mut extra = extra.borrow_mut();
+            if !extra.iter().any(|s| s == sid) {
+                extra.push(sid.to_string());
+            }
+        }
+        true
+    };
+    check_entries(dacl, true, &allowed).ok()?;
+    // A deny entry is someone's deliberate change: not Explorer's, so not
+    // the one case Repair re-secures.
+    if dacl.contains("(D;") {
+        return None;
+    }
+    let extra = extra.into_inner();
+    (!extra.is_empty()).then_some(extra)
+}
+
 /// [`check_dacl`]'s rules, with `allowed` deciding who an allow entry may
 /// name, and `protected` whether the DACL must not inherit.
 fn check_entries(
@@ -298,11 +326,155 @@ pub trait Ops {
     fn inspect(&self, dir: &Path) -> io::Result<Option<Inspection>>;
     /// Creates the folder with its final ACL in one step.
     fn create(&self, dir: &Path) -> io::Result<()>;
+    /// An account for a refusal's message, when it can be looked up: its
+    /// SID spelled out (an SDDL alias such as `LA`, the built-in
+    /// Administrator, names a machine-specific SID) and its name
+    /// (`DESKTOP-1\\alex`), if it has one.
+    fn account(&self, _sid: &str) -> Option<Account> {
+        None
+    }
 }
 
-/// What a refusal tells the administrator to do.
-pub const REPAIR: &str = "Repair the installation: run the Lodestar installer's Repair, or \
-                          delete the folder as an administrator and start the service again";
+/// An account as [`Ops::account`] looks it up: the SID spelled out and
+/// the account's name.
+pub type Account = (String, Option<String>);
+
+/// What a refusal tells the administrator to do when someone else may
+/// have had the folder: the installer's Repair secures an existing folder
+/// only when it's empty, or when its one problem is the installing
+/// administrator's own entry (owner §2.52), so the contents go first.
+pub const MOVE_AWAY: &str = "Someone else may have put files in it. As an administrator, move \
+                             everything in it to a safe place and check it, delete the folder, \
+                             then run the Lodestar installer's Repair, which creates it again. \
+                             See \"Fix Windows service error 3\" in the user guide";
+
+/// A name or SID as it may go into a message: [`plain`], short, no quotes
+/// (it's pasted into a command line).
+fn printable(text: &str) -> String {
+    plain(text)
+        .chars()
+        .filter(|c| *c != '"')
+        .take(256)
+        .collect()
+}
+
+/// `text` without control characters, format characters (Unicode general
+/// category Cf: bidirectional marks and overrides, zero-width characters,
+/// the byte order mark) or line and paragraph separators (Zl, Zp), which
+/// could make a message read differently from what it says (item names in
+/// a refusal are whoever could write the folder's choice).
+fn plain(text: &str) -> String {
+    text.chars()
+        .filter(|c| !c.is_control() && !invisible(*c))
+        .collect()
+}
+
+/// Unicode's Cf, Zl and Zp characters (Unicode 15).
+fn invisible(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00ad}'
+            | '\u{0600}'..='\u{0605}'
+            | '\u{061c}'
+            | '\u{06dd}'
+            | '\u{070f}'
+            | '\u{0890}'..='\u{0891}'
+            | '\u{08e2}'
+            | '\u{180e}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{2028}'..='\u{202e}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206f}'
+            | '\u{feff}'
+            | '\u{fff9}'..='\u{fffb}'
+            | '\u{110bd}'
+            | '\u{110cd}'
+            | '\u{13430}'..='\u{1343f}'
+            | '\u{1bca0}'..='\u{1bca3}'
+            | '\u{1d173}'..='\u{1d17a}'
+            | '\u{e0001}'
+            | '\u{e0020}'..='\u{e007f}'
+    )
+}
+
+/// A SID [`full_sid`] spells out, if it's one `icacls` can take as `*SID`.
+fn icacls_sid(sid: &str) -> Option<String> {
+    let full = full_sid(sid, None);
+    full.strip_prefix("S-1-")
+        .is_some_and(|r| !r.is_empty() && r.chars().all(|c| c.is_ascii_digit() || c == '-'))
+        .then_some(full)
+}
+
+/// Whether `sid` (spelled out) is a local or domain user account's, the
+/// only kind Repair takes (`secure-datadir.ps1`): `S-1-5-21-` and four
+/// numbers, and not one of a domain's own groups (RIDs 512 to 527). Never
+/// a well-known or built-in SID such as Users.
+fn user_account(sid: &str) -> bool {
+    let Some(rest) = sid.strip_prefix("S-1-5-21-") else {
+        return false;
+    };
+    let parts: Vec<&str> = rest.split('-').collect();
+    parts.len() == 4
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+        && parts[3]
+            .parse::<u64>()
+            .is_ok_and(|rid| !(512..=527).contains(&rid))
+}
+
+/// Why `seen` isn't private and the exact fix, for a refusal. When its only
+/// problem is one extra user account, that's the administrator's own entry
+/// from Explorer's **Continue** or someone else's: name the account, the
+/// `icacls` command that removes it everywhere in the folder, and the
+/// installer's Repair (which re-secures exactly that case, owner §2.52).
+/// Anything else may have let another user in: [`MOVE_AWAY`].
+pub fn refusal(
+    dir: &Path,
+    seen: &Inspection,
+    own_sid: Option<&str>,
+    why: &str,
+    account: &dyn Fn(&str) -> Option<Account>,
+) -> String {
+    let dir = printable(&dir.display().to_string());
+    let clean = !seen.folder.link
+        && seen.links.is_empty()
+        && seen
+            .entries
+            .iter()
+            .all(|e| !e.link && parse_sddl(&e.sddl).is_ok_and(|d| trusted(&d.owner, own_sid)));
+    let folder = parse_sddl(&seen.folder.sddl)
+        .ok()
+        .filter(|d| clean && trusted(&d.owner, own_sid));
+    let extra = folder.and_then(|d| extra_accounts(&d.dacl, own_sid));
+    // The one extra account, spelled out: a SID as written, or the
+    // built-in Administrator or Guest (`LA`, `LG`) as Windows expands it.
+    let one = match extra.as_deref() {
+        Some([sid]) => match icacls_sid(sid) {
+            Some(full) => Some((full.clone(), account(&full).and_then(|a| a.1))),
+            None if matches!(sid.as_str(), "LA" | "LG") => {
+                account(sid).and_then(|(full, name)| icacls_sid(&full).map(|f| (f, name)))
+            }
+            None => None,
+        },
+        _ => None,
+    };
+    match one.filter(|(full, _)| user_account(full)) {
+        Some((full, name)) => {
+            let who = match name {
+                Some(n) => format!("{} ({full})", printable(&n)),
+                None => full.clone(),
+            };
+            format!(
+                "{dir} isn't private: it grants access to {who}. If that is your own administrator \
+                 account (Windows Explorer adds it when you click Continue on the folder), run the \
+                 Lodestar installer's Repair, or remove it as an administrator with: icacls \"{dir}\" \
+                 /remove:g *{full} /T /C. If it's anyone else: {MOVE_AWAY}."
+            )
+        }
+        None => format!("{dir} isn't private: {}. {MOVE_AWAY}.", plain(why)),
+    }
+}
 
 /// Makes sure `dir` is private for the service with `own_sid`, creating
 /// it if needed. It never changes an existing folder. An error says why
@@ -321,7 +493,8 @@ pub fn secure_dir(dir: &Path, own_sid: Option<&str>, ops: &impl Ops) -> Result<(
             inspect()?.ok_or_else(|| format!("{shown} vanished after it was created"))?
         }
     };
-    verdict(&seen, own_sid).map_err(|why| format!("{shown} isn't private: {why}. {REPAIR}."))?;
+    verdict(&seen, own_sid)
+        .map_err(|why| refusal(dir, &seen, own_sid, &why, &|sid| ops.account(sid)))?;
     let marker = dir.join(MARKER);
     if !marker.exists() {
         let _ = std::fs::write(marker, "Lodestar checked this folder's permissions.\r\n");
@@ -426,7 +599,62 @@ impl Ops for Windows<'_> {
         // service then refuses, and the installer has to create the folder.
         self.powershell(CREATE_SCRIPT, dir).map(drop)
     }
+
+    /// At most [`NAME_WAIT`]: on a domain member with no domain
+    /// controller in reach, a lookup can take long enough to hold up the
+    /// refusal past the SCM's patience. Then the message gives the SID
+    /// alone.
+    fn account(&self, sid: &str) -> Option<Account> {
+        use std::io::Read;
+        let mut child = super::powershell_command()?
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                NAME_SCRIPT,
+            ])
+            .env("LODESTAR_ACL_SID", sid)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .ok()?;
+        let deadline = std::time::Instant::now() + NAME_WAIT;
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                _ => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+            }
+        };
+        let mut out = String::new();
+        child.stdout.take()?.read_to_string(&mut out).ok()?;
+        if !status.success() {
+            return None;
+        }
+        let mut lines = out.lines().map(str::trim).filter(|l| !l.is_empty());
+        let full = lines.next()?.to_string();
+        Some((full, lines.next().map(str::to_string)))
+    }
 }
+
+/// How long a refusal waits for an account's name.
+pub const NAME_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// A SID or SDDL alias spelled out, then the account's name when it has
+/// one. The SID arrives in an environment variable, so it's never parsed
+/// as script.
+pub const NAME_SCRIPT: &str = "$ErrorActionPreference = 'Stop'
+$s = New-Object System.Security.Principal.SecurityIdentifier($env:LODESTAR_ACL_SID)
+$s.Value
+try { $s.Translate([System.Security.Principal.NTAccount]).Value } catch { }";
 
 /// The folder's own SDDL, or nothing for a link or junction. The path
 /// arrives in an environment variable, as [`INSPECT_SCRIPT`]'s does.
@@ -784,6 +1012,161 @@ mod tests {
                 "{err}"
             );
             assert_eq!(*fake.calls.borrow(), ["inspect"]);
+        }
+    }
+
+    /// Explorer's Continue: the folder as the installer made it, plus one
+    /// explicit entry for the administrator who clicked it.
+    const ALEX: &str = "S-1-5-21-9-9-9-1001";
+    fn with_alex() -> String {
+        format!("{PRIVATE}(A;OICI;FA;;;{ALEX})")
+    }
+
+    #[test]
+    fn finds_the_extra_accounts_only_when_theyre_the_only_problem() {
+        let dacl = |sddl: &str| parse_sddl(sddl).unwrap().dacl;
+        let x = |sddl: &str| extra_accounts(&dacl(sddl), Some(OWN));
+        assert_eq!(x(PRIVATE), None, "nothing extra");
+        assert_eq!(x(&with_alex()), Some(vec![ALEX.to_string()]));
+        // The same account twice is one account; two accounts are two.
+        let twice = format!("{}(A;;0x1200a9;;;{ALEX})", with_alex());
+        assert_eq!(x(&twice), Some(vec![ALEX.to_string()]));
+        let two = format!("{}(A;OICI;FA;;;BU)", with_alex());
+        assert_eq!(x(&two), Some(vec![ALEX.to_string(), "BU".to_string()]));
+        // Any other problem as well, and it isn't just extra accounts.
+        let inherits = with_alex().replace("D:PAI", "D:AI");
+        assert_eq!(x(&inherits), None, "inherits");
+        let denied = format!("{}(D;;FA;;;BG)", with_alex());
+        assert_eq!(x(&denied), None, "a deny entry");
+        let unknown = format!("{}(OA;;FA;;;{ALEX})", with_alex());
+        assert_eq!(x(&unknown), None, "an object entry");
+    }
+
+    #[test]
+    fn an_admins_own_extra_entry_names_the_account_the_fix_and_repair() {
+        let dir = Path::new(r"C:\ProgramData\Lodestar");
+        let seen = seen(&with_alex(), &[item("auth.json", "O:BAD:AI")]);
+        let why = verdict(&seen, Some(OWN)).unwrap_err();
+        let named = |sid: &str| {
+            (sid == ALEX).then(|| (ALEX.to_string(), Some(r"DESKTOP-1\alex".to_string())))
+        };
+        let msg = refusal(dir, &seen, Some(OWN), &why, &named);
+        for part in [
+            r"C:\ProgramData\Lodestar isn't private",
+            r"DESKTOP-1\alex (S-1-5-21-9-9-9-1001)",
+            "Windows Explorer adds it when you click Continue",
+            "installer's Repair",
+            r#"icacls "C:\ProgramData\Lodestar" /remove:g *S-1-5-21-9-9-9-1001 /T /C"#,
+            MOVE_AWAY,
+        ] {
+            assert!(msg.contains(part), "{part:?} missing from {msg}");
+        }
+        // Without a name it gives the SID alone.
+        let msg = refusal(dir, &seen, Some(OWN), &why, &|_| None);
+        assert!(
+            msg.contains("grants access to S-1-5-21-9-9-9-1001."),
+            "{msg}"
+        );
+        // A name that would break the command line is cleaned.
+        let odd = |_: &str| Some((ALEX.to_string(), Some("a\"b\n\u{202e}".to_string())));
+        let msg = refusal(dir, &seen, Some(OWN), &why, &odd);
+        assert!(msg.contains("grants access to ab (S-1-5-21"), "{msg}");
+        // A group or well-known account is never offered as your own:
+        // Repair refuses it.
+        for other in ["BU", "S-1-5-32-545", "S-1-5-21-9-9-9-513", "S-1-1-0"] {
+            let group = self::seen(&format!("{PRIVATE}(A;OICI;FA;;;{other})"), &[]);
+            let why = verdict(&group, Some(OWN)).unwrap_err();
+            let msg = refusal(dir, &group, Some(OWN), &why, &|_| None);
+            assert!(!msg.contains("Repair, or remove"), "{other}: {msg}");
+            assert!(msg.contains(MOVE_AWAY), "{other}: {msg}");
+        }
+    }
+
+    /// An item name someone else chose can't make the message read
+    /// differently: bidirectional marks and control characters go.
+    #[test]
+    fn a_refusal_drops_marks_from_planted_names() {
+        let dir = Path::new(r"C:\ProgramData\Lodestar");
+        let seen = Inspection {
+            links: vec![
+                "e\u{202e}v\u{200f}i\u{200b}l\u{2028}t\u{feff}x\u{2060}t\u{061c}.\u{2029}exe\n — ok…".into(),
+            ],
+            ..seen(PRIVATE, &[])
+        };
+        let why = verdict(&seen, Some(OWN)).unwrap_err();
+        let msg = refusal(dir, &seen, Some(OWN), &why, &|_| None);
+        // The marks and separators go; dashes and ellipses stay.
+        assert!(msg.contains("eviltxt.exe — ok… is a link"), "{msg}");
+        for c in [
+            '\u{202e}', '\u{200f}', '\u{200b}', '\u{2028}', '\u{2029}', '\u{feff}', '\u{2060}',
+            '\u{061c}', '\n',
+        ] {
+            assert!(!msg.contains(c), "{c:?} in {msg}");
+        }
+    }
+
+    /// SDDL writes the built-in Administrator as `LA`, whose SID depends on
+    /// the machine: Windows spells it out, and then it's handled like any
+    /// other administrator account.
+    #[test]
+    fn the_built_in_administrator_is_spelled_out() {
+        let dir = Path::new(r"C:\ProgramData\Lodestar");
+        let seen = seen(&format!("{PRIVATE}(A;OICI;FA;;;LA)"), &[]);
+        let why = verdict(&seen, Some(OWN)).unwrap_err();
+        let admin = "S-1-5-21-9-9-9-500";
+        let expand = |sid: &str| {
+            (sid == "LA").then(|| (admin.to_string(), Some(r"DESKTOP-1\Administrator".into())))
+        };
+        let msg = refusal(dir, &seen, Some(OWN), &why, &expand);
+        assert!(
+            msg.contains(r"grants access to DESKTOP-1\Administrator (S-1-5-21-9-9-9-500)"),
+            "{msg}"
+        );
+        assert!(msg.contains("/remove:g *S-1-5-21-9-9-9-500 /T /C"), "{msg}");
+        // Not expanded, or expanded to something that isn't a user account:
+        // the general advice.
+        for lookup in [None, Some(("S-1-5-32-544".to_string(), None))] {
+            let msg = refusal(dir, &seen, Some(OWN), &why, &|_| lookup.clone());
+            assert!(msg.ends_with(&format!("{why}. {MOVE_AWAY}.")), "{msg}");
+        }
+    }
+
+    #[test]
+    fn an_admins_entry_plus_any_other_problem_moves_the_contents_away() {
+        let dir = Path::new(r"C:\ProgramData\Lodestar");
+        let alex = with_alex();
+        let user_file = item("config.toml", &format!("O:{ALEX}D:AI"));
+        let link = Item {
+            link: true,
+            sddl: String::new(),
+            ..item("logs", "")
+        };
+        let cases = [
+            seen(&alex.replace("D:PAI", "D:AI"), &[]),
+            seen(&format!("{alex}(D;;FA;;;BG)"), &[]),
+            seen(&format!("{alex}(A;OICI;FA;;;BU)"), &[]),
+            seen(&alex.replace("O:BA", &format!("O:{ALEX}")), &[]),
+            seen(&alex, &[user_file]),
+            seen(&alex, &[link]),
+            Inspection {
+                links: vec![r"C:\ProgramData\Lodestar\logs\x".into()],
+                ..seen(&alex, &[])
+            },
+            // Not an admin entry at all: the folder still inherits.
+            seen(INHERITED, &[]),
+        ];
+        for case in cases {
+            let Err(why) = verdict(&case, Some(OWN)) else {
+                // A deny entry alone passes the service's check; with
+                // the admin's entry it's refused, but never as Repair's case.
+                panic!("{case:?} passed");
+            };
+            let msg = refusal(dir, &case, Some(OWN), &why, &|_| {
+                Some((ALEX.into(), Some("x".into())))
+            });
+            assert!(msg.ends_with(&format!("{why}. {MOVE_AWAY}.")), "{msg}");
+            assert!(!msg.contains("icacls"), "{msg}");
+            assert!(!msg.contains("Continue"), "{msg}");
         }
     }
 
