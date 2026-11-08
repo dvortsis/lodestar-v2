@@ -15,6 +15,6 @@
 | `status.py`, `comments.py` | The status comment (no labels, addresses, fingerprints or IDs) |
 | `ancestry.py` | Commit arguments must be ancestors of `main` |
 
-Run the tests: `pip install --no-deps -r requirements-test.txt && ./run_tests.sh`.
+Run the tests: `pip install --no-deps --require-hashes -r requirements-test.txt && ./run_tests.sh` (the hashes are for CPython 3.13 on Linux x86_64; elsewhere, install the same versions without `--require-hashes`).
 
 `steps/` belongs to OP-3 and `apply.py` to OP-2. Any change here or to `fleet.yml` gets a fresh Opus review and a `/security-review`.

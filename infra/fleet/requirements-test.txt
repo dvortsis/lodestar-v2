@@ -1,5 +1,11 @@
-# Test-only dependencies for infra/fleet (OP-1), pinned exactly. The control
-# plane itself uses the standard library only.
-hypothesis==6.170.15
-sortedcontainers==2.4.0
-pyyaml==6.0.3
+# Test-only dependencies for infra/fleet (OP-1), pinned exactly and by hash.
+# The control plane itself uses the standard library only. The hashes are for
+# CI's platform (CPython 3.13, manylinux x86_64); installed there with
+#   pip install --no-deps --require-hashes -r requirements-test.txt
+# Elsewhere, install the same versions without --require-hashes.
+hypothesis==6.170.15 \
+    --hash=sha256:f25261d1656f830a78863844be5fb55cd0208154dc9ddec85d44fe691488c557
+sortedcontainers==2.4.0 \
+    --hash=sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0
+pyyaml==6.0.3 \
+    --hash=sha256:0f29edc409a6392443abf94b9cf89ce99889a1dd5376d94316ae5145dfedd5d6
