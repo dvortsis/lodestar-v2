@@ -6143,6 +6143,16 @@
       "id": "WK-10d-later",
       "note": "From #607 delta reviews (follow-ups): random lease tokens (epoch<<32|seq predictable); join detached cluster session tasks at shutdown; per-fleet alert on sustained floor reporting near the 100/h budget.",
       "logged": "2026-11-08T11:20Z"
+    },
+    {
+      "id": "CMP-7-polish",
+      "from": "#606 delta review",
+      "items": [
+        "shell_inert fn + unit test ShellUnsafe (--a;b, $(x), 'a b', '')",
+        "compose.rs check_pair: move 'Its ports would have to be published' comment down to PublishOnExisting arm",
+        "existing gluetun named 'lodestar' accepted: refuse or flag in CMP-5 UI"
+      ],
+      "logged": "2026-11-08T11:41Z"
     }
   ],
   "main_health": [
