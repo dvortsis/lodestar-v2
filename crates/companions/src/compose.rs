@@ -96,6 +96,11 @@ pub enum TemplateError {
     Interpolation,
     /// The XML writer failed.
     Encode,
+    /// An Unraid `ExtraParams` flag held a character outside its
+    /// allowlist; Unraid pastes that field into a shell line.
+    ShellUnsafe,
+    /// An existing gluetun's name is another catalogue companion's.
+    ExistingName,
 }
 
 impl TemplateError {
@@ -124,6 +129,8 @@ impl TemplateError {
             TemplateError::Unprintable => "unprintable",
             TemplateError::Interpolation => "interpolation",
             TemplateError::Encode => "encode",
+            TemplateError::ShellUnsafe => "shell_unsafe",
+            TemplateError::ExistingName => "existing_name",
         }
     }
 }
@@ -158,6 +165,8 @@ impl fmt::Display for TemplateError {
                 }
                 TemplateError::DataFolderUnreadable => "the data folder couldn't be resolved",
                 TemplateError::Unprintable => "a value holds a character that can't be written",
+                TemplateError::ShellUnsafe => "an Unraid flag holds a character that isn't allowed",
+                TemplateError::ExistingName => "that name belongs to another companion",
                 _ => "the template couldn't be written",
             }),
         }
@@ -264,7 +273,7 @@ impl DataFolder {
 /// Lodestar's data folders on the host: the main one, and Unraid's
 /// optional hot and cold paths. Under Docker, Lodestar sees `/data`, so
 /// these come from the Unraid template or from you.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct DataFolders(Vec<DataFolder>);
 
 impl DataFolders {
@@ -695,6 +704,14 @@ pub(crate) fn check_pair<'a>(
         Route::Direct => Ok((main, None)),
         // Its ports would have to be published on a container this doesn't
         // generate.
+        // A companion's own name would route it through that companion.
+        Route::ExistingGluetun(name)
+            if catalogue.entries().iter().any(|e| {
+                e.id.as_str() != GLUETUN && e.container.as_ref().is_some_and(|k| k.name() == name)
+            }) =>
+        {
+            Err(TemplateError::ExistingName)
+        }
         Route::ExistingGluetun(_) if !main.publish.is_empty() => {
             Err(TemplateError::PublishOnExisting)
         }
@@ -759,15 +776,28 @@ fn quote(v: &str) -> Result<String, TemplateError> {
     if v.contains('$') {
         return Err(TemplateError::Interpolation);
     }
-    // serde_json escapes the C0 controls; YAML also can't hold DEL or the
-    // C1 controls in a quoted string, and YAML 1.1 reads U+2028 and U+2029
-    // as line breaks. No closed input holds any of them.
-    if v.chars()
-        .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}' | '\u{feff}'))
-    {
+    printable(v)?;
+    Ok(Value::String(v.to_owned()).to_string())
+}
+
+/// Refuses what neither YAML nor XML may hold in a value: every control
+/// character (serde_json escapes C0, but YAML can't hold DEL or C1 in a
+/// quoted string, and quick-xml writes C0 raw, which XML 1.0 forbids),
+/// U+2028 and U+2029 (line breaks to YAML 1.1), U+FEFF, and the
+/// non-characters U+FFFE and U+FFFF. No closed input holds any of them;
+/// this keeps both writers safe on their own.
+pub(crate) fn printable(v: &str) -> Result<(), TemplateError> {
+    let bad = |c: char| {
+        c.is_control()
+            || matches!(
+                c,
+                '\u{2028}' | '\u{2029}' | '\u{feff}' | '\u{fffe}' | '\u{ffff}'
+            )
+    };
+    if v.chars().any(bad) {
         return Err(TemplateError::Unprintable);
     }
-    Ok(Value::String(v.to_owned()).to_string())
+    Ok(())
 }
 
 fn scalar(y: &Y) -> Result<Option<String>, TemplateError> {
@@ -949,25 +979,27 @@ pub fn compose(
             ];
             services.push((None, main.name.as_str().to_owned(), service(&main, own)));
         }
-        None if let Route::ExistingGluetun(name) = &input.route => {
-            // `container:` plus a closed ContainerName ([a-z0-9_-]).
-            let mode = format!("container:{}", name.as_str());
-            let own = vec![(
-                Some("All of its traffic goes through your gluetun container."),
-                "network_mode".to_owned(),
-                s(mode),
-            )];
-            services.push((None, main.name.as_str().to_owned(), service(&main, own)));
-        }
-        None if main.profile.id == GLUETUN => {
-            let mut own = gluetun_own();
-            own.push(joins());
-            services.push((Some(VPN_NOTE), GLUETUN.to_owned(), service(&main, own)));
-        }
-        None => {
-            let own = vec![joins()];
-            services.push((None, main.name.as_str().to_owned(), service(&main, own)));
-        }
+        None => match &input.route {
+            Route::ExistingGluetun(name) => {
+                // `container:` plus a closed ContainerName ([a-z0-9_-]).
+                let mode = format!("container:{}", name.as_str());
+                let own = vec![(
+                    Some("All of its traffic goes through your gluetun container."),
+                    "network_mode".to_owned(),
+                    s(mode),
+                )];
+                services.push((None, main.name.as_str().to_owned(), service(&main, own)));
+            }
+            _ if main.profile.id == GLUETUN => {
+                let mut own = gluetun_own();
+                own.push(joins());
+                services.push((Some(VPN_NOTE), GLUETUN.to_owned(), service(&main, own)));
+            }
+            _ => {
+                let own = vec![joins()];
+                services.push((None, main.name.as_str().to_owned(), service(&main, own)));
+            }
+        },
     }
     render(services, net)
 }
@@ -1021,6 +1053,8 @@ mod tests {
         assert_eq!(quote("a\"b\\#: ").as_deref(), Ok("\"a\\\"b\\\\#: \""));
         assert_eq!(quote("a\nb"), Err(TemplateError::Unprintable));
         assert_eq!(quote("a\u{2028}"), Err(TemplateError::Unprintable));
+        assert_eq!(quote("a\u{ffff}"), Err(TemplateError::Unprintable));
+        assert_eq!(printable("a\u{1}"), Err(TemplateError::Unprintable));
     }
 
     #[test]
@@ -1097,6 +1131,8 @@ mod tests {
             TemplateError::PublishOnExisting,
             TemplateError::DataFolderUnreadable,
             TemplateError::Unprintable,
+            TemplateError::ShellUnsafe,
+            TemplateError::ExistingName,
             TemplateError::Interpolation,
             TemplateError::Encode,
         ];

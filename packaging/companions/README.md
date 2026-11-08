@@ -15,7 +15,7 @@ These files show what Lodestar generates for its companions on Docker and Unraid
 
 ## What every file follows
 - **Images are pinned by digest** (`image@sha256:…`), never by a tag such as `:latest`.
-- **Ports stay on the Docker network** unless you publish one. The compose examples publish the web UI on `127.0.0.1` only, so only the server itself can reach it. The Unraid examples publish it on your network, and qBittorrent's peer port too.
+- **Ports stay on the Docker network** unless you publish one. The examples publish the web UI on `127.0.0.1` only, so only the server itself can reach it, never your network. The direct qBittorrent example on Unraid also publishes its peer port on your network, so other peers can connect.
 - **No Docker socket, no privileged mode and no host networking.** gluetun is the only one with an extra capability (`NET_ADMIN`) and a device (`/dev/net/tun`). It needs both to run the VPN tunnel and its firewall.
 - **You fill in gluetun's VPN settings yourself.** Lodestar never asks for or stores a VPN key. gluetun won't start until they're real values, so nothing is sent outside the VPN in the meantime.
 - **Mount real folders, never a link.** Each companion gets its own folder. Lodestar refuses a folder that overlaps its own data folder or another companion's folder it knows about.

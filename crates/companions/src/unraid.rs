@@ -22,7 +22,8 @@ use quick_xml::events::{BytesDecl, BytesText, Event};
 
 use crate::catalogue::{Catalogue, Proto, TemplateId};
 use crate::compose::{
-    Bind, Checked, GLUETUN, GLUETUN_CAP, Route, ServiceInput, TemplateError, check_pair, proto_name,
+    Bind, Checked, GLUETUN, GLUETUN_CAP, Route, ServiceInput, TemplateError, check_pair, printable,
+    proto_name,
 };
 use crate::inputs::CompanionId;
 
@@ -93,6 +94,7 @@ fn io<T>(r: std::io::Result<T>) -> Result<T, TemplateError> {
 }
 
 fn element(w: &mut W, name: &str, text: &str) -> Result<(), TemplateError> {
+    printable(text)?;
     let e = w.create_element(name);
     if text.is_empty() {
         io(e.write_empty())?;
@@ -122,6 +124,9 @@ fn config(w: &mut W, c: &Config<'_>) -> Result<(), TemplateError> {
         "always"
     };
     let default = if c.fill { "" } else { c.value.as_str() };
+    for v in [c.name, &c.target, &c.value, c.mode, c.help, c.kind] {
+        printable(v)?;
+    }
     let e = w.create_element("Config").with_attributes([
         ("Name", c.name),
         ("Target", c.target.as_str()),
@@ -232,10 +237,18 @@ fn render(
         overview.push(' ');
         overview.push_str(NETWORK_NOTE);
     }
-    let extra_params = args.join(" ");
-    if args.iter().any(|a| a.contains(char::is_whitespace)) {
-        return Err(TemplateError::Encode);
+    // Unraid pastes ExtraParams into its `docker create` line unescaped,
+    // so each flag is held to a shell-inert allowlist, and the flags are
+    // joined by single spaces.
+    let shell_inert = |a: &String| {
+        !a.is_empty()
+            && a.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_=:./,".contains(&b))
+    };
+    if !args.iter().all(shell_inert) {
+        return Err(TemplateError::ShellUnsafe);
     }
+    let extra_params = args.join(" ");
 
     let mut w = Writer::new_with_indent(Vec::new(), b' ', 2);
     io(w.write_event(Event::Decl(BytesDecl::new("1.0", None, None))))?;
@@ -318,6 +331,19 @@ mod tests {
         let fixed = written(&cfg("022", false, false));
         assert!(fixed.contains("Default=\"022\"") && fixed.contains("Display=\"advanced\""));
         assert!(fixed.ends_with(">022</Config>"));
+    }
+
+    #[test]
+    fn control_characters_are_refused_not_written() {
+        let mut w = Writer::new(Vec::new());
+        assert_eq!(
+            config(&mut w, &cfg("a\u{1}b", false, false)),
+            Err(TemplateError::Unprintable)
+        );
+        assert_eq!(
+            element(&mut w, "Name", "a\u{fffe}"),
+            Err(TemplateError::Unprintable)
+        );
     }
 
     #[test]

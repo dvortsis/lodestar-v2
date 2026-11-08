@@ -131,7 +131,7 @@ fn input(companion: &str, route: Route) -> ServiceInput {
 }
 
 fn update() -> bool {
-    std::env::var_os("UPDATE_GOLDEN").is_some()
+    std::env::var_os("UPDATE_GOLDEN").is_some_and(|v| v == "1")
 }
 
 /// Compares `actual` with the file, or rewrites it under `UPDATE_GOLDEN`.
@@ -296,7 +296,20 @@ fn packaging_snippets_match() {
                 )),
                 &yaml,
             );
-            for t in unraid(&cat, &id(companion), &input(companion, route)).expect("unraid") {
+            // The web UI stays off your network in the shipped examples
+            // (§18.10); only the direct qBittorrent example publishes its
+            // peer port on the LAN.
+            let mut unraid_in = input(companion, route);
+            for p in &mut unraid_in.publish {
+                if p.port.as_str() == "webui" {
+                    p.bind = Bind::Loopback;
+                }
+            }
+            for t in unraid(&cat, &id(companion), &unraid_in).expect("unraid") {
+                assert!(
+                    !t.xml.contains("Web UI port"),
+                    "web UI published on the LAN"
+                );
                 written.push(format!("unraid/{companion}{suffix}/{}", t.file_name));
                 golden(
                     &here(&format!(
@@ -592,6 +605,14 @@ fn refuses_wrong_shapes() {
         |i| i.route = Route::ExistingGluetun(name("my-vpn")),
         TemplateError::PublishOnExisting,
     );
+    refuse(
+        "prowlarr",
+        |i| {
+            i.publish.clear();
+            i.route = Route::ExistingGluetun(name("qbittorrent"));
+        },
+        TemplateError::ExistingName,
+    );
     let cat = golden_catalogue();
     assert_eq!(
         compose(&cat, &id("nzbget"), &input("x", Route::Direct)),
@@ -741,12 +762,27 @@ proptest! {
     #[test]
     fn no_input_changes_the_structure(
         text in hostile(),
-        slot in 0usize..6,
+        slot in 0usize..7,
+        baseline in 0usize..3,
     ) {
-        let base = input("qbittorrent", Route::Direct);
+        let base = match baseline {
+            0 => input("qbittorrent", Route::Direct),
+            1 => input("qbittorrent", Route::Gluetun),
+            _ => {
+                let mut b = input("qbittorrent", Route::ExistingGluetun(name("my-vpn")));
+                b.publish.clear();
+                b
+            }
+        };
         let (y0, x0) = skeletons(&base).expect("baseline renders");
         let mut inp = base.clone();
+        let existing = matches!(base.route, Route::ExistingGluetun(_));
         let accepted = match slot {
+            // The name of a gluetun you already run.
+            6 if existing => ContainerName::parse(&text)
+                .map(|n| inp.route = Route::ExistingGluetun(n))
+                .is_ok(),
+            6 => false,
             0 => HostPath::parse(&format!("/mnt/user/{text}")).map(|p| inp.paths.config = Some(p)).is_ok(),
             1 => HostPath::parse(&format!("/mnt/user/{text}")).map(|p| inp.paths.downloads = Some(p)).is_ok(),
             2 => NetworkName::parse(&text).map(|n| inp.network = n).is_ok(),
