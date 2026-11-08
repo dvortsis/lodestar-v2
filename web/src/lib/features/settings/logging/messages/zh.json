@@ -596,7 +596,7 @@
 	"settings_logging_ev_service_restarting_n": "服务正在重启",
 	"settings_logging_ev_service_restarting_h": "Windows 将在约一分钟后再次启动它。",
 	"settings_logging_ev_service_restart_paused_n": "“立即重启”已暂停",
-	"settings_logging_ev_service_restart_paused_h": "暂停 24 小时。请在 Windows 服务中重启该服务。",
+	"settings_logging_ev_service_restart_paused_h": "暂停约一天。请在 Windows 服务中重启该服务。",
 	"settings_logging_ev_service_restarts_unwritable_n": "重启记录未保存",
 	"settings_logging_ev_service_restarts_unwritable_h": "无法保存最近重启的记录。"
 }

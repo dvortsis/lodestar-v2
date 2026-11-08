@@ -596,7 +596,7 @@
 	"settings_logging_ev_service_restarting_n": "Service restarting",
 	"settings_logging_ev_service_restarting_h": "Windows starts it again in about a minute.",
 	"settings_logging_ev_service_restart_paused_n": "Restart now paused",
-	"settings_logging_ev_service_restart_paused_h": "Paused for 24 hours. Restart the service in Windows Services.",
+	"settings_logging_ev_service_restart_paused_h": "Paused for about a day. Restart the service in Windows Services.",
 	"settings_logging_ev_service_restarts_unwritable_n": "Restart record not saved",
 	"settings_logging_ev_service_restarts_unwritable_h": "The record of recent restarts couldn't be saved."
 }

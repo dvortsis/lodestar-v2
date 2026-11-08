@@ -708,14 +708,14 @@ lodestar_log::catalogue! {
         message: "service: exiting so Windows starts it again in about a minute",
         fields: { code: Size },
     }
-    /// Restart now isn't offered for the next 24 hours: Windows restarts
+    /// Restart now isn't offered for about a day: Windows restarts
     /// the service at most twice a day, and one of those may be used
     /// (`reason`: restart, unclean_stop, unverified or unwritable).
     SERVICE_RESTART_PAUSED {
         id: "service.restart_paused",
         component: System,
         level: Info,
-        message: "service: Restart now is paused for up to 24 hours, so a crash still has an automatic restart left; restart the service from Windows Services instead",
+        message: "service: Restart now is paused for about a day, so a crash still has an automatic restart left; restart the service from Windows Services instead",
         fields: { reason: Label },
     }
     /// The service's record of recent restarts couldn't be written.

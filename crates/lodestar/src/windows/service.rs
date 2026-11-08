@@ -207,7 +207,7 @@ pub const fn scm_code(code: u32) -> u32 {
 pub const RESTART: u32 = 80;
 
 /// What `/system` says while Restart now is paused.
-pub const PAUSED_HINT: &str = "Restart now is paused for up to 24 hours: Lodestar restarted or \
+pub const PAUSED_HINT: &str = "Restart now is paused for about a day: Lodestar restarted or \
      stopped unexpectedly recently, and Windows restarts the service automatically only twice a \
      day, so one is kept for a crash. To restart now, restart the Lodestar service in Windows \
      Services (services.msc).";
@@ -240,6 +240,13 @@ pub mod restarts {
     pub const MAX_BYTES: u64 = 4096;
     /// How long a recovery counts: the MSI's `ResetPeriodInDays="1"`.
     pub const WINDOW_SECS: u64 = 86_400;
+    /// Added to the window, so the count is strictly conservative: an
+    /// entry is stamped just before the exit, a moment before the SCM
+    /// records the failure, and Windows doesn't say which clock its reset
+    /// period follows.
+    pub const MARGIN_SECS: u64 = 3_600;
+    /// How long an entry counts.
+    pub const COUNTS_SECS: u64 = WINDOW_SECS + MARGIN_SECS;
     const HEADER: &str = "lodestar-service-restarts 1";
     /// More can't matter: one already pauses Restart now.
     const MAX_ENTRIES: usize = 32;
@@ -322,13 +329,13 @@ pub mod restarts {
             }
         }
 
-        /// Drops entries over [`WINDOW_SECS`] old. One from the future (the
+        /// Drops entries over [`COUNTS_SECS`] old. One from the future (the
         /// clock went back) counts from now, so it can't linger.
         fn prune(&mut self, now: u64) {
             for (_, at) in &mut self.entries {
                 *at = (*at).min(now);
             }
-            self.entries.retain(|&(_, at)| now - at < WINDOW_SECS);
+            self.entries.retain(|&(_, at)| now - at < COUNTS_SECS);
             self.entries.sort_by_key(|&(_, at)| at);
             let extra = self.entries.len().saturating_sub(MAX_ENTRIES);
             self.entries.drain(..extra);
@@ -344,7 +351,7 @@ pub mod restarts {
         pub fn paused_until(&self) -> Option<u64> {
             self.entries
                 .last()
-                .map(|&(_, at)| at.saturating_add(WINDOW_SECS))
+                .map(|&(_, at)| at.saturating_add(COUNTS_SECS))
         }
 
         /// A clean stop.
@@ -934,7 +941,7 @@ mod tests {
         use super::super::restarts::*;
 
         const NOW: u64 = 1_762_560_000;
-        const DAY: u64 = WINDOW_SECS;
+        const DAY: u64 = COUNTS_SECS;
 
         fn text(lines: &[&str]) -> Found {
             Found::Text(lines.iter().map(|l| format!("{l}\n")).collect())
@@ -966,7 +973,7 @@ mod tests {
         }
 
         #[test]
-        fn entries_expire_after_a_day() {
+        fn entries_expire_after_a_day_and_an_hour() {
             let old = text(&[
                 "lodestar-service-restarts 1",
                 "state stopped",
@@ -983,6 +990,18 @@ mod tests {
             ]);
             assert_eq!(
                 Ledger::at_start(almost, true, NOW).paused(),
+                Some(Kind::Restart)
+            );
+            // Exactly a day old still counts: the margin keeps it an hour
+            // longer than the SCM's reset period.
+            assert_eq!(DAY, WINDOW_SECS + 3_600);
+            let a_day = text(&[
+                "lodestar-service-restarts 1",
+                "state stopped",
+                &format!("restart {}", NOW - WINDOW_SECS),
+            ]);
+            assert_eq!(
+                Ledger::at_start(a_day, true, NOW).paused(),
                 Some(Kind::Restart)
             );
         }
