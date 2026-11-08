@@ -579,6 +579,10 @@ jobs:
         shell: pwsh
         run: packaging/windows/test-service-sid.ps1
 
+      - name: Unit test (data folder Repair rule, owner 2.52)
+        shell: powershell
+        run: packaging/windows/test-secure-datadir.ps1
+
       - name: Build
         # Without the `fixture` feature (`serve --fixture` test data): not for releases.
         run: cargo build --locked --release -p lodestar --bin lodestar --no-default-features --features web --target x86_64-pc-windows-msvc

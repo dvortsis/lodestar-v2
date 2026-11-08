@@ -174,6 +174,50 @@ if ($Msi) {
   Assert ($svc.State -eq 'Stopped') "service is $($svc.State) after Stop-Service"
   Assert ($svc.ExitCode -eq 0) "service stopped with exit code $($svc.ExitCode)"
 
+  # --- owner 2.52: the admin's own Explorer entry is refused with the fix, and Repair fixes it ---
+  # What Explorer's "Continue" does: an explicit Allow for the clicking administrator, on
+  # the folder and everything in it.
+  $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+  $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
+  & $icacls $dataDir /grant "*${me}:(OI)(CI)F" /T /C /Q | Out-Null
+  Assert ($LASTEXITCODE -eq 0) 'could not add the administrator entry for the test'
+  Start-Service Lodestar -ErrorAction SilentlyContinue
+  $deadline = (Get-Date).AddSeconds(60)
+  do {
+    $svc = Get-CimInstance Win32_Service -Filter "Name='Lodestar'"
+    if ($svc.State -eq 'Stopped') { break }
+    Start-Sleep -Milliseconds 500
+  } while ((Get-Date) -lt $deadline)
+  Assert ($svc.State -eq 'Stopped') "the service is $($svc.State) with the administrator's entry on the folder; it must refuse"
+  Assert ($svc.ServiceSpecificExitCode -eq 536870915) "the refusal's service-specific code is $($svc.ServiceSpecificExitCode), expected 536870915 (0x20000003)"
+  # The reason, with the account and the fix, goes beside the installer's log.
+  $reason = Get-Content -LiteralPath (Join-Path $env:SystemRoot 'Temp\lodestar-service.log') -Tail 1
+  Assert ($reason -match [regex]::Escape($me)) "the refusal doesn't name the extra account's SID: $reason"
+  Assert ($reason -match [regex]::Escape("/remove:g *$me /T /C")) "the refusal doesn't give the icacls fix: $reason"
+  # Another account beside it: Repair must still refuse.
+  $other = 'S-1-5-32-545'   # Users: an account icacls can name
+  & $icacls $dataDir /grant "*${other}:(OI)(CI)R" /C /Q | Out-Null
+  Assert ($LASTEXITCODE -eq 0) 'could not add the second account for the test'
+  $p = Start-Process msiexec.exe -ArgumentList @('/fa', "`"$Msi`"", '/qn', '/norestart', '/l*v', "`"$logs\msi-repair-refused.log`"") -Wait -PassThru
+  Assert ($p.ExitCode -eq 1603) "Repair with another account's entry on the folder ended with msiexec exit $($p.ExitCode), expected 1603 (the install stopped)"
+  Assert (Select-String -LiteralPath "$logs\msi-repair-refused.log" -SimpleMatch 'LODESTAR INSTALL STOPPED' -Quiet) "the refused Repair didn't stop in secure-datadir.ps1; see msi-repair-refused.log"
+  Assert ((Get-Acl $dataDir).GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]).IdentityReference.Value -contains $other) 'the refused Repair changed the folder'
+  & $icacls $dataDir /remove:g "*$other" /C /Q | Out-Null
+  # Only the administrator's own entry: Repair removes it everywhere and the service starts.
+  Invoke-Msiexec @('/fa', "`"$Msi`"", '/qn', '/norestart', '/l*v', "`"$logs\msi-repair.log`"") 'Repair of the administrator entry'
+  $left = @(Get-ChildItem -LiteralPath $dataDir -Force -Recurse | Where-Object { (Get-Acl -LiteralPath $_.FullName).GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]).IdentityReference.Value -contains $me })
+  $top = (Get-Acl $dataDir).GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]).IdentityReference.Value -contains $me
+  Assert (-not $top -and $left.Count -eq 0) "Repair left the administrator's entry on $(if ($top) { $dataDir } else { $left[0].FullName })"
+  Assert (Test-Path "$dataDir\config.toml") 'Repair lost the data'
+  Start-Service Lodestar -ErrorAction SilentlyContinue
+  $up = $false
+  for ($i = 0; $i -lt 90 -and -not $up; $i++) {
+    try { $up = ((Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 'http://127.0.0.1:8090/healthz').StatusCode -eq 200) } catch { Start-Sleep -Seconds 1 }
+  }
+  Assert $up 'the service did not start after Repair re-secured the folder'
+  Stop-Service Lodestar
+  Write-Host 'repair of the administrator entry ok'
+
   # --- upgrade: the next version installed over this one keeps the service, data and ACL ---
   if ($UpgradeMsi) {
     # Start from an install that chose the web rule, so the upgrade (without the option) must keep it.
