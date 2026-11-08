@@ -31,6 +31,7 @@ function Audit([string]$Message) {
 }
 
 . (Join-Path $scriptDir 'AwsCli.ps1')
+. (Join-Path $scriptDir 'Interactive.ps1')
 $region = 'us-east-1'
 $profileArgs = @('--profile', 'lodestar-provisioner', '--region', $region)
 
@@ -106,7 +107,8 @@ if ($targetState -in @('shutting-down', 'terminated')) {
     return
 }
 
-# 4. Confirmation gate (always required; there is no bypass)
+# 4. Confirmation gate (always required; there is no bypass; piped input is refused)
+Assert-InteractiveConfirmation
 $phrase = "DESTROY 1 AWS WINDOWS INSTANCE"
 Write-Host "`n>>> TO CONFIRM DESTRUCTION OF INSTANCE $InstanceId ($targetState), TYPE EXACTLY:" -ForegroundColor Yellow
 Write-Host "    $phrase" -ForegroundColor Red

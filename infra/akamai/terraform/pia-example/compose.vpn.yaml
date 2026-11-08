@@ -3,7 +3,9 @@
 # according to the official PIA manual-connections instructions.
 services:
   gluetun:
-    image: qmcgaw/gluetun:latest # Pin a reviewed digest before repeatable production deployments.
+    # UNPINNED EXAMPLE: `latest` changes without notice. Before any real use,
+    # pull it, review it, and pin it by digest (image: qmcgaw/gluetun@sha256:<digest>).
+    image: qmcgaw/gluetun:latest
     cap_add:
       - NET_ADMIN
     devices:

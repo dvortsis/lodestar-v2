@@ -18,6 +18,8 @@ REQUIRED_TAGS = {"lodestar", "test"}
 APPROVED_TYPES = {"g6-standard-4", "g6-nanode-1"}
 EXPECTED_REGION = "us-east"
 MAX_DELETIONS = 4
+CONFIRM_DEADLINE_S = 90  # wait for 404s on all deletions of a run together
+CONFIRM_POLL_S = 5
 MAX_PAGES = 20
 MAX_ITEMS = 500
 
@@ -113,14 +115,21 @@ def aged(resource, now):
     return now >= created + timedelta(hours=48)
 
 
-def confirm_deleted(id_, token):
-    for attempt in range(6):
-        data = api("GET", "/linode/instances/" + str(id_), token, allow_404=True)
-        if data is None:
-            return True
-        if attempt < 5:
-            time.sleep(3)
-    return False
+def confirm_deleted(ids, token, deadline_s=CONFIRM_DEADLINE_S):
+    """Poll until each Linode returns 404 or the shared deadline passes.
+    Returns the set of ids confirmed deleted."""
+    pending = set(ids)
+    confirmed = set()
+    deadline = time.monotonic() + deadline_s
+    while pending:
+        for id_ in sorted(pending):
+            if api("GET", "/linode/instances/" + str(id_), token, allow_404=True) is None:
+                confirmed.add(id_)
+        pending -= confirmed
+        if not pending or time.monotonic() >= deadline:
+            break
+        time.sleep(CONFIRM_POLL_S)
+    return confirmed
 
 
 def token_value():
@@ -153,8 +162,16 @@ def handler(event, context):
 
     items = list_paginated("/linode/instances", token)
     selected = []
+    out_of_scope = 0
     for item in items:
         if not scoped(item):
+            tags = item.get("tags") if isinstance(item, dict) else None
+            if isinstance(tags, list) and "lodestar" in tags:
+                # Tagged lodestar but outside what the watchdog may delete (region,
+                # type, label or tags): it would never be reaped. The OutOfScope
+                # alarm counts this log line.
+                LOG.error(json.dumps({"event": "out_of_scope_linode", "id": item.get("id")}))
+                out_of_scope += 1
             continue
         try:
             if aged(item, now):
@@ -165,7 +182,7 @@ def handler(event, context):
     if len(selected) > 10:
         raise RuntimeError("Safety limit exceeded: more than 10 eligible Linodes")
 
-    deleted = []
+    requested = []
     failures = []
     for instance in selected[:MAX_DELETIONS]:
         instance_id = instance["id"]
@@ -180,13 +197,25 @@ def handler(event, context):
                 LOG.warning(json.dumps({"event": "scope_changed_skip", "id": instance_id}))
                 continue
             api("DELETE", "/linode/instances/" + str(instance_id), token)
-            if not confirm_deleted(instance_id, token):
-                raise RuntimeError("Deletion was not verified")
-            deleted.append(instance_id)
-            LOG.info(json.dumps({"event": "deleted_verified", "id": instance_id}))
+            requested.append(instance_id)
         except Exception as exc:
             failures.append({"id": instance_id, "error_type": type(exc).__name__})
             LOG.exception("Akamai deletion failed for id=%s", instance_id)
+
+    deleted = []
+    if requested:
+        try:
+            confirmed = confirm_deleted(requested, token)
+        except Exception as exc:
+            confirmed = set()
+            LOG.exception("Akamai deletion confirmation failed")
+            failures.append({"id": None, "error_type": type(exc).__name__})
+        for instance_id in requested:
+            if instance_id in confirmed:
+                deleted.append(instance_id)
+                LOG.info(json.dumps({"event": "deleted_verified", "id": instance_id}))
+            else:
+                failures.append({"id": instance_id, "error_type": "DeletionNotVerified"})
 
     if deleted:
         SNS.publish(
@@ -194,7 +223,8 @@ def handler(event, context):
             Subject="Lodestar Akamai expiry: instances deleted",
             Message=json.dumps({"verified_deleted": deleted, "utc": now.isoformat()}),
         )
-    LOG.info(json.dumps({"event": "scan_complete", "scanned": len(items), "eligible": len(selected), "verified_deleted": len(deleted), "dry_run": dry_run}))
+    LOG.info(json.dumps({"event": "scan_complete", "scanned": len(items), "eligible": len(selected), "out_of_scope_count": out_of_scope, "verified_deleted": len(deleted), "dry_run": dry_run}))
     if failures:
         raise RuntimeError("Akamai deletions failed: " + json.dumps(failures))
-    return {"status": "ok", "scanned": len(items), "eligible": len(selected), "deleted": len(deleted), "dry_run": dry_run}
+    return {"status": "ok", "scanned": len(items), "eligible": len(selected), "out_of_scope": out_of_scope,
+            "deleted": len(deleted), "dry_run": dry_run}

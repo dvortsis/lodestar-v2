@@ -1,11 +1,16 @@
 output "main_public_ipv4" {
   description = "Main VM public IPv4, null if not deployed. This is NOT your PIA exit IP."
-  value       = try(linode_instance.main[0].ip_address, null)
+  value       = try(tolist(linode_instance.main[0].ipv4)[0], null)
 }
 
 output "worker_public_ipv4s" {
   description = "One independent Akamai-assigned public IPv4 per worker."
-  value       = { for vm in linode_instance.workers : vm.label => vm.ip_address }
+  value       = { for vm in linode_instance.workers : vm.label => tolist(vm.ipv4)[0] }
+}
+
+output "main_admin_ipv4_cidrs" {
+  description = "The /32s allowed to SSH to the main VM (primary admin plus extras)."
+  value       = local.main_admin_ipv4_cidrs
 }
 
 output "estimated_compute_usd_per_hour" {
@@ -20,5 +25,5 @@ output "estimated_compute_usd_for_48_hours" {
 
 output "ssh_admin_example" {
   description = "SSH command skeleton for the main server."
-  value       = length(linode_instance.main) > 0 ? "ssh -i <PRIVATE_KEY_PATH> lodestar@${linode_instance.main[0].ip_address}" : null
+  value       = length(linode_instance.main) > 0 ? "ssh -i <PRIVATE_KEY_PATH> lodestar@${tolist(linode_instance.main[0].ipv4)[0]}" : null
 }

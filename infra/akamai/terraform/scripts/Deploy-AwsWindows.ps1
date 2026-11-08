@@ -27,6 +27,12 @@ param(
     [Parameter(Mandatory = $false)]
     [switch]$DryRun,
 
+    # Root volume size. The LodestarRestrictedEC2 policy allows at most 100 GiB;
+    # Windows Server with the toolchain needs at least 50.
+    [Parameter(Mandatory = $false)]
+    [ValidateRange(50, 100)]
+    [int]$RootVolumeGiB = 50,
+
     [Parameter(Mandatory = $false)]
     [string]$AmiId = $env:LODESTAR_AWS_AMI_ID,
 
@@ -60,6 +66,7 @@ function Audit([string]$Message) {
 
 . (Join-Path $scriptDir 'Test-ExpirationPolicy.ps1')
 . (Join-Path $scriptDir 'AwsCli.ps1')
+. (Join-Path $scriptDir 'Interactive.ps1')
 
 $region = 'us-east-1'
 $instanceType = 'c6a.xlarge'
@@ -136,6 +143,7 @@ AMI ID:                $AmiId (must be an approved Windows Server base AMI)
 Subnet:                $SubnetId
 Security Group:        $SecurityGroupId (Deny all inbound, SSM only)
 Instance Profile:      $instanceProfileArn
+Root Volume:           $RootVolumeGiB GiB, encrypted (EBS storage is billed on top)
 Hourly Rate:           `$0.3370 / hour (on-demand, us-east-1, incl. Windows licence; check current AWS pricing)
 $($expCheck.LeaseHours)-Hour Estimated Cost:  `$$([math]::Round(0.3370 * $expCheck.LeaseHours, 3))
 Mandatory Tags:        Project=Lodestar, Environment=Test, ManagedBy=Terraform,
@@ -151,7 +159,7 @@ $runArgs = @('ec2', 'run-instances',
     '--subnet-id', $SubnetId,
     '--security-group-ids', $SecurityGroupId,
     '--metadata-options', 'HttpTokens=required',
-    '--block-device-mappings', 'DeviceName=/dev/sda1,Ebs={VolumeSize=50,Encrypted=true}',
+    '--block-device-mappings', "DeviceName=/dev/sda1,Ebs={VolumeSize=$RootVolumeGiB,Encrypted=true}",
     '--tag-specifications', "ResourceType=instance,Tags=[$tags]", "ResourceType=volume,Tags=[$tags]",
     '--iam-instance-profile', "Arn=$instanceProfileArn",
     '--profile', 'lodestar-provisioner', '--region', $region, '--output', 'json')
@@ -166,7 +174,8 @@ if ($DryRun) {
     throw "DryRun failed (exit $($r.ExitCode)): $($r.Err)"
 }
 
-# 4. Mandatory human confirmation
+# 4. Mandatory human confirmation (typed at a console; piped input is refused)
+Assert-InteractiveConfirmation
 $phrase = "DEPLOY 1 AWS WINDOWS INSTANCE"
 Write-Host "`n>>> TO CONFIRM BILLABLE CREATION, TYPE EXACTLY:" -ForegroundColor Yellow
 Write-Host "    $phrase" -ForegroundColor Green

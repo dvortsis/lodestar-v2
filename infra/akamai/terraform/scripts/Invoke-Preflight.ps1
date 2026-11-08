@@ -7,7 +7,7 @@ $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $logs = Join-Path $root 'logs'
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
-$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmssZ')
 $runLog = Join-Path $logs "runner-$stamp.log"
 
 function Audit-Log([string]$Message) {

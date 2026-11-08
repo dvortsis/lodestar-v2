@@ -26,7 +26,7 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $projectRoot = (Resolve-Path (Join-Path $scriptDir '..')).Path
 $logsDir = Join-Path $projectRoot 'logs'
 New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
-$logFile = Join-Path $logsDir ("fleet-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+$logFile = Join-Path $logsDir ("fleet-{0}.log" -f (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmssZ'))
 
 function Audit([string]$Message) {
     $line = '{0} [FLEET] {1}' -f (Get-Date).ToUniversalTime().ToString('o'), $Message
@@ -114,7 +114,9 @@ Linode instances bill until deleted, even when shut down.
         Audit "[AWS] Executing non-destructive EC2 RunInstances Dry-Run..."
         Push-Location $projectRoot
         try {
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\Deploy-AwsWindows.ps1" -DryRun -Hours $Hours
+            # The same PowerShell that runs this script (powershell.exe or pwsh).
+            $psHost = (Get-Process -Id $PID).Path
+            & $psHost -NoProfile -File (Join-Path $scriptDir 'Deploy-AwsWindows.ps1') -DryRun -Hours $Hours
         } finally { Pop-Location }
 
         Audit "[Akamai] Generating read-only Terraform execution plan..."
@@ -133,7 +135,13 @@ Usage:
 "@
             return
         }
-        if ($Target -match '^i-[0-9a-f]+$') {
+        $ip = $null
+        $isIpv4 = $Target -match '^(\d{1,3}\.){3}\d{1,3}$' -and [System.Net.IPAddress]::TryParse($Target, [ref]$ip) -and
+                  $ip.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork
+        if ($Target -cnotmatch '^i-[0-9a-f]{8,17}$' -and -not $isIpv4) {
+            throw "Invalid -Target '$Target'. Use an EC2 instance ID (i-...) or an Akamai VM's IPv4 address."
+        }
+        if ($Target -cmatch '^i-[0-9a-f]{8,17}$') {
             Audit "Starting AWS Systems Manager session to $Target (human-run only: requires the administrator's MFA session)..."
             & $awsCli ssm start-session --target $Target --region us-east-1 --profile lodestar-provisioner
         } else {

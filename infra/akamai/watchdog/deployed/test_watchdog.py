@@ -69,7 +69,7 @@ class WatchdogTests(unittest.TestCase):
     @patch.object(mod,'token_value', return_value='thisisafaketokenxxxxxxxxxxxxxxxxxxxxxxxx')
     @patch.object(mod,'list_paginated')
     @patch.object(mod,'api')
-    @patch.object(mod,'confirm_deleted',return_value=True)
+    @patch.object(mod,'confirm_deleted',return_value={12345})
     def test_delete_only_eligible(self,confirm,api,list_fn,_token):
         list_fn.return_value=[self.vm]
         api.side_effect=[self.vm,{}]
@@ -127,7 +127,7 @@ class WatchdogTests(unittest.TestCase):
     @patch.object(mod,'token_value', return_value='thisisafaketokenxxxxxxxxxxxxxxxxxxxxxxxx')
     @patch.object(mod,'list_paginated')
     @patch.object(mod,'api')
-    @patch.object(mod,'confirm_deleted',return_value=True)
+    @patch.object(mod,'confirm_deleted',side_effect=lambda ids,token: set(ids))
     def test_at_most_four_deletions_per_run(self,_confirm,api,list_fn,_token):
         vms=self._vms(6)
         list_fn.return_value=vms
@@ -141,7 +141,7 @@ class WatchdogTests(unittest.TestCase):
     @patch.object(mod,'token_value', return_value='thisisafaketokenxxxxxxxxxxxxxxxxxxxxxxxx')
     @patch.object(mod,'list_paginated')
     @patch.object(mod,'api')
-    @patch.object(mod,'confirm_deleted',return_value=False)
+    @patch.object(mod,'confirm_deleted',return_value=set())
     def test_unverified_deletion_raises_without_alert(self,_confirm,api,list_fn,_token):
         list_fn.return_value=[self.vm]
         api.side_effect=[self.vm,{}]
@@ -171,8 +171,8 @@ class WatchdogTests(unittest.TestCase):
         client.get_secret_value.return_value={'SecretString':value}
         return patch.object(mod,'SECRETS',client)
 
+    @patch.dict(os.environ, {'SECRET_ARN': 'arn:aws:secretsmanager:us-east-1:123456789012:secret:x'})
     def test_token_value_parsing(self):
-        os.environ['SECRET_ARN']='arn:aws:secretsmanager:us-east-1:123456789012:secret:x'
         good='a'*40
         with self._secret(good):
             self.assertEqual(mod.token_value(),good)
@@ -184,5 +184,54 @@ class WatchdogTests(unittest.TestCase):
             with self._secret(bad):
                 with self.assertRaises(RuntimeError, msg=bad[:10]):
                     mod.token_value()
+
+    def test_linode_zoneless_created_format(self):
+        # The Linode API returns created as "2018-01-01T00:01:01" with no zone; it is UTC.
+        zoneless={**self.vm,'created':self.created.strftime('%Y-%m-%dT%H:%M:%S')}
+        self.assertTrue(mod.aged(zoneless,self.now))
+        young={**self.vm,'created':(self.now-timedelta(hours=47)).strftime('%Y-%m-%dT%H:%M:%S')}
+        self.assertFalse(mod.aged(young,self.now))
+
+    @patch.object(mod,'token_value', return_value='thisisafaketokenxxxxxxxxxxxxxxxxxxxxxxxx')
+    @patch.object(mod,'list_paginated')
+    @patch.object(mod,'api')
+    def test_lodestar_tagged_out_of_scope_is_logged_as_error(self,api,list_fn,_token):
+        stray=[{**self.vm,'id':1,'region':'us-west'}, {**self.vm,'id':2,'type':'g6-standard-8'},
+               {**self.vm,'id':3,'label':'other'}, {**self.vm,'id':4,'tags':['lodestar']}]
+        unrelated={**self.vm,'id':5,'tags':['other'],'region':'us-west'}
+        list_fn.return_value=stray+[unrelated]
+        with self.assertLogs(mod.LOG, level='ERROR') as logs:
+            result=mod.handler({},None)
+        self.assertEqual(result['out_of_scope'],4)
+        self.assertEqual(sum('"out_of_scope_linode"' in line for line in logs.output),4)
+        self.assertEqual(result['eligible'],0)
+        api.assert_not_called()
+
+    @patch.object(mod,'api')
+    def test_confirm_deleted_waits_on_a_shared_deadline(self,api):
+        clock={'t':0.0}
+        sleeps=[]
+        def fake_sleep(s):
+            sleeps.append(s); clock['t']+=s
+        # id 1 is gone at once; id 2 only after 30 s; id 3 never.
+        def fake_api(method,path,token,allow_404=False):
+            id_=int(path.rsplit('/',1)[1])
+            if id_==1 or (id_==2 and clock['t']>=30):
+                return None
+            return {'id':id_}
+        api.side_effect=fake_api
+        with patch.object(mod.time,'monotonic',lambda: clock['t']), patch.object(mod.time,'sleep',fake_sleep):
+            confirmed=mod.confirm_deleted([1,2,3],'t')
+        self.assertEqual(confirmed,{1,2})
+        self.assertGreaterEqual(clock['t'],mod.CONFIRM_DEADLINE_S)
+        self.assertGreaterEqual(mod.CONFIRM_DEADLINE_S,60)
+        self.assertTrue(all(s==mod.CONFIRM_POLL_S for s in sleeps))
+
+    @patch.object(mod,'api')
+    def test_confirm_deleted_returns_early_when_all_gone(self,api):
+        api.return_value=None
+        with patch.object(mod.time,'sleep') as sleep:
+            self.assertEqual(mod.confirm_deleted([1,2],'t'),{1,2})
+        sleep.assert_not_called()
 
 if __name__=='__main__': unittest.main(verbosity=2)

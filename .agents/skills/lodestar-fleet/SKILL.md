@@ -105,8 +105,10 @@ Two independent reapers delete expired test machines. Both run in AWS Lambda. **
 +----------------------------------+     +------------------------------------------+
 ```
 
-- **AWS:** `infra/aws/expiration-guard/deployed/` (`index.py` and the `template.json` built from it by `build_template.py`). Terminates in-scope instances once `ExpiresAt` or 48 hours after launch has passed, whichever is first. It reports that termination was *requested*; it doesn't wait for the final state.
+- **AWS:** `infra/aws/expiration-guard/deployed/` (`index.py` and the `template.json` built from it by `build_template.py`). Terminates in-scope instances once `ExpiresAt` or 48 hours after the instance first started has passed, whichever is first. "First started" is the earliest of `LaunchTime` and the root volume's `AttachTime`, so stopping and starting an instance doesn't reset its clock. It reports that termination was *requested*; it doesn't wait for the final state.
 - **Akamai:** `infra/akamai/watchdog/deployed/` (`index.py` and the template built from it by `build_template.py`). Reads the Linode token from AWS Secrets Manager (`lodestar/akamai-token`), deletes in-scope Linodes at least 48 hours old (at most 4 a run), and confirms each with an HTTP 404. With `TOKEN_REQUIRED=true` (set in the template), a missing or empty secret fails the run so the error alarm fires; without it, the watchdog only logs `unconfigured` and deletes nothing.
+- **Alarms:** each reaper has an errors alarm, an out-of-scope alarm (a `Project=Lodestar` EC2 instance or a `lodestar`-tagged Linode it may not clean up) and a heartbeat alarm (no run for an hour). These alarm changes are in the templates; the owner deploys them (`docs/operations/lodestar-cloud-assets.md`).
+- **Fail closed:** more than 10 eligible Linodes in one scan stops all Akamai deletion for that run, deliberately.
 - **Not cleaned automatically:** detached Linode firewalls, volumes and reserved addresses. Look for them in Cloud Manager after a test.
 - **Terraform drift:** after the watchdog deletes a Linode, the local Terraform state still lists it. See §4.
 
@@ -194,6 +196,7 @@ terraform output
 ```powershell
 .\scripts\Deploy.ps1
 ```
+Only region `us-east` is allowed (the watchdog reaps nothing elsewhere). To let the AWS Windows VM SSH-tunnel to Main's UI, add its public IPv4 to `main_extra_admin_ipv4_cidrs` in `terraform.tfvars` (up to four `/32`s, Main only; workers stay on `ssh_admin_ipv4_cidr`).
 Shows the full plan, then asks the human to type `DEPLOY <N> LINODES`.
 
 ### 🔒 Remote access (human-run only, never by an agent)
@@ -221,7 +224,7 @@ All of these need `LODESTAR_AWS_ACCOUNT_ID`, `LODESTAR_AWS_AMI_ID`, `LODESTAR_AW
 
 1. **MFA sign-in:** `aws sts get-caller-identity --profile lodestar-provisioner`
 2. **Dry run:** `.\scripts\Deploy-AwsWindows.ps1 -DryRun -Hours 48`
-3. **Deploy:** `.\scripts\Deploy-AwsWindows.ps1 -Hours 48`. Asks the human to type `DEPLOY 1 AWS WINDOWS INSTANCE`. State is kept in `state\aws-fleet-state.json` (git-ignored).
+3. **Deploy:** `.\scripts\Deploy-AwsWindows.ps1 -Hours 48` (add `-RootVolumeGiB <50-100>` for a larger disk; the IAM policy caps it at 100). Asks the human to type `DEPLOY 1 AWS WINDOWS INSTANCE`. State is kept in `state\aws-fleet-state.json` (git-ignored).
 4. **Partial deployment:** the deploy script refuses to run while any instance tagged `Project=Lodestar` is active, and lists it. Remove it with `Destroy-AwsWindows.ps1` before trying again.
 5. **Teardown:** `.\scripts\Destroy-AwsWindows.ps1`. Asks the human to type `DESTROY 1 AWS WINDOWS INSTANCE`, with no bypass. With more than one candidate instance, it stops and asks for `-InstanceId`.
 
@@ -231,7 +234,7 @@ The live test suite `tests\Test-LodestarAutomation.ps1` calls AWS with several p
 
 ## 6. Safety rules
 
-1. **Human approval gate:** paid provisioning (`Deploy.ps1`, `Deploy-AwsWindows.ps1`, `ec2:RunInstances`) and deletion (`Destroy.ps1`, `Destroy-AwsWindows.ps1`, `ec2:TerminateInstances`) need a phrase typed by the human. No script has a switch to skip it.
+1. **Human approval gate:** paid provisioning (`Deploy.ps1`, `Deploy-AwsWindows.ps1`, `ec2:RunInstances`) and deletion (`Destroy.ps1`, `Destroy-AwsWindows.ps1`, `ec2:TerminateInstances`) need a phrase typed by the human. No script has a switch to skip it, and a phrase piped in or sent from a non-interactive session is refused.
 2. **Credentials:**
    - `LINODE_TOKEN` lives only in the memory of the human's PowerShell process. It is never written to files, logs or MCP configuration.
    - AWS credentials are short-lived STS sessions.

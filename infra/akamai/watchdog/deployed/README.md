@@ -1,8 +1,14 @@
 # Lodestar Akamai 48-hour expiration watchdog
 
-The canonical **source** CloudFormation template in `lodestar-akamai-watchdog.json` was reconciled against the live AWS `lodestar-akamai-watchdog` stack before its account-specific SNS topic ARN was converted to the corresponding AWS pseudo-parameter expression. The embedded `index.py` Lambda source was verified identical to the deployed inline code at reconciliation time. Two changes have been made since (`docs/decisions/2026-11-08-X-cloud-infra.md`); the deployed copy has neither until the stack is next updated:
-- the API path allowlist no longer admits `/networking/firewalls?page=`, a path the code never calls;
-- with `TOKEN_REQUIRED=true`, which the template now sets, a missing or empty secret fails the run so the error alarm fires, instead of returning `unconfigured` silently.
+The canonical **source** CloudFormation template in `lodestar-akamai-watchdog.json` was reconciled against the live AWS `lodestar-akamai-watchdog` stack before its account-specific SNS topic ARN was converted to the corresponding AWS pseudo-parameter expression. The embedded `index.py` Lambda source was verified identical to the deployed inline code at reconciliation time. The source has changed since; the deployed copy has none of these changes until the owner deploys a reviewed change set (steps in `docs/operations/lodestar-cloud-assets.md`, "Deploying template changes"):
+- the API path allowlist no longer admits `/networking/firewalls?page=`, a path the code never calls (X-cloud-infra);
+- with `TOKEN_REQUIRED=true`, which the template sets, a missing or empty secret fails the run so the error alarm fires, instead of returning `unconfigured` silently (X-cloud-infra);
+- the function `DependsOn` its log group (X-cloud-infra);
+- a Linode tagged `lodestar` that fails the scope checks is logged as `out_of_scope_linode`, and the `lodestar-akamai-expiration-guard-out-of-scope` alarm fires on it (X-cloud-infra-2);
+- a `lodestar-akamai-expiration-guard-heartbeat` alarm fires when the function hasn't run for an hour, missing data counting as breaching (X-cloud-infra-2);
+- deletions are confirmed together against one 90-second deadline instead of about 15 seconds each, and the timeout is 300 s (X-cloud-infra-2).
+
+**Fail-closed limit (deliberate):** more than 10 eligible Linodes in one scan stops all deletion for that run and raises an error. A sudden crowd of expired machines more likely means a scoping bug than real expiry; the error alarm brings a person in to look.
 
 Tests: `python3 -m unittest test_watchdog -v` from this folder. Rebuild check: `python3 build_template.py && git diff --exit-code`.
 

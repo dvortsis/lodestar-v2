@@ -48,6 +48,8 @@ class Infra(unittest.TestCase):
         for f in ["docs/operations/lodestar-cloud-assets.md", ".agents/skills/lodestar-fleet/SKILL.md",
                   "crates/infra/src/lib.rs", "web/src/infra.ts"]:
             self.assertFalse(ci_changes.INFRA.match(f), f)
+
+
 class UpdateManifest(unittest.TestCase):
     def test_the_builder_release_yml_and_the_verifier_apply(self):
         for f in [".github/scripts/update_manifest.py", ".github/scripts/test_update_manifest.py",
