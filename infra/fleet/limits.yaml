@@ -1,0 +1,30 @@
+# Fleet limits (OP-1; docs/plan/2026-11-08-cloud-operator.md §3). The control
+# plane enforces these in code and the operator can't change them: a change is
+# a slice PR with a fresh Opus /security-review. Written in JSON syntax so
+# limits.py parses it with the standard library; it is still valid YAML.
+# Prices are Linode list rates, as in infra/akamai/terraform/main.tf.
+{
+  "version": 1,
+  "max_fleets": 1,
+  "max_lifetime_hours": 44,
+  "monthly_compute_cap_usd": 40,
+  "lock_ttl_minutes": 90,
+  "reap_grace_minutes": 15,
+  "presets": {
+    "screen": {
+      "roles": {
+        "main": {"type": "g6-standard-4", "hourly_usd": 0.072},
+        "worker": {"type": "g6-nanode-1", "hourly_usd": 0.0075}
+      }
+    }
+  },
+  "steps": {
+    "leak-test": {"takes_commit": false},
+    "start-block": {"takes_commit": true},
+    "arm-switch": {"takes_commit": false},
+    "outage-watcher": {"takes_commit": false},
+    "vm-status": {"takes_commit": false},
+    "copy-off": {"takes_commit": false},
+    "renew-vpn": {"takes_commit": false}
+  }
+}

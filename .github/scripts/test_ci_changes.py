@@ -43,11 +43,15 @@ class Applicability(unittest.TestCase):
 class Infra(unittest.TestCase):
     def test_only_infra_paths_match(self):
         for f in ["infra/aws/expiration-guard/deployed/index.py", "infra/akamai/terraform/main.tf",
-                  "infra/akamai/terraform/scripts/Deploy.ps1"]:
+                  "infra/akamai/terraform/scripts/Deploy.ps1", ".github/workflows/fleet.yml",
+                  ".github/workflows/operator-wake.yml", ".github/workflows/operator-injection.yml"]:
             self.assertTrue(ci_changes.INFRA.match(f), f)
         for f in ["docs/operations/lodestar-cloud-assets.md", ".agents/skills/lodestar-fleet/SKILL.md",
-                  "crates/infra/src/lib.rs", "web/src/infra.ts"]:
+                  "crates/infra/src/lib.rs", "web/src/infra.ts", ".github/workflows/fleet.yml.bak",
+                  ".github/workflows/operator-apply.yml"]:
             self.assertFalse(ci_changes.INFRA.match(f), f)
+
+
 class UpdateManifest(unittest.TestCase):
     def test_the_builder_release_yml_and_the_verifier_apply(self):
         for f in [".github/scripts/update_manifest.py", ".github/scripts/test_update_manifest.py",

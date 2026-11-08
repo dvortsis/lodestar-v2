@@ -452,6 +452,12 @@ jobs:
         run: |
           (cd infra/akamai/watchdog/deployed && python -m unittest test_watchdog -v)
           (cd infra/aws/expiration-guard/deployed && python -m unittest test_guard -v)
+      # The fleet control plane (OP-1): dry-run only, no cloud call; the
+      # parser's property tests, the workflow checks and the public-log leak test.
+      - name: Fleet control plane tests
+        run: |
+          python -m pip install --no-deps --require-hashes -r infra/fleet/requirements-test.txt
+          ./infra/fleet/run_tests.sh -v
       # Each template inlines its index.py; the committed JSON must be exactly
       # what build_template.py produces from the committed source.
       - name: Templates match their Lambda source
@@ -459,24 +465,22 @@ jobs:
           python infra/akamai/watchdog/deployed/build_template.py
           python infra/aws/expiration-guard/deployed/build_template.py
           git diff --exit-code -- infra/
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
           terraform_version: "1.9.8"
           terraform_wrapper: false
       - name: terraform fmt
         run: terraform fmt -check -recursive -diff infra/
       # Every root module: a folder holding .tf files. init downloads the
-      # provider pinned in .terraform.lock.hcl and checks the zip against its
-      # zh: checksums; no backend, no credentials. Not -lockfile=readonly: the
-      # lock holds the h1: hash only for the platform it was made on, and
-      # readonly mode needs an h1: for this runner's unpacked copy. The lock
-      # change stays on the runner (the template diff check ran before this).
+      # provider pinned in .terraform.lock.hcl and checks it against the lock's
+      # zh: (zip) and h1: (unpacked, linux_amd64 and windows_amd64) hashes; a
+      # lock that would need changing fails the job. No backend, no credentials.
       - name: terraform validate
         run: |
           set -euo pipefail
           for dir in $(find infra -name '*.tf' -not -path '*/.terraform/*' -exec dirname {} \; | sort -u); do
             echo "::group::$dir"
-            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" init -backend=false -input=false -lockfile=readonly
             terraform -chdir="$dir" validate
             echo "::endgroup::"
           done
