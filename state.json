@@ -6535,6 +6535,11 @@
       "id": "opt-oidc-repository-id",
       "at": "2026-11-08T23:10Z",
       "note": "Optional hardening (OP-2a self-review): GitHub OIDC include_claim_keys repository_id so trust survives a repo rename; changes owner setup step 2.8; raise with owner later, not blocking."
+    },
+    {
+      "id": "runner-pr-1108-late",
+      "at": "2026-11-08T23:13Z",
+      "note": "Next runner PR slices.yaml: add X-wk-busy-metrics (owns metrics.rs, docs/metrics.md, server.rs doc line, runtime.rs accessors) and X-event-names-split; X-lease-report-atomic after it."
     }
   ],
   "main_health": [
@@ -7009,6 +7014,12 @@
       "slice": "OP-1",
       "sha": "bc2a6e95122b25b6d718c24d6950f2a55e8f302c",
       "at": "2026-11-08T22:52Z"
+    },
+    {
+      "pr": 637,
+      "slice": "X-wk-busy-retry",
+      "sha": "e964b48772ffc15edab7a4de4ebb95fc5c4bd993",
+      "at": "2026-11-08T23:13Z"
     }
   ],
   "active_sessions": {
@@ -7242,14 +7253,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T22:52Z",
+    "updated": "2026-11-08T23:13Z",
     "items": [
       {
         "slot": 1,
         "slice": "CMP-6",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: #639 ready at 3b8f3e53; Opus review running, security MERGE; fix round + main merge after #637",
+        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: #639 told to bring main in after #637 merge and push its fix round; then delta review",
         "since": "2026-11-08T20:07Z"
       },
       {
@@ -7270,11 +7281,11 @@
       },
       {
         "slot": 4,
-        "slice": "X-wk-busy-retry",
+        "slice": "X-wk-busy-metrics",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #637 at 0e79f478, Windows re-run (attempt 2) of a_portable_restart_starts_a_new_copy in progress; merge on green",
-        "since": "2026-11-08T19:55Z"
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #637 merged (e964b487); building X-wk-busy-metrics, then X-lease-report-atomic (brief briefs/X-wk-busy-metrics.md)",
+        "since": "2026-11-08T23:13Z"
       },
       {
         "slot": 5,
@@ -7341,5 +7352,5 @@
     }
   ],
   "heartbeat": "2026-11-08T21:39Z",
-  "updated": "2026-11-08T23:10Z"
+  "updated": "2026-11-08T23:13Z"
 }
