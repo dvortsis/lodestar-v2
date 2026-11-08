@@ -179,6 +179,10 @@ pub enum LimitsError {
     DownloadsInsideCompanion,
     /// The executable isn't a regular file inside the install folder.
     ExecutableOutsideInstall,
+    /// The mount table couldn't be read, or couldn't place a folder, so a
+    /// second mount of the data folder can't be ruled out (Linux; fails
+    /// closed).
+    MountsUnreadable,
     /// Lodestar's own executable, the launcher, couldn't be found.
     NoLauncher,
     /// The Windows Job Object couldn't be created.
@@ -193,6 +197,7 @@ impl LimitsError {
             LimitsError::InstallOutsideCompanion => "install_outside_companion",
             LimitsError::DownloadsInsideCompanion => "downloads_inside_companion",
             LimitsError::ExecutableOutsideInstall => "executable_outside_install",
+            LimitsError::MountsUnreadable => "mounts_unreadable",
             LimitsError::NoLauncher => "no_launcher",
             LimitsError::NoJob => "no_job",
         }
