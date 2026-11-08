@@ -33,5 +33,8 @@ pub use plugin::{
     BoxFuture, Closed, ConfigRefusal, Discovery, Emitter, Found, Kit, LookupSession, PeerRequest,
     PluginError, SessionAdmission, Shutdown, SourceCtx, SourcePlugin, Terminal,
 };
-pub use pool::{FetchedKey, Fetcher, PeerWireFetcher, PoolConfig, PoolHandle, PoolIo, PoolStats};
+pub use pool::{
+    FetchedKey, Fetcher, IpCap, PeerIpCap, PeerWireFetcher, PoolConfig, PoolHandle, PoolIo,
+    PoolStats,
+};
 pub use state::{MemoryState, PluginState, StateError};

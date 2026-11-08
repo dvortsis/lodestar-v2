@@ -800,6 +800,7 @@ impl Actor {
                     }
                 }
             }
+            Command::SetSampleScale(scale) => self.cfg.sample_interval_scale = scale,
             Command::SetIntensity(intensity) => {
                 // The rates and the outstanding cap follow at once; the
                 // buckets start full, as at start.
@@ -1457,12 +1458,18 @@ impl Actor {
                             self.capture_hint(h, from);
                         }
                     }
-                    let wait = if supported {
-                        Duration::from_secs(u64::from(r.interval.unwrap_or(SAMPLE_INTERVAL)))
+                    // WK-10e: a node's interval is waited this install's
+                    // share times over; a failure or no support isn't.
+                    let (wait, scale) = if supported {
+                        let secs = r.interval.unwrap_or(SAMPLE_INTERVAL);
+                        (
+                            Duration::from_secs(u64::from(secs)),
+                            self.cfg.sample_interval_scale,
+                        )
                     } else {
-                        sampler::UNSUPPORTED_BACKOFF
+                        (sampler::UNSUPPORTED_BACKOFF, 1)
                     };
-                    if !self.sampler.complete(from, tid, wait, now_i) {
+                    if !self.sampler.complete_scaled(from, tid, wait, scale, now_i) {
                         Stats::inc(&self.stats.sample_stale);
                     }
                 }
@@ -3403,6 +3410,55 @@ mod tests {
         assert!(a.stalled.is_empty());
         assert!(a.peer_requests.is_empty());
         assert_eq!(a.active_get_peers, 0);
+    }
+
+    /// WK-10e: with a scale of N, a node that answers with interval I isn't
+    /// sampled again for N × I, and a changed scale applies from the next
+    /// answer; a failure isn't scaled.
+    #[test]
+    fn a_sample_scale_spaces_repeat_samples_of_a_node() {
+        for scale in [1u8, 3, 8] {
+            let (mut a, sockets) = fixture();
+            a.on_command(Command::SetSampleScale(scale));
+            let remote = SocketAddr::from(([127, 0, 0, 9], 7000));
+            let now = Instant::now();
+            assert!(a.sampler.offer(candidate(remote), now));
+            a.sample_tick(&sockets, now);
+            let tid = a
+                .pending
+                .iter()
+                .find(|(_, p)| matches!(p.purpose, Purpose::Sample) && p.to == remote)
+                .map(|(t, _)| *t)
+                .expect("a sample sent");
+            let response = Response {
+                id: candidate(remote).id,
+                samples: Some(crate::krpc::Samples::default()),
+                interval: Some(600),
+                ..Default::default()
+            };
+            let tid_bytes = tid.to_be_bytes();
+            let msg = Message {
+                transaction_id: &tid_bytes,
+                version: None,
+                ip: None,
+                read_only: false,
+                body: Body::Response(response.clone()),
+            };
+            let before = Instant::now();
+            a.on_response(&sockets, 0, &msg, Some(&response), remote);
+            let after = Instant::now();
+            let until = a
+                .sampler
+                .restrictions(after)
+                .find(|(x, _)| *x == remote)
+                .map(|(_, u)| u)
+                .expect("cooling");
+            let want = Duration::from_secs(600 * u64::from(scale));
+            assert!(
+                until >= before + want && until <= after + want,
+                "scale {scale}"
+            );
+        }
     }
 
     #[test]
