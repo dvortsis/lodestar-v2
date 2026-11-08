@@ -1336,7 +1336,13 @@ mod tests {
                 .unwrap()
         };
         let sddl = crate::windows::acl::parse_sddl(&seen.folder.sddl).unwrap();
-        assert!(sddl.dacl.starts_with("PAI"), "{sddl:?}");
+        // Protected, SYSTEM and Administrators only: the production rule.
+        assert!(sddl.dacl.starts_with('P'), "{sddl:?}");
+        assert_eq!(
+            crate::windows::acl::check_dacl(&sddl.dacl, None),
+            Ok(()),
+            "{sddl:?}"
+        );
         assert!(!sddl.dacl.contains("S-1-5-80-"), "{sddl:?}");
         Windows.secure_staging(&dir).unwrap();
         let open = tmp.path().join("open");
