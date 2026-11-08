@@ -6984,7 +6984,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T15:39:10Z",
+    "updated": "2026-11-08T16:52:18Z",
     "items": [
       {
         "slot": 1,
@@ -7017,6 +7017,14 @@
         "agent": "claude",
         "doing": "session_01MMjhnAgARNjXHd2povCJ2f: PR #617, fixing review blocker",
         "since": "2026-11-08T13:34Z"
+      },
+      {
+        "slot": 5,
+        "slice": "X-cloud-infra",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhnCot56kB5kgihYEBsx: fix #623 on fresh slice/X-cloud-infra (owner's one-off 5th slot)",
+        "since": "2026-11-08T16:52:18Z"
       }
     ],
     "limit": 4,
@@ -7074,5 +7082,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T16:51:55Z"
+  "updated": "2026-11-08T16:52:18Z"
 }
