@@ -305,6 +305,10 @@ struct QState {
     hostile_categories: Option<fn() -> Reply>,
     /// Takes the next password write but never answers it.
     silent_password_once: bool,
+    /// Bans every sign-in that isn't bypassed, as after five refusals.
+    banned_unless_bypassed: bool,
+    /// Refuses a write that turns the localhost bypass back on.
+    refuse_restore: bool,
 }
 
 type Qbit = Arc<Mutex<QState>>;
@@ -326,6 +330,8 @@ fn qbit_state(password: &str) -> Qbit {
         hostile_login: None,
         hostile_categories: None,
         silent_password_once: false,
+        banned_unless_bypassed: false,
+        refuse_restore: false,
     }))
 }
 
@@ -345,7 +351,7 @@ fn qbit_handler(state: Qbit) -> Handler {
             if let Some(h) = s.hostile_login {
                 return h();
             }
-            if s.banned {
+            if s.banned || (s.banned_unless_bypassed && !bypassing) {
                 return reply(403, "Your IP address has been banned");
             }
             let f = form_decode(&seen.body);
@@ -400,6 +406,9 @@ fn qbit_handler(state: Qbit) -> Handler {
                 let Ok(Value::Object(m)) = serde_json::from_str(&f["json"]) else {
                     return reply(400, "");
                 };
+                if s.refuse_restore && m.get("bypass_local_auth") == Some(&json!(true)) {
+                    return reply(400, "");
+                }
                 let mut silent = false;
                 for (k, v) in m {
                     if k == "web_ui_password" {
@@ -929,7 +938,13 @@ fn prowlarr_handler(state: Prow) -> Handler {
                 let Ok(Value::Object(m)) = serde_json::from_slice(&seen.body) else {
                     return reply(400, "");
                 };
-                s.host = m;
+                // As `ConfigService.SaveConfigDictionary` does: a null
+                // value leaves the stored one as it is.
+                for (k, v) in m {
+                    if !v.is_null() {
+                        s.host.insert(k, v);
+                    }
+                }
                 reply(202, "1")
             }
             _ => reply(404, ""),
@@ -973,7 +988,17 @@ async fn prowlarr_first_configuration_then_an_empty_plan() {
         // Everything else went back as it was.
         let mut rest = s.host.clone();
         let mut before = fixture("prowlarr/configure/host.json");
-        for k in ["proxyEnabled", "proxyType", "proxyHostname", "proxyPort"] {
+        // The old proxy's credentials are emptied, not left in place.
+        assert_eq!(s.host["proxyUsername"], "");
+        assert_eq!(s.host["proxyPassword"], "");
+        for k in [
+            "proxyEnabled",
+            "proxyType",
+            "proxyHostname",
+            "proxyPort",
+            "proxyUsername",
+            "proxyPassword",
+        ] {
             rest.remove(k);
             before.remove(k);
         }
@@ -995,6 +1020,8 @@ async fn prowlarr_first_configuration_then_an_empty_plan() {
         ("proxyType", json!("socks5")),
         ("proxyHostname", json!("172.17.0.2")),
         ("proxyPort", json!(1080)),
+        ("proxyUsername", json!("")),
+        ("proxyPassword", json!("")),
     ] {
         assert_eq!(sent.remove(k), Some(v), "{k}");
         got.remove(k);
@@ -1076,8 +1103,8 @@ async fn prowlarr_already_and_partly_configured() {
         .await
         .unwrap();
     // A new host never gets the old proxy's credentials.
-    assert_eq!(state.lock().unwrap().host["proxyUsername"], Value::Null);
-    assert_eq!(state.lock().unwrap().host["proxyPassword"], Value::Null);
+    assert_eq!(state.lock().unwrap().host["proxyUsername"], "");
+    assert_eq!(state.lock().unwrap().host["proxyPassword"], "");
     assert!(
         prowlarr_adapter()
             .plan(&http, &target, &input)
@@ -1455,6 +1482,37 @@ async fn turning_local_auth_on_never_locks_lodestar_out() {
     clean_error(&e);
     // The bypass went back on, so Lodestar still reaches it.
     assert_eq!(state.lock().unwrap().prefs["bypass_local_auth"], true);
+
+    // After failed sign-ins qBittorrent bans the address: the fresh
+    // sign-in gets `403`, and the bypass still goes back on.
+    state.lock().unwrap().banned_unless_bypassed = true;
+    let plan = qbit().plan(&http, &target, &input).await.unwrap();
+    let e = qbit()
+        .apply(&http, &target, &input, &plan)
+        .await
+        .unwrap_err();
+    assert_eq!(e, AdapterError::Refused(qbittorrent::LOCAL_AUTH_LOCKOUT));
+    assert_eq!(state.lock().unwrap().prefs["bypass_local_auth"], true);
+
+    // If putting it back fails, that's its own code: the bypass is off and
+    // the password doesn't work, which you have to be told.
+    state.lock().unwrap().refuse_restore = true;
+    let plan = qbit().plan(&http, &target, &input).await.unwrap();
+    let e = qbit()
+        .apply(&http, &target, &input, &plan)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        e,
+        AdapterError::Refused(qbittorrent::LOCAL_AUTH_RESTORE_FAILED)
+    );
+    assert_eq!(state.lock().unwrap().prefs["bypass_local_auth"], false);
+    {
+        let mut s = state.lock().unwrap();
+        s.banned_unless_bypassed = false;
+        s.refuse_restore = false;
+        s.prefs.insert("bypass_local_auth".into(), true.into());
+    }
 
     // With the right password it turns off and stays off.
     let creds = qbit_creds(GENERATED);

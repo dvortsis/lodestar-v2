@@ -20,7 +20,7 @@
 //! indexer host is left on the direct route. An interface or bind-address route is refused
 //! ([`ROUTE_UNSUPPORTED`](super::ROUTE_UNSUPPORTED)). With no route
 //! nothing is planned and nothing sent. When the host or port changes, the
-//! proxy's username and password are cleared, so the old proxy's
+//! proxy's username and password are set empty, so the old proxy's
 //! credentials never go to the new one.
 //!
 //! **Your own Prowlarr** (confirmed or guided): a proxy it already uses is
@@ -351,9 +351,12 @@ impl Prowlarr {
             host.insert(name.to_owned(), value);
         }
         // A new proxy host or port never gets the old proxy's credentials.
+        // Empty strings, not null: `ConfigService.SaveConfigDictionary`
+        // skips nulls, which would keep the old values; both default to
+        // `string.Empty` upstream.
         if plan.changes().contains(&PROXY_HOSTNAME) || plan.changes().contains(&PROXY_PORT) {
-            host.insert("proxyUsername".to_owned(), serde_json::Value::Null);
-            host.insert("proxyPassword".to_owned(), serde_json::Value::Null);
+            host.insert("proxyUsername".to_owned(), "".into());
+            host.insert("proxyPassword".to_owned(), "".into());
         }
         let body = serde_json::Value::Object(host).to_string().into_bytes();
         let req = ProbeRequest::new(target, path(HOST_PUT)?, limits())

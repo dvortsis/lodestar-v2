@@ -31,9 +31,11 @@
 //! - `webui.password` (`web_ui_password`), for a guided install whose
 //!   temporary password still works (Q19).
 //!
-//! Applying writes categories first, then the preferences, then the new
-//! password, which it checks by signing in with it, and the WebUI address
-//! last, since qBittorrent restarts its WebUI on that change.
+//! Applying writes the new password first, which it checks by signing in
+//! with it, then categories, then the preferences (turning the localhost
+//! bypass off is checked with a fresh sign-in and put back on failure), and
+//! the WebUI address last, since qBittorrent restarts its WebUI on that
+//! change.
 
 use std::net::IpAddr;
 use std::time::Duration;
@@ -103,6 +105,10 @@ pub const PASSWORD_NOT_TAKEN: &str = "password_not_taken";
 /// The refusal when turning the localhost bypass off would lock Lodestar
 /// out; the bypass is put back first.
 pub const LOCAL_AUTH_LOCKOUT: &str = "local_auth_would_lock_out";
+/// The refusal when the localhost bypass couldn't be put back: it's off and
+/// the stored password doesn't sign in, so you have to fix the password in
+/// qBittorrent (CMP-5g says so).
+pub const LOCAL_AUTH_RESTORE_FAILED: &str = "local_auth_restore_failed";
 
 /// A configuration request's bounds: preferences run to about 12 KiB, and a
 /// write may take a moment on a slow NAS.
@@ -631,15 +637,22 @@ impl QBittorrent {
             }
         }
 
-        if w.yours && (listed(&INTERFACE) || listed(&INTERFACE_ADDRESS)) {
-            let prefs = read_prefs(http, target, &session).await?;
-            if loosens(&w, &prefs) {
-                return Err(failed(
-                    ID,
-                    INTERFACE.as_str(),
-                    AdapterError::Refused(WOULD_LOOSEN),
-                ));
-            }
+        // Read once before the batch: for the loosening check on your own
+        // companion, and to know whether this run is the one turning the
+        // localhost bypass off (and so the one to put it back).
+        let before = if (w.yours && (listed(&INTERFACE) || listed(&INTERFACE_ADDRESS)))
+            || listed(&LOCAL_AUTH)
+        {
+            Some(read_prefs(http, target, &session).await?)
+        } else {
+            None
+        };
+        if before.as_ref().is_some_and(|p| loosens(&w, p)) {
+            return Err(failed(
+                ID,
+                INTERFACE.as_str(),
+                AdapterError::Refused(WOULD_LOOSEN),
+            ));
         }
         let mut prefs = serde_json::Map::new();
         let mut batch = Vec::new();
@@ -677,22 +690,21 @@ impl QBittorrent {
             // Turning the localhost bypass off must not lock Lodestar out:
             // the stored password has to sign in afresh, or the bypass goes
             // back on through the session still open.
-            if listed(&LOCAL_AUTH) {
-                match login(http, target, input, &stored).await {
-                    Ok(_) => {}
-                    Err(AdapterError::Unauthorized) => {
-                        let restore = one("bypass_local_auth", true.into());
-                        set_preferences(http, target, &session, restore)
-                            .await
-                            .map_err(|e| failed(ID, LOCAL_AUTH.as_str(), e))?;
-                        return Err(failed(
-                            ID,
-                            LOCAL_AUTH.as_str(),
-                            AdapterError::Refused(LOCAL_AUTH_LOCKOUT),
-                        ));
+            // Any failure counts, not only a refused password: after
+            // failed sign-ins qBittorrent bans the address (`403`), and a
+            // transport error proves nothing either.
+            if listed(&LOCAL_AUTH) && login(http, target, input, &stored).await.is_err() {
+                let turned_off_here = before.as_ref().is_some_and(|p| p.bypass_local_auth);
+                let code = if !turned_off_here {
+                    LOCAL_AUTH_LOCKOUT
+                } else {
+                    let restore = one("bypass_local_auth", true.into());
+                    match set_preferences(http, target, &session, restore).await {
+                        Ok(()) => LOCAL_AUTH_LOCKOUT,
+                        Err(_) => LOCAL_AUTH_RESTORE_FAILED,
                     }
-                    Err(e) => return Err(failed(ID, LOCAL_AUTH.as_str(), e)),
-                }
+                };
+                return Err(failed(ID, LOCAL_AUTH.as_str(), AdapterError::Refused(code)));
             }
             batch.iter().for_each(applied);
         }
