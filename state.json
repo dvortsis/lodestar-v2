@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-08T03:15:06Z",
+  "updated_at": "2026-11-08T03:27:02Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6004,6 +6004,11 @@
       "id": "X-filter-props-flake",
       "what": "lodestar-filter tests/props.rs reuse::the_property_reads_trails failed its statistical floor once locally (18 of 224 decided by SP-3/SP-4, needs >10%); passed on re-run. Reported by CMP-1's session. No issue or fix PR yet. Fix once (widen sample or fixed seed), runner assigns.",
       "logged": "2026-11-08T03:03:10Z"
+    },
+    {
+      "id": "wk10c-review",
+      "at": "2026-11-08T03:27:02Z",
+      "note": "#601 Opus review CHANGES: B1 missing tests (heartbeat stats, restart back-off next_step, dht-state.bin saved at shutdown) + units MiB, stopped() race, log-once, normalize ext IP. Runner approved web/** generated labels (X-flakes-1107 merged). Moved to WK-10d: dedupe memory reading with system/info.rs, refresh_pause lock held across bounded send."
     }
   ],
   "main_health": [
@@ -6705,7 +6710,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T03:15:06Z",
+    "updated": "2026-11-08T03:27:02Z",
     "items": [
       {
         "slot": 1,
@@ -6736,7 +6741,7 @@
         "slice": "WK-10c",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f; #601 green c8c1e7a6, Opus review running",
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f; #601 review CHANGES (B1 tests: heartbeat stats, back-off, state save; +4 small); web/** labels approved; fix push pending",
         "since": "2026-11-08T01:53Z"
       }
     ],
