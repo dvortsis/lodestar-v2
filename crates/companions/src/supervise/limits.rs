@@ -12,8 +12,8 @@
 //!
 //! **Linux** ([`super::limits_linux`]): the companion is started through
 //! Lodestar's own binary as a small launcher ([`launcher_main`]), which
-//! sets its rlimits, joins a delegated cgroup when there is one, applies
-//! the Landlock ruleset to itself and then `exec`s the companion. Nothing
+//! sets its rlimits, applies the Landlock ruleset to itself and then
+//! `exec`s the companion. Nothing
 //! the companion runs is ever outside them. The hook waits for that
 //! `exec`, so CMP-4a's record names the companion, not the launcher.
 //!
@@ -43,8 +43,8 @@ pub const DEFAULT_OPEN_FILES: u64 = 4096;
 pub struct Limits {
     /// `RLIMIT_NOFILE` on Linux. Held to Lodestar's own hard limit.
     pub open_files: u64,
-    /// A memory cap in bytes: `RLIMIT_AS` on Linux, and `memory.max` when a
-    /// delegated cgroup is used. `None` (the default): no cap, because
+    /// A memory cap in bytes: `RLIMIT_AS` on Linux. `None` (the default):
+    /// no cap, because
     /// .NET (Prowlarr) and Chromium reserve far more address space than
     /// they use and an address-space cap breaks them. Windows has no safe
     /// way to set a job memory cap, so it reports it as not applied.
@@ -100,11 +100,17 @@ impl Level {
 pub struct Sandboxed {
     pub level: Level,
     /// Why, as a stable code:
-    /// - `landlock`: Landlock with an ABI that covers reads, writes and
-    ///   truncation (Linux 6.2 or later);
-    /// - `landlock_old_abi`: Landlock without truncation control (Linux
-    ///   5.13 to 6.1), so a file it can't open may still be truncated by
-    ///   name;
+    /// - `landlock` (`full`): Landlock ABI 9 or later, which also mediates
+    ///   connecting to Unix sockets by path;
+    /// - `landlock_unix_sockets` (`partial`, ABI 6 to 8): files are
+    ///   confined, but a Unix socket it can reach by path isn't (a user's
+    ///   session bus, `systemd --user`, `docker.sock`), and one of those
+    ///   could run code outside the sandbox. Not reachable under the
+    ///   shipped systemd unit;
+    /// - `landlock_no_scopes` (`partial`, ABI 3 to 5): also no signal or
+    ///   abstract-socket scoping;
+    /// - `landlock_old_abi` (`partial`, ABI 1 or 2): also no truncation
+    ///   control, so a file it can't open may still be truncated by name;
     /// - `landlock_unavailable`: the kernel has no Landlock, or it's off;
     /// - `no_safe_wrapper`: Windows, where no safe restricted-token or
     ///   AppContainer wrapper exists;
@@ -117,8 +123,6 @@ pub struct Sandboxed {
 pub enum Mechanism {
     /// Linux rlimits, set before the companion runs.
     Rlimits,
-    /// Rlimits, and a cgroup v2 leaf in a delegated subtree.
-    RlimitsAndCgroup,
     /// A Windows Job Object.
     JobObject,
     None,
@@ -128,7 +132,6 @@ impl Mechanism {
     pub fn code(&self) -> &'static str {
         match self {
             Mechanism::Rlimits => "rlimits",
-            Mechanism::RlimitsAndCgroup => "rlimits_cgroup",
             Mechanism::JobObject => "job_object",
             Mechanism::None => "none",
         }
@@ -146,9 +149,8 @@ pub struct Applied {
     /// It dies when Lodestar does, whatever happens to Lodestar (the Job
     /// Object). On Linux CMP-4a's process group and the init's hook do it.
     pub dies_with_lodestar: bool,
-    /// Why the cgroup wasn't used (Linux), as a code: `not_cgroup_v2`,
-    /// `not_delegated`, `no_controllers`, `root`. `None` when used, or off
-    /// Linux.
+    /// Why no cgroup is used (Linux): always `not_delegated` in this
+    /// version, since no shipped unit delegates one. `None` off Linux.
     pub cgroup_skipped: Option<&'static str>,
 }
 
@@ -400,6 +402,12 @@ pub(crate) fn check(spec: &SpawnSpec, conf: &Confinement) -> Result<Folders, Lim
             if d == own || d.starts_with(&home) || d.starts_with(&install) {
                 return Err(LimitsError::DownloadsInsideCompanion);
             }
+            // The same checks on the filesystem itself, so a second mount
+            // of a folder above the data folder can't pass for another.
+            #[cfg(target_os = "linux")]
+            if !super::limits_linux::mount_separate(&d, &data, &own) {
+                return Err(LimitsError::DownloadsOverlapData);
+            }
             Some(d)
         }
     };
@@ -499,7 +507,7 @@ mod tests {
     #[test]
     fn codes_are_stable() {
         assert_eq!(Level::Partial.code(), "partial");
-        assert_eq!(Mechanism::RlimitsAndCgroup.code(), "rlimits_cgroup");
+        assert_eq!(Mechanism::JobObject.code(), "job_object");
         assert_eq!(
             LimitsError::DownloadsOverlapData.to_string(),
             "companion limits: downloads_overlap_data"

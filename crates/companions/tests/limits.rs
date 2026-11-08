@@ -474,11 +474,9 @@ mod linux {
             .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(report.limits.open_files, Some(1000));
         assert_eq!(report.limits.memory, Some(64 << 30));
-        // CI runs as root, where a cgroup is never touched.
-        if rustix::process::geteuid().is_root() {
-            assert_eq!(report.limits.mechanism, Mechanism::Rlimits);
-            assert_eq!(report.limits.cgroup_skipped, Some("root"));
-        }
+        // No cgroup is used in this version.
+        assert_eq!(report.limits.mechanism, Mechanism::Rlimits);
+        assert_eq!(report.limits.cgroup_skipped, Some("not_delegated"));
         let (sup, ring) = run_one(&s, &sb, "limits").await;
         let line = wait_lines(&ring, "LIMITS", 1).await.remove(0);
         assert_eq!(

@@ -141,7 +141,7 @@ pub enum State {
     },
     /// Not restarting until [`Supervisor::restart`].
     NeedsAttention(Attention),
-    /// Stopped and kept stopped by a [`Handle::hold`] (CMP-4b's route
+    /// Stopped and kept stopped by a hold (CMP-4b's route
     /// gate: its route is down) until released. Not a crash.
     Held,
     Stopped,
@@ -267,19 +267,19 @@ enum Control {
 /// companion is stopped and doesn't start or restart until released; the
 /// stop isn't a crash.
 #[derive(Debug, Clone)]
-pub struct Handle {
+pub(crate) struct Handle {
     control: mpsc::UnboundedSender<Control>,
 }
 
 impl Handle {
     /// `false` once the companion is no longer supervised.
-    pub fn hold(&self) -> bool {
+    pub(crate) fn hold(&self) -> bool {
         self.control.send(Control::Hold).is_ok()
     }
 
     /// Lets it start again. One that needed your attention before the
     /// hold still does: only [`Supervisor::restart`] clears that.
-    pub fn release(&self) -> bool {
+    pub(crate) fn release(&self) -> bool {
         self.control.send(Control::Release).is_ok()
     }
 }
@@ -333,9 +333,9 @@ impl Supervisor {
         self.insert(c, false)
     }
 
-    /// Like [`Supervisor::add`], but held: it doesn't start until its
-    /// [`Handle::release`].
-    pub fn add_held(&mut self, c: Companion) -> Result<(), SuperviseError> {
+    /// Like [`Supervisor::add`], but held: it doesn't start until the route
+    /// gate releases it.
+    pub(crate) fn add_held(&mut self, c: Companion) -> Result<(), SuperviseError> {
         self.insert(c, true)
     }
 
@@ -388,8 +388,9 @@ impl Supervisor {
         self.find(id).map(|s| s.status.clone())
     }
 
-    /// Its hold and release.
-    pub fn handle(&self, id: &CompanionId) -> Option<Handle> {
+    /// Its hold and release: the route gate's alone, so nothing outside the
+    /// crate can start a gated companion while its route is down.
+    pub(crate) fn handle(&self, id: &CompanionId) -> Option<Handle> {
         self.find(id).map(|s| Handle {
             control: s.control.clone(),
         })
@@ -514,6 +515,16 @@ async fn supervise(
                 Control::Stop | Control::Release => break,
             }
             continue;
+        }
+        // A hold that queued up during a stop (a restart, say) wins over
+        // the start it would otherwise race.
+        match control.try_recv() {
+            Ok(Control::Hold) => {
+                held = true;
+                continue;
+            }
+            Ok(Control::Stop) | Err(mpsc::error::TryRecvError::Disconnected) => break,
+            Ok(Control::Restart | Control::Release) | Err(mpsc::error::TryRecvError::Empty) => {}
         }
         set(State::Starting);
         let (spec, h) = (c.spawn.clone(), hook.clone());

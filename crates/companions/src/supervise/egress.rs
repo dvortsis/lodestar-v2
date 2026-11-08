@@ -23,6 +23,8 @@
 //! [`PluginEgress`] also runs its [`PluginEgress::monitor`] (as the
 //! pipeline does for plugins), so its state changes.
 
+use std::sync::{Arc, Mutex};
+
 use lodestar_sources::egress::{PluginEgress, RouteKind, RouteState};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -53,8 +55,11 @@ impl Follows {
     /// says otherwise.
     pub fn of(id: &CompanionId) -> Follows {
         match id.as_str() {
+            // A bind address keeps traffic on the VPN only on Windows;
+            // elsewhere `EgressFactory` marks that route down for good, so
+            // it's refused here rather than held forever.
             "qbittorrent" => Follows {
-                bind_address: true,
+                bind_address: cfg!(windows),
                 interface: true,
                 socks5: false,
             },
@@ -146,14 +151,28 @@ impl Route {
 #[must_use = "dropping it holds the companion"]
 pub struct Gated {
     pub decision: Decision,
-    follow: Option<(JoinHandle<()>, Handle)>,
+    follow: Option<Follow>,
+}
+
+#[derive(Debug)]
+struct Follow {
+    task: JoinHandle<()>,
+    handle: Handle,
+    /// Set once the gate is dropped. The follow task sends only while
+    /// holding this lock and after checking it, so nothing it sends can
+    /// land after `Drop`'s hold, even when `abort` can't stop a task
+    /// that's mid-poll on another worker.
+    closed: Arc<Mutex<bool>>,
 }
 
 impl Drop for Gated {
     fn drop(&mut self) {
-        if let Some((task, handle)) = &self.follow {
-            task.abort();
-            handle.hold();
+        if let Some(f) = &self.follow {
+            let mut closed = f.closed.lock().unwrap_or_else(|e| e.into_inner());
+            *closed = true;
+            f.handle.hold();
+            drop(closed);
+            f.task.abort();
         }
     }
 }
@@ -180,24 +199,37 @@ pub fn add(
     let handle = sup
         .handle(&id)
         .ok_or(GateError::Supervise(SuperviseError::Duplicate))?;
-    let task = tokio::spawn(follow(handle.clone(), route.state));
+    let closed = Arc::new(Mutex::new(false));
+    let task = tokio::spawn(follow(handle.clone(), route.state, closed.clone()));
     Ok(Gated {
         decision,
-        follow: Some((task, handle)),
+        follow: Some(Follow {
+            task,
+            handle,
+            closed,
+        }),
     })
 }
 
 /// Holds the companion while the route isn't up, releases it while it is.
-async fn follow(handle: Handle, mut state: watch::Receiver<RouteState>) {
+/// Stops once the gate is closed: every send happens under `closed`'s
+/// lock, after checking it.
+async fn follow(handle: Handle, mut state: watch::Receiver<RouteState>, closed: Arc<Mutex<bool>>) {
+    let send = |up: bool| -> bool {
+        let closed = closed.lock().unwrap_or_else(|e| e.into_inner());
+        if *closed {
+            return false;
+        }
+        if up { handle.release() } else { handle.hold() }
+    };
     loop {
         let up = *state.borrow_and_update() == RouteState::Up;
-        let sent = if up { handle.release() } else { handle.hold() };
-        if !sent {
+        if !send(up) {
             return;
         }
         if state.changed().await.is_err() {
             // Nothing reports the route any more: fail closed.
-            handle.hold();
+            send(false);
             return;
         }
     }
@@ -211,6 +243,39 @@ mod tests {
         CompanionId::parse(s).unwrap()
     }
 
+    /// The drop race, made deterministic: the gate closes (holding the
+    /// lock, as `Drop` does) before the route comes up, so the follow task
+    /// wakes to `Up` but can't send a release after the hold.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_closed_gate_never_releases_after_its_hold() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let handle = Handle { control: tx };
+        let (route, state) = watch::channel(RouteState::Down(
+            lodestar_sources::egress::DownReason::InterfaceDown,
+        ));
+        let closed = Arc::new(Mutex::new(false));
+        let task = tokio::spawn(follow(handle.clone(), state, closed.clone()));
+        assert!(matches!(rx.recv().await, Some(super::super::Control::Hold)));
+        {
+            let mut c = closed.lock().unwrap();
+            // The route comes up while `Drop` holds the lock.
+            route.send(RouteState::Up).unwrap();
+            *c = true;
+            handle.hold();
+        }
+        // The task sees `Up`, finds the gate closed and ends.
+        tokio::time::timeout(std::time::Duration::from_secs(10), task)
+            .await
+            .unwrap()
+            .unwrap();
+        drop(handle);
+        let mut rest = Vec::new();
+        while let Some(c) = rx.recv().await {
+            rest.push(c);
+        }
+        assert_eq!(rest, [super::super::Control::Hold]);
+    }
+
     #[test]
     fn each_companion_follows_what_it_supports() {
         let q = Follows::of(&id("qbittorrent"));
@@ -219,10 +284,17 @@ mod tests {
             decide(q, RouteKind::Interface),
             Ok(Decision::Follow(RouteKind::Interface))
         );
-        assert_eq!(
-            decide(q, RouteKind::BindAddress),
-            Ok(Decision::Follow(RouteKind::BindAddress))
-        );
+        if cfg!(windows) {
+            assert_eq!(
+                decide(q, RouteKind::BindAddress),
+                Ok(Decision::Follow(RouteKind::BindAddress))
+            );
+        } else {
+            assert_eq!(
+                decide(q, RouteKind::BindAddress),
+                Err(GateError::CantFollow(RouteKind::BindAddress))
+            );
+        }
         assert_eq!(
             decide(q, RouteKind::Socks5),
             Err(GateError::CantFollow(RouteKind::Socks5))

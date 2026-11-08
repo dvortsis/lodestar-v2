@@ -5,12 +5,16 @@
 //! `unsafe`). So the supervisor starts Lodestar's own binary as a launcher
 //! ([`run_launcher`]), with the plan in one environment variable. The
 //! launcher, single-threaded and before it reads anything else:
-//! 1. joins a delegated cgroup v2 leaf, when [`prepare`] found one;
+//! 1. re-checks the target and what the plan grants;
 //! 2. sets `RLIMIT_NOFILE`, `RLIMIT_CORE` (0: a core dump would hold the
 //!    companion's credentials) and `RLIMIT_AS` when a cap is set;
 //! 3. applies the Landlock ruleset to itself, at the best ABI the kernel
 //!    has, and checks it reached the level [`prepare`] reported;
 //! 4. removes the plan from its environment and `exec`s the companion.
+//!
+//! No cgroup is used: none of the units Lodestar ships delegates one, and
+//! a cgroup a same-user companion can leave (`clone3(CLONE_INTO_CGROUP)`)
+//! would only be best effort anyway.
 //!
 //! The ruleset and limits are inherited across `exec` and by everything
 //! the companion starts, so no window is left for untrusted code. A
@@ -21,7 +25,6 @@
 
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -46,17 +49,18 @@ use super::process::{AfterSpawn, EnvName, SpawnSpec};
 /// removes it before `exec`.
 pub const PLAN_ENV: &str = "LODESTAR_COMPANION_PLAN";
 
-/// The newest file-system access rights asked for. ABI 9's
-/// `ResolveUnix` governs connecting to Unix sockets, not files, and is left
-/// out so name lookups through local services keep working.
-const ABI_ASKED: ABI = ABI::V8;
+/// The newest file-system access rights asked for, `ResolveUnix` (ABI 9:
+/// connecting to a Unix socket by its path) included, so a companion can't
+/// reach a user's session services outside the sandbox.
+const ABI_ASKED: ABI = ABI::V9;
 
 /// How long [`ExecHook`] waits for the launcher's `exec`.
 const EXEC_WAIT: Duration = Duration::from_secs(10);
 
-/// The pids a delegated cgroup leaf allows: a guard against a runaway
-/// companion, far above what qBittorrent or Prowlarr start.
-const CGROUP_PIDS: u32 = 1024;
+/// The only Unix sockets a companion may connect to by path besides its
+/// own folders': the name-resolution services. Canonicalised when the
+/// rules are built (`/var/run` is a link to `/run`).
+const SYSTEM_SOCKETS: &[&str] = &["/run/systemd/resolve", "/run/nscd", "/var/run/nscd"];
 
 /// System folders a program needs to load and run: read and execute.
 const SYSTEM_EXEC: &[&str] = &["/usr", "/lib", "/lib64", "/lib32", "/bin", "/sbin"];
@@ -101,7 +105,6 @@ pub(crate) struct Plan {
     pub read_write: Vec<PathBuf>,
     pub read_exec: Vec<PathBuf>,
     pub read: Vec<PathBuf>,
-    pub cgroup: Option<PathBuf>,
     /// Lodestar's data folder: the executable must be under its
     /// `companions/`.
     pub data: PathBuf,
@@ -140,9 +143,6 @@ impl Plan {
             for p in paths {
                 put(&mut out, tag, p.as_os_str().as_bytes());
             }
-        }
-        if let Some(g) = &self.cgroup {
-            put(&mut out, b'g', g.as_os_str().as_bytes());
         }
         put(&mut out, b'd', self.data.as_os_str().as_bytes());
         put(&mut out, b'e', self.exe.as_os_str().as_bytes());
@@ -191,7 +191,6 @@ impl Plan {
                 b'w' => plan.read_write.push(path(v)?),
                 b'x' => plan.read_exec.push(path(v)?),
                 b'r' => plan.read.push(path(v)?),
-                b'g' if plan.cgroup.is_none() => plan.cgroup = Some(path(v)?),
                 b'd' if data.is_none() => data = Some(path(v)?),
                 b'e' if exe.is_none() => exe = Some(path(v)?),
                 b'a' if exe.is_some() => plan.args.push(OsStr::from_bytes(v).to_owned()),
@@ -234,15 +233,25 @@ fn level_of(s: &RestrictionStatus) -> Sandboxed {
     if s.ruleset == RulesetStatus::NotEnforced {
         return none;
     }
-    match s.landlock {
-        LandlockStatus::Available { effective_abi, .. } if effective_abi >= ABI::V3 => Sandboxed {
+    let LandlockStatus::Available { effective_abi, .. } = s.landlock else {
+        return none;
+    };
+    let partial = |reason| Sandboxed {
+        level: Level::Partial,
+        reason,
+    };
+    match effective_abi {
+        a if a >= ABI::V9 => Sandboxed {
             level: Level::Full,
             reason: "landlock",
         },
-        LandlockStatus::Available { effective_abi, .. } if effective_abi >= ABI::V1 => Sandboxed {
-            level: Level::Partial,
-            reason: "landlock_old_abi",
-        },
+        // Pathname Unix sockets aren't mediated: a user's session bus,
+        // `systemd --user` or `docker.sock` could run code outside it.
+        a if a >= ABI::V6 => partial("landlock_unix_sockets"),
+        // No signal or abstract-socket scoping either.
+        a if a >= ABI::V3 => partial("landlock_no_scopes"),
+        // No truncation control either.
+        a if a >= ABI::V1 => partial("landlock_old_abi"),
         _ => none,
     }
 }
@@ -287,16 +296,24 @@ fn beneath(
 /// The rules for `plan`. Its own folders must exist; a missing system
 /// path is skipped.
 fn rules(plan: &Plan) -> Result<Vec<PathBeneath<OwnedFd>>, ()> {
-    let all = AccessFs::from_all(ABI_ASKED);
+    // Its own folders: everything but execute (W^X: neither companion
+    // runs programs from them).
+    let own = AccessFs::from_all(ABI_ASKED) & !AccessFs::Execute;
     let read: BitFlags<AccessFs> = AccessFs::ReadFile | AccessFs::ReadDir;
-    let write = read | AccessFs::WriteFile;
+    // `>/dev/null` truncates; terminals and the like need ioctls.
+    let write = read | AccessFs::WriteFile | AccessFs::Truncate | AccessFs::IoctlDev;
     let mut out = Vec::new();
     let system_write: Vec<PathBuf> = SYSTEM_WRITE.iter().map(PathBuf::from).collect();
+    let sockets: Vec<PathBuf> = SYSTEM_SOCKETS
+        .iter()
+        .filter_map(|p| std::fs::canonicalize(p).ok())
+        .collect();
     for (paths, access, required) in [
-        (&plan.read_write, all, true),
+        (&plan.read_write, own, true),
         (&plan.read_exec, AccessFs::from_read(ABI_ASKED), false),
         (&plan.read, read, false),
         (&system_write, write, false),
+        (&sockets, BitFlags::from(AccessFs::ResolveUnix), false),
     ] {
         for p in paths {
             out.extend(beneath(p, access, required)?);
@@ -305,21 +322,39 @@ fn rules(plan: &Plan) -> Result<Vec<PathBeneath<OwnedFd>>, ()> {
     Ok(out)
 }
 
-/// The launcher's own check of what the plan grants: nothing that is or
-/// holds the data folder, and inside it only `companions/`, never
-/// `companions/run`. Paths have no `..` and are opened without links, so
-/// comparing their text is enough.
-fn grants_ok(plan: &Plan) -> bool {
+/// The companion's own folder, `<data>/companions/<id>`, from its
+/// executable's path; never the records folder.
+fn own_folder(plan: &Plan) -> Option<PathBuf> {
     let companions = plan.data.join("companions");
-    let run = companions.join("run");
+    let id = plan
+        .exe
+        .strip_prefix(&companions)
+        .ok()?
+        .components()
+        .next()?;
+    let id = match id {
+        std::path::Component::Normal(id) if id != "run" => id,
+        _ => return None,
+    };
+    Some(companions.join(id))
+}
+
+/// The launcher's own check of what the plan grants: nothing that is or
+/// holds the data folder, and inside it only folders inside the
+/// companion's own (`<data>/companions/<id>/…`, not the folder itself).
+/// Paths have no `..` and are opened without links, so comparing their
+/// text is enough.
+fn grants_ok(plan: &Plan) -> bool {
+    let Some(own) = own_folder(plan) else {
+        return false;
+    };
     plan.read_write
         .iter()
         .chain(&plan.read_exec)
         .chain(&plan.read)
         .all(|p| {
             !reaches(p, &plan.data)
-                && (!p.starts_with(&plan.data)
-                    || (p.starts_with(&companions) && !p.starts_with(&run)))
+                && (!p.starts_with(&plan.data) || (p.starts_with(&own) && p != &own))
         })
 }
 
@@ -343,55 +378,78 @@ fn system(paths: &[&str], data: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// A delegated cgroup v2 leaf for `id`, or why there's none. Delegated
-/// means Lodestar runs in a leaf whose parent belongs to its own user and
-/// has the memory and pids controllers enabled for its children; the
-/// shipped unit (`ProtectControlGroups=yes`, no `Delegate=`) never does.
-fn cgroup_leaf(id: &str) -> Result<PathBuf, &'static str> {
-    if rustix::process::geteuid().is_root() {
-        return Err("root");
+/// Undoes `/proc/self/mountinfo`'s octal escapes (`\040` for a space).
+fn unescape(field: &str) -> PathBuf {
+    let b = field.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let oct = b
+            .get(i + 1..i + 4)
+            .filter(|o| b[i] == b'\\' && o.iter().all(|c| (b'0'..=b'7').contains(c)));
+        match oct {
+            Some(o) => {
+                out.push(
+                    o.iter()
+                        .fold(0u8, |n, c| n.wrapping_mul(8).wrapping_add(c - b'0')),
+                );
+                i += 4;
+            }
+            None => {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
     }
-    let own = std::fs::read_to_string("/proc/self/cgroup").map_err(|_| "not_cgroup_v2")?;
-    let rel = own
-        .lines()
-        .find_map(|l| l.strip_prefix("0::"))
-        .ok_or("not_cgroup_v2")?;
-    let mount = Path::new("/sys/fs/cgroup");
-    let parent = mount
-        .join(rel.trim_start_matches('/'))
-        .parent()
-        .map(Path::to_owned)
-        .filter(|p| p.starts_with(mount) && p != mount)
-        .ok_or("not_delegated")?;
-    let owner = std::fs::metadata(&parent)
-        .map_err(|_| "not_delegated")?
-        .uid();
-    if owner != rustix::process::geteuid().as_raw() {
-        return Err("not_delegated");
-    }
-    let enabled = std::fs::read_to_string(parent.join("cgroup.subtree_control"))
-        .map_err(|_| "not_delegated")?;
-    let words: Vec<&str> = enabled.split_whitespace().collect();
-    if !(words.contains(&"memory") && words.contains(&"pids")) {
-        return Err("no_controllers");
-    }
-    Ok(parent.join(format!("lodestar-companion-{id}")))
+    PathBuf::from(OsString::from_vec(out))
 }
 
-/// Creates the leaf with its limits, here in Lodestar, so a cgroup that
-/// looked delegated but isn't falls back to rlimits instead of failing
-/// every start. The launcher only moves itself in.
-fn make_leaf(leaf: &Path, memory: Option<u64>) -> Result<(), &'static str> {
-    let made = || -> std::io::Result<()> {
-        match std::fs::create_dir(leaf) {
-            Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(e),
-            _ => {}
+/// Where `p` (canonical) is on its filesystem: the device and the path
+/// from the filesystem's root, from the mount that serves it (the longest
+/// mount point above it; a later mount shadows an earlier one).
+fn fs_view(mountinfo: &str, p: &Path) -> Option<(String, PathBuf)> {
+    let mut best: Option<(usize, String, PathBuf, PathBuf)> = None;
+    for line in mountinfo.lines() {
+        let f: Vec<&str> = line.split(' ').collect();
+        let (Some(dev), Some(root), Some(point)) = (f.get(2), f.get(3), f.get(4)) else {
+            continue;
+        };
+        let point = unescape(point);
+        if !p.starts_with(&point) {
+            continue;
         }
-        let max = memory.map_or_else(|| "max".to_owned(), |m| m.to_string());
-        std::fs::write(leaf.join("memory.max"), max)?;
-        std::fs::write(leaf.join("pids.max"), CGROUP_PIDS.to_string())
+        let depth = point.components().count();
+        if best.as_ref().is_none_or(|b| depth >= b.0) {
+            best = Some((depth, (*dev).to_owned(), unescape(root), point));
+        }
+    }
+    let (_, dev, root, point) = best?;
+    let rest = p.strip_prefix(&point).ok()?;
+    Some((dev, root.join(rest)))
+}
+
+/// Whether `grant` stays clear of the data folder on the filesystem
+/// itself: a bind mount can show one folder at two paths. Off the data
+/// folder's device, or with no readable mount table, it's clear.
+pub(crate) fn mount_separate(grant: &Path, data: &Path, own: &Path) -> bool {
+    let Ok(table) = std::fs::read_to_string("/proc/self/mountinfo") else {
+        return true;
     };
-    made().map_err(|_| "leaf_failed")
+    separate_in(&table, grant, data, own)
+}
+
+fn separate_in(table: &str, grant: &Path, data: &Path, own: &Path) -> bool {
+    let (Some((gd, g)), Some((dd, d))) = (fs_view(table, grant), fs_view(table, data)) else {
+        return true;
+    };
+    if gd != dd {
+        return true;
+    }
+    let own = own
+        .strip_prefix(data)
+        .map(|rest| d.join(rest))
+        .unwrap_or_default();
+    !(d.starts_with(&g) || (g.starts_with(&d) && !g.starts_with(&own)))
 }
 
 /// The spec that starts `spec` through the launcher, and the report.
@@ -404,8 +462,6 @@ pub(crate) fn prepare(
     let hard = rustix::process::getrlimit(Resource::Nofile).maximum;
     let open_files = hard.map_or(limits.open_files, |h| limits.open_files.min(h));
     let sandbox = landlock_level();
-    let cgroup = cgroup_leaf(spec.id.as_str())
-        .and_then(|leaf| make_leaf(&leaf, limits.memory).map(|()| leaf));
     let mut read_exec = vec![f.install.clone()];
     read_exec.extend(system(SYSTEM_EXEC, &f.data));
     let plan = Plan {
@@ -418,7 +474,6 @@ pub(crate) fn prepare(
             .collect(),
         read_exec,
         read: system(SYSTEM_READ, &f.data),
-        cgroup: cgroup.as_ref().ok().cloned(),
         data: f.data.clone(),
         exe: spec.executable.clone(),
         args: spec.args.clone(),
@@ -426,15 +481,11 @@ pub(crate) fn prepare(
     let report = Report {
         sandbox,
         limits: Applied {
-            mechanism: if cgroup.is_ok() {
-                Mechanism::RlimitsAndCgroup
-            } else {
-                Mechanism::Rlimits
-            },
+            mechanism: Mechanism::Rlimits,
             open_files: Some(open_files),
             memory: limits.memory,
             dies_with_lodestar: false,
-            cgroup_skipped: cgroup.err(),
+            cgroup_skipped: Some("not_delegated"),
         },
     };
     let name = EnvName::parse(PLAN_ENV).map_err(|_| LimitsError::NoLauncher)?;
@@ -458,7 +509,6 @@ pub(crate) fn prepare(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LaunchError {
     Plan = 120,
-    Cgroup = 121,
     Rlimit = 122,
     Landlock = 123,
     BelowLevel = 124,
@@ -471,7 +521,6 @@ impl LaunchError {
     fn code(self) -> &'static str {
         match self {
             LaunchError::Plan => "launcher_bad_plan",
-            LaunchError::Cgroup => "launcher_cgroup",
             LaunchError::Rlimit => "launcher_rlimit",
             LaunchError::Landlock => "launcher_landlock",
             LaunchError::BelowLevel => "launcher_below_level",
@@ -484,7 +533,6 @@ impl LaunchError {
     fn from_exit(code: i32) -> &'static str {
         [
             LaunchError::Plan,
-            LaunchError::Cgroup,
             LaunchError::Rlimit,
             LaunchError::Landlock,
             LaunchError::BelowLevel,
@@ -516,6 +564,7 @@ fn target_ok(exe: &Path, data: &Path) -> bool {
 /// and `exec`s the companion. Returns only on failure, with the exit
 /// code. [`super::limits::launcher_main`] calls it; tests call it from
 /// their fake.
+#[doc(hidden)]
 pub fn run_launcher() -> i32 {
     let e = match launch() {
         Ok(never) => match never {},
@@ -533,9 +582,6 @@ fn launch() -> Result<std::convert::Infallible, LaunchError> {
     }
     if !grants_ok(&plan) {
         return Err(LaunchError::Plan);
-    }
-    if let Some(leaf) = &plan.cgroup {
-        std::fs::write(leaf.join("cgroup.procs"), "0").map_err(|_| LaunchError::Cgroup)?;
     }
     let set = |r: Resource, v: u64| {
         rustix::process::setrlimit(
@@ -660,7 +706,6 @@ mod tests {
             read_write: vec!["/data/companions/q/home".into(), "/dl with:colon".into()],
             read_exec: vec!["/usr".into()],
             read: vec!["/etc/hosts".into()],
-            cgroup: Some("/sys/fs/cgroup/x/lodestar-companion-q".into()),
             data: "/data".into(),
             exe: "/data/companions/q/5/qbittorrent-nox".into(),
             args: vec![
@@ -753,6 +798,59 @@ mod tests {
     }
 
     #[test]
+    fn grants_inside_the_data_folder_stay_in_the_companions_own() {
+        let plan = |w: &str| Plan {
+            open_files: 1,
+            read_write: vec![w.into()],
+            data: "/d".into(),
+            exe: "/d/companions/q/1/bin".into(),
+            ..Plan::default()
+        };
+        assert!(grants_ok(&plan("/d/companions/q/home")));
+        assert!(grants_ok(&plan("/srv/downloads")));
+        for bad in [
+            "/d/companions/q",
+            "/d/companions",
+            "/d/companions/run",
+            "/d/companions/p/home",
+            "/d/secrets.key",
+            "/d",
+            "/",
+        ] {
+            assert!(!grants_ok(&plan(bad)), "{bad}");
+        }
+        let mut run = plan("/srv/x");
+        run.exe = "/d/companions/run/bin".into();
+        assert!(!grants_ok(&run));
+    }
+
+    #[test]
+    fn a_second_mount_of_the_data_folder_is_caught() {
+        // `/` is /dev/sda1; /mnt/alias is a bind mount of /var/lib on it;
+        // /media/usb is another device.
+        let table = "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n\
+                     2 1 8:1 /var/lib /mnt/alias rw - ext4 /dev/sda1 rw\n\
+                     3 1 8:1 /srv/dl /mnt/my\\040dl rw - ext4 /dev/sda1 rw\n\
+                     4 1 8:17 / /media/usb rw - ext4 /dev/sdb1 rw\n";
+        let data = Path::new("/var/lib/lodestar");
+        let own = Path::new("/var/lib/lodestar/companions/q");
+        let sep = |g: &str| separate_in(table, Path::new(g), data, own);
+        // An alias above the data folder, of it, or of another companion.
+        assert!(!sep("/mnt/alias"));
+        assert!(!sep("/mnt/alias/lodestar"));
+        assert!(!sep("/mnt/alias/lodestar/companions/p"));
+        // Its own folder through the alias, another device, a plain folder.
+        assert!(sep("/mnt/alias/lodestar/companions/q/downloads"));
+        assert!(sep("/media/usb/dl"));
+        assert!(sep("/srv/dl"));
+        assert!(sep("/mnt/my dl"));
+        assert_eq!(
+            fs_view(table, Path::new("/mnt/my dl/x")),
+            Some(("8:1".to_owned(), PathBuf::from("/srv/dl/x")))
+        );
+    }
+
+    #[test]
     fn system_paths_never_reach_the_data_folder() {
         let got = system(
             &["/usr", "/etc/hosts", "/does-not-exist"],
@@ -774,11 +872,15 @@ mod tests {
     fn the_level_is_worked_out_once_and_is_consistent() {
         let a = landlock_level();
         assert_eq!(a, landlock_level());
-        match a.level {
-            Level::Full => assert_eq!(a.reason, "landlock"),
-            Level::Partial => assert_eq!(a.reason, "landlock_old_abi"),
-            Level::None => assert_eq!(a.reason, "landlock_unavailable"),
-        }
+        let ok = match a.level {
+            Level::Full => a.reason == "landlock",
+            Level::Partial => matches!(
+                a.reason,
+                "landlock_unix_sockets" | "landlock_no_scopes" | "landlock_old_abi"
+            ),
+            Level::None => a.reason == "landlock_unavailable",
+        };
+        assert!(ok, "{a:?}");
     }
 
     #[test]
