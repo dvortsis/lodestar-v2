@@ -22,6 +22,7 @@ import time
 from datetime import datetime, timezone
 
 import limits as limits_mod
+import ancestry
 from ancestry import head_of, is_ancestor
 from comments import Channel, urllib_transport
 from command import REASONS, Command, Refused
@@ -134,9 +135,18 @@ def _execute(ctx: Ctx, cmd: Command, run_id: str, fleet) -> str:
 
 
 def _on_main_head(repo: str) -> bool:
-    """The checked-out code is main's current head (a re-run checks out the old SHA)."""
+    """The checked-out code is main's current head on GitHub (a re-run checks
+    out the old SHA). Fails closed if GitHub can't be asked.
+
+    Elsewhere, `origin/main` in the ancestor checks means GITHUB_SHA, because
+    actions/checkout points it there; once this check passes that is main's
+    head, and either way it is a commit on main, so those checks stay sound.
+    """
+    remote = ancestry.remote_main_head(repo)
+    if remote is None:
+        return False
     try:
-        return head_of("HEAD", repo) == head_of("origin/main", repo)
+        return head_of("HEAD", repo) == remote
     except (subprocess.CalledProcessError, ValueError):
         return False
 

@@ -11,6 +11,8 @@ import re
 import secrets
 import subprocess
 import sys
+import tempfile
+from unittest import mock
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import timedelta
@@ -18,6 +20,7 @@ from pathlib import Path
 
 import yaml
 
+import ancestry
 import fleet
 import limits
 from state import DryRunBackend, new_fleet
@@ -119,6 +122,13 @@ class FleetStructure(unittest.TestCase):
                 if "environment" in job:  # every job that can hold the fleet lock
                     self.assertLess(job["timeout-minutes"], 90)
 
+    def test_actions_pinned_by_sha(self):
+        for name, job in self.jobs.items():
+            for s in steps(job):
+                if "uses" in s:
+                    with self.subTest(job=name, uses=s["uses"]):
+                        self.assertRegex(s["uses"], r"^[\w.-]+/[\w.-]+@[0-9a-f]{40}$")
+
     def test_no_artifacts(self):
         self.assertFalse("artifact" in code_text(FLEET).lower(), "an Actions artifact appears")
 
@@ -201,13 +211,19 @@ class PublicLogLeak(unittest.TestCase):
                         self.assertIsNotNone(m, "a run: step must be one `python3 infra/<script>.py <sub>`")
                         self.assertIn(m.groups(), SCENARIOS, "add a leak scenario for this script")
 
+    def setUp(self):
+        self.outside = tempfile.mkdtemp(prefix="fleet-leak-")
+        self.addCleanup(__import__("shutil").rmtree, self.outside, True)
+
     def test_marked_secrets_never_reach_stdout_or_stderr(self):
         values = marks(len(SECRET_NAMES))
         secret_env = dict(zip(SECRET_NAMES, values))
         for (script, sub), envs in SCENARIOS.items():
             for env in envs:
                 with self.subTest(script=script, sub=sub, body=env.get("COMMENT_BODY")):
-                    r = subprocess.run([sys.executable, str(ROOT / script), sub], cwd=ROOT, capture_output=True,
+                    # Outside any git repo: the main-head check fails closed
+                    # without a network call.
+                    r = subprocess.run([sys.executable, str(ROOT / script), sub], cwd=self.outside, capture_output=True,
                                        text=True, env=scrub_env({**env, **secret_env}), timeout=60)
                     self.assertEqual(r.returncode, 0, r.stderr[-400:])
                     for v in values:
@@ -230,7 +246,8 @@ class PublicLogLeak(unittest.TestCase):
                     fl = dict(fl, created_at=fmt(T0 - timedelta(hours=44)), expires_at=fmt(T0))
                 b = DryRunBackend(fleet=fl if overdue else None, linodes=list(old) if overdue else [])
                 gh, out, clock = FakeGitHub(), io.StringIO(), Clock()
-                with redirect_stdout(out), redirect_stderr(out):
+                with redirect_stdout(out), redirect_stderr(out), \
+                        mock.patch.object(ancestry, "remote_main_head", return_value=c["head"]):
                     fleet.main([sub], env=event_env(body, **secret_env), backend=b, transport=gh,
                                clock=clock, sleep=clock.sleep, repo=repo)
                 seen = out.getvalue() + "\n".join(gh.bodies())

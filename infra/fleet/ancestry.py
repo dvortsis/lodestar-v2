@@ -23,6 +23,24 @@ def is_ancestor(commit: str, ref: str = "origin/main", repo: str = ".") -> bool:
     return r.returncode == 0
 
 
+def remote_main_head(repo: str = ".") -> str | None:
+    """main's head on GitHub right now, or None (callers fail closed).
+
+    `git ls-remote` needs no credential on this public repo. It's used instead
+    of the local `origin/main`, which actions/checkout points at GITHUB_SHA.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", repo, "ls-remote", "origin", "refs/heads/main"],
+            capture_output=True, text=True, check=True, timeout=60,
+        ).stdout.split()
+    except (subprocess.SubprocessError, OSError):
+        return None
+    if len(out) != 2 or out[1] != "refs/heads/main" or not HEX40.match(out[0]):
+        return None
+    return out[0]
+
+
 def head_of(ref: str = "origin/main", repo: str = ".") -> str:
     out = subprocess.run(
         ["git", "-C", repo, "rev-parse", "--verify", f"{ref}^{{commit}}"],

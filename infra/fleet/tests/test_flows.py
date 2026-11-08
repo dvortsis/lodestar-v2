@@ -1,12 +1,14 @@
 import io
 import json
 import unittest
+from unittest import mock
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import timedelta
 
 import fleet
 import limits
-from ancestry import head_of, is_ancestor
+import ancestry
+from ancestry import head_of, is_ancestor, remote_main_head
 from lock import LOCK_KEY, FleetLock, MemoryStore
 from reaper import DOWN, EMERGENCY, NONE, decide, only_down
 from state import DryRunBackend, new_fleet, validate
@@ -108,16 +110,45 @@ class Ancestry(unittest.TestCase):
         self.assertEqual(head_of("origin/main", self.repo), self.c["head"])
 
 
+class RemoteHead(unittest.TestCase):
+    def run_ls_remote(self, stdout="", fail=False):
+        def fake(*a, **kw):
+            if fail:
+                raise ancestry.subprocess.CalledProcessError(128, a[0])
+            return ancestry.subprocess.CompletedProcess(a[0], 0, stdout=stdout)
+        with mock.patch.object(ancestry.subprocess, "run", side_effect=fake) as m:
+            got = remote_main_head("/r")
+        return got, m
+
+    def test_parses_one_main_ref(self):
+        got, m = self.run_ls_remote("a" * 40 + "\trefs/heads/main\n")
+        self.assertEqual(got, "a" * 40)
+        self.assertEqual(m.call_args[0][0], ["git", "-C", "/r", "ls-remote", "origin", "refs/heads/main"])
+
+    def test_fails_closed(self):
+        for out in ("", "a" * 40 + "\trefs/heads/mainx\n", "zz\trefs/heads/main\n",
+                    ("a" * 40 + "\trefs/heads/main\n") * 2):
+            with self.subTest(out=out):
+                self.assertIsNone(self.run_ls_remote(out)[0])
+        self.assertIsNone(self.run_ls_remote(fail=True)[0])
+
+    def test_no_remote_in_a_real_repo(self):
+        repo, _ = make_repo()  # no origin remote: fails closed, no network
+        self.assertIsNone(remote_main_head(repo))
+
+
 class Flows(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.repo, cls.c = make_repo()
 
-    def run_cli(self, sub, env, backend=None, store=None, gh=None, clock=None):
+    def run_cli(self, sub, env, backend=None, store=None, gh=None, clock=None, remote="head"):
         out = io.StringIO()
         self.gh = gh if gh is not None else FakeGitHub()
         clock = clock or Clock()
-        with redirect_stdout(out), redirect_stderr(out):
+        remote_sha = self.c.get(remote, remote)  # a key of self.c, or a literal (None: ls-remote failed)
+        with redirect_stdout(out), redirect_stderr(out), \
+                mock.patch.object(ancestry, "remote_main_head", return_value=remote_sha):
             rc = fleet.main([sub], env=env, backend=backend, store=store, transport=self.gh,
                             clock=clock, sleep=clock.sleep, repo=self.repo)
         return rc, out.getvalue()
@@ -181,12 +212,11 @@ class Flows(unittest.TestCase):
         store = MemoryStore()
         _, out = self.run_cli("act", event_env("/fleet up screen", GITHUB_RUN_ATTEMPT="2"), store=store)
         self.assertEqual((out, store.calls), ("", []))
-        from tests.helpers import git
-        git(self.repo, "checkout", "-q", self.c["first"])
-        try:
-            _, out = self.run_cli("act", event_env("/fleet up screen"), store=store)
-        finally:
-            git(self.repo, "checkout", "-q", "main")
+        # main moved on GitHub since the event: the checkout is an old commit.
+        _, out = self.run_cli("act", event_env("/fleet up screen"), store=store, remote="side")
+        self.assertIn("not main's head", out)
+        # GitHub can't be asked: fail closed.
+        _, out = self.run_cli("act", event_env("/fleet up screen"), store=store, remote=None)
         self.assertIn("not main's head", out)
         self.assertEqual(store.calls, [])
 
