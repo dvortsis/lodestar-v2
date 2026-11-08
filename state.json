@@ -6039,7 +6039,7 @@
     {
       "id": "wk10d-runner-calls",
       "at": "2026-11-08T04:52:26Z",
-      "note": "Approved outside owns: cluster/have.rs ResetOnPanic (~30), pipeline wire/filter_snapshot.rs zeroize (~15), worker/session.rs reconnect on DHT vote change (~40, debounced), set_coordinator_ips serve.rs + services.rs (~40, public only). Tombstone ruling (b'): permanent tombstone row rule 'worker-floor:<worker id>' (no migration; WK-13 purge-by-worker removes them); rejected (a) in-memory 7-day as content-safety loosening. Size 1,000-1,300 accepted. Owner flag after merge. | 05:18Z re-sent (crossed); +6 cluster/ops.rs Saved::parse pub(crate) approved (1 line, test pauses seeded before first request)."
+      "note": "Approved outside owns: cluster/have.rs ResetOnPanic (~30), pipeline wire/filter_snapshot.rs zeroize (~15), worker/session.rs reconnect on DHT vote change (~40, debounced), set_coordinator_ips serve.rs + services.rs (~40, public only). Tombstone ruling (b'): permanent tombstone row rule 'worker-floor:<worker id>' (no migration; WK-13 purge-by-worker removes them); rejected (a) in-memory 7-day as content-safety loosening. Size 1,000-1,300 accepted. Owner flag after merge. | 05:18Z re-sent (crossed); +6 cluster/ops.rs Saved::parse pub(crate) approved (1 line, test pauses seeded before first request). | 05:2xZ: store/filter.rs tombstone_from_worker (ON CONFLICT DO NOTHING; HeldSet sync before try_send; full queue never drops, nack->resend) approved; worker-floor rows are FLOOR holds everywhere (WORKER_FLOOR_PREFIX + is_floor_hold; purge_filter, snapshots.rs ~1123 + hold_rank, release refusal path) except WK-13 purge-by-worker; FLOOR_RULES unchanged. Split store part if PR >1,500."
     },
     {
       "id": "X-worker-drain-fence",
