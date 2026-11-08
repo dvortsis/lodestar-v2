@@ -6439,6 +6439,15 @@
     {
       "at": "2026-11-08T20:20Z",
       "note": "CMP-5 session archived; CMP-6 launched slot 1 (session_01MMjhnBsTrGEcACYGQjoYqp); owner FYI sent. Runner PR #635 (owns fixes X-cloud-infra/-2, OP-1, X-wk-busy-retry; PK-win-upd-2 #630 notes; new X-natural-wording, X-win-restart-followups, X-lease-report-atomic; plan TZ line) opened at 771c0e19, Opus review running. Main macOS watch on 20818fea running (verifies #621's macOS env test fix)."
+    },
+    {
+      "id": "CMP-5g-from-621",
+      "at": "2026-11-08T20:25Z",
+      "note": "For CMP-5g's brief, from #621's review at 10cb2154 (scratchpad rv-621-10cb2154.md): N2 recover() not spawned, so a dropped recover frees the slot while blocking work runs (spawn it or document run-to-completion); N4 save()'s temp cleanup on a failed rename is untested; N5 no install cancel, a dropped Manager holds the lock while a task runs, JoinError::Cancelled reported as panicked (also told CMP-6); N7 start_installed opens the credential twice; N8 remove_own can return a spurious error after a parent fsync fails. Also the carried #620 items: the held route's 120 s health wait (fail fast with a distinct code) and the credential Present check-then-act (route handovers through the manager slot)."
+    },
+    {
+      "at": "2026-11-08T20:25Z",
+      "note": "OP-1 size ~2,020 lines (850 tests): runner kept it one PR, reason in the description. CMP-6 shared edits approved: lodestar/src/companions.rs CompanionsApi impl, services.rs Extension + System snapshot, companions.credential_revealed event (shares logs_catalog.txt, event-names.ts and logging en/zh with X-wk-busy-retry; the later PR regenerates), api lib.rs mod line; logging chunk budget raise approved under \u00a72.26 up to measured + 10%. Regenerate/restart/logs routes return not_wired until CMP-5g. CMP-6 owns needs these in the next runner PR."
     }
   ],
   "main_health": [
