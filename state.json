@@ -6248,6 +6248,11 @@
       "id": "review-617-changes",
       "at": "2026-11-08T15:25:48Z",
       "note": "#617 WK-10e at 48be1bb4: CHANGES, 1 blocker (apply_pause initial share read on first poll, not the pool's built share; runtime.rs ~952/~1269). Relayed with fix; delta review next. /security-review skill could not run (no origin/HEAD); manual security pass clean. PK-manifest ~1,120 lines, one PR, accepted."
+    },
+    {
+      "id": "CMP-5-split",
+      "at": "2026-11-08T15:30:25Z",
+      "note": "CMP-5 ~3,200 lines -> stacked split: CMP-5a (stage_binary+state.rs, base main), CMP-5b (manager, base CMP-5a), CMP-5 (CLI+serve, base CMP-5b). Approved: layout.rs stage_binary, removing expect(dead_code) on InstallReceipt::new, crates/lodestar/tests/companion_launcher.rs. Lock must be OS advisory (Windows too). Snapshot channel TODO(CMP-5g) -> CMP-5g brief. slices.yaml needs CMP-5a, CMP-5b entries in next runner PR."
     }
   ],
   "main_health": [
@@ -7039,5 +7044,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T15:25:48Z"
+  "updated": "2026-11-08T15:30:25Z"
 }
