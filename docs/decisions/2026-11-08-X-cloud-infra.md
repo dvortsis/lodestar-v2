@@ -1,4 +1,4 @@
-# X-cloud-infra decisions (from #623)
+# X-cloud-infra decisions (#625, supersedes #623)
 
 The owner asked the runner to review #623 ("Reconcile Lodestar AWS and Akamai infrastructure", written on the owner's behalf by another tool) and merge it if everything passes. This slice brings #623's content to `main` as fresh commits on `slice/X-cloud-infra`, so the live AWS resource IDs in #623's only commit never enter `main`'s history. It supersedes #623. Nothing here changes an owner decision; the access model below is new and is flagged to the owner (§2.19).
 
@@ -50,6 +50,7 @@ The owner asked the runner to review #623 ("Reconcile Lodestar AWS and Akamai in
   - **The target is checked first.** Before asking for the phrase, the script confirms the target is tagged `Project=Lodestar` and is not already terminated.
 - **`Lodestar-Fleet.ps1 inspect` touched the provisioner profile.** It no longer does, so it is read-only as the skill says. `status` lists only `Project=Lodestar` instances.
 - **The live test suite could print credentials.** A failure in a call that should have been denied printed its output, which could include live credentials; it no longer does.
+- **Windows price corrected.** The scripts quoted $0.153/h for the Windows instance, which is the Linux on-demand price of `c6a.xlarge`; with the Windows licence it is about $0.337/h in us-east-1.
 - **ZIP-era leftovers removed.** `Invoke-Preflight.ps1` no longer sets the execution policy or strips Mark-of-the-Web with `Unblock-File`; those dated from the ZIP package.
 - **`Lodestar-Fleet.ps1 reconcile`** marked the AWS instance destroyed on *any* CLI error, an expired session included. It now does so only when EC2 reports `terminated` or `InvalidInstanceID.NotFound`.
 - **`Destroy-AwsWindows.ps1`** treated a failed inventory call as "fleet is clean"; it now stops.

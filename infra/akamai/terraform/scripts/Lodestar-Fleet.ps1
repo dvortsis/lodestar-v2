@@ -84,26 +84,27 @@ switch ($Action) {
 
     'cost' {
         Audit "=== Lodestar Compute Cost Projections ==="
-        $aws48 = [math]::Round(0.1530 * $Hours, 3)
+        $aws48 = [math]::Round(0.3370 * $Hours, 3)
         $main48 = [math]::Round(0.0720 * $Hours, 3)
         $worker48 = [math]::Round(0.0075 * $Hours, 3)
         $pilotRate = [math]::Round(0.0720 + 0.0075, 4)
         $pilot48 = [math]::Round($pilotRate * $Hours, 3)
-        $fullRate = [math]::Round(0.1530 + $pilotRate, 4)
+        $fullRate = [math]::Round(0.3370 + $pilotRate, 4)
         $full48 = [math]::Round($fullRate * $Hours, 3)
 
         Write-Host @"
 --------------------------------------------------------------------------------
 CLOUD    ROLE    INSTANCE TYPE   VCPU   RAM   HOURLY USD   ${Hours}-HOUR COST
 --------------------------------------------------------------------------------
-AWS      Windows c6a.xlarge      4      8 GB  `$0.1530      `$$aws48
+AWS      Windows c6a.xlarge      4      8 GB  `$0.3370      `$$aws48
 Akamai   Main    g6-standard-4   4      8 GB  `$0.0720      `$$main48
 Akamai   Worker  g6-nanode-1     1      1 GB  `$0.0075      `$$worker48
 --------------------------------------------------------------------------------
 AKAMAI PILOT TOTAL (1 Main + 1 Worker):       `$$pilotRate/hr   `$$pilot48
 FULL MULTI-CLOUD FLEET (AWS + 2 Akamai):     `$$fullRate/hr   `$$full48
 --------------------------------------------------------------------------------
-Note: Excludes data transfer overage, storage IOPS, and VPN subscriptions.
+Note: AWS rate is on-demand us-east-1 including the Windows licence (about `$0.153 compute + `$0.184 licence).
+Excludes EBS storage, data transfer overage, storage IOPS, and VPN subscriptions.
 Linode instances bill until deleted, even when shut down.
 "@
     }

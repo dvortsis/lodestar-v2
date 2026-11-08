@@ -136,8 +136,8 @@ AMI ID:                $AmiId (must be an approved Windows Server base AMI)
 Subnet:                $SubnetId
 Security Group:        $SecurityGroupId (Deny all inbound, SSM only)
 Instance Profile:      $instanceProfileArn
-Hourly Rate:           `$0.1530 / hour
-$($expCheck.LeaseHours)-Hour Estimated Cost:  `$$([math]::Round(0.1530 * $expCheck.LeaseHours, 3))
+Hourly Rate:           `$0.3370 / hour (on-demand, us-east-1, incl. Windows licence; check current AWS pricing)
+$($expCheck.LeaseHours)-Hour Estimated Cost:  `$$([math]::Round(0.3370 * $expCheck.LeaseHours, 3))
 Mandatory Tags:        Project=Lodestar, Environment=Test, ManagedBy=Terraform,
                        ExpiresAt=$($expCheck.IsoString)
 ================================================================================
