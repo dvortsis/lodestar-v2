@@ -109,6 +109,7 @@ fn parts() -> Vec<(&'static str, Doc)> {
         ("logs", crate::logs::ApiDoc::openapi()),
         ("webhooks", crate::webhooks::ApiDoc::openapi()),
         ("workers", crate::workers::ApiDoc::openapi()),
+        ("companions", crate::companions::ApiDoc::openapi()),
     ]
 }
 

@@ -25,6 +25,7 @@
 pub mod alerts;
 pub mod auth;
 mod collections;
+pub mod companions;
 mod compare;
 mod digest;
 mod discover;
@@ -130,6 +131,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(logs::routes())
         .merge(webhooks::routes())
         .merge(workers::routes())
+        .merge(companions::routes())
         .merge(openapi::routes())
         // What `auth::protected` checks sessions against.
         .layer(Extension(auth::SessionAuth::of(&state)))

@@ -16,17 +16,29 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use lodestar_api::companions::{CompanionsApi, CompanionsError, Revealed};
+use lodestar_api::dto::companions::{
+    Companion, CompanionHealth, CompanionTemplate, InstallOffer, RemovalItem, RemovalItemKind,
+    RemovalPlan, TemplateKind, TemplateRequest, TemplateRoute, UnraidField, UnraidFile,
+};
 use lodestar_companions::adapter::{AdapterError, BoxFuture, Credentials, Target};
+use lodestar_companions::catalogue::{Sha256, TemplateId};
+use lodestar_companions::compose::{
+    self, DataFolder, DataFolders, MountRole, Paths, ServiceInput, TemplateError,
+};
 use lodestar_companions::configure::InstallReceipt;
-use lodestar_companions::credentials::{CredentialKey, Field, SealedRow};
+use lodestar_companions::credentials::{self, CredentialKey, Field, SealedRow};
 use lodestar_companions::fetch::{self, Guarded};
+use lodestar_companions::inputs::{ContainerName, HostPath, NetworkName, Pgid, Puid};
 use lodestar_companions::log_events::INSTALL_FAILED;
 use lodestar_companions::manager::{
-    ApiConfigure, Downloader, Host, Launch, Manager, Parts, RowError, Rows, Run, Snapshot,
+    ApiConfigure, Downloader, Health, Host, InstallToken, Launch, Manager, ManagerError, Parts,
+    Refusal, RowError, Rows, Run, Snapshot,
 };
-use lodestar_companions::{Catalogue, CompanionId};
+use lodestar_companions::supervise::logs::Redactor;
+use lodestar_companions::{Catalogue, CompanionId, Entry, Version, unraid};
 use lodestar_integrations::net::Route;
-use lodestar_integrations::secret::{SealedSecret, SecretStore};
+use lodestar_integrations::secret::{SealedSecret, Secret, SecretStore};
 use lodestar_store::Store;
 use tokio::sync::watch;
 
@@ -137,18 +149,30 @@ fn manager_on(
     catalogue: &'static Catalogue,
     host: Host,
 ) -> Result<Manager, OpenError> {
+    manager_with(data, store, catalogue, host).map(|(m, _)| m)
+}
+
+/// [`manager_on`], with the secrets file the manager seals with, for the
+/// API's reveal.
+fn manager_with(
+    data: PathBuf,
+    store: Arc<Mutex<Store>>,
+    catalogue: &'static Catalogue,
+    host: Host,
+) -> Result<(Manager, Arc<SecretStore>), OpenError> {
     let fail = |code: &'static str, message: String| OpenError { code, message };
     let secrets =
         SecretStore::open_or_create(&data).map_err(|e| fail("secrets", format!("secrets: {e}")))?;
     let client = fetch::client(&Route::Direct).map_err(|e| fail(e.code(), e.code().to_owned()))?;
     let downloader =
         Downloader::new(Guarded::new(client).map_err(|e| fail(e.code(), e.code().to_owned()))?);
+    let secrets = Arc::new(secrets);
     Manager::open(Parts {
         data,
         host,
         catalogue,
         downloader,
-        secrets: Arc::new(secrets),
+        secrets: secrets.clone(),
         rows: Arc::new(StoreRows(store)),
         run: Arc::new(Unwired),
         api: Arc::new(Unwired),
@@ -160,6 +184,7 @@ fn manager_on(
         ),
         e => fail(e.code(), e.code().to_owned()),
     })
+    .map(|m| (m, secrets))
 }
 
 /// Why the manager couldn't be opened: a stable code for the log, and a
@@ -178,6 +203,8 @@ pub struct OpenError {
 )]
 pub struct Companions {
     pub manager: Arc<Manager>,
+    /// `/companions` (CMP-6), layered over the API.
+    pub api: Arc<Service>,
     /// CMP-10's input. TODO(CMP-5g): hand it to the pipeline as
     /// `PipelineConfig::companions` once CMP-10 has merged.
     pub snapshot: watch::Receiver<Snapshot>,
@@ -207,7 +234,9 @@ async fn start_with(
     catalogue: &'static Catalogue,
     host: Host,
 ) -> Option<Companions> {
-    let opened = tokio::task::spawn_blocking(move || manager_on(data, store, catalogue, host))
+    let rows = StoreRows(store.clone());
+    let folder = data.clone();
+    let opened = tokio::task::spawn_blocking(move || manager_with(data, store, catalogue, host))
         .await
         .unwrap_or_else(|_| {
             Err(OpenError {
@@ -215,8 +244,8 @@ async fn start_with(
                 message: String::new(),
             })
         });
-    let manager = match opened {
-        Ok(m) => Arc::new(m),
+    let (manager, secrets) = match opened {
+        Ok((m, secrets)) => (Arc::new(m), secrets),
         Err(e) => {
             // Companions are off for this run.
             lodestar_log::log_event!(
@@ -252,7 +281,498 @@ async fn start_with(
         }
     });
     let snapshot = manager.snapshot();
-    Some(Companions { manager, snapshot })
+    let api = Arc::new(Service {
+        manager: manager.clone(),
+        catalogue,
+        host,
+        data: folder,
+        secrets,
+        rows,
+        live: Arc::new(Unwired),
+    });
+    Some(Companions {
+        manager,
+        api,
+        snapshot,
+    })
+}
+
+/// What only a running supervisor can do (CMP-5g hands one in): restart,
+/// recent output and regenerating a credential, which rewrites the
+/// companion's own config and restarts it. It answers `not_installed` for
+/// a companion it doesn't run. [`Unwired`] refuses each with `not_wired`.
+pub trait Live: Send + Sync {
+    fn restart<'a>(&'a self, id: &'a CompanionId) -> BoxFuture<'a, Result<(), &'static str>>;
+    /// Its recent output, as the supervisor's ring holds it (redacted
+    /// once there; [`Service`] redacts it again).
+    fn logs(&self, id: &CompanionId) -> Result<Vec<String>, &'static str>;
+    fn regenerate<'a>(
+        &'a self,
+        id: &'a CompanionId,
+        field: Field,
+    ) -> BoxFuture<'a, Result<(), &'static str>>;
+}
+
+impl Live for Unwired {
+    fn restart<'a>(&'a self, _: &'a CompanionId) -> BoxFuture<'a, Result<(), &'static str>> {
+        Box::pin(async { Err("not_wired") })
+    }
+    fn logs(&self, _: &CompanionId) -> Result<Vec<String>, &'static str> {
+        Err("not_wired")
+    }
+    fn regenerate<'a>(
+        &'a self,
+        _: &'a CompanionId,
+        _: Field,
+    ) -> BoxFuture<'a, Result<(), &'static str>> {
+        Box::pin(async { Err("not_wired") })
+    }
+}
+
+/// `/companions` over the manager (CMP-6). CMP-5g swaps `live` (and the
+/// manager's `Run`) for the supervisor; nothing here changes.
+pub struct Service {
+    manager: Arc<Manager>,
+    catalogue: &'static Catalogue,
+    host: Host,
+    /// Compared against in templates, never returned.
+    data: PathBuf,
+    secrets: Arc<SecretStore>,
+    rows: StoreRows,
+    live: Arc<dyn Live>,
+}
+
+impl std::fmt::Debug for Service {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Service").finish_non_exhaustive()
+    }
+}
+
+/// The manager's answer as the API's stable code.
+fn refused(e: ManagerError) -> CompanionsError {
+    match e {
+        ManagerError::Refused(Refusal::Unknown) => CompanionsError::Unknown,
+        ManagerError::Refused(Refusal::Confirmation) => CompanionsError::Mismatch,
+        ManagerError::Refused(r) => CompanionsError::Refused(r.code()),
+        ManagerError::Step {
+            code: "not_wired", ..
+        } => CompanionsError::Refused("not_wired"),
+        e => CompanionsError::Internal(e.code()),
+    }
+}
+
+fn health(h: Health) -> CompanionHealth {
+    match h {
+        Health::Unknown => CompanionHealth::Unknown,
+        Health::Healthy => CompanionHealth::Healthy,
+        Health::Unhealthy => CompanionHealth::Unhealthy,
+    }
+}
+
+fn field(name: &str) -> Result<Field, CompanionsError> {
+    Field::ALL
+        .into_iter()
+        .find(|f| f.as_str() == name)
+        .ok_or(CompanionsError::NoCredential)
+}
+
+fn bad(field: &'static str) -> impl Fn(lodestar_companions::inputs::InputError) -> CompanionsError {
+    move |_| CompanionsError::BadInput {
+        field,
+        code: "bad_template_input",
+    }
+}
+
+fn template_error(e: TemplateError) -> CompanionsError {
+    match e {
+        TemplateError::UnknownCompanion => CompanionsError::Unknown,
+        TemplateError::NoTemplate | TemplateError::NotAvailable(_) => {
+            CompanionsError::Refused(e.code())
+        }
+        TemplateError::MissingPath(r) | TemplateError::UnexpectedPath(r) => {
+            CompanionsError::BadInput {
+                field: match r {
+                    MountRole::Config => "config_dir",
+                    MountRole::Downloads => "downloads",
+                },
+                code: e.code(),
+            }
+        }
+        TemplateError::DataFolder | TemplateError::OtherCompanion | TemplateError::DotFolder => {
+            CompanionsError::BadInput {
+                field: "config_dir",
+                code: e.code(),
+            }
+        }
+        TemplateError::Encode => CompanionsError::Internal(e.code()),
+        _ => CompanionsError::BadInput {
+            field: "kind",
+            code: e.code(),
+        },
+    }
+}
+
+impl Service {
+    fn entry(&self, id: &str) -> Result<&'static Entry, CompanionsError> {
+        CompanionId::parse(id).map_err(|_| CompanionsError::Unknown)?;
+        self.catalogue.get(id).ok_or(CompanionsError::Unknown)
+    }
+
+    /// Runs the manager's or the store's blocking work off the runtime.
+    async fn off<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&Service) -> Result<T, CompanionsError> + Send + 'static,
+    ) -> Result<T, CompanionsError> {
+        let me = self.clone_parts();
+        tokio::task::spawn_blocking(move || f(&me))
+            .await
+            .map_err(|_| CompanionsError::Internal("panicked"))?
+    }
+
+    fn clone_parts(&self) -> Service {
+        Service {
+            manager: self.manager.clone(),
+            catalogue: self.catalogue,
+            host: self.host,
+            data: self.data.clone(),
+            secrets: self.secrets.clone(),
+            rows: self.rows.clone(),
+            live: self.live.clone(),
+        }
+    }
+
+    /// The fields with a stored row. Blocking.
+    fn stored(&self, id: &CompanionId) -> Result<Vec<Field>, CompanionsError> {
+        let mut out = Vec::new();
+        for f in Field::ALL {
+            let key = CredentialKey::new(id.clone(), f).row_key();
+            if self
+                .rows
+                .get(&key)
+                .map_err(|_| CompanionsError::Internal("store"))?
+                .is_some()
+            {
+                out.push(f);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Opens a stored credential. Blocking.
+    fn open(&self, id: &CompanionId, f: Field) -> Result<Option<Secret>, CompanionsError> {
+        let key = CredentialKey::new(id.clone(), f);
+        let Some(sealed) = self
+            .rows
+            .get(&key.row_key())
+            .map_err(|_| CompanionsError::Internal("store"))?
+        else {
+            return Ok(None);
+        };
+        credentials::open(&self.secrets, &key, &sealed)
+            .map(Some)
+            .map_err(|_| CompanionsError::Internal("sealed"))
+    }
+
+    /// One row of the list. Blocking (the journal, the store).
+    fn row(&self, e: &'static Entry) -> Result<Companion, CompanionsError> {
+        let present = self
+            .manager
+            .snapshot()
+            .borrow()
+            .companions
+            .iter()
+            .find(|c| c.id == e.id)
+            .cloned();
+        let (available, refusal) = match self.manager.offer(&e.id) {
+            Ok(o) => (Some(o.version.as_str().to_owned()), None),
+            Err(ManagerError::Refused(Refusal::Current)) => (None, None),
+            Err(err) => (None, Some(err.code().to_owned())),
+        };
+        let installed = present.as_ref().and_then(|p| p.version.clone());
+        Ok(Companion {
+            available,
+            credentials: self
+                .stored(&e.id)?
+                .into_iter()
+                .map(|f| f.as_str().to_owned())
+                .collect(),
+            health: installed
+                .as_ref()
+                .and(present.as_ref())
+                .map(|p| health(p.health)),
+            id: e.id.as_str().to_owned(),
+            installed: installed.map(|v| v.as_str().to_owned()),
+            licence: e.licence.spdx.clone(),
+            name: e.name.clone(),
+            opt_in: e.opt_in,
+            refusal,
+            templates: e
+                .templates
+                .iter()
+                .filter_map(|t| match t {
+                    TemplateId::ComposeService => Some(TemplateKind::Compose),
+                    TemplateId::UnraidTemplate => Some(TemplateKind::Unraid),
+                    _ => None,
+                })
+                .collect(),
+        })
+    }
+
+    fn input(&self, r: &TemplateRequest) -> Result<ServiceInput, CompanionsError> {
+        let path = |p: &Option<String>, f: &'static str| {
+            p.as_deref()
+                .map(HostPath::parse)
+                .transpose()
+                .map_err(bad(f))
+        };
+        let route = match r.route {
+            TemplateRoute::Direct => compose::Route::Direct,
+            TemplateRoute::Gluetun => compose::Route::Gluetun,
+            TemplateRoute::ExistingGluetun => compose::Route::ExistingGluetun(
+                ContainerName::parse(r.gluetun_container.as_deref().unwrap_or(""))
+                    .map_err(bad("gluetun_container"))?,
+            ),
+        };
+        if r.route != TemplateRoute::ExistingGluetun && r.gluetun_container.is_some() {
+            return Err(CompanionsError::BadInput {
+                field: "gluetun_container",
+                code: "bad_template_input",
+            });
+        }
+        // A native install knows its own data folder, which a template
+        // must never mount; in a container it's the container's path.
+        let data = if self.host.in_container {
+            DataFolders::none()
+        } else {
+            match DataFolder::from_running(&self.data) {
+                Ok(d) => DataFolders::none().with(d),
+                Err(_) => DataFolders::none(),
+            }
+        };
+        Ok(ServiceInput {
+            puid: Puid::parse(&r.puid).map_err(bad("puid"))?,
+            pgid: Pgid::parse(&r.pgid).map_err(bad("pgid"))?,
+            network: NetworkName::parse(&r.network).map_err(bad("network"))?,
+            route,
+            paths: Paths {
+                config: path(&r.config_dir, "config_dir")?,
+                downloads: path(&r.downloads, "downloads")?,
+            },
+            publish: Vec::new(),
+            data,
+            taken: Vec::new(),
+        })
+    }
+}
+
+impl CompanionsApi for Service {
+    fn list(&self) -> lodestar_api::ops::BoxFuture<'_, Result<Vec<Companion>, CompanionsError>> {
+        Box::pin(self.off(|s| s.catalogue.entries().iter().map(|e| s.row(e)).collect()))
+    }
+
+    fn get(
+        &self,
+        id: String,
+    ) -> lodestar_api::ops::BoxFuture<'_, Result<Companion, CompanionsError>> {
+        Box::pin(async move {
+            let e = self.entry(&id)?;
+            self.off(move |s| s.row(e)).await
+        })
+    }
+
+    fn offer(
+        &self,
+        id: String,
+    ) -> lodestar_api::ops::BoxFuture<'_, Result<InstallOffer, CompanionsError>> {
+        Box::pin(async move {
+            let e = self.entry(&id)?;
+            let o = self
+                .off(move |s| s.manager.offer(&e.id).map_err(refused))
+                .await?;
+            Ok(InstallOffer {
+                id: o.id.as_str().to_owned(),
+                licence: o.licence,
+                name: o.name,
+                replaces: o.replaces.map(|v| v.as_str().to_owned()),
+                sha256: o.sha256.to_hex(),
+                size_bytes: o.size,
+                version: o.version.as_str().to_owned(),
+            })
+        })
+    }
+
+    fn install(
+        &self,
+        id: String,
+        version: String,
+        sha256: String,
+    ) -> lodestar_api::ops::BoxFuture<'_, Result<Companion, CompanionsError>> {
+        Box::pin(async move {
+            let e = self.entry(&id)?;
+            let token = InstallToken {
+                id: e.id.clone(),
+                version: Version::parse(&version).map_err(|_| CompanionsError::Mismatch)?,
+                sha256: Sha256::parse_hex(&sha256).map_err(|_| CompanionsError::Mismatch)?,
+            };
+            self.manager.install(&token).await.map_err(refused)?;
+            self.off(move |s| s.row(e)).await
+        })
+    }
+
+    fn removal(
+        &self,
+        id: String,
+    ) -> lodestar_api::ops::BoxFuture<'_, Result<RemovalPlan, CompanionsError>> {
+        Box::pin(async move {
+            let e = self.entry(&id)?;
+            let r = self
+                .off(move |s| s.manager.removal(&e.id).map_err(refused))
+                .await?;
+            Ok(plan(e, &r.rows, false))
+        })
+    }
+
+    fn remove(
+        &self,
+        id: String,
+    ) -> lodestar_api::ops::BoxFuture<'_, Result<RemovalPlan, CompanionsError>> {
+        Box::pin(async move {
+            let e = self.entry(&id)?;
+            let r = self.manager.remove(&e.id).await.map_err(refused)?;
+            Ok(plan(e, &r.rows, true))
+        })
+    }
+
+    fn restart(&self, id: String) -> lodestar_api::ops::BoxFuture<'_, Result<(), CompanionsError>> {
+        Box::pin(async move {
+            let e = self.entry(&id)?;
+            self.live
+                .restart(&e.id)
+                .await
+                .map_err(CompanionsError::Refused)
+        })
+    }
+
+    fn logs(
+        &self,
+        id: String,
+    ) -> lodestar_api::ops::BoxFuture<'_, Result<Vec<String>, CompanionsError>> {
+        Box::pin(async move {
+            let e = self.entry(&id)?;
+            self.off(move |s| {
+                let lines = s.live.logs(&e.id).map_err(CompanionsError::Refused)?;
+                // Redacted again with its own credentials, whatever the
+                // ring did (plan CMP-6).
+                let mut secrets = Vec::new();
+                for f in s.stored(&e.id)? {
+                    secrets.extend(s.open(&e.id, f)?);
+                }
+                let r = Redactor::new(&secrets);
+                Ok(lines.iter().map(|l| r.redact(l)).collect())
+            })
+            .await
+        })
+    }
+
+    fn template(
+        &self,
+        id: String,
+        request: TemplateRequest,
+    ) -> lodestar_api::ops::BoxFuture<'_, Result<CompanionTemplate, CompanionsError>> {
+        Box::pin(async move {
+            let e = self.entry(&id)?;
+            let kind = request.kind;
+            self.off(move |s| {
+                let input = s.input(&request)?;
+                let (compose, unraid) = match kind {
+                    TemplateKind::Compose => (
+                        Some(compose::compose(s.catalogue, &e.id, &input).map_err(template_error)?),
+                        Vec::new(),
+                    ),
+                    TemplateKind::Unraid => (
+                        None,
+                        unraid::unraid(s.catalogue, &e.id, &input)
+                            .map_err(template_error)?
+                            .into_iter()
+                            .map(|t| UnraidFile {
+                                add_container_path: t.add_container_path(),
+                                fields: t
+                                    .fields
+                                    .into_iter()
+                                    .map(|(label, value)| UnraidField { label, value })
+                                    .collect(),
+                                file_name: t.file_name,
+                                xml: t.xml,
+                            })
+                            .collect(),
+                    ),
+                };
+                Ok(CompanionTemplate {
+                    compose,
+                    id: e.id.as_str().to_owned(),
+                    kind,
+                    unraid,
+                })
+            })
+            .await
+        })
+    }
+
+    fn reveal(
+        &self,
+        id: String,
+        name: String,
+    ) -> lodestar_api::ops::BoxFuture<'_, Result<Revealed, CompanionsError>> {
+        Box::pin(async move {
+            let e = self.entry(&id)?;
+            let f = field(&name)?;
+            let secret = self
+                .off(move |s| s.open(&e.id, f))
+                .await?
+                .ok_or(CompanionsError::NoCredential)?;
+            Ok(Revealed {
+                id: e.id.as_str(),
+                field: f.as_str(),
+                value: secret.expose().to_owned(),
+            })
+        })
+    }
+
+    fn regenerate(
+        &self,
+        id: String,
+        name: String,
+    ) -> lodestar_api::ops::BoxFuture<'_, Result<(), CompanionsError>> {
+        Box::pin(async move {
+            let e = self.entry(&id)?;
+            let f = field(&name)?;
+            if !self.off(move |s| s.stored(&e.id)).await?.contains(&f) {
+                return Err(CompanionsError::NoCredential);
+            }
+            self.live
+                .regenerate(&e.id, f)
+                .await
+                .map_err(CompanionsError::Refused)
+        })
+    }
+}
+
+/// What a removal deletes: the folder, relative to the data folder, and
+/// each credential row.
+fn plan(e: &Entry, rows: &[String], removed: bool) -> RemovalPlan {
+    let mut deletes = vec![RemovalItem {
+        kind: RemovalItemKind::Folder,
+        name: format!("companions/{}", e.id),
+    }];
+    deletes.extend(rows.iter().map(|r| RemovalItem {
+        kind: RemovalItemKind::Setting,
+        name: r.clone(),
+    }));
+    RemovalPlan {
+        deletes,
+        id: e.id.as_str().to_owned(),
+        removed,
+    }
 }
 
 #[cfg(test)]
@@ -413,5 +933,378 @@ mod tests {
         rows.forget(&qbt).unwrap();
         assert_eq!(rows.get(&a.row.key).unwrap(), None);
         assert_eq!(rows.get(&b.row.key).unwrap(), Some(b.row.value));
+    }
+
+    /// qBittorrent pinned on Linux x86_64, with a pinned image and its
+    /// templates; Prowlarr with nothing pinned.
+    fn pinned() -> &'static Catalogue {
+        let sha = "ab".repeat(32);
+        let j = serde_json::json!({
+            "format": 1,
+            "entries": [{
+                "id": "qbittorrent",
+                "name": "qBittorrent",
+                "licence": {"spdx": "GPL-2.0-or-later", "url": "https://github.com/qbittorrent/qBittorrent/blob/master/COPYING"},
+                "homepage": "https://www.qbittorrent.org/",
+                "needed_for": ["download_client"],
+                "opt_in": false,
+                "hosts": ["github.com"],
+                "native": {"release": "https://github.com/userdocs/qbittorrent-nox-static/releases/download/", "artifacts": [
+                    {"platform": "linux", "arch": "x86_64", "archive": "binary", "executable": null,
+                     "pin": {"version": "5.1.2", "url": "https://github.com/userdocs/qbittorrent-nox-static/releases/download/release-5.1.2/x86_64-qbittorrent-nox",
+                             "size": 10, "sha256": sha, "upstream_sig": {"kind": "none"}}}
+                ]},
+                "container": {"image": "lscr.io/linuxserver/qbittorrent", "digest": format!("sha256:{}", "cd".repeat(32)), "name": "qbittorrent"},
+                "ports": [
+                    {"name": "webui", "port": 8080, "proto": "tcp", "exposure": "internal"},
+                    {"name": "p2p", "port": 6881, "proto": "tcp", "exposure": "p2p"},
+                    {"name": "p2p_udp", "port": 6881, "proto": "udp", "exposure": "p2p"}
+                ],
+                "health": {"port": "webui", "path": "/api/v2/app/version"},
+                "templates": ["qbittorrent_conf", "compose_service", "unraid_template"]
+            }, {
+                "id": "prowlarr",
+                "name": "Prowlarr",
+                "licence": {"spdx": "GPL-3.0-only", "url": "https://github.com/Prowlarr/Prowlarr/blob/develop/LICENSE.md"},
+                "homepage": "https://prowlarr.com/",
+                "needed_for": ["indexer_manager"],
+                "opt_in": false,
+                "hosts": ["github.com"],
+                "native": {"release": "https://github.com/Prowlarr/Prowlarr/releases/download/", "artifacts": [
+                    {"platform": "linux", "arch": "x86_64", "archive": "tar_gz", "executable": "Prowlarr/Prowlarr", "pin": null}
+                ]},
+                "container": null,
+                "ports": [{"name": "webui", "port": 9696, "proto": "tcp", "exposure": "internal"}],
+                "health": {"port": "webui", "path": "/ping"},
+                "templates": ["prowlarr_config_xml"]
+            }]
+        });
+        Box::leak(Box::new(Catalogue::from_json(&j.to_string()).unwrap()))
+    }
+
+    /// The supervisor CMP-5g hands in, as far as these tests need: its
+    /// ring holds a line with the companion's own password in it.
+    struct Ring(String);
+
+    impl Live for Ring {
+        fn restart<'a>(&'a self, _: &'a CompanionId) -> BoxFuture<'a, Result<(), &'static str>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn logs(&self, _: &CompanionId) -> Result<Vec<String>, &'static str> {
+            Ok(vec![format!(
+                "WebUI: signed in with {} from 127.0.0.1",
+                self.0
+            )])
+        }
+        fn regenerate<'a>(
+            &'a self,
+            _: &'a CompanionId,
+            _: Field,
+        ) -> BoxFuture<'a, Result<(), &'static str>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    fn service(
+        dir: &std::path::Path,
+        catalogue: &'static Catalogue,
+        host: Host,
+        live: Arc<dyn Live>,
+    ) -> Service {
+        let store = store(dir);
+        let (m, secrets) = manager_with(dir.to_path_buf(), store.clone(), catalogue, host).unwrap();
+        Service {
+            manager: Arc::new(m),
+            catalogue,
+            host,
+            data: dir.to_path_buf(),
+            secrets,
+            rows: StoreRows(store),
+            live,
+        }
+    }
+
+    /// Stores a generated credential for `id`, as an install would.
+    fn stored(s: &Service, id: &str, f: Field) -> String {
+        let key = CredentialKey::new(CompanionId::parse(id).unwrap(), f);
+        let issued = generate(&s.secrets, &key).unwrap();
+        s.rows.put(&issued.row).unwrap();
+        issued.secret.expose().to_owned()
+    }
+
+    /// Until CMP-5g, an install the admin confirmed is refused with
+    /// `not_wired` before anything is downloaded or written: the pinned
+    /// URL is never asked for, and the companion has no folder.
+    #[tokio::test]
+    async fn a_confirmed_install_is_not_wired_and_fetches_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = service(dir.path(), pinned(), NATIVE, Arc::new(Unwired));
+        let offer = s.offer("qbittorrent".into()).await.unwrap();
+        assert_eq!(offer.version, "5.1.2");
+        assert_eq!(offer.sha256, "ab".repeat(32));
+        assert_eq!(offer.replaces, None);
+        let got = s
+            .install("qbittorrent".into(), offer.version, offer.sha256)
+            .await;
+        assert_eq!(got, Err(CompanionsError::Refused("not_wired")));
+        assert!(!dir.path().join("companions/qbittorrent").exists());
+        // A token for anything but the pin is refused first.
+        let wrong = s
+            .install("qbittorrent".into(), "5.1.2".into(), "cd".repeat(32))
+            .await;
+        assert_eq!(wrong, Err(CompanionsError::Mismatch));
+        let garbage = s
+            .install("qbittorrent".into(), "5.1.2".into(), "nope".into())
+            .await;
+        assert_eq!(garbage, Err(CompanionsError::Mismatch));
+        assert_eq!(
+            s.install("nope".into(), "1".into(), "ab".repeat(32)).await,
+            Err(CompanionsError::Unknown)
+        );
+    }
+
+    #[tokio::test]
+    async fn the_list_says_what_can_be_installed_here_and_why_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = service(dir.path(), pinned(), NATIVE, Arc::new(Unwired));
+        stored(&s, "prowlarr", Field::ApiKey);
+        let all = s.list().await.unwrap();
+        let qbt = &all[0];
+        assert_eq!(
+            (
+                qbt.id.as_str(),
+                qbt.available.as_deref(),
+                qbt.refusal.as_deref()
+            ),
+            ("qbittorrent", Some("5.1.2"), None)
+        );
+        assert_eq!((qbt.installed.as_ref(), qbt.health), (None, None));
+        assert_eq!(qbt.licence, "GPL-2.0-or-later");
+        assert_eq!(
+            qbt.templates,
+            vec![TemplateKind::Compose, TemplateKind::Unraid]
+        );
+        assert!(qbt.credentials.is_empty());
+        let p = &all[1];
+        assert_eq!(
+            (p.available.as_deref(), p.refusal.as_deref()),
+            (None, Some("awaiting_pin"))
+        );
+        assert_eq!(p.credentials, vec!["api_key".to_owned()]);
+        assert_eq!(s.get("prowlarr".into()).await.unwrap(), *p);
+        assert_eq!(s.get("Nope".into()).await, Err(CompanionsError::Unknown));
+
+        let dir = tempfile::tempdir().unwrap();
+        let docker = Host {
+            in_container: true,
+            ..NATIVE
+        };
+        let s = service(dir.path(), pinned(), docker, Arc::new(Unwired));
+        let qbt = s.get("qbittorrent".into()).await.unwrap();
+        assert_eq!(qbt.refusal.as_deref(), Some("native_in_container"));
+        assert_eq!(
+            s.offer("qbittorrent".into()).await,
+            Err(CompanionsError::Refused("native_in_container"))
+        );
+    }
+
+    /// Q5: the stored value, opened from its sealed row, and nothing for a
+    /// field or companion with no row.
+    #[tokio::test]
+    async fn reveal_opens_the_stored_credential_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = service(dir.path(), pinned(), NATIVE, Arc::new(Unwired));
+        let password = stored(&s, "qbittorrent", Field::WebUiPassword);
+        let r = s
+            .reveal("qbittorrent".into(), "webui_password".into())
+            .await
+            .unwrap();
+        assert_eq!((r.id, r.field), ("qbittorrent", "webui_password"));
+        assert_eq!(r.value, password);
+        assert!(!format!("{r:?}").contains(&password));
+        for (id, field, want) in [
+            ("qbittorrent", "api_key", CompanionsError::NoCredential),
+            ("prowlarr", "api_key", CompanionsError::NoCredential),
+            ("qbittorrent", "password", CompanionsError::NoCredential),
+            ("nope", "api_key", CompanionsError::Unknown),
+        ] {
+            assert_eq!(
+                s.reveal(id.into(), field.into()).await.err(),
+                Some(want),
+                "{id} {field}"
+            );
+        }
+        // Regenerate needs the supervisor: refused, and the row is kept.
+        assert_eq!(
+            s.regenerate("qbittorrent".into(), "webui_password".into())
+                .await,
+            Err(CompanionsError::Refused("not_wired"))
+        );
+        assert_eq!(
+            s.regenerate("qbittorrent".into(), "api_key".into()).await,
+            Err(CompanionsError::NoCredential)
+        );
+        let again = s
+            .reveal("qbittorrent".into(), "webui_password".into())
+            .await
+            .unwrap();
+        assert_eq!(again.value, password);
+    }
+
+    #[tokio::test]
+    async fn restart_and_logs_need_the_supervisor() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = service(dir.path(), pinned(), NATIVE, Arc::new(Unwired));
+        assert_eq!(
+            s.restart("qbittorrent".into()).await,
+            Err(CompanionsError::Refused("not_wired"))
+        );
+        assert_eq!(
+            s.logs("qbittorrent".into()).await,
+            Err(CompanionsError::Refused("not_wired"))
+        );
+        assert_eq!(
+            s.removal("qbittorrent".into()).await,
+            Err(CompanionsError::Refused("not_installed"))
+        );
+        assert_eq!(
+            s.remove("qbittorrent".into()).await,
+            Err(CompanionsError::Refused("not_installed"))
+        );
+    }
+
+    /// The supervisor's lines are redacted again with the companion's own
+    /// credentials on the way out.
+    #[tokio::test]
+    async fn logs_are_redacted_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = service(dir.path(), pinned(), NATIVE, Arc::new(Unwired));
+        let password = stored(&s, "qbittorrent", Field::WebUiPassword);
+        let s = Service {
+            live: Arc::new(Ring(password.clone())),
+            ..s.clone_parts()
+        };
+        let lines = s.logs("qbittorrent".into()).await.unwrap();
+        assert_eq!(lines.len(), 1);
+        assert!(!lines[0].contains(&password), "{}", lines[0]);
+        assert!(lines[0].contains("127.0.0.1"), "{}", lines[0]);
+    }
+
+    #[test]
+    fn a_removal_names_the_folder_relative_to_the_data_folder() {
+        let e = pinned().get("qbittorrent").unwrap();
+        let p = plan(
+            e,
+            &["companions.qbittorrent.secret.webui_password".into()],
+            false,
+        );
+        assert_eq!(
+            p.deletes,
+            vec![
+                RemovalItem {
+                    kind: RemovalItemKind::Folder,
+                    name: "companions/qbittorrent".into()
+                },
+                RemovalItem {
+                    kind: RemovalItemKind::Setting,
+                    name: "companions.qbittorrent.secret.webui_password".into()
+                },
+            ]
+        );
+        assert!(!p.removed);
+    }
+
+    #[tokio::test]
+    async fn templates_are_built_from_checked_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = service(dir.path(), pinned(), NATIVE, Arc::new(Unwired));
+        let req = |v: serde_json::Value| -> TemplateRequest { serde_json::from_value(v).unwrap() };
+        let t = s
+            .template(
+                "qbittorrent".into(),
+                req(serde_json::json!({
+                    "kind": "compose",
+                    "config_dir": "/srv/qbittorrent",
+                    "downloads": "/srv/downloads"
+                })),
+            )
+            .await
+            .unwrap();
+        let doc = t.compose.unwrap();
+        assert!(
+            doc.contains("/srv/qbittorrent") && doc.contains("lodestar"),
+            "{doc}"
+        );
+        assert!(t.unraid.is_empty());
+        let t = s
+            .template(
+                "qbittorrent".into(),
+                req(serde_json::json!({
+                    "kind": "unraid",
+                    "config_dir": "/mnt/user/appdata/qbittorrent",
+                    "downloads": "/mnt/user/downloads"
+                })),
+            )
+            .await
+            .unwrap();
+        assert_eq!(t.compose, None);
+        assert_eq!(t.unraid.len(), 1);
+        assert!(
+            t.unraid[0]
+                .add_container_path
+                .contains(&t.unraid[0].file_name)
+        );
+        for (body, field) in [
+            (serde_json::json!({"kind": "compose", "puid": "x"}), "puid"),
+            (
+                serde_json::json!({"kind": "compose", "config_dir": "relative"}),
+                "config_dir",
+            ),
+            (
+                serde_json::json!({"kind": "compose", "network": "bad net"}),
+                "network",
+            ),
+            (
+                serde_json::json!({"kind": "compose", "route": "existing_gluetun"}),
+                "gluetun_container",
+            ),
+            (
+                serde_json::json!({"kind": "compose", "gluetun_container": "vpn"}),
+                "gluetun_container",
+            ),
+        ] {
+            match s.template("qbittorrent".into(), req(body.clone())).await {
+                Err(CompanionsError::BadInput { field: f, .. }) => assert_eq!(f, field, "{body}"),
+                other => panic!("{body}: {other:?}"),
+            }
+        }
+        // Lodestar's own data folder is never mounted.
+        let data = std::fs::canonicalize(dir.path()).unwrap();
+        let inside = format!("{}/qbt", data.display());
+        if HostPath::parse(&inside).is_ok() {
+            let got = s
+                .template(
+                    "qbittorrent".into(),
+                    req(serde_json::json!({
+                        "kind": "compose",
+                        "config_dir": inside,
+                        "downloads": "/srv/downloads"
+                    })),
+                )
+                .await;
+            assert!(
+                matches!(got, Err(CompanionsError::BadInput { .. })),
+                "{got:?}"
+            );
+        }
+        assert_eq!(
+            s.template(
+                "prowlarr".into(),
+                req(serde_json::json!({"kind": "compose"}))
+            )
+            .await
+            .err(),
+            Some(CompanionsError::Refused("no_template"))
+        );
     }
 }

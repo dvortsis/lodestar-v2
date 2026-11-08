@@ -455,6 +455,8 @@
 	"settings_logging_ev_companions_removed_h": "伴随程序及其文件已移除。",
 	"settings_logging_ev_companions_recovered_n": "伴随程序更改已恢复",
 	"settings_logging_ev_companions_recovered_h": "中断的更改已完成或撤销。",
+	"settings_logging_ev_companions_credential_revealed_n": "已显示伴随程序凭据",
+	"settings_logging_ev_companions_credential_revealed_h": "管理员显示了伴随程序的密码或密钥。",
 	"settings_logging_ev_integrations_client_request_n": "下载器请求",
 	"settings_logging_ev_integrations_client_request_h": "向你的下载器发出的请求。",
 	"settings_logging_ev_integrations_client_left_paused_n": "种子保持暂停",
