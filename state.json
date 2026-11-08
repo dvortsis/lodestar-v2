@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-08T04:50:45Z",
+  "updated_at": "2026-11-08T04:52:26Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6022,6 +6022,16 @@
     {
       "id": "WK-10c-merged",
       "note": "2026-11-08T04:50:45Z: #601 merged 34bd24b1 on fresh Opus delta MERGE (review 1 CHANGES B1 tests). Owner FYI + 3 flags sent. WK-10d in same session (slot 4) with delta notes 1-5 added."
+    },
+    {
+      "id": "wk10d-runner-calls",
+      "at": "2026-11-08T04:52:26Z",
+      "note": "Approved outside owns: cluster/have.rs ResetOnPanic (~30), pipeline wire/filter_snapshot.rs zeroize (~15), worker/session.rs reconnect on DHT vote change (~40, debounced), set_coordinator_ips serve.rs + services.rs (~40, public only). Tombstone ruling (b'): permanent tombstone row rule 'worker-floor:<worker id>' (no migration; WK-13 purge-by-worker removes them); rejected (a) in-memory 7-day as content-safety loosening. Size 1,000-1,300 accepted. Owner flag after merge."
+    },
+    {
+      "id": "X-worker-drain-fence",
+      "what": "Results flushed before Drained are counted stale: Drained evicts leases at once (crates/cluster/src/server.rs ~1366) while intake (crates/pipeline/src/remote.rs) fences later. Needs a flush handshake across cluster+pipeline (~150+ lines). From WK-10d.",
+      "logged": "2026-11-08T04:52:26Z"
     }
   ],
   "main_health": [
