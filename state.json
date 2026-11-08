@@ -6092,7 +6092,8 @@
       ]
     },
     "2026-11-08T07:48Z: CMP-4b: runner approved win32job =2.0.3 (Windows-only; pulls windows 0.61 + 12 crates, ~190 lock lines incl. landlock) under Q13; Job Object assign-after-CreateProcess race accepted (residual, like prlimit window); Linux Landlock via re-exec launcher approved with conditions; supervise/mod.rs hold/release ~50 lines approved. Owner FYI after merge (\u00a72.19).",
-    "2026-11-08T07:48Z: CMP-5 brief must include: call lodestar_companions::supervise::limits::launcher_main() first thing in crates/lodestar main (argv sentinel contract from CMP-4b PR) + test that launcher mode does nothing else."
+    "2026-11-08T07:48Z: CMP-5 brief must include: call lodestar_companions::supervise::limits::launcher_main() first thing in crates/lodestar main (argv sentinel contract from CMP-4b PR) + test that launcher mode does nothing else.",
+    "2026-11-08T08:17Z: X-natural-strict-parity: real bug on main (suggest.rs natural_keeps_explicit_syntax; natural accepts what strict parse refuses; seed cc 6b5c49cd\u2026). Found on #607 Windows. Runner Opus helper fixing on slice/X-natural-strict-parity; needs slices.yaml entry in next runner PR. #607 re-ran once; if red again, land the fix first."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -6883,5 +6884,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T07:48Z"
+  "updated": "2026-11-08T08:17Z"
 }
