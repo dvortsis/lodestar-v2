@@ -6403,7 +6403,8 @@
     "2026-11-08T18:47Z: #631 at 9c326ada CHANGES (B1 emergency down waits on fleet lock; lock expiry vs 3-job chain) + N1 wording required; N2-N7 into plan or OP rows. #621 at 5e0b6014 CHANGES (B1 leftover state.json.tmp; N1 atomic delete required) relayed; #619 review running. #628 X-wk10d-unknown ready at 0548410a, green, review running.",
     "2026-11-08T18:52Z: #631 at 9976485a MERGE (narrow security review). Last push asked: D:76-77 match P (3 workflows, fleet.json GetObject) + N2-N6 as OP-row build reqs; self-check docs delta, then merge on green CI.",
     "2026-11-08T18:55Z: #619 at 7b233d13 MERGE (fresh Opus). CMP-5 told to push #621 fixes + #619 (merge of new 5b). Next: fresh delta review of #621, self-check #619 delta, merge #621, retarget #619, merge. #631 docs delta 6fc3b0b2 self-checked; merge on green CI.",
-    "2026-11-08T18:59Z: main macOS red on 11267a21: companions tests/supervise.rs:255 env test sees __CF_USER_TEXT_ENCODING (macOS CoreFoundation sets it in the child). Fix folded into CMP-5 #621 push (test-side macOS allowance after confirming env_clear). Verify on the next main macOS run after #621 merges."
+    "2026-11-08T18:59Z: main macOS red on 11267a21: companions tests/supervise.rs:255 env test sees __CF_USER_TEXT_ENCODING (macOS CoreFoundation sets it in the child). Fix folded into CMP-5 #621 push (test-side macOS allowance after confirming env_clear). Verify on the next main macOS run after #621 merges.",
+    "2026-11-08T19:00Z: #628 at 0548410a CHANGES (docs only: record claims a worker Busy retry that doesn't exist; proto.rs Busy doc; leases order docs; heading). Self-check the docs delta, merge on green. New follow-ups to queue: X-wk-busy-retry (worker-side Busy retry with backoff, runtime.rs claim loop drops all denials); X-wk-pause-text (workers.pause_not_saved message + web help wrong for removed worker, en/zh)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7202,5 +7203,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T18:59Z"
+  "updated": "2026-11-08T19:00Z"
 }
