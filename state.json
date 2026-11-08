@@ -6460,6 +6460,10 @@
     {
       "at": "2026-11-08T20:20Z",
       "note": "PK-win-upd-2 owns approved (option a): update/windows/check.rs install wiring (install, incapable, can_install) + skip trim; update/download.rs cfg(windows) create_part with reparse refusal, and drop download's cfg(unix) gate in update/mod.rs. Unix unchanged. Add both to PK-win-upd-2 owns in the next runner PR. Main macOS: 20818fea and 6554ca2c runs cancelled by later merges; watching 3e69d889."
+    },
+    {
+      "at": "2026-11-08T20:21Z",
+      "note": "PK-win-upd-2 owns also gain update/layout.rs: cfg(windows) retry_rename (os errors 5 and 32, 8 attempts, 5 ms to 320 ms) in layout.rs, called by write_steps, msi.rs, helper and download.rs. Add with check.rs and download.rs in the next runner PR."
     }
   ],
   "main_health": [
