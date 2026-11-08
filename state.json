@@ -6213,6 +6213,16 @@
       "id": "CMP-5g-brief-additions",
       "at": "2026-11-08T14:38Z",
       "note": "From CMP-5 scoping (runner): CMP-5g owns the companions.<id>.egress setting (Q18) and serve-time start of installed companions with their route; it must continue CMP-5 \"staged\" installs (CLI install stops at files; recovery leaves staged intact). CMP-5 adds layout.rs stage_binary (approved) and tests/companion_launcher.rs."
+    },
+    {
+      "id": "merged-615",
+      "at": "2026-11-08T15:01Z",
+      "note": "#615 WK-10d-polish merged (fresh Opus MERGE). Follow-up X-wk10d-unknown (after WK-10e): deny Unknown as Busy; requeue Unknown at back (leases.rs); log WORKERS_PAUSE_NOT_SAVED code=unknown_worker on failed check; fix decisions line re StoredKeys."
+    },
+    {
+      "id": "CMP-10-round2",
+      "at": "2026-11-08T15:01Z",
+      "note": "#616 MERGE at d9228270 but conflicted with main (golden). Round: rebless, Jackett ExternalIndexer (runner option a; owner flag at merge), purge race re-check, spin test, doc fixes. Narrow delta review then merge. CMP-5 told: external_indexer, restart source after hand-over, worker gate None."
     }
   ],
   "main_health": [
@@ -6914,7 +6924,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T14:32Z",
+    "updated": "2026-11-08T15:01Z",
     "items": [
       {
         "slot": 1,
@@ -6942,10 +6952,10 @@
       },
       {
         "slot": 4,
-        "slice": "WK-10d-polish",
+        "slice": "WK-10e",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: WK-10d-polish first (#607 review items 1-7), then WK-10e (brief briefs/WK-10e.md)",
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #615 WK-10d-polish merged; #617 WK-10e in CI",
         "since": "2026-11-08T13:34Z"
       }
     ],
