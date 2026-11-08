@@ -388,7 +388,7 @@
 	"settings_logging_ev_workers_prefs_skipped_n": "工作节点设置已重置",
 	"settings_logging_ev_workers_prefs_skipped_h": "无法读取工作节点保存的设置，改用默认值。",
 	"settings_logging_ev_workers_pause_not_saved_n": "工作节点暂停未保存",
-	"settings_logging_ev_workers_pause_not_saved_h": "某个因报告过多拦截种子而被暂停的工作节点，其暂停状态无法保存。它会保持暂停直到 Lodestar 重启。请在“工作节点”中暂停它，以便重启后仍保持暂停。",
+	"settings_logging_ev_workers_pause_not_saved_h": "某个工作节点因报告过多拦截种子而暂停，但暂停未能保存。若它仍在“工作节点”中，请在那里暂停它，Lodestar 重启后才会保持暂停；若已撤销，则无需操作。",
 	"settings_logging_ev_workers_token_created_n": "已创建加入令牌",
 	"settings_logging_ev_workers_token_created_h": "已创建一次性加入令牌。令牌不会写入日志。",
 	"settings_logging_ev_workers_revoked_n": "已撤销工作节点",

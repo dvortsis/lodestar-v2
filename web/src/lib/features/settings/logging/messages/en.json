@@ -388,7 +388,7 @@
 	"settings_logging_ev_workers_prefs_skipped_n": "Worker settings reset",
 	"settings_logging_ev_workers_prefs_skipped_h": "A worker's saved settings couldn't be read; it uses the defaults.",
 	"settings_logging_ev_workers_pause_not_saved_n": "Worker pause not saved",
-	"settings_logging_ev_workers_pause_not_saved_h": "A worker paused for reporting too many blocked torrents couldn't have its pause saved. It stays paused until Lodestar restarts. Pause it in Workers to keep it paused after that.",
+	"settings_logging_ev_workers_pause_not_saved_h": "A worker's pause for too many blocked-torrent reports wasn't saved. If it's still in Workers, pause it there to keep it paused after Lodestar restarts. If it was revoked, nothing needs doing.",
 	"settings_logging_ev_workers_token_created_n": "Join token created",
 	"settings_logging_ev_workers_token_created_h": "A one-time worker join token was made. The token isn't logged.",
 	"settings_logging_ev_workers_revoked_n": "Worker revoked",
