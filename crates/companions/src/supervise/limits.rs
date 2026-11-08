@@ -172,6 +172,11 @@ pub enum LimitsError {
     DownloadsOverlapData,
     /// The install folder isn't inside the companion's own folder.
     InstallOutsideCompanion,
+    /// The downloads folder is the companion's own folder, or lies inside
+    /// its home or install folder, where it could swap a granted folder.
+    DownloadsInsideCompanion,
+    /// The executable isn't a regular file inside the install folder.
+    ExecutableOutsideInstall,
     /// Lodestar's own executable, the launcher, couldn't be found.
     NoLauncher,
     /// The Windows Job Object couldn't be created.
@@ -184,6 +189,8 @@ impl LimitsError {
             LimitsError::BadFolder => "bad_folder",
             LimitsError::DownloadsOverlapData => "downloads_overlap_data",
             LimitsError::InstallOutsideCompanion => "install_outside_companion",
+            LimitsError::DownloadsInsideCompanion => "downloads_inside_companion",
+            LimitsError::ExecutableOutsideInstall => "executable_outside_install",
             LimitsError::NoLauncher => "no_launcher",
             LimitsError::NoJob => "no_job",
         }
@@ -275,10 +282,11 @@ impl Sandbox {
         }
         #[cfg(target_os = "linux")]
         {
+            let hook = Arc::new(super::limits_linux::ExecHook::new(&launcher.exe));
             Ok(Sandbox {
                 limits,
                 launcher,
-                hook: Arc::new(super::limits_linux::ExecHook),
+                hook,
             })
         }
         #[cfg(not(any(windows, target_os = "linux")))]
@@ -370,8 +378,15 @@ pub(crate) fn check(spec: &SpawnSpec, conf: &Confinement) -> Result<Folders, Lim
     let data = canonical_dir(&spec.data_dir)?;
     let own = data.join("companions").join(spec.id.as_str());
     let install = canonical_dir(&conf.install)?;
-    if !install.starts_with(&own) || install == own {
+    let home = super::process::home_dir(&data, &spec.id);
+    if !install.starts_with(&own) || install == own || install.starts_with(&home) {
         return Err(LimitsError::InstallOutsideCompanion);
+    }
+    let exe = std::fs::canonicalize(&spec.executable)
+        .ok()
+        .filter(|e| e.starts_with(&install) && e.is_file());
+    if exe.is_none() {
+        return Err(LimitsError::ExecutableOutsideInstall);
     }
     let downloads = match &conf.downloads {
         None => None,
@@ -382,12 +397,14 @@ pub(crate) fn check(spec: &SpawnSpec, conf: &Confinement) -> Result<Folders, Lim
             if data.starts_with(&d) || (d.starts_with(&data) && !d.starts_with(&own)) {
                 return Err(LimitsError::DownloadsOverlapData);
             }
+            if d == own || d.starts_with(&home) || d.starts_with(&install) {
+                return Err(LimitsError::DownloadsInsideCompanion);
+            }
             Some(d)
         }
     };
-    // CMP-4a's spawn creates `home`; this is the same path, made
-    // canonical through the data folder (it may not exist yet).
-    let home = super::process::home_dir(&data, &spec.id);
+    // CMP-4a's spawn creates `home` (it may not exist yet); the path is
+    // made canonical through the data folder.
     Ok(Folders {
         home,
         install,
@@ -404,7 +421,11 @@ mod tests {
     fn spec(data: &Path) -> SpawnSpec {
         SpawnSpec {
             id: CompanionId::parse("qbittorrent").unwrap(),
-            executable: data.join("x"),
+            executable: data
+                .join("companions")
+                .join("qbittorrent")
+                .join("5.0.3")
+                .join("x"),
             args: Vec::new(),
             env: Vec::new(),
             data_dir: data.to_owned(),
@@ -420,9 +441,16 @@ mod tests {
         let install = own.join("5.0.3");
         let other = data.join("companions").join("prowlarr");
         let outside = tmp.path().join("dl");
-        for d in [&install, &other, &outside, &own.join("downloads")] {
+        for d in [
+            &install,
+            &other,
+            &outside,
+            &own.join("downloads"),
+            &own.join("home").join("Downloads"),
+        ] {
             std::fs::create_dir_all(d).unwrap();
         }
+        std::fs::write(install.join("x"), b"").unwrap();
         let s = spec(&data);
         let conf = |install: &Path, dl: Option<&Path>| Confinement {
             install: install.to_owned(),
@@ -439,6 +467,21 @@ mod tests {
                 bad.display()
             );
         }
+        for bad in [&own, &own.join("home").join("Downloads"), &install] {
+            assert_eq!(
+                check(&s, &conf(&install, Some(bad))),
+                Err(LimitsError::DownloadsInsideCompanion),
+                "{}",
+                bad.display()
+            );
+        }
+        let mut elsewhere = s.clone();
+        elsewhere.executable = outside.join("x");
+        std::fs::write(&elsewhere.executable, b"").unwrap();
+        assert_eq!(
+            check(&elsewhere, &conf(&install, None)),
+            Err(LimitsError::ExecutableOutsideInstall)
+        );
         assert_eq!(
             check(&s, &conf(&other, None)),
             Err(LimitsError::InstallOutsideCompanion)

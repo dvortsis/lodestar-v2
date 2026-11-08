@@ -139,18 +139,21 @@ impl Route {
     }
 }
 
-/// A gated companion. Dropping it stops following the route; the
-/// companion stays as it is (held or not) until the supervisor removes it.
+/// A gated companion. Keep it as long as the companion is supervised:
+/// dropping it stops following the route and holds the companion (fails
+/// closed), so it never runs on a route nothing watches.
 #[derive(Debug)]
+#[must_use = "dropping it holds the companion"]
 pub struct Gated {
     pub decision: Decision,
-    task: Option<JoinHandle<()>>,
+    follow: Option<(JoinHandle<()>, Handle)>,
 }
 
 impl Drop for Gated {
     fn drop(&mut self) {
-        if let Some(t) = &self.task {
-            t.abort();
+        if let Some((task, handle)) = &self.follow {
+            task.abort();
+            handle.hold();
         }
     }
 }
@@ -170,16 +173,17 @@ pub fn add(
         sup.add(c).map_err(GateError::Supervise)?;
         return Ok(Gated {
             decision,
-            task: None,
+            follow: None,
         });
     }
     sup.add_held(c).map_err(GateError::Supervise)?;
     let handle = sup
         .handle(&id)
         .ok_or(GateError::Supervise(SuperviseError::Duplicate))?;
+    let task = tokio::spawn(follow(handle.clone(), route.state));
     Ok(Gated {
         decision,
-        task: Some(tokio::spawn(follow(handle, route.state))),
+        follow: Some((task, handle)),
     })
 }
 

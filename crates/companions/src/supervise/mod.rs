@@ -264,8 +264,8 @@ enum Control {
 }
 
 /// Holds and releases one companion: CMP-4b's route gate. A held
-/// companion is stopped and doesn't start, restart or count crashes until
-/// released.
+/// companion is stopped and doesn't start or restart until released; the
+/// stop isn't a crash.
 #[derive(Debug, Clone)]
 pub struct Handle {
     control: mpsc::UnboundedSender<Control>,
@@ -277,7 +277,8 @@ impl Handle {
         self.control.send(Control::Hold).is_ok()
     }
 
-    /// Lets it start again (with a clean crash history).
+    /// Lets it start again. One that needed your attention before the
+    /// hold still does: only [`Supervisor::restart`] clears that.
     pub fn release(&self) -> bool {
         self.control.send(Control::Release).is_ok()
     }
@@ -479,17 +480,39 @@ async fn supervise(
     let set = |state: State| status.send_modify(|s| s.state = state);
     let mut crashes: VecDeque<Instant> = VecDeque::new();
     let mut in_a_row = 0u32;
+    // Needs attention survives a hold: a route that comes back doesn't
+    // clear it, only your restart does.
+    let mut parked: Option<Attention> = None;
     loop {
         if held {
             set(State::Held);
             match control.recv().await.unwrap_or(Control::Stop) {
                 Control::Stop => break,
-                // Released, or restarted while held: a clean history.
-                Control::Release => held = false,
-                Control::Restart | Control::Hold => {}
+                Control::Release => {
+                    held = false;
+                    // The route is back: start promptly, not after a backoff.
+                    in_a_row = 0;
+                }
+                Control::Restart => {
+                    parked = None;
+                    crashes.clear();
+                    in_a_row = 0;
+                }
+                Control::Hold => {}
             }
-            crashes.clear();
-            in_a_row = 0;
+            continue;
+        }
+        if let Some(why) = parked {
+            set(State::NeedsAttention(why));
+            match wait_for_you(&mut control).await {
+                Control::Restart => {
+                    parked = None;
+                    crashes.clear();
+                    in_a_row = 0;
+                }
+                Control::Hold => held = true,
+                Control::Stop | Control::Release => break,
+            }
             continue;
         }
         set(State::Starting);
@@ -506,12 +529,8 @@ async fn supervise(
                 | SpawnError::BadEnvName
                 | SpawnError::ReservedId),
             ) => {
-                set(State::NeedsAttention(Attention::Refused(e.code())));
-                match wait_for_you(&mut control).await {
-                    Control::Restart => Ended::Restart,
-                    Control::Hold => Ended::Held,
-                    Control::Stop | Control::Release => Ended::Stopped,
-                }
+                parked = Some(Attention::Refused(e.code()));
+                continue;
             }
             Err(_) => Ended::Crashed {
                 ran: Duration::ZERO,
@@ -523,7 +542,6 @@ async fn supervise(
             Ended::Restart => {
                 crashes.clear();
                 in_a_row = 0;
-                continue;
             }
             Ended::Crashed { ran } => {
                 status.send_modify(|s| s.restarts = s.restarts.saturating_add(1));
@@ -539,27 +557,24 @@ async fn supervise(
                 {
                     crashes.pop_front();
                 }
-                let next = if crashes.len() >= t.crash_limit {
-                    set(State::NeedsAttention(Attention::CrashLoop));
-                    wait_for_you(&mut control).await
-                } else {
-                    let delay = backoff(in_a_row, &t);
-                    set(State::BackingOff { delay });
-                    tokio::select! {
-                        () = tokio::time::sleep(delay) => continue,
-                        c = wait_for_you(&mut control) => c,
-                    }
+                if crashes.len() >= t.crash_limit {
+                    parked = Some(Attention::CrashLoop);
+                    continue;
+                }
+                let delay = backoff(in_a_row, &t);
+                set(State::BackingOff { delay });
+                let next = tokio::select! {
+                    () = tokio::time::sleep(delay) => continue,
+                    c = wait_for_you(&mut control) => c,
                 };
                 match next {
                     Control::Stop | Control::Release => break,
-                    Control::Hold => {
-                        held = true;
-                        continue;
+                    Control::Hold => held = true,
+                    Control::Restart => {
+                        crashes.clear();
+                        in_a_row = 0;
                     }
-                    Control::Restart => {}
                 }
-                crashes.clear();
-                in_a_row = 0;
             }
         }
     }

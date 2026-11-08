@@ -27,10 +27,14 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use std::os::fd::OwnedFd;
+
 use landlock::{
-    ABI, Access, AccessFs, BitFlags, LandlockStatus, RestrictionStatus, Ruleset, RulesetAttr,
-    RulesetCreatedAttr, RulesetStatus, path_beneath_rules,
+    ABI, Access, AccessFs, BitFlags, LandlockStatus, PathBeneath, RestrictionStatus, Ruleset,
+    RulesetAttr, RulesetCreatedAttr, RulesetStatus, Scope,
 };
+use rustix::fs::{CWD, FileType, Mode, OFlags, ResolveFlags};
+use rustix::io::Errno;
 use rustix::process::{Resource, Rlimit};
 
 use super::limits::{
@@ -155,9 +159,14 @@ impl Plan {
         let mut plan = Plan::default();
         let (mut open_files, mut exe, mut data) = (None, None, None);
         let number = |v: &[u8]| std::str::from_utf8(v).ok()?.parse::<u64>().ok();
+        // Absolute, with no `..`: the launcher's checks compare paths by
+        // their text, and it opens them without following links.
         let path = |v: &[u8]| {
             let p = PathBuf::from(OsStr::from_bytes(v));
-            p.is_absolute().then_some(p)
+            let plain = !p
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir));
+            (p.is_absolute() && plain).then_some(p)
         };
         while let Some((&tag, after)) = rest.split_first() {
             let colon = after.iter().position(|b| *b == b':')?;
@@ -202,7 +211,7 @@ impl Plan {
 pub fn landlock_level() -> Sandboxed {
     static LEVEL: OnceLock<Sandboxed> = OnceLock::new();
     *LEVEL.get_or_init(|| {
-        let status = std::thread::spawn(|| restrict(&Plan::default()).ok())
+        let status = std::thread::spawn(|| restrict(Vec::new()).ok())
             .join()
             .ok()
             .flatten();
@@ -238,20 +247,80 @@ fn level_of(s: &RestrictionStatus) -> Sandboxed {
     }
 }
 
-/// Builds and applies the ruleset for `plan` to the calling thread.
-fn restrict(plan: &Plan) -> Result<RestrictionStatus, landlock::RulesetError> {
+/// Applies the ruleset to the calling thread: every file-system right up
+/// to [`ABI_ASKED`] handled, allowed only beneath `rules`, and no signals
+/// or abstract Unix sockets out of the sandbox (ABI 6; best effort, like
+/// the rest).
+fn restrict(rules: Vec<PathBeneath<OwnedFd>>) -> Result<RestrictionStatus, landlock::RulesetError> {
+    Ruleset::default()
+        .handle_access(AccessFs::from_all(ABI_ASKED))?
+        .scope(Scope::Signal | Scope::AbstractUnixSocket)?
+        .create()?
+        .add_rules(rules.into_iter().map(Ok::<_, landlock::RulesetError>))?
+        .restrict_self()
+}
+
+/// Opens `p` (`O_PATH`) without following any link on the way, so a
+/// granted folder swapped for a link after [`prepare`] can't widen the
+/// grant. `None` when it doesn't exist and isn't `required`.
+fn beneath(
+    p: &Path,
+    access: BitFlags<AccessFs>,
+    required: bool,
+) -> Result<Option<PathBeneath<OwnedFd>>, ()> {
+    let flags = OFlags::PATH | OFlags::CLOEXEC;
+    match rustix::fs::openat2(CWD, p, flags, Mode::empty(), ResolveFlags::NO_SYMLINKS) {
+        Ok(fd) => {
+            let st = rustix::fs::fstat(&fd).map_err(|_| ())?;
+            let access = if FileType::from_raw_mode(st.st_mode).is_dir() {
+                access
+            } else {
+                access & AccessFs::from_file(ABI_ASKED)
+            };
+            Ok(Some(PathBeneath::new(fd, access)))
+        }
+        Err(Errno::NOENT) if !required => Ok(None),
+        Err(_) => Err(()),
+    }
+}
+
+/// The rules for `plan`. Its own folders must exist; a missing system
+/// path is skipped.
+fn rules(plan: &Plan) -> Result<Vec<PathBeneath<OwnedFd>>, ()> {
     let all = AccessFs::from_all(ABI_ASKED);
-    let read_exec = AccessFs::from_read(ABI_ASKED);
     let read: BitFlags<AccessFs> = AccessFs::ReadFile | AccessFs::ReadDir;
     let write = read | AccessFs::WriteFile;
-    Ruleset::default()
-        .handle_access(all)?
-        .create()?
-        .add_rules(path_beneath_rules(&plan.read_write, all))?
-        .add_rules(path_beneath_rules(&plan.read_exec, read_exec))?
-        .add_rules(path_beneath_rules(&plan.read, read))?
-        .add_rules(path_beneath_rules(SYSTEM_WRITE, write))?
-        .restrict_self()
+    let mut out = Vec::new();
+    let system_write: Vec<PathBuf> = SYSTEM_WRITE.iter().map(PathBuf::from).collect();
+    for (paths, access, required) in [
+        (&plan.read_write, all, true),
+        (&plan.read_exec, AccessFs::from_read(ABI_ASKED), false),
+        (&plan.read, read, false),
+        (&system_write, write, false),
+    ] {
+        for p in paths {
+            out.extend(beneath(p, access, required)?);
+        }
+    }
+    Ok(out)
+}
+
+/// The launcher's own check of what the plan grants: nothing that is or
+/// holds the data folder, and inside it only `companions/`, never
+/// `companions/run`. Paths have no `..` and are opened without links, so
+/// comparing their text is enough.
+fn grants_ok(plan: &Plan) -> bool {
+    let companions = plan.data.join("companions");
+    let run = companions.join("run");
+    plan.read_write
+        .iter()
+        .chain(&plan.read_exec)
+        .chain(&plan.read)
+        .all(|p| {
+            !reaches(p, &plan.data)
+                && (!p.starts_with(&plan.data)
+                    || (p.starts_with(&companions) && !p.starts_with(&run)))
+        })
 }
 
 /// Whether granting `p` would reach Lodestar's data folder: `p` is it,
@@ -309,6 +378,22 @@ fn cgroup_leaf(id: &str) -> Result<PathBuf, &'static str> {
     Ok(parent.join(format!("lodestar-companion-{id}")))
 }
 
+/// Creates the leaf with its limits, here in Lodestar, so a cgroup that
+/// looked delegated but isn't falls back to rlimits instead of failing
+/// every start. The launcher only moves itself in.
+fn make_leaf(leaf: &Path, memory: Option<u64>) -> Result<(), &'static str> {
+    let made = || -> std::io::Result<()> {
+        match std::fs::create_dir(leaf) {
+            Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(e),
+            _ => {}
+        }
+        let max = memory.map_or_else(|| "max".to_owned(), |m| m.to_string());
+        std::fs::write(leaf.join("memory.max"), max)?;
+        std::fs::write(leaf.join("pids.max"), CGROUP_PIDS.to_string())
+    };
+    made().map_err(|_| "leaf_failed")
+}
+
 /// The spec that starts `spec` through the launcher, and the report.
 pub(crate) fn prepare(
     spec: SpawnSpec,
@@ -319,7 +404,8 @@ pub(crate) fn prepare(
     let hard = rustix::process::getrlimit(Resource::Nofile).maximum;
     let open_files = hard.map_or(limits.open_files, |h| limits.open_files.min(h));
     let sandbox = landlock_level();
-    let cgroup = cgroup_leaf(spec.id.as_str());
+    let cgroup = cgroup_leaf(spec.id.as_str())
+        .and_then(|leaf| make_leaf(&leaf, limits.memory).map(|()| leaf));
     let mut read_exec = vec![f.install.clone()];
     read_exec.extend(system(SYSTEM_EXEC, &f.data));
     let plan = Plan {
@@ -420,7 +506,7 @@ fn target_ok(exe: &Path, data: &Path) -> bool {
         std::fs::canonicalize(exe),
         std::fs::canonicalize(data.join("companions")),
     ) {
-        (Ok(e), Ok(root)) => e.starts_with(&root) && e != root,
+        (Ok(e), Ok(root)) => e.starts_with(&root) && !e.starts_with(root.join("run")),
         _ => false,
     };
     exe.is_absolute() && regular && under
@@ -445,8 +531,11 @@ fn launch() -> Result<std::convert::Infallible, LaunchError> {
     if !target_ok(&plan.exe, &plan.data) {
         return Err(LaunchError::Target);
     }
+    if !grants_ok(&plan) {
+        return Err(LaunchError::Plan);
+    }
     if let Some(leaf) = &plan.cgroup {
-        join_cgroup(leaf, plan.memory).map_err(|_| LaunchError::Cgroup)?;
+        std::fs::write(leaf.join("cgroup.procs"), "0").map_err(|_| LaunchError::Cgroup)?;
     }
     let set = |r: Resource, v: u64| {
         rustix::process::setrlimit(
@@ -462,7 +551,11 @@ fn launch() -> Result<std::convert::Infallible, LaunchError> {
     if let Some(m) = plan.memory {
         set(Resource::As, m).map_err(|_| LaunchError::Rlimit)?;
     }
-    let got = restrict(&plan).map_err(|_| LaunchError::Landlock)?;
+    // Every granted path is opened now, before the restriction, without
+    // following links.
+    let got = rules(&plan)
+        .map_err(|_| LaunchError::Landlock)
+        .and_then(|r| restrict(r).map_err(|_| LaunchError::Landlock))?;
     let rank = |l: Level| match l {
         Level::Full => 2,
         Level::Partial => 1,
@@ -479,39 +572,48 @@ fn launch() -> Result<std::convert::Infallible, LaunchError> {
     Err(LaunchError::Exec)
 }
 
-/// Moves this process into `leaf`, creating it with its limits.
-fn join_cgroup(leaf: &Path, memory: Option<u64>) -> std::io::Result<()> {
-    match std::fs::create_dir(leaf) {
-        Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(e),
-        _ => {}
-    }
-    let max = memory.map_or_else(|| "max".to_owned(), |m| m.to_string());
-    std::fs::write(leaf.join("memory.max"), max)?;
-    std::fs::write(leaf.join("pids.max"), CGROUP_PIDS.to_string())?;
-    std::fs::write(leaf.join("cgroup.procs"), "0")
-}
-
 /// Waits until a just-spawned launcher has `exec`d the companion, so
 /// CMP-4a's record names the companion's executable. A child that isn't
 /// a launcher passes at once.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct ExecHook;
+#[derive(Debug, Clone)]
+pub struct ExecHook {
+    /// The launcher's executable, canonical.
+    launcher: PathBuf,
+}
+
+impl ExecHook {
+    pub fn new(launcher: &Path) -> ExecHook {
+        ExecHook {
+            launcher: std::fs::canonicalize(launcher).unwrap_or_else(|_| launcher.to_owned()),
+        }
+    }
+}
 
 impl AfterSpawn for ExecHook {
     fn applied(&self, child: &tokio::process::Child) -> Result<(), &'static str> {
         let pid = child.id().ok_or("launcher_failed")?;
-        wait_for_exec(pid, EXEC_WAIT)
+        wait_for_exec(pid, &self.launcher, EXEC_WAIT)
     }
 }
 
-fn wait_for_exec(pid: u32, wait: Duration) -> Result<(), &'static str> {
+fn wait_for_exec(pid: u32, launcher: &Path, wait: Duration) -> Result<(), &'static str> {
     let marker = format!("{PLAN_ENV}=");
     let until = Instant::now() + wait;
     let mut pause = Duration::from_micros(100);
     loop {
-        // The launcher's environment holds the plan; the companion's
-        // doesn't. Unreadable (mid-exec) counts as not yet.
-        if let Ok(env) = std::fs::read(format!("/proc/{pid}/environ"))
+        // Exec'd: it's no longer the launcher's executable, and its
+        // environment (readable, so not mid-exec) has no plan. Both,
+        // because either can be read in the middle of an `exec`.
+        let exe = std::fs::read_link(format!("/proc/{pid}/exe")).ok();
+        let not_launcher = exe.is_some_and(|e| {
+            let e = e
+                .to_str()
+                .and_then(|s| s.strip_suffix(" (deleted)"))
+                .map_or(e.clone(), PathBuf::from);
+            e != launcher
+        });
+        if not_launcher
+            && let Ok(env) = std::fs::read(format!("/proc/{pid}/environ"))
             && !env
                 .split(|b| *b == 0)
                 .any(|v| v.starts_with(marker.as_bytes()))
@@ -682,10 +784,17 @@ mod tests {
     #[test]
     fn a_child_that_isnt_a_launcher_passes_and_a_dead_one_fails() {
         let me = std::process::id();
-        assert_eq!(wait_for_exec(me, Duration::from_secs(10)), Ok(()));
+        let other = Path::new("/nonexistent/launcher");
+        assert_eq!(wait_for_exec(me, other, Duration::from_secs(10)), Ok(()));
         assert_eq!(
-            wait_for_exec(u32::MAX - 1, Duration::from_secs(10)),
+            wait_for_exec(u32::MAX - 1, other, Duration::from_secs(10)),
             Err("launcher_failed")
+        );
+        // Still the launcher: waits, then gives up.
+        let mine = std::fs::canonicalize(std::env::current_exe().unwrap()).unwrap();
+        assert_eq!(
+            wait_for_exec(me, &mine, Duration::from_millis(50)),
+            Err("launcher_timeout")
         );
     }
 }

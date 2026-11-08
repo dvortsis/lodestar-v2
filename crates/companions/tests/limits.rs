@@ -37,6 +37,7 @@ fn fake_companion() {
         "hang" => {
             let _ = writeln!(out, "READY");
         }
+        "crash" => std::process::exit(3),
         #[cfg(target_os = "linux")]
         "limits" => {
             use rustix::process::{Resource, getrlimit};
@@ -269,6 +270,49 @@ async fn a_route_the_companion_cant_follow_never_starts_it() {
     sup.shutdown().await;
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn needs_attention_survives_a_route_flap_and_dropping_the_gate_holds() {
+    let data = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let mut sup = Supervisor::new(data.path().to_owned(), Arc::new(NoHook), fast())
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let crash = OsString::from("crash");
+    let c = companion(spec(
+        data.path(),
+        "qbittorrent",
+        me(),
+        &[("FAKE_MODE", &crash)],
+    ));
+    let (tx, r) = route(RouteKind::Interface, RouteState::Up);
+    let gated = egress::add(&mut sup, c, Follows::of(&id("qbittorrent")), r)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let q = id("qbittorrent");
+    let mut st = sup.status(&q).unwrap_or_else(|| panic!("not supervised"));
+    let attention = State::NeedsAttention(lodestar_companions::supervise::Attention::CrashLoop);
+    let before = wait_status(&mut st, "crash loop", |s| s.state == attention).await;
+    // Down and back up: still waiting for you, no new starts.
+    let _ = tx.send(RouteState::Down(DownReason::InterfaceDown));
+    wait_status(&mut st, "held", |s| s.state == State::Held).await;
+    let _ = tx.send(RouteState::Up);
+    let after = wait_status(&mut st, "crash loop again", |s| s.state == attention).await;
+    assert_eq!(after.restarts, before.restarts, "a route flap restarted it");
+
+    // A running companion whose gate is dropped is held, not left running.
+    let hang = OsString::from("hang");
+    let p = companion(spec(data.path(), "prowlarr", me(), &[("FAKE_MODE", &hang)]));
+    let (_tx2, r2) = route(RouteKind::Socks5, RouteState::Up);
+    let g2 = egress::add(&mut sup, p, Follows::of(&id("prowlarr")), r2)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let mut st2 = sup
+        .status(&id("prowlarr"))
+        .unwrap_or_else(|| panic!("not supervised"));
+    wait_status(&mut st2, "running", |s| s.state == State::Running).await;
+    drop(g2);
+    wait_status(&mut st2, "held after drop", |s| s.state == State::Held).await;
+    drop(gated);
+    sup.shutdown().await;
+}
+
 /// A real `PluginEgress` from the factory: the loopback interface is up,
 /// a missing one is down.
 #[cfg(target_os = "linux")]
@@ -491,23 +535,75 @@ mod linux {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn a_granted_folder_swapped_for_a_link_is_never_followed() {
+        let s = setup("qbittorrent");
+        let dl = s.data.parent().unwrap_or(&s.data).join("downloads");
+        std::fs::create_dir_all(&dl).unwrap_or_else(|e| panic!("{e}"));
+        let sb = sandbox(Limits::default());
+        let mut sup = Supervisor::new(s.data.clone(), sb.hook(), fast())
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        let (mode, data) = (OsString::from("probe"), s.data.clone().into_os_string());
+        let raw = spec(
+            &s.data,
+            "qbittorrent",
+            s.exe.clone(),
+            &[("FAKE_MODE", &mode), ("FAKE_DATA", &data)],
+        );
+        let (wrapped, report) = sb
+            .prepare(
+                raw,
+                &Confinement {
+                    install: s.install.clone(),
+                    downloads: Some(dl.clone()),
+                },
+            )
+            .unwrap_or_else(|e| panic!("{e}"));
+        // Between `prepare` (or a run) and the next start, the downloads
+        // folder becomes a link to Lodestar's data folder.
+        std::fs::remove_dir(&dl).unwrap_or_else(|e| panic!("{e}"));
+        std::os::unix::fs::symlink(&s.data, &dl).unwrap_or_else(|e| panic!("{e}"));
+        sup.add(companion(wrapped))
+            .unwrap_or_else(|e| panic!("{e}"));
+        let ring = sup
+            .logs(&id("qbittorrent"))
+            .unwrap_or_else(|| panic!("no ring"));
+        let mut st = sup
+            .status(&id("qbittorrent"))
+            .unwrap_or_else(|| panic!("none"));
+        if report.sandbox.level != Level::None {
+            // The launcher refuses to open the link: it never starts.
+            wait_status(&mut st, "refused start", |s| {
+                matches!(s.state, State::NeedsAttention(_))
+            })
+            .await;
+            assert!(
+                !ring.lines().iter().any(|l| l.starts_with("READ_DATA")),
+                "{:?}",
+                ring.lines()
+            );
+        }
+        sup.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn a_launcher_that_cant_launch_fails_the_start() {
-        // A damaged plan, and a target outside `<data>/companions/` (this
-        // binary where it was built): the launcher exits, the hook sees it
-        // and the start fails, so nothing is recorded.
+        // A damaged plan, and a target that became a link out of
+        // `<data>/companions/`: the launcher exits, the hook sees it and the
+        // start fails, so nothing is recorded.
         for case in ["damaged plan", "target outside companions"] {
             let s = setup("qbittorrent");
             let sb = sandbox(Limits::default());
             let mut sup = Supervisor::new(s.data.clone(), sb.hook(), fast())
                 .await
                 .unwrap_or_else(|e| panic!("{e}"));
-            let exe = if case == "damaged plan" {
-                s.exe.clone()
-            } else {
-                me()
-            };
             let hang = OsString::from("hang");
-            let raw = spec(&s.data, "qbittorrent", exe, &[("FAKE_MODE", &hang)]);
+            let raw = spec(
+                &s.data,
+                "qbittorrent",
+                s.exe.clone(),
+                &[("FAKE_MODE", &hang)],
+            );
             let (mut wrapped, _) = sb
                 .prepare(
                     raw,
@@ -523,6 +619,11 @@ mod linux {
                         *v = OsString::from("garbage");
                     }
                 }
+            } else {
+                // After `prepare`, the installed program becomes a link to
+                // a program outside `companions/`.
+                std::fs::remove_file(&s.exe).unwrap_or_else(|e| panic!("{e}"));
+                std::os::unix::fs::symlink(me(), &s.exe).unwrap_or_else(|e| panic!("{e}"));
             }
             sup.add(companion(wrapped))
                 .unwrap_or_else(|e| panic!("{e}"));
@@ -564,6 +665,8 @@ mod windows {
             .join("qbittorrent")
             .join("1.0.0");
         std::fs::create_dir_all(&install).unwrap_or_else(|e| panic!("{e}"));
+        let exe = install.join("fake.exe");
+        std::fs::copy(me(), &exe).unwrap_or_else(|e| panic!("{e}"));
         let sb = Sandbox::new(
             Limits::default(),
             Launcher {
@@ -573,7 +676,7 @@ mod windows {
         )
         .unwrap_or_else(|e| panic!("{e}"));
         let hang = OsString::from("hang");
-        let raw = spec(data.path(), "qbittorrent", me(), &[("FAKE_MODE", &hang)]);
+        let raw = spec(data.path(), "qbittorrent", exe, &[("FAKE_MODE", &hang)]);
         let (spec, report) = sb
             .prepare(
                 raw,
