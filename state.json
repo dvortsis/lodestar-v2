@@ -7136,15 +7136,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T19:56:00Z",
+    "updated": "2026-11-08T20:07Z",
     "items": [
       {
         "slot": 1,
-        "slice": "CMP-5",
-        "role": "build",
-        "agent": "claude",
-        "doing": "session_01MMjhn8X2TF9tNCnNecmH9G: #620 merged (11267a21); #621 at 5e0b6014 (base main) and #619 at 7b233d13 in fresh Opus review",
-        "since": "2026-11-08T14:32Z"
+        "slice": "CMP-6",
+        "role": "slice",
+        "agent": "session_01MMjhnBsTrGEcACYGQjoYqp",
+        "doing": "building: Companions API (admin), credential reveal per Q5, system row",
+        "since": "2026-11-08T20:07Z"
       },
       {
         "slot": 2,
@@ -7233,6 +7233,6 @@
       "answers": "runner recommendation on all items: X-refetch-private ships in v0.5.2; installer Repair may re-secure admin-ACE-only folder (X-win-refusal-ux); v0.5.1 release body replacement (notes/v051-release-body.md); web-ok+e2e-ok required; delete wip/CMP-0-catalogue; Q13 stands, Q14 at G-m6; import host = Unraid box; nightly key deferred; counsel advisory, no reminders; package installers after 1.0"
     }
   ],
-  "heartbeat": "2026-11-08T19:30:00Z",
-  "updated": "2026-11-08T19:00Z"
+  "heartbeat": "2026-11-08T20:07Z",
+  "updated": "2026-11-08T20:07Z"
 }
