@@ -396,12 +396,15 @@ impl Runtime {
         });
         let (stop_reports, reports_stopped) = watch::channel(false);
         let (dht_task, dht_running) = dht.unzip();
-        let mut tasks = vec![
+        let tasks = vec![
             tokio::spawn(send_acks(shared.clone(), ack_rx)),
             tokio::spawn(claim(shared.clone(), found_rx)),
             tokio::spawn(heartbeat_stats(shared.clone())),
         ];
-        tasks.extend(dht_task);
+        // The DHT's task isn't aborted with the others: a stop (or a drop)
+        // asks it to stop its node, which saves the node's state, and it
+        // ends once the runtime is gone ([`super::dht::stopped`]).
+        drop(dht_task);
         Runtime {
             tasks,
             dht_running,
@@ -490,10 +493,8 @@ impl Runtime {
     pub async fn shutdown(mut self) {
         self.stop_stages().await;
         // The DHT saves its state as it stops (within its own deadline).
-        if let Some(mut running) = self.dht_running.clone() {
-            let _ =
-                tokio::time::timeout(super::dht::STOP_DEADLINE, running.wait_for(Option::is_none))
-                    .await;
+        if let Some(running) = self.dht_running.clone() {
+            super::dht::stopped(running).await;
         }
         self.abort_all();
     }
@@ -1727,13 +1728,12 @@ mod tests {
 
         // Same shard, another intensity: applied to the running node.
         rt.event(WorkerEvent::Assign(assign_dht(3, Some(b), Intensity::Low)));
-        assert_eq!(
-            *rt.shared.dht_want.borrow(),
-            super::super::dht::Desired::Run(super::super::dht::Want {
-                shard: b,
-                intensity: Intensity::Low
-            })
-        );
+        until("the node runs at the new intensity", || {
+            let n = counts.intensity_changes.load(Ordering::Relaxed);
+            (n == 1, n)
+        })
+        .await;
+        assert_eq!(counts.starts.load(Ordering::Relaxed), 2, "no restart");
         // An assignment without a DHT stops it, and only it.
         rt.event(WorkerEvent::Assign(assign_dht(4, None, Intensity::Low)));
         until("the DHT stopped", || {
@@ -1793,7 +1793,11 @@ mod tests {
         let (mut rt, _coord, _session) = started_with_dht(super::super::dht::LINGER).await;
         // `Some(paused)` once no refresh holds the lock.
         let paused = |rt: &Runtime| rt.shared.pool_paused.try_lock().ok().map(|g| *g);
-        assert_eq!(paused(&rt), Some(false));
+        // A refresh spawned at start may still hold the lock.
+        until("the pool runs", || {
+            (paused(&rt) == Some(false), paused(&rt))
+        })
+        .await;
         rt.disconnected();
         until("the pool paused", || {
             (paused(&rt) == Some(true), paused(&rt))

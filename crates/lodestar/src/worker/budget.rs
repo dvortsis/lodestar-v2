@@ -21,9 +21,10 @@ use lodestar_cluster::assign::{Assignment, Intensity};
 
 /// The worker's socket ceiling (WK-10b: 200, within its 4 MiB held).
 const SOCKETS: usize = super::runtime::MAX_SOCKETS;
-/// MiB a worker uses besides its fetch pool, at defaults and 10M stored
-/// (plan Q5: about 208 MiB steady less the pool's 46).
-pub const FIXED_MIB: u32 = 162;
+/// MiB a worker uses besides its fetch pool, at defaults and 10M stored:
+/// the measured worst case, about 212 MiB during a have-filter swap,
+/// less the pool's 44 (`docs/decisions/2026-11-08-WK-10c.md`).
+pub const FIXED_MIB: u64 = 168;
 /// Bytes the pool takes per key (plan Q5, the observed upper bound).
 const BYTES_PER_KEY: u64 = 973;
 pub const MIN_POOL: u32 = 1_000;
@@ -54,7 +55,8 @@ impl Limits {
         let pool_cap = match b.ram_mb {
             0 => a.pool_cap,
             mb => {
-                let room = u64::from(mb.saturating_sub(FIXED_MIB)) << 20;
+                // `ram_mb` is in MB (10^6 bytes).
+                let room = (u64::from(mb) * 1_000_000).saturating_sub(FIXED_MIB << 20);
                 let keys = u32::try_from(room / BYTES_PER_KEY).unwrap_or(u32::MAX);
                 a.pool_cap.min(keys.max(MIN_POOL))
             }
@@ -94,7 +96,8 @@ pub struct Process {
 }
 
 impl Process {
-    /// CPU use since the last call, in ‰ of the whole machine, and the
+    /// CPU use since the last call, in ‰ of the CPUs this process may use
+    /// (`available_parallelism`: a container's or affinity's limit), and the
     /// resident memory in MB. The first call reports 0 ‰.
     pub fn sample(&mut self) -> (u16, u32) {
         let now = std::time::Instant::now();
@@ -265,13 +268,15 @@ mod tests {
             };
             Limits::of(&assignment(Intensity::Balanced, b, cap)).pool_cap
         };
-        // 256 MB: 94 MiB for the pool, about 101k keys, so 50k stands.
+        // 256 MB is 244 MiB: 76 MiB for the pool, about 82k keys, so 50k
+        // stands, and an operator's 1M is cut to what fits.
         assert_eq!(at(256, 50_000), 50_000);
-        // 192 MB: 30 MiB, about 32k keys.
-        assert_eq!(
-            at(192, 50_000),
-            (30u64 << 20).div_euclid(BYTES_PER_KEY) as u32
-        );
+        let fits = (256_000_000 - (FIXED_MIB << 20)) / BYTES_PER_KEY;
+        assert_eq!(u64::from(at(256, 1_000_000)), fits);
+        assert!(fits * BYTES_PER_KEY + (FIXED_MIB << 20) <= 256_000_000);
+        // 200 MB: about 15 MiB, about 16k keys.
+        let fits = (200_000_000 - (FIXED_MIB << 20)) / BYTES_PER_KEY;
+        assert_eq!(u64::from(at(200, 50_000)), fits);
         // Less than the fixed part: the floor.
         assert_eq!(at(100, 50_000), MIN_POOL);
         // Never raised above what the coordinator set.

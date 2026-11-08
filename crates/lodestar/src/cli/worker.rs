@@ -343,7 +343,13 @@ fn run_with(config: &Config, args: WorkerArgs, env: &dyn Fn(&str) -> Option<Stri
             jitter: random_jitter,
             wait: sleep(),
         };
+        let dht = runtime.dht_running();
         let exit = worker.run(runtime, crate::shutdown_signal()).await;
+        // The dropped runtime stops its DHT, which saves its state (its
+        // routing table, ids and restart proof) before the process exits.
+        if let Some(dht) = dht {
+            crate::worker::dht::stopped(dht).await;
+        }
         finish(exit, &report)
     })
 }

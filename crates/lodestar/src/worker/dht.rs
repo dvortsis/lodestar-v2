@@ -18,7 +18,8 @@
 //! - **The pool's peer requests** reach whichever node runs; with none,
 //!   a request is dropped, which the pool reads as a refusal.
 //! - A node that fails to bind is started again after a back-off (1 s
-//!   doubling to 60 s), and one that stops by itself likewise.
+//!   doubling to 60 s), and one that stops by itself likewise: its step
+//!   resets only once a node has run for a minute.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -31,8 +32,10 @@ use lodestar_sources::{Found, PeerRequest};
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 
-/// How long a node's shutdown (its state save) may take before it's
-/// dropped, which stops its actor without the save.
+/// How long a node's shutdown (its state save) may take before it's let
+/// go. Its actor still finishes (and saves) by itself, and keeps its port
+/// until then: a new node binding the same `[dht].bind` fails meanwhile
+/// and is retried after the back-off.
 pub const STOP_DEADLINE: Duration = Duration::from_secs(10);
 const RETRY_FIRST: Duration = Duration::from_secs(1);
 const RETRY_MAX: Duration = Duration::from_secs(60);
@@ -73,6 +76,8 @@ pub struct DhtCounts {
     /// Pauses for a lost session, and resumes when one came back in time.
     pub pauses: AtomicU64,
     pub resumes: AtomicU64,
+    /// New intensities applied to a running node (no restart).
+    pub intensity_changes: AtomicU64,
     /// Keys the claims' queue had no room for (found again later).
     pub dropped: AtomicU64,
     /// Peer requests that arrived with no node running.
@@ -138,6 +143,7 @@ struct Live {
     harvests: mpsc::Receiver<Harvest>,
     /// Paused for a lost session: stopped at this deadline.
     linger: Option<Instant>,
+    started: Instant,
 }
 
 struct Driver {
@@ -157,6 +163,8 @@ impl Driver {
     ) {
         let mut requests_open = true;
         let mut retry: Option<(Instant, Duration)> = None;
+        // The back-off step for a node that stops by itself.
+        let mut crash: Option<Duration> = None;
         let mut address = tokio::time::interval(ADDRESS_EVERY);
         address.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -178,10 +186,19 @@ impl Driver {
                 },
                 h = harvest(&mut self.node) => match h {
                     Some(h) => self.found(h),
-                    // The node stopped by itself: start it again.
+                    // The node stopped by itself: start it again, backing
+                    // off while it keeps stopping within a minute.
                     None => {
+                        let lived = self.node.as_ref().map(|l| l.started.elapsed());
                         self.stop().await;
-                        retry = Some((Instant::now() + RETRY_FIRST, RETRY_FIRST));
+                        crash = match crash {
+                            Some(step) if lived.is_some_and(|d| d < RETRY_MAX) => {
+                                Some((step * 2).min(RETRY_MAX))
+                            }
+                            _ => Some(RETRY_FIRST),
+                        };
+                        let step = crash.unwrap_or(RETRY_FIRST);
+                        retry = Some((Instant::now() + step, step));
                     }
                 },
                 () = sleep_until(wake) => {}
@@ -223,7 +240,11 @@ impl Driver {
                 }
                 if live.want.intensity != t.intensity {
                     live.want.intensity = t.intensity;
-                    handle.set_intensity(dht_intensity(t.intensity)).await;
+                    if handle.set_intensity(dht_intensity(t.intensity)).await {
+                        self.counts
+                            .intensity_changes
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
                 }
                 return Ok(());
             }
@@ -255,6 +276,7 @@ impl Driver {
                     want: t,
                     harvests,
                     linger: None,
+                    started: Instant::now(),
                 });
                 self.running.send_replace(Some(t.shard));
                 Ok(())
@@ -317,6 +339,17 @@ impl Driver {
             self.counts.dropped.fetch_add(1, Ordering::Relaxed);
         }
     }
+}
+
+/// Waits, up to [`STOP_DEADLINE`] and a second, until no node runs: a
+/// stopping node's state is saved by then. For a process about to exit
+/// (`lodestar worker` after its runtime is dropped).
+pub async fn stopped(mut running: Running) {
+    let _ = tokio::time::timeout(
+        STOP_DEADLINE + Duration::from_secs(1),
+        running.wait_for(Option::is_none),
+    )
+    .await;
 }
 
 async fn harvest(node: &mut Option<Live>) -> Option<Harvest> {
