@@ -344,11 +344,27 @@ fn run_with(config: &Config, args: WorkerArgs, env: &dyn Fn(&str) -> Option<Stri
             wait: sleep(),
         };
         let dht = runtime.dht_running();
-        let exit = worker.run(runtime, crate::shutdown_signal()).await;
+        let failed = runtime.failed();
+        let stage_failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = stage_failed.clone();
+        let stop = async move {
+            tokio::select! {
+                () = crate::shutdown_signal() => {}
+                () = failed => flag.store(true, std::sync::atomic::Ordering::Relaxed),
+            }
+        };
+        let exit = worker.run(runtime, stop).await;
         // The dropped runtime stops its DHT, which saves its state (its
         // routing table, ids and restart proof) before the process exits.
         if let Some(dht) = dht {
             crate::worker::dht::stopped(dht).await;
+        }
+        if stage_failed.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(Failure::Failed(
+                "the worker's fetch or prepare stage stopped unexpectedly (a bug; see the log). \
+                 Start the worker again; Docker and the service manager do this by themselves."
+                    .to_owned(),
+            ));
         }
         finish(exit, &report)
     })

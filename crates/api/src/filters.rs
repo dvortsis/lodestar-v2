@@ -2252,7 +2252,17 @@ impl FiltersApi {
                 self.release(store, h)?;
             }
             Change::Release { hash } => {
-                if !self.release(store, hex20(hash)?)? {
+                let h = hex20(hash)?;
+                if !self.release(store, h)? {
+                    // Nothing removed, yet still held: a remote worker's
+                    // floor report, which no release removes (WK-10d).
+                    if store.held_among(&[h]).map_err(internal)?[0] {
+                        return Err(conflict(
+                            "held_by_worker_floor",
+                            "A worker blocked this torrent under the locked floor, so it can't be \
+                             released here. Removing that worker clears its blocks.",
+                        ));
+                    }
                     return Err(gone());
                 }
             }
@@ -4228,6 +4238,26 @@ mod tests {
                 .contains(&"packs.sp4.row.3".to_owned()),
             "{:?}",
             overview.pack_conditions
+        );
+    }
+
+    /// WK-10d: a remote worker's floor report isn't released here, and the
+    /// answer says why rather than "not found".
+    #[test]
+    fn a_workers_floor_report_is_refused_with_its_reason() {
+        let mut store = Store::open_in_memory(lodestar_store::StoreConfig::default()).unwrap();
+        store.tombstone_from_worker(&[[4; 20]], 7, 1).unwrap();
+        let api = test_api(store);
+        let c = Change::Release {
+            hash: hex(&[4; 20]),
+        };
+        let a = api.assess(&c, 1_000).unwrap();
+        let err = api.apply(&c, a, 1_000).unwrap_err();
+        assert_eq!(err.code(), "held_by_worker_floor");
+        assert_eq!(
+            api.store().held_among(&[[4; 20]]).unwrap(),
+            vec![true],
+            "still held"
         );
     }
 

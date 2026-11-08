@@ -407,9 +407,25 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_cluster_snapshot_failed_n,
 		m.settings_logging_ev_cluster_snapshot_failed_h
 	],
+	'cluster.floor_report_failed': [
+		m.settings_logging_ev_cluster_floor_report_failed_n,
+		m.settings_logging_ev_cluster_floor_report_failed_h
+	],
+	'cluster.floor_reports_over_budget': [
+		m.settings_logging_ev_cluster_floor_reports_over_budget_n,
+		m.settings_logging_ev_cluster_floor_reports_over_budget_h
+	],
 	'worker.dht_started': [
 		m.settings_logging_ev_worker_dht_started_n,
 		m.settings_logging_ev_worker_dht_started_h
+	],
+	'worker.snapshot_failed': [
+		m.settings_logging_ev_worker_snapshot_failed_n,
+		m.settings_logging_ev_worker_snapshot_failed_h
+	],
+	'worker.stage_failed': [
+		m.settings_logging_ev_worker_stage_failed_n,
+		m.settings_logging_ev_worker_stage_failed_h
 	],
 	'worker.dht_start_failed': [
 		m.settings_logging_ev_worker_dht_start_failed_n,
@@ -422,6 +438,10 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 	'workers.prefs_skipped': [
 		m.settings_logging_ev_workers_prefs_skipped_n,
 		m.settings_logging_ev_workers_prefs_skipped_h
+	],
+	'workers.pause_not_saved': [
+		m.settings_logging_ev_workers_pause_not_saved_n,
+		m.settings_logging_ev_workers_pause_not_saved_h
 	],
 	'workers.token_created': [
 		m.settings_logging_ev_workers_token_created_n,
