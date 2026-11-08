@@ -987,11 +987,17 @@ struct Inner {
     tick: Arc<Tick>,
 }
 
+/// How long `close` waits for an aborted tick to go.
+const CLOSE_TICK: Duration = Duration::from_secs(10);
+
 /// A running server, its `serve` task and its tick.
 struct Running {
     server: Arc<ClusterServer>,
     task: JoinHandle<()>,
     ticker: JoinHandle<()>,
+    /// Closes when the tick's future is gone (ended, or dropped by its
+    /// abort), so `close` can wait for the tick, not only its watcher.
+    tick_gone: watch::Receiver<()>,
 }
 
 impl Inner {
@@ -1055,12 +1061,17 @@ impl Inner {
         lock(&self.tick.queued_acks).clear();
         self.tick.observe();
         let task = tokio::spawn(server.clone().serve(listener));
-        let ticker = tokio::spawn(watch_tick(tokio::spawn(run_tick(
+        let (gone, tick_gone) = watch::channel(());
+        let tick = run_tick(
             self.tick.clone(),
             server.clone(),
             self.wiring.clone(),
             ack_rx,
-        ))));
+        );
+        let ticker = tokio::spawn(watch_tick(tokio::spawn(async move {
+            let _gone = gone;
+            tick.await;
+        })));
         self.state().current = Some((server.clone(), addr));
         lodestar_log::log_event!(
             events::CLUSTER_LISTENING,
@@ -1070,6 +1081,7 @@ impl Inner {
             server,
             task,
             ticker,
+            tick_gone,
         })
     }
 
@@ -1079,6 +1091,14 @@ impl Inner {
         }
         running.ticker.abort();
         let _ = running.ticker.await;
+        // Aborting the watcher aborts the tick, which goes at its next
+        // await: waited for here (#592's review), so nothing of the old
+        // tick runs on once the port is closed. Blocking work it started
+        // (a rebuild, an install) finishes by itself and finds the server
+        // gone.
+        let mut gone = running.tick_gone;
+        let _ =
+            tokio::time::timeout(CLOSE_TICK, async { while gone.changed().await.is_ok() {} }).await;
         running.server.shutdown();
         let _ = running.task.await;
         {
@@ -2033,6 +2053,26 @@ mod tests {
 
     fn ticks(h: &ClusterHandle) -> u64 {
         h.0.tick.steps.load(Ordering::Relaxed)
+    }
+
+    /// Once a shutdown returns, nothing of the old tick holds the server.
+    /// (`close` also waits for the aborted tick to go, #592's review; this
+    /// doesn't catch that wait's removal, since an aborted tick normally
+    /// goes before `close` gets on.)
+    #[tokio::test]
+    async fn a_close_releases_the_server() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut w = wiring(dir.path(), false, any_port());
+        w.settings.enabled = true;
+        w.fleet = Some(fleet());
+        let (remote, _ends) = intake(&w.authority);
+        w.remote = Some(remote);
+        let cluster = Cluster::start(w).await.unwrap();
+        let h = cluster.handle();
+        until("ticking", || (ticks(&h) > 0, ticks(&h))).await;
+        let server = Arc::downgrade(&h.server().unwrap());
+        cluster.shutdown().await;
+        assert!(server.upgrade().is_none(), "nothing still holds the server");
     }
 
     /// The tick's gate: a connected worker is planned and sent its
