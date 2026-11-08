@@ -6133,6 +6133,11 @@
       "id": "CMP-8b-put",
       "note": "Runner approved for CMP-8b: adapter::Method::Put + detect/mod.rs match arm + ProbeRequest::put (Prowlarr PUT /api/v1/config/host/1 full resource). Condition: PUT built from Prowlarr's own GET, only proxy fields changed, auth/apiKey/bind/port echoed; verify upstream PUT handling of password/apiKey; stop if echo can reset auth.",
       "logged": "2026-11-08T11:09Z"
+    },
+    {
+      "id": "X-lodestar-lib-unknown-flake",
+      "note": "WK-10d session saw 1 of 800 `cargo test -p lodestar --lib` fail once locally (name not captured; 13 reruns clean). Watch CI for a lodestar lib flake; capture the name if seen.",
+      "logged": "2026-11-08T11:11Z"
     }
   ],
   "main_health": [
@@ -6865,7 +6870,7 @@
         "slice": "WK-10d",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #607 CHANGES; fix round (regrant edit in crates/cluster approved), then fresh delta review; WK-10e next",
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #607 fix round green at 3b22dc5f; fresh delta review (Opus + security) running; WK-10e next",
         "since": "2026-11-08T04:50:45Z"
       }
     ],
@@ -6924,5 +6929,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T11:09Z"
+  "updated": "2026-11-08T11:11Z"
 }
