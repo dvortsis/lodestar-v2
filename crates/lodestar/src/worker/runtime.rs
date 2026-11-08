@@ -77,7 +77,7 @@ pub const DRAIN_DEADLINE: Duration = Duration::from_secs(10);
 const POLL_EVERY: Duration = Duration::from_secs(5);
 /// How often the heartbeat's stats are refreshed (the session sends the
 /// latest with each heartbeat).
-const STATS_EVERY: Duration = Duration::from_secs(5);
+pub const STATS_EVERY: Duration = Duration::from_secs(5);
 /// Keys found here waiting to be checked and claimed. A full queue drops
 /// the newest: the DHT finds a key again.
 const FOUND_QUEUE: usize = 4096;
@@ -124,6 +124,8 @@ pub struct Config {
     pub dht: Option<lodestar_dht::node::Config>,
     /// How long the DHT stays paused for a lost session before it stops.
     pub dht_linger: Duration,
+    /// How often the heartbeat's stats are refreshed ([`STATS_EVERY`]).
+    pub stats_every: Duration,
 }
 
 impl Config {
@@ -145,6 +147,7 @@ impl Config {
             seal_wait: SEAL_WAIT,
             dht: None,
             dht_linger: super::dht::LINGER,
+            stats_every: STATS_EVERY,
         }
     }
 }
@@ -282,7 +285,9 @@ struct Shared {
     /// Asks the session task to send everything it has now (a drain).
     flush: mpsc::UnboundedSender<tokio::sync::oneshot::Sender<()>>,
     /// What the DHT should run ([`want_dht`]).
-    dht_want: watch::Sender<super::dht::Desired>,
+    /// Taken (closed) at a stop, which ends the DHT's task once it has
+    /// stopped its node: the task doesn't wait for this to be dropped.
+    dht_want: Mutex<Option<watch::Sender<super::dht::Desired>>>,
     /// The pool's peer requests, to the DHT; `None` with no DHT.
     peer_requests: Option<mpsc::Sender<lodestar_sources::PeerRequest>>,
     dht_counts: Arc<super::dht::DhtCounts>,
@@ -389,7 +394,7 @@ impl Runtime {
             fresh_session: AtomicBool::new(false),
             flush,
             unsealable_since: Mutex::new(None),
-            dht_want,
+            dht_want: Mutex::new(Some(dht_want)),
             peer_requests,
             dht_counts,
             config,
@@ -402,8 +407,8 @@ impl Runtime {
             tokio::spawn(heartbeat_stats(shared.clone())),
         ];
         // The DHT's task isn't aborted with the others: a stop (or a drop)
-        // asks it to stop its node, which saves the node's state, and it
-        // ends once the runtime is gone ([`super::dht::stopped`]).
+        // closes its `want`, and it ends after stopping its node, which
+        // saves the node's state ([`super::dht::stopped`]).
         drop(dht_task);
         Runtime {
             tasks,
@@ -493,6 +498,7 @@ impl Runtime {
     pub async fn shutdown(mut self) {
         self.stop_stages().await;
         // The DHT saves its state as it stops (within its own deadline).
+        close_dht(&self.shared);
         if let Some(running) = self.dht_running.clone() {
             super::dht::stopped(running).await;
         }
@@ -640,7 +646,7 @@ impl Drop for Runtime {
         // late install on a blocking thread then can't start stages nobody
         // owns.
         self.shared.draining.store(true, Ordering::Release);
-        want_dht(&self.shared);
+        close_dht(&self.shared);
         if let Some(stages) = lock(&self.shared.stages).take() {
             let _ = stages.stop.send(true);
             stages.prepare.abort();
@@ -902,12 +908,19 @@ fn want_dht(s: &Shared) {
             intensity: super::budget::Limits::of(&a).intensity,
         })
     };
-    s.dht_want.send_if_modified(|w| {
-        let now = want();
-        let changed = *w != now;
-        *w = now;
-        changed
-    });
+    if let Some(tx) = lock(&s.dht_want).as_ref() {
+        tx.send_if_modified(|w| {
+            let now = want();
+            let changed = *w != now;
+            *w = now;
+            changed
+        });
+    }
+}
+
+/// Ends the DHT's task: its node stops (and saves) as it ends.
+fn close_dht(s: &Shared) {
+    drop(lock(&s.dht_want).take());
 }
 
 /// What to do with a key found here (runner, 2026-11-07T20:34Z):
@@ -1108,12 +1121,12 @@ async fn current(s: &Shared) -> SessionHandle {
     }
 }
 
-/// Refreshes the heartbeat's stats every [`STATS_EVERY`] (WK-10c):
+/// Refreshes the heartbeat's stats every `stats_every` (WK-10c):
 /// claimed, results sent ("fetched"), results the coordinator accepted
 /// ("processed"), CPU and resident memory. The spool is WK-11's.
 async fn heartbeat_stats(s: Arc<Shared>) {
     let mut process = super::budget::Process::default();
-    let mut every = tokio::time::interval(STATS_EVERY);
+    let mut every = tokio::time::interval(s.config.stats_every);
     every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         every.tick().await;
@@ -1669,11 +1682,23 @@ mod tests {
         lodestar_cluster::CoordinatorLink,
         lodestar_cluster::WorkerSession,
     ) {
-        let mut rt = Runtime::start(Config {
+        started_with(Config {
             dht: Some(dht_config()),
             dht_linger: linger,
             ..config(Arc::new(MapFetch::default()))
-        });
+        })
+        .await
+    }
+
+    /// [`started_with_dht`] from a whole config (its `dht` set).
+    async fn started_with(
+        config: Config,
+    ) -> (
+        Runtime,
+        lodestar_cluster::CoordinatorLink,
+        lodestar_cluster::WorkerSession,
+    ) {
+        let mut rt = Runtime::start(config);
         let (coord, session) = session_pair().await;
         rt.connected(session.handle());
         let a = ShardSpec::new(64..128, 0xff).unwrap();
@@ -1762,7 +1787,7 @@ mod tests {
         rt.connected(session2.handle());
         // Until the new session's first `Assign`, it stays paused.
         assert_eq!(
-            *rt.shared.dht_want.borrow(),
+            *lock(&rt.shared.dht_want).as_ref().unwrap().borrow(),
             super::super::dht::Desired::Pause
         );
         let a = ShardSpec::new(64..128, 0xff).unwrap();
@@ -1842,6 +1867,87 @@ mod tests {
             }
             rt.shutdown().await;
         }
+    }
+
+    /// A stop saves the DHT's state: `shutdown`, and a dropped runtime
+    /// (as `lodestar worker` drops it) once `dht::stopped` returns.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_dht_state_is_saved_at_a_stop_and_a_drop() {
+        for drop_it in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("dht-state.bin");
+            let (rt, _coord, session) = started_with(Config {
+                dht: Some(lodestar_dht::node::Config {
+                    state_path: Some(path.clone()),
+                    ..dht_config()
+                }),
+                ..config(Arc::new(MapFetch::default()))
+            })
+            .await;
+            assert!(!path.exists(), "nothing saved while it runs");
+            if drop_it {
+                let running = rt.dht_running().unwrap();
+                drop(rt);
+                super::super::dht::stopped(running).await;
+            } else {
+                rt.shutdown().await;
+            }
+            assert!(path.exists(), "saved (drop: {drop_it})");
+            drop(session);
+        }
+    }
+
+    /// The heartbeat carries the runtime's stats: keys claimed, results
+    /// sent, and (on Linux) resident memory.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_heartbeat_carries_the_stats() {
+        let fetch = Arc::new(MapFetch::default());
+        let raw = info("Counted in the heartbeat");
+        lock(&fetch.0).insert(key_of(&raw), raw.clone());
+        let mut rt = Runtime::start(Config {
+            stats_every: Duration::from_millis(50),
+            ..config(fetch)
+        });
+        let (mut coord, session) = session_pair().await;
+        rt.connected(session.handle());
+        rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
+        let (_, chunks) = filter_chunks();
+        for c in chunks {
+            rt.event(WorkerEvent::Snapshot(c));
+        }
+        until("started", || (rt.is_started(), ())).await;
+        // A result to send, and a find to claim.
+        granted(
+            &rt.shared,
+            key_of(&raw),
+            Token(3),
+            vec!["203.0.113.9:6881".parse().unwrap()],
+            unix_now(),
+        );
+        assert!(rt.finds().found(found(42)));
+        let start = Instant::now();
+        loop {
+            assert!(start.elapsed() < DEADLINE, "no heartbeat with the stats");
+            // The heartbeat goes out at once; its acknowledgement never
+            // comes here, so it isn't awaited.
+            let _ = tokio::time::timeout(Duration::from_millis(50), session.heartbeat()).await;
+            let mut seen = None;
+            while let Ok(Ok(Some(m))) =
+                tokio::time::timeout(Duration::from_millis(50), coord.recv()).await
+            {
+                if let ToCoordinator::Heartbeat(hb) = m {
+                    seen = Some(hb.stats);
+                }
+            }
+            if let Some(st) = seen
+                && st.claimed > 0
+                && st.fetched > 0
+                && (st.rss_mb > 0 || !cfg!(target_os = "linux"))
+            {
+                break;
+            }
+        }
+        rt.shutdown().await;
     }
 
     /// A session that doesn't come back within the linger stops the DHT.

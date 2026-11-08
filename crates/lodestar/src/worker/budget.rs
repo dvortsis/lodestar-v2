@@ -55,8 +55,8 @@ impl Limits {
         let pool_cap = match b.ram_mb {
             0 => a.pool_cap,
             mb => {
-                // `ram_mb` is in MB (10^6 bytes).
-                let room = (u64::from(mb) * 1_000_000).saturating_sub(FIXED_MIB << 20);
+                // `ram_mb` is in MiB, as `Hello` and the heartbeat report.
+                let room = (u64::from(mb) << 20).saturating_sub(FIXED_MIB << 20);
                 let keys = u32::try_from(room / BYTES_PER_KEY).unwrap_or(u32::MAX);
                 a.pool_cap.min(keys.max(MIN_POOL))
             }
@@ -268,14 +268,14 @@ mod tests {
             };
             Limits::of(&assignment(Intensity::Balanced, b, cap)).pool_cap
         };
-        // 256 MB is 244 MiB: 76 MiB for the pool, about 82k keys, so 50k
-        // stands, and an operator's 1M is cut to what fits.
+        // 256 MiB: 88 MiB for the pool, about 94k keys, so 50k stands,
+        // and an operator's 1M is cut to what fits.
         assert_eq!(at(256, 50_000), 50_000);
-        let fits = (256_000_000 - (FIXED_MIB << 20)) / BYTES_PER_KEY;
+        let fits = ((256 - FIXED_MIB) << 20) / BYTES_PER_KEY;
         assert_eq!(u64::from(at(256, 1_000_000)), fits);
-        assert!(fits * BYTES_PER_KEY + (FIXED_MIB << 20) <= 256_000_000);
-        // 200 MB: about 15 MiB, about 16k keys.
-        let fits = (200_000_000 - (FIXED_MIB << 20)) / BYTES_PER_KEY;
+        assert!(fits * BYTES_PER_KEY + (FIXED_MIB << 20) <= 256 << 20);
+        // 200 MiB: 32 MiB, about 34k keys.
+        let fits = ((200 - FIXED_MIB) << 20) / BYTES_PER_KEY;
         assert_eq!(u64::from(at(200, 50_000)), fits);
         // Less than the fixed part: the floor.
         assert_eq!(at(100, 50_000), MIN_POOL);

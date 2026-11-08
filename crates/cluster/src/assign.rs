@@ -124,6 +124,7 @@ impl Intensity {
 pub struct Budget {
     /// CPU share, 1–1000 ‰.
     pub cpu_permille: u16,
+    /// Memory cap in MiB, 0 for none.
     pub ram_mb: u32,
     pub up_kbps: u32,
     pub down_kbps: u32,

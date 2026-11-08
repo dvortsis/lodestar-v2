@@ -94,8 +94,12 @@ impl DhtCounts {
     }
 
     fn set_external_ip(&self, ip: Option<std::net::IpAddr>) {
-        // A private or reserved address says nothing to the planner.
+        // A v4-mapped v6 address is the v4 one; a private or reserved
+        // address says nothing to the planner. A later private or missing
+        // vote keeps the last public address: the planner's grouping wants
+        // the address peers saw, and a node with no vote yet has none.
         let ip = ip
+            .map(|ip| ip.to_canonical())
             .filter(|ip| lodestar_network_policy::allows(std::net::SocketAddr::new(*ip, 1), false));
         if ip.is_some() {
             *self.external_ip.lock().unwrap_or_else(|e| e.into_inner()) = ip;
@@ -131,6 +135,7 @@ pub fn spawn(
             counts,
             running,
             node: None,
+            failing: false,
         }
         .run(want, requests),
     );
@@ -153,6 +158,19 @@ struct Driver {
     counts: Arc<DhtCounts>,
     running: watch::Sender<Option<ShardSpec>>,
     node: Option<Live>,
+    /// Starts have failed since the last one that worked: the warning
+    /// was said once for the streak, and the rest only counted.
+    failing: bool,
+}
+
+/// The back-off after a node stopped by itself: `prev` doubled while
+/// each node `lived` less than a minute, up to a minute; the first step
+/// again after one that ran longer (or the first time).
+pub fn next_step(prev: Option<Duration>, lived: Duration) -> Duration {
+    match prev {
+        Some(step) if lived < RETRY_MAX => (step * 2).min(RETRY_MAX),
+        _ => RETRY_FIRST,
+    }
 }
 
 impl Driver {
@@ -189,15 +207,13 @@ impl Driver {
                     // The node stopped by itself: start it again, backing
                     // off while it keeps stopping within a minute.
                     None => {
-                        let lived = self.node.as_ref().map(|l| l.started.elapsed());
+                        let lived = self
+                            .node
+                            .as_ref()
+                            .map_or(Duration::ZERO, |l| l.started.elapsed());
                         self.stop().await;
-                        crash = match crash {
-                            Some(step) if lived.is_some_and(|d| d < RETRY_MAX) => {
-                                Some((step * 2).min(RETRY_MAX))
-                            }
-                            _ => Some(RETRY_FIRST),
-                        };
-                        let step = crash.unwrap_or(RETRY_FIRST);
+                        let step = next_step(crash, lived);
+                        crash = Some(step);
                         retry = Some((Instant::now() + step, step));
                     }
                 },
@@ -264,6 +280,7 @@ impl Driver {
         let (tx, harvests) = mpsc::channel(HARVEST_QUEUE);
         match Node::start(config, Some(tx)).await {
             Ok(node) => {
+                self.failing = false;
                 self.counts.starts.fetch_add(1, Ordering::Relaxed);
                 lodestar_log::log_event!(
                     crate::logging::events::WORKER_DHT_STARTED,
@@ -283,10 +300,14 @@ impl Driver {
             }
             Err(e) => {
                 self.counts.start_failures.fetch_add(1, Ordering::Relaxed);
-                lodestar_log::log_event!(
-                    crate::logging::events::WORKER_DHT_START_FAILED,
-                    error = lodestar_log::Error::new(&e)
-                );
+                // Once per streak: a port that stays taken would otherwise
+                // warn every minute for good.
+                if !std::mem::replace(&mut self.failing, true) {
+                    lodestar_log::log_event!(
+                        crate::logging::events::WORKER_DHT_START_FAILED,
+                        error = lodestar_log::Error::new(&e)
+                    );
+                }
                 Err(())
             }
         }
@@ -341,14 +362,16 @@ impl Driver {
     }
 }
 
-/// Waits, up to [`STOP_DEADLINE`] and a second, until no node runs: a
-/// stopping node's state is saved by then. For a process about to exit
-/// (`lodestar worker` after its runtime is dropped).
+/// Waits, up to [`STOP_DEADLINE`] and a second, for the DHT's task to
+/// end, which it does once the runtime is gone, after stopping (and
+/// saving) its node. For a process about to exit (`lodestar worker` after
+/// its runtime is dropped). Waiting for the task, not for "no node", also
+/// covers a drop while a node was starting.
 pub async fn stopped(mut running: Running) {
-    let _ = tokio::time::timeout(
-        STOP_DEADLINE + Duration::from_secs(1),
-        running.wait_for(Option::is_none),
-    )
+    let _ = tokio::time::timeout(STOP_DEADLINE + Duration::from_secs(1), async {
+        // `changed` fails once the task's sender is gone.
+        while running.changed().await.is_ok() {}
+    })
     .await;
 }
 
@@ -414,6 +437,75 @@ mod tests {
             .await
             .expect("the task ends with its sender")
             .unwrap();
+    }
+
+    #[test]
+    fn a_node_that_keeps_stopping_backs_off() {
+        let short = Duration::from_secs(5);
+        assert_eq!(next_step(None, short), RETRY_FIRST);
+        let mut step = None;
+        let mut seen = Vec::new();
+        for _ in 0..8 {
+            let s = next_step(step, short);
+            seen.push(s.as_secs());
+            step = Some(s);
+        }
+        assert_eq!(seen, [1, 2, 4, 8, 16, 32, 60, 60], "doubles to the cap");
+        // One that ran a minute or more starts the back-off over.
+        assert_eq!(next_step(Some(RETRY_MAX), RETRY_MAX), RETRY_FIRST);
+    }
+
+    #[test]
+    fn a_v4_mapped_address_is_kept_as_v4_and_private_ones_are_not() {
+        let c = DhtCounts::default();
+        c.set_external_ip(Some("::ffff:81.2.69.7".parse().unwrap()));
+        assert_eq!(c.external_ip(), Some("81.2.69.7".parse().unwrap()));
+        // A private vote, or none, keeps the last public address.
+        c.set_external_ip(Some("10.0.0.2".parse().unwrap()));
+        c.set_external_ip(None);
+        assert_eq!(c.external_ip(), Some("81.2.69.7".parse().unwrap()));
+        for ip in ["100.64.1.1", "127.0.0.1", "::ffff:192.168.1.1"] {
+            let fresh = DhtCounts::default();
+            fresh.set_external_ip(Some(ip.parse().unwrap()));
+            assert_eq!(fresh.external_ip(), None, "{ip}");
+        }
+    }
+
+    /// A taken port: the start fails (counted, retried after the back-off)
+    /// and the node starts once the port is free.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_failed_bind_is_retried_until_it_works() {
+        let held = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr = held.local_addr().unwrap();
+        let base = dht::Config {
+            bind: vec![addr],
+            bootstrap: Vec::new(),
+            state_path: None,
+            allow_private: true,
+            ..dht::Config::default()
+        };
+        let shard = ShardSpec::new(0..128, 0xff).unwrap();
+        let (_want_tx, want) = watch::channel(Desired::Run(Want {
+            shard,
+            intensity: Intensity::Balanced,
+        }));
+        let (finds, _rx) = mpsc::channel(4);
+        let (_requests, req_rx) = mpsc::channel(4);
+        let counts = Arc::new(DhtCounts::default());
+        let (_task, mut running) = spawn(base, want, finds, req_rx, counts.clone(), LINGER);
+        let deadline = Duration::from_secs(20);
+        let start = Instant::now();
+        while counts.start_failures.load(Ordering::Relaxed) == 0 {
+            assert!(start.elapsed() < deadline, "no failed start");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(running.borrow().is_none());
+        drop(held);
+        tokio::time::timeout(deadline, running.wait_for(|r| *r == Some(shard)))
+            .await
+            .expect("started once the port was free")
+            .unwrap();
+        assert!(counts.starts.load(Ordering::Relaxed) == 1);
     }
 
     #[test]
