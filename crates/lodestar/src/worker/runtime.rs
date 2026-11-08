@@ -28,15 +28,15 @@
 //! **Secrets:** the wire key and the have-filter key live inside the judge
 //! and the filter, which print neither; nothing here formats a payload.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use lodestar_cluster::assign::{Assignment, Politeness};
 use lodestar_cluster::proto::{
-    ClaimItem, GrantItem, HintItem, MAX_HINTS, MAX_OPAQUE, MAX_OUTCOME_BATCH, Outcome, OutcomeItem,
-    Payload, SnapshotAck, SnapshotChunk, SnapshotKind, ToCoordinator,
+    ClaimItem, DenyReason, GrantItem, HintItem, MAX_HINTS, MAX_OPAQUE, MAX_OUTCOME_BATCH, Outcome,
+    OutcomeItem, Payload, SnapshotAck, SnapshotChunk, SnapshotKind, ToCoordinator,
 };
 use lodestar_cluster::{SessionHandle, Token, WorkerEvent, WorkerId};
 use lodestar_metainfo::InfoHash;
@@ -140,6 +140,37 @@ pub struct Config {
     pub reconnect_debounce: Duration,
     /// How often refused result batches are sent again (5 s).
     pub retry_every: Duration,
+    /// How keys the coordinator answered `Busy` are claimed again
+    /// (X-wk-busy-retry).
+    pub busy_retry: BusyRetry,
+}
+
+/// The retry of `Busy` claims: a capped exponential back-off with equal
+/// jitter (the session's [`Backoff`](super::session::Backoff)), a limit on
+/// attempts, and a limit on the keys waiting.
+#[derive(Debug, Clone, Copy)]
+pub struct BusyRetry {
+    pub base: Duration,
+    pub cap: Duration,
+    /// Claims after the first, before the key is dropped.
+    pub attempts: u8,
+    /// Keys in a retry at once; a `Busy` key past it is dropped.
+    pub capacity: usize,
+}
+
+impl Default for BusyRetry {
+    /// 2 s doubling to a 60 s cap, 5 attempts (about a minute in all):
+    /// `Busy` is backpressure (the writer's queue, or a store read) that
+    /// clears in seconds, and past a minute the DHT finds the key again
+    /// anyway. 1,024 keys: the claims channel's own size.
+    fn default() -> BusyRetry {
+        BusyRetry {
+            base: Duration::from_secs(2),
+            cap: Duration::from_secs(60),
+            attempts: 5,
+            capacity: 1024,
+        }
+    }
 }
 
 impl Config {
@@ -164,6 +195,7 @@ impl Config {
             stats_every: STATS_EVERY,
             reconnect_debounce: RECONNECT_DEBOUNCE,
             retry_every: POLL_EVERY,
+            busy_retry: BusyRetry::default(),
         }
     }
 }
@@ -195,6 +227,11 @@ pub struct Counts {
     /// Finds not claimed because sealing was down.
     pub held_back: AtomicU64,
     pub claimed: AtomicU64,
+    /// `Busy` denials claimed again, keys dropped after the last attempt,
+    /// and keys dropped because the retry was full (X-wk-busy-retry).
+    pub busy_retried: AtomicU64,
+    pub busy_gave_up: AtomicU64,
+    pub busy_dropped: AtomicU64,
     pub granted: AtomicU64,
     /// Results sent, and accepted by the coordinator.
     pub sent: AtomicU64,
@@ -1426,8 +1463,137 @@ async fn send_acks(s: Arc<Shared>, mut acks: mpsc::Receiver<SnapshotAck>) {
     }
 }
 
+/// Keys the coordinator answered `Busy`, waiting to be claimed again
+/// (X-wk-busy-retry). Bounded: at most `capacity` keys are in a retry at
+/// once, each claimed at most `attempts` more times.
+struct BusyRetries {
+    state: Mutex<RetryState>,
+    wake: tokio::sync::Notify,
+    policy: BusyRetry,
+}
+
+#[derive(Default)]
+struct RetryState {
+    /// Keys in a retry: claims so far, and the back-off.
+    tries: HashMap<[u8; 20], (u8, super::session::Backoff)>,
+    /// When each waiting key is due, with what to claim it with.
+    waiting: BTreeMap<(tokio::time::Instant, [u8; 20]), (ClaimItem, Vec<std::net::SocketAddr>)>,
+}
+
+/// What became of a `Busy` key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Busy {
+    /// Claimed again after this wait.
+    Again(Duration),
+    /// Its last attempt was spent: dropped.
+    GaveUp,
+    /// The retry holds `capacity` keys already: dropped.
+    Full,
+}
+
+impl BusyRetries {
+    fn new(policy: BusyRetry) -> BusyRetries {
+        BusyRetries {
+            state: Mutex::default(),
+            wake: tokio::sync::Notify::new(),
+            policy,
+        }
+    }
+
+    fn busy(
+        &self,
+        item: ClaimItem,
+        peers: Vec<std::net::SocketAddr>,
+        now: tokio::time::Instant,
+        jitter: u64,
+    ) -> Busy {
+        let key = item.key;
+        let mut st = lock(&self.state);
+        if !st.tries.contains_key(&key) && st.tries.len() >= self.policy.capacity {
+            return Busy::Full;
+        }
+        let (base, cap) = (self.policy.base, self.policy.cap);
+        let (n, backoff) = st
+            .tries
+            .entry(key)
+            .or_insert_with(|| (0, super::session::Backoff::new(base, cap)));
+        *n += 1;
+        if *n > self.policy.attempts {
+            st.tries.remove(&key);
+            return Busy::GaveUp;
+        }
+        let wait = backoff.next(jitter);
+        st.waiting.insert((now + wait, key), (item, peers));
+        drop(st);
+        self.wake.notify_one();
+        Busy::Again(wait)
+    }
+
+    /// A key's retry ends: granted, denied for another reason, or not
+    /// claimed after all.
+    fn done(&self, key: &[u8; 20]) {
+        lock(&self.state).tries.remove(key);
+    }
+
+    /// The keys due by `now`, and when the next one is.
+    fn due(
+        &self,
+        now: tokio::time::Instant,
+    ) -> (
+        Vec<(ClaimItem, Vec<std::net::SocketAddr>)>,
+        Option<tokio::time::Instant>,
+    ) {
+        let mut st = lock(&self.state);
+        let mut out = Vec::new();
+        while let Some(entry) = st.waiting.first_entry() {
+            if entry.key().0 > now {
+                break;
+            }
+            let ((_, key), item) = entry.remove_entry();
+            // One whose retry ended meanwhile isn't claimed again.
+            if st.tries.contains_key(&key) {
+                out.push(item);
+            }
+        }
+        let next = st.waiting.keys().next().map(|(at, _)| *at);
+        (out, next)
+    }
+
+    /// Keys in a retry now.
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        lock(&self.state).tries.len()
+    }
+}
+
+/// Feeds `Busy` keys back into the claims as each comes due.
+async fn retry_busy(
+    retries: Arc<BusyRetries>,
+    items: mpsc::Sender<(ClaimItem, Vec<std::net::SocketAddr>)>,
+) {
+    loop {
+        let (due, next) = retries.due(tokio::time::Instant::now());
+        for item in due {
+            if items.send(item).await.is_err() {
+                return;
+            }
+        }
+        match next {
+            Some(at) => {
+                tokio::select! {
+                    () = tokio::time::sleep_until(at) => {}
+                    () = retries.wake.notified() => {}
+                }
+            }
+            None => retries.wake.notified().await,
+        }
+    }
+}
+
 /// Checks keys found here against the have-filter and claims them in
 /// batches. Before a filter is complete every key is claimed ("maybe").
+/// A key the coordinator answers `Busy` is claimed again later
+/// ([`BusyRetries`]); any other denial drops it, as the DHT finds it again.
 async fn claim(s: Arc<Shared>, found: mpsc::Receiver<Found>) {
     // Nothing is claimed before the stages can take it.
     let mut started = s.started.subscribe();
@@ -1435,11 +1601,23 @@ async fn claim(s: Arc<Shared>, found: mpsc::Receiver<Found>) {
         return;
     }
     let (items, mut batches) = mpsc::channel::<(ClaimItem, Vec<std::net::SocketAddr>)>(1024);
-    // Ends with this task (a stop aborts it).
+    let retries = Arc::new(BusyRetries::new(s.config.busy_retry));
+    // Both end with this task (a stop aborts it).
+    let _retry =
+        AbortOnDrop(tokio::spawn(retry_busy(retries.clone(), items.clone())).abort_handle());
     let _check = AbortOnDrop(tokio::spawn(check(s.clone(), found, items)).abort_handle());
+    // Once per streak of give-ups, not per key: a coordinator stuck on
+    // `Busy` can't flood the log.
+    let mut giving_up = false;
     // `next_claims` isn't cancel-safe: it's awaited to its end.
     while let Some(batch) = next_claims(&mut batches).await {
+        let end = |batch: &[(ClaimItem, Vec<std::net::SocketAddr>)]| {
+            for (c, _) in batch {
+                retries.done(&c.key);
+            }
+        };
         if s.draining.load(Ordering::Acquire) {
+            end(&batch);
             continue;
         }
         // Sifted before sealing went down, claimed after: dropped as `sift`
@@ -1448,6 +1626,7 @@ async fn claim(s: Arc<Shared>, found: mpsc::Receiver<Found>) {
             s.counts
                 .held_back
                 .fetch_add(batch.len() as u64, Ordering::Relaxed);
+            end(&batch);
             continue;
         }
         // Only as many as the pool has room for: the leases held never
@@ -1459,13 +1638,16 @@ async fn claim(s: Arc<Shared>, found: mpsc::Receiver<Found>) {
             s.counts
                 .held_back
                 .fetch_add((batch.len() - room) as u64, Ordering::Relaxed);
+            end(&batch[room..]);
             batch.truncate(room);
         }
         if batch.is_empty() {
             continue;
         }
-        let peers: BTreeMap<[u8; 20], Vec<_>> =
-            batch.iter().map(|(c, p)| (c.key, p.clone())).collect();
+        let mut sent: BTreeMap<[u8; 20], (ClaimItem, Vec<std::net::SocketAddr>)> = batch
+            .iter()
+            .map(|(c, p)| (c.key, (c.clone(), p.clone())))
+            .collect();
         let items: Vec<ClaimItem> = batch.into_iter().map(|(c, _)| c).collect();
         s.counts
             .claimed
@@ -1473,13 +1655,48 @@ async fn claim(s: Arc<Shared>, found: mpsc::Receiver<Found>) {
         let h = current(&s).await;
         // A claim that fails is dropped: the DHT finds the keys again.
         let Ok(grants) = h.claim(items).await else {
+            for key in sent.keys() {
+                retries.done(key);
+            }
             continue;
         };
+        let (mut busy, mut gave_up) = (0u64, 0u64);
         for g in grants {
-            if let GrantItem::Granted { key, token, .. } = g {
-                let peers = peers.get(&key).cloned().unwrap_or_default();
-                granted(&s, InfoHash(key), Token(token), peers, unix_now());
+            match g {
+                GrantItem::Granted { key, token, .. } => {
+                    retries.done(&key);
+                    let peers = sent.remove(&key).map(|(_, p)| p).unwrap_or_default();
+                    granted(&s, InfoHash(key), Token(token), peers, unix_now());
+                }
+                GrantItem::Denied {
+                    key,
+                    reason: DenyReason::Busy,
+                } => {
+                    busy += 1;
+                    let Some((item, peers)) = sent.remove(&key) else {
+                        continue;
+                    };
+                    let jitter = super::session::random_jitter();
+                    match retries.busy(item, peers, tokio::time::Instant::now(), jitter) {
+                        Busy::Again(_) => bump(&s.counts.busy_retried),
+                        Busy::GaveUp => {
+                            gave_up += 1;
+                            bump(&s.counts.busy_gave_up);
+                        }
+                        Busy::Full => bump(&s.counts.busy_dropped),
+                    }
+                }
+                // Stored, held elsewhere, draining: dropped, as before.
+                GrantItem::Denied { key, .. } => retries.done(&key),
             }
+        }
+        if gave_up > 0 && !std::mem::replace(&mut giving_up, true) {
+            lodestar_log::log_event!(
+                crate::logging::events::WORKER_CLAIMS_GAVE_UP,
+                keys = lodestar_log::Count(gave_up)
+            );
+        } else if busy == 0 {
+            giving_up = false;
         }
     }
 }
@@ -2626,6 +2843,205 @@ mod tests {
         })
         .await;
         assert_eq!(c.claimed.load(Ordering::Relaxed), 0);
+        rt.shutdown().await;
+    }
+
+    /// X-wk-busy-retry: the retry is bounded. At most `capacity` keys at
+    /// once (one more is `Full`), each claimed at most `attempts` more
+    /// times; a key whose retry ended isn't fed back; and keys come due in
+    /// order.
+    #[test]
+    fn busy_retries_are_bounded() {
+        let r = BusyRetries::new(BusyRetry {
+            base: Duration::from_millis(100),
+            cap: Duration::from_millis(400),
+            attempts: 2,
+            capacity: 2,
+        });
+        let item = |n: u8| ClaimItem {
+            key: [n; 20],
+            source: 1,
+            strategy: 0,
+            discovered_ms: 0,
+            hints: vec![],
+        };
+        let now = tokio::time::Instant::now();
+        assert!(matches!(r.busy(item(1), vec![], now, 0), Busy::Again(_)));
+        assert!(matches!(r.busy(item(2), vec![], now, 0), Busy::Again(_)));
+        assert_eq!(r.busy(item(3), vec![], now, 0), Busy::Full);
+        assert_eq!(r.len(), 2);
+        // Key 1 again: its second attempt, then its limit.
+        assert!(matches!(r.busy(item(1), vec![], now, 0), Busy::Again(_)));
+        assert_eq!(r.busy(item(1), vec![], now, 0), Busy::GaveUp);
+        assert_eq!(r.len(), 1);
+        // Room again for a new key; one whose retry ended isn't fed back.
+        assert!(matches!(r.busy(item(3), vec![], now, 0), Busy::Again(_)));
+        r.done(&[2; 20]);
+        let later = now + Duration::from_secs(10);
+        let (due, next) = r.due(later);
+        let keys: Vec<[u8; 20]> = due.iter().map(|(c, _)| c.key).collect();
+        assert_eq!(
+            keys,
+            vec![[3; 20]],
+            "key 1's leftovers and key 2 aren't due"
+        );
+        assert_eq!(next, None);
+        // With jitter 0 the wait is the step's lower half.
+        let r = BusyRetries::new(BusyRetry::default());
+        assert_eq!(
+            r.busy(item(9), vec![], now, 0),
+            Busy::Again(Duration::from_secs(1))
+        );
+    }
+
+    /// The next claim the coordinator gets, skipping everything else.
+    async fn next_claim(
+        coord: &mut lodestar_cluster::CoordinatorLink,
+    ) -> lodestar_cluster::proto::ClaimBatch {
+        use lodestar_cluster::proto::ToCoordinator;
+        tokio::time::timeout(DEADLINE, async {
+            loop {
+                match coord.recv().await {
+                    Ok(Some(ToCoordinator::Claim(b))) => return b,
+                    Ok(Some(_)) => {}
+                    other => panic!("the link ended: {other:?}"),
+                }
+            }
+        })
+        .await
+        .expect("a claim in time")
+    }
+
+    /// Answers a claim: `busy` keys denied as busy (or `reason`), the rest
+    /// granted.
+    async fn answer(
+        coord: &mut lodestar_cluster::CoordinatorLink,
+        batch: &lodestar_cluster::proto::ClaimBatch,
+        deny: impl Fn(&[u8; 20]) -> Option<DenyReason>,
+    ) {
+        use lodestar_cluster::proto::{GrantBatch, ToWorker};
+        let items = batch
+            .items
+            .iter()
+            .enumerate()
+            .map(|(i, c)| match deny(&c.key) {
+                Some(reason) => GrantItem::Denied { key: c.key, reason },
+                None => GrantItem::Granted {
+                    key: c.key,
+                    token: 100 + i as u64,
+                    ttl_secs: 600,
+                },
+            })
+            .collect();
+        coord
+            .send(ToWorker::Grants(GrantBatch {
+                batch: batch.batch,
+                items,
+            }))
+            .await
+            .unwrap();
+    }
+
+    /// A started runtime whose `Busy` retries wait milliseconds.
+    async fn busy_rig(
+        attempts: u8,
+    ) -> (
+        Runtime,
+        lodestar_cluster::CoordinatorLink,
+        lodestar_cluster::WorkerSession,
+    ) {
+        let mut cfg = config(Arc::new(MapFetch::default()));
+        cfg.busy_retry = BusyRetry {
+            base: Duration::from_millis(20),
+            cap: Duration::from_millis(80),
+            attempts,
+            capacity: 16,
+        };
+        let mut rt = Runtime::start(cfg);
+        let (coord, session) = session_pair().await;
+        rt.connected(session.handle());
+        rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
+        let (_, chunks) = filter_chunks().await;
+        for c in chunks {
+            rt.event(WorkerEvent::Snapshot(c));
+        }
+        until("started", || (rt.is_started(), ())).await;
+        (rt, coord, session)
+    }
+
+    /// X-wk-busy-retry: a key answered `Busy` is claimed again later, and
+    /// granted then.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_busy_key_is_claimed_again_and_granted() {
+        let (rt, mut coord, _session) = busy_rig(5).await;
+        assert!(rt.finds().found(found(7)));
+        let first = next_claim(&mut coord).await;
+        assert_eq!(first.items[0].key, [7; 20]);
+        answer(&mut coord, &first, |_| Some(DenyReason::Busy)).await;
+        let again = next_claim(&mut coord).await;
+        assert_eq!(again.items[0].key, [7; 20], "the same key, claimed again");
+        assert_eq!(again.items[0].discovered_ms, first.items[0].discovered_ms);
+        answer(&mut coord, &again, |_| None).await;
+        until("granted", || {
+            let held = rt.shared.leases.len();
+            (held == 1, held)
+        })
+        .await;
+        let c = rt.counts();
+        assert_eq!(c.busy_retried.load(Ordering::Relaxed), 1);
+        assert_eq!(c.busy_gave_up.load(Ordering::Relaxed), 0);
+        rt.shutdown().await;
+    }
+
+    /// X-wk-busy-retry: a key the coordinator keeps answering `Busy` is
+    /// claimed `attempts` more times, then dropped and counted (and the
+    /// streak logged once).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_key_busy_past_its_limit_is_dropped() {
+        let (rt, mut coord, _session) = busy_rig(2).await;
+        assert!(rt.finds().found(found(8)));
+        for _ in 0..3 {
+            let b = next_claim(&mut coord).await;
+            assert_eq!(b.items[0].key, [8; 20]);
+            answer(&mut coord, &b, |_| Some(DenyReason::Busy)).await;
+        }
+        let c = rt.counts();
+        until("given up", || {
+            let n = c.busy_gave_up.load(Ordering::Relaxed);
+            (n == 1, n)
+        })
+        .await;
+        assert_eq!(c.busy_retried.load(Ordering::Relaxed), 2);
+        assert_eq!(c.claimed.load(Ordering::Relaxed), 3);
+        // Nothing more for it: the next claim is a new key's alone.
+        assert!(rt.finds().found(found(9)));
+        let next = next_claim(&mut coord).await;
+        let keys: Vec<[u8; 20]> = next.items.iter().map(|i| i.key).collect();
+        assert_eq!(keys, vec![[9; 20]]);
+        rt.shutdown().await;
+    }
+
+    /// X-wk-busy-retry: any other denial drops the key at once, as before.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_key_denied_for_another_reason_is_dropped_at_once() {
+        let (rt, mut coord, _session) = busy_rig(5).await;
+        for (n, reason) in [
+            (4, DenyReason::Stored),
+            (5, DenyReason::HeldElsewhere),
+            (6, DenyReason::Draining),
+        ] {
+            assert!(rt.finds().found(found(n)));
+            let b = next_claim(&mut coord).await;
+            assert_eq!(b.items[0].key, [n; 20]);
+            answer(&mut coord, &b, |_| Some(reason)).await;
+        }
+        // The loop answers in order: by the time this key is claimed, the
+        // three denials were handled, and none went to the retry.
+        assert!(rt.finds().found(found(9)));
+        let next = next_claim(&mut coord).await;
+        let keys: Vec<[u8; 20]> = next.items.iter().map(|i| i.key).collect();
+        assert_eq!(keys, vec![[9; 20]]);
+        assert_eq!(rt.counts().busy_retried.load(Ordering::Relaxed), 0);
         rt.shutdown().await;
     }
 

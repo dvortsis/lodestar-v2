@@ -1045,6 +1045,19 @@ lodestar_log::catalogue! {
         message: "A snapshot from the coordinator didn't decode; the worker keeps the one it has",
         fields: { kind: Label },
     }
+
+    /// Keys the coordinator kept answering "busy" were dropped after
+    /// their last retry (about a minute). The coordinator is behind, or
+    /// can't read its store; the DHT finds the keys again later. Logged
+    /// once per run of drops (X-wk-busy-retry).
+    WORKER_CLAIMS_GAVE_UP {
+        id: "worker.claims_gave_up",
+        component: Workers,
+        level: Warn,
+        message: "The coordinator stayed busy; some found torrents were dropped for now",
+        fields: { keys: Label },
+    }
+
     /// The worker's fetch pool or prepare stage ended by itself (a bug):
     /// the worker stops with an error so its service manager starts it
     /// again, and the coordinator re-grants its keys (WK-10d).
