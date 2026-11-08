@@ -14,7 +14,7 @@ The worker claims a `Busy` key again instead of dropping it (#628's review; runn
 - **Back-off:** 2 s doubling to a 60 s cap, with equal jitter. It's the session's own `Backoff`: half of each step fixed, half random.
 - **At most 5 attempts** after the first claim, about a minute in all.
 - **At most 1,024 keys waiting,** the claims channel's own size. A `Busy` key past that is dropped and counted (`busy_dropped`).
-- **Why:** `Busy` is backpressure that clears in seconds (a writer's queue, a store read). Past a minute, the DHT finds the key again anyway. So a coordinator stuck on `Busy` costs the worker at most 1,024 small entries and five claims for each.
+- **Why:** `Busy` is backpressure that clears in seconds (a writer's queue, a store read). Past a minute, the DHT finds the key again anyway. A coordinator stuck on `Busy` costs the worker at most 1,024 keys in a retry, each waiting at most once, and five more claims for each.
 - All four numbers are in `Config::busy_retry` (`BusyRetry`). The defaults are these; tests use milliseconds.
 
 ## How
@@ -22,9 +22,16 @@ The worker claims a `Busy` key again instead of dropping it (#628's review; runn
 - A small task feeds each key back into the claims channel when it comes due. So retried keys go through the same batching, room check and sealing check as new ones, and the claim loop, whose `next_claims` isn't cancel-safe, never waits on a timer.
 - A key's retry ends when it's granted, denied for another reason, or not claimed after all (draining, sealing down, no room in the pool, a failed claim). A key whose retry ended meanwhile isn't fed back.
 - A key keeps its original discovery time, so it stays in its own cohort.
+- **A key waits at most once** (#637's review): `waiting.len() <= tries.len() <= capacity`.
+  - Its `Try` names its one wait.
+  - A second `Busy` while it waits (the DHT found it again and it was claimed meanwhile) keeps its place and uses no attempt.
+  - Ending a key's retry removes its wait too.
+  - Before the review, each `Busy` added a wait. So a found-again key was claimed in parallel and used its attempts in seconds, and the waits weren't bounded by 1,024.
+- **Fetching off** (#637's review): a retried key gets the same checks as a new find. While the assignment turns fetching off, it's held back (counted in `held_back`) and its retry ends, as `sift` does for new finds.
 
 ## Logged once per streak
-- When keys use up their attempts, the worker logs `worker.claims_gave_up` (Warn, the number of keys), once per streak. The streak ends with a batch answered with no `Busy` at all. So a stuck coordinator can't flood the log.
+- When keys use up their attempts, or are dropped because the retry is full, the worker logs `worker.claims_gave_up` (Warn), once per streak. The count is the first batch's; the counters have the whole streak.
+- The streak ends with a batch answered with no `Busy` at all. So a stuck coordinator can't flood the log. The rule is a pure helper (`streak`), tested on its own.
 - The counters `busy_retried`, `busy_gave_up` and `busy_dropped` count every case.
 
 ## The event-names budget (runner-approved, §2.26, 2026-11-08T20:29Z)
@@ -35,8 +42,11 @@ The worker claims a `Busy` key again instead of dropping it (#628's review; runn
 - `crates/cluster/src/server.rs`'s `KeyCheck` doc still says "(Today's worker drops any denied key; a busy retry is a follow-up.)". That file is outside this PR, so the runner updates the line or folds it into the next cluster PR.
 
 ## Tests
-- `busy_retries_are_bounded`: capacity, the attempt limit, ended retries not fed back, and the first wait.
+- `busy_retries_are_bounded`: capacity, the attempt limit and the first wait.
+- `a_busy_key_waits_at_most_once`: two `Busy` answers before it's due give one due copy, and done then `Busy` again isn't fed back twice.
+- `give_ups_are_logged_once_per_streak`: the streak rule.
+- `a_retry_due_while_fetching_is_off_is_dropped`.
 - `a_busy_key_is_claimed_again_and_granted`: over a real local session.
 - `a_key_busy_past_its_limit_is_dropped`: claimed 1 + `attempts` times, then dropped and counted.
 - `a_key_denied_for_another_reason_is_dropped_at_once`: `Stored`, `HeldElsewhere` and `Draining`.
-- Mutation-checked: the retry arm and the attempt limit.
+- Mutation-checked: the retry arm, the attempt limit, the wait-once rule, `done` clearing the wait, and the fetching gate.

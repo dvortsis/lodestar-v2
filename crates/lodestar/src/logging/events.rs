@@ -1049,7 +1049,9 @@ lodestar_log::catalogue! {
     /// Keys the coordinator kept answering "busy" were dropped after
     /// their last retry (about a minute). The coordinator is behind, or
     /// can't read its store; the DHT finds the keys again later. Logged
-    /// once per run of drops (X-wk-busy-retry).
+    /// once per run of drops, with the first batch's count (the worker's
+    /// counters have the whole run); keys dropped because the retry was
+    /// full count too (X-wk-busy-retry).
     WORKER_CLAIMS_GAVE_UP {
         id: "worker.claims_gave_up",
         component: Workers,
