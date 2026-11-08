@@ -16,6 +16,9 @@
 //! - [`inputs`]: the closed, validated values generated compose services
 //!   and Unraid templates are built from, and the shared [`CompanionId`]
 //!   and [`Version`].
+//! - [`supervise`]: starting, restarting, health-checking and stopping
+//!   managed companions, their redacted log rings, and orphan cleanup
+//!   (CMP-4a).
 //!
 //! Later CMP slices add their modules here, one `mod` line each.
 
@@ -28,6 +31,7 @@ pub mod fetch;
 pub mod inputs;
 pub mod layout;
 pub mod log_events;
+pub mod supervise;
 pub mod verify;
 
 pub use catalogue::{Catalogue, CatalogueError, Entry, NotAvailable, builtin};

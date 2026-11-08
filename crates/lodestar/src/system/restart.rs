@@ -20,13 +20,20 @@
 //!   graceful shutdown, and the supervisor starts the same version again,
 //!   using no probation attempt. `reexec` stays for an unsupervised run
 //!   (`serve --fixture DIR`).
-//! - **Windows: `manual`** until M6 wires its hooks (a service exits with
-//!   a service-specific code for the SCM's recovery action; the portable
-//!   build starts a new copy, then exits). They keep [`Restart::requested`]
-//!   and the method, as B-update's supervised relaunch will.
+//! - **Windows service: `service`.** `windows/service.rs` races
+//!   [`Restart::requested`] with its stop channel, takes the same graceful
+//!   shutdown, then exits with a dedicated service-specific code, so the
+//!   SCM's recovery action starts it again after 60 s. It's offered only
+//!   while Lodestar's own count of recoveries used in the last 24 h is 0
+//!   ([`Restart::refuse`] otherwise), so a crash always has one left.
+//! - **Windows portable: `relaunch`.** The request first starts a new copy
+//!   of the same program with the same arguments, which waits until this
+//!   process hands over and exits ([`crate::windows::relaunch`]). If that
+//!   copy can't be started, the request is dropped and this run keeps
+//!   serving. After the graceful shutdown, [`reexec`] hands over and exits.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use lodestar_api::system::{RestartInfo, RestartMethod};
@@ -34,7 +41,6 @@ use tokio::sync::Notify;
 
 /// The process's restart state. One per process ([`Restart::global`]);
 /// tests make their own.
-#[derive(Debug)]
 pub struct Restart {
     requested: AtomicBool,
     notify: Notify,
@@ -47,7 +53,33 @@ pub struct Restart {
     refused: OnceLock<String>,
     /// `serve --child` under its supervisor: the supervisor restarts it.
     supervised: AtomicBool,
+    /// Run by the Windows Service Control Manager, which restarts it.
+    service: AtomicBool,
+    /// Not offered before this Unix time, with this hint: the service's
+    /// count of recent recoveries ([`Restart::pause_until`]).
+    paused: Mutex<Option<(u64, String)>>,
+    /// Runs before a request takes effect (the portable build starts its
+    /// successor there); an error drops the request and this run keeps
+    /// serving.
+    prepare: Mutex<Option<Prepare>>,
 }
+
+impl std::fmt::Debug for Restart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Restart")
+            .field("requested", &self.requested)
+            .field("method", &self.method())
+            .field("refused", &self.refused.get())
+            .finish_non_exhaustive()
+    }
+}
+
+/// [`Restart::set_prepare`]'s step.
+pub type Prepare = Box<dyn FnMut() -> std::io::Result<()> + Send>;
+
+/// How long the SCM's recovery action waits before starting the service
+/// again (`packaging/windows/main.wxs`, `RestartServiceDelayInSeconds`).
+pub const SERVICE_RESTART_DELAY_SECS: u64 = 60;
 
 /// What a restart takes when nothing has been measured yet.
 const DEFAULT_ESTIMATE_SECS: u64 = 5;
@@ -62,7 +94,41 @@ impl Restart {
             start_secs: AtomicU64::new(0),
             refused: OnceLock::new(),
             supervised: AtomicBool::new(false),
+            service: AtomicBool::new(false),
+            paused: Mutex::new(None),
+            prepare: Mutex::new(None),
         }
+    }
+
+    /// Not offered until Unix time `until`, with `why` as the hint
+    /// meanwhile (the service, while a recovery used in the last 24 hours
+    /// is still in the SCM's count). Unlike [`Restart::refuse`], it lifts
+    /// by itself.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn pause_until(&self, until: u64, why: impl Into<String>) {
+        *self.paused.lock().unwrap_or_else(|e| e.into_inner()) = Some((until, why.into()));
+    }
+
+    /// The pause's hint while it lasts at `now`.
+    fn paused_at(&self, now: u64) -> Option<String> {
+        match &*self.paused.lock().unwrap_or_else(|e| e.into_inner()) {
+            Some((until, why)) if now < *until => Some(why.clone()),
+            _ => None,
+        }
+    }
+
+    /// This run is the Windows service (`windows/service.rs`, before
+    /// `Services::start`): the SCM's recovery action restarts it.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn set_service(&self) {
+        self.service.store(true, Ordering::SeqCst);
+    }
+
+    /// `prepare` runs once per request, before it takes effect; an error
+    /// is logged and the request dropped, so this run keeps serving.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn set_prepare(&self, prepare: Prepare) {
+        *self.prepare.lock().unwrap_or_else(|e| e.into_inner()) = Some(prepare);
     }
 
     /// This run is the supervisor's child (`main.rs`, before
@@ -80,6 +146,8 @@ impl Restart {
     fn method(&self) -> RestartMethod {
         if self.supervised() {
             RestartMethod::Supervised
+        } else if self.service.load(Ordering::SeqCst) {
+            RestartMethod::Service
         } else {
             self.method
         }
@@ -116,10 +184,17 @@ impl Restart {
             .map_or_else(|| crate::unix_now().max(0) as u64, |&(_, at)| at)
     }
 
+    /// About how long a restart pauses crawling: this run's measured start,
+    /// plus the SCM's delay for a service.
     pub fn estimated_seconds(&self) -> u64 {
-        match self.start_secs.load(Ordering::Relaxed) {
+        let start = match self.start_secs.load(Ordering::Relaxed) {
             0 => DEFAULT_ESTIMATE_SECS,
             n => n,
+        };
+        if self.method() == RestartMethod::Service {
+            start.saturating_add(SERVICE_RESTART_DELAY_SECS)
+        } else {
+            start
         }
     }
 
@@ -129,17 +204,30 @@ impl Restart {
     }
 
     pub fn available(&self) -> bool {
+        self.available_at(crate::unix_now().max(0) as u64)
+    }
+
+    fn available_at(&self, now: u64) -> bool {
         matches!(
             self.method(),
-            RestartMethod::Reexec | RestartMethod::Supervised
+            RestartMethod::Reexec
+                | RestartMethod::Supervised
+                | RestartMethod::Service
+                | RestartMethod::Relaunch
         ) && self.refused.get().is_none()
+            && self.paused_at(now).is_none()
     }
 
     pub fn info(&self) -> RestartInfo {
-        let available = self.available();
-        let hint = match self.refused.get() {
-            Some(why) => Some(why.clone()),
-            None => (!available).then(|| HINT.to_string()),
+        self.info_at(crate::unix_now().max(0) as u64)
+    }
+
+    fn info_at(&self, now: u64) -> RestartInfo {
+        let available = self.available_at(now);
+        let hint = match (self.refused.get(), self.paused_at(now)) {
+            (Some(why), _) => Some(why.clone()),
+            (None, Some(why)) => Some(why),
+            (None, None) => (!available).then(|| HINT.to_string()),
         };
         RestartInfo {
             available,
@@ -154,11 +242,42 @@ impl Restart {
     }
 
     /// Asks for a restart; [`Restart::requested`] resolves. Asking twice is
-    /// asking once.
+    /// asking once. For [`RestartMethod::Relaunch`], a
+    /// [`Restart::set_prepare`] step runs first, under a lock so two
+    /// requests can't both run it; if it fails the request is dropped and
+    /// this run keeps serving.
     pub fn request(&self) {
-        if !self.requested.swap(true, Ordering::SeqCst) {
-            // Required: a log must say why the process went away.
-            lodestar_log::log_event!(crate::logging::events::APP_RESTART);
+        {
+            let mut prepare = self.prepare.lock().unwrap_or_else(|e| e.into_inner());
+            if self.was_requested() {
+                drop(prepare);
+                self.notify.notify_waiters();
+                return;
+            }
+            // A paused or refused service would use a recovery a crash may
+            // need: whoever asks (the API checks first; an updater might
+            // not), it doesn't restart.
+            if self.method() == RestartMethod::Service && !self.available() {
+                lodestar_log::log_event!(
+                    crate::logging::events::APP_RESTART_FAILED,
+                    error = lodestar_log::Error::kind("paused")
+                );
+                return;
+            }
+            if self.method() == RestartMethod::Relaunch
+                && let Some(step) = prepare.as_mut()
+                && let Err(e) = step()
+            {
+                lodestar_log::log_event!(
+                    crate::logging::events::APP_RESTART_FAILED,
+                    error = lodestar_log::Error::io(&e)
+                );
+                return;
+            }
+            if !self.requested.swap(true, Ordering::SeqCst) {
+                // Required: a log must say why the process went away.
+                lodestar_log::log_event!(crate::logging::events::APP_RESTART);
+            }
         }
         self.notify.notify_waiters();
     }
@@ -185,11 +304,13 @@ impl Restart {
 
 #[cfg(unix)]
 const METHOD: RestartMethod = RestartMethod::Reexec;
-#[cfg(not(unix))]
+/// The portable build; the service sets [`Restart::set_service`].
+#[cfg(windows)]
+const METHOD: RestartMethod = RestartMethod::Relaunch;
+#[cfg(not(any(unix, windows)))]
 const METHOD: RestartMethod = RestartMethod::Manual;
 
-/// How to restart where the server can't (Windows, until M6 wires the
-/// service's recovery action and the portable relaunch).
+/// How to restart where the server can't.
 const HINT: &str = "Restart Lodestar the way you started it: restart the Lodestar service in \
                     Windows Services, or close the portable Lodestar and start it again.";
 
@@ -227,9 +348,23 @@ pub(crate) fn program(
     }
 }
 
-/// Windows can't restart in place yet ([`RestartMethod::Manual`]): the
-/// request is refused before it gets here.
-#[cfg(not(unix))]
+/// Windows portable ([`RestartMethod::Relaunch`]): this process has shut
+/// down gracefully, so the copy started at the request takes over, and
+/// this process exits. Returns only if no copy could take over; `serve`
+/// then fails and the process exits non-zero.
+#[cfg(windows)]
+pub fn reexec() -> std::io::Error {
+    match crate::windows::relaunch::hand_over() {
+        // Like `exec`, nothing after this runs: the services have stopped
+        // and logs are written as they happen.
+        Ok(()) => std::process::exit(0),
+        Err(e) => e,
+    }
+}
+
+/// Elsewhere it can't ([`RestartMethod::Manual`]): the request is refused
+/// before it gets here.
+#[cfg(not(any(unix, windows)))]
 pub fn reexec() -> std::io::Error {
     std::io::Error::other("restarting in place isn't supported on this platform")
 }
@@ -294,6 +429,79 @@ mod tests {
             info.hint.as_deref(),
             Some("A temporary fixture is deleted when Lodestar stops.")
         );
+    }
+
+    #[test]
+    fn a_service_restarts_through_the_scm_in_about_a_minute() {
+        let r = Restart::new(RestartMethod::Relaunch);
+        r.set_service();
+        let info = r.info();
+        assert!(info.available && info.hint.is_none());
+        assert_eq!(info.method, RestartMethod::Service);
+        assert_eq!(
+            info.estimated_seconds,
+            DEFAULT_ESTIMATE_SECS + SERVICE_RESTART_DELAY_SECS
+        );
+        // Paused by the service's count until a time: manual, with its
+        // hint, then offered again by itself.
+        let now = 1_762_560_000;
+        r.pause_until(now + 100, "paused");
+        let info = r.info_at(now);
+        assert!(!info.available);
+        assert_eq!(info.method, RestartMethod::Manual);
+        assert_eq!(info.hint.as_deref(), Some("paused"));
+        assert!(r.info_at(now + 99).hint.is_some());
+        let info = r.info_at(now + 100);
+        assert!(info.available && info.hint.is_none());
+        assert_eq!(info.method, RestartMethod::Service);
+    }
+
+    #[test]
+    fn a_paused_service_ignores_a_request() {
+        let r = Restart::new(RestartMethod::Relaunch);
+        r.set_service();
+        r.pause_until(u64::MAX, "paused");
+        r.request();
+        assert!(!r.was_requested());
+        let r = Restart::new(RestartMethod::Relaunch);
+        r.set_service();
+        r.refuse("unwritable");
+        r.request();
+        assert!(!r.was_requested());
+    }
+
+    #[test]
+    fn a_relaunch_that_cant_start_its_copy_keeps_serving() {
+        use std::sync::atomic::AtomicUsize;
+        let r = Restart::new(RestartMethod::Relaunch);
+        assert!(r.info().available);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let fail = Arc::new(AtomicBool::new(true));
+        r.set_prepare(Box::new({
+            let (calls, fail) = (calls.clone(), fail.clone());
+            move || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                if fail.load(Ordering::SeqCst) {
+                    Err(std::io::Error::other("spawn failed"))
+                } else {
+                    Ok(())
+                }
+            }
+        }));
+        r.request();
+        assert!(!r.was_requested(), "no copy, no restart");
+        fail.store(false, Ordering::SeqCst);
+        r.request();
+        assert!(r.was_requested());
+        // Asked again: the copy isn't started twice.
+        r.request();
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        // Other methods never run it.
+        let s = Restart::new(RestartMethod::Relaunch);
+        s.set_service();
+        s.set_prepare(Box::new(|| Err(std::io::Error::other("unused"))));
+        s.request();
+        assert!(s.was_requested());
     }
 
     #[cfg(unix)]

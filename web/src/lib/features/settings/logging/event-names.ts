@@ -245,6 +245,11 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_address_revert_failed_h
 	],
 	'app.reexec': [m.settings_logging_ev_app_reexec_n, m.settings_logging_ev_app_reexec_h],
+	'app.restart_failed': [
+		m.settings_logging_ev_app_restart_failed_n,
+		m.settings_logging_ev_app_restart_failed_h
+	],
+	'app.relaunch': [m.settings_logging_ev_app_relaunch_n, m.settings_logging_ev_app_relaunch_h],
 	'windows.ports_low': [
 		m.settings_logging_ev_windows_ports_low_n,
 		m.settings_logging_ev_windows_ports_low_h
@@ -280,6 +285,18 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 	'service.stopped': [
 		m.settings_logging_ev_service_stopped_n,
 		m.settings_logging_ev_service_stopped_h
+	],
+	'service.restarting': [
+		m.settings_logging_ev_service_restarting_n,
+		m.settings_logging_ev_service_restarting_h
+	],
+	'service.restart_paused': [
+		m.settings_logging_ev_service_restart_paused_n,
+		m.settings_logging_ev_service_restart_paused_h
+	],
+	'service.restarts_unwritable': [
+		m.settings_logging_ev_service_restarts_unwritable_n,
+		m.settings_logging_ev_service_restarts_unwritable_h
 	],
 	'service.witness_refused': [
 		m.settings_logging_ev_service_witness_refused_n,

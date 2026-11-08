@@ -594,5 +594,15 @@
 	"settings_logging_ev_update_probation_failed_n": "新版本已回滚",
 	"settings_logging_ev_update_probation_failed_h": "新版本出现问题，已恢复旧版本。",
 	"settings_logging_ev_auth_notice_accepted_n": "已接受法律声明",
-	"settings_logging_ev_auth_notice_accepted_h": "管理员在登录关卡接受了法律声明；该行给出其版本。"
+	"settings_logging_ev_auth_notice_accepted_h": "管理员在登录关卡接受了法律声明；该行给出其版本。",
+	"settings_logging_ev_app_restart_failed_n": "重启失败",
+	"settings_logging_ev_app_restart_failed_h": "新副本无法启动；Lodestar 继续运行。",
+	"settings_logging_ev_app_relaunch_n": "新副本已启动",
+	"settings_logging_ev_app_relaunch_h": "由新副本接管。",
+	"settings_logging_ev_service_restarting_n": "服务正在重启",
+	"settings_logging_ev_service_restarting_h": "Windows 将在约一分钟后再次启动它。",
+	"settings_logging_ev_service_restart_paused_n": "“立即重启”已暂停",
+	"settings_logging_ev_service_restart_paused_h": "暂停约一天。请在 Windows 服务中重启该服务。",
+	"settings_logging_ev_service_restarts_unwritable_n": "重启记录未保存",
+	"settings_logging_ev_service_restarts_unwritable_h": "无法保存最近重启的记录。"
 }
