@@ -275,6 +275,7 @@ fn check_field(field: &str) -> Result<(), CompanionsError> {
     tag = "companions",
     responses(
         (status = 200, body = CompanionList),
+        (status = 503, description = "`companions_unavailable`: companions are off in this process.", body = ErrorEnvelope),
     )
 )]
 pub(crate) async fn list_companions(handle: Handle) -> ApiResult<Json<CompanionList>> {
@@ -292,6 +293,7 @@ pub(crate) async fn list_companions(handle: Handle) -> ApiResult<Json<CompanionL
     responses(
         (status = 200, body = Companion),
         (status = 404, description = "`unknown_companion`.", body = ErrorEnvelope),
+        (status = 503, description = "`companions_unavailable`: companions are off in this process.", body = ErrorEnvelope),
     )
 )]
 pub(crate) async fn get_companion(
@@ -314,6 +316,7 @@ pub(crate) async fn get_companion(
         (status = 200, body = InstallOffer),
         (status = 404, description = "`unknown_companion`.", body = ErrorEnvelope),
         (status = 409, description = "Why it can't be installed here: `native_in_container`, `unsupported_platform`, `awaiting_pin`, `no_build`, `guided_only`, `already_current`, ….", body = ErrorEnvelope),
+        (status = 503, description = "`companions_unavailable`: companions are off in this process.", body = ErrorEnvelope),
     )
 )]
 pub(crate) async fn install_offer(
@@ -341,6 +344,7 @@ pub(crate) async fn install_offer(
         (status = 404, description = "`unknown_companion`.", body = ErrorEnvelope),
         (status = 409, description = "`confirmation_mismatch`, `not_wired`, `busy`, or why it can't be installed here.", body = ErrorEnvelope),
         (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
+        (status = 503, description = "`companions_unavailable`: companions are off in this process.", body = ErrorEnvelope),
     )
 )]
 pub(crate) async fn install_companion(
@@ -373,6 +377,7 @@ pub(crate) async fn install_companion(
         (status = 200, body = RemovalPlan),
         (status = 404, description = "`unknown_companion`.", body = ErrorEnvelope),
         (status = 409, description = "`not_installed`, `native_in_container`.", body = ErrorEnvelope),
+        (status = 503, description = "`companions_unavailable`: companions are off in this process.", body = ErrorEnvelope),
     )
 )]
 pub(crate) async fn removal_plan(
@@ -399,6 +404,7 @@ pub(crate) async fn removal_plan(
         (status = 404, description = "`unknown_companion`.", body = ErrorEnvelope),
         (status = 409, description = "`confirmation_mismatch`, `not_installed`, `busy`.", body = ErrorEnvelope),
         (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
+        (status = 503, description = "`companions_unavailable`: companions are off in this process.", body = ErrorEnvelope),
     )
 )]
 pub(crate) async fn remove_companion(
@@ -429,6 +435,7 @@ pub(crate) async fn remove_companion(
         (status = 404, description = "`unknown_companion`.", body = ErrorEnvelope),
         (status = 409, description = "`not_installed`, `not_wired`, `busy`.", body = ErrorEnvelope),
         (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
+        (status = 503, description = "`companions_unavailable`: companions are off in this process.", body = ErrorEnvelope),
     )
 )]
 pub(crate) async fn restart_companion(
@@ -453,6 +460,7 @@ pub(crate) async fn restart_companion(
         (status = 200, body = CompanionLogs),
         (status = 404, description = "`unknown_companion`.", body = ErrorEnvelope),
         (status = 409, description = "`not_installed`, `not_wired`.", body = ErrorEnvelope),
+        (status = 503, description = "`companions_unavailable`: companions are off in this process.", body = ErrorEnvelope),
     )
 )]
 pub(crate) async fn companion_logs(
@@ -485,6 +493,7 @@ pub(crate) async fn companion_logs(
         (status = 404, description = "`unknown_companion`.", body = ErrorEnvelope),
         (status = 409, description = "`no_template`, `awaiting_pin`, ….", body = ErrorEnvelope),
         (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
+        (status = 503, description = "`companions_unavailable`: companions are off in this process.", body = ErrorEnvelope),
     )
 )]
 pub(crate) async fn companion_template(
@@ -520,6 +529,7 @@ pub(crate) async fn companion_template(
         (status = 422, description = "`bad_body`.", body = ErrorEnvelope),
         (status = 428, description = "`confirm_required`: no password.", body = ErrorEnvelope),
         (status = 429, description = "`rate_limited`: too many password attempts.", body = ErrorEnvelope),
+        (status = 503, description = "`companions_unavailable`: companions are off in this process.", body = ErrorEnvelope),
     )
 )]
 pub(crate) async fn reveal_credential(
@@ -573,6 +583,7 @@ pub(crate) async fn reveal_credential(
         (status = 404, description = "`unknown_companion`, `no_credential`.", body = ErrorEnvelope),
         (status = 409, description = "`not_installed`, `not_wired`, `busy`.", body = ErrorEnvelope),
         (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
+        (status = 503, description = "`companions_unavailable`: companions are off in this process.", body = ErrorEnvelope),
     )
 )]
 pub(crate) async fn regenerate_credential(
