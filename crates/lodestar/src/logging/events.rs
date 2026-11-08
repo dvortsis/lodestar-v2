@@ -961,6 +961,17 @@ lodestar_log::catalogue! {
         message: "The worker's DHT started on its assigned part of the keyspace",
         fields: { first: Label, end: Label, slots: Label },
     }
+    /// A filter or dictionary snapshot reached the worker whole but didn't
+    /// decode. The worker keeps the one it has (none after a restart, so
+    /// it can't seal yet) until the coordinator sends the next version or
+    /// the worker reconnects (WK-10d).
+    WORKER_SNAPSHOT_FAILED {
+        id: "worker.snapshot_failed",
+        component: Workers,
+        level: Warn,
+        message: "A snapshot from the coordinator didn't decode; the worker keeps the one it has",
+        fields: { kind: Label },
+    }
     /// The worker's fetch pool or prepare stage ended by itself (a bug):
     /// the worker stops with an error so its service manager starts it
     /// again, and the coordinator re-grants its keys (WK-10d).

@@ -844,6 +844,16 @@ fn snapshot_chunk(s: &Arc<Shared>, c: SnapshotChunk) {
         std::sync::atomic::compiler_fence(Ordering::SeqCst);
         if !ok {
             bump(&s.counts.snapshot_errors);
+            // Its last chunk was acknowledged, so the coordinator counts it
+            // delivered: said, so a stall until the next version is seen.
+            lodestar_log::log_event!(
+                crate::logging::events::WORKER_SNAPSHOT_FAILED,
+                kind = if kind == SnapshotKind::Filter {
+                    "filter"
+                } else {
+                    "dictionary"
+                }
+            );
         }
         start_if_ready(&s);
     });

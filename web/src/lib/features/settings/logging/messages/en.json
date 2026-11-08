@@ -371,6 +371,8 @@
 	"settings_logging_ev_cluster_snapshot_failed_h": "The filter rules sent to remote workers couldn't be built, so they keep the last ones they got. The error names the limit that was passed.",
 	"settings_logging_ev_worker_dht_started_n": "Worker DHT started",
 	"settings_logging_ev_worker_dht_started_h": "This worker's DHT started on the part of the keyspace the coordinator assigned it. When the assignment changes, only the DHT restarts, not the worker.",
+	"settings_logging_ev_worker_snapshot_failed_n": "Worker snapshot not decoded",
+	"settings_logging_ev_worker_snapshot_failed_h": "A filter or dictionary snapshot from the coordinator arrived whole but couldn't be read. The worker keeps the one it has until the coordinator sends a newer one or the worker reconnects. A worker that has none yet can't send results meanwhile.",
 	"settings_logging_ev_worker_stage_failed_n": "Worker stage stopped",
 	"settings_logging_ev_worker_stage_failed_h": "This worker's fetch or prepare stage stopped unexpectedly, which is a bug. The worker stops with an error so Docker or its service manager starts it again, and the coordinator gives its work to other workers meanwhile.",
 	"settings_logging_ev_worker_dht_start_failed_n": "Worker DHT couldn't start",
