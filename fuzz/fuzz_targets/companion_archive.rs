@@ -77,13 +77,7 @@ fuzz_target!(|data: &[u8]| {
     fs::create_dir(work.join("root")).expect("root");
 
     let exe = RelPath::parse(EXE).expect("valid");
-    let r = extract_limited(
-        limits,
-        kind,
-        &mut Cursor::new(archive),
-        &exe,
-        &staging,
-    );
+    let r = extract_limited(limits, kind, &mut Cursor::new(archive), &exe, &staging);
 
     let mut all = Vec::new();
     walk(&work, &mut all);

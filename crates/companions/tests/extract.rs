@@ -546,7 +546,7 @@ fn a_long_name_or_pax_header_cannot_inflate_past_the_caps() {
         overhead: 1024 * 1024,
         ..Limits::Q16
     };
-    for ty in [b'L', b'K', b'x', b'g'] {
+    for ty in *b"LKxg" {
         let bomb = header_bomb(ty, 64 * 1024 * 1024);
         let r = run_with(limits, ArchiveKind::TarGz, &bomb).0;
         let refusal = r.unwrap_err().refusal();
