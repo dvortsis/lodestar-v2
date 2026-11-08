@@ -6138,6 +6138,11 @@
       "id": "X-lodestar-lib-unknown-flake",
       "note": "WK-10d session saw 1 of 800 `cargo test -p lodestar --lib` fail once locally (name not captured; 13 reruns clean). Watch CI for a lodestar lib flake; capture the name if seen.",
       "logged": "2026-11-08T11:11Z"
+    },
+    {
+      "id": "WK-10d-later",
+      "note": "From #607 delta reviews (follow-ups): random lease tokens (epoch<<32|seq predictable); join detached cluster session tasks at shutdown; per-fleet alert on sustained floor reporting near the 100/h budget.",
+      "logged": "2026-11-08T11:20Z"
     }
   ],
   "main_health": [
@@ -6870,7 +6875,7 @@
         "slice": "WK-10d",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #607 fix round green at 3b22dc5f; fresh delta review (Opus + security) running; WK-10e next",
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #607 delta CHANGES at 3b22dc5f (pending-map cap fill by one worker; cap/pause untested + bug; claim check join-error fail-open; durable budget pause; regrant cancel leak); round 3, then fresh delta review",
         "since": "2026-11-08T04:50:45Z"
       }
     ],
@@ -6929,5 +6934,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T11:11Z"
+  "updated": "2026-11-08T11:20Z"
 }
