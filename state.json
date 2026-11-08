@@ -6298,6 +6298,11 @@
       "id": "review-618",
       "at": "2026-11-08T17:04:23Z",
       "note": "#618 PK-manifest green at 8d05ca2c; fresh Opus + /security-review launched."
+    },
+    {
+      "id": "X-soak-screen-calibrate",
+      "at": "2026-11-08T16:05Z",
+      "note": "analyze_cr0 screen replay: tripped on passing r5 (mimalloc_committed_mib_per_1000_stored 37.79 vs 20), not_available on failing r4 (mmap_cache_excess[main] absent). Recalibrate/demote mimalloc growth; handle absent mmap_cache_excess. Advisory only; after current slices."
     }
   ],
   "main_health": [
