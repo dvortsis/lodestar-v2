@@ -6456,6 +6456,10 @@
     {
       "at": "2026-11-08T20:24Z",
       "note": "Runner PR #635 merged (3e69d889): owns fixes, CMP-6 owns, PK-win-upd-2 notes, X-natural-wording / X-win-restart-followups (after CMP-6) / X-lease-report-atomic, plan TZ line. Main macOS check: watch the newest main run (6554ca2c's may be cancelled by this merge)."
+    },
+    {
+      "at": "2026-11-08T20:20Z",
+      "note": "PK-win-upd-2 owns approved (option a): update/windows/check.rs install wiring (install, incapable, can_install) + skip trim; update/download.rs cfg(windows) create_part with reparse refusal, and drop download's cfg(unix) gate in update/mod.rs. Unix unchanged. Add both to PK-win-upd-2 owns in the next runner PR. Main macOS: 20818fea and 6554ca2c runs cancelled by later merges; watching 3e69d889."
     }
   ],
   "main_health": [
