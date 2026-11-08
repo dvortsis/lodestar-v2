@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-08T01:13Z",
+  "updated_at": "2026-11-08T01:53Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5951,6 +5951,10 @@
       "id": "X-win-repair-handle-acl",
       "what": "Handle-based SetSecurityInfo with FILE_FLAG_OPEN_REPARSE_POINT in secure-datadir.ps1 to close the Set-Acl-by-path gap (from #597 delta review; admin-own-process only)",
       "at": "2026-11-08T01:13Z"
+    },
+    {
+      "id": "WK-10b-merged",
+      "note": "2026-11-08T01:53Z: #599 merged a3ddae03 on fresh Opus delta MERGE (security review CHANGES -> B1 fixed). Owner \u00a72.19 flags sent with merge. WK-10c in same session (slot 4)."
     }
   ],
   "main_health": [
@@ -6652,7 +6656,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T01:13Z",
+    "updated": "2026-11-08T01:53Z",
     "items": [
       {
         "slot": 1,
@@ -6680,11 +6684,11 @@
       },
       {
         "slot": 4,
-        "slice": "WK-10b",
+        "slice": "WK-10c",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #599 review CHANGES (B1 SEAL_WAIT per-result; hardening); fix round requested 2026-11-08T00:44Z",
-        "since": "2026-11-07T23:27Z"
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #599 WK-10b merged a3ddae03; WK-10c next (sharded DHT, budget, heartbeat stats, tombstones, measured RSS, review nits)",
+        "since": "2026-11-08T01:53Z"
       }
     ],
     "limit": 8,
