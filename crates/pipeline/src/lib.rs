@@ -178,7 +178,9 @@ pub struct PipelineConfig {
     pub setup_done: Option<watch::Receiver<bool>>,
     /// The companion manager's snapshots ([`requires`], CMP-10): a plugin
     /// that needs a companion runs only while it's there and healthy.
-    /// `None`: no plugin is held for a companion.
+    /// `None`: no plugin is held for a companion, so the gate is off until
+    /// the companion manager exists. CMP-5 must wire `Some`; with `Some`
+    /// the gate fails closed.
     pub companions: Option<requires::Companions>,
 }
 

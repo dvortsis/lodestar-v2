@@ -1,30 +1,32 @@
 //! Plugins that need a companion (architecture §18.10; plan
 //! 2026-11-06-v06-companions §4.3, CMP-10).
 //!
-//! `lodestar_companions::requires` says which plugins need which
-//! companion. Here the host holds such a plugin until it's met:
+//! `lodestar_companions::requires` says which plugins need what. Here the
+//! host holds such a plugin until it's met:
 //!
-//! - **[`State::Needs`]:** the companion isn't installed or detected. The
-//!   plugin doesn't start. It waits on the snapshot, with no polling and
-//!   no retries, and starts as soon as the companion is there and healthy,
-//!   without a restart of Lodestar.
-//! - **[`State::Unhealthy`]:** the companion is there but failing its
-//!   health check. A running plugin is stopped (paused) and starts again
-//!   once it's healthy. Other plugins are unaffected.
+//! - **[`State::Needs`]:** nothing that meets it is there. The plugin
+//!   doesn't start. It waits on the snapshot, with no polling and no
+//!   retries, and starts as soon as something meets it, without a restart
+//!   of Lodestar.
+//! - **[`State::Unhealthy`]:** only a companion that's failing its health
+//!   check could meet it. A running plugin is stopped (paused) and starts
+//!   again once it recovers. Other plugins are unaffected.
 //! - **[`State::Ok`]:** met, or the plugin needs nothing.
 //!
 //! The binary hands [`crate::PipelineConfig::companions`] a receiver of
-//! [`Snapshot`]s from the companion manager (CMP-5). **It fails closed:**
-//! a snapshot that is [`Snapshot::Unknown`] (not read yet, or unreadable)
-//! or a sender that went away starts no gated plugin and pauses a running
-//! one. `None` turns the gate off, as `setup_done: None` turns off the
-//! setup hold: until the manager exists nothing reports companions, and a
-//! gate with nothing to read would switch off the Prowlarr and
-//! download-client sources everywhere.
+//! [`Snapshot`]s from the companion manager. **It fails closed:** a
+//! snapshot that is [`Snapshot::Unknown`] (not read yet, or unreadable)
+//! or a sender that went away starts no gated plugin, pauses a running
+//! one, and reads as [`State::Needs`] in the API. `None` turns the gate
+//! off, as `setup_done: None` turns off the setup hold, so the Prowlarr
+//! and download-client sources run as before until CMP-5 exists. **CMP-5
+//! must wire `Some`** (runner, 2026-11-08).
 //!
 //! Only transitions are logged, once each (`pipeline.source_needs_companion`,
 //! `pipeline.source_companion_unhealthy`, `pipeline.source_companion_ready`),
-//! with the plugin and companion ids and nothing else.
+//! with the plugin and companion ids and nothing else. A companion whose
+//! health flaps restarts the plugin once per flip it reports, so the
+//! manager debounces health before it sends (CMP-5).
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -44,22 +46,32 @@ pub enum Health {
     Unhealthy,
 }
 
-/// What the companion manager knows: every companion installed or
-/// detected, by catalogue id, with its health. One that isn't listed is
-/// missing.
+/// What's there, as the companion manager knows it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Present {
+    /// Every companion installed or detected, by catalogue id, with its
+    /// health. One that isn't listed is missing.
+    pub companions: BTreeMap<String, Health>,
+    /// A download client is configured in Settings → Integrations that
+    /// Lodestar doesn't manage (one it manages is in `companions`, with
+    /// its health). Its own health isn't judged here.
+    pub external_client: bool,
+}
+
+/// The companion manager's latest word.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Snapshot {
     /// Not read yet, or unreadable: nothing gated starts.
     #[default]
     Unknown,
-    Known(BTreeMap<String, Health>),
+    Known(Present),
 }
 
 /// The receiver the binary hands the pipeline.
 pub type Companions = watch::Receiver<Snapshot>;
 
-/// A plugin's standing with the companion it needs. The companion is a
-/// catalogue id.
+/// A plugin's standing with what it needs. The companion is a catalogue
+/// id: the unhealthy one, or the one to suggest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
     Ok,
@@ -67,30 +79,30 @@ pub enum State {
     Unhealthy(&'static str),
 }
 
-/// `requirement`'s state on `snapshot`. Any healthy candidate meets it.
-/// Otherwise the first present (unhealthy) one makes it
-/// [`State::Unhealthy`], and with none present it's
-/// [`State::Needs`] the suggested one. An unknown snapshot reads as
-/// needing it.
+/// `requirement`'s state on `snapshot`. A healthy companion that can meet
+/// it, or an external client where one counts, makes it `Ok`. Otherwise
+/// the first present (unhealthy) companion makes it [`State::Unhealthy`],
+/// and with none it's [`State::Needs`] the suggested one. An unknown
+/// snapshot reads as needing it.
 pub fn evaluate(
     requirement: &Requirement,
     catalogue: Option<&Catalogue>,
     snapshot: &Snapshot,
 ) -> State {
     let Snapshot::Known(present) = snapshot else {
-        return State::Needs(requirement.suggested());
+        return State::Needs(requirement.suggest);
     };
-    let candidates = requirement.candidates(catalogue);
-    let health = |id: &str| present.get(id).copied();
-    if candidates
-        .iter()
-        .any(|id| health(id) == Some(Health::Healthy))
-    {
+    if present.external_client && requirement.takes_external_client() {
         return State::Ok;
     }
-    match candidates.iter().find(|id| health(id).is_some()) {
+    let ids = requirement.companions(catalogue);
+    let health = |id: &str| present.companions.get(id).copied();
+    if ids.iter().any(|id| health(id) == Some(Health::Healthy)) {
+        return State::Ok;
+    }
+    match ids.iter().find(|id| health(id).is_some()) {
         Some(id) => State::Unhealthy(id),
-        None => State::Needs(requirement.suggested()),
+        None => State::Needs(requirement.suggest),
     }
 }
 
@@ -103,11 +115,13 @@ fn state_of(requirement: &Requirement, snapshot: &Snapshot) -> State {
 }
 
 impl Monitor {
-    /// Plugin `plugin`'s standing with its companion, now: what the
-    /// Sources API shows (`companion_need`). [`State::Ok`] for a plugin
-    /// that needs none, and for every plugin while the gate is off.
+    /// Plugin `plugin`'s standing now: what the Sources API shows
+    /// (`companion_need`). [`State::Ok`] for a plugin that needs nothing,
+    /// and for every plugin while the gate is off. A closed channel reads
+    /// as unknown, as it does to the gate.
     pub fn companion_state(&self, plugin: &str) -> State {
         match (requirement(plugin), &self.companions) {
+            (Some(r), Some(rx)) if rx.has_changed().is_err() => state_of(&r, &Snapshot::Unknown),
             (Some(r), Some(rx)) => state_of(&r, &rx.borrow()),
             _ => State::Ok,
         }
@@ -147,9 +161,11 @@ fn note(plugin: &'static str, last: &mut State, now: State) {
     *last = now;
 }
 
-/// The snapshot now, marked seen. A closed channel reads as unknown.
+/// The snapshot now, marked seen. A closed channel reads as unknown,
+/// whether it closed before the gate first looked or since: the last
+/// value a sender left behind never counts.
 fn read(rx: &mut Companions, closed: bool) -> Snapshot {
-    if closed {
+    if closed || rx.has_changed().is_err() {
         Snapshot::Unknown
     } else {
         rx.borrow_and_update().clone()
@@ -157,7 +173,8 @@ fn read(rx: &mut Companions, closed: bool) -> Snapshot {
 }
 
 /// Waits for the next snapshot, or `stop`. `false` when stopped. A sender
-/// dropped sets `closed`, which then reads as unknown.
+/// dropped sets `closed`, which then reads as unknown and is never waited
+/// on again.
 async fn next(stop: &mut Shutdown, rx: &mut Companions, closed: &mut bool) -> bool {
     tokio::select! {
         biased;
@@ -186,12 +203,14 @@ fn for_run(ctx: &mut SourceCtx, shutdown: Shutdown) -> SourceCtx {
     }
 }
 
-/// Runs plugin `plugin` through `run`, held for its companion when it
-/// needs one and `companions` is set; otherwise just `run(ctx)`.
+/// Runs plugin `plugin` through `run`, held for what it needs when it
+/// needs something and `companions` is set; otherwise just `run(ctx)`.
 ///
-/// `running` reads `false` while it waits or is paused. It returns when
-/// the context's shutdown fires (a pause winding down is cut short), or
-/// when a run ends on its own, with that run's result.
+/// `running` reads `false` while it waits, and once a paused run has
+/// ended (or been dropped), never while one is still winding down, so a
+/// purge's stop still waits for it. It returns when the context's
+/// shutdown fires (a pause winding down is cut short), or when a run ends
+/// on its own, with that run's result.
 pub(crate) async fn run<'a>(
     plugin: &'static str,
     companions: Option<Companions>,
@@ -209,6 +228,9 @@ pub(crate) async fn run<'a>(
     loop {
         // Held until met: one evaluation per snapshot sent, nothing more.
         loop {
+            if stop.is_requested() {
+                return Ok(());
+            }
             let now = state_of(&req, &read(&mut rx, closed));
             note(plugin, &mut logged, now);
             if now == State::Ok {
@@ -236,7 +258,6 @@ pub(crate) async fn run<'a>(
                         continue;
                     }
                     note(plugin, &mut logged, now);
-                    running.store(false, Ordering::Relaxed);
                     let _ = pause.send(true);
                     // A plugin that ignores its stop is dropped (cancelled)
                     // after the stop timeout; an outright stop cuts the
@@ -244,8 +265,16 @@ pub(crate) async fn run<'a>(
                     tokio::select! {
                         biased;
                         () = stop.requested() => return Ok(()),
-                        _ = tokio::time::timeout(PLUGIN_STOP_TIMEOUT, fut) => {}
+                        ended = tokio::time::timeout(PLUGIN_STOP_TIMEOUT, fut) => {
+                            if ended.is_err() {
+                                lodestar_log::log_event!(
+                                    log_events::SOURCE_STOP_TIMEOUT,
+                                    plugin = plugin
+                                );
+                            }
+                        }
                     }
+                    running.store(false, Ordering::Relaxed);
                     break;
                 }
             }
@@ -255,19 +284,23 @@ pub(crate) async fn run<'a>(
 
 #[cfg(test)]
 mod tests {
-    use lodestar_companions::catalogue::Need;
     use proptest::prelude::*;
 
     use super::*;
 
-    const PROWLARR: Requirement = Requirement::Companion("prowlarr");
-    const CLIENT: Requirement = Requirement::AnyOf {
-        need: Need::DownloadClient,
-        suggest: "qbittorrent",
-    };
+    fn prowlarr() -> Requirement {
+        requirement("prowlarr").unwrap()
+    }
 
-    fn known(pairs: &[(&str, Health)]) -> Snapshot {
-        Snapshot::Known(pairs.iter().map(|(k, h)| (k.to_string(), *h)).collect())
+    fn client() -> Requirement {
+        requirement("download_clients").unwrap()
+    }
+
+    fn known(pairs: &[(&str, Health)], external_client: bool) -> Snapshot {
+        Snapshot::Known(Present {
+            companions: pairs.iter().map(|(k, h)| (k.to_string(), *h)).collect(),
+            external_client,
+        })
     }
 
     #[test]
@@ -275,32 +308,37 @@ mod tests {
         use Health::*;
         let c = catalogue();
         assert!(c.is_some());
+        let (p, d) = (prowlarr(), client());
         let cases: &[(Requirement, Snapshot, State)] = &[
-            (PROWLARR, Snapshot::Unknown, State::Needs("prowlarr")),
-            (PROWLARR, known(&[]), State::Needs("prowlarr")),
-            (PROWLARR, known(&[("prowlarr", Healthy)]), State::Ok),
+            (p, Snapshot::Unknown, State::Needs("prowlarr")),
+            (p, known(&[], false), State::Needs("prowlarr")),
+            (p, known(&[("prowlarr", Healthy)], false), State::Ok),
             (
-                PROWLARR,
-                known(&[("prowlarr", Unhealthy)]),
+                p,
+                known(&[("prowlarr", Unhealthy)], false),
                 State::Unhealthy("prowlarr"),
             ),
-            // Another companion doesn't count.
+            // Another companion, or an external client, doesn't count.
             (
-                PROWLARR,
-                known(&[("qbittorrent", Healthy)]),
+                p,
+                known(&[("qbittorrent", Healthy)], true),
                 State::Needs("prowlarr"),
             ),
-            (CLIENT, Snapshot::Unknown, State::Needs("qbittorrent")),
-            (CLIENT, known(&[("qbittorrent", Healthy)]), State::Ok),
+            (d, Snapshot::Unknown, State::Needs("qbittorrent")),
+            (d, known(&[], false), State::Needs("qbittorrent")),
+            (d, known(&[("qbittorrent", Healthy)], false), State::Ok),
+            // An external client meets it, whatever a companion's health.
+            (d, known(&[], true), State::Ok),
+            (d, known(&[("qbittorrent", Unhealthy)], true), State::Ok),
             (
-                CLIENT,
-                known(&[("qbittorrent", Unhealthy)]),
+                d,
+                known(&[("qbittorrent", Unhealthy)], false),
                 State::Unhealthy("qbittorrent"),
             ),
             // Not a download client, and not in the catalogue.
             (
-                CLIENT,
-                known(&[("prowlarr", Healthy), ("transmission", Healthy)]),
+                d,
+                known(&[("prowlarr", Healthy), ("transmission", Healthy)], false),
                 State::Needs("qbittorrent"),
             ),
         ];
@@ -321,44 +359,54 @@ mod tests {
         let ids = ["qbittorrent", "prowlarr", "gluetun", "other"];
         prop_oneof![
             1 => Just(Snapshot::Unknown),
-            4 => proptest::collection::vec(health(), 4).prop_map(move |hs| {
-                Snapshot::Known(
-                    ids.iter()
-                        .zip(hs)
-                        .filter_map(|(id, h)| h.map(|h| (id.to_string(), h)))
-                        .collect(),
-                )
-            }),
+            4 => (proptest::collection::vec(health(), 4), any::<bool>()).prop_map(
+                move |(hs, external_client)| {
+                    Snapshot::Known(Present {
+                        companions: ids
+                            .iter()
+                            .zip(hs)
+                            .filter_map(|(id, h)| h.map(|h| (id.to_string(), h)))
+                            .collect(),
+                        external_client,
+                    })
+                }
+            ),
         ]
     }
 
     proptest! {
-        /// Over any snapshot: `Ok` exactly when a candidate is healthy;
-        /// otherwise it names a candidate, unhealthy only if that one is
-        /// there; never `Ok` on an unknown snapshot.
+        /// Over any snapshot: `Ok` exactly when a companion that can meet
+        /// it is healthy, or an external client counts; otherwise it names
+        /// a companion, unhealthy only if that one is there; never `Ok`
+        /// on an unknown snapshot.
         #[test]
-        fn ok_only_when_a_candidate_is_healthy(s in snapshot(), any in any::<bool>()) {
+        fn ok_only_when_something_meets_it(s in snapshot(), dl in any::<bool>()) {
             let c = catalogue();
-            let r = if any { CLIENT } else { PROWLARR };
-            let cands = r.candidates(c);
+            let r = if dl { client() } else { prowlarr() };
+            let ids = r.companions(c);
             let got = evaluate(&r, c, &s);
-            let healthy = match &s {
+            let met = match &s {
                 Snapshot::Unknown => false,
-                Snapshot::Known(m) => cands.iter().any(|id| m.get(*id) == Some(&Health::Healthy)),
+                Snapshot::Known(p) => {
+                    (p.external_client && r.takes_external_client())
+                        || ids.iter().any(|id| p.companions.get(*id) == Some(&Health::Healthy))
+                }
             };
-            prop_assert_eq!(got == State::Ok, healthy);
+            prop_assert_eq!(got == State::Ok, met);
             match (got, &s) {
                 (State::Ok, _) => {}
-                (State::Needs(id), Snapshot::Known(m)) => {
-                    prop_assert_eq!(id, r.suggested());
-                    prop_assert!(cands.iter().all(|c| !m.contains_key(*c)));
+                (State::Needs(id), Snapshot::Known(p)) => {
+                    prop_assert_eq!(id, r.suggest);
+                    prop_assert!(ids.iter().all(|c| !p.companions.contains_key(*c)));
                 }
-                (State::Needs(id), Snapshot::Unknown) => prop_assert_eq!(id, r.suggested()),
-                (State::Unhealthy(id), Snapshot::Known(m)) => {
-                    prop_assert!(cands.contains(&id));
-                    prop_assert_eq!(m.get(id), Some(&Health::Unhealthy));
+                (State::Needs(id), Snapshot::Unknown) => prop_assert_eq!(id, r.suggest),
+                (State::Unhealthy(id), Snapshot::Known(p)) => {
+                    prop_assert!(ids.contains(&id));
+                    prop_assert_eq!(p.companions.get(id), Some(&Health::Unhealthy));
                 }
-                (State::Unhealthy(_), Snapshot::Unknown) => prop_assert!(false, "unknown reads as needs"),
+                (State::Unhealthy(_), Snapshot::Unknown) => {
+                    prop_assert!(false, "unknown reads as needs")
+                }
             }
         }
     }

@@ -8,9 +8,13 @@
 //! companion.
 //!
 //! - The Prowlarr plugin needs Prowlarr itself.
-//! - The download-client source needs a download client: any catalogue
-//!   entry needed for [`Need::DownloadClient`] will do, and the one to
-//!   suggest is qBittorrent (§18.10's wizard recommendation).
+//! - The download-client source needs a download client (runner,
+//!   2026-11-08): a client configured in Settings → Integrations that
+//!   Lodestar doesn't manage, or any catalogue companion needed for
+//!   [`Need::DownloadClient`]. With neither, the one to suggest is
+//!   qBittorrent (§18.10's wizard recommendation). An external client's
+//!   own health stays the integration's business; only a managed
+//!   companion's health can hold the plugin.
 //! - i2pd's plugins get their entry when they and i2pd's catalogue entry
 //!   exist (v1.1).
 //!
@@ -23,59 +27,79 @@
 
 use crate::catalogue::{Catalogue, Need};
 
-/// What a plugin needs before it may start.
+/// One thing that meets a [`Requirement`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Requirement {
-    /// Exactly this companion, by catalogue id.
+pub enum Satisfier {
+    /// This companion, by catalogue id, installed or detected and healthy.
     Companion(&'static str),
-    /// Any catalogue companion needed for `need`; `suggest` is the one
-    /// named while none is there, and counts even when the catalogue
-    /// can't be read.
-    AnyOf { need: Need, suggest: &'static str },
+    /// Any catalogue companion needed for this role, healthy.
+    AnyCompanion(Need),
+    /// A download client configured in Settings → Integrations that
+    /// Lodestar doesn't manage. Its health isn't judged here.
+    ExternalClient,
+}
+
+/// What a plugin needs before it may start: any one of its satisfiers,
+/// and the companion to suggest while none is there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Requirement {
+    pub satisfiers: &'static [Satisfier],
+    /// Named while it isn't met; a catalogue id. It always counts as a
+    /// candidate, even when the catalogue can't be read.
+    pub suggest: &'static str,
 }
 
 impl Requirement {
-    /// The companion ids that satisfy it, the suggested one first and
+    /// The companion ids that can meet it, the suggested one first and
     /// then the rest in catalogue order. With no catalogue (it failed to
-    /// load), only the named one: the set only ever shrinks.
-    pub fn candidates(&self, catalogue: Option<&Catalogue>) -> Vec<&'static str> {
-        match *self {
-            Requirement::Companion(id) => vec![id],
-            Requirement::AnyOf { need, suggest } => {
-                let mut ids = vec![suggest];
-                if let Some(c) = catalogue {
-                    for e in c.entries() {
-                        if e.needs(need) {
-                            let id = e.id.as_str();
-                            if let Some(known) = MAPPED_IDS.iter().find(|k| **k == id)
-                                && !ids.contains(known)
-                            {
-                                ids.push(known);
-                            }
+    /// load), the role adds nothing: the set only ever shrinks.
+    pub fn companions(&self, catalogue: Option<&Catalogue>) -> Vec<&'static str> {
+        let mut ids = vec![self.suggest];
+        let mut add = |id: &'static str| {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        };
+        for s in self.satisfiers {
+            match *s {
+                Satisfier::Companion(id) => add(id),
+                Satisfier::AnyCompanion(need) => {
+                    for e in catalogue.map(Catalogue::entries).unwrap_or_default() {
+                        if e.needs(need)
+                            && let Some(id) = MAPPED_IDS.iter().find(|k| **k == e.id.as_str())
+                        {
+                            add(id);
                         }
                     }
                 }
-                ids
+                Satisfier::ExternalClient => {}
             }
         }
+        ids
     }
 
-    /// The companion to name while it isn't met.
-    pub fn suggested(&self) -> &'static str {
-        match *self {
-            Requirement::Companion(id) => id,
-            Requirement::AnyOf { suggest, .. } => suggest,
-        }
+    /// Whether a client configured in Integrations meets it.
+    pub fn takes_external_client(&self) -> bool {
+        self.satisfiers.contains(&Satisfier::ExternalClient)
     }
 }
 
 /// The map: plugin manifest id → what it needs.
 const MAP: &[(&str, Requirement)] = &[
-    ("prowlarr", Requirement::Companion("prowlarr")),
+    (
+        "prowlarr",
+        Requirement {
+            satisfiers: &[Satisfier::Companion("prowlarr")],
+            suggest: "prowlarr",
+        },
+    ),
     (
         "download_clients",
-        Requirement::AnyOf {
-            need: Need::DownloadClient,
+        Requirement {
+            satisfiers: &[
+                Satisfier::ExternalClient,
+                Satisfier::AnyCompanion(Need::DownloadClient),
+            ],
             suggest: "qbittorrent",
         },
     ),
@@ -112,22 +136,28 @@ mod tests {
         assert_eq!(requirement("nyaa"), None);
         assert_eq!(requirement(""), None);
         assert_eq!(requirement("PROWLARR"), None, "ids match exactly");
-        assert_eq!(
-            requirement("prowlarr"),
-            Some(Requirement::Companion("prowlarr"))
+        let p = requirement("prowlarr").unwrap();
+        assert_eq!(p.satisfiers, &[Satisfier::Companion("prowlarr")]);
+        assert!(!p.takes_external_client(), "Prowlarr is a hard need");
+        assert!(
+            requirement("download_clients")
+                .unwrap()
+                .takes_external_client()
         );
     }
 
     #[test]
-    fn every_companion_named_is_in_the_builtin_catalogue_for_the_role() {
+    fn every_companion_named_is_in_the_builtin_catalogue_for_its_role() {
         let c = builtin().expect("the built-in catalogue loads");
         for (plugin, r) in entries() {
-            for id in r.candidates(Some(c)) {
+            for id in r.companions(Some(c)) {
                 let e = c
                     .get(id)
                     .unwrap_or_else(|| panic!("{plugin}: {id} not in the catalogue"));
-                if let Requirement::AnyOf { need, .. } = r {
-                    assert!(e.needs(need), "{plugin}: {id} isn't needed for {need:?}");
+                for s in r.satisfiers {
+                    if let Satisfier::AnyCompanion(need) = s {
+                        assert!(e.needs(*need), "{plugin}: {id} isn't needed for {need:?}");
+                    }
                 }
             }
         }
@@ -139,8 +169,7 @@ mod tests {
     #[test]
     fn every_catalogue_download_client_can_satisfy_the_download_client_source() {
         let c = builtin().unwrap();
-        let r = requirement("download_clients").unwrap();
-        let got = r.candidates(Some(c));
+        let got = requirement("download_clients").unwrap().companions(Some(c));
         assert_eq!(got[0], "qbittorrent", "the suggestion comes first");
         for e in c.entries().iter().filter(|e| e.needs(Need::DownloadClient)) {
             assert!(
@@ -149,17 +178,14 @@ mod tests {
                 e.id
             );
         }
-        // Not a download client: never a candidate.
         assert!(!got.contains(&"prowlarr") && !got.contains(&"gluetun"));
     }
 
     #[test]
-    fn without_a_catalogue_only_the_named_companion_counts() {
+    fn without_a_catalogue_only_the_named_companions_count() {
         let r = requirement("download_clients").unwrap();
-        assert_eq!(r.candidates(None), vec!["qbittorrent"]);
-        assert_eq!(r.suggested(), "qbittorrent");
+        assert_eq!(r.companions(None), vec!["qbittorrent"]);
         let p = requirement("prowlarr").unwrap();
-        assert_eq!(p.candidates(None), vec!["prowlarr"]);
-        assert_eq!(p.suggested(), "prowlarr");
+        assert_eq!(p.companions(None), vec!["prowlarr"]);
     }
 }

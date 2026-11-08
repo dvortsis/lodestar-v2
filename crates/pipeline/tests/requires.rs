@@ -12,7 +12,7 @@ use std::time::Duration;
 use lodestar_log::{Record, Sink, Value};
 use lodestar_metainfo::InfoHash;
 use lodestar_peer_wire::{FailureKind, Fetched};
-use lodestar_pipeline::requires::{Health, Snapshot, State};
+use lodestar_pipeline::requires::{Health, Present, Snapshot, State};
 use lodestar_pipeline::{Monitor, Pipeline, PipelineConfig};
 use lodestar_sources::{
     BoxFuture, Consent, Fetcher, Kind, Manifest, Network, PluginError, Priority, Risk, SourceCtx,
@@ -202,12 +202,19 @@ async fn start(companions: Option<watch::Receiver<Snapshot>>) -> Started {
 }
 
 fn known(pairs: &[(&str, Health)]) -> Snapshot {
-    Snapshot::Known(
-        pairs
+    with_client(pairs, false)
+}
+
+/// `pairs`, and whether a download client Lodestar doesn't manage is
+/// configured in Integrations.
+fn with_client(pairs: &[(&str, Health)], external_client: bool) -> Snapshot {
+    Snapshot::Known(Present {
+        companions: pairs
             .iter()
             .map(|(k, h)| (k.to_string(), *h))
             .collect::<BTreeMap<_, _>>(),
-    )
+        external_client,
+    })
 }
 
 /// Waits for `ok`, up to [`DEADLINE`].
@@ -219,8 +226,12 @@ async fn until(what: &str, mut ok: impl FnMut() -> bool) {
     }
 }
 
-/// Lets every task spawned so far run as far as it can (a current-thread
-/// runtime runs nothing else in between).
+/// Lets every task spawned so far run as far as it can. Every test here
+/// runs on a current-thread runtime (pinned below), where a task runs
+/// only when this one yields, and the gate needs one poll per snapshot,
+/// so after this nothing it was sent is still unseen. The positive
+/// conditions are waited for with [`until`]; this backs only the
+/// "nothing happened" assertions.
 async fn settle() {
     for _ in 0..200 {
         tokio::task::yield_now().await;
@@ -242,7 +253,7 @@ async fn the_mapped_plugins_are_in_the_registry_and_none_is_a_peer_finder() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn a_missing_companion_holds_the_plugin_once_then_it_starts_when_it_arrives() {
     let _serial = SERIAL.lock().await;
     let (needs0, ready0) = (logged(NEEDS, "prowlarr"), logged(READY, "prowlarr"));
@@ -298,7 +309,7 @@ async fn a_missing_companion_holds_the_plugin_once_then_it_starts_when_it_arrive
     s.pipeline.shutdown().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn an_unhealthy_companion_pauses_its_plugin_alone_until_healthy() {
     let _serial = SERIAL.lock().await;
     let unhealthy0 = logged(UNHEALTHY, "prowlarr");
@@ -344,7 +355,7 @@ async fn an_unhealthy_companion_pauses_its_plugin_alone_until_healthy() {
     assert_eq!(s.prowlarr.live() + s.clients.live() + s.other.live(), 0);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn unknown_or_lost_state_never_starts_a_gated_plugin() {
     let _serial = SERIAL.lock().await;
     let (tx, rx) = watch::channel(Snapshot::Unknown);
@@ -387,12 +398,21 @@ async fn unknown_or_lost_state_never_starts_a_gated_plugin() {
     .await;
     settle().await;
     assert_eq!((s.prowlarr.starts(), s.clients.starts()), (2, 2));
+    // The API says so too, not the last snapshot sent.
+    assert_eq!(
+        s.monitor().companion_state("prowlarr"),
+        State::Needs("prowlarr")
+    );
+    assert_eq!(
+        s.monitor().companion_state("download_clients"),
+        State::Needs("qbittorrent")
+    );
     assert_eq!((s.other.live(), s.other.starts()), (1, 1));
 
     s.pipeline.shutdown().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn with_the_gate_off_nothing_is_held() {
     let _serial = SERIAL.lock().await;
     let s = start(None).await;
@@ -401,5 +421,57 @@ async fn with_the_gate_off_nothing_is_held() {
     })
     .await;
     assert_eq!(s.monitor().companion_state("prowlarr"), State::Ok);
+    s.pipeline.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_strict_gate_on_a_closed_channel_starts_nothing_gated() {
+    let _serial = SERIAL.lock().await;
+    // The sender is gone before the pipeline starts; it last said all
+    // was well, which no longer counts.
+    let (tx, rx) = watch::channel(with_client(&[("prowlarr", Health::Healthy)], true));
+    drop(tx);
+    let s = start(Some(rx)).await;
+    until("nyaa to start", || s.other.live() == 1).await;
+    settle().await;
+    assert_eq!((s.prowlarr.starts(), s.clients.starts()), (0, 0));
+    assert!(!s.running("prowlarr") && !s.running("download_clients"));
+    assert_eq!(
+        s.monitor().companion_state("prowlarr"),
+        State::Needs("prowlarr")
+    );
+    s.pipeline.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_client_configured_in_integrations_meets_the_download_client_source() {
+    let _serial = SERIAL.lock().await;
+    let unhealthy0 = logged(UNHEALTHY, "download_clients");
+    // An external client and an unhealthy managed qBittorrent: the
+    // external one meets it; Prowlarr still needs its own companion.
+    let (tx, rx) = watch::channel(with_client(&[("qbittorrent", Health::Unhealthy)], true));
+    let s = start(Some(rx)).await;
+    until("the client source to start", || s.clients.live() == 1).await;
+    assert_eq!(s.monitor().companion_state("download_clients"), State::Ok);
+    settle().await;
+    assert_eq!(s.prowlarr.starts(), 0, "an external client isn't Prowlarr");
+
+    // The external client is removed: only the unhealthy companion is left.
+    tx.send_replace(known(&[("qbittorrent", Health::Unhealthy)]));
+    until("the client source to pause", || s.clients.live() == 0).await;
+    until("it reads stopped", || !s.running("download_clients")).await;
+    assert_eq!(
+        s.monitor().companion_state("download_clients"),
+        State::Unhealthy("qbittorrent")
+    );
+    assert_eq!(logged(UNHEALTHY, "download_clients"), unhealthy0 + 1);
+    // And with neither, it needs one, suggesting qBittorrent.
+    tx.send_replace(known(&[]));
+    settle().await;
+    assert_eq!(
+        s.monitor().companion_state("download_clients"),
+        State::Needs("qbittorrent")
+    );
+    assert_eq!(s.clients.starts(), 1);
     s.pipeline.shutdown().await.unwrap();
 }

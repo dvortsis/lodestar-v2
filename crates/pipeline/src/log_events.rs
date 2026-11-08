@@ -184,7 +184,7 @@ lodestar_log::catalogue! {
         id: "pipeline.source_companion_unhealthy",
         component: Pipeline,
         level: Warn,
-        message: "Source paused: the companion it needs is unhealthy",
+        message: "Source held: the companion it needs is unhealthy",
         fields: { plugin: Label, companion: Label },
     }
     /// A source held for its companion started: the companion is there

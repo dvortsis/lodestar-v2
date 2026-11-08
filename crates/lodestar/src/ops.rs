@@ -867,6 +867,31 @@ pub fn ui_address(bind: std::net::SocketAddr) -> String {
 #[cfg(test)]
 mod tests;
 
+/// `Source.companion_need` from the pipeline's state, and its wire shape
+/// (CMP-10): what CMP-9b's chip reads.
+#[cfg(test)]
+mod companion_need_tests {
+    use super::*;
+
+    #[test]
+    fn each_state_maps_to_its_field_and_json() {
+        assert_eq!(companion_need(CompanionState::Ok), None);
+        let need = |s| serde_json::to_value(companion_need(s)).unwrap();
+        assert_eq!(
+            need(CompanionState::Needs("prowlarr")),
+            serde_json::json!({"companion": "prowlarr", "state": "missing"})
+        );
+        assert_eq!(
+            need(CompanionState::Unhealthy("qbittorrent")),
+            serde_json::json!({"companion": "qbittorrent", "state": "unhealthy"})
+        );
+        assert_eq!(need(CompanionState::Ok), serde_json::Value::Null);
+        let back: CompanionNeed =
+            serde_json::from_str(r#"{"companion":"prowlarr","state":"unhealthy"}"#).unwrap();
+        assert_eq!(back.state, CompanionNeedState::Unhealthy);
+    }
+}
+
 /// What `GET /sources` lists of each plugin's declared credentials and
 /// settings schema (X-sources-api-spec), over every plugin in the build.
 #[cfg(test)]
