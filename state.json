@@ -6525,6 +6525,16 @@
       "id": "runner-pr-op2a-owns",
       "at": "2026-11-08T22:53Z",
       "note": "Next runner PR: slices.yaml OP-2a owns += infra/akamai/terraform/scripts/{Deploy,Destroy,Preflight,Invoke-Preflight}.ps1 (those that terraform init), tests/Test-LodestarAutomation.ps1, terraform README operator-env section, ci.yml infra job terraform_version 1.10.5 (runner 1a: scripts read LODESTAR_TF_STATE_BUCKET/REGION, shared state, refuse when unset)"
+    },
+    {
+      "id": "runner-pr-op2-notes",
+      "at": "2026-11-08T23:10Z",
+      "note": "Next runner PR, slices.yaml notes: OP-2: fleet.json is never deleted; down writes a tombstone once inventory is empty (bridge reads no-fleet only from a readable tombstone; any error = fleet may exist); first tombstone writer is OP-2s call; ledger + mismatch-flag keys added to the OP-2a template, owner updates stack before FLEET_LIVE=true. OP-2b: a cloud-fleet job fences on the lock just before deliver-pia (PIA role scope unchanged). OP-3: runbook warns manual Deploy/Destroy share state but not lock. OP-2a owns += tests/Test-StateBackend.ps1 (pure test, runs in CI pwsh step)."
+    },
+    {
+      "id": "opt-oidc-repository-id",
+      "at": "2026-11-08T23:10Z",
+      "note": "Optional hardening (OP-2a self-review): GitHub OIDC include_claim_keys repository_id so trust survives a repo rename; changes owner setup step 2.8; raise with owner later, not blocking."
     }
   ],
   "main_health": [
@@ -7331,5 +7341,5 @@
     }
   ],
   "heartbeat": "2026-11-08T21:39Z",
-  "updated": "2026-11-08T22:53Z"
+  "updated": "2026-11-08T23:10Z"
 }
