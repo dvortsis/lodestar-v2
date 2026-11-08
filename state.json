@@ -6498,6 +6498,11 @@
       "id": "OP-2-notes",
       "from": "#636 reviews",
       "what": "Owner setup: hourly reaper creates the cloud-fleet environment before step 2.4 \u2014 owner edits it to main-only rather than creating it. OP-2: down with no fleet.json (write fleet.json before apply or let down run anyway); mismatch with no fleet recorded; max_fleets unused; monthly_compute_cap_usd unbounded in limits.load; attempt-1 rule for dispatch-down optional; live inventory filtered to fleet account+tag."
+    },
+    {
+      "id": "X-flake-search-keyboard-2",
+      "from": "#637 e2e on 4a235ceb",
+      "what": "e2e/search-table.keyboard.test.ts:8 \u2014 table-row-3 not focused after j (10 s). Recurrence after #477's fix. One re-run spent on #637. If it repeats on any PR, launch an X-flake slice (sonnet) when a slot frees."
     }
   ],
   "main_health": [
