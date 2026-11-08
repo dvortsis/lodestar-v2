@@ -6491,7 +6491,7 @@
     {
       "id": "CMP-5g-note",
       "from": "#639 CMP-6",
-      "what": "If a guided qBittorrent's replaced password must be revealable, add a provenance marker; CMP-6 reveals only Lodestar-generated credentials. Add to CMP-5g notes in next runner PR."
+      "what": "If a guided qBittorrent's replaced password must be revealable, add a provenance marker; CMP-6 reveals only Lodestar-generated credentials. Add to CMP-5g notes in next runner PR. Security review #639: reveal/regenerate guard (Service::installed) keys on snapshot version.is_some(); CMP-5g must base it on the manager's own install record (e.g. Manager::installed_by_lodestar) before detected companions enter the snapshot with a version."
     },
     "2026-11-08: #636 OP-1 security review MERGE (c0f43b2d); notes for OP-2: pin checkout by SHA once id-token/secrets land; attempt-1 rule for dispatch-down optional; live inventory must filter to fleet account+tag.",
     {
