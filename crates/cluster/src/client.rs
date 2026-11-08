@@ -161,7 +161,11 @@ pub async fn connect(
 }
 
 /// Something the coordinator sent that no request was waiting for.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Its `Debug` prints the have-filter, snapshot and `Assign` payloads only
+/// by length, as `ToWorker`'s does: the have-filter header and the filter
+/// snapshot carry keys (WK-3, WK-8).
+#[derive(Clone, PartialEq, Eq)]
 pub enum WorkerEvent {
     Assign(Assign),
     /// Keys granted with no request waiting: leases that expired elsewhere,
@@ -188,6 +192,11 @@ pub enum WorkerEvent {
     /// One chunk of a snapshot; acknowledge it with
     /// [`WorkerSession::send`] and [`ToCoordinator::SnapshotAck`].
     Snapshot(SnapshotChunk),
+    /// A have-filter snapshot's header (WK-3): its chunks follow as
+    /// [`WorkerEvent::Snapshot`]s of the have-filter kind.
+    HaveSnapshot(Vec<u8>),
+    /// Keys stored since the have-filter's header, in order (WK-3).
+    HaveDelta(Vec<u8>),
     /// Fetch these keys again and answer with [`ToCoordinator::Reverified`].
     Reverify(ReverifyRequest),
     /// The coordinator says this worker's clock is more than 60 s off.
@@ -207,11 +216,55 @@ impl WorkerEvent {
             WorkerEvent::Regranted(items) => items.len() * 40,
             WorkerEvent::Hints(h) => h.iter().map(|i| 40 + i.hints.len() * 32).sum::<usize>(),
             WorkerEvent::Snapshot(c) => c.bytes.len(),
+            WorkerEvent::HaveSnapshot(b) | WorkerEvent::HaveDelta(b) => b.len(),
             WorkerEvent::Reverify(r) => r.keys.len() * 20,
             WorkerEvent::Accepted { .. }
             | WorkerEvent::Drain
             | WorkerEvent::ClockSkewed { .. }
             | WorkerEvent::Ended(_) => 0,
+        }
+    }
+}
+
+impl std::fmt::Debug for WorkerEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let len =
+            |name: &str, n: usize, f: &mut std::fmt::Formatter<'_>| write!(f, "{name}({n} bytes)");
+        match self {
+            WorkerEvent::Assign(a) => f
+                .debug_struct("Assign")
+                .field("revision", &a.revision)
+                .field("payload", &a.payload.len())
+                .finish(),
+            WorkerEvent::Regranted(items) => f.debug_tuple("Regranted").field(items).finish(),
+            WorkerEvent::Drain => f.write_str("Drain"),
+            // Peers are kept in memory only (§18.7): counts, not addresses.
+            WorkerEvent::Hints(h) => f
+                .debug_struct("Hints")
+                .field("keys", &h.len())
+                .field("peers", &h.iter().map(|i| i.hints.len()).sum::<usize>())
+                .finish(),
+            WorkerEvent::Accepted { batch, accepted } => f
+                .debug_struct("Accepted")
+                .field("batch", batch)
+                .field("accepted", accepted)
+                .finish(),
+            WorkerEvent::Snapshot(c) => f
+                .debug_struct("Snapshot")
+                .field("kind", &c.kind)
+                .field("version", &c.version)
+                .field("seq", &c.seq)
+                .field("total", &c.total)
+                .field("bytes", &c.bytes.len())
+                .finish(),
+            WorkerEvent::HaveSnapshot(b) => len("HaveSnapshot", b.len(), f),
+            WorkerEvent::HaveDelta(b) => len("HaveDelta", b.len(), f),
+            WorkerEvent::Reverify(r) => f.debug_tuple("Reverify").field(r).finish(),
+            WorkerEvent::ClockSkewed { offset_ms } => f
+                .debug_struct("ClockSkewed")
+                .field("offset_ms", offset_ms)
+                .finish(),
+            WorkerEvent::Ended(r) => f.debug_tuple("Ended").field(r).finish(),
         }
     }
 }
@@ -349,6 +402,18 @@ impl WorkerSession {
         &self.welcome
     }
 
+    /// A cloneable handle for the requests (claims, reports, results,
+    /// commits, stats), so the worker's runtime can make them from its own
+    /// tasks while the caller keeps reading [`next_event`](Self::next_event).
+    /// It fails with [`ClientError::Closed`] once the session ends.
+    pub fn handle(&self) -> SessionHandle {
+        SessionHandle {
+            commands: self.commands.clone(),
+            leases: self.leases.clone(),
+            reply_timeout: self.reply_timeout,
+        }
+    }
+
     /// Bytes of events waiting for [`next_event`](Self::next_event) (at
     /// most [`WorkerConfig::event_queue_bytes`]).
     pub fn queued_bytes(&self) -> usize {
@@ -423,17 +488,20 @@ impl WorkerSession {
     /// `Counters`, `SnapshotAck` or `Reverified`. Returns once it's on the
     /// wire. Anything else has its own method and is refused here.
     pub async fn send(&self, msg: ToCoordinator) -> Result<(), ClientError> {
-        let allowed = matches!(
+        if !Self::sendable(&msg) {
+            return Err(ClientError::Invalid);
+        }
+        self.ask(|tx| Command::Send(msg, tx)).await
+    }
+
+    fn sendable(msg: &ToCoordinator) -> bool {
+        matches!(
             msg,
             ToCoordinator::Results(_)
                 | ToCoordinator::Counters(_)
                 | ToCoordinator::SnapshotAck(_)
                 | ToCoordinator::Reverified(_)
-        );
-        if !allowed || !msg.validate() {
-            return Err(ClientError::Invalid);
-        }
-        self.ask(|tx| Command::Send(msg, tx)).await
+        ) && msg.validate()
     }
 
     /// Forgets leases whose results the coordinator accepted (an
@@ -453,6 +521,78 @@ impl WorkerSession {
     pub async fn next_event(&mut self) -> Option<WorkerEvent> {
         // The permit goes back as the event leaves the queue.
         self.events.recv().await.map(|(event, _permit)| event)
+    }
+}
+
+/// A session's requests, from any task ([`WorkerSession::handle`]).
+#[derive(Debug, Clone)]
+pub struct SessionHandle {
+    commands: mpsc::Sender<Command>,
+    leases: Arc<AtomicU32>,
+    reply_timeout: Duration,
+}
+
+impl SessionHandle {
+    async fn ask<T>(
+        &self,
+        make: impl FnOnce(oneshot::Sender<T>) -> Command,
+    ) -> Result<T, ClientError> {
+        let (tx, rx) = oneshot::channel();
+        self.commands
+            .send(make(tx))
+            .await
+            .map_err(|_| ClientError::Closed)?;
+        timeout(self.reply_timeout, rx)
+            .await
+            .map_err(|_| ClientError::Timeout)?
+            .map_err(|_| ClientError::Closed)
+    }
+
+    /// As [`WorkerSession::claim`].
+    pub async fn claim(&self, items: Vec<ClaimItem>) -> Result<Vec<GrantItem>, ClientError> {
+        if items.is_empty() || items.len() > MAX_CLAIM_BATCH {
+            return Err(ClientError::Invalid);
+        }
+        self.ask(|tx| Command::Claim(items, tx)).await
+    }
+
+    /// As [`WorkerSession::report`].
+    pub async fn report(&self, items: Vec<OutcomeItem>) -> Result<(), ClientError> {
+        if items.is_empty() || items.len() > MAX_OUTCOME_BATCH {
+            return Err(ClientError::Invalid);
+        }
+        self.ask(|tx| Command::Report(items, tx)).await
+    }
+
+    /// As [`WorkerSession::send`].
+    pub async fn send(&self, msg: ToCoordinator) -> Result<(), ClientError> {
+        if !WorkerSession::sendable(&msg) {
+            return Err(ClientError::Invalid);
+        }
+        self.ask(|tx| Command::Send(msg, tx)).await
+    }
+
+    /// As [`WorkerSession::committed`].
+    pub async fn committed(&self, leases: Vec<([u8; 20], u64)>) -> Result<(), ClientError> {
+        self.ask(|tx| Command::Committed(leases, tx)).await
+    }
+
+    /// As [`WorkerSession::set_stats`].
+    pub async fn set_stats(&self, stats: Stats) -> Result<(), ClientError> {
+        self.commands
+            .send(Command::Stats(stats))
+            .await
+            .map_err(|_| ClientError::Closed)
+    }
+
+    /// Leases the session holds.
+    pub fn leases(&self) -> u32 {
+        self.leases.load(Ordering::Relaxed)
+    }
+
+    /// Whether the session has ended.
+    pub fn is_closed(&self) -> bool {
+        self.commands.is_closed()
     }
 }
 
@@ -774,10 +914,10 @@ impl Driver {
             }
             ToWorker::Snapshot(chunk) => self.event(WorkerEvent::Snapshot(chunk)).await,
             ToWorker::Reverify(req) => self.event(WorkerEvent::Reverify(req)).await,
-            // Later slices.
-            ToWorker::HaveSnapshot(_) | ToWorker::HaveDelta(_) | ToWorker::Update(_) => {
-                Step::Continue
-            }
+            ToWorker::HaveSnapshot(b) => self.event(WorkerEvent::HaveSnapshot(b)).await,
+            ToWorker::HaveDelta(b) => self.event(WorkerEvent::HaveDelta(b)).await,
+            // Update offers are out of v1 (plan Q13).
+            ToWorker::Update(_) => Step::Continue,
         }
     }
 }
@@ -870,5 +1010,138 @@ mod held_prune {
         beat(&s).await;
         s.committed(vec![]).await.unwrap();
         assert_eq!(s.leases(), 1, "key 1 pruned; key 3 still fetching");
+    }
+}
+
+#[cfg(test)]
+mod handle {
+    use super::*;
+    use crate::{ManualClock, local_pair};
+
+    /// The handle makes requests from another task while the session's
+    /// owner reads events; the have-filter messages reach the caller (they
+    /// were dropped before WK-10b); and no event prints a payload byte.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_handle_works_from_another_task_and_events_print_no_payload() {
+        let (mut coord, worker) = local_pair(16);
+        let config = WorkerConfig {
+            auto_heartbeat: false,
+            ..WorkerConfig::default()
+        };
+        let clock = Arc::new(ManualClock::new(1_000_000));
+        let (session, ()) = tokio::join!(
+            WorkerSession::start(
+                worker,
+                Hello::new(0, Capabilities::default()),
+                clock,
+                config
+            ),
+            async {
+                assert!(matches!(
+                    coord.recv().await,
+                    Ok(Some(ToCoordinator::Hello(_)))
+                ));
+                coord
+                    .send(ToWorker::Welcome(Welcome {
+                        major: PROTOCOL_MAJOR,
+                        minor: PROTOCOL_MINOR,
+                        worker: 0,
+                        heartbeat_ms: 5_000,
+                        lease_ttl_secs: 600,
+                        renew_now: false,
+                    }))
+                    .await
+                    .unwrap();
+            }
+        );
+        let mut s = session.unwrap();
+        let h = s.handle();
+        let claimed = tokio::spawn(async move {
+            h.claim(vec![ClaimItem {
+                key: [4; 20],
+                source: 0,
+                strategy: 0,
+                discovered_ms: 0,
+                hints: Vec::new(),
+            }])
+            .await
+        });
+        let Ok(Some(ToCoordinator::Claim(batch))) = coord.recv().await else {
+            panic!("no claim");
+        };
+        coord
+            .send(ToWorker::Grants(GrantBatch {
+                batch: batch.batch,
+                items: vec![GrantItem::Granted {
+                    key: [4; 20],
+                    token: 9,
+                    ttl_secs: 600,
+                }],
+            }))
+            .await
+            .unwrap();
+        let grants = claimed.await.unwrap().unwrap();
+        assert_eq!(grants.len(), 1);
+        assert_eq!(s.handle().leases(), 1);
+        // Requests the session refuses are refused by the handle too.
+        assert!(matches!(
+            s.handle().send(ToCoordinator::Drained).await,
+            Err(ClientError::Invalid)
+        ));
+
+        let secret = vec![0xAB; 48];
+        for msg in [
+            ToWorker::HaveSnapshot(secret.clone()),
+            ToWorker::HaveDelta(secret.clone()),
+            ToWorker::Snapshot(SnapshotChunk {
+                kind: SnapshotKind::Filter,
+                version: 3,
+                seq: 0,
+                total: 1,
+                bytes: secret.clone(),
+            }),
+        ] {
+            coord.send(msg).await.unwrap();
+        }
+        let mut seen = Vec::new();
+        while seen.len() < 3 {
+            let e = timeout(Duration::from_secs(15), s.next_event())
+                .await
+                .unwrap()
+                .unwrap();
+            let shown = format!("{e:?}");
+            assert!(
+                !shown.contains("171") && !shown.to_lowercase().contains("ab, ab"),
+                "{shown}"
+            );
+            seen.push(e);
+        }
+        assert_eq!(seen[0], WorkerEvent::HaveSnapshot(secret.clone()));
+        assert_eq!(seen[1], WorkerEvent::HaveDelta(secret));
+        assert!(format!("{:?}", seen[0]).contains("48 bytes"));
+
+        // Once the session ends, the handle says so.
+        let h = s.handle();
+        coord.close().await;
+        drop(coord);
+        timeout(Duration::from_secs(15), async {
+            while s.next_event().await.is_some() {}
+        })
+        .await
+        .expect("the session ends");
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        while !h.is_closed() {
+            assert!(tokio::time::Instant::now() < deadline, "still open");
+            tokio::task::yield_now().await;
+        }
+        assert!(matches!(
+            h.report(vec![OutcomeItem {
+                key: [4; 20],
+                token: 9,
+                outcome: Outcome::Lost { reason: 1 },
+            }])
+            .await,
+            Err(ClientError::Closed)
+        ));
     }
 }

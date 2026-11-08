@@ -338,25 +338,52 @@ impl Retry {
     }
 }
 
-/// The keys sealed records open with at `now`: today's and yesterday's (a
-/// spool holds a record for at most 24 h). A worker only ever holds a key
-/// the coordinator built (the filter snapshot carries it, keyed by the
-/// coordinator's day), and refuses to seal past that key's day by its own
-/// clock (`Judge::judge_at`), so no other key is needed (WK-9c's choice,
-/// in the decisions file).
-fn open_keys(seal_key: &[u8; 32], now: i64) -> Vec<WireKey> {
-    wire_keys(seal_key, now)
+/// From this time of day (UTC), the next day's wire key and its snapshot
+/// go out, so workers seal under it at 00:00Z with no gap (runner,
+/// #592's B2).
+pub const PRESEND_FROM: i64 = 23 * 3600;
+const DAY: i64 = 86_400;
+
+/// The time whose day the snapshot's wire key is for: `now`, or from
+/// [`PRESEND_FROM`] the start of the next day.
+fn key_time(now: i64) -> i64 {
+    let into = now.rem_euclid(DAY);
+    if into >= PRESEND_FROM {
+        now - into + DAY
+    } else {
+        now
+    }
 }
 
-/// Sets `keys` to the open keys at `now` when the day has changed since
-/// `day` (or on the first call). Returns whether it set them.
-fn follow_keys(keys: &WireKeys, seal_key: &[u8; 32], now: i64, day: &mut Option<u32>) -> bool {
-    let today = day_of(now);
-    if *day == Some(today) {
+/// The keys sealed records open with at `now`: yesterday's (a spool holds
+/// a record for at most 24 h), today's, and from [`PRESEND_FROM`] the next
+/// day's, which the snapshot sent then carries. A worker only ever holds a
+/// key the coordinator built, and refuses to seal past that key's day by
+/// its own clock (`Judge::judge_at`).
+fn open_keys(seal_key: &[u8; 32], now: i64) -> Vec<WireKey> {
+    let mut keys = wire_keys(seal_key, now);
+    let next = day_of(key_time(now));
+    if next > day_of(now) {
+        keys.push(super::filter::wire_key(seal_key, next));
+    }
+    keys
+}
+
+/// Sets `keys` to the open keys at `now` when they've changed since
+/// `seen` (the day, and the key day: a new day or the pre-send window).
+/// Returns whether it set them.
+fn follow_keys(
+    keys: &WireKeys,
+    seal_key: &[u8; 32],
+    now: i64,
+    seen: &mut Option<(u32, u32)>,
+) -> bool {
+    let mark = (day_of(now), day_of(key_time(now)));
+    if *seen == Some(mark) {
         return false;
     }
     keys.set(open_keys(seal_key, now));
-    *day = Some(today);
+    *seen = Some(mark);
     true
 }
 
@@ -543,8 +570,8 @@ impl InboundSink for Sink {
 struct Seen {
     /// Each connected remote worker's session id at the last tick.
     sessions: BTreeMap<WorkerId, u64>,
-    /// The day the open keys were last set for.
-    key_day: Option<u32>,
+    /// The day and key day the open keys were last set for.
+    key_day: Option<(u32, u32)>,
 }
 
 /// One server's tick: runs every [`TICK`] and applies acknowledgements as
@@ -623,7 +650,8 @@ async fn step(tick: &Arc<Tick>, server: &Arc<ClusterServer>, wiring: &Wiring, se
         follow_keys(k, &fleet.seal_key, now, &mut seen.key_day);
     }
     have_step(tick, server, fleet, &fleet_snapshot, wiring);
-    snapshot_step(tick, server, fleet, &fleet_snapshot, now).await;
+    // From 23:00Z the snapshot is built for the next day's key.
+    snapshot_step(tick, server, fleet, &fleet_snapshot, key_time(now)).await;
 }
 
 /// Starts both snapshots from chunk 0 for each worker whose session is new
@@ -2023,15 +2051,25 @@ mod tests {
         let (remote, _ends) = intake(&w.authority);
         w.remote = Some(remote);
         let (placement, now) = (w.placement.clone(), w.clock.now_secs());
+        let w_clock = w.clock.clone();
         let cluster = Cluster::start(w).await.unwrap();
         let h = cluster.handle();
         // The keys are set when the server is built, before any tick.
+        // Yesterday's and today's, and from 23:00Z tomorrow's too: whatever
+        // `open_keys` says for now (the test may run either side of 23:00Z
+        // or of midnight, so the expectation follows the clock).
         let keys = format!("{:?}", lock(&h.0.tick.keys));
         let today = day_of(now);
-        assert!(
-            keys.contains(&format!("[{}, {today}]", today - 1)),
-            "{keys}"
-        );
+        assert!(keys.contains(&format!("{}, {today}", today - 1)), "{keys}");
+        let later = w_clock.now_secs();
+        let want = |at: i64| {
+            let ids: Vec<String> = open_keys(&[7; 32], at)
+                .iter()
+                .map(|k| k.id.to_string())
+                .collect();
+            format!("Some(WireKeys([{}]))", ids.join(", "))
+        };
+        assert!(keys == want(now) || keys == want(later), "{keys}");
         let creds = join(&h, "w1").await;
         let addr = h.local_addr().unwrap().to_string();
 
@@ -2542,6 +2580,52 @@ mod tests {
         cluster.shutdown().await;
     }
 
+    /// From 23:00Z the snapshot is built for the next day's wire key, and
+    /// stays so across midnight (no second build at 00:00Z).
+    #[test]
+    fn the_next_days_key_goes_out_from_23z() {
+        let day = 20_400_i64;
+        let at = |d: i64, secs: i64| d * 86_400 + secs;
+        assert_eq!(key_time(at(day, 12 * 3600)), at(day, 12 * 3600));
+        assert_eq!(
+            key_time(at(day, PRESEND_FROM - 1)),
+            at(day, PRESEND_FROM - 1)
+        );
+        assert_eq!(
+            day_of(key_time(at(day, PRESEND_FROM))),
+            day_of(at(day + 1, 0))
+        );
+        assert_eq!(day_of(key_time(at(day, 86_399))), day_of(at(day + 1, 0)));
+        assert_eq!(day_of(key_time(at(day + 1, 0))), day_of(at(day + 1, 0)));
+        // The snapshot's due check, which compares the day it was built for
+        // with the key time's: built at 23:00Z for tomorrow, it's not due
+        // again at 00:00Z.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("c.db"), StoreConfig::default()).unwrap();
+        let seal = [8; 32];
+        let mut s = WorkerSnapshots::new();
+        let workers = vec![lodestar_cluster::WorkerStatus {
+            worker: WorkerId(3),
+            connected: true,
+            session: Some(1),
+            draining: false,
+            paused: false,
+            offset_ms: 0,
+            skewed: false,
+            leases: 0,
+            last_seen_ms: 0,
+            stats: Default::default(),
+            external_ips: Vec::new(),
+        }];
+        let built = key_time(at(day, PRESEND_FROM));
+        let snap = read_snapshot(&store, &seal, built).unwrap();
+        assert_eq!(i64::from(snap.key.id), day + 1);
+        s.install(1, &seal, &snap, None).unwrap();
+        assert!(!s.due(&workers, 1, key_time(at(day, 86_399)), None));
+        assert!(!s.due(&workers, 1, key_time(at(day + 1, 60)), None));
+        assert!(s.due(&workers, 1, key_time(at(day + 1, PRESEND_FROM)), None));
+    }
+
     #[test]
     fn the_open_keys_follow_the_day() {
         let seal = [3; 32];
@@ -2556,7 +2640,19 @@ mod tests {
             ids(&keys),
             format!("WireKeys([{}, {}])", d(day - 1), d(day))
         );
-        // The same day: nothing to set.
+        // The same day, before 23:00Z: nothing to set.
+        assert!(!follow_keys(
+            &keys,
+            &seal,
+            at(day, PRESEND_FROM - 1),
+            &mut seen
+        ));
+        // From 23:00Z, the next day's too: the pre-sent snapshot's key.
+        assert!(follow_keys(&keys, &seal, at(day, PRESEND_FROM), &mut seen));
+        assert_eq!(
+            ids(&keys),
+            format!("WireKeys([{}, {}, {}])", d(day - 1), d(day), d(day + 1))
+        );
         assert!(!follow_keys(&keys, &seal, at(day, 86_399), &mut seen));
         // Midnight: the new day's, and the one before.
         assert!(follow_keys(&keys, &seal, at(day + 1, 0), &mut seen));

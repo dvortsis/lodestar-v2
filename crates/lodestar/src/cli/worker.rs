@@ -22,7 +22,7 @@ use lodestar_cluster::{JoinToken, SystemClock, read_join_token, read_join_token_
 
 use super::util::{Failure, Outcome, failed};
 use crate::config::Config;
-use crate::worker::session::{Exit, Idle, Report, Settings, Tcp, Worker, random_jitter, sleep};
+use crate::worker::session::{Exit, Report, Settings, Tcp, Worker, random_jitter, sleep};
 use crate::worker::{self, JoinFailure, Layout};
 
 #[derive(Debug, Args, PartialEq, Eq)]
@@ -313,6 +313,18 @@ fn run_with(config: &Config, args: WorkerArgs, env: &dyn Fn(&str) -> Option<Stri
             })?;
         report(&format!("connecting to {addr}"));
         let settings = Settings::default();
+        // The worker's fetch budget (WK-10b): dicts up to `MAX_METADATA`,
+        // reserved against the pool's 4 MiB before they're requested.
+        let fetcher = Arc::new(lodestar_sources::pool::PeerWireFetcher(
+            lodestar_peer_wire::FetchOptions {
+                max_metadata: crate::worker::runtime::MAX_METADATA,
+                ..lodestar_peer_wire::FetchOptions::default()
+            },
+        ));
+        let runtime = crate::worker::runtime::Runtime::start(crate::worker::runtime::Config::new(
+            creds.worker(),
+            fetcher,
+        ));
         let worker = Worker {
             layout,
             creds,
@@ -327,7 +339,7 @@ fn run_with(config: &Config, args: WorkerArgs, env: &dyn Fn(&str) -> Option<Stri
             jitter: random_jitter,
             wait: sleep(),
         };
-        let exit = worker.run(Idle, crate::shutdown_signal()).await;
+        let exit = worker.run(runtime, crate::shutdown_signal()).await;
         finish(exit, &report)
     })
 }

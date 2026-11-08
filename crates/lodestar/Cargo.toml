@@ -34,6 +34,7 @@ lodestar-integrations.workspace = true
 lodestar-log.workspace = true
 lodestar-metainfo.workspace = true
 lodestar-peer-wire.workspace = true
+lodestar-network-policy.workspace = true
 lodestar-pipeline.workspace = true
 lodestar-search.workspace = true
 lodestar-sources-importers.workspace = true

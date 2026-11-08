@@ -25,6 +25,7 @@
 //! paths and addresses.
 
 pub mod have;
+pub mod runtime;
 pub mod session;
 
 use std::fs;
