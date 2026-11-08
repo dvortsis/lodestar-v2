@@ -20877,6 +20877,7 @@
         "description": "One source plugin of this build.",
         "required": [
           "agents",
+          "companion_need",
           "config_schema",
           "consent",
           "consent_required",
@@ -20931,6 +20932,36 @@
                 "minimum": 0
               }
             }
+          },
+          "companion_need": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "description": "A companion a source waits for (§18.10): it isn't started, or is\npaused, until the companion is there and healthy.",
+                "required": [
+                  "companion",
+                  "state"
+                ],
+                "properties": {
+                  "companion": {
+                    "type": "string",
+                    "description": "The companion's catalogue id, such as `prowlarr` or `qbittorrent`\n(for a source any download client satisfies, the suggested one)."
+                  },
+                  "state": {
+                    "type": "string",
+                    "description": "Why a source waits for its companion.",
+                    "enum": [
+                      "missing",
+                      "unhealthy"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "The companion it waits for before it runs (§18.10); null when it\nneeds none, or has it and it's healthy. Not the same as `needs`,\nwhich is what enabling it asks for."
           },
           "config_schema": {
             "type": "object",
@@ -21356,6 +21387,7 @@
                 "enforced": false,
                 "max": 1
               },
+              "companion_need": null,
               "config_schema": {
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
                 "additionalProperties": false,

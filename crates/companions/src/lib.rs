@@ -28,6 +28,7 @@
 //! - [`manager`] and [`state`]: installing, updating and removing a
 //!   managed companion as one journalled state machine, recovery at
 //!   start-up, and the snapshot CMP-10 reads (CMP-5).
+//! - [`requires`]: which source plugins need which companion (CMP-10).
 //! - [`supervise`]: starting, restarting, health-checking and stopping
 //!   managed companions, their redacted log rings, and orphan cleanup
 //!   (CMP-4a).
@@ -47,6 +48,7 @@ pub mod inputs;
 pub mod layout;
 pub mod log_events;
 pub mod manager;
+pub mod requires;
 pub mod state;
 pub mod supervise;
 pub mod unraid;
