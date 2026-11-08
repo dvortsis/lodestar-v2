@@ -6504,7 +6504,13 @@
       "from": "#637 e2e on 4a235ceb",
       "what": "e2e/search-table.keyboard.test.ts:8 \u2014 table-row-3 not focused after j (10 s). Recurrence after #477's fix. One re-run spent on #637. If it repeats on any PR, launch an X-flake slice (sonnet) when a slot frees."
     },
-    "2026-11-08: #634 X-cloud-infra-2 merged (f5e2afff); owner FYI sent (deploy via change set); session archived; slot 5 idle."
+    "2026-11-08: #634 X-cloud-infra-2 merged (f5e2afff); owner FYI sent (deploy via change set); session archived; slot 5 idle.",
+    {
+      "id": "X-cmp-removal-rows",
+      "from": "#639 review P1",
+      "what": "Manager removal() lists both credential rows (webui_password, api_key) for every companion even when one can't exist; filter absent rows so the removal plan is literal."
+    },
+    "2026-11-08: owner flag pending after #639 merges: CMP-6 regenerate skips the password (decisions file); credential_revealed made required."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
