@@ -3705,6 +3705,12 @@
       "brief": "briefs/PK-win-restart.md",
       "since": "2026-11-08T05:04:58Z",
       "session": "session_01MMjhnCQQBy5wXCeS23fHo4"
+    },
+    "CMP-4a": {
+      "state": "review",
+      "pr": 603,
+      "session": "session_01MMjhn9UTgWx4UJ4Ae7mhXJ",
+      "notes": "2026-11-08T05:50:30Z: #603 48598f18 both fresh Opus reviews MERGE (correctness + security). Hardening round asked: pid<=1/self refusal + pgrp check + exe under <data>/companions; group kill before readers; keep record if unreaped; read_record O_NOFOLLOW|O_NONBLOCK + filter before take; ring per-line overhead + strip control bytes; reserve id run; send_if_modified; cfg data_dir; remove() doc. Runner self-checks delta (concurrency ordering: look closely)."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -6045,6 +6051,10 @@
       "id": "X-worker-drain-fence",
       "what": "Results flushed before Drained are counted stale: Drained evicts leases at once (crates/cluster/src/server.rs ~1366) while intake (crates/pipeline/src/remote.rs) fences later. Needs a flush handshake across cluster+pipeline (~150+ lines). From WK-10d.",
       "logged": "2026-11-08T04:52:26Z"
+    },
+    {
+      "id": "X-cmp4a-notes",
+      "note": "For CMP-5: auto-redact env values marked secret + percent/JSON-escaped forms + suffix key shapes (PROWLARR__AUTH__APIKEY, db_password, adminPassword), quoted values with spaces; Windows companions need a Stop (else killed at once); sequential shutdown ~17 s each can exceed init's 30 s grace. For CMP-4b: keep <data>/companions/run/ out of any companion-writable sandbox path. Later: executable fd hand-off (H7); runtime-injection env denylist (DOTNET_STARTUP_HOOKS, NODE_OPTIONS, PYTHONPATH...) if env names become user-supplied (H8). CMP-G: test the update/supervisor.rs orphan hook call site."
     }
   ],
   "main_health": [
@@ -6746,7 +6756,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T05:33:46Z",
+    "updated": "2026-11-08T05:50:30Z",
     "items": [
       {
         "slot": 1,
@@ -6761,7 +6771,7 @@
         "slice": "CMP-4a",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn9UTgWx4UJ4Ae7mhXJ: #603 at 48598f18 (2,943 lines, ~1,000 tests; size accepted); fresh Opus review + security review running",
+        "doing": "session_01MMjhn9UTgWx4UJ4Ae7mhXJ: #603 both reviews MERGE; small hardening round asked; runner self-checks delta then merges",
         "since": "2026-11-08T04:46:43Z"
       },
       {
