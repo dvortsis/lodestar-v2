@@ -1500,6 +1500,40 @@ fn batch_up(
     }
 }
 
+/// Sends every batch not on the wire on `session` (and, with
+/// `refused_too`, those refused for now), counting each in
+/// `Counts::sent` once, however often it's sent.
+async fn send_due(
+    s: &Shared,
+    session: Option<SessionHandle>,
+    flight: &mut BTreeMap<u64, InFlight>,
+    refused_too: bool,
+) {
+    let Some(h) = session.filter(|h| !h.is_closed()) else {
+        return;
+    };
+    for (&batch, f) in flight
+        .iter_mut()
+        .filter(|(_, f)| !f.sent || (refused_too && f.refused))
+    {
+        let msg = ToCoordinator::Results(Payload {
+            batch,
+            bytes: f.payload.clone(),
+        });
+        if h.send(msg).await.is_err() {
+            break;
+        }
+        f.sent = true;
+        f.refused = false;
+        if !f.counted {
+            f.counted = true;
+            s.counts
+                .sent
+                .fetch_add(f.leases.len() as u64, Ordering::Relaxed);
+        }
+    }
+}
+
 /// The session task: sealed results into `Results` batches, kept until
 /// accepted, sent again on a new session and after a refusal.
 async fn send_results(
@@ -1516,25 +1550,7 @@ async fn send_results(
     loop {
         // Send whatever is due on the current session.
         let session = sessions.borrow_and_update().clone();
-        if let Some(h) = session.filter(|h| !h.is_closed()) {
-            for (&batch, f) in flight.iter_mut().filter(|(_, f)| !f.sent) {
-                let msg = ToCoordinator::Results(Payload {
-                    batch,
-                    bytes: f.payload.clone(),
-                });
-                if h.send(msg).await.is_err() {
-                    break;
-                }
-                f.sent = true;
-                // Counted once, not on every resend.
-                if !f.counted {
-                    f.counted = true;
-                    s.counts
-                        .sent
-                        .fetch_add(f.leases.len() as u64, Ordering::Relaxed);
-                }
-            }
-        }
+        send_due(&s, session, &mut flight, false).await;
         tokio::select! {
             record = outbound.recv() => {
                 let Some(first) = record else { return };
@@ -1556,16 +1572,10 @@ async fn send_results(
                     held.push(more);
                 }
                 batch_up(&s, held, &mut next_batch, &mut flight);
+                // A drain doesn't wait for the retry tick: refused batches
+                // go again too.
                 let session = s.session.borrow().clone();
-                if let Some(h) = session.filter(|h| !h.is_closed()) {
-                    for (&batch, f) in flight.iter_mut().filter(|(_, f)| !f.sent) {
-                        let msg = ToCoordinator::Results(Payload { batch, bytes: f.payload.clone() });
-                        if h.send(msg).await.is_err() {
-                            break;
-                        }
-                        f.sent = true;
-                    }
-                }
+                send_due(&s, session, &mut flight, true).await;
                 let _ = done.send(());
             }
             Some((batch, ok)) = accepted.recv() => {
@@ -3027,6 +3037,45 @@ mod tests {
         .await;
         assert_eq!(c.sent.load(Ordering::Relaxed), 1, "counted once");
         drop(session);
+        rt.shutdown().await;
+    }
+
+    /// A drain sends a batch refused for now at once (not on the next
+    /// retry tick), and counts it as sent once.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_drain_resends_a_refused_batch_and_counts_it_once() {
+        use lodestar_cluster::proto::ToWorker;
+        let mut rt = Runtime::start(config(Arc::new(MapFetch::default())));
+        let (mut coord, mut session) = session_pair().await;
+        rt.connected(session.handle());
+        let out = lock(&rt.shared.out).take().unwrap();
+        out.send(sealed(1)).await.unwrap();
+        let first = next_results(&mut coord).await;
+        coord
+            .send(ToWorker::Accepted {
+                batch: first.batch,
+                accepted: false,
+            })
+            .await
+            .unwrap();
+        let e = tokio::time::timeout(DEADLINE, session.next_event())
+            .await
+            .unwrap()
+            .unwrap();
+        rt.event(e);
+        // The refusal is in before the drain asks.
+        until("refused", || {
+            (rt.shared.accepted.capacity() == ACCEPTED_QUEUE, ())
+        })
+        .await;
+        let started = Instant::now();
+        let (_, again) = tokio::join!(rt.drain(), next_results(&mut coord));
+        assert_eq!(again.batch, first.batch);
+        assert!(
+            started.elapsed() < POLL_EVERY,
+            "sent by the drain, not the tick"
+        );
+        assert_eq!(rt.counts().sent.load(Ordering::Relaxed), 1, "counted once");
         rt.shutdown().await;
     }
 
