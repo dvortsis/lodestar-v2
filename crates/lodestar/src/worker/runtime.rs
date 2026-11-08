@@ -78,6 +78,9 @@ const POLL_EVERY: Duration = Duration::from_secs(5);
 /// How often the heartbeat's stats are refreshed (the session sends the
 /// latest with each heartbeat).
 pub const STATS_EVERY: Duration = Duration::from_secs(5);
+/// A fresh session is asked for at most once per this long, so an address
+/// that flaps between votes can't cause a reconnect storm.
+pub const RECONNECT_DEBOUNCE: Duration = Duration::from_secs(600);
 /// Keys found here waiting to be checked and claimed. A full queue drops
 /// the newest: the DHT finds a key again.
 const FOUND_QUEUE: usize = 4096;
@@ -132,6 +135,9 @@ pub struct Config {
     pub dht_linger: Duration,
     /// How often the heartbeat's stats are refreshed ([`STATS_EVERY`]).
     pub stats_every: Duration,
+    /// At most one fresh session asked for per this long
+    /// ([`RECONNECT_DEBOUNCE`]).
+    pub reconnect_debounce: Duration,
 }
 
 impl Config {
@@ -154,6 +160,7 @@ impl Config {
             dht: None,
             dht_linger: super::dht::LINGER,
             stats_every: STATS_EVERY,
+            reconnect_debounce: RECONNECT_DEBOUNCE,
         }
     }
 }
@@ -195,6 +202,9 @@ pub struct Counts {
     pub hints_refused: AtomicU64,
     /// Snapshots that didn't decode or install.
     pub snapshot_errors: AtomicU64,
+    /// Fresh sessions asked for, and asks the debounce held back.
+    pub reconnects: AtomicU64,
+    pub reconnects_debounced: AtomicU64,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -298,6 +308,11 @@ struct Shared {
     unsealable_since: Mutex<Option<std::time::Instant>>,
     /// Set when a stage task ended by itself ([`supervise`]).
     failed: watch::Sender<bool>,
+    /// Bumped to ask the session for a fresh one ([`Shared::ask_reconnect`]).
+    reconnect: watch::Sender<u64>,
+    last_reconnect: Mutex<Option<std::time::Instant>>,
+    /// The public address the last `Hello` carried.
+    hello_ip: Mutex<Option<std::net::IpAddr>>,
     /// Asks the session task to send everything it has now (a drain).
     flush: mpsc::UnboundedSender<tokio::sync::oneshot::Sender<()>>,
     /// What the DHT should run ([`want_dht`]).
@@ -408,6 +423,9 @@ impl Runtime {
             pool_paused: watch::channel(false).0,
             pool_told: watch::channel(false).0,
             failed: watch::channel(false).0,
+            reconnect: watch::channel(0).0,
+            last_reconnect: Mutex::new(None),
+            hello_ip: Mutex::new(None),
             waiting: std::sync::atomic::AtomicUsize::new(0),
             fresh_session: AtomicBool::new(false),
             flush,
@@ -619,11 +637,19 @@ impl Work for Runtime {
     /// What `Hello` reports (WK-10c): the memory this process may use and
     /// the public address the DHT last voted. The session adds the cores.
     fn capabilities(&self) -> lodestar_cluster::proto::Capabilities {
+        let ip = self.shared.dht_counts.external_ip();
+        *lock(&self.shared.hello_ip) = ip;
         lodestar_cluster::proto::Capabilities {
             ram_mb: super::budget::ram_mb(),
-            external_ips: self.shared.dht_counts.external_ip().into_iter().collect(),
+            external_ips: ip.into_iter().collect(),
             ..Default::default()
         }
+    }
+
+    /// A changed public address, or a snapshot that didn't decode, asks
+    /// for a fresh session (debounced, [`RECONNECT_DEBOUNCE`]).
+    fn reconnects(&self) -> Option<watch::Receiver<u64>> {
+        Some(self.shared.reconnect.subscribe())
     }
 
     fn connected(&mut self, session: SessionHandle) {
@@ -849,6 +875,8 @@ fn snapshot_chunk(s: &Arc<Shared>, c: SnapshotChunk) {
             bump(&s.counts.snapshot_errors);
             // Its last chunk was acknowledged, so the coordinator counts it
             // delivered: said, so a stall until the next version is seen.
+            // A fresh session starts every snapshot over (WK-10a).
+            s.ask_reconnect();
             lodestar_log::log_event!(
                 crate::logging::events::WORKER_SNAPSHOT_FAILED,
                 kind = if kind == SnapshotKind::Filter {
@@ -1032,6 +1060,20 @@ impl Shared {
         usize::try_from(cap)
             .unwrap_or(usize::MAX)
             .saturating_sub(self.leases.len())
+    }
+
+    /// Asks the session for a fresh one, at most once per
+    /// `reconnect_debounce`; `false` (and counted) when it's too soon.
+    fn ask_reconnect(&self) -> bool {
+        let mut last = lock(&self.last_reconnect);
+        if last.is_some_and(|at| at.elapsed() < self.config.reconnect_debounce) {
+            bump(&self.counts.reconnects_debounced);
+            return false;
+        }
+        *last = Some(std::time::Instant::now());
+        bump(&self.counts.reconnects);
+        self.reconnect.send_modify(|n| *n += 1);
+        true
     }
 
     /// Whether the assignment lets this worker fetch: `fetch` and
@@ -1284,6 +1326,12 @@ async fn heartbeat_stats(s: Arc<Shared>) {
         let session = s.session.borrow().clone();
         if let Some(h) = session {
             let _ = h.set_stats(stats).await;
+            // A new public address reaches the coordinator only in `Hello`
+            // (WK-5): ask for a fresh session to carry it.
+            let voted = s.dht_counts.external_ip();
+            if voted.is_some() && voted != *lock(&s.hello_ip) {
+                s.ask_reconnect();
+            }
         }
     }
 }
@@ -2155,6 +2203,50 @@ mod tests {
                 break;
             }
         }
+        rt.shutdown().await;
+    }
+
+    /// A new public address from the DHT asks for a fresh session, so the
+    /// next `Hello` carries it; a flapping one asks at most once per
+    /// debounce window.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_new_address_asks_for_a_fresh_session_debounced() {
+        let mut rt = Runtime::start(Config {
+            stats_every: Duration::from_millis(50),
+            ..config(Arc::new(MapFetch::default()))
+        });
+        let asks = rt.reconnects().unwrap();
+        // The Hello before connecting carried no address.
+        assert!(rt.capabilities().external_ips.is_empty());
+        let (_coord, session) = session_pair().await;
+        rt.connected(session.handle());
+        let c = rt.counts();
+        rt.shared
+            .dht_counts
+            .set_external_ip(Some("81.2.69.7".parse().unwrap()));
+        until("a fresh session asked for", || {
+            let n = c.reconnects.load(Ordering::Relaxed);
+            (n == 1, n)
+        })
+        .await;
+        assert_eq!(*asks.borrow(), 1);
+        // The address flaps: held back until the window passes.
+        rt.shared
+            .dht_counts
+            .set_external_ip(Some("81.2.69.8".parse().unwrap()));
+        until("the flap was debounced", || {
+            let n = c.reconnects_debounced.load(Ordering::Relaxed);
+            (n > 0, n)
+        })
+        .await;
+        assert_eq!(c.reconnects.load(Ordering::Relaxed), 1);
+        assert_eq!(*asks.borrow(), 1);
+        // The next Hello carries the address; it then matches, and nothing
+        // more is asked for.
+        assert_eq!(
+            rt.capabilities().external_ips,
+            vec!["81.2.69.8".parse::<std::net::IpAddr>().unwrap()]
+        );
         rt.shutdown().await;
     }
 

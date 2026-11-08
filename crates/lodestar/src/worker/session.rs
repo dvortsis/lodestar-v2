@@ -72,6 +72,12 @@ pub trait Work: Send {
     fn capabilities(&self) -> Capabilities {
         Capabilities::default()
     }
+    /// Bumped when the work wants a fresh session (its public address
+    /// changed, or a snapshot needs sending again): the session ends and
+    /// connects again at once, with a new `Hello`. The work debounces it.
+    fn reconnects(&self) -> Option<tokio::sync::watch::Receiver<u64>> {
+        None
+    }
     /// A session started: its handle for claims, reports and results, until
     /// [`disconnected`](Self::disconnected). Called before any of its
     /// events.
@@ -99,6 +105,17 @@ impl Work for Idle {
     async fn drain(&mut self) -> Vec<OutcomeItem> {
         Vec::new()
     }
+}
+
+/// The next bump of a work's reconnect counter; never, without one or
+/// once its sender is gone.
+async fn changed(r: &mut Option<tokio::sync::watch::Receiver<u64>>) {
+    if let Some(rx) = r
+        && rx.changed().await.is_ok()
+    {
+        return;
+    }
+    std::future::pending().await
 }
 
 /// Why the worker stopped.
@@ -237,6 +254,8 @@ enum Ended {
     Lost,
     /// Renewed: connect again at once on the new certificate.
     Renewed,
+    /// The work asked for a fresh session: connect again at once.
+    Reconnect,
 }
 
 /// The state of renewal across sessions.
@@ -306,6 +325,10 @@ impl<C: Connect> Worker<C> {
                     match ended {
                         Ended::Exit(exit) => return exit,
                         Ended::Renewed => continue,
+                        Ended::Reconnect => {
+                            self.say("connecting again with this worker's new details");
+                            continue;
+                        }
                         Ended::Lost => self.say("the connection to the coordinator was lost"),
                     }
                 }
@@ -348,9 +371,15 @@ impl<C: Connect> Worker<C> {
         let mut draining = false;
         let mut upkeep = tokio::time::interval(self.settings.upkeep_every);
         upkeep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // Asks made before this session don't end it.
+        let mut reconnects = work.reconnects();
+        if let Some(r) = &mut reconnects {
+            r.borrow_and_update();
+        }
         loop {
             tokio::select! {
                 () = shutdown.as_mut() => return Ended::Exit(Exit::Shutdown),
+                () = changed(&mut reconnects), if !draining => return Ended::Reconnect,
                 event = session.next_event() => match event {
                     None | Some(WorkerEvent::Ended(None)) => return Ended::Lost,
                     Some(WorkerEvent::Ended(Some(reason))) => {
@@ -747,6 +776,44 @@ pub(crate) mod tests {
         let all = s.lines.all();
         assert!(all.contains("connecting again in"), "{all}");
         s.assert_no_token();
+    }
+
+    /// Asks for a fresh session when told to.
+    #[derive(Clone)]
+    struct Asking(Arc<tokio::sync::watch::Sender<u64>>);
+
+    impl Work for Asking {
+        fn reconnects(&self) -> Option<tokio::sync::watch::Receiver<u64>> {
+            Some(self.0.subscribe())
+        }
+
+        fn event(&mut self, _: WorkerEvent) {}
+
+        async fn drain(&mut self) -> Vec<OutcomeItem> {
+            Vec::new()
+        }
+    }
+
+    /// WK-10d: a work that asks for a fresh session gets one at once, with
+    /// no back-off wait; an ask from before the session doesn't end it.
+    #[tokio::test]
+    async fn the_work_can_ask_for_a_fresh_session() {
+        let s = joined().await;
+        let ask = Arc::new(tokio::sync::watch::channel(0u64).0);
+        ask.send_replace(1); // before any session: not an ask for this one
+        let running = s.run(Asking(ask.clone()));
+        s.until_connected(&s.coord).await;
+        assert_eq!(s.coord.server.snapshot().sessions, 1);
+        ask.send_replace(2);
+        until("a second session", || {
+            let n = s.coord.server.snapshot().sessions;
+            (n == 2 && s.coord.connected(s.worker), n)
+        })
+        .await;
+        let all = s.lines.all();
+        assert!(all.contains("connecting again with"), "{all}");
+        assert!(!all.contains("connecting again in"), "no back-off: {all}");
+        assert_eq!(running.shutdown().await, Exit::Shutdown);
     }
 
     #[tokio::test]

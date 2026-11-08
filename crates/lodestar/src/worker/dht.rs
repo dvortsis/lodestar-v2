@@ -93,7 +93,7 @@ impl DhtCounts {
         *self.external_ip.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn set_external_ip(&self, ip: Option<std::net::IpAddr>) {
+    pub(super) fn set_external_ip(&self, ip: Option<std::net::IpAddr>) {
         // A v4-mapped v6 address is the v4 one; a private or reserved
         // address says nothing to the planner. A later private or missing
         // vote keeps the last public address: the planner's grouping wants
