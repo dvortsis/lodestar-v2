@@ -379,8 +379,7 @@ fn system(paths: &[&str], data: &Path) -> Vec<PathBuf> {
 }
 
 /// Undoes `/proc/self/mountinfo`'s octal escapes (`\040` for a space).
-fn unescape(field: &str) -> PathBuf {
-    let b = field.as_bytes();
+fn unescape(b: &[u8]) -> PathBuf {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
@@ -405,27 +404,38 @@ fn unescape(field: &str) -> PathBuf {
 }
 
 /// Where `p` (canonical) is on its filesystem: the device and the path
-/// from the filesystem's root, from the mount that serves it (the longest
-/// mount point above it; a later mount shadows an earlier one).
-fn fs_view(mountinfo: &str, p: &Path) -> Option<(String, PathBuf)> {
+/// from the filesystem's root, from the mount taken to serve it: the
+/// longest mount point above it, the later one at equal depth. A later
+/// mount on a parent folder that hides it isn't seen (L-1 in
+/// `docs/decisions/2026-11-08-X-cmp4b-mounts.md`).
+fn fs_view(mountinfo: &[u8], p: &Path) -> Option<(String, PathBuf)> {
     let mut best: Option<(usize, String, PathBuf, PathBuf)> = None;
-    for line in mountinfo.lines() {
-        let f: Vec<&str> = line.split(' ').collect();
-        let (Some(dev), Some(root), Some(point)) = (f.get(2), f.get(3), f.get(4)) else {
-            continue;
-        };
-        let point = unescape(point);
+    for (dev, root, point) in mounts(mountinfo) {
         if !p.starts_with(&point) {
             continue;
         }
         let depth = point.components().count();
         if best.as_ref().is_none_or(|b| depth >= b.0) {
-            best = Some((depth, (*dev).to_owned(), unescape(root), point));
+            best = Some((depth, dev, root, point));
         }
     }
     let (_, dev, root, point) = best?;
     let rest = p.strip_prefix(&point).ok()?;
     Some((dev, root.join(rest)))
+}
+
+/// Each mount's device, root and mount point, read as bytes: a mount
+/// point needn't be UTF-8 (a disk with a Latin-1 label).
+fn mounts(table: &[u8]) -> impl Iterator<Item = (String, PathBuf, PathBuf)> + '_ {
+    table.split(|b| *b == b'\n').filter_map(|line| {
+        let mut f = line.split(|b| *b == b' ').skip(2);
+        let (dev, root, point) = (f.next()?, f.next()?, f.next()?);
+        Some((
+            String::from_utf8_lossy(dev).into_owned(),
+            unescape(root),
+            unescape(point),
+        ))
+    })
 }
 
 /// A folder as its filesystem sees it: the device, and the path from the
@@ -443,8 +453,8 @@ struct Views {
 /// What a writable grant, seen as `(dev, path)`, would reach that the
 /// path checks refuse: the data folder (or a folder holding it), the
 /// data folder outside the companion's own, the companion's own folder
-/// itself, or its home or install folder. `in_home` skips the last two
-/// rules for what lies inside home, which home's own grant covers.
+/// itself, or its home or install folder. `in_home` skips the home rule
+/// for what lies inside home, which home's own grant covers.
 fn clash(v: &Views, dev: &str, p: &Path, in_home: bool) -> Option<LimitsError> {
     let on = |w: &View| w.0 == dev;
     let (data, own) = (&v.data.1, &v.own.1);
@@ -452,15 +462,16 @@ fn clash(v: &Views, dev: &str, p: &Path, in_home: bool) -> Option<LimitsError> {
         return Some(LimitsError::DownloadsOverlapData);
     }
     let inside = (on(&v.install) && p.starts_with(&v.install.1))
-        || (!in_home && ((on(&v.own) && p == own) || (on(&v.home) && p.starts_with(&v.home.1))));
+        || (on(&v.own) && p == own)
+        || (!in_home && on(&v.home) && p.starts_with(&v.home.1));
     inside.then_some(LimitsError::DownloadsInsideCompanion)
 }
 
 /// The path checks again, on the filesystem itself, for each writable
 /// grant (downloads, home) and every mount at or below it, which the
 /// grant's rule covers too. A bind mount can show one folder at two
-/// paths. Fails closed: no readable mount table, or a folder it can't
-/// place, refuses.
+/// paths. Fails closed (`mounts_unreadable`): no readable mount table,
+/// or a folder it can't place, refuses.
 pub(crate) fn mounts_ok(
     downloads: Option<&Path>,
     home: &Path,
@@ -468,20 +479,19 @@ pub(crate) fn mounts_ok(
     own: &Path,
     install: &Path,
 ) -> Result<(), LimitsError> {
-    let table = std::fs::read_to_string("/proc/self/mountinfo")
-        .map_err(|_| LimitsError::DownloadsOverlapData)?;
+    let table = std::fs::read("/proc/self/mountinfo").map_err(|_| LimitsError::MountsUnreadable)?;
     mounts_ok_in(&table, downloads, home, data, own, install)
 }
 
 fn mounts_ok_in(
-    table: &str,
+    table: &[u8],
     downloads: Option<&Path>,
     home: &Path,
     data: &Path,
     own: &Path,
     install: &Path,
 ) -> Result<(), LimitsError> {
-    let view = |p: &Path| fs_view(table, p).ok_or(LimitsError::DownloadsOverlapData);
+    let view = |p: &Path| fs_view(table, p).ok_or(LimitsError::MountsUnreadable);
     let v = Views {
         data: view(data)?,
         own: view(own)?,
@@ -497,13 +507,9 @@ fn mounts_ok_in(
         if let Some(e) = clash(&v, &dev, &p, in_home) {
             return Err(e);
         }
-        for line in table.lines() {
-            let f: Vec<&str> = line.split(' ').collect();
-            let (Some(dev), Some(root), Some(point)) = (f.get(2), f.get(3), f.get(4)) else {
-                continue;
-            };
-            if unescape(point).starts_with(grant)
-                && let Some(e) = clash(&v, dev, &unescape(root), in_home)
+        for (dev, root, point) in mounts(table) {
+            if point.starts_with(grant)
+                && let Some(e) = clash(&v, &dev, &root, in_home)
             {
                 return Err(e);
             }
@@ -757,6 +763,52 @@ fn exit_reason(stat: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    /// Escapes the way the kernel writes mountinfo: space, tab, newline
+    /// and backslash as `\ooo`.
+    fn kernel_escape(b: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for c in b {
+            if matches!(c, b' ' | b'\t' | b'\n' | b'\\') {
+                out.extend_from_slice(format!("\\{c:03o}").as_bytes());
+            } else {
+                out.push(*c);
+            }
+        }
+        out
+    }
+
+    proptest! {
+        #[test]
+        fn unescape_undoes_the_kernels_escapes(b in proptest::collection::vec(any::<u8>(), 0..64)) {
+            prop_assert_eq!(unescape(&kernel_escape(&b)).into_os_string().into_vec(), b);
+        }
+
+        #[test]
+        fn the_parser_never_panics(
+            table in proptest::collection::vec(any::<u8>(), 0..512),
+            path in proptest::collection::vec(any::<u8>(), 0..64),
+        ) {
+            let _ = mounts(&table).count();
+            let _ = fs_view(&table, Path::new(OsStr::from_bytes(&path)));
+        }
+    }
+
+    #[test]
+    fn unescape_fixed_cases() {
+        let u = |b: &[u8]| unescape(b).into_os_string().into_vec();
+        assert_eq!(u(b"\\011"), b"\t");
+        assert_eq!(u(b"\\012"), b"\n");
+        assert_eq!(u(b"\\134"), b"\\");
+        // An escaped backslash followed by digits stays digits.
+        assert_eq!(u(b"\\134040"), b"\\040");
+        // Cut short at the end of the field, or not octal: kept as is.
+        assert_eq!(u(b"a\\01"), b"a\\01");
+        assert_eq!(u(b"a\\"), b"a\\");
+        assert_eq!(u(b"\\8"), b"\\8");
+        assert_eq!(u(b"\\078"), b"\\078");
+    }
 
     fn sample() -> Plan {
         Plan {
@@ -895,7 +947,7 @@ mod tests {
         let own = Path::new("/var/lib/lodestar/companions/q");
         let check = |table: &str, dl: &str| {
             mounts_ok_in(
-                table,
+                table.as_bytes(),
                 Some(Path::new(dl)),
                 &own.join("home"),
                 Path::new("/var/lib/lodestar"),
@@ -929,7 +981,7 @@ mod tests {
         assert_eq!(check(base, "/srv/dl"), Ok(()));
         assert_eq!(check(base, "/mnt/my dl"), Ok(()));
         assert_eq!(
-            fs_view(base, Path::new("/mnt/my dl/x")),
+            fs_view(base.as_bytes(), Path::new("/mnt/my dl/x")),
             Some(("8:1".to_owned(), PathBuf::from("/srv/dl/x")))
         );
         // (b) A bind of the data folder below the downloads folder, or
@@ -940,8 +992,69 @@ mod tests {
             "{base}6 1 8:1 /var/lib /var/lib/lodestar/companions/q/home/x rw - ext4 /dev/sda1 rw\n"
         );
         assert_eq!(check(&under_home, "/srv/dl"), overlap);
-        // (a) Fails closed: a table that can't place a folder refuses.
-        assert_eq!(check("", "/srv/dl"), overlap);
+        // An alias of its own folder mounted below home (W^X).
+        let own_under_home = format!(
+            "{base}7 1 8:1 /var/lib/lodestar/companions/q /var/lib/lodestar/companions/q/home/o rw - ext4 /dev/sda1 rw\n"
+        );
+        assert_eq!(check(&own_under_home, "/srv/dl"), inside);
+        // Home itself a bind of the companion's own folder.
+        let home_is_own = format!(
+            "{base}9 1 8:1 /var/lib/lodestar/companions/q /var/lib/lodestar/companions/q/home rw - ext4 /dev/sda1 rw\n"
+        );
+        assert_eq!(check(&home_is_own, "/srv/dl"), inside);
+        // (a) Fails closed, with its own reason: a table that can't place
+        // a folder refuses.
+        assert_eq!(check("", "/srv/dl"), Err(LimitsError::MountsUnreadable));
+        // A mount point that isn't UTF-8 elsewhere in the table changes
+        // nothing.
+        let mut latin1 = base.as_bytes().to_vec();
+        latin1.extend_from_slice(b"8 1 8:33 / /media/caf\xe9 rw - vfat /dev/sdc1 rw\n");
+        let own_home = own.join("home");
+        let run = |dl: &str| {
+            mounts_ok_in(
+                &latin1,
+                Some(Path::new(dl)),
+                &own_home,
+                Path::new("/var/lib/lodestar"),
+                own,
+                &own.join("5.0.3"),
+            )
+        };
+        assert_eq!(run("/srv/dl"), Ok(()));
+        // A refusal through a mount point that isn't UTF-8: the data
+        // folder bound below it.
+        let mut bound = latin1.clone();
+        bound.extend_from_slice(
+            b"10 8 8:1 /var/lib/lodestar /media/caf\xe9/x rw - ext4 /dev/sda1 rw\n",
+        );
+        assert_eq!(
+            mounts_ok_in(
+                &bound,
+                Some(Path::new(OsStr::from_bytes(b"/media/caf\xe9"))),
+                &own_home,
+                Path::new("/var/lib/lodestar"),
+                own,
+                &own.join("5.0.3"),
+            ),
+            overlap
+        );
+        // A downloads folder on that disk, end to end.
+        assert_eq!(
+            mounts_ok_in(
+                &latin1,
+                Some(Path::new(OsStr::from_bytes(b"/media/caf\xe9/dl"))),
+                &own_home,
+                Path::new("/var/lib/lodestar"),
+                own,
+                &own.join("5.0.3"),
+            ),
+            Ok(())
+        );
+        assert_eq!(run("/mnt/alias"), overlap);
+        assert_eq!(
+            fs_view(&latin1, Path::new(OsStr::from_bytes(b"/media/caf\xe9/x"))),
+            Some(("8:33".to_owned(), PathBuf::from("/x")))
+        );
     }
 
     #[test]

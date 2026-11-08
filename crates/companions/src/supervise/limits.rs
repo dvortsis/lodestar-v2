@@ -179,6 +179,10 @@ pub enum LimitsError {
     DownloadsInsideCompanion,
     /// The executable isn't a regular file inside the install folder.
     ExecutableOutsideInstall,
+    /// The mount table couldn't be read, or couldn't place a folder, so a
+    /// second mount of the data folder can't be ruled out (Linux; fails
+    /// closed).
+    MountsUnreadable,
     /// Lodestar's own executable, the launcher, couldn't be found.
     NoLauncher,
     /// The Windows Job Object couldn't be created.
@@ -193,6 +197,7 @@ impl LimitsError {
             LimitsError::InstallOutsideCompanion => "install_outside_companion",
             LimitsError::DownloadsInsideCompanion => "downloads_inside_companion",
             LimitsError::ExecutableOutsideInstall => "executable_outside_install",
+            LimitsError::MountsUnreadable => "mounts_unreadable",
             LimitsError::NoLauncher => "no_launcher",
             LimitsError::NoJob => "no_job",
         }
@@ -385,7 +390,10 @@ pub(crate) fn check(spec: &SpawnSpec, conf: &Confinement) -> Result<Folders, Lim
     let own = data.join("companions").join(spec.id.as_str());
     let install = canonical_dir(&conf.install)?;
     let home = super::process::home_dir(&data, &spec.id);
-    if !install.starts_with(&own) || install == own || install.starts_with(&home) {
+    // Exactly `<own>/<version>` (CMP-2's layout): a deeper install folder
+    // would leave a folder between it and `own` that a downloads grant
+    // could take, with write access over the install folder.
+    if install.parent() != Some(own.as_path()) || install == home {
         return Err(LimitsError::InstallOutsideCompanion);
     }
     let exe = std::fs::canonicalize(&spec.executable)
@@ -497,6 +505,17 @@ mod tests {
         );
         assert_eq!(
             check(&s, &conf(&own, None)),
+            Err(LimitsError::InstallOutsideCompanion)
+        );
+        // A deeper install folder is refused, so `<own>/v` can't be a
+        // downloads folder holding it.
+        let deep = own.join("v").join("5.0.3");
+        std::fs::create_dir_all(&deep).unwrap();
+        let mut deeper = s.clone();
+        deeper.executable = deep.join("x");
+        std::fs::write(&deeper.executable, b"").unwrap();
+        assert_eq!(
+            check(&deeper, &conf(&deep, Some(&own.join("v")))),
             Err(LimitsError::InstallOutsideCompanion)
         );
         assert_eq!(
