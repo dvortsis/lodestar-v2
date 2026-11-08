@@ -855,6 +855,16 @@
               }
             }
           },
+          "503": {
+            "description": "`companions_unavailable`: companions are off in this process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -897,6 +907,16 @@
           },
           "404": {
             "description": "`unknown_companion`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`companions_unavailable`: companions are off in this process.",
             "content": {
               "application/json": {
                 "schema": {
@@ -986,6 +1006,16 @@
           },
           "415": {
             "description": "`unsupported_media_type`: not JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`companions_unavailable`: companions are off in this process.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1123,6 +1153,16 @@
               }
             }
           },
+          "503": {
+            "description": "`companions_unavailable`: companions are off in this process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -1175,6 +1215,16 @@
           },
           "409": {
             "description": "Why it can't be installed here: `native_in_container`, `unsupported_platform`, `awaiting_pin`, `no_build`, `guided_only`, `already_current`, ….",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`companions_unavailable`: companions are off in this process.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1281,6 +1331,16 @@
               }
             }
           },
+          "503": {
+            "description": "`companions_unavailable`: companions are off in this process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -1341,6 +1401,16 @@
               }
             }
           },
+          "503": {
+            "description": "`companions_unavailable`: companions are off in this process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -1393,6 +1463,16 @@
           },
           "409": {
             "description": "`not_installed`, `native_in_container`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`companions_unavailable`: companions are off in this process.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1499,6 +1579,16 @@
               }
             }
           },
+          "503": {
+            "description": "`companions_unavailable`: companions are off in this process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -1571,6 +1661,16 @@
           },
           "415": {
             "description": "`unsupported_media_type`: not JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`companions_unavailable`: companions are off in this process.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1681,6 +1781,16 @@
           },
           "422": {
             "description": "`bad_body`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`companions_unavailable`: companions are off in this process.",
             "content": {
               "application/json": {
                 "schema": {

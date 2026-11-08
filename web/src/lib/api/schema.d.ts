@@ -11295,6 +11295,15 @@ export interface operations {
                     "application/json": components["schemas"]["CompanionList"];
                 };
             };
+            /** @description `companions_unavailable`: companions are off in this process. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -11320,6 +11329,15 @@ export interface operations {
             };
             /** @description `unknown_companion`. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `companions_unavailable`: companions are off in this process. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11381,6 +11399,15 @@ export interface operations {
             };
             /** @description `unsupported_media_type`: not JSON. */
             415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `companions_unavailable`: companions are off in this process. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11480,6 +11507,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description `companions_unavailable`: companions are off in this process. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -11514,6 +11550,15 @@ export interface operations {
             };
             /** @description Why it can't be installed here: `native_in_container`, `unsupported_platform`, `awaiting_pin`, `no_build`, `guided_only`, `already_current`, …. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `companions_unavailable`: companions are off in this process. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11593,6 +11638,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description `companions_unavailable`: companions are off in this process. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -11634,6 +11688,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description `companions_unavailable`: companions are off in this process. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -11668,6 +11731,15 @@ export interface operations {
             };
             /** @description `not_installed`, `native_in_container`. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `companions_unavailable`: companions are off in this process. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11747,6 +11819,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description `companions_unavailable`: companions are off in this process. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -11799,6 +11880,15 @@ export interface operations {
             };
             /** @description `unsupported_media_type`: not JSON. */
             415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `companions_unavailable`: companions are off in this process. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11880,6 +11970,15 @@ export interface operations {
             };
             /** @description `bad_body`. */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `companions_unavailable`: companions are off in this process. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
