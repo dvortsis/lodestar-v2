@@ -6431,6 +6431,10 @@
     {
       "at": "2026-11-08T19:58Z",
       "note": "Next runner PR: X-wk-busy-retry owns add crates/lodestar/src/logging/events.rs, blessed catalogue, logging messages en/zh, event-names.ts (new event worker.claims_gave_up, approved). Numbers approved \u00a72.26: 2 s base, 60 s cap, equal jitter, 5 attempts, 1,024 waiting keys. Non-Busy denials drop; Unknown reaches worker as Busy since #628."
+    },
+    {
+      "at": "2026-11-08T20:10Z",
+      "note": "#630 security review MERGE (32c0779d). Next runner PR: PK-win-upd-2 notes gain (a) the helper refuses to install from a bin it hasn't checked (configured data dir via --config/LODESTAR_DATA_DIR isn't ACL-checked); (b) refuse install when the build version fails to parse (falls back to 0.0.0). PK-win-portable-upd's bin-ACL requirement (already in notes) confirmed as a must before it writes/executes. Optional: check bin's own DACL."
     }
   ],
   "main_health": [
