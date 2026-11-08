@@ -80,6 +80,12 @@ pub struct Handles {
     torrent_cache: Option<(watch::Sender<bool>, JoinHandle<()>)>,
     /// The cluster port (WK-1), stopped before the pipeline.
     cluster: crate::cluster::Cluster,
+    /// The companion manager and its snapshot (CMP-5); none in a fixture.
+    #[allow(
+        dead_code,
+        reason = "CMP-5g starts companions and hands the snapshot on"
+    )]
+    companions: Option<crate::companions::Companions>,
 }
 
 impl Services {
@@ -320,6 +326,17 @@ impl Services {
         let reenrich = pipeline_config.reenrich.clone();
         let quarantine_secs = pipeline_config.quarantine.as_secs() as i64;
         let control = Arc::new(Mutex::new(control));
+        // Companion recovery runs before anything could start one (CMP-5).
+        let companions = if crate::fixture::active() {
+            None
+        } else {
+            crate::companions::start(
+                config.data_dir.clone(),
+                control.clone(),
+                settings.subscribe(),
+            )
+            .await
+        };
         // Each enabled plugin's HTTP client is built on its egress
         // setting, with its SOCKS5 credentials from the per-source store
         // (SRC-4, SRC-5). A fixture is served offline: plugins get no
@@ -656,6 +673,7 @@ impl Services {
                 storage: (stop_storage, sampler),
                 torrent_cache: cache_task,
                 cluster,
+                companions,
             },
             listener,
             system,

@@ -239,7 +239,18 @@ async fn the_companion_gets_a_minimal_env_its_folder_and_no_stdin() {
         .logs(&id("prowlarr"))
         .unwrap_or_else(|| panic!("no ring"));
 
-    let env = wait_line(&ring, "ENV ").await;
+    let mut env = wait_line(&ring, "ENV ").await;
+    // macOS: CoreFoundation, which the fake companion (this test binary)
+    // links through the TLS stack, sets `__CF_USER_TEXT_ENCODING` inside
+    // the process at start-up when it's missing. It's added by the child
+    // after exec, not passed through: the spawn clears the environment.
+    if cfg!(target_os = "macos") {
+        let names: Vec<&str> = env["ENV ".len()..]
+            .split(',')
+            .filter(|n| *n != "__CF_USER_TEXT_ENCODING")
+            .collect();
+        env = format!("ENV {}", names.join(","));
+    }
     let mut want = vec!["FAKE_MODE", "X_TEMPLATE"];
     if cfg!(windows) {
         want.extend([

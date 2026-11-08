@@ -25,9 +25,10 @@
 //! - [`inputs`]: the closed, validated values generated compose services
 //!   and Unraid templates are built from, and the shared [`CompanionId`]
 //!   and [`Version`].
+//! - [`manager`] and [`state`]: installing, updating and removing a
+//!   managed companion as one journalled state machine, recovery at
+//!   start-up, and the snapshot CMP-10 reads (CMP-5).
 //! - [`requires`]: which source plugins need which companion (CMP-10).
-//! - [`state`]: a managed companion's state record and install journal
-//!   (CMP-5).
 //! - [`supervise`]: starting, restarting, health-checking and stopping
 //!   managed companions, their redacted log rings, and orphan cleanup
 //!   (CMP-4a).
@@ -46,6 +47,7 @@ pub mod fetch;
 pub mod inputs;
 pub mod layout;
 pub mod log_events;
+pub mod manager;
 pub mod requires;
 pub mod state;
 pub mod supervise;
