@@ -1,0 +1,151 @@
+# The cloud fleet control plane (OP-1: dry-run, no cloud call anywhere).
+# Plan: docs/plan/2026-11-08-cloud-operator.md §2-§4; decisions:
+# docs/decisions/2026-11-08-OP-1.md. Every change to this file or
+# infra/fleet/** gets a fresh Opus review and a /security-review.
+#
+# Rules this file keeps (infra/fleet/tests/test_workflow.py checks them):
+# - no workflow_call and no reusable workflow;
+# - comment text and every secret reach scripts only through env, never `run:`;
+# - every job sets minimal permissions; jobs with an environment gate on a
+#   job-level `if:` placed before `environment:`;
+# - lock-holding jobs set timeout-minutes below the lock's 90 minutes;
+# - no Actions artifacts.
+name: fleet
+
+on:
+  issue_comment:
+    types: [created]
+  schedule:
+    - cron: "17 * * * *"
+  # The owner's down (plan §4, kill switch step 2). No inputs, by design.
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  # The filter: no secrets, no environment. Channel PR, created events only,
+  # the operator App bot's numeric ID; then the parser and the soft stop.
+  gate:
+    if: >-
+      github.event_name == 'issue_comment' && github.event.action == 'created'
+      && github.event.issue.pull_request
+      && vars.CHANNEL_PR != '' && format('{0}', github.event.issue.number) == vars.CHANNEL_PR
+      && vars.OPERATOR_BOT_USER_ID != '' && format('{0}', github.event.comment.user.id) == vars.OPERATOR_BOT_USER_ID
+      && startsWith(github.event.comment.body, '/fleet')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      allowed: ${{ steps.gate.outputs.allowed }}
+      reason: ${{ steps.gate.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          IS_PR: ${{ github.event.issue.pull_request != null }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          AUTHOR_ID: ${{ github.event.comment.user.id }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          CHANNEL_PR: ${{ vars.CHANNEL_PR }}
+          OPERATOR_BOT_USER_ID: ${{ vars.OPERATOR_BOT_USER_ID }}
+          OPERATOR_STOP: ${{ vars.OPERATOR_STOP }}
+        run: python3 infra/fleet/fleet.py gate
+
+  # Answers a refused /fleet command from the operator with its fixed reason.
+  refuse:
+    needs: gate
+    if: github.event_name == 'issue_comment' && needs.gate.outputs.allowed == 'false' && needs.gate.outputs.reason != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - env:
+          REFUSAL_REASON: ${{ needs.gate.outputs.reason }}
+          CHANNEL_PR: ${{ vars.CHANNEL_PR }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 infra/fleet/fleet.py refuse
+
+  # One allowed command, under the fleet lock. The script repeats every gate
+  # before it touches the lock.
+  act:
+    needs: gate
+    if: >-
+      github.event_name == 'issue_comment' && github.event.action == 'created'
+      && needs.gate.outputs.allowed == 'true'
+      && vars.CHANNEL_PR != '' && format('{0}', github.event.issue.number) == vars.CHANNEL_PR
+      && vars.OPERATOR_BOT_USER_ID != '' && format('{0}', github.event.comment.user.id) == vars.OPERATOR_BOT_USER_ID
+    environment: cloud-fleet
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # the ancestor-of-main checks need history
+      - env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          IS_PR: ${{ github.event.issue.pull_request != null }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          AUTHOR_ID: ${{ github.event.comment.user.id }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          CHANNEL_PR: ${{ vars.CHANNEL_PR }}
+          OPERATOR_BOT_USER_ID: ${{ vars.OPERATOR_BOT_USER_ID }}
+          OPERATOR_STOP: ${{ vars.OPERATOR_STOP }}
+          FLEET_LIVE: ${{ vars.FLEET_LIVE }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 infra/fleet/fleet.py act
+
+  # The hourly reaper. Exempt from OPERATOR_STOP. It waits for FLEET_LIVE to
+  # exist (owner setup step 2.7): before that there is no fleet, and running
+  # would create the cloud-fleet environment without its main-only rule.
+  reaper:
+    if: github.event_name == 'schedule' && vars.FLEET_LIVE != ''
+    environment: cloud-fleet
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - env:
+          CHANNEL_PR: ${{ vars.CHANNEL_PR }}
+          FLEET_LIVE: ${{ vars.FLEET_LIVE }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 infra/fleet/fleet.py reap
+
+  # The owner's down: gated on the owner's numeric ID, no input, never through
+  # the /fleet parser, and it pre-empts the lock with the reaping marker.
+  dispatch-down:
+    if: github.event_name == 'workflow_dispatch' && vars.OWNER_USER_ID != '' && github.actor_id == vars.OWNER_USER_ID
+    environment: cloud-fleet
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - env:
+          CHANNEL_PR: ${{ vars.CHANNEL_PR }}
+          FLEET_LIVE: ${{ vars.FLEET_LIVE }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 infra/fleet/fleet.py dispatch-down

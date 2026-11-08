@@ -1,0 +1,5 @@
+# Test-only dependencies for infra/fleet (OP-1), pinned exactly. The control
+# plane itself uses the standard library only.
+hypothesis==6.170.15
+sortedcontainers==2.4.0
+pyyaml==6.0.3
