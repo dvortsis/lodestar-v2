@@ -6520,6 +6520,11 @@
       "id": "X-flake-portable-restart",
       "at": "2026-11-08T22:52Z",
       "note": "windows_service.rs a_portable_restart_starts_a_new_copy failed \"no new copy served\" on #636 94b22698 and #637 0e79f478; main f5e2afff passed; #636 green on re-run. If it recurs, launch a fix slice: dump the relaunched copy jsonl on failure, then root-cause (PK-win-restart test; X-win-restart-followups owns windows_service.rs)"
+    },
+    {
+      "id": "runner-pr-op2a-owns",
+      "at": "2026-11-08T22:53Z",
+      "note": "Next runner PR: slices.yaml OP-2a owns += infra/akamai/terraform/scripts/{Deploy,Destroy,Preflight,Invoke-Preflight}.ps1 (those that terraform init), tests/Test-LodestarAutomation.ps1, terraform README operator-env section, ci.yml infra job terraform_version 1.10.5 (runner 1a: scripts read LODESTAR_TF_STATE_BUCKET/REGION, shared state, refuse when unset)"
     }
   ],
   "main_health": [
@@ -7326,5 +7331,5 @@
     }
   ],
   "heartbeat": "2026-11-08T21:39Z",
-  "updated": "2026-11-08T22:52Z"
+  "updated": "2026-11-08T22:53Z"
 }
