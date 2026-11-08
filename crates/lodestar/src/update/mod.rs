@@ -15,12 +15,13 @@
 //! codes and the request file in [`control`]; probation's accounting in
 //! [`pending`]; the rollback steps in [`journal`].
 //!
-//! Off Unix only [`log_events`], [`window`] (the settings section's
-//! check) and [`unavailable`] compile: the log catalogue (and its golden)
-//! is the same everywhere, and Windows checks and installs with E-M6's
-//! helper, so `/updates` answers `unavailable` there.
+//! **Windows** (PK-win-upd-1): [`windows::check`] checks and notifies
+//! with the same [`window`], [`policy`], [`check`] request and
+//! [`trust_file`] (over a Windows [`layout`]); installing waits for
+//! PK-win-upd-2 and PK-win-portable-upd, so Install and Roll back answer
+//! `not_built_yet`. Off Unix only those, [`log_events`] and
+//! [`unavailable`] (a fixture) compile.
 
-#[cfg(unix)]
 pub mod check;
 #[cfg(unix)]
 pub mod control;
@@ -34,14 +35,16 @@ pub mod history;
 pub mod install;
 #[cfg(unix)]
 pub mod journal;
-#[cfg(unix)]
+// Off Unix the overlay and supervisor halves aren't used.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub mod layout;
 pub mod log_events;
 #[cfg(unix)]
 pub mod overlay;
 #[cfg(unix)]
 pub mod pending;
-#[cfg(unix)]
+// Off Unix Install now's rules (`install_now`) aren't used yet.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub mod policy;
 #[cfg(unix)]
 pub mod probation;
@@ -51,12 +54,12 @@ pub mod rollback_cache;
 pub mod supervisor;
 #[cfg(unix)]
 pub mod testing;
-#[cfg(unix)]
 pub mod trust_file;
 pub mod unavailable;
-// Off Unix only `Window::parse` is used (the settings check).
-#[cfg_attr(not(unix), allow(dead_code))]
 pub mod window;
+// Compiled and tested everywhere; started only on Windows.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub mod windows;
 
 #[cfg(unix)]
 use lodestar_update::semver::Version;
@@ -102,8 +105,9 @@ pub struct Started {
 }
 
 /// Starts the engine, except for a fixture (served offline: nothing is
-/// checked) and off Unix (Windows installs through E-M6's helper).
-/// `busy` names what keeps an install waiting (a rebuild under way).
+/// checked). On Windows it's the [`windows::check`] notifier, which
+/// installs nothing yet. `busy` names what keeps an install waiting (a
+/// rebuild under way).
 pub fn start(
     config: &crate::config::Config,
     settings: &crate::settings::Registry,
@@ -123,7 +127,39 @@ pub fn start(
     if crate::fixture::active() {
         return unavailable(lodestar_api::updates::UpdatesUnavailable::Fixture);
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use self::windows::check as win;
+        let _ = busy;
+        let Ok(fetch) = check::Guarded::new() else {
+            return unavailable(lodestar_api::updates::UpdatesUnavailable::Network);
+        };
+        let ctx = win::Context {
+            data_dir: config.data_dir.clone(),
+            running: lodestar_update::semver::Version::parse(&version)
+                .unwrap_or_else(|_| lodestar_update::semver::Version::new(0, 0, 0)),
+            repository: env!("CARGO_PKG_REPOSITORY").to_string(),
+            dev: crate::system::info::channel() == lodestar_api::system::Channel::Dev,
+            kind: win::detect(&win::signals(&config.data_dir)),
+            target: lodestar_update::Target::from_triple(env!("LODESTAR_BUILD_TARGET")),
+        };
+        let notifier = win::Notifier::new(
+            ctx,
+            settings.subscribe(),
+            events.clone(),
+            std::sync::Arc::new(fetch),
+        );
+        let (stop, stopped) = tokio::sync::watch::channel(false);
+        let task = notifier.spawn(stopped);
+        let row_notifier = notifier.clone();
+        let row: crate::system::UpdatesRow = std::sync::Arc::new(move || row_notifier.summary());
+        Started {
+            api: std::sync::Arc::new(notifier),
+            row: Some(row),
+            task: Some((stop, task)),
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (config, settings, events, busy);
         unavailable(lodestar_api::updates::UpdatesUnavailable::WindowsHelper)

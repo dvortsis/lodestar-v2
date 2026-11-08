@@ -1,6 +1,9 @@
 //! `/updates` where there's no update engine: a fixture (served offline,
-//! never checking) and, until E-M6's helper, Windows. `GET` says why
-//! (`unavailable`); every write is `409 updates_unavailable`.
+//! never checking), or an update client that couldn't be built
+//! (`network`). Windows checks and notifies since PK-win-upd-1
+//! (`windows::check`); `windows_helper` stays in the enum for clients
+//! and older servers. `GET` says why (`unavailable`); every write is
+//! `409 updates_unavailable`.
 
 use lodestar_api::ops::BoxFuture;
 use lodestar_api::updates::{
@@ -109,10 +112,10 @@ impl UpdatesApi for Unavailable {
 mod tests {
     use super::*;
 
-    /// Windows' answer (`start` off Unix): `unavailable: "windows_helper"`,
-    /// nothing installable, and every write refused with that reason.
+    /// Any reason's answer: `unavailable` set, nothing installable, and
+    /// every write refused with that reason.
     #[tokio::test]
-    async fn windows_answers_windows_helper() {
+    async fn an_unavailable_engine_answers_its_reason() {
         let u = Unavailable {
             why: UpdatesUnavailable::WindowsHelper,
             version: "0.5.3".into(),

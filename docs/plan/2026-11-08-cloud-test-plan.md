@@ -113,7 +113,7 @@ The goal is the owner's standing one: **better performance and UX** (`docs/owner
   - gluetun with PIA through gluetun's custom WireGuard provider, with Lodestar on `network_mode: service:gluetun`;
   - the gluetun image pinned by digest, not `:latest`;
   - the WireGuard endpoint fixed to one server, so a reconnect keeps the same exit IP;
-  - `TZ=UTC`.
+  - `TZ=Etc/UTC`, as `infra/akamai/terraform/pia-example/compose.vpn.yaml` sets it.
 - **Firewall settings:** `FIREWALL_VPN_INPUT_PORTS` stays empty, because there's no forwarding. If the published `8090` doesn't answer on Main's loopback, add `FIREWALL_INPUT_PORTS=8090` and record why.
 - **Lodestar has no DHT-level kill switch of its own;** the kill switch under test is gluetun's firewall.
 - **Check how long a PIA WireGuard registration lasts.** The block runs about 34 h, and a manually negotiated peer may not stay valid that long. If it needs renewing, renew only outside blocks.
