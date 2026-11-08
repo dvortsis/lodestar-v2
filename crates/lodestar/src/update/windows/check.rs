@@ -162,7 +162,7 @@ pub fn signals(data_dir: &Path) -> Signals {
         service_account: crate::windows::acl::process_sid()
             .is_some_and(|sid| sid.starts_with("S-1-5-80-")),
         exe,
-        program_files: std::env::var_os("ProgramFiles").map(PathBuf::from),
+        program_files: super::msi::system_program_files(),
         data_dir: data_dir.to_path_buf(),
         launcher_beside_exe,
     }
@@ -253,8 +253,55 @@ struct Skip {
     reason: String,
 }
 
-/// The most `skipped` keeps (oldest dropped first), as on Unix.
+/// The most `skipped` keeps: the oldest `user` skips go first, and a
+/// `failed` or `manual` entry is never dropped ([`trim`]). Unix's
+/// `pending::trim` drops the oldest of any reason once only those are
+/// left; here they stay, so a version that failed stays refused.
 const MAX_SKIPPED: usize = 64;
+/// A version whose install failed (written by the update helper): never
+/// offered again.
+pub const SKIP_FAILED: &str = "failed";
+
+/// Whether an entry is one the user can't undo (`failed`, `manual`).
+fn refusing(s: &Skip) -> bool {
+    s.reason == SKIP_FAILED || s.reason == "manual"
+}
+
+/// Keeps at most [`MAX_SKIPPED`] by dropping the oldest `user` skips,
+/// never the entry just added (the last), never a `failed` or `manual`
+/// one.
+fn trim(list: &mut Vec<Skip>) {
+    let mut over = list.len().saturating_sub(MAX_SKIPPED);
+    let newest = list.len().saturating_sub(1);
+    let mut i = 0;
+    list.retain(|s| {
+        let drop = over > 0 && i < newest && !refusing(s);
+        over -= usize::from(drop);
+        i += 1;
+        !drop
+    });
+}
+
+/// Adds `version` to `skipped` with `reason` (the update helper's
+/// `failed`), under the caller's `.lock`. An entry that refuses it
+/// already is kept; a `user` one is replaced. An unreadable list is an
+/// error, never overwritten.
+pub fn add_skip(bin: &Bin, version: &str, reason: &str) -> std::io::Result<()> {
+    let mut list: Vec<Skip> = bin.read(SKIPPED_FILE)?.unwrap_or_default();
+    if list
+        .iter()
+        .any(|s| s.version == version && (s.reason == reason || refusing(s)))
+    {
+        return Ok(());
+    }
+    list.retain(|s| s.version != version);
+    list.push(Skip {
+        version: version.to_string(),
+        reason: reason.to_string(),
+    });
+    trim(&mut list);
+    bin.write(SKIPPED_FILE, &list)
+}
 
 /// What the notifier knows about this process.
 #[derive(Debug, Clone)]
@@ -828,8 +875,7 @@ impl Notifier {
                     version: version.to_string(),
                     reason: "user".into(),
                 });
-                let over = list.len().saturating_sub(MAX_SKIPPED);
-                list.drain(..over);
+                trim(&mut list);
                 self.write(Some(&bin), SKIPPED_FILE, &list)?;
             }
         }
@@ -1534,6 +1580,38 @@ mod tests {
         assert_eq!(list.len(), MAX_SKIPPED);
         assert_eq!(list[0].version, "0.1.1", "the oldest went");
         assert_eq!(list.last().unwrap().version, "0.5.4");
+    }
+
+    /// The helper's `failed` entry survives any number of user skips, and
+    /// a user skip never replaces it.
+    #[tokio::test]
+    async fn user_skips_never_push_out_a_failed_one() {
+        let e = Env::new(Mode::Notify, InstallKind::Msi);
+        let bin = Bin::open(e.dir.path()).unwrap();
+        add_skip(&bin, "0.0.9", SKIP_FAILED).unwrap();
+        for i in 0..MAX_SKIPPED {
+            add_skip(&bin, &format!("0.1.{i}"), "user").unwrap();
+        }
+        let list: Vec<Skip> = bin.read(SKIPPED_FILE).unwrap().unwrap();
+        assert_eq!(list.len(), MAX_SKIPPED);
+        assert_eq!(
+            (list[0].version.as_str(), list[0].reason.as_str()),
+            ("0.0.9", "failed")
+        );
+        assert_eq!(list[1].version, "0.1.1", "the oldest user skip went");
+        // A user skip of the failed version doesn't replace it.
+        add_skip(&bin, "0.0.9", "user").unwrap();
+        let again: Vec<Skip> = bin.read(SKIPPED_FILE).unwrap().unwrap();
+        assert_eq!(again, list);
+        // Only failed entries over the limit: all kept.
+        let mut only: Vec<Skip> = (0..MAX_SKIPPED + 2)
+            .map(|i| Skip {
+                version: format!("0.2.{i}"),
+                reason: SKIP_FAILED.into(),
+            })
+            .collect();
+        trim(&mut only);
+        assert_eq!(only.len(), MAX_SKIPPED + 2);
     }
 
     /// A damaged `trust.json` is named and never written over; the check

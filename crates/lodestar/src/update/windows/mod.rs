@@ -15,3 +15,5 @@
 //! [`check::signals`] is Windows-only.
 
 pub mod check;
+pub mod helper;
+pub mod msi;

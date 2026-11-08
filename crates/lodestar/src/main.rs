@@ -92,6 +92,8 @@ fn main() -> ExitCode {
         | Command::Companion(_) => Some(privdrop::Scope::DataDir),
         Command::Healthcheck | Command::Stats(_) => Some(privdrop::Scope::ProcessOnly),
         Command::Lists => None,
+        // Windows only, where there's no PUID/PGID drop; it reads no config.
+        Command::UpdateHelper(_) => None,
     };
     // `lodestar worker --data <dir>`: that folder is the one to own, through
     // the same checks as LODESTAR_DATA_DIR (it's passed to the drop as that
