@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-08T02:17Z",
+  "updated_at": "2026-11-08T02:21Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5974,6 +5974,16 @@
       "id": "X-cmp-minisign-variant",
       "at": "2026-11-08T02:17Z",
       "what": "Add catalogue UpstreamSig::Minisign{public_key, sig_url} variant (CMP-0 catalogue.rs) to reach CMP-1 verify::minisign; and a streaming verify_prehashed in crates/update so the check needn't read the whole file (<=512 MiB) into memory. No v0.6 companion publishes minisign, so not urgent. From CMP-1 session."
+    },
+    {
+      "id": "X-worker-bandwidth-limit",
+      "at": "2026-11-08T02:21Z",
+      "what": "Workers ignore Assign up_kbps/down_kbps (no limiter exists). Build the limiter; meanwhile ensure UI says caps do not apply to workers yet. From WK-10c."
+    },
+    {
+      "id": "wk10c-runner-calls",
+      "at": "2026-11-08T02:21Z",
+      "note": "Approved: worker/session.rs ~12 lines (Hello capabilities: ram_mb cgroup/MemTotal, external_ips public only); worker/dht.rs new in WK-10 owns (add to slices.yaml). Accepted: 60 s DHT grace after lost session (pool+DHT pause at once) - owner flag; bandwidth caps unapplied - owner flag. RSS 114-124 MiB measured, ~212 worst case."
     }
   ],
   "main_health": [
