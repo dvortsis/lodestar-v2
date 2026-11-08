@@ -6427,6 +6427,10 @@
     {
       "at": "2026-11-08T19:56Z",
       "note": "#626 X-pk-manifest-hardening merged (06ef6385); PK-manifest session archived; slot 2 -> OP-1 (session_01MMjhn8vnSa2hCANaKahuAe)."
+    },
+    {
+      "at": "2026-11-08T19:58Z",
+      "note": "Next runner PR: X-wk-busy-retry owns add crates/lodestar/src/logging/events.rs, blessed catalogue, logging messages en/zh, event-names.ts (new event worker.claims_gave_up, approved). Numbers approved \u00a72.26: 2 s base, 60 s cap, equal jitter, 5 attempts, 1,024 waiting keys. Non-Busy denials drop; Unknown reaches worker as Busy since #628."
     }
   ],
   "main_health": [
