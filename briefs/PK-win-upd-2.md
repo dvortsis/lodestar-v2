@@ -2,7 +2,7 @@
 
 **Model:** Opus. **Review:** a fresh Opus reviewer plus `/security-review`. **Branch:** `slice/PK-win-upd-2` from `origin/main`. **PR title:** `PK-win-upd-2: Windows MSI install through the update helper`. **Steward:** `.claude/skills/steward/SKILL.md`. The runner merges; you never do.
 
-Runner brief, 2026-11-08T20:35Z. Slot 3. M6 critical path: PK-win-upd-1 (merged #630, 6554ca2c) → **PK-win-upd-2** → PK-win-upd-3 → G-m6. PK-win-portable-upd follows separately and owns disjoint files.
+Runner brief, 2026-11-08T20:16Z. Slot 3. M6 critical path: PK-win-upd-1 (merged #630, 6554ca2c) → **PK-win-upd-2** → PK-win-upd-3 → G-m6. PK-win-portable-upd follows separately and owns disjoint files.
 
 ## The owner's decision
 `docs/owner-decisions.md` §2.47 approved M6 **Q13** as the plan row gives it (`docs/plan/2026-11-06-m6-gap-audit.md` §5, Q13 row). The owner also confirmed this loosening by name: "the privileged MSI updater helper". **The plan row is the decision.** Build exactly that:

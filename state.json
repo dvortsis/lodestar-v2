@@ -6448,6 +6448,10 @@
     {
       "at": "2026-11-08T20:25Z",
       "note": "OP-1 size ~2,020 lines (850 tests): runner kept it one PR, reason in the description. CMP-6 shared edits approved: lodestar/src/companions.rs CompanionsApi impl, services.rs Extension + System snapshot, companions.credential_revealed event (shares logs_catalog.txt, event-names.ts and logging en/zh with X-wk-busy-retry; the later PR regenerates), api lib.rs mod line; logging chunk budget raise approved under \u00a72.26 up to measured + 10%. Regenerate/restart/logs routes return not_wired until CMP-5g. CMP-6 owns needs these in the next runner PR."
+    },
+    {
+      "at": "2026-11-08T20:17Z",
+      "note": "#630 PK-win-upd-1 merged (6554ca2c) on Opus MERGE + security MERGE; session archived; PK-win-upd-2 launched slot 3 (session_01MMjhnAC9TBdvBgyLvxSjGf) with #630 review notes in its brief. #635 Opus MERGE (2 important notes fixed, polish folded, self-checked at 5a099dd3); merge on green. Main 20818fea run cancelled by the #630 merge; macOS watch moved to 6554ca2c. X-updates-api-text and PK-win-portable-upd now ready (no free slot)."
     }
   ],
   "main_health": [
@@ -7149,7 +7153,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T20:07Z",
+    "updated": "2026-11-08T20:17Z",
     "items": [
       {
         "slot": 1,
@@ -7169,11 +7173,11 @@
       },
       {
         "slot": 3,
-        "slice": "PK-win-upd-1",
-        "role": "build",
-        "agent": "claude",
-        "doing": "session_01MMjhnAd9r3xoTvY1JabMgn: PR #630 open; awaiting its all-green report, then Opus + security review",
-        "since": "2026-11-08T17:18Z"
+        "slice": "PK-win-upd-2",
+        "role": "slice",
+        "agent": "session_01MMjhnAC9TBdvBgyLvxSjGf",
+        "doing": "building: Windows MSI install through the SYSTEM update helper (Q13)",
+        "since": "2026-11-08T20:17Z"
       },
       {
         "slot": 4,
