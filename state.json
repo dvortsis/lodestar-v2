@@ -6824,22 +6824,22 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T09:38Z",
+    "updated": "2026-11-08T11:05Z",
     "items": [
       {
         "slot": 1,
-        "slice": "CMP-8a",
+        "slice": "CMP-8b",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBU4Bgyb2nfsARB3x8: #610 open at b32e5f30; Opus review + /security-review running; CI running",
-        "since": "2026-11-08T08:41Z"
+        "doing": "session_01MMjhnCJUWWGd7mwdqxpyXh: CMP-8b auto-configuration (brief 99bfafad)",
+        "since": "2026-11-08T11:05Z"
       },
       {
         "slot": 2,
         "slice": "CMP-4b",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCb1R6WRuMNMxCLNcn: #608 at 24769baf; CI running; then Opus review + /security-review",
+        "doing": "session_01MMjhnCb1R6WRuMNMxCLNcn: #608 at 24769baf green; Opus review + /security-review running; main merge (Cargo conflict) prepared locally",
         "since": "2026-11-08T07:43Z"
       },
       {
@@ -6914,5 +6914,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T11:04Z"
+  "updated": "2026-11-08T11:05Z"
 }
