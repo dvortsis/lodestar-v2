@@ -6381,6 +6381,10 @@
     {
       "at": "2026-11-08T17:54Z",
       "note": "#624 merged (b20fde51); main macOS watch running. Runner PR #629 open (cr-ab-comp-1, followups-3, plan entries incl. P-cloud-operator, uTP + export test-only flake fixes); Opus review running. #620 CMP-5a review MERGE (notes N1-N6 to relay with 5b/5 reviews); merge on green CI."
+    },
+    {
+      "at": "2026-11-08T17:55Z",
+      "note": "Next runner PR: from PK-win-upd-1 self-review. (1) X-updates-api-text: crates/api/src/updates.rs and dto/updates.rs describe updates_unavailable as 'fixture or Windows' and omit not_built_yet; doc-only edit + regenerated openapi.json/schema.d.ts, after PK-win-upd-1. (2) PK-win-portable-upd notes gain a requirement: <data>\\bin owner-only via windows::acl (protected DACL: user, SYSTEM, Administrators) or refuse a non-private one, as log_folder does. (3) web Updates screen: rollback wording for not_built_yet (falls back to unknown)."
     }
   ],
   "main_health": [
@@ -7180,5 +7184,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T17:54Z"
+  "updated": "2026-11-08T17:55Z"
 }
