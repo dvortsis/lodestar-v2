@@ -6173,6 +6173,11 @@
       "id": "owner-flag-CMP-10-download-clients",
       "note": "\u00a72.19 flag at merge: download_clients need satisfied by any Integrations client (Transmission/Deluge/qBittorrent) or a healthy catalogue client companion; missing suggests qBittorrent; unhealthy only for Lodestar-managed companion",
       "logged": "2026-11-08T12:34Z"
+    },
+    {
+      "id": "CMP-5g-guided-origin-switch",
+      "note": "CMP-8b: guided plan under a whitelist auth bypass is never empty; CMP-5g must switch origin Guided->Confirmed after a successful guided apply and re-plan only after; local_auth_restore_failed must reach the user",
+      "logged": "2026-11-08T13:14Z"
     }
   ],
   "main_health": [
