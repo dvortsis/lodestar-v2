@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the web / e2e applicability rules in ci_changes.py.
+"""Tests for the web / e2e / infra applicability rules in ci_changes.py.
 
 Run: python3 .github/scripts/test_ci_changes.py
 """
@@ -40,6 +40,16 @@ class Applicability(unittest.TestCase):
         self.assertEqual(applies(".github/workflows/e2e.yml"), (False, True))
 
 
+class Infra(unittest.TestCase):
+    def test_only_infra_paths_match(self):
+        for f in ["infra/aws/expiration-guard/deployed/index.py", "infra/akamai/terraform/main.tf",
+                  "infra/akamai/terraform/scripts/Deploy.ps1"]:
+            self.assertTrue(ci_changes.INFRA.match(f), f)
+        for f in ["docs/operations/lodestar-cloud-assets.md", ".agents/skills/lodestar-fleet/SKILL.md",
+                  "crates/infra/src/lib.rs", "web/src/infra.ts"]:
+            self.assertFalse(ci_changes.INFRA.match(f), f)
+
+
 class EndToEnd(unittest.TestCase):
     def test_docs_only_pr_reports_web_and_e2e_false(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -67,6 +77,7 @@ class EndToEnd(unittest.TestCase):
             kv = dict(line.split("=", 1) for line in out.splitlines())
             self.assertEqual((kv["web"], kv["e2e"]), ("false", "false"))
             self.assertEqual(kv["rust"], "false")
+            self.assertEqual(kv["infra"], "false")
 
     def test_crash_exits_nonzero(self):
         # A bad base must fail the script (the workflow step then fails, not an empty output).
@@ -81,6 +92,7 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("web=true", out)
         self.assertIn("e2e=true", out)
         self.assertIn("mmap_retention=true", out)
+        self.assertIn("infra=true", out)
 
 
 if __name__ == "__main__":

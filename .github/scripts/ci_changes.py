@@ -14,6 +14,8 @@ request gets:
   crate that job builds, following the workspace's path dependencies (the
   logging bench: `lodestar-log` or the binary's `logging/` runtime);
 - the soak tools' Python tests only if it touches `docs/soak/tools/`;
+- the cloud infrastructure checks (Lambda tests, template rebuilds, Terraform
+  fmt/validate, PowerShell parse) only if it touches `infra/` or this workflow;
 - `web` and `e2e` for web.yml / e2e.yml (see WEB_INPUTS below). Those two
   workflows always run on a pull request and use these outputs to skip their
   heavy jobs, so their `web-ok` / `e2e-ok` aggregates can be required.
@@ -62,6 +64,10 @@ WEB = re.compile(rf"^({WEB_INPUTS}|\.github/workflows/web\.yml$)")
 # the API contract that openapi.json is generated from. Docs, other crates and
 # unrelated workflows never apply.
 E2E = re.compile(rf"^({WEB_INPUTS}|crates/api/|\.github/workflows/e2e\.yml$)")
+
+# The cloud infrastructure job (X-cloud-infra): Lambda tests, template rebuilds,
+# Terraform fmt/validate and a PowerShell parse check. Never touches a cloud.
+INFRA = re.compile(r"^infra/")
 
 EVERYTHING = re.compile(
     r"^(Cargo\.(toml|lock)|rust-toolchain(\.toml)?|\.cargo/|\.github/workflows/ci\.yml"
@@ -146,6 +152,7 @@ def main() -> None:
             log_bench="true",
             mmap_retention="true",
             soak_tools="true",
+            infra="true",
             web="true",
             e2e="true",
         )
@@ -193,6 +200,7 @@ def main() -> None:
         )
     ).lower()
     out["soak_tools"] = str(everything or any(f.startswith("docs/soak/tools/") for f in changed)).lower()
+    out["infra"] = str(everything or any(INFRA.match(f) for f in changed)).lower()
     # The mmap-cache retention test (X-mmap-cache-prune): the bench crate
     # that holds it, or anything it builds (the search crate among them).
     out["mmap_retention"] = str(needs({"lodestar-bench"}, tested=True)).lower()

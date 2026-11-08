@@ -22,7 +22,13 @@ The owner asked the runner to review #623 ("Reconcile Lodestar AWS and Akamai in
 - **Terraform state reconciliation.** The live fleet's state is private and not in Git. `terraform apply` from a fresh checkout could create a second fleet or recreate watchdog-deleted machines; the docs say not to apply until state ownership is reconciled.
 - **Whether the stacks are still live**, or still match these templates. Nothing in this slice ran against AWS or Akamai.
 - **`terraform fmt -check` and `terraform validate`**, and the PowerShell scripts: neither Terraform nor PowerShell is available in the cloud session that prepared this slice. The Python tests (`test_watchdog.py`, `test_guard.py`) ran and pass.
-- **No CI job runs any of `infra/`.** Adding one needs the runner's approval; this slice asks for it rather than adding one.
+- **What CI checks.** On the runner's instruction, a new `infra` CI job (gated by an `infra` output of `ci_changes.py` and part of `ci-ok`) runs on any change under `infra/`:
+  - both Lambda test suites;
+  - the byte-for-byte template rebuild;
+  - `terraform fmt -check` and `terraform init -backend=false` plus `validate` for each root module;
+  - a PowerShell parse check.
+
+  It uses no credentials and runs no plan or apply. Nothing executes a PowerShell script, so the scripts' behaviour stays unverified.
 - **The AMI.** Whether the previously hard-coded AMI is a public Amazon base image couldn't be checked without AWS access, so it is a parameter like the other IDs.
 
 ## Agent access model

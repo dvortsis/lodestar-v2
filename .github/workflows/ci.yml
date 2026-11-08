@@ -51,6 +51,7 @@ jobs:
       mmap_retention: ${{ steps.c.outputs.mmap_retention }}
       fuzz: ${{ steps.c.outputs.fuzz }}
       soak_tools: ${{ steps.c.outputs.soak_tools }}
+      infra: ${{ steps.c.outputs.infra }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -432,9 +433,66 @@ jobs:
       - shell: pwsh
         run: ./docs/soak/tools/test_cr0_collector.ps1
 
+  # Cloud infrastructure (X-cloud-infra, docs/decisions/2026-11-08-X-cloud-infra.md).
+  # Static checks only: no credentials, no terraform plan or apply, nothing
+  # runs against AWS or Akamai, and no PowerShell script is executed.
+  infra:
+    name: infra
+    needs: changes
+    if: needs.changes.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13" # the Lambdas' runtime (python3.13)
+      - name: Lambda tests
+        run: |
+          (cd infra/akamai/watchdog/deployed && python -m unittest test_watchdog -v)
+          (cd infra/aws/expiration-guard/deployed && python -m unittest test_guard -v)
+      # Each template inlines its index.py; the committed JSON must be exactly
+      # what build_template.py produces from the committed source.
+      - name: Templates match their Lambda source
+        run: |
+          python infra/akamai/watchdog/deployed/build_template.py
+          python infra/aws/expiration-guard/deployed/build_template.py
+          git diff --exit-code -- infra/
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+          terraform_wrapper: false
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff infra/
+      # Every root module: a folder holding .tf files. init downloads the
+      # provider pinned in .terraform.lock.hcl; no backend, no credentials.
+      - name: terraform validate
+        run: |
+          set -euo pipefail
+          for dir in $(find infra -name '*.tf' -not -path '*/.terraform/*' -exec dirname {} \; | sort -u); do
+            echo "::group::$dir"
+            terraform -chdir="$dir" init -backend=false -input=false -lockfile=readonly
+            terraform -chdir="$dir" validate
+            echo "::endgroup::"
+          done
+      # Parse only: a syntax error fails the job, nothing is executed.
+      - name: PowerShell parse check
+        shell: pwsh
+        run: |
+          $failed = $false
+          foreach ($f in Get-ChildItem -Path infra -Recurse -Filter *.ps1) {
+            $tokens = $null; $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors) {
+              $failed = $true
+              foreach ($e in $errors) { Write-Host "::error file=$($f.FullName),line=$($e.Extent.StartLineNumber)::$($e.Message)" }
+            } else { Write-Host "ok $($f.FullName)" }
+          }
+          if ($failed) { exit 1 }
+
   ci-ok:
     name: ci-ok
-    needs: [changes, lint, openapi, test, size-budget, relevance, importer, fuzz, log-bench, mmap-retention, soak-tools, soak-collector-windows]
+    needs: [changes, lint, openapi, test, size-budget, relevance, importer, fuzz, log-bench, mmap-retention, soak-tools, soak-collector-windows, infra]
     if: always()
     runs-on: ubuntu-latest
     steps:
