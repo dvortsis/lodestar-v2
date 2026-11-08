@@ -882,6 +882,8 @@ async fn a_regrant_whose_check_fails_grants_nothing() {
         assert_eq!(keys, vec![key(1)]);
         let s = c.server.snapshot();
         assert_eq!((s.regrants, s.leases, s.pending), (1, 1, 1));
+        // A key's own failed read is the store check's to count, not this.
+        assert_eq!(s.check_failures, 1);
 
         // Once it answers, the next tick grants it.
         check.unknown.lock().unwrap().clear();
@@ -984,6 +986,7 @@ async fn a_claim_whose_check_fails_is_denied() {
         let c = coordinator_with(config(), Some(Arc::new(ShortCheck))).await;
         let a = c.local().await;
         let grants = a.claim(found(&*c.clock, &[1, 2])).await.unwrap();
+        assert_eq!(grants.len(), 2);
         for (g, n) in grants.iter().zip([1, 2]) {
             assert_eq!(
                 *g,

@@ -536,10 +536,12 @@ impl StoreCheck {
         between();
         let reader = self.reader.lock().unwrap_or_else(PoisonError::into_inner);
         let hashes: Vec<[u8; 20]> = keys.iter().map(|k| k.0).collect();
-        // `None`: the read failed, so any key might have been held.
-        let held = reader.held_among(&hashes).map_err(|_| {
+        // `None`: the read failed (or came back short), so any key might
+        // have been held.
+        let held = held_answers(reader.held_among(&hashes), keys.len());
+        if held.is_none() {
             self.errors.fetch_add(1, Ordering::Relaxed);
-        });
+        }
         let engine = self.filter.as_ref().map(|f| f.current());
         keys.iter()
             .enumerate()
@@ -547,24 +549,39 @@ impl StoreCheck {
                 let listed = engine
                     .as_ref()
                     .is_some_and(|e| e.blocked_hash(&[k.0]).is_some());
-                let held = held
-                    .as_ref()
-                    .ok()
-                    .map(|h| h.get(i).copied().unwrap_or(true));
-                if reported[i] || listed || held == Some(true) {
-                    return KeyCheck::Held;
-                }
-                match (reader.find(k), held) {
-                    (Ok(Some(_)), _) => KeyCheck::Stored,
-                    (Ok(None), Some(false)) => KeyCheck::Free,
-                    (Ok(None), _) => KeyCheck::Unknown,
-                    (Err(_), _) => {
+                let held = held.as_ref().map(|h| h[i]);
+                // `find` only when the answer still depends on it.
+                let found = if reported[i] || listed || held == Some(true) {
+                    Ok(false)
+                } else {
+                    reader.find(k).map(|f| f.is_some()).map_err(|_| {
                         self.errors.fetch_add(1, Ordering::Relaxed);
-                        KeyCheck::Unknown
-                    }
-                }
+                    })
+                };
+                classify(reported[i], listed, held, found)
             })
             .collect()
+    }
+}
+
+/// `held_among`'s answer, or `None` if the read failed or came back short
+/// (#607's review: a short answer reads as unknown, not as held).
+fn held_answers<E>(read: Result<Vec<bool>, E>, n: usize) -> Option<Vec<bool>> {
+    read.ok().filter(|h| h.len() == n)
+}
+
+/// One key's answer: reported by a worker, on the floor's hash lists, held
+/// in the store (`None`: unknown), and found in the store (`Err`: the read
+/// failed).
+fn classify(reported: bool, listed: bool, held: Option<bool>, found: Result<bool, ()>) -> KeyCheck {
+    if reported || listed {
+        return KeyCheck::Held;
+    }
+    match (held, found) {
+        (Some(true), _) => KeyCheck::Held,
+        (_, Ok(true)) => KeyCheck::Stored,
+        (Some(false), Ok(false)) => KeyCheck::Free,
+        (None, Ok(false)) | (_, Err(())) => KeyCheck::Unknown,
     }
 }
 
@@ -875,8 +892,10 @@ impl Sink {
     /// first two stand whether or not it happens (#607's review).
     fn over_budget(&self, worker: WorkerId) {
         if let Some(server) = self.server.get().and_then(Weak::upgrade) {
-            server.pause(worker);
-            server.authority().evict(worker);
+            // `false` only for the built-in worker, which keeps its leases.
+            if server.pause(worker) {
+                server.authority().evict(worker);
+            }
         }
         lodestar_log::log_event!(
             events::CLUSTER_FLOOR_REPORTS_OVER_BUDGET,
@@ -2957,6 +2976,36 @@ mod tests {
         assert_eq!(
             floor.report(WorkerId(9), &key_n(1), 1, now),
             Reported::Taken
+        );
+    }
+
+    /// #607's delta review: a `held_among` answer that's short, or failed,
+    /// leaves a key unknown (refused by a claim, waiting in a re-grant),
+    /// never held or free; a stored key is stored even then.
+    #[test]
+    fn a_short_held_read_is_unknown() {
+        let short = held_answers::<()>(Ok(vec![false]), 2);
+        assert_eq!(short, None);
+        assert_eq!(held_answers::<()>(Err(()), 1), None);
+        assert_eq!(
+            held_answers::<()>(Ok(vec![true, false]), 2),
+            Some(vec![true, false])
+        );
+        let held = short.as_ref().map(|h| h[0]);
+        assert_eq!(classify(false, false, held, Ok(false)), KeyCheck::Unknown);
+        assert_eq!(classify(false, false, held, Ok(true)), KeyCheck::Stored);
+        assert_eq!(
+            classify(false, false, Some(false), Ok(false)),
+            KeyCheck::Free
+        );
+        assert_eq!(
+            classify(false, false, Some(false), Err(())),
+            KeyCheck::Unknown
+        );
+        assert_eq!(classify(false, true, None, Err(())), KeyCheck::Held);
+        assert_eq!(
+            classify(true, false, Some(false), Ok(false)),
+            KeyCheck::Held
         );
     }
 
