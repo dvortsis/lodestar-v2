@@ -757,8 +757,8 @@ async fn in_flight_samples_are_sealed_for_the_full_horizon() {
 #[tokio::test(start_paused = true)]
 async fn a_scaled_cooldown_is_saved_as_the_horizon() {
     // WK-10e: a 48 h cooldown (scale 8) doesn't fail the snapshot. It's
-    // saved and restored for the horizon, so every node's own interval
-    // (at most `MAX_INTERVAL`) still holds after the restart.
+    // saved and restored as `MAX_INTERVAL` from the save, so every node's
+    // own interval (at most that) still holds after the restart.
     let d = Dirs::new("wk10e");
     let c = clock();
     let mut r = Run::boot(&d, &c, true);
@@ -781,7 +781,7 @@ async fn a_scaled_cooldown_is_saved_as_the_horizon() {
         .unwrap()
         .unwrap();
     let mut r = Run::boot(&d, &c, true);
-    advance(saved_at + horizon() - Instant::now() - Duration::from_secs(1)).await;
+    advance(saved_at + max - Instant::now() - Duration::from_secs(1)).await;
     r.tick();
     assert_eq!(r.proof.reason(), Reason::Resumed, "the snapshot loaded");
     assert!(!r.sampler.reserve(addr(5), 1, Instant::now()));
