@@ -38,6 +38,7 @@ lodestar_log::catalogue! {
         id: "companions.credential_revealed",
         component: Companions,
         level: Info,
+        required: true,
         message: "companions: credential revealed",
         fields: { companion: Label, field: Label, client: Client },
     }

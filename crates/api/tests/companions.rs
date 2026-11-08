@@ -166,7 +166,7 @@ impl CompanionsApi for Fake {
             Fake::known(&id)?;
             if request.puid != "1000" {
                 return Err(CompanionsError::BadInput {
-                    field: "puid",
+                    field: Some("puid"),
                     code: "bad_template_input",
                 });
             }

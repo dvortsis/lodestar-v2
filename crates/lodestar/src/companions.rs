@@ -378,12 +378,14 @@ fn field(name: &str) -> Result<Field, CompanionsError> {
 
 fn bad(field: &'static str) -> impl Fn(lodestar_companions::inputs::InputError) -> CompanionsError {
     move |_| CompanionsError::BadInput {
-        field,
+        field: Some(field),
         code: "bad_template_input",
     }
 }
 
-fn template_error(e: TemplateError) -> CompanionsError {
+/// A template refusal as the API's code. `path` names the folder a
+/// folder rule refused, once [`Service::template`] has found which.
+fn template_error(e: TemplateError, path: Option<&'static str>) -> CompanionsError {
     match e {
         TemplateError::UnknownCompanion => CompanionsError::Unknown,
         TemplateError::NoTemplate | TemplateError::NotAvailable(_) => {
@@ -391,24 +393,67 @@ fn template_error(e: TemplateError) -> CompanionsError {
         }
         TemplateError::MissingPath(r) | TemplateError::UnexpectedPath(r) => {
             CompanionsError::BadInput {
-                field: match r {
-                    MountRole::Config => "config_dir",
-                    MountRole::Downloads => "downloads",
-                },
+                field: Some(role_field(r)),
                 code: e.code(),
             }
         }
         TemplateError::DataFolder | TemplateError::OtherCompanion | TemplateError::DotFolder => {
             CompanionsError::BadInput {
-                field: "config_dir",
+                field: path,
                 code: e.code(),
             }
         }
-        TemplateError::Encode => CompanionsError::Internal(e.code()),
+        TemplateError::Encode | TemplateError::DataFolderUnreadable => {
+            CompanionsError::Internal(e.code())
+        }
+        // No one field is to blame (a character rule, a port rule).
         _ => CompanionsError::BadInput {
-            field: "kind",
+            field: None,
             code: e.code(),
         },
+    }
+}
+
+fn role_field(r: MountRole) -> &'static str {
+    match r {
+        MountRole::Config => "config_dir",
+        MountRole::Downloads => "downloads",
+    }
+}
+
+/// Whether a folder rule refused it: it names a folder, not which.
+fn folder_rule(e: TemplateError) -> bool {
+    matches!(
+        e,
+        TemplateError::DataFolder | TemplateError::OtherCompanion | TemplateError::DotFolder
+    )
+}
+
+/// Which folder a folder rule refused. CMP-7 checks the settings folder
+/// first, so with the downloads folder set to it, the same refusal blames
+/// the settings folder, and none (or another) blames downloads.
+fn blame<T>(
+    input: &ServiceInput,
+    err: TemplateError,
+    generate: impl Fn(&ServiceInput) -> Result<T, TemplateError>,
+) -> &'static str {
+    if input.paths.downloads.is_none() {
+        return "config_dir";
+    }
+    let mut probe = input.clone();
+    probe.paths.downloads = probe.paths.config.clone();
+    match generate(&probe) {
+        Err(again) if again == err => "config_dir",
+        _ => "downloads",
+    }
+}
+
+/// The one credential each companion has (as the manager's own map).
+fn own_field(id: &CompanionId) -> Option<Field> {
+    match id.as_str() {
+        lodestar_companions::configure::qbittorrent::ID => Some(Field::WebUiPassword),
+        lodestar_companions::configure::prowlarr::ID => Some(Field::ApiKey),
+        _ => None,
     }
 }
 
@@ -548,7 +593,7 @@ impl Service {
         };
         if r.route != TemplateRoute::ExistingGluetun && r.gluetun_container.is_some() {
             return Err(CompanionsError::BadInput {
-                field: "gluetun_container",
+                field: Some("gluetun_container"),
                 code: "bad_template_input",
             });
         }
@@ -699,29 +744,33 @@ impl CompanionsApi for Service {
             let kind = request.kind;
             self.off(move |s| {
                 let input = s.input(&request)?;
-                let (compose, unraid) = match kind {
-                    TemplateKind::Compose => (
-                        Some(compose::compose(s.catalogue, &e.id, &input).map_err(template_error)?),
-                        Vec::new(),
-                    ),
-                    TemplateKind::Unraid => (
-                        None,
-                        unraid::unraid(s.catalogue, &e.id, &input)
-                            .map_err(template_error)?
-                            .into_iter()
-                            .map(|t| UnraidFile {
-                                add_container_path: t.add_container_path(),
-                                fields: t
-                                    .fields
-                                    .into_iter()
-                                    .map(|(label, value)| UnraidField { label, value })
-                                    .collect(),
-                                file_name: t.file_name,
-                                xml: t.xml,
-                            })
-                            .collect(),
-                    ),
+                let generate = |input: &ServiceInput| -> Result<(Option<String>, Vec<UnraidFile>), TemplateError> {
+                    Ok(match kind {
+                        TemplateKind::Compose => {
+                            (Some(compose::compose(s.catalogue, &e.id, input)?), Vec::new())
+                        }
+                        TemplateKind::Unraid => (
+                            None,
+                            unraid::unraid(s.catalogue, &e.id, input)?
+                                .into_iter()
+                                .map(|t| UnraidFile {
+                                    add_container_path: t.add_container_path(),
+                                    fields: t
+                                        .fields
+                                        .into_iter()
+                                        .map(|(label, value)| UnraidField { label, value })
+                                        .collect(),
+                                    file_name: t.file_name,
+                                    xml: t.xml,
+                                })
+                                .collect(),
+                        ),
+                    })
                 };
+                let (compose, unraid) = generate(&input).map_err(|err| {
+                    let path = folder_rule(err).then(|| blame(&input, err, generate));
+                    template_error(err, path)
+                })?;
                 Ok(CompanionTemplate {
                     compose,
                     id: e.id.as_str().to_owned(),
@@ -741,6 +790,9 @@ impl CompanionsApi for Service {
         Box::pin(async move {
             let e = self.entry(&id)?;
             let f = field(&name)?;
+            if own_field(&e.id) != Some(f) {
+                return Err(CompanionsError::NoCredential);
+            }
             // Q5 is about generated credentials: only a companion Lodestar
             // installed has one. A pasted key or temporary password (a
             // guided or detected companion) is never shown again.
@@ -767,7 +819,10 @@ impl CompanionsApi for Service {
         Box::pin(async move {
             let e = self.entry(&id)?;
             let f = field(&name)?;
-            if !self.installed(&e.id) || !self.off(move |s| s.stored(&e.id)).await?.contains(&f) {
+            if own_field(&e.id) != Some(f)
+                || !self.installed(&e.id)
+                || !self.off(move |s| s.stored(&e.id)).await?.contains(&f)
+            {
                 return Err(CompanionsError::NoCredential);
             }
             self.live
@@ -1286,7 +1341,9 @@ mod tests {
             ),
         ] {
             match s.template("qbittorrent".into(), req(body.clone())).await {
-                Err(CompanionsError::BadInput { field: f, .. }) => assert_eq!(f, field, "{body}"),
+                Err(CompanionsError::BadInput { field: f, .. }) => {
+                    assert_eq!(f, Some(field), "{body}")
+                }
                 other => panic!("{body}: {other:?}"),
             }
         }
@@ -1317,6 +1374,77 @@ mod tests {
         assert_eq!(
             s.template("nope".into(), req(ok)).await.err(),
             Some(CompanionsError::Unknown)
+        );
+    }
+
+    /// The folder a folder rule refused is named, not always the settings
+    /// one. The generator here checks folders as CMP-7 does: settings
+    /// first, then downloads, refusing a dot component.
+    #[test]
+    fn a_folder_refusal_names_the_folder_at_fault() {
+        let generate = |i: &ServiceInput| -> Result<(), TemplateError> {
+            for p in [&i.paths.config, &i.paths.downloads].into_iter().flatten() {
+                if p.as_str().contains("/.") {
+                    return Err(TemplateError::DotFolder);
+                }
+            }
+            Ok(())
+        };
+        let s_req = |config: &str, downloads: Option<&str>| ServiceInput {
+            puid: Puid::parse("1000").unwrap(),
+            pgid: Pgid::parse("1000").unwrap(),
+            network: NetworkName::parse("lodestar").unwrap(),
+            route: compose::Route::Direct,
+            paths: Paths {
+                config: Some(HostPath::parse(config).unwrap()),
+                downloads: downloads.map(|d| HostPath::parse(d).unwrap()),
+            },
+            publish: Vec::new(),
+            data: DataFolders::none(),
+            taken: Vec::new(),
+        };
+        let bad_downloads = s_req("/srv/qbittorrent", Some("/srv/.hidden"));
+        let e = generate(&bad_downloads).unwrap_err();
+        assert_eq!(blame(&bad_downloads, e, generate), "downloads");
+        let bad_config = s_req("/srv/.hidden", Some("/srv/downloads"));
+        let e = generate(&bad_config).unwrap_err();
+        assert_eq!(blame(&bad_config, e, generate), "config_dir");
+        let only_config = s_req("/srv/.hidden", None);
+        assert_eq!(
+            blame(&only_config, TemplateError::DotFolder, generate),
+            "config_dir"
+        );
+        // A rule no one field breaks names none.
+        assert_eq!(
+            template_error(TemplateError::Interpolation, None),
+            CompanionsError::BadInput {
+                field: None,
+                code: "interpolation"
+            }
+        );
+    }
+
+    /// Each companion's reveal and Regenerate reach only its own field.
+    #[tokio::test]
+    async fn only_the_companions_own_credential_is_reachable() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = service(dir.path(), pinned(), NATIVE, Arc::new(Unwired));
+        installed(&s, dir.path(), "qbittorrent").await;
+        stored(&s, "qbittorrent", Field::WebUiPassword);
+        // A row under the other field, which qBittorrent never has.
+        stored(&s, "qbittorrent", Field::ApiKey);
+        assert_eq!(
+            s.reveal("qbittorrent".into(), "api_key".into()).await.err(),
+            Some(CompanionsError::NoCredential)
+        );
+        assert_eq!(
+            s.regenerate("qbittorrent".into(), "api_key".into()).await,
+            Err(CompanionsError::NoCredential)
+        );
+        assert!(
+            s.reveal("qbittorrent".into(), "webui_password".into())
+                .await
+                .is_ok()
         );
     }
 }

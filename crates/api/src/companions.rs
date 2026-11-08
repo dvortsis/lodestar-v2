@@ -138,9 +138,10 @@ pub enum CompanionsError {
     /// The manager refused (`not_wired`, `busy`, `native_in_container`,
     /// `awaiting_pin`, `not_installed`, …). Nothing was changed.
     Refused(&'static str),
-    /// A template input was refused: which field, and why.
+    /// A template input was refused: which field, when one alone is to
+    /// blame, and why.
     BadInput {
-        field: &'static str,
+        field: Option<&'static str>,
         code: &'static str,
     },
     /// Logged by code, never shown.
@@ -195,7 +196,11 @@ impl From<CompanionsError> for ApiError {
                 ApiError::new(StatusCode::CONFLICT, code, refusal_message(code))
             }
             CompanionsError::BadInput { field, code } => {
-                ApiError::bad_request(code, "That value can't be used in a template.").field(field)
+                let e = ApiError::bad_request(code, "That value can't be used in a template.");
+                match field {
+                    Some(f) => e.field(f),
+                    None => e,
+                }
             }
             CompanionsError::Internal(code) => internal(format!("companions: {code}")),
         }
@@ -617,11 +622,16 @@ mod tests {
             assert_eq!((e.status().as_u16(), e.code()), (status, code));
         }
         let e = ApiError::from(CompanionsError::BadInput {
-            field: "config_dir",
+            field: Some("config_dir"),
             code: "bad_template_input",
         });
         assert_eq!((e.status().as_u16(), e.code()), (400, "bad_template_input"));
         assert_eq!(e.body()["error"]["field"], "config_dir");
+        let e = ApiError::from(CompanionsError::BadInput {
+            field: None,
+            code: "interpolation",
+        });
+        assert!(e.body()["error"].get("field").is_none());
         let e = ApiError::from(CompanionsError::Internal("store"));
         assert_eq!(e.status().as_u16(), 500);
         assert!(!e.body().to_string().contains("store"));
