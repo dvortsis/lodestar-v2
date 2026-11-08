@@ -2,7 +2,8 @@
 # Fail-fast credential process wrapper for AWS MCP with MFA caching.
 param(
     [string]$RoleName = "LodestarObserver",
-    [string]$Profile = "lodestar-observer"
+    [Alias('Profile')]
+    [string]$ProfileName = "lodestar-observer"
 )
 
 $cacheDir = Join-Path $HOME ".aws\cli\cache"
@@ -28,9 +29,14 @@ if (Test-Path $cacheDir) {
 if (-not $valid) {
     [Console]::Error.WriteLine("[ERROR] AWS STS session for $RoleName has expired or is not initialized.")
     [Console]::Error.WriteLine("[ACTION REQUIRED] Unattended MFA refresh is not supported. Please run in your terminal:")
-    [Console]::Error.WriteLine("  aws sts get-caller-identity --profile $Profile")
+    [Console]::Error.WriteLine("  aws sts get-caller-identity --profile $ProfileName")
     exit 1
 }
 
-& "C:\Program Files\Amazon\AWSCLIV2\aws.exe" configure export-credentials --profile $Profile --format process
+$awsCli = 'C:\Program Files\Amazon\AWSCLIV2\aws.exe'
+if (-not (Test-Path -LiteralPath $awsCli)) {
+    $cmd = Get-Command aws -ErrorAction SilentlyContinue
+    if ($cmd) { $awsCli = $cmd.Source } else { [Console]::Error.WriteLine('[ERROR] AWS CLI v2 executable not found.'); exit 1 }
+}
+& $awsCli configure export-credentials --profile $ProfileName --format process
 exit $LASTEXITCODE

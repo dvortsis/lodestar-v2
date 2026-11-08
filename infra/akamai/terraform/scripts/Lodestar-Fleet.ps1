@@ -34,30 +34,23 @@ function Audit([string]$Message) {
     Add-Content -LiteralPath $logFile -Value $line
 }
 
-$awsCli = "C:\Program Files\Amazon\AWSCLIV2\aws.exe"
-if (-not (Test-Path $awsCli)) {
-    $cmd = Get-Command aws -ErrorAction SilentlyContinue
-    if ($cmd) { $awsCli = $cmd.Source } else { throw "AWS CLI v2 executable not found." }
-}
+. (Join-Path $scriptDir 'AwsCli.ps1')
+$awsCli = $script:AwsCli
 
 switch ($Action) {
     'inspect' {
         Audit "=== Multi-Cloud Identity & Permissions Inspection ==="
         Audit "1. AWS Cloud (Read-Only Observer: lodestar-observer):"
-        $observerId = & $awsCli sts get-caller-identity --profile lodestar-observer 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Audit ($observerId | Out-String).Trim()
+        $r = Invoke-AwsCli @('sts', 'get-caller-identity', '--profile', 'lodestar-observer', '--output', 'json')
+        if ($r.ExitCode -eq 0) {
+            Audit $r.Out.Trim()
         } else {
             Audit "Observer session not active. Run: aws sts get-caller-identity --profile lodestar-observer"
         }
-
-        Audit "2. AWS Cloud (Privileged Provisioner: lodestar-provisioner):"
-        $provisionerId = & $awsCli sts get-caller-identity --profile lodestar-provisioner 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Audit ($provisionerId | Out-String).Trim()
-        } else {
-            Audit "Provisioner session not active (accessible only by administrator via lodestar-admin with MFA)."
-        }
+        # The provisioner profile is deliberately not touched here: inspect is read-only and
+        # agent-safe, and the provisioner session belongs to the human administrator.
+        Audit "2. AWS Cloud (Privileged Provisioner): not checked by inspect. The administrator checks it with"
+        Audit "   aws sts get-caller-identity --profile lodestar-provisioner"
 
         Audit "3. Akamai Cloud (Terraform Preflight & Provider):"
         Push-Location $projectRoot
@@ -70,10 +63,11 @@ switch ($Action) {
     'status' {
         Audit "=== Lodestar Fleet Status ==="
         Audit "[AWS] Checking Windows test instances in us-east-1 (via lodestar-observer)..."
-        $instances = & $awsCli ec2 describe-instances --profile lodestar-observer --region us-east-1 `
-            --query "Reservations[].Instances[].[InstanceId, State.Name, InstanceType, LaunchTime, Tags[?Key=='ExpiresAt'].Value | [0]]" `
-            --output table
-        Write-Host ($instances | Out-String)
+        $r = Invoke-AwsCli @('ec2', 'describe-instances', '--profile', 'lodestar-observer', '--region', 'us-east-1',
+            '--filters', 'Name=tag:Project,Values=Lodestar',
+            '--query', "Reservations[].Instances[].[InstanceId, State.Name, InstanceType, LaunchTime, Tags[?Key=='ExpiresAt'].Value | [0]]",
+            '--output', 'table')
+        if ($r.ExitCode -eq 0) { Write-Host $r.Out } else { Audit "[AWS] Inventory unavailable (exit $($r.ExitCode)). Is the observer session active?" }
 
         Audit "[Akamai] Checking Linux test fleet state..."
         Push-Location $projectRoot
@@ -156,7 +150,7 @@ Usage:
 --------------------------------------------------------------------------------
 1. To provision Akamai pilot Linux Linodes (1 Main + 1 Worker):
    .\scripts\Deploy.ps1
-   (Enforces confirmation: DEPLOY 2 LINODES)
+   (Enforces confirmation: DEPLOY <N> LINODES, where <N> is the planned count)
 
 2. To provision AWS Windows Server 2022/2025 instance (c6a.xlarge):
    .\scripts\Deploy-AwsWindows.ps1 -Hours $Hours
@@ -204,11 +198,13 @@ To synchronize Terraform state with live Akamai Cloud (dropping watchdog-deleted
         $awsStateFile = Join-Path $projectRoot 'state\aws-fleet-state.json'
         if (Test-Path $awsStateFile) {
             $state = Get-Content $awsStateFile -Raw | ConvertFrom-Json
-            if ($state.instance_id -and $state.status -ne 'destroyed') {
+            if ($state.instance_id -and [string]$state.status -ne 'destroyed') {
                 Audit "Verifying instance $($state.instance_id) in live AWS inventory..."
-                $chk = (& $awsCli ec2 describe-instances --instance-ids $state.instance_id --profile lodestar-observer --region us-east-1 `
-                    --query "Reservations[].Instances[].State.Name" --output text 2>&1) -join "`n"
-                $exit = $LASTEXITCODE
+                $r = Invoke-AwsCli @('ec2', 'describe-instances', '--instance-ids', [string]$state.instance_id,
+                    '--profile', 'lodestar-observer', '--region', 'us-east-1',
+                    '--query', 'Reservations[].Instances[].State.Name', '--output', 'text')
+                $exit = $r.ExitCode
+                $chk = if ($exit -eq 0) { $r.Out } else { $r.Err }
                 # Only a definite answer from EC2 marks the instance gone. An expired
                 # session, throttling or a network error must not rewrite the state.
                 $gone = ($exit -eq 0 -and $chk.Trim() -ceq 'terminated') -or
@@ -217,9 +213,9 @@ To synchronize Terraform state with live Akamai Cloud (dropping watchdog-deleted
                     Audit "Could not verify instance $($state.instance_id) (exit $exit). State left unchanged."
                 }
                 if ($gone) {
-                    Audit "Instance $($state.instance_id) terminated by Expiration Guard. Updating state to 'destroyed'."
+                    Audit "Instance $($state.instance_id) found terminated or gone. Updating state to 'destroyed'."
                     $state.status = "destroyed"
-                    $state.reconciled_at = (Get-Date).ToUniversalTime().ToString('o')
+                    $state | Add-Member -NotePropertyName reconciled_at -NotePropertyValue (Get-Date).ToUniversalTime().ToString('o') -Force
                     $state | ConvertTo-Json -Depth 5 | Set-Content $awsStateFile -Encoding utf8
                 }
             }

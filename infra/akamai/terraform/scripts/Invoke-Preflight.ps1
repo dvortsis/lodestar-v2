@@ -68,18 +68,14 @@ try {
     }
     Audit-Log 'Akamai API token loaded into process memory.'
 
-    # 3. Unblock scripts & set process-scoped execution policy
-    Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned -Force
-    Get-ChildItem -Path (Join-Path $root 'scripts\*') | Unblock-File
-
-    # 4. Run Preflight
+    # 3. Run Preflight
     Audit-Log 'Invoking .\scripts\Preflight.ps1...'
     Push-Location $root
     try {
         & .\scripts\Preflight.ps1
         if ($LASTEXITCODE -ne 0) { throw "Preflight.ps1 failed with code $LASTEXITCODE" }
 
-        # 5. Terraform Formatting, Validation, and Plan
+        # 4. Terraform Formatting, Validation, and Plan
         Audit-Log 'Running terraform fmt -check -recursive...'
         & terraform fmt -check -recursive
         if ($LASTEXITCODE -ne 0) { throw 'terraform fmt check failed.' }

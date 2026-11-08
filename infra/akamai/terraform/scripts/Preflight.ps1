@@ -1,4 +1,4 @@
-# Run from the extracted project folder: .\scripts\Preflight.ps1
+# Run from infra/akamai/terraform in the repository checkout: .\scripts\Preflight.ps1
 # Read-only Linode API requests plus local Terraform init/validate. Never prints the token.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'

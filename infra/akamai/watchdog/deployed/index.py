@@ -143,6 +143,11 @@ def handler(event, context):
     now = datetime.now(timezone.utc)
     token = token_value()
     if token is None:
+        if os.environ.get("TOKEN_REQUIRED") == "true":
+            # Once the token is installed, a missing or empty secret means the 48-hour
+            # cleanup has silently stopped: fail so the Errors alarm fires.
+            LOG.error(json.dumps({"event": "token_missing", "dry_run": dry_run}))
+            raise RuntimeError("Akamai API token missing from Secrets Manager; cleanup is not running")
         LOG.warning(json.dumps({"event": "unconfigured", "message": "Akamai API token not installed", "dry_run": dry_run}))
         return {"status": "unconfigured", "scanned": 0, "eligible": 0, "deleted": 0, "dry_run": dry_run}
 

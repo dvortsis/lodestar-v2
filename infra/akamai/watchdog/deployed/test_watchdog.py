@@ -97,4 +97,92 @@ class WatchdogTests(unittest.TestCase):
             with self.assertRaises(ValueError, msg=bad):
                 mod.api('GET', bad, 'thisisafaketokenxxxxxxxxxxxxxxxxxxxxxxxx')
 
+    def tearDown(self):
+        os.environ.pop('TOKEN_REQUIRED', None)
+
+    def _vms(self, n):
+        return [{**self.vm, 'id': 1000 + i, 'label': 'lodestar-worker-%02d' % i} for i in range(n)]
+
+    @patch.object(mod,'token_value', return_value=None)
+    @patch.object(mod,'list_paginated')
+    def test_missing_token_raises_when_required(self,list_fn,_token):
+        os.environ['TOKEN_REQUIRED']='true'
+        with self.assertRaises(RuntimeError):
+            mod.handler({},None)
+        list_fn.assert_not_called()
+
+    def test_future_created_excluded(self):
+        skewed={**self.vm,'created':(self.now+timedelta(minutes=30)).isoformat().replace('+00:00','Z')}
+        self.assertFalse(mod.aged(skewed,self.now))
+
+    @patch.object(mod,'token_value', return_value='thisisafaketokenxxxxxxxxxxxxxxxxxxxxxxxx')
+    @patch.object(mod,'list_paginated')
+    @patch.object(mod,'api')
+    def test_more_than_ten_eligible_stops_everything(self,api,list_fn,_token):
+        list_fn.return_value=self._vms(11)
+        with self.assertRaises(RuntimeError):
+            mod.handler({},None)
+        api.assert_not_called()
+
+    @patch.object(mod,'token_value', return_value='thisisafaketokenxxxxxxxxxxxxxxxxxxxxxxxx')
+    @patch.object(mod,'list_paginated')
+    @patch.object(mod,'api')
+    @patch.object(mod,'confirm_deleted',return_value=True)
+    def test_at_most_four_deletions_per_run(self,_confirm,api,list_fn,_token):
+        vms=self._vms(6)
+        list_fn.return_value=vms
+        by_id={v['id']:v for v in vms}
+        api.side_effect=lambda method,path,token,allow_404=False: by_id[int(path.rsplit('/',1)[1])] if method=='GET' else {}
+        result=mod.handler({},None)
+        self.assertEqual(result['eligible'],6)
+        self.assertEqual(result['deleted'],4)
+        self.assertEqual(sum(1 for c in api.call_args_list if c.args[0]=='DELETE'),4)
+
+    @patch.object(mod,'token_value', return_value='thisisafaketokenxxxxxxxxxxxxxxxxxxxxxxxx')
+    @patch.object(mod,'list_paginated')
+    @patch.object(mod,'api')
+    @patch.object(mod,'confirm_deleted',return_value=False)
+    def test_unverified_deletion_raises_without_alert(self,_confirm,api,list_fn,_token):
+        list_fn.return_value=[self.vm]
+        api.side_effect=[self.vm,{}]
+        with patch.object(mod,'SNS') as sns:
+            with self.assertRaises(RuntimeError):
+                mod.handler({},None)
+            sns.publish.assert_not_called()
+
+    def _page(self, page, pages, n=1):
+        return {'data':[{'id':i} for i in range(n)],'page':page,'pages':pages}
+
+    @patch.object(mod,'api')
+    def test_pagination_reads_all_pages(self,api):
+        api.side_effect=[self._page(1,2),self._page(2,2)]
+        self.assertEqual(len(mod.list_paginated('/linode/instances','t')),2)
+
+    @patch.object(mod,'api')
+    def test_pagination_rejects_bad_responses(self,api):
+        for bad in [self._page(2,2), self._page(1,21), self._page(1,0), {'data':None,'page':1,'pages':1},
+                    self._page(1,1,n=501)]:
+            api.side_effect=[bad]
+            with self.assertRaises(RuntimeError, msg=bad.get('pages')):
+                mod.list_paginated('/linode/instances','t')
+
+    def _secret(self, value):
+        client=Mock()
+        client.get_secret_value.return_value={'SecretString':value}
+        return patch.object(mod,'SECRETS',client)
+
+    def test_token_value_parsing(self):
+        os.environ['SECRET_ARN']='arn:aws:secretsmanager:us-east-1:123456789012:secret:x'
+        good='a'*40
+        with self._secret(good):
+            self.assertEqual(mod.token_value(),good)
+        with self._secret('{"token": "%s"}' % good):
+            self.assertEqual(mod.token_value(),good)
+        with self._secret(''):
+            self.assertIsNone(mod.token_value())
+        for bad in ['short', 'a'*20+' '+'a'*20, 'a'*513, '{"other": "x"}']:
+            with self._secret(bad):
+                with self.assertRaises(RuntimeError, msg=bad[:10]):
+                    mod.token_value()
+
 if __name__=='__main__': unittest.main(verbosity=2)

@@ -1,6 +1,10 @@
 # Lodestar Akamai 48-hour expiration watchdog
 
-The canonical **source** CloudFormation template in `lodestar-akamai-watchdog.json` was reconciled against the live AWS `lodestar-akamai-watchdog` stack before its account-specific SNS topic ARN was converted to the corresponding AWS pseudo-parameter expression. The embedded `index.py` Lambda source was verified identical to the deployed inline code at reconciliation time. One change has been made since: the API path allowlist no longer admits `/networking/firewalls?page=`, a path the code never calls (`docs/decisions/2026-11-08-X-cloud-infra.md`). The deployed copy keeps that harmless extra entry until the stack is next updated.
+The canonical **source** CloudFormation template in `lodestar-akamai-watchdog.json` was reconciled against the live AWS `lodestar-akamai-watchdog` stack before its account-specific SNS topic ARN was converted to the corresponding AWS pseudo-parameter expression. The embedded `index.py` Lambda source was verified identical to the deployed inline code at reconciliation time. Two changes have been made since (`docs/decisions/2026-11-08-X-cloud-infra.md`); the deployed copy has neither until the stack is next updated:
+- the API path allowlist no longer admits `/networking/firewalls?page=`, a path the code never calls;
+- with `TOKEN_REQUIRED=true`, which the template now sets, a missing or empty secret fails the run so the error alarm fires, instead of returning `unconfigured` silently.
+
+Tests: `python3 -m unittest test_watchdog -v` from this folder. Rebuild check: `python3 build_template.py && git diff --exit-code`.
 
 - AWS Lambda: `lodestar-akamai-expiration-guard`
 - Schedule: EventBridge, every 30 minutes

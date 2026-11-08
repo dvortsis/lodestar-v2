@@ -54,7 +54,8 @@
                     "StringEquals": {
                       "aws:ResourceTag/Project": "Lodestar",
                       "aws:ResourceTag/Environment": "Test",
-                      "aws:ResourceTag/ManagedBy": "Terraform"
+                      "aws:ResourceTag/ManagedBy": "Terraform",
+                      "ec2:InstanceType": "c6a.xlarge"
                     }
                   }
                 },
@@ -95,6 +96,7 @@
     },
     "Function": {
       "Type": "AWS::Lambda::Function",
+      "DependsOn": "LogGroup",
       "Properties": {
         "FunctionName": "lodestar-aws-expiration-guard",
         "Runtime": "python3.13",

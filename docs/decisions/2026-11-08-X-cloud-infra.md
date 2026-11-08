@@ -10,13 +10,19 @@ The owner asked the runner to review #623 ("Reconcile Lodestar AWS and Akamai in
 
 ## The templates are representations, not deployed copies
 - **Parameterized, not byte-identical.** Account-specific values were replaced by parameters or AWS pseudo-parameters (`${AWS::AccountId}`, `${AWS::Region}`). A future stack update must go through a reviewed change set with the existing parameter values supplied by the human.
-- **One deliberate source change.** The watchdog's API path allowlist admitted `/networking/firewalls?page=`, a path the code never calls; it is removed, with a test that the guard rejects it. The deployed Lambda keeps the extra entry, harmless, until the next stack update.
+- **Deliberate source changes.** None is deployed; each reaches AWS only through a reviewed change set at the next stack update.
+  - **Dead allowlist entry removed.** The watchdog's API path allowlist admitted `/networking/firewalls?page=`, a path the code never calls; it is removed, with a test that the guard rejects it.
+  - **A missing token now raises an alarm.** The watchdog returned `unconfigured` without error when its secret was missing or empty, so the cleanup could stop with no alarm. With `TOKEN_REQUIRED=true`, which the template now sets, it fails the run and the Errors alarm fires. Without the variable it behaves as before.
+  - **IAM matches the code's scope.** The AWS guard's `TerminateInstances` permission also requires `ec2:InstanceType = c6a.xlarge`, which the code already checks. This is defence in depth: IAM now enforces it too.
+  - **No lost first logs.** Both Lambda functions `DependsOn` their log group, so the first invocation can't lose its logs (the roles can't create log groups).
+- **The AWS guard Lambda has a source file now.** It lived only inline in `template.json`; it is extracted unchanged to `index.py`, with `build_template.py` (which reproduces the template byte for byte) and `test_guard.py`, the same layout as the watchdog.
 
 ## Not verified
 - **End-to-end deletion** by either reaper: only non-destructive inventory and dry-run checks have passed.
 - **Terraform state reconciliation.** The live fleet's state is private and not in Git. `terraform apply` from a fresh checkout could create a second fleet or recreate watchdog-deleted machines; the docs say not to apply until state ownership is reconciled.
 - **Whether the stacks are still live**, or still match these templates. Nothing in this slice ran against AWS or Akamai.
-- **`terraform fmt -check` and `terraform validate`**, and the PowerShell scripts: neither Terraform nor PowerShell is available in the cloud session that prepared this slice, and no CI job runs them. The Python watchdog tests ran and pass.
+- **`terraform fmt -check` and `terraform validate`**, and the PowerShell scripts: neither Terraform nor PowerShell is available in the cloud session that prepared this slice. The Python tests (`test_watchdog.py`, `test_guard.py`) ran and pass.
+- **No CI job runs any of `infra/`.** Adding one needs the runner's approval; this slice asks for it rather than adding one.
 - **The AMI.** Whether the previously hard-coded AMI is a public Amazon base image couldn't be checked without AWS access, so it is a parameter like the other IDs.
 
 ## Agent access model
@@ -35,6 +41,16 @@ The owner asked the runner to review #623 ("Reconcile Lodestar AWS and Akamai in
 - **Everything else is scoped to `infra/**`:** credentials, keys, `.env`, local state, logs and archives. #623's repo-wide `**/*.pem`, `**/*.key`, `**/*.log`, `**/secrets/**` and `**/.env.*` matched 7 tracked files: TLS test fixtures under `crates/sources-importers` and soak evidence logs under `docs/soak/`. New files of those kinds would have been silently ignored. `git ls-files -ci --exclude-standard` prints nothing.
 
 ## Smaller corrections
+- **One AWS CLI wrapper for PowerShell 5.1 and 7.** `scripts/AwsCli.ps1` runs every AWS CLI call with stdout and stderr kept apart and decides on the exit code alone. Under `$ErrorActionPreference = 'Stop'`, Windows PowerShell 5.1 throws on any stderr line from `2>&1`, even on success, while PowerShell 7 mixes error records into the output. That could leave a launched instance unrecorded, or make error branches unreachable.
+  - **Inline JSON dropped.** The deploy script uses shorthand syntax for `--block-device-mappings`, because inline JSON needs different quoting on each PowerShell version.
+  - **Text output for lists.** Instance lists use `--output text`, because `ConvertFrom-Json` unrolls a one-element array differently on each version.
+- **`Deploy-AwsWindows.ps1`'s duplicate check failed open.** A failed inventory call counted as "no instances"; it now stops the deployment.
+- **`Destroy-AwsWindows.ps1` reported success on a failed waiter.** It now throws when the waiter fails and leaves the state file alone.
+  - **The state file is trusted less.** It is used only while it says `running` or `provisioning`.
+  - **The target is checked first.** Before asking for the phrase, the script confirms the target is tagged `Project=Lodestar` and is not already terminated.
+- **`Lodestar-Fleet.ps1 inspect` touched the provisioner profile.** It no longer does, so it is read-only as the skill says. `status` lists only `Project=Lodestar` instances.
+- **The live test suite could print credentials.** A failure in a call that should have been denied printed its output, which could include live credentials; it no longer does.
+- **ZIP-era leftovers removed.** `Invoke-Preflight.ps1` no longer sets the execution policy or strips Mark-of-the-Web with `Unblock-File`; those dated from the ZIP package.
 - **`Lodestar-Fleet.ps1 reconcile`** marked the AWS instance destroyed on *any* CLI error, an expired session included. It now does so only when EC2 reports `terminated` or `InvalidInstanceID.NotFound`.
 - **`Destroy-AwsWindows.ps1`** treated a failed inventory call as "fleet is clean"; it now stops.
 - **The VPN example's `TZ`** named a local time zone; it is `Etc/UTC` (`docs/owner-decisions.md` §2.35).

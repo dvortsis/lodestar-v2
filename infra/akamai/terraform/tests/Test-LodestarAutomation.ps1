@@ -4,6 +4,8 @@
 .DESCRIPTION
     Run by a human operator on their own machine, never by an agent and never in CI.
     Needs the local LODESTAR_AWS_ACCOUNT_ID and LODESTAR_AWS_AMI_ID environment variables.
+    Failure messages never include the output of a call that succeeded, because a call that
+    should have been denied may return live credentials.
     Executes live verification tests covering role separation, expiration policy enforcement,
     MCP fail-fast mechanics, Terraform validation, and MCP tool execution.
 #>
@@ -116,7 +118,7 @@ Run-Test "MCP Wrapper: Returns valid JSON schema when session cached" {
     if ($LASTEXITCODE -ne 0) { throw "Wrapper returned nonzero: $jsonOutput" }
     $parsed = $jsonOutput | ConvertFrom-Json
     if ($parsed.Version -ne 1 -or -not $parsed.AccessKeyId -or -not $parsed.SessionToken) {
-        throw "Invalid credential JSON schema returned: $jsonOutput"
+        throw "Invalid credential JSON schema returned (output withheld: it may contain credentials)"
     }
 }
 
@@ -163,7 +165,11 @@ Run-Test "IAM Security: lodestar-agent is explicitly DENIED sts:AssumeRole on Lo
         if ($expectedAccountId -cnotmatch '^[0-9]{12}$') { throw 'Set LODESTAR_AWS_ACCOUNT_ID to the approved AWS account ID before IAM testing.' }
         $res = (& $awsCli sts assume-role --role-arn "arn:aws:iam::${expectedAccountId}:role/LodestarProvisioner" --role-session-name test-deny-check --profile lodestar-agent 2>&1) -join "`n"
     } finally { $ErrorActionPreference = $eap }
-    if ($LASTEXITCODE -eq 0 -or $res -notmatch "AccessDenied") {
+    if ($LASTEXITCODE -eq 0) {
+        $res = $null  # holds live LodestarProvisioner credentials; never print it
+        throw "Security failure: lodestar-agent was able to assume LodestarProvisioner. Revoke the session and fix the IAM deny."
+    }
+    if ($res -notmatch "AccessDenied") {
         throw "Security failure: lodestar-agent was not denied assume-role for LodestarProvisioner ($res)"
     }
 }
@@ -182,7 +188,9 @@ Run-Test "IAM Security: lodestar-agent CAN assume LodestarObserver" {
 Run-Test "AWS Deploy: Refuses execution when administrator provisioner session is not active" {
     $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
     try {
-        $res = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $deployAws -DryRun -Hours 48 2>&1) -join "`n"
+        # Placeholder IDs pass the script's format check so it reaches the identity check.
+        $res = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $deployAws -DryRun -Hours 48 `
+            -AmiId ami-00000000 -SubnetId subnet-00000000 -SecurityGroupId sg-00000000 -InstanceProfileName placeholder 2>&1) -join "`n"
     } finally { $ErrorActionPreference = $eap }
     if ($LASTEXITCODE -eq 0 -or $res -notmatch "lodestar-provisioner session is not active or unauthorized") {
         throw "Expected Deploy-AwsWindows.ps1 to block execution without active administrator session ($res)"

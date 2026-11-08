@@ -2,9 +2,10 @@
 .SYNOPSIS
     Privileged, approval-enforced provisioner for the Lodestar AWS Windows test instance.
 .DESCRIPTION
-    Requires active LodestarProvisioner profile, validates expiration policy, tracks state
-    in aws-fleet-state.json, prevents duplicate/orphaned instances, and enforces explicit
-    human approval phrase: DEPLOY 1 AWS WINDOWS INSTANCE.
+    Human-run only, never by an agent. Requires an active LodestarProvisioner session,
+    validates the expiration policy, tracks state in state\aws-fleet-state.json, refuses to
+    run while any Lodestar instance is active, and asks the human to type the phrase
+    DEPLOY 1 AWS WINDOWS INSTANCE before anything billable happens.
 
     Account-specific resource IDs are never stored in this public repository. Pass them as
     parameters, or set them in the local environment before running:
@@ -49,7 +50,7 @@ New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
 $stateFile = Join-Path $stateDir 'aws-fleet-state.json'
 $logsDir = Join-Path $projectRoot 'logs'
 New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
-$logFile = Join-Path $logsDir ("aws-deploy-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+$logFile = Join-Path $logsDir ("aws-deploy-{0}.log" -f (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmssZ'))
 
 function Audit([string]$Message) {
     $line = '{0} [AWS-DEPLOY] {1}' -f (Get-Date).ToUniversalTime().ToString('o'), $Message
@@ -57,14 +58,11 @@ function Audit([string]$Message) {
     Add-Content -LiteralPath $logFile -Value $line
 }
 
-# Import expiration validator
 . (Join-Path $scriptDir 'Test-ExpirationPolicy.ps1')
+. (Join-Path $scriptDir 'AwsCli.ps1')
 
-$awsCli = "C:\Program Files\Amazon\AWSCLIV2\aws.exe"
-if (-not (Test-Path -LiteralPath $awsCli)) {
-    $cmd = Get-Command aws -ErrorAction SilentlyContinue
-    if ($cmd) { $awsCli = $cmd.Source } else { throw "AWS CLI v2 executable not found." }
-}
+$region = 'us-east-1'
+$instanceType = 'c6a.xlarge'
 
 # 0. Validate account-specific parameters before any AWS call (no defaults exist).
 function Assert-Id([string]$Name, [string]$Value, [string]$Pattern) {
@@ -77,13 +75,10 @@ Assert-Id 'SubnetId' $SubnetId '^subnet-[0-9a-f]{8,17}$'
 Assert-Id 'SecurityGroupId' $SecurityGroupId '^sg-[0-9a-f]{8,17}$'
 Assert-Id 'InstanceProfileName' $InstanceProfileName '^[A-Za-z0-9+=,.@_-]{1,128}$'
 
-# 1. Identity Verification (Enforce Privileged Provisioner Role via Administrator Identity)
+# 1. Identity: an active LodestarProvisioner session (the administrator's MFA session).
 Audit "Verifying privileged AWS STS caller identity..."
-$eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-$identityJson = & $awsCli sts get-caller-identity --profile lodestar-provisioner 2>&1
-$ErrorActionPreference = $eap
-
-if ($LASTEXITCODE -ne 0) {
+$r = Invoke-AwsCli @('sts', 'get-caller-identity', '--profile', 'lodestar-provisioner', '--output', 'json')
+if ($r.ExitCode -ne 0) {
     Audit "ERROR: lodestar-provisioner session is not active or unauthorized."
     Audit "[ADMIN ACTION REQUIRED] Privileged provisioning requires human administrator authentication."
     Audit "In your administrative terminal, run:"
@@ -91,72 +86,55 @@ if ($LASTEXITCODE -ne 0) {
     Audit "(Note: lodestar-agent is blocked by explicit IAM deny; only lodestar-admin may assume this role)."
     throw "Active 'lodestar-provisioner' assumed-role session required for deployment."
 }
-$identity = $identityJson | ConvertFrom-Json
-if ($identity.Arn -notmatch 'role/LodestarProvisioner') {
+$identity = $r.Out | ConvertFrom-Json
+if ($identity.Arn -notmatch ':assumed-role/LodestarProvisioner/') {
     throw "Security Violation: Expected role 'LodestarProvisioner', got '$($identity.Arn)'"
 }
 Audit "Authenticated as $($identity.Arn)"
 
-# 2. Expiration Tag Calculation & Strict Validation
+$expectedAccountId = $env:LODESTAR_AWS_ACCOUNT_ID
+if ($expectedAccountId -cnotmatch '^[0-9]{12}$') { throw 'Set LODESTAR_AWS_ACCOUNT_ID to the approved 12-digit AWS account ID before deployment.' }
+if ($identity.Account -cne $expectedAccountId) { throw 'Provisioner session is in an unexpected AWS account. No deployment performed.' }
+$r = Invoke-AwsCli @('sts', 'get-caller-identity', '--profile', 'lodestar-admin', '--region', $region, '--output', 'json', '--no-cli-pager')
+if ($r.ExitCode -ne 0) { throw 'Cannot validate lodestar-admin identity. No deployment performed.' }
+$admin = $r.Out | ConvertFrom-Json
+if ($admin.Account -cne $expectedAccountId -or $admin.Arn -cne "arn:aws:iam::${expectedAccountId}:user/lodestar-admin") { throw "Unexpected administrator identity or account. No deployment performed." }
+$instanceProfileArn = "arn:aws:iam::${expectedAccountId}:instance-profile/$InstanceProfileName"
+
+# 2. Expiration tag
 if (-not $ExpiresAt) {
     $ExpiresAt = (Get-Date).ToUniversalTime().AddHours($Hours).ToString("yyyy-MM-ddTHH:mm:ssZ")
 }
 $expCheck = Assert-LodestarExpiration -ExpiresAt $ExpiresAt -MaxHours 48
 Audit "Validated lease duration: $($expCheck.LeaseHours) hours (Expires: $($expCheck.IsoString))"
 
-# 3. State Tracking & Duplicate/Orphan Detection
-Audit "Checking persistent state in $stateFile..."
-$existingState = $null
-if (Test-Path -LiteralPath $stateFile) {
-    try {
-        $existingState = Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json
-    } catch {}
-}
-
+# 3. Refuse while any Lodestar instance is active. A failed inventory call stops the
+#    deployment: it never counts as "no instances".
 Audit "Checking live AWS cloud inventory for active Lodestar instances..."
-$liveQuery = & $awsCli ec2 describe-instances --profile lodestar-provisioner --region us-east-1 `
-    --filters "Name=tag:Project,Values=Lodestar" "Name=instance-state-name,Values=pending,running,stopping,stopped" `
-    --query "Reservations[].Instances[].[InstanceId,State.Name,LaunchTime,Tags[?Key=='ExpiresAt'].Value | [0]]" `
-    --output json 2>&1
-
-$activeInstances = @()
-if ($LASTEXITCODE -eq 0) {
-    $parsedQuery = $liveQuery | ConvertFrom-Json
-    if ($parsedQuery -and $parsedQuery.Count -gt 0) {
-        $activeInstances = $parsedQuery
-    }
+$r = Invoke-AwsCli @('ec2', 'describe-instances', '--profile', 'lodestar-provisioner', '--region', $region,
+    '--filters', 'Name=tag:Project,Values=Lodestar', 'Name=instance-state-name,Values=pending,running,stopping,stopped',
+    '--query', 'Reservations[].Instances[].[InstanceId,State.Name,LaunchTime]', '--output', 'text')
+if ($r.ExitCode -ne 0) {
+    throw "Could not list EC2 instances (exit $($r.ExitCode)). No deployment performed."
 }
-
-if ($activeInstances.Count -gt 0) {
+$active = ConvertFrom-AwsTextRows $r.Out
+if ($active.Count -gt 0) {
     Audit "WARNING: Active Lodestar instance(s) already exist in AWS!"
-    foreach ($inst in $activeInstances) {
-        Write-Host "  Found: InstanceId=$($inst[0]) State=$($inst[1]) LaunchTime=$($inst[2]) ExpiresAt=$($inst[3])" -ForegroundColor Yellow
+    foreach ($inst in $active) {
+        Write-Host "  Found: InstanceId=$($inst[0]) State=$($inst[1]) LaunchTime=$($inst[2])" -ForegroundColor Yellow
     }
     throw "Deployment halted to prevent duplicate billable resources or partial deployment conflict. Terminate existing instance or recover state."
 }
-
-# 4. Deployment Parameters
-$amiId = $AmiId
-$instanceType = "c6a.xlarge"
-$subnetId = $SubnetId
-$securityGroupId = $SecurityGroupId
-$expectedAccountId = $env:LODESTAR_AWS_ACCOUNT_ID
-if ($expectedAccountId -cnotmatch '^[0-9]{12}$') { throw 'Set LODESTAR_AWS_ACCOUNT_ID to the approved 12-digit AWS account ID before deployment.' }
-$identityJson = & $awsCli sts get-caller-identity --profile lodestar-admin --region us-east-1 --output json --no-cli-pager
-if ($LASTEXITCODE -ne 0) { throw 'Cannot validate lodestar-admin identity. No deployment performed.' }
-$identity = ($identityJson -join "`n") | ConvertFrom-Json
-if ($identity.Account -cne $expectedAccountId -or $identity.Arn -cne "arn:aws:iam::${expectedAccountId}:user/lodestar-admin") { throw "Unexpected administrator identity or account. No deployment performed." }
-$instanceProfileArn = "arn:aws:iam::${expectedAccountId}:instance-profile/$InstanceProfileName"
 
 Write-Host @"
 ================================================================================
                     LODESTAR AWS WINDOWS PROVISIONING PLAN
 ================================================================================
-Target Region:         us-east-1
+Target Region:         $region
 Instance Type:         $instanceType (4 vCPU, 8 GB RAM)
-AMI ID:                $amiId (must be an approved Windows Server base AMI)
-Subnet:                $subnetId
-Security Group:        $securityGroupId (Deny all inbound, SSM only)
+AMI ID:                $AmiId (must be an approved Windows Server base AMI)
+Subnet:                $SubnetId
+Security Group:        $SecurityGroupId (Deny all inbound, SSM only)
 Instance Profile:      $instanceProfileArn
 Hourly Rate:           `$0.1530 / hour
 $($expCheck.LeaseHours)-Hour Estimated Cost:  `$$([math]::Round(0.1530 * $expCheck.LeaseHours, 3))
@@ -165,93 +143,80 @@ Mandatory Tags:        Project=Lodestar, Environment=Test, ManagedBy=Terraform,
 ================================================================================
 "@ -ForegroundColor Cyan
 
+# Shorthand syntax, not inline JSON: inline JSON needs different quoting in 5.1 and 7.
+$tags = "{Key=Project,Value=Lodestar},{Key=Environment,Value=Test},{Key=ManagedBy,Value=Terraform},{Key=ExpiresAt,Value=$($expCheck.IsoString)}"
+$runArgs = @('ec2', 'run-instances',
+    '--image-id', $AmiId,
+    '--instance-type', $instanceType,
+    '--subnet-id', $SubnetId,
+    '--security-group-ids', $SecurityGroupId,
+    '--metadata-options', 'HttpTokens=required',
+    '--block-device-mappings', 'DeviceName=/dev/sda1,Ebs={VolumeSize=50,Encrypted=true}',
+    '--tag-specifications', "ResourceType=instance,Tags=[$tags]", "ResourceType=volume,Tags=[$tags]",
+    '--iam-instance-profile', "Arn=$instanceProfileArn",
+    '--profile', 'lodestar-provisioner', '--region', $region, '--output', 'json')
+
 if ($DryRun) {
     Audit "DRY-RUN REQUESTED: Executing ec2 run-instances --dry-run..."
-    $prevEap = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try {
-        $dryRunOutput = & $awsCli ec2 run-instances --dry-run `
-            --image-id $amiId `
-            --instance-type $instanceType `
-            --subnet-id $subnetId `
-            --security-group-ids $securityGroupId `
-            --metadata-options "HttpTokens=required" `
-            --block-device-mappings '[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"VolumeSize\":50,\"Encrypted\":true}}]' `
-            --tag-specifications "ResourceType=instance,Tags=[{Key=Project,Value=Lodestar},{Key=Environment,Value=Test},{Key=ManagedBy,Value=Terraform},{Key=ExpiresAt,Value=$($expCheck.IsoString)}]" `
-                                 "ResourceType=volume,Tags=[{Key=Project,Value=Lodestar},{Key=Environment,Value=Test},{Key=ManagedBy,Value=Terraform},{Key=ExpiresAt,Value=$($expCheck.IsoString)}]" `
-            --iam-instance-profile "Arn=$instanceProfileArn" `
-            --profile lodestar-provisioner --region us-east-1 2>&1
-    } finally {
-        $ErrorActionPreference = $prevEap
-    }
-
-    if ($dryRunOutput -match "DryRunOperation") {
+    $r = Invoke-AwsCli ($runArgs + '--dry-run')
+    if ($r.Err -match 'DryRunOperation') {
         Audit "PASS: DryRunOperation succeeded. Cloud policy and parameters fully compliant."
         return
-    } else {
-        throw "DryRun failed: $dryRunOutput"
     }
+    throw "DryRun failed (exit $($r.ExitCode)): $($r.Err)"
 }
 
-# 5. Mandatory Human Confirmation Gate
+# 4. Mandatory human confirmation
 $phrase = "DEPLOY 1 AWS WINDOWS INSTANCE"
 Write-Host "`n>>> TO CONFIRM BILLABLE CREATION, TYPE EXACTLY:" -ForegroundColor Yellow
 Write-Host "    $phrase" -ForegroundColor Green
 $confirm = Read-Host -Prompt "Enter confirmation phrase"
-
 if ($confirm -cne $phrase) {
-    Audit "Deployment aborted: Confirmation phrase mismatch ('$confirm' != '$phrase')."
+    Audit "Deployment aborted: Confirmation phrase mismatch."
     Write-Host "Aborted. No resources were created." -ForegroundColor Red
     return
 }
 
-# 6. Execute Provisioning
+# 5. Provision. State is written before the call, so an interruption leaves a record.
 Audit "Executing live EC2 RunInstances..."
-# Update state file to provisioning
-$stateObj = @{
-    status       = "provisioning"
-    timestamp    = (Get-Date).ToUniversalTime().ToString('o')
-    expires_at   = $expCheck.IsoString
-    lease_hours  = $expCheck.LeaseHours
-    region       = "us-east-1"
-    instance_id  = $null
+$stateObj = [ordered]@{
+    status      = "provisioning"
+    timestamp   = (Get-Date).ToUniversalTime().ToString('o')
+    expires_at  = $expCheck.IsoString
+    lease_hours = $expCheck.LeaseHours
+    region      = $region
+    instance_id = $null
 }
 $stateObj | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $stateFile -Encoding utf8
 
-try {
-    $runResp = & $awsCli ec2 run-instances `
-        --image-id $amiId `
-        --instance-type $instanceType `
-        --subnet-id $subnetId `
-        --security-group-ids $securityGroupId `
-        --metadata-options "HttpTokens=required" `
-        --block-device-mappings '[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"VolumeSize\":50,\"Encrypted\":true}}]' `
-        --tag-specifications "ResourceType=instance,Tags=[{Key=Project,Value=Lodestar},{Key=Environment,Value=Test},{Key=ManagedBy,Value=Terraform},{Key=ExpiresAt,Value=$($expCheck.IsoString)}]" `
-                             "ResourceType=volume,Tags=[{Key=Project,Value=Lodestar},{Key=Environment,Value=Test},{Key=ManagedBy,Value=Terraform},{Key=ExpiresAt,Value=$($expCheck.IsoString)}]" `
-        --iam-instance-profile "Arn=$instanceProfileArn" `
-        --profile lodestar-provisioner --region us-east-1 `
-        --output json 2>&1
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "ec2 run-instances failed with code ${LASTEXITCODE}: $runResp"
-    }
-
-    $runJson = $runResp | ConvertFrom-Json
-    $newInstance = $runJson.Instances[0]
-    $instId = $newInstance.InstanceId
-
-    $stateObj.status = "running"
-    $stateObj.instance_id = $instId
-    $stateObj.launch_time = $newInstance.LaunchTime
-    $stateObj.private_ip = $newInstance.PrivateIpAddress
-    $stateObj | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $stateFile -Encoding utf8
-
-    Audit "SUCCESS: Instance $instId provisioned and recorded in state."
-    Write-Host "Instance provisioned: $instId" -ForegroundColor Green
-} catch {
+$r = Invoke-AwsCli $runArgs
+if ($r.ExitCode -ne 0) {
     $stateObj.status = "failed"
-    $stateObj.error = $_.Exception.Message
+    $stateObj.error = "run-instances exit $($r.ExitCode)"
     $stateObj | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $stateFile -Encoding utf8
-    Audit "PROVISIONING FAILED: $($_.Exception.Message)"
-    throw
+    Audit "PROVISIONING FAILED (exit $($r.ExitCode)): $($r.Err)"
+    Audit "Run .\scripts\Deploy-AwsWindows.ps1 -DryRun to check for an instance that launched anyway."
+    throw "ec2 run-instances failed with code $($r.ExitCode)."
 }
+
+try {
+    $newInstance = ($r.Out | ConvertFrom-Json).Instances[0]
+    $instId = [string]$newInstance.InstanceId
+} catch {
+    $instId = $null
+}
+if ($instId -cnotmatch '^i-[0-9a-f]{8,17}$') {
+    # The call succeeded, so an instance may exist. The live duplicate check and the
+    # destroy script's inventory search both find it by its Project=Lodestar tag.
+    $stateObj.status = "unknown-after-launch"
+    $stateObj | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $stateFile -Encoding utf8
+    throw "run-instances succeeded but its output could not be read. An instance may be running: check with -DryRun and remove it with Destroy-AwsWindows.ps1."
+}
+
+$stateObj.status = "running"
+$stateObj.instance_id = $instId
+$stateObj.launch_time = [string]$newInstance.LaunchTime
+$stateObj.private_ip = [string]$newInstance.PrivateIpAddress
+$stateObj | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $stateFile -Encoding utf8
+Audit "SUCCESS: Instance $instId provisioned and recorded in state."
+Write-Host "Instance provisioned: $instId" -ForegroundColor Green
