@@ -839,7 +839,9 @@ impl Notifier {
     }
 }
 
-/// The releases as `/updates` lists them, in the policy's order.
+/// The releases as `/updates` lists them, in the policy's order. This
+/// and the three below mirror `engine.rs`'s, which is Unix-only; a
+/// follow-up moves them to a module both share.
 fn release_infos(plan: &policy::Plan, releases: &[Release]) -> Vec<ReleaseInfo> {
     plan.releases
         .iter()
