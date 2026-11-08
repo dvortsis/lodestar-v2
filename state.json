@@ -6163,6 +6163,16 @@
       "id": "X-flake-email-bcc",
       "note": "runner PR #612 on claude/busy-allen-aptli2 (564d2a02): Bcc header-line check; flake seen on #607 windows",
       "logged": "2026-11-08T12:30Z"
+    },
+    {
+      "id": "CMP-5-wire-companions-gate",
+      "note": "CMP-10: PipelineConfig::companions None = no gate until CMP-5; CMP-5 brief must wire Some(rx) with a test; snapshot also carries integrations.clients presence for download_clients",
+      "logged": "2026-11-08T12:34Z"
+    },
+    {
+      "id": "owner-flag-CMP-10-download-clients",
+      "note": "\u00a72.19 flag at merge: download_clients need satisfied by any Integrations client (Transmission/Deluge/qBittorrent) or a healthy catalogue client companion; missing suggests qBittorrent; unhealthy only for Lodestar-managed companion",
+      "logged": "2026-11-08T12:34Z"
     }
   ],
   "main_health": [
