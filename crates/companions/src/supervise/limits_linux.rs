@@ -404,8 +404,10 @@ fn unescape(b: &[u8]) -> PathBuf {
 }
 
 /// Where `p` (canonical) is on its filesystem: the device and the path
-/// from the filesystem's root, from the mount that serves it (the longest
-/// mount point above it; a later mount shadows an earlier one).
+/// from the filesystem's root, from the mount taken to serve it: the
+/// longest mount point above it, the later one at equal depth. A later
+/// mount on a parent folder that hides it isn't seen (L-1 in
+/// `docs/decisions/2026-11-08-X-cmp4b-mounts.md`).
 fn fs_view(mountinfo: &[u8], p: &Path) -> Option<(String, PathBuf)> {
     let mut best: Option<(usize, String, PathBuf, PathBuf)> = None;
     for (dev, root, point) in mounts(mountinfo) {
@@ -468,9 +470,8 @@ fn clash(v: &Views, dev: &str, p: &Path, in_home: bool) -> Option<LimitsError> {
 /// The path checks again, on the filesystem itself, for each writable
 /// grant (downloads, home) and every mount at or below it, which the
 /// grant's rule covers too. A bind mount can show one folder at two
-/// paths. Fails closed (`mounts_unreadable`): no readable mount table, or
-/// a folder it can't
-/// place, refuses.
+/// paths. Fails closed (`mounts_unreadable`): no readable mount table,
+/// or a folder it can't place, refuses.
 pub(crate) fn mounts_ok(
     downloads: Option<&Path>,
     home: &Path,
@@ -969,6 +970,18 @@ mod tests {
             )
         };
         assert_eq!(run("/srv/dl"), Ok(()));
+        // A downloads folder on that disk, end to end.
+        assert_eq!(
+            mounts_ok_in(
+                &latin1,
+                Some(Path::new(OsStr::from_bytes(b"/media/caf\xe9/dl"))),
+                &own_home,
+                Path::new("/var/lib/lodestar"),
+                own,
+                &own.join("5.0.3"),
+            ),
+            Ok(())
+        );
         assert_eq!(run("/mnt/alias"), overlap);
         assert_eq!(
             fs_view(&latin1, Path::new(OsStr::from_bytes(b"/media/caf\xe9/x"))),
