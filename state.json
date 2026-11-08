@@ -6472,6 +6472,10 @@
     {
       "at": "2026-11-08T20:45Z",
       "note": "Reviews running (3): #637 X-wk-busy-retry e8db9fc9 (main merged, budget 16.6 KB), #638 X-wk-pause-text bad7a619, #634 X-cloud-infra-2 854d9c70 (Opus + security; green; ~590 lines; owner deploys template/guard changes). CMP-6 kept as one PR (~2,750 hand-written + ~2,240 generated)."
+    },
+    {
+      "at": "2026-11-08T20:50Z",
+      "note": "#638 review MERGE at bad7a619; relayed important wording fix (A worker's, not This worker's) + 2 polish; to push after #637 merges with main; runner self-checks text delta then merges. Later Workers-text/WK-16 brief: workers.pause_not_saved help for code=prefs_full says 'pause it there' but an admin pause hits the same PrefsFull."
     }
   ],
   "main_health": [
