@@ -20,6 +20,8 @@ EXPECTED_REGION = "us-east"
 MAX_DELETIONS = 4
 CONFIRM_DEADLINE_S = 90  # wait for 404s on all deletions of a run together
 CONFIRM_POLL_S = 5
+REPORT_RESERVE_S = 20  # time kept back for the SNS message and summary log
+DELETE_RESERVE_S = 60  # don't start another deletion with less time left
 MAX_PAGES = 20
 MAX_ITEMS = 500
 
@@ -115,16 +117,28 @@ def aged(resource, now):
     return now >= created + timedelta(hours=48)
 
 
+def remaining_s(context):
+    """Seconds left before the Lambda times out (no limit outside Lambda)."""
+    getter = getattr(context, "get_remaining_time_in_millis", None)
+    return getter() / 1000.0 if callable(getter) else float("inf")
+
+
 def confirm_deleted(ids, token, deadline_s=CONFIRM_DEADLINE_S):
     """Poll until each Linode returns 404 or the shared deadline passes.
-    Returns the set of ids confirmed deleted."""
+    Returns the set of ids confirmed deleted. A failed status check keeps that
+    id pending (and is logged) instead of discarding confirmations already made."""
     pending = set(ids)
     confirmed = set()
-    deadline = time.monotonic() + deadline_s
+    deadline = time.monotonic() + max(0.0, deadline_s)
     while pending:
         for id_ in sorted(pending):
-            if api("GET", "/linode/instances/" + str(id_), token, allow_404=True) is None:
-                confirmed.add(id_)
+            if time.monotonic() >= deadline:
+                break
+            try:
+                if api("GET", "/linode/instances/" + str(id_), token, allow_404=True) is None:
+                    confirmed.add(id_)
+            except Exception as exc:
+                LOG.warning(json.dumps({"event": "confirm_check_failed", "id": id_, "error_type": type(exc).__name__}))
         pending -= confirmed
         if not pending or time.monotonic() >= deadline:
             break
@@ -189,6 +203,11 @@ def handler(event, context):
         if dry_run:
             LOG.info(json.dumps({"event": "would_delete", "id": instance_id}))
             continue
+        if remaining_s(context) < DELETE_RESERVE_S:
+            # Leave time to confirm what was already deleted and to report.
+            LOG.warning(json.dumps({"event": "deferred_low_time", "id": instance_id}))
+            failures.append({"id": instance_id, "error_type": "DeferredLowTime"})
+            continue
         try:
             current = api("GET", "/linode/instances/" + str(instance_id), token, allow_404=True)
             if current is None:
@@ -204,8 +223,10 @@ def handler(event, context):
 
     deleted = []
     if requested:
+        # The shared deadline never runs past the Lambda's own timeout.
+        budget = min(CONFIRM_DEADLINE_S, remaining_s(context) - REPORT_RESERVE_S)
         try:
-            confirmed = confirm_deleted(requested, token)
+            confirmed = confirm_deleted(requested, token, deadline_s=budget)
         except Exception as exc:
             confirmed = set()
             LOG.exception("Akamai deletion confirmation failed")

@@ -107,6 +107,18 @@ class GuardTests(unittest.TestCase):
         self.serve(inst)
         self.assertEqual(mod.handler({}, None)["expired"], 0)
 
+    def test_falls_back_to_launch_time_without_root_attach_time(self):
+        for mappings in ([], [{"DeviceName": "/dev/sda1", "Ebs": {}}]):
+            self.ec2.terminate_instances.reset_mock()
+            inst = self.instance(launched_hours_ago=49)
+            inst["BlockDeviceMappings"] = mappings
+            self.serve(inst)
+            self.assertEqual(mod.handler({}, None)["requested"], 1, mappings)
+        inst = self.instance(launched_hours_ago=49)
+        del inst["BlockDeviceMappings"], inst["RootDeviceName"]
+        self.serve(inst)
+        self.assertEqual(mod.handler({}, None)["requested"], 1)
+
     def test_expires_at_still_caps_before_48h(self):
         self.serve(self.instance(launched_hours_ago=1, root_attached_hours_ago=2, expires_in_hours=-0.1))
         self.assertEqual(mod.handler({}, None)["requested"], 1)

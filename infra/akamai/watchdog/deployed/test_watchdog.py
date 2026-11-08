@@ -127,7 +127,7 @@ class WatchdogTests(unittest.TestCase):
     @patch.object(mod,'token_value', return_value='thisisafaketokenxxxxxxxxxxxxxxxxxxxxxxxx')
     @patch.object(mod,'list_paginated')
     @patch.object(mod,'api')
-    @patch.object(mod,'confirm_deleted',side_effect=lambda ids,token: set(ids))
+    @patch.object(mod,'confirm_deleted',side_effect=lambda ids,token,deadline_s=None: set(ids))
     def test_at_most_four_deletions_per_run(self,_confirm,api,list_fn,_token):
         vms=self._vms(6)
         list_fn.return_value=vms
@@ -233,5 +233,69 @@ class WatchdogTests(unittest.TestCase):
         with patch.object(mod.time,'sleep') as sleep:
             self.assertEqual(mod.confirm_deleted([1,2],'t'),{1,2})
         sleep.assert_not_called()
+
+    def _two_vms_api(self, api):
+        vms=self._vms(2)
+        by_id={v['id']:v for v in vms}
+        api.side_effect=lambda method,path,token,allow_404=False: by_id[int(path.rsplit('/',1)[1])] if method=='GET' else {}
+        return vms
+
+    @patch.object(mod,'token_value', return_value='thisisafaketokenxxxxxxxxxxxxxxxxxxxxxxxx')
+    @patch.object(mod,'list_paginated')
+    @patch.object(mod,'api')
+    def test_partial_confirmation_alerts_confirmed_and_fails_on_the_rest(self,api,list_fn,_token):
+        vms=self._two_vms_api(api); list_fn.return_value=vms
+        with patch.object(mod,'confirm_deleted',return_value={1000}), patch.object(mod,'SNS') as sns:
+            with self.assertRaises(RuntimeError) as err:
+                mod.handler({},None)
+        sns.publish.assert_called_once()
+        self.assertIn('[1000]', sns.publish.call_args.kwargs['Message'])
+        self.assertNotIn('1001', sns.publish.call_args.kwargs['Message'])
+        self.assertIn('1001', str(err.exception))
+        self.assertIn('DeletionNotVerified', str(err.exception))
+
+    @patch.object(mod,'token_value', return_value='thisisafaketokenxxxxxxxxxxxxxxxxxxxxxxxx')
+    @patch.object(mod,'list_paginated')
+    @patch.object(mod,'api')
+    def test_confirmation_exception_fails_without_alert(self,api,list_fn,_token):
+        vms=self._two_vms_api(api); list_fn.return_value=vms
+        with patch.object(mod,'confirm_deleted',side_effect=RuntimeError('boom')), patch.object(mod,'SNS') as sns:
+            with self.assertRaises(RuntimeError):
+                mod.handler({},None)
+        sns.publish.assert_not_called()
+
+    @patch.object(mod,'api')
+    def test_failed_status_check_keeps_earlier_confirmations(self,api):
+        clock={'t':0.0}
+        def fake_sleep(s): clock['t']+=s
+        def fake_api(method,path,token,allow_404=False):
+            id_=int(path.rsplit('/',1)[1])
+            if id_==1: return None
+            raise RuntimeError('Akamai API HTTP status 503')
+        api.side_effect=fake_api
+        with patch.object(mod.time,'monotonic',lambda: clock['t']), patch.object(mod.time,'sleep',fake_sleep):
+            self.assertEqual(mod.confirm_deleted([1,2],'t',deadline_s=20),{1})
+
+    @patch.object(mod,'token_value', return_value='thisisafaketokenxxxxxxxxxxxxxxxxxxxxxxxx')
+    @patch.object(mod,'list_paginated')
+    @patch.object(mod,'api')
+    def test_confirmation_budget_respects_lambda_time_left(self,api,list_fn,_token):
+        vms=self._two_vms_api(api); list_fn.return_value=vms
+        ctx=Mock(); ctx.get_remaining_time_in_millis.return_value=70_000
+        with patch.object(mod,'confirm_deleted',side_effect=lambda ids,token,deadline_s: set(ids)) as confirm, \
+                patch.object(mod,'SNS'):
+            mod.handler({},ctx)
+        self.assertEqual(confirm.call_args.kwargs['deadline_s'],70-mod.REPORT_RESERVE_S)
+
+    @patch.object(mod,'token_value', return_value='thisisafaketokenxxxxxxxxxxxxxxxxxxxxxxxx')
+    @patch.object(mod,'list_paginated')
+    @patch.object(mod,'api')
+    def test_low_time_defers_deletions_and_fails(self,api,list_fn,_token):
+        vms=self._two_vms_api(api); list_fn.return_value=vms
+        ctx=Mock(); ctx.get_remaining_time_in_millis.return_value=30_000
+        with self.assertRaises(RuntimeError) as err:
+            mod.handler({},ctx)
+        self.assertIn('DeferredLowTime', str(err.exception))
+        self.assertFalse(any(c.args[0]=='DELETE' for c in api.call_args_list))
 
 if __name__=='__main__': unittest.main(verbosity=2)

@@ -105,9 +105,9 @@ Two independent reapers delete expired test machines. Both run in AWS Lambda. **
 +----------------------------------+     +------------------------------------------+
 ```
 
-- **AWS:** `infra/aws/expiration-guard/deployed/` (`index.py` and the `template.json` built from it by `build_template.py`). Terminates in-scope instances once `ExpiresAt` or 48 hours after the instance first started has passed, whichever is first. "First started" is the earliest of `LaunchTime` and the root volume's `AttachTime`, so stopping and starting an instance doesn't reset its clock. It reports that termination was *requested*; it doesn't wait for the final state.
+- **AWS:** `infra/aws/expiration-guard/deployed/` (`index.py` and the `template.json` built from it by `build_template.py`). Terminates in-scope instances once `ExpiresAt` or 48 hours after the instance first started has passed, whichever is first. In the repository source, "first started" is the earliest of `LaunchTime` and the root volume's `AttachTime`, so stopping and starting an instance doesn't reset its clock. **The live guard still uses `LaunchTime` alone until the owner deploys the change set** (`docs/operations/lodestar-cloud-assets.md`). It reports that termination was *requested*; it doesn't wait for the final state.
 - **Akamai:** `infra/akamai/watchdog/deployed/` (`index.py` and the template built from it by `build_template.py`). Reads the Linode token from AWS Secrets Manager (`lodestar/akamai-token`), deletes in-scope Linodes at least 48 hours old (at most 4 a run), and confirms each with an HTTP 404. With `TOKEN_REQUIRED=true` (set in the template), a missing or empty secret fails the run so the error alarm fires; without it, the watchdog only logs `unconfigured` and deletes nothing.
-- **Alarms:** each reaper has an errors alarm, an out-of-scope alarm (a `Project=Lodestar` EC2 instance or a `lodestar`-tagged Linode it may not clean up) and a heartbeat alarm (no run for an hour). These alarm changes are in the templates; the owner deploys them (`docs/operations/lodestar-cloud-assets.md`).
+- **Alarms:** live, each reaper has an errors alarm. The source adds an out-of-scope alarm (a `Project=Lodestar` EC2 instance or a `lodestar`-tagged Linode it may not clean up) and a heartbeat alarm (no run for an hour). These two exist only after the owner deploys the change set (`docs/operations/lodestar-cloud-assets.md`).
 - **Fail closed:** more than 10 eligible Linodes in one scan stops all Akamai deletion for that run, deliberately.
 - **Not cleaned automatically:** detached Linode firewalls, volumes and reserved addresses. Look for them in Cloud Manager after a test.
 - **Terraform drift:** after the watchdog deletes a Linode, the local Terraform state still lists it. See §4.
@@ -196,8 +196,8 @@ terraform output
 ```powershell
 .\scripts\Deploy.ps1
 ```
-Only region `us-east` is allowed (the watchdog reaps nothing elsewhere). To let the AWS Windows VM SSH-tunnel to Main's UI, add its public IPv4 to `main_extra_admin_ipv4_cidrs` in `terraform.tfvars` (up to four `/32`s, Main only; workers stay on `ssh_admin_ipv4_cidr`).
 Shows the full plan, then asks the human to type `DEPLOY <N> LINODES`.
+Only region `us-east` is allowed (the watchdog reaps nothing elsewhere). To let the AWS Windows VM SSH-tunnel to Main's UI, add its public IPv4 to `main_extra_admin_ipv4_cidrs` in `terraform.tfvars` (up to four `/32`s, Main only; workers stay on `ssh_admin_ipv4_cidr`).
 
 ### 🔒 Remote access (human-run only, never by an agent)
 ```powershell

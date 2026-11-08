@@ -28,8 +28,10 @@ This file **supersedes one bullet** of `2026-11-08-X-cloud-infra.md`. Its "Not v
 - **Deletions are confirmed against one shared deadline.**
   - **Before:** each deletion waited about 15 seconds for its own 404.
   - **Now:** the run sends all its deletions first, then polls every 5 s until each returns 404 or a single 90 s deadline passes.
-  - **Timeout:** 300 s, which covers four deletions with retries plus that deadline.
-  - **Unconfirmed deletions** fail the run, as before.
+  - **Bounded by the Lambda's time left:** the deadline is the lower of 90 s and the time left minus 20 s kept for the report. A new deletion isn't started with under 60 s left; it is reported as `DeferredLowTime` and retried on the next run.
+  - **Timeout:** 300 s. That covers HTTP-error retries comfortably. A run of network timeouts can still use it up, and then the Lambda timeout fails the run, which the errors alarm reports.
+  - **One failed status check no longer discards confirmations.** A failed check leaves that Linode pending until the deadline, instead of throwing away the confirmations already made.
+  - **Unconfirmed deletions** fail the run, as before. Confirmed ones are still announced on SNS.
 - **Fail-closed limit kept (runner's call):** more than 10 eligible Linodes stops all deletion for that run. It's documented in the assets doc and the watchdog README.
 - **New tests:** the real zone-less `created` format, out-of-scope logging, and the confirmation deadline (with a fake clock, no sleeps). `test_token_value_parsing` no longer leaks `SECRET_ARN`.
 
@@ -37,7 +39,9 @@ This file **supersedes one bullet** of `2026-11-08-X-cloud-infra.md`. Its "Not v
 - **Root volume size is a parameter.** `Deploy-AwsWindows.ps1 -RootVolumeGiB` takes 50–100 (default 50). The upper bound is the `LodestarRestrictedEC2` policy's 100 GiB cap, as the owner reported it.
 - **A piped confirmation phrase is refused.** `Interactive.ps1`'s `Assert-InteractiveConfirmation` throws when stdin is redirected, the session isn't interactive, or the host was started with `-NonInteractive`.
   - **Where it runs:** before every typed phrase, in `Deploy.ps1`, `Destroy.ps1`, `Deploy-AwsWindows.ps1` and `Destroy-AwsWindows.ps1`. `-DryRun` doesn't ask for a phrase, so it isn't affected.
-- **`Lodestar-Fleet.ps1 access -Target`** accepts only an EC2 instance ID or a dotted IPv4 address. `plan` runs the dry run with the PowerShell that is already running, not a hard-coded `powershell.exe`.
+- **`Lodestar-Fleet.ps1 access -Target`** accepts only an EC2 instance ID or a dotted IPv4 address.
+- **`plan` runs the dry run with the PowerShell that is already running,** not a hard-coded `powershell.exe`. It drops `-ExecutionPolicy Bypass` on purpose: the child inherits the process-scope policy, and bypassing it was never needed for a signed or local script.
+- **PowerShell ISE is refused for typed phrases:** it has no console, so its input reads as redirected. The error message says to use a console or Windows Terminal.
 - **Log and plan file names use UTC,** with a trailing `Z` (§2.35).
 
 ## Docs

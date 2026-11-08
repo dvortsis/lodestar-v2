@@ -1,3 +1,6 @@
+# tolist(ipv4)[0] is the public address only because private_ip = false in
+# main.tf: ipv4 is a set, sorted lexically, so a private 192.168.x address could
+# come first if private IPs were ever enabled.
 output "main_public_ipv4" {
   description = "Main VM public IPv4, null if not deployed. This is NOT your PIA exit IP."
   value       = try(tolist(linode_instance.main[0].ipv4)[0], null)
