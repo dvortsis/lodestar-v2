@@ -6468,6 +6468,10 @@
     {
       "at": "2026-11-08T20:30Z",
       "note": "#637 X-wk-busy-retry (889f1485) and #638 X-wk-pause-text (bad7a619) opened; CI running. Runner approved (\u00a72.26) re-baselining size-limit 'Settings logging event names (on demand)' 14.9 KB -> measured + 10% (~16.6 KB) in #637 after it brings main in; owner \u00a72.19 flag after merge. CMP-6 told its event should fit under the new baseline. Follow-up to log: X-event-names-split (split the on-demand event-names chunk by component so each event wave stops needing a raise)."
+    },
+    {
+      "at": "2026-11-08T20:45Z",
+      "note": "Reviews running (3): #637 X-wk-busy-retry e8db9fc9 (main merged, budget 16.6 KB), #638 X-wk-pause-text bad7a619, #634 X-cloud-infra-2 854d9c70 (Opus + security; green; ~590 lines; owner deploys template/guard changes). CMP-6 kept as one PR (~2,750 hand-written + ~2,240 generated)."
     }
   ],
   "main_health": [
