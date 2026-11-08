@@ -1,0 +1,4 @@
+GET /api/v2/app/version
+
+HTTP 404
+Content-Type: text/html

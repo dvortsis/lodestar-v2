@@ -10,6 +10,9 @@
 //! - [`config_files`]: `qBittorrent.conf` and Prowlarr's `config.xml`,
 //!   written before first start with the credential and a loopback bind
 //!   (CMP-3).
+//! - [`detect`]: finding qBittorrent, Prowlarr and gluetun on fixed
+//!   targets or a URL you enter, and their health, through the SSRF guard
+//!   (CMP-8a).
 //! - [`fetch`] and [`verify`]: a pinned artifact's download through the
 //!   entry's host allowlist, and its size, SHA-256 and upstream signature
 //!   checks (CMP-1).
@@ -26,6 +29,7 @@ pub mod adapter;
 pub mod catalogue;
 pub mod config_files;
 pub mod credentials;
+pub mod detect;
 pub mod extract;
 pub mod fetch;
 pub mod inputs;

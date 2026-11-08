@@ -1,0 +1,3 @@
+# Recorded bodies are raw bytes: exact-match markers include their line
+# endings ("Unauthorized\n"), so never convert them.
+* -text

@@ -18598,7 +18598,9 @@
             "enum": [
               "reexec",
               "supervised",
-              "manual"
+              "manual",
+              "service",
+              "relaunch"
             ]
           }
         }

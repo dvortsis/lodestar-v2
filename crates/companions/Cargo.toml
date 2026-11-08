@@ -22,6 +22,8 @@ lodestar-log.workspace = true
 # crates/lodestar and handed in. lodestar-sources never depends on this
 # crate.
 lodestar-sources.workspace = true
+# The bounded JSON reader (`json.rs`) for the adapters' small answers (CMP-8a).
+lodestar-sources-feeds.workspace = true
 flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
 lodestar-update.workspace = true
 pbkdf2 = { version = "=0.13.0", default-features = false, features = ["hmac"] }

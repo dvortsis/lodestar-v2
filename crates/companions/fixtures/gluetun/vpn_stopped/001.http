@@ -1,0 +1,4 @@
+GET /v1/vpn/status
+
+HTTP 200
+Content-Type: application/json
