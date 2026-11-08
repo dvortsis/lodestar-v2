@@ -72,6 +72,10 @@ COPY crates ./crates
 COPY bench ./bench
 COPY --from=web /src/web/build ./web/build
 
+# The version the binary reports and the updater compares (build.rs reads it
+# from the environment); release.yml passes it, other builds leave it empty.
+ARG LODESTAR_VERSION=
+
 # The target dir is a cache mount, so the binary is copied out in the same RUN.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
