@@ -6288,6 +6288,16 @@
       "id": "X-macos-pidfile-fifo",
       "at": "2026-11-08T17:02:42Z",
       "note": "main red on macOS since #613 (29107fc8): pidfile.rs a_fifo_in_place test used rustix mknodat (absent on macOS). Runner PR #624 (5e58a674, full-ci label) uses mkfifo(1). PR CI runs macOS only with full-ci, so #613 didn't catch it. Merge on green incl. macOS."
+    },
+    {
+      "id": "cr-ab-comp-1-verdict",
+      "at": "2026-11-08T17:04:23Z",
+      "note": "analyze_cr.py segment (repo 29107fc8): verdict invalid, sole reason 6.5 host_checklist_complete missing backup \u2014 runner's run sheet said 'backup: not_applicable' (Appdata Backup disabled), analyzer/CR-SPEC need 'excluded'+next_run. All 18 other checks ok. Comparator 317.80/min net (worst hour 299.22), peak private 408 MiB, cpu 0.08. Digests: bitmagnet sha256:b6373349\u20266f19 (v0.10.1, rev e31b30d7), postgres sha256:aa6cb33c\u20265139 (16.15), collector sha256 fa718caa\u2026582f. Owner asked (via dashboard): accept with runner decisions-file record (recommended) or re-run. Then fix run sheet; host order: rc.2 B-E from 02:01Z, then CR-AB-ADM run sheet."
+    },
+    {
+      "id": "review-618",
+      "at": "2026-11-08T17:04:23Z",
+      "note": "#618 PK-manifest green at 8d05ca2c; fresh Opus + /security-review launched."
     }
   ],
   "main_health": [
@@ -7087,5 +7097,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T17:02:42Z"
+  "updated": "2026-11-08T17:04:23Z"
 }
