@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-08T03:38:31Z",
+  "updated_at": "2026-11-08T03:41:11Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6009,6 +6009,11 @@
       "id": "wk10c-review",
       "at": "2026-11-08T03:27:02Z",
       "note": "#601 Opus review CHANGES: B1 missing tests (heartbeat stats, restart back-off next_step, dht-state.bin saved at shutdown) + units MiB, stopped() race, log-once, normalize ext IP. Runner approved web/** generated labels (X-flakes-1107 merged). Moved to WK-10d: dedupe memory reading with system/info.rs, refresh_pause lock held across bounded send."
+    },
+    {
+      "id": "X-flake-utp-lossy",
+      "what": "lodestar-peer-wire tests/utp.rs::fetches_over_a_lossy_link timed out ('Require: timed out' line 349) on test (windows-latest) for #600 merge head fdd3c451; passed on ae052ae9. No fix PR. Runner routes.",
+      "logged": "2026-11-08T03:41:11Z"
     }
   ],
   "main_health": [
@@ -6710,7 +6715,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T03:38:31Z",
+    "updated": "2026-11-08T03:41:11Z",
     "items": [
       {
         "slot": 1,
@@ -6733,7 +6738,7 @@
         "slice": "CMP-2",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBjswJ9d8Qu8vvTvyu; #600 review CHANGES (2 blocking: tar header overhead bound, implicit dirs vs entry cap; +8 runner calls); fix push pending",
+        "doing": "session_01MMjhnBjswJ9d8Qu8vvTvyu; #600 fix push 0dd26ba5 (all 10 items); 2R delta reviews running; CI running",
         "since": "2026-11-08T00:55Z"
       },
       {
