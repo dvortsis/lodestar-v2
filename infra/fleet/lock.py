@@ -78,7 +78,11 @@ class S3Store:  # pragma: no cover - live only; nothing constructs it in CI
         import boto3  # noqa: PLC0415 - only on the live path
         from botocore.exceptions import ClientError  # noqa: PLC0415
 
-        self._s3, self._bucket, self._err = boto3.client("s3"), bucket, ClientError
+        try:
+            self._s3 = boto3.client("s3")
+        except Exception:
+            raise RuntimeError("S3 client setup failed") from None
+        self._bucket, self._err = bucket, ClientError
 
     def _cond(self, fn, **kw) -> bool:
         try:
@@ -105,7 +109,10 @@ class S3Store:  # pragma: no cover - live only; nothing constructs it in CI
         return self._cond(self._s3.put_object, Key=key, Body=body, IfMatch=etag)
 
     def put(self, key, body):
-        self._s3.put_object(Bucket=self._bucket, Key=key, Body=body)
+        try:
+            self._s3.put_object(Bucket=self._bucket, Key=key, Body=body)
+        except self._err:
+            raise RuntimeError("S3 lock write failed") from None
 
     def delete_if_match(self, key, etag):
         return self._cond(self._s3.delete_object, Key=key, IfMatch=etag)
@@ -154,9 +161,10 @@ class FleetLock:
         return ACQUIRED if self.store.put_if_match(LOCK_KEY, body, cur[1]) else BUSY
 
     def holds(self, run_id: str) -> bool:
+        """This run holds the lock and its own lease hasn't expired."""
         cur = self.store.get(LOCK_KEY)
         holder = _decode(cur[0]) if cur else None
-        return holder is not None and holder.run_id == run_id
+        return holder is not None and holder.run_id == run_id and holder.expires_at > self.clock()
 
     def fence(self, run_id: str) -> None:
         if not self.holds(run_id):

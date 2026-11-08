@@ -6,6 +6,8 @@ _FMT = "%Y-%m-%dT%H:%M:%SZ"
 
 
 def fmt(t: datetime) -> str:
+    if t.tzinfo is None:
+        raise ValueError("naive datetime")
     return t.astimezone(timezone.utc).strftime(_FMT)
 
 

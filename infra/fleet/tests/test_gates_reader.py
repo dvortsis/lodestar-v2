@@ -25,6 +25,9 @@ class Gates(unittest.TestCase):
             {"IS_PR": "false"}, {"ISSUE_NUMBER": "701"}, {"CHANNEL_PR": ""}, {"CHANNEL_PR": "700 "},
             {"AUTHOR_ID": "556"}, {"OPERATOR_BOT_USER_ID": ""}, {"AUTHOR_ID": "", "OPERATOR_BOT_USER_ID": ""},
             {"AUTHOR_ID": "lodestar-operator[bot]", "OPERATOR_BOT_USER_ID": "lodestar-operator[bot]"},
+            {"EVENT_NAME": "workflow_dispatch"}, {"EVENT_NAME": "schedule"},
+            {"AUTHOR_ID": "\u0665\u0665\u0665", "OPERATOR_BOT_USER_ID": "\u0665\u0665\u0665"},
+            {"GITHUB_RUN_ATTEMPT": "2"}, {"GITHUB_RUN_ATTEMPT": ""},  # a re-run replays the event
         ]
         for over in bad:
             with self.subTest(over=over), self.assertRaises(Gated):

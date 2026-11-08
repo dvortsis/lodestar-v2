@@ -127,7 +127,7 @@ class FleetStructure(unittest.TestCase):
             cond = str(job.get("if", ""))
             with self.subTest(job=name):
                 if name == "dispatch-down":
-                    self.assertTrue(cond.startswith("github.event_name == 'workflow_dispatch' && "))
+                    self.assertTrue(cond.startswith("github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'"))
                     self.assertIn("github.actor_id == vars.OWNER_USER_ID", cond)
                     self.assertIn("vars.OWNER_USER_ID != ''", cond)
                     runs = [s["run"] for s in steps(job) if "run" in s]
@@ -140,6 +140,16 @@ class FleetStructure(unittest.TestCase):
     def test_stop_never_gates_reaper_or_dispatch(self):
         for name in ("reaper", "dispatch-down"):
             self.assertNotIn("OPERATOR_STOP", yaml.safe_dump(self.jobs[name]))
+        # Only disabling the workflow stops the reaper: no variable gates it.
+        self.assertEqual(self.jobs["reaper"]["if"], "github.event_name == 'schedule' && github.ref == 'refs/heads/main'")
+
+    def test_act_repeats_the_filter(self):
+        cond = self.jobs["act"]["if"]
+        for check in ("github.event.action == 'created'", "needs.gate.outputs.allowed == 'true'",
+                      "format('{0}', github.event.issue.number) == vars.CHANNEL_PR",
+                      "format('{0}', github.event.comment.user.id) == vars.OPERATOR_BOT_USER_ID",
+                      "github.ref == 'refs/heads/main'"):
+            self.assertIn(check, cond)
 
 
 # ---- the public-log leak test ----
@@ -174,7 +184,9 @@ SCENARIOS = {
     ("infra/fleet/fleet.py", "reap"): [event_env()],
     ("infra/fleet/fleet.py", "dispatch-down"): [event_env()],
 }
-INVOKE = re.compile(r"python3?\s+(\S+\.py)(?:\s+([a-z][\w-]*))?")
+# Every run: step in a covered workflow is exactly one such invocation, so a
+# script can't slip past the scenarios by being started some other way.
+INVOKE = re.compile(r"python3 (infra/[\w/.-]+\.py) ([a-z][\w-]*)")
 
 
 class PublicLogLeak(unittest.TestCase):
@@ -182,10 +194,12 @@ class PublicLogLeak(unittest.TestCase):
         for path in covered():
             for name, job in load(path)["jobs"].items():
                 for s in steps(job):
-                    for script, sub in INVOKE.findall(s.get("run", "")):
-                        with self.subTest(workflow=path.name, job=name, script=script, sub=sub):
-                            self.assertIn((script, sub), SCENARIOS,
-                                          "add a leak scenario for this script")
+                    if "run" not in s:
+                        continue
+                    m = INVOKE.fullmatch(s["run"].strip())
+                    with self.subTest(workflow=path.name, job=name, run=s["run"][:60]):
+                        self.assertIsNotNone(m, "a run: step must be one `python3 infra/<script>.py <sub>`")
+                        self.assertIn(m.groups(), SCENARIOS, "add a leak scenario for this script")
 
     def test_marked_secrets_never_reach_stdout_or_stderr(self):
         values = marks(len(SECRET_NAMES))

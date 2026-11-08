@@ -69,6 +69,12 @@ class Lock(unittest.TestCase):
         self.assertEqual(writes, ["rules"])
         self.assertTrue(self.lock.release("9-1"))
 
+    def test_fence_refuses_an_expired_lease(self):
+        self.lock.acquire("1-1")
+        self.clock.sleep(90 * 60)
+        with self.assertRaises(LockLost):
+            self.lock.fence("1-1")
+
     def test_unreadable_lock_fails_closed(self):
         self.store.put(LOCK_KEY, b"not json")
         self.assertEqual(self.lock.acquire("1-1"), BUSY)

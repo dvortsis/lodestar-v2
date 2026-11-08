@@ -81,7 +81,7 @@ jobs:
     needs: gate
     if: >-
       github.event_name == 'issue_comment' && github.event.action == 'created'
-      && needs.gate.outputs.allowed == 'true'
+      && needs.gate.outputs.allowed == 'true' && github.ref == 'refs/heads/main'
       && vars.CHANNEL_PR != '' && format('{0}', github.event.issue.number) == vars.CHANNEL_PR
       && vars.OPERATOR_BOT_USER_ID != '' && format('{0}', github.event.comment.user.id) == vars.OPERATOR_BOT_USER_ID
     environment: cloud-fleet
@@ -109,11 +109,10 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 infra/fleet/fleet.py act
 
-  # The hourly reaper. Exempt from OPERATOR_STOP. It waits for FLEET_LIVE to
-  # exist (owner setup step 2.7): before that there is no fleet, and running
-  # would create the cloud-fleet environment without its main-only rule.
+  # The hourly reaper. Exempt from OPERATOR_STOP; nothing but disabling this
+  # workflow stops it (plan §3).
   reaper:
-    if: github.event_name == 'schedule' && vars.FLEET_LIVE != ''
+    if: github.event_name == 'schedule' && github.ref == 'refs/heads/main'
     environment: cloud-fleet
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -133,7 +132,9 @@ jobs:
   # The owner's down: gated on the owner's numeric ID, no input, never through
   # the /fleet parser, and it pre-empts the lock with the reaping marker.
   dispatch-down:
-    if: github.event_name == 'workflow_dispatch' && vars.OWNER_USER_ID != '' && github.actor_id == vars.OWNER_USER_ID
+    if: >-
+      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+      && vars.OWNER_USER_ID != '' && github.actor_id == vars.OWNER_USER_ID
     environment: cloud-fleet
     runs-on: ubuntu-latest
     timeout-minutes: 30

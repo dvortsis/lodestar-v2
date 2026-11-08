@@ -22,7 +22,7 @@ def stop_engaged(env: Mapping[str, str]) -> bool:
 
 
 def _numeric(value: str | None) -> str:
-    if not value or not value.isdigit():
+    if not value or not (value.isascii() and value.isdigit()):
         raise Gated("unset or non-numeric id")
     return value
 
@@ -37,6 +37,10 @@ def check_event(env: Mapping[str, str]) -> None:
         raise Gated("not the channel PR")
     if _numeric(env.get("AUTHOR_ID")) != _numeric(env.get("OPERATOR_BOT_USER_ID")):
         raise Gated("author is not the operator")
+    # A re-run replays the original event, so anyone with write access (the
+    # owner's login included) could repeat an old command: only attempt 1 acts.
+    if env.get("GITHUB_RUN_ATTEMPT") != "1":
+        raise Gated("a re-run")
 
 
 def gate(env: Mapping[str, str], limits: Mapping) -> Command:

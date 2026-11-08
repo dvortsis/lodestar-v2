@@ -169,6 +169,76 @@ class Flows(unittest.TestCase):
         _, out = self.run_cli("act", event_env("/fleet run leak-test worker"), backend=b)
         self.assertIn("pinned commit is not an ancestor", out)
 
+    def test_result_comment_carries_an_unedited_status(self):
+        b = DryRunBackend(fleet=new_fleet(L, "screen", self.c["head"], T0 - timedelta(hours=1)))
+        self.run_cli("act", event_env("/fleet status"), backend=b)
+        result = [x for x in self.gh.bodies() if not x.startswith(MARKER)]
+        self.assertEqual(len(result), 1)
+        self.assertIn("| main | 1 h 00 min |", result[0])
+        self.assertNotIn(MARKER, result[0])
+
+    def test_rerun_or_stale_checkout_never_acts(self):
+        store = MemoryStore()
+        _, out = self.run_cli("act", event_env("/fleet up screen", GITHUB_RUN_ATTEMPT="2"), store=store)
+        self.assertEqual((out, store.calls), ("", []))
+        from tests.helpers import git
+        git(self.repo, "checkout", "-q", self.c["first"])
+        try:
+            _, out = self.run_cli("act", event_env("/fleet up screen"), store=store)
+        finally:
+            git(self.repo, "checkout", "-q", "main")
+        self.assertIn("not main's head", out)
+        self.assertEqual(store.calls, [])
+
+    def test_lock_lost_mid_command(self):
+        store = MemoryStore()
+        b = DryRunBackend()
+        real = b.lodestar_linodes
+
+        def preempted():  # the reaper pre-empts while up checks limits
+            FleetLock(store, 90, Clock()).preempt("9-1")
+            return real()
+        b.lodestar_linodes = preempted
+        rc, out = self.run_cli("act", event_env("/fleet up screen"), backend=b, store=store)
+        self.assertEqual(rc, 1)
+        self.assertIn("lock was lost", out)
+        self.assertIsNone(b.fleet)
+        self.assertIn(LOCK_KEY, store.objects)  # the reaper's marker stays
+
+    def test_invalid_fleet_json(self):
+        b = DryRunBackend(fleet={"version": 9})
+        rc, out = self.run_cli("act", event_env("/fleet status"), backend=b)
+        self.assertEqual(rc, 1)
+        self.assertIn("fleet.json is invalid", out)
+        rc, out = self.run_cli("reap", event_env(), backend=b)
+        self.assertEqual(rc, 1)
+
+    def test_internal_errors_print_no_detail(self):
+        class Boom(DryRunBackend):
+            def read_fleet(self):
+                raise KeyError("LEAKMARK-secret-value")
+        rc, out = self.run_cli("dispatch-down", event_env(), backend=Boom())
+        self.assertEqual(rc, 1)
+        self.assertIn("internal error (KeyError)", out)
+        self.assertNotIn("LEAKMARK", out)
+
+    def test_reaper_decides_again_under_the_lock(self):
+        clock, store = Clock(), MemoryStore()
+        holder = FleetLock(store, 90, clock)
+        holder.acquire("7-1")
+        b = DryRunBackend(fleet=new_fleet(L, "screen", self.c["head"], T0 - timedelta(hours=44)))
+
+        def sleep(seconds):  # a /fleet down finishes while the reaper waits
+            clock.sleep(seconds)
+            b.fleet = None
+            holder.release("7-1")
+        out = io.StringIO()
+        with redirect_stdout(out):
+            fleet.main(["reap"], env=event_env(), backend=b, store=store, transport=FakeGitHub(),
+                       clock=clock, sleep=sleep, repo=self.repo)
+        self.assertIn("reaper: none (no fleet)", out.getvalue())
+        self.assertEqual(b.log, [])
+
     def test_live_mode_refused(self):
         for sub in ("act", "reap", "dispatch-down"):
             rc, _ = self.run_cli(sub, event_env("/fleet status", FLEET_LIVE="true"))

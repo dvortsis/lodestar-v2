@@ -22,7 +22,7 @@ CONTROL_PLANE_USER_ID = "41898282"
 
 def allowed_ids(env: Mapping[str, str]) -> frozenset[str]:
     ids = {env.get("RUNNER_USER_ID", ""), env.get("OPERATOR_BOT_USER_ID", ""), CONTROL_PLANE_USER_ID}
-    return frozenset(i for i in ids if i.isdigit())
+    return frozenset(i for i in ids if i.isascii() and i.isdigit())
 
 
 def trusted(comments: Iterable, allowed: frozenset[str]) -> list[dict]:

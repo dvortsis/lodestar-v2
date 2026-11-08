@@ -49,7 +49,7 @@ class Channel:
         while page <= 20:
             items = self.t("GET", f"{self.base}/{self.pr}/comments?per_page=100&page={page}", None) or []
             for c in items:
-                if str(c.get("user", {}).get("id")) == CONTROL_PLANE_USER_ID and str(c.get("body", "")).startswith(MARKER):
+                if str((c.get("user") or {}).get("id")) == CONTROL_PLANE_USER_ID and str(c.get("body", "")).startswith(MARKER):
                     self.t("PATCH", f"{self.base}/comments/{int(c['id'])}", {"body": body})
                     return
             if len(items) < 100:
