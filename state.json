@@ -6113,6 +6113,11 @@
       "id": "CMP-8b-gluetun-cred",
       "note": "From #610 (CMP-8a): gluetun control server answers 401 when auth is on; health fails closed (Unhealthy). CMP-8b's brief must decide how Lodestar gets a control-server credential (or a status-only auth=none role on the internal network via CMP-7/CMP-13), and CMP-5g adds the detect log events.",
       "logged": "2026-11-08T09:35Z"
+    },
+    {
+      "id": "CMP-5g-detect-notes",
+      "note": "From #610 security review (no blocking): (1) set detect::Runtime::Container only when Docker's embedded DNS (127.0.0.11) is the resolver, else a LAN host named 'qbittorrent' via dnsmasq/search domain is a false detection; (2) the API maps user input to Target::Entered only, never Loopback/Container; (3) never log ProbeResponse with {:?} (Debug includes body, CMP-0 adapter.rs); (4) entered-URL error classes are a port-probe oracle: endpoint admin-only and rate-limited. CMP-8b: never send credentials to a container-detected target the user hasn't confirmed.",
+      "logged": "2026-11-08T09:41Z"
     }
   ],
   "main_health": [
@@ -6904,5 +6909,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T09:38Z"
+  "updated": "2026-11-08T09:41Z"
 }
