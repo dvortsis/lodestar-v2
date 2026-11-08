@@ -20,6 +20,7 @@
 	import { statusInk } from '$lib/ui/status';
 	import Tooltip from '$lib/ui/overlays/Tooltip.svelte';
 	import type { Route } from './nav';
+	import { useFleet } from '$lib/features/insights/workers/fleet.svelte';
 	import type { PillKind, PillState } from './status';
 
 	let { state, href = '/insights' }: { state: PillState; href?: string } = $props();
@@ -61,9 +62,6 @@
 			state.reason === 'index_lag' ? m.shell_status_lag_help() : m.shell_status_stalled_help()
 	};
 
-	const Icon = $derived(icons[state.kind]);
-	const helpText = $derived(help[state.kind]?.() ?? '');
-	const tone = $derived(state.kind === 'stalled' ? statusInk.warning : '');
 	const locale = $derived(currentLocale());
 	const showsCount = $derived(
 		state.kind === 'crawling' ||
@@ -72,6 +70,12 @@
 			state.kind === 'starting' ||
 			state.kind === 'stalled'
 	);
+	// The fleet (WK-17): " · N workers · X/h" after the count, with paused and offline when above zero.
+	const fleet = useFleet(() => showsCount);
+
+	const Icon = $derived(icons[state.kind]);
+	const helpText = $derived(help[state.kind]?.() ?? '');
+	const tone = $derived(state.kind === 'stalled' ? statusInk.warning : '');
 	const count = $derived(
 		state.kind === 'rebuilding'
 			? m.shell_status_rebuild_progress({
@@ -100,6 +104,9 @@
 			<span data-testid="status-pill-text">{words[state.kind]()}</span>
 			{#if count}<span class="text-muted-text tabular-nums" data-testid="status-pill-count"
 					>· {count}</span
+				>{/if}
+			{#if fleet.text}<span class="text-muted-text tabular-nums" data-testid="status-pill-fleet"
+					>· {fleet.text}</span
 				>{/if}
 		</span>
 		<span class="sr-only">{m.shell_status_label()}</span>

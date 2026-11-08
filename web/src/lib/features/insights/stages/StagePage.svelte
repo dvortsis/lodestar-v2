@@ -114,6 +114,13 @@
 			.catch(() => {});
 		return () => ctl.abort();
 	});
+	// The per-worker section loads only when the server sends `by_worker` (never on a single machine).
+	const byWorker = $derived((data as { by_worker?: never[] } | undefined)?.by_worker);
+	let Workers = $state.raw<typeof import('../workers/WorkerBreakdown.svelte').default>();
+	$effect(() => {
+		if (byWorker?.length && !Workers)
+			void import('../workers/WorkerBreakdown.svelte').then((mod) => (Workers = mod.default));
+	});
 	const key = $derived(JSON.stringify([stage, query, reason]));
 	$effect(() => {
 		const [, q, r] = JSON.parse(key) as [string, InsightsQuery, string | undefined];
@@ -593,6 +600,10 @@
 				</dl>
 			</div>
 		</section>
+
+		{#if Workers && (stage === 'discover' || stage === 'fetch')}
+			<Workers {stage} {byWorker} />
+		{/if}
 
 		{#each [...model.tables, ...extraTables] as t (t.id)}
 			<section class="ins-section" aria-labelledby="ins-t-{t.id}">

@@ -77,6 +77,8 @@ export const test = base.extend<
 			mock.on('getInsightsIndex', indexFixture());
 			mock.on('getInsightsServe', serveFixture());
 			mock.on('getInsightsEvents', { annotations: [], paused: [], truncated: false });
+			// A single-machine fixture: no fleet, so the status pill adds nothing (WK-17).
+			mock.on('insightsFleetSummary', { fleet: null });
 			await use(mock);
 			mock.assertNoFailures();
 		},
