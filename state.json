@@ -6078,7 +6078,19 @@
     "2026-11-08T07:28Z: from #606: CMP-13 must regenerate packaging/companions/** and golden with UPDATE_GOLDEN=1 when it pins digests; catalogue gluetun container_name 'gluetun' collides with Lodestar's own VPN template \u2014 CMP-0/CMP-13 catalogue call (runner to decide).",
     "2026-11-08T07:32Z: WK-10d main PR #607 opened; runner \u00a72.26 approved re-baseline of size-limit 'Settings logging event names (on demand)' 13.3 -> ~14.9 KB (measured 13.58 + 10%, S-logs-3 rule). Owner FYI after merge with the worker-floor flags.",
     "2026-11-08T07:41Z: #606 CMP-7 CHANGES sent (B1 shipped Unraid examples publish qBittorrent webui on LAN; + ExtraParams runtime allowlist, XML control-char refusal, ContainerName property slot, if-let guard MSRV, decisions notes). Security OK. Gluetun naming -> CMP-13 brief: decide distinct name for generated standalone gluetun vs Lodestar's own 'gluetun'.",
-    "2026-11-08T07:43Z: #603 CMP-4a merged (fa469e4e); session archived; CMP-4b launched in slot 2 (session_01MMjhnCb1R6WRuMNMxCLNcn). Owner FYI sent."
+    "2026-11-08T07:43Z: #603 CMP-4a merged (fa469e4e); session archived; CMP-4b launched in slot 2 (session_01MMjhnCb1R6WRuMNMxCLNcn). Owner FYI sent.",
+    "2026-11-08T07:44Z: #605 PK-win-restart: Opus MERGE + SECURITY-OK; small round asked (24h window +1h margin, decisions-file gaps). Self-check delta then merge.",
+    {
+      "id": "X-win-restart-followups",
+      "added": "2026-11-08T07:44Z",
+      "items": [
+        "crates/api/src/system.rs: start the portable successor before answering 202; 409 if spawn fails (PK-win-restart reviewer)",
+        "packaging/windows/portable/Start Lodestar.cmd: after a relaunch it prints 'Lodestar stopped.' + pause while the new copy runs in the same console; loop or reword",
+        "PK-guide-3: mention the upgrade-day pause of Restart now, and the portable window behaviour",
+        "windows_service.rs: a fixed-port relaunch test to exercise the port-release wait",
+        "icacls children inherit LODESTAR_RELAUNCH_TOKEN (harmless; rule noted for PK-win-portable-upd)"
+      ]
+    }
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -6869,5 +6881,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T07:43Z"
+  "updated": "2026-11-08T07:44Z"
 }
