@@ -138,7 +138,7 @@ fn open(config: &Config) -> Outcome<(Manager, tokio::runtime::Runtime)> {
         Arc::new(Mutex::new(store)),
         catalogue()?,
     )
-    .map_err(Failure::Failed)?;
+    .map_err(|e| Failure::Failed(e.message))?;
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

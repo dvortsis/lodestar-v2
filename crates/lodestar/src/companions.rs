@@ -20,6 +20,7 @@ use lodestar_companions::adapter::{AdapterError, BoxFuture, Credentials, Target}
 use lodestar_companions::configure::InstallReceipt;
 use lodestar_companions::credentials::{CredentialKey, Field, SealedRow};
 use lodestar_companions::fetch::{self, Guarded};
+use lodestar_companions::log_events::INSTALL_FAILED;
 use lodestar_companions::manager::{
     ApiConfigure, Downloader, Host, Launch, Manager, Parts, RowError, Rows, Run, Snapshot,
 };
@@ -124,10 +125,13 @@ pub fn manager(
     data: PathBuf,
     store: Arc<Mutex<Store>>,
     catalogue: &'static Catalogue,
-) -> Result<Manager, String> {
-    let secrets = SecretStore::open_or_create(&data).map_err(|e| format!("secrets: {e}"))?;
-    let client = fetch::client(&Route::Direct).map_err(|e| e.code().to_owned())?;
-    let downloader = Downloader::new(Guarded::new(client).map_err(|e| e.code().to_owned())?);
+) -> Result<Manager, OpenError> {
+    let fail = |code: &'static str, message: String| OpenError { code, message };
+    let secrets =
+        SecretStore::open_or_create(&data).map_err(|e| fail("secrets", format!("secrets: {e}")))?;
+    let client = fetch::client(&Route::Direct).map_err(|e| fail(e.code(), e.code().to_owned()))?;
+    let downloader =
+        Downloader::new(Guarded::new(client).map_err(|e| fail(e.code(), e.code().to_owned()))?);
     Manager::open(Parts {
         data,
         host: host(),
@@ -139,11 +143,20 @@ pub fn manager(
         api: Arc::new(Unwired),
     })
     .map_err(|e| match e {
-        lodestar_companions::manager::ManagerError::Refused(_) => {
-            "another Lodestar process is managing companions".to_owned()
-        }
-        e => e.code().to_owned(),
+        lodestar_companions::manager::ManagerError::Refused(_) => fail(
+            "busy",
+            "another Lodestar process is managing companions".to_owned(),
+        ),
+        e => fail(e.code(), e.code().to_owned()),
     })
+}
+
+/// Why the manager couldn't be opened: a stable code for the log, and a
+/// sentence for the CLI.
+#[derive(Debug)]
+pub struct OpenError {
+    pub code: &'static str,
+    pub message: String,
 }
 
 /// What serve keeps: the manager, and the snapshot channel.
@@ -172,16 +185,28 @@ pub async fn start(
     let manager = match manager(data, store, catalogue) {
         Ok(m) => Arc::new(m),
         Err(e) => {
-            tracing::warn!("companions are off for this run: {e}");
+            // Companions are off for this run.
+            lodestar_log::log_event!(
+                INSTALL_FAILED,
+                companion = "all",
+                version = "",
+                step = "open",
+                reason = e.code
+            );
             return None;
         }
     };
     for (id, r) in manager.recover().await {
         if let Err(e) = r {
-            tracing::warn!(
-                companion = id.as_str(),
-                code = e.code(),
-                "companion recovery"
+            let companion = catalogue
+                .get(id.as_str())
+                .map_or("unknown", |e| e.id.as_str());
+            lodestar_log::log_event!(
+                INSTALL_FAILED,
+                companion = companion,
+                version = "",
+                step = "recover",
+                reason = e.code()
             );
         }
     }
