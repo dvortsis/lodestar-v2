@@ -64,13 +64,14 @@ DEFAULT_PIA_REGION = "us-east"
 # Multi-platform index digest: sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00
 # Linux AMD64 platform manifest digest: sha256:8ec31c4b83e1f3173d43728f78a4a7ad45237fef366a4b5461e5aee93f517fba
 GLUETUN_IMAGE = "qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00"
+GLUETUN_IMAGE_DIGEST = "sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00"
 GLUETUN_AMD64_MANIFEST_DIGEST = "sha256:8ec31c4b83e1f3173d43728f78a4a7ad45237fef366a4b5461e5aee93f517fba"
 
 # Runtime filesystem locations on target Linode
 REMOTE_CONFIG_DIR = "/run/lodestar/vpn"
 REMOTE_CONFIG_FILE = "/run/lodestar/vpn/wg0.conf"
-REMOTE_COMPOSE_DIR = "/home/lodestar/lodestar/pia-example"
-REMOTE_COMPOSE_FILE = "/home/lodestar/lodestar/pia-example/compose.vpn.yaml"
+REMOTE_COMPOSE_DIR = "/etc/lodestar/vpn"
+REMOTE_COMPOSE_FILE = "/etc/lodestar/vpn/compose.yaml"
 REMOTE_DEFAULT_USER = "lodestar"
 REMOTE_DEFAULT_KEY = os.path.expanduser("~/.ssh/lodestar_akamai_ed25519")
 REMOTE_HELPER_BIN = "/usr/local/sbin/lodestar-vpn-helper"
@@ -233,64 +234,104 @@ def redact_sensitive_text(text: str) -> str:
 def write_secure_local_config(output_path: str | Path, content: str) -> Path:
     """
     Writes secret WireGuard configuration text to a local file with strictly verified permissions.
-    On Windows: strips inherited ACLs and grants only the current user full control via icacls.
-    On POSIX: enforces 0600 root/user-only permissions.
-    Guarantees atomic creation, rejects symlinks and reparse points, and ensures zero plaintext remnants on failure.
+    Ordering and security controls:
+    1. Pre-resolution validation: Rejects symlinks and Windows reparse points before calling resolve().
+    2. Parent validation: Verifies every component of the parent directory hierarchy for symlinks and reparse points.
+    3. Permission-first creation: Creates an empty temporary file and establishes restrictive ACLs (Windows)
+       or 0600 mode (POSIX) BEFORE writing any secret bytes, preventing plaintext exposure under inherited permissions.
+    4. ACL verification: Verifies effective ACLs and confirms forbidden principals (Users, Everyone, Authenticated Users) are absent.
+    5. Secret writing: Writes secret configuration bytes exclusively to the proven-restricted descriptor, flushes, and fsyncs.
+    6. Target validation & atomic replacement: Verifies destination target is not a symlink/reparse point, atomically replaces it.
+    7. Post-replacement verification: Confirms effective permissions on target file.
+    8. Deterministic cleanup: Cleans up temporary or empty target files on any failure.
     """
-    target = Path(output_path).resolve()
-    parent = target.parent
+    raw_path = Path(output_path)
+
+    # Step 1: Pre-resolution checks on destination path
+    if raw_path.is_symlink() or os.path.islink(raw_path):
+        raise PiaBridgeError("Symlink detected in configuration output path; export rejected for security.")
+
+    FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
+    if os.name == "nt" and raw_path.exists():
+        attrs = raw_path.stat().st_file_attributes
+        if attrs & FILE_ATTRIBUTE_REPARSE_POINT:
+            raise PiaBridgeError("Target file is a Windows reparse point/symlink; export rejected.")
+
+    # Step 2: Pre-resolution checks on parent directory hierarchy
+    parent_candidate = raw_path.parent
+    check_dir = parent_candidate
+    while check_dir != check_dir.parent:
+        if check_dir.is_symlink() or os.path.islink(check_dir):
+            raise PiaBridgeError("Symlink detected in parent directory path; export rejected for security.")
+        if os.name == "nt" and check_dir.exists():
+            attrs = check_dir.stat().st_file_attributes
+            if attrs & FILE_ATTRIBUTE_REPARSE_POINT:
+                raise PiaBridgeError("Parent directory is a Windows reparse point/junction; export rejected.")
+        check_dir = check_dir.parent
+
+    # Safe to resolve parent
+    parent = parent_candidate.resolve()
     if not parent.is_dir():
         raise PiaBridgeError(f"Destination parent directory does not exist: {parent}")
 
-    # Prevent symlink attacks on parent or destination file
-    if os.path.islink(target) or os.path.islink(parent):
-        raise PiaBridgeError("Symlink detected in configuration output path; export rejected for security.")
+    target = parent / raw_path.name
 
-    if os.name == "nt":
-        FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
-        if target.exists():
-            attrs = target.stat().st_file_attributes
-            if attrs & FILE_ATTRIBUTE_REPARSE_POINT:
-                raise PiaBridgeError("Target file is a Windows reparse point/symlink; export rejected.")
-        if parent.exists():
-            attrs = parent.stat().st_file_attributes
-            if attrs & FILE_ATTRIBUTE_REPARSE_POINT:
-                raise PiaBridgeError("Destination directory is a Windows reparse point/junction; export rejected.")
+    # Check if target already exists and is a symlink or reparse point
+    if target.is_symlink() or os.path.islink(target):
+        raise PiaBridgeError("Target file is a symlink; export rejected.")
+    if os.name == "nt" and target.exists():
+        if target.stat().st_file_attributes & FILE_ATTRIBUTE_REPARSE_POINT:
+            raise PiaBridgeError("Target file is a Windows reparse point; export rejected.")
 
-    temp_path = parent / f"{target.name}.tmp.{os.urandom(6).hex()}"
+    # Step 3: Create temporary file EMPTY with exclusive creation
+    temp_path = parent / f".lodestar_cfg_{os.urandom(8).hex()}.tmp"
     try:
-        # Create temp file exclusively with restricted permissions
         fd = os.open(temp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(content)
-            f.flush()
-            os.fsync(f.fileno())
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
+        # Step 4: Establish and verify restrictive permissions on EMPTY file BEFORE writing any secret bytes
         if os.name == "nt":
             username = os.environ.get("USERNAME")
             if not username:
                 raise PiaBridgeError("USERNAME environment variable missing; unable to enforce Windows ACL.")
-            # Remove inherited permissions and grant only the current user
+            # Strip inheritance and grant only current user Full Control
             acl_cmd = ["icacls", str(temp_path), "/inheritance:r", "/grant:r", f"{username}:(F)"]
             res = subprocess.run(acl_cmd, capture_output=True, text=True, check=True)
             if "successfully processed 1 files" not in res.stdout.lower():
                 raise PiaBridgeError(f"icacls failed to apply restricted ACL: {res.stdout.strip()}")
-            # Verify ACL on temp file before replacing target
+
+            # Verify effective ACL on temp file before writing any content
             chk = subprocess.run(["icacls", str(temp_path)], capture_output=True, text=True, check=True)
             chk_out = chk.stdout.lower()
             for forbidden in ["users", "everyone", "authenticated users"]:
                 if forbidden in chk_out:
-                    raise PiaBridgeError(f"Insecure ACL detected: {forbidden} granted access in {chk.stdout}")
+                    raise PiaBridgeError(f"Insecure ACL detected on temporary file: {forbidden} granted access in {chk.stdout}")
         else:
             os.chmod(temp_path, 0o600)
             mode = temp_path.stat().st_mode & 0o777
             if mode != 0o600:
-                raise PiaBridgeError(f"Insecure POSIX permissions on {temp_path}: {oct(mode)}")
+                raise PiaBridgeError(f"Insecure POSIX permissions on temporary file: {oct(mode)}")
 
-        # Atomically replace target file
+        # Step 5: Write secret bytes exclusively to the proven-restricted file
+        with open(temp_path, "w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+
+        # Re-check target before replacing
+        if target.exists():
+            if target.is_symlink() or os.path.islink(target):
+                raise PiaBridgeError("Target file is a symlink; replacement rejected.")
+            if os.name == "nt" and (target.stat().st_file_attributes & FILE_ATTRIBUTE_REPARSE_POINT):
+                raise PiaBridgeError("Target file is a Windows reparse point; replacement rejected.")
+
+        # Step 6: Atomically replace target file
         os.replace(temp_path, target)
 
-        # Post-write verification of effective permissions on target
+        # Step 7: Post-write verification of effective permissions on target
         if os.name == "nt":
             chk = subprocess.run(["icacls", str(target)], capture_output=True, text=True, check=True)
             chk_out = chk.stdout.lower()
@@ -1108,14 +1149,23 @@ class LinodeSshProvisioner:
                 f"CRITICAL LEAK: Container egress is routing through host ISP/cloud ({ip_info.get('org')})!"
             )
 
-        # Step 5: DNS Leak check - resolver must resolve internally, external bypass must be blocked
+        # Step 5: Path-Aware DNS Leak & Egress Isolation Verification
+        # 5a: Internal DoT resolver (Unbound on 127.0.0.1:53) must resolve successfully
         dns_res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} query-dns", check=False)
         if dns_res.returncode != 0 or "Address" not in dns_res.stdout:
             raise LeakDetectedError(f"Container DNS resolution failed through internal resolver on {self.target_ip}")
 
-        direct_dns = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} query-dns-direct", check=False)
-        if direct_dns.returncode == 0 and "Address" in direct_dns.stdout:
-            raise LeakDetectedError("CRITICAL LEAK: Container can send unencrypted DNS queries directly to external DNS (8.8.8.8) bypassing VPN!")
+        # 5b: Routing path verification - DNS queries to public DNS (8.8.8.8) MUST route via wg0, NEVER via eth0
+        dns_route = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} verify-dns-route", check=False)
+        if dns_route.returncode != 0 or "DNS_ROUTE_WG0_OK" not in dns_route.stdout:
+            raise LeakDetectedError(f"DNS routing leak detected: egress is not bound to WireGuard interface wg0 on {self.target_ip}")
+
+        # 5c: Active physical bypass check - unencrypted egress forced over physical eth0 MUST be dropped by killswitch
+        bypass_check = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} verify-dns-bypass-blocked", check=False)
+        if bypass_check.returncode != 0 or "DNS_BYPASS_BLOCKED_OK" not in bypass_check.stdout:
+            raise LeakDetectedError(
+                f"CRITICAL LEAK: Container can send packets out physical interface eth0 bypassing WireGuard on {self.target_ip}!"
+            )
 
         # Step 6: Firewall policy check (fail-closed)
         fw_res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} inspect-firewall", check=False)
@@ -1171,12 +1221,39 @@ class ComposeDeployer:
 
     @staticmethod
     def validate_local_compose(local_compose_path: str) -> str:
-        """Validates local Compose YAML syntax and returns file content and sha256."""
+        """
+        Validates local Compose YAML syntax and strictly enforces privilege boundaries:
+        - Rejects environment variable interpolation ($VAR or ${VAR}).
+        - Rejects unauthorized top-level keys (volumes, secrets, configs).
+        - Allows ONLY gluetun and crawler services.
+        - Enforces pinned official Gluetun image digest.
+        - Rejects privileged: true, network_mode: host, and /var/run/docker.sock.
+        - Restricts volume mounts strictly to /run/lodestar/vpn/wg0.conf:/gluetun/wireguard/wg0.conf:ro.
+        - Ensures crawler uses network_mode: service:gluetun.
+        """
         path = Path(local_compose_path)
         if not path.is_file():
             raise ComposeValidationError(f"Compose file not found: {local_compose_path}")
 
         content = path.read_text(encoding="utf-8")
+
+        # 1. Reject environment variable interpolation
+        if re.search(r"\$([a-zA-Z_]|\{[a-zA-Z_])", content):
+            raise ComposeValidationError("Environment variable interpolation forbidden in compose definition")
+
+        # 2. Reject unauthorized top-level keys
+        if re.search(r"^(volumes|secrets|configs):", content, re.MULTILINE):
+            raise ComposeValidationError("Unauthorized top-level keys (volumes/secrets/configs forbidden)")
+
+        # 3. Reject privileged containers, host networking, docker socket
+        if re.search(r"privileged:\s*true", content, re.IGNORECASE):
+            raise ComposeValidationError("Insecure compose directive rejected: privileged: true")
+        if re.search(r"network_mode:\s*['\"]?host['\"]?", content, re.IGNORECASE):
+            raise ComposeValidationError("Insecure compose directive rejected: network_mode: host")
+        if "/var/run/docker.sock" in content:
+            raise ComposeValidationError("Insecure compose directive rejected: docker.sock mount forbidden")
+
+        # 4. Strict YAML parsing and structure validation if PyYAML available
         if yaml is not None:
             try:
                 data = yaml.safe_load(content)
@@ -1186,13 +1263,48 @@ class ComposeDeployer:
             if not isinstance(data, dict) or "services" not in data:
                 raise ComposeValidationError(f"Compose file {local_compose_path} missing top-level 'services' key")
 
-            if "gluetun" not in data["services"]:
+            services = data.get("services", {})
+            unauthorized_services = set(services.keys()) - {"gluetun", "crawler"}
+            if unauthorized_services:
+                raise ComposeValidationError(
+                    f"Unauthorized service(s) in compose definition: {unauthorized_services}; only gluetun and crawler allowed"
+                )
+
+            if "gluetun" not in services:
                 raise ComposeValidationError(f"Compose file {local_compose_path} missing required 'gluetun' service")
+
+            gluetun_svc = services["gluetun"]
+            gluetun_img = gluetun_svc.get("image", "")
+            if GLUETUN_IMAGE_DIGEST not in gluetun_img:
+                raise ComposeValidationError(
+                    f"Gluetun image must match pinned official digest {GLUETUN_IMAGE_DIGEST}, got '{gluetun_img}'"
+                )
+
+            # Volume mount restriction
+            for vol in gluetun_svc.get("volumes", []):
+                vol_str = vol if isinstance(vol, str) else vol.get("source", "") + ":" + vol.get("target", "")
+                if vol_str != "/run/lodestar/vpn/wg0.conf:/gluetun/wireguard/wg0.conf:ro":
+                    raise ComposeValidationError(
+                        f"Unauthorized volume mount rejected: {vol_str}; only /run/lodestar/vpn/wg0.conf:ro allowed"
+                    )
+
+            # Crawler service restrictions
+            if "crawler" in services:
+                crawler_svc = services["crawler"]
+                net_mode = crawler_svc.get("network_mode", "")
+                if net_mode not in ("service:gluetun", "container:gluetun"):
+                    raise ComposeValidationError(
+                        f"Crawler must use network_mode: service:gluetun, got '{net_mode}'"
+                    )
+                if crawler_svc.get("volumes"):
+                    raise ComposeValidationError("Crawler service is not permitted to mount host volumes")
         else:
             if "services:" not in content or "gluetun:" not in content:
                 raise ComposeValidationError(f"Compose file {local_compose_path} missing 'services:' or 'gluetun:' definition")
             if re.search(r"^\t", content, re.MULTILINE):
                 raise ComposeValidationError(f"Invalid Compose YAML syntax in {local_compose_path}: tab indentation forbidden in YAML")
+            if GLUETUN_IMAGE_DIGEST not in content:
+                raise ComposeValidationError("Gluetun image must match pinned official digest")
 
         return content
 

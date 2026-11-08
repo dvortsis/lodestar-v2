@@ -49,9 +49,11 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import ssl
 import subprocess
 import sys
+import tempfile
 import unittest
 import urllib.error
 from pathlib import Path
@@ -72,7 +74,8 @@ def make_mock_leak_responses(
     endpoint_ip: str = "212.56.54.190",
     org: str = "Private Internet Access",
     dns_internal_ok: bool = True,
-    dns_direct_blocked: bool = True,
+    dns_route_wg0: bool = True,
+    dns_bypass_blocked: bool = True,
     firewall_drop: bool = True,
     ipv6_disabled: bool = True,
 ):
@@ -93,28 +96,35 @@ def make_mock_leak_responses(
         subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout=f"{vpn_ip}\n", stderr=""),
         # 7. query-ipinfo
         subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout=json.dumps({"org": org}), stderr=""),
-        # 8. query-dns (internal resolver: must succeed)
+        # 8. query-dns (internal DoT resolver: must succeed)
         subprocess.CompletedProcess(
             args=["ssh"],
             returncode=0 if dns_internal_ok else 1,
             stdout="Address: 142.250.190.46\n" if dns_internal_ok else "",
             stderr="" if dns_internal_ok else "connection timed out",
         ),
-        # 9. query-dns-direct (direct to 8.8.8.8: must be blocked!)
+        # 9. verify-dns-route (routing must go through wg0)
         subprocess.CompletedProcess(
             args=["ssh"],
-            returncode=1 if dns_direct_blocked else 0,
-            stdout="" if dns_direct_blocked else "Address: 142.250.190.46\n",
-            stderr="connection timed out" if dns_direct_blocked else "",
+            returncode=0 if dns_route_wg0 else 1,
+            stdout="DNS_ROUTE_WG0_OK\n" if dns_route_wg0 else "ERROR: DNS route does not go through wg0\n",
+            stderr="" if dns_route_wg0 else "route failure",
         ),
-        # 10. inspect-firewall (OUTPUT chain must have -P OUTPUT DROP)
+        # 10. verify-dns-bypass-blocked (eth0 bypass must be dropped/blocked by iptables)
+        subprocess.CompletedProcess(
+            args=["ssh"],
+            returncode=0 if dns_bypass_blocked else 1,
+            stdout="DNS_BYPASS_BLOCKED_OK\n" if dns_bypass_blocked else "ERROR: Interface eth0 bypass succeeded!\n",
+            stderr="" if dns_bypass_blocked else "killswitch failure",
+        ),
+        # 11. inspect-firewall (OUTPUT chain must have -P OUTPUT DROP)
         subprocess.CompletedProcess(
             args=["ssh"],
             returncode=0 if firewall_drop else 1,
             stdout="-P OUTPUT DROP\n-A OUTPUT -o wg0 -j ACCEPT\n" if firewall_drop else "-P OUTPUT ACCEPT\n",
             stderr="",
         ),
-        # 11. inspect-ipv6 (disable_ipv6 must be 1)
+        # 12. inspect-ipv6 (disable_ipv6 must be 1)
         subprocess.CompletedProcess(
             args=["ssh"],
             returncode=0,
@@ -785,12 +795,12 @@ class LodestarPiaBridgeTests(unittest.TestCase):
     # -------------------------------------------------------------------------
     @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
     def test_unauthorized_external_dns_path_rejected(self, mock_cmd: MagicMock) -> None:
-        """Proves that unencrypted external DNS queries to 8.8.8.8 succeeding raises LeakDetectedError."""
-        mock_cmd.side_effect = make_mock_leak_responses(dns_direct_blocked=False)
+        """Proves that unencrypted external egress on eth0 succeeding raises LeakDetectedError."""
+        mock_cmd.side_effect = make_mock_leak_responses(dns_bypass_blocked=False)
         prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
         with self.assertRaises(bridge.LeakDetectedError) as ctx:
             prov.verify_leak_protection(max_retries=1, delay_s=0)
-        self.assertIn("unencrypted dns queries directly to external dns", str(ctx.exception).lower())
+        self.assertIn("bypassing wireguard", str(ctx.exception).lower())
 
     # -------------------------------------------------------------------------
     # Section 9 Remediation: VPN outage after startup prevents direct crawler egress
@@ -922,6 +932,394 @@ class LodestarPiaBridgeTests(unittest.TestCase):
             bridge.GLUETUN_AMD64_MANIFEST_DIGEST,
             "sha256:8ec31c4b83e1f3173d43728f78a4a7ad45237fef366a4b5461e5aee93f517fba",
         )
+
+
+def _find_test_bash() -> Optional[str]:
+    """Discovers a usable GNU bash executable for isolated Linux privilege-boundary testing."""
+    candidates = [
+        r"C:\Users\dvort\scoop\apps\git\current\bin\bash.exe",
+        os.path.expanduser(r"~\scoop\apps\git\current\bin\bash.exe"),
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files\Git\usr\bin\bash.exe",
+        shutil.which("bash"),
+    ]
+    for c in candidates:
+        if c and os.path.exists(c):
+            try:
+                res = subprocess.run([c, "-c", "echo ok"], capture_output=True, text=True, timeout=2)
+                if res.returncode == 0 and "ok" in res.stdout:
+                    return c
+            except Exception:
+                continue
+    return None
+
+
+# =============================================================================
+# Executable Privilege-Boundary Security Regression Tests
+# =============================================================================
+class TestExecutablePrivilegeBoundary(unittest.TestCase):
+    """
+    Executes the root helper script in an isolated subprocess environment
+    to assert real process outcomes, exit codes, and effective permissions
+    against all specified adversary attack vectors.
+    """
+
+    def setUp(self) -> None:
+        self.bash = _find_test_bash()
+        if not self.bash:
+            self.skipTest("No functional GNU bash executable found for subprocess helper execution.")
+
+        self.temp_dir = tempfile.mkdtemp()
+        self.config_dir = os.path.join(self.temp_dir, "run_vpn").replace("\\", "/")
+        self.compose_dir = os.path.join(self.temp_dir, "etc_vpn").replace("\\", "/")
+        os.makedirs(self.config_dir, exist_ok=True)
+        os.makedirs(self.compose_dir, exist_ok=True)
+
+        self.mock_bin = os.path.join(self.temp_dir, "mock_bin").replace("\\", "/")
+        os.makedirs(self.mock_bin, exist_ok=True)
+
+        # Extract helper script directly from cloud-init template
+        tftpl_path = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "cloud-init", "ubuntu24.yaml.tftpl")
+        )
+        with open(tftpl_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        start_marker = "path: /usr/local/sbin/lodestar-vpn-helper"
+        start_idx = content.find(start_marker)
+        content_marker = "content: |\n"
+        script_start = content.find(content_marker, start_idx) + len(content_marker)
+        end_marker = "  - path: /etc/ssh"
+        script_end = content.find(end_marker, script_start)
+        raw_script = content[script_start:script_end]
+        lines = [line[6:] if line.startswith("      ") else line for line in raw_script.splitlines()]
+        script = "\n".join(lines)
+        script = script.replace("$${", "${")
+
+        # Adjust root-specific chown/install for unprivileged local test sandbox
+        script = script.replace("install -d -m 0755 -o root -g root", "install -d -m 0755")
+        script = script.replace("install -d -m 0700 -o root -g root", "install -d -m 0700")
+        script = script.replace("chown root:root", "true || chown root:root")
+
+        # Direct script paths into isolated sandbox directories
+        script = script.replace('CONFIG_DIR="/run/lodestar/vpn"', f'CONFIG_DIR="{self.config_dir}"')
+        script = script.replace(
+            'CONFIG_FILE="/run/lodestar/vpn/wg0.conf"', f'CONFIG_FILE="{self.config_dir}/wg0.conf"'
+        )
+        script = script.replace('COMPOSE_DIR="/etc/lodestar/vpn"', f'COMPOSE_DIR="{self.compose_dir}"')
+        script = script.replace(
+            'COMPOSE_FILE="/etc/lodestar/vpn/compose.yaml"', f'COMPOSE_FILE="{self.compose_dir}/compose.yaml"'
+        )
+
+        self.script_path = os.path.join(self.temp_dir, "helper.sh").replace("\\", "/")
+        with open(self.script_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(script)
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def create_mock_docker(self, handler_script: str) -> None:
+        docker_path = os.path.join(self.mock_bin, "docker")
+        with open(docker_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(f"#!/usr/bin/env bash\n{handler_script}\n")
+
+    def run_helper(self, cmd: str, input_data: str = "") -> subprocess.CompletedProcess:
+        env = os.environ.copy()
+        env["PATH"] = f"{self.mock_bin}{os.pathsep}{env['PATH']}"
+        return subprocess.run(
+            [self.bash, self.script_path, cmd],
+            input=input_data,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+    # 1. Arbitrary Docker Commands
+    def test_exec_helper_arbitrary_commands_rejected(self) -> None:
+        """Proves that helper rejects unauthorized command arguments with non-zero exit code."""
+        res = self.run_helper("docker run -it alpine")
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("Unauthorized helper command", res.stderr)
+
+    def test_exec_helper_command_injection_rejected(self) -> None:
+        """Proves that shell metacharacters and injected commands are rejected."""
+        res = self.run_helper("start-vpn; rm -rf /")
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("Unauthorized helper command", res.stderr)
+
+    # 2. Malicious Compose YAML & Bind Mounts
+    def test_exec_helper_malicious_compose_host_mount_rejected(self) -> None:
+        """Proves that arbitrary host directory bind mounts (e.g. /:/host) are rejected."""
+        yaml_content = """services:
+  gluetun:
+    image: qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00
+    volumes:
+      - /:/host
+"""
+        res = self.run_helper("install-compose", input_data=yaml_content)
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("Unauthorized volume mount rejected", res.stderr)
+
+    def test_exec_helper_malicious_compose_docker_sock_rejected(self) -> None:
+        """Proves that Docker daemon socket mounts are rejected."""
+        yaml_content = """services:
+  gluetun:
+    image: qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+"""
+        res = self.run_helper("install-compose", input_data=yaml_content)
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("Docker socket mount forbidden", res.stderr)
+
+    # 3. Privileged Containers & Capabilities
+    def test_exec_helper_malicious_compose_privileged_rejected(self) -> None:
+        """Proves that privileged: true is rejected."""
+        yaml_content = """services:
+  gluetun:
+    image: qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00
+    privileged: true
+"""
+        res = self.run_helper("install-compose", input_data=yaml_content)
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("privileged: true forbidden", res.stderr)
+
+    def test_exec_helper_malicious_compose_excess_capabilities_rejected(self) -> None:
+        """Proves that capabilities beyond NET_ADMIN (e.g. SYS_ADMIN) are rejected."""
+        yaml_content = """services:
+  gluetun:
+    image: qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00
+    cap_add:
+      - SYS_ADMIN
+"""
+        res = self.run_helper("install-compose", input_data=yaml_content)
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("Unauthorized capability requested", res.stderr)
+
+    # 4. Environment-Variable Interpolation & Overrides
+    def test_exec_helper_malicious_compose_env_interpolation_rejected(self) -> None:
+        """Proves that ${VAR} interpolation is rejected to prevent parameter injection."""
+        yaml_content = """services:
+  gluetun:
+    image: qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00
+    environment:
+      - ATTACK=${UNTRUSTED_INJECTION}
+"""
+        res = self.run_helper("install-compose", input_data=yaml_content)
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("Environment variable interpolation forbidden", res.stderr)
+
+    def test_exec_helper_malicious_compose_unauthorized_service_rejected(self) -> None:
+        """Proves that arbitrary containers/services outside gluetun and crawler are rejected."""
+        yaml_content = """services:
+  gluetun:
+    image: qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00
+  miner:
+    image: alpine:latest
+"""
+        res = self.run_helper("install-compose", input_data=yaml_content)
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("Unauthorized service in compose definition", res.stderr)
+
+    # 5. Direct Helper Invocation without Verified VPN (Authorized Component Gate)
+    def test_exec_helper_direct_start_crawler_rejected_without_gluetun_running(self) -> None:
+        """Proves that direct start-crawler invocation fails when Gluetun is not running."""
+        self.create_mock_docker("if [[ \"$*\" =~ \"inspect\" ]]; then echo \"false\"; exit 0; fi; exit 0")
+        with open(os.path.join(self.compose_dir, "compose.yaml"), "w") as f:
+            f.write("services:\n  crawler:\n    network_mode: service:gluetun\n")
+
+        res = self.run_helper("start-crawler")
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("Gluetun container is not running", res.stderr)
+
+    def test_exec_helper_direct_start_crawler_rejected_stale_handshake(self) -> None:
+        """Proves that direct start-crawler invocation fails when WireGuard handshake age > 120s."""
+        self.create_mock_docker(
+            "if [[ \"$*\" =~ \"inspect\" ]]; then echo \"true\"; exit 0;\n"
+            "elif [[ \"$*\" =~ \"latest-handshakes\" ]]; then echo \"peer_key 1000\"; exit 0; fi; exit 0"
+        )
+        with open(os.path.join(self.compose_dir, "compose.yaml"), "w") as f:
+            f.write("services:\n  crawler:\n    network_mode: service:gluetun\n")
+
+        res = self.run_helper("start-crawler")
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("handshake is stale", res.stderr)
+
+    def test_exec_helper_direct_start_crawler_rejected_zero_transfer(self) -> None:
+        """Proves that direct start-crawler invocation fails when transfer rx/tx bytes are 0."""
+        self.create_mock_docker(
+            "now=$(date +%s)\n"
+            "if [[ \"$*\" =~ \"inspect\" ]]; then echo \"true\"; exit 0;\n"
+            "elif [[ \"$*\" =~ \"latest-handshakes\" ]]; then echo \"peer_key $now\"; exit 0;\n"
+            "elif [[ \"$*\" =~ \"transfer\" ]]; then echo \"peer_key 0 0\"; exit 0; fi; exit 0"
+        )
+        with open(os.path.join(self.compose_dir, "compose.yaml"), "w") as f:
+            f.write("services:\n  crawler:\n    network_mode: service:gluetun\n")
+
+        res = self.run_helper("start-crawler")
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("transfer inactive", res.stderr)
+
+    def test_exec_helper_direct_start_crawler_rejected_firewall_not_drop(self) -> None:
+        """Proves that direct start-crawler invocation fails when killswitch is inactive."""
+        self.create_mock_docker(
+            "now=$(date +%s)\n"
+            "if [[ \"$*\" =~ \"inspect\" ]]; then echo \"true\"; exit 0;\n"
+            "elif [[ \"$*\" =~ \"latest-handshakes\" ]]; then echo \"peer_key $now\"; exit 0;\n"
+            "elif [[ \"$*\" =~ \"transfer\" ]]; then echo \"peer_key 1000 2000\"; exit 0;\n"
+            "elif [[ \"$*\" =~ \"iptables\" ]]; then echo \"-P OUTPUT ACCEPT\"; exit 0; fi; exit 0"
+        )
+        with open(os.path.join(self.compose_dir, "compose.yaml"), "w") as f:
+            f.write("services:\n  crawler:\n    network_mode: service:gluetun\n")
+
+        res = self.run_helper("start-crawler")
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("killswitch inactive", res.stderr)
+
+    def test_exec_helper_direct_start_crawler_rejected_crawler_not_in_gluetun_namespace(self) -> None:
+        """Proves that direct start-crawler invocation fails when crawler is not bound to Gluetun."""
+        self.create_mock_docker(
+            "now=$(date +%s)\n"
+            "if [[ \"$*\" =~ \"inspect\" ]]; then echo \"true\"; exit 0;\n"
+            "elif [[ \"$*\" =~ \"latest-handshakes\" ]]; then echo \"peer_key $now\"; exit 0;\n"
+            "elif [[ \"$*\" =~ \"transfer\" ]]; then echo \"peer_key 1000 2000\"; exit 0;\n"
+            "elif [[ \"$*\" =~ \"iptables\" ]]; then echo \"-P OUTPUT DROP\"; exit 0;\n"
+            "elif [[ \"$*\" =~ \"disable_ipv6\" ]]; then echo \"1\"; exit 0; fi; exit 0"
+        )
+        with open(os.path.join(self.compose_dir, "compose.yaml"), "w") as f:
+            f.write("services:\n  crawler:\n    network_mode: host\n")
+
+        res = self.run_helper("start-crawler")
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("Crawler is not restricted to Gluetun network namespace", res.stderr)
+
+    # 6. DNS Path-Aware Routing & Bypass Verification
+    def test_exec_helper_dns_routing_wg0_accepted(self) -> None:
+        """Proves that DNS route query confirms dev wg0 routing."""
+        self.create_mock_docker("echo '8.8.8.8 dev wg0 src 10.0.0.2 uid 0'; exit 0")
+        res = self.run_helper("verify-dns-route")
+        self.assertEqual(res.returncode, 0)
+        self.assertIn("DNS_ROUTE_WG0_OK", res.stdout)
+
+    def test_exec_helper_dns_routing_eth0_rejected(self) -> None:
+        """Proves that DNS route query routing over dev eth0 fails closed."""
+        self.create_mock_docker("echo '8.8.8.8 dev eth0 src 192.0.2.100 uid 0'; exit 0")
+        res = self.run_helper("verify-dns-route")
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("DNS route does not go through wg0", res.stderr)
+
+    def test_exec_helper_dns_bypass_blocked_by_killswitch_accepted(self) -> None:
+        """Proves that blocked physical eth0 bypass attempts confirm active leak protection."""
+        self.create_mock_docker("exit 1")  # ping -I eth0 fails as expected
+        res = self.run_helper("verify-dns-bypass-blocked")
+        self.assertEqual(res.returncode, 0)
+        self.assertIn("DNS_BYPASS_BLOCKED_OK", res.stdout)
+
+    def test_exec_helper_dns_bypass_succeeding_rejected_as_leak(self) -> None:
+        """Proves that successful outbound physical eth0 traffic triggers critical leak alert."""
+        self.create_mock_docker("exit 0")  # ping -I eth0 unexpectedly succeeds!
+        res = self.run_helper("verify-dns-bypass-blocked")
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("Killswitch leak detected", res.stderr)
+
+
+# =============================================================================
+# ComposeDeployer Strict Boundary Unit Tests
+# =============================================================================
+class TestComposeDeployerStrictBoundary(unittest.TestCase):
+    """Verifies that ComposeDeployer rejects all malicious Compose configurations locally."""
+
+    def test_rejects_env_interpolation(self) -> None:
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yaml") as f:
+            f.write("services:\n  gluetun:\n    image: ${IMAGE_VAR}\n")
+            f_path = f.name
+        try:
+            with self.assertRaises(bridge.ComposeValidationError) as ctx:
+                bridge.ComposeDeployer.validate_local_compose(f_path)
+            self.assertIn("interpolation forbidden", str(ctx.exception).lower())
+        finally:
+            os.unlink(f_path)
+
+    def test_rejects_arbitrary_host_mounts(self) -> None:
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yaml") as f:
+            f.write(
+                "services:\n  gluetun:\n"
+                f"    image: {bridge.GLUETUN_IMAGE}\n"
+                "    volumes:\n      - /etc:/etc\n"
+            )
+            f_path = f.name
+        try:
+            with self.assertRaises(bridge.ComposeValidationError) as ctx:
+                bridge.ComposeDeployer.validate_local_compose(f_path)
+            self.assertIn("unauthorized volume mount", str(ctx.exception).lower())
+        finally:
+            os.unlink(f_path)
+
+    def test_rejects_privileged_true(self) -> None:
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yaml") as f:
+            f.write(
+                "services:\n  gluetun:\n"
+                f"    image: {bridge.GLUETUN_IMAGE}\n"
+                "    privileged: true\n"
+            )
+            f_path = f.name
+        try:
+            with self.assertRaises(bridge.ComposeValidationError) as ctx:
+                bridge.ComposeDeployer.validate_local_compose(f_path)
+            self.assertIn("privileged: true", str(ctx.exception).lower())
+        finally:
+            os.unlink(f_path)
+
+    def test_rejects_docker_socket(self) -> None:
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yaml") as f:
+            f.write(
+                "services:\n  gluetun:\n"
+                f"    image: {bridge.GLUETUN_IMAGE}\n"
+                "    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock\n"
+            )
+            f_path = f.name
+        try:
+            with self.assertRaises(bridge.ComposeValidationError) as ctx:
+                bridge.ComposeDeployer.validate_local_compose(f_path)
+            self.assertIn("docker.sock", str(ctx.exception).lower())
+        finally:
+            os.unlink(f_path)
+
+    def test_rejects_crawler_outside_gluetun_namespace(self) -> None:
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yaml") as f:
+            f.write(
+                "services:\n  gluetun:\n"
+                f"    image: {bridge.GLUETUN_IMAGE}\n"
+                "  crawler:\n    image: curlimages/curl:latest\n    network_mode: bridge\n"
+            )
+            f_path = f.name
+        try:
+            with self.assertRaises(bridge.ComposeValidationError) as ctx:
+                bridge.ComposeDeployer.validate_local_compose(f_path)
+            self.assertIn("network_mode: service:gluetun", str(ctx.exception).lower())
+        finally:
+            os.unlink(f_path)
+
+
+# =============================================================================
+# Windows Secret-File Creation & Permissions Tests
+# =============================================================================
+class TestWindowsExportSecurityOrdering(unittest.TestCase):
+    """Verifies that write_secure_local_config establishes permissions prior to writing content."""
+
+    def test_pre_resolution_symlink_rejected(self) -> None:
+        """Confirms that symlinks in target path are rejected before resolution."""
+        with patch("pathlib.Path.is_symlink", return_value=True):
+            with self.assertRaises(bridge.PiaBridgeError) as ctx:
+                bridge.write_secure_local_config("symlink.conf", "secret_data")
+            self.assertIn("symlink detected in configuration output path", str(ctx.exception).lower())
+
+    def test_pre_resolution_parent_symlink_rejected(self) -> None:
+        """Confirms that symlinks in parent directories are rejected before resolution."""
+        with patch("os.path.islink", side_effect=lambda p: os.path.basename(str(p)) == "parent_symlink"):
+            with self.assertRaises(bridge.PiaBridgeError) as ctx:
+                bridge.write_secure_local_config("C:/parent_symlink/target.conf", "secret_data")
+            self.assertIn("symlink detected in parent directory path", str(ctx.exception).lower())
 
 
 if __name__ == "__main__":

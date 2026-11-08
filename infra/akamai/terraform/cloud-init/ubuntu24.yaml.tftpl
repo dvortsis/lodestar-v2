@@ -28,6 +28,59 @@ write_files:
     content: |
       # Restricted, auditable non-interactive sudoers permission: ONLY the root-owned deployment helper
       lodestar ALL=(root) NOPASSWD: /usr/local/sbin/lodestar-vpn-helper
+  - path: /etc/lodestar/vpn/compose.yaml
+    owner: root:root
+    permissions: '0644'
+    content: |
+      # Lodestar Secure PIA VPN Gateway Stack (Root-Owned Static Configuration)
+      services:
+        gluetun:
+          image: qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00
+          container_name: gluetun
+          cap_drop:
+            - ALL
+          cap_add:
+            - NET_ADMIN
+          devices:
+            - /dev/net/tun:/dev/net/tun
+          security_opt:
+            - no-new-privileges:true
+          sysctls:
+            - net.ipv6.conf.all.disable_ipv6=1
+            - net.ipv6.conf.default.disable_ipv6=1
+          environment:
+            - VPN_SERVICE_PROVIDER=custom
+            - VPN_TYPE=wireguard
+            - TZ=Etc/UTC
+            - FIREWALL=on
+            - FIREWALL_VPN_INPUT_PORTS=
+            - FIREWALL_OUTBOUND_SUBNETS=
+            - DOT=on
+            - BLOCK_MALICIOUS=on
+          volumes:
+            - /run/lodestar/vpn/wg0.conf:/gluetun/wireguard/wg0.conf:ro
+          restart: unless-stopped
+          networks:
+            - vpn_isolated
+
+        crawler:
+          image: ghcr.io/dvortsis/lodestar:v0.5.1
+          container_name: lodestar_crawler
+          network_mode: "service:gluetun"
+          depends_on:
+            - gluetun
+          security_opt:
+            - no-new-privileges:true
+          cap_drop:
+            - ALL
+          restart: "no"
+          profiles:
+            - crawler
+
+      networks:
+        vpn_isolated:
+          driver: bridge
+          internal: false
   - path: /usr/local/sbin/lodestar-vpn-helper
     owner: root:root
     permissions: '0750'
@@ -38,8 +91,8 @@ write_files:
 
       CONFIG_DIR="/run/lodestar/vpn"
       CONFIG_FILE="/run/lodestar/vpn/wg0.conf"
-      COMPOSE_DIR="/home/lodestar/lodestar/pia-example"
-      COMPOSE_FILE="/home/lodestar/lodestar/pia-example/compose.vpn.yaml"
+      COMPOSE_DIR="/etc/lodestar/vpn"
+      COMPOSE_FILE="/etc/lodestar/vpn/compose.yaml"
 
       cmd="$${1:-}"
       case "$cmd" in
@@ -85,6 +138,7 @@ write_files:
           stat -c '%a %U:%G' "$CONFIG_FILE"
           ;;
         install-compose)
+          # Root-owned static boundary: unprivileged users cannot supply arbitrary Compose definitions
           if [ -L "$COMPOSE_DIR" ]; then
             echo "ERROR: $COMPOSE_DIR is a symlink" >&2
             exit 1
@@ -92,11 +146,83 @@ write_files:
           install -d -m 0755 -o root -g root "$COMPOSE_DIR"
           tmp_compose="$COMPOSE_DIR/compose.tmp.$$"
           cat > "$tmp_compose"
-          if grep -q -E '/var/run/docker\.sock|privileged:\s*true|network_mode:\s*["'\''?]host["'\''?]' "$tmp_compose"; then
+
+          # 1. Reject empty payload
+          if [ ! -s "$tmp_compose" ]; then
             rm -f "$tmp_compose"
-            echo "ERROR: Insecure compose directive rejected (docker.sock/privileged/host-net)" >&2
+            echo "ERROR: Empty compose specification rejected" >&2
             exit 1
           fi
+
+          # 2. Reject environment variable interpolation ($VAR or $${VAR})
+          if grep -q -E '\$([a-zA-Z_]|\{[a-zA-Z_])' "$tmp_compose"; then
+            rm -f "$tmp_compose"
+            echo "ERROR: Environment variable interpolation forbidden in compose definition" >&2
+            exit 1
+          fi
+
+          # 3. Reject unauthorized top-level keys (only services, networks, name permitted)
+          if grep -q -E '^(volumes|secrets|configs):' "$tmp_compose"; then
+            rm -f "$tmp_compose"
+            echo "ERROR: Unauthorized top-level compose keys (volumes/secrets/configs forbidden)" >&2
+            exit 1
+          fi
+
+          # 4. Enforce permitted services: ONLY gluetun and crawler permitted
+          if awk '/^services:/{flag=1;next}/^[a-zA-Z]/{flag=0}flag && /^  [a-zA-Z0-9_-]+:/{print $1}' "$tmp_compose" | grep -v -E '^(gluetun:|crawler:)$'; then
+            rm -f "$tmp_compose"
+            echo "ERROR: Unauthorized service in compose definition (only gluetun and crawler permitted)" >&2
+            exit 1
+          fi
+
+          # 5. Reject privileged containers, host network, docker socket, and excess capabilities
+          if grep -q -E 'privileged:\s*true' "$tmp_compose"; then
+            rm -f "$tmp_compose"
+            echo "ERROR: privileged: true forbidden" >&2
+            exit 1
+          fi
+          if grep -q -E 'network_mode:\s*["'\''?]host["'\''?]' "$tmp_compose"; then
+            rm -f "$tmp_compose"
+            echo "ERROR: network_mode: host forbidden" >&2
+            exit 1
+          fi
+          if grep -q -E '/var/run/docker\.sock' "$tmp_compose"; then
+            rm -f "$tmp_compose"
+            echo "ERROR: Docker socket mount forbidden" >&2
+            exit 1
+          fi
+
+          # 6. Reject arbitrary host filesystem mounts (only /run/lodestar/vpn/wg0.conf:/gluetun/wireguard/wg0.conf:ro permitted)
+          if grep -E '^\s*-\s*[^:]+:[^:]+' "$tmp_compose" | grep -v -E '/run/lodestar/vpn/wg0\.conf:/gluetun/wireguard/wg0\.conf:ro'; then
+            rm -f "$tmp_compose"
+            echo "ERROR: Unauthorized volume mount rejected (only /run/lodestar/vpn/wg0.conf:ro permitted)" >&2
+            exit 1
+          fi
+
+          # 7. Gluetun capability restriction: only NET_ADMIN permitted
+          if grep -E '^\s*-\s*[A-Z_]+' "$tmp_compose" | grep -v -E '^\s*-\s*(ALL|NET_ADMIN|crawler|vpn_isolated)$'; then
+            rm -f "$tmp_compose"
+            echo "ERROR: Unauthorized capability requested (only NET_ADMIN allowed)" >&2
+            exit 1
+          fi
+
+          # 8. Crawler must strictly share Gluetun network namespace
+          if grep -q '^  crawler:' "$tmp_compose"; then
+            if ! grep -q -E 'network_mode:\s*["'\''?]?(service:gluetun|container:gluetun)["'\''?]?' "$tmp_compose"; then
+              rm -f "$tmp_compose"
+              echo "ERROR: Crawler must use network_mode: service:gluetun" >&2
+              exit 1
+            fi
+          fi
+
+          # 9. Gluetun image must match pinned official digest
+          if ! grep -q 'image:\s*qmcgaw/gluetun:v3\.40\.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00' "$tmp_compose"; then
+            rm -f "$tmp_compose"
+            echo "ERROR: Gluetun image must match verified pinned digest sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00" >&2
+            exit 1
+          fi
+
+          # 10. Syntax and compose config validation
           if [ -L "$COMPOSE_FILE" ]; then
             rm -f "$COMPOSE_FILE"
           fi
@@ -131,7 +257,49 @@ write_files:
             echo "ERROR: $COMPOSE_FILE missing or symlink" >&2
             exit 1
           fi
-          docker compose -f "$COMPOSE_FILE" up -d crawler
+          # Trusted Component Authorization Gate:
+          # 1. Gluetun container running
+          if ! docker inspect -f '{{.State.Running}}' gluetun 2>/dev/null | grep -q 'true'; then
+            echo "ERROR: Gluetun container is not running" >&2
+            exit 1
+          fi
+          # 2. WireGuard handshake active and fresh (<= 120s)
+          hs_out="$(docker exec gluetun wg show wg0 latest-handshakes 2>/dev/null || true)"
+          hs_epoch="$(echo "$hs_out" | awk '{print $2}')"
+          if [ -z "$hs_epoch" ] || [ "$hs_epoch" -le 0 ] 2>/dev/null; then
+            echo "ERROR: WireGuard tunnel handshake missing or inactive" >&2
+            exit 1
+          fi
+          now="$(date +%s)"
+          hs_age=$(( now - hs_epoch ))
+          if [ "$hs_age" -lt 0 ] || [ "$hs_age" -gt 120 ]; then
+            echo "ERROR: WireGuard handshake is stale ($${hs_age}s > 120s limit)" >&2
+            exit 1
+          fi
+          # 3. WireGuard transfer active (rx > 0 and tx > 0)
+          tx_out="$(docker exec gluetun wg show wg0 transfer 2>/dev/null || true)"
+          rx_b="$(echo "$tx_out" | awk '{print $2}')"
+          tx_b="$(echo "$tx_out" | awk '{print $3}')"
+          if [ -z "$rx_b" ] || [ -z "$tx_b" ] || [ "$rx_b" -le 0 ] || [ "$tx_b" -le 0 ] 2>/dev/null; then
+            echo "ERROR: WireGuard transfer inactive (rx=$${rx_b:-0}, tx=$${tx_b:-0})" >&2
+            exit 1
+          fi
+          # 4. Gluetun killswitch firewall active (-P OUTPUT DROP)
+          if ! docker exec gluetun iptables -S OUTPUT 2>/dev/null | grep -q -- '-P OUTPUT DROP'; then
+            echo "ERROR: Gluetun firewall killswitch inactive (no -P OUTPUT DROP)" >&2
+            exit 1
+          fi
+          # 5. IPv6 disabled inside container
+          if [ "$(docker exec gluetun cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null || true)" != "1" ]; then
+            echo "ERROR: IPv6 is not disabled inside Gluetun container" >&2
+            exit 1
+          fi
+          # 6. Crawler strictly confined to Gluetun network namespace
+          if ! grep -q -E 'network_mode:\s*["'\''?]?(service:gluetun|container:gluetun)["'\''?]?' "$COMPOSE_FILE"; then
+            echo "ERROR: Crawler is not restricted to Gluetun network namespace in $COMPOSE_FILE" >&2
+            exit 1
+          fi
+          docker compose -f "$COMPOSE_FILE" --profile crawler up -d crawler 2>/dev/null || docker compose -f "$COMPOSE_FILE" up -d crawler
           echo "CRAWLER_STARTED"
           ;;
         stop-vpn)
@@ -165,10 +333,30 @@ write_files:
           docker exec gluetun curl -s --max-time 5 https://ipinfo.io/json
           ;;
         query-dns)
+          # Query internal DoT resolver (Unbound on 127.0.0.1:53)
           docker exec gluetun nslookup -timeout=5 google.com 127.0.0.1
           ;;
-        query-dns-direct)
-          docker exec gluetun nslookup -timeout=3 google.com 8.8.8.8
+        query-dns-vpn)
+          # Query public DNS via default VPN tunnel route (wg0)
+          docker exec gluetun nslookup -timeout=5 google.com 8.8.8.8
+          ;;
+        verify-dns-route)
+          # Validate that DNS traffic routes through wg0 and NOT eth0
+          route_out="$(docker exec gluetun ip route get 8.8.8.8 2>/dev/null || true)"
+          if echo "$route_out" | grep -q 'dev wg0'; then
+            echo "DNS_ROUTE_WG0_OK"
+          else
+            echo "ERROR: DNS route does not go through wg0: $route_out" >&2
+            exit 1
+          fi
+          ;;
+        verify-dns-bypass-blocked)
+          # Actively verify that traffic bound to physical host interface eth0 cannot egress (blocked by iptables OUTPUT DROP)
+          if docker exec gluetun ping -c 1 -W 2 -I eth0 8.8.8.8 >/dev/null 2>&1; then
+            echo "ERROR: Interface eth0 bypass succeeded! Killswitch leak detected!" >&2
+            exit 1
+          fi
+          echo "DNS_BYPASS_BLOCKED_OK"
           ;;
         inspect-firewall)
           docker exec gluetun iptables -S OUTPUT
@@ -229,6 +417,8 @@ write_files:
       install -d -o lodestar -g lodestar -m 0700 /home/lodestar/lodestar
       install -d -o lodestar -g lodestar -m 0700 /home/lodestar/lodestar/secrets
       install -d -o lodestar -g lodestar -m 0700 /home/lodestar/lodestar/pia-example
+      # Root-owned immutable Compose stack directory
+      install -d -o root -g root -m 0755 /etc/lodestar/vpn
       # Ephemeral runtime directory for WireGuard credentials (tmpfs, root-only)
       install -d -o root -g root -m 0700 /run/lodestar/vpn
       # Never start a crawler on an unverified tunnel.
