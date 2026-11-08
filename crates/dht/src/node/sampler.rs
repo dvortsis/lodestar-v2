@@ -18,6 +18,10 @@ const RECLAIM_PER_TICK: usize = 1024;
 pub(crate) const UNSUPPORTED_BACKOFF: Duration = Duration::from_secs(6 * 3600);
 pub const MIN_INTERVAL: Duration = Duration::from_secs(60);
 pub const MAX_INTERVAL: Duration = Duration::from_secs(6 * 3600);
+/// The largest BEP 51 share a node takes (WK-10e): the fleet planner's
+/// `MAX_DHT_PER_IP`, so a cooldown is at most `MAX_INTERVAL` times this
+/// (48 h).
+pub const MAX_SCALE: u8 = 8;
 /// Tokens for records the restart proof made (CR-0d): restored at start or
 /// sealed at shutdown. Wire transaction ids start in the lower half and
 /// only count up, so they never reach this bit.
@@ -139,10 +143,33 @@ impl Sampler {
     }
 
     pub fn complete(&mut self, addr: SocketAddr, token: u64, wait: Duration, now: Instant) -> bool {
+        self.complete_scaled(addr, token, wait, 1, now)
+    }
+
+    /// [`complete`](Self::complete), cooling `scale` times as long (WK-10e,
+    /// plan Q9): the node's own interval is bounded first, then multiplied,
+    /// so N same-IP members together sample it no faster than one install.
+    /// `scale` is taken as `1..=MAX_SCALE`; the multiply saturates.
+    pub fn complete_scaled(
+        &mut self,
+        addr: SocketAddr,
+        token: u64,
+        wait: Duration,
+        scale: u8,
+        now: Instant,
+    ) -> bool {
+        // A sample's token is a wire transaction id, always below the
+        // proof's bit (the actor never hands out one at or past it), which
+        // is how a snapshot tells a sample's cooldown from a seal.
+        debug_assert!(token & PROOF_TOKEN == 0, "a wire token below PROOF_TOKEN");
         if !matches!(self.states.get(&addr), Some(State::InFlight(t)) if *t == token) {
             return false;
         }
-        let until = now + wait.clamp(MIN_INTERVAL, MAX_INTERVAL);
+        let scale = scale.clamp(1, MAX_SCALE);
+        let until = now
+            + wait
+                .clamp(MIN_INTERVAL, MAX_INTERVAL)
+                .saturating_mul(u32::from(scale));
         self.states.insert(addr, State::Cooling { until, token });
         self.expiry.insert((until, token, addr));
         true
@@ -225,9 +252,25 @@ impl Sampler {
 
     /// Every live cooldown, for the snapshot (S10). Call after
     /// [`Sampler::seal_in_flight`]: in-flight records aren't listed.
+    ///
+    /// A cooldown from a sample's answer (a wire token, below
+    /// `PROOF_TOKEN`) is listed as at most `MAX_INTERVAL` from `now`,
+    /// within the restart proof's horizon (WK-10e). Unscaled, it ends by
+    /// then anyway; scaled (up to 48 h), only this member's extra share is
+    /// cut, since the node's own interval (≤ `MAX_INTERVAL`) ran from a
+    /// sample before `now`. The live cooldown keeps its full length, and a
+    /// sealed or restored record (a proof token) keeps its own end.
     pub fn restrictions(&self, now: Instant) -> impl Iterator<Item = (SocketAddr, Instant)> + '_ {
+        let bound = now + MAX_INTERVAL;
         self.states.iter().filter_map(move |(addr, s)| match s {
-            State::Cooling { until, .. } if *until > now => Some((*addr, *until)),
+            State::Cooling { until, token } if *until > now => {
+                let until = if token & PROOF_TOKEN == 0 {
+                    (*until).min(bound)
+                } else {
+                    *until
+                };
+                Some((*addr, until))
+            }
             _ => None,
         })
     }
@@ -350,5 +393,97 @@ mod tests {
         }
         s.prune(start + MAX_INTERVAL * 100);
         assert_eq!((s.known(), s.inflight(), s.cooling()), (0, 0, 0));
+    }
+
+    /// WK-10e: a scaled cooldown is the node's bounded interval times the
+    /// scale, which is taken as 1..=MAX_SCALE: at most 48 h.
+    #[test]
+    fn a_scaled_cooldown_is_the_interval_times_the_scale() {
+        for (wait, scale, want) in [
+            (3600, 1, 3600),
+            (3600, 3, 3 * 3600),
+            (21_600, 8, 8 * 21_600),
+            // The node's own interval is bounded first.
+            (30, 2, 120),
+            (99_999, 8, 8 * 21_600),
+            // 0 reads as 1; past MAX_SCALE reads as MAX_SCALE.
+            (3600, 0, 3600),
+            (21_600, 200, 8 * 21_600),
+        ] {
+            let mut s = Sampler::default();
+            let now = Instant::now();
+            assert!(s.reserve(n(1).addr, 1, now));
+            assert!(s.complete_scaled(n(1).addr, 1, Duration::from_secs(wait), scale, now));
+            let due = now + Duration::from_secs(want);
+            assert!(
+                !s.reserve(n(1).addr, 2, due - Duration::from_nanos(1)),
+                "{wait} × {scale}"
+            );
+            assert!(s.reserve(n(1).addr, 2, due), "{wait} × {scale}");
+        }
+        assert_eq!(
+            MAX_INTERVAL * u32::from(MAX_SCALE),
+            Duration::from_secs(48 * 3600)
+        );
+    }
+
+    /// WK-10e: with a full table of 48 h cooldowns, a new node waits on the
+    /// frontier, isn't lost, and is sampled as soon as a cooldown ends.
+    #[test]
+    fn a_full_table_of_scaled_cooldowns_holds_new_nodes_until_one_ends() {
+        let mut s = Sampler::with_capacity(4);
+        let now = Instant::now();
+        for i in 1..=4 {
+            assert!(s.reserve(n(i).addr, u64::from(i), now));
+            assert!(s.complete_scaled(n(i).addr, u64::from(i), MAX_INTERVAL, MAX_SCALE, now));
+        }
+        assert!(s.saturated());
+        assert!(s.offer(n(9), now));
+        assert_eq!(s.next(now + MAX_INTERVAL), None, "full: it waits");
+        assert_eq!(s.frontier_len(), 1, "still queued");
+        let end = now + MAX_INTERVAL * u32::from(MAX_SCALE);
+        s.prune(end);
+        assert!(!s.saturated());
+        assert_eq!(s.next(end), Some(n(9)));
+    }
+
+    /// WK-10e: the snapshot lists a scaled cooldown as at most
+    /// `MAX_INTERVAL` from now; the live one keeps its full length, and an
+    /// unscaled or sealed record its own end.
+    #[test]
+    fn a_snapshot_bounds_only_scaled_cooldowns() {
+        let mut s = Sampler::default();
+        let now = Instant::now();
+        assert!(s.reserve(n(1).addr, 1, now));
+        assert!(s.complete_scaled(n(1).addr, 1, MAX_INTERVAL, MAX_SCALE, now));
+        // Wire ids start anywhere below bit 63, bits 61 and 62 included.
+        let high = (1 << 62) | (1 << 61) | 2;
+        assert!(s.reserve(n(2).addr, high, now));
+        assert!(s.complete_scaled(n(2).addr, high, Duration::from_secs(600), 4, now));
+        assert!(s.reserve(n(4).addr, 4, now));
+        assert!(s.complete(n(4).addr, 4, Duration::from_secs(900), now));
+        assert!(s.reserve(n(3).addr, 3, now));
+        let sealed = now + MAX_INTERVAL + Duration::from_secs(4);
+        s.seal_in_flight(sealed);
+        let listed: std::collections::HashMap<SocketAddr, Instant> = s.restrictions(now).collect();
+        assert_eq!(listed[&n(1).addr], now + MAX_INTERVAL, "bounded");
+        assert_eq!(listed[&n(2).addr], now + Duration::from_secs(2400));
+        assert_eq!(listed[&n(4).addr], now + Duration::from_secs(900));
+        assert_eq!(listed[&n(3).addr], sealed, "a seal keeps the horizon");
+        // Live, the scaled one still cools for 48 h.
+        let end = now + MAX_INTERVAL * u32::from(MAX_SCALE);
+        assert!(!s.reserve(n(1).addr, 9, end - Duration::from_nanos(1)));
+        assert!(s.reserve(n(1).addr, 9, end));
+    }
+
+    /// A sample's token is always a wire id below the proof's bit; one at
+    /// it is a bug the snapshot would misread as a seal (debug builds).
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "a wire token below PROOF_TOKEN")]
+    fn a_proof_bit_on_a_samples_token_is_refused() {
+        let mut s = Sampler::default();
+        let now = Instant::now();
+        let _ = s.complete_scaled(n(1).addr, PROOF_TOKEN | 1, MAX_INTERVAL, 1, now);
     }
 }

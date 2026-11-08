@@ -178,6 +178,11 @@ pub struct Config {
     /// slots this node walks. `None`, or [`shard::Shard::FULL`], is the
     /// whole keyspace, as before.
     pub shard: Option<shard::Shard>,
+    /// WK-10e's BEP 51 share (plan Q9): a remote node's sample interval is
+    /// waited this many times over, so the same-IP members of a fleet
+    /// together sample it no faster than one install. 1 (the default) is
+    /// a single install; 0 reads as 1.
+    pub sample_interval_scale: u8,
 }
 
 /// The restart proof's settings (docs/decisions/2026-10-30-CR-0d.md).
@@ -247,6 +252,7 @@ impl Default for Config {
             target_prefixes: false,
             utp: None,
             shard: None,
+            sample_interval_scale: 1,
         }
     }
 }
@@ -853,6 +859,7 @@ pub(crate) enum Command {
     Scrape(InfoHash, oneshot::Sender<Option<DhtEstimate>>),
     SetIntensity(Intensity),
     SetPaused(bool),
+    SetSampleScale(u8),
 }
 
 /// An owned terminal result. Dropping the receiver cancels the request;
@@ -965,6 +972,16 @@ impl NodeHandle {
     pub async fn set_intensity(&self, intensity: Intensity) -> bool {
         self.commands
             .send(Command::SetIntensity(intensity))
+            .await
+            .is_ok()
+    }
+
+    /// Waits `scale` times a remote node's BEP 51 interval from its next
+    /// answer on ([`Config::sample_interval_scale`], WK-10e). `false` if
+    /// the node has stopped.
+    pub async fn set_sample_scale(&self, scale: u8) -> bool {
+        self.commands
+            .send(Command::SetSampleScale(scale))
             .await
             .is_ok()
     }
