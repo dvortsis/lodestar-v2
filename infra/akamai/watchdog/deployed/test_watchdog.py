@@ -298,4 +298,20 @@ class WatchdogTests(unittest.TestCase):
         self.assertIn('DeferredLowTime', str(err.exception))
         self.assertFalse(any(c.args[0]=='DELETE' for c in api.call_args_list))
 
+    @patch.object(mod,'token_value', return_value='thisisafaketokenxxxxxxxxxxxxxxxxxxxxxxxx')
+    @patch.object(mod,'list_paginated')
+    @patch.object(mod,'api')
+    def test_in_scope_but_outside_created_window_is_logged(self,api,list_fn,_token):
+        os.environ['MIN_CREATED_UTC']=(self.now-timedelta(hours=30)).isoformat().replace('+00:00','Z')
+        before=dict(self.vm, id=1)  # created 49 h ago, before activation
+        future=dict(self.vm, id=2, created=(self.now+timedelta(hours=1)).isoformat().replace('+00:00','Z'))
+        young=dict(self.vm, id=3, created=(self.now-timedelta(hours=2)).isoformat().replace('+00:00','Z'))
+        list_fn.return_value=[before,future,young]
+        with self.assertLogs(mod.LOG, level='ERROR') as logs:
+            result=mod.handler({},None)
+        self.assertEqual(result['out_of_scope'],2)
+        self.assertEqual(sum('"out_of_scope_linode"' in l and 'created_outside_window' in l for l in logs.output),2)
+        self.assertEqual(result['eligible'],0)
+        api.assert_not_called()
+
 if __name__=='__main__': unittest.main(verbosity=2)

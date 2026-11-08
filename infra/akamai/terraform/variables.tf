@@ -42,7 +42,7 @@ variable "ssh_admin_ipv4_cidr" {
   description = "Your management public IPv4 as a /32, such as 203.0.113.20/32. Never 0.0.0.0/0."
 
   validation {
-    condition     = can(cidrnetmask(var.ssh_admin_ipv4_cidr)) && can(regex("/32$", var.ssh_admin_ipv4_cidr))
+    condition     = can(regex("^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])/32$", var.ssh_admin_ipv4_cidr))
     error_message = "Use one valid management IPv4 in /32 form."
   }
 }
@@ -54,7 +54,7 @@ variable "main_extra_admin_ipv4_cidrs" {
 
   validation {
     condition = length(var.main_extra_admin_ipv4_cidrs) <= 4 && alltrue([
-      for c in var.main_extra_admin_ipv4_cidrs : can(cidrnetmask(c)) && can(regex("^([0-9]{1,3}\\.){3}[0-9]{1,3}/32$", c))
+      for c in var.main_extra_admin_ipv4_cidrs : can(regex("^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])/32$", c))
     ])
     error_message = "Each entry must be one valid IPv4 address in /32 form, at most 4 entries. Never 0.0.0.0/0 or a wider range."
   }

@@ -37,6 +37,7 @@ Agents never deploy. The owner deploys each template from an interactive termina
 4. **Execute it:** `aws cloudformation execute-change-set --stack-name <stack> --change-set-name x-cloud-infra-2 ...`, then `aws cloudformation wait stack-update-complete --stack-name <stack> --profile lodestar-admin --region us-east-1`.
 5. **Check the result.**
    - Invoke each Lambda with `{"dry_run": true}`; the result now includes `out_of_scope`.
+   - If `out_of_scope` isn't 0, the out-of-scope alarm will fire. That's expected for any `lodestar`-tagged Linode in another region, of another type or label, or created before `MIN_CREATED_UTC` (2026-11-08T00:00:00Z), and for any `Project=Lodestar` EC2 instance outside the guard's VPC, security group, type or tags. Delete such machines by hand or bring them into scope; the reapers will never remove them.
    - The two heartbeat alarms read `OK` within an hour. They start in `INSUFFICIENT_DATA` and, because missing data counts as breaching, may alert once until the first scheduled run.
 6. **Roll back if needed:** the previous template stays in the stack's history; update back to it the same way, through a change set.
 

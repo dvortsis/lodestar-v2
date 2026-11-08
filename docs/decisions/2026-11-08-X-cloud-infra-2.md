@@ -1,10 +1,11 @@
-# X-cloud-infra-2 decisions (follow-ups to #625)
+# X-cloud-infra-2 decisions (#634, follow-ups to #625)
 
 The runner's follow-ups after #625: the cloud test plan's two needs, and the #625 reviewers' findings. Brief: `briefs/X-cloud-infra-2.md` on `runner-state`. Nothing here is deployed. The template and guard changes reach AWS only when the owner runs a reviewed change set (`docs/operations/lodestar-cloud-assets.md`, "Deploying template changes"). The runner approved the guard change (brief item 5).
 
 This file **supersedes one bullet** of `2026-11-08-X-cloud-infra.md`. Its "Not verified" entry on `terraform fmt -check` and `terraform validate` is out of date: CI's `infra` job now runs `fmt`, `init` and `validate`, plus a PowerShell parse check, on every change to `infra/`. Only the scripts' runtime behaviour, and anything against a live account, remain unverified.
 
 ## Terraform
+- **Admin addresses are strict dotted IPv4 `/32`s.** Octets are 0–255 with no leading zeros, so `010.0.0.1/32` is refused. This applies to `ssh_admin_ipv4_cidr` and to the new list.
 - **Main's firewall takes a list of admin addresses.** `main_extra_admin_ipv4_cidrs` (default empty, at most 4) adds `/32`s to Main's SSH rule only. One use is the AWS Windows VM's public IPv4, so it can SSH-tunnel to Main's UI (the cloud test plan).
   - **Why a separate variable:** `ssh_admin_ipv4_cidr` stays the primary address, so workers, `Preflight.ps1`'s check and existing `terraform.tfvars` files are unchanged.
   - **Validation:** each entry must be a dotted IPv4 `/32`. The rule has no `ipv6` list, so there is no IPv6 ingress, and inbound stays DROP otherwise. The merged list is exposed as the `main_admin_ipv4_cidrs` output for OP-2's firewall audit.
@@ -24,7 +25,7 @@ This file **supersedes one bullet** of `2026-11-08-X-cloud-infra.md`. Its "Not v
 - **Heartbeat alarm.** `lodestar-expiration-guard-heartbeat` fires when `Invocations` is below 1 for an hour, with missing data counted as breaching. A disabled schedule is now noticed.
 
 ## Akamai watchdog
-- **Linodes outside its scope are reported.** A Linode tagged `lodestar` that fails the scope checks (region, type, label, tags) is logged at error level as `out_of_scope_linode`. Before, it was skipped in silence. A metric filter and `lodestar-akamai-expiration-guard-out-of-scope` alarm on it, plus a heartbeat alarm like the guard's.
+- **Linodes outside its scope are reported.** A Linode tagged `lodestar` that fails the scope checks (region, type, label, tags) is logged at error level as `out_of_scope_linode`. So is one that passes them but was created before `MIN_CREATED_UTC` or dated more than 10 minutes ahead (`reason: created_outside_window`). Before, both were skipped in silence. A metric filter and `lodestar-akamai-expiration-guard-out-of-scope` alarm on it, plus a heartbeat alarm like the guard's.
 - **Deletions are confirmed against one shared deadline.**
   - **Before:** each deletion waited about 15 seconds for its own 404.
   - **Now:** the run sends all its deletions first, then polls every 5 s until each returns 404 or a single 90 s deadline passes.
@@ -40,7 +41,7 @@ This file **supersedes one bullet** of `2026-11-08-X-cloud-infra.md`. Its "Not v
 - **A piped confirmation phrase is refused.** `Interactive.ps1`'s `Assert-InteractiveConfirmation` throws when stdin is redirected, the session isn't interactive, or the host was started with `-NonInteractive`.
   - **Where it runs:** before every typed phrase, in `Deploy.ps1`, `Destroy.ps1`, `Deploy-AwsWindows.ps1` and `Destroy-AwsWindows.ps1`. `-DryRun` doesn't ask for a phrase, so it isn't affected.
 - **`Lodestar-Fleet.ps1 access -Target`** accepts only an EC2 instance ID or a dotted IPv4 address.
-- **`plan` runs the dry run with the PowerShell that is already running,** not a hard-coded `powershell.exe`. It drops `-ExecutionPolicy Bypass` on purpose: the child inherits the process-scope policy, and bypassing it was never needed for a signed or local script.
+- **`plan` runs the dry run with the PowerShell edition that is already running,** built from `$PSHOME` (`pwsh` on Core, `powershell.exe` on Desktop) rather than the process path, which under ISE is `powershell_ise.exe`. It drops `-ExecutionPolicy Bypass` on purpose: the child inherits the process-scope policy, and bypassing it was never needed for a signed or local script.
 - **PowerShell ISE is refused for typed phrases:** it has no console, so its input reads as redirected. The error message says to use a console or Windows Terminal.
 - **Log and plan file names use UTC,** with a trailing `Z` (§2.35).
 

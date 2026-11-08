@@ -114,8 +114,11 @@ Linode instances bill until deleted, even when shut down.
         Audit "[AWS] Executing non-destructive EC2 RunInstances Dry-Run..."
         Push-Location $projectRoot
         try {
-            # The same PowerShell that runs this script (powershell.exe or pwsh).
-            $psHost = (Get-Process -Id $PID).Path
+            # The same PowerShell edition that runs this script, from $PSHOME (not the
+            # process path, which is powershell_ise.exe or an embedding host under ISE).
+            $exe = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh' } else { 'powershell.exe' }
+            if ($IsLinux -or $IsMacOS) { $exe = 'pwsh' }
+            $psHost = Join-Path $PSHOME $exe
             & $psHost -NoProfile -File (Join-Path $scriptDir 'Deploy-AwsWindows.ps1') -DryRun -Hours $Hours
         } finally { Pop-Location }
 

@@ -109,6 +109,13 @@ def scoped(resource):
     )
 
 
+def in_window(resource, now):
+    """Created on or after MIN_CREATED_UTC and not more than 10 minutes ahead."""
+    created = iso(resource.get("created"))
+    activation = iso(os.environ["MIN_CREATED_UTC"])
+    return activation <= created <= now + timedelta(minutes=10)
+
+
 def aged(resource, now):
     created = iso(resource.get("created"))
     activation = iso(os.environ["MIN_CREATED_UTC"])
@@ -188,6 +195,13 @@ def handler(event, context):
                 out_of_scope += 1
             continue
         try:
+            if not in_window(item, now):
+                # In scope but created before the watchdog's activation time, or
+                # dated in the future: it would never be reaped. Counted by the
+                # same OutOfScope metric filter.
+                LOG.error(json.dumps({"event": "out_of_scope_linode", "id": item.get("id"), "reason": "created_outside_window"}))
+                out_of_scope += 1
+                continue
             if aged(item, now):
                 selected.append(item)
         except (ValueError, TypeError):

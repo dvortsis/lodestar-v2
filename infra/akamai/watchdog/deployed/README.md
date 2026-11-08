@@ -4,7 +4,7 @@ The canonical **source** CloudFormation template in `lodestar-akamai-watchdog.js
 - the API path allowlist no longer admits `/networking/firewalls?page=`, a path the code never calls (X-cloud-infra);
 - with `TOKEN_REQUIRED=true`, which the template sets, a missing or empty secret fails the run so the error alarm fires, instead of returning `unconfigured` silently (X-cloud-infra);
 - the function `DependsOn` its log group (X-cloud-infra);
-- a Linode tagged `lodestar` that fails the scope checks is logged as `out_of_scope_linode`, and the `lodestar-akamai-expiration-guard-out-of-scope` alarm fires on it (X-cloud-infra-2);
+- a Linode tagged `lodestar` that fails the scope checks, or passes them but was created before `MIN_CREATED_UTC` or dated in the future, is logged as `out_of_scope_linode`, and the `lodestar-akamai-expiration-guard-out-of-scope` alarm fires on it (X-cloud-infra-2);
 - a `lodestar-akamai-expiration-guard-heartbeat` alarm fires when the function hasn't run for an hour, missing data counting as breaching (X-cloud-infra-2);
 - deletions are confirmed together against one 90-second deadline instead of about 15 seconds each, and the timeout is 300 s (X-cloud-infra-2).
 
