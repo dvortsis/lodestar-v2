@@ -6452,6 +6452,10 @@
     {
       "at": "2026-11-08T20:17Z",
       "note": "#630 PK-win-upd-1 merged (6554ca2c) on Opus MERGE + security MERGE; session archived; PK-win-upd-2 launched slot 3 (session_01MMjhnAC9TBdvBgyLvxSjGf) with #630 review notes in its brief. #635 Opus MERGE (2 important notes fixed, polish folded, self-checked at 5a099dd3); merge on green. Main 20818fea run cancelled by the #630 merge; macOS watch moved to 6554ca2c. X-updates-api-text and PK-win-portable-upd now ready (no free slot)."
+    },
+    {
+      "at": "2026-11-08T20:24Z",
+      "note": "Runner PR #635 merged (3e69d889): owns fixes, CMP-6 owns, PK-win-upd-2 notes, X-natural-wording / X-win-restart-followups (after CMP-6) / X-lease-report-atomic, plan TZ line. Main macOS check: watch the newest main run (6554ca2c's may be cancelled by this merge)."
     }
   ],
   "main_health": [
