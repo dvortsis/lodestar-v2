@@ -693,6 +693,9 @@ impl Drop for Runtime {
         // late install on a blocking thread then can't start stages nobody
         // owns.
         self.shared.draining.store(true, Ordering::Release);
+        // `Stop` first, then closed: a `Run` the DHT's task hadn't seen yet
+        // can't start a node during the teardown (#601's delta review).
+        want_dht(&self.shared);
         close_dht(&self.shared);
         if let Some(stages) = lock(&self.shared.stages).take() {
             let _ = stages.stop.send(true);
@@ -2077,14 +2080,27 @@ mod tests {
             })
             .await;
             assert!(!path.exists(), "nothing saved while it runs");
+            let started = Instant::now();
             if drop_it {
                 let running = rt.dht_running().unwrap();
+                // Something else still holds the shared state (an install
+                // on a blocking thread, say): the drop must still end the
+                // DHT's task, not wait for the last `Arc` to go.
+                let held = rt.shared.clone();
                 drop(rt);
                 super::super::dht::stopped(running).await;
+                drop(held);
             } else {
                 rt.shutdown().await;
             }
             assert!(path.exists(), "saved (drop: {drop_it})");
+            // Well inside `stopped`'s 11 s: the task ended because the stop
+            // closed its channel, not at the timeout (#601's delta review).
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "took {:?} (drop: {drop_it})",
+                started.elapsed()
+            );
             drop(session);
         }
     }

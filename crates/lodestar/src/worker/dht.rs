@@ -135,7 +135,7 @@ pub fn spawn(
             counts,
             running,
             node: None,
-            failing: false,
+            failing: None,
         }
         .run(want, requests),
     );
@@ -158,9 +158,10 @@ struct Driver {
     counts: Arc<DhtCounts>,
     running: watch::Sender<Option<ShardSpec>>,
     node: Option<Live>,
-    /// Starts have failed since the last one that worked: the warning
-    /// was said once for the streak, and the rest only counted.
-    failing: bool,
+    /// The error of the current streak of failed starts: warned once per
+    /// streak, and again when the error changes; the rest are counted.
+    /// Cleared by a start that works and by a target that isn't `Run`.
+    failing: Option<std::io::ErrorKind>,
 }
 
 /// The back-off after a node stopped by itself: `prev` doubled while
@@ -234,6 +235,10 @@ impl Driver {
 
     /// Brings the node to `target`; `Err` when a start failed.
     async fn follow(&mut self, target: Desired) -> Result<(), ()> {
+        // A streak of failed starts ends when nothing is to be started.
+        if !matches!(target, Desired::Run(_)) {
+            self.failing = None;
+        }
         let t = match (&mut self.node, target) {
             (None, Desired::Stop | Desired::Pause) => return Ok(()),
             (Some(_), Desired::Stop) => {
@@ -280,7 +285,7 @@ impl Driver {
         let (tx, harvests) = mpsc::channel(HARVEST_QUEUE);
         match Node::start(config, Some(tx)).await {
             Ok(node) => {
-                self.failing = false;
+                self.failing = None;
                 self.counts.starts.fetch_add(1, Ordering::Relaxed);
                 lodestar_log::log_event!(
                     crate::logging::events::WORKER_DHT_STARTED,
@@ -300,9 +305,9 @@ impl Driver {
             }
             Err(e) => {
                 self.counts.start_failures.fetch_add(1, Ordering::Relaxed);
-                // Once per streak: a port that stays taken would otherwise
-                // warn every minute for good.
-                if !std::mem::replace(&mut self.failing, true) {
+                // Once per streak, and again if the error changes: a port
+                // that stays taken would otherwise warn every minute for good.
+                if self.failing.replace(e.kind()) != Some(e.kind()) {
                     lodestar_log::log_event!(
                         crate::logging::events::WORKER_DHT_START_FAILED,
                         error = lodestar_log::Error::new(&e)
