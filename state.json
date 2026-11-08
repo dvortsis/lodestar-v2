@@ -7263,7 +7263,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T23:56Z",
+    "updated": "2026-11-08T23:57Z",
     "items": [
       {
         "slot": 1,
@@ -7278,7 +7278,7 @@
         "slice": "OP-2a",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: OP-1 merged #636 (bc2a6e95); building OP-2a (brief briefs/OP-2a.md)",
+        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #641 OP-2a ready at fe8c1088 (green); Opus + security review queued (3 reviewers busy)",
         "since": "2026-11-08T22:52Z"
       },
       {
@@ -7362,5 +7362,5 @@
     }
   ],
   "heartbeat": "2026-11-08T21:39Z",
-  "updated": "2026-11-08T23:56Z"
+  "updated": "2026-11-08T23:57Z"
 }
