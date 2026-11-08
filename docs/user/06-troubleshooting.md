@@ -43,24 +43,29 @@ To fix it:
     ```
 
    **Result:** The last line says the folder isn't private and why, for example that it grants access to `DESKTOP-1\alex (S-1-5-21-…)`.
-2. If the account it names is your own and it gives an `icacls` command, run **Repair**. Open **Control Panel → Programs and Features**, right-click **Lodestar**, then select **Repair**. Allow it when Windows asks for administrator permission.
+2. If the account it names is your own, run **Repair**. Open **Control Panel → Programs and Features**, right-click **Lodestar**, then select **Repair**. Allow it when Windows asks for administrator permission.
 
-   **Result:** Repair finishes without an error and starts the service. Continue with step 4. If Repair stops with an error, read why in its log, which only administrators can read:
+   Repair can use your account only if it is listed directly in `net localgroup Administrators`. A work or school (Microsoft Entra ID) account can't use it: `whoami /user` shows its number starting with `S-1-12-1-`. Run Repair anyway: it checks the whole folder first and tells you what to do.
 
-    ```powershell
-    Get-ChildItem "C:\Windows\Temp\lodestar-secure-*" -Directory | Sort-Object LastWriteTime | Select-Object -Last 1 | ForEach-Object { Get-Content (Join-Path $_.FullName "secure-datadir.log") -Tail 3 }
-    ```
-
-   If the last line says `STOPPED: Repair can't fix this for your account`, continue with step 3. If it says anything else, Repair found another problem: don't run `icacls`, and read the last paragraph of this section.
-3. Run the `icacls` command from that last line in the elevated PowerShell window. It looks like this, with your account's number:
+   **Result:** Repair finishes without an error and starts the service. Continue with step 4. If Repair stops with an error, read why in its log. This finds only logs that Lodestar's installer made:
 
     ```powershell
-    icacls "C:\ProgramData\Lodestar" /remove:g *S-1-5-21-… /T /C
+    $owners = "S-1-5-18", "S-1-5-32-544"
+    $log = Get-ChildItem "C:\Windows\Temp\lodestar-secure-*\secure-datadir.log" |
+      Where-Object { (Get-Acl $_.DirectoryName).GetOwner([Security.Principal.SecurityIdentifier]).Value -in $owners } |
+      Sort-Object LastWriteTime | Select-Object -Last 1
+    Get-Content $log.FullName -Tail 3
     ```
 
-   Repair gives this message only for your own account when nothing else in the folder looks wrong. It happens if you are an administrator only through a group, or you sign in with a work or school (Microsoft Entra ID) account. To check beforehand, run `whoami /user`: a work or school account's number starts with `S-1-12-1-`. `net localgroup Administrators` lists the accounts that are members directly.
+   If the last line says `STOPPED: Repair can't fix this for your account`, continue with step 3. If it says anything else, Repair found another problem: don't run step 3, and read the last paragraph of this section.
+3. Remove your own account's entries. Don't copy a command from a log: these lines work out your account's number themselves, so they never remove anyone else's.
 
-   **Result:** `icacls` reports the files it processed. It removes that one account's entries and changes nothing else.
+    ```powershell
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    icacls "C:\ProgramData\Lodestar" /remove:g "*$me" /T /C
+    ```
+
+   **Result:** `icacls` reports the files it processed. It removes your account's entries and changes nothing else.
 4. Start the service, wait about 10 seconds, then check that it is still running:
 
     ```powershell

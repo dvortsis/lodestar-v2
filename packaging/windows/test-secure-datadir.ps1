@@ -19,6 +19,35 @@ $other = 'S-1-5-21-1000000001-1000000002-1000000003-4242'
 $domainUsers = 'S-1-5-21-1000000001-1000000002-1000000003-513'
 $root = Join-Path ([IO.Path]::GetTempPath()) ('lodestar-sdd-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $root | Out-Null
+# The raw reader the script uses, and a raw writer for the tests: .NET (Set-Acl) would drop
+# the object entries these cases need.
+. (Join-Path $PSScriptRoot 'dacl-check.ps1')
+Initialize-RawReader $root
+Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+namespace LodestarTest {
+  public static class RawSdWriter {
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(string sddl,
+      uint revision, out IntPtr sd, out uint size);
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool SetFileSecurityW(string path, uint info, IntPtr sd);
+    [DllImport("kernel32.dll")]
+    static extern IntPtr LocalFree(IntPtr p);
+    // DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION.
+    public static void SetDacl(string path, string sddl) {
+      IntPtr sd; uint size;
+      if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, 1, out sd, out size))
+        throw new Win32Exception(Marshal.GetLastWin32Error());
+      try {
+        if (!SetFileSecurityW(path, 4u | 0x80000000u, sd)) throw new Win32Exception(Marshal.GetLastWin32Error());
+      } finally { LocalFree(sd); }
+    }
+  }
+}
+'@
 
 function Icacls([string[]]$a) {
   & $icacls @a | Out-Null
@@ -67,14 +96,14 @@ function Invoke-Secure([string]$dir, [string]$sid) {
   $LASTEXITCODE
 }
 
-# Adds an entry written in SDDL (object and callback entries, which .NET's rule objects can't
-# make) to $path; $false when this Windows won't store it, and the case is then skipped.
+# Adds an entry written in SDDL (object and callback entries, which .NET can't keep) to $path,
+# written and read back natively; $false when this Windows won't store it, and the case is
+# then skipped.
 function Add-Sddl([string]$path, [string]$ace) {
   try {
-    $acl = Get-Acl -LiteralPath $path
-    $acl.SetSecurityDescriptorSddlForm($acl.Sddl + $ace, 'Access')
-    Set-Acl -LiteralPath $path -AclObject $acl
-    return (Get-Acl -LiteralPath $path).Sddl.Contains($ace.Substring(0, 4))
+    $sddl = [Lodestar.RawSd]::Sddl($path)
+    [LodestarTest.RawSdWriter]::SetDacl($path, $sddl.Substring($sddl.IndexOf('D:')) + $ace)
+    return [Lodestar.RawSd]::Sddl($path).Contains($ace.Substring(0, 4))
   } catch { Write-Host "could not add $ace to ${path}: $($_.Exception.Message)"; return $false }
 }
 
@@ -96,6 +125,28 @@ function Expect([string]$case, [int]$want, [int]$got, [bool]$manual = $false) {
 }
 
 try {
+  # Get-DaclProblem on descriptors built in memory: every entry type but a plain Allow, and a
+  # NULL DACL, is a problem. .NET's own view drops the object entry, so without the raw
+  # descriptor the first case would pass.
+  $sy = @(New-Object Security.Principal.SecurityIdentifier 'S-1-5-18')
+  $base = 'O:BAD:P(A;OICI;FA;;;SY)'
+  foreach ($case in @(
+      @{ Name = 'an object entry'; Sddl = "$base(OA;;FA;;;WD)" },
+      @{ Name = 'a callback entry'; Sddl = "$base(XA;;FA;;;WD;(Exists LodestarTest))" },
+      @{ Name = 'a Deny entry'; Sddl = "$base(D;;FA;;;WD)" },
+      @{ Name = 'another account'; Sddl = "$base(A;;FA;;;WD)" },
+      @{ Name = 'no access list'; Sddl = 'O:BAD:NO_ACCESS_CONTROL' })) {
+    $problem = Get-DaclProblem (New-Object Security.AccessControl.RawSecurityDescriptor $case.Sddl) $sy
+    if ($problem) { Write-Host "ok: in memory, $($case.Name) ($problem)" }
+    else { $failed += "in memory, $($case.Name) passed Get-DaclProblem" }
+  }
+  if (Get-DaclProblem (New-Object Security.AccessControl.RawSecurityDescriptor $base) $sy) {
+    $failed += 'in memory, a plain Allow for SYSTEM was refused'
+  }
+  $dotnet = New-Object Security.AccessControl.DirectorySecurity
+  $dotnet.SetSecurityDescriptorSddlForm("$base(OA;;FA;;;WD)")
+  Write-Host ".NET's view of an object entry: $($dotnet.Sddl)"
+
   # Re-secured: the administrator's entries go from the folder and everything in it.
   # Its logs folder as the service locks it: OWNER RIGHTS and CREATOR OWNER are fine.
   $d = New-Secured 'admin-only'; Add-Me $d

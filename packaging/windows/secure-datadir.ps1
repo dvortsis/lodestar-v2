@@ -38,6 +38,7 @@ $admins = New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-544'
 # anywhere): it goes into a new folder with a random name that only SYSTEM and
 # Administrators can use, in a file opened with CreateNew, which fails if the name exists.
 $script:logWriter = $null
+$script:privateTemp = $null
 try {
   $logDir = Join-Path $env:SystemRoot ('Temp\lodestar-secure-' + [guid]::NewGuid().ToString('N'))
   $logSec = New-Object Security.AccessControl.DirectorySecurity
@@ -47,6 +48,7 @@ try {
       $sid, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow')))
   }
   (New-Object IO.DirectoryInfo $logDir).Create($logSec)
+  $script:privateTemp = $logDir
   $stream = [IO.File]::Open((Join-Path $logDir 'secure-datadir.log'), [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
   $script:logWriter = New-Object IO.StreamWriter($stream)
 } catch {
@@ -77,8 +79,13 @@ $marker = '.lodestar-secured'
 # The service's own SID, worked out (see service-sid.ps1): translating NT SERVICE\<name>
 # fails while the service has no SID type yet, as in this install.
 . (Join-Path $PSScriptRoot 'service-sid.ps1')
+# Get-RawDescriptor and Get-DaclProblem, the raw entry check (see dacl-check.ps1). Its reader
+# compiles in the log's private folder; without one, nothing can be checked, so stop.
+. (Join-Path $PSScriptRoot 'dacl-check.ps1')
 $svc = Get-ServiceSid $Service
 Log "service SID: $svc"
+if (-not $script:privateTemp) { Stop-Install "Could not create a private folder in $env:SystemRoot\Temp to check permissions from. Install again; if it keeps failing, ask for help." }
+Initialize-RawReader $script:privateTemp
 
 function New-DataSecurity {
   $sec = New-Object Security.AccessControl.DirectorySecurity
@@ -93,9 +100,8 @@ function New-DataSecurity {
 $trusted = @($system, $admins, $svc)
 
 # Why the folder is not private yet, or $null if it is: protected (no inheritance from
-# ProgramData) and every Allow entry names SYSTEM, Administrators or the service. Only a hint:
-# it reads .NET's rule list, which leaves out a NULL DACL, object and callback entries, so
-# whatever decides to keep a folder's contents also runs Get-DaclProblem.
+# ProgramData), and every entry, read raw (Get-DaclProblem), a plain Allow for SYSTEM,
+# Administrators or the service. The first loop only gives an extra account's name.
 function Get-NotPrivateReason($folder) {
   $acl = Get-Acl -LiteralPath $folder
   if (-not $acl.AreAccessRulesProtected) { return 'it inherits permissions from ProgramData' }
@@ -105,22 +111,7 @@ function Get-NotPrivateReason($folder) {
       return "it lets $($rule.IdentityReference) in"
     }
   }
-  return $null
-}
-
-# The first problem with an ACL's entries, read from the raw descriptor as windows/acl.rs
-# (check_entries) reads them: $null only when there is a DACL and every entry is a plain Allow
-# for a SID in $allowed. .NET's rule list (GetAccessRules, .Access) leaves out object and
-# callback (conditional) entries, so it can't be used for this.
-function Get-DaclProblem($acl, $allowed) {
-  $raw = New-Object Security.AccessControl.RawSecurityDescriptor($acl.GetSecurityDescriptorBinaryForm(), 0)
-  if ($null -eq $raw.DiscretionaryAcl) { return 'it has no access list, so anyone can open it' }
-  foreach ($ace in $raw.DiscretionaryAcl) {
-    $who = if ($ace -is [Security.AccessControl.KnownAce]) { $ace.SecurityIdentifier } else { $null }
-    if ($ace.AceType -ne [Security.AccessControl.AceType]::AccessAllowed) { return "it has an entry of type $($ace.AceType) for $who" }
-    if ($allowed -notcontains $who) { return "it lets $who in" }
-  }
-  return $null
+  return Get-DaclProblem (Get-RawDescriptor $folder) $trusted
 }
 
 # Whether $sid is a direct member of the local Administrators group: $false when the group
@@ -187,7 +178,7 @@ function Get-InsideProblem($folder, $extra) {
     if ($trusted -notcontains $o) {
       return "$($item.FullName) is owned by $o, not SYSTEM, Administrators or the Lodestar service"
     }
-    $problem = Get-DaclProblem $acl $allowed
+    $problem = Get-DaclProblem (Get-RawDescriptor $item.FullName) $allowed
     if ($problem) { return "$($item.FullName) has its own permissions: $problem" }
   }
   return $null
@@ -224,7 +215,7 @@ function Get-RepairableSid($folder) {
   $acl = Get-Acl -LiteralPath $folder
   if (-not $acl.AreAccessRulesProtected) { return $null }
   # Every entry, read raw, a plain Allow for SYSTEM, Administrators, the service or this account.
-  $problem = Get-DaclProblem $acl (@($trusted) + $me)
+  $problem = Get-DaclProblem (Get-RawDescriptor $folder) (@($trusted) + $me)
   if ($problem) { Log "not repairable: $problem"; return $null }
   $member = $local -and (Test-LocalAdmin $me)
   if ($member) { return $me }
@@ -232,7 +223,14 @@ function Get-RepairableSid($folder) {
   # Read only, before anything changes: if anything inside is wrong, the general refusal.
   $inside = Get-InsideProblem $folder $me
   if ($inside) { Log "not repairable: $inside"; return $null }
-  Stop-Install "Repair can't fix this for your account: $folder lets the account installing Lodestar ($me) in, and Repair removes only the entries of an account that is itself in the local Administrators group. Nothing else in the folder looks wrong. As an administrator, run: icacls `"$folder`" /remove:g *$($me.Value) /T /C, then start the Lodestar service."
+  # A command is printed only for a plain ASCII path: Safe() would turn other characters into
+  # '?', which icacls reads as a wildcard.
+  $how = if ($folder -cmatch '\A[\x20-\x7E]+\z') {
+    "As an administrator, run: icacls `"$folder`" /remove:g *$($me.Value) /T /C"
+  } else {
+    'As an administrator, remove your own entries as the user guide (section 6.2, step 3) shows'
+  }
+  Stop-Install "Repair can't fix this for your account: $folder lets the account installing Lodestar ($me) in, and Repair removes only the entries of an account that is itself in the local Administrators group. Nothing else in the folder looks wrong. $how. Then start the Lodestar service."
 }
 
 # Creates the folder with its descriptor, then checks that what is there is ours: if someone
@@ -327,7 +325,6 @@ if (Test-Path -LiteralPath $dir) {
       Stop-Install "$dir was replaced while Lodestar was installing. Check it, move it away, then install again."
     }
     $why = Get-NotPrivateReason $dir
-    if (-not $why) { $why = Get-DaclProblem (Get-Acl -LiteralPath $dir) $trusted }
     if ($why) { Stop-Install "$dir is still not private after removing ${sidText}: $why. Move its contents somewhere else, check them, then install again." }
     $owner = (Get-Acl -LiteralPath $dir).GetOwner([Security.Principal.SecurityIdentifier])
     if ($trusted -notcontains $owner) {

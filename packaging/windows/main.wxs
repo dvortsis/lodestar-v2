@@ -90,6 +90,7 @@
         <File Id="LodestarExe" Name="lodestar.exe" Source="$(var.CargoTargetBinDir)\lodestar.exe" KeyPath="yes" />
         <File Id="SecureDataDir" Name="secure-datadir.ps1" Source="$(env.LODESTAR_PACKAGING)\windows\secure-datadir.ps1" />
         <File Id="ServiceSid" Name="service-sid.ps1" Source="$(env.LODESTAR_PACKAGING)\windows\service-sid.ps1" />
+        <File Id="DaclCheck" Name="dacl-check.ps1" Source="$(env.LODESTAR_PACKAGING)\windows\dacl-check.ps1" />
         <File Id="RemoveDataDir" Name="remove-datadir.ps1" Source="$(env.LODESTAR_PACKAGING)\windows\remove-datadir.ps1" />
 
         <!-- The service runs as its own virtual account, NT SERVICE\Lodestar (no password; not
