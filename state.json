@@ -6323,6 +6323,11 @@
       "id": "X-utp-backoff",
       "at": "2026-11-08T17:20Z",
       "note": "Core (Opus) follow-up from the utp flake review: the proposed reset-backoff-on-progress fix was rejected (B1: Karn regression; small messages resent 2-3x once RTT jumps above the RTO; probe in scratchpad probe.rs). Options: (a) cap backoff growth across timeouts separated by progress while keeping Karn retention; (b) SACK-driven fast retransmit of a lost resend; (c) libutp behaviour with an honest trade-off and an RTT-increase Sim bound. Also pre-existing: on_timeout counts timeouts only when !heard, so a peer that sends but never ACKs never reaches MAX_TIMEOUTS. Check whether the socket layer bounds it. Test-only flake fix lands first (X-flake-utp-lossy)."
+    },
+    {
+      "id": "merged-617",
+      "at": "2026-11-08T17:20Z",
+      "note": "#617 WK-10e merged 977f59ea; owner flags sent (48 h cooldown bound, snapshot bound). Slot 4 \u2192 X-wk10d-unknown, same session."
     }
   ],
   "main_health": [
@@ -7024,7 +7029,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T17:19:00Z",
+    "updated": "2026-11-08T17:20:00Z",
     "items": [
       {
         "slot": 1,
@@ -7052,11 +7057,11 @@
       },
       {
         "slot": 4,
-        "slice": "WK-10e",
+        "slice": "X-wk10d-unknown",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: PR #617, fixing review blocker",
-        "since": "2026-11-08T13:34Z"
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #617 WK-10e merged 977f59ea; small follow-up X-wk10d-unknown",
+        "since": "2026-11-08T17:20Z"
       },
       {
         "slot": 5,
