@@ -12,10 +12,10 @@ use std::time::{Duration, Instant};
 
 use lodestar_api::dto::jobs::PurgePreview;
 use lodestar_api::ops::{
-    BoxFuture, ConsentClass, CrawlerRuntime, CredentialField, CredentialKind, DhtStatus,
-    EgressCounts, EgressLive, EgressRoute, EgressSetting, EgressState, ExternalAddress,
-    FetchStatus, NetworkCheck, OpsApi, OpsError, PortMapping, ReachReason, RiskLevel,
-    SamplingBlocked, Secret, SocksDns, Source, SourceAgents, SourceEgress, SourceHealth,
+    BoxFuture, CompanionNeed, CompanionNeedState, ConsentClass, CrawlerRuntime, CredentialField,
+    CredentialKind, DhtStatus, EgressCounts, EgressLive, EgressRoute, EgressSetting, EgressState,
+    ExternalAddress, FetchStatus, NetworkCheck, OpsApi, OpsError, PortMapping, ReachReason,
+    RiskLevel, SamplingBlocked, Secret, SocksDns, Source, SourceAgents, SourceEgress, SourceHealth,
     SourceKind, SourceNeed, SourcePatch, SourcePriority, SourceSchedule, SourceState,
     StatsResponse, parse_proxy, parse_window, window_text,
 };
@@ -24,6 +24,7 @@ use lodestar_pipeline::Monitor;
 use lodestar_pipeline::control::{
     self, Control, REACH_MIN_SECS, REACH_WINDOW_SECS, SourceChange, SourceError, SourceView,
 };
+use lodestar_pipeline::requires::State as CompanionState;
 use lodestar_sources::consent::{self as consent_rules, Need, SourceCredentials};
 use lodestar_sources::consent::{CredentialKind as SpecKind, CredentialSpec};
 use lodestar_sources::{Consent, Kind, Network, Priority, ProxySpec, Risk, RouteState, Window};
@@ -103,6 +104,12 @@ impl std::fmt::Debug for Ops {
 }
 
 impl Ops {
+    /// Source `v` as the API shows it, with its companion's state now.
+    fn source(&self, v: SourceView) -> Source {
+        let companion = self.monitor.companion_state(v.status.plugin);
+        source(v, companion)
+    }
+
     pub fn new(
         control: Control,
         crawler: tokio::sync::watch::Receiver<Crawler>,
@@ -428,7 +435,21 @@ fn strip_secrets(v: &mut serde_json::Value, names: &[&str], depth: usize) -> boo
     false
 }
 
-fn source(v: SourceView) -> Source {
+/// The companion a source waits for, for the Sources screen's chip
+/// (CMP-10); `None` when it needs none or has it.
+fn companion_need(state: CompanionState) -> Option<CompanionNeed> {
+    let (companion, state) = match state {
+        CompanionState::Ok => return None,
+        CompanionState::Needs(c) => (c, CompanionNeedState::Missing),
+        CompanionState::Unhealthy(c) => (c, CompanionNeedState::Unhealthy),
+    };
+    Some(CompanionNeed {
+        companion: companion.to_string(),
+        state,
+    })
+}
+
+fn source(v: SourceView, companion: CompanionState) -> Source {
     let m = &v.status.manifest;
     let state = match v.state {
         lodestar_store::SourceState::Enabled => SourceState::Enabled,
@@ -500,6 +521,7 @@ fn source(v: SourceView) -> Source {
             Need::Credentials => SourceNeed::Credentials,
             Need::Consent => SourceNeed::Consent,
         }),
+        companion_need: companion_need(companion),
         not_yet_editable: NOT_YET_EDITABLE.map(String::from).to_vec(),
         password_required: consent_rules::needs_password(m.consent),
         plugin: m.id.to_string(),
@@ -631,7 +653,7 @@ impl OpsApi for Ops {
                 .await
                 .map_err(internal)?
                 .map_err(internal)?;
-            Ok(views.into_iter().map(source).collect())
+            Ok(views.into_iter().map(|v| self.source(v)).collect())
         })
     }
 
@@ -669,7 +691,7 @@ impl OpsApi for Ops {
             self.control
                 .update_source(id, change)
                 .await
-                .map(source)
+                .map(|v| self.source(v))
                 .map_err(source_error)
         })
     }
@@ -684,7 +706,7 @@ impl OpsApi for Ops {
             self.control
                 .update_credentials(id, &self.credentials, changes)
                 .await
-                .map(source)
+                .map(|v| self.source(v))
                 .map_err(source_error)
         })
     }

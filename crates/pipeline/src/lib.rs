@@ -30,6 +30,7 @@ pub mod health;
 pub mod log_events;
 pub mod marginal;
 pub mod remote;
+pub mod requires;
 mod rollups;
 mod setup_hold;
 pub mod source_adult;
@@ -175,6 +176,10 @@ pub struct PipelineConfig {
     /// instance is set up. While it reads `false`, no plugin starts, the
     /// scrape scheduler waits and the pool starts paused. `None`: no hold.
     pub setup_done: Option<watch::Receiver<bool>>,
+    /// The companion manager's snapshots ([`requires`], CMP-10): a plugin
+    /// that needs a companion runs only while it's there and healthy.
+    /// `None`: no plugin is held for a companion.
+    pub companions: Option<requires::Companions>,
 }
 
 /// How often a running plugin's non-direct route is probed, so a route
@@ -220,6 +225,7 @@ impl Default for PipelineConfig {
             torrent_cache: None,
             adult_enrichers: Vec::new(),
             setup_done: None,
+            companions: None,
         }
     }
 }
@@ -416,6 +422,8 @@ pub struct Monitor {
     gate: Arc<gate::GateStats>,
     /// [`PipelineConfig::setup_done`], for [`Control`] to lift the hold.
     setup_done: Option<watch::Receiver<bool>>,
+    /// [`PipelineConfig::companions`], for [`Monitor::companion_state`].
+    companions: Option<requires::Companions>,
 }
 
 impl std::fmt::Debug for Monitor {
@@ -892,6 +900,7 @@ impl Pipeline {
             let flag = running.clone();
             let last_error = Arc::clone(&error);
             let hold = config.setup_done.clone();
+            let companions = config.companions.clone();
             let task = tokio::spawn(async move {
                 // Held until setup (LEGAL-2): a stop while waiting ends
                 // the plugin without ever running it.
@@ -906,7 +915,8 @@ impl Pipeline {
                         () = setup_hold::released(hold) => {}
                     }
                 }
-                let result = p.run(ctx).await;
+                let result =
+                    requires::run(p.manifest().id, companions, ctx, &flag, |c| p.run(c)).await;
                 flag.store(false, Ordering::Relaxed);
                 if let Err(e) = &result {
                     lodestar_log::log_event!(
@@ -1170,6 +1180,7 @@ impl Pipeline {
                 rollups: rollups_handle,
                 gate,
                 setup_done: config.setup_done.clone(),
+                companions: config.companions.clone(),
             },
             tasks,
             egress_tasks,
