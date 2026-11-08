@@ -6228,6 +6228,16 @@
       "id": "merged-613",
       "at": "2026-11-08T15:04Z",
       "note": "#613 X-cmp4b-mounts merged 29107fc8 (round-1 Opus+security CHANGES; delta self-checked: proptests, install parent==own). Session archived; owner FYI. Slot 2 -> PK-manifest (M6 critical path)."
+    },
+    {
+      "id": "CMP-10-round2-missing",
+      "at": "2026-11-08T15:10:17Z",
+      "note": "#616 head 32322918 is only the main merge; ExternalIndexer, purge-race re-check, spin test and decisions fixes requested again in one push."
+    },
+    {
+      "id": "review-617",
+      "at": "2026-11-08T15:10:17Z",
+      "note": "Fresh Opus review + /security-review launched on #617 WK-10e at 48be1bb4."
     }
   ],
   "main_health": [
@@ -7019,5 +7029,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T11:20Z"
+  "updated": "2026-11-08T15:10:17Z"
 }
