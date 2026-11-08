@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-08T03:41:11Z",
+  "updated_at": "2026-11-08T03:49:29Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6715,7 +6715,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T03:41:11Z",
+    "updated": "2026-11-08T03:49:29Z",
     "items": [
       {
         "slot": 1,
@@ -6730,7 +6730,7 @@
         "slice": "CMP-1",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBUJa6y4tEEAzxmMJs; PR #602 open (925d94fd), CI running",
+        "doing": "session_01MMjhnBUJa6y4tEEAzxmMJs; #602 green 925d94fd; 2R review (security + second read) running",
         "since": "2026-11-08T02:13Z"
       },
       {
@@ -6738,7 +6738,7 @@
         "slice": "CMP-2",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBjswJ9d8Qu8vvTvyu; #600 fix push 0dd26ba5 (all 10 items); 2R delta reviews running; CI running",
+        "doing": "session_01MMjhnBjswJ9d8Qu8vvTvyu; #600 0dd26ba5: security delta CHANGES (zip EOCD precheck gaps, B1); second read running",
         "since": "2026-11-08T00:55Z"
       },
       {
