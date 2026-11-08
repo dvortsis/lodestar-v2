@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-08T01:53Z",
+  "updated_at": "2026-11-08T01:54Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5955,6 +5955,11 @@
     {
       "id": "WK-10b-merged",
       "note": "2026-11-08T01:53Z: #599 merged a3ddae03 on fresh Opus delta MERGE (security review CHANGES -> B1 fixed). Owner \u00a72.19 flags sent with merge. WK-10c in same session (slot 4)."
+    },
+    {
+      "id": "wk10cd-split",
+      "at": "2026-11-08T01:54Z",
+      "note": "Runner approved WK-10c (features: sharded DHT, shard restart, budget.rs, heartbeat stats, Hello caps, metrics.md prefix text, measured RSS) / WK-10d (hardening: floor-drop tombstones in RemoteSink::outcomes, WK-10b follow-ups, #599 delta N1-N5). Add WK-10d to slices.yaml in next runner PR; WK-10d sends file list before editing outside owns."
     }
   ],
   "main_health": [
