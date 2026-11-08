@@ -88,8 +88,9 @@ struct PointerFile {
 }
 
 /// What a switch (commit, rollback, prune) did. Once the pointer is
-/// written the switch has happened, so it's returned as a success even if
-/// deleting what's no longer named then fails (on Windows, a running
+/// renamed into place the switch has happened, so it's returned as a
+/// success even if the folder's fsync or deleting what's no longer named
+/// then fails (on Windows, a running
 /// program's files can't be deleted): `leftover` holds that error, and a
 /// later [`Install::sweep`] finishes the job.
 #[derive(Debug)]
@@ -332,8 +333,9 @@ impl Install {
 
     /// Writes `new`, then deletes what it no longer names.
     fn switch(&mut self, new: Pointer) -> Result<Switched, LayoutError> {
-        self.write_pointer(&new)?;
-        let leftover = self.sweep().err();
+        let unsynced = self.write_pointer(&new)?;
+        let swept = self.sweep().err();
+        let leftover = unsynced.or(swept);
         Ok(Switched {
             pointer: new,
             leftover,
@@ -437,12 +439,36 @@ impl Install {
 
     /// Deletes the whole folder, for an uninstall. The folder is checked
     /// again first; a link inside is removed as a link.
+    ///
+    /// The pointer goes first, fsynced, so a crash or a locked file
+    /// partway through never leaves `current` naming a half-deleted
+    /// version: what's left has no pointer, and [`Install::sweep`] takes
+    /// every version folder. Each child then goes through [`Self::delete`]
+    /// (folders by way of a `.deleting` tombstone), and the folder last.
     pub fn remove(self) -> Result<(), LayoutError> {
+        self.remove_pointer()?;
+        let mut names = Vec::new();
+        for entry in fs::read_dir(&self.root)? {
+            names.push(entry?.file_name());
+        }
+        for name in names {
+            self.delete(&self.root.join(name))?;
+        }
         self.recheck()?;
-        fs::remove_dir_all(&self.root)?;
+        fs::remove_dir(&self.root)?;
         if let Some(parent) = self.root.parent() {
             sync_dir(parent)?;
         }
+        Ok(())
+    }
+
+    /// The first step of [`Install::remove`]: the pointer and any
+    /// temporary pointer, then an fsync of the folder.
+    fn remove_pointer(&self) -> Result<(), LayoutError> {
+        self.recheck()?;
+        self.delete(&self.root.join(POINTER))?;
+        self.delete(&self.root.join(POINTER_TMP))?;
+        sync_dir(&self.root)?;
         Ok(())
     }
 
@@ -451,6 +477,12 @@ impl Install {
     /// `remove_dir_all`, anything else (a link included) as a file.
     /// Something already gone is fine.
     fn delete(&self, path: &Path) -> Result<(), LayoutError> {
+        self.delete_steps(path, false)
+    }
+
+    /// [`Self::delete`], stopping after the rename when `stop_after_rename`
+    /// (a crash there, for tests).
+    fn delete_steps(&self, path: &Path, stop_after_rename: bool) -> Result<(), LayoutError> {
         if path.parent() != Some(self.root.as_path()) {
             return Err(LayoutError::OutsideRoot);
         }
@@ -475,11 +507,16 @@ impl Install {
         self.delete(&tomb)?;
         fs::rename(path, &tomb)?;
         sync_dir(&self.root)?;
-        fs::remove_dir_all(&tomb)?;
+        if !stop_after_rename {
+            fs::remove_dir_all(&tomb)?;
+        }
         Ok(())
     }
 
-    fn write_pointer(&self, p: &Pointer) -> Result<(), LayoutError> {
+    /// Writes the pointer. An error before the rename means it didn't move;
+    /// once renamed it has, so a failed fsync of the folder after that is
+    /// returned inside `Ok`, for [`Switched::leftover`].
+    fn write_pointer(&self, p: &Pointer) -> Result<Option<LayoutError>, LayoutError> {
         let bytes = serde_json::to_vec(&PointerFile {
             format: POINTER_FORMAT,
             current: p.current.as_str().to_owned(),
@@ -502,8 +539,7 @@ impl Install {
         f.sync_all()?;
         drop(f);
         fs::rename(&tmp, self.root.join(POINTER))?;
-        sync_dir(&self.root)?;
-        Ok(())
+        Ok(sync_dir(&self.root).err().map(LayoutError::from))
     }
 }
 
@@ -617,6 +653,40 @@ mod tests {
         assert!(matches!(i.delete(i.root()), Err(LayoutError::OutsideRoot)));
         i.delete(&i.root().join("a")).unwrap();
         assert!(!i.root().join("a").exists());
+        let _ = fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn a_folder_is_deleted_by_way_of_a_tombstone() {
+        let d = tmp();
+        let mut i = Install::open(&d, &CompanionId::parse("prowlarr").unwrap()).unwrap();
+        fs::create_dir_all(i.root().join("1.0/app")).unwrap();
+        // A crash right after the rename leaves only the tombstone, never
+        // a partial `1.0`.
+        i.delete_steps(&i.root().join("1.0"), true).unwrap();
+        assert!(!i.root().join("1.0").exists());
+        assert!(i.root().join("1.0.deleting/app").is_dir());
+        assert_eq!(i.sweep().unwrap(), ["1.0.deleting"]);
+        let _ = fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn remove_drops_the_pointer_first() {
+        let d = tmp();
+        let mut i = Install::open(&d, &CompanionId::parse("prowlarr").unwrap()).unwrap();
+        fs::create_dir_all(i.root().join("1.0/app")).unwrap();
+        i.write_pointer(&Pointer {
+            current: Version::parse("1.0").unwrap(),
+            previous: None,
+        })
+        .unwrap();
+        // A crash right after the first step: no pointer, so nothing
+        // names the half-deleted version and a sweep takes it.
+        i.remove_pointer().unwrap();
+        assert_eq!(i.pointer().unwrap(), None);
+        assert_eq!(i.sweep().unwrap(), ["1.0"]);
+        i.remove().unwrap();
+        assert!(!d.join("companions/prowlarr").exists());
         let _ = fs::remove_dir_all(d);
     }
 }

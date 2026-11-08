@@ -29,8 +29,9 @@
 //!   them count toward the entry cap too. Everything else a tar.gz
 //!   decompresses (headers, long names, pax records, skipped bodies) is
 //!   bounded on its own by [`MAX_OVERHEAD`], so no header can make the
-//!   parser hold more than that in memory. A zip whose index claims more
-//!   entries than the cap is refused before the index is read.
+//!   parser hold more than that in memory (about twice that at peak). A
+//!   zip's index is read under the same budget, so an index of millions of
+//!   records is refused before it's in memory.
 //! - **Writing:** every file is created new (`O_CREAT|O_EXCL` on Unix,
 //!   `CREATE_NEW` on Windows), which never opens through an existing
 //!   symlink. Every directory is one this extraction created into a
@@ -849,15 +850,25 @@ pub(crate) fn sync_dir(dir: &Path) -> io::Result<()> {
 
 /// Counts the compressed bytes read from the archive, and passes seeks
 /// through (zip's index is at the end).
+/// While `budget` holds a number, reading past it fails the read and sets
+/// `tripped`: the zip crate allocates for every index record it reads
+/// while opening, so the bytes it may read then are capped, whatever its
+/// rules for finding the index.
 struct Counting<'a> {
     inner: &'a mut dyn Archive,
     read: Rc<Cell<u64>>,
+    budget: Rc<Cell<Option<u64>>>,
+    tripped: Tripped,
 }
 
 impl Read for Counting<'_> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let n = self.inner.read(buf)?;
         self.read.set(self.read.get().saturating_add(n as u64));
+        if self.budget.get().is_some_and(|b| self.read.get() > b) {
+            self.tripped.set(Some(Refusal::TooLarge));
+            return Err(io::Error::other("archive index cap"));
+        }
         Ok(n)
     }
 }
@@ -938,94 +949,20 @@ const SPECIAL_BITS: u32 = 0o7000;
 /// entry being decoded.
 const ZIP_READ_AHEAD: u64 = 8 * 1024;
 
-/// How far from the end an end-of-central-directory record can start:
-/// its 22 bytes plus a comment of up to 65,535.
-const EOCD_WINDOW: u64 = 22 + 65_535;
-
-fn le16(b: &[u8], at: usize) -> u64 {
-    b.get(at..at + 2)
-        .map_or(0, |x| u64::from(u16::from_le_bytes([x[0], x[1]])))
-}
-
-fn le64(b: &[u8], at: usize) -> Option<u64> {
-    let x: [u8; 8] = b.get(at..at + 8)?.try_into().ok()?;
-    Some(u64::from_le_bytes(x))
-}
-
-/// The most entries any end-of-central-directory record near the end of
-/// the archive claims, zip64's included, read before the zip crate reads
-/// the index (which it allocates for). Every candidate record counts, so
-/// a decoy can't hide the one the zip crate would use. A zip64 marker
-/// whose record can't be found is corrupt.
-fn zip_claimed_entries(archive: &mut dyn Archive, len: u64) -> Result<u64, ExtractError> {
-    let start = len.saturating_sub(EOCD_WINDOW);
-    let mut tail = Vec::new();
-    archive
-        .seek(SeekFrom::Start(start))
-        .and_then(|_| archive.take(EOCD_WINDOW).read_to_end(&mut tail))
-        .map_err(|_| ExtractError::Corrupt)?;
-    let mut most = 0u64;
-    for i in (0..tail.len().saturating_sub(21)).rev() {
-        if &tail[i..i + 4] != b"PK\x05\x06" {
-            continue;
-        }
-        let (on_disk, total) = (le16(&tail, i + 8), le16(&tail, i + 10));
-        most = most.max(on_disk).max(total);
-        if on_disk == 0xFFFF || total == 0xFFFF {
-            most = most.max(zip64_entries(archive, &tail, start, i)?);
-        }
-    }
-    archive
-        .seek(SeekFrom::Start(0))
-        .map_err(|_| ExtractError::Corrupt)?;
-    Ok(most)
-}
-
-/// The entry count of the zip64 record a zip64 locator before the record
-/// at `tail[eocd]` points to, or of one just before the locator.
-fn zip64_entries(
-    archive: &mut dyn Archive,
-    tail: &[u8],
-    start: u64,
-    eocd: usize,
-) -> Result<u64, ExtractError> {
-    let locator = eocd
-        .checked_sub(20)
-        .filter(|&l| &tail[l..l + 4] == b"PK\x06\x07");
-    let mut at = Vec::new();
-    if let Some(l) = locator {
-        at.extend(le64(tail, l + 8));
-        at.push((start + l as u64).saturating_sub(56));
-    }
-    for offset in at {
-        let mut rec = [0u8; 56];
-        let found = archive
-            .seek(SeekFrom::Start(offset))
-            .and_then(|_| archive.read_exact(&mut rec))
-            .is_ok()
-            && &rec[..4] == b"PK\x06\x06";
-        if found {
-            let on_disk = le64(&rec, 24).unwrap_or(u64::MAX);
-            let total = le64(&rec, 32).unwrap_or(u64::MAX);
-            return Ok(on_disk.max(total));
-        }
-    }
-    Err(ExtractError::Corrupt)
-}
-
 fn zip_entries(archive: &mut dyn Archive, len: u64, out: &mut Out<'_>) -> Result<(), ExtractError> {
-    if zip_claimed_entries(archive, len)? > out.limits.entries as u64 {
-        return Err(ExtractError::Refused {
-            refusal: Refusal::TooManyEntries,
-            entry: None,
-        });
-    }
     let read = Rc::new(Cell::new(0u64));
+    let budget = Rc::new(Cell::new(Some(out.limits.overhead)));
+    let tripped: Tripped = Rc::new(Cell::new(None));
     let counting = Counting {
         inner: archive,
         read: read.clone(),
+        budget: budget.clone(),
+        tripped: tripped.clone(),
     };
-    let mut zip = zip::ZipArchive::new(counting).map_err(|_| ExtractError::Corrupt)?;
+    // Opening reads the index, allocating as it goes: capped at the
+    // overhead budget (a 20,000-entry index is a few megabytes).
+    let mut zip = zip::ZipArchive::new(counting).map_err(|_| stream_failed(&tripped, None))?;
+    budget.set(None);
     if zip.len() > out.limits.entries {
         return Err(ExtractError::Refused {
             refusal: Refusal::TooManyEntries,
@@ -1117,6 +1054,8 @@ fn tar_gz_entries(archive: &mut dyn Archive, out: &mut Out<'_>) -> Result<(), Ex
     let counting = Counting {
         inner: archive,
         read: read.clone(),
+        budget: Rc::new(Cell::new(None)),
+        tripped: tripped.clone(),
     };
     let gz = flate2::bufread::GzDecoder::new(BufReader::with_capacity(READ_AHEAD, counting));
     let guard = Guard {

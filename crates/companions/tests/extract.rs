@@ -648,20 +648,48 @@ fn folders_a_deep_name_creates_count_toward_the_entry_cap() {
 }
 
 #[test]
-fn a_zip_index_claiming_too_many_entries_is_refused_before_it_is_read() {
-    let mut z = zip_of(&[(EXE, E::File(b"#!"))]);
-    let eocd = z.len() - 22;
-    assert_eq!(&z[eocd..eocd + 4], b"PK\x05\x06");
-    for at in [eocd + 8, eocd + 10] {
-        z[at..at + 2].copy_from_slice(&30_000u16.to_le_bytes());
-    }
-    assert_eq!(refusal(ArchiveKind::Zip, &z), Some(Refusal::TooManyEntries));
-    // A zip64 marker with no zip64 record is corrupt.
-    let mut z = zip_of(&[(EXE, E::File(b"#!"))]);
-    let eocd = z.len() - 22;
-    z[eocd + 10..eocd + 12].copy_from_slice(&0xFFFFu16.to_le_bytes());
-    let (r, _tmp) = run(ArchiveKind::Zip, &z);
-    assert!(matches!(r, Err(ExtractError::Corrupt)), "{r:?}");
+fn a_zip_index_is_read_under_the_overhead_budget() {
+    // The zip crate allocates for each index record as it opens the
+    // archive, so opening reads at most `overhead` bytes, however it finds
+    // the index. Scaled down from a 4-million-record index.
+    let limits = Limits {
+        overhead: 64 * 1024,
+        ..Limits::Q16
+    };
+    let many = |n: usize| {
+        let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let o = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        w.start_file(EXE, o).unwrap();
+        for i in 0..n {
+            w.start_file(format!("f{i:07}"), o).unwrap();
+        }
+        w.finish().unwrap().into_inner()
+    };
+    let z = many(5_000);
+    let r = run_with(limits, ArchiveKind::Zip, &z).0;
+    assert_eq!(r.unwrap_err().refusal(), Some(Refusal::TooLarge));
+
+    // Over 65,535 entries the writer uses a zip64 index, which the crate
+    // finds through other fields; the budget doesn't care.
+    let z64 = many(70_000);
+    let r = run_with(limits, ArchiveKind::Zip, &z64).0;
+    assert_eq!(r.unwrap_err().refusal(), Some(Refusal::TooLarge));
+    // Under Q16's budget it opens, and the entry cap refuses it.
+    assert_eq!(
+        refusal(ArchiveKind::Zip, &z64),
+        Some(Refusal::TooManyEntries)
+    );
+
+    // An end record pushed further from the end than a comment allows
+    // (trailing bytes the crate tolerates) is no way round it either.
+    let mut far = z.clone();
+    far.extend(std::iter::repeat_n(0u8, 65_560));
+    let r = run_with(limits, ArchiveKind::Zip, &far).0;
+    let refusal = r.unwrap_err().refusal();
+    assert!(
+        matches!(refusal, Some(Refusal::TooLarge) | None),
+        "{refusal:?}"
+    );
 }
 
 #[test]
@@ -1121,11 +1149,23 @@ fn removal_never_follows_a_link() {
     let data2 = tmp.0.join("data2");
     fs::create_dir(&data2).unwrap();
     symlink(&data, data2.join("companions")).unwrap();
-    assert!(!data.join("prowlarr").exists());
     assert!(matches!(
         Install::open(&data2, &id()),
         Err(LayoutError::OutsideRoot)
     ));
+    // Nothing was created inside the link's target first.
+    assert!(!data.join("prowlarr").exists());
+
+    // A sweep through a folder swapped for a link deletes nothing there.
+    let mut install = Install::open(&data, &id()).unwrap();
+    let decoy = tmp.0.join("decoy");
+    fs::create_dir_all(decoy.join("9.0/app")).unwrap();
+    fs::create_dir_all(decoy.join("9.0.staging")).unwrap();
+    fs::remove_dir_all(install.root()).unwrap();
+    symlink(&decoy, install.root()).unwrap();
+    assert!(matches!(install.sweep(), Err(LayoutError::OutsideRoot)));
+    assert!(decoy.join("9.0/app").is_dir() && decoy.join("9.0.staging").is_dir());
+    fs::remove_file(install.root()).unwrap();
 
     // And a folder swapped for a link after it was opened.
     let install = Install::open(&data, &id()).unwrap();
@@ -1247,4 +1287,15 @@ fn a_partial_version_is_never_committed_and_tombstones_are_swept() {
     fs::write(install.root().join("2.0.deleting/app/x"), b"x").unwrap();
     assert_eq!(install.sweep().unwrap(), ["2.0.deleting", "3.0"]);
     assert!(names(&install).is_empty());
+}
+
+#[test]
+fn sweep_takes_the_current_versions_staging_folder_too() {
+    let tmp = Tmp::new();
+    let mut install = Install::open(&tmp.0, &id()).unwrap();
+    stage(&mut install, "1.0", b"a");
+    install.commit(&v("1.0"), &exe()).unwrap();
+    fs::create_dir_all(install.root().join("1.0.staging/app")).unwrap();
+    assert_eq!(install.sweep().unwrap(), ["1.0.staging"]);
+    assert_eq!(names(&install), ["1.0", POINTER]);
 }
