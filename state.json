@@ -6487,7 +6487,13 @@
       "from": "#637 review",
       "what": "Export busy_retried/busy_gave_up/busy_dropped worker counters in crates/lodestar/src/metrics.rs + docs/metrics.md rows; fix the stale KeyCheck doc line in crates/cluster/src/server.rs (busy retry now done)."
     },
-    "2026-11-08: #638 X-wk-pause-text merged (c5dd0fe7) after runner self-check of the text delta."
+    "2026-11-08: #638 X-wk-pause-text merged (c5dd0fe7) after runner self-check of the text delta.",
+    {
+      "id": "CMP-5g-note",
+      "from": "#639 CMP-6",
+      "what": "If a guided qBittorrent's replaced password must be revealable, add a provenance marker; CMP-6 reveals only Lodestar-generated credentials. Add to CMP-5g notes in next runner PR."
+    },
+    "2026-11-08: #636 OP-1 security review MERGE (c0f43b2d); notes for OP-2: pin checkout by SHA once id-token/secrets land; attempt-1 rule for dispatch-down optional; live inventory must filter to fleet account+tag."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
