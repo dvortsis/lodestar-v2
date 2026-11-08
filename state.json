@@ -6071,7 +6071,8 @@
       "id": "X-cmp4a-notes",
       "note": "For CMP-5: auto-redact env values marked secret + percent/JSON-escaped forms + suffix key shapes (PROWLARR__AUTH__APIKEY, db_password, adminPassword), quoted values with spaces; Windows companions need a Stop (else killed at once); sequential shutdown ~17 s each can exceed init's 30 s grace. For CMP-4b: keep <data>/companions/run/ out of any companion-writable sandbox path. Later: executable fd hand-off (H7); runtime-injection env denylist (DOTNET_STARTUP_HOOKS, NODE_OPTIONS, PYTHONPATH...) if env names become user-supplied (H8). CMP-G: test the update/supervisor.rs orphan hook call site."
     },
-    "2026-11-08T06:52Z: #603 CMP-4a delta 73d82227..12e6f7b2 self-checked OK, green; conflicts with main on companions/Cargo.toml after #600; session asked to merge main, then runner self-checks and merges."
+    "2026-11-08T06:52Z: #603 CMP-4a delta 73d82227..12e6f7b2 self-checked OK, green; conflicts with main on companions/Cargo.toml after #600; session asked to merge main, then runner self-checks and merges.",
+    "2026-11-08T07:03Z: #604 WK-10d-store merged (82450892). Owner flags owed after WK-10d main PR: worker-floor rows are floor holds (only WK-13 purge-by-worker removes them); floor's own CS tombstones stay releasable. WK-10d main PR next in slot 4."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -6862,5 +6863,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T06:52Z"
+  "updated": "2026-11-08T07:03Z"
 }
