@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-08T02:07Z",
+  "updated_at": "2026-11-08T02:13Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5965,6 +5965,10 @@
       "id": "wk10cd-split",
       "at": "2026-11-08T01:54Z",
       "note": "Runner approved WK-10c (features: sharded DHT, shard restart, budget.rs, heartbeat stats, Hello caps, metrics.md prefix text, measured RSS) / WK-10d (hardening: floor-drop tombstones in RemoteSink::outcomes, WK-10b follow-ups, #599 delta N1-N5). Add WK-10d to slices.yaml in next runner PR; WK-10d sends file list before editing outside owns."
+    },
+    {
+      "id": "CMP-3-merged",
+      "note": "2026-11-08T02:13Z: #598 merged 7f641d94 (3 runner review rounds). CMP-5 notes: wire is_secret_row into export/import/bundle filters; chown for other uid; write only while qBittorrent stopped; handle PendingRewrite (tell user / remove leftover _new and retry with qB stopped); \"three keys\" comments (config_files.rs:205, decisions :17) now five; ini_entries oracle panic message; check qB build for WebUI API key, CSRFProtection/HostHeaderValidation; log-leak test capture tracing if events added."
     }
   ],
   "main_health": [
@@ -6666,7 +6670,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T02:07Z",
+    "updated": "2026-11-08T02:13Z",
     "items": [
       {
         "slot": 1,
@@ -6678,11 +6682,11 @@
       },
       {
         "slot": 2,
-        "slice": "CMP-3",
+        "slice": "CMP-1",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnA1oLZ56UoBFFMwUoU: #598 round 3 green f0f5d97f; runner delta security review running",
-        "since": "2026-11-07T22:46Z"
+        "doing": "CMP-1 companion fetch + verify (Opus, 2R, /security-review); launching",
+        "since": "2026-11-08T02:13Z"
       },
       {
         "slot": 3,
