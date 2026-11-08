@@ -6253,6 +6253,11 @@
       "id": "CMP-5-split",
       "at": "2026-11-08T15:30:25Z",
       "note": "CMP-5 ~3,200 lines -> stacked split: CMP-5a (stage_binary+state.rs, base main), CMP-5b (manager, base CMP-5a), CMP-5 (CLI+serve, base CMP-5b). Approved: layout.rs stage_binary, removing expect(dead_code) on InstallReceipt::new, crates/lodestar/tests/companion_launcher.rs. Lock must be OS advisory (Windows too). Snapshot channel TODO(CMP-5g) -> CMP-5g brief. slices.yaml needs CMP-5a, CMP-5b entries in next runner PR."
+    },
+    {
+      "id": "PK-manifest-channel",
+      "at": "2026-11-08T15:31:23Z",
+      "note": "Approved LODESTAR_CHANNEL from package-gate (stable/beta/nightly/dev), Dockerfile ARG (2 lines), smoke+build-arm64 same build-args. Owner flag at merge: v0.5.1 (and release/v0.5.2 builds without this) report channel dev, so they refuse self-update; one manual update needed. Tell PK-smoke the smoke job changed. Check release/v0.5.2 release.yml for the same gap before v0.5.2 final."
     }
   ],
   "main_health": [
@@ -7044,5 +7049,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T15:30:25Z"
+  "updated": "2026-11-08T15:31:23Z"
 }
