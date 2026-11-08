@@ -227,15 +227,13 @@ fn load(companion: &str, case: &str) -> Vec<Exchange> {
 async fn replay(companion: &str, case: &str) -> (Server, Vec<String>) {
     let exchanges = load(companion, case);
     let paths = exchanges.iter().map(|e| e.path.clone()).collect();
-    let by_path: HashMap<String, (u16, Vec<(String, String)>, Vec<u8>)> = exchanges
-        .into_iter()
-        .map(|e| (e.path, (e.status, e.headers, e.body)))
-        .collect();
+    let by_path: HashMap<String, Exchange> =
+        exchanges.into_iter().map(|e| (e.path.clone(), e)).collect();
     let server = Server::start(move |path| match by_path.get(path) {
-        Some((status, headers, body)) => Reply::Full {
-            status: *status,
-            headers: headers.clone(),
-            body: body.clone(),
+        Some(e) => Reply::Full {
+            status: e.status,
+            headers: e.headers.clone(),
+            body: e.body.clone(),
         },
         None => reply(599, b"no recording for this path"),
     })
