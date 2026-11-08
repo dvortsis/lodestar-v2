@@ -6311,12 +6311,12 @@
     },
     {
       "id": "merged-618",
-      "at": "2026-11-08T17:16Z",
+      "at": "2026-11-08T17:12Z",
       "note": "#618 PK-manifest merged 4f36875d (Opus MERGE, manual security pass). Owner flags sent via dashboard. Still to do: check release/v0.5.2 release.yml LODESTAR_CHANNEL gap before v0.5.2 final; tell PK-smoke owner smoke job changed when it next runs."
     },
     {
       "id": "merged-616",
-      "at": "2026-11-08T17:24Z",
+      "at": "2026-11-08T17:17Z",
       "note": "#616 CMP-10 merged ba27bf5d; session archived; CMP-5 told. Owner flag (download_clients + ExternalIndexer, size ~1.6k, web budget 98%) via dashboard."
     }
   ],
@@ -7019,7 +7019,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T17:25:00Z",
+    "updated": "2026-11-08T17:19:00Z",
     "items": [
       {
         "slot": 1,
@@ -7035,15 +7035,15 @@
         "role": "build",
         "agent": "claude",
         "doing": "session_01MMjhnCXsenhYx7tX8TeoyN: #618 merged (4f36875d); small hardening follow-up PR (review notes 1-6); then PK-win-upd-1",
-        "since": "2026-11-08T17:16Z"
+        "since": "2026-11-08T17:12Z"
       },
       {
         "slot": 3,
         "slice": "PK-win-upd-1",
         "role": "build",
         "agent": "claude",
-        "doing": "launching (brief briefs/PK-win-upd-1.md); CMP-10 #616 merged ba27bf5d, session archived",
-        "since": "2026-11-08T17:25Z"
+        "doing": "session_01MMjhnAd9r3xoTvY1JabMgn: launched 17:18Z (briefs/PK-win-upd-1.md); CMP-10 #616 merged ba27bf5d, session archived",
+        "since": "2026-11-08T17:18Z"
       },
       {
         "slot": 4,

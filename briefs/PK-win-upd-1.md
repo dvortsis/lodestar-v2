@@ -2,7 +2,7 @@
 
 **Model:** Opus. **Review:** a fresh Opus reviewer plus `/security-review`. **Branch:** `slice/PK-win-upd-1` from `origin/main`. **PR title:** `PK-win-upd-1: Windows update check and notify in the service`. **Steward:** `.claude/skills/steward/SKILL.md`. The runner merges; you never do.
 
-Runner brief, 2026-11-08T17:25Z. Slot 3. M6 critical path: PK-manifest (merged #618, 4f36875d) → **PK-win-upd-1** → PK-win-upd-2/3 and PK-win-portable-upd → G-m6.
+Runner brief, 2026-11-08T17:18Z. Slot 3. M6 critical path: PK-manifest (merged #618, 4f36875d) → **PK-win-upd-1** → PK-win-upd-2/3 and PK-win-portable-upd → G-m6.
 
 ## Read first
 - `docs/plan/2026-11-06-m6-gap-audit.md`: §1 (fixed constraints: the `NT SERVICE\Lodestar` virtual account), §2.3, §4.3's **PK-win-upd-1** bullet (the spec), §5 Q13 (why install is NOT in this slice).

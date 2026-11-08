@@ -59,7 +59,7 @@ The live IDs are in #623's only commit. **Don't rewrite that branch** (it isn't 
 If you find a real credential (a key, token or password), stop. Tell the runner at once and push nothing.
 
 ## Owns
-- Runner, 2026-11-08T17:16Z: also `.github/workflows/ci.yml`, `.github/scripts/ci_changes.py` and `.github/scripts/test_ci_changes.py`, for the infra CI job only.
+- Runner, 2026-11-08T17:12Z: also `.github/workflows/ci.yml`, `.github/scripts/ci_changes.py` and `.github/scripts/test_ci_changes.py`, for the infra CI job only.
 - `infra/**`, `.agents/skills/lodestar-fleet/**`, `docs/operations/lodestar-cloud-assets.md`, the infra section of `.gitignore`, and `docs/decisions/2026-11-08-X-cloud-infra.md`.
 
 **Not yours:** any change to deployed cloud resources. Never run anything against AWS or Akamai: no credentials exist in this container, and none may be requested. Don't add CI jobs without asking the runner first.
