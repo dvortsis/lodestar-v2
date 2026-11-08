@@ -325,11 +325,13 @@ impl Lines {
     fn emit(&mut self, cut: bool) {
         let text = String::from_utf8_lossy(&self.buf);
         // Control characters (C0 but tab, DEL, C1, and so ESC sequences'
-        // introducer) never reach the ring or whoever shows it.
+        // introducer) never reach the ring or whoever shows it. Each
+        // becomes a space rather than vanishing, so it still separates
+        // words: a short secret is matched as a whole word.
         let text: String = text
             .trim_end_matches(['\n', '\r'])
             .chars()
-            .filter(|c| *c == '\t' || !c.is_control())
+            .map(|c| if c != '\t' && c.is_control() { ' ' } else { c })
             .collect();
         let text = text.as_str();
         let cut = cut || text.len() > LINE_BYTES;
@@ -516,7 +518,14 @@ mod tests {
     fn control_characters_are_stripped() {
         let (ring, mut lines) = lines_with(&[]);
         lines.feed("a\u{1b}[31mred\u{7}\tb\u{9b}c\u{7f}\rd\n".as_bytes());
-        assert_eq!(ring.lines(), ["a[31mred\tbcd"]);
+        assert_eq!(ring.lines(), ["a [31mred \tb c  d"]);
+    }
+
+    #[test]
+    fn a_stripped_control_byte_still_separates_a_short_secret() {
+        let (ring, mut lines) = lines_with(&["ab12"]);
+        lines.feed(b"user\x07ab12\n");
+        assert_eq!(ring.lines(), ["user [redacted]"]);
     }
 
     #[test]
