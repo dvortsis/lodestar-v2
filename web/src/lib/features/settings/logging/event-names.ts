@@ -645,6 +645,18 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_pipeline_source_not_started_n,
 		m.settings_logging_ev_pipeline_source_not_started_h
 	],
+	'pipeline.source_needs_companion': [
+		m.settings_logging_ev_pipeline_source_needs_companion_n,
+		m.settings_logging_ev_pipeline_source_needs_companion_h
+	],
+	'pipeline.source_companion_unhealthy': [
+		m.settings_logging_ev_pipeline_source_companion_unhealthy_n,
+		m.settings_logging_ev_pipeline_source_companion_unhealthy_h
+	],
+	'pipeline.source_companion_ready': [
+		m.settings_logging_ev_pipeline_source_companion_ready_n,
+		m.settings_logging_ev_pipeline_source_companion_ready_h
+	],
 	'pipeline.source_failed': [
 		m.settings_logging_ev_pipeline_source_failed_n,
 		m.settings_logging_ev_pipeline_source_failed_h

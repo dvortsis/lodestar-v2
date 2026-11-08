@@ -262,6 +262,29 @@ pub enum SourceNeed {
     Consent,
 }
 
+/// A companion a source waits for (§18.10): it isn't started, or is
+/// paused, until the companion is there and healthy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CompanionNeed {
+    /// The companion's catalogue id, such as `prowlarr` or `qbittorrent`
+    /// (for a source any download client satisfies, the suggested one).
+    pub companion: String,
+    #[schema(inline)]
+    pub state: CompanionNeedState,
+}
+
+/// Why a source waits for its companion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CompanionNeedState {
+    /// Not installed or detected, or its state isn't known yet: the source
+    /// doesn't start ("Needs Prowlarr · Set up").
+    Missing,
+    /// Installed or detected but failing its health check: the source is
+    /// paused until it recovers.
+    Unhealthy,
+}
+
 /// How a source's traffic leaves (§18.4, §18.7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -414,6 +437,14 @@ pub struct SourceSchedule {
 pub struct Source {
     #[schema(inline)]
     pub agents: SourceAgents,
+    /// The companion it waits for before it runs (§18.10); null when it
+    /// needs none, or has it and it's healthy. Not the same as `needs`,
+    /// which is what enabling it asks for.
+    // `default` only lets a client or fixture written before this field
+    // read a `Source`.
+    #[serde(default)]
+    #[schema(required = true, inline)]
+    pub companion_need: Option<CompanionNeed>,
     /// The JSON Schema (draft 2020-12) of its settings, as its plugin
     /// declares it: the settings form is generated from it, and `config`
     /// in `PATCH /sources/{id}` is checked against the plugin's own rules
@@ -513,6 +544,7 @@ pub struct Source {
 #[schema(example = json!({
     "sources": [{
         "agents": { "count": 1, "enforced": false, "max": 1 },
+        "companion_need": null,
         "config_schema": {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "object", "properties": {}, "additionalProperties": false

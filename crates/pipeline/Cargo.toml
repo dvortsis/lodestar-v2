@@ -17,6 +17,8 @@ lodestar-store.workspace = true
 lodestar-tracker-scrape.workspace = true
 lodestar-cluster.workspace = true
 lodestar-classify.workspace = true
+# CMP-10: the plugin → companion map and the catalogue (never the reverse).
+lodestar-companions.workspace = true
 lodestar-filter.workspace = true
 lodestar-integrations.workspace = true
 lodestar-log.workspace = true
@@ -39,3 +41,5 @@ lodestar-dht.workspace = true
 lodestar-peer-wire = { workspace = true, features = ["testing"] }
 tempfile = "3.27.0"
 tokio = { version = "1.54.0", features = ["sync", "time", "rt", "rt-multi-thread", "macros", "net", "test-util"] }
+# CMP-10 (`tests/requires.rs`): every mapped plugin id is in the registry.
+lodestar-sources-plugins.workspace = true
