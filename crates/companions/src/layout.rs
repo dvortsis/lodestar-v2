@@ -279,6 +279,64 @@ impl Install {
         Ok(done)
     }
 
+    /// Step 1 for a bare executable ([`ArchiveKind::Binary`]): copies
+    /// the verified download into `<version>.staging/<name>` (0700 on
+    /// Unix, created new, at most `max` bytes, fsynced) and renames the
+    /// folder to `<version>/`, as [`Install::stage`] does. `name` is one
+    /// component. The pointer is unchanged.
+    pub fn stage_binary(
+        &mut self,
+        version: &Version,
+        file: &mut dyn Read,
+        name: &RelPath,
+        max: u64,
+    ) -> Result<u64, LayoutError> {
+        if name.components().count() != 1 {
+            return Err(LayoutError::Extract(ExtractError::StagingInTheWay));
+        }
+        let target = self.version_dir(version);
+        if exists(&target)? {
+            return Err(LayoutError::AlreadyStaged);
+        }
+        let staging = self.staging_dir(version);
+        if exists(&staging)? {
+            if !real_dir(&staging)? {
+                return Err(LayoutError::Extract(ExtractError::StagingInTheWay));
+            }
+            self.delete(&staging)?;
+        }
+        let copied = (|| -> Result<u64, LayoutError> {
+            fs::create_dir(&staging)?;
+            let mut o = OpenOptions::new();
+            o.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                o.mode(0o700);
+            }
+            let mut out = o.open(staging.join(name.as_str()))?;
+            let n = io::copy(&mut file.take(max.saturating_add(1)), &mut out)?;
+            if n > max {
+                return Err(LayoutError::Io(io::ErrorKind::InvalidData));
+            }
+            out.sync_all()?;
+            sync_dir(&staging)?;
+            fs::rename(&staging, &target)?;
+            Ok(n)
+        })();
+        match copied {
+            Ok(n) => {
+                sync_dir(&self.root)?;
+                Ok(n)
+            }
+            Err(e) => {
+                // Best effort: the next stage or sweep removes it otherwise.
+                let _ = self.delete(&staging);
+                Err(e)
+            }
+        }
+    }
+
     /// The pointer, or `None` before the first commit.
     pub fn pointer(&self) -> Result<Option<Pointer>, LayoutError> {
         let path = self.root.join(POINTER);
@@ -612,6 +670,74 @@ mod tests {
         let _ = fs::remove_dir_all(&p);
         fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn a_bare_binary_is_staged_and_committed() {
+        let d = tmp();
+        let mut i = Install::open(&d, &CompanionId::parse("qbittorrent").unwrap()).unwrap();
+        let v = Version::parse("5.0.3").unwrap();
+        let name = RelPath::parse("qbittorrent-nox").unwrap();
+        let big = [7u8; 33];
+        assert!(i.stage_binary(&v, &mut &big[..], &name, 32).is_err());
+        assert!(!i.version_dir(&v).exists());
+        assert!(!i.staging_dir(&v).exists());
+        assert_eq!(i.stage_binary(&v, &mut &big[..32], &name, 32).unwrap(), 32);
+        assert!(matches!(
+            i.stage_binary(&v, &mut &big[..1], &name, 32),
+            Err(LayoutError::AlreadyStaged)
+        ));
+        let nested = RelPath::parse("a/b").unwrap();
+        let w = Version::parse("5.0.4").unwrap();
+        assert!(i.stage_binary(&w, &mut &big[..1], &nested, 32).is_err());
+        i.commit(&v, &name).unwrap();
+        assert_eq!(fs::read(i.executable(&v, &name)).unwrap(), big[..32]);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(i.executable(&v, &name))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
+        let _ = fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn a_hostile_binary_name_is_refused_before_anything_is_written() {
+        // The name is a catalogue `RelPath`: `..`, separators, an empty
+        // name and Windows device names never parse.
+        for bad in ["../x", "", "a\\b", "CON", "nul.exe", "x:y"] {
+            assert!(RelPath::parse(bad).is_err(), "{bad:?}");
+        }
+        // One that parses but has more than one component is refused by
+        // `stage_binary` itself, with nothing left behind.
+        let d = tmp();
+        let mut i = Install::open(&d, &CompanionId::parse("qbittorrent").unwrap()).unwrap();
+        let v = Version::parse("5.0.3").unwrap();
+        let nested = RelPath::parse("a/b").unwrap();
+        assert!(i.stage_binary(&v, &mut &b"x"[..], &nested, 8).is_err());
+        assert_eq!(fs::read_dir(i.root()).unwrap().count(), 0);
+        let _ = fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn an_interrupted_binary_stage_is_cleaned_up() {
+        let d = tmp();
+        let mut i = Install::open(&d, &CompanionId::parse("qbittorrent").unwrap()).unwrap();
+        let v = Version::parse("5.0.3").unwrap();
+        let name = RelPath::parse("qbittorrent").unwrap();
+        // A crash mid-copy leaves `<version>.staging/` with a partial file.
+        fs::create_dir(i.staging_dir(&v)).unwrap();
+        fs::write(i.staging_dir(&v).join("qbittorrent"), b"par").unwrap();
+        // The sweep at start-up removes it; so does the next stage.
+        assert_eq!(i.sweep().unwrap(), vec!["5.0.3.staging".to_owned()]);
+        fs::create_dir(i.staging_dir(&v)).unwrap();
+        assert_eq!(i.stage_binary(&v, &mut &b"full"[..], &name, 8).unwrap(), 4);
+        assert!(!i.staging_dir(&v).exists());
+        assert_eq!(fs::read(i.executable(&v, &name)).unwrap(), b"full");
+        let _ = fs::remove_dir_all(d);
     }
 
     #[test]
