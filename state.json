@@ -6108,6 +6108,11 @@
       "id": "X-natural-wording",
       "note": "#609 merged d9d7160c: natural refusal text, /parse doc and schema.d.ts say '32 words'; the cap counts brackets and lone '-' too (B7). Align the user-visible wording (UX). Also add X-natural-strict-parity to slices.yaml in the next runner PR.",
       "logged": "2026-11-08T09:34Z"
+    },
+    {
+      "id": "CMP-8b-gluetun-cred",
+      "note": "From #610 (CMP-8a): gluetun control server answers 401 when auth is on; health fails closed (Unhealthy). CMP-8b's brief must decide how Lodestar gets a control-server credential (or a status-only auth=none role on the internal network via CMP-7/CMP-13), and CMP-5g adds the detect log events.",
+      "logged": "2026-11-08T09:35Z"
     }
   ],
   "main_health": [
@@ -6899,5 +6904,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T09:34Z"
+  "updated": "2026-11-08T09:35Z"
 }
