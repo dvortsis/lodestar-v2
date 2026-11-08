@@ -69,7 +69,14 @@ Akamai's published plan description is *SSD*. This is not an assurance of a part
    $env:AWS_PROFILE = '<your admin profile that may use that bucket>'
    ```
 
-   The bucket name is private configuration: keep it out of the repository and chat. If an older local `.terraform` folder exists here, `terraform init` stops and asks about a backend change. Don't migrate the old local state: delete the `.terraform` folder and run the script again (the cloud-operator plan: a fresh S3 state is the reconciliation, and no old local state is imported).
+   The bucket name is private configuration: keep it out of the repository and chat.
+
+   **If you used these scripts before, with a local state file:** `terraform init` stops, because the state location changed. Never copy the old local state into the bucket (the cloud-operator plan: a fresh S3 state is the reconciliation, and no old local state is imported). Instead:
+   1. In Cloud Manager, check that no Lodestar Linodes or firewalls exist. If any do, delete them there, or run the old `Destroy.ps1` from a checkout before this change.
+   2. Delete the `.terraform` folder and every `terraform.tfstate*` file in this folder.
+   3. Run the script again. If Terraform ever offers to copy existing state, answer **no**.
+
+   **Shared with the control plane:** the automated fleet (`fleet.yml`) uses the same state. Don't run `Deploy.ps1` or `Destroy.ps1` while a fleet it created exists: they would change that fleet outside the control plane's lock. Use the fleet's `down` instead.
 
 6. In `infra/akamai/terraform`, copy the example and edit the configuration:
 

@@ -435,8 +435,9 @@ jobs:
         run: ./docs/soak/tools/test_cr0_collector.ps1
 
   # Cloud infrastructure (X-cloud-infra, docs/decisions/2026-11-08-X-cloud-infra.md).
-  # Static checks only: no credentials, no terraform plan or apply, nothing
-  # runs against AWS or Akamai, and no PowerShell script is executed.
+  # No credentials, no terraform plan or apply, and nothing runs against AWS
+  # or Akamai. No script that can reach a cloud runs here; pure test files may
+  # (the runner, OP-2a).
   infra:
     name: infra
     needs: changes
@@ -504,6 +505,11 @@ jobs:
             } else { Write-Host "ok $($f.FullName)" }
           }
           if ($failed) { exit 1 }
+      # A pure unit test (no network, terraform or AWS CLI): the manual scripts
+      # refuse without the shared state's bucket and region (OP-2a).
+      - name: StateBackend.ps1 test
+        shell: pwsh
+        run: ./infra/akamai/terraform/tests/Test-StateBackend.ps1
 
   # The update manifest (PK-manifest): the builder's tests, then a round trip
   # through the verifier clients run, signed with the minisign CLI as

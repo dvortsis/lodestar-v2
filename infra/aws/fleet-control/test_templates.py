@@ -140,7 +140,8 @@ class LeastPrivilege(unittest.TestCase):
             self.assertNotIn('"Action": "*"', text.replace(json.dumps(bt.DENY_ALL["Statement"][0])[1:-1], ""))
 
     def test_deny_all_is_unattached(self):
-        for t in TEMPLATES.values():
+        for tname, t in TEMPLATES.items():
+            self.assertEqual(len(resources(t, "AWS::IAM::ManagedPolicy")), 1, tname)  # each stack has its own
             for name, p in resources(t, "AWS::IAM::ManagedPolicy").items():
                 for k in ("Roles", "Users", "Groups"):
                     self.assertNotIn(k, p["Properties"], name)
@@ -150,7 +151,7 @@ class LeastPrivilege(unittest.TestCase):
         self.assertEqual(g, {
             ("StateBucket", bt.TF_STATE_KEY): {"s3:GetObject", "s3:PutObject"},
             ("StateBucket", bt.TF_LOCK_KEY): {"s3:GetObject", "s3:PutObject", "s3:DeleteObject"},
-            ("StateBucket", "fleet/fleet.json"): {"s3:GetObject", "s3:PutObject", "s3:DeleteObject"},
+            ("StateBucket", "fleet/fleet.json"): {"s3:GetObject", "s3:PutObject"},  # tombstoned, never deleted
             ("EvidenceBucket", "fleet/*"): {"s3:GetObject", "s3:PutObject"},
             ("ControlBucket", "locks/fleet.json"): {"s3:GetObject", "s3:PutObject", "s3:DeleteObject"},
         })
@@ -183,14 +184,24 @@ class LeastPrivilege(unittest.TestCase):
                     "lodestar/other-AbC123"):
             self.assertIsNone(pat.fullmatch(fake + bad), bad)
 
-    def test_list_bucket_only_on_exact_prefixes(self):
-        for name in ("LodestarFleetOperator", "LodestarOperatorBridge"):
-            for s in allow_statements(roles()[name]):
-                if s["Action"] == "s3:ListBucket":
-                    with self.subTest(role=name, sid=s["Sid"]):
-                        self.assertIn("s3:prefix", next(iter(s["Condition"].values())))
-        for s in allow_statements(roles()["LodestarPiaDelivery"]):
-            self.assertNotEqual(s["Action"], "s3:ListBucket")
+    def lists(self, role_name):
+        out = {}
+        for s in allow_statements(roles()[role_name]):
+            if "s3:ListBucket" in as_list(s["Action"]):
+                self.assertEqual(as_list(s["Action"]), ["s3:ListBucket"])
+                bucket = s["Resource"]["Fn::Sub"][1]["B"]["Ref"]
+                out[bucket] = s.get("Condition")
+        return out
+
+    def test_list_grants_are_exact(self):
+        self.assertEqual(self.lists("LodestarFleetOperator"), {
+            "StateBucket": None,  # unconditional: Terraform needs 404 on a fresh state
+            "ControlBucket": {"StringEquals": {"s3:prefix": ["locks/fleet.json"]}},
+        })
+        self.assertEqual(self.lists("LodestarOperatorBridge"), {
+            "ControlBucket": {"StringLike": {"s3:prefix": ["locks/operator*", "operator/claude-lock.json"]}},
+        })
+        self.assertEqual(self.lists("LodestarPiaDelivery"), {})
 
     def test_cross_account_grant_is_one_object_and_conditional(self):
         stmt = FC["Resources"]["StateBucketPolicy"]["Properties"]["PolicyDocument"]["Statement"][1]
@@ -216,11 +227,22 @@ class Buckets(unittest.TestCase):
                 self.assertEqual(rule["ServerSideEncryptionByDefault"], {"SSEAlgorithm": "AES256"})
                 self.assertEqual(p["OwnershipControls"]["Rules"][0]["ObjectOwnership"], "BucketOwnerEnforced")
                 self.assertEqual(b["DeletionPolicy"], "Retain")
-                tls = policies[name]["Properties"]["PolicyDocument"]["Statement"][0]
-                self.assertEqual((tls["Effect"], tls["Principal"], tls["Action"]), ("Deny", "*", "s3:*"))
+                stmts = policies[name]["Properties"]["PolicyDocument"]["Statement"]
+                tls = stmts[0]
+                self.assertEqual((tls["Sid"], tls["Effect"], tls["Principal"], tls["Action"]), ("DenyNonTls", "Deny", "*", "s3:*"))
                 self.assertEqual(tls["Condition"], {"Bool": {"aws:SecureTransport": "false"}})
-                self.assertEqual(len(tls["Resource"]), 2)  # the bucket and its objects
+                self.assertEqual(tls["Resource"], [{"Fn::GetAtt": [name, "Arn"]}, {"Fn::Sub": "${" + name + ".Arn}/*"}])
+                # Nothing else, except the state bucket's one conditional grant.
+                self.assertEqual(len(stmts), 2 if name == "StateBucket" else 1)
+                for s in stmts:
+                    inner = s["Fn::If"][1] if "Fn::If" in s else s
+                    if inner["Effect"] == "Allow":
+                        self.assertNotEqual(inner["Principal"], "*")
+                        self.assertNotEqual(inner.get("Principal", {}).get("AWS"), "*")
         self.assertEqual(buckets["StateBucket"]["Properties"]["VersioningConfiguration"], {"Status": "Enabled"})
+        state_rules = buckets["StateBucket"]["Properties"]["LifecycleConfiguration"]["Rules"]
+        self.assertIn(True, [r.get("ExpiredObjectDeleteMarker") for r in state_rules])
+        self.assertNotIn("VersioningConfiguration", buckets["ControlBucket"]["Properties"])
         rules = buckets["EvidenceBucket"]["Properties"]["LifecycleConfiguration"]["Rules"]
         self.assertIn(14, [r.get("ExpirationInDays") for r in rules])
 
@@ -277,6 +299,18 @@ class Terraform(unittest.TestCase):
                 for line in re.findall(r".*&\s*terraform\s+init\b.*", text):
                     self.assertIn("@backend", line)
                     self.assertNotIn("-backend=false", line)
+
+    def test_state_backend_helper_stays_pure(self):
+        # CI runs tests/Test-StateBackend.ps1, which dot-sources this helper; the
+        # runner's rule is that nothing run in CI can reach a cloud.
+        for name in ("scripts/StateBackend.ps1", "tests/Test-StateBackend.ps1"):
+            text = (self.TF / name).read_text(encoding="utf-8")
+            code = re.sub(r"<#.*?#>", "", text, flags=re.S)
+            code = "\n".join(ln for ln in code.splitlines() if not ln.lstrip().startswith("#"))
+            with self.subTest(file=name):
+                for banned in (r"&\s*terraform", r"(?-i:\baws\s+[a-z0-9-]+)", r"Invoke-(RestMethod|WebRequest|Expression)", r"Start-Process",
+                               r"New-Object\s+System\.Net", r"\[System\.Net\.", r"curl|wget|iwr|irm\b"):
+                    self.assertIsNone(re.search(banned, code, re.I), banned)
 
     def test_required_version_has_native_s3_locking(self):
         text = (self.TF / "versions.tf").read_text(encoding="utf-8")

@@ -94,6 +94,11 @@
               "NoncurrentVersionExpiration": {
                 "NoncurrentDays": 30
               }
+            },
+            {
+              "Id": "DropDeleteMarkers",
+              "Status": "Enabled",
+              "ExpiredObjectDeleteMarker": true
             }
           ]
         }
@@ -410,34 +415,22 @@
                   ]
                 },
                 {
-                  "Sid": "DeleteTerraformLockAndFleetJson",
+                  "Sid": "DeleteTerraformLock",
                   "Effect": "Allow",
                   "Action": "s3:DeleteObject",
-                  "Resource": [
-                    {
-                      "Fn::Sub": [
-                        "arn:${AWS::Partition}:s3:::${B}/terraform/lodestar.tfstate.tflock",
-                        {
-                          "B": {
-                            "Ref": "StateBucket"
-                          }
+                  "Resource": {
+                    "Fn::Sub": [
+                      "arn:${AWS::Partition}:s3:::${B}/terraform/lodestar.tfstate.tflock",
+                      {
+                        "B": {
+                          "Ref": "StateBucket"
                         }
-                      ]
-                    },
-                    {
-                      "Fn::Sub": [
-                        "arn:${AWS::Partition}:s3:::${B}/fleet/fleet.json",
-                        {
-                          "B": {
-                            "Ref": "StateBucket"
-                          }
-                        }
-                      ]
-                    }
-                  ]
+                      }
+                    ]
+                  }
                 },
                 {
-                  "Sid": "ListStateKeys",
+                  "Sid": "ListStateBucket",
                   "Effect": "Allow",
                   "Action": "s3:ListBucket",
                   "Resource": {
@@ -449,15 +442,6 @@
                         }
                       }
                     ]
-                  },
-                  "Condition": {
-                    "StringEquals": {
-                      "s3:prefix": [
-                        "terraform/lodestar.tfstate",
-                        "terraform/lodestar.tfstate.tflock",
-                        "fleet/fleet.json"
-                      ]
-                    }
                   }
                 },
                 {

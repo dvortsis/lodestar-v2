@@ -69,8 +69,9 @@ def bucket_arn(bucket_ref) -> dict:
 
 
 def list_prefixes(bucket_ref, prefixes: list[str]) -> dict:
-    """ListBucket limited to exact prefixes, so a missing key reads as 404,
-    not 403 (the lock and Terraform need to tell the two apart)."""
+    """ListBucket limited to exact prefixes. It lets ListObjectsV2 with that
+    prefix answer "does this key exist"; it does not turn a GetObject on a
+    missing key into 404 (that request carries no s3:prefix)."""
     return {
         "Effect": "Allow",
         "Action": "s3:ListBucket",
@@ -124,6 +125,9 @@ def bucket(versioned: bool, expire_days: int | None = None) -> dict:
     if versioned:
         props["VersioningConfiguration"] = {"Status": "Enabled"}
         rules.append({"Id": "ExpireOldVersions", "Status": "Enabled", "NoncurrentVersionExpiration": {"NoncurrentDays": 30}})
+        # Each .tflock and fleet.json delete leaves a marker; drop it once no
+        # older version remains.
+        rules.append({"Id": "DropDeleteMarkers", "Status": "Enabled", "ExpiredObjectDeleteMarker": True})
     if expire_days:
         rules.append({"Id": "Expire", "Status": "Enabled", "ExpirationInDays": expire_days})
     props["LifecycleConfiguration"] = {"Rules": rules}
@@ -172,9 +176,15 @@ def fleet_control() -> dict:
             {"Sid": "TerraformStateAndFleetJson", "Effect": "Allow",
              "Action": ["s3:GetObject", "s3:PutObject"],
              "Resource": [obj(state, TF_STATE_KEY), obj(state, TF_LOCK_KEY), obj(state, FLEET_JSON_KEY)]},
-            {"Sid": "DeleteTerraformLockAndFleetJson", "Effect": "Allow", "Action": "s3:DeleteObject",
-             "Resource": [obj(state, TF_LOCK_KEY), obj(state, FLEET_JSON_KEY)]},
-            {"Sid": "ListStateKeys", **list_prefixes(state, [TF_STATE_KEY, TF_LOCK_KEY, FLEET_JSON_KEY])},
+            # fleet.json is never deleted: `down` overwrites it with a tombstone
+            # (the runner's refinement), so only the lock file may be deleted.
+            {"Sid": "DeleteTerraformLock", "Effect": "Allow", "Action": "s3:DeleteObject",
+             "Resource": obj(state, TF_LOCK_KEY)},
+            # Unconditional: a HeadObject or GetObject carries no s3:prefix, so only
+            # a plain ListBucket turns a missing key into 404. Terraform needs that
+            # on a fresh state, and the role already reads and writes every object
+            # that matters here; listing shows key names only.
+            {"Sid": "ListStateBucket", "Effect": "Allow", "Action": "s3:ListBucket", "Resource": bucket_arn(state)},
             {"Sid": "Evidence", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject"],
              "Resource": obj(evidence, "fleet/*")},
             {"Sid": "FleetLock", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],

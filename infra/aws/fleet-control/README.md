@@ -20,8 +20,10 @@ Both use named IAM resources, so a deploy needs `CAPABILITY_NAMED_IAM`. Neither 
    - `PiaSecretArn`: the exact ARN of `lodestar/pia-vpn`, with its six-character suffix.
    - `StateBucketName`: step 1's `StateBucketName` output.
 3. **Only if the two stacks are in different accounts:** update the `fleet-control` stack with `PiaDeliveryRoleArn` set to step 2's `PiaDeliveryRoleArn` output. That grants the role `s3:GetObject` on `fleet/fleet.json` alone.
-4. Put the token values into the two empty secrets in the console (owner setup steps 5 and 6.3), never in a parameter, file or chat.
+4. Put the token values into the two empty secrets in the console (owner setup steps 5 and 6.3), never in a parameter, file or chat. The stacks create those secrets, so don't create them by hand first: a secret that already has the name makes the deploy fail. If one exists already, delete it (or rename it) before deploying.
 5. Copy the outputs into the GitHub environment secrets each output's description names.
+
+If `LodestarPiaDelivery` is ever deleted and recreated in another account, update the `fleet-control` stack again with its ARN: the bucket policy otherwise keeps pointing at the old role.
 
 ## Build and test
 The JSON is generated: edit `build_templates.py`, then run it. CI fails when the committed JSON differs from what the builder makes.
