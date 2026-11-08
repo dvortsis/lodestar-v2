@@ -339,7 +339,9 @@ struct AuthorityState {
     /// be granted again. A key here is still in flight: a claim for it
     /// takes it over as a re-grant, never as a new harvest.
     pending: HashMap<InfoHash, Lease>,
-    /// `pending`'s keys, oldest first. May hold keys no longer pending;
+    /// `pending`'s keys in waiting order: oldest first, except that a key
+    /// whose store check couldn't answer goes to the back and one whose
+    /// delivery failed to the front. May hold keys no longer pending;
     /// they're skipped, and it's cleared whenever `pending` empties.
     order: VecDeque<InfoHash>,
     /// Kept only once remote workers are allowed ([`LeaseAuthority::serve_remote`]),
@@ -749,7 +751,9 @@ impl LeaseAuthority {
         n
     }
 
-    /// Grants waiting keys, oldest first, to `targets`, each time to the one
+    /// Grants waiting keys, in waiting order (oldest first, except keys
+    /// whose check couldn't answer, which wait at the back), to `targets`,
+    /// each time to the one
     /// holding the fewest leases, at most `per_target` keys each. Keys left
     /// over keep waiting. Not a harvest.
     pub fn regrant_pending(

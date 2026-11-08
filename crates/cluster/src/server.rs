@@ -140,8 +140,9 @@ pub trait StoredKeys: Send + Sync + 'static {
 
 /// One key's answer before a grant or a re-grant
 /// ([`StoredKeys::key_checks`]). A claim grants only a `Free` key: it
-/// denies a stored or held one as stored, and an `Unknown` one as busy, so
-/// the worker asks again later rather than taking it as stored.
+/// denies a stored or held one as stored, and an `Unknown` one as busy
+/// ("claim again later"), not as stored: it isn't known to be. (Today's
+/// worker drops any denied key; a busy retry is a follow-up.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyCheck {
     /// Neither stored nor held: it may go out.
@@ -1592,7 +1593,7 @@ impl ClusterServer {
             } else if matches!(check, KeyCheck::Stored | KeyCheck::Held) {
                 out[i] = deny(DenyReason::Stored);
             } else if check == KeyCheck::Unknown {
-                // Not known to be stored: asked again later (#615's review).
+                // Not known to be stored: "claim again later" (#615's review).
                 out[i] = deny(DenyReason::Busy);
             } else if let Some(source) = SourceId::new(item.source) {
                 // Discovery times are the worker's clock; correct them (§19.3).

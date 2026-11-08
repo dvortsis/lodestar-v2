@@ -1,4 +1,6 @@
-# X-wk10d-unknown: an unknown check is busy, and waits at the back
+# X-wk10d-unknown decisions (#628)
+
+An unknown check is busy, and waits at the back.
 
 #615's review notes, collected in their own PR (runner, 2026-11-08T17:20Z).
 
@@ -7,7 +9,9 @@
   - it grants only a `Free` key;
   - it denies a `Stored` or `Held` key as stored;
   - it denies an `Unknown` key (its store read failed) as **busy**.
-- Before, a failed read was refused as stored, which a worker takes as final: it drops the key. Busy tells it to ask again later, so a transient read error never loses a key, and still never grants one.
+- **The protocol's answer is now right:** `DenyReason::Busy` means "claim again later" (`proto.rs`, whose doc now names the store check too), where `Stored` says the key needs no fetch. A failed read still never grants a key.
+- **Today's worker doesn't act on the difference yet.** Its claim loop (`worker/runtime.rs`) takes only grants and drops every denied key, whatever the reason. Such a key comes back only when the DHT finds it again. So a transient read error can still cost a key until then, as before this PR.
+- **Follow-up (the runner queues it):** a worker-side retry of a `Busy` denial with back-off, so the protocol's "again later" is honoured.
 - A check that dies or comes back short still denies the whole batch as busy, as before.
 - `StoredKeys::stored` stays for the remote intake, where any non-free key reads as stored.
 
