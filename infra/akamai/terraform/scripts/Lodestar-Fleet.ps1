@@ -9,14 +9,21 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('status', 'inspect', 'plan', 'cost', 'access', 'deploy', 'destroy', 'reconcile')]
+    [ValidateSet('status', 'inspect', 'plan', 'cost', 'access', 'deploy', 'destroy', 'reconcile',
+                 'vpn-verify', 'vpn-provision', 'vpn-status', 'vpn-crawler', 'vpn-cleanup')]
     [string]$Action,
 
     [Parameter(Mandatory = $false)]
     [string]$Target,
 
     [Parameter(Mandatory = $false)]
-    [int]$Hours = 48
+    [int]$Hours = 48,
+
+    [Parameter(Mandatory = $false)]
+    [string]$Region = 'us-east',
+
+    [Parameter(Mandatory = $false)]
+    [switch]$StartCrawler
 )
 
 Set-StrictMode -Version Latest
@@ -221,5 +228,63 @@ To synchronize Terraform state with live Akamai Cloud (dropping watchdog-deleted
                 }
             }
         }
+    }
+
+    'vpn-verify' {
+        Audit "=== Verifying AWS Secrets Manager Access for PIA VPN ==="
+        Push-Location $projectRoot
+        try {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\Deploy-PiaVpn.ps1" -VerifyOnly
+        } finally { Pop-Location }
+    }
+
+    'vpn-provision' {
+        Audit "=== Provisioning Secure PIA WireGuard VPN ==="
+        if (-not $Target) {
+            Audit "ERROR: -Target <Linode_IP> is required for vpn-provision."
+            return
+        }
+        Push-Location $projectRoot
+        try {
+            $params = @('-Target', $Target, '-Region', $Region)
+            if ($StartCrawler) { $params += '-StartCrawler' }
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\Deploy-PiaVpn.ps1" @params
+        } finally { Pop-Location }
+    }
+
+    'vpn-status' {
+        Audit "=== Checking Linode VPN Status and Leak Protection ==="
+        if (-not $Target) {
+            Audit "ERROR: -Target <Linode_IP> is required for vpn-status."
+            return
+        }
+        Push-Location $projectRoot
+        try {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\Deploy-PiaVpn.ps1" -Target $Target -Action Health
+        } finally { Pop-Location }
+    }
+
+    'vpn-crawler' {
+        Audit "=== Starting Crawler Behind Verified PIA VPN ==="
+        if (-not $Target) {
+            Audit "ERROR: -Target <Linode_IP> is required for vpn-crawler."
+            return
+        }
+        Push-Location $projectRoot
+        try {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\Deploy-PiaVpn.ps1" -Target $Target -Action StartCrawler
+        } finally { Pop-Location }
+    }
+
+    'vpn-cleanup' {
+        Audit "=== Cleaning Up PIA VPN Runtime Secrets and Containers ==="
+        if (-not $Target) {
+            Audit "ERROR: -Target <Linode_IP> is required for vpn-cleanup."
+            return
+        }
+        Push-Location $projectRoot
+        try {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\Deploy-PiaVpn.ps1" -Target $Target -Action Cleanup
+        } finally { Pop-Location }
     }
 }

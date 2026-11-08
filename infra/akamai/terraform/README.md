@@ -123,13 +123,32 @@ lsblk -o NAME,SIZE,TYPE,ROTA,TRAN,MOUNTPOINTS
 
 `lsblk` is evidence of the guest-visible device, **not proof of physical backing media**. Validate IOPS and latency on the real search-index path using a controlled benchmark before using it in production.
 
-### PIA WireGuard gateway
+### PIA WireGuard gateway and automated credential bridge
 
-The `pia-example/` directory contains **only a VPN gateway Compose skeleton**, not your crawler and not credentials. PIA's official native WireGuard setup involves obtaining credentials and negotiating a WireGuard configuration. Keep this local and use the official project: https://github.com/pia-foss/manual-connections.
+The `pia-example/` directory contains the VPN gateway Compose stack and the crawler service template. Credentials delivery is automated via the secure bridge (`scripts/Deploy-PiaVpn.ps1` and `scripts/lodestar_pia_bridge.py`):
 
-Gluetun's current PIA integration supports OpenVPN natively; PIA WireGuard requires using its **custom WireGuard** configuration. This file must be securely transferred directly to the host from your machine. Do not upload it to GitHub, Terraform, cloud-init, or any chat or AI tool. The corresponding Docker Compose example expects `pia-example/secrets/wg0.conf`, which is not in the repository (and is git-ignored).
+1. **Central AWS Credential Store**: `lodestar/pia-vpn` in AWS Secrets Manager (`us-east-1`), read exclusively via the restricted `LodestarPiaSecretReader` role by the trusted deployment host.
+2. **Zero Linode AWS Credentials**: No AWS keys, IAM profiles, or Secrets Manager access on the Linode.
+3. **Ephemeral Runtime Storage**: Ephemeral `wg0.conf` is dynamically negotiated via PIA's authenticated REST API with Curve25519 key generation and streamed directly to `/run/lodestar/vpn/wg0.conf` (root-only mode `0600` on RAM-backed `tmpfs`).
+4. **Survives Container Restarts**: Persists in `/run` across container restarts while the VM remains active; cleanly wiped on VM reboot.
+5. **Independent Leak Verification**: Egress IP and local DNS resolution are verified from inside the Gluetun container before the crawler container is permitted to start. Never falls back to unencrypted host networking.
 
-Never start Lodestar until you verify a working PIA exit IP, Gluetun's kill switch, DNS, and IPv6 behavior. If the VPN container fails or stops, the crawler must not fall back to the host network. With `network_mode: "service:gluetun"`, Gluetun handles the crawler's network namespace when configured appropriately. Verify this at runtime and test by deliberately stopping the VPN tunnel **without** putting test packets on the public network.
+```powershell
+# Verify AWS access to PIA secret:
+.\scripts\Lodestar-Fleet.ps1 vpn-verify
+
+# Provision WireGuard and start VPN on a Linode:
+.\scripts\Lodestar-Fleet.ps1 vpn-provision -Target <LINODE_IP> -Region us-east
+
+# Verify tunnel health and leak protection:
+.\scripts\Lodestar-Fleet.ps1 vpn-status -Target <LINODE_IP>
+
+# Start crawler behind verified VPN:
+.\scripts\Lodestar-Fleet.ps1 vpn-crawler -Target <LINODE_IP>
+
+# Clean up runtime credentials and containers:
+.\scripts\Lodestar-Fleet.ps1 vpn-cleanup -Target <LINODE_IP>
+```
 
 **Networking reminder:** Cloud Firewalls only guard the host's network interface, **not traffic after it has entered the PIA tunnel**. A port such as UDP/6881 is only reachable through PIA if the particular exit permits/forwards it. Never expose the web UI on public TCP/8090. Use a restricted SSH tunnel to bind it locally after setting up the app.
 

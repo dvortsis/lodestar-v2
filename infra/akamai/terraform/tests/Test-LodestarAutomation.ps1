@@ -203,9 +203,34 @@ Run-Test "AWS Deploy: Refuses execution when administrator provisioner session i
 Run-Test "Akamai Reconcile: terraform plan -refresh-only succeeds" {
     Push-Location $projectRoot
     try {
-        & terraform plan -refresh-only
+        $hasTfvars = Test-Path (Join-Path $projectRoot "terraform.tfvars")
+        $planArgs = @("plan", "-refresh-only", "-input=false")
+        if (-not $hasTfvars) {
+            $planArgs += @("-var", "ssh_admin_ipv4_cidr=192.0.2.1/32")
+        }
+        & terraform @planArgs
         if ($LASTEXITCODE -ne 0) { throw "terraform plan -refresh-only failed" }
     } finally { Pop-Location }
+}
+
+# -----------------------------------------------------------------------------
+# 7. Secure PIA VPN Bridge Automation Tests
+# -----------------------------------------------------------------------------
+Run-Test "PIA VPN: Automated unit test suite passes (all 16 security controls)" {
+    $testScript = Join-Path $projectRoot 'tests\test_pia_bridge.py'
+    $py = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $py) { $py = Get-Command py -ErrorAction SilentlyContinue }
+    if (-not $py) { throw "Python not found" }
+    $out = (& $py.Source $testScript 2>&1) -join "`n"
+    if ($LASTEXITCODE -ne 0) { throw "PIA bridge unit test suite failed: $out" }
+}
+
+Run-Test "PIA VPN Deploy: Dry-run simulation executes cleanly" {
+    $deployVpn = Join-Path $scriptsDir 'Deploy-PiaVpn.ps1'
+    $out = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $deployVpn -DryRun -Target '192.0.2.1' 2>&1) -join "`n"
+    if ($LASTEXITCODE -ne 0 -or $out -notmatch '\[DRY-RUN\] Dry run complete') {
+        throw "Deploy-PiaVpn.ps1 dry-run simulation failed: $out"
+    }
 }
 
 $resultColor = if ($failed -eq 0) { "Green" } else { "Red" }

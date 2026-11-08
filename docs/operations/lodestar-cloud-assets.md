@@ -32,3 +32,16 @@ Alternative watchdog drafts, a former local AWS guard candidate and outdated clo
 - The migrated Terraform directory must **not** execute `terraform apply` until private state and working-directory ownership are reconciled. A new empty state may recreate machines, and out-of-band expirations can likewise trigger recreation.
 - Never grant an unrestricted local coding agent access to administrator cached credentials in the same Windows session. IAM role separation alone is not a local process sandbox.
 - Secret scans are best-effort. Before pushing a public branch, review staged changes and Gitleaks results, and confirm all Terraform and Git validations.
+
+## Secure PIA VPN credential delivery and leak protection
+
+The Private Internet Access (PIA) VPN integration delivers least-privilege egress protection for disposable Linodes without distributing AWS credentials to the test fleet:
+
+1. **Central Credential Store**: AWS Secrets Manager `lodestar/pia-vpn` in `us-east-1` stores master keys `PIA_USERNAME` and `PIA_PASSWORD`.
+2. **Restricted IAM Role**: `LodestarPiaSecretReader` trusts `lodestar-admin` with MFA and allows only `secretsmanager:GetSecretValue` on `lodestar/pia-vpn`. All other secrets and AWS actions are denied. Temporary STS sessions are capped at 1 hour.
+3. **Zero AWS Credentials on Linode**: Linodes never connect to AWS Secrets Manager and hold no AWS access keys, session tokens, or IAM credentials.
+4. **Ephemeral WireGuard Negotiation**: The deployment tool authenticates to the PIA REST API using the temporary credentials, generates an ephemeral Curve25519 WireGuard keypair, and registers the public key with the designated East Coast PIA server (`us-east`, `us-new-jersey`, `us-new-york`).
+5. **Runtime Storage in `/run` tmpfs**: The resulting `wg0.conf` is streamed over host-key-verified SSH directly into `/run/lodestar/vpn/wg0.conf` (permissions `0600 root:root`, directory `0700 root:root`). Because `/run` is mounted as tmpfs (RAM), credentials are never written to disk.
+6. **Reboot and Lifecycle Behavior**: The VPN configuration survives container restarts while the VM remains active. On VM reboot or shutdown, `/run` is wiped automatically. To re-provision after reboot, the operator runs `Lodestar-Fleet.ps1 vpn-provision`.
+7. **Pinned Immutable Container**: Gluetun runs pinned to `qmcgaw/gluetun:v3.40.0@sha256:4af0c804003481e100180e1f8d4d5e9c48163fedc0f88d061881b615aef9d183` with `FIREWALL=on` (strict kill switch), `no-new-privileges:true`, and minimal capabilities (`NET_ADMIN` only).
+8. **Independent Leak Gate**: Before crawler startup, independent checks inside the container verify that egress IP != host public IP, matches PIA ASN/ISP, and DNS resolves through the VPN resolver. If any check fails, the crawler refuses to start and containers are stopped.

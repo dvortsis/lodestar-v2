@@ -70,6 +70,9 @@ write_files:
       systemctl restart ssh
       install -d -o lodestar -g lodestar -m 0700 /home/lodestar/lodestar
       install -d -o lodestar -g lodestar -m 0700 /home/lodestar/lodestar/secrets
+      install -d -o lodestar -g lodestar -m 0700 /home/lodestar/lodestar/pia-example
+      # Ephemeral runtime directory for WireGuard credentials (tmpfs, root-only)
+      install -d -o root -g root -m 0700 /run/lodestar/vpn
       # Never start a crawler on an unverified tunnel.
       docker --version
       docker compose version

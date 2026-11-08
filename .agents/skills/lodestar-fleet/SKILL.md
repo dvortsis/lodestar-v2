@@ -133,6 +133,13 @@ Set-Location "$env:LODESTAR_REPO_ROOT\infra\akamai\terraform"
 .\scripts\Lodestar-Fleet.ps1 access -Target <INSTANCE_ID> # SSM session as LodestarProvisioner
 .\scripts\Lodestar-Fleet.ps1 access -Target <PUBLIC_IP>   # SSH to an Akamai VM
 .\scripts\Lodestar-Fleet.ps1 reconcile                    # can rewrite local state files
+
+# PIA VPN Credential Delivery & Egress Protection
+.\scripts\Lodestar-Fleet.ps1 vpn-verify                                              # verifies AWS Secrets Manager access
+.\scripts\Lodestar-Fleet.ps1 vpn-provision -Target <AKAMAI_IP> [-Region us-east]   # provisions wg0.conf to /run tmpfs
+.\scripts\Lodestar-Fleet.ps1 vpn-status -Target <AKAMAI_IP>                          # verifies tunnel and leak protection
+.\scripts\Lodestar-Fleet.ps1 vpn-crawler -Target <AKAMAI_IP>                         # launches crawler behind verified VPN
+.\scripts\Lodestar-Fleet.ps1 vpn-cleanup -Target <AKAMAI_IP>                         # removes runtime secrets and stops VPN
 ```
 
 ### Read-only AWS CLI (observer profile)
