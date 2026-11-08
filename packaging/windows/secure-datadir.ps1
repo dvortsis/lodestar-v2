@@ -136,6 +136,20 @@ function Invoke-Icacls([string[]]$arguments, [string]$fix) {
   }
 }
 
+# The folder's file ID, which a folder renamed away and replaced by another doesn't keep.
+function Get-FileId($folder) {
+  $fsutil = Join-Path $env:SystemRoot 'System32\fsutil.exe'
+  $ErrorActionPreference = 'Continue'
+  $out = & $fsutil file queryfileid $folder 2>&1 | Out-String
+  $code = $LASTEXITCODE
+  $ErrorActionPreference = 'Stop'
+  if ($code -ne 0 -or $out -notmatch '0x[0-9a-fA-F]+') {
+    Log "fsutil file queryfileid failed ($code): $out"
+    Stop-Install "Could not read the file ID of $dir. Install again; if it keeps failing, ask for help."
+  }
+  $Matches[0]
+}
+
 # Stops the install unless everything inside $folder is a real file or folder, owned by
 # SYSTEM, Administrators or the service, with Allow entries only for those three, OWNER RIGHTS
 # (how the service locks its logs folder, granting only that trusted owner) and CREATOR OWNER
@@ -155,10 +169,17 @@ function Assert-PrivateInside($folder) {
     if ($trusted -notcontains $o) {
       Stop-Install "$($item.FullName) is owned by $o, not SYSTEM, Administrators or the Lodestar service. Someone else may have put it there: move the folder's contents somewhere else, check them, then install again."
     }
-    foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
-      $who = $rule.IdentityReference
-      if ($rule.AccessControlType -ne 'Allow' -or ($trusted -notcontains $who -and $ownerSids -notcontains $who)) {
-        Stop-Install "$($item.FullName) has its own permissions for $($rule.IdentityReference). Someone else may have changed it: move the folder's contents somewhere else, check them, then install again."
+    # From the raw descriptor, not GetAccessRules, which leaves out callback (conditional)
+    # and object entries: as in windows/acl.rs (check_entries), only plain Allow entries.
+    $raw = New-Object Security.AccessControl.RawSecurityDescriptor($acl.GetSecurityDescriptorBinaryForm(), 0)
+    if ($null -eq $raw.DiscretionaryAcl) {
+      Stop-Install "$($item.FullName) has no access list, so anyone can open it. Someone else may have changed it: move the folder's contents somewhere else, check them, then install again."
+    }
+    foreach ($ace in $raw.DiscretionaryAcl) {
+      $who = if ($ace -is [Security.AccessControl.KnownAce]) { $ace.SecurityIdentifier } else { $null }
+      if ($ace.AceType -ne [Security.AccessControl.AceType]::AccessAllowed -or
+          ($trusted -notcontains $who -and $ownerSids -notcontains $who)) {
+        Stop-Install "$($item.FullName) has its own permissions ($($ace.AceType) for $who). Someone else may have changed it: move the folder's contents somewhere else, check them, then install again."
       }
     }
   }
@@ -170,7 +191,8 @@ function Assert-PrivateInside($folder) {
 # group SID, never one already trusted. Any Deny entry, inheritance or other account means $null.
 function Get-RepairableSid($folder) {
   if (-not $InstallerSid) { return $null }
-  if ($InstallerSid -notmatch '^S-1-5-21(-\d+){4}$') { return $null }
+  # Case-sensitive, ASCII digits only, nothing after the last one (not even a newline).
+  if ($InstallerSid -cnotmatch '\AS-1-5-21(-[0-9]+){4}\z') { return $null }
   $me = New-Object Security.Principal.SecurityIdentifier $InstallerSid
   $rid = [long]($InstallerSid -split '-')[-1]
   if ($rid -ge 512 -and $rid -le 527) { return $null }   # Domain Admins, Domain Users and the other domain groups
@@ -222,6 +244,9 @@ if (Test-Path -LiteralPath $dir) {
   if ($trusted -notcontains $owner) {
     Stop-Install "$dir already exists and is owned by $owner, not SYSTEM, Administrators or the Lodestar service. Check it, move it away, then install again."
   }
+  # Set-Acl goes by path, so the folder it secures must be the one checked here: same file ID,
+  # still no link, just before it (a handle opened earlier could have renamed it away).
+  $fileId = Get-FileId $dir
   $inside = @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction Stop)
 
   if ($inside.Count -eq 0) {
@@ -279,7 +304,15 @@ if (Test-Path -LiteralPath $dir) {
     }
     $why = Get-NotPrivateReason $dir
     if ($why) { Stop-Install "$dir is still not private after removing ${sidText}: $why. Move its contents somewhere else, check them, then install again." }
+    $owner = (Get-Acl -LiteralPath $dir).GetOwner([Security.Principal.SecurityIdentifier])
+    if ($trusted -notcontains $owner) {
+      Stop-Install "$dir is now owned by $owner, not SYSTEM, Administrators or the Lodestar service. Check it, move it away, then install again."
+    }
     Assert-PrivateInside $dir
+  }
+  $item = Get-Item -LiteralPath $dir -Force
+  if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or (Get-FileId $dir) -ne $fileId) {
+    Stop-Install "$dir was replaced while Lodestar was installing. Check it, move it away, then install again."
   }
   Set-Acl -LiteralPath $dir -AclObject (New-DataSecurity)
   Log "re-secured $dir"

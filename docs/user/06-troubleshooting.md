@@ -17,22 +17,22 @@ This chapter lists common problems with fixes, then says how to get help.
 | The database is slow or reports "database is locked" | The data folder is under `/mnt/user` or on a network share | Move the data folder to a pool path such as `/mnt/cache/appdata/lodestar` ([section 2.2](02-install-lodestar-on-unraid-and-docker.md#22-settings-in-the-unraid-template)). |
 | Your home network gets slow | The crawler fills the router's connection table | Set **Intensity** to `low` and raise it step by step. |
 | The gluetun variant stops after a [VPN](glossary.md#vpn) restart | A container that shares a network stays attached to the old one | Restart Lodestar after gluetun restarts. |
-| The Windows service won't start and Windows shows "service-specific error 536870915" (0.5.2 and earlier: "error 3") | The data folder `C:\ProgramData\Lodestar` isn't private any more, most often because **Continue** was selected on its permission prompt in File Explorer | Follow [section 6.2](#62-fix-windows-service-error-3). |
+| The Windows service won't start and Windows shows "service-specific error 536870915" (versions before this change: "error 3") | The data folder `C:\ProgramData\Lodestar` isn't private any more, most often because **Continue** was selected on its permission prompt in File Explorer | Follow [section 6.2](#62-fix-windows-service-error-3). |
 | Windows logs three failure events for one problem | Windows restarts the service twice after it stops with an error, 60 seconds apart, so one problem shows three times | Fix the cause once, as in [section 6.2](#62-fix-windows-service-error-3). The count starts again after a day. |
 | Other computers can't open the web page, or few torrents are found, on Windows | Windows treats your network as a **Public network**. Lodestar's firewall rules allow private networks only, on purpose | If this is your own home network and you trust every device on it, set it to private: **Settings → Network & internet**, select your connection, then under **Network profile type** select **Private network**. On a network you don't control, such as a café or hotel, leave it **Public**. Never add the Public profile to Lodestar's rules: that opens Lodestar to everyone on such networks. |
-| Lodestar logs the warning `logging.folder_shared` on Windows | The `logs` folder has an extra account in its permissions | In an [elevated PowerShell](glossary.md#elevated-powershell), run `icacls "C:\ProgramData\Lodestar\logs"` to see the accounts. Remove the one that isn't SYSTEM, Administrators or `NT SERVICE\Lodestar` with `icacls "C:\ProgramData\Lodestar\logs" /remove:g "<account>" /T /C`, then run `Restart-Service Lodestar`. |
+| Lodestar logs the warning `logging.folder_shared` on Windows | The `logs` folder has an extra account in its permissions | In an [elevated PowerShell](glossary.md#elevated-powershell), run `icacls "C:\ProgramData\Lodestar\logs"` to see the accounts. SYSTEM, Administrators, `NT SERVICE\Lodestar`, `OWNER RIGHTS` and `CREATOR OWNER` belong there. Remove any other account with `icacls "C:\ProgramData\Lodestar\logs" /remove:g "<account>" /T /C`, then run `Restart-Service Lodestar`. |
 
 ## 6.2 Fix Windows service error 3
 <!-- index: error 3; error 536870915; 0x20000003; event 7024; Windows service; icacls; Repair; folder_shared; service-specific error 3 -->
 
-At every start the Lodestar service checks that `C:\ProgramData\Lodestar` is private: only SYSTEM, Administrators and `NT SERVICE\Lodestar` have permissions, nothing is inherited, and nothing inside is a link. If the check fails, the service refuses to start. Windows shows "service-specific error 536870915" (`0x20000003`), and Event Viewer has event 7024 in the **System** log saying the same. Lodestar 0.5.2 and earlier show "error 3" instead.
+At every start the Lodestar service checks that `C:\ProgramData\Lodestar` is private: only SYSTEM, Administrators and `NT SERVICE\Lodestar` have permissions, nothing is inherited, and nothing inside is a link. If the check fails, the service refuses to start. Windows shows "service-specific error 536870915" (`0x20000003`). Event Viewer has event 7024 in the **System** log, which may show only the raw code, such as `%%536870915`. Versions before this change show "error 3" instead.
 
 Windows doesn't know why. Lodestar writes the reason to `C:\Windows\Temp\lodestar-service.log`, which only administrators can read. It names the folder and the extra account. When the one problem is a single extra user account, it also gives the exact command that removes it.
 
 > [!WARNING]
 > Don't delete the folder: it holds your library, your password and your keys. The steps below remove only the extra account.
 
-**Recommended:** if the extra account is your own administrator account, run the installer's **Repair** (step 2). It removes your account's entries and makes the folder private again. It refuses anything else, so it can't hide another problem.
+**Recommended:** if the extra account is your own administrator account, run the installer's **Repair** (step 2). It removes your account's entries and makes the folder private again. It refuses anything else, so it can't hide another problem. It also refuses an administrator only through a domain group, and a work or school (Microsoft Entra ID) account. They use step 3 instead.
 
 To fix it:
 
@@ -45,14 +45,16 @@ To fix it:
    **Result:** The last line says the folder isn't private and why, for example that it grants access to `DESKTOP-1\alex (S-1-5-21-…)`.
 2. If the account it names is your own and it gives an `icacls` command, run **Repair**. Open **Control Panel → Programs and Features**, right-click **Lodestar**, then select **Repair**. Allow it when Windows asks for administrator permission.
 
-   **Result:** Repair finishes without an error and starts the service. Continue with step 4. If Repair stops with an error, something else in the folder is wrong too. Skip step 3 and read the last paragraph of this section.
-3. Instead of Repair, you can copy the `icacls` command from the reason into the elevated PowerShell window and run it. It looks like this, with the account's number from the reason:
+   **Result:** Repair finishes without an error and starts the service. Continue with step 4. If Repair stops with an error, read the next step.
+3. If Repair stopped, remove your own account yourself. Copy the `icacls` command from the reason into the elevated PowerShell window and run it. It looks like this, with the account's number from the reason:
 
     ```powershell
     icacls "C:\ProgramData\Lodestar" /remove:g *S-1-5-21-… /T /C
     ```
 
-   **Result:** `icacls` reports the files it processed. It removes that one account's entries and changes nothing else.
+   A work or school account's number starts with `S-1-12-1-`, and the reason gives no command for it. If that number is your own account, use it the same way: `/remove:g *S-1-12-1-…`.
+
+   **Result:** `icacls` reports the files it processed. It removes that one account's entries and changes nothing else. If the account isn't yours, don't run it: read the last paragraph of this section.
 4. Start the service, wait about 10 seconds, then check that it is still running:
 
     ```powershell

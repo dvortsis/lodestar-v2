@@ -348,17 +348,28 @@ pub const MOVE_AWAY: &str = "Someone else may have put files in it. As an admini
                              then run the Lodestar installer's Repair, which creates it again. \
                              See \"Fix Windows service error 3\" in the user guide";
 
-/// A name or SID as it may go into a message: printable, short, no quotes
-/// (it's pasted into a command line), no bidirectional overrides (they
-/// could make a message read differently from what it says).
+/// A name or SID as it may go into a message: [`plain`], short, no quotes
+/// (it's pasted into a command line).
 fn printable(text: &str) -> String {
+    plain(text)
+        .chars()
+        .filter(|c| *c != '"')
+        .take(256)
+        .collect()
+}
+
+/// `text` without control characters or bidirectional marks and overrides,
+/// which could make a message read differently from what it says (item
+/// names in a refusal are whoever could write the folder's choice).
+fn plain(text: &str) -> String {
     text.chars()
         .filter(|c| {
             !c.is_control()
-                && *c != '"'
-                && !matches!(*c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+                && !matches!(
+                    *c,
+                    '\u{200e}' | '\u{200f}' | '\u{061c}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+                )
         })
-        .take(256)
         .collect()
 }
 
@@ -437,7 +448,7 @@ pub fn refusal(
                  /remove:g *{full} /T /C. If it's anyone else: {MOVE_AWAY}."
             )
         }
-        None => format!("{dir} isn't private: {why}. {MOVE_AWAY}."),
+        None => format!("{dir} isn't private: {}. {MOVE_AWAY}.", plain(why)),
     }
 }
 
@@ -1045,6 +1056,24 @@ mod tests {
             assert!(!msg.contains("Repair, or remove"), "{other}: {msg}");
             assert!(msg.contains(MOVE_AWAY), "{other}: {msg}");
         }
+    }
+
+    /// An item name someone else chose can't make the message read
+    /// differently: bidirectional marks and control characters go.
+    #[test]
+    fn a_refusal_drops_marks_from_planted_names() {
+        let dir = Path::new(r"C:\ProgramData\Lodestar");
+        let seen = Inspection {
+            links: vec!["evil\u{202e}txt.exe\u{200f}\n".into()],
+            ..seen(PRIVATE, &[])
+        };
+        let why = verdict(&seen, Some(OWN)).unwrap_err();
+        let msg = refusal(dir, &seen, Some(OWN), &why, &|_| None);
+        assert!(msg.contains("eviltxt.exe is a link"), "{msg}");
+        assert!(
+            !msg.chars()
+                .any(|c| c.is_control() || ('\u{200e}'..='\u{202e}').contains(&c))
+        );
     }
 
     /// SDDL writes the built-in Administrator as `LA`, whose SID depends on

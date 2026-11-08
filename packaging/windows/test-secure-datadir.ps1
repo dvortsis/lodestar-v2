@@ -131,6 +131,28 @@ try {
   $d = New-Secured 'deep-entry'; Add-Me $d; Icacls @((Join-Path $d 'logs\lodestar.log'), '/grant', '*S-1-1-0:R')
   Expect 'the administrator plus a file inside open to Everyone' 1 (Invoke-Secure $d $me)
 
+  # A conditional (callback) Allow for Everyone deep inside: .NET's own rule list leaves those
+  # out, so only a check of the raw entries finds it.
+  $d = New-Secured 'deep-callback'; Add-Me $d
+  $f = Join-Path $d 'logs\lodestar.log'
+  $built = $false
+  try {
+    $acl = Get-Acl -LiteralPath $f
+    $acl.SetSecurityDescriptorSddlForm($acl.Sddl + '(XA;;FR;;;WD;(Exists LodestarTest))', 'Access')
+    Set-Acl -LiteralPath $f -AclObject $acl
+    $built = (Get-Acl -LiteralPath $f).Sddl -match 'XA;'
+  } catch { Write-Host "could not build a callback entry: $($_.Exception.Message)" }
+  if ($built) { Expect 'the administrator plus a callback entry inside' 1 (Invoke-Secure $d $me) }
+  else { Write-Host '::warning::skipped the callback-entry case: this Windows would not store one' }
+
+  # Only an exact user SID counts: no lower case, no trailing newline, no missing part.
+  $d = New-Secured 'sid-newline'; Add-Me $d
+  Expect 'the installer SID with a trailing newline' 1 (Invoke-Secure $d "$me`n")
+  $d = New-Secured 'sid-lower'; Add-Me $d
+  Expect 'the installer SID in lower case' 1 (Invoke-Secure $d $me.ToLowerInvariant())
+  $d = New-Secured 'sid-short'; Add-Me $d
+  Expect 'a malformed installer SID' 1 (Invoke-Secure $d ($me -replace '-[0-9]+$', ''))
+
   $d = New-Secured 'no-marker'; Add-Me $d; Remove-Item -LiteralPath (Join-Path $d '.lodestar-secured')
   Expect 'the administrator but no marker' 1 (Invoke-Secure $d $me)
 } finally {

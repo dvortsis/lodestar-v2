@@ -51,7 +51,7 @@
 		</div>
 		{@render fields(specs.filter((s) => !s.advanced))}
 		{#if advanced.length && advanced.length === specs.length}
-			<!-- A group of Advanced fields only (the Event Log): nothing to hide them behind. -->
+			<!-- A group of Advanced fields only: nothing to hide them behind. -->
 			{@render fields(advanced)}
 		{:else if advanced.length}
 			<details
