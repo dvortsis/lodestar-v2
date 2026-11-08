@@ -6094,7 +6094,9 @@
     "2026-11-08T07:48Z: CMP-4b: runner approved win32job =2.0.3 (Windows-only; pulls windows 0.61 + 12 crates, ~190 lock lines incl. landlock) under Q13; Job Object assign-after-CreateProcess race accepted (residual, like prlimit window); Linux Landlock via re-exec launcher approved with conditions; supervise/mod.rs hold/release ~50 lines approved. Owner FYI after merge (\u00a72.19).",
     "2026-11-08T07:48Z: CMP-5 brief must include: call lodestar_companions::supervise::limits::launcher_main() first thing in crates/lodestar main (argv sentinel contract from CMP-4b PR) + test that launcher mode does nothing else.",
     "2026-11-08T08:17Z: X-natural-strict-parity: real bug on main (suggest.rs natural_keeps_explicit_syntax; natural accepts what strict parse refuses; seed cc 6b5c49cd\u2026). Found on #607 Windows. Runner Opus helper fixing on slice/X-natural-strict-parity; needs slices.yaml entry in next runner PR. #607 re-ran once; if red again, land the fix first.",
-    "2026-11-08T08:36Z: CMP-4b PR #608 opened (142a9a89), CI running, ~2,350 lines w/o lock. CMP-5 wiring: `if let Some(code) = lodestar_companions::supervise::limits::launcher_main() { std::process::exit(code) }` first in main; launcher mode only when argv[1] == \"__lodestar-companion-launcher\"; plus a test that launcher mode does nothing else."
+    "2026-11-08T08:36Z: CMP-4b PR #608 opened (142a9a89), CI running, ~2,350 lines w/o lock. CMP-5 wiring: `if let Some(code) = lodestar_companions::supervise::limits::launcher_main() { std::process::exit(code) }` first in main; launcher mode only when argv[1] == \"__lodestar-companion-launcher\"; plus a test that launcher mode does nothing else.",
+    "2026-11-08T08:38Z: #609 X-natural-strict-parity opened (f3df317c, tests-only + hidden natural::tokens): natural refuses valid queries past its 32-token/512-byte cap (B7) before strict parse; property wrongly asserted parse fails. Review launched.",
+    "2026-11-08T08:38Z: UX follow-up: natural refusal text says 'more than 32 words and operators' and /parse docs (crates/api/src/search.rs, schema.d.ts) say '32 words', but the cap counts brackets and lone '-' too (~18 visible words can be refused). Wording fix, runner UX call later."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -6885,5 +6887,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T08:36Z"
+  "updated": "2026-11-08T08:38Z"
 }
