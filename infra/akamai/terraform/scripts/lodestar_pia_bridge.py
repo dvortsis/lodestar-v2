@@ -23,12 +23,15 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import http.client
 import json
 import logging
 import os
 import re
 import shlex
+import socket
 import ssl
+import stat
 import subprocess
 import sys
 import time
@@ -70,6 +73,7 @@ REMOTE_COMPOSE_DIR = "/home/lodestar/lodestar/pia-example"
 REMOTE_COMPOSE_FILE = "/home/lodestar/lodestar/pia-example/compose.vpn.yaml"
 REMOTE_DEFAULT_USER = "lodestar"
 REMOTE_DEFAULT_KEY = os.path.expanduser("~/.ssh/lodestar_akamai_ed25519")
+REMOTE_HELPER_BIN = "/usr/local/sbin/lodestar-vpn-helper"
 
 # PIA Root CA 4096-bit Certificate PEM
 PIA_ROOT_CA_PEM = """-----BEGIN CERTIFICATE-----
@@ -224,6 +228,91 @@ def redact_sensitive_text(text: str) -> str:
     text = re.sub(r'("SessionToken"\s*:\s*")[^"]+(")', r'\1[REDACTED]\2', text)
     text = re.sub(r'("SecretAccessKey"\s*:\s*")[^"]+(")', r'\1[REDACTED]\2', text)
     return text
+
+
+def write_secure_local_config(output_path: str | Path, content: str) -> Path:
+    """
+    Writes secret WireGuard configuration text to a local file with strictly verified permissions.
+    On Windows: strips inherited ACLs and grants only the current user full control via icacls.
+    On POSIX: enforces 0600 root/user-only permissions.
+    Guarantees atomic creation, rejects symlinks and reparse points, and ensures zero plaintext remnants on failure.
+    """
+    target = Path(output_path).resolve()
+    parent = target.parent
+    if not parent.is_dir():
+        raise PiaBridgeError(f"Destination parent directory does not exist: {parent}")
+
+    # Prevent symlink attacks on parent or destination file
+    if os.path.islink(target) or os.path.islink(parent):
+        raise PiaBridgeError("Symlink detected in configuration output path; export rejected for security.")
+
+    if os.name == "nt":
+        FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
+        if target.exists():
+            attrs = target.stat().st_file_attributes
+            if attrs & FILE_ATTRIBUTE_REPARSE_POINT:
+                raise PiaBridgeError("Target file is a Windows reparse point/symlink; export rejected.")
+        if parent.exists():
+            attrs = parent.stat().st_file_attributes
+            if attrs & FILE_ATTRIBUTE_REPARSE_POINT:
+                raise PiaBridgeError("Destination directory is a Windows reparse point/junction; export rejected.")
+
+    temp_path = parent / f"{target.name}.tmp.{os.urandom(6).hex()}"
+    try:
+        # Create temp file exclusively with restricted permissions
+        fd = os.open(temp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+
+        if os.name == "nt":
+            username = os.environ.get("USERNAME")
+            if not username:
+                raise PiaBridgeError("USERNAME environment variable missing; unable to enforce Windows ACL.")
+            # Remove inherited permissions and grant only the current user
+            acl_cmd = ["icacls", str(temp_path), "/inheritance:r", "/grant:r", f"{username}:(F)"]
+            res = subprocess.run(acl_cmd, capture_output=True, text=True, check=True)
+            if "successfully processed 1 files" not in res.stdout.lower():
+                raise PiaBridgeError(f"icacls failed to apply restricted ACL: {res.stdout.strip()}")
+            # Verify ACL on temp file before replacing target
+            chk = subprocess.run(["icacls", str(temp_path)], capture_output=True, text=True, check=True)
+            chk_out = chk.stdout.lower()
+            for forbidden in ["users", "everyone", "authenticated users"]:
+                if forbidden in chk_out:
+                    raise PiaBridgeError(f"Insecure ACL detected: {forbidden} granted access in {chk.stdout}")
+        else:
+            os.chmod(temp_path, 0o600)
+            mode = temp_path.stat().st_mode & 0o777
+            if mode != 0o600:
+                raise PiaBridgeError(f"Insecure POSIX permissions on {temp_path}: {oct(mode)}")
+
+        # Atomically replace target file
+        os.replace(temp_path, target)
+
+        # Post-write verification of effective permissions on target
+        if os.name == "nt":
+            chk = subprocess.run(["icacls", str(target)], capture_output=True, text=True, check=True)
+            chk_out = chk.stdout.lower()
+            for forbidden in ["users", "everyone", "authenticated users"]:
+                if forbidden in chk_out:
+                    target.unlink(missing_ok=True)
+                    raise PiaBridgeError(f"Target ACL verification failed: {forbidden} has access")
+        else:
+            mode = target.stat().st_mode & 0o777
+            if mode != 0o600:
+                target.unlink(missing_ok=True)
+                raise PiaBridgeError(f"Target file permissions not 0600: {oct(mode)}")
+
+        return target
+
+    except Exception:
+        # Guarantee no plaintext temporary or corrupted files remain on failure
+        if temp_path.exists():
+            temp_path.unlink(missing_ok=True)
+        if target.exists() and target.stat().st_size == 0:
+            target.unlink(missing_ok=True)
+        raise
 
 
 # -----------------------------------------------------------------------------
@@ -483,6 +572,28 @@ AwsSecretClient = AwsSecretManagerReader
 # -----------------------------------------------------------------------------
 # PIA Dynamic Endpoint Discovery & WireGuard API Negotiation
 # -----------------------------------------------------------------------------
+class BoundHttpsConnection(http.client.HTTPSConnection):
+    """
+    Binds the TCP transport directly to target_ip while strictly verifying TLS
+    against expected_hostname using standard Python SSLContext (SNI + cert verification).
+    """
+
+    def __init__(
+        self,
+        target_ip: str,
+        port: int,
+        expected_hostname: str,
+        context: ssl.SSLContext,
+        timeout: int = 15,
+    ) -> None:
+        super().__init__(host=target_ip, port=port, context=context, timeout=timeout)
+        self.expected_hostname = expected_hostname
+
+    def connect(self) -> None:
+        http.client.HTTPConnection.connect(self)
+        self.sock = self._context.wrap_socket(self.sock, server_hostname=self.expected_hostname)
+
+
 class PiaWireGuardClient:
     """Discovers endpoints dynamically and negotiates WireGuard parameters with PIA's API."""
 
@@ -624,20 +735,64 @@ class PiaWireGuardClient:
         public_key: str,
         timeout: int = 15,
     ) -> Dict[str, Any]:
-        """Registers the ephemeral public key on the selected PIA WireGuard endpoint."""
+        """
+        Registers the ephemeral public key on the selected PIA WireGuard endpoint.
+        Connects TCP directly to server_ip while validating TLS against server_cn.
+        """
+        if not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", server_ip):
+            raise WireGuardRegistrationError(f"Invalid server IP address format: '{server_ip}'")
+
+        if not re.match(r"^[a-zA-Z0-9.-]+$", server_cn):
+            raise WireGuardRegistrationError(f"Invalid server Common Name format: '{server_cn}'")
+
         if not validate_wireguard_key(public_key):
             raise WireGuardRegistrationError(f"Invalid public key format for registration: '{public_key}'")
 
         query = urllib.parse.urlencode({"pt": pia_token, "pubkey": public_key})
-        url = f"https://{server_cn}:1337/addKey?{query}"
+        url_path = f"/addKey?{query}"
 
         ssl_ctx = ssl.create_default_context()
         ssl_ctx.load_verify_locations(cadata=self.ca_cert_pem)
+        ssl_ctx.check_hostname = True
+        ssl_ctx.verify_mode = ssl.CERT_REQUIRED
 
-        req = urllib.request.Request(url, headers={"Host": server_cn, "User-Agent": "LodestarPiaBridge/1.0"})
         try:
-            with urllib.request.urlopen(req, timeout=timeout, context=ssl_ctx) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
+            conn = BoundHttpsConnection(
+                target_ip=server_ip,
+                port=1337,
+                expected_hostname=server_cn,
+                context=ssl_ctx,
+                timeout=timeout,
+            )
+            conn.request("GET", url_path, headers={"Host": server_cn, "User-Agent": "LodestarPiaBridge/1.0"})
+            resp = conn.getresponse()
+            if resp.status != 200:
+                raise WireGuardRegistrationError(
+                    f"PIA WireGuard endpoint {server_cn} ({server_ip}) returned HTTP {resp.status}"
+                )
+            body = resp.read().decode("utf-8")
+            conn.close()
+            data = json.loads(body)
+        except ssl.SSLCertVerificationError as exc:
+            redacted_err = redact_sensitive_text(str(exc))
+            raise WireGuardRegistrationError(
+                f"TLS certificate verification failed for PIA endpoint {server_cn} ({server_ip}): {redacted_err}"
+            )
+        except ssl.SSLError as exc:
+            redacted_err = redact_sensitive_text(str(exc))
+            raise WireGuardRegistrationError(
+                f"TLS handshake failed connecting to {server_cn} ({server_ip}): {redacted_err}"
+            )
+        except (TimeoutError, socket.timeout) as exc:
+            raise WireGuardRegistrationError(
+                f"Connection timeout contacting PIA endpoint {server_cn} ({server_ip}): {exc}"
+            )
+        except json.JSONDecodeError as exc:
+            raise WireGuardRegistrationError(
+                f"Malformed JSON response from PIA endpoint {server_cn} ({server_ip}): {exc}"
+            )
+        except WireGuardRegistrationError:
+            raise
         except Exception as exc:
             redacted_err = redact_sensitive_text(str(exc))
             raise WireGuardRegistrationError(
@@ -760,130 +915,173 @@ class LinodeSshProvisioner:
             raise SshConnectionError("ssh command not available on local PATH")
 
     def validate_remote_prerequisites(self) -> None:
-        """Validates that remote user can execute sudo docker commands and /dev/net/tun is available."""
+        """Validates that remote user can execute the helper preflight and /dev/net/tun is available."""
         self.verify_host_connectivity()
-        check_script = (
-            "sudo -n docker info >/dev/null 2>&1 && "
-            "test -c /dev/net/tun && "
-            "echo PREFLIGHT_OK"
-        )
-        res = self.run_remote_command(check_script, check=False)
-        if "PREFLIGHT_OK" not in res.stdout:
-            err = (res.stderr or "").strip()
+        res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} preflight", check=False)
+        if res.returncode != 0 or "PREFLIGHT_OK" not in res.stdout:
+            err = (res.stderr or res.stdout).strip()
             raise RemotePrerequisiteError(
                 f"Remote host {self.target_ip} failed prerequisite check. "
-                f"Verify that '{self.user}' has sudo access for docker and /dev/net/tun exists. Stderr: {err}"
+                f"Verify '{self.user}' has sudo access to {REMOTE_HELPER_BIN} and /dev/net/tun exists. Stderr: {err}"
             )
 
     def provision_wg0_config(self, wg0_conf: str) -> None:
         """
-        Transfers wg0.conf via standard input directly into /run/lodestar/vpn/wg0.conf.
+        Transfers wg0.conf via standard input directly into /run/lodestar/vpn/wg0.conf
+        using the root-owned deployment helper.
         Enforces 0700 directory permissions and 0600 root-only file permissions.
         """
         self.verify_host_connectivity()
-
-        # Remote install command reads from stdin; file contents never appear in process arguments
-        remote_script = (
-            f"sudo -n install -d -m 0700 -o root -g root {REMOTE_CONFIG_DIR} && "
-            f"sudo -n install -m 0600 -o root -g root /dev/stdin {REMOTE_CONFIG_FILE}"
-        )
-        try:
-            self.run_remote_command(remote_script, input_data=wg0_conf, check=True)
-        except subprocess.CalledProcessError as exc:
-            raise SshConnectionError(f"Failed to stream wg0.conf to {self.target_ip}: {exc.stderr.strip()}")
+        res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} write-config", input_data=wg0_conf, check=False)
+        if res.returncode != 0 or "CONFIG_OK" not in res.stdout:
+            err = (res.stderr or res.stdout).strip()
+            raise SshConnectionError(f"Failed to stream wg0.conf to {self.target_ip}: {err}")
 
         self.verify_remote_permissions()
 
     def verify_remote_permissions(self) -> None:
         """Confirms that remote runtime credentials are strictly root-only (0600 / 0700)."""
-        check_script = (
-            f"sudo -n stat -c '%a %U:%G' {REMOTE_CONFIG_DIR} && "
-            f"sudo -n stat -c '%a %U:%G' {REMOTE_CONFIG_FILE}"
-        )
-        try:
-            res = self.run_remote_command(check_script, check=True)
-            lines = res.stdout.strip().splitlines()
-            if len(lines) < 2:
-                raise RemotePermissionError("Incomplete stat output for remote VPN files")
+        res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} verify-permissions", check=False)
+        if res.returncode != 0:
+            err = (res.stderr or res.stdout).strip()
+            raise RemotePermissionError(f"Failed to verify remote file permissions: {err}")
 
-            dir_stat, file_stat = lines[0].strip(), lines[1].strip()
-            if dir_stat != "700 root:root":
-                raise RemotePermissionError(
-                    f"Insecure permissions on {REMOTE_CONFIG_DIR}: expected '700 root:root', got '{dir_stat}'"
-                )
-            if file_stat != "600 root:root":
-                raise RemotePermissionError(
-                    f"Insecure permissions on {REMOTE_CONFIG_FILE}: expected '600 root:root', got '{file_stat}'"
-                )
-        except subprocess.CalledProcessError as exc:
-            raise RemotePermissionError(f"Failed to verify remote file permissions: {exc.stderr.strip()}")
+        lines = res.stdout.strip().splitlines()
+        if len(lines) < 2:
+            raise RemotePermissionError("Incomplete stat output for remote VPN files")
+
+        dir_stat, file_stat = lines[0].strip(), lines[1].strip()
+        if dir_stat != "700 root:root":
+            raise RemotePermissionError(
+                f"Insecure permissions on {REMOTE_CONFIG_DIR}: expected '700 root:root', got '{dir_stat}'"
+            )
+        if file_stat != "600 root:root":
+            raise RemotePermissionError(
+                f"Insecure permissions on {REMOTE_CONFIG_FILE}: expected '600 root:root', got '{file_stat}'"
+            )
 
     def cleanup_runtime_credentials(self, compose_file: str = REMOTE_COMPOSE_FILE) -> None:
         """Securely stops containers and wipes runtime secrets from the Linode's tmpfs."""
         self.verify_host_connectivity()
-        cleanup_script = (
-            f"if [ -f {shlex.quote(compose_file)} ]; then "
-            f"  sudo -n docker compose -f {shlex.quote(compose_file)} down >/dev/null 2>&1 || true; "
-            f"fi; "
-            f"if [ -d {REMOTE_CONFIG_DIR} ]; then "
-            f"  sudo -n rm -rf {REMOTE_CONFIG_DIR}; "
-            f"fi"
-        )
-        try:
-            self.run_remote_command(cleanup_script, check=True)
-        except subprocess.CalledProcessError as exc:
-            raise SshConnectionError(f"Failed to clean up runtime credentials on {self.target_ip}: {exc.stderr.strip()}")
+        res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} cleanup", check=False)
+        if res.returncode != 0 or "CLEANUP_OK" not in res.stdout:
+            err = (res.stderr or res.stdout).strip()
+            raise SshConnectionError(f"Failed to clean up runtime credentials on {self.target_ip}: {err}")
 
     def start_vpn(self, compose_file: str = REMOTE_COMPOSE_FILE) -> None:
-        """Starts the Gluetun container via Docker Compose using elevated sudo privilege."""
-        safe_path = shlex.quote(compose_file)
-        cmd = f"sudo -n docker compose -f {safe_path} up -d gluetun"
-        try:
-            self.run_remote_command(cmd, check=True)
-        except subprocess.CalledProcessError as exc:
-            raise VpnConnectionError(f"Failed to start Gluetun container: {exc.stderr.strip()}")
+        """Starts the Gluetun container via Docker Compose using the root deployment helper."""
+        res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} start-vpn", check=False)
+        if res.returncode != 0 or "VPN_STARTED" not in res.stdout:
+            err = (res.stderr or res.stdout).strip()
+            raise VpnConnectionError(f"Failed to start Gluetun container: {err}")
 
-    def verify_leak_protection(self, max_retries: int = 8, delay_s: int = 5) -> Dict[str, Any]:
+    def verify_leak_protection(
+        self,
+        max_retries: int = 8,
+        delay_s: int = 5,
+        expected_server_ip: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
-        Independently and rigorously validates:
-        1. WireGuard handshake is active and recent (<= 120s) with transferred bytes > 0.
-        2. Egress public IP != host public IP.
-        3. Egress ISP / organization does NOT belong to Linode / Akamai.
-        4. DNS egress resolves through internal Gluetun resolver (127.0.0.1) and does not leak.
-        5. Routing and firewall policies enforce strict DROP on unencrypted egress.
-        6. IPv6 is disabled or blocked.
+        Independently and rigorously validates that all traffic is contained within the VPN:
+        1. Queries Linode host public IP for baseline comparison.
+        2. Validates WireGuard latest handshake timestamp is recent (<= 120s) and non-zero.
+        3. Validates WireGuard transfer statistics show active bidirectional bytes (> 0 rx/tx).
+        4. Validates WireGuard peer endpoint matches expected server IP.
+        5. Validates Gluetun egress public IP is active and does NOT match Linode host public IP.
+        6. Validates egress ISP / organization does NOT belong to Linode / Akamai.
+        7. Validates DNS queries resolve through internal DoT resolver (127.0.0.1) and direct unencrypted 8.8.8.8 DNS is blocked.
+        8. Validates iptables OUTPUT default policy is strictly DROP.
+        9. Validates IPv6 is disabled in the container namespace.
+
+        Every check fails closed: any command failure, timeout, or missing/ambiguous output raises an exception.
         """
         # Step 1: Query Linode host public IP
         host_cmd = "curl -s --max-time 5 https://checkip.amazonaws.com || curl -s --max-time 5 https://api.ipify.org"
         host_res = self.run_remote_command(host_cmd, check=False)
-        host_ip = host_res.stdout.strip() or self.target_ip
+        host_ip = host_res.stdout.strip()
+        if not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host_ip):
+            host_ip = self.target_ip
+        if not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host_ip):
+            raise LeakDetectedError("Unable to determine valid Linode host public IP for baseline leak check")
 
-        # Step 2: Poll Gluetun container for handshake and active egress IP
-        handshake_ok = False
+        # Step 2: Poll Gluetun container for handshake, transfer, endpoint, and egress IP
+        handshake_valid = False
+        transfer_valid = False
+        endpoint_valid = False
         vpn_ip: Optional[str] = None
-        probe_cmd = (
-            "sudo -n docker exec gluetun wg show wg0 && "
-            "echo '---WG_END---' && "
-            "sudo -n docker exec gluetun curl -s --max-time 5 https://checkip.amazonaws.com"
-        )
+        handshake_age: Optional[int] = None
+        rx_bytes = 0
+        tx_bytes = 0
+        actual_ep_ip = ""
 
         for attempt in range(1, max_retries + 1):
-            res = self.run_remote_command(probe_cmd, check=False)
-            if res.returncode == 0 and "---WG_END---" in res.stdout:
-                parts = res.stdout.split("---WG_END---")
-                wg_out = parts[0]
-                ip_out = parts[1].strip()
+            # Probe 1: Handshake timestamp
+            hs_res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} wg-handshake", check=False)
+            if hs_res.returncode == 0 and hs_res.stdout.strip():
+                lines = hs_res.stdout.strip().splitlines()
+                parts = lines[0].split()
+                if len(parts) >= 2:
+                    try:
+                        epoch_seconds = int(parts[1])
+                        clock_res = self.run_remote_command("date +%s", check=False)
+                        if clock_res.returncode == 0 and clock_res.stdout.strip():
+                            remote_now = int(clock_res.stdout.strip())
+                            age = remote_now - epoch_seconds
+                            if epoch_seconds > 0:
+                                handshake_age = age
+                                if 0 <= age <= 120:
+                                    handshake_valid = True
+                    except (ValueError, IndexError):
+                        pass
 
-                if "latest handshake" in wg_out and "transfer:" in wg_out:
-                    handshake_ok = True
-                if ip_out and re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", ip_out):
-                    vpn_ip = ip_out
-                    if handshake_ok:
-                        break
+            # Probe 2: Transfer bytes
+            tx_res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} wg-transfer", check=False)
+            if tx_res.returncode == 0 and tx_res.stdout.strip():
+                lines = tx_res.stdout.strip().splitlines()
+                parts = lines[0].split()
+                if len(parts) >= 3:
+                    try:
+                        rx_bytes = int(parts[1])
+                        tx_bytes = int(parts[2])
+                        if rx_bytes > 0 and tx_bytes > 0:
+                            transfer_valid = True
+                    except (ValueError, IndexError):
+                        pass
+
+            # Probe 3: Endpoint IP
+            ep_res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} wg-endpoints", check=False)
+            if ep_res.returncode == 0 and ep_res.stdout.strip():
+                lines = ep_res.stdout.strip().splitlines()
+                parts = lines[0].split()
+                if len(parts) >= 2:
+                    actual_ep_ip = parts[1].split(":")[0]
+                    if expected_server_ip:
+                        if actual_ep_ip == expected_server_ip:
+                            endpoint_valid = True
+                    else:
+                        endpoint_valid = bool(actual_ep_ip)
+
+            # Probe 4: Egress public IP
+            eg_res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} query-egress", check=False)
+            if eg_res.returncode == 0 and eg_res.stdout.strip():
+                candidate_ip = eg_res.stdout.strip()
+                if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", candidate_ip):
+                    vpn_ip = candidate_ip
+
+            if handshake_valid and transfer_valid and endpoint_valid and vpn_ip:
+                break
             time.sleep(delay_s)
 
-        if not handshake_ok:
+        if not handshake_valid:
+            if handshake_age is not None and handshake_age > 120:
+                raise VpnHandshakeError(f"WireGuard handshake is stale ({handshake_age}s > 120s limit) on {self.target_ip}")
             raise VpnHandshakeError(f"WireGuard tunnel handshake failed or not established on {self.target_ip}")
+
+        if not transfer_valid:
+            raise VpnHandshakeError(f"WireGuard tunnel has 0 transferred bytes (rx={rx_bytes}, tx={tx_bytes}) on {self.target_ip}")
+
+        if not endpoint_valid:
+            raise VpnConnectionError(f"WireGuard endpoint mismatch: expected {expected_server_ip}, got {actual_ep_ip}")
 
         if not vpn_ip:
             raise VpnConnectionError(f"Gluetun container has no outbound VPN connectivity on {self.target_ip}")
@@ -894,43 +1092,53 @@ class LinodeSshProvisioner:
                 f"CRITICAL LEAK: VPN egress IP ({vpn_ip}) matches Linode host public IP ({host_ip})!"
             )
 
-        # Step 4: Verify ISP / Organization is not Linode/Akamai
-        org_cmd = "sudo -n docker exec gluetun curl -s --max-time 5 https://ipinfo.io/json"
-        org_res = self.run_remote_command(org_cmd, check=False)
-        if org_res.returncode == 0 and org_res.stdout:
-            try:
-                ip_info = json.loads(org_res.stdout)
-                org = ip_info.get("org", "").lower()
-                if "linode" in org or "akamai" in org:
-                    raise LeakDetectedError(
-                        f"CRITICAL LEAK: Container egress is routing through host ISP/cloud ({ip_info.get('org')})!"
-                    )
-            except json.JSONDecodeError:
-                pass
+        # Step 4: Verify ISP / Organization is not Linode/Akamai (fail-closed if missing)
+        org_res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} query-ipinfo", check=False)
+        if org_res.returncode != 0 or not org_res.stdout.strip():
+            raise LeakDetectedError(f"Egress ISP ownership lookup unavailable on {self.target_ip}")
+        try:
+            ip_info = json.loads(org_res.stdout)
+        except json.JSONDecodeError:
+            raise LeakDetectedError("Egress ISP lookup failed: invalid JSON from ipinfo.io")
+        org = ip_info.get("org", "").lower()
+        if not org:
+            raise LeakDetectedError("Egress ISP lookup failed: missing 'org' attribute in ipinfo response")
+        if "linode" in org or "akamai" in org:
+            raise LeakDetectedError(
+                f"CRITICAL LEAK: Container egress is routing through host ISP/cloud ({ip_info.get('org')})!"
+            )
 
-        # Step 5: DNS Leak check - resolver must resolve locally
-        dns_cmd = "sudo -n docker exec gluetun nslookup -timeout=5 google.com 127.0.0.1 >/dev/null 2>&1 && echo DNS_OK"
-        dns_res = self.run_remote_command(dns_cmd, check=False)
-        if "DNS_OK" not in dns_res.stdout:
+        # Step 5: DNS Leak check - resolver must resolve internally, external bypass must be blocked
+        dns_res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} query-dns", check=False)
+        if dns_res.returncode != 0 or "Address" not in dns_res.stdout:
             raise LeakDetectedError(f"Container DNS resolution failed through internal resolver on {self.target_ip}")
 
-        # Step 6: Firewall policy check
-        fw_cmd = "sudo -n docker exec gluetun iptables -S OUTPUT"
-        fw_res = self.run_remote_command(fw_cmd, check=False)
-        if fw_res.returncode == 0 and "-P OUTPUT DROP" not in fw_res.stdout:
+        direct_dns = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} query-dns-direct", check=False)
+        if direct_dns.returncode == 0 and "Address" in direct_dns.stdout:
+            raise LeakDetectedError("CRITICAL LEAK: Container can send unencrypted DNS queries directly to external DNS (8.8.8.8) bypassing VPN!")
+
+        # Step 6: Firewall policy check (fail-closed)
+        fw_res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} inspect-firewall", check=False)
+        if fw_res.returncode != 0:
+            raise LeakDetectedError(f"Firewall inspection command failed on {self.target_ip}")
+        if "-P OUTPUT DROP" not in fw_res.stdout:
             raise LeakDetectedError("Gluetun firewall kill switch is inactive (-P OUTPUT DROP not found)")
 
-        # Step 7: IPv6 check
-        ipv6_cmd = "sudo -n docker exec gluetun cat /proc/sys/net/ipv6/conf/all/disable_ipv6"
-        ipv6_res = self.run_remote_command(ipv6_cmd, check=False)
-        if ipv6_res.returncode == 0 and ipv6_res.stdout.strip() != "1":
-            raise LeakDetectedError("IPv6 is not disabled inside Gluetun container; potential IPv6 routing leak")
+        # Step 7: IPv6 check (fail-closed)
+        ipv6_res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} inspect-ipv6", check=False)
+        if ipv6_res.returncode != 0:
+            raise LeakDetectedError(f"IPv6 inspection command failed on {self.target_ip}")
+        if ipv6_res.stdout.strip() != "1":
+            raise LeakDetectedError(f"IPv6 is not disabled inside Gluetun container (disable_ipv6='{ipv6_res.stdout.strip()}'); potential IPv6 routing leak")
 
         return {
             "status": "protected",
             "host_ip": host_ip,
             "vpn_ip": vpn_ip,
             "handshake": "active",
+            "handshake_age": handshake_age,
+            "rx_bytes": rx_bytes,
+            "tx_bytes": tx_bytes,
             "dns_leak_protected": True,
             "kill_switch_active": True,
         }
@@ -943,14 +1151,13 @@ class LinodeSshProvisioner:
             logger.info(f"Leak verification confirmed: VPN egress is {leak_info['vpn_ip']} (Host is {leak_info['host_ip']})")
         except Exception as exc:
             logger.error(f"Pre-crawler leak check failed: {exc}. Aborting crawler start and shutting down containers.")
-            self.run_remote_command(f"sudo -n docker compose -f {shlex.quote(compose_file)} down", check=False)
+            self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} cleanup", check=False)
             raise
 
-        safe_path = shlex.quote(compose_file)
-        cmd = f"sudo -n docker compose -f {safe_path} up -d crawler"
-        res = self.run_remote_command(cmd, check=False)
-        if res.returncode != 0:
-            raise VpnConnectionError(f"Failed to start crawler container: {res.stderr.strip()}")
+        res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} start-crawler", check=False)
+        if res.returncode != 0 or "CRAWLER_STARTED" not in res.stdout:
+            err = (res.stderr or res.stdout).strip()
+            raise VpnConnectionError(f"Failed to start crawler container: {err}")
 
 
 # -----------------------------------------------------------------------------
@@ -994,37 +1201,16 @@ class ComposeDeployer:
         local_compose_path: str,
         remote_compose_path: str = REMOTE_COMPOSE_FILE,
     ) -> None:
-        """Transfers Compose file over SSH, checks checksum integrity, and runs remote syntax check."""
+        """Transfers Compose file over SSH, validates syntax locally and remotely via helper."""
         content = self.validate_local_compose(local_compose_path)
-        local_sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
-
-        # Check if already present and matches
-        remote_dir = str(Path(remote_compose_path).parent)
-        check_cmd = f"sudo -n install -d -m 0755 -o lodestar -g lodestar {remote_dir} && sha256sum {remote_compose_path} 2>/dev/null || true"
-        existing = self.ssh.run_remote_command(check_cmd, check=False)
-
-        if local_sha in existing.stdout:
-            logger.info("Remote Compose file already up to date with matching SHA-256.")
-        else:
-            # Transfer securely via stdin
-            install_cmd = f"sudo -n install -m 0644 -o lodestar -g lodestar /dev/stdin {remote_compose_path}"
-            self.ssh.run_remote_command(install_cmd, input_data=content, check=True)
-
-            # Validate remote checksum
-            verify_cmd = f"sha256sum {remote_compose_path}"
-            verify_res = self.ssh.run_remote_command(verify_cmd, check=True)
-            remote_sha = verify_res.stdout.split()[0] if verify_res.stdout else ""
-            if remote_sha != local_sha:
-                raise ComposeValidationError(
-                    f"Integrity check failed after transfer: expected {local_sha}, got {remote_sha}"
-                )
-
-        # Validate remote Compose configuration syntax with docker compose config
-        config_check = f"sudo -n docker compose -f {remote_compose_path} config --quiet"
-        config_res = self.ssh.run_remote_command(config_check, check=False)
-        if config_res.returncode != 0:
-            err = config_res.stderr.strip()
-            raise ComposeValidationError(f"Remote Docker Compose configuration validation failed: {err}")
+        res = self.ssh.run_remote_command(
+            f"sudo -n {REMOTE_HELPER_BIN} install-compose",
+            input_data=content,
+            check=False,
+        )
+        if res.returncode != 0 or "COMPOSE_OK" not in res.stdout:
+            err = (res.stderr or res.stdout).strip()
+            raise ComposeValidationError(f"Remote Docker Compose installation failed: {err}")
 
 
 # -----------------------------------------------------------------------------
@@ -1091,7 +1277,7 @@ def run_bridge_workflow(
     provisioner.start_vpn(remote_compose_path)
 
     # Step 6: Verify leak protection
-    leak_res = provisioner.verify_leak_protection()
+    leak_res = provisioner.verify_leak_protection(expected_server_ip=region_info["server_ip"])
 
     # Step 7: Optionally start crawler
     if start_crawler_workload:
@@ -1214,11 +1400,8 @@ def main() -> int:
                 dns_servers=params["dns_servers"],
             )
 
-            out_path = Path(args.output).resolve()
-            out_path.write_text(cfg, encoding="utf-8")
-            if os.name != "nt":
-                os.chmod(out_path, 0o600)
-            print(f"[SECURE] WireGuard configuration written to {out_path} with restricted permissions (secrets redacted from stdout).")
+            out_path = write_secure_local_config(args.output, cfg)
+            print(f"[SECURE] WireGuard configuration written to {out_path} with verified restricted permissions (secrets redacted from stdout).")
             return 0
 
         if args.command == "provision":

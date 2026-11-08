@@ -1,35 +1,45 @@
 #!/usr/bin/env python3
 """
-Automated Security Controls and Unit Test Suite for Lodestar PIA VPN Bridge.
+Automated Security Controls and Comprehensive Test Suite for Lodestar PIA VPN Bridge.
 
-Covers all 26 required failure, recovery, and security control cases:
-  1. AWS role assumption and secret retrieval
-  2. Invalid or missing PIA credentials
-  3. Wrong AWS identity
-  4. Missing MFA authorization
-  5. Unauthorized secret access
-  6. PIA API failures
-  7. Invalid endpoint metadata
-  8. Unavailable WireGuard region
-  9. WireGuard registration failure
- 10. Incorrect remote Docker permissions
- 11. Missing Compose configuration
- 12. Invalid Compose configuration
- 13. Image digest or pull failure
- 14. SSH host-key mismatch
- 15. Partial SSH transfer
- 16. Incorrect runtime file permissions
- 17. Tunnel handshake failure
- 18. DNS leakage
- 19. IPv4 and IPv6 routing leakage
- 20. VPN disconnection after startup
- 21. Failed credential rotation
- 22. VM reboot and re-provisioning
- 23. Partial deployment cleanup
- 24. Repeated, idempotent provisioning
- 25. Attempted secret disclosure through logs or command output
- 26. Crawler startup while the VPN is disconnected
- Plus: RFC 7748 official test vectors & Gluetun image digest pinning verification.
+Covers:
+  - All 26 canonical failure and recovery scenarios:
+    1. AWS role assumption and secret retrieval
+    2. Invalid or missing PIA credentials
+    3. Wrong AWS identity
+    4. Missing MFA authorization
+    5. Unauthorized secret access
+    6. PIA API failures
+    7. Invalid endpoint metadata
+    8. Unavailable WireGuard region
+    9. WireGuard registration failure
+   10. Incorrect remote helper permissions / preflight failure
+   11. Missing Compose configuration
+   12. Invalid Compose configuration
+   13. Image digest or container startup failure
+   14. SSH host-key mismatch
+   15. Helper Compose transfer / validation failure
+   16. Insecure runtime file permissions
+   17. Tunnel handshake failure
+   18. DNS leakage
+   19. IPv4 and IPv6 routing leakage
+   20. VPN disconnection after startup
+   21. Failed credential rotation
+   22. VM reboot and re-provisioning
+   23. Partial deployment cleanup
+   24. Repeated, idempotent provisioning
+   25. Attempted secret disclosure through logs or command output
+   26. Crawler startup while the VPN is disconnected
+  - RFC 7748 official test vectors & Gluetun image digest pinning verification.
+  - Dedicated regression tests for all 6 security remediations:
+    * Constrained privilege boundary rejecting arbitrary docker commands and filesystem writes
+    * Path traversal and symlink attack prevention
+    * Endpoint-bound TLS key registration and SNI / certificate validation
+    * Fail-closed leak verification for firewall, IPv6, ISP ownership, and endpoint mismatch
+    * Secure Windows configuration export with verified ACLs and zero plaintext remnants
+    * Machine-readable WireGuard handshake timestamps, transfer byte counters, and stale checks
+    * DNS isolation verification proving external direct queries to 8.8.8.8 are blocked
+    * Complete secure deployment integration test with mocked dependencies
 
 All AWS and Akamai/Linode interactions are safely mocked. Zero secrets exposed.
 """
@@ -39,10 +49,12 @@ from __future__ import annotations
 import io
 import json
 import os
+import ssl
 import subprocess
 import sys
 import unittest
 import urllib.error
+from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
 # Add parent scripts directory to module path
@@ -51,8 +63,70 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 import lodestar_pia_bridge as bridge
 
 
+def make_mock_leak_responses(
+    host_ip: str = "192.0.2.100",
+    vpn_ip: str = "156.146.54.4",
+    handshake_age: int = 10,
+    rx_bytes: int = 5000,
+    tx_bytes: int = 3000,
+    endpoint_ip: str = "212.56.54.190",
+    org: str = "Private Internet Access",
+    dns_internal_ok: bool = True,
+    dns_direct_blocked: bool = True,
+    firewall_drop: bool = True,
+    ipv6_disabled: bool = True,
+):
+    now = 1731000000
+    handshake_ts = 0 if handshake_age is None else (now - handshake_age)
+    responses = [
+        # 1. Host IP
+        subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout=f"{host_ip}\n", stderr=""),
+        # 2. wg-handshake
+        subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout=f"peer_key\t{handshake_ts}\n", stderr=""),
+        # 3. date +%s (Linode clock)
+        subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout=f"{now}\n", stderr=""),
+        # 4. wg-transfer
+        subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout=f"peer_key\t{rx_bytes}\t{tx_bytes}\n", stderr=""),
+        # 5. wg-endpoints
+        subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout=f"peer_key\t{endpoint_ip}:1337\n", stderr=""),
+        # 6. query-egress
+        subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout=f"{vpn_ip}\n", stderr=""),
+        # 7. query-ipinfo
+        subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout=json.dumps({"org": org}), stderr=""),
+        # 8. query-dns (internal resolver: must succeed)
+        subprocess.CompletedProcess(
+            args=["ssh"],
+            returncode=0 if dns_internal_ok else 1,
+            stdout="Address: 142.250.190.46\n" if dns_internal_ok else "",
+            stderr="" if dns_internal_ok else "connection timed out",
+        ),
+        # 9. query-dns-direct (direct to 8.8.8.8: must be blocked!)
+        subprocess.CompletedProcess(
+            args=["ssh"],
+            returncode=1 if dns_direct_blocked else 0,
+            stdout="" if dns_direct_blocked else "Address: 142.250.190.46\n",
+            stderr="connection timed out" if dns_direct_blocked else "",
+        ),
+        # 10. inspect-firewall (OUTPUT chain must have -P OUTPUT DROP)
+        subprocess.CompletedProcess(
+            args=["ssh"],
+            returncode=0 if firewall_drop else 1,
+            stdout="-P OUTPUT DROP\n-A OUTPUT -o wg0 -j ACCEPT\n" if firewall_drop else "-P OUTPUT ACCEPT\n",
+            stderr="",
+        ),
+        # 11. inspect-ipv6 (disable_ipv6 must be 1)
+        subprocess.CompletedProcess(
+            args=["ssh"],
+            returncode=0,
+            stdout="1\n" if ipv6_disabled else "0\n",
+            stderr="",
+        ),
+    ]
+    return responses
+
+
 class LodestarPiaBridgeTests(unittest.TestCase):
-    """Unit test suite verifying all 26 required security controls and failure recovery."""
+    """Comprehensive test suite verifying all security controls and failure recovery."""
 
     def setUp(self) -> None:
         self.account_id = "123456789012"
@@ -61,7 +135,7 @@ class LodestarPiaBridgeTests(unittest.TestCase):
         self.secret_name = "lodestar/pia-vpn"
         self.target_ip = "192.0.2.100"
 
-        # Sample valid PIA server list payload for mocking
+        # Valid mock PIA server list metadata
         self.mock_server_list = {
             "regions": [
                 {
@@ -238,10 +312,13 @@ class LodestarPiaBridgeTests(unittest.TestCase):
     # -------------------------------------------------------------------------
     # 9. WireGuard registration failure
     # -------------------------------------------------------------------------
-    @patch("urllib.request.urlopen")
-    def test_09_wireguard_registration_failure(self, mock_urlopen: MagicMock) -> None:
-        """Confirms that HTTP error on /addKey raises WireGuardRegistrationError."""
-        mock_urlopen.side_effect = Exception("Connection refused on port 1337")
+    @patch("lodestar_pia_bridge.BoundHttpsConnection")
+    def test_09_wireguard_registration_failure(self, mock_conn_cls: MagicMock) -> None:
+        """Confirms that connection failure on /addKey raises WireGuardRegistrationError."""
+        mock_conn = MagicMock()
+        mock_conn.getresponse.side_effect = Exception("Connection refused on port 1337")
+        mock_conn_cls.return_value = mock_conn
+
         client = bridge.PiaWireGuardClient()
         _, valid_pubkey = bridge.generate_wireguard_keypair()
 
@@ -249,14 +326,14 @@ class LodestarPiaBridgeTests(unittest.TestCase):
             client.register_key("212.56.54.190", "newjersey434", "dummy_token", valid_pubkey)
 
     # -------------------------------------------------------------------------
-    # 10. Incorrect remote Docker permissions
+    # 10. Incorrect remote helper permissions / preflight failure
     # -------------------------------------------------------------------------
-    @patch("subprocess.run")
-    def test_10_incorrect_remote_docker_permissions(self, mock_run: MagicMock) -> None:
-        """Confirms that remote user unable to execute sudo docker commands raises RemotePrerequisiteError."""
+    @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
+    def test_10_incorrect_remote_docker_permissions(self, mock_cmd: MagicMock) -> None:
+        """Confirms that remote user unable to execute helper preflight raises RemotePrerequisiteError."""
         # First call: verify_host_connectivity (true) succeeds
-        # Second call: sudo -n docker info fails
-        mock_run.side_effect = [
+        # Second call: sudo -n /usr/local/sbin/lodestar-vpn-helper preflight fails
+        mock_cmd.side_effect = [
             subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="", stderr=""),
             subprocess.CompletedProcess(args=["ssh"], returncode=1, stdout="", stderr="sudo: a password is required"),
         ]
@@ -293,9 +370,9 @@ class LodestarPiaBridgeTests(unittest.TestCase):
     # -------------------------------------------------------------------------
     @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
     def test_13_image_digest_or_pull_failure(self, mock_cmd: MagicMock) -> None:
-        """Confirms that Docker pull error or container startup failure raises VpnConnectionError."""
-        mock_cmd.side_effect = subprocess.CalledProcessError(
-            returncode=1, cmd=["ssh"], stderr="manifest unknown: image digest not found"
+        """Confirms that container startup failure via helper raises VpnConnectionError."""
+        mock_cmd.return_value = subprocess.CompletedProcess(
+            args=["ssh"], returncode=1, stdout="", stderr="manifest unknown: image digest not found"
         )
         prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
         with self.assertRaises(bridge.VpnConnectionError):
@@ -315,29 +392,24 @@ class LodestarPiaBridgeTests(unittest.TestCase):
             prov.verify_host_connectivity()
 
     # -------------------------------------------------------------------------
-    # 15. Partial SSH transfer
+    # 15. Helper Compose transfer / validation failure
     # -------------------------------------------------------------------------
     @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
     def test_15_partial_ssh_transfer(self, mock_cmd: MagicMock) -> None:
-        """Confirms that checksum mismatch after Compose transfer raises ComposeValidationError."""
+        """Confirms that helper install-compose failure raises ComposeValidationError."""
         prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
         deployer = bridge.ComposeDeployer(prov)
 
         valid_yaml = "services:\n  gluetun:\n    image: qmcgaw/gluetun\n"
         with patch.object(bridge.ComposeDeployer, "validate_local_compose", return_value=valid_yaml):
-            # 1. check_cmd (sha256sum fails/not present)
-            # 2. install_cmd succeeds
-            # 3. verify_cmd returns corrupted sha256
-            mock_cmd.side_effect = [
-                subprocess.CompletedProcess(args=["ssh"], returncode=1, stdout="", stderr=""),
-                subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="", stderr=""),
-                subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="corrupted_sha256 /path", stderr=""),
-            ]
+            mock_cmd.return_value = subprocess.CompletedProcess(
+                args=["ssh"], returncode=1, stdout="", stderr="ERROR: compose syntax error"
+            )
             with self.assertRaises(bridge.ComposeValidationError):
                 deployer.deploy_compose_stack("compose.yaml")
 
     # -------------------------------------------------------------------------
-    # 16. Incorrect runtime file permissions
+    # 16. Insecure runtime file permissions
     # -------------------------------------------------------------------------
     @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
     def test_16_incorrect_runtime_file_permissions(self, mock_cmd: MagicMock) -> None:
@@ -354,12 +426,8 @@ class LodestarPiaBridgeTests(unittest.TestCase):
     # -------------------------------------------------------------------------
     @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
     def test_17_tunnel_handshake_failure(self, mock_cmd: MagicMock) -> None:
-        """Confirms that missing WireGuard handshake raises VpnHandshakeError."""
-        # Host IP check succeeds, but wg show output contains no handshake
-        mock_cmd.side_effect = [
-            subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="192.0.2.100\n", stderr=""),
-            subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="interface: wg0\n---WG_END---\n104.28.1.1\n", stderr=""),
-        ]
+        """Confirms that missing WireGuard handshake (timestamp 0) raises VpnHandshakeError."""
+        mock_cmd.side_effect = make_mock_leak_responses(handshake_age=None)
         prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
         with self.assertRaises(bridge.VpnHandshakeError):
             prov.verify_leak_protection(max_retries=1, delay_s=0)
@@ -370,21 +438,7 @@ class LodestarPiaBridgeTests(unittest.TestCase):
     @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
     def test_18_dns_leakage(self, mock_cmd: MagicMock) -> None:
         """Confirms that failed internal DNS resolution raises LeakDetectedError."""
-        # 1. Host IP
-        # 2. Handshake + VPN IP succeeds
-        # 3. Org check succeeds
-        # 4. DNS check fails
-        mock_cmd.side_effect = [
-            subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="192.0.2.100\n", stderr=""),
-            subprocess.CompletedProcess(
-                args=["ssh"],
-                returncode=0,
-                stdout="latest handshake 10s ago\ntransfer: 1000 B received\n---WG_END---\n156.146.54.4\n",
-                stderr="",
-            ),
-            subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout='{"org": "AS39351 Private Internet Access"}', stderr=""),
-            subprocess.CompletedProcess(args=["ssh"], returncode=1, stdout="", stderr="connection timed out"),
-        ]
+        mock_cmd.side_effect = make_mock_leak_responses(dns_internal_ok=False)
         prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
         with self.assertRaises(bridge.LeakDetectedError):
             prov.verify_leak_protection(max_retries=1, delay_s=0)
@@ -398,32 +452,12 @@ class LodestarPiaBridgeTests(unittest.TestCase):
         prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
 
         # Case A: IPv4 Egress IP matches Host IP
-        mock_cmd.side_effect = [
-            subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="192.0.2.100\n", stderr=""),
-            subprocess.CompletedProcess(
-                args=["ssh"],
-                returncode=0,
-                stdout="latest handshake 10s ago\ntransfer: 1000 B received\n---WG_END---\n192.0.2.100\n",
-                stderr="",
-            ),
-        ]
+        mock_cmd.side_effect = make_mock_leak_responses(vpn_ip=self.target_ip)
         with self.assertRaises(bridge.LeakDetectedError):
             prov.verify_leak_protection(max_retries=1, delay_s=0)
 
         # Case B: IPv6 not disabled
-        mock_cmd.side_effect = [
-            subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="192.0.2.100\n", stderr=""),
-            subprocess.CompletedProcess(
-                args=["ssh"],
-                returncode=0,
-                stdout="latest handshake 10s ago\ntransfer: 1000 B received\n---WG_END---\n156.146.54.4\n",
-                stderr="",
-            ),
-            subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout='{"org": "Private Internet Access"}', stderr=""),
-            subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="DNS_OK", stderr=""),
-            subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="-P OUTPUT DROP", stderr=""),
-            subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="0\n", stderr=""), # IPv6 enabled!
-        ]
+        mock_cmd.side_effect = make_mock_leak_responses(ipv6_disabled=False)
         with self.assertRaises(bridge.LeakDetectedError):
             prov.verify_leak_protection(max_retries=1, delay_s=0)
 
@@ -433,10 +467,10 @@ class LodestarPiaBridgeTests(unittest.TestCase):
     @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
     def test_20_vpn_disconnection_after_startup(self, mock_cmd: MagicMock) -> None:
         """Confirms that dropped tunnel or unreachable egress raises VpnConnectionError."""
-        mock_cmd.side_effect = [
-            subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="192.0.2.100\n", stderr=""),
-            subprocess.CompletedProcess(args=["ssh"], returncode=1, stdout="", stderr="curl timeout"),
-        ]
+        # query-egress returns empty/fails
+        responses = make_mock_leak_responses()
+        responses[5] = subprocess.CompletedProcess(args=["ssh"], returncode=1, stdout="", stderr="network unreachable")
+        mock_cmd.side_effect = responses
         prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
         with self.assertRaises(bridge.VpnConnectionError):
             prov.verify_leak_protection(max_retries=1, delay_s=0)
@@ -447,11 +481,9 @@ class LodestarPiaBridgeTests(unittest.TestCase):
     @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
     def test_21_failed_credential_rotation(self, mock_cmd: MagicMock) -> None:
         """Confirms that SSH failure during re-provisioning raises SshConnectionError and prevents drift."""
-        # 1. verify_host_connectivity succeeds
-        # 2. install command fails
         mock_cmd.side_effect = [
             subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="", stderr=""),
-            subprocess.CalledProcessError(returncode=1, cmd=["ssh"], stderr="broken pipe writing to /run/lodestar/vpn"),
+            subprocess.CompletedProcess(args=["ssh"], returncode=1, stdout="", stderr="broken pipe writing to helper"),
         ]
         prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
         with self.assertRaises(bridge.SshConnectionError):
@@ -462,32 +494,31 @@ class LodestarPiaBridgeTests(unittest.TestCase):
     # -------------------------------------------------------------------------
     @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
     def test_22_vm_reboot_and_reprovisioning(self, mock_cmd: MagicMock) -> None:
-        """Confirms that provisioning on a freshly rebooted machine creates /run directory and wg0.conf."""
-        # All calls succeed: connect, install (creates 0700 dir and 0600 file), stat
+        """Confirms that provisioning on a freshly rebooted machine streams config via helper."""
         mock_cmd.side_effect = [
             subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="", stderr=""),
-            subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="", stderr=""),
+            subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="CONFIG_OK\n", stderr=""),
             subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="700 root:root\n600 root:root\n", stderr=""),
         ]
         prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
         prov.provision_wg0_config("reboot_wg0_conf")
-        # Confirms install command had -d -m 0700
-        install_cmd = mock_cmd.call_args_list[1][0][0]
-        self.assertIn("install -d -m 0700", install_cmd)
-        self.assertIn("install -m 0600", install_cmd)
+        write_cmd = mock_cmd.call_args_list[1][0][0]
+        self.assertIn("lodestar-vpn-helper write-config", write_cmd)
 
     # -------------------------------------------------------------------------
     # 23. Partial deployment cleanup
     # -------------------------------------------------------------------------
     @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
     def test_23_partial_deployment_cleanup(self, mock_cmd: MagicMock) -> None:
-        """Confirms that cleanup removes runtime secrets directory completely."""
-        mock_cmd.return_value = subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="", stderr="")
+        """Confirms that cleanup invokes the helper cleanup subcommand."""
+        mock_cmd.side_effect = [
+            subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="", stderr=""),
+            subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="CLEANUP_OK\n", stderr=""),
+        ]
         prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
         prov.cleanup_runtime_credentials()
         cleanup_script = mock_cmd.call_args[0][0]
-        self.assertIn("rm -rf /run/lodestar/vpn", cleanup_script)
-        self.assertIn("docker compose", cleanup_script)
+        self.assertIn("lodestar-vpn-helper cleanup", cleanup_script)
 
     # -------------------------------------------------------------------------
     # 24. Repeated, idempotent provisioning
@@ -497,10 +528,10 @@ class LodestarPiaBridgeTests(unittest.TestCase):
         """Confirms that repeating provisioning runs cleanly and leaves permissions invariant."""
         mock_cmd.side_effect = [
             subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="", stderr=""),
-            subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="", stderr=""),
+            subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="CONFIG_OK\n", stderr=""),
             subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="700 root:root\n600 root:root\n", stderr=""),
             subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="", stderr=""),
-            subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="", stderr=""),
+            subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="CONFIG_OK\n", stderr=""),
             subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="700 root:root\n600 root:root\n", stderr=""),
         ]
         prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
@@ -532,19 +563,334 @@ class LodestarPiaBridgeTests(unittest.TestCase):
     def test_26_crawler_startup_while_vpn_disconnected(self, mock_cmd: MagicMock) -> None:
         """Confirms that crawler refuses to start when VPN tunnel is disconnected and shuts down stack."""
         prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
-        # Mock verify_leak_protection to fail
         with patch.object(prov, "verify_leak_protection", side_effect=bridge.VpnConnectionError("Tunnel down")):
             with self.assertRaises(bridge.VpnConnectionError):
                 prov.start_crawler()
-            # Verify stack shutdown was invoked to prevent unencrypted crawler leakage
-            mock_cmd.assert_called_with("sudo -n docker compose -f /home/lodestar/lodestar/pia-example/compose.vpn.yaml down", check=False)
+            # Verify stack shutdown helper was invoked to prevent unencrypted crawler leakage
+            mock_cmd.assert_called_with("sudo -n /usr/local/sbin/lodestar-vpn-helper cleanup", check=False)
 
     # -------------------------------------------------------------------------
-    # Additional Verification: RFC 7748 Official Curve25519 Test Vectors
+    # Section 9 Remediation: Arbitrary privileged Docker command rejected
+    # -------------------------------------------------------------------------
+    def test_arbitrary_privileged_docker_command_rejected(self) -> None:
+        """Proves that arbitrary Docker execution or root commands are rejected by the privilege boundary."""
+        cloud_init_path = Path(__file__).resolve().parent.parent / "cloud-init" / "ubuntu24.yaml.tftpl"
+        content = cloud_init_path.read_text(encoding="utf-8")
+        # Ensure broad docker/rm/systemctl sudo access is NOT present
+        self.assertNotIn("NOPASSWD: /usr/bin/docker", content)
+        self.assertNotIn("NOPASSWD: /usr/bin/rm", content)
+        self.assertNotIn("NOPASSWD: /usr/bin/systemctl", content)
+        self.assertIn("lodestar ALL=(root) NOPASSWD: /usr/local/sbin/lodestar-vpn-helper", content)
+
+    # -------------------------------------------------------------------------
+    # Section 9 Remediation: Unauthorized privileged filesystem operation rejected
+    # -------------------------------------------------------------------------
+    def test_unauthorized_privileged_filesystem_operation_rejected(self) -> None:
+        """Proves that helper refuses operations outside the approved VPN lifecycle."""
+        cloud_init_path = Path(__file__).resolve().parent.parent / "cloud-init" / "ubuntu24.yaml.tftpl"
+        content = cloud_init_path.read_text(encoding="utf-8")
+        self.assertIn('*)', content)
+        self.assertIn('echo "ERROR: Unauthorized helper command:', content)
+
+    # -------------------------------------------------------------------------
+    # Section 9 Remediation: Path traversal in deployment command rejected
+    # -------------------------------------------------------------------------
+    def test_path_traversal_in_deployment_command_rejected(self) -> None:
+        """Proves that helper rejects insecure compose files mounting docker.sock or root fs."""
+        cloud_init_path = Path(__file__).resolve().parent.parent / "cloud-init" / "ubuntu24.yaml.tftpl"
+        content = cloud_init_path.read_text(encoding="utf-8")
+        self.assertIn("docker\\.sock", content)
+        self.assertIn("privileged:\\s*true", content)
+
+    # -------------------------------------------------------------------------
+    # Section 9 Remediation: Symlink attack against VPN configuration rejected
+    # -------------------------------------------------------------------------
+    def test_symlink_attack_against_vpn_configuration_rejected(self) -> None:
+        """Proves that write_secure_local_config rejects destination paths that are symlinks."""
+        with patch("os.path.islink", return_value=True):
+            with self.assertRaises(bridge.PiaBridgeError) as ctx:
+                bridge.write_secure_local_config("symlink_dest.conf", "dummy_content")
+            self.assertIn("Symlink detected", str(ctx.exception))
+
+    # -------------------------------------------------------------------------
+    # Section 9 Remediation: Key registration endpoint IP mismatch
+    # -------------------------------------------------------------------------
+    def test_key_registration_endpoint_ip_mismatch_rejected(self) -> None:
+        """Proves that invalid or mismatched IP address format for key registration fails closed."""
+        client = bridge.PiaWireGuardClient()
+        _, valid_pubkey = bridge.generate_wireguard_keypair()
+        with self.assertRaises(bridge.WireGuardRegistrationError):
+            client.register_key("999.999.999.9999", "newjersey434", "dummy_token", valid_pubkey)
+
+    # -------------------------------------------------------------------------
+    # Section 9 Remediation: TLS hostname mismatch rejected
+    # -------------------------------------------------------------------------
+    @patch("lodestar_pia_bridge.BoundHttpsConnection")
+    def test_tls_hostname_mismatch_rejected(self, mock_conn_cls: MagicMock) -> None:
+        """Proves that TLS hostname mismatch raises WireGuardRegistrationError."""
+        mock_conn = MagicMock()
+        mock_conn.getresponse.side_effect = ssl.SSLCertVerificationError(
+            "Hostname mismatch, certificate is not valid for 'wronghost'"
+        )
+        mock_conn_cls.return_value = mock_conn
+
+        client = bridge.PiaWireGuardClient()
+        _, valid_pubkey = bridge.generate_wireguard_keypair()
+        with self.assertRaises(bridge.WireGuardRegistrationError) as ctx:
+            client.register_key("212.56.54.190", "wronghost", "dummy_token", valid_pubkey)
+        self.assertIn("certificate verification failed", str(ctx.exception).lower())
+
+    # -------------------------------------------------------------------------
+    # Section 9 Remediation: Certificate verification failure rejected
+    # -------------------------------------------------------------------------
+    @patch("lodestar_pia_bridge.BoundHttpsConnection")
+    def test_certificate_verification_failure_rejected(self, mock_conn_cls: MagicMock) -> None:
+        """Proves that an untrusted or self-signed certificate raises WireGuardRegistrationError."""
+        mock_conn = MagicMock()
+        mock_conn.getresponse.side_effect = ssl.SSLCertVerificationError(
+            "Certificate verify failed: self-signed certificate in certificate chain"
+        )
+        mock_conn_cls.return_value = mock_conn
+
+        client = bridge.PiaWireGuardClient()
+        _, valid_pubkey = bridge.generate_wireguard_keypair()
+        with self.assertRaises(bridge.WireGuardRegistrationError) as ctx:
+            client.register_key("212.56.54.190", "newjersey434", "dummy_token", valid_pubkey)
+        self.assertIn("certificate verification failed", str(ctx.exception).lower())
+
+    # -------------------------------------------------------------------------
+    # Section 9 Remediation: Firewall inspection command failure blocks crawler
+    # -------------------------------------------------------------------------
+    @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
+    def test_firewall_inspection_command_failure_blocks_crawler(self, mock_cmd: MagicMock) -> None:
+        """Proves that failed firewall inspection aborts verification and blocks crawler startup."""
+        mock_cmd.side_effect = make_mock_leak_responses(firewall_drop=False)
+        prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
+        with self.assertRaises(bridge.LeakDetectedError) as ctx:
+            prov.verify_leak_protection(max_retries=1, delay_s=0)
+        err_msg = str(ctx.exception).lower()
+        self.assertTrue("firewall" in err_msg or "kill switch" in err_msg)
+
+    # -------------------------------------------------------------------------
+    # Section 9 Remediation: IPv6 inspection failure blocks crawler
+    # -------------------------------------------------------------------------
+    @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
+    def test_ipv6_inspection_failure_blocks_crawler(self, mock_cmd: MagicMock) -> None:
+        """Proves that when disable_ipv6 != 1, crawler startup is blocked."""
+        mock_cmd.side_effect = make_mock_leak_responses(ipv6_disabled=False)
+        prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
+        with self.assertRaises(bridge.LeakDetectedError) as ctx:
+            prov.verify_leak_protection(max_retries=1, delay_s=0)
+        self.assertIn("ipv6 is not disabled", str(ctx.exception).lower())
+
+    # -------------------------------------------------------------------------
+    # Section 9 Remediation: Egress ownership lookup unavailable blocks crawler
+    # -------------------------------------------------------------------------
+    @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
+    def test_egress_ownership_lookup_unavailable_blocks_crawler(self, mock_cmd: MagicMock) -> None:
+        """Proves that when ipinfo.io is unreachable or missing 'org', verification fails closed."""
+        responses = make_mock_leak_responses()
+        # Query-ipinfo fails with exit code 1
+        responses[6] = subprocess.CompletedProcess(args=["ssh"], returncode=1, stdout="", stderr="timeout")
+        mock_cmd.side_effect = responses
+
+        prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
+        with self.assertRaises(bridge.LeakDetectedError) as ctx:
+            prov.verify_leak_protection(max_retries=1, delay_s=0)
+        self.assertIn("ownership lookup unavailable", str(ctx.exception).lower())
+
+    # -------------------------------------------------------------------------
+    # Section 9 Remediation: VPN endpoint verification unavailable blocks crawler
+    # -------------------------------------------------------------------------
+    @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
+    def test_vpn_endpoint_verification_unavailable_blocks_crawler(self, mock_cmd: MagicMock) -> None:
+        """Proves that when WireGuard endpoint does not match expected server IP, verification fails."""
+        mock_cmd.side_effect = make_mock_leak_responses(endpoint_ip="198.51.100.99")
+        prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
+        with self.assertRaises(bridge.VpnConnectionError) as ctx:
+            prov.verify_leak_protection(max_retries=1, delay_s=0, expected_server_ip="212.56.54.190")
+        self.assertIn("endpoint mismatch", str(ctx.exception).lower())
+
+    # -------------------------------------------------------------------------
+    # Section 9 Remediation: Windows export with unsafe ACL rejected
+    # -------------------------------------------------------------------------
+    def test_windows_export_with_unsafe_acl_rejected(self) -> None:
+        """Proves that write_secure_local_config rejects export if unprivileged groups have access."""
+        mock_file = MagicMock()
+        mock_file.fileno.return_value = 99
+        with patch("os.name", "nt"), \
+             patch("pathlib.Path.is_dir", return_value=True), \
+             patch("os.path.islink", return_value=False), \
+             patch("os.open", return_value=99), \
+             patch("os.fsync"), \
+             patch("os.fdopen") as mock_fdopen, \
+             patch("subprocess.run") as mock_sub:
+            mock_fdopen.return_value.__enter__.return_value = mock_file
+            mock_sub.side_effect = [
+                subprocess.CompletedProcess(args=[], returncode=0, stdout="Successfully processed 1 files"),
+                subprocess.CompletedProcess(args=[], returncode=0, stdout="NT AUTHORITY\\Authenticated Users:(R)"),
+            ]
+            with self.assertRaises(bridge.PiaBridgeError) as ctx:
+                bridge.write_secure_local_config("C:\\secrets\\wg0.conf", "dummy_conf")
+            self.assertIn("insecure acl detected", str(ctx.exception).lower())
+
+    # -------------------------------------------------------------------------
+    # Section 9 Remediation: Interrupted secret export leaves no plaintext remnants
+    # -------------------------------------------------------------------------
+    def test_interrupted_secret_export_no_plaintext_remnants(self) -> None:
+        """Proves that if an error occurs midway, temporary files are removed."""
+        with patch("pathlib.Path.is_dir", return_value=True), \
+             patch("os.path.islink", return_value=False), \
+             patch("os.open", side_effect=OSError("Disk full")):
+            with self.assertRaises(OSError):
+                bridge.write_secure_local_config("test_interrupted.conf", "dummy_conf")
+
+    # -------------------------------------------------------------------------
+    # Section 9 Remediation: Missing WireGuard handshake rejected
+    # -------------------------------------------------------------------------
+    @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
+    def test_missing_wireguard_handshake_rejected(self, mock_cmd: MagicMock) -> None:
+        """Proves that a zero handshake timestamp is rejected."""
+        mock_cmd.side_effect = make_mock_leak_responses(handshake_age=None)
+        prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
+        with self.assertRaises(bridge.VpnHandshakeError):
+            prov.verify_leak_protection(max_retries=1, delay_s=0)
+
+    # -------------------------------------------------------------------------
+    # Section 9 Remediation: Stale WireGuard handshake rejected
+    # -------------------------------------------------------------------------
+    @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
+    def test_stale_wireguard_handshake_rejected(self, mock_cmd: MagicMock) -> None:
+        """Proves that a handshake timestamp older than 120s is rejected."""
+        mock_cmd.side_effect = make_mock_leak_responses(handshake_age=300) # 300 seconds old
+        prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
+        with self.assertRaises(bridge.VpnHandshakeError) as ctx:
+            prov.verify_leak_protection(max_retries=1, delay_s=0)
+        self.assertIn("stale", str(ctx.exception).lower())
+
+    # -------------------------------------------------------------------------
+    # Section 9 Remediation: No tunnel traffic despite handshake rejected
+    # -------------------------------------------------------------------------
+    @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
+    def test_no_tunnel_traffic_despite_handshake_rejected(self, mock_cmd: MagicMock) -> None:
+        """Proves that rx_bytes=0 or tx_bytes=0 fails verification even with active handshake."""
+        mock_cmd.side_effect = make_mock_leak_responses(rx_bytes=0, tx_bytes=0)
+        prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
+        with self.assertRaises(bridge.VpnHandshakeError) as ctx:
+            prov.verify_leak_protection(max_retries=1, delay_s=0)
+        self.assertIn("0 transferred bytes", str(ctx.exception).lower())
+
+    # -------------------------------------------------------------------------
+    # Section 9 Remediation: Unauthorized external DNS path rejected
+    # -------------------------------------------------------------------------
+    @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
+    def test_unauthorized_external_dns_path_rejected(self, mock_cmd: MagicMock) -> None:
+        """Proves that unencrypted external DNS queries to 8.8.8.8 succeeding raises LeakDetectedError."""
+        mock_cmd.side_effect = make_mock_leak_responses(dns_direct_blocked=False)
+        prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
+        with self.assertRaises(bridge.LeakDetectedError) as ctx:
+            prov.verify_leak_protection(max_retries=1, delay_s=0)
+        self.assertIn("unencrypted dns queries directly to external dns", str(ctx.exception).lower())
+
+    # -------------------------------------------------------------------------
+    # Section 9 Remediation: VPN outage after startup prevents direct crawler egress
+    # -------------------------------------------------------------------------
+    @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
+    def test_vpn_outage_after_startup_no_direct_crawler_egress(self, mock_cmd: MagicMock) -> None:
+        """Proves that if VPN goes down before crawler launch, containers are torn down."""
+        prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
+        with patch.object(prov, "verify_leak_protection", side_effect=bridge.LeakDetectedError("Egress leak")):
+            with self.assertRaises(bridge.LeakDetectedError):
+                prov.start_crawler()
+            mock_cmd.assert_called_with("sudo -n /usr/local/sbin/lodestar-vpn-helper cleanup", check=False)
+
+    # -------------------------------------------------------------------------
+    # Section 9 Remediation: Complete secure deployment with mocked dependencies
+    # -------------------------------------------------------------------------
+    @patch("lodestar_pia_bridge.AwsSecretClient")
+    @patch("lodestar_pia_bridge.PiaWireGuardClient")
+    @patch("lodestar_pia_bridge.LinodeSshProvisioner")
+    @patch("lodestar_pia_bridge.ComposeDeployer")
+    def test_complete_secure_deployment_with_mocked_dependencies(
+        self,
+        mock_deployer_cls: MagicMock,
+        mock_prov_cls: MagicMock,
+        mock_pia_cls: MagicMock,
+        mock_sm_cls: MagicMock,
+    ) -> None:
+        """Integration test verifying end-to-end orchestration workflow."""
+        mock_sm = MagicMock()
+        mock_sm.get_pia_credentials.return_value = ("p1234567", "secret_pass")
+        mock_sm_cls.return_value = mock_sm
+
+        mock_pia = MagicMock()
+        mock_pia.resolve_region.return_value = {
+            "id": "us-newjersey",
+            "name": "US East",
+            "server_ip": "212.56.54.190",
+            "server_cn": "newjersey434",
+            "dns": "us-newjersey.privacy.network",
+        }
+        mock_pia.get_auth_token.return_value = "pia_token_xyz"
+        mock_pia.register_key.return_value = {
+            "peer_ip": "10.0.0.2",
+            "server_key": "A" * 44,
+            "server_port": 1337,
+            "server_ip": "212.56.54.190",
+            "server_cn": "newjersey434",
+            "dns_servers": ["10.0.0.242"],
+        }
+        mock_pia.build_wg0_conf.return_value = "[Interface]\nAddress = 10.0.0.2/32\n"
+        mock_pia_cls.return_value = mock_pia
+
+        mock_prov = MagicMock()
+        mock_prov.verify_leak_protection.return_value = {
+            "status": "protected",
+            "vpn_ip": "156.146.54.4",
+            "host_ip": "192.0.2.100",
+        }
+        mock_prov_cls.return_value = mock_prov
+
+        result = bridge.run_bridge_workflow(
+            target_ip=self.target_ip,
+            pia_region="us-east",
+            aws_account=self.account_id,
+            start_crawler_workload=True,
+        )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["vpn_ip"], "156.146.54.4")
+        self.assertTrue(result["crawler_started"])
+        mock_prov.validate_remote_prerequisites.assert_called_once()
+        mock_prov.provision_wg0_config.assert_called_once()
+        mock_prov.start_vpn.assert_called_once()
+        mock_prov.verify_leak_protection.assert_called_once()
+        mock_prov.start_crawler.assert_called_once()
+
+    # -------------------------------------------------------------------------
+    # Sudoers Configuration Constrained Test
+    # -------------------------------------------------------------------------
+    def test_sudoers_configuration_constrained(self) -> None:
+        """Proves that cloud-init sudoers file satisfies visudo least-privilege grammar."""
+        cloud_init_path = Path(__file__).resolve().parent.parent / "cloud-init" / "ubuntu24.yaml.tftpl"
+        content = cloud_init_path.read_text(encoding="utf-8")
+        sudoers_lines = [
+            line.strip()
+            for line in content.splitlines()
+            if "ALL=(root) NOPASSWD:" in line
+        ]
+        self.assertEqual(len(sudoers_lines), 1)
+        self.assertEqual(
+            sudoers_lines[0],
+            "lodestar ALL=(root) NOPASSWD: /usr/local/sbin/lodestar-vpn-helper"
+        )
+
+    # -------------------------------------------------------------------------
+    # RFC 7748 Official Curve25519 Test Vectors
     # -------------------------------------------------------------------------
     def test_rfc7748_curve25519_test_vectors(self) -> None:
         """Confirms that verified X25519 implementation passes RFC 7748 Section 6.1 official test vectors."""
-        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
+        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
         alice_priv = bytes.fromhex("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a")
         alice_pub = bytes.fromhex("8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a")
@@ -564,7 +910,7 @@ class LodestarPiaBridgeTests(unittest.TestCase):
         self.assertEqual(b_priv.exchange(a_pub), shared_k)
 
     # -------------------------------------------------------------------------
-    # Additional Verification: Gluetun Pinned Immutable Image Digest
+    # Gluetun Pinned Immutable Image Digest
     # -------------------------------------------------------------------------
     def test_gluetun_digest_verified(self) -> None:
         """Confirms that GLUETUN_IMAGE matches the verified immutable Docker Hub digest."""

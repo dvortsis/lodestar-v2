@@ -26,8 +26,161 @@ write_files:
     owner: root:root
     permissions: '0440'
     content: |
-      # Narrowed, auditable non-interactive sudoers permissions for automated deployment operations
-      lodestar ALL=(root) NOPASSWD: /usr/bin/docker, /usr/bin/install, /usr/bin/rm, /usr/bin/stat, /usr/bin/sha256sum, /usr/bin/test, /usr/bin/systemctl, /usr/bin/journalctl
+      # Restricted, auditable non-interactive sudoers permission: ONLY the root-owned deployment helper
+      lodestar ALL=(root) NOPASSWD: /usr/local/sbin/lodestar-vpn-helper
+  - path: /usr/local/sbin/lodestar-vpn-helper
+    owner: root:root
+    permissions: '0750'
+    content: |
+      #!/usr/bin/env bash
+      set -Eeuo pipefail
+      umask 027
+
+      CONFIG_DIR="/run/lodestar/vpn"
+      CONFIG_FILE="/run/lodestar/vpn/wg0.conf"
+      COMPOSE_DIR="/home/lodestar/lodestar/pia-example"
+      COMPOSE_FILE="/home/lodestar/lodestar/pia-example/compose.vpn.yaml"
+
+      cmd="$${1:-}"
+      case "$cmd" in
+        preflight)
+          docker info >/dev/null 2>&1
+          test -c /dev/net/tun
+          echo "PREFLIGHT_OK"
+          ;;
+        write-config)
+          # Prevent symlink attacks on parent directory and target file
+          if [ -L "$CONFIG_DIR" ]; then
+            echo "ERROR: $CONFIG_DIR is a symlink" >&2
+            exit 1
+          fi
+          install -d -m 0700 -o root -g root "$CONFIG_DIR"
+          tmp_cfg="$CONFIG_DIR/wg0.tmp.$$"
+          cat > "$tmp_cfg"
+          chmod 0600 "$tmp_cfg"
+          chown root:root "$tmp_cfg"
+          if ! grep -q '^\[Interface\]' "$tmp_cfg" || ! grep -q '^\[Peer\]' "$tmp_cfg"; then
+            rm -f "$tmp_cfg"
+            echo "ERROR: Invalid WireGuard configuration payload" >&2
+            exit 1
+          fi
+          if [ -L "$CONFIG_FILE" ]; then
+            rm -f "$CONFIG_FILE"
+          fi
+          mv -f "$tmp_cfg" "$CONFIG_FILE"
+          chmod 0600 "$CONFIG_FILE"
+          chown root:root "$CONFIG_FILE"
+          echo "CONFIG_OK"
+          ;;
+        verify-permissions)
+          if [ -L "$CONFIG_DIR" ] || [ ! -d "$CONFIG_DIR" ]; then
+            echo "ERROR: $CONFIG_DIR missing or symlink" >&2
+            exit 1
+          fi
+          if [ -L "$CONFIG_FILE" ] || [ ! -f "$CONFIG_FILE" ]; then
+            echo "ERROR: $CONFIG_FILE missing or symlink" >&2
+            exit 1
+          fi
+          stat -c '%a %U:%G' "$CONFIG_DIR"
+          stat -c '%a %U:%G' "$CONFIG_FILE"
+          ;;
+        install-compose)
+          if [ -L "$COMPOSE_DIR" ]; then
+            echo "ERROR: $COMPOSE_DIR is a symlink" >&2
+            exit 1
+          fi
+          install -d -m 0755 -o root -g root "$COMPOSE_DIR"
+          tmp_compose="$COMPOSE_DIR/compose.tmp.$$"
+          cat > "$tmp_compose"
+          if grep -q -E '/var/run/docker\.sock|privileged:\s*true|network_mode:\s*["'\''?]host["'\''?]' "$tmp_compose"; then
+            rm -f "$tmp_compose"
+            echo "ERROR: Insecure compose directive rejected (docker.sock/privileged/host-net)" >&2
+            exit 1
+          fi
+          if [ -L "$COMPOSE_FILE" ]; then
+            rm -f "$COMPOSE_FILE"
+          fi
+          mv -f "$tmp_compose" "$COMPOSE_FILE"
+          chmod 0644 "$COMPOSE_FILE"
+          chown root:root "$COMPOSE_FILE"
+          docker compose -f "$COMPOSE_FILE" config --quiet
+          echo "COMPOSE_OK"
+          ;;
+        validate-compose)
+          if [ ! -f "$COMPOSE_FILE" ] || [ -L "$COMPOSE_FILE" ]; then
+            echo "ERROR: $COMPOSE_FILE missing or symlink" >&2
+            exit 1
+          fi
+          docker compose -f "$COMPOSE_FILE" config --quiet
+          echo "COMPOSE_VALID"
+          ;;
+        start-vpn)
+          if [ ! -f "$COMPOSE_FILE" ] || [ -L "$COMPOSE_FILE" ]; then
+            echo "ERROR: $COMPOSE_FILE missing or symlink" >&2
+            exit 1
+          fi
+          if [ ! -f "$CONFIG_FILE" ] || [ -L "$CONFIG_FILE" ]; then
+            echo "ERROR: $CONFIG_FILE missing or symlink" >&2
+            exit 1
+          fi
+          docker compose -f "$COMPOSE_FILE" up -d gluetun
+          echo "VPN_STARTED"
+          ;;
+        start-crawler)
+          if [ ! -f "$COMPOSE_FILE" ] || [ -L "$COMPOSE_FILE" ]; then
+            echo "ERROR: $COMPOSE_FILE missing or symlink" >&2
+            exit 1
+          fi
+          docker compose -f "$COMPOSE_FILE" up -d crawler
+          echo "CRAWLER_STARTED"
+          ;;
+        stop-vpn)
+          if [ -f "$COMPOSE_FILE" ]; then
+            docker compose -f "$COMPOSE_FILE" down
+          fi
+          echo "STOP_OK"
+          ;;
+        cleanup)
+          if [ -f "$COMPOSE_FILE" ]; then
+            docker compose -f "$COMPOSE_FILE" down || true
+          fi
+          if [ -d "$CONFIG_DIR" ] && [ ! -L "$CONFIG_DIR" ]; then
+            rm -rf "$CONFIG_DIR"
+          fi
+          echo "CLEANUP_OK"
+          ;;
+        wg-handshake)
+          docker exec gluetun wg show wg0 latest-handshakes
+          ;;
+        wg-transfer)
+          docker exec gluetun wg show wg0 transfer
+          ;;
+        wg-endpoints)
+          docker exec gluetun wg show wg0 endpoints
+          ;;
+        query-egress)
+          docker exec gluetun curl -s --max-time 5 https://checkip.amazonaws.com
+          ;;
+        query-ipinfo)
+          docker exec gluetun curl -s --max-time 5 https://ipinfo.io/json
+          ;;
+        query-dns)
+          docker exec gluetun nslookup -timeout=5 google.com 127.0.0.1
+          ;;
+        query-dns-direct)
+          docker exec gluetun nslookup -timeout=3 google.com 8.8.8.8
+          ;;
+        inspect-firewall)
+          docker exec gluetun iptables -S OUTPUT
+          ;;
+        inspect-ipv6)
+          docker exec gluetun cat /proc/sys/net/ipv6/conf/all/disable_ipv6
+          ;;
+        *)
+          echo "ERROR: Unauthorized helper command: $cmd" >&2
+          exit 1
+          ;;
+      esac
   - path: /etc/ssh/sshd_config.d/99-lodestar.conf
     owner: root:root
     permissions: '0644'

@@ -20,7 +20,7 @@ Akamai's published plan description is *SSD*. This is not an assurance of a part
 ## Security properties
 
 - Akamai Cloud Firewall is **attached at Linode creation** (`firewall_id`) using explicit `interface_generation="legacy_config"`, inbound DROP except SSH TCP/22 from **your single explicit `/32`** (`ssh_admin_ipv4_cidr`). The main VM alone may also allow up to four more `/32`s in `main_extra_admin_ipv4_cidrs`, for example the AWS Windows VM's public IPv4 so it can SSH-tunnel to the UI. Every entry is validated as an IPv4 `/32`, and there is no IPv6 ingress. No inbound 8090/tcp or 6881/udp is opened on the Akamai host.
-- Root login by SSH is disabled by cloud-init; `lodestar` has the supplied public key and passwordless sudo. Do not grant the crawler container or VPN credentials sudo access.
+- Root login by SSH is disabled by cloud-init; `lodestar` has the supplied public key and scoped non-interactive sudo limited strictly to the root deployment helper (`/usr/local/sbin/lodestar-vpn-helper`). Direct sudo access to `docker`, `rm`, `install`, or `systemctl` is eliminated to enforce a strict privilege boundary. Do not grant the crawler container or VPN credentials sudo access.
 - Region is fixed to `us-east` (Newark): the 48-hour watchdog only reaps Linodes there, so Terraform refuses any other region.
 - Linode API token is read through the **local** `LINODE_TOKEN` environment variable; never placed in Terraform configuration or metadata.
 - No PIA credentials, WireGuard keys or torrent metadata are stored in cloud-init, Terraform state, logs or this repository.

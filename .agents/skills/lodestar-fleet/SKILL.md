@@ -223,6 +223,24 @@ Asks the human to type `DESTROY LODESTAR`.
 terraform apply -refresh-only
 ```
 
+### 🔒 Private Internet Access (PIA) VPN management (human-run only)
+```powershell
+# 1. Verify restricted AWS Secrets Manager access
+.\scripts\Lodestar-Fleet.ps1 vpn-verify
+
+# 2. Provision WireGuard VPN to target Linode (uses root helper /usr/local/sbin/lodestar-vpn-helper)
+.\scripts\Lodestar-Fleet.ps1 vpn-provision -Target <LINODE_IP> -Region us-east
+
+# 3. Check VPN health, WireGuard handshake, and independent leak protection
+.\scripts\Lodestar-Fleet.ps1 vpn-status -Target <LINODE_IP>
+
+# 4. Start crawler workload behind verified VPN
+.\scripts\Lodestar-Fleet.ps1 vpn-crawler -Target <LINODE_IP>
+
+# 5. Clean up runtime secrets and containers
+.\scripts\Lodestar-Fleet.ps1 vpn-cleanup -Target <LINODE_IP>
+```
+
 ---
 
 ## 5. AWS Windows instance procedures (all 🔒, human-run only)
