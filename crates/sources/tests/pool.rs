@@ -13,8 +13,8 @@ use lodestar_metainfo::InfoHash;
 use lodestar_peer_wire::{FailureKind, Fetched};
 use lodestar_sources::pool::{Reservation, SHUTDOWN_DRAIN, spawn};
 use lodestar_sources::{
-    BoxFuture, Discovery, FetchedKey, Fetcher, Found, Funnel, FunnelCounts, Loss, PoolConfig,
-    PoolHandle, PoolIo, Shutdown, Stage,
+    BoxFuture, Discovery, FetchedKey, Fetcher, Found, Funnel, FunnelCounts, Loss, PeerIpCap,
+    PoolConfig, PoolHandle, PoolIo, Shutdown, Stage,
 };
 use lodestar_store::{QueuedKey, SourceId};
 use tokio::sync::{mpsc, watch};
@@ -880,6 +880,130 @@ async fn caps_sockets_and_connections_per_ip() {
     // Two IPs at two connections each: the IP cap binds before the socket cap.
     assert_eq!(h.fake.max_active.load(Ordering::SeqCst), 4);
     assert_eq!(h.fake.max_per_ip.load(Ordering::SeqCst), 2);
+    h.stop().await;
+}
+
+/// A per-peer-IP policy (WK-10e): each listed IP's cap, 2 for the rest.
+struct ByIp(Mutex<HashMap<IpAddr, usize>>);
+
+impl ByIp {
+    fn new(caps: &[(u8, usize)]) -> Arc<ByIp> {
+        Arc::new(ByIp(Mutex::new(
+            caps.iter().map(|&(ip, n)| (peer(ip, 0).ip(), n)).collect(),
+        )))
+    }
+}
+
+impl PeerIpCap for ByIp {
+    fn connections_to(&self, ip: IpAddr) -> usize {
+        self.0.lock().unwrap().get(&ip).copied().unwrap_or(2)
+    }
+}
+
+/// Sets the pool's policy and waits until the pool has taken it (its
+/// commands are handled in order).
+async fn set_cap(h: &Harness, cap: Option<Arc<dyn PeerIpCap>>) {
+    h.handle.set_ip_cap(cap).await;
+    h.handle.queued().await;
+}
+
+/// WK-10e: a peer IP the policy gives 0 (another same-IP member's bucket)
+/// is never dialled; one it gives 1 gets at most one connection; a key
+/// whose only peers are in another bucket asks for more peers instead.
+#[tokio::test(start_paused = true)]
+async fn a_peer_ip_outside_our_share_is_never_dialled() {
+    let mut h = Harness::start(config(), &[], vec![]);
+    set_cap(&h, Some(ByIp::new(&[(1, 0), (2, 1)]))).await;
+    for n in 0..6 {
+        h.send(found(0, n, vec![peer(1, 1), peer(1, 2), peer(2, 1)]));
+    }
+    h.send(found(0, 99, vec![peer(1, 3)]));
+    for _ in 0..6 {
+        h.out.recv().await.unwrap();
+    }
+    // At once, not after a back-off: its peer was never queued.
+    until_within("a lookup for the key with no peer of ours", 10, || {
+        h.drain_lookups().contains(&key(99))
+    })
+    .await;
+    let started = h.fake.started.lock().unwrap().clone();
+    assert!(
+        started.iter().all(|(_, p)| p.ip() == peer(2, 0).ip()),
+        "{started:?}"
+    );
+    assert_eq!(h.fake.max_per_ip.load(Ordering::SeqCst), 1);
+    h.stop().await;
+}
+
+/// WK-10e: a single install's policy (2 for every IP) is today's `per_ip`.
+#[tokio::test(start_paused = true)]
+async fn a_single_installs_policy_dials_as_today() {
+    let cfg = PoolConfig {
+        max_sockets: 5,
+        per_ip: 2,
+        ..config()
+    };
+    let mut h = Harness::start(cfg, &[], vec![]);
+    set_cap(&h, Some(ByIp::new(&[]))).await;
+    for n in 0..20 {
+        h.send(found(0, n, vec![peer(1, 1), peer(1, 2), peer(2, 1)]));
+    }
+    for _ in 0..20 {
+        h.out.recv().await.unwrap();
+    }
+    assert_eq!(h.fake.max_active.load(Ordering::SeqCst), 4);
+    assert_eq!(h.fake.max_per_ip.load(Ordering::SeqCst), 2);
+    h.stop().await;
+}
+
+/// WK-10e: a policy change applies to the next dial. Fetches already out
+/// to an IP that's no longer ours finish; peers on it that were already
+/// queued are skipped from then on, and a key left with none asks again.
+#[tokio::test(start_paused = true)]
+async fn a_lowered_cap_stops_new_dials_and_lets_open_ones_finish() {
+    let cfg = PoolConfig {
+        max_sockets: 8,
+        ..config()
+    };
+    let mut h = Harness::start(cfg, &[], vec![]);
+    h.script(peer(1, 1), 5_000, Ok(()));
+    h.script(peer(1, 2), 5_000, Ok(()));
+    // Two fetches out to IP 1, which then fills its cap of 2.
+    h.send(found(0, 1, vec![peer(1, 1)]));
+    h.send(found(0, 2, vec![peer(1, 2)]));
+    until("two fetches out", || {
+        h.fake.active.load(Ordering::SeqCst) == 2
+    })
+    .await;
+    // Queued behind them: keys whose peers are on IP 1, one with IP 2 too.
+    h.send(found(0, 3, vec![peer(1, 3), peer(2, 3)]));
+    h.send(found(0, 4, vec![peer(1, 4)]));
+    until("key 3 dialled on IP 2", || {
+        h.fake
+            .started
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(k, _)| *k == key(3))
+    })
+    .await;
+    set_cap(&h, Some(ByIp::new(&[(1, 0)]))).await;
+    // The open fetches finish and are sent on.
+    let mut done = Vec::new();
+    for _ in 0..3 {
+        done.push(h.out.recv().await.unwrap().key);
+    }
+    done.sort_by_key(|k| k.0);
+    assert_eq!(done, vec![key(1), key(2), key(3)]);
+    // Key 4's queued peer on IP 1 is skipped: it asks for peers instead.
+    until("a lookup for key 4", || h.drain_lookups().contains(&key(4))).await;
+    let started = h.fake.started.lock().unwrap().clone();
+    let on_ip1: Vec<InfoHash> = started
+        .iter()
+        .filter(|(_, p)| p.ip() == peer(1, 0).ip())
+        .map(|(k, _)| *k)
+        .collect();
+    assert_eq!(on_ip1, vec![key(1), key(2)], "{started:?}");
     h.stop().await;
 }
 
