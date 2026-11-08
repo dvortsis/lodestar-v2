@@ -16,9 +16,17 @@
   Administrators and the service, and top-level entries owned by those. Then the
   same ACL is applied again.
 
+  One exception (owner decision 2.52): when the one problem with such a folder is an
+  Allow entry for the administrator running the install (Windows Explorer adds one,
+  on the folder and everything in it, when you click Continue on its permission
+  prompt), that entry is removed everywhere and the folder re-secured. The MSI passes the
+  installing user's SID as -InstallerSid, and it counts only if that account is in the local
+  Administrators group. The folder is locked first and then everything in it is checked again:
+  any link, other owner or other account's entry anywhere inside still stops the install.
+
   Matches crates/lodestar/src/windows/acl.rs in the service.
 #>
-param([Parameter(Mandatory)][string]$Path, [string]$Service = 'Lodestar')
+param([Parameter(Mandatory)][string]$Path, [string]$Service = 'Lodestar', [string]$InstallerSid = '')
 $ErrorActionPreference = 'Stop'
 
 $system = New-Object Security.Principal.SecurityIdentifier 'S-1-5-18'
@@ -30,6 +38,7 @@ $admins = New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-544'
 # anywhere): it goes into a new folder with a random name that only SYSTEM and
 # Administrators can use, in a file opened with CreateNew, which fails if the name exists.
 $script:logWriter = $null
+$script:privateTemp = $null
 try {
   $logDir = Join-Path $env:SystemRoot ('Temp\lodestar-secure-' + [guid]::NewGuid().ToString('N'))
   $logSec = New-Object Security.AccessControl.DirectorySecurity
@@ -39,6 +48,7 @@ try {
       $sid, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow')))
   }
   (New-Object IO.DirectoryInfo $logDir).Create($logSec)
+  $script:privateTemp = $logDir
   $stream = [IO.File]::Open((Join-Path $logDir 'secure-datadir.log'), [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
   $script:logWriter = New-Object IO.StreamWriter($stream)
 } catch {
@@ -69,8 +79,13 @@ $marker = '.lodestar-secured'
 # The service's own SID, worked out (see service-sid.ps1): translating NT SERVICE\<name>
 # fails while the service has no SID type yet, as in this install.
 . (Join-Path $PSScriptRoot 'service-sid.ps1')
+# Get-RawDescriptor and Get-DaclProblem, the raw entry check (see dacl-check.ps1). Its reader
+# compiles in the log's private folder; without one, nothing can be checked, so stop.
+. (Join-Path $PSScriptRoot 'dacl-check.ps1')
 $svc = Get-ServiceSid $Service
 Log "service SID: $svc"
+if (-not $script:privateTemp) { Stop-Install "Could not create a private folder in $env:SystemRoot\Temp to check permissions from. Install again; if it keeps failing, ask for help." }
+Initialize-RawReader $script:privateTemp
 
 function New-DataSecurity {
   $sec = New-Object Security.AccessControl.DirectorySecurity
@@ -85,9 +100,8 @@ function New-DataSecurity {
 $trusted = @($system, $admins, $svc)
 
 # Why the folder is not private yet, or $null if it is: protected (no inheritance from
-# ProgramData) and every Allow entry names SYSTEM, Administrators or the service. A NULL
-# DACL and object-specific ACEs are not looked at: wherever this is used the ACL is
-# re-applied afterwards, so they cannot survive.
+# ProgramData), and every entry, read raw (Get-DaclProblem), a plain Allow for SYSTEM,
+# Administrators or the service. The first loop only gives an extra account's name.
 function Get-NotPrivateReason($folder) {
   $acl = Get-Acl -LiteralPath $folder
   if (-not $acl.AreAccessRulesProtected) { return 'it inherits permissions from ProgramData' }
@@ -97,7 +111,126 @@ function Get-NotPrivateReason($folder) {
       return "it lets $($rule.IdentityReference) in"
     }
   }
+  return Get-DaclProblem (Get-RawDescriptor $folder) $trusted
+}
+
+# Whether $sid is a direct member of the local Administrators group: $false when the group
+# cannot be read (a domain member that cannot be looked up, say), so Repair then refuses.
+function Test-LocalAdmin($sid) {
+  try {
+    $name = $admins.Translate([Security.Principal.NTAccount]).Value.Split('\')[-1]
+    $group = [ADSI]"WinNT://$env:COMPUTERNAME/$name,group"
+    foreach ($m in @($group.Invoke('Members'))) {
+      $bytes = $m.GetType().InvokeMember('objectSid', 'GetProperty', $null, $m, $null)
+      if ((New-Object Security.Principal.SecurityIdentifier($bytes, 0)) -eq $sid) { return $true }
+    }
+  } catch { Log "could not read the Administrators group: $($_.Exception.Message)" }
+  return $false
+}
+
+# Runs icacls, reading its error output instead of throwing on it: Windows PowerShell turns a
+# native tool's stderr into errors, which 'Stop' would make fatal before the exit code is seen.
+function Invoke-Icacls([string[]]$arguments, [string]$fix) {
+  $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
+  $ErrorActionPreference = 'Continue'
+  $out = & $icacls @arguments 2>&1 | Out-String
+  $code = $LASTEXITCODE
+  $ErrorActionPreference = 'Stop'
+  if ($code -ne 0) {
+    Log "icacls $($arguments -join ' ') failed ($code): $out"
+    Stop-Install "icacls could not change $dir (exit $code). As an administrator, run: $fix"
+  }
+}
+
+# The folder's file ID, which a folder renamed away and replaced by another doesn't keep.
+function Get-FileId($folder) {
+  $fsutil = Join-Path $env:SystemRoot 'System32\fsutil.exe'
+  $ErrorActionPreference = 'Continue'
+  $out = & $fsutil file queryfileid $folder 2>&1 | Out-String
+  $code = $LASTEXITCODE
+  $ErrorActionPreference = 'Stop'
+  if ($code -ne 0 -or $out -notmatch '0x[0-9a-fA-F]+') {
+    Log "fsutil file queryfileid failed ($code): $out"
+    Stop-Install "Could not read the file ID of $dir. Install again; if it keeps failing, ask for help."
+  }
+  $Matches[0]
+}
+
+# Stops the install unless everything inside $folder is a real file or folder, owned by
+# SYSTEM, Administrators or the service, with Allow entries only for those three, OWNER RIGHTS
+# (how the service locks its logs folder, granting only that trusted owner) and CREATOR OWNER
+# (which names only whoever creates an item there, and only those three can). No Deny.
+# Same rule as the service's log-folder check (windows/acl.rs, log_folder_private).
+$ownerSids = @(
+  (New-Object Security.Principal.SecurityIdentifier 'S-1-3-4'),   # OWNER RIGHTS
+  (New-Object Security.Principal.SecurityIdentifier 'S-1-3-0'))   # CREATOR OWNER
+# The first problem inside $folder, or $null; $extra is a SID also allowed (the installing
+# administrator's, before its entries are removed).
+function Get-InsideProblem($folder, $extra) {
+  $allowed = @($trusted) + $ownerSids + @($extra | Where-Object { $_ })
+  # Fail closed: if the scan itself cannot run, the install stops (trap, exit 2).
+  foreach ($item in @(Get-ChildItem -LiteralPath $folder -Force -Recurse -ErrorAction Stop)) {
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+      return "$($item.FullName) is a link or junction inside the data folder"
+    }
+    $acl = Get-Acl -LiteralPath $item.FullName
+    $o = $acl.GetOwner([Security.Principal.SecurityIdentifier])
+    if ($trusted -notcontains $o) {
+      return "$($item.FullName) is owned by $o, not SYSTEM, Administrators or the Lodestar service"
+    }
+    $problem = Get-DaclProblem (Get-RawDescriptor $item.FullName) $allowed
+    if ($problem) { return "$($item.FullName) has its own permissions: $problem" }
+  }
   return $null
+}
+
+function Assert-PrivateInside($folder) {
+  $problem = Get-InsideProblem $folder $null
+  if ($problem) {
+    Stop-Install "$problem. Someone else may have put it there or changed it: move the folder's contents somewhere else, check them, then install again."
+  }
+}
+
+# The installing administrator's SID, when the one thing that keeps the folder from being
+# private is that account's own Allow entries; $null otherwise. Only a user account's SID
+# (S-1-5-21-...) in the local Administrators group, never a well-known, built-in or domain
+# group SID, never one already trusted. Any Deny, object or callback entry, inheritance or other
+# account means $null.
+#
+# When the folder's only extra entries are the installing account's own and nothing inside
+# looks wrong, but Repair can't take that account (a work or school account, S-1-12-1-..., or
+# one that is an administrator only through a group), it stops with a message of its own that
+# gives the icacls command: the guide's manual fix keys on it, so a refusal that found
+# something else never sends anyone there.
+function Get-RepairableSid($folder) {
+  if (-not $InstallerSid) { return $null }
+  # Case-sensitive, ASCII digits only, nothing before or after (not even a space or newline).
+  $local = $InstallerSid -cmatch '\AS-1-5-21(-[0-9]+){4}\z'
+  $entra = $InstallerSid -cmatch '\AS-1-12-1(-[0-9]+){4}\z'
+  if (-not ($local -or $entra)) { return $null }
+  $me = New-Object Security.Principal.SecurityIdentifier $InstallerSid
+  $rid = [long]($InstallerSid -split '-')[-1]
+  if ($local -and $rid -ge 512 -and $rid -le 527) { return $null }   # Domain Admins, Domain Users and the other domain groups
+  if ($trusted -contains $me) { return $null }
+  $acl = Get-Acl -LiteralPath $folder
+  if (-not $acl.AreAccessRulesProtected) { return $null }
+  # Every entry, read raw, a plain Allow for SYSTEM, Administrators, the service or this account.
+  $problem = Get-DaclProblem (Get-RawDescriptor $folder) (@($trusted) + $me)
+  if ($problem) { Log "not repairable: $problem"; return $null }
+  $member = $local -and (Test-LocalAdmin $me)
+  if ($member) { return $me }
+  Log "$me is not itself in the local Administrators group"
+  # Read only, before anything changes: if anything inside is wrong, the general refusal.
+  $inside = Get-InsideProblem $folder $me
+  if ($inside) { Log "not repairable: $inside"; return $null }
+  # A command is printed only for a plain ASCII path: Safe() would turn other characters into
+  # '?', which icacls reads as a wildcard.
+  $how = if ($folder -cmatch '\A[\x20-\x7E]+\z') {
+    "As an administrator, run: icacls `"$folder`" /remove:g *$($me.Value) /T /C"
+  } else {
+    'As an administrator, remove your own entries as the user guide (section 6.2, step 3) shows'
+  }
+  Stop-Install "Repair can't fix this for your account: $folder lets the account installing Lodestar ($me) in, and Repair removes only the entries of an account that is itself in the local Administrators group. Nothing else in the folder looks wrong. $how. Then start the Lodestar service."
 }
 
 # Creates the folder with its descriptor, then checks that what is there is ours: if someone
@@ -133,6 +266,9 @@ if (Test-Path -LiteralPath $dir) {
   if ($trusted -notcontains $owner) {
     Stop-Install "$dir already exists and is owned by $owner, not SYSTEM, Administrators or the Lodestar service. Check it, move it away, then install again."
   }
+  # Set-Acl goes by path, so the folder it secures must be the one checked here: same file ID,
+  # still no link, just before it (a handle opened earlier could have renamed it away).
+  $fileId = Get-FileId $dir
   $inside = @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction Stop)
 
   if ($inside.Count -eq 0) {
@@ -157,8 +293,14 @@ if (Test-Path -LiteralPath $dir) {
     # it belongs to SYSTEM, Administrators or the service (same rules as the service's
     # start-up check, windows/acl.rs).
     $why = Get-NotPrivateReason $dir
+    $repairSid = $null
     if ($why) {
-      Stop-Install "$dir is not empty and $why, so other users may have put files in it. Move its contents somewhere else, check them, then install again."
+      $repairSid = Get-RepairableSid $dir
+      if (-not $repairSid) {
+        Log "not repairable (installer SID '$InstallerSid'): $why"
+        Stop-Install "$dir is not empty and $why, so other users may have put files in it. Move its contents somewhere else, check them, then install again."
+      }
+      Log "the only extra entries are the installing administrator's own ($repairSid): removing them"
     }
     foreach ($child in $inside) {
       $o = (Get-Acl -LiteralPath $child.FullName).GetOwner([Security.Principal.SecurityIdentifier])
@@ -170,6 +312,32 @@ if (Test-Path -LiteralPath $dir) {
   # Fail closed: if the scan itself cannot run, the install stops (trap, exit 2).
   $link = Get-ChildItem -LiteralPath $dir -Force -Recurse -Attributes ReparsePoint -ErrorAction Stop | Select-Object -First 1
   if ($link) { Stop-Install "$($link.FullName) is a link or junction inside the data folder. Remove it and install again." }
+  if ($repairSid) {
+    $sidText = $repairSid.Value
+    # Lock it first. With /L, icacls changes a link itself, never what it points to, so a folder
+    # swapped for a junction in the meantime is never followed. Once that account's entries are
+    # gone, only SYSTEM, Administrators and the service can change anything in the folder.
+    Invoke-Icacls @($dir, '/remove:g', "*$sidText", '/T', '/C', '/L', '/Q') "icacls `"$dir`" /remove:g *$sidText /T /C"
+    Log "removed $sidText from $dir and everything in it"
+    # Then check it all again, now that nobody else can change it.
+    $item = Get-Item -LiteralPath $dir -Force
+    if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+      Stop-Install "$dir was replaced while Lodestar was installing. Check it, move it away, then install again."
+    }
+    $why = Get-NotPrivateReason $dir
+    if ($why) { Stop-Install "$dir is still not private after removing ${sidText}: $why. Move its contents somewhere else, check them, then install again." }
+    $owner = (Get-Acl -LiteralPath $dir).GetOwner([Security.Principal.SecurityIdentifier])
+    if ($trusted -notcontains $owner) {
+      Stop-Install "$dir is now owned by $owner, not SYSTEM, Administrators or the Lodestar service. Check it, move it away, then install again."
+    }
+    Assert-PrivateInside $dir
+  }
+  # File ID first, then the link check, so the only gap left is Set-Acl's own call.
+  $sameId = (Get-FileId $dir) -eq $fileId
+  $item = Get-Item -LiteralPath $dir -Force
+  if (-not $sameId -or -not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    Stop-Install "$dir was replaced while Lodestar was installing. Check it, move it away, then install again."
+  }
   Set-Acl -LiteralPath $dir -AclObject (New-DataSecurity)
   Log "re-secured $dir"
 } else {

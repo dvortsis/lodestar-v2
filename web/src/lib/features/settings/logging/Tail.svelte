@@ -15,6 +15,6 @@
 	import('./LogFiles.svelte').then((mod) => (Files = mod.default), fail);
 </script>
 
-{#if Outputs && form}<Outputs {form} deployment={catalog.deployment} />{/if}
+{#if Outputs && form}<Outputs {form} />{/if}
 {#if Files}<Files {catalog} />{/if}
 {#if failed}<p role="alert" class="text-small text-error">{m.settings_form_chunk_failed()}</p>{/if}

@@ -16,8 +16,8 @@ export class LoggingCatalog {
 	error = $state.raw<ApiError | Error>();
 	/** The server's clock, in Unix seconds, as of the last tick. */
 	now = $state(0);
-	/** How Lodestar is installed (`GET /system`), for the Docker hint and the Windows Event Log
-	 * setting; undefined until read, or if it can't be, so neither shows. */
+	/** How Lodestar is installed (`GET /system`), for the Docker hint; undefined until read, or if
+	 * it can't be, so it doesn't show. */
 	deployment = $state<DeploymentKind>();
 	#offset = 0;
 	#seq = 0;
