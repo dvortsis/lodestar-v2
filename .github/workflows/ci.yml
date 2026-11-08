@@ -466,13 +466,17 @@ jobs:
       - name: terraform fmt
         run: terraform fmt -check -recursive -diff infra/
       # Every root module: a folder holding .tf files. init downloads the
-      # provider pinned in .terraform.lock.hcl; no backend, no credentials.
+      # provider pinned in .terraform.lock.hcl and checks the zip against its
+      # zh: checksums; no backend, no credentials. Not -lockfile=readonly: the
+      # lock holds the h1: hash only for the platform it was made on, and
+      # readonly mode needs an h1: for this runner's unpacked copy. The lock
+      # change stays on the runner (the template diff check ran before this).
       - name: terraform validate
         run: |
           set -euo pipefail
           for dir in $(find infra -name '*.tf' -not -path '*/.terraform/*' -exec dirname {} \; | sort -u); do
             echo "::group::$dir"
-            terraform -chdir="$dir" init -backend=false -input=false -lockfile=readonly
+            terraform -chdir="$dir" init -backend=false -input=false
             terraform -chdir="$dir" validate
             echo "::endgroup::"
           done
