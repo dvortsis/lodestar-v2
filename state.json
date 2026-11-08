@@ -6476,6 +6476,10 @@
     {
       "at": "2026-11-08T20:50Z",
       "note": "#638 review MERGE at bad7a619; relayed important wording fix (A worker's, not This worker's) + 2 polish; to push after #637 merges with main; runner self-checks text delta then merges. Later Workers-text/WK-16 brief: workers.pause_not_saved help for code=prefs_full says 'pause it there' but an admin pause hits the same PrefsFull."
+    },
+    {
+      "at": "2026-11-08T20:55Z",
+      "note": "#634 X-cloud-infra-2 Opus+security MERGE at 854d9c70 (no security findings; lock hashes verified independently). Polish round asked (ISE host path, no-leading-zero octet regex, watchdog aged() silent skip logged, decisions heading); runner self-checks delta and merges on green. OP-1 told: infra -lockfile=readonly needs linux+windows h1 hashes for any new module; ci.yml infra job shared."
     }
   ],
   "main_health": [
