@@ -248,14 +248,24 @@ pub(crate) async fn run<'a>(
             }
         }
         running.store(true, Ordering::Relaxed);
-        // A stop that landed since the check above starts nothing: a
-        // purge that already read `running` as false mustn't race a start.
+        let (pause, shutdown) = Shutdown::new();
+        let fut = run(for_run(&mut ctx, shutdown));
+        // Judged `Ok` above, but a stop, a new snapshot or a sender gone
+        // may have landed since (on another thread, or while the run was
+        // created). Then the run is dropped unpolled: it never ran. A
+        // purge that already read `running` as false can't race a start,
+        // and a snapshot is judged again in the hold loop.
         if stop.is_requested() {
+            drop(fut);
             running.store(false, Ordering::Relaxed);
             return Ok(());
         }
-        let (pause, shutdown) = Shutdown::new();
-        let mut fut = run(for_run(&mut ctx, shutdown));
+        if rx.has_changed().unwrap_or(true) {
+            drop(fut);
+            running.store(false, Ordering::Relaxed);
+            continue;
+        }
+        let mut fut = fut;
         loop {
             // A stop or a new snapshot is seen before the run is polled.
             tokio::select! {
@@ -323,6 +333,98 @@ mod tests {
             external_client: false,
             external_indexer: true,
         })
+    }
+
+    /// A start racing a change: whatever lands as the run is created (a
+    /// snapshot that's no longer `Ok`, or a stop) is seen before the run
+    /// is first polled, so the plugin never runs on stale state. The
+    /// change is sent from inside the run's creation, which is the race
+    /// window itself, so it's reproduced every time with no timing.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_change_landing_as_the_run_starts_is_seen_before_it_runs() {
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicUsize;
+
+        use lodestar_store::SourceId;
+
+        let healthy = || known(&[("prowlarr", Health::Healthy)], false);
+        let (tx, rx) = watch::channel(healthy());
+        let (stop_tx, stop) = Shutdown::new();
+        let (emit_tx, _emit_rx) = tokio::sync::mpsc::channel(1);
+        let source = SourceId::new(1).unwrap();
+        let ctx = SourceCtx {
+            source,
+            emitter: lodestar_sources::Emitter::new(source, emit_tx),
+            peer_requests: None,
+            peer_replies: None,
+            shutdown: stop,
+            kit: lodestar_sources::Kit::default(),
+        };
+        let created = Arc::new(AtomicUsize::new(0));
+        let polled = Arc::new(AtomicUsize::new(0));
+        let running = Arc::new(AtomicBool::new(false));
+        let (tx, stop_tx) = (Arc::new(tx), Arc::new(stop_tx));
+
+        let task = {
+            let (created, polled, running) = (created.clone(), polled.clone(), running.clone());
+            let (tx, stop_tx) = (tx.clone(), stop_tx.clone());
+            tokio::spawn(async move {
+                run(
+                    "prowlarr",
+                    Some(rx),
+                    ctx,
+                    &running,
+                    move |mut c: SourceCtx| {
+                        let n = created.fetch_add(1, Ordering::SeqCst);
+                        match n {
+                            // First start: Prowlarr goes unhealthy right now.
+                            0 => {
+                                tx.send_replace(known(&[("prowlarr", Health::Unhealthy)], false));
+                            }
+                            // Second start: a stop lands right now.
+                            _ => {
+                                stop_tx.send_replace(true);
+                            }
+                        }
+                        let polled = polled.clone();
+                        Box::pin(async move {
+                            polled.fetch_add(1, Ordering::SeqCst);
+                            c.shutdown.requested().await;
+                            Ok(())
+                        })
+                    },
+                )
+                .await
+            })
+        };
+
+        // The first start was created but never polled, and it's held.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        while created.load(Ordering::SeqCst) < 1 {
+            assert!(tokio::time::Instant::now() < deadline, "no start");
+            tokio::task::yield_now().await;
+        }
+        for _ in 0..100 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(polled.load(Ordering::SeqCst), 0, "ran on a stale Ok");
+        assert!(!running.load(Ordering::SeqCst));
+        assert_eq!(
+            created.load(Ordering::SeqCst),
+            1,
+            "no restart while unhealthy"
+        );
+
+        // Healthy again: a second start, and a stop lands as it's created.
+        tx.send_replace(healthy());
+        tokio::time::timeout(std::time::Duration::from_secs(10), task)
+            .await
+            .expect("the stop ends it")
+            .unwrap()
+            .unwrap();
+        assert_eq!(created.load(Ordering::SeqCst), 2);
+        // Dropped unpolled too: the plugin never ran.
+        assert_eq!(polled.load(Ordering::SeqCst), 0);
     }
 
     /// A closed channel is never waited on again: `next` stays pending
