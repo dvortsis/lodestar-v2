@@ -7210,9 +7210,9 @@
       {
         "slot": 1,
         "slice": "CMP-6",
-        "role": "slice",
-        "agent": "session_01MMjhnBsTrGEcACYGQjoYqp",
-        "doing": "building: Companions API (admin), credential reveal per Q5, system row",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: #639 ready at 3b8f3e53; Opus review running, security MERGE; fix round + main merge after #637",
         "since": "2026-11-08T20:07Z"
       },
       {
@@ -7220,15 +7220,15 @@
         "slice": "OP-1",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: launched 19:55Z per briefs/OP-1.md",
+        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #636 both reviews MERGE; fixes at 94b22698 self-checked; merge on green",
         "since": "2026-11-08T19:55:08Z"
       },
       {
         "slot": 3,
         "slice": "PK-win-upd-2",
-        "role": "slice",
-        "agent": "session_01MMjhnAC9TBdvBgyLvxSjGf",
-        "doing": "building: Windows MSI install through the SYSTEM update helper (Q13)",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhnAC9TBdvBgyLvxSjGf: building Windows MSI install through the SYSTEM update helper (Q13)",
         "since": "2026-11-08T20:17Z"
       },
       {
@@ -7236,16 +7236,16 @@
         "slice": "X-wk-busy-retry",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #628 merged (6c915427); X-wk-busy-retry then X-wk-pause-text per briefs/X-wk-busy-retry.md",
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #638 merged (c5dd0fe7); #637 fix round 4a235ceb in delta review",
         "since": "2026-11-08T19:55Z"
       },
       {
         "slot": 5,
         "slice": null,
         "role": "build",
-        "agent": null,
+        "agent": "claude",
         "doing": "idle: owner 5th slot, cloud work done; held under seven-day usage warning",
-        "since": "2026-11-08T21:40Z",
+        "since": "2026-11-08T21:39Z",
         "status": "idle"
       }
     ],
