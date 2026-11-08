@@ -1,4 +1,4 @@
-# P-cloud-operator decisions
+# P-cloud-operator decisions (#631)
 
 The plan is `docs/plan/2026-11-08-cloud-operator.md`: an AI operator on Anthropic's hosted agent runs the cloud test fleet, and the runner manages it through comments on one draft PR. Docs only.
 
