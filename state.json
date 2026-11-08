@@ -6096,7 +6096,8 @@
     "2026-11-08T08:17Z: X-natural-strict-parity: real bug on main (suggest.rs natural_keeps_explicit_syntax; natural accepts what strict parse refuses; seed cc 6b5c49cd\u2026). Found on #607 Windows. Runner Opus helper fixing on slice/X-natural-strict-parity; needs slices.yaml entry in next runner PR. #607 re-ran once; if red again, land the fix first.",
     "2026-11-08T08:36Z: CMP-4b PR #608 opened (142a9a89), CI running, ~2,350 lines w/o lock. CMP-5 wiring: `if let Some(code) = lodestar_companions::supervise::limits::launcher_main() { std::process::exit(code) }` first in main; launcher mode only when argv[1] == \"__lodestar-companion-launcher\"; plus a test that launcher mode does nothing else.",
     "2026-11-08T08:38Z: #609 X-natural-strict-parity opened (f3df317c, tests-only + hidden natural::tokens): natural refuses valid queries past its 32-token/512-byte cap (B7) before strict parse; property wrongly asserted parse fails. Review launched.",
-    "2026-11-08T08:38Z: UX follow-up: natural refusal text says 'more than 32 words and operators' and /parse docs (crates/api/src/search.rs, schema.d.ts) say '32 words', but the cap counts brackets and lone '-' too (~18 visible words can be refused). Wording fix, runner UX call later."
+    "2026-11-08T08:38Z: UX follow-up: natural refusal text says 'more than 32 words and operators' and /parse docs (crates/api/src/search.rs, schema.d.ts) say '32 words', but the cap counts brackets and lone '-' too (~18 visible words can be refused). Wording fix, runner UX call later.",
+    "2026-11-08T08:41Z: #605 PK-win-restart merged (87d4906f) after self-checked delta (+1h margin, decisions gaps); session archived; slot 1 -> CMP-8a (session_01MMjhnBU4Bgyb2nfsARB3x8). Owner FYI sent. PK-win-upd-2, PK-win-portable-upd, PK-smoke now have PK-win-restart."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -6797,15 +6798,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T07:43Z",
+    "updated": "2026-11-08T08:41Z",
     "items": [
       {
         "slot": 1,
-        "slice": "PK-win-restart",
+        "slice": "CMP-8a",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCQQBy5wXCeS23fHo4: building (brief c88fbf34)",
-        "since": "2026-11-08T05:04:58Z"
+        "doing": "session_01MMjhnBU4Bgyb2nfsARB3x8: CMP-8a detection and health adapters",
+        "since": "2026-11-08T08:41Z"
       },
       {
         "slot": 2,
@@ -6887,5 +6888,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T08:38Z"
+  "updated": "2026-11-08T08:41Z"
 }
