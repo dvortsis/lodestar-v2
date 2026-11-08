@@ -6301,8 +6301,13 @@
     },
     {
       "id": "X-soak-screen-calibrate",
-      "at": "2026-11-08T16:05Z",
+      "at": "2026-11-08T17:08Z",
       "note": "analyze_cr0 screen replay: tripped on passing r5 (mimalloc_committed_mib_per_1000_stored 37.79 vs 20), not_available on failing r4 (mmap_cache_excess[main] absent). Recalibrate/demote mimalloc growth; handle absent mmap_cache_excess. Advisory only; after current slices."
+    },
+    {
+      "id": "X-flake-utp-lossy-patch",
+      "at": "2026-11-08T17:12Z",
+      "note": "Root cause found: conn.rs keeps RTO backoff across ACK progress (reset only on fresh RTT sample) + test independent-drop model. Patch in runner scratchpad; fresh Opus review running. Open runner PR on claude/busy-allen-aptli2 after #624 merges; \u00a72.19 flag timer refinement to owner."
     }
   ],
   "main_health": [
