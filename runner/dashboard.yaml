@@ -305,6 +305,7 @@ placement:
   - X-wk10d-unknown
   - X-wk-busy-retry
   - X-wk-pause-text
+  - X-lease-report-atomic
 - ws: ws-web
   match:
   - W*
@@ -361,6 +362,8 @@ placement:
   - X-flake-states-clock
   - X-e2e-baseline-refresh
   - X-natural-strict-parity
+  - X-natural-wording
+  - X-win-restart-followups
   - X-flake-email-bcc
   - X-flake-ops-pause
   - X-flake-query-token-style
