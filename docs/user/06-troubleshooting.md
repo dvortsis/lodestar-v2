@@ -51,10 +51,12 @@ To fix it:
 
     ```powershell
     $owners = "S-1-5-18", "S-1-5-32-544"
+    $owner = { param($p) (Get-Acl -LiteralPath $p).GetOwner([Security.Principal.SecurityIdentifier]).Value }
     $log = Get-ChildItem "C:\Windows\Temp\lodestar-secure-*\secure-datadir.log" |
-      Where-Object { (Get-Acl $_.DirectoryName).GetOwner([Security.Principal.SecurityIdentifier]).Value -in $owners } |
+      Where-Object { -not (($_.Attributes -bor $_.Directory.Attributes) -band [IO.FileAttributes]::ReparsePoint) } |
+      Where-Object { (& $owner $_.DirectoryName) -in $owners -and (& $owner $_.FullName) -in $owners } |
       Sort-Object LastWriteTime | Select-Object -Last 1
-    Get-Content $log.FullName -Tail 3
+    if ($log) { Get-Content $log.FullName -Tail 3 } else { "No installer log found" }
     ```
 
    If the last line says `STOPPED: Repair can't fix this for your account`, continue with step 3. If it says anything else, Repair found another problem: don't run step 3, and read the last paragraph of this section.
@@ -62,8 +64,10 @@ To fix it:
 
     ```powershell
     $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    icacls "C:\ProgramData\Lodestar" /remove:g "*$me" /T /C
+    icacls "$env:ProgramData\Lodestar" /remove:g "*$me" /T /C /L
     ```
+
+   Compare `$me` with the account number in step 1's reason. If they differ, for example because you opened PowerShell as another administrator, ask for help ([section 6.3](#63-get-help)).
 
    **Result:** `icacls` reports the files it processed. It removes your account's entries and changes nothing else.
 4. Start the service, wait about 10 seconds, then check that it is still running:
