@@ -492,45 +492,58 @@ mod linux {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_launcher_that_cant_launch_fails_the_start() {
-        let s = setup("qbittorrent");
-        let sb = sandbox(Limits::default());
-        let mut sup = Supervisor::new(s.data.clone(), sb.hook(), fast())
-            .await
-            .unwrap_or_else(|e| panic!("{e}"));
-        let raw = spec(&s.data, "qbittorrent", s.exe.clone(), &[]);
-        let (mut wrapped, _) = sb
-            .prepare(
-                raw,
-                &Confinement {
-                    install: s.install.clone(),
-                    downloads: None,
-                },
-            )
-            .unwrap_or_else(|e| panic!("{e}"));
-        // A damaged plan: the launcher exits, the hook sees it.
-        for (k, v) in &mut wrapped.env {
-            if k.as_str() == lodestar_companions::supervise::limits_linux::PLAN_ENV {
-                *v = OsString::from("garbage");
+        // A damaged plan, and a target outside `<data>/companions/` (this
+        // binary where it was built): the launcher exits, the hook sees it
+        // and the start fails, so nothing is recorded.
+        for case in ["damaged plan", "target outside companions"] {
+            let s = setup("qbittorrent");
+            let sb = sandbox(Limits::default());
+            let mut sup = Supervisor::new(s.data.clone(), sb.hook(), fast())
+                .await
+                .unwrap_or_else(|e| panic!("{e}"));
+            let exe = if case == "damaged plan" {
+                s.exe.clone()
+            } else {
+                me()
+            };
+            let hang = OsString::from("hang");
+            let raw = spec(&s.data, "qbittorrent", exe, &[("FAKE_MODE", &hang)]);
+            let (mut wrapped, _) = sb
+                .prepare(
+                    raw,
+                    &Confinement {
+                        install: s.install.clone(),
+                        downloads: None,
+                    },
+                )
+                .unwrap_or_else(|e| panic!("{e}"));
+            if case == "damaged plan" {
+                for (k, v) in &mut wrapped.env {
+                    if k.as_str() == lodestar_companions::supervise::limits_linux::PLAN_ENV {
+                        *v = OsString::from("garbage");
+                    }
+                }
             }
+            sup.add(companion(wrapped))
+                .unwrap_or_else(|e| panic!("{e}"));
+            let mut st = sup
+                .status(&id("qbittorrent"))
+                .unwrap_or_else(|| panic!("none"));
+            let got = wait_status(&mut st, case, |s| {
+                matches!(s.state, State::NeedsAttention(_))
+            })
+            .await;
+            assert!(got.restarts >= 2, "{case}");
+            assert!(
+                !s.data
+                    .join("companions")
+                    .join("run")
+                    .join("qbittorrent.json")
+                    .exists(),
+                "{case}"
+            );
+            sup.shutdown().await;
         }
-        sup.add(companion(wrapped))
-            .unwrap_or_else(|e| panic!("{e}"));
-        let mut st = sup
-            .status(&id("qbittorrent"))
-            .unwrap_or_else(|| panic!("none"));
-        let got = wait_status(&mut st, "crash loop", |s| {
-            matches!(s.state, State::NeedsAttention(_))
-        })
-        .await;
-        assert!(got.restarts >= 2);
-        assert!(
-            !s.data
-                .join("companions")
-                .join("run")
-                .join("qbittorrent.json")
-                .exists()
-        );
-        sup.shutdown().await;
     }
 }
 

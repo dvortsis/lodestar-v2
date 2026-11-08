@@ -98,6 +98,9 @@ pub(crate) struct Plan {
     pub read_exec: Vec<PathBuf>,
     pub read: Vec<PathBuf>,
     pub cgroup: Option<PathBuf>,
+    /// Lodestar's data folder: the executable must be under its
+    /// `companions/`.
+    pub data: PathBuf,
     pub exe: PathBuf,
     pub args: Vec<OsString>,
 }
@@ -137,6 +140,7 @@ impl Plan {
         if let Some(g) = &self.cgroup {
             put(&mut out, b'g', g.as_os_str().as_bytes());
         }
+        put(&mut out, b'd', self.data.as_os_str().as_bytes());
         put(&mut out, b'e', self.exe.as_os_str().as_bytes());
         for a in &self.args {
             put(&mut out, b'a', a.as_bytes());
@@ -149,7 +153,7 @@ impl Plan {
     pub fn decode(raw: &OsStr) -> Option<Plan> {
         let mut rest = raw.as_bytes().strip_prefix(FORMAT)?;
         let mut plan = Plan::default();
-        let (mut open_files, mut exe) = (None, None);
+        let (mut open_files, mut exe, mut data) = (None, None, None);
         let number = |v: &[u8]| std::str::from_utf8(v).ok()?.parse::<u64>().ok();
         let path = |v: &[u8]| {
             let p = PathBuf::from(OsStr::from_bytes(v));
@@ -179,6 +183,7 @@ impl Plan {
                 b'x' => plan.read_exec.push(path(v)?),
                 b'r' => plan.read.push(path(v)?),
                 b'g' if plan.cgroup.is_none() => plan.cgroup = Some(path(v)?),
+                b'd' if data.is_none() => data = Some(path(v)?),
                 b'e' if exe.is_none() => exe = Some(path(v)?),
                 b'a' if exe.is_some() => plan.args.push(OsStr::from_bytes(v).to_owned()),
                 _ => return None,
@@ -186,6 +191,7 @@ impl Plan {
         }
         plan.open_files = open_files?;
         plan.exe = exe?;
+        plan.data = data?;
         Some(plan)
     }
 }
@@ -327,6 +333,7 @@ pub(crate) fn prepare(
         read_exec,
         read: system(SYSTEM_READ, &f.data),
         cgroup: cgroup.as_ref().ok().cloned(),
+        data: f.data.clone(),
         exe: spec.executable.clone(),
         args: spec.args.clone(),
     };
@@ -370,6 +377,8 @@ enum LaunchError {
     Landlock = 123,
     BelowLevel = 124,
     Exec = 125,
+    /// The executable isn't a regular file under `<data>/companions/`.
+    Target = 126,
 }
 
 impl LaunchError {
@@ -381,8 +390,40 @@ impl LaunchError {
             LaunchError::Landlock => "launcher_landlock",
             LaunchError::BelowLevel => "launcher_below_level",
             LaunchError::Exec => "launcher_exec",
+            LaunchError::Target => "launcher_bad_target",
         }
     }
+
+    /// The code for a launcher's exit code, so a failed start says why.
+    fn from_exit(code: i32) -> &'static str {
+        [
+            LaunchError::Plan,
+            LaunchError::Cgroup,
+            LaunchError::Rlimit,
+            LaunchError::Landlock,
+            LaunchError::BelowLevel,
+            LaunchError::Exec,
+            LaunchError::Target,
+        ]
+        .into_iter()
+        .find(|e| *e as i32 == code)
+        .map_or("launcher_failed", LaunchError::code)
+    }
+}
+
+/// CMP-4a's checks again, in the launcher: an absolute path to a regular
+/// file (not a link), under `<data>/companions/`, compared canonically.
+/// `PATH` is never searched.
+fn target_ok(exe: &Path, data: &Path) -> bool {
+    let regular = std::fs::symlink_metadata(exe).is_ok_and(|m| m.file_type().is_file());
+    let under = match (
+        std::fs::canonicalize(exe),
+        std::fs::canonicalize(data.join("companions")),
+    ) {
+        (Ok(e), Ok(root)) => e.starts_with(&root) && e != root,
+        _ => false,
+    };
+    exe.is_absolute() && regular && under
 }
 
 /// Acts as the launcher: applies the plan in [`PLAN_ENV`] to this process
@@ -401,6 +442,9 @@ pub fn run_launcher() -> i32 {
 fn launch() -> Result<std::convert::Infallible, LaunchError> {
     let raw = std::env::var_os(PLAN_ENV).ok_or(LaunchError::Plan)?;
     let plan = Plan::decode(&raw).ok_or(LaunchError::Plan)?;
+    if !target_ok(&plan.exe, &plan.data) {
+        return Err(LaunchError::Target);
+    }
     if let Some(leaf) = &plan.cgroup {
         join_cgroup(leaf, plan.memory).map_err(|_| LaunchError::Cgroup)?;
     }
@@ -477,7 +521,7 @@ fn wait_for_exec(pid: u32, wait: Duration) -> Result<(), &'static str> {
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
         let state = stat.rsplit_once(") ").and_then(|(_, s)| s.chars().next());
         if matches!(state, None | Some('Z' | 'X')) {
-            return Err("launcher_failed");
+            return Err(exit_reason(&stat));
         }
         if Instant::now() >= until {
             return Err("launcher_timeout");
@@ -485,6 +529,20 @@ fn wait_for_exec(pid: u32, wait: Duration) -> Result<(), &'static str> {
         // Blocking is fine: CMP-4a runs spawns on the blocking pool.
         std::thread::sleep(pause);
         pause = (pause * 2).min(Duration::from_millis(20));
+    }
+}
+
+/// Why an exited launcher stopped: `exit_code` (field 52 of
+/// `/proc/<pid>/stat`, a wait status) mapped to its code.
+fn exit_reason(stat: &str) -> &'static str {
+    let status = stat
+        .rsplit_once(") ")
+        .and_then(|(_, rest)| rest.split_whitespace().nth(52 - 3))
+        .and_then(|v| v.parse::<i32>().ok());
+    match status {
+        // Exited normally: the code is the second byte.
+        Some(w) if w & 0x7f == 0 => LaunchError::from_exit((w >> 8) & 0xff),
+        _ => "launcher_failed",
     }
 }
 
@@ -501,6 +559,7 @@ mod tests {
             read_exec: vec!["/usr".into()],
             read: vec!["/etc/hosts".into()],
             cgroup: Some("/sys/fs/cgroup/x/lodestar-companion-q".into()),
+            data: "/data".into(),
             exe: "/data/companions/q/5/qbittorrent-nox".into(),
             args: vec![
                 "--profile=a:b".into(),
@@ -517,6 +576,7 @@ mod tests {
         let bare = Plan {
             open_files: 1,
             exe: "/x".into(),
+            data: "/d".into(),
             ..Plan::default()
         };
         assert_eq!(Plan::decode(&bare.encode()), Some(bare));
@@ -527,16 +587,17 @@ mod tests {
         let good = sample().encode().into_vec();
         for bad in [
             &b""[..],
-            b"2n1:1e2:/x",
-            b"1n1:1",             // no executable
-            b"1e2:/x",            // no open-files limit
-            b"1n1:1n1:2e2:/x",    // twice
-            b"1n1:1e1:x",         // relative
-            b"1n1:1a1:ye2:/x",    // an argument before the executable
-            b"1n1:1e2:/x?",       // trailing bytes
-            b"1n9:1e2:/x",        // a length past the end
-            b"1n1:1l4:moste2:/x", // an unknown level
-            b"1n2:-1e2:/x",
+            b"2n1:1d2:/de2:/x",
+            b"1n1:1d2:/d",             // no executable
+            b"1d2:/de2:/x",            // no open-files limit
+            b"1n1:1e2:/x",             // no data folder
+            b"1n1:1n1:2d2:/de2:/x",    // twice
+            b"1n1:1d2:/de1:x",         // relative
+            b"1n1:1d2:/da1:ye2:/x",    // an argument before the executable
+            b"1n1:1d2:/de2:/x?",       // trailing bytes
+            b"1n9:1d2:/de2:/x",        // a length past the end
+            b"1n1:1l4:mostd2:/de2:/x", // an unknown level
+            b"1n2:-1d2:/de2:/x",
         ] {
             assert_eq!(Plan::decode(OsStr::from_bytes(bad)), None, "{bad:?}");
         }
@@ -547,6 +608,46 @@ mod tests {
                 assert_eq!(p.encode().as_bytes(), &good[..cut]);
             }
         }
+    }
+
+    #[test]
+    fn the_minimal_plan_decodes() {
+        assert!(Plan::decode(OsStr::from_bytes(b"1n1:1d2:/de2:/x")).is_some());
+    }
+
+    #[test]
+    fn a_launchers_exit_code_names_its_reason() {
+        // Fields 3..=52 after the name; exit_code (52) last.
+        let stat = |w: i32| {
+            let mut f = vec!["0"; 49];
+            f[0] = "Z";
+            let w = w.to_string();
+            format!("7 (a) b) {} {w}", f.join(" "))
+        };
+        assert_eq!(exit_reason(&stat(124 << 8)), "launcher_below_level");
+        assert_eq!(exit_reason(&stat(126 << 8)), "launcher_bad_target");
+        assert_eq!(exit_reason(&stat(3 << 8)), "launcher_failed");
+        assert_eq!(exit_reason(&stat(9)), "launcher_failed"); // killed
+        assert_eq!(exit_reason("garbage"), "launcher_failed");
+    }
+
+    #[test]
+    fn the_target_must_be_a_file_under_companions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path().join("data");
+        let dir = data.join("companions").join("q").join("1");
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("bin");
+        std::fs::write(&exe, b"").unwrap();
+        let outside = tmp.path().join("bin");
+        std::fs::write(&outside, b"").unwrap();
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        assert!(target_ok(&exe, &data));
+        assert!(!target_ok(&outside, &data));
+        assert!(!target_ok(&link, &data));
+        assert!(!target_ok(&dir, &data));
+        assert!(!target_ok(Path::new("bin"), &data));
     }
 
     #[test]
