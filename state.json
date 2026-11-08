@@ -6685,7 +6685,7 @@
         "slice": "CMP-1",
         "role": "build",
         "agent": "claude",
-        "doing": "CMP-1 companion fetch + verify (Opus, 2R, /security-review); launching",
+        "doing": "session_01MMjhnBUJa6y4tEEAzxmMJs: CMP-1 companion fetch + verify (Opus, 2R, /security-review)",
         "since": "2026-11-08T02:13Z"
       },
       {
