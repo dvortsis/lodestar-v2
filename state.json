@@ -6283,6 +6283,11 @@
       "id": "owner-5th-slot-623",
       "at": "2026-11-08T16:51:55Z",
       "note": "Owner (direct, 2026-11-08 ~16:40Z): review #623 and merge if all passes; then 'Spin up a 5th session 623 for that.' One-off exception to \u00a72.42's 4 slots for X-cloud-infra. Runner findings on #623 a01bd12a: live sg/subnet/instance-role IDs on a public repo despite 'scrubbed' claim; personal Downloads path; repo-wide .gitignore hides 7 tracked files; doc contradictions (firewall cleanup, provisioner profile); no decisions file; 2,970 lines. Fix on fresh slice/X-cloud-infra so IDs never enter main history; owner to delete old branch."
+    },
+    {
+      "id": "X-macos-pidfile-fifo",
+      "at": "2026-11-08T17:02:42Z",
+      "note": "main red on macOS since #613 (29107fc8): pidfile.rs a_fifo_in_place test used rustix mknodat (absent on macOS). Runner PR #624 (5e58a674, full-ci label) uses mkfifo(1). PR CI runs macOS only with full-ci, so #613 didn't catch it. Merge on green incl. macOS."
     }
   ],
   "main_health": [
@@ -7082,5 +7087,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T16:52:18Z"
+  "updated": "2026-11-08T17:02:42Z"
 }
