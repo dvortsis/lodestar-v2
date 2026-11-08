@@ -3714,6 +3714,18 @@
     },
     "WK-10d": {
       "notes": "2026-11-08T05:58:58Z: split: #604 store floor holds (slice/WK-10d-store, 03310790, ~275). Fresh Opus CHANGES: B1 filter::write INSERT OR REPLACE overwrites worker-floor rows (then release frees); N1 single predicate, N5 exact prefix match, N2 docs, N6 release_rule_hashes guard, N7 hold_rank local floor 3 / worker 2, N3 doc. N4 (UI gone() message), N8 (stored torrent under held hash) -> main WK-10d PR. Floor's own CS tombstones stay releasable (runner, owner FYI). Delta review after push."
+    },
+    "CMP-2": {
+      "state": "merged",
+      "pr": 600,
+      "merge": "5b240fa33849802976f9b348f4de690f2f3c10a4",
+      "notes": "2026-11-08T06:06:52Z: merged at 42a54aed (merge diff checked, all green incl. Windows); session archived; owner FYI sent."
+    },
+    "CMP-7": {
+      "state": "running",
+      "brief": "briefs/CMP-7.md",
+      "since": "2026-11-08T06:06:52Z",
+      "session": "session_01MMjhnBuvgoPj7DQ8u9wewz"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -6759,7 +6771,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T05:58:58Z",
+    "updated": "2026-11-08T06:06:52Z",
     "items": [
       {
         "slot": 1,
@@ -6774,16 +6786,16 @@
         "slice": "CMP-4a",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn9UTgWx4UJ4Ae7mhXJ: #603 both reviews MERGE; small hardening round asked; runner self-checks delta then merges",
+        "doing": "session_01MMjhn9UTgWx4UJ4Ae7mhXJ: #603 delta OK; asked one more fix (control byte -> space, short-secret boundary); merge on green",
         "since": "2026-11-08T04:46:43Z"
       },
       {
         "slot": 3,
-        "slice": "CMP-2",
+        "slice": "CMP-7",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBjswJ9d8Qu8vvTvyu: #600 main merged at 42a54aed, merge diff checked; merge on green incl. Windows",
-        "since": "2026-11-08T00:55Z"
+        "doing": "session_01MMjhnBuvgoPj7DQ8u9wewz: building (brief 57f0c248)",
+        "since": "2026-11-08T06:06:52Z"
       },
       {
         "slot": 4,
