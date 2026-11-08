@@ -45,6 +45,24 @@ To rotate (the formats are in `crates/update/README.md`):
    This writes `statement.json.minisig`. Check it with `minisign -V -p lodestar-recovery.pub -m statement.json`. A co-signature with the old key (the same command with the old key and `-x statement.json.cosig`) is optional and never enough on its own.
 4. Publish the statement with the next release: the release workflow puts `{"body": <base64 of statement.json, byte for byte>, "minisig": <the .minisig text>, "cosig": <optional>}` into the `statements` of every manifest, after all earlier statements: every document carries the whole chain from `seq` 1, in order. **From then on, every manifest carries the statements** that chain its key to the recovery key, and every freshness statement after a freshness-key rotation carries them too, so a copy that was offline across the rotation can still verify. Never change a published statement's bytes: a different statement with a sequence number already accepted is refused as equivocation.
 5. Replace the role's `.pub` file and its CI secret. For a release or nightly rotation, re-sign each affected channel's current manifest with the new key; for a freshness rotation, issue new freshness statements with the new key.
+
+   **After a release-key rotation, do this before the next tag.** The release workflow's `update manifest` job checks each published envelope against the tagged `lodestar-release.pub`. While Stable and Beta are still signed by the old key, it refuses ("doesn't verify … not replacing it"), and so does the weekly re-sign.
+   - **The new statement must be in `crates/update/keys/statements.json` first:** do step 6 before this. A manifest signed by the new key without the statement that links that key to the recovery key is refused by every client, even though `minisign -V` against the new `.pub` passes.
+   - **Upload only when no release manifest job or freshness run is pending or running.** A manual upload is outside their shared `update-manifest` concurrency group.
+
+   For each `channel` of `stable` and `beta`, working on that channel's `stable.json` or `beta.json` from the `update-manifest` release:
+   1. Extract and check the old manifest: `python3 .github/scripts/update_manifest.py extract "$channel.json" old.body old.minisig`, then `minisign -V -p <old release .pub> -m old.body -x old.minisig`.
+   2. Write a new body that carries the whole chain and is dated now. The date must be after the statement's, and after the old manifest's:
+
+      ```sh
+      t=$(date -u +%s)
+      jq -c --argjson s "$(cat crates/update/keys/statements.json)" --argjson t "$t" \
+        '.statements = $s | .timestamp = $t | .expires = ($t + 2592000)' old.body | tr -d '\n' >new.body
+      ```
+   3. Sign it with the new release key (prehashed, never `-l`), with the trusted comment the workflow uses: `minisign -S -s <new release key> -t "lodestar $channel manifest $t" -m new.body -x new.minisig`.
+   4. Wrap it: `python3 .github/scripts/update_manifest.py envelope new.body new.minisig "$channel.json"`.
+   5. Check it as a client that still trusts the old key would: `cargo run -p lodestar-update --example verify_envelope -- "$channel.json" "$channel" <old release .pub> packaging/keys/lodestar-recovery.pub "$(date -u +%s)"`. It must print `accepted`.
+   6. Upload it: `gh release upload update-manifest --clobber "$channel.json"`.
 6. Append the published statement to `crates/update/keys/statements.json`, so later builds embed it and deleting `trust.json` can't undo the revocation. Leave the `.pub` copies in `crates/update/keys/` as they are: they are the first key generation, and the statements carry every change after it. A test fails unless each `.pub` file here is its role's current key in the embedded chain.
 
 When the owner first creates the nightly or freshness key, the default is simpler: add its `.pub` file here, copy it into `crates/update/keys/`, and change that role's `None` in `crates/update/src/keys.rs` to its `include_str!` (one line). That makes it part of the first generation, with no statement. The choice is final for that key: a key introduced by a statement can't later be embedded as generation 0.
