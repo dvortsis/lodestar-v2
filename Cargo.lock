@@ -1676,6 +1676,7 @@ dependencies = [
  "lodestar-companions",
  "lodestar-integrations",
  "lodestar-log",
+ "lodestar-sources-feeds",
  "lodestar-update",
  "pbkdf2",
  "proptest",
