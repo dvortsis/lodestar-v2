@@ -2,7 +2,7 @@
 
 The plan is `docs/plan/2026-11-08-cloud-test-plan.md`: concurrent test lanes on the 48 h pilot fleet (one AWS Windows VM, two Linodes behind PIA), and a standing cloud screen for crawler improvements. Docs only; it starts no VM.
 
-**One item changes an owner answer, and the owner approved it on 2026-11-08Z:** the uTP timing. The cloud screen is the runner's decision under §2.26: the owner deferred it to the runner's recommendation.
+**One item changes an owner answer, and the owner approved it on 2026-11-08Z:** the uTP timing. For the cloud screen: The owner approved adding a standing cloud-screen stage (2026-11-08) and left its design to the runner; its rules are the runner's under §2.26, flagged to the owner under §2.19.
 
 **Nothing weakens a content-safety decision or changes an owner-set number.**
 - The one security-relevant change is Prerequisite 2. It widens Main's SSH ingress by one more `/32` (Win's egress), through the infra follow-up slice's own review, and stays SSH-only.
@@ -14,9 +14,9 @@ The remaining refinements are the runner's to flag (`docs/owner-decisions.md` §
 - **CR-ADM runs as one CR-SPEC ABBA block, and uTP moves to the next fleet session** (owner, 2026-11-08Z, revising their Decision 3).
   - **Why not rounds:** the first version gave each toggle round its own fresh start. That costs another 6 h suppression per round and puts control and treatment in different hours.
   - **The block:** resumed restarts (`dht.safe_restart`), the control inside the block, and 6 h segments. It fits by hour 37.5 and is judged by `analyze_cr.py`.
-  - **What it's worth:** one block is half CR-SPEC's minimum, so it yields a lead, never an outcome. The order (CR-ADM, then uTP) is unchanged.
-- **A standing cloud screen** (the runner, 2026-11-08Z, under §2.26; flagged to the owner, §2.19). It runs before experiment-host runs, on the two cloud Linodes only. The runner's six rules are in the plan word for word:
-  - fail-only: crash or restart, a memory or disk bound breached, stored rate at zero, or a named error class;
+  - **What it's worth:** it's a lead whatever the block count, and it's never pooled with experiment-host blocks; never an outcome. The order (CR-ADM, then uTP) is unchanged.
+- **A standing cloud screen.** The owner approved adding a standing cloud-screen stage (2026-11-08) and left its design to the runner; its rules are the runner's under §2.26, flagged to the owner under §2.19. It runs before experiment-host runs, on the two cloud Linodes only. The runner's six rules are in the plan word for word:
+  - fail-only: crash or unplanned restart, a memory or disk bound breached, stored rate at zero, or a named error class;
   - rules committed before the run, and never changed after seeing results;
   - one fresh start, then an ABBA block of 2–3 h resumed segments on both Linodes, with images frozen by digest;
   - never evidence, never pooled with experiment-host segments, never cited as a gain;
@@ -45,7 +45,7 @@ The remaining refinements are the runner's to flag (`docs/owner-decisions.md` §
 - **Each Linode gets its own PIA exit.** Two crawlers on one exit would be "another crawler on the public IP" (CR-SPEC 6.5).
 
 ## Flagged for the owner
-- The cloud screen, which the runner adopted under §2.26 (above).
+- The cloud screen's rules, which are the runner's under §2.26 (above).
 - Infra follow-up for the runner to slice after `#625` (the X-cloud-infra session agreed they're feature changes outside it):
   - an admin-address list for Main's firewall;
   - a root-volume size parameter for Win.
