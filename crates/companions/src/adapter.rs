@@ -28,6 +28,8 @@ use std::time::Duration;
 
 use lodestar_integrations::secret::Secret;
 
+use crate::config_files::Username;
+use crate::configure::{Confirmation, Downloads, InstallReceipt, Origin, Route, WebUiBind};
 use crate::inputs::{CompanionId, ContainerName, InputError, PortNumber, Version};
 
 /// A boxed, sendable future.
@@ -261,6 +263,8 @@ impl Limits {
 pub enum Method {
     Get,
     Post,
+    /// Prowlarr's settings take `PUT` only (CMP-8b).
+    Put,
 }
 
 /// A request path and query (`/api/v2/app/version`,
@@ -482,8 +486,87 @@ impl fmt::Debug for HeaderValue {
     }
 }
 
+/// The longest session cookie value a [`GuardedHttp`] hands back, in
+/// bytes.
+pub const COOKIE_VALUE_MAX: usize = 512;
+
+/// A session cookie's name an adapter asks for, from its own constants:
+/// exactly a name (qBittorrent up to 5.1's `SID`), or a prefix followed by
+/// one to five digits (5.2's `QBT_SID_<WebUI port>`). Names are RFC 6265
+/// tokens of letters, digits, `_` and `-`, at most 64 bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CookieName {
+    name: &'static str,
+    numbered: bool,
+}
+
+const fn cookie_token(b: &[u8]) -> bool {
+    if b.is_empty() || b.len() > 64 {
+        return false;
+    }
+    let mut i = 0;
+    while i < b.len() {
+        if !(b[i].is_ascii_alphanumeric() || b[i] == b'_' || b[i] == b'-') {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+impl CookieName {
+    /// Exactly this name.
+    pub const fn new(name: &'static str) -> Option<CookieName> {
+        if !cookie_token(name.as_bytes()) {
+            return None;
+        }
+        Some(CookieName {
+            name,
+            numbered: false,
+        })
+    }
+
+    /// This prefix, then one to five ASCII digits.
+    pub const fn numbered(prefix: &'static str) -> Option<CookieName> {
+        if !cookie_token(prefix.as_bytes()) || prefix.len() > 59 {
+            return None;
+        }
+        Some(CookieName {
+            name: prefix,
+            numbered: true,
+        })
+    }
+
+    /// Whether a cookie called `name` is this one.
+    pub fn matches(&self, name: &str) -> bool {
+        if !self.numbered {
+            return name == self.name;
+        }
+        name.strip_prefix(self.name).is_some_and(|digits| {
+            (1..=5).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit())
+        })
+    }
+}
+
+/// Whether `value` may be handed back as a session cookie's value: 1 to
+/// [`COOKIE_VALUE_MAX`] bytes of letters, digits and `_ - . + / = % :`,
+/// so it can't end a header or add a cookie when sent back.
+pub fn cookie_value_ok(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= COOKIE_VALUE_MAX
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_-.+/=%:".contains(&b))
+}
+
+/// Whether `pair` is a `name=value` cookie a [`GuardedHttp`] may hand back:
+/// a token name and a value that passes [`cookie_value_ok`].
+fn cookie_pair_ok(pair: &str) -> bool {
+    pair.split_once('=')
+        .is_some_and(|(n, v)| cookie_token(n.as_bytes()) && cookie_value_ok(v))
+}
+
 /// One request to a companion, built with [`ProbeRequest::new`].
-#[derive(Debug)]
 #[non_exhaustive]
 pub struct ProbeRequest<'a> {
     pub target: &'a Target,
@@ -492,6 +575,26 @@ pub struct ProbeRequest<'a> {
     pub headers: Vec<(HeaderName, HeaderValue)>,
     pub body: Option<Vec<u8>>,
     pub limits: Limits,
+    /// The session cookie the answer may carry back, as the first of these
+    /// names it sets ([`ProbeResponse::session_cookie`]). No other header
+    /// of the answer is ever read.
+    pub session_cookie: Option<&'static [CookieName]>,
+}
+
+/// A body may hold a password or a key (a sign-in form, Prowlarr's host
+/// settings), so `Debug` shows only its length.
+impl fmt::Debug for ProbeRequest<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProbeRequest")
+            .field("target", self.target)
+            .field("method", &self.method)
+            .field("path", &self.path)
+            .field("headers", &self.headers)
+            .field("body_len", &self.body.as_ref().map(Vec::len))
+            .field("limits", &self.limits)
+            .field("session_cookie", &self.session_cookie)
+            .finish()
+    }
 }
 
 impl<'a> ProbeRequest<'a> {
@@ -504,7 +607,22 @@ impl<'a> ProbeRequest<'a> {
             headers: Vec::new(),
             body: None,
             limits,
+            session_cookie: None,
         }
+    }
+
+    /// Makes it a `PUT` with this body.
+    pub fn put(mut self, body: Vec<u8>) -> ProbeRequest<'a> {
+        self.method = Method::Put;
+        self.body = Some(body);
+        self
+    }
+
+    /// Asks for the session cookie with the first of these names among the
+    /// answer's `Set-Cookie` headers.
+    pub fn session_cookie(mut self, names: &'static [CookieName]) -> ProbeRequest<'a> {
+        self.session_cookie = Some(names);
+        self
     }
 
     /// Makes it a `POST` with this body.
@@ -520,12 +638,37 @@ impl<'a> ProbeRequest<'a> {
     }
 }
 
-/// A companion's answer: its status and a body no larger than the
-/// request's cap. Fields are private, so the cap can't be skipped.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A companion's answer: its status, a body no larger than the request's
+/// cap and, when the request asked for one, its session cookie. Fields are
+/// private, so the cap can't be skipped.
+#[derive(Clone)]
 pub struct ProbeResponse {
     status: u16,
     body: Vec<u8>,
+    session: Option<Secret>,
+}
+
+impl PartialEq for ProbeResponse {
+    fn eq(&self, other: &ProbeResponse) -> bool {
+        self.status == other.status
+            && self.body == other.body
+            && self.session.as_ref().map(Secret::expose)
+                == other.session.as_ref().map(Secret::expose)
+    }
+}
+
+impl Eq for ProbeResponse {}
+
+/// The body may hold a key or a password hash (Prowlarr's host settings),
+/// so `Debug` shows only its length.
+impl fmt::Debug for ProbeResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProbeResponse")
+            .field("status", &self.status)
+            .field("body_len", &self.body.len())
+            .field("session", &self.session.is_some())
+            .finish()
+    }
 }
 
 impl ProbeResponse {
@@ -538,7 +681,28 @@ impl ProbeResponse {
         if !(100..=599).contains(&status) {
             return Err(AdapterError::Protocol("HTTP status out of range"));
         }
-        Ok(ProbeResponse { status, body })
+        Ok(ProbeResponse {
+            status,
+            body,
+            session: None,
+        })
+    }
+
+    /// Adds the session cookie the request asked for, as `name=value`.
+    /// Refused ([`AdapterError::Protocol`]) unless the name is a token and
+    /// the value passes [`cookie_value_ok`].
+    pub fn with_session_cookie(mut self, pair: Secret) -> Result<ProbeResponse, AdapterError> {
+        if !cookie_pair_ok(pair.expose()) {
+            return Err(AdapterError::Protocol("session cookie"));
+        }
+        self.session = Some(pair);
+        Ok(self)
+    }
+
+    /// The session cookie as `name=value`, ready for a `Cookie` header,
+    /// when the request asked for it and the answer set it.
+    pub fn session_cookie(&self) -> Option<&Secret> {
+        self.session.as_ref()
     }
 
     pub fn status(&self) -> u16 {
@@ -562,7 +726,9 @@ impl ProbeResponse {
 /// - fail with [`AdapterError::Timeout`] once `limits.timeout()` has passed
 ///   for the whole request;
 /// - send nothing identifying beyond the request's own headers, and keep no
-///   cookies or state between requests.
+///   cookies or state between requests. The one cookie a request names
+///   ([`ProbeRequest::session_cookie`]) is handed back to the adapter,
+///   which sends it on later requests itself.
 pub trait GuardedHttp: Send + Sync {
     fn send<'a>(
         &'a self,
@@ -708,12 +874,7 @@ pub struct ConfigPlan {
 }
 
 impl ConfigPlan {
-    /// For this crate's adapters (CMP-8b). Only the tests and
-    /// [`ConfigPlan::for_tests`] call it until CMP-8b's adapters land.
-    #[cfg_attr(
-        not(any(test, feature = "testing")),
-        expect(dead_code, reason = "CMP-8b's adapters are its first callers")
-    )]
+    /// For this crate's adapters (CMP-8b) and [`ConfigPlan::for_tests`].
     pub(crate) fn new(companion: CompanionId, changes: Vec<SettingKey>) -> ConfigPlan {
         ConfigPlan { companion, changes }
     }
@@ -766,16 +927,83 @@ pub trait Credentials: Send + Sync {
 }
 
 /// What [`Configure`] is given beyond the target. Built with
-/// [`ConfigureInput::new`]; later slices add fields (the egress route,
-/// CMP-8b) without breaking implementations.
+/// [`ConfigureInput::new`] and the builder methods (CMP-8b); later slices
+/// add fields without breaking implementations.
+///
+/// `new` alone leaves the origin [`Origin::Unstated`], which CMP-8b's
+/// adapters refuse before sending anything: a caller must say whether
+/// Lodestar installed the companion or you confirmed it.
 #[non_exhaustive]
 pub struct ConfigureInput<'a> {
     pub credentials: &'a dyn Credentials,
+    /// Where the companion came from, which decides consent.
+    pub origin: Origin,
+    /// The egress route to follow; `None` leaves the companion's as it is.
+    pub route: Option<Route>,
+    /// Where the WebUI listens; `None` leaves it as it is.
+    pub webui: Option<WebUiBind>,
+    /// The save path and categories; `None` leaves them as they are.
+    pub downloads: Option<Downloads>,
+    /// The WebUI user to sign in as (qBittorrent).
+    pub username: Username,
 }
 
 impl<'a> ConfigureInput<'a> {
     pub fn new(credentials: &'a dyn Credentials) -> ConfigureInput<'a> {
-        ConfigureInput { credentials }
+        ConfigureInput {
+            credentials,
+            origin: Origin::Unstated,
+            route: None,
+            webui: None,
+            downloads: None,
+            username: Username::default(),
+        }
+    }
+
+    /// A companion Lodestar installed, with the receipt CMP-5's manager
+    /// mints for it.
+    pub fn installed(mut self, receipt: InstallReceipt) -> ConfigureInput<'a> {
+        self.origin = Origin::Installed(receipt);
+        self
+    }
+
+    /// A detected or entered companion you confirmed.
+    pub fn confirmed(mut self, confirmation: Confirmation) -> ConfigureInput<'a> {
+        self.origin = Origin::Confirmed(confirmation);
+        self
+    }
+
+    /// A guided install you confirmed, with the temporary password you
+    /// pasted (plan Q19). The generated password that replaces it must
+    /// already be stored durably as the companion's credential
+    /// (`credentials::PasswordChange`): `apply` reads it from
+    /// [`Credentials`] and writes it into qBittorrent.
+    pub fn guided(mut self, confirmation: Confirmation, temporary: Secret) -> ConfigureInput<'a> {
+        self.origin = Origin::Guided {
+            confirmation,
+            temporary,
+        };
+        self
+    }
+
+    pub fn route(mut self, route: Route) -> ConfigureInput<'a> {
+        self.route = Some(route);
+        self
+    }
+
+    pub fn webui(mut self, bind: WebUiBind) -> ConfigureInput<'a> {
+        self.webui = Some(bind);
+        self
+    }
+
+    pub fn downloads(mut self, downloads: Downloads) -> ConfigureInput<'a> {
+        self.downloads = Some(downloads);
+        self
+    }
+
+    pub fn username(mut self, username: Username) -> ConfigureInput<'a> {
+        self.username = username;
+        self
     }
 }
 
@@ -1097,6 +1325,39 @@ mod tests {
         let v = HeaderValue::plain("SID=abc").unwrap();
         assert!(!v.is_secret());
         assert!(!format!("{v:?}").contains("abc"));
+    }
+
+    #[test]
+    fn debug_never_shows_a_body_or_a_cookie() {
+        let t = Target::Loopback(PortNumber::new(8080).unwrap());
+        let req = ProbeRequest::new(&t, RequestPath::parse("/x").unwrap(), Limits::PROBE)
+            .post(b"password=hunter2".to_vec());
+        let text = format!("{req:?}");
+        assert!(!text.contains("hunter2") && !text.contains("104"), "{text}");
+        assert!(text.contains("body_len: Some(16)"));
+        let r = ProbeResponse::new(200, br#"{"apiKey":"k3y"}"#.to_vec(), &Limits::PROBE)
+            .unwrap()
+            .with_session_cookie(Secret::new("SID=s3cr3t"))
+            .unwrap();
+        let text = format!("{r:?}");
+        assert!(!text.contains("k3y") && !text.contains("s3cr3t"), "{text}");
+        assert_eq!(r.session_cookie().unwrap().expose(), "SID=s3cr3t");
+        for bad in ["s3cr3t", "=v", "SID=", "S D=v", "SID=a b", "SID=a;b"] {
+            let r = ProbeResponse::new(200, Vec::new(), &Limits::PROBE).unwrap();
+            assert!(r.with_session_cookie(Secret::new(bad)).is_err(), "{bad}");
+        }
+        assert!(
+            CookieName::numbered("QBT_SID_")
+                .unwrap()
+                .matches("QBT_SID_8080")
+        );
+        assert!(
+            !CookieName::numbered("QBT_SID_")
+                .unwrap()
+                .matches("QBT_SID_")
+        );
+        assert!(!CookieName::new("SID").unwrap().matches("SIDX"));
+        assert!(CookieName::new("a b").is_none());
     }
 
     #[test]

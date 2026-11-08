@@ -13,6 +13,9 @@
 //! - [`config_files`]: `qBittorrent.conf` and Prowlarr's `config.xml`,
 //!   written before first start with the credential and a loopback bind
 //!   (CMP-3).
+//! - [`configure`]: configuring qBittorrent and Prowlarr through their own
+//!   APIs, plan then apply, with consent, and Lodestar's own settings
+//!   through a [`configure::ConfigSink`] (CMP-8b).
 //! - [`detect`]: finding qBittorrent, Prowlarr and gluetun on fixed
 //!   targets or a URL you enter, and their health, through the SSRF guard
 //!   (CMP-8a).
@@ -32,6 +35,7 @@ pub mod adapter;
 pub mod catalogue;
 pub mod compose;
 pub mod config_files;
+pub mod configure;
 pub mod credentials;
 pub mod detect;
 pub mod extract;
