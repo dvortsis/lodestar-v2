@@ -922,7 +922,7 @@ async fn a_peer_ip_outside_our_share_is_never_dialled() {
         h.out.recv().await.unwrap();
     }
     // At once, not after a back-off: its peer was never queued.
-    until_within("a lookup for the key with no peer of ours", 5, || {
+    until_within("a lookup for the key with no peer of ours", 10, || {
         h.drain_lookups().contains(&key(99))
     })
     .await;

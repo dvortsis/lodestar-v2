@@ -2149,7 +2149,6 @@ impl Pool {
         }
     }
 
-    /// Schedules the next lookup, or gives up if there won't be one.
     /// A key with no peer left that this install may dial: a stream keeps
     /// its lookup (its next batch or its end brings the key back), and any
     /// other key backs off for its next lookup, as after a failure.
@@ -2163,6 +2162,7 @@ impl Pool {
         }
     }
 
+    /// Schedules the next lookup, or gives up if there won't be one.
     fn back_off(&mut self, key: InfoHash) {
         let (base, max_attempts) = (self.cfg.retry_backoff, self.cfg.max_attempts);
         let e = self.entries.get_mut(&key).expect("present");

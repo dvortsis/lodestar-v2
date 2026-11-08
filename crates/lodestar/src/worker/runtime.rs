@@ -913,6 +913,9 @@ fn start_if_ready(s: &Arc<Shared>) {
     if *s.started.borrow() || s.draining.load(Ordering::Acquire) {
         return;
     }
+    // Subscribed before the assignment is read, so a share that changes
+    // after the pool is built still wakes the pause task (#617's review).
+    let share = s.politeness.subscribe();
     let Some(a) = *lock(&s.assignment) else {
         return;
     };
@@ -979,8 +982,11 @@ fn start_if_ready(s: &Arc<Shared>) {
         running.pool.clone(),
         s.pool_paused.subscribe(),
         s.pool_told.clone(),
-        s.politeness.subscribe(),
-        s.share_told.clone(),
+        Share {
+            built_with: a.politeness,
+            latest: share,
+            told: s.share_told.clone(),
+        },
     ));
     *lock(&s.pool) = Some(running.pool);
     *stages = Some(Stages {
@@ -1252,21 +1258,35 @@ impl lodestar_sources::PeerIpCap for ShareCap {
     }
 }
 
+/// The pool's per-peer-IP share, for [`apply_pause`]: the one it was
+/// built with, the latest wanted, and where to say what it was told.
+struct Share {
+    built_with: Politeness,
+    latest: watch::Receiver<Politeness>,
+    told: watch::Sender<Politeness>,
+}
+
 /// Tells the pool the latest pause [`Shared::refresh_pause`] decided, and
 /// the latest per-peer-IP share, in order, for as long as the stages run.
 /// A changed share applies to the pool's next dial: connections already
-/// open finish (WK-10e).
+/// open finish (WK-10e). The starting point is the share the pool was
+/// built with, never the watch's value at the first poll: a replan that
+/// lands in between is applied, not taken as already done (#617's review).
 async fn apply_pause(
     pool: lodestar_sources::PoolHandle,
     mut want: watch::Receiver<bool>,
     told_tx: watch::Sender<bool>,
-    mut share: watch::Receiver<Politeness>,
-    share_told: watch::Sender<Politeness>,
+    share: Share,
 ) {
+    let Share {
+        built_with,
+        latest: mut share,
+        told: share_told,
+    } = share;
     // The pool starts unpaused, with the share it was built with.
     let mut told = false;
     told_tx.send_replace(false);
-    let mut shared = *share.borrow_and_update();
+    let mut shared = built_with;
     share_told.send_replace(shared);
     loop {
         let now = *share.borrow_and_update();
@@ -2803,6 +2823,88 @@ mod tests {
         );
         assert_eq!(gated.dropped.load(Ordering::Relaxed), 0, "nothing dropped");
         rt.shutdown().await;
+    }
+
+    /// #617's review: a replan that changes the share after the pool is
+    /// built but before the pause task first runs still reaches the pool.
+    /// The task starts from the share the pool was built with, not from
+    /// the watch, so it applies the new one and reports it only then.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_share_changed_before_the_pause_task_runs_reaches_the_pool() {
+        use lodestar_cluster::assign::peer_ip_bucket;
+        let gated = Arc::new(GatedState::default());
+        let (disc_tx, discoveries) = mpsc::channel(16);
+        let (out, _out_rx) = mpsc::channel(16);
+        let (stop, shutdown) = Shutdown::new();
+        // Built alone: up to two connections to any IP.
+        let (pool, task) = lodestar_sources::pool::spawn(
+            PoolConfig {
+                ip_cap: lodestar_sources::IpCap(Some(Arc::new(ShareCap(Politeness::ALONE)))),
+                ..PoolConfig::default()
+            },
+            Arc::new(Gated(gated.clone())),
+            lodestar_sources::PoolIo {
+                discoveries,
+                peer_finders: Vec::new(),
+                out,
+                funnel: Arc::new(FunnelCounts::default()),
+                shutdown,
+            },
+            HashMap::new(),
+            Vec::new(),
+        );
+        let ours: SocketAddr = "203.0.113.9:6881".parse().unwrap();
+        let theirs = (1..=250u8)
+            .map(|i| SocketAddr::from(([198, 51, 100, i], 6881)))
+            .find(|p| peer_ip_bucket(p.ip(), 2) != peer_ip_bucket(ours.ip(), 2))
+            .unwrap();
+        let split = Politeness {
+            peer_ip_groups: 2,
+            peer_ip_group: peer_ip_bucket(ours.ip(), 2),
+            per_peer_ip: 1,
+            bep51_interval_scale: 1,
+        };
+        // The replan lands before the pause task's first poll.
+        let (share_tx, latest) = watch::channel(Politeness::ALONE);
+        share_tx.send_replace(split);
+        let told = watch::channel(Politeness::ALONE).0;
+        let (_want_tx, want) = watch::channel(false);
+        let pauser = tokio::spawn(apply_pause(
+            pool.clone(),
+            want,
+            watch::channel(false).0,
+            Share {
+                built_with: Politeness::ALONE,
+                latest,
+                told: told.clone(),
+            },
+        ));
+        until("the split told to the pool", || {
+            let now = *told.borrow();
+            (now == split, now)
+        })
+        .await;
+        // Ordered behind the pool's own commands, so it has the split.
+        pool.queued().await;
+        let mut found = Found::key(InfoHash([7; 20]), 0);
+        found.peers = vec![theirs, ours];
+        disc_tx
+            .send(Discovery {
+                source: SourceId::new(DHT_SOURCE).unwrap(),
+                found,
+                at: 0,
+                reply: false,
+            })
+            .await
+            .unwrap();
+        until("dialled ours", || (lock(&gated.dials).contains(&ours), ())).await;
+        assert!(
+            !lock(&gated.dials).contains(&theirs),
+            "the pool kept the share it was built with"
+        );
+        pauser.abort();
+        let _ = stop.send(true);
+        let _ = task.await;
     }
 
     /// Never fetches: every key waits on a peer that doesn't answer, so
