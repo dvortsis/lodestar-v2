@@ -19,19 +19,30 @@ getrandom = "=0.3.4"
 lodestar-integrations.workspace = true
 lodestar-log.workspace = true
 flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
+lodestar-update.workspace = true
 pbkdf2 = { version = "=0.13.0", default-features = false, features = ["hmac"] }
 quick-xml = { version = "=0.42.0", default-features = false }
+# The GuardedClient's request and response types (CMP-1); the client itself
+# comes from lodestar-integrations.
+reqwest = { version = "=0.13.5", default-features = false }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
 sha2 = "=0.11.0"
 tar = { version = "=0.4.46", default-features = false }
+tokio = { version = "=1.54.0", features = ["rt", "sync", "time"] }
 zeroize = "=1.9.1"
 zip = { version = "=9.4.2", default-features = false, features = ["deflate-flate2"] }
 
+[target.'cfg(unix)'.dependencies]
+# O_NOFOLLOW for the download's .part file (CMP-1).
+rustix = { version = "=1.1.5", features = ["fs"] }
+
 [dev-dependencies]
 lodestar-companions = { path = ".", features = ["testing"] }
+lodestar-update = { workspace = true, features = ["testing"] }
 proptest = "=1.11.0"
-tokio = { version = "=1.54.0", features = ["rt", "macros"] }
+tempfile = "=3.27.0"
+tokio = { version = "=1.54.0", features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "time"] }
 
 [lints]
 workspace = true

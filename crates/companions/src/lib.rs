@@ -10,6 +10,9 @@
 //! - [`config_files`]: `qBittorrent.conf` and Prowlarr's `config.xml`,
 //!   written before first start with the credential and a loopback bind
 //!   (CMP-3).
+//! - [`fetch`] and [`verify`]: a pinned artifact's download through the
+//!   entry's host allowlist, and its size, SHA-256 and upstream signature
+//!   checks (CMP-1).
 //! - [`inputs`]: the closed, validated values generated compose services
 //!   and Unraid templates are built from, and the shared [`CompanionId`]
 //!   and [`Version`].
@@ -21,9 +24,11 @@ pub mod catalogue;
 pub mod config_files;
 pub mod credentials;
 pub mod extract;
+pub mod fetch;
 pub mod inputs;
 pub mod layout;
 pub mod log_events;
+pub mod verify;
 
 pub use catalogue::{Catalogue, CatalogueError, Entry, NotAvailable, builtin};
 pub use inputs::{CompanionId, Version};
