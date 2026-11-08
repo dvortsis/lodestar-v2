@@ -178,27 +178,40 @@ fn records(dir: &Path) -> Result<Vec<(PathBuf, Option<Record>)>, PidfileError> {
         return Err(PidfileError::NotADirectory);
     }
     let mut out = Vec::new();
-    for entry in fs::read_dir(dir)?.take(MAX_RECORDS) {
-        let path = entry?.path();
-        if path.extension().is_none_or(|e| e != "json") {
-            continue;
-        }
-        out.push((path.clone(), read_record(&path)));
+    let mut entries = fs::read_dir(dir)?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "json"));
+    for path in entries.by_ref().take(MAX_RECORDS) {
+        let rec = read_record(&path);
+        out.push((path, rec));
     }
     Ok(out)
 }
 
+/// Opens a record without following a link, and without blocking on a
+/// FIFO put in its place; checks the open handle is a small regular file.
 fn read_record(path: &Path) -> Option<Record> {
-    let meta = fs::symlink_metadata(path).ok()?;
+    let mut opts = OpenOptions::new();
+    opts.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(
+            (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32,
+        );
+    }
+    #[cfg(not(unix))]
+    if !fs::symlink_metadata(path).ok()?.file_type().is_file() {
+        return None;
+    }
+    let file = opts.open(path).ok()?;
+    let meta = file.metadata().ok()?;
     if !meta.file_type().is_file() || meta.len() > MAX_RECORD {
         return None;
     }
     let mut text = String::new();
-    fs::File::open(path)
-        .ok()?
-        .take(MAX_RECORD)
-        .read_to_string(&mut text)
-        .ok()?;
+    file.take(MAX_RECORD).read_to_string(&mut text).ok()?;
     serde_json::from_str::<Record>(&text)
         .ok()
         .filter(|r| r.format == FORMAT)
@@ -211,7 +224,7 @@ pub fn kill_orphans(data_dir: &Path) -> Result<Cleanup, PidfileError> {
     let mut done = Cleanup::default();
     for (path, rec) in records(&run_dir(data_dir))? {
         match rec {
-            Some(r) if kill_if_same(&r, None) => done.killed += 1,
+            Some(r) if allowed(&r, data_dir) && kill_if_same(&r, None) => done.killed += 1,
             _ => done.stale += 1,
         }
         let _ = fs::remove_file(&path);
@@ -227,6 +240,7 @@ pub fn kill_orphans(data_dir: &Path) -> Result<Cleanup, PidfileError> {
 pub fn kill_adopted(data_dir: &Path, parent: u32) -> Result<Cleanup, PidfileError> {
     let mut done = Cleanup::default();
     for (_, rec) in records(&run_dir(data_dir))? {
+        let rec = rec.filter(|r| allowed(r, data_dir));
         match &rec {
             Some(r) if kill_if_same(r, Some(parent)) => done.killed += 1,
             _ => done.stale += 1,
@@ -237,6 +251,56 @@ pub fn kill_adopted(data_dir: &Path, parent: u32) -> Result<Cleanup, PidfileErro
         }
     }
     Ok(done)
+}
+
+/// Whether a record may lead to a kill at all, before its identity is
+/// checked: never Lodestar itself, its parent, its group, pid 1 or below
+/// (a group kill of 1 is `kill(-1)`: everything), and only a program
+/// installed under `<data>/companions/`. So the identity check is also an
+/// authorisation check: a record can't name an arbitrary program.
+fn allowed(rec: &Record, data_dir: &Path) -> bool {
+    !forbidden_pid(rec.pid) && installed(&rec.exe, data_dir)
+}
+
+/// Pids no record may name.
+pub(crate) fn forbidden_pid(pid: u32) -> bool {
+    if pid == std::process::id() {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        let raw = |p: Option<rustix::process::Pid>| p.map(|p| p.as_raw_nonzero().get() as u32);
+        pid <= 1
+            || Some(pid) == raw(rustix::process::getppid())
+            || Some(pid) == raw(Some(rustix::process::getpgrp()))
+    }
+    #[cfg(not(unix))]
+    {
+        // Windows: 0 is the idle process and 4 the System process.
+        pid <= 4
+    }
+}
+
+/// Whether `exe` is under `<data>/companions/`, compared canonically. A
+/// program deleted since it started can't be resolved; its path as the OS
+/// reported it is used then, and must have no `..`.
+fn installed(exe: &Path, data_dir: &Path) -> bool {
+    let Ok(root) = fs::canonicalize(data_dir.join("companions")) else {
+        return false;
+    };
+    let exe = match fs::canonicalize(exe) {
+        Ok(e) => e,
+        Err(_)
+            if exe.is_absolute()
+                && !exe
+                    .components()
+                    .any(|c| c == std::path::Component::ParentDir) =>
+        {
+            exe.to_owned()
+        }
+        Err(_) => return false,
+    };
+    exe.starts_with(&root) && exe != root
 }
 
 /// Whether `pid` still is the process `rec` names (and `parent`'s child,
@@ -265,17 +329,32 @@ fn kill_if_same(rec: &Record, parent: Option<u32>) -> bool {
             // Its process group (whatever it started) first, while the
             // leader is alive and holds the group's id; then the leader
             // itself through the pidfd.
-            let _ = rustix::process::kill_process_group(pid, Signal::KILL);
+            kill_own_group(rec.pid);
             pidfd_send_signal(&fd, Signal::KILL).is_ok()
         }
         Err(rustix::io::Errno::NOSYS) => {
             if !matches(rec, parent) {
                 return false;
             }
-            let _ = rustix::process::kill_process_group(pid, Signal::KILL);
+            kill_own_group(rec.pid);
             rustix::process::kill_process(pid, Signal::KILL).is_ok()
         }
         Err(_) => false,
+    }
+}
+
+/// Kills the process group `pid` leads, only if it does lead one: its
+/// group id (`/proc/<pid>/stat` field 5) is its own pid.
+#[cfg(target_os = "linux")]
+fn kill_own_group(pid: u32) {
+    let leads = stat_field(pid, 5).and_then(|g| g.parse::<u32>().ok()) == Some(pid);
+    if leads
+        && !forbidden_pid(pid)
+        && let Some(p) = i32::try_from(pid)
+            .ok()
+            .and_then(rustix::process::Pid::from_raw)
+    {
+        let _ = rustix::process::kill_process_group(p, rustix::process::Signal::KILL);
     }
 }
 
@@ -286,6 +365,9 @@ fn kill_if_same(rec: &Record, parent: Option<u32>) -> bool {
 #[cfg(target_os = "linux")]
 fn kill_adopted_group(parent: u32, pgid: u32) -> usize {
     use rustix::process::{Pid, Signal};
+    if forbidden_pid(pgid) {
+        return 0;
+    }
     let Ok(dir) = fs::read_dir("/proc") else {
         return 0;
     };
@@ -483,6 +565,74 @@ mod tests {
             parent_of(std::process::id()),
             rustix::process::getppid().map(|p| p.as_raw_nonzero().get() as u32)
         );
+    }
+
+    #[test]
+    fn lodestar_its_parent_group_and_low_pids_are_never_named() {
+        assert!(forbidden_pid(0));
+        assert!(forbidden_pid(1));
+        assert!(forbidden_pid(std::process::id()));
+        #[cfg(unix)]
+        {
+            let raw = |p: rustix::process::Pid| p.as_raw_nonzero().get() as u32;
+            if let Some(pp) = rustix::process::getppid() {
+                assert!(forbidden_pid(raw(pp)));
+            }
+            assert!(forbidden_pid(raw(rustix::process::getpgrp())));
+        }
+    }
+
+    #[test]
+    fn only_a_program_under_companions_may_be_killed() {
+        let data = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let bin = data.path().join("companions").join("x");
+        fs::create_dir_all(&bin).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(bin.join("prog"), b"").unwrap_or_else(|e| panic!("{e}"));
+        let root = fs::canonicalize(data.path()).unwrap_or_else(|e| panic!("{e}"));
+        let rec = |exe: PathBuf, pid: u32| Record {
+            format: FORMAT,
+            pid,
+            start: 1,
+            exe,
+        };
+        let good = root.join("companions").join("x").join("prog");
+        assert!(installed(&good, data.path()));
+        assert!(allowed(&rec(good.clone(), 999_999), data.path()));
+        // Gone, but reported plainly under the folder.
+        assert!(installed(
+            &root.join("companions").join("x").join("gone"),
+            data.path()
+        ));
+        // Outside it, or climbing out, or the folder itself.
+        assert!(!installed(&root.join("elsewhere"), data.path()));
+        assert!(!installed(
+            &root.join("companions").join("..").join("gone"),
+            data.path()
+        ));
+        assert!(!installed(&root.join("companions"), data.path()));
+        assert!(!installed(
+            &std::env::current_exe().unwrap_or_default(),
+            data.path()
+        ));
+        // A good program under a forbidden pid.
+        assert!(!allowed(&rec(good.clone(), 1), data.path()));
+        assert!(!allowed(&rec(good, std::process::id()), data.path()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_in_place_of_a_record_does_not_block() {
+        let data = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let fifo = data.path().join("a.json");
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            &fifo,
+            rustix::fs::FileType::Fifo,
+            rustix::fs::Mode::from_raw_mode(0o600),
+            0,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(read_record(&fifo), None);
     }
 
     #[test]

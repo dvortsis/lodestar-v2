@@ -109,6 +109,8 @@ pub enum SpawnError {
     /// The executable isn't an absolute path to a regular file.
     BadExecutable,
     BadEnvName,
+    /// The id is `run`, the records folder's name.
+    ReservedId,
     /// The working directory couldn't be made private.
     WorkDir,
     /// The OS refused to start it.
@@ -126,6 +128,7 @@ impl SpawnError {
             SpawnError::PrivilegeUnknown => "privilege_unknown",
             SpawnError::BadExecutable => "bad_executable",
             SpawnError::BadEnvName => "bad_env_name",
+            SpawnError::ReservedId => "reserved_id",
             SpawnError::WorkDir => "work_dir",
             SpawnError::Start(_) => "start_failed",
             SpawnError::Hook(code) => code,
@@ -159,6 +162,12 @@ impl AfterSpawn for NoHook {
     fn applied(&self, _: &tokio::process::Child) -> Result<(), &'static str> {
         Ok(())
     }
+}
+
+/// `<data>/companions/run` holds the records, so no companion may be
+/// called `run`.
+pub fn is_reserved(id: &CompanionId) -> bool {
+    id.as_str() == "run"
 }
 
 /// `<data>/companions/<id>/home`: the companion's working directory and,
@@ -299,6 +308,9 @@ pub fn spawn(spec: &SpawnSpec, hook: &dyn AfterSpawn) -> Result<Started, SpawnEr
     };
     if !allow && privileged()? {
         return Err(SpawnError::Privileged);
+    }
+    if is_reserved(&spec.id) {
+        return Err(SpawnError::ReservedId);
     }
     let exe = &spec.executable;
     let regular = fs::symlink_metadata(exe).is_ok_and(|m| m.file_type().is_file());

@@ -24,6 +24,9 @@ pub const LINE_BYTES: usize = 8 * 1024;
 /// The longest secret [`Redactor`] guarantees to find at a line's cut.
 /// Longer known secrets are still redacted wherever they're whole.
 pub const MAX_SECRET: usize = 512;
+/// What each line costs beyond its text, roughly a `String`'s and the
+/// queue's own memory, so a flood of empty lines stays within the cap.
+pub const LINE_OVERHEAD: usize = 32;
 /// What a redacted value becomes.
 pub const REDACTED: &str = "[redacted]";
 /// Appended to a line that was cut.
@@ -238,13 +241,13 @@ impl LogRing {
     /// Adds one line that has already been redacted and cut.
     fn push(&self, line: String) {
         let mut ring = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        let cost = line.len() + 1;
+        let cost = line.len() + LINE_OVERHEAD;
         if cost > ring.cap {
             return;
         }
         while ring.bytes + cost > ring.cap {
             match ring.lines.pop_front() {
-                Some(old) => ring.bytes -= old.len() + 1,
+                Some(old) => ring.bytes -= old.len() + LINE_OVERHEAD,
                 None => break,
             }
         }
@@ -258,7 +261,8 @@ impl LogRing {
         ring.lines.iter().cloned().collect()
     }
 
-    /// The bytes the ring holds, newlines included.
+    /// The bytes the ring charges: each line's length plus
+    /// [`LINE_OVERHEAD`].
     pub fn bytes(&self) -> usize {
         self.0.lock().unwrap_or_else(PoisonError::into_inner).bytes
     }
@@ -320,7 +324,14 @@ impl Lines {
 
     fn emit(&mut self, cut: bool) {
         let text = String::from_utf8_lossy(&self.buf);
-        let text = text.trim_end_matches(['\n', '\r']);
+        // Control characters (C0 but tab, DEL, C1, and so ESC sequences'
+        // introducer) never reach the ring or whoever shows it.
+        let text: String = text
+            .trim_end_matches(['\n', '\r'])
+            .chars()
+            .filter(|c| *c == '\t' || !c.is_control())
+            .collect();
+        let text = text.as_str();
         let cut = cut || text.len() > LINE_BYTES;
         // Only raw text before the cut can reach the ring; matches are
         // found over the whole window.
@@ -473,7 +484,10 @@ mod tests {
         assert!(ring.bytes() <= 100);
         let got = ring.lines();
         assert_eq!(got.last().map(String::as_str), Some("line number 49"));
-        assert_eq!(ring.bytes(), got.iter().map(|l| l.len() + 1).sum::<usize>());
+        assert_eq!(
+            ring.bytes(),
+            got.iter().map(|l| l.len() + LINE_OVERHEAD).sum::<usize>()
+        );
     }
 
     #[test]
@@ -486,7 +500,23 @@ mod tests {
             lines.feed(b"\n");
         }
         assert!(ring.bytes() <= RING_BYTES);
-        assert!(ring.bytes() > RING_BYTES - 1001);
+        assert!(ring.bytes() > RING_BYTES - 1000 - LINE_OVERHEAD);
+    }
+
+    #[test]
+    fn a_flood_of_empty_lines_stays_within_the_cap() {
+        let ring = LogRing::with_capacity(10 * LINE_OVERHEAD);
+        let mut lines = Lines::new(ring.clone(), Arc::new(Redactor::default()));
+        lines.feed(&[b'\n'; 10_000]);
+        assert_eq!(ring.lines().len(), 10);
+        assert_eq!(ring.bytes(), 10 * LINE_OVERHEAD);
+    }
+
+    #[test]
+    fn control_characters_are_stripped() {
+        let (ring, mut lines) = lines_with(&[]);
+        lines.feed("a\u{1b}[31mred\u{7}\tb\u{9b}c\u{7f}\rd\n".as_bytes());
+        assert_eq!(ring.lines(), ["a[31mred\tbcd"]);
     }
 
     #[test]

@@ -212,6 +212,8 @@ impl std::fmt::Debug for Companion {
 pub enum SuperviseError {
     /// It's already supervised.
     Duplicate,
+    /// Its id is `run`, the records folder's name.
+    ReservedId,
     /// A companion it depends on hasn't been added.
     MissingDependency,
     /// Its data folder isn't the supervisor's.
@@ -224,6 +226,7 @@ impl SuperviseError {
     pub fn code(&self) -> &'static str {
         match self {
             SuperviseError::Duplicate => "duplicate",
+            SuperviseError::ReservedId => "reserved_id",
             SuperviseError::MissingDependency => "missing_dependency",
             SuperviseError::OtherDataDir => "other_data_dir",
             SuperviseError::Records(e) => e.code(),
@@ -296,6 +299,9 @@ impl Supervisor {
         if self.find(&id).is_some() {
             return Err(SuperviseError::Duplicate);
         }
+        if process::is_reserved(&id) {
+            return Err(SuperviseError::ReservedId);
+        }
         if c.depends_on.iter().any(|d| self.find(d).is_none()) {
             return Err(SuperviseError::MissingDependency);
         }
@@ -349,6 +355,8 @@ impl Supervisor {
     }
 
     /// Stops and forgets one companion. Bounded like [`Supervisor::shutdown`].
+    /// It doesn't look at dependents: remove the companions that depend on
+    /// it first.
     pub async fn remove(&mut self, id: &CompanionId) {
         if let Some(i) = self.running.iter().position(|s| &s.id == id) {
             let s = self.running.remove(i);
@@ -428,7 +436,8 @@ async fn supervise(
                 e @ (SpawnError::Privileged
                 | SpawnError::PrivilegeUnknown
                 | SpawnError::BadExecutable
-                | SpawnError::BadEnvName),
+                | SpawnError::BadEnvName
+                | SpawnError::ReservedId),
             ) => {
                 set(State::NeedsAttention(Attention::Refused(e.code())));
                 match wait_for_you(&mut control).await {
@@ -502,9 +511,11 @@ async fn run(
     control: &mut mpsc::UnboundedReceiver<Control>,
 ) -> Ended {
     let process::Started { mut child, pid } = started;
-    // Declared first so it drops last: whatever the companion started is
-    // killed once it has gone, or if this future is dropped.
-    let _group = Group(pid);
+    // Whatever the companion started is killed once it has gone (below),
+    // or when this future is dropped: `group` is declared after `child`,
+    // so it drops first, while the leader is still unreaped and holds the
+    // group's id.
+    let mut group = Group(Some(pid));
     let mut readers = Readers(Vec::new());
     if let Some(out) = child.stdout.take() {
         readers
@@ -540,7 +551,12 @@ async fn run(
                 check = None;
                 if r == Some(HealthStatus::Healthy) {
                     failures = 0;
-                    status.send_modify(|s| s.state = State::Running);
+                    // Watchers wake only on a change, not every check.
+                    status.send_if_modified(|s| {
+                        let changed = s.state != State::Running;
+                        s.state = State::Running;
+                        changed
+                    });
                     continue;
                 }
                 failures += 1;
@@ -561,9 +577,15 @@ async fn run(
         }
     };
     drop(check);
+    // At once, right after the leader's wait: what it started goes with it.
+    group.kill();
     status.send_modify(|s| s.last_exit = exit);
-    // Its pid isn't ours any more once it has been reaped (or abandoned).
-    pidfile::remove(&c.spawn.data_dir, &c.spawn.id);
+    // Reaped: its pid isn't ours any more. One that didn't die within the
+    // kill wait keeps its record, so the init's hook and the next start
+    // still find it.
+    if exit.is_some() {
+        pidfile::remove(&c.spawn.data_dir, &c.spawn.id);
+    }
     for r in &mut readers.0 {
         let _ = tokio::time::timeout(READER_WAIT, r).await;
     }
@@ -586,12 +608,23 @@ impl Drop for Readers {
 /// started dies with it. The leader is reaped (or being killed) by then;
 /// the group's id stays reserved while any member lives, so only members
 /// can be hit.
-struct Group(u32);
+struct Group(Option<u32>);
+
+impl Group {
+    /// SIGKILL to the group, once.
+    fn kill(&mut self) {
+        #[cfg(unix)]
+        if let Some(pgid) = self.0.take() {
+            signal_group(pgid, rustix::process::Signal::KILL);
+        }
+        #[cfg(not(unix))]
+        self.0.take();
+    }
+}
 
 impl Drop for Group {
     fn drop(&mut self) {
-        #[cfg(unix)]
-        signal_group(self.0, rustix::process::Signal::KILL);
+        self.kill();
     }
 }
 

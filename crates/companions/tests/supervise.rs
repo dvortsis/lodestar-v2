@@ -109,8 +109,10 @@ fn fake_companion() {
                 let mut sup = Supervisor::new(data.clone(), Arc::new(NoHook), Timings::default())
                     .await
                     .unwrap_or_else(|e| panic!("{e}"));
-                sup.add(companion(&data, "qbittorrent", "hang", &[]))
-                    .unwrap_or_else(|e| panic!("{e}"));
+                let mut c = companion(&data, "qbittorrent", "hang", &[]);
+                c.spawn.executable =
+                    PathBuf::from(std::env::var_os("FAKE_EXE").unwrap_or_default());
+                sup.add(c).unwrap_or_else(|e| panic!("{e}"));
                 std::future::pending::<()>().await;
             });
             hang()
@@ -370,7 +372,7 @@ fn alive(pid: u32) -> bool {
 fn the_init_hook_kills_only_its_own_children() {
     let data = data_dir();
     records_dir(data.path());
-    let mut child = unsupervised();
+    let mut child = unsupervised(data.path());
     pidfile::record(data.path(), &id("prowlarr"), child.id()).unwrap_or_else(|e| panic!("{e}"));
     // The test process isn't pid 1, so pid 1 isn't this child's parent.
     let done = pidfile::kill_adopted(data.path(), 1).unwrap_or_else(|e| panic!("{e}"));
@@ -598,14 +600,46 @@ async fn a_companion_ignoring_sigterm_is_killed_after_the_deadline() {
 }
 
 /// Starts the fake directly (not supervised) and records it.
-fn unsupervised() -> std::process::Child {
-    std::process::Command::new(std::env::current_exe().unwrap_or_else(|e| panic!("{e}")))
-        .args(fake_args())
+/// Starts the fake directly (not supervised), from a copy installed
+/// under `<data>/companions/`, where a record may name it.
+fn unsupervised(data: &Path) -> std::process::Child {
+    let exe = install_fake(data);
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.args(fake_args())
         .env("FAKE_MODE", "hang")
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .spawn()
-        .unwrap_or_else(|e| panic!("{e}"))
+        .stdout(std::process::Stdio::null());
+    spawn_fresh(&mut cmd)
+}
+
+/// Copies this binary to `<data>/companions/fake/`, as an install would.
+fn install_fake(data: &Path) -> PathBuf {
+    let me = std::env::current_exe().unwrap_or_else(|e| panic!("{e}"));
+    let dir = data.join("companions").join("fake");
+    std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{e}"));
+    let exe = dir.join(me.file_name().unwrap_or_default());
+    if !exe.exists() {
+        std::fs::copy(&me, &exe).unwrap_or_else(|e| panic!("{e}"));
+    }
+    canonical(&exe)
+}
+
+/// Spawns a just-written program. Another test thread's fork can briefly
+/// hold the copy's write handle open (`ETXTBSY` on Linux): retry that,
+/// against the deadline.
+fn spawn_fresh(cmd: &mut std::process::Command) -> std::process::Child {
+    let until = Instant::now() + DEADLINE;
+    loop {
+        match cmd.spawn() {
+            Ok(c) => return c,
+            Err(e)
+                if e.kind() == std::io::ErrorKind::ExecutableFileBusy && Instant::now() < until =>
+            {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(e) => panic!("{e}"),
+        }
+    }
 }
 
 fn wait_exit(child: &mut std::process::Child) -> bool {
@@ -630,7 +664,7 @@ fn records_dir(data: &Path) -> PathBuf {
 fn a_matching_orphan_is_killed_at_start() {
     let data = data_dir();
     records_dir(data.path());
-    let mut child = unsupervised();
+    let mut child = unsupervised(data.path());
     pidfile::record(data.path(), &id("prowlarr"), child.id()).unwrap_or_else(|e| panic!("{e}"));
     let done = pidfile::kill_orphans(data.path()).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(
@@ -655,7 +689,7 @@ fn a_matching_orphan_is_killed_at_start() {
 fn a_partial_match_is_never_killed() {
     let data = data_dir();
     let dir = records_dir(data.path());
-    let mut child = unsupervised();
+    let mut child = unsupervised(data.path());
     let rec =
         pidfile::record(data.path(), &id("prowlarr"), child.id()).unwrap_or_else(|e| panic!("{e}"));
     let other_start = pidfile::Record {
@@ -707,6 +741,7 @@ fn no_companion_survives_a_killed_work_child() {
             .args(fake_args())
             .env("FAKE_MODE", "work")
             .env("FAKE_DATA", data.path())
+            .env("FAKE_EXE", install_fake(data.path()))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .spawn()

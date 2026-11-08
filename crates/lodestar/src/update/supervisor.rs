@@ -102,6 +102,7 @@ pub fn run(
         }
     };
     let mut s = Supervisor {
+        #[cfg(target_os = "linux")]
         data_dir: data_dir.to_owned(),
         bin,
         db,
@@ -138,6 +139,8 @@ fn own_program() -> std::io::Result<PathBuf> {
 }
 
 struct Supervisor {
+    /// For the companion orphan hook (Linux).
+    #[cfg(target_os = "linux")]
     data_dir: PathBuf,
     bin: Bin,
     db: PathBuf,
