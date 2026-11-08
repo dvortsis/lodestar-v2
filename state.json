@@ -6503,7 +6503,8 @@
       "id": "X-flake-search-keyboard-2",
       "from": "#637 e2e on 4a235ceb",
       "what": "e2e/search-table.keyboard.test.ts:8 \u2014 table-row-3 not focused after j (10 s). Recurrence after #477's fix. One re-run spent on #637. If it repeats on any PR, launch an X-flake slice (sonnet) when a slot frees."
-    }
+    },
+    "2026-11-08: #634 X-cloud-infra-2 merged (f5e2afff); owner FYI sent (deploy via change set); session archived; slot 5 idle."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7204,7 +7205,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T20:17Z",
+    "updated": "2026-11-08T21:40Z",
     "items": [
       {
         "slot": 1,
@@ -7240,11 +7241,12 @@
       },
       {
         "slot": 5,
-        "slice": "X-cloud-infra-2",
+        "slice": null,
         "role": "build",
-        "agent": "claude",
-        "doing": "session_01MMjhnCot56kB5kgihYEBsx: #625 merged (6e6a1135); X-cloud-infra-2 per briefs/X-cloud-infra-2.md",
-        "since": "2026-11-08T19:58Z"
+        "agent": null,
+        "doing": "idle: owner 5th slot, cloud work done; held under seven-day usage warning",
+        "since": "2026-11-08T21:40Z",
+        "status": "idle"
       }
     ],
     "limit": 4,
@@ -7301,6 +7303,6 @@
       "answers": "runner recommendation on all items: X-refetch-private ships in v0.5.2; installer Repair may re-secure admin-ACE-only folder (X-win-refusal-ux); v0.5.1 release body replacement (notes/v051-release-body.md); web-ok+e2e-ok required; delete wip/CMP-0-catalogue; Q13 stands, Q14 at G-m6; import host = Unraid box; nightly key deferred; counsel advisory, no reminders; package installers after 1.0"
     }
   ],
-  "heartbeat": "2026-11-08T21:21Z",
+  "heartbeat": "2026-11-08T21:40Z",
   "updated": "2026-11-08T20:07Z"
 }
