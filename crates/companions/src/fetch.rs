@@ -97,6 +97,8 @@ pub enum FetchError {
     TooLarge,
     /// The SHA-256 or the size isn't the pin's.
     Mismatch,
+    /// An upstream signature file that isn't UTF-8 text.
+    SignatureText,
     /// The download folder couldn't be written, or isn't a plain folder.
     Io,
 }
@@ -113,6 +115,7 @@ impl FetchError {
             FetchError::Network => "network",
             FetchError::TooLarge => "download_too_large",
             FetchError::Mismatch => "download_mismatch",
+            FetchError::SignatureText => "signature_file",
             FetchError::Io => "download_io",
         }
     }
@@ -250,13 +253,21 @@ pub fn hop_allowed(entry: &Entry, url: &Url) -> bool {
 }
 
 /// The response for `url`, every hop through [`hop_allowed`].
-async fn open_allowed(src: &dyn Source, entry: &Entry, url: &str) -> Result<Opened, FetchError> {
+/// Each hop's response headers must come within `idle`.
+async fn open_allowed(
+    src: &dyn Source,
+    entry: &Entry,
+    url: &str,
+    idle: Duration,
+) -> Result<Opened, FetchError> {
     let mut at = Url::parse(url).map_err(|_| FetchError::Redirect)?;
     for _ in 0..=MAX_HOPS {
         if !hop_allowed(entry, &at) {
             return Err(FetchError::Redirect);
         }
-        let hop = src.open(&at).await?;
+        let hop = tokio::time::timeout(idle, src.open(&at))
+            .await
+            .map_err(|_| FetchError::Timeout)??;
         match hop.status {
             200 => return Ok(hop),
             301 | 302 | 303 | 307 | 308 => {
@@ -281,6 +292,9 @@ pub struct Verified {
     path: PathBuf,
     size: u64,
     sha256: Sha256,
+    /// The companion's download slot: a second download, which would
+    /// remove this file as stale, waits until the handle is gone.
+    _busy: Arc<Busy>,
 }
 
 impl Verified {
@@ -299,7 +313,9 @@ impl Verified {
 
     /// Closes and deletes the file, once it has been extracted.
     pub fn discard(self) -> io::Result<()> {
-        let Verified { file, path, .. } = self;
+        let Verified {
+            file, path, _busy, ..
+        } = self;
         drop(file);
         fs::remove_file(path)
     }
@@ -335,12 +351,11 @@ pub async fn fetch(
     pin: &Pin,
     progress: &mut (dyn FnMut(u64) + Send),
 ) -> Result<Verified, FetchError> {
-    fetch_limited(src, data, entry, pin, progress, Limits::DEFAULT).await
+    fetch_with(src, data, entry, pin, progress, Limits::DEFAULT, None).await
 }
 
-/// [`fetch`] within `limits`. A failure removes the `.part` file only once
-/// the writer thread has finished with it, so no write lands after the
-/// removal.
+/// [`fetch`] within other limits, for tests only.
+#[cfg(any(test, feature = "testing"))]
 pub async fn fetch_limited(
     src: &dyn Source,
     data: &Path,
@@ -349,17 +364,49 @@ pub async fn fetch_limited(
     progress: &mut (dyn FnMut(u64) + Send),
     limits: Limits,
 ) -> Result<Verified, FetchError> {
-    let _busy = Busy::take(entry.id.as_str())?;
+    fetch_with(src, data, entry, pin, progress, limits, None).await
+}
+
+/// Where the writer thread is, for tests that hold it there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WriterAt {
+    /// About to create the `.part` file.
+    Start,
+    /// Finished: the file is closed or handed back (or never created).
+    Done,
+}
+
+type WriterHook = Arc<dyn Fn(WriterAt) + Send + Sync>;
+
+/// A failure removes the `.part` file only once the writer thread has
+/// finished with it, so no write (or the file's creation) lands after the
+/// removal. The slot is held by the writer too, so a cancelled download
+/// keeps it until its writer has stopped.
+async fn fetch_with(
+    src: &dyn Source,
+    data: &Path,
+    entry: &Entry,
+    pin: &Pin,
+    progress: &mut (dyn FnMut(u64) + Send),
+    limits: Limits,
+    hook: Option<WriterHook>,
+) -> Result<Verified, FetchError> {
+    let busy = Arc::new(Busy::take(entry.id.as_str())?);
     let dir = prepare(data).map_err(|_| FetchError::Io)?;
     remove_stale(&dir, entry);
     let part = dir.join(file_name(entry, pin, "part"));
     let deadline = tokio::time::Instant::now() + limits.overall;
-    let result = match fetch_to(src, &part, entry, pin, progress, limits.idle, deadline).await {
+    let got = fetch_to(
+        src, &part, entry, pin, progress, limits, deadline, &busy, hook,
+    )
+    .await;
+    let result = match got {
         Ok(file) => finish(
             file,
             &part,
             &dir.join(file_name(entry, pin, "verified")),
             pin,
+            busy,
         ),
         Err(e) => Err(e),
     };
@@ -370,7 +417,13 @@ pub async fn fetch_limited(
 }
 
 /// Renames the checked `.part` to `.verified` and rewinds the handle.
-fn finish(mut file: File, part: &Path, verified: &Path, pin: &Pin) -> Result<Verified, FetchError> {
+fn finish(
+    mut file: File,
+    part: &Path,
+    verified: &Path,
+    pin: &Pin,
+    busy: Arc<Busy>,
+) -> Result<Verified, FetchError> {
     file.seek(SeekFrom::Start(0)).map_err(|_| FetchError::Io)?;
     fs::rename(part, verified).map_err(|_| FetchError::Io)?;
     Ok(Verified {
@@ -378,35 +431,53 @@ fn finish(mut file: File, part: &Path, verified: &Path, pin: &Pin) -> Result<Ver
         path: verified.to_path_buf(),
         size: pin.size,
         sha256: pin.sha256,
+        _busy: busy,
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn fetch_to(
     src: &dyn Source,
     path: &Path,
     entry: &Entry,
     pin: &Pin,
     progress: &mut (dyn FnMut(u64) + Send),
-    idle: Duration,
+    limits: Limits,
     deadline: tokio::time::Instant,
+    busy: &Arc<Busy>,
+    hook: Option<WriterHook>,
 ) -> Result<File, FetchError> {
-    let mut opened = tokio::time::timeout_at(deadline, open_allowed(src, entry, pin.url.as_str()))
-        .await
-        .map_err(|_| FetchError::Timeout)??;
+    let idle = limits.idle;
+    let mut opened =
+        tokio::time::timeout_at(deadline, open_allowed(src, entry, pin.url.as_str(), idle))
+            .await
+            .map_err(|_| FetchError::Timeout)??;
     let cap = pin.size.min(MAX_ARTIFACT_SIZE);
     // The writes, the hash and the fsync run off the async workers; this
     // side counts the bytes (the cap) and reports progress.
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(QUEUE);
     let target = path.to_path_buf();
+    let slot = Arc::clone(busy);
     let writer = tokio::task::spawn_blocking(move || -> io::Result<(File, [u8; 32])> {
-        let mut file = create_part(&target)?;
-        let mut hash = sha2::Sha256::new();
-        while let Some(chunk) = rx.blocking_recv() {
-            hash.update(&chunk);
-            file.write_all(&chunk)?;
-        }
-        file.sync_all()?;
-        Ok((file, hash.finalize().into()))
+        let _slot = slot;
+        let at = |w| {
+            if let Some(h) = &hook {
+                h(w);
+            }
+        };
+        at(WriterAt::Start);
+        let written = (|| {
+            let mut file = create_part(&target)?;
+            let mut hash = sha2::Sha256::new();
+            while let Some(chunk) = rx.blocking_recv() {
+                hash.update(&chunk);
+                file.write_all(&chunk)?;
+            }
+            file.sync_all()?;
+            Ok((file, hash.finalize().into()))
+        })();
+        at(WriterAt::Done);
+        written
     });
     let mut len = 0u64;
     // The deadline ends the streaming only: the writer is joined below
@@ -440,17 +511,24 @@ async fn fetch_to(
     Ok(file)
 }
 
+/// How long a signature fetch may take, in all and between chunks.
+pub const SIGNATURE_LIMITS: Limits = Limits {
+    overall: Duration::from_secs(60),
+    idle: Duration::from_secs(30),
+};
+
 /// Fetches `url`, an upstream signature on `entry`'s hosts, through the
-/// same hops as an artifact, refusing a body over [`MAX_SIGNATURE`].
+/// same hops as an artifact within [`SIGNATURE_LIMITS`], refusing a body
+/// over [`MAX_SIGNATURE`] or one that isn't UTF-8.
 pub async fn fetch_signature(
     src: &dyn Source,
     entry: &Entry,
     url: &str,
-    limits: Limits,
 ) -> Result<String, FetchError> {
+    let limits = SIGNATURE_LIMITS;
     let deadline = tokio::time::Instant::now() + limits.overall;
     let read = async {
-        let mut opened = open_allowed(src, entry, url).await?;
+        let mut opened = open_allowed(src, entry, url, limits.idle).await?;
         let mut body = Vec::new();
         while let Some(chunk) = tokio::time::timeout(limits.idle, opened.body.next())
             .await
@@ -461,37 +539,50 @@ pub async fn fetch_signature(
             }
             body.extend_from_slice(&chunk);
         }
-        String::from_utf8(body).map_err(|_| FetchError::Mismatch)
+        String::from_utf8(body).map_err(|_| FetchError::SignatureText)
     };
     tokio::time::timeout_at(deadline, read)
         .await
         .unwrap_or(Err(FetchError::Timeout))
 }
 
-/// Creates `<data>/companions/.downloads` and checks that neither it nor
-/// `<data>/companions` is a link.
+/// Creates `<data>/companions` (with the default mode, as CMP-2's layout
+/// does) and then `.downloads` in it (`0700` on Unix), checking each is a
+/// plain folder, not a link, before anything is created inside it.
 fn prepare(data: &Path) -> io::Result<PathBuf> {
     let companions = data.join("companions");
     let dir = companions.join(FOLDER);
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
+    plain_folder(&companions, fs::DirBuilder::new())?;
+    let mut private = fs::DirBuilder::new();
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
+        private.mode(0o700);
     }
-    builder.create(&dir)?;
-    for d in [&companions, &dir] {
-        if !fs::symlink_metadata(d)?.file_type().is_dir() {
-            return Err(io::Error::other("not a plain folder"));
-        }
-    }
+    plain_folder(&dir, private)?;
     Ok(dir)
+}
+
+/// Creates `dir` unless it exists; either way it must be a folder, not a
+/// link (or a junction) to one.
+fn plain_folder(dir: &Path, builder: fs::DirBuilder) -> io::Result<()> {
+    match builder.create(dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e),
+    }
+    if fs::symlink_metadata(dir)?.file_type().is_dir() {
+        Ok(())
+    } else {
+        Err(io::Error::other("not a plain folder"))
+    }
 }
 
 /// Removes `entry`'s `.part` and `.verified` files: a download that
 /// stopped, or one never extracted. A link of that name is removed too,
-/// never followed. Other companions' files stay.
+/// never followed. Other companions' files stay. A folder of that name
+/// (or, on Windows, a folder link) isn't removed: the download then fails
+/// with `download_io` until it's cleared by hand, which follows nothing.
 fn remove_stale(dir: &Path, entry: &Entry) {
     let Ok(list) = fs::read_dir(dir) else {
         return;
@@ -529,6 +620,7 @@ fn create_part(path: &Path) -> io::Result<File> {
 static RUNNING: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 
 /// Holds one companion's download slot until dropped.
+#[derive(Debug)]
 struct Busy(String);
 
 impl Busy {
@@ -557,16 +649,6 @@ impl Drop for Busy {
 mod tests {
     use super::*;
 
-    #[test]
-    fn one_download_per_companion() {
-        let a = Busy::take("cmp1-unit-a").unwrap();
-        assert_eq!(Busy::take("cmp1-unit-a").err(), Some(FetchError::Busy));
-        let b = Busy::take("cmp1-unit-b").unwrap();
-        drop(a);
-        assert!(Busy::take("cmp1-unit-a").is_ok());
-        drop(b);
-    }
-
     /// `create_part` itself never opens through a link, even one planted
     /// after the stale files were removed.
     #[cfg(unix)]
@@ -585,6 +667,102 @@ mod tests {
         std::os::unix::fs::symlink(&gone, &dangling).unwrap();
         assert!(create_part(&dangling).is_err());
         assert!(!gone.exists());
+    }
+
+    fn pinned(body: &[u8]) -> crate::Catalogue {
+        let sha: String = sha2::Sha256::digest(body)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let json = format!(
+            r#"{{"format":1,"entries":[{{"id":"qbittorrent","name":"qBittorrent",
+            "licence":{{"spdx":"GPL-2.0-or-later","url":"https://github.com/qbittorrent/qBittorrent/blob/master/COPYING"}},
+            "homepage":"https://www.qbittorrent.org/","needed_for":["download_client"],"opt_in":false,
+            "hosts":["github.com"],
+            "native":{{"release":"https://github.com/userdocs/qbittorrent-nox-static/releases/download/","artifacts":[
+              {{"platform":"linux","arch":"x86_64","archive":"binary","executable":null,
+               "pin":{{"version":"5.0.3","url":"https://github.com/userdocs/qbittorrent-nox-static/releases/download/r/q",
+                      "size":{},"sha256":"{sha}","upstream_sig":{{"kind":"none"}}}}}}]}},
+            "container":null,"ports":[{{"name":"webui","port":8080,"proto":"tcp","exposure":"internal"}}],
+            "health":null,"templates":["qbittorrent_conf"]}}]}}"#,
+            body.len()
+        );
+        crate::Catalogue::from_json(&json).unwrap()
+    }
+
+    /// When the overall timeout fires, the writer is joined before the
+    /// `.part` file is removed: it's held at its start past the deadline
+    /// here, and has finished (and its file is gone) by the time the
+    /// download returns, so nothing it does can land after the removal.
+    #[tokio::test]
+    async fn the_overall_timeout_joins_the_writer_before_removing_the_file() {
+        struct OneThenStall(bool);
+        impl Chunks for OneThenStall {
+            fn next(&mut self) -> BoxFuture<'_, Result<Option<Vec<u8>>, FetchError>> {
+                if std::mem::replace(&mut self.0, true) {
+                    return Box::pin(std::future::pending());
+                }
+                Box::pin(async { Ok(Some(vec![7u8; 100])) })
+            }
+        }
+        struct Src;
+        impl Source for Src {
+            fn open<'a>(&'a self, _: &'a Url) -> BoxFuture<'a, Result<Opened, FetchError>> {
+                Box::pin(async {
+                    Ok(Opened {
+                        status: 200,
+                        location: None,
+                        body: Box::new(OneThenStall(false)),
+                    })
+                })
+            }
+        }
+        let data = tempfile::tempdir().unwrap();
+        let c = pinned(&[1u8; 4500]);
+        let entry = c.get("qbittorrent").unwrap();
+        let pin = entry
+            .artifact(
+                crate::catalogue::Platform::Linux,
+                crate::catalogue::Arch::X86_64,
+            )
+            .unwrap()
+            .pin()
+            .unwrap();
+        let overall = Duration::from_millis(100);
+        // Paces the writer (never assumes work finished): held at its
+        // start until well past the deadline.
+        let held_until = std::time::Instant::now() + overall * 10;
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seen = done.clone();
+        let hook: WriterHook = Arc::new(move |w| match w {
+            WriterAt::Start => {
+                while std::time::Instant::now() < held_until {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+            WriterAt::Done => seen.store(true, std::sync::atomic::Ordering::SeqCst),
+        });
+        let limits = Limits {
+            overall,
+            idle: OVERALL,
+        };
+        let got = fetch_with(
+            &Src,
+            data.path(),
+            entry,
+            pin,
+            &mut |_| {},
+            limits,
+            Some(hook),
+        )
+        .await;
+        assert_eq!(got.err(), Some(FetchError::Timeout));
+        assert!(
+            done.load(std::sync::atomic::Ordering::SeqCst),
+            "the writer was joined before the download returned"
+        );
+        let left = fs::read_dir(folder(data.path())).unwrap().count();
+        assert_eq!(left, 0, "no .part file was created after the removal");
     }
 
     #[test]

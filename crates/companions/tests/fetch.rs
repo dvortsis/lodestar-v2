@@ -140,8 +140,9 @@ impl Source for Fake {
     }
 }
 
-/// A body that sends `chunks` chunks of 100 bytes, `every` apart, then
-/// stalls for good (`chunks: 0` stalls at once).
+/// A source whose body sends `chunks` chunks of 100 bytes, `every`
+/// apart, then stalls for good (`chunks: 0` stalls at once).
+#[derive(Clone)]
 struct Drip {
     chunks: usize,
     every: Duration,
@@ -162,16 +163,14 @@ impl Chunks for Drip {
     }
 }
 
-struct Dripping(Drip);
-
-impl Source for Dripping {
+impl Source for Drip {
     fn open<'a>(&'a self, _: &'a Url) -> BoxFuture<'a, Result<Opened, FetchError>> {
-        let (chunks, every) = (self.0.chunks, self.0.every);
+        let body = Box::new(self.clone());
         Box::pin(async move {
             Ok(Opened {
                 status: 200,
                 location: None,
-                body: Box::new(Drip { chunks, every }),
+                body,
             })
         })
     }
@@ -249,10 +248,10 @@ async fn a_long_body_stops_at_the_cap_unread() {
     let b = binary();
     let c = catalogue(&b);
     // 50 chunks of 100 bytes against a 4,500-byte pin: the 46th stops it.
-    let src = Dripping(Drip {
+    let src = Drip {
         chunks: 50,
         every: Duration::from_millis(1),
-    });
+    };
     let mut last = 0;
     let got = fetch::fetch(&src, data.path(), entry(&c), pin(&c), &mut |n| last = n).await;
     assert_eq!(got.err(), Some(FetchError::TooLarge));
@@ -341,10 +340,10 @@ async fn a_stalled_body_hits_the_idle_limit() {
     let _turn = SERIAL.lock().await;
     let data = tempfile::tempdir().unwrap();
     let c = catalogue(&binary());
-    let src = Dripping(Drip {
+    let src = Drip {
         chunks: 2,
         every: Duration::from_millis(1),
-    });
+    };
     let limits = Limits {
         overall: Duration::from_secs(600),
         idle: Duration::from_millis(100),
@@ -366,10 +365,10 @@ async fn a_slow_drip_hits_the_overall_limit() {
     let data = tempfile::tempdir().unwrap();
     let c = catalogue(&binary());
     // Every chunk well inside the idle limit, the whole far past overall.
-    let src = Dripping(Drip {
+    let src = Drip {
         chunks: 1000,
         every: Duration::from_millis(20),
-    });
+    };
     let limits = Limits {
         overall: Duration::from_millis(200),
         idle: Duration::from_secs(60),
@@ -469,6 +468,41 @@ async fn a_linked_download_folder_is_refused() {
     assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
 }
 
+/// A `companions` folder that's a link is refused before anything is
+/// created through it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_linked_companions_folder_is_refused() {
+    let _turn = SERIAL.lock().await;
+    let data = tempfile::tempdir().unwrap();
+    let b = binary();
+    let c = catalogue(&b);
+    let elsewhere = data.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, data.path().join("companions")).unwrap();
+    let f = Fake::default();
+    f.serve(URL, 200, None, &b);
+    assert_eq!(get(&f, data.path(), &c).await.err(), Some(FetchError::Io));
+    assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
+}
+
+/// The slot stays taken while the verified file is still open, so a
+/// second download can't remove it as stale from under the extractor.
+#[tokio::test]
+async fn the_slot_is_held_until_the_verified_file_is_gone() {
+    let _turn = SERIAL.lock().await;
+    let data = tempfile::tempdir().unwrap();
+    let b = binary();
+    let c = catalogue(&b);
+    let f = Fake::default();
+    f.serve(URL, 200, None, &b);
+    let v = get(&f, data.path(), &c).await.unwrap();
+    assert_eq!(get(&f, data.path(), &c).await.err(), Some(FetchError::Busy));
+    assert!(v.path().exists());
+    v.discard().unwrap();
+    get(&f, data.path(), &c).await.unwrap();
+}
+
 /// A second download of the same companion while one runs is refused.
 #[tokio::test]
 async fn one_download_per_companion_at_a_time() {
@@ -476,44 +510,31 @@ async fn one_download_per_companion_at_a_time() {
     let data = tempfile::tempdir().unwrap();
     let b = binary();
     let c = catalogue(&b);
-    let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
-    let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
-    struct Held(
-        Mutex<
-            Option<(
-                tokio::sync::oneshot::Sender<()>,
-                tokio::sync::oneshot::Receiver<()>,
-            )>,
-        >,
-    );
-    impl Source for Held {
-        fn open<'a>(&'a self, _: &'a Url) -> BoxFuture<'a, Result<Opened, FetchError>> {
-            let held = self.0.lock().unwrap().take();
-            Box::pin(async move {
-                if let Some((started, release)) = held {
-                    let _ = started.send(());
-                    let _ = release.await;
-                }
-                Err(FetchError::Network)
-            })
-        }
-    }
-    let held = Held(Mutex::new(Some((started_tx, release_rx))));
-    let first = get(&held, data.path(), &c);
-    let second = async {
-        started_rx.await.unwrap();
-        let f = Fake::default();
-        f.serve(URL, 200, None, &b);
-        let got = get(&f, data.path(), &c).await.err();
-        release_tx.send(()).unwrap();
-        got
+    let stalled = Drip {
+        chunks: 0,
+        every: Duration::ZERO,
     };
-    let (first, second) = tokio::join!(first, second);
-    assert_eq!(first.err(), Some(FetchError::Network));
-    assert_eq!(second, Some(FetchError::Busy));
-    // And free again once the first ended.
+    let limits = Limits {
+        overall: Duration::from_secs(600),
+        idle: Duration::from_millis(200),
+    };
     let f = Fake::default();
     f.serve(URL, 200, None, &b);
+    // The first takes the slot on its first poll, before the second runs.
+    let mut ignore = |_| {};
+    let first = fetch::fetch_limited(
+        &stalled,
+        data.path(),
+        entry(&c),
+        pin(&c),
+        &mut ignore,
+        limits,
+    );
+    let (first, second) = tokio::join!(first, get(&f, data.path(), &c));
+    assert_eq!(first.err(), Some(FetchError::Timeout));
+    assert_eq!(second.err(), Some(FetchError::Busy));
+    assert_eq!(f.asked(), 0);
+    // And free again once the first ended.
     get(&f, data.path(), &c).await.unwrap();
 }
 
@@ -721,18 +742,23 @@ async fn a_signature_comes_through_the_same_hops_within_its_cap() {
     let f = Fake::default();
     f.serve(&sig_url, 302, Some("https://evil.example/s.minisig"), b"");
     assert_eq!(
-        fetch::fetch_signature(&f, entry(&c), &sig_url, Limits::DEFAULT).await,
+        fetch::fetch_signature(&f, entry(&c), &sig_url).await,
         Err(FetchError::Redirect)
     );
     f.serve(&sig_url, 200, None, sig.as_bytes());
     assert_eq!(
-        fetch::fetch_signature(&f, entry(&c), &sig_url, Limits::DEFAULT).await,
+        fetch::fetch_signature(&f, entry(&c), &sig_url).await,
         Ok(sig)
     );
     f.serve(&sig_url, 200, None, &vec![b'a'; MAX_SIGNATURE as usize + 1]);
     assert_eq!(
-        fetch::fetch_signature(&f, entry(&c), &sig_url, Limits::DEFAULT).await,
+        fetch::fetch_signature(&f, entry(&c), &sig_url).await,
         Err(FetchError::TooLarge)
+    );
+    f.serve(&sig_url, 200, None, &[0xff, 0xfe]);
+    assert_eq!(
+        fetch::fetch_signature(&f, entry(&c), &sig_url).await,
+        Err(FetchError::SignatureText)
     );
 }
 
@@ -743,6 +769,7 @@ fn the_pin_check_compares_size_and_hash() {
     let p = pin(&c);
     let hash: [u8; 32] = sha2::Sha256::digest(&b).into();
     assert_eq!(verify::matches(p, b.len() as u64, &hash), Ok(()));
+    assert_eq!(verify::upstream(p), verify::Upstream::PinOnly);
     assert_eq!(
         verify::matches(p, b.len() as u64 + 1, &hash),
         Err(VerifyError::Mismatch)

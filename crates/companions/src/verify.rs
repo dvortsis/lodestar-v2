@@ -7,7 +7,7 @@
 //!   much of one matched.
 //! - **Upstream OpenPGP** signatures are checked when the pin is made, by
 //!   CMP-13's tool; the catalogue records it as
-//!   [`crate::catalogue::UpstreamSig::VerifiedAtPin`], and nothing more is checked here.
+//!   [`UpstreamSig::VerifiedAtPin`], and nothing more is checked here.
 //! - **Upstream minisign** signatures, if a companion ever publishes them,
 //!   are checked at run time with [`lodestar_update::minisign`]
 //!   ([`minisign`]), after the pin matched. The catalogue can't name a
@@ -18,7 +18,7 @@ use std::io::{self, Read, Seek, SeekFrom};
 
 use lodestar_update::minisign::{PublicKey, Signature};
 
-use crate::catalogue::Pin;
+use crate::catalogue::{Pin, UpstreamSig};
 use crate::fetch::Verified;
 
 /// Why a check failed: stable codes.
@@ -64,6 +64,24 @@ pub fn matches(pin: &Pin, size: u64, sha256: &[u8; 32]) -> Result<(), VerifyErro
 fn ct_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
     let diff = a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y));
     std::hint::black_box(diff) == 0
+}
+
+/// What a pin's upstream signature needs at run time, beyond the SHA-256
+/// [`matches`] already checked. CMP-5 asks this for every pin before
+/// extraction and refuses one it can't satisfy. The match is exhaustive
+/// on purpose: a new [`UpstreamSig`] variant (a minisign key, say) is a
+/// compile error here until its run-time check is wired in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Upstream {
+    /// Nothing more: upstream doesn't sign it, or CMP-13 checked its
+    /// OpenPGP signature when the pin was made (Q2).
+    PinOnly,
+}
+
+pub fn upstream(pin: &Pin) -> Upstream {
+    match pin.upstream_sig {
+        UpstreamSig::None | UpstreamSig::VerifiedAtPin { .. } => Upstream::PinOnly,
+    }
 }
 
 /// Verifies upstream's minisign signature `sig` (a `.minisig` file's text)
