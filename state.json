@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-08T01:08Z",
+  "updated_at": "2026-11-08T01:13Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5946,6 +5946,11 @@
     {
       "id": "X-ps-tests-on-pr-ci",
       "note": "2026-11-07T23:53Z: test-secure-datadir.ps1 and test-service-sid.ps1 run only in release.yml; add a PR CI job (windows) on packaging/windows/** changes. From #597 review."
+    },
+    {
+      "id": "X-win-repair-handle-acl",
+      "what": "Handle-based SetSecurityInfo with FILE_FLAG_OPEN_REPARSE_POINT in secure-datadir.ps1 to close the Set-Acl-by-path gap (from #597 delta review; admin-own-process only)",
+      "at": "2026-11-08T01:13Z"
     }
   ],
   "main_health": [
@@ -6647,14 +6652,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T01:08Z",
+    "updated": "2026-11-08T01:13Z",
     "items": [
       {
         "slot": 1,
         "slice": "X-win-refusal-ux",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnABi9mwqkZULms8pjL: #597 hardening round green 2dcb6995; runner delta security review running",
+        "doing": "session_01MMjhnABi9mwqkZULms8pjL: #597 delta review CHANGES (top-folder object ACEs; guide step 3 after refusal); fix round requested 2026-11-08T01:13Z",
         "since": "2026-11-07T21:10Z"
       },
       {
