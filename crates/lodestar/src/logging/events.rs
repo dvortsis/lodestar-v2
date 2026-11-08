@@ -1086,9 +1086,11 @@ lodestar_log::catalogue! {
         fields: { worker: Label },
     }
     /// A worker paused for too many floor reports couldn't have its pause
-    /// saved (too many workers' settings, or the write failed). It stays
-    /// paused until the coordinator restarts; pause it in Workers to keep
-    /// it paused after that (WK-10d).
+    /// saved: too many workers' settings (`prefs_full`), the write failed
+    /// (`failed`), or it was removed meanwhile (`unknown_worker`, so
+    /// there's nothing to save). Otherwise it stays paused until the
+    /// coordinator restarts; pause it in Workers to keep it paused after
+    /// that (WK-10d).
     WORKERS_PAUSE_NOT_SAVED {
         id: "workers.pause_not_saved",
         component: Workers,

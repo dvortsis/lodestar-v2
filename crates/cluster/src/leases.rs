@@ -795,12 +795,28 @@ impl LeaseAuthority {
     /// Takes back a re-grant that couldn't be delivered: the key waits
     /// again, at the front. `false` if `token` was no longer current.
     pub fn requeue(&self, key: &InfoHash, token: Token) -> bool {
+        self.take_back(key, token, true)
+    }
+
+    /// [`requeue`](Self::requeue), but the key waits at the back: one whose
+    /// store check couldn't answer goes behind the rest, so a key whose
+    /// read keeps failing doesn't stand first in every re-grant (#615's
+    /// review).
+    pub fn requeue_back(&self, key: &InfoHash, token: Token) -> bool {
+        self.take_back(key, token, false)
+    }
+
+    fn take_back(&self, key: &InfoHash, token: Token, front: bool) -> bool {
         let mut s = self.lock();
         let Some(lease) = s.table.release(key, token) else {
             return false;
         };
         if s.pending.insert(*key, lease).is_none() {
-            s.order.push_front(*key);
+            if front {
+                s.order.push_front(*key);
+            } else {
+                s.order.push_back(*key);
+            }
         }
         self.gauge(&s);
         true
@@ -1086,6 +1102,33 @@ mod tests {
         assert!(a.held(A, &key, t).is_none());
         assert!(a.release(&key, new).is_some());
         assert_eq!((get(&ev.harvested), get(&ev.lost)), (2, 0));
+    }
+
+    /// #615's review: a key whose store check couldn't answer goes back
+    /// behind the others; one whose delivery failed goes back in front.
+    #[test]
+    fn an_unknown_key_waits_behind_the_rest() {
+        let (a, _) = counted();
+        for n in 1..=3 {
+            a.claim(A, claim(n, 0), 0);
+        }
+        a.evict(A);
+        let out = a.regrant_pending(&[B], 3, 1);
+        let keys = &out[0].1;
+        assert_eq!(keys.len(), 3);
+        let (first, t1) = keys[0];
+        let (second, t2) = keys[1];
+        let (third, t3) = keys[2];
+        // The first unknown: behind. The second failed delivery: in front.
+        assert!(a.requeue_back(&first, t1));
+        assert!(a.requeue(&second, t2));
+        assert!(a.requeue_back(&third, t3));
+        let order: Vec<InfoHash> = (0..3)
+            .map(|_| a.regrant_pending(&[B], 1, 2)[0].1[0].0)
+            .collect();
+        assert_eq!(order, vec![second, first, third]);
+        // A stale token takes nothing back.
+        assert!(!a.requeue_back(&first, t1));
     }
 
     #[test]

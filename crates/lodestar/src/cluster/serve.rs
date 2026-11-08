@@ -646,8 +646,8 @@ fn classify(reported: bool, listed: bool, held: Option<bool>, found: Result<bool
 }
 
 impl StoredKeys for StoreCheck {
-    /// A claim's check: anything but a free key is refused, an unknown
-    /// one included.
+    /// The intake's check (a claim and a re-grant use `key_checks`):
+    /// anything but a free key reads as stored, an unknown one included.
     fn stored(&self, keys: &[InfoHash]) -> Vec<bool> {
         self.check_with(keys, || {})
             .into_iter()
@@ -655,7 +655,7 @@ impl StoredKeys for StoreCheck {
             .collect()
     }
 
-    fn regrant_check(&self, keys: &[InfoHash]) -> Vec<KeyCheck> {
+    fn key_checks(&self, keys: &[InfoHash]) -> Vec<KeyCheck> {
         self.check_with(keys, || {})
     }
 }
