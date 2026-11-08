@@ -6435,6 +6435,10 @@
     {
       "at": "2026-11-08T20:10Z",
       "note": "#630 security review MERGE (32c0779d). Next runner PR: PK-win-upd-2 notes gain (a) the helper refuses to install from a bin it hasn't checked (configured data dir via --config/LODESTAR_DATA_DIR isn't ACL-checked); (b) refuse install when the build version fails to parse (falls back to 0.0.0). PK-win-portable-upd's bin-ACL requirement (already in notes) confirmed as a must before it writes/executes. Optional: check bin's own DACL."
+    },
+    {
+      "at": "2026-11-08T20:20Z",
+      "note": "CMP-5 session archived; CMP-6 launched slot 1 (session_01MMjhnBsTrGEcACYGQjoYqp); owner FYI sent. Runner PR #635 (owns fixes X-cloud-infra/-2, OP-1, X-wk-busy-retry; PK-win-upd-2 #630 notes; new X-natural-wording, X-win-restart-followups, X-lease-report-atomic; plan TZ line) opened at 771c0e19, Opus review running. Main macOS watch on 20818fea running (verifies #621's macOS env test fix)."
     }
   ],
   "main_health": [
