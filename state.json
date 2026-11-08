@@ -6076,7 +6076,8 @@
     "2026-11-08T07:28Z: #605 PK-win-restart (cc6dd29b) and #606 CMP-7 (d5dc3a18) green; reviews launched: #605 Opus + security, #606 Opus; #606 security queued (3-reviewer cap).",
     "2026-11-08T07:28Z: from #605: (a) crates/api restart handler sends 202 before portable spawn; a failed spawn leaves the dialog waiting its timeout (needs crates/api change, follow-up); (b) packaging/windows/portable 'Start Lodestar.cmd' prints 'Lodestar stopped.' after relaunch while new copy runs in the window \u2014 follow-up + PK-guide-3 note; (c) exit-3 refused starts not counted in 24h record (recorded gap).",
     "2026-11-08T07:28Z: from #606: CMP-13 must regenerate packaging/companions/** and golden with UPDATE_GOLDEN=1 when it pins digests; catalogue gluetun container_name 'gluetun' collides with Lodestar's own VPN template \u2014 CMP-0/CMP-13 catalogue call (runner to decide).",
-    "2026-11-08T07:32Z: WK-10d main PR #607 opened; runner \u00a72.26 approved re-baseline of size-limit 'Settings logging event names (on demand)' 13.3 -> ~14.9 KB (measured 13.58 + 10%, S-logs-3 rule). Owner FYI after merge with the worker-floor flags."
+    "2026-11-08T07:32Z: WK-10d main PR #607 opened; runner \u00a72.26 approved re-baseline of size-limit 'Settings logging event names (on demand)' 13.3 -> ~14.9 KB (measured 13.58 + 10%, S-logs-3 rule). Owner FYI after merge with the worker-floor flags.",
+    "2026-11-08T07:41Z: #606 CMP-7 CHANGES sent (B1 shipped Unraid examples publish qBittorrent webui on LAN; + ExtraParams runtime allowlist, XML control-char refusal, ContainerName property slot, if-let guard MSRV, decisions notes). Security OK. Gluetun naming -> CMP-13 brief: decide distinct name for generated standalone gluetun vs Lodestar's own 'gluetun'."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -6867,5 +6868,5 @@
     }
   ],
   "heartbeat": "2026-11-07T22:05Z",
-  "updated": "2026-11-08T07:32Z"
+  "updated": "2026-11-08T07:41Z"
 }
