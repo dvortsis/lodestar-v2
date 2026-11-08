@@ -161,14 +161,7 @@ fn run_with(
 ) -> (Result<extract::Extracted, ExtractError>, Tmp) {
     let tmp = Tmp::new();
     let staging = tmp.0.join("s.staging");
-    let r = extract_limited(
-        limits,
-        kind,
-        &mut Cursor::new(bytes),
-        bytes.len() as u64,
-        &exe(),
-        &staging,
-    );
+    let r = extract_limited(limits, kind, &mut Cursor::new(bytes), &exe(), &staging);
     if r.is_err() {
         assert!(!staging.exists(), "staging left behind: {r:?}");
         assert_eq!(fs::read_dir(&tmp.0).unwrap().count(), 0, "{r:?}");
@@ -522,6 +515,62 @@ fn the_size_cap_counts_bytes_written_not_headers() {
     }
 }
 
+/// A gzip of one raw tar header claiming `size` bytes of type `ty`,
+/// followed by `size` zeros, streamed so the test never holds them.
+fn header_bomb(ty: u8, size: u64) -> Vec<u8> {
+    let mut h = Header::new_gnu();
+    h.as_mut_bytes()[..13].copy_from_slice(b"././@LongLink");
+    h.set_entry_type(EntryType::new(ty));
+    h.set_mode(0o644);
+    h.set_size(size);
+    h.set_cksum();
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    gz.write_all(h.as_bytes()).unwrap();
+    let zeros = vec![0u8; 1 << 20];
+    let mut left = size;
+    while left > 0 {
+        let n = left.min(zeros.len() as u64) as usize;
+        gz.write_all(&zeros[..n]).unwrap();
+        left -= n as u64;
+    }
+    gz.finish().unwrap()
+}
+
+#[test]
+fn a_long_name_or_pax_header_cannot_inflate_past_the_caps() {
+    // Each header's body is read by the tar parser itself, before any
+    // entry reaches the writer: GNU long names (`L`, `K`), pax records
+    // (`x`) and a pax global header (`g`), which is skipped.
+    let limits = Limits {
+        total: 1024 * 1024,
+        overhead: 1024 * 1024,
+        ..Limits::Q16
+    };
+    for ty in [b'L', b'K', b'x', b'g'] {
+        let bomb = header_bomb(ty, 64 * 1024 * 1024);
+        let r = run_with(limits, ArchiveKind::TarGz, &bomb).0;
+        let refusal = r.unwrap_err().refusal();
+        assert!(
+            matches!(refusal, Some(Refusal::Ratio | Refusal::TooLarge)),
+            "{}: {refusal:?}",
+            ty as char
+        );
+    }
+    // Q16's own caps: a 256 MiB long name is stopped by the ratio long
+    // before it's in memory.
+    let r = run(ArchiveKind::TarGz, &header_bomb(b'L', 256 * 1024 * 1024)).0;
+    assert_eq!(r.unwrap_err().refusal(), Some(Refusal::Ratio));
+}
+
+#[test]
+fn an_encrypted_zip_entry_is_refused() {
+    let mut z = zip_of(&[(EXE, E::File(b"#!"))]);
+    let (cd, local) = zip_records(&z, EXE);
+    z[cd + 8] |= 1;
+    z[local + 6] |= 1;
+    assert_eq!(refusal(ArchiveKind::Zip, &z), Some(Refusal::Encrypted));
+}
+
 #[test]
 fn a_zip_bomb_over_the_ratio_is_refused() {
     let zeros = vec![0u8; 8 * 1024 * 1024];
@@ -613,13 +662,7 @@ fn an_existing_staging_folder_is_never_reused() {
     let staging = tmp.0.join("s.staging");
     fs::create_dir(&staging).unwrap();
     let t = tgz(&[exe_tar()]);
-    let r = extract::extract(
-        ArchiveKind::TarGz,
-        &mut Cursor::new(&t),
-        t.len() as u64,
-        &exe(),
-        &staging,
-    );
+    let r = extract::extract(ArchiveKind::TarGz, &mut Cursor::new(&t), &exe(), &staging);
     assert!(matches!(r, Err(ExtractError::StagingInTheWay)), "{r:?}");
     assert!(staging.is_dir(), "someone else's folder is left alone");
 }
@@ -636,13 +679,7 @@ fn a_symlink_planted_before_extraction_is_never_followed() {
     // The staging path itself.
     let staging = tmp.0.join("s.staging");
     symlink(&outside, &staging).unwrap();
-    let r = extract::extract(
-        ArchiveKind::TarGz,
-        &mut Cursor::new(&t),
-        t.len() as u64,
-        &exe(),
-        &staging,
-    );
+    let r = extract::extract(ArchiveKind::TarGz, &mut Cursor::new(&t), &exe(), &staging);
     assert!(matches!(r, Err(ExtractError::StagingInTheWay)), "{r:?}");
     assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
 
@@ -655,13 +692,7 @@ fn a_symlink_planted_before_extraction_is_never_followed() {
     symlink(&outside, stale.join("app")).unwrap();
     fs::write(outside.join("keep"), b"k").unwrap();
     install
-        .stage(
-            &v("1.0"),
-            ArchiveKind::TarGz,
-            &mut Cursor::new(&t),
-            t.len() as u64,
-            &exe(),
-        )
+        .stage(&v("1.0"), ArchiveKind::TarGz, &mut Cursor::new(&t), &exe())
         .unwrap();
     assert_eq!(fs::read(outside.join("keep")).unwrap(), b"k");
     assert!(!outside.join("bin").exists());
@@ -669,13 +700,7 @@ fn a_symlink_planted_before_extraction_is_never_followed() {
 
     // A staging path that's a link: refused, the link and its target kept.
     symlink(&outside, install.root().join("2.0.staging")).unwrap();
-    let r = install.stage(
-        &v("2.0"),
-        ArchiveKind::TarGz,
-        &mut Cursor::new(&t),
-        t.len() as u64,
-        &exe(),
-    );
+    let r = install.stage(&v("2.0"), ArchiveKind::TarGz, &mut Cursor::new(&t), &exe());
     assert!(
         matches!(r, Err(LayoutError::Extract(ExtractError::StagingInTheWay))),
         "{r:?}"
@@ -684,13 +709,7 @@ fn a_symlink_planted_before_extraction_is_never_followed() {
 
     // A version folder that's a link: never extracted into.
     symlink(&outside, install.root().join("3.0")).unwrap();
-    let r = install.stage(
-        &v("3.0"),
-        ArchiveKind::TarGz,
-        &mut Cursor::new(&t),
-        t.len() as u64,
-        &exe(),
-    );
+    let r = install.stage(&v("3.0"), ArchiveKind::TarGz, &mut Cursor::new(&t), &exe());
     assert!(matches!(r, Err(LayoutError::AlreadyStaged)), "{r:?}");
     assert_eq!(fs::read_dir(&outside).unwrap().count(), 1);
 }
@@ -812,7 +831,6 @@ fn stage(install: &mut Install, version: &str, body: &[u8]) {
             &v(version),
             ArchiveKind::TarGz,
             &mut Cursor::new(&t),
-            t.len() as u64,
             &exe(),
         )
         .unwrap();
@@ -848,13 +866,7 @@ fn stage_commit_prune_and_rollback() {
 
     stage(&mut install, "1.0", b"one");
     assert!(matches!(
-        install.stage(
-            &v("1.0"),
-            ArchiveKind::TarGz,
-            &mut Cursor::new(b""),
-            0,
-            &exe()
-        ),
+        install.stage(&v("1.0"), ArchiveKind::TarGz, &mut Cursor::new(b""), &exe()),
         Err(LayoutError::AlreadyStaged)
     ));
     assert_eq!(install.pointer().unwrap(), None, "staging doesn't switch");
@@ -1018,4 +1030,75 @@ fn removal_never_follows_a_link() {
     symlink(&outside, install.root()).unwrap();
     assert!(matches!(install.remove(), Err(LayoutError::OutsideRoot)));
     assert_eq!(fs::read(outside.join("keep")).unwrap(), b"k");
+}
+
+// ─── Windows: junctions need no privilege, so they're tested there ──────
+
+#[cfg(windows)]
+fn junction(link: &Path, target: &Path) {
+    let ok = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .output()
+        .unwrap()
+        .status
+        .success();
+    assert!(ok, "mklink /J {link:?}");
+}
+
+#[cfg(windows)]
+#[test]
+fn junctions_are_never_followed_on_windows() {
+    let tmp = Tmp::new();
+    let outside = tmp.0.join("outside");
+    fs::create_dir(&outside).unwrap();
+    fs::write(outside.join("keep"), b"k").unwrap();
+    let t = tgz(&[exe_tar()]);
+
+    // A staging path that's a junction is refused, not extracted into.
+    let staging = tmp.0.join("s.staging");
+    junction(&staging, &outside);
+    let r = extract::extract(ArchiveKind::TarGz, &mut Cursor::new(&t), &exe(), &staging);
+    assert!(matches!(r, Err(ExtractError::StagingInTheWay)), "{r:?}");
+    assert_eq!(fs::read_dir(&outside).unwrap().count(), 1);
+
+    let data = tmp.0.join("data");
+    fs::create_dir(&data).unwrap();
+    let mut install = Install::open(&data, &id()).unwrap();
+    // A stale staging folder holding a junction out: cleaned as a link.
+    let stale = install.root().join("1.0.staging");
+    fs::create_dir(&stale).unwrap();
+    junction(&stale.join("app"), &outside);
+    install
+        .stage(&v("1.0"), ArchiveKind::TarGz, &mut Cursor::new(&t), &exe())
+        .unwrap();
+    assert_eq!(fs::read(outside.join("keep")).unwrap(), b"k");
+    install.commit(&v("1.0")).unwrap();
+    // A staging or version path that's a junction refuses.
+    junction(&install.root().join("2.0.staging"), &outside);
+    let r = install.stage(&v("2.0"), ArchiveKind::TarGz, &mut Cursor::new(&t), &exe());
+    assert!(
+        matches!(r, Err(LayoutError::Extract(ExtractError::StagingInTheWay))),
+        "{r:?}"
+    );
+    junction(&install.root().join("3.0"), &outside);
+    let r = install.stage(&v("3.0"), ArchiveKind::TarGz, &mut Cursor::new(&t), &exe());
+    assert!(matches!(r, Err(LayoutError::AlreadyStaged)), "{r:?}");
+    // Sweeping and removing take junctions out as links.
+    assert_eq!(install.sweep().unwrap(), ["2.0.staging", "3.0"]);
+    junction(&install.root().join("1.0").join("out"), &outside);
+    install.remove().unwrap();
+    assert_eq!(fs::read(outside.join("keep")).unwrap(), b"k");
+
+    // A companion folder that's a junction is refused.
+    junction(&data.join("companions").join("prowlarr"), &outside);
+    assert!(matches!(
+        Install::open(&data, &id()),
+        Err(LayoutError::OutsideRoot)
+    ));
+    assert!(matches!(
+        Install::existing(&data, &id()),
+        Err(LayoutError::OutsideRoot)
+    ));
 }

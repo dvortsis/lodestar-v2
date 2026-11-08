@@ -213,12 +213,15 @@ impl Install {
     /// `<version>.staging/` from a crash is removed first, if it's a plain
     /// directory; anything else in its place refuses. The pointer is
     /// unchanged.
+    ///
+    /// An `Io` error after the rename (the folder's fsync) leaves
+    /// `<version>/` in place: a retry gets [`LayoutError::AlreadyStaged`],
+    /// and the caller commits it or [`Install::sweep`]s it.
     pub fn stage(
         &mut self,
         version: &Version,
         kind: ArchiveKind,
         archive: &mut dyn Archive,
-        len: u64,
         executable: &RelPath,
     ) -> Result<Extracted, LayoutError> {
         let target = self.version_dir(version);
@@ -232,8 +235,8 @@ impl Install {
             }
             self.delete(&staging)?;
         }
-        let done = extract::extract(kind, archive, len, executable, &staging)
-            .map_err(LayoutError::Extract)?;
+        let done =
+            extract::extract(kind, archive, executable, &staging).map_err(LayoutError::Extract)?;
         if let Err(e) = fs::rename(&staging, &target) {
             // Best effort: the next stage or sweep removes it otherwise.
             let _ = self.delete(&staging);
@@ -458,11 +461,83 @@ fn ensure_dir(path: &Path) -> Result<(), LayoutError> {
 /// Removes a file or a link. On Windows a directory symlink or junction
 /// is removed with `remove_dir`, which removes the link, not its target.
 fn remove_link_or_file(path: &Path) -> io::Result<()> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        #[cfg(windows)]
-        Err(_) => fs::remove_dir(path),
-        #[cfg(not(windows))]
-        Err(e) => Err(e),
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::FileTypeExt;
+        if fs::symlink_metadata(path)?.file_type().is_symlink_dir() {
+            return fs::remove_dir(path);
+        }
+    }
+    fs::remove_file(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp() -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let p = std::env::temp_dir().join(format!(
+            "lodestar-layout-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&p);
+        fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn the_pointer_round_trips() {
+        let d = tmp();
+        let i = Install::open(&d, &CompanionId::parse("prowlarr").unwrap()).unwrap();
+        let p = Pointer {
+            current: Version::parse("5.0.3").unwrap(),
+            previous: Some(Version::parse("5.0.2").unwrap()),
+        };
+        i.write_pointer(&p).unwrap();
+        assert_eq!(
+            fs::read_to_string(i.root().join(POINTER)).unwrap(),
+            r#"{"format":1,"current":"5.0.3","previous":"5.0.2"}"#
+        );
+        assert_eq!(i.pointer().unwrap(), Some(p));
+        assert!(!i.root().join(POINTER_TMP).exists());
+        let _ = fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn sweep_takes_only_its_own_names() {
+        let d = tmp();
+        let mut i = Install::open(&d, &CompanionId::parse("prowlarr").unwrap()).unwrap();
+        for n in [
+            "1.0",
+            "1.0.staging",
+            "01.0",
+            "1.0.staging.x",
+            "config",
+            "1.0.old",
+        ] {
+            fs::create_dir(i.root().join(n)).unwrap();
+        }
+        fs::write(i.root().join(POINTER_TMP), b"x").unwrap();
+        assert_eq!(i.sweep().unwrap(), ["1.0", "1.0.staging", POINTER_TMP]);
+        let _ = fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn delete_takes_only_direct_children() {
+        let d = tmp();
+        let i = Install::open(&d, &CompanionId::parse("prowlarr").unwrap()).unwrap();
+        fs::create_dir_all(i.root().join("a/b")).unwrap();
+        assert!(matches!(
+            i.delete(&i.root().join("a/b")),
+            Err(LayoutError::OutsideRoot)
+        ));
+        assert!(matches!(i.delete(&d), Err(LayoutError::OutsideRoot)));
+        assert!(matches!(i.delete(i.root()), Err(LayoutError::OutsideRoot)));
+        i.delete(&i.root().join("a")).unwrap();
+        assert!(!i.root().join("a").exists());
+        let _ = fs::remove_dir_all(d);
     }
 }

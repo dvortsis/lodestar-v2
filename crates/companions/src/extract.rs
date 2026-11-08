@@ -25,7 +25,10 @@
 //!   counted as they're written (one byte past stops it, whatever a header
 //!   claimed); and [`MAX_RATIO`]:1, checked as bytes are written, for the
 //!   entry and for the archive. An entry whose written size differs from
-//!   its header's is refused as corrupt.
+//!   its header's is refused. Everything a tar.gz decompresses (headers,
+//!   long names, pax records, skipped bodies) is bounded too, by
+//!   [`MAX_TOTAL`] plus [`MAX_OVERHEAD`] and the ratio, so no header can
+//!   make the parser read gigabytes before a cap runs.
 //! - **Writing:** every file is created new (`O_CREAT|O_EXCL` on Unix,
 //!   `CREATE_NEW` on Windows), which never opens through an existing
 //!   symlink. Every directory is one this extraction created into a
@@ -39,11 +42,13 @@
 //!   directory on any error. Errors are typed and carry no attacker text
 //!   beyond an [`EntryName`], which is bounded and sanitised.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufRead, BufReader, Read, Seek, Write};
+use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use crate::catalogue::{ArchiveKind, RelPath};
 
@@ -72,6 +77,9 @@ pub struct Limits {
     pub total: u64,
     pub ratio: u64,
     pub ratio_floor: u64,
+    /// What a tar.gz may decompress beyond the files it writes: headers,
+    /// long names, pax records, padding and skipped bodies.
+    pub overhead: u64,
 }
 
 impl Limits {
@@ -81,6 +89,7 @@ impl Limits {
         total: MAX_TOTAL,
         ratio: MAX_RATIO,
         ratio_floor: RATIO_FLOOR,
+        overhead: MAX_OVERHEAD,
     };
 
     /// `written` bytes from `compressed` is within the ratio, or still
@@ -89,6 +98,12 @@ impl Limits {
         written <= self.ratio_floor || written <= compressed.saturating_mul(self.ratio)
     }
 }
+
+/// What a tar.gz may decompress beyond its files' bytes (headers, long
+/// names, pax records, padding, skipped bodies): 64 MiB. [`MAX_ENTRIES`]
+/// tiny files, each with a header, a pax record and padding, need about
+/// 40 MiB.
+pub const MAX_OVERHEAD: u64 = 64 * 1024 * 1024;
 
 /// The longest entry name, in bytes.
 pub const MAX_NAME: usize = 1024;
@@ -448,7 +463,7 @@ pub struct Extracted {
 pub trait Archive: Read + Seek {}
 impl<T: Read + Seek> Archive for T {}
 
-/// Extracts `archive` (`len` bytes of the `kind` given) into `staging`,
+/// Extracts `archive` (of the `kind` given) into `staging`,
 /// which this creates and which must not exist. `executable` is the
 /// catalogue's program inside the archive.
 ///
@@ -458,11 +473,10 @@ impl<T: Read + Seek> Archive for T {}
 pub fn extract(
     kind: ArchiveKind,
     archive: &mut dyn Archive,
-    len: u64,
     executable: &RelPath,
     staging: &Path,
 ) -> Result<Extracted, ExtractError> {
-    extract_with(Limits::Q16, kind, archive, len, executable, staging)
+    extract_with(Limits::Q16, kind, archive, executable, staging)
 }
 
 /// [`extract`] under other caps, for tests and the fuzz target only.
@@ -471,24 +485,28 @@ pub fn extract_limited(
     limits: Limits,
     kind: ArchiveKind,
     archive: &mut dyn Archive,
-    len: u64,
     executable: &RelPath,
     staging: &Path,
 ) -> Result<Extracted, ExtractError> {
-    extract_with(limits, kind, archive, len, executable, staging)
+    extract_with(limits, kind, archive, executable, staging)
 }
 
 fn extract_with(
     limits: Limits,
     kind: ArchiveKind,
     archive: &mut dyn Archive,
-    len: u64,
     executable: &RelPath,
     staging: &Path,
 ) -> Result<Extracted, ExtractError> {
     if !matches!(kind, ArchiveKind::Zip | ArchiveKind::TarGz) {
         return Err(ExtractError::NotAnArchive(kind));
     }
+    // The archive's real length, the whole-archive ratio's denominator:
+    // measured, never taken from the caller or a header.
+    let len = archive
+        .seek(SeekFrom::End(0))
+        .and_then(|len| archive.seek(SeekFrom::Start(0)).map(|_| len))
+        .map_err(io_err)?;
     create_dir(staging).map_err(|e| {
         if e.kind() == io::ErrorKind::AlreadyExists {
             ExtractError::StagingInTheWay
@@ -651,6 +669,7 @@ impl<'a> Out<'a> {
         raw: &[u8],
         claimed: u64,
         body: &mut dyn Read,
+        tripped: Option<&Tripped>,
         compressed: &dyn Fn() -> (u64, u64),
     ) -> Result<(), ExtractError> {
         if name.components.is_empty() || name.trailing_slash {
@@ -674,7 +693,12 @@ impl<'a> Out<'a> {
                 Ok(0) => break,
                 Ok(n) => n,
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                Err(_) => return Err(ExtractError::Corrupt),
+                Err(_) => {
+                    return Err(match tripped {
+                        Some(t) => stream_failed(t, Some(raw)),
+                        None => ExtractError::Corrupt,
+                    });
+                }
             };
             let n64 = n as u64;
             written += n64;
@@ -810,6 +834,79 @@ pub(crate) fn sync_dir(dir: &Path) -> io::Result<()> {
     }
 }
 
+// ─── Reading ────────────────────────────────────────────────────────────
+
+/// Counts the compressed bytes read from the archive, and passes seeks
+/// through (zip's index is at the end).
+struct Counting<'a> {
+    inner: &'a mut dyn Archive,
+    read: Rc<Cell<u64>>,
+}
+
+impl Read for Counting<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.read.set(self.read.get().saturating_add(n as u64));
+        Ok(n)
+    }
+}
+
+impl Seek for Counting<'_> {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        self.inner.seek(pos)
+    }
+}
+
+/// Why a stream stopped: set by [`Guard`] before it fails a read, so the
+/// error the parser returns can be reported as the refusal it was.
+type Tripped = Rc<Cell<Option<Refusal>>>;
+
+/// Bounds everything a tar parser decompresses, not only the file bodies
+/// [`Out::file`] sees: headers, GNU long names, pax records and the data
+/// of entries it skips. More than [`Limits::total`] plus
+/// [`Limits::overhead`] stops it, and so does a ratio over the cap
+/// against the compressed bytes read. Without it, one long-name header
+/// claiming gigabytes would be read into memory before any cap ran.
+struct Guard<R> {
+    inner: R,
+    limits: Limits,
+    inflated: u64,
+    read: Rc<Cell<u64>>,
+    tripped: Tripped,
+}
+
+impl<R: Read> Read for Guard<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.inflated = self.inflated.saturating_add(n as u64);
+        let refusal = if self.inflated > self.limits.total.saturating_add(self.limits.overhead) {
+            Some(Refusal::TooLarge)
+        } else if !self.limits.ratio_ok(self.inflated, self.read.get()) {
+            Some(Refusal::Ratio)
+        } else {
+            None
+        };
+        if let Some(r) = refusal {
+            self.tripped.set(Some(r));
+            return Err(io::Error::other("archive cap"));
+        }
+        Ok(n)
+    }
+}
+
+/// The error for a stream that failed: the refusal [`Guard`] tripped on,
+/// or corrupt.
+fn stream_failed(tripped: &Tripped, raw: Option<&[u8]>) -> ExtractError {
+    match (tripped.get(), raw) {
+        (Some(r), Some(raw)) => ExtractError::refused(r, raw),
+        (Some(refusal), None) => ExtractError::Refused {
+            refusal,
+            entry: None,
+        },
+        (None, _) => ExtractError::Corrupt,
+    }
+}
+
 // ─── Zip ────────────────────────────────────────────────────────────────
 
 const S_IFMT: u32 = 0o170_000;
@@ -818,8 +915,17 @@ const S_IFDIR: u32 = 0o040_000;
 const S_IFLNK: u32 = 0o120_000;
 const SPECIAL_BITS: u32 = 0o7000;
 
+/// The zip reader's buffer (`std`'s default), which may run ahead of the
+/// entry being decoded.
+const ZIP_READ_AHEAD: u64 = 8 * 1024;
+
 fn zip_entries(archive: &mut dyn Archive, len: u64, out: &mut Out<'_>) -> Result<(), ExtractError> {
-    let mut zip = zip::ZipArchive::new(archive).map_err(|_| ExtractError::Corrupt)?;
+    let read = Rc::new(Cell::new(0u64));
+    let counting = Counting {
+        inner: archive,
+        read: read.clone(),
+    };
+    let mut zip = zip::ZipArchive::new(counting).map_err(|_| ExtractError::Corrupt)?;
     if zip.len() > out.limits.entries {
         return Err(ExtractError::Refused {
             refusal: Refusal::TooManyEntries,
@@ -835,11 +941,27 @@ fn zip_entries(archive: &mut dyn Archive, len: u64, out: &mut Out<'_>) -> Result
         });
     }
     for i in 0..zip.len() {
-        let mut entry = zip.by_index(i).map_err(|_| ExtractError::Corrupt)?;
+        // The raw view first: `by_index` fails an encrypted entry before
+        // it could be named.
+        let encrypted = zip
+            .by_index_raw(i)
+            .map_err(|_| ExtractError::Corrupt)?
+            .encrypted();
+        let start = read.get();
+        let mut entry = zip.by_index(i).map_err(|_| {
+            if encrypted {
+                ExtractError::Refused {
+                    refusal: Refusal::Encrypted,
+                    entry: None,
+                }
+            } else {
+                ExtractError::Corrupt
+            }
+        })?;
         let raw = entry.name_raw().to_vec();
         out.count(&raw)?;
         let name = normalise(&raw).map_err(|r| ExtractError::refused(r, &raw))?;
-        if entry.encrypted() {
+        if encrypted {
             return Err(ExtractError::refused(Refusal::Encrypted, &raw));
         }
         // The zip crate's `unix_mode` clears the setuid, setgid and sticky
@@ -865,51 +987,52 @@ fn zip_entries(archive: &mut dyn Archive, len: u64, out: &mut Out<'_>) -> Result
             out.dir(&name, &raw)?;
             continue;
         }
-        let entry_in = entry.compressed_size();
-        if entry_in > len {
+        if entry.compressed_size() > len {
             return Err(ExtractError::Corrupt);
         }
         let claimed = entry.size();
-        out.file(&name, &raw, claimed, &mut entry, &|| (entry_in, len))?;
+        // The entry's denominator is what was really read for it (its
+        // header's compressed size can be inflated), plus the reader's
+        // read-ahead.
+        let counter = read.clone();
+        out.file(&name, &raw, claimed, &mut entry, None, &move || {
+            let used = counter.get().saturating_sub(start);
+            (used.saturating_add(ZIP_READ_AHEAD), len)
+        })?;
     }
     Ok(())
 }
 
 // ─── Tar.gz ─────────────────────────────────────────────────────────────
 
-/// Counts the compressed bytes read from the archive.
-struct Counting<'a> {
-    inner: &'a mut dyn Archive,
-    read: std::rc::Rc<std::cell::Cell<u64>>,
-}
-
-impl Read for Counting<'_> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let n = self.inner.read(buf)?;
-        self.read.set(self.read.get() + n as u64);
-        Ok(n)
-    }
-}
-
 fn tar_gz_entries(archive: &mut dyn Archive, out: &mut Out<'_>) -> Result<(), ExtractError> {
     use tar::EntryType;
 
-    let read = std::rc::Rc::new(std::cell::Cell::new(0u64));
+    let read = Rc::new(Cell::new(0u64));
+    let tripped: Tripped = Rc::new(Cell::new(None));
     let counting = Counting {
         inner: archive,
         read: read.clone(),
     };
     let gz = flate2::bufread::GzDecoder::new(BufReader::with_capacity(READ_AHEAD, counting));
-    let mut tar = tar::Archive::new(gz);
-    let entries = tar.entries().map_err(|_| ExtractError::Corrupt)?;
+    let guard = Guard {
+        inner: gz,
+        limits: out.limits,
+        inflated: 0,
+        read: read.clone(),
+        tripped: tripped.clone(),
+    };
+    let mut tar = tar::Archive::new(guard);
+    let entries = tar.entries().map_err(|_| stream_failed(&tripped, None))?;
     for entry in entries {
-        let mut entry = entry.map_err(|_| ExtractError::Corrupt)?;
+        let mut entry = entry.map_err(|_| stream_failed(&tripped, None))?;
         let raw = entry.path_bytes().into_owned();
         out.count(&raw)?;
         let kind = entry.header().entry_type();
         if kind == EntryType::XGlobalHeader {
             // pax global headers (`git archive` writes one with the commit)
-            // carry no file. Their records are ignored, as tar does here.
+            // carry no file. Their records are ignored, as tar does here;
+            // their bodies are bounded by the guard.
             continue;
         }
         let name = normalise(&raw).map_err(|r| ExtractError::refused(r, &raw))?;
@@ -934,20 +1057,28 @@ fn tar_gz_entries(archive: &mut dyn Archive, out: &mut Out<'_>) -> Result<(), Ex
         }
         let start = read.get();
         let counter = read.clone();
-        out.file(&name, &raw, claimed, &mut entry, &move || {
-            let now = counter.get();
-            (now - start + READ_AHEAD as u64, now)
-        })?;
+        out.file(
+            &name,
+            &raw,
+            claimed,
+            &mut entry,
+            Some(&tripped),
+            &move || {
+                let now = counter.get();
+                (now - start + READ_AHEAD as u64, now)
+            },
+        )?;
     }
-    tar_trailer(tar.into_inner())
+    let guard = tar.into_inner();
+    tar_trailer(guard, &tripped)
 }
 
 /// Reads what's left of the gzip stream after the tar's end, so its CRC
 /// and length are checked: a corrupt or truncated stream is refused even
 /// when the damage is past the last entry.
-fn tar_trailer<R: BufRead>(gz: flate2::bufread::GzDecoder<R>) -> Result<(), ExtractError> {
-    let mut rest = gz.take(MAX_TRAILER + 1);
-    let n = io::copy(&mut rest, &mut io::sink()).map_err(|_| ExtractError::Corrupt)?;
+fn tar_trailer<R: Read>(guard: R, tripped: &Tripped) -> Result<(), ExtractError> {
+    let mut rest = guard.take(MAX_TRAILER + 1);
+    let n = io::copy(&mut rest, &mut io::sink()).map_err(|_| stream_failed(tripped, None))?;
     if n > MAX_TRAILER {
         return Err(ExtractError::Refused {
             refusal: Refusal::TooLarge,

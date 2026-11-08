@@ -62,6 +62,7 @@ fuzz_target!(|data: &[u8]| {
             total: 64 * 1024,
             ratio: 100,
             ratio_floor: 1024,
+            overhead: 64 * 1024,
         }
     } else {
         Limits::Q16
@@ -80,7 +81,6 @@ fuzz_target!(|data: &[u8]| {
         limits,
         kind,
         &mut Cursor::new(archive),
-        archive.len() as u64,
         &exe,
         &staging,
     );
