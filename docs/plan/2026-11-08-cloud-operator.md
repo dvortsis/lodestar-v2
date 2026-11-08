@@ -84,6 +84,7 @@ The runner proposed: the routine loop on Sonnet 5.5 at medium effort, failure tr
 - **Each session gets a hard budget,** checked before every model request: $3 for a routine wake, $15 for triage.
 - **The bridge rate-limits wakes:** at most 6 an hour and 60 a day.
 - These numbers are the runner's parameters under §2.26.
+- **OP-5's injection test** costs about $15 at the routine setting. If it escalates through every level, the worst case is about $45. The harness stops at $50.
 - **Expected spend:** about 30–50 wakes per 48 h fleet session at roughly $0.05–0.10 each with caching, plus occasional triage. That's about $5–10 per fleet session. The first-run test records a real wake's cost to check this.
 
 ## 2. The two-way channel: comments on one draft PR
@@ -94,20 +95,24 @@ The runner proposed: the routine loop on Sonnet 5.5 at medium effort, failure tr
     - the PR is the channel PR;
     - the author's **numeric user ID** matches `RUNNER_USER_ID` (logins can be renamed and taken by someone else);
     - the header is present, and the `id` is new;
-    - the stop label is absent;
+    - the soft stop is off: the repository variable `OPERATOR_STOP` isn't `true`. The App can't change repository variables, while it could remove a label;
+    - the comment is unedited (`updated_at` equals `created_at`). The author ID survives an edit, and the App can edit other authors' comments;
     - the rate limit and the $200 total aren't reached.
-  - Only then does a second job, in the `cloud-operator` environment, run the steps below. It has `concurrency: operator` with `cancel-in-progress: false`, so two wakes never run two operator sessions at once.
+  - Only then does a second job, in the `cloud-operator` environment, run the steps below. One session at a time is enforced by an S3 conditional-write lock (`If-None-Match`), with an expiry. GitHub's `concurrency` isn't used for it, because a newer pending run cancels an older one and the command would vanish. A wake that finds the lock taken posts "busy, retry" for the runner.
     1. Mint a 1-hour GitHub App installation token and update the vault credential with it.
     2. Create one operator session with its budget. The instruction text goes in as the session's `user.message`; Managed Agents treats that as operator intent, so only runner-authored text ever goes there.
     3. Wait on the event stream until the session ends.
+    4. Revoke the installation token (`DELETE /installation/token`) and release the lock.
 - **The bridge never leaves a session stalled.**
   - **A tool call that pauses for approval** (`requires_action`): the bridge denies it with a `deny_message` telling the operator to escalate instead.
   - **A session that reaches its budget, errors, or runs past 30 minutes:** the operator can't escalate from a paused session, so the bridge posts the escalation itself, then archives the session.
 - **Operator → runner:** the operator posts comments starting with `operator-report v1`, with `id`, `in-reply-to` and `kind` (`ack`, `report`, `escalation`, `done`). The runner is subscribed to the PR, so the comment wakes it.
   - Fleet commands are separate comments starting with `/fleet`.
-  - `fleet.yml` answers each command with a result comment, and edits one status comment in place: Linode labels, ages, expiry, compute cost so far, host-key fingerprints. Never IPs.
+  - `fleet.yml` answers each command with a result comment, and edits one status comment in place: role names (main, worker), ages, expiry and compute cost so far. No Linode labels, fingerprints or IPs (#627 rule 6).
+  - Fingerprints and IPs go only to the private bucket and Cloud Manager.
+  - **`fleet.yml` never reads its state back from a comment.** Its state (the fleet's commit pin, expiry and host keys) lives in the S3 state bucket, which neither the operator nor the App can write.
 - **Reading the thread safely.** Anyone can comment on a public PR.
-  - The operator reads comments only through a committed helper that returns comments whose author IDs are the runner's, the App's bot or the control plane's, and drops everything else. Reading the thread any other way is a prompt rule backed by the injection test, not a hard barrier.
+  - The operator reads comments only through a committed helper. It returns unedited comments whose author IDs are the runner's, the App's bot or the control plane's, and drops everything else. Reading the thread any other way is a prompt rule backed by the injection test, not a hard barrier.
   - The runner checks the author ID before it reads a comment's body.
 - **One wake, one session.** A session ends after its report, so nothing builds up in an agent's context between wakes. Durable state is the filtered thread and the status comment.
 - **Who may say what** (checked by author ID in code):
@@ -124,22 +129,27 @@ The runner proposed: the routine loop on Sonnet 5.5 at medium effort, failure tr
   - both workflows run only from `main` (`issue_comment` always uses the default branch's copy), in environments limited to `main`;
   - each job sets minimal `permissions:`;
   - the job-level `if:` gates come before `environment:`, so no secret loads for a refused comment;
-  - commit SHAs in `run` arguments are validated as 40 hex characters.
+  - **every commit argument must be an ancestor of `main`** (`git merge-base --is-ancestor`), not just 40 hex characters. A fork PR's commit is fetchable through `refs/pull/N/head`, and a rules commit decides what runs as root on a Linode;
+  - image digests come only from that commit's files, never from a comment.
 
 ## 3. Limits
 **Enforced by `fleet.yml` in code. The operator can't change them.** A change is a slice PR that the runner reviews and merges (owner, 2026-11-08: "Let the runner manage the control agent"). The runner asks for a fresh Opus `/security-review` on any change to `fleet.yml`, `operator-wake.yml`, `infra/fleet/**`, `infra/pia-bridge/**` or the agent files.
 - **One preset, one fleet.** `screen` is Main and Worker. `up` refuses while any Lodestar Linode exists.
-- **Lifetime:** the Akamai watchdog deletes Linodes at 48 h. There's no extend command; `down` runs as soon as the screen is done.
-- **One commit per fleet.** `up` records `main`'s commit, and every later command for that fleet checks out that commit. A merge in the middle of a session can't change the scripts or limits under it.
+- **Lifetime, enforced twice:**
+  - **A reaper in code:** an hourly scheduled job in `fleet.yml` runs `down` once a fleet passes the expiry recorded in the state bucket at `up` (at most 44 h).
+  - **The Akamai watchdog** deletes Linodes at 48 h. Its deletion path isn't proven yet (#625), so OP-G runs #627's 0a canary first, and setup step 1 points the watchdog at the fleet's account.
+  - There's no extend command, and `down` runs as soon as the screen is done.
+- **One commit per fleet.** `up` records `main`'s commit in the state bucket, not in a comment, and every later command for that fleet checks out that commit. A merge in the middle of a session can't change the scripts or limits under it.
+- **State reconciliation (#627 Prerequisite 1):** a fresh S3 state, plus `up` refusing while any Lodestar Linode exists, is the reconciliation. No old local state is imported.
 - **Spend on the cloud side:**
   - Terraform's `max_hourly_compute_usd`;
   - a monthly fleet-compute cap of $40 in `infra/fleet/limits.yaml`, priced from Linode list rates (a `screen` session is about $3.82);
   - an AWS Budgets alert on the account.
 - **Commands are an allow-list:**
   - `status`, `up screen`, `down`;
-  - `run <step> <vm>`, where `<step>` is one of the committed step scripts (leak test, start block at a rules commit, arm switch, status, copy-off; OP-3).
+  - `run <step> <vm>`, where `<step>` is one of the committed step scripts (leak test, start block at a rules commit, arm switch, outage watcher, status, copy-off, `renew-vpn`; OP-3 and OP-2b). The WireGuard step runs only inside `deliver-pia` and `renew-vpn`.
   - Anything else is refused and logged.
-  - **Busy:** while a command is running, `fleet.yml` refuses the next one with a "busy, retry" result comment. GitHub keeps only one pending run per concurrency group and cancels the older one, so it doesn't queue. The concurrency group sits on the job after the author and PR filter, so a stranger's comment can't cancel anything.
+  - **Busy:** one command at a time, enforced by an S3 conditional-write lock with an expiry, not by GitHub `concurrency` (where a newer pending run cancels an older one). A command that finds the lock taken gets a "busy, retry" result comment. The lock is taken only after the author, edit and PR checks, so a stranger's comment can't hold it.
 - **Never the owner's soak host.** Nothing in the control plane can reach it:
   - the soak host isn't in Akamai, and the workflow has no EC2 access;
   - the SSH steps reach only the hosts the same fleet created, by their pinned host keys;
@@ -155,7 +165,14 @@ The runner proposed: the routine loop on Sonnet 5.5 at medium effort, failure tr
 - **Raw logs, credentials and databases stay on the VMs.**
   - Only `copy-off` moves data. Its scrubber is an **allow-list**: only the named aggregate files and fields of `analyze_cr.py`'s output and the collector's `result.json` pass, so names, infohashes, peer and VM addresses, instance and Linode IDs, PIA server names and the region don't. It runs on the VM and again in the control plane.
   - The scrubbed aggregates go to the runner as a result comment (the runner has no AWS access), and into the repo only through a runner-reviewed PR.
-- **The cloud-screen rules (#627) bind the operator.** It runs a screen only at a rules commit the runner names, changes nothing after it sees results, reports "screen: pass" or "screen: stop (rule n)", and never reports a gain. A screen never delays an experiment-host booking.
+  - **That result comment is public before the runner reviews it.** The allow-list scrubber is what makes that acceptable.
+- **#627 binds the operator as written:** the cloud screen's rules 1–6 and the plan's ground rules. In particular:
+  - it runs a screen only at a rules commit the runner names, and changes nothing after it sees results;
+  - it reports "screen: pass" or "screen: stop (rule n)", and never a gain;
+  - results are never stitched into or pooled with experiment-host segments;
+  - nothing sends load to a Linode during a block;
+  - a screen never delays an experiment-host booking.
+  - #627 Prerequisite 6 (a named watcher and booked times) is met by the runner booking the session and watching the channel.
 - **The operator escalates instead of deciding** on:
   - anything outside its instruction or the screen's committed rules;
   - a leak-test failure;
@@ -170,13 +187,13 @@ The runner proposed: the routine loop on Sonnet 5.5 at medium effort, failure tr
 ## 4. Credentials and revocation
 | Credential | Who holds it | Scope | Rotation | Revocation |
 |---|---|---|---|---|
-| GitHub App installation token (operator) | Managed Agents vault, `environment_variable`, header-only, `allowed_hosts: [api.github.com]`. The sandbox sees a placeholder; the bridge refreshes the value before each session | The App's installation on this repo only: Issues and Pull requests write, Contents none (exactly Q4) | 1 hour, minted per wake | Suspend or uninstall the App |
+| GitHub App installation token (operator) | Managed Agents vault, `environment_variable`, header-only, `allowed_hosts: [api.github.com]`. The sandbox sees a placeholder; the bridge refreshes the value before each session and revokes it after | The App's installation on this repo only: Pull requests write, Metadata read, no Issues or Contents. **Beyond Q4's "comments only", Pull requests write also lets it** edit or delete PR comments (others' included), change PR labels, and close, reopen or retitle PRs. Hence the soft stop is a repository variable, trust needs unedited comments, and state lives in S3, not in comments | 1 hour, minted per wake, revoked at session end | Suspend or uninstall the App |
 | GitHub App private key (bridge) | GitHub environment secret, `cloud-operator` | Mints installation tokens for this repo's installation | The owner regenerates it | Delete the key in the App settings |
 | Anthropic API key (bridge) | GitHub environment secret, `cloud-operator` | The dedicated workspace only | 90 days | Revoke the key in the Console; interrupt or archive running sessions (a revoked key may not stop a session already running) |
-| AWS (control plane) | Nothing stored: `fleet.yml` assumes `LodestarFleetOperator` by GitHub OIDC, trusted only for `repo:dvortsis/lodestar-v2:environment:cloud-fleet` | Read `lodestar/akamai-fleet-token`; read and write the Terraform state bucket and the evidence bucket. **No** EC2, SSM or IAM, and no other secret | Per-run, short-lived | Attach the prepared deny-all policy, or delete the OIDC trust |
+| AWS (control plane) | Nothing stored: `fleet.yml` assumes `LodestarFleetOperator` by GitHub OIDC, trusted only when the token's `aud` is `sts.amazonaws.com` and its `sub` names the `cloud-fleet` environment **and** `fleet.yml@refs/heads/main` (the repo's OIDC subject template is customized to include `job_workflow_ref`, because AWS can match only `sub` and `aud`) | Read `lodestar/akamai-fleet-token`; read and write the Terraform state bucket and the evidence bucket. **No** EC2, SSM or IAM, and no other secret | Per-run, short-lived | Attach the prepared deny-all policy, or delete the OIDC trust |
 | Linode token (control plane) | Secrets Manager `lodestar/akamai-fleet-token`, separate from the watchdog's `lodestar/akamai-token` | Linodes and firewalls read-write, images and account read-only, in the fleet's dedicated Akamai account | 90-day expiry | Revoke in Cloud Manager; the watchdog keeps working on its own token |
-| SSH key (control plane) | GitHub environment secret `FLEET_SSH_KEY`, `cloud-fleet`; its public half goes on each Linode with the owner's key | The fleet's Linodes, reachable only from a job's own `/32` while that job runs | Rotated by replacing the secret | Delete the secret; the Linodes die with the fleet |
-| PIA login | Secrets Manager `lodestar/pia-vpn`. Read unattended only by `fleet.yml`'s `deliver-pia` job, through `LodestarPiaDelivery` (GitHub OIDC, trusted only for the `pia-delivery` environment). Also by `LodestarPiaSecretReader` (`lodestar-admin` with MFA), for manual use | `LodestarPiaDelivery`: `secretsmanager:GetSecretValue` on the exact ARN, nothing else. `LodestarFleetOperator` can't read it | The owner changes it in Secrets Manager; the next delivery picks it up | Change the PIA password; delete `LodestarPiaDelivery`'s OIDC trust |
+| SSH key (control plane) | GitHub environment secret `FLEET_SSH_KEY`, `cloud-fleet`; its public half goes on each Linode with the owner's key | The fleet's Linodes, reachable only from a job's own `/32` while that job runs. Each job removes any stale job rule at its start as well as in its `always()` cleanup | Rotated by replacing the secret | Delete the secret; the Linodes die with the fleet |
+| PIA login | Secrets Manager `lodestar/pia-vpn`. Read unattended only by `fleet.yml`'s `deliver-pia` job, through `LodestarPiaDelivery` (GitHub OIDC, trusted only for the `pia-delivery` environment and `fleet.yml@refs/heads/main`, with the same `aud` check). Also by `LodestarPiaSecretReader` (`lodestar-admin` with MFA), for manual use | `LodestarPiaDelivery`: `secretsmanager:GetSecretValue` on the exact ARN, nothing else. `LodestarFleetOperator` can't read it | The owner changes it in Secrets Manager; the next delivery picks it up | Change the PIA password; delete `LodestarPiaDelivery`'s OIDC trust |
 
 **How the PIA login reaches each Linode: the owner's broker, made unattended.** The owner's rule stands: the Linodes get no AWS credentials. Only the reader changes, from the owner's MFA session to a separate job.
 - **A job of its own.** `deliver-pia` runs in `fleet.yml` after `up`, in its own GitHub environment, `pia-delivery`, limited to `main`.
@@ -187,7 +204,8 @@ The runner proposed: the routine loop on Sonnet 5.5 at medium effort, failure tr
   2. it connects to each Linode the same fleet created, refusing any host whose key doesn't match the pin;
   3. it streams the credentials over SSH stdin (never in arguments, environment or logs) into root-only files in `/run`.
   - The logic comes from the owner's bridge (`provision_pia.py`), reviewed and imported as `infra/pia-bridge/`.
-- **Host keys are pinned, not trusted on first use.** At `up`, the control plane generates each Linode's SSH host key and installs it through cloud-init. The fingerprints (never the IPs) go in the status comment.
+- **Host keys are pinned, not trusted on first use.** At `up`, the control plane generates each Linode's SSH host key, installs it through cloud-init, and keeps the fingerprints in the state bucket.
+  - For manual use, the owner takes fingerprints from the state bucket and IPs from Cloud Manager, never from an operator report.
   - **Trade-off:** the host's private key sits in the user data and the Terraform state, which only the owner and the control plane can read. The VM is disposable, and the key dies with it.
 - **Distinct exits.** The owner sets the environment secret `PIA_SERVERS` once:
   - a server for Main and a different one for Worker;
@@ -203,11 +221,11 @@ The runner proposed: the routine loop on Sonnet 5.5 at medium effort, failure tr
 - **Residual risk, stated:**
   - a workflow can now read the PIA password without MFA, so a malicious change to the delivery code, merged to `main`, could leak it;
   - the guards are the runner's review with `/security-review`, the separate environment and role, and the password belonging to a dedicated test-only PIA login that the owner can change in minutes.
-- **The owner's MFA-gated `LodestarPiaSecretReader` and the bridge stay** for manual and break-glass use.
+- **The owner's MFA-gated `LodestarPiaSecretReader` and the bridge stay** for manual and break-glass use. #625's rule applies: no coding agent runs in the Windows session that holds the owner's cached admin credentials.
 - **Win gets no PIA access** while no Windows crawl is planned.
 
 **The kill switch the owner can pull, fastest first:**
-1. **Add the label `operator-stop` to the channel PR.** Both workflows check it first and refuse to act. Any session that posts as the owner can also remove it, so for a firm stop use step 2.
+1. **Set the repository variable `OPERATOR_STOP` to `true`** (Settings → Secrets and variables → Actions → Variables). Both workflows check it first and refuse to act. The App can't change variables. A Claude session posting as the owner might, so for a firm stop use step 2 as well.
 2. **Disable the two workflows** (GitHub → Actions → each workflow → Disable).
 3. **Suspend the GitHub App and revoke the Anthropic workspace key** (or set the workspace limit to $0). Then interrupt or archive any running session in the Console.
 4. **Cut cloud access:**
@@ -231,6 +249,7 @@ The runbook (OP-3) gives these as a one-page "Stop everything" list.
 | `fleet.yml` runs committed step scripts on the Linodes as root over SSH, unattended | Q1, "the Claude api session to run the cloud machines" |
 | The PIA login is read unattended by the `deliver-pia` job (`LodestarPiaDelivery`), not only behind MFA. This loosens the owner's own broker design | The owner, 2026-11-08: "I can't be entering the MFA for each session" |
 | Control-plane changes merge on the runner's review, with no owner approval | The owner, 2026-11-08: "Let the runner manage the control agent" |
+| While a job runs, the Linodes' SSH ingress is widened from the one admin `/32` to that job's GitHub-hosted runner `/32`, and the control plane can change Linode firewalls at runtime (#625 allows one admin `/32`; #627 Prerequisite 2 widens ingress only through a reviewed slice) | Q1 and Q3 together: running and building the machines unattended needs a path in. This approval is inferred, not quoted, so the runner flags it to the owner (§2.19). The rule exists only during a job, from that job's address, to key-only SSH with pinned host keys |
 
 **Unchanged:**
 - interactive agents keep the observer role, and `LodestarProvisioner` keeps its MFA;
@@ -256,30 +275,43 @@ No VM is created.
    - a test instruction that triggers a call needing approval is denied by the bridge, which tells the operator to escalate instead;
    - a test session with a $0.01 budget hits it, and the bridge posts the escalation itself.
 5. **Control plane, read-only:** the operator posts `/fleet status`. `fleet.yml` answers with an empty inventory, and the log shows no private value (the OP-1 log test, run live).
-6. **Kill switch:** add `operator-stop`, post a `ping`, confirm nothing runs, then remove the label.
-7. **Injection test:** OP-5's corpus passes at the routine setting.
-8. **Results:** the runner records them in the operator's decisions file.
+6. **Kill switch:** set the variable `OPERATOR_STOP=true`, post a `ping`, confirm nothing runs, then set it back.
+7. **Edited comments:** an edited copy of a valid instruction starts no session.
+8. **Injection test:** OP-5's corpus passes at the routine setting.
+9. **Results:** the runner records them in the operator's decisions file.
 
-Then, at OP-G, one live Linode receives the PIA login through `deliver-pia` against its pinned fingerprint, and passes #627's leak test, before any crawl.
+Then, at OP-G:
+1. #627's 0a canary proves the Akamai watchdog's deletion in the fleet's account, before any live `up`.
+2. The reaper's scheduled `down` is tested on a dry fleet.
+3. One live Linode receives the PIA login through `deliver-pia` against its pinned fingerprint, and passes #627's leak test, before any crawl.
 
 ## Owner setup (plain steps, after OP-2a merges; values go only where named, never in the repo or chat)
-1. **Accounts** (owner answer 2): if the current AWS or Akamai account holds anything besides this fleet, create a dedicated one first, and do steps 3–5 there. The PIA secret and `LodestarPiaSecretReader` can stay where they are, because the broker runs on your host.
+1. **Accounts** (owner answer 2): if the current AWS or Akamai account holds anything besides this fleet, create a dedicated one first, and do the AWS and Akamai steps (4 and 5) there; the Anthropic and GitHub steps don't move.
+   - **Keep the watchdog pointed at the fleet.** If the Linodes move to a new Akamai account, put a token for that account into the watchdog's secret `lodestar/akamai-token`, and redo its dry-run check (#627 0a). Otherwise nothing reaps the new account's Linodes at 48 h.
+   - The PIA secret and `LodestarPiaSecretReader` can stay where they are, provided `LodestarPiaDelivery` sits in the same account as the secret.
 2. **GitHub:**
    1. Create a GitHub App, "lodestar-operator":
-      - repository permissions: Issues read/write, Pull requests read/write, Metadata read, nothing else;
+      - repository permissions: Pull requests read/write and Metadata read, nothing else (no Issues, no Contents);
       - no webhook;
       - install it on `dvortsis/lodestar-v2` only.
-   2. Note the App's bot user ID.
+   2. Note the App's bot user ID: `gh api users/<app-slug>%5Bbot%5D --jq .id`. The runner's ID is `gh api users/dvortsis --jq .id`.
    3. Generate a private key.
    4. Create the environments `cloud-operator` and `cloud-fleet`, each limited to `main` (`pia-delivery` comes in step 6).
    5. In `cloud-operator`, add the secrets `OPERATOR_APP_ID`, `OPERATOR_APP_PRIVATE_KEY` and `ANTHROPIC_API_KEY` (step 3).
    6. In `cloud-fleet`, add the secrets `AWS_FLEET_ROLE_ARN`, `FLEET_SSH_KEY` and `OWNER_ADMIN_CIDR`. For `FLEET_SSH_KEY`, run `ssh-keygen -t ed25519 -f lodestar_fleet_ci` on your machine, paste the private key, then delete the local private key.
-   7. As repository variables (not secret), add `RUNNER_USER_ID`, `OPERATOR_BOT_USER_ID` and `FLEET_SSH_PUBLIC_KEY`. Add `OPERATOR_MODEL_ROUTINE` and `OPERATOR_MODEL_TRIAGE`, the model IDs the runner names.
+   7. As repository variables (not secret), add:
+      - `RUNNER_USER_ID`, `OPERATOR_BOT_USER_ID` and `FLEET_SSH_PUBLIC_KEY`;
+      - `CHANNEL_PR` (the channel PR's number, once the runner opens it);
+      - `OPERATOR_STOP=false`;
+      - `FLEET_LIVE=false` (set it to `true` after OP-G's dry cycle);
+      - `OPERATOR_MODEL_ROUTINE` and `OPERATOR_MODEL_TRIAGE`, the model IDs the runner names.
+   8. Customize the repo's OIDC subject claim to include `job_workflow_ref` (`gh api -X PUT repos/dvortsis/lodestar-v2/actions/oidc/customization/sub` with `include_claim_keys` of `repo`, `context` and `job_workflow_ref`), so the AWS roles can require `fleet.yml@refs/heads/main`.
 3. **Anthropic Console:**
    1. Create a workspace, `lodestar-operator`.
    2. Set its spend limit to $200, with an alert at $100.
    3. Create a workspace API key, which goes into step 2.5.
-   4. The runner then runs OP-4's `ant apply` with that key. It creates the agent, the environment and the vault with an empty `GITHUB_TOKEN` credential, which the bridge fills on each wake.
+   4. After OP-4 merges, run its `operator-apply.yml` workflow (Actions → Run workflow, in the `cloud-operator` environment, on `main`). It renders the agent file from the model variables, then runs `ant apply`, which creates the agent, the environment and the vault with an empty `GITHUB_TOKEN` credential that the bridge fills on each wake.
+      - **The runner never holds the workspace key.** Whoever holds it could start a vault-attached session and post `/fleet` as the App, bypassing the bridge.
 4. **AWS (us-east-1),** by deploying OP-2a's CloudFormation template as one reviewed stack:
    - the GitHub OIDC provider;
    - `LodestarFleetOperator` with the scope in §4, and the unattached deny-all policy;
@@ -287,7 +319,7 @@ Then, at OP-G, one live Linode receives the PIA login through `deliver-pia` agai
    - the Terraform state bucket and the private evidence bucket (14-day expiry);
    - the secret `lodestar/akamai-fleet-token`.
 
-   Then add an AWS Budgets alert on the account at a monthly amount you choose. `LodestarPiaSecretReader` is already done.
+   Then add an AWS Budgets alert on the account; $10 a month is ample, since AWS here holds only roles, buckets and secrets. `LodestarPiaSecretReader` is already done.
 5. **Akamai:** create a personal access token for the fleet (scopes as in §4, 90-day expiry), and store it only in `lodestar/akamai-fleet-token`.
 6. **PIA delivery:**
    1. Create the GitHub environment `pia-delivery`, limited to `main`.
@@ -297,18 +329,18 @@ Then, at OP-G, one live Linode receives the PIA login through `deliver-pia` agai
 ## Slices
 Ids, estimated changed lines and dependencies. Every slice is `/security-review` and on Opus (credentials and an untrusted-input parser; CLAUDE.md's delegation rules).
 
-| Id | What | Lines | Deps |
-|---|---|---|---|
-| OP-1 | `fleet.yml` control plane in **dry-run** (no cloud call): the comment parser with a strict grammar, unit and property tests; filter-then-act jobs with author-ID and stop-label gates; `limits.yaml`; the `screen` preset; busy refusal; the status comment; the one-commit-per-fleet pin; the public-log leak test | ~600 | X-cloud-infra (#625), `ext:owner-operator-answers` |
-| OP-2a | The CloudFormation template the owner deploys: OIDC provider, `LodestarFleetOperator`, `LodestarPiaDelivery`, deny-all policy, buckets, and the secret shell. Terraform moves to an S3 backend, with `required_version` raised to 1.10 for native locking | ~350 | OP-1 |
-| OP-2 | Live mode for `screen`: Terraform's non-interactive mode inside `cloud-fleet` only; pinned host keys and the control plane's public key in cloud-init; the job-scoped SSH rule (`job_ssh_cidrs`, added at job start, removed in an `always()` cleanup); output to the private bucket. Live mode is off until the owner sets the variable `FLEET_LIVE=true` after OP-G's dry cycle | ~450 | OP-2a, X-cloud-infra-2 (it also edits `main.tf` and `variables.tf`) |
-| OP-2b | The `deliver-pia` job: the owner's bridge, reviewed and imported as `infra/pia-bridge/`, run unattended in the `pia-delivery` environment, with masking, SSH stdin, pinned host keys and distinct servers from `PIA_SERVERS`. Also the VM step that makes the WireGuard configuration and deletes the credentials, plus `renew-vpn`, with tests | ~500 | OP-2a |
-| OP-3 | Committed step scripts for #627 over SSH: leak test, block start at a rules commit, arm switch, outage watcher, status, and copy-off with the allow-list scrubber and tests. Also the runbook (#627's deliverable) with the "Stop everything" page | ~700 | OP-2 |
-| OP-4 | The operator agent as files synced with `ant apply`: agent (system prompt, the model from `OPERATOR_MODEL_ROUTINE` with medium effort set explicitly, web tools off, bash on `auto`; no model ID in the repo), environment (`limited` networking, `api.github.com` only), vault without secrets. Also `operator-wake.yml`: the gates, rate limit, $200 cap, App-token refresh, session budget, stall handling, the comment helper and the message formats | ~550 | OP-1 |
-| OP-5 | The prompt-injection corpus and `workflow_dispatch` harness, and the first-run checklist (§5). Results go in a decisions file | ~300 | OP-4 |
-| OP-G | Gate: §5 passes, the kill-switch drill passes, a dry `up`/`down` cycle of `screen` runs, and one live Linode receives the PIA login through `deliver-pia` and passes #627's leak test. Then the first real cloud screen | gate | OP-1–OP-5, OP-2b, `ext:owner-operator-setup` |
+| Id | What | Owns | Lines | Deps |
+|---|---|---|---|---|
+| OP-1 | `fleet.yml` control plane in **dry-run** (no cloud call):<br>- the comment parser: strict grammar, unit and property tests;<br>- filter-then-act jobs: author-ID, unedited-comment and `OPERATOR_STOP` gates;<br>- the ancestor-of-`main` check on commit arguments;<br>- `limits.yaml` and the `screen` preset;<br>- the S3 lock and busy refusal;<br>- the status comment;<br>- the one-commit-per-fleet pin and expiry in the state bucket;<br>- the hourly reaper;<br>- the public-log leak test | `.github/workflows/fleet.yml`, `infra/fleet/**` (except `infra/fleet/steps/**`) | ~650 | X-cloud-infra (#625), `ext:owner-operator-answers` |
+| OP-2a | The CloudFormation template the owner deploys: the OIDC provider; `LodestarFleetOperator` and `LodestarPiaDelivery`, both trusted on `aud` plus a `sub` naming the environment and `fleet.yml@refs/heads/main`; the deny-all policy; buckets; the secret shell. Terraform moves to an S3 backend, with `required_version` raised to 1.10 for native locking | `infra/aws/fleet-control/**`, `infra/akamai/terraform/versions.tf`, `infra/akamai/terraform/backend.tf` | ~350 | OP-1 |
+| OP-2 | Live mode for `screen`:<br>- Terraform's non-interactive mode inside `cloud-fleet` only;<br>- pinned host keys and the control plane's public key in cloud-init;<br>- the job-scoped SSH rule (`job_ssh_cidrs`), with stale rules removed at each job's start and in its `always()` cleanup;<br>- output to the private bucket.<br>Live mode stays off until `FLEET_LIVE=true` | `infra/akamai/terraform/main.tf`, `variables.tf`, `cloud-init/**`, `scripts/Deploy.ps1`, `scripts/Destroy.ps1` | ~450 | OP-2a, X-cloud-infra-2 (it also edits `main.tf` and `variables.tf`) |
+| OP-2b | The `deliver-pia` job: the owner's bridge, reviewed and imported, run unattended in `pia-delivery`, with masking, SSH stdin, pinned host keys and distinct servers from `PIA_SERVERS`. Also the VM step that makes the WireGuard configuration and deletes the credentials, plus `renew-vpn`, with tests | `infra/pia-bridge/**` | ~500 | OP-2a |
+| OP-3 | Committed step scripts for #627 over SSH: leak test, block start at a rules commit, arm switch, outage watcher, status, and copy-off with the allow-list scrubber and tests. Also the runbook (#627's deliverable) with the "Stop everything" page | `infra/fleet/steps/**`, `docs/operations/cloud-fleet-runbook.md` | ~700 | OP-2 |
+| OP-4 | The operator agent and its bridge:<br>- agent files with a model *placeholder*: system prompt, web tools off, bash on `auto`;<br>- environment: `limited` networking, `api.github.com` only;<br>- a vault without secrets;<br>- `operator-apply.yml`, which renders the model from `OPERATOR_MODEL_ROUTINE` with medium effort and runs `ant apply` in `cloud-operator`, keeping `claude-lock.json` in the private bucket because it holds resource IDs;<br>- `operator-wake.yml`: the gates, rate limit, $200 cap, S3 lock, App-token refresh and revoke, session budget, triage override (`OPERATOR_MODEL_TRIAGE` at high effort), stall handling, the comment helper and the message formats | `infra/operator/**`, `.github/workflows/operator-apply.yml`, `.github/workflows/operator-wake.yml` | ~600 | OP-1 |
+| OP-5 | The prompt-injection corpus and `workflow_dispatch` harness, and the first-run checklist (§5). The harness stops at $50 of the $200; the worst case of every item at every escalation level is about $45. Results go in a decisions file | `infra/operator/injection/**` | ~300 | OP-4 |
+| OP-G | Gate:<br>- #627's 0a canary in the fleet's Akamai account;<br>- §5 passes, and so does the kill-switch drill;<br>- a dry `up`/`down` cycle runs, with the reaper firing;<br>- one live Linode receives the PIA login through `deliver-pia` and passes #627's leak test.<br>Then the first real cloud screen | none | gate | OP-1–OP-5, OP-2b, `ext:owner-operator-setup` |
 
-OP-2b, OP-3 and OP-4 can run in parallel; they own different paths. The total is about 3.5k lines in seven PRs, each under 1,500. The runner defines X-cloud-infra-2 (the address list for Main's firewall and Win's volume size).
+OP-2b, OP-3 and OP-4 can run in parallel; they own different paths. The total is about 3.6k lines in seven PRs, each under 1,500. The runner defines X-cloud-infra-2 (the address list for Main's firewall and Win's volume size).
 
 ## Owner answers to the open questions
 1. **Per-session MFA: no.** "I can't be entering the MFA for each session." The `deliver-pia` job delivers the PIA login unattended under its own single-secret role (§4). The owner's MFA path stays for manual use.
