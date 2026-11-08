@@ -985,3 +985,62 @@ async fn a_dropped_install_still_runs_to_completion() {
     assert!(removed.is_ok(), "{removed:?}");
     assert_eq!(*w.run.started.lock().unwrap(), ["5.0.3"]);
 }
+
+/// #621's delta review (N1): a failed first install's rollback deletes
+/// only what Lodestar put in the folder. A file someone else wrote there
+/// mid-install survives, and the folder stays because of it, while the
+/// staged version, the journal and the credential go.
+#[tokio::test]
+async fn a_rolled_back_install_spares_a_file_written_meanwhile() {
+    let _g = SERIAL.lock().await;
+    /// Serves the body after writing a third party's file into the
+    /// companion's folder, between `begun` and the failed health check.
+    struct Writing(std::path::PathBuf);
+    impl Source for Writing {
+        fn open<'a>(&'a self, _: &'a Url) -> BoxFuture<'a, Result<Opened, FetchError>> {
+            std::fs::write(&self.0, b"mine").unwrap();
+            Box::pin(async move {
+                Ok(Opened {
+                    status: 200,
+                    location: None,
+                    body: Box::new(Once(Some(body("5.0.3")))),
+                })
+            })
+        }
+    }
+    let w = World::new();
+    let theirs = w.folder().join("theirs.iso");
+    w.run.sick.store(true, Ordering::SeqCst);
+    let m = Manager::open(Parts {
+        downloader: Downloader::any(Arc::new(Writing(theirs.clone()))),
+        ..w.parts(catalogue("5.0.3"), LINUX)
+    })
+    .unwrap();
+    let e = m.install(&token("5.0.3")).await.unwrap_err();
+    assert!(
+        matches!(e, ManagerError::Step { step: "health", .. }),
+        "{e:?}"
+    );
+    assert_eq!(std::fs::read(&theirs).unwrap(), b"mine");
+    let left: Vec<String> = std::fs::read_dir(w.folder())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(left, ["theirs.iso"]);
+    assert!(w.rows.keys().is_empty());
+}
+
+/// #621's delta review (N3): a directory named like the journal's
+/// temporary file isn't a leftover of Lodestar's.
+#[tokio::test]
+async fn a_directory_named_like_the_temporary_journal_is_not_ours() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    std::fs::create_dir_all(w.folder().join(state::STATE_TMP)).unwrap();
+    let m = w.manager(catalogue("5.0.3"), LINUX);
+    assert_eq!(
+        m.install(&token("5.0.3")).await,
+        refused(Refusal::FolderInUse)
+    );
+    assert!(w.folder().join(state::STATE_TMP).is_dir());
+}
