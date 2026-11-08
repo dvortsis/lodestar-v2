@@ -869,7 +869,7 @@ conditions:
   owner-operator-setup:
     met: false
     who: you
-    label: You complete the cloud operator setup steps (GitHub App, environments, AWS stacks, agent, PIA secret)
+    label: You complete the cloud operator setup steps (GitHub App, environments, AWS stacks, Akamai tokens, agent, pia-delivery environment); the runner then checks the first-run test
   bench-runner:
     met: false
     who: you
