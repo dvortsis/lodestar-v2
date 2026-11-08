@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-08T00:44Z",
+  "updated_at": "2026-11-08T00:55Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6403,6 +6403,12 @@
       "sha": "a2c9e9557880b4dab16ea1353ad0b1cca0d0bf8b",
       "at": "2026-11-01T15:44Z",
       "slice": "X-file-clause-cold"
+    },
+    {
+      "pr": 593,
+      "slice": "WK-17",
+      "merge": "8d6c4c85",
+      "at": "2026-11-08T00:55Z"
     }
   ],
   "active_sessions": {
@@ -6636,7 +6642,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T00:44Z",
+    "updated": "2026-11-08T00:55Z",
     "items": [
       {
         "slot": 1,
@@ -6656,11 +6662,11 @@
       },
       {
         "slot": 3,
-        "slice": "WK-17",
+        "slice": "CMP-2",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBbYe9ernDLKKvnSSv: #593 fixes pushed cbcc89be (green); runner delta review next",
-        "since": "2026-11-07T19:30Z"
+        "doing": "CMP-2 companion archive extraction + layout (Opus, 2R, /security-review); launching",
+        "since": "2026-11-08T00:55Z"
       },
       {
         "slot": 4,
