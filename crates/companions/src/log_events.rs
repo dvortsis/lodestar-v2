@@ -44,4 +44,50 @@ lodestar_log::catalogue! {
         message: "A configured companion was added to Lodestar's settings",
         fields: { companion: Label, entry: Label },
     }
+    /// A companion was installed or updated and passed health (CMP-5).
+    INSTALLED {
+        id: "companions.installed",
+        component: Companions,
+        level: Info,
+        message: "A companion was installed",
+        fields: { companion: Label, version: Label },
+    }
+    /// Installing or updating a companion stopped at a step, and what it
+    /// had done was undone (CMP-5). `step` names the step (`fetch`,
+    /// `stage`, `health`, …, or `leftover` for a folder left to sweep);
+    /// `reason` is the step's own code.
+    INSTALL_FAILED {
+        id: "companions.install_failed",
+        component: Companions,
+        level: Warn,
+        message: "Installing a companion failed",
+        fields: { companion: Label, version: Label, step: Label, reason: Label },
+    }
+    /// A failed update was rolled back: the previous version runs again
+    /// (CMP-5).
+    ROLLED_BACK {
+        id: "companions.rolled_back",
+        component: Companions,
+        level: Warn,
+        message: "A companion update was rolled back",
+        fields: { companion: Label },
+    }
+    /// A companion was uninstalled: its folder and credentials are gone
+    /// (CMP-5).
+    REMOVED {
+        id: "companions.removed",
+        component: Companions,
+        level: Info,
+        message: "A companion was removed",
+        fields: { companion: Label },
+    }
+    /// At start-up, an install, update or removal a crash interrupted was
+    /// finished or undone (CMP-5). `step` is the last step it had done.
+    RECOVERED {
+        id: "companions.recovered",
+        component: Companions,
+        level: Warn,
+        message: "An interrupted companion change was finished or undone",
+        fields: { companion: Label, step: Label },
+    }
 }
