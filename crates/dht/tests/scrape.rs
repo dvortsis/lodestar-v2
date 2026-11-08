@@ -33,6 +33,7 @@ fn config(bootstrap: Vec<String>) -> Config {
         target_prefixes: false,
         utp: None,
         shard: None,
+        sample_interval_scale: 1,
     }
 }
 
