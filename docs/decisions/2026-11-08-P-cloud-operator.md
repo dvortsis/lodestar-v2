@@ -8,15 +8,16 @@ The plan is `docs/plan/2026-11-08-cloud-operator.md`: an AI operator on Anthropi
 - the owner chose and built the MFA-protected PIA broker;
 - at about 18:20Z, the owner said they can't enter MFA for each session ("I can't be entering the MFA for each session") and that the runner manages the control plane ("I don't need to approve all the control agent's code. Let the runner manage the control agent").
 
-**Owner-approved loosenings.** Six loosenings of `#625`'s access model are named in the plan's "Loosenings of `#625`, named" table, each with the owner answer that approved it:
+**Owner-approved loosenings.** Seven loosenings of `#625`'s access model are named in the plan's "Loosenings of `#625`, named" table, each with the owner answer that approved it:
 1. unattended create and destroy of Linodes;
 2. Terraform's non-interactive mode, without the typed phrase;
 3. unattended root step scripts over SSH;
 4. the PIA login read unattended by the `deliver-pia` job, not only behind MFA;
 5. control-plane changes merging on the runner's review, with no owner approval;
-6. per-job SSH ingress from the job's GitHub-hosted runner `/32`, with runtime firewall writes.
+6. the operator App's Pull requests write, which reaches beyond Q4's "comments only";
+7. per-job SSH ingress from the job's GitHub-hosted runner `/32`, with runtime firewall writes.
 
-All six are for the control plane only. The sixth is inferred from Q1 and Q3 rather than quoted, so the runner flags it to the owner.
+All seven are for the control plane only. The sixth and seventh are inferred from Q4, and from Q1 and Q3, rather than quoted, so the runner flags them to the owner.
 
 **Nothing else loosens an owner or security decision, or changes an owner-set number.** The refinements below narrow the answers, and the runner flags them (§2.19).
 
@@ -40,7 +41,15 @@ All six are for the control plane only. The sixth is inferred from Q1 and Q3 rat
   - **On the VM:** the WireGuard configuration is made there, and the credentials are deleted.
   - **Exits:** they come from a private `PIA_SERVERS` secret, distinct for Main and Worker and never the Unraid host's.
   - **Consistent with #627:** WireGuard material moves only host to host over SSH.
-  - **Residual risk:** a malicious merged change to the delivery code could leak the password. The guards are the runner's `/security-review` on those paths, the separate role and environment, and a dedicated test-only PIA login. The owner's MFA path stays for manual use.
+  - **The delivery job's own boundary:**
+    - its environment allows `main` only, and it repeats the author, edit and stop gates itself;
+    - its role's trust requires `aud` and a `sub` naming `fleet.yml@refs/heads/main`;
+    - it takes targets and pins only from the fleet's Terraform state, never from comments or arguments;
+    - it reads the secret with boto3, masks each value, and discards the remote output;
+    - it delivers only to a fleet whose pinned commit is an ancestor of `main`;
+    - its role lives in the secret's own account.
+  - **The Unraid host's exit** is re-confirmed against `PIA_SERVERS` when each fleet session is booked.
+  - **Residual risk:** a malicious merged change to the delivery code could leak the password, and `main`'s protection needs no approvals, so the merge guard is procedural. The guards are the runner's `/security-review` on those paths, the separate role and environment, and a dedicated test-only PIA login. The owner's MFA path stays for manual use.
 - **SSH stays on the Linodes:** from the owner's admin `/32`, and from a job's own `/32` only while that job runs. The first draft's recommendation to drop SSH for SSM no longer applies (see the previous item).
 - **The first version runs `screen` only (Main and Worker).**
   - The Windows lanes stay human-run, so the control plane has no EC2, SSM, `iam:PassRole` or root SSM access at all.
