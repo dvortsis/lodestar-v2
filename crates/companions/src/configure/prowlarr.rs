@@ -87,9 +87,11 @@ fn wanted(route: &Route) -> Result<Option<(String, u32)>, AdapterError> {
     }
 }
 
-/// Caps for the host settings: one flat object of about 40 keys.
+/// Caps for the host settings: one flat object of about 40 scalar keys.
+/// Depth 1 refuses any nested object or list, so the round trip in
+/// `apply` has nothing to reinterpret.
 const HOST_LIMITS: json::Limits = json::Limits {
-    max_depth: 3,
+    max_depth: 1,
     max_values: 512,
     max_array: 64,
     max_text: 512,
@@ -97,7 +99,10 @@ const HOST_LIMITS: json::Limits = json::Limits {
 
 /// The host settings' `id` (which must be 1) and proxy fields, each once
 /// and of its type (`proxyHostname` may be `null`). `None` for anything
-/// else, including a key with an escape or a port outside `0..=65535`.
+/// else: a key with an escape, a port outside `0..=65535`, a nested object
+/// or list, or a number anywhere that isn't a whole number in `i64`. The
+/// last two keep `apply`'s `serde_json` round trip exact: every other
+/// field goes back as Prowlarr sent it.
 pub(crate) fn parse_host(body: &[u8]) -> Option<Proxy> {
     let s = std::str::from_utf8(body).ok()?;
     let mut j = json::Reader::new(s, HOST_LIMITS);
@@ -150,7 +155,11 @@ pub(crate) fn parse_host(body: &[u8]) -> Option<Proxy> {
                 });
             }
             _ => {
-                j.skip()?;
+                if matches!(j.peek(), Some(b'-' | b'0'..=b'9')) {
+                    j.num()?.parse::<i64>().map_err(|_| bad)?;
+                } else {
+                    j.skip()?;
+                }
             }
         }
         Ok(())
@@ -254,8 +263,12 @@ impl Prowlarr {
             .ok_or(AdapterError::Refused("the plan doesn't match the input"))?;
         let want = wanted(route)?;
         let (answer, _) = read_host(http, target, input).await?;
-        // Already checked by `parse_host` with the bounded reader: one
-        // object, depth and size capped.
+        // Already checked by `parse_host` with the bounded reader: one flat
+        // object of strings, booleans, nulls and whole numbers, so every
+        // field `serde_json` reads it into goes back unchanged. Prowlarr's
+        // own `apiKey`, password hash, bind address and port are among
+        // them; `SaveHostConfig` skips `ApiKey`, and leaves the password
+        // alone when the hash it gets equals the stored one.
         let mut host: serde_json::Map<String, serde_json::Value> =
             serde_json::from_slice(answer.body())
                 .map_err(|_| AdapterError::Protocol("host settings"))?;
@@ -364,6 +377,10 @@ mod tests {
             &HOST_JSON.replace("{", "{\"proxyEnabled\":true,"),
             &HOST_JSON.replace("{", "{\"proxy\\u0045nabled\":true,"),
             &format!("{HOST_JSON},"),
+            &HOST_JSON.replace("\"port\":9696", "\"port\":9696.5"),
+            &HOST_JSON.replace("\"port\":9696", "\"port\":99999999999999999999"),
+            &HOST_JSON.replace("\"bindAddress\":\"*\"", "\"bindAddress\":[\"*\"]"),
+            &HOST_JSON.replace("\"bindAddress\":\"*\"", "\"bindAddress\":{}"),
         ] {
             assert_eq!(parse_host(bad.as_bytes()), None, "{bad}");
         }

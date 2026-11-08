@@ -613,8 +613,7 @@ async fn qbittorrent_guided_install_replaces_the_temporary_password() {
     let last_login = server
         .seen()
         .into_iter()
-        .filter(|s| s.path.ends_with("/login"))
-        .next_back()
+        .rfind(|s| s.path.ends_with("/login"))
         .unwrap();
     assert_eq!(form_decode(&last_login.body)["password"], GENERATED);
     clean_urls(&server.seen());
@@ -897,7 +896,27 @@ async fn prowlarr_first_configuration_then_an_empty_plan() {
         }
         assert_eq!(rest, before);
     }
-    clean_urls(&server.seen());
+    let seen = server.seen();
+    clean_urls(&seen);
+    // The PUT is GET's object with only the planned proxy fields changed,
+    // and the key goes in `X-Api-Key`; the body holds it only as GET's own
+    // echoed `apiKey`.
+    let puts: Vec<_> = seen.iter().filter(|s| s.method == "PUT").collect();
+    assert_eq!(puts.len(), 1);
+    assert_eq!(puts[0].header("x-api-key"), Some(API_KEY));
+    let mut sent: Map<String, Value> = serde_json::from_slice(&puts[0].body).unwrap();
+    let mut got = fixture("prowlarr/configure/host.json");
+    assert_eq!(sent["apiKey"], got["apiKey"]);
+    for (k, v) in [
+        ("proxyEnabled", json!(true)),
+        ("proxyType", json!("socks5")),
+        ("proxyHostname", json!("172.17.0.2")),
+        ("proxyPort", json!(1080)),
+    ] {
+        assert_eq!(sent.remove(k), Some(v), "{k}");
+        got.remove(k);
+    }
+    assert_eq!(sent, got, "every other field went back as GET sent it");
     let again = adapter.plan(&http, &target, &input).await.unwrap();
     assert!(again.changes().is_empty());
 
