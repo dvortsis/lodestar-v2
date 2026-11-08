@@ -295,6 +295,11 @@ impl FloorReports {
             // A key already tombstoned (by its rule or an earlier report)
             // keeps its row; either way it's held now.
             store.tombstone_from_worker(keys, *w, *at)?;
+            // Nothing stays stored under a held hash (as `hold_claims`): a
+            // key stored after this worker's grant (another worker's
+            // result, or the built-in worker's) goes, and the indexer drops
+            // it.
+            store.delete_torrents(keys)?;
         }
         let mut pending = self.pending();
         for (k, v) in &batch {
@@ -1600,6 +1605,32 @@ impl ClusterHandle {
             "1 when the workers' have-filter is at its largest size and full.",
             u8::from(inner.tick.at_cap.load(Ordering::Relaxed)),
         );
+        let floor = &inner.floor;
+        o.one(
+            "cluster_floor_reports_pending",
+            "gauge",
+            "Remote workers' floor drops not yet written as tombstones (refused to every claim meanwhile).",
+            floor.len(),
+        );
+        for (name, help, n) in [
+            (
+                "cluster_floor_reports_total",
+                "Floor drops remote workers reported (Lost as blocked).",
+                &floor.reported,
+            ),
+            (
+                "cluster_floor_reports_written_total",
+                "Workers' floor drops written as worker-floor tombstones.",
+                &floor.written,
+            ),
+            (
+                "cluster_floor_report_write_failures_total",
+                "Writes of workers' floor drops the store refused; the reports are kept and tried again.",
+                &floor.write_failures,
+            ),
+        ] {
+            o.one(name, "counter", help, n.load(Ordering::Relaxed));
+        }
     }
 }
 
@@ -2141,7 +2172,7 @@ mod tests {
             .filter_map(|l| l.strip_prefix("# TYPE lodestar_"))
             .map(|l| l.split(' ').next().unwrap())
             .collect();
-        assert_eq!(families.len(), 27, "{text}");
+        assert_eq!(families.len(), 31, "{text}");
         for family in &families {
             assert!(
                 doc.lines().any(|l| l.starts_with(&format!("| `{family}"))),
@@ -2453,6 +2484,37 @@ mod tests {
         assert_eq!(rule.as_deref(), Some("worker-floor:7"));
     }
 
+    /// A key stored after its grant (another worker's result) and then
+    /// reported as a floor drop doesn't stay stored: nothing is left under
+    /// a held hash, as `hold_claims` keeps it (#604's review, N8).
+    #[test]
+    fn a_floor_report_deletes_what_was_stored_under_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let raw = b"d6:lengthi1048576e4:name9:floor.bin12:piece lengthi262144e6:pieces20:aaaaaaaaaaaaaaaaaaaae".to_vec();
+        let info = lodestar_metainfo::Info::parse(&raw).unwrap();
+        let key = info.v1.unwrap();
+        let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        store
+            .insert(&[lodestar_store::NewTorrent {
+                info: &info,
+                raw_info: Some(&raw),
+                discovered_at: 1,
+                metadata_at: 1,
+                extra_flags: 0,
+                source: lodestar_store::SourceId::new(0).unwrap(),
+            }])
+            .unwrap();
+        assert!(store.find(&key).unwrap().is_some());
+        drop(store);
+        let floor = FloorReports::default();
+        floor.report(WorkerId(4), &key, 2);
+        assert_eq!(floor.flush(&db, StoreConfig::default()).unwrap(), 1);
+        let store = Store::open(&db, StoreConfig::default()).unwrap();
+        assert!(store.find(&key).unwrap().is_none(), "deleted");
+        assert_eq!(store.held_among(&[key.0]).unwrap(), vec![true]);
+    }
+
     /// A report taken just before a shutdown is in the store once the
     /// cluster has shut down.
     #[tokio::test]
@@ -2462,8 +2524,16 @@ mod tests {
         let db = w.db.clone();
         drop(Store::open(&db, StoreConfig::default()).unwrap());
         let cluster = Cluster::start(w).await.unwrap();
-        let floor = cluster.handle().0.floor.clone();
+        let h = cluster.handle();
+        let floor = h.0.floor.clone();
         floor.report(WorkerId(3), &InfoHash([9; 20]), 1);
+        // Pending or already written: the metrics say which.
+        let mut m = String::new();
+        h.render(&mut m);
+        let pending = series(&m, "lodestar_cluster_floor_reports_pending");
+        let written = series(&m, "lodestar_cluster_floor_reports_written_total");
+        assert_eq!(series(&m, "lodestar_cluster_floor_reports_total"), 1);
+        assert_eq!(pending + written, 1, "{m}");
         cluster.shutdown().await;
         assert_eq!(floor.len(), 0);
         let held = Store::open(&db, StoreConfig::default())

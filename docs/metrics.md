@@ -932,6 +932,10 @@ Every second while the port is served, the coordinator plans the fleet and sends
 | `cluster_snapshot_installs_total` | counter | Filter and dictionary snapshots built for remote workers: on a new filter engine, a new UTC day (the wire key) or a new dictionary. |
 | `cluster_snapshot_install_failures_total` | counter | Snapshot builds or reads that failed; workers keep the snapshots they have. See the `cluster.snapshot_failed` log line, whose error names the cap passed. |
 | `cluster_snapshot_acks_dropped_total` | counter | Snapshot acknowledgements dropped because that worker already had 16 waiting for the tick (an honest worker has at most 8). That transfer starts over after 60 s without progress. |
+| `cluster_floor_reports_pending` | gauge | Remote workers' floor drops (`Lost` as `blocked`) not yet written as `worker-floor:<id>` tombstones. They're refused to every claim meanwhile. Normally 0: each is written within about a second (WK-10d). |
+| `cluster_floor_reports_total` | counter | Floor drops remote workers reported. |
+| `cluster_floor_reports_written_total` | counter | Workers' floor drops written as tombstones (a key already tombstoned keeps its row and is counted too). |
+| `cluster_floor_report_write_failures_total` | counter | Writes of workers' floor drops the store refused. The reports are kept, still refused, and tried again after 5 s; the `cluster.floor_report_failed` log line says so once per streak. |
 
 ## Remote intake (WK-9, 2026-11-07)
 
