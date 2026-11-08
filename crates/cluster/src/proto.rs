@@ -84,6 +84,7 @@ impl Hello {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Capabilities {
     pub cores: u16,
+    /// Memory the worker may use, in MiB.
     pub ram_mb: u32,
     pub external_ips: Vec<IpAddr>,
     /// Companions present, a bitset (§18).
@@ -138,6 +139,7 @@ pub struct Stats {
     pub fetched: u64,
     pub processed: u64,
     pub cpu_permille: u16,
+    /// Resident memory, in MiB.
     pub rss_mb: u32,
     pub spool_bytes: u64,
 }

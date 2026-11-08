@@ -1,24 +1,22 @@
 <script lang="ts">
 	// The outputs (§10.10.12, §12.1): the console (format, detail), the log file (on, folder, size,
-	// files kept, age, cap) with the preview of what the staged settings write, and the Windows Event
-	// Log on a Windows service. The fields are the screen's form's; this part only lays them out, and
-	// loads after the events, below which it sits.
+	// files kept, age, cap) with the preview of what the staged settings write. The fields are the
+	// screen's form's; this part only lays them out, and loads after the events, below which it sits.
+	// The Windows Event Log setting is never shown: nothing writes to the Event Log (the Legal Notice
+	// says so), and the server keeps the field only so older settings files still load.
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import type { FieldSpec, SettingsForm } from '../form';
 	import SettingField from '../form/SettingField.svelte';
 	import { loadMessages, messagesLoaded } from '../form/messages';
-	import type { DeploymentKind } from './catalog.svelte';
 	import Preview from './Preview.svelte';
 
 	let {
 		form,
-		deployment,
 		open = {}
 	}: {
 		form: SettingsForm;
-		deployment?: DeploymentKind;
 		/** Disclosures to open. An Advanced field with an error also opens its own, so the error
 		 * summary's link to it lands on a shown field. */
 		open?: Record<string, boolean>;
@@ -26,16 +24,10 @@
 
 	const GROUPS = [
 		{ id: 'console', title: m.settings_logging_console, lead: m.settings_logging_console_lead },
-		{ id: 'file', title: m.settings_logging_file, lead: m.settings_logging_file_lead },
-		{ id: 'event_log', title: m.settings_logging_event_log, lead: undefined }
+		{ id: 'file', title: m.settings_logging_file, lead: m.settings_logging_file_lead }
 	];
 	const inGroup = (g: string) => form.specs.filter((s) => s.group === g);
-	// The Windows Event Log setting matters only on a Windows service.
-	const shown = $derived(
-		GROUPS.filter(
-			(g) => inGroup(g.id).length && (g.id !== 'event_log' || deployment === 'windows_service')
-		)
-	);
+	const shown = $derived(GROUPS.filter((g) => inGroup(g.id).length));
 	let toggled = $state<Record<string, boolean>>({});
 
 	// The outputs' labels are in their own map (`settings.logoutput.*`): the fields render once it's in,
@@ -59,7 +51,7 @@
 		</div>
 		{@render fields(specs.filter((s) => !s.advanced))}
 		{#if advanced.length && advanced.length === specs.length}
-			<!-- A group of Advanced fields only (the Event Log): nothing to hide them behind. -->
+			<!-- A group of Advanced fields only: nothing to hide them behind. -->
 			{@render fields(advanced)}
 		{:else if advanced.length}
 			<details
