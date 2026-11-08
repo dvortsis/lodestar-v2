@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-08T02:27Z",
+  "updated_at": "2026-11-08T02:29Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -5989,6 +5989,16 @@
       "id": "WK-10e",
       "at": "2026-11-08T02:27Z",
       "what": "New slice WK-10e worker politeness (Opus): apply Assign.politeness - per-IP connections_to(ip) cap in crates/sources/src/pool.rs, bep51_interval_scale in crates/dht sampler, coordinator share in serve.rs + services.rs wiring. After WK-10c and WK-10d. WK-G depends on it. Add WK-10d + WK-10e to slices.yaml in next runner PR."
+    },
+    {
+      "id": "X-win-deep-check-reinstall",
+      "at": "2026-11-08T02:29Z",
+      "what": "secure-datadir.ps1: deep check on every reinstall/Repair of a non-empty data folder (files planted by $me processes between manual icacls and next start survive). From #597 review."
+    },
+    {
+      "id": "X-win-temp-log-owner",
+      "at": "2026-11-08T02:29Z",
+      "what": "temp_log.rs: refuse a pre-created lodestar-service.log in C:\\Windows\\Temp owned by anyone but SYSTEM/Administrators/the service. From #597 review."
     }
   ],
   "main_health": [
@@ -6690,14 +6700,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T02:13Z",
+    "updated": "2026-11-08T02:29Z",
     "items": [
       {
         "slot": 1,
         "slice": "X-win-refusal-ux",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnABi9mwqkZULms8pjL: #597 delta review CHANGES (top-folder object ACEs; guide step 3 after refusal); fix round requested 2026-11-08T01:13Z",
+        "doing": "session_01MMjhnABi9mwqkZULms8pjL: #597 round-3 delta CHANGES (guide runs forgeable temp-log command); fix round requested 2026-11-08T02:29Z",
         "since": "2026-11-07T21:10Z"
       },
       {
