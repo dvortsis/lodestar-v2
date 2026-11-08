@@ -12,17 +12,21 @@
 //!   with `FILE_FLAG_OPEN_REPARSE_POINT`, so a symlink or junction is
 //!   opened as itself, and refused by its attributes on the handle (no
 //!   check-then-open gap). `<data>` itself is the configured folder, as on
-//!   Unix; the service's is checked for reparse points at every start
-//!   (`windows::acl`).
+//!   Unix. Only the service's default folder is checked for reparse
+//!   points at start (`windows::acl`); a folder set with `--config` or
+//!   `LODESTAR_DATA_DIR` isn't.
 //! - **Pinned:** [`Bin`] holds the folder open without
 //!   `FILE_SHARE_DELETE` while it lives, so it can't be renamed, deleted
 //!   or swapped for a junction after it was checked.
 //! - **Atomic replace:** temporary file (`CREATE_NEW`, never through a
 //!   link), `FlushFileBuffers`, then `MoveFileEx`-style replace
-//!   (`std::fs::rename`). NTFS journals the rename, and a folder can't be
-//!   flushed through std, so there's no folder fsync.
+//!   (`std::fs::rename`). There's no folder flush (std can't open a
+//!   folder for one), and NTFS writes its log lazily, so a power cut
+//!   right after can bring back the previous file: atomic, but an
+//!   acknowledged rename isn't guaranteed to survive power loss.
 //! - **One writer:** `.lock`, an exclusive `LockFileEx` lock
-//!   (`File::try_lock`).
+//!   (`File::try_lock`), held open without `FILE_SHARE_DELETE` so it
+//!   can't be renamed away and replaced by an unlocked one.
 //! - **Owner-only:** rests on the folder's ACL, not on code: files inherit
 //!   the data folder's protected DACL, which the MSI sets and the service
 //!   checks at every start (SYSTEM, Administrators and `NT SERVICE\Lodestar`
@@ -228,6 +232,7 @@ impl Bin {
             .write(true)
             .create(true)
             .truncate(false)
+            .share_mode(win::SHARE_READ | win::SHARE_WRITE)
             .custom_flags(win::OPEN_REPARSE_POINT)
             .open(self.path(".lock"))?;
         win::refuse_reparse(&file, &self.path(".lock"))?;
@@ -296,8 +301,8 @@ impl Bin {
         }
     }
 
-    /// NTFS journals the rename and std can't flush a folder: only the
-    /// test fault runs.
+    /// std can't flush a folder (see the module's note on power loss):
+    /// only the test fault runs.
     #[cfg(windows)]
     fn sync_acknowledged(&self, fault: &dyn Fn(Step) -> io::Result<()>) -> io::Result<()> {
         fault(Step::SyncDir)
@@ -555,7 +560,8 @@ pub fn sync_dir(dir: &Path) {
     }
 }
 
-/// NTFS journals renames, and std can't open a folder to flush it.
+/// std can't open a folder to flush it (see the module's note on power
+/// loss).
 #[cfg(windows)]
 pub fn sync_dir(_dir: &Path) {}
 
@@ -735,6 +741,44 @@ mod windows_tests {
         assert!(bin.read::<serde_json::Value>("trust.json").is_err());
         junction(&bin.path(".lock"), target.path());
         assert!(bin.lock().is_err());
+    }
+
+    /// A file symlink (GitHub's Windows runners are administrators, who
+    /// may make one).
+    fn symlink_file(link: &Path, target: &Path) {
+        std::os::windows::fs::symlink_file(target, link)
+            .unwrap_or_else(|e| panic!("symlink_file {}: {e}", link.display()));
+    }
+
+    /// File links in place of state files are opened as themselves and
+    /// refused: never read through, never locked through, never written
+    /// through.
+    #[test]
+    fn a_file_symlink_is_never_followed() {
+        let data = tempfile::tempdir().unwrap();
+        let bin = Bin::open(data.path()).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("elsewhere.json");
+        fs::write(&secret, br#"{"format":1}"#).unwrap();
+        symlink_file(&bin.path("trust.json"), &secret);
+        let e = open_nofollow(&bin.path("trust.json")).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{e}");
+        assert!(bin.read::<serde_json::Value>("trust.json").is_err());
+        symlink_file(&bin.path(".lock"), &secret);
+        assert!(bin.lock().is_err());
+        // A link planted as the temporary file: the write replaces the
+        // link (or fails), and the file it points at is untouched.
+        symlink_file(&bin.path(".updater.json.tmp"), &secret);
+        let _ = bin.write("updater.json", &serde_json::json!({"n": 1}));
+        assert_eq!(fs::read(&secret).unwrap(), br#"{"format":1}"#);
+        // A link as the target itself is replaced, not written through.
+        let other = outside.path().join("other.json");
+        fs::write(&other, b"untouched").unwrap();
+        symlink_file(&bin.path("skipped"), &other);
+        bin.write("skipped", &serde_json::json!([])).unwrap();
+        assert_eq!(fs::read(&other).unwrap(), b"untouched");
+        let back: serde_json::Value = bin.read("skipped").unwrap().unwrap();
+        assert_eq!(back, serde_json::json!([]));
     }
 
     #[test]

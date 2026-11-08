@@ -65,8 +65,9 @@ const MANUAL_EVERY: Duration = Duration::from_secs(60);
 const MAX_SLEEP: Duration = Duration::from_secs(15 * 60);
 pub const UPDATER_FILE: &str = "updater.json";
 pub const SKIPPED_FILE: &str = "skipped";
-/// Why Install and Roll back refuse until they're built on Windows.
-pub const NOT_BUILT_YET: &str = "not_built_yet";
+/// Why Install and Roll back refuse until they're built on Windows (the
+/// one place to change).
+pub const NOT_BUILT_YET: Reason = Reason::NotBuiltYet;
 
 /// How Lodestar was installed, which decides the artifact it updates
 /// from.
@@ -179,6 +180,8 @@ pub enum NoArtifact {
 }
 
 impl NoArtifact {
+    // Reported by PK-win-upd-2's install refusal.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn code(self) -> &'static str {
         match self {
             NoArtifact::NoTarget => "no_target",
@@ -326,8 +329,8 @@ impl std::fmt::Debug for Notifier {
 
 struct Inner {
     ctx: Context,
-    bin: Option<Bin>,
-    _lock: Option<Lock>,
+    /// `<data>\bin` and its held `.lock`; see [`Notifier::bin`].
+    bin: Mutex<Option<(Bin, Lock)>>,
     settings: watch::Receiver<Updates>,
     publish: Publish,
     fetch: Arc<dyn Fetch>,
@@ -375,43 +378,54 @@ impl Notifier {
         zone: (jiff::tz::TimeZone, String),
         Seams { clock, keys, fault }: Seams,
     ) -> Notifier {
-        // The one writer of `<data>\bin`: without its lock, nothing is
-        // written (or fetched).
-        let (bin, lock) = match Bin::open(&ctx.data_dir) {
-            Ok(bin) => match bin.lock() {
-                Ok(Some(lock)) => (Some(bin), Some(lock)),
-                _ => (None, None),
-            },
-            Err(_) => (None, None),
-        };
-        let mut state = State::default();
-        if let Some(b) = &bin {
-            match b.read::<Updater>(UPDATER_FILE) {
-                Ok(u) => state.durable = u.unwrap_or_default(),
-                Err(e) => {
-                    log_event!(UPDATE_STATE_UNREADABLE, error = lodestar_log::Error::io(&e));
-                    state.unreadable = true;
-                }
-            }
-        }
-        Notifier {
+        let n = Notifier {
             inner: Arc::new(Inner {
                 ctx,
-                bin,
-                _lock: lock,
+                bin: Mutex::new(None),
                 settings,
                 publish,
                 fetch,
                 zone,
                 found: Mutex::new(Found::default()),
-                state: Mutex::new(state),
+                state: Mutex::new(State::default()),
                 checking: Arc::new(tokio::sync::Mutex::new(())),
                 last_manual: Mutex::new(None),
                 clock,
                 keys,
                 fault,
             }),
+        };
+        let _ = n.bin();
+        n
+    }
+
+    /// `<data>\bin` with its lock held: this process is its one writer.
+    /// Opened again when it couldn't be (the lock was busy at start, as
+    /// when a relaunched copy starts before the old one has let go), so
+    /// one busy moment doesn't turn updates off for the whole run. Its
+    /// `updater.json` is read when it's first held. Never called with the
+    /// state's lock held.
+    fn bin(&self) -> Option<Bin> {
+        let mut held = lock(&self.inner.bin);
+        if held.is_none() {
+            let bin = Bin::open(&self.inner.ctx.data_dir).ok()?;
+            let Ok(Some(l)) = bin.lock() else {
+                return None;
+            };
+            let mut state = lock(&self.inner.state);
+            match bin.read::<Updater>(UPDATER_FILE) {
+                Ok(u) => {
+                    state.durable = u.unwrap_or_default();
+                    state.unreadable = false;
+                }
+                Err(e) => {
+                    log_event!(UPDATE_STATE_UNREADABLE, error = lodestar_log::Error::io(&e));
+                    state.unreadable = true;
+                }
+            }
+            *held = Some((bin, l));
         }
+        held.as_ref().map(|(b, _)| b.clone())
     }
 
     /// The scheduled checks, until `stop` is set.
@@ -526,7 +540,7 @@ impl Notifier {
                 lock(&self.inner.found).state = Some(CheckState::Ok);
                 let n = self.clone();
                 let newest = blocking(move || {
-                    n.plan(&settings, now)
+                    n.plan(n.bin().as_ref(), &settings, now)
                         .releases
                         .first()
                         .map(|a| a.version.to_string())
@@ -549,7 +563,7 @@ impl Notifier {
     }
 
     async fn check_once(&self, channel: lodestar_update::Channel) -> Result<(), &'static str> {
-        let Some(bin) = self.inner.bin.clone() else {
+        let Some(bin) = self.bin() else {
             return Err("bin_unavailable");
         };
         let url = check::source(&self.inner.ctx.repository, channel).map_err(CheckError::code)?;
@@ -598,11 +612,13 @@ impl Notifier {
     /// Saves a check's times; kept in memory only when they can't be
     /// written, or when an unreadable file may hold a pause.
     fn save_check(&self, at: i64, next: i64, error: Option<String>) {
+        let bin = self.bin();
         let mut state = lock(&self.inner.state);
         if !state.unreadable {
             let mut u = state.durable.clone();
+            u.format = 1;
             (u.checked_at, u.next_check_at, u.error) = (Some(at), Some(next), error.clone());
-            if self.write(UPDATER_FILE, &u).is_ok() {
+            if self.write(bin.as_ref(), UPDATER_FILE, &u).is_ok() {
                 state.durable = u;
                 state.unsaved = None;
                 return;
@@ -612,12 +628,13 @@ impl Notifier {
     }
 
     /// A durable write (acknowledged: a failed step is an error).
-    fn write<T: Serialize>(&self, name: &'static str, value: &T) -> Result<(), UpdatesError> {
-        let bin = self
-            .inner
-            .bin
-            .as_ref()
-            .ok_or(UpdatesError::BinUnavailable)?;
+    fn write<T: Serialize>(
+        &self,
+        bin: Option<&Bin>,
+        name: &'static str,
+        value: &T,
+    ) -> Result<(), UpdatesError> {
+        let bin = bin.ok_or(UpdatesError::BinUnavailable)?;
         bin.write_acknowledged(name, value, &*self.inner.fault)
             .map_err(|e| {
                 log_event!(
@@ -630,8 +647,8 @@ impl Notifier {
     }
 
     /// The skipped versions; `None` when `skipped` can't be read.
-    fn skipped(&self) -> Option<Vec<Skip>> {
-        let Some(bin) = &self.inner.bin else {
+    fn skipped(bin: Option<&Bin>) -> Option<Vec<Skip>> {
+        let Some(bin) = bin else {
             return Some(vec![]);
         };
         Some(
@@ -649,12 +666,12 @@ impl Notifier {
         } else if self.inner.ctx.dev {
             Reason::DevBuild
         } else {
-            Reason::NotBuiltYet
+            NOT_BUILT_YET
         }
     }
 
     /// The policy's plan over the releases offered here.
-    fn plan(&self, settings: &Updates, now: i64) -> policy::Plan {
+    fn plan(&self, bin: Option<&Bin>, settings: &Updates, now: i64) -> policy::Plan {
         let paused_until = self.updater().paused_until;
         let found = lock(&self.inner.found);
         let Some(c) = found.checked.as_ref() else {
@@ -674,7 +691,7 @@ impl Notifier {
             Some(When::Open { .. }) | None => t,
             Some(When::Opens(at)) => at,
         };
-        let skipped = self.skipped();
+        let skipped = Notifier::skipped(bin);
         let incapable = self.incapable(skipped.is_some());
         let skipped: Vec<String> = skipped
             .unwrap_or_default()
@@ -700,12 +717,13 @@ impl Notifier {
         let settings = self.inner.settings.borrow().clone();
         let now = (self.inner.clock)();
         let ctx = &self.inner.ctx;
+        let bin = self.bin();
         let (updater, check_unsaved, unreadable) = {
             let s = lock(&self.inner.state);
             (s.effective(), s.unsaved.is_some(), s.unreadable)
         };
-        let plan = self.plan(&settings, now);
-        let reason = self.incapable(self.skipped().is_some());
+        let plan = self.plan(bin.as_ref(), &settings, now);
+        let reason = self.incapable(Notifier::skipped(bin.as_ref()).is_some());
         let found = lock(&self.inner.found);
         let mut notices = found.notices.clone();
         if found.trust_damaged {
@@ -714,7 +732,7 @@ impl Notifier {
         if found.checked.as_ref().is_some_and(|c| !current(c, now)) {
             notices.push("manifest_lapsed".into());
         }
-        if check_unsaved && self.inner.bin.is_some() {
+        if check_unsaved && bin.is_some() {
             notices.push("check_not_saved".into());
         }
         if unreadable {
@@ -777,7 +795,7 @@ impl Notifier {
             installing: None,
             rollback: RollbackInfo {
                 available: false,
-                reason: Some(NOT_BUILT_YET.into()),
+                reason: Some(NOT_BUILT_YET.code().into()),
                 to_version: None,
                 lost_torrents: None,
                 restores_store: None,
@@ -799,14 +817,11 @@ impl Notifier {
         if !known {
             return Err(UpdatesError::UnknownVersion);
         }
-        if self.inner.bin.is_none() {
-            return Err(UpdatesError::BinUnavailable);
-        }
+        let bin = self.bin().ok_or(UpdatesError::BinUnavailable)?;
         {
             let _state = lock(&self.inner.state);
             // An unreadable list is damage: nothing is written over it.
-            let mut list = self
-                .skipped()
+            let mut list = Notifier::skipped(Some(&bin))
                 .ok_or_else(|| UpdatesError::Internal("skipped is unreadable".into()))?;
             if !list.iter().any(|s| s.version == version) {
                 list.push(Skip {
@@ -815,7 +830,7 @@ impl Notifier {
                 });
                 let over = list.len().saturating_sub(MAX_SKIPPED);
                 list.drain(..over);
-                self.write(SKIPPED_FILE, &list)?;
+                self.write(Some(&bin), SKIPPED_FILE, &list)?;
             }
         }
         Ok(self.status())
@@ -826,12 +841,13 @@ impl Notifier {
     /// installs automatically here, so a failed pause holds nothing.
     pub fn pause(&self, days: u32) -> Result<UpdatesStatus, UpdatesError> {
         let now = (self.inner.clock)();
+        let bin = self.bin();
         {
             let mut state = lock(&self.inner.state);
             let mut u = state.durable.clone();
             u.format = 1;
             u.paused_until = (days > 0).then(|| now + i64::from(days) * 86_400);
-            self.write(UPDATER_FILE, &u)?;
+            self.write(bin.as_ref(), UPDATER_FILE, &u)?;
             state.durable = u;
             state.unreadable = false;
         }
@@ -956,7 +972,7 @@ impl UpdatesApi for Notifier {
         _when: InstallWhen,
         _confirm_manual: bool,
     ) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
-        Box::pin(async { Err(UpdatesError::InstallUnavailable(NOT_BUILT_YET)) })
+        Box::pin(async { Err(UpdatesError::InstallUnavailable(NOT_BUILT_YET.code())) })
     }
 
     fn skip(&self, version: String) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
@@ -976,7 +992,7 @@ impl UpdatesApi for Notifier {
     }
 
     fn rollback(&self) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
-        Box::pin(async { Err(UpdatesError::RollbackUnavailable(NOT_BUILT_YET)) })
+        Box::pin(async { Err(UpdatesError::RollbackUnavailable(NOT_BUILT_YET.code())) })
     }
 }
 
@@ -1185,6 +1201,8 @@ mod tests {
         trust: Arc<TestTrust>,
         settings: watch::Sender<Updates>,
         events: Arc<Mutex<Vec<UpdatesEvent>>>,
+        /// The write step to fail, if any.
+        fail: Arc<Mutex<Option<Step>>>,
     }
 
     impl Env {
@@ -1199,6 +1217,7 @@ mod tests {
                 trust: Arc::new(TestTrust::default()),
                 settings,
                 events: Arc::default(),
+                fail: Arc::default(),
                 n: None,
             };
             e.n = Some(e.open(kind));
@@ -1208,6 +1227,7 @@ mod tests {
         fn open(&self, kind: InstallKind) -> Notifier {
             let sink = self.events.clone();
             let keys = self.trust.clone();
+            let fail = self.fail.clone();
             Notifier::with(
                 Context {
                     data_dir: self.dir.path().to_path_buf(),
@@ -1224,9 +1244,25 @@ mod tests {
                 Seams {
                     clock: Box::new(|| NOW),
                     keys: Box::new(move || Ok(keys.embedded(vec![]))),
-                    fault: Box::new(|_| Ok(())),
+                    fault: Box::new(move |step| match *lock(&fail) {
+                        Some(f) if f == step => Err(std::io::Error::other("injected")),
+                        _ => Ok(()),
+                    }),
                 },
             )
+        }
+
+        fn bin_file(&self, name: &str) -> PathBuf {
+            self.dir.path().join("bin").join(name)
+        }
+
+        fn notices(json: &Value) -> Vec<&str> {
+            json["notices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|n| n.as_str().unwrap())
+                .collect()
         }
 
         fn n(&self) -> &Notifier {
@@ -1325,11 +1361,11 @@ mod tests {
             UpdatesApi::install(n, "0.5.4".into(), InstallWhen::Now, true)
                 .await
                 .unwrap_err(),
-            UpdatesError::InstallUnavailable(NOT_BUILT_YET)
+            UpdatesError::InstallUnavailable(NOT_BUILT_YET.code())
         );
         assert_eq!(
             UpdatesApi::rollback(n).await.unwrap_err(),
-            UpdatesError::RollbackUnavailable(NOT_BUILT_YET)
+            UpdatesError::RollbackUnavailable(NOT_BUILT_YET.code())
         );
         assert!(UpdatesApi::clear_history(n).await.is_ok());
         // A second manual check within the minute waits.
@@ -1408,22 +1444,113 @@ mod tests {
     }
 
     /// Another process holding `<data>\bin\.lock` keeps this one from
-    /// fetching or writing anything.
+    /// fetching or writing anything, until it lets go.
     #[tokio::test]
-    async fn a_second_writer_gets_nothing() {
-        let dir = tempfile::tempdir().unwrap();
-        let first = Bin::open(dir.path()).unwrap();
-        let _held = first.lock().unwrap().unwrap();
+    async fn a_second_writer_gets_nothing_until_the_lock_is_free() {
         let mut e = Env::new(Mode::Notify, InstallKind::Msi);
         e.n = None;
-        let moved = std::mem::replace(&mut e.dir, dir);
+        let first = Bin::open(e.dir.path()).unwrap();
+        let held = first.lock().unwrap().unwrap();
         e.n = Some(e.open(InstallKind::Msi));
         e.serve(Channel::Stable, vec![release_with("0.5.4", &["msi"])]);
         let json = e.check().await;
         assert_eq!(json["status"]["error"], "bin_unavailable");
         assert!(e.fake.asked.lock().unwrap().is_empty(), "nothing fetched");
         assert_eq!(e.n().pause(1).unwrap_err(), UpdatesError::BinUnavailable);
-        drop(moved);
+        assert!(!e.bin_file(UPDATER_FILE).exists());
+        // Once it's free, the next write takes it.
+        drop(held);
+        drop(first);
+        let paused = serde_json::to_value(e.n().pause(1).unwrap()).unwrap();
+        assert_eq!(paused["policy"]["paused_until"], NOW + 86_400);
+        assert!(e.bin_file(UPDATER_FILE).exists());
+    }
+
+    /// A write that fails isn't acknowledged and changes nothing: a skip
+    /// or pause answers `not_saved`, and a check's times stay in memory.
+    #[tokio::test]
+    async fn a_failed_write_is_not_acknowledged() {
+        let e = Env::new(Mode::Notify, InstallKind::Msi);
+        e.serve(Channel::Stable, vec![release_with("0.5.4", &["msi"])]);
+        *lock(&e.fail) = Some(Step::Rename);
+        let json = e.check().await;
+        assert_eq!(json["status"]["checked_at"], NOW, "kept in memory");
+        assert!(Env::notices(&json).contains(&"check_not_saved"), "{json}");
+        assert!(!e.bin_file(UPDATER_FILE).exists());
+        assert_eq!(e.n().skip("0.5.4").unwrap_err(), UpdatesError::NotSaved);
+        assert_eq!(Env::versions(&e.status()), ["0.5.4"]);
+        assert!(!e.bin_file(SKIPPED_FILE).exists());
+        assert_eq!(e.n().pause(7).unwrap_err(), UpdatesError::NotSaved);
+        assert_eq!(e.status()["policy"]["paused_until"], Value::Null);
+        // Every step, not only the rename.
+        for step in [Step::Write, Step::Flush, Step::SyncDir] {
+            *lock(&e.fail) = Some(step);
+            assert_eq!(
+                e.n().pause(7).unwrap_err(),
+                UpdatesError::NotSaved,
+                "{step:?}"
+            );
+        }
+        *lock(&e.fail) = None;
+        assert!(e.n().pause(7).is_ok());
+        assert_eq!(e.status()["policy"]["paused_until"], NOW + 7 * 86_400);
+        assert!(e.bin_file(UPDATER_FILE).exists());
+    }
+
+    /// A `skipped` that can't be read (damaged, oversize) blocks rather
+    /// than forgets a skip, and is never written over.
+    #[tokio::test]
+    async fn an_unreadable_skip_list_is_kept_and_named() {
+        for bad in [b"{ not a list".to_vec(), vec![b' '; 256 * 1024 + 1]] {
+            let e = Env::new(Mode::Notify, InstallKind::Msi);
+            std::fs::write(e.bin_file(SKIPPED_FILE), &bad).unwrap();
+            e.serve(Channel::Stable, vec![release_with("0.5.4", &["msi"])]);
+            let json = e.check().await;
+            assert_eq!(json["capability"]["reason"], "skipped_unreadable");
+            assert!(matches!(
+                e.n().skip("0.5.4").unwrap_err(),
+                UpdatesError::Internal(_)
+            ));
+            assert_eq!(std::fs::read(e.bin_file(SKIPPED_FILE)).unwrap(), bad);
+        }
+    }
+
+    /// `skipped` keeps the newest 64, dropping the oldest.
+    #[tokio::test]
+    async fn the_skip_list_keeps_the_newest_64() {
+        let e = Env::new(Mode::Notify, InstallKind::Msi);
+        let old: Vec<Skip> = (0..MAX_SKIPPED)
+            .map(|i| Skip {
+                version: format!("0.1.{i}"),
+                reason: "user".into(),
+            })
+            .collect();
+        std::fs::write(e.bin_file(SKIPPED_FILE), serde_json::to_vec(&old).unwrap()).unwrap();
+        e.serve(Channel::Stable, vec![release_with("0.5.4", &["msi"])]);
+        e.check().await;
+        e.n().skip("0.5.4").unwrap();
+        let list: Vec<Skip> =
+            serde_json::from_slice(&std::fs::read(e.bin_file(SKIPPED_FILE)).unwrap()).unwrap();
+        assert_eq!(list.len(), MAX_SKIPPED);
+        assert_eq!(list[0].version, "0.1.1", "the oldest went");
+        assert_eq!(list.last().unwrap().version, "0.5.4");
+    }
+
+    /// A damaged `trust.json` is named and never written over; the check
+    /// still runs from the embedded floor.
+    #[tokio::test]
+    async fn a_damaged_trust_file_is_named_and_kept() {
+        let e = Env::new(Mode::Notify, InstallKind::Msi);
+        std::fs::write(e.bin_file(trust_file::FILE), b"{ planted").unwrap();
+        e.serve(Channel::Stable, vec![release_with("0.5.4", &["msi"])]);
+        let json = e.check().await;
+        assert_eq!(json["status"]["state"], "ok");
+        assert!(Env::notices(&json).contains(&"trust_damaged"), "{json}");
+        assert_eq!(Env::versions(&json), ["0.5.4"]);
+        assert_eq!(
+            std::fs::read(e.bin_file(trust_file::FILE)).unwrap(),
+            b"{ planted"
+        );
     }
 
     /// An `updater.json` that can't be read (planted, damaged) isn't
