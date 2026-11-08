@@ -2,7 +2,7 @@
 
 The plan is `docs/plan/2026-11-08-cloud-test-plan.md`: concurrent test lanes on the 48 h pilot fleet (one AWS Windows VM, two Linodes behind PIA), and a standing cloud screen for crawler improvements. Docs only; it starts no VM.
 
-**Two items change the owner's answers, and the owner approved both on 2026-11-08Z:** the uTP timing and the cloud screen.
+**One item changes an owner answer, and the owner approved it on 2026-11-08Z:** the uTP timing. The cloud screen is the runner's decision under §2.26: the owner deferred it to the runner's recommendation.
 
 **Nothing weakens a content-safety decision or changes an owner-set number.**
 - The one security-relevant change is Prerequisite 2. It widens Main's SSH ingress by one more `/32` (Win's egress), through the infra follow-up slice's own review, and stays SSH-only.
@@ -15,11 +15,14 @@ The remaining refinements are the runner's to flag (`docs/owner-decisions.md` §
   - **Why not rounds:** the first version gave each toggle round its own fresh start. That costs another 6 h suppression per round and puts control and treatment in different hours.
   - **The block:** resumed restarts (`dht.safe_restart`), the control inside the block, and 6 h segments. It fits by hour 37.5 and is judged by `analyze_cr.py`.
   - **What it's worth:** one block is half CR-SPEC's minimum, so it yields a lead, never an outcome. The order (CR-ADM, then uTP) is unchanged.
-- **A standing cloud screen** comes before the experiment host's A/B blocks (owner, 2026-11-08Z).
-  - **Its purpose:** to catch broken or clearly worse changes before they use the scarce host. It never judges a win.
-  - **The format:** one ABBA block of 3 h segments on both Linodes in lockstep, collected with `--rehearsal`.
-  - **When it stops a change:** only for four predeclared failures (the mechanism didn't engage, instability, a guardrail worse by more than 25 %, a yield loss of more than 25 %, each consistent across both B segments and both VMs). Everything else goes on.
-  - **The 25 % margins are new measurement parameters** (§2.26), flagged here. They change only by a decisions file merged before the screen they apply to.
+- **A standing cloud screen** (the runner, 2026-11-08Z, under §2.26; flagged to the owner, §2.19). It runs before experiment-host runs, on the two cloud Linodes only. The runner's six rules are in the plan word for word:
+  - fail-only: crash or restart, a memory or disk bound breached, stored rate at zero, or a named error class;
+  - rules committed before the run, and never changed after seeing results;
+  - one fresh start, then an ABBA block of 2–3 h resumed segments on both Linodes, with images frozen by digest;
+  - never evidence, never pooled with experiment-host segments, never cited as a gain;
+  - never on the owner's soak host;
+  - never delays an experiment-host booking.
+  - The soak screen's failure to separate pass from fail on r4/r5 (X-soak-screen-calibrate) is why it stays fail-only and advisory.
 - **Main and Worker run the same block in the same hours, and are analysed apart.** This keeps Decision 3's "the same toggle on every VM". It never pools a 4 vCPU and a 1 vCPU box, and it gives a 1 GiB replicate.
 - **Worker runs the shipped Balanced preset.** The server has no low-resource mode yet (architecture §3 describes one; only M8-PERF-1 plans a bench mode). Worker mode (§19) waits for WK-10e and for a cluster-port path through PIA, which needs an infra change; it gets its own session.
 - **Measurements never overlap** (ground rule 4).
@@ -42,7 +45,7 @@ The remaining refinements are the runner's to flag (`docs/owner-decisions.md` §
 - **Each Linode gets its own PIA exit.** Two crawlers on one exit would be "another crawler on the public IP" (CR-SPEC 6.5).
 
 ## Flagged for the owner
-- The cloud screen's 25 % stop margins (above).
+- The cloud screen, which the runner adopted under §2.26 (above).
 - Infra follow-up for the runner to slice after `#625` (the X-cloud-infra session agreed they're feature changes outside it):
   - an admin-address list for Main's firewall;
   - a root-volume size parameter for Win.

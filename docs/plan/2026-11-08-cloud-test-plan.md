@@ -6,7 +6,7 @@ Planning note, 2026-11-08Z, for the build runner. Docs only; it starts no VM and
 - the deployed infrastructure (`dvortsis/lodestar-v2#625`, which supersedes `#623`);
 - CR-SPEC and the repo's tools.
 
-The owner approved the two changes to their answers that came out of it: uTP moves to the next session, and a standing cloud screen is added. Every change is listed in [Review changes](#review-changes-2026-11-08z) and recorded in `docs/decisions/2026-11-08-P-cloud-test-plan.md`.
+Two changes came out of it. The owner approved moving uTP to the next session. The owner deferred the standing cloud screen to the runner, which adopted it under §2.26. Every change is listed in [Review changes](#review-changes-2026-11-08z) and recorded in `docs/decisions/2026-11-08-P-cloud-test-plan.md`.
 
 **Authority:** `docs/owner-decisions.md` §2.19, §2.23, §2.25, §2.26, §2.35, §2.51; `docs/decisions/2026-11-02-CR-SPEC.md`; `docs/build-plan.md` §0.5; `docs/handoff.md` §6; `docs/operations.md` §4.3; architecture §3, §10.1, §17, §19.8.
 
@@ -269,21 +269,33 @@ Win is the measuring box: it never crawls in this session, and it runs one measu
 There's a scripted switch and a 1 h warm-up after each segment. The block has no slack: an invalid segment writes it off (CR-SPEC 6.7), and there's no time to re-run it. Report whatever segments are valid, marked as such. If the watchdog ever deletes a Linode before Terraform does, reconcile the state as the runbook says before any later `apply`.
 
 ## The cloud screen (standing stage)
-Approved by the owner 2026-11-08Z. Once a crawler improvement is merged, it gets a short cloud screen before it books the experiment host's longer A/B blocks. The screen spends cheap cloud hours so that the scarce host's time isn't spent on a change that's broken.
-- **Where:** the two Linodes only (about $4 per 48 h); the Windows VM isn't needed. Phase 0, the leak test and every ground rule above apply.
-- **How:**
-  - one fresh start, then one ABBA block with resumed restarts on both Linodes in lockstep;
-  - 3 h segments, collected with `--rehearsal --baseline-hours 3`, which `run.json` records and `analyze_cr.py` marks "rehearsal: not gate evidence";
-  - about 7 h + 4 × 3 h + 3 h ≈ 22 h of crawling, so a verdict in about a day.
-  - A session can screen two candidates one after the other on the same data directory, each in its own ABBA block.
-- **It can only stop a change for a clear failure,** predeclared here and never argued after the data is in:
-  1. **The switch didn't engage:** the mechanism check (CR-SPEC rule 5) fails in any on-segment.
-  2. **Instability:** a crash, an OOM kill of Lodestar on Main, a counter reset, or the CR-ADM permit identity stuck non-zero for 60 minutes.
-  3. **A clear guardrail regression:** a CR-SPEC 5.2 guardrail worse in both B segments than in both A segments, on both VMs, by more than 25 %.
-  4. **A large loss:** the net verified searchable rate lower in both B segments than in both A segments, on both VMs, by more than 25 %.
-- **Anything else goes on to the experiment host,** including "no effect" and modest gains or losses. Cloud noise is far above CR-SPEC's ±5 % margin, so a screen never kills an idea for lack of a win.
-- **Records:** each screen goes in its slice's decisions file, or in a small runner PR, as "screen: pass" or "screen: stop (rule n)", with the evidence directory. A stop goes back to the slice's owner. The runner decides whether to fix it and screen again (§2.26).
-- **The 25 % margins are the runner's measurement parameters** (§2.26), flagged to the owner (§2.19). They change only by a decisions file merged before the screen they apply to.
+**The runner's decision under §2.26 (2026-11-08Z), flagged to the owner (§2.19).** The owner deferred this stage to the runner's recommendation. Once a crawler improvement is merged, it gets a short screen on the cloud Linodes before an experiment-host run. The runner's rules, as decided:
+
+1. **Fail-only.**
+   - A screen on the two Linodes runs before an experiment-host run.
+   - It can stop a candidate for a clear failure only: a crash or restart, a memory or disk bound breached, stored rate at zero, or an error class the rules name.
+   - It never ranks variants, never shows a gain, and never decides between two candidates that both pass.
+2. **Rules before the run.**
+   - The failure thresholds, the block shape and the analysis are committed before the screen starts, and the commit is recorded in the run record.
+   - Nothing is changed after seeing results.
+   - If a rule turns out wrong, the screen is re-run under corrected rules, and the change is recorded with its reason.
+3. **Shape.** One fresh start, then an ABBA block of 2–3 h resumed segments, the same block on both Linodes, frozen images by digest.
+4. **Never evidence.**
+   - Screen results are never gate evidence.
+   - They are never stitched into or pooled with experiment-host segments.
+   - They are never cited as evidence of a gain.
+   - Gate evidence stays on the experiment host under CR-SPEC.
+5. **Not the owner's soak host.** The screen runs only on the cloud Linodes. It never touches the owner's soak host or its data. Raw logs, credentials and databases stay private.
+6. **Cost.** The screen must not delay an experiment-host booking. If a screen isn't finished when a booking comes up, the booking goes ahead, and the screen result is recorded later as advisory.
+
+How this plan carries those rules out:
+- **Setup:** Phase 0, the leak test and every ground rule above apply. The Windows VM isn't needed; the two Linodes cost about $4 per 48 h.
+- **Collection:** collected with `--rehearsal --baseline-hours 2` or `3`, which `run.json` records and `analyze_cr.py` marks "rehearsal: not gate evidence".
+  - A 3 h block is about 7 h + 4 × 3 h + 3 h ≈ 22 h of crawling.
+  - A session can screen two candidates one after the other, each in its own block.
+- **The named error classes** are part of each screen's committed rules (rule 2). One example is the treatment's CR-SPEC rule 5 mechanism check failing in an on-segment.
+- **Where results go:** each screen goes in its slice's decisions file, or in a small runner PR, as "screen: pass" or "screen: stop (rule n)", with the rules commit and the evidence directory. A stop goes back to the runner, which decides what happens next (§2.26).
+- **Precedent:** the runner's X-soak-screen-calibrate follow-up found that the soak screen didn't separate pass from fail on soak r4 and r5. This screen is therefore fail-only and advisory.
 
 ## Deliverables (when run)
 - This plan, and a runbook under `docs/operations/` covering:
@@ -306,7 +318,7 @@ Approved by the owner 2026-11-08Z. Once a crawler improvement is merged, it gets
 4. All three VMs are confirmed deleted (EC2 console and Linode API), with no orphaned firewalls, volumes or reserved IPs. Win's SSH key is removed from Main, and the PIA configurations are deleted locally.
 5. No published file contains a torrent name, infohash, peer address, VM IP, instance ID or PIA exit.
 
-## Decisions (answered by the owner, 2026-11-08Z)
+## Decisions (2026-11-08Z)
 1. **Cloud crawl runs are exploratory only,** not CR-SPEC evidence (the runner's recommendation, taken under §2.26). Recorded in `docs/decisions/2026-11-08-P-cloud-test-plan.md`.
 2. **Windows cost:** the owner accepted the estimate of about $15 for 48 h. At $0.337/h, `ExpiresAt` at hour 42 keeps Win at about $14.50 plus the volume.
 3. **First treatment on Main and Worker: `dht.coordinated_admission` (CR-ADM).** It's first in the live-run order, and the CR-0 checkpoint showed 98.9% of pool evictions happening before an accepted lookup.
@@ -315,7 +327,7 @@ Approved by the owner 2026-11-08Z. Once a crawler improvement is merged, it gets
    - **Route backoff** waits until `fetch_no_route_total{family="ipv6"}` is above 0, as on the Unraid plan.
    - **One treatment at a time,** the same on every VM in the same hours, with the control inside the block (ABBA).
 4. **Port forwarding is not available** (US regions). All crawling is outbound-only through PIA. Testing a non-US region with forwarding would be a separate, later treatment, because it also changes distance and IP.
-5. **A standing cloud screen** comes before the experiment host's A/B blocks for each merged crawler improvement (the owner, 2026-11-08Z; see [The cloud screen](#the-cloud-screen-standing-stage)).
+5. **A standing cloud screen** comes before an experiment-host run for each merged crawler improvement: fail-only and never evidence. The owner deferred it to the runner's recommendation; the runner adopted it under §2.26 (2026-11-08Z; see [The cloud screen](#the-cloud-screen-standing-stage)).
 
 ## Review changes (2026-11-08Z)
 What the review found in the first version, and what changed:
@@ -351,4 +363,4 @@ What the review found in the first version, and what changed:
    - provider complaints;
    - the PIA registration lifetime;
    - Terraform state reconciliation.
-8. **Added at the owner's request:** the standing cloud screen.
+8. **Added by the runner under §2.26, after the owner deferred to it:** the standing cloud screen.
