@@ -168,7 +168,13 @@ fn updates_check_and_notify_without_installing() {
     let body = json_body(&install);
     assert_eq!(body["error"]["code"], "install_unavailable", "{body}");
     assert_eq!(body["error"]["reason"], "not_built_yet", "{body}");
-    let rollback = signed_in(port, "POST", "/api/v1/updates/rollback", &cookie, "");
+    let rollback = signed_in(
+        port,
+        "POST",
+        "/api/v1/updates/rollback",
+        &cookie,
+        r#"{"confirm":true}"#,
+    );
     assert!(rollback.starts_with("HTTP/1.0 409"), "{rollback}");
     assert_eq!(
         json_body(&rollback)["error"]["code"],
