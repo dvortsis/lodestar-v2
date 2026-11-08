@@ -30,13 +30,15 @@ use lodestar_integrations::BoxFuture as NetFuture;
 use lodestar_integrations::net::{
     AddrClass, GuardedClient, NetError, NetPolicy, Resolve, SystemResolver, classify, read_limited,
 };
+use lodestar_integrations::secret::Secret;
 use lodestar_sources_feeds::json::{self, Walk};
 use reqwest::Url;
-use reqwest::header::{HeaderValue as ReqHeaderValue, USER_AGENT};
+use reqwest::header::{HeaderValue as ReqHeaderValue, SET_COOKIE, USER_AGENT};
 
 use crate::adapter::{
-    AdapterError, BoxFuture, Detect, Detected, EnteredUrl, GuardedHttp, Health, HealthStatus,
-    Limits, Method, ProbeRequest, ProbeResponse, RequestPath, TIMEOUT_MAX, Target,
+    AdapterError, BoxFuture, CookieName, Detect, Detected, EnteredUrl, GuardedHttp, Health,
+    HealthStatus, Limits, Method, ProbeRequest, ProbeResponse, RequestPath, TIMEOUT_MAX, Target,
+    cookie_value_ok,
 };
 use crate::catalogue::{Catalogue, Entry, Exposure, Proto};
 use crate::inputs::CompanionId;
@@ -263,8 +265,10 @@ impl Resolve for LocalOnly {
 /// - **Bounds:** the request's [`Limits`] cover the whole exchange, from
 ///   connecting to the last body byte; one byte past the cap fails with
 ///   [`AdapterError::TooLarge`].
-/// - **Nothing kept:** no cookies, no proxy, no `Referer`; only the
-///   request's own headers and [`PROBE_USER_AGENT`].
+/// - **Nothing kept:** no cookie jar, no proxy, no `Referer`; only the
+///   request's own headers and [`PROBE_USER_AGENT`]. The one session cookie
+///   a request names is handed back in the answer, for the adapter to send
+///   itself (CMP-8b's qBittorrent sign-in).
 pub struct CompanionHttp {
     fixed: GuardedClient,
     entered: GuardedClient,
@@ -305,6 +309,7 @@ impl CompanionHttp {
         let method = match request.method {
             Method::Get => reqwest::Method::GET,
             Method::Post => reqwest::Method::POST,
+            Method::Put => reqwest::Method::PUT,
         };
         let mut req = reqwest::Request::new(method, url);
         *req.timeout_mut() = Some(request.limits.timeout());
@@ -322,14 +327,29 @@ impl CompanionHttp {
             *req.body_mut() = Some(body.clone().into());
         }
         let cap = request.limits.body_cap();
-        let (status, body) = async {
+        let (status, session, body) = async {
             let resp = client.send(req).await?;
             let status = resp.status().as_u16();
-            Ok::<_, NetError>((status, read_limited(resp, cap).await?))
+            // Only the one cookie the request names is read, and only its
+            // value; no other header of the answer is.
+            let session = request.session_cookie.and_then(|names| {
+                session_cookie(
+                    resp.headers()
+                        .get_all(SET_COOKIE)
+                        .iter()
+                        .filter_map(|v| v.to_str().ok()),
+                    names,
+                )
+            });
+            Ok::<_, NetError>((status, session, read_limited(resp, cap).await?))
         }
         .await
         .map_err(net_error)?;
-        ProbeResponse::new(status, body, &request.limits)
+        let response = ProbeResponse::new(status, body, &request.limits)?;
+        match session {
+            Some(value) => response.with_session_cookie(Secret::new(value)),
+            None => Ok(response),
+        }
     }
 
     async fn dispatch(&self, request: &ProbeRequest<'_>) -> Result<ProbeResponse, AdapterError> {
@@ -375,6 +395,20 @@ impl GuardedHttp for CompanionHttp {
     }
 }
 
+/// The `name=value` of the first `Set-Cookie` whose name one of `names`
+/// matches and whose value passes [`cookie_value_ok`]; attributes after
+/// `;` are ignored. Cookies that fail are passed over, never returned.
+fn session_cookie<'a>(
+    headers: impl Iterator<Item = &'a str>,
+    names: &[CookieName],
+) -> Option<String> {
+    headers
+        .filter_map(|h| h.split(';').next())
+        .filter_map(|pair| pair.trim().split_once('='))
+        .find(|(n, v)| names.iter().any(|c| c.matches(n)) && cookie_value_ok(v))
+        .map(|(n, v)| format!("{n}={v}"))
+}
+
 fn parse(s: &str) -> Result<Url, AdapterError> {
     Url::parse(s).map_err(|_| AdapterError::Protocol("URL"))
 }
@@ -417,6 +451,99 @@ mod tests {
         ] {
             let u = join(&EnteredUrl::parse(base).unwrap(), &p).unwrap();
             assert_eq!(u.as_str(), want);
+        }
+    }
+
+    #[test]
+    fn only_the_named_session_cookie_is_read() {
+        const NAMES: &[CookieName] = &[
+            match CookieName::new("SID") {
+                Some(c) => c,
+                None => panic!(),
+            },
+            match CookieName::numbered("QBT_SID_") {
+                Some(c) => c,
+                None => panic!(),
+            },
+        ];
+        let pick = |hs: &[&str]| session_cookie(hs.iter().copied(), NAMES);
+        assert_eq!(
+            pick(&["SID=abc123; HttpOnly; path=/"]),
+            Some("SID=abc123".into())
+        );
+        assert_eq!(pick(&["X=1", "SID=b"]), Some("SID=b".into()));
+        assert_eq!(pick(&["QBT_SID_8080=a"]), Some("QBT_SID_8080=a".into()));
+        for none in [
+            &["QBT_SID_=a"][..],
+            &["QBT_SID_123456=a"],
+            &["QBT_SID_80x=a"],
+            &["sid=a"],
+            &["SID="],
+            &["SID=a,b=c"],
+            &[],
+        ] {
+            assert_eq!(pick(none), None, "{none:?}");
+        }
+        assert_eq!(pick(&["SID=a b", "SID=ok"]), Some("SID=ok".into()));
+        assert_eq!(pick(&[&format!("SID={}", "a".repeat(513))]), None);
+    }
+
+    mod cookie_props {
+        use super::*;
+        use proptest::prelude::*;
+
+        const NAMES: &[CookieName] = &[
+            match CookieName::new("SID") {
+                Some(c) => c,
+                None => panic!(),
+            },
+            match CookieName::numbered("QBT_SID_") {
+                Some(c) => c,
+                None => panic!(),
+            },
+        ];
+
+        fn header() -> impl Strategy<Value = String> {
+            prop_oneof![
+                any::<String>(),
+                "[ -~]{0,80}",
+                "(SID|QBT_SID_[0-9]{0,7}|sid|X)=[ -~]{0,40}(; [a-zA-Z=/]{0,20}){0,3}",
+            ]
+        }
+
+        proptest! {
+            /// Any list of headers: no panic, and anything handed back is
+            /// a matching name with a value that may be sent back.
+            #[test]
+            fn never_panics_and_returns_only_safe_pairs(
+                headers in proptest::collection::vec(header(), 0..6)
+            ) {
+                if let Some(pair) = session_cookie(headers.iter().map(String::as_str), NAMES) {
+                    let (n, v) = pair.split_once('=').unwrap();
+                    prop_assert!(NAMES.iter().any(|c| c.matches(n)));
+                    prop_assert!(cookie_value_ok(v));
+                    prop_assert!(ProbeResponse::new(200, Vec::new(), &Limits::PROBE)
+                        .unwrap()
+                        .with_session_cookie(Secret::new(pair.clone()))
+                        .is_ok());
+                }
+            }
+
+            /// A well-formed cookie with attributes round-trips.
+            #[test]
+            fn well_formed_cookies_round_trip(
+                port in 1u32..=65535,
+                numbered: bool,
+                value in "[A-Za-z0-9_.+/=%:-]{1,64}",
+                attrs in "(; (HttpOnly|path=/|SameSite=Strict)){0,3}",
+            ) {
+                let name = if numbered { format!("QBT_SID_{port}") } else { "SID".to_owned() };
+                let header = format!("{name}={value}{attrs}");
+                prop_assert_eq!(
+                    session_cookie(std::iter::once(header.as_str()), NAMES),
+                    Some(format!("{name}={value}"))
+                );
+            }
         }
     }
 
