@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-08T15:39:10Z",
+  "updated_at": "2026-11-08T18:38:56Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4114,7 +4114,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 32,
-  "last_heartbeat": "2026-11-08T15:39:10Z",
+  "last_heartbeat": "2026-11-08T18:38:56Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -7099,14 +7099,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T17:20:00Z",
+    "updated": "2026-11-08T18:38:56Z",
     "items": [
       {
         "slot": 1,
         "slice": "CMP-5",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8X2TF9tNCnNecmH9G: PRs #620/#621/#619 stacked, CI running",
+        "doing": "session_01MMjhn8X2TF9tNCnNecmH9G: #620 merged (11267a21); #621 at 5e0b6014 (base main) and #619 at 7b233d13 in fresh Opus review",
         "since": "2026-11-08T14:32Z"
       },
       {
@@ -7114,7 +7114,7 @@
         "slice": "X-pk-manifest-hardening",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCXsenhYx7tX8TeoyN: #618 merged (4f36875d); small hardening follow-up PR (review notes 1-6); then PK-win-upd-1",
+        "doing": "session_01MMjhnCXsenhYx7tX8TeoyN: #626 delta review MERGE at e3875411; merge on green CI",
         "since": "2026-11-08T17:12Z"
       },
       {
@@ -7122,7 +7122,7 @@
         "slice": "PK-win-upd-1",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAd9r3xoTvY1JabMgn: launched 17:18Z (briefs/PK-win-upd-1.md); CMP-10 #616 merged ba27bf5d, session archived",
+        "doing": "session_01MMjhnAd9r3xoTvY1JabMgn: PR #630 open; awaiting its all-green report, then Opus + security review",
         "since": "2026-11-08T17:18Z"
       },
       {
@@ -7130,7 +7130,7 @@
         "slice": "X-wk10d-unknown",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #617 WK-10e merged 977f59ea; small follow-up X-wk10d-unknown",
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: X-wk10d-unknown follow-up; awaiting its ready report",
         "since": "2026-11-08T17:20Z"
       },
       {
@@ -7138,7 +7138,7 @@
         "slice": "X-cloud-infra",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCot56kB5kgihYEBsx: PR #625 (supersedes #623), adding infra CI job (owns + ci.yml/ci_changes.py/test_ci_changes.py)",
+        "doing": "session_01MMjhnCot56kB5kgihYEBsx: PR #625 (supersedes #623); awaiting ready, then Opus + /security-review",
         "since": "2026-11-08T16:52:18Z"
       }
     ],
