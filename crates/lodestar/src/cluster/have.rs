@@ -194,18 +194,37 @@ impl HaveObserver for WorkerFilter {
     }
 }
 
-/// Clears a rebuild's state if it unwinds.
-struct ResetOnPanic<'a>(&'a WorkerFilter);
+/// Clears a rebuild's state unless the rebuild finished: armed until
+/// [`disarm`](Self::disarm), so it resets on any way out the normal path
+/// didn't take (a panic above all), and never on the normal path, which
+/// clears the state itself under its own locks (#592's review).
+struct ResetOnPanic<'a> {
+    filter: &'a WorkerFilter,
+    armed: bool,
+}
+
+impl<'a> ResetOnPanic<'a> {
+    fn new(filter: &'a WorkerFilter) -> ResetOnPanic<'a> {
+        ResetOnPanic {
+            filter,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
 
 impl Drop for ResetOnPanic<'_> {
     fn drop(&mut self) {
-        if std::thread::panicking() {
-            self.0
+        if self.armed {
+            self.filter
                 .inserts
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .building = None;
-            self.0
+            self.filter
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -280,7 +299,7 @@ impl WorkerFilter {
         // A panic from here on (sizing, allocating, the scan) leaves the old
         // filter and clears the flag, so a later rebuild can run (WK-10a's
         // review).
-        let _unwind = ResetOnPanic(self);
+        let mut unwind = ResetOnPanic::new(self);
         // Never smaller than what the filter in use already holds.
         let held = self.inserts().current.as_ref().map_or(0, |b| b.len());
         let (capacity, bits, hashes) = worker_params(stored.max(held));
@@ -295,6 +314,9 @@ impl WorkerFilter {
         // is after this store, so its insert sees `active`.
         self.active.store(true, Ordering::Release);
         let result = scan(&mut |h| bloom.insert(&h));
+        // From here the normal path clears the state itself, under the
+        // locks it takes now.
+        unwind.disarm();
         let mut st = self.state();
         let mut ins = self.inserts();
         ins.building = None;
@@ -572,6 +594,36 @@ mod tests {
             stats: Stats::default(),
             external_ips: vec![],
         }
+    }
+
+    /// #592's review: a rebuild that panics (here, in its scan) leaves the
+    /// old filter and clears its flags, so the next rebuild runs; a
+    /// rebuild that finishes isn't reset after it.
+    #[test]
+    fn a_rebuild_that_panics_is_reset_and_one_that_finishes_is_kept() {
+        let f = WorkerFilter::starting_at(1);
+        let ok: Result<bool, ()> = f.rebuild(10, |insert| {
+            insert(key(1));
+            Ok(())
+        });
+        assert_eq!(ok, Ok(true));
+        let first = f.generation();
+        assert!(first.is_some());
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: Result<bool, ()> = f.rebuild(10, |_| panic!("the scan failed"));
+        }));
+        assert!(panicked.is_err());
+        assert!(!f.state().rebuilding, "the flag was cleared");
+        assert!(f.inserts().building.is_none(), "the half-built filter went");
+        assert_eq!(f.generation(), first, "the old filter stays");
+        // The next rebuild runs (not refused as "already rebuilding").
+        let again: Result<bool, ()> = f.rebuild(10, |insert| {
+            insert(key(2));
+            Ok(())
+        });
+        assert_eq!(again, Ok(true));
+        assert!(f.generation() > first);
+        assert!(f.inserts().building.is_none());
     }
 
     fn key(i: u64) -> InfoHash {
