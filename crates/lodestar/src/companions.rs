@@ -486,7 +486,9 @@ impl Service {
         let (available, refusal) = match self.manager.offer(&e.id) {
             Ok(o) => (Some(o.version.as_str().to_owned()), None),
             Err(ManagerError::Refused(Refusal::Current)) => (None, None),
-            Err(err) => (None, Some(err.code().to_owned())),
+            Err(ManagerError::Refused(r)) => (None, Some(r.code().to_owned())),
+            // A failed read isn't a reason it can't be installed.
+            Err(err) => return Err(CompanionsError::Internal(err.code())),
         };
         let installed = present.as_ref().and_then(|p| p.version.clone());
         Ok(Companion {
@@ -518,6 +520,17 @@ impl Service {
         })
     }
 
+    /// Whether Lodestar installed it (the manager's snapshot, which
+    /// recovery fills from each journal at start).
+    fn installed(&self, id: &CompanionId) -> bool {
+        self.manager
+            .snapshot()
+            .borrow()
+            .companions
+            .iter()
+            .any(|c| &c.id == id && c.version.is_some())
+    }
+
     fn input(&self, r: &TemplateRequest) -> Result<ServiceInput, CompanionsError> {
         let path = |p: &Option<String>, f: &'static str| {
             p.as_deref()
@@ -541,13 +554,15 @@ impl Service {
         }
         // A native install knows its own data folder, which a template
         // must never mount; in a container it's the container's path.
-        let data = if self.host.in_container {
+        // It fails closed on Unix. On Windows the folder is a drive path,
+        // which no template's host folder (a `/` path) can name.
+        let data = if self.host.in_container || cfg!(windows) {
             DataFolders::none()
         } else {
-            match DataFolder::from_running(&self.data) {
-                Ok(d) => DataFolders::none().with(d),
-                Err(_) => DataFolders::none(),
-            }
+            DataFolders::none().with(
+                DataFolder::from_running(&self.data)
+                    .map_err(|_| CompanionsError::Internal("data_folder"))?,
+            )
         };
         Ok(ServiceInput {
             puid: Puid::parse(&r.puid).map_err(bad("puid"))?,
@@ -726,6 +741,12 @@ impl CompanionsApi for Service {
         Box::pin(async move {
             let e = self.entry(&id)?;
             let f = field(&name)?;
+            // Q5 is about generated credentials: only a companion Lodestar
+            // installed has one. A pasted key or temporary password (a
+            // guided or detected companion) is never shown again.
+            if !self.installed(&e.id) {
+                return Err(CompanionsError::NoCredential);
+            }
             let secret = self
                 .off(move |s| s.open(&e.id, f))
                 .await?
@@ -746,7 +767,7 @@ impl CompanionsApi for Service {
         Box::pin(async move {
             let e = self.entry(&id)?;
             let f = field(&name)?;
-            if !self.off(move |s| s.stored(&e.id)).await?.contains(&f) {
+            if !self.installed(&e.id) || !self.off(move |s| s.stored(&e.id)).await?.contains(&f) {
                 return Err(CompanionsError::NoCredential);
             }
             self.live
@@ -1108,12 +1129,51 @@ mod tests {
         );
     }
 
-    /// Q5: the stored value, opened from its sealed row, and nothing for a
-    /// field or companion with no row.
+    /// A journal saying Lodestar installed `id` at 5.1.2, read back by
+    /// recovery as at serve start.
+    async fn installed(s: &Service, dir: &std::path::Path, id: &str) {
+        let home = dir.join("companions").join(id);
+        std::fs::create_dir_all(&home).unwrap();
+        lodestar_companions::state::save(
+            &home,
+            &lodestar_companions::state::Record {
+                installed: Some(Version::parse("5.1.2").unwrap()),
+                op: None,
+            },
+        )
+        .unwrap();
+        s.manager.recover().await;
+        assert!(s.installed(&CompanionId::parse(id).unwrap()));
+    }
+
+    /// Q5: a credential of a companion Lodestar didn't install is a pasted
+    /// one, and is never shown again.
+    #[tokio::test]
+    async fn a_pasted_credential_is_never_revealed() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = service(dir.path(), pinned(), NATIVE, Arc::new(Unwired));
+        stored(&s, "qbittorrent", Field::WebUiPassword);
+        stored(&s, "prowlarr", Field::ApiKey);
+        for (id, f) in [("qbittorrent", "webui_password"), ("prowlarr", "api_key")] {
+            assert_eq!(
+                s.reveal(id.into(), f.into()).await.err(),
+                Some(CompanionsError::NoCredential),
+                "{id}"
+            );
+            assert_eq!(
+                s.regenerate(id.into(), f.into()).await,
+                Err(CompanionsError::NoCredential)
+            );
+        }
+    }
+
+    /// Q5: the stored value of a companion Lodestar installed, opened from
+    /// its sealed row, and nothing for a field or companion with no row.
     #[tokio::test]
     async fn reveal_opens_the_stored_credential_only() {
         let dir = tempfile::tempdir().unwrap();
         let s = service(dir.path(), pinned(), NATIVE, Arc::new(Unwired));
+        installed(&s, dir.path(), "qbittorrent").await;
         let password = stored(&s, "qbittorrent", Field::WebUiPassword);
         let r = s
             .reveal("qbittorrent".into(), "webui_password".into())
@@ -1278,7 +1338,22 @@ mod tests {
                 other => panic!("{body}: {other:?}"),
             }
         }
-        // Lodestar's own data folder is never mounted.
+        // Lodestar's own data folder is never mounted, and a data folder
+        // that can't be resolved refuses rather than dropping the guard.
+        #[cfg(unix)]
+        {
+            let gone = Service {
+                data: dir.path().join("missing"),
+                ..s.clone_parts()
+            };
+            let got = gone
+                .template(
+                    "qbittorrent".into(),
+                    req(serde_json::json!({"kind": "compose", "config_dir": "/srv/q", "downloads": "/srv/d"})),
+                )
+                .await;
+            assert_eq!(got.err(), Some(CompanionsError::Internal("data_folder")));
+        }
         let data = std::fs::canonicalize(dir.path()).unwrap();
         let inside = format!("{}/qbt", data.display());
         if HostPath::parse(&inside).is_ok() {

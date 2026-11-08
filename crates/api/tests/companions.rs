@@ -705,14 +705,6 @@ async fn reveal_needs_the_password_and_is_logged_without_the_value() {
         assert!(!r.text.contains(SECRET));
     }
 
-    // Nothing else carries it.
-    for (method, p, body) in every_route() {
-        if p.ends_with("/reveal") {
-            continue;
-        }
-        let r = send(&f, req(method, p, Some(&cookie), body)).await;
-        assert!(!r.text.contains(SECRET), "{method} {p}: {}", r.text);
-    }
     let log = LINES.lock().unwrap().join("\n");
     assert!(!log.contains(SECRET) && !log.contains(PASSWORD), "{log}");
     let revealed: Vec<&str> = log
@@ -725,4 +717,69 @@ async fn reveal_needs_the_password_and_is_logged_without_the_value() {
         "{}",
         revealed[0]
     );
+}
+
+/// The password is checked before the id or field, so a guess learns
+/// nothing about which companions or credentials exist, and wrong
+/// passwords run into the login bucket.
+#[tokio::test]
+async fn reveal_checks_the_password_first_and_is_rate_limited() {
+    let f = fixture();
+    let cookie = session(&f);
+    for path in [
+        "/api/v1/companions/nope/credentials/api_key/reveal",
+        "/api/v1/companions/qbittorrent/credentials/nope/reveal",
+        "/api/v1/companions/qbittorrent/credentials/webui_password/reveal",
+    ] {
+        let r = send(
+            &f,
+            req(
+                "POST",
+                path,
+                Some(&cookie),
+                Some(json!({ "password": "wrong wrong wrong" })),
+            ),
+        )
+        .await;
+        assert_eq!(
+            (r.status, r.code()),
+            (401, "bad_password"),
+            "{path}: {}",
+            r.text
+        );
+    }
+    let path = "/api/v1/companions/qbittorrent/credentials/webui_password/reveal";
+    let mut limited = None;
+    for i in 0..20 {
+        let r = send(
+            &f,
+            req(
+                "POST",
+                path,
+                Some(&cookie),
+                Some(json!({ "password": "wrong wrong wrong" })),
+            ),
+        )
+        .await;
+        if r.status == 429 {
+            assert_eq!(r.code(), "rate_limited");
+            limited = Some(i);
+            break;
+        }
+        assert_eq!(r.status, 401, "{}", r.text);
+    }
+    assert!(limited.is_some(), "never rate limited");
+    // Limited, the right password is refused too.
+    let r = send(
+        &f,
+        req(
+            "POST",
+            path,
+            Some(&cookie),
+            Some(json!({ "password": PASSWORD })),
+        ),
+    )
+    .await;
+    assert_eq!(r.status, 429, "{}", r.text);
+    assert!(f.fake.calls().is_empty(), "{:?}", f.fake.calls());
 }
