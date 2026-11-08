@@ -13,7 +13,9 @@
 
 pub mod adapter;
 pub mod catalogue;
+pub mod extract;
 pub mod inputs;
+pub mod layout;
 pub mod log_events;
 
 pub use catalogue::{Catalogue, CatalogueError, Entry, NotAvailable, builtin};
