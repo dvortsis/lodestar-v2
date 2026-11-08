@@ -6338,6 +6338,21 @@
       "id": "X-collect-checklist-docker",
       "at": "2026-11-08T17:21Z",
       "note": "collect.py accepts backup=not_applicable, but analyze_cr.py's host_checklist() requires excluded + next_run in docker mode (CR-SPEC rule 5). Collector should refuse not_applicable in --mode docker at start, failing early instead of invalidating a 25 h segment."
+    },
+    {
+      "id": "review-627",
+      "at": "2026-11-08T17:24Z",
+      "note": "#627 P-cloud-test-plan (docs, head 7edd99e5) from session_01MMjhnCGVT3gXsdgmn6jw8i: fresh Opus review running. Owner decisions (a) uTP to next fleet session's first block, one CR-ADM ABBA block now; (b) standing cloud screen (runner's \u00a72.26 rules sent 17:22Z, 25% margins \u00a72.26). Runner adds P-cloud-test-plan to slices/dashboard and a dashboard note for the screen."
+    },
+    {
+      "id": "X-cloud-infra-2",
+      "at": "2026-11-08T17:24Z",
+      "note": "After #625: admin-address list variable for Main's Linode firewall (Win VM SSH tunnel to Main UI); root-volume size parameter in Deploy-AwsWindows.ps1 (hardcoded 50 GiB). Add to next runner PR."
+    },
+    {
+      "id": "PK-win-upd-1-policy-owns",
+      "at": "2026-11-08T17:24Z",
+      "note": "Approved PK-win-upd-1 to add policy::Reason::NotBuiltYet ('not_built_yet') in crates/lodestar/src/update/policy.rs (variant + doc only)."
     }
   ],
   "main_health": [
