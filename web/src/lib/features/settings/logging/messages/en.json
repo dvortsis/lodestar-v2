@@ -588,5 +588,15 @@
 	"settings_logging_ev_update_probation_failed_n": "New version rolled back",
 	"settings_logging_ev_update_probation_failed_h": "The new version had problems, so the old one came back.",
 	"settings_logging_ev_auth_notice_accepted_n": "Legal Notice accepted",
-	"settings_logging_ev_auth_notice_accepted_h": "The admin accepted the Legal Notice at the sign-in gate; the line gives its version."
+	"settings_logging_ev_auth_notice_accepted_h": "The admin accepted the Legal Notice at the sign-in gate; the line gives its version.",
+	"settings_logging_ev_app_restart_failed_n": "Restart failed",
+	"settings_logging_ev_app_restart_failed_h": "The new copy couldn't start; Lodestar keeps running.",
+	"settings_logging_ev_app_relaunch_n": "New copy started",
+	"settings_logging_ev_app_relaunch_h": "A new copy takes over.",
+	"settings_logging_ev_service_restarting_n": "Service restarting",
+	"settings_logging_ev_service_restarting_h": "Windows starts it again in about a minute.",
+	"settings_logging_ev_service_restart_paused_n": "Restart now paused",
+	"settings_logging_ev_service_restart_paused_h": "Paused for 24 hours. Restart the service in Windows Services.",
+	"settings_logging_ev_service_restarts_unwritable_n": "Restart record not saved",
+	"settings_logging_ev_service_restarts_unwritable_h": "The record of recent restarts couldn't be saved."
 }

@@ -96,6 +96,10 @@ tempfile = "3.27.0"
 
 [target.'cfg(windows)'.dependencies]
 windows-service = "0.8.1"
+# Free space in `/system` (`system/info.rs`): `GetDiskFreeSpaceExW` behind a
+# safe call, since the workspace forbids `unsafe`. Already in the lock through
+# tantivy.
+fs4 = { version = "0.13.1", default-features = false, features = ["sync"] }
 
 # One allocator for Rust and C in the static musl release build: `override`
 # makes mimalloc define `malloc`, `free`, `calloc`, `realloc` and the rest, so

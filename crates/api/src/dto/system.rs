@@ -183,6 +183,13 @@ pub enum RestartMethod {
     Supervised,
     /// It can't: restart it the way it was started.
     Manual,
+    /// A graceful shutdown, then the Windows service exits for the
+    /// Service Control Manager's recovery action, which starts it again
+    /// after a minute (§11).
+    Service,
+    /// A graceful shutdown, then a new copy of the same program with the
+    /// same arguments starts in its place (Windows portable).
+    Relaunch,
 }
 
 /// Whether Restart now is offered (§10.10.6).

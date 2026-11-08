@@ -605,6 +605,24 @@ lodestar_log::catalogue! {
         message: "Restarting: starting the binary again",
         fields: { path: Path },
     }
+    /// Restart now couldn't start the new copy that takes over (Windows
+    /// portable), so nothing restarts and this run keeps serving.
+    APP_RESTART_FAILED {
+        id: "app.restart_failed",
+        component: System,
+        level: Error,
+        message: "Restart now failed: the new copy of Lodestar couldn't be started, so this one keeps running",
+        fields: { error: Error },
+    }
+    /// The new copy (Windows portable) takes over once this process has
+    /// exited.
+    APP_RELAUNCH {
+        id: "app.relaunch",
+        component: System,
+        level: Info,
+        message: "Restarting: a new copy of Lodestar takes over",
+        fields: {},
+    }
     /// Windows leaves too few dynamic ports for the fetch pool. To fix
     /// it, run `netsh int <family> set dynamicport tcp start=<fix_start>
     /// num=<fix_count>` as administrator (no fix: 0), or lower the
@@ -679,6 +697,34 @@ lodestar_log::catalogue! {
         level: Info,
         message: "service: stopped",
         fields: {},
+    }
+    /// The Windows service exits for the Service Control Manager to start
+    /// it again (Restart now), with service-specific code `code`.
+    SERVICE_RESTARTING {
+        id: "service.restarting",
+        component: System,
+        level: Info,
+        required: true,
+        message: "service: exiting so Windows starts it again in about a minute",
+        fields: { code: Size },
+    }
+    /// Restart now isn't offered for the next 24 hours: Windows restarts
+    /// the service at most twice a day, and one of those may be used
+    /// (`reason`: restart, unclean_stop, unverified or unwritable).
+    SERVICE_RESTART_PAUSED {
+        id: "service.restart_paused",
+        component: System,
+        level: Info,
+        message: "service: Restart now is paused for up to 24 hours, so a crash still has an automatic restart left; restart the service from Windows Services instead",
+        fields: { reason: Label },
+    }
+    /// The service's record of recent restarts couldn't be written.
+    SERVICE_RESTARTS_UNWRITABLE {
+        id: "service.restarts_unwritable",
+        component: System,
+        level: Warn,
+        message: "service: the record of recent restarts couldn't be written",
+        fields: { error: Error },
     }
     /// CR-0d §1.5: the service's restart witness folder couldn't be made
     /// private, so the DHT runs without one and suppresses after every

@@ -21,7 +21,13 @@
 //!   Ctrl+C, acknowledging at once (also while the store opens) and
 //!   reporting progress so the SCM waits for it;
 //! - reports a service-specific exit code 1 (`0x20000001`) when it stops
-//!   on an error, so the SCM's recovery actions (restart) apply.
+//!   on an error, so the SCM's recovery actions (restart) apply;
+//! - on Restart now, takes the same graceful shutdown as a stop, then
+//!   reports [`RESTART`] (`0x20000050`), so the recovery action starts it
+//!   again after 60 s. It's offered only while [`restarts`], Lodestar's own
+//!   count of recoveries used in the last 24 hours, is empty: the SCM
+//!   restarts a service twice a day at most, so a crash always has one
+//!   left.
 
 use std::path::{Path, PathBuf};
 
@@ -194,6 +200,321 @@ pub const fn scm_code(code: u32) -> u32 {
     if code == 0 { 0 } else { code | CUSTOMER }
 }
 
+/// The exit code for Restart now: the service stopped cleanly so that the
+/// SCM's recovery action starts it again. Distinct from 1 (an error) and 3
+/// (a refused start); the same number as the Unix supervisor's
+/// `EXIT_RESTART`. The SCM sees [`scm_code`]`(80)`, `0x20000050`.
+pub const RESTART: u32 = 80;
+
+/// What `/system` says while Restart now is paused.
+pub const PAUSED_HINT: &str = "Restart now is paused for up to 24 hours: Lodestar restarted or \
+     stopped unexpectedly recently, and Windows restarts the service automatically only twice a \
+     day, so one is kept for a crash. To restart now, restart the Lodestar service in Windows \
+     Services (services.msc).";
+
+/// Lodestar's own count of the SCM recoveries used in the last 24 hours
+/// (plan Q10). The SCM doesn't expose its failure count, and the MSI lets
+/// it restart the service twice, then never, until a day without failures
+/// has passed (`packaging/windows/main.wxs`). Every Restart now uses one,
+/// and so may any start after an unclean stop, so each is recorded here,
+/// and Restart now is offered only while none is in the window.
+///
+/// The file is untrusted input: bounded, parsed strictly, and anything
+/// missing (with a store already there), unreadable, oversized, a link or
+/// malformed counts as "a recovery may have been used", which pauses
+/// Restart now (fails closed). It's written beside a temporary file and
+/// renamed into place, never through a link, in the private data folder.
+///
+/// ```text
+/// lodestar-service-restarts 1
+/// state running
+/// restart 1762560000
+/// unclean_stop 1762570000
+/// ```
+pub mod restarts {
+    use std::io::{Read as _, Write as _};
+    use std::path::{Path, PathBuf};
+
+    /// In the data folder.
+    pub const FILE: &str = "service-restarts.txt";
+    pub const MAX_BYTES: u64 = 4096;
+    /// How long a recovery counts: the MSI's `ResetPeriodInDays="1"`.
+    pub const WINDOW_SECS: u64 = 86_400;
+    const HEADER: &str = "lodestar-service-restarts 1";
+    /// More can't matter: one already pauses Restart now.
+    const MAX_ENTRIES: usize = 32;
+
+    /// Why a recovery may have been used.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Kind {
+        /// Restart now.
+        Restart,
+        /// A start after a run that didn't record a clean stop (a crash,
+        /// an error exit, a kill).
+        UncleanStop,
+        /// The record was missing or unreadable.
+        Unverified,
+    }
+
+    impl Kind {
+        /// The word in the file, and the event's `reason`.
+        pub const fn word(self) -> &'static str {
+            match self {
+                Kind::Restart => "restart",
+                Kind::UncleanStop => "unclean_stop",
+                Kind::Unverified => "unverified",
+            }
+        }
+
+        fn parse(word: &str) -> Option<Kind> {
+            [Kind::Restart, Kind::UncleanStop, Kind::Unverified]
+                .into_iter()
+                .find(|k| k.word() == word)
+        }
+    }
+
+    /// What reading the file found.
+    #[derive(Debug, PartialEq, Eq)]
+    pub enum Found {
+        Missing,
+        Text(String),
+        /// Unreadable, oversized, not a plain file, or not UTF-8.
+        Bad,
+    }
+
+    /// The record: whether a run is in progress, and the recoveries.
+    #[derive(Debug, Default, Clone, PartialEq, Eq)]
+    pub struct Ledger {
+        pub running: bool,
+        /// Oldest first, Unix seconds.
+        pub entries: Vec<(Kind, u64)>,
+    }
+
+    impl Ledger {
+        /// The record as this start leaves it: entries over a day old
+        /// dropped, an unclean stop or an unverified record added, and a run
+        /// in progress. `store_exists` is whether the store was there before
+        /// this start: a missing file then means a fresh install, not a
+        /// deleted record.
+        pub fn at_start(found: Found, store_exists: bool, now: u64) -> Ledger {
+            let mut ledger = match found {
+                Found::Missing if !store_exists => Ledger::default(),
+                Found::Text(text) => match parse(&text) {
+                    Some(mut l) => {
+                        if l.running {
+                            l.entries.push((Kind::UncleanStop, now));
+                        }
+                        l
+                    }
+                    None => Ledger::unverified(now),
+                },
+                Found::Missing | Found::Bad => Ledger::unverified(now),
+            };
+            ledger.prune(now);
+            ledger.running = true;
+            ledger
+        }
+
+        fn unverified(now: u64) -> Ledger {
+            Ledger {
+                running: false,
+                entries: vec![(Kind::Unverified, now)],
+            }
+        }
+
+        /// Drops entries over [`WINDOW_SECS`] old. One from the future (the
+        /// clock went back) counts from now, so it can't linger.
+        fn prune(&mut self, now: u64) {
+            for (_, at) in &mut self.entries {
+                *at = (*at).min(now);
+            }
+            self.entries.retain(|&(_, at)| now - at < WINDOW_SECS);
+            self.entries.sort_by_key(|&(_, at)| at);
+            let extra = self.entries.len().saturating_sub(MAX_ENTRIES);
+            self.entries.drain(..extra);
+        }
+
+        /// Why Restart now is paused: the newest recovery's kind, if any.
+        pub fn paused(&self) -> Option<Kind> {
+            self.entries.last().map(|&(k, _)| k)
+        }
+
+        /// When the newest recovery leaves the window, and Restart now is
+        /// offered again.
+        pub fn paused_until(&self) -> Option<u64> {
+            self.entries
+                .last()
+                .map(|&(_, at)| at.saturating_add(WINDOW_SECS))
+        }
+
+        /// A clean stop.
+        pub fn stopped(&mut self) {
+            self.running = false;
+        }
+
+        /// A clean stop for Restart now, which uses a recovery.
+        pub fn restarted(&mut self, now: u64) {
+            self.running = false;
+            self.entries.push((Kind::Restart, now));
+            self.prune(now);
+        }
+
+        pub fn render(&self) -> String {
+            let mut out = format!(
+                "{HEADER}\nstate {}\n",
+                if self.running { "running" } else { "stopped" }
+            );
+            for (kind, at) in &self.entries {
+                out.push_str(&format!("{} {at}\n", kind.word()));
+            }
+            out
+        }
+    }
+
+    /// The record in `text`, or `None` if anything about it is off.
+    pub fn parse(text: &str) -> Option<Ledger> {
+        let mut lines = text.lines();
+        if lines.next()? != HEADER {
+            return None;
+        }
+        let running = match lines.next()? {
+            "state running" => true,
+            "state stopped" => false,
+            _ => return None,
+        };
+        let mut entries = Vec::new();
+        for line in lines {
+            let (word, at) = line.split_once(' ')?;
+            // Digits only: no sign, space or `+`.
+            if at.is_empty() || at.len() > 20 || !at.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            entries.push((Kind::parse(word)?, at.parse().ok()?));
+            if entries.len() > MAX_ENTRIES {
+                return None;
+            }
+        }
+        Some(Ledger { running, entries })
+    }
+
+    pub fn path(dir: &Path) -> PathBuf {
+        dir.join(FILE)
+    }
+
+    /// Opens without following a final link: Windows opens a reparse
+    /// point itself (which is then refused), Unix fails with `ELOOP`.
+    fn no_follow(options: &mut std::fs::OpenOptions) -> &mut std::fs::OpenOptions {
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            /// `FILE_FLAG_OPEN_REPARSE_POINT`.
+            const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            options.custom_flags(OPEN_REPARSE_POINT)
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        }
+        #[cfg(not(any(windows, unix)))]
+        {
+            options
+        }
+    }
+
+    /// Whether `meta` is a plain file and no link.
+    fn plain(meta: &std::fs::Metadata) -> bool {
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            /// `FILE_ATTRIBUTE_REPARSE_POINT`.
+            const REPARSE_POINT: u32 = 0x400;
+            meta.is_file() && meta.file_attributes() & REPARSE_POINT == 0
+        }
+        #[cfg(not(windows))]
+        {
+            meta.is_file()
+        }
+    }
+
+    pub fn read(dir: &Path) -> Found {
+        let file = match no_follow(std::fs::OpenOptions::new().read(true)).open(path(dir)) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Found::Missing,
+            Err(_) => return Found::Bad,
+        };
+        match file.metadata() {
+            Ok(meta) if plain(&meta) && meta.len() <= MAX_BYTES => {}
+            _ => return Found::Bad,
+        }
+        let mut bytes = Vec::new();
+        if file.take(MAX_BYTES + 1).read_to_end(&mut bytes).is_err()
+            || bytes.len() as u64 > MAX_BYTES
+        {
+            return Found::Bad;
+        }
+        String::from_utf8(bytes).map_or(Found::Bad, Found::Text)
+    }
+
+    /// Replaces the record: a new temporary file (a stale one, or a link
+    /// planted in its place, is removed first, not followed), synced, then
+    /// renamed over the old record, which replaces a link rather than
+    /// writing through it.
+    pub fn write(dir: &Path, ledger: &Ledger) -> std::io::Result<()> {
+        let tmp = dir.join(format!("{FILE}.tmp"));
+        match std::fs::remove_file(&tmp) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
+        let mut file =
+            no_follow(std::fs::OpenOptions::new().write(true).create_new(true)).open(&tmp)?;
+        file.write_all(ledger.render().as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp, path(dir))
+    }
+
+    /// Whether Restart now is paused: why, and until when (`None`: for
+    /// the whole run).
+    pub type Pause = Option<(&'static str, Option<u64>)>;
+
+    /// At a service start, before the store opens: records this start and
+    /// says whether Restart now is paused, why and until when. A record
+    /// that can't be written pauses it for the whole run (`unwritable`):
+    /// the next start couldn't count this run's recovery.
+    pub fn begin(dir: &Path, store_exists: bool, now: u64) -> (Ledger, Pause) {
+        let ledger = Ledger::at_start(read(dir), store_exists, now);
+        let paused = match write(dir, &ledger) {
+            Ok(()) => ledger.paused().map(|k| (k.word(), ledger.paused_until())),
+            Err(e) => {
+                lodestar_log::log_event!(
+                    crate::logging::events::SERVICE_RESTARTS_UNWRITABLE,
+                    error = lodestar_log::Error::io(&e)
+                );
+                Some(("unwritable", None))
+            }
+        };
+        (ledger, paused)
+    }
+
+    /// At the end of a run that stopped cleanly; `restart` for Restart now.
+    pub fn end(dir: &Path, ledger: &mut Ledger, restart: bool, now: u64) {
+        if restart {
+            ledger.restarted(now);
+        } else {
+            ledger.stopped();
+        }
+        if let Err(e) = write(dir, ledger) {
+            // The record still says running, so the next start counts an
+            // unclean stop: a recovery is still counted.
+            lodestar_log::log_event!(
+                crate::logging::events::SERVICE_RESTARTS_UNWRITABLE,
+                error = lodestar_log::Error::io(&e)
+            );
+        }
+    }
+}
+
 #[cfg(windows)]
 mod scm {
     use std::ffi::OsString;
@@ -330,9 +651,16 @@ mod scm {
                     .map_err(BoxError::from)
                     .and_then(|c| serve(&c, stop_rx))
                 {
-                    Ok(()) => {
+                    Ok(Ended::Stopped) => {
                         lodestar_log::log_event!(crate::logging::events::SERVICE_STOPPED);
                         0
+                    }
+                    Ok(Ended::Restart) => {
+                        lodestar_log::log_event!(
+                            crate::logging::events::SERVICE_RESTARTING,
+                            code = u64::from(super::scm_code(super::RESTART))
+                        );
+                        super::RESTART
                     }
                     // Its message can name a path: the kind only.
                     Err(_) => {
@@ -479,12 +807,47 @@ mod scm {
             });
     }
 
-    fn serve(config: &Config, stop: watch::Receiver<bool>) -> Result<(), BoxError> {
+    /// How a run that didn't fail ended.
+    enum Ended {
+        Stopped,
+        /// Restart now: exit with [`super::RESTART`] for the SCM.
+        Restart,
+    }
+
+    fn now() -> u64 {
+        crate::unix_now().max(0) as u64
+    }
+
+    fn serve(config: &Config, stop: watch::Receiver<bool>) -> Result<Ended, BoxError> {
         super::super::startup(config);
+        let restart = crate::system::Restart::global();
+        restart.set_service();
+        // Recorded before the store opens, so a start that fails or dies
+        // there leaves `running` and the next start counts it. Before
+        // `Services::start` creates the store, a missing record is a fresh
+        // install's, not a deleted one. The folder is created as
+        // `Services::start` would.
+        let store_existed = config.db_path().exists();
+        std::fs::create_dir_all(&config.data_dir)?;
+        let (mut ledger, paused) = super::restarts::begin(&config.data_dir, store_existed, now());
+        if let Some((reason, until)) = paused {
+            lodestar_log::log_event!(
+                crate::logging::events::SERVICE_RESTART_PAUSED,
+                reason = reason
+            );
+            match until {
+                Some(until) => restart.pause_until(until, super::PAUSED_HINT),
+                // Unwritable: for this whole run.
+                None => restart.refuse(super::PAUSED_HINT),
+            }
+        }
+        // Read again after the runtime has shut down: a stop then still
+        // wins, so the SCM never restarts a service someone stopped.
+        let after = stop.clone();
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()?;
-        let served = runtime.block_on(async {
+        let served: Result<bool, BoxError> = runtime.block_on(async {
             let mut early = stop.clone();
             // A stop while the store opens ends the start: the open's
             // blocking work may be cut off after `RUNTIME_GRACE` as the
@@ -492,14 +855,29 @@ mod scm {
             // transaction, and runs again at the next start).
             let services = tokio::select! {
                 s = Services::start(config) => s?,
-                () = stopped(&mut early) => return Ok(()),
+                () = stopped(&mut early) => return Ok(false),
             };
             let mut stop = stop;
-            services.run(async move { stopped(&mut stop).await }).await
+            services
+                .run(async move {
+                    tokio::select! {
+                        () = stopped(&mut stop) => {}
+                        () = restart.requested() => {}
+                    }
+                })
+                .await?;
+            Ok(restart.was_requested())
         });
         // A blocking task still running can't keep the SCM waiting.
         runtime.shutdown_timeout(crate::services::RUNTIME_GRACE);
-        served
+        // An error leaves the record at `running`: the next start counts it.
+        let restarting = served? && !*after.borrow();
+        super::restarts::end(&config.data_dir, &mut ledger, restarting, now());
+        Ok(if restarting {
+            Ended::Restart
+        } else {
+            Ended::Stopped
+        })
     }
 
     /// Resolves once a stop is requested.
@@ -543,6 +921,196 @@ mod tests {
         assert_eq!(scm_code(3), 536_870_915);
         assert_eq!(scm_code(3), 0x2000_0003);
         assert_eq!(scm_code(1), 0x2000_0001);
+    }
+
+    #[test]
+    fn restart_now_has_its_own_code() {
+        assert_eq!(scm_code(RESTART), 0x2000_0050);
+        assert_ne!(RESTART, 1);
+        assert_ne!(RESTART, 3);
+    }
+
+    mod ledger {
+        use super::super::restarts::*;
+
+        const NOW: u64 = 1_762_560_000;
+        const DAY: u64 = WINDOW_SECS;
+
+        fn text(lines: &[&str]) -> Found {
+            Found::Text(lines.iter().map(|l| format!("{l}\n")).collect())
+        }
+
+        #[test]
+        fn a_fresh_install_or_a_clean_record_offers_it() {
+            let l = Ledger::at_start(Found::Missing, false, NOW);
+            assert_eq!(l.paused(), None);
+            assert!(l.running);
+            let clean = text(&["lodestar-service-restarts 1", "state stopped"]);
+            assert_eq!(Ledger::at_start(clean, true, NOW).paused(), None);
+        }
+
+        #[test]
+        fn a_recent_restart_or_unclean_stop_withdraws_it() {
+            let restart = text(&[
+                "lodestar-service-restarts 1",
+                "state stopped",
+                &format!("restart {}", NOW - 60),
+            ]);
+            let l = Ledger::at_start(restart, true, NOW);
+            assert_eq!(l.paused(), Some(Kind::Restart));
+            // The previous run never recorded its stop.
+            let crashed = text(&["lodestar-service-restarts 1", "state running"]);
+            let l = Ledger::at_start(crashed, true, NOW);
+            assert_eq!(l.paused(), Some(Kind::UncleanStop));
+            assert_eq!(l.entries, vec![(Kind::UncleanStop, NOW)]);
+        }
+
+        #[test]
+        fn entries_expire_after_a_day() {
+            let old = text(&[
+                "lodestar-service-restarts 1",
+                "state stopped",
+                &format!("restart {}", NOW - DAY),
+                &format!("unclean_stop {}", NOW - DAY - 5),
+            ]);
+            let l = Ledger::at_start(old, true, NOW);
+            assert_eq!(l.paused(), None);
+            assert!(l.entries.is_empty());
+            let almost = text(&[
+                "lodestar-service-restarts 1",
+                "state stopped",
+                &format!("restart {}", NOW - DAY + 1),
+            ]);
+            assert_eq!(
+                Ledger::at_start(almost, true, NOW).paused(),
+                Some(Kind::Restart)
+            );
+        }
+
+        #[test]
+        fn an_entry_from_the_future_counts_from_now() {
+            let future = text(&[
+                "lodestar-service-restarts 1",
+                "state stopped",
+                &format!("restart {}", NOW + 10 * DAY),
+            ]);
+            let l = Ledger::at_start(future, true, NOW);
+            assert_eq!(l.entries, vec![(Kind::Restart, NOW)]);
+        }
+
+        #[test]
+        fn anything_off_fails_closed() {
+            let bad: &[&[&str]] = &[
+                &[],
+                &["lodestar-service-restarts 2", "state stopped"],
+                &["lodestar-service-restarts 1"],
+                &["lodestar-service-restarts 1", "state paused"],
+                &["lodestar-service-restarts 1", "state stopped", "restart"],
+                &["lodestar-service-restarts 1", "state stopped", "restart -1"],
+                &["lodestar-service-restarts 1", "state stopped", "restart +5"],
+                &["lodestar-service-restarts 1", "state stopped", "restart  5"],
+                &["lodestar-service-restarts 1", "state stopped", "reboot 5"],
+                &[
+                    "lodestar-service-restarts 1",
+                    "state stopped",
+                    "restart 99999999999999999999999",
+                ],
+            ];
+            for lines in bad {
+                let l = Ledger::at_start(text(lines), true, NOW);
+                assert_eq!(l.paused(), Some(Kind::Unverified), "{lines:?}");
+            }
+            for found in [Found::Bad, Found::Missing] {
+                let l = Ledger::at_start(found, true, NOW);
+                assert_eq!(l.paused(), Some(Kind::Unverified));
+            }
+            // Too many lines is malformed too.
+            let mut many = vec![
+                "lodestar-service-restarts 1".to_string(),
+                "state stopped".into(),
+            ];
+            many.extend((0..40).map(|i| format!("restart {}", NOW - i)));
+            let many: Vec<&str> = many.iter().map(String::as_str).collect();
+            let l = Ledger::at_start(text(&many), true, NOW);
+            assert_eq!(l.paused(), Some(Kind::Unverified));
+        }
+
+        #[test]
+        fn the_pause_lasts_until_the_newest_entry_leaves_the_window() {
+            let dir = tempfile::tempdir().unwrap();
+            let (mut l, paused) = begin(dir.path(), false, NOW);
+            assert_eq!(paused, None);
+            l.restarted(NOW + 10);
+            end(dir.path(), &mut l, false, NOW + 20);
+            let (_, paused) = begin(dir.path(), true, NOW + 70);
+            assert_eq!(paused, Some(("restart", Some(NOW + 10 + DAY))));
+            // That start never recorded its stop: an unclean one, newer.
+            let (_, paused) = begin(dir.path(), true, NOW + 500);
+            assert_eq!(paused, Some(("unclean_stop", Some(NOW + 500 + DAY))));
+            // A folder that can't hold the record: for the whole run.
+            let missing = dir.path().join("missing");
+            let (_, paused) = begin(&missing, false, NOW);
+            assert_eq!(paused, Some(("unwritable", None)));
+        }
+
+        #[test]
+        fn a_run_records_its_end_and_round_trips() {
+            let mut l = Ledger::at_start(Found::Missing, false, NOW);
+            l.restarted(NOW + 5);
+            let back = parse(&l.render()).unwrap();
+            assert_eq!(back, l);
+            assert!(!back.running);
+            assert_eq!(back.paused(), Some(Kind::Restart));
+            l.stopped();
+            assert_eq!(parse(&l.render()), Some(l));
+        }
+
+        #[test]
+        fn the_file_is_bounded_and_never_followed() {
+            let dir = tempfile::tempdir().unwrap();
+            assert_eq!(read(dir.path()), Found::Missing);
+            let mut l = Ledger::at_start(Found::Missing, false, NOW);
+            write(dir.path(), &l).unwrap();
+            l.restarted(NOW);
+            // A stale temporary file is replaced.
+            std::fs::write(dir.path().join(format!("{FILE}.tmp")), "junk").unwrap();
+            write(dir.path(), &l).unwrap();
+            assert_eq!(read(dir.path()), Found::Text(l.render()));
+            // Oversized: refused unread.
+            std::fs::write(path(dir.path()), vec![b'a'; MAX_BYTES as usize + 1]).unwrap();
+            assert_eq!(read(dir.path()), Found::Bad);
+            // Not UTF-8.
+            std::fs::write(path(dir.path()), [0xff, 0xfe]).unwrap();
+            assert_eq!(read(dir.path()), Found::Bad);
+            // A folder in its place.
+            std::fs::remove_file(path(dir.path())).unwrap();
+            std::fs::create_dir(path(dir.path())).unwrap();
+            assert_eq!(read(dir.path()), Found::Bad);
+        }
+
+        /// A link in the record's place is read as bad, and writing
+        /// replaces the link instead of writing through it.
+        #[cfg(unix)]
+        #[test]
+        fn a_link_is_refused_and_replaced() {
+            let dir = tempfile::tempdir().unwrap();
+            let target = dir.path().join("elsewhere.txt");
+            let clean = "lodestar-service-restarts 1\nstate stopped\n";
+            std::fs::write(&target, clean).unwrap();
+            std::os::unix::fs::symlink(&target, path(dir.path())).unwrap();
+            assert_eq!(read(dir.path()), Found::Bad);
+            let tmp = dir.path().join(format!("{FILE}.tmp"));
+            std::os::unix::fs::symlink(&target, &tmp).unwrap();
+            let l = Ledger::at_start(read(dir.path()), true, NOW);
+            write(dir.path(), &l).unwrap();
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), clean);
+            assert!(
+                !std::fs::symlink_metadata(path(dir.path()))
+                    .unwrap()
+                    .is_symlink()
+            );
+            assert_eq!(read(dir.path()), Found::Text(l.render()));
+        }
     }
 
     #[test]

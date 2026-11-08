@@ -7382,7 +7382,7 @@ export interface components {
              * @description How this process restarts itself.
              * @enum {string}
              */
-            method: "reexec" | "supervised" | "manual";
+            method: "reexec" | "supervised" | "manual" | "service" | "relaunch";
         };
         /**
          * @description `event: resync`: events were missed; refetch what the page shows, then
