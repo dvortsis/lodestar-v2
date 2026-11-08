@@ -6353,6 +6353,11 @@
       "id": "PK-win-upd-1-policy-owns",
       "at": "2026-11-08T17:24Z",
       "note": "Approved PK-win-upd-1 to add policy::Reason::NotBuiltYet ('not_built_yet') in crates/lodestar/src/update/policy.rs (variant + doc only)."
+    },
+    {
+      "id": "review-627-verdict",
+      "at": "2026-11-08T17:28Z",
+      "note": "#627 at 726b5ffc: CHANGES, B1 = who decided the screen (session said owner decision; dashboard said deferral). Runner settled on the safer wording: owner approved the standing stage, design left to the runner, rules under \u00a72.26. Relayed with N1-N4, N7 (N5/N6 the author's call). Docs-only delta: runner self-checks, then merges on green."
     }
   ],
   "main_health": [
