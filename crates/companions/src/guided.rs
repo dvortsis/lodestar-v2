@@ -12,6 +12,9 @@
 //!   refuses user names and passwords, queries, fragments and any scheme
 //!   but `http` and `https`, so no credential lands in this non-secret row.
 //! - `companions.<id>.origin`: [`Origin`], `confirmed` or `guided`.
+//! - `companions.<id>.applied`: the target row a generated credential was
+//!   set on, written with its `generated` provenance; a retry signs in
+//!   only there.
 //! - `companions.<id>.provenance.<field>`: [`Provenance`], `pasted` or
 //!   `generated`, for the companion's one credential field
 //!   ([`crate::manager::field_of`]); no other field is accepted. It sits
@@ -147,6 +150,14 @@ pub fn origin_key(id: &CompanionId) -> String {
     format!("{ROW_PREFIX}{id}.origin")
 }
 
+/// `companions.<id>.applied`: the target, as its row holds it, that a
+/// generated credential was set on. A retry after a failed hand-over signs
+/// in only there, so the live password never goes to another address
+/// (#653's review, B2).
+pub fn applied_key(id: &CompanionId) -> String {
+    format!("{ROW_PREFIX}{id}.applied")
+}
+
 /// `companions.<id>.provenance.<field>`, for the companion's own field
 /// only.
 pub fn provenance_key(id: &CompanionId, field: Field) -> Option<String> {
@@ -155,7 +166,7 @@ pub fn provenance_key(id: &CompanionId, field: Field) -> Option<String> {
 
 /// Every row key this module reads or writes for `id`, for removal.
 pub fn row_keys(id: &CompanionId) -> Vec<String> {
-    let mut keys = vec![target_key(id), origin_key(id)];
+    let mut keys = vec![target_key(id), origin_key(id), applied_key(id)];
     keys.extend(field_of(id).and_then(|f| provenance_key(id, f)));
     keys
 }
@@ -229,7 +240,11 @@ mod tests {
             assert!(!crate::credentials::is_secret_row(&k), "{k}");
         }
         let g = CompanionId::parse("gluetun").unwrap();
-        assert_eq!(row_keys(&g), vec![target_key(&g), origin_key(&g)]);
+        assert_eq!(applied_key(&q), "companions.qbittorrent.applied");
+        assert_eq!(
+            row_keys(&g),
+            vec![target_key(&g), origin_key(&g), applied_key(&g)]
+        );
     }
 
     #[test]

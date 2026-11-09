@@ -11647,7 +11647,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `confirmation_mismatch`, `no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, `sign_in_refused`, or the companion's own refusal code. */
+            /** @description `confirmation_mismatch`, `no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, `sign_in_refused`, `target_changed`, or the companion's own refusal code. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -12246,7 +12246,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, `sign_in_refused` (three refused sign-ins in a row), or the companion's own refusal code. */
+            /** @description `no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, `sign_in_refused` (three refused sign-ins in a row), `target_changed`, or the companion's own refusal code. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -12535,7 +12535,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `not_detected`, `address_refused`, `handover_later`, `installed`, `already_added`, `busy`, or the companion's own refusal code (`companion_unreachable`, `companion_unauthorized`, `companion_protocol`). */
+            /** @description `not_detected`, `address_refused`, `handover_later`, `installed`, `already_added`, `generated_pending`, `busy`, or the companion's own refusal code (`companion_unreachable`, `companion_unauthorized`, `companion_protocol`). */
             409: {
                 headers: {
                     [name: string]: unknown;

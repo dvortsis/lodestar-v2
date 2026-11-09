@@ -1014,6 +1014,29 @@ impl Guided {
         }
     }
 
+    /// Refuses a retry anywhere but the target the generated password was
+    /// set on: the live password never goes to another address (#653's
+    /// review, B2).
+    async fn applied_here(
+        &self,
+        e: &'static Entry,
+        target: &Target,
+    ) -> Result<(), CompanionsError> {
+        let key = guided::applied_key(&e.id);
+        let applied = self
+            .blocking(move |s| {
+                Ok(texts(s)?
+                    .into_iter()
+                    .find(|(k, _)| *k == key)
+                    .map(|(_, v)| v))
+            })
+            .await?;
+        if applied.as_deref().and_then(StoredTarget::from_row) != Some(StoredTarget::of(target)) {
+            return Err(CompanionsError::Refused("target_changed"));
+        }
+        Ok(())
+    }
+
     /// Refuses once qBittorrent has refused [`SIGN_IN_CAP`] sign-ins in a
     /// row, before it would ban Lodestar's address.
     fn sign_ins_left(&self) -> Result<(), CompanionsError> {
@@ -1172,6 +1195,11 @@ impl CompanionsGuidedApi for Guided {
             let e = self.handed_over(&id).await?;
             let _one = self.exclusive()?;
             self.not_added(e).await?;
+            // The generated password may be qBittorrent's: a retry signs in
+            // with it, so its address never moves (#653's review, B2).
+            if self.credential(e).await?.0 == Some(Provenance::Generated) {
+                return Err(CompanionsError::Refused("generated_pending").into());
+            }
             let target = checked_target(e, self.runtime, target)?;
             let detector =
                 detect::detector(&e.id).ok_or(CompanionsError::Refused("not_detected"))?;
@@ -1274,7 +1302,10 @@ impl CompanionsGuidedApi for Guided {
                     self.plan_with(e, &target, temporary.clone(), Some(temporary))
                         .await?
                 }
-                Held::Pending(generated) => self.plan_with(e, &target, generated, None).await?,
+                Held::Pending(generated) => {
+                    self.applied_here(e, &target).await?;
+                    self.plan_with(e, &target, generated, None).await?
+                }
             };
             let settings: Vec<String> = plan
                 .changes()
@@ -1321,6 +1352,7 @@ impl CompanionsGuidedApi for Guided {
                 // A retry after a failed apply or hand-over: the generated
                 // password signs in, and nothing is replaced.
                 Held::Pending(generated) => {
+                    self.applied_here(e, &target).await?;
                     let plan = self.plan_with(e, &target, generated.clone(), None).await?;
                     if !echoes(&plan) {
                         return Err(CompanionsError::Mismatch.into());
@@ -1341,15 +1373,27 @@ impl CompanionsGuidedApi for Guided {
             // The generated password is stored durably first (CMP-8b), then
             // marked generated: a crash between leaves it marked pasted,
             // which is never revealed.
+            // The target it's set on goes with the marking: a retry signs in
+            // only there.
             let rows = crate::companions::StoreRows(self.store.clone());
             let next_row = change.next.row.clone();
             let prov_set = prov.clone();
+            let applied = (
+                guided::applied_key(&e.id),
+                StoredTarget::of(&target).to_row(),
+            );
             self.blocking(move |s| {
                 use lodestar_companions::manager::Rows as _;
                 rows.put(&next_row).map_err(|_| ())?;
                 s.lock()
                     .map_err(|_| ())?
-                    .set_settings_text(&[(&prov_set, Provenance::Generated.as_str())])
+                    .update_settings_text(
+                        &[
+                            (&prov_set, Provenance::Generated.as_str()),
+                            (&applied.0, &applied.1),
+                        ],
+                        &[],
+                    )
                     .map_err(|_| ())
             })
             .await?;
@@ -1367,11 +1411,15 @@ impl CompanionsGuidedApi for Guided {
                         temporary,
                     );
                     let rows = crate::companions::StoreRows(self.store.clone());
+                    let applied_key = guided::applied_key(&e.id);
                     let restored = self
                         .blocking(move |s| {
                             s.lock()
                                 .map_err(|_| ())?
-                                .set_settings_text(&[(&prov, Provenance::Pasted.as_str())])
+                                .update_settings_text(
+                                    &[(&prov, Provenance::Pasted.as_str())],
+                                    &[&applied_key],
+                                )
                                 .map_err(|_| ())?;
                             use lodestar_companions::manager::Rows as _;
                             rows.put(&restore.map_err(|_| ())?).map_err(|_| ())

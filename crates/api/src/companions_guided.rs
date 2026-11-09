@@ -91,10 +91,13 @@ fn message(code: &str) -> Option<&'static str> {
         }
         "installed" => "Lodestar installed this companion; it's managed on its own.",
         "generated_pending" => {
-            "Lodestar already set a new password on qBittorrent. Confirm again to finish, or reveal the password before you forget it."
+            "qBittorrent may already use the new password Lodestar set. Confirm again to finish; to start over, reveal the password, then forget the companion."
         }
         "sign_in_refused" => {
             "qBittorrent refused the password three times, and it bans an address after five. Restart qBittorrent for a new temporary password, then forget this companion and add it again."
+        }
+        "target_changed" => {
+            "The companion's address changed after Lodestar set its new password. Forget it and add it again."
         }
         "already_added" => "This companion is already added. Forget it first to add it again.",
         "no_target" => "Add the companion's address first.",
@@ -221,7 +224,7 @@ pub(crate) async fn detect_companions(
         (status = 400, description = "`bad_template_input` with `field`: a port or address that can't be used.", body = ErrorEnvelope),
         (status = 403, description = "`cross_origin`.", body = ErrorEnvelope),
         (status = 404, description = "`unknown_companion`.", body = ErrorEnvelope),
-        (status = 409, description = "`not_detected`, `address_refused`, `handover_later`, `installed`, `already_added`, `busy`, or the companion's own refusal code (`companion_unreachable`, `companion_unauthorized`, `companion_protocol`).", body = ErrorEnvelope),
+        (status = 409, description = "`not_detected`, `address_refused`, `handover_later`, `installed`, `already_added`, `generated_pending`, `busy`, or the companion's own refusal code (`companion_unreachable`, `companion_unauthorized`, `companion_protocol`).", body = ErrorEnvelope),
         (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
         (status = 422, description = "`bad_body`.", body = ErrorEnvelope),
         (status = 503, description = "`companions_unavailable`.", body = ErrorEnvelope),
@@ -296,7 +299,7 @@ pub(crate) async fn paste_credential(
         (status = 200, body = CompanionPlan),
         (status = 403, description = "`cross_origin`.", body = ErrorEnvelope),
         (status = 404, description = "`unknown_companion`.", body = ErrorEnvelope),
-        (status = 409, description = "`no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, `sign_in_refused` (three refused sign-ins in a row), or the companion's own refusal code.", body = ErrorEnvelope),
+        (status = 409, description = "`no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, `sign_in_refused` (three refused sign-ins in a row), `target_changed`, or the companion's own refusal code.", body = ErrorEnvelope),
         (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
         (status = 429, description = "`rate_limited`, with `Retry-After`.", body = ErrorEnvelope),
         (status = 503, description = "`companions_unavailable`.", body = ErrorEnvelope),
@@ -329,7 +332,7 @@ pub(crate) async fn plan_configuration(
         (status = 200, body = Companion),
         (status = 403, description = "`cross_origin`.", body = ErrorEnvelope),
         (status = 404, description = "`unknown_companion`.", body = ErrorEnvelope),
-        (status = 409, description = "`confirmation_mismatch`, `no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, `sign_in_refused`, or the companion's own refusal code.", body = ErrorEnvelope),
+        (status = 409, description = "`confirmation_mismatch`, `no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, `sign_in_refused`, `target_changed`, or the companion's own refusal code.", body = ErrorEnvelope),
         (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
         (status = 422, description = "`bad_body`.", body = ErrorEnvelope),
         (status = 503, description = "`companions_unavailable`.", body = ErrorEnvelope),
@@ -416,6 +419,7 @@ mod tests {
             "installed",
             "already_added",
             "generated_pending",
+            "target_changed",
             "sign_in_refused",
             "no_target",
             "no_temporary_password",

@@ -804,6 +804,47 @@ async fn a_failed_hand_over_is_retried_with_the_generated_password() {
         "generated_pending"
     );
     assert_eq!(f.credential(), Some(generated.clone()));
+    // Nor may its address move: the retry signs in with the live password
+    // (#653's review, B2).
+    let (elsewhere, other) = qbittorrent(TEMPORARY).await;
+    assert_eq!(
+        refused(g.set_target(id(), url(elsewhere)).await.unwrap_err()),
+        "generated_pending"
+    );
+    assert_eq!(
+        f.row(&guided::applied_key(&qbt())),
+        Some(format!(r#"{{"kind":"url","url":"http://{addr}"}}"#))
+    );
+    // Even a target row changed behind the endpoints is refused before any
+    // sign-in there.
+    let key = guided::target_key(&qbt());
+    let moved = StoredTarget::Url {
+        url: format!("http://{elsewhere}"),
+    }
+    .to_row();
+    let saved = f.row(&key).unwrap();
+    f.store
+        .lock()
+        .unwrap()
+        .set_settings_text(&[(&key, &moved)])
+        .unwrap();
+    f.a_minute_passes();
+    assert_eq!(refused(g.plan(id()).await.unwrap_err()), "target_changed");
+    *f.guided.planned.lock().unwrap() = Some(vec![]);
+    assert_eq!(
+        refused(g.confirm(id(), vec![]).await.unwrap_err()),
+        "target_changed"
+    );
+    assert_eq!(
+        other.lock().unwrap().logins,
+        0,
+        "the other address got nothing"
+    );
+    f.store
+        .lock()
+        .unwrap()
+        .set_settings_text(&[(&key, &saved)])
+        .unwrap();
 
     // The retry signs in with the generated password and finishes.
     f.sink.1.store(false, Ordering::SeqCst);
@@ -938,4 +979,45 @@ async fn a_guided_step_waits_for_an_install_under_way() {
         assert_eq!(refused(e), "busy");
     }
     assert!(texts(&f.store).unwrap().is_empty());
+}
+
+/// Each confirmation path checks its re-plan against what you confirmed,
+/// not only against the last plan shown: a qBittorrent that changed
+/// between the two is refused, and nothing is applied (#653's review,
+/// L5). The last plan is set by hand here, as a qBittorrent that changed
+/// in between would leave it.
+#[tokio::test]
+async fn a_replan_that_differs_from_the_confirmation_is_refused() {
+    let (addr, q) = qbittorrent(TEMPORARY).await;
+    let f = fixture();
+    let g = &f.guided;
+    let id = || "qbittorrent".to_owned();
+    g.set_target(id(), url(addr)).await.unwrap();
+    g.paste(id(), TEMPORARY.into()).await.unwrap();
+
+    // The first confirmation: its re-plan is `webui.password`.
+    let other = vec!["downloads.save_path".to_owned()];
+    *g.planned.lock().unwrap() = Some(other.clone());
+    assert_eq!(
+        refused(g.confirm(id(), other.clone()).await.unwrap_err()),
+        "confirmation_mismatch"
+    );
+    assert_eq!(f.provenance().as_deref(), Some("pasted"), "restored");
+    assert_eq!(f.credential().as_deref(), Some(TEMPORARY));
+    assert_eq!(f.row(&guided::applied_key(&qbt())), None);
+    assert_eq!(q.lock().unwrap().password, TEMPORARY);
+
+    // A retry: its re-plan is empty.
+    let plan = g.plan(id()).await.unwrap();
+    f.sink.1.store(true, Ordering::SeqCst);
+    assert!(g.confirm(id(), plan).await.is_err());
+    f.sink.1.store(false, Ordering::SeqCst);
+    let pw = vec!["webui.password".to_owned()];
+    *g.planned.lock().unwrap() = Some(pw.clone());
+    assert_eq!(
+        refused(g.confirm(id(), pw).await.unwrap_err()),
+        "confirmation_mismatch"
+    );
+    assert_eq!(f.row(&guided::origin_key(&qbt())), None);
+    assert!(f.sink.0.lock().unwrap().is_empty());
 }
