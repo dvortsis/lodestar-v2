@@ -333,12 +333,12 @@ if command -v ip >/dev/null 2>&1 && command -v iptables >/dev/null 2>&1; then
   # Verify IPv6 is disabled in namespace
   ip netns exec "$TEST_NETNS" sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null 2>&1 || true
 
-  # 7a: Kernel packet-drop test - egress on physical interface eth0 must be dropped by iptables
+  # 7a: Kernel packet-drop test - egress forced over physical interface eth0 (SO_BINDTODEVICE) must be dropped by iptables
   drop_verified=$(ip netns exec "$TEST_NETNS" python3 -c "
 import socket
 try:
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.bind(('192.0.2.10', 0))
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b'eth0')
     s.sendto(b'test', ('8.8.8.8', 53))
     print('SENT_UNEXPECTED')
 except PermissionError:
