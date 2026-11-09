@@ -305,8 +305,14 @@ pub trait LeaseEvents: Send + Sync + 'static {
 /// Keys committed recently, remembered so a remote claim that raced the
 /// commit (its store check ran before the row was written) isn't granted
 /// and harvested again. About ten seconds of commits at the §19.8 ingest
-/// target.
+/// target. A key reported lost as [`LOSS_BLOCKED`] is remembered the same
+/// way ([`LeaseAuthority::report`]).
 pub const RECENT_COMMITS: usize = 16_384;
+
+/// `funnel::Loss::Blocked` (`lodestar-sources`, persisted): a floor drop.
+/// A worker reports it for a key the hash lists or the floor refused, and
+/// a re-grant reports it for a key the store check found held.
+pub(crate) const LOSS_BLOCKED: u8 = 7;
 
 /// One answer of [`LeaseAuthority::claim_batch`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -696,6 +702,16 @@ impl LeaseAuthority {
     /// A terminal outcome reported by `worker`: it ends the lease only if
     /// `worker` holds it under `token` (anything else is stale, `None`).
     /// With `loss`, the loss is reported once.
+    ///
+    /// A [`LOSS_BLOCKED`] loss is remembered with the recent commits, under
+    /// the same lock that ends the lease (X-lease-report-atomic, closing
+    /// WK-10d's window). From the moment this returns, a remote claim of
+    /// the key is refused as stored, and so is a late result's lease
+    /// ([`restore_if_free`](Self::restore_if_free)). That holds for a claim
+    /// already in flight, whose store check ran before the report: its
+    /// `checked_at` is older, so the report counts as a commit since. It
+    /// stays refused until the sink's floor-report map, which the server
+    /// fills right after this, and then the store take over.
     pub fn report(
         &self,
         worker: WorkerId,
@@ -712,6 +728,9 @@ impl LeaseAuthority {
             return None;
         }
         let lease = s.table.release(key, token);
+        if lease.is_some() && loss == Some(LOSS_BLOCKED) {
+            s.remember_commit(*key);
+        }
         self.gauge(&s);
         drop(s);
         if let (Some(lease), Some(reason)) = (&lease, loss) {
@@ -1457,6 +1476,125 @@ mod tests {
         assert_eq!(a.restore_if_free(A, key, lease, 1, a.commit_seq()), None);
         assert!(!a.in_flight(&key));
         assert_eq!(get(&ev.harvested), 1);
+    }
+
+    /// X-lease-report-atomic: a floor drop (`LOSS_BLOCKED`) is refused to
+    /// every remote claim and late lease as soon as `report` returns. Any
+    /// other loss leaves the key free to claim again, as before.
+    #[test]
+    fn a_blocked_report_refuses_the_key_at_once() {
+        let (a, ev) = counted();
+        a.serve_remote();
+        let (blocked, other) = (InfoHash([5; 20]), InfoHash([6; 20]));
+        let Claimed::Granted(t) = a.claim(A, claim(5, 1), 0) else {
+            panic!()
+        };
+        let Claimed::Granted(u) = a.claim(A, claim(6, 1), 0) else {
+            panic!()
+        };
+        let checked_at = a.commit_seq();
+        assert!(a.report(A, &blocked, t, Some(LOSS_BLOCKED)).is_some());
+        assert!(a.report(A, &other, u, Some(1)).is_some());
+        assert_eq!(get(&ev.lost), 2);
+        let answers = a.claim_batch(B, &[claim(5, 2), claim(6, 2)], 1, None, Some(checked_at));
+        assert_eq!(answers[0], BatchAnswer::Committed, "refused as stored");
+        assert!(matches!(
+            answers[1],
+            BatchAnswer::Claimed {
+                claimed: Claimed::Granted(_),
+                ..
+            }
+        ));
+        let lease = RestoredLease {
+            cohort: 2,
+            source: src(1),
+            sources: 1,
+            strategy: 0,
+            discovered_at: 7_200,
+        };
+        assert_eq!(
+            a.restore_if_free(B, blocked, lease, 1, a.commit_seq()),
+            None
+        );
+        // A stale report changes nothing.
+        let key = InfoHash([7; 20]);
+        let Claimed::Granted(_) = a.claim(A, claim(7, 1), 0) else {
+            panic!()
+        };
+        assert!(a.report(B, &key, Token(1), Some(LOSS_BLOCKED)).is_none());
+        assert!(!a.committed_recently_for_test(&key));
+    }
+
+    /// X-lease-report-atomic: a claim already waiting when the report lands
+    /// (its store check ran before the report, so the store and the sink's
+    /// map didn't know the key yet) is refused. Two threads, interleaved by
+    /// barriers: the claim's check, then the report, then the claim.
+    #[test]
+    fn a_claim_waiting_during_a_blocked_report_is_refused() {
+        let (a, _) = counted();
+        a.serve_remote();
+        let a = Arc::new(a);
+        let key = InfoHash([5; 20]);
+        let Claimed::Granted(t) = a.claim(A, claim(5, 1), 0) else {
+            panic!()
+        };
+        let checked = Arc::new(std::sync::Barrier::new(2));
+        let reported = Arc::new(std::sync::Barrier::new(2));
+        let claimer = {
+            let (a, checked, reported) = (a.clone(), checked.clone(), reported.clone());
+            std::thread::spawn(move || {
+                // The claim's store check: before the report.
+                let checked_at = a.commit_seq();
+                checked.wait();
+                reported.wait();
+                a.claim_batch(B, &[claim(5, 2)], 1, None, Some(checked_at))
+            })
+        };
+        checked.wait();
+        assert!(a.report(A, &key, t, Some(LOSS_BLOCKED)).is_some());
+        reported.wait();
+        assert_eq!(claimer.join().unwrap(), vec![BatchAnswer::Committed]);
+        assert!(a.get(&key).is_none(), "no lease");
+    }
+
+    /// X-lease-report-atomic: a report and a claim racing on two threads.
+    /// Whichever takes the lock first, the claimer never gets a lease: it
+    /// finds the key held (the report comes after) or refused (before).
+    #[test]
+    fn a_claim_racing_a_blocked_report_never_gets_the_key() {
+        for n in 0..200u32 {
+            let (a, _) = counted();
+            a.serve_remote();
+            let a = Arc::new(a);
+            let key = InfoHash([5; 20]);
+            let Claimed::Granted(t) = a.claim(A, claim(5, 1), 0) else {
+                panic!()
+            };
+            let checked_at = a.commit_seq();
+            let start = Arc::new(std::sync::Barrier::new(2));
+            let claimer = {
+                let (a, start) = (a.clone(), start.clone());
+                std::thread::spawn(move || {
+                    start.wait();
+                    a.claim_batch(B, &[claim(5, 2)], 1, None, Some(checked_at))
+                })
+            };
+            start.wait();
+            assert!(a.report(A, &key, t, Some(LOSS_BLOCKED)).is_some());
+            let answer = claimer.join().unwrap();
+            assert!(
+                matches!(
+                    answer[0],
+                    BatchAnswer::Committed
+                        | BatchAnswer::Claimed {
+                            claimed: Claimed::Held { holder: A, .. },
+                            ..
+                        }
+                ),
+                "round {n}: {answer:?}"
+            );
+            assert!(a.get(&key).is_none(), "round {n}: no lease after both");
+        }
     }
 
     /// More commits than `RECENT_COMMITS` remembers between the late-result

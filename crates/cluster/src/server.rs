@@ -159,9 +159,7 @@ pub enum KeyCheck {
     Unknown,
 }
 
-/// `funnel::Loss::Blocked` (`lodestar-sources`, persisted): the loss a
-/// re-grant reports for a key the store check refused.
-const LOSS_BLOCKED: u8 = 7;
+use crate::leases::LOSS_BLOCKED;
 
 /// Where the server hands what workers send. Every method runs on the
 /// session's task with no lock held, so it must not block: queue the work
