@@ -196,7 +196,7 @@ write_files:
               ;;
           esac
           # 4. WireGuard handshake active and fresh (<= 120s)
-          hs_out="$("$0" wg-handshake 2>/dev/null || true)"
+          hs_out="$(bash "$0" wg-handshake 2>/dev/null || true)"
           hs_epoch="$(echo "$hs_out" | awk '{print $2}')"
           if [ -z "$hs_epoch" ] || [ "$hs_epoch" -le 0 ] 2>/dev/null; then
             echo "ERROR: WireGuard tunnel handshake missing or inactive" >&2
@@ -209,7 +209,7 @@ write_files:
             exit 1
           fi
           # 5. WireGuard transfer active (rx > 0 and tx > 0)
-          tx_out="$("$0" wg-transfer 2>/dev/null || true)"
+          tx_out="$(bash "$0" wg-transfer 2>/dev/null || true)"
           rx_b="$(echo "$tx_out" | awk '{print $2}')"
           tx_b="$(echo "$tx_out" | awk '{print $3}')"
           if [ -z "$rx_b" ] || [ -z "$tx_b" ] || [ "$rx_b" -le 0 ] || [ "$tx_b" -le 0 ] 2>/dev/null; then
@@ -383,7 +383,7 @@ write_files:
           fi
 
           # 4. Discover and strictly validate legitimate VPN endpoint server IP
-          raw_ep="$("$0" wg-endpoints 2>/dev/null | awk '{print $2}' | cut -d: -f1 || true)"
+          raw_ep="$(bash "$0" wg-endpoints 2>/dev/null | awk '{print $2}' | cut -d: -f1 || true)"
           if [ -z "$raw_ep" ] && [ -f "$CONFIG_FILE" ]; then
             raw_ep="$(awk -F'=' '/^[[:space:]]*Endpoint[[:space:]]*=/ {gsub(/[[:space:]]/, "", $2); split($2, a, ":"); print a[1]; exit}' "$CONFIG_FILE" 2>/dev/null || true)"
           fi

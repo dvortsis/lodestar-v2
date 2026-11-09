@@ -1039,6 +1039,7 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
         self.script_path = os.path.join(self.temp_dir, "helper.sh").replace("\\", "/")
         with open(self.script_path, "w", encoding="utf-8", newline="\n") as f:
             f.write(script)
+        os.chmod(self.script_path, 0o755)
 
     def tearDown(self) -> None:
         shutil.rmtree(self.temp_dir, ignore_errors=True)
