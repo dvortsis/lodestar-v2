@@ -26,6 +26,7 @@ mod reindex;
 mod rollback;
 mod rollup;
 mod stats;
+mod update_helper;
 pub(crate) mod util;
 mod vacuum;
 pub(crate) mod worker;
@@ -123,6 +124,10 @@ pub enum Command {
     /// Companions: list, install, remove (server stopped), or print a
     /// compose service (see `lodestar companion --help`)
     Companion(companion::CompanionArgs),
+    /// The MSI's update helper, run as SYSTEM by its scheduled task
+    /// (Windows; §12.2, plan Q13)
+    #[command(hide = true)]
+    UpdateHelper(update_helper::UpdateHelperArgs),
 }
 
 /// Where the bitmagnet database is. The password comes from
@@ -225,6 +230,10 @@ pub fn parse() -> Cli {
 /// `dropped` is what the PUID/PGID drop did, logged once the config (and
 /// so the log filter) is loaded.
 pub fn run(command: Command, config_path: Option<&Path>, dropped: &privdrop::Report) -> ExitCode {
+    // Reads no config: nothing from the data folder decides where it looks.
+    if let Command::UpdateHelper(a) = command {
+        return update_helper::run(&a, config_path);
+    }
     let config = match load_config(&command, config_path, |k| std::env::var(k).ok()) {
         Ok(c) => c,
         Err(e) => {
@@ -262,7 +271,10 @@ pub fn run(command: Command, config_path: Option<&Path>, dropped: &privdrop::Rep
         Command::ImportBitmagnet(a) => ("import-bitmagnet", import::legacy(&config, a)),
         Command::Worker(a) => ("worker", worker::run(&config, a)),
         Command::Companion(a) => ("companion", companion::run(&config, a)),
-        Command::Serve { .. } | Command::Healthcheck | Command::Lists => {
+        Command::Serve { .. }
+        | Command::Healthcheck
+        | Command::Lists
+        | Command::UpdateHelper(_) => {
             unreachable!("main.rs runs these")
         }
     };

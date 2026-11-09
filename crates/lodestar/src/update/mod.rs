@@ -25,7 +25,8 @@
 pub mod check;
 #[cfg(unix)]
 pub mod control;
-#[cfg(unix)]
+// Shared with Windows (the MSI and the portable build).
+#[cfg_attr(not(unix), allow(dead_code))]
 pub mod download;
 #[cfg(unix)]
 pub mod engine;
@@ -142,6 +143,10 @@ pub fn start(
             dev: crate::system::info::channel() == lodestar_api::system::Channel::Dev,
             kind: win::detect(&win::signals(&config.data_dir)),
             target: lodestar_update::Target::from_triple(env!("LODESTAR_BUILD_TARGET")),
+            checked_data: crate::windows::service::same_dir(
+                &config.data_dir,
+                &crate::windows::service::default_data_dir(std::env::var("ProgramData").ok()),
+            ),
         };
         let notifier = win::Notifier::new(
             ctx,

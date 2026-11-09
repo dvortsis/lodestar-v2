@@ -1,6 +1,8 @@
 //! `/updates` from the real binary on Windows (PK-win-upd-1): the check
 //! and notify engine answers (no `unavailable: "windows_helper"`), nothing
-//! is installable, Install and Roll back refuse with `not_built_yet`, and
+//! is installable (a test build is a dev build, run from outside Program
+//! Files), Install refuses with the reason `/updates` names, Roll back
+//! with `not_built_yet` (PK-win-upd-3), and
 //! the running server holds `<data>\bin\.lock`, so a second writer can't
 //! take it.
 #![cfg(windows)]
@@ -150,8 +152,8 @@ fn updates_check_and_notify_without_installing() {
     assert_eq!(json["unavailable"], serde_json::Value::Null, "{json}");
     assert_eq!(json["capability"]["can_install"], false, "{json}");
     // A test build is a dev build: that's the reason it names first.
-    let reason = json["capability"]["reason"].as_str().unwrap();
-    assert!(reason == "not_built_yet" || reason == "dev_build", "{json}");
+    let reason = json["capability"]["reason"].as_str().unwrap().to_string();
+    assert_eq!(reason, "dev_build", "{json}");
     assert_eq!(json["rollback"]["available"], false, "{json}");
     assert_eq!(json["rollback"]["reason"], "not_built_yet", "{json}");
     assert_eq!(json["policy"]["mode"], "off", "{json}");
@@ -167,7 +169,8 @@ fn updates_check_and_notify_without_installing() {
     assert!(install.starts_with("HTTP/1.0 409"), "{install}");
     let body = json_body(&install);
     assert_eq!(body["error"]["code"], "install_unavailable", "{body}");
-    assert_eq!(body["error"]["reason"], "not_built_yet", "{body}");
+    // The same reason `/updates` gave (PK-win-upd-2 built Install).
+    assert_eq!(body["error"]["reason"], reason.as_str(), "{body}");
     let rollback = signed_in(
         port,
         "POST",
