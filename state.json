@@ -6625,15 +6625,6 @@
       "id": "op-2-mismatch-unreadable",
       "added": "2026-11-09T02:00Z",
       "what": "runner \u00a72.26 (flag to owner at OP-2 merge): reaper destroys only on readable mismatch=true; unreadable => down-only + escalate. Mismatch flag IAM narrowed (no DeleteObject)."
-    },
-    {
-      "id": "X-lease-test-polish",
-      "from": "#647 delta review 5c27d313",
-      "items": [
-        "race-test doc and decisions file overclaim per-round coverage (most rounds see only post-report claims); say at least one claim after the report each round",
-        "panic message at leases.rs:1615 prints the whole answers Vec; print length and bad index",
-        "redundant assert refused >= 200 at leases.rs:1622"
-      ]
     }
   ],
   "main_health": [
@@ -7359,7 +7350,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T02:45Z",
+    "updated": "2026-11-09T02:54Z",
     "items": [
       {
         "slot": 1,
@@ -7374,7 +7365,7 @@
         "slice": "OP-2",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #646 OP-2 round 2 at 477888a6; delta + security delta reviews running",
+        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #646 OP-2 round 2 at 477888a6; security delta MERGE (2 LOW); Opus delta running",
         "since": "2026-11-09T01:05Z"
       },
       {
@@ -7387,11 +7378,11 @@
       },
       {
         "slot": 4,
-        "slice": "X-lease-report-atomic",
+        "slice": "X-lease-test-polish",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #647 X-lease-report-atomic delta MERGE at 5c27d313; merge on ci-ok green",
-        "since": "2026-11-09T01:45Z"
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #647 merged (e009b89e); now X-lease-test-polish (small), then X-win-restart-followups",
+        "since": "2026-11-09T02:54Z"
       },
       {
         "slot": 5,
