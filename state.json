@@ -6645,7 +6645,8 @@
       "pr": 645,
       "note": "CMP-5g-1 merged f5604c58; owner FYI + flags sent (with #648, #649, OP-3 split); CMP-5g-2 launched in same session"
     },
-    "After #644 merges: brief X-win-upd-bounds (LOW-B/P-8 boot-identity bound on 3010 reinstall, LOW-C copy waits only for its parent helper, P-3 wait for Installer idle after deadline kill, P-4 try_wait classification + HandedOff race, update/layout.rs:239 busy-lock retry). Owner \u00a72.19 flags for #644: Q13 refinement, marker location, disabled start type, journal cross-version contract."
+    "After #644 merges: brief X-win-upd-bounds (LOW-B/P-8 boot-identity bound on 3010 reinstall, LOW-C copy waits only for its parent helper, P-3 wait for Installer idle after deadline kill, P-4 try_wait classification + HandedOff race, update/layout.rs:239 busy-lock retry). Owner \u00a72.19 flags for #644: Q13 refinement, marker location, disabled start type, journal cross-version contract.",
+    "OP-3b brief notes (from #652 review): a durable block marker written by start-block and honoured by every mid-block check (closes the arm-switch gap); start-block requires exit 0 AND the final 'ok leak_test' line; follow-up s3:ResourceAccount condition in OP-2a's template for Terraform's S3 backend."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
