@@ -1668,6 +1668,13 @@ mod tests {
         assert_eq!(attempts, 1);
     }
 
+    /// Unix waits for nothing: a busy lock there is another process.
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_never_waits_for_the_lock() {
+        assert_eq!(LOCK_WAIT, Duration::ZERO);
+    }
+
     #[test]
     fn a_lock_error_is_never_retried() {
         let (got, attempts) = retried(

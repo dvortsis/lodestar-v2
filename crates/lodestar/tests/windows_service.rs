@@ -684,10 +684,12 @@ fn a_portable_restart_serves_again_on_the_same_port() {
 /// `CONIN$` opens, as in `Start Lodestar.cmd`'s window), its stderr kept.
 /// `relaunched`: started as Restart now starts a copy, with the token in
 /// its environment and the hand-over on stdin (the token, then end of
-/// file, as the old process gives once it has exited).
+/// file, as the old process gives once it has exited). `window`: in
+/// `Start Lodestar.cmd`'s window (`LODESTAR_PORTABLE_WINDOW=1`).
 fn bad_config_run(
     dir: &Path,
     relaunched: bool,
+    window: bool,
 ) -> (
     std::process::Child,
     std::sync::Arc<std::sync::Mutex<String>>,
@@ -705,9 +707,13 @@ fn bad_config_run(
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .creation_flags(NEW_CONSOLE)
-        .env_remove("LODESTAR_RELAUNCH_TOKEN");
+        .env_remove("LODESTAR_RELAUNCH_TOKEN")
+        .env_remove("LODESTAR_PORTABLE_WINDOW");
     if relaunched {
         cmd.env("LODESTAR_RELAUNCH_TOKEN", TOKEN);
+    }
+    if window {
+        cmd.env("LODESTAR_PORTABLE_WINDOW", "1");
     }
     let mut child = cmd.spawn().unwrap();
     {
@@ -746,7 +752,7 @@ fn bad_config_run(
 #[test]
 fn a_relaunched_copy_that_fails_at_start_waits_for_enter() {
     let dir = tempfile::tempdir().unwrap();
-    let (mut child, console) = bad_config_run(dir.path(), true);
+    let (mut child, console) = bad_config_run(dir.path(), true, true);
     let shown = wait_for(Duration::from_secs(30), || {
         let c = console.lock().unwrap().clone();
         c.contains("Press Enter to close this window.").then_some(c)
@@ -772,8 +778,22 @@ fn a_relaunched_copy_that_fails_at_start_waits_for_enter() {
 /// before: no prompt, a failure exit.
 #[test]
 fn an_ordinary_run_that_fails_at_start_exits() {
+    exits_without_a_prompt(false, true);
+}
+
+/// A relaunched copy outside the launcher's window (Task Scheduler, a
+/// service wrapper, a hidden console) never waits: nobody could press
+/// Enter (#651's review).
+#[test]
+fn a_relaunch_outside_the_launchers_window_exits() {
+    exits_without_a_prompt(true, false);
+}
+
+/// A run with a broken config, as `bad_config_run` starts it, that exits
+/// with a failure and no prompt.
+fn exits_without_a_prompt(relaunched: bool, window: bool) {
     let dir = tempfile::tempdir().unwrap();
-    let (mut child, console) = bad_config_run(dir.path(), false);
+    let (mut child, console) = bad_config_run(dir.path(), relaunched, window);
     let status = wait_for(Duration::from_secs(30), || child.try_wait().ok().flatten());
     if status.is_none() {
         let _ = child.kill();
