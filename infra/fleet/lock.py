@@ -72,14 +72,14 @@ class MemoryStore:
 class S3Store:  # pragma: no cover - live only; nothing constructs it in CI
     """Live store. Errors carry no bucket name or key beyond the fixed prefix."""
 
-    def __init__(self, bucket: str, live: bool):
+    def __init__(self, bucket: str, live: bool, client=None):
         if not live:
             raise RuntimeError("S3Store is live-only (FLEET_LIVE=true, OP-2)")
         import boto3  # noqa: PLC0415 - only on the live path
         from botocore.exceptions import ClientError  # noqa: PLC0415
 
         try:
-            self._s3 = boto3.client("s3")
+            self._s3 = client if client is not None else boto3.client("s3")
         except Exception:
             raise RuntimeError("S3 client setup failed") from None
         self._bucket, self._err = bucket, ClientError
@@ -157,6 +157,10 @@ class FleetLock:
         if holder is None:  # unreadable: fail closed; the reaper can pre-empt it
             return BUSY
         if holder.expires_at > self.clock():
+            if holder.kind == "run" and holder.run_id == run_id:
+                # Our own earlier put whose response was lost (the retry got a
+                # 412): it's ours, so don't strand it for the lease.
+                return ACQUIRED
             return REAPING if holder.kind == "reaping" else BUSY
         return ACQUIRED if self.store.put_if_match(LOCK_KEY, body, cur[1]) else BUSY
 

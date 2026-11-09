@@ -87,6 +87,8 @@ class Built(unittest.TestCase):
     def test_keys_match_the_control_plane(self):
         self.assertEqual(bt.FLEET_LOCK_KEY, fleet_lock.LOCK_KEY)
         self.assertEqual(bt.FLEET_JSON_KEY, fleet_state.FLEET_KEY)
+        self.assertEqual(bt.SPEND_LEDGER_KEY, fleet_state.LEDGER_KEY)
+        self.assertEqual(bt.MISMATCH_KEY, fleet_state.MISMATCH_KEY)
 
 
 class Trust(unittest.TestCase):
@@ -152,8 +154,10 @@ class LeastPrivilege(unittest.TestCase):
             ("StateBucket", bt.TF_STATE_KEY): {"s3:GetObject", "s3:PutObject"},
             ("StateBucket", bt.TF_LOCK_KEY): {"s3:GetObject", "s3:PutObject", "s3:DeleteObject"},
             ("StateBucket", "fleet/fleet.json"): {"s3:GetObject", "s3:PutObject"},  # tombstoned, never deleted
+            ("StateBucket", "fleet/spend-ledger.json"): {"s3:GetObject", "s3:PutObject"},
             ("EvidenceBucket", "fleet/*"): {"s3:GetObject", "s3:PutObject"},
             ("ControlBucket", "locks/fleet.json"): {"s3:GetObject", "s3:PutObject", "s3:DeleteObject"},
+            ("ControlBucket", "locks/fleet-mismatch.json"): {"s3:GetObject", "s3:PutObject"},  # overwritten, never deleted
         })
         actions = {a for s in allow_statements(roles()["LodestarFleetOperator"]) for a in as_list(s["Action"])}
         self.assertFalse({a for a in actions if a.split(":")[0] in ("ec2", "ssm", "iam", "sts", "kms")})
@@ -289,6 +293,17 @@ def ps_code(text: str) -> str:
     return re.sub(r"'(?:[^']|'')*'|\"(?:[^\"`]|`.)*\"", "''", code)
 
 
+# An init call however terraform is named: bare, .exe, a path, quoted after
+# `&`, or through a variable (`& $tf init`).
+_QUOTED_TF = re.compile(r"""&\s*(['"])[^'"]*?terraform(?:\.exe)?\1""", re.I)
+_INIT = re.compile(r"(?:\bterraform(?:\.exe)?|&\s*\$[\w:]+)\s+init\b", re.I)
+
+
+def init_lines(text: str) -> list[str]:
+    code = _QUOTED_TF.sub("& terraform", re.sub(r"<#.*?#>", "", text, flags=re.S))
+    return [ln for ln in ps_code(code).splitlines() if _INIT.search(ln)]
+
+
 class Terraform(unittest.TestCase):
     TF = ROOT / "infra" / "akamai" / "terraform"
 
@@ -307,16 +322,26 @@ class Terraform(unittest.TestCase):
         self.assertIn(f"$key = '{bt.TF_STATE_KEY}'", helper)  # the key fleet.yml's role is granted
         self.assertIn("LODESTAR_TF_STATE_BUCKET", helper)
         self.assertIn("LODESTAR_TF_STATE_REGION", helper)
-        initing = [p for p in scripts.glob("*.ps1") if re.search(r"\bterraform\s+init\b", ps_code(p.read_text(encoding="utf-8")))]
+        initing = [p for p in scripts.glob("*.ps1") if init_lines(p.read_text(encoding="utf-8"))]
         self.assertEqual({p.name for p in initing}, {"Deploy.ps1", "Destroy.ps1", "Preflight.ps1"})
         for p in initing:
             text = p.read_text(encoding="utf-8")
             with self.subTest(script=p.name):
                 self.assertIn(". (Join-Path $PSScriptRoot 'StateBackend.ps1')", text)
                 self.assertIn("$backend = Get-StateBackendArgs", text)
-                for line in re.findall(r".*\bterraform\s+init\b.*", ps_code(text)):
+                for line in init_lines(text):
                     self.assertIn("@backend", line)
                     self.assertNotIn("-backend=false", line)
+
+    def test_init_scan_sees_every_spelling(self):
+        for src in ("terraform init", "& terraform init -input=false", "terraform.exe init", "& 'terraform' init",
+                    '& "C:\\tools\\terraform.exe" init', "& $tf init", "& $script:tf init", "  TERRAFORM INIT"):
+            with self.subTest(src=src):
+                self.assertEqual(len(init_lines(src)), 1)
+        for src in ("throw 'terraform init failed.'", "# terraform init", "<# terraform init #>",
+                    'Audit "run terraform init first"', "terraform validate"):
+            with self.subTest(src=src):
+                self.assertEqual(init_lines(src), [])
 
     def test_state_backend_helper_stays_pure(self):
         # CI runs tests/Test-StateBackend.ps1, which dot-sources this helper; the
