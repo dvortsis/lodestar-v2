@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-09T00:39Z",
+  "updated_at": "2026-11-09T01:05Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6600,6 +6600,11 @@
       "id": "runner-pr-643-merged",
       "added": "2026-11-09T00:41Z",
       "what": "#643 merged (cd1f30c7): owner \u00a72.53 cloud loosenings, CMP-5g split, X-wk-busy-metrics, X-event-names-split, OP notes. Owner \u00a72.19 flags to send via dashboard: OP-G runner additions (App on this repo only, protection blocks App bypass, dry cycle tests stop switch)"
+    },
+    {
+      "id": "op-2a-merged",
+      "added": "2026-11-09T01:05Z",
+      "what": "#641 OP-2a merged (ca4cd0a9). Owner \u00a72.19 flags sent via dashboard: PR body refinements incl. ResourceAccount grant, setup step 2.8 OIDC subject template, FleetAccountId parameter, plus #643 OP-G additions."
     }
   ],
   "main_health": [
@@ -7325,7 +7330,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T00:39Z",
+    "updated": "2026-11-09T01:05Z",
     "items": [
       {
         "slot": 1,
@@ -7337,11 +7342,11 @@
       },
       {
         "slot": 2,
-        "slice": "OP-2a",
+        "slice": "OP-2",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #641 at 8f4d33b7, delta review MERGE, merge-tree clean vs cd1f30c7; waiting on fuzz jobs for ci-ok",
-        "since": "2026-11-08T22:52Z"
+        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #641 OP-2a merged (ca4cd0a9); building OP-2 (brief briefs/OP-2.md)",
+        "since": "2026-11-09T01:05Z"
       },
       {
         "slot": 3,
