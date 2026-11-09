@@ -6625,6 +6625,15 @@
       "id": "op-2-mismatch-unreadable",
       "added": "2026-11-09T02:00Z",
       "what": "runner \u00a72.26 (flag to owner at OP-2 merge): reaper destroys only on readable mismatch=true; unreadable => down-only + escalate. Mismatch flag IAM narrowed (no DeleteObject)."
+    },
+    {
+      "id": "X-lease-test-polish",
+      "from": "#647 delta review 5c27d313",
+      "items": [
+        "race-test doc and decisions file overclaim per-round coverage (most rounds see only post-report claims); say at least one claim after the report each round",
+        "panic message at leases.rs:1615 prints the whole answers Vec; print length and bad index",
+        "redundant assert refused >= 200 at leases.rs:1622"
+      ]
     }
   ],
   "main_health": [
@@ -7350,7 +7359,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T02:13Z",
+    "updated": "2026-11-09T02:45Z",
     "items": [
       {
         "slot": 1,
@@ -7365,7 +7374,7 @@
         "slice": "OP-2",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #646 OP-2 delta + security delta CHANGES (kill paths fail closed on head check; L1 sweep; L-B; timeouts; tests) relayed; fix round then both delta reviews",
+        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #646 OP-2 round 2 at 477888a6; delta + security delta reviews running",
         "since": "2026-11-09T01:05Z"
       },
       {
@@ -7373,7 +7382,7 @@
         "slice": "PK-win-upd-3",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAC9TBdvBgyLvxSjGf: #644 PK-win-upd-3 at cc1b42c3 (green); Opus review + security review running",
+        "doing": "session_01MMjhnAC9TBdvBgyLvxSjGf: #644 PK-win-upd-3 security MERGE, Opus CHANGES (B-1 reinstall exit-code tests, B-2 started-then-failed msiexec) + runner calls relayed; fix round then delta + security delta",
         "since": "2026-11-09T00:10Z"
       },
       {
@@ -7381,7 +7390,7 @@
         "slice": "X-lease-report-atomic",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #647 X-lease-report-atomic review CHANGES (race test never runs report-first order; PeerFound note; Taken-only no-gap doc; import) relayed 02:04Z; fix round then delta review",
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #647 X-lease-report-atomic delta MERGE at 5c27d313; merge on ci-ok green",
         "since": "2026-11-09T01:45Z"
       },
       {
