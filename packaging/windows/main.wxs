@@ -16,6 +16,8 @@
     - Start-menu shortcut that opens the web UI
     - optional, off by default: a Windows Defender exclusion for the data folder
     - uninstall keeps the data unless run with REMOVE_DATA=1
+    - registers the "Lodestar update helper" scheduled task: SYSTEM runs `lodestar.exe update-helper`
+      at boot and when the service starts it (plan 2026-11-06 Q13, owner-decisions 2.47)
 -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
      xmlns:util="http://schemas.microsoft.com/wix/UtilExtension"
@@ -201,6 +203,23 @@
     <CustomAction Id="SetRemoveDataFolder" Property="RemoveDataFolder" Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]remove-datadir.ps1&quot; -Path &quot;[DataFolderDir].&quot;" />
     <CustomAction Id="RemoveDataFolder" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Return="ignore" Impersonate="no" />
 
+    <!-- The update helper's task (plan 2026-11-06 Q13): SYSTEM runs only `lodestar.exe update-helper`
+         from this folder, at boot and on demand; the service's own account may read and start it,
+         nothing more (crates/lodestar/src/update/windows/msi.rs, task_xml). Registered after the
+         service exists, so its SID resolves; again on Repair and upgrade, which replaces the
+         definition. The helper refuses any version that isn't newer than the installed one, so
+         AllowDowngrades above is never reached through it. -->
+    <CustomAction Id="SetRegisterUpdateTask" Property="RegisterUpdateTask" Value="&quot;[INSTALLFOLDER]lodestar.exe&quot; update-helper --register-task" />
+    <CustomAction Id="RegisterUpdateTask" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Return="check" Impersonate="no" />
+    <!-- Gone again if a first install rolls back, and on uninstall (not on the uninstall half of an
+         upgrade), with the helper's staging folder: the cached MSIs and their pins. -->
+    <CustomAction Id="SetUnregisterUpdateTaskRollback" Property="UnregisterUpdateTaskRollback" Value="&quot;[System64Folder]schtasks.exe&quot; /Delete /TN &quot;Lodestar update helper&quot; /F" />
+    <CustomAction Id="UnregisterUpdateTaskRollback" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="rollback" Return="ignore" Impersonate="no" />
+    <CustomAction Id="SetUnregisterUpdateTask" Property="UnregisterUpdateTask" Value="&quot;[System64Folder]schtasks.exe&quot; /Delete /TN &quot;Lodestar update helper&quot; /F" />
+    <CustomAction Id="UnregisterUpdateTask" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Return="ignore" Impersonate="no" />
+    <CustomAction Id="SetRemoveUpdateStaging" Property="RemoveUpdateStaging" Value="&quot;[System64Folder]cmd.exe&quot; /d /c rd /s /q &quot;[INSTALLFOLDER]updates&quot;" />
+    <CustomAction Id="RemoveUpdateStaging" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Return="ignore" Impersonate="no" />
+
     <!-- SYSTEM runs scripts from, and the service runs the program from, the install folder, and a
          folder outside Program Files can be writable by other users. Only the default is allowed. -->
     <CustomAction Id="SetDefaultInstallDir" Property="DEFAULTINSTALLDIR" Value="[ProgramFiles64Folder]Lodestar\" />
@@ -217,9 +236,17 @@
       <Custom Action="SetSecureDataFolder" After="ServicePrivileges">NOT (REMOVE="ALL")</Custom>
       <Custom Action="SetSecureDataFolderAdmin" After="SetSecureDataFolder">NOT (REMOVE="ALL") AND UserSID</Custom>
       <Custom Action="SecureDataFolder" After="SetSecureDataFolderAdmin">NOT (REMOVE="ALL")</Custom>
+      <Custom Action="SetUnregisterUpdateTaskRollback" After="SecureDataFolder">NOT Installed AND NOT WIX_UPGRADE_DETECTED</Custom>
+      <Custom Action="UnregisterUpdateTaskRollback" After="SetUnregisterUpdateTaskRollback">NOT Installed AND NOT WIX_UPGRADE_DETECTED</Custom>
+      <Custom Action="SetRegisterUpdateTask" After="UnregisterUpdateTaskRollback">NOT (REMOVE="ALL")</Custom>
+      <Custom Action="RegisterUpdateTask" After="SetRegisterUpdateTask">NOT (REMOVE="ALL")</Custom>
+      <Custom Action="SetUnregisterUpdateTask" Before="UnregisterUpdateTask">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+      <Custom Action="UnregisterUpdateTask" Before="SetRemoveUpdateStaging">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+      <Custom Action="SetRemoveUpdateStaging" Before="RemoveUpdateStaging">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+      <Custom Action="RemoveUpdateStaging" Before="SetRemoveDefenderExclusion">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
       <!-- The exclusion goes in last, after the folder is known to be ours, and comes out again
            if a later step rolls the install back. -->
-      <Custom Action="SetRemoveDefenderExclusionRollback" After="SecureDataFolder">NOT Installed AND DEFENDER_EXCLUSION="1"</Custom>
+      <Custom Action="SetRemoveDefenderExclusionRollback" After="RegisterUpdateTask">NOT Installed AND DEFENDER_EXCLUSION="1"</Custom>
       <Custom Action="RemoveDefenderExclusionRollback" After="SetRemoveDefenderExclusionRollback">NOT Installed AND DEFENDER_EXCLUSION="1"</Custom>
       <Custom Action="SetAddDefenderExclusion" After="RemoveDefenderExclusionRollback">NOT Installed AND DEFENDER_EXCLUSION="1"</Custom>
       <Custom Action="AddDefenderExclusion" After="SetAddDefenderExclusion">NOT Installed AND DEFENDER_EXCLUSION="1"</Custom>

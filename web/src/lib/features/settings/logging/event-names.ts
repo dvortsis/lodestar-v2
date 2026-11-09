@@ -423,6 +423,10 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_worker_snapshot_failed_n,
 		m.settings_logging_ev_worker_snapshot_failed_h
 	],
+	'worker.claims_gave_up': [
+		m.settings_logging_ev_worker_claims_gave_up_n,
+		m.settings_logging_ev_worker_claims_gave_up_h
+	],
 	'worker.stage_failed': [
 		m.settings_logging_ev_worker_stage_failed_n,
 		m.settings_logging_ev_worker_stage_failed_h
@@ -456,6 +460,10 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_api_internal_error_h
 	],
 	'api.request': [m.settings_logging_ev_api_request_n, m.settings_logging_ev_api_request_h],
+	'companions.credential_revealed': [
+		m.settings_logging_ev_companions_credential_revealed_n,
+		m.settings_logging_ev_companions_credential_revealed_h
+	],
 	'filters.rule_set_updated': [
 		m.settings_logging_ev_filters_rule_set_updated_n,
 		m.settings_logging_ev_filters_rule_set_updated_h

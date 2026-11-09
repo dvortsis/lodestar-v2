@@ -54,6 +54,8 @@ pub struct Services {
     updates: Arc<dyn lodestar_api::updates::UpdatesApi>,
     /// `/workers` (WK-14), beside `/system`.
     workers: Arc<dyn lodestar_api::workers::WorkersApi>,
+    /// `/companions` (CMP-6); none when companions are off for this run.
+    companions_api: Option<Arc<dyn lodestar_api::companions::CompanionsApi>>,
     /// `POST /webhooks/{integration}` (SRC-11c), over the plugin's inbox.
     webhooks: Arc<lodestar_api::webhooks::Webhooks>,
 }
@@ -649,8 +651,14 @@ impl Services {
             &settings,
             control,
             &events,
-            updates.row.clone(),
+            system::Rows {
+                updates: updates.row.clone(),
+                companions: companions.as_ref().map(|c| c.snapshot.clone()),
+            },
         );
+        let companions_api = companions
+            .as_ref()
+            .map(|c| c.api.clone() as Arc<dyn lodestar_api::companions::CompanionsApi>);
         lodestar_log::log_event!(
             crate::logging::events::APP_SERVING,
             address = lodestar_log::Listen(served),
@@ -677,6 +685,7 @@ impl Services {
             },
             listener,
             system,
+            companions_api,
             updates: updates.api,
             webhooks,
             workers,
@@ -717,6 +726,7 @@ impl Services {
             updates,
             webhooks,
             workers,
+            companions_api,
         } = self;
         // Exports and other background jobs (§9): one registry, closed at
         // shutdown so open downloads end rather than hold it.
@@ -741,8 +751,12 @@ impl Services {
             .layer(Extension(system))
             .layer(Extension(updates))
             .layer(Extension(workers))
-            .layer(webhooks.layer())
-            .into_make_service_with_connect_info::<SocketAddr>();
+            .layer(webhooks.layer());
+        let app = match companions_api {
+            Some(c) => app.layer(Extension(c)),
+            None => app,
+        }
+        .into_make_service_with_connect_info::<SocketAddr>();
         // Open streams never end on their own: closing the hub ends them,
         // and closing the jobs ends open exports, so the graceful
         // shutdown doesn't wait on them.

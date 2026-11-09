@@ -31,6 +31,17 @@ lodestar_log::catalogue! {
         message: "API request",
         fields: { method: Label, route: Label, status: Label, took_ms: Size, client: Client },
     }
+    /// An admin revealed a companion's stored credential after entering
+    /// the password again (Q5): which companion and field, and from where.
+    /// Never the value.
+    COMPANIONS_CREDENTIAL_REVEALED {
+        id: "companions.credential_revealed",
+        component: Companions,
+        level: Info,
+        required: true,
+        message: "companions: credential revealed",
+        fields: { companion: Label, field: Label, client: Client },
+    }
     /// A filter change was applied: the engine's new version only.
     FILTERS_RULE_SET_UPDATED {
         id: "filters.rule_set_updated",

@@ -15,10 +15,12 @@
 //!   portable build, either when the kind isn't known ([`detect`]). The
 //!   artifact an install would take is [`select`]'s, which never guesses:
 //!   an unknown kind takes none.
-//! - **Install and Roll back** aren't built yet (PK-win-upd-2, -3,
-//!   PK-win-portable-upd): `capability.reason` and `rollback.reason` are
-//!   `not_built_yet`, the policy treats `auto` as Check and notify, and
-//!   both routes answer `409` with that reason.
+//! - **Install** (the MSI, PK-win-upd-2): `POST /updates/install` with
+//!   `when: now` downloads the MSI and hands it to the update helper
+//!   ([`super::msi::hand_over`], [`super::helper`]). The portable build's
+//!   comes with PK-win-portable-upd, Roll back with PK-win-upd-3 (both
+//!   `not_built_yet`). Nothing installs automatically: the policy treats
+//!   `auto` as Check and notify.
 //! - **The one writer:** the notifier holds `<data>\bin\.lock` for its
 //!   whole life. If another process holds it, nothing is fetched or
 //!   written (`bin_unavailable`).
@@ -51,7 +53,8 @@ use crate::settings::updates::{Level, Mode, Updates};
 use crate::update::check::{self, CheckError, Fetch};
 use crate::update::layout::{Bin, Lock, Step};
 use crate::update::log_events::{
-    UPDATE_AVAILABLE, UPDATE_CHECK_FAILED, UPDATE_STATE_UNREADABLE, UPDATE_STATE_UNSAVED,
+    UPDATE_AVAILABLE, UPDATE_CHECK_FAILED, UPDATE_INSTALL_FAILED, UPDATE_STATE_UNREADABLE,
+    UPDATE_STATE_UNSAVED,
 };
 use crate::update::policy::{self, Block, Reason};
 use crate::update::trust_file;
@@ -162,7 +165,7 @@ pub fn signals(data_dir: &Path) -> Signals {
         service_account: crate::windows::acl::process_sid()
             .is_some_and(|sid| sid.starts_with("S-1-5-80-")),
         exe,
-        program_files: std::env::var_os("ProgramFiles").map(PathBuf::from),
+        program_files: super::msi::system_program_files(),
         data_dir: data_dir.to_path_buf(),
         launcher_beside_exe,
     }
@@ -180,8 +183,6 @@ pub enum NoArtifact {
 }
 
 impl NoArtifact {
-    // Reported by PK-win-upd-2's install refusal.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn code(self) -> &'static str {
         match self {
             NoArtifact::NoTarget => "no_target",
@@ -253,8 +254,55 @@ struct Skip {
     reason: String,
 }
 
-/// The most `skipped` keeps (oldest dropped first), as on Unix.
+/// The most `skipped` keeps: the oldest `user` skips go first, and a
+/// `failed` or `manual` entry is never dropped ([`trim`]). Unix's
+/// `pending::trim` drops the oldest of any reason once only those are
+/// left; here they stay, so a version that failed stays refused.
 const MAX_SKIPPED: usize = 64;
+/// A version whose install failed (written by the update helper): never
+/// offered again.
+pub const SKIP_FAILED: &str = "failed";
+
+/// Whether an entry is one the user can't undo (`failed`, `manual`).
+fn refusing(s: &Skip) -> bool {
+    s.reason == SKIP_FAILED || s.reason == "manual"
+}
+
+/// Keeps at most [`MAX_SKIPPED`] by dropping the oldest `user` skips,
+/// never the entry just added (the last), never a `failed` or `manual`
+/// one.
+fn trim(list: &mut Vec<Skip>) {
+    let mut over = list.len().saturating_sub(MAX_SKIPPED);
+    let newest = list.len().saturating_sub(1);
+    let mut i = 0;
+    list.retain(|s| {
+        let drop = over > 0 && i < newest && !refusing(s);
+        over -= usize::from(drop);
+        i += 1;
+        !drop
+    });
+}
+
+/// Adds `version` to `skipped` with `reason` (the update helper's
+/// `failed`), under the caller's `.lock`. An entry that refuses it
+/// already is kept; a `user` one is replaced. An unreadable list is an
+/// error, never overwritten.
+pub fn add_skip(bin: &Bin, version: &str, reason: &str) -> std::io::Result<()> {
+    let mut list: Vec<Skip> = bin.read(SKIPPED_FILE)?.unwrap_or_default();
+    if list
+        .iter()
+        .any(|s| s.version == version && (s.reason == reason || refusing(s)))
+    {
+        return Ok(());
+    }
+    list.retain(|s| s.version != version);
+    list.push(Skip {
+        version: version.to_string(),
+        reason: reason.to_string(),
+    });
+    trim(&mut list);
+    bin.write(SKIPPED_FILE, &list)
+}
 
 /// What the notifier knows about this process.
 #[derive(Debug, Clone)]
@@ -268,6 +316,9 @@ pub struct Context {
     pub kind: InstallKind,
     /// This build's target; `None` where nothing is shipped for it.
     pub target: Option<Target>,
+    /// The data folder is the service's default, which the service checks
+    /// at every start: the only one the update helper installs from.
+    pub checked_data: bool,
 }
 
 /// Where `updates` events go: the event hub, or a test's list.
@@ -275,11 +326,13 @@ pub type Publish = Arc<dyn Fn(UpdatesEvent) + Send + Sync>;
 type Fault = Box<dyn Fn(Step) -> std::io::Result<()> + Send + Sync>;
 type Keys = Box<dyn Fn() -> Result<Embedded, lodestar_update::Error> + Send + Sync>;
 
-/// What tests replace: the clock, the keys and the writes' faults.
+/// What tests replace: the clock, the keys, the writes' faults, and the
+/// MSI's download and helper start (`None`: Install isn't offered).
 pub struct Seams {
     pub clock: Box<dyn Fn() -> i64 + Send + Sync>,
     pub keys: Keys,
     pub fault: Fault,
+    pub installer: Option<super::msi::Installer>,
 }
 
 /// What the last check found.
@@ -287,6 +340,9 @@ pub struct Seams {
 struct Found {
     state: Option<CheckState>,
     checked: Option<Checked>,
+    /// The envelope `checked` came from, as fetched: the MSI's helper
+    /// verifies it again itself.
+    envelope: Option<Vec<u8>>,
     notices: Vec<String>,
     trust_damaged: bool,
 }
@@ -343,6 +399,9 @@ struct Inner {
     clock: Box<dyn Fn() -> i64 + Send + Sync>,
     keys: Keys,
     fault: Fault,
+    installer: Option<super::msi::Installer>,
+    /// The version being downloaded for the helper.
+    installing: Mutex<Option<Version>>,
 }
 
 impl Notifier {
@@ -366,6 +425,7 @@ impl Notifier {
                 clock: Box::new(crate::unix_now),
                 keys: Box::new(Embedded::builtin),
                 fault: Box::new(|_| Ok(())),
+                installer: installer(),
             },
         )
     }
@@ -376,7 +436,12 @@ impl Notifier {
         publish: Publish,
         fetch: Arc<dyn Fetch>,
         zone: (jiff::tz::TimeZone, String),
-        Seams { clock, keys, fault }: Seams,
+        Seams {
+            clock,
+            keys,
+            fault,
+            installer,
+        }: Seams,
     ) -> Notifier {
         let n = Notifier {
             inner: Arc::new(Inner {
@@ -393,6 +458,8 @@ impl Notifier {
                 clock,
                 keys,
                 fault,
+                installer,
+                installing: Mutex::new(None),
             }),
         };
         let _ = n.bin();
@@ -574,12 +641,14 @@ impl Notifier {
             // Nothing published for this channel yet.
             let mut f = lock(&self.inner.found);
             f.checked = None;
+            f.envelope = None;
             f.notices.clear();
             f.trust_damaged = false;
             return Ok(());
         };
         let embedded = (self.inner.keys)().map_err(lodestar_update::Error::code)?;
         let now = (self.inner.clock)().max(0) as u64;
+        let envelope = body.clone();
         let (checked, damaged) = blocking(move || {
             // No overlays on Windows: the floor is the embedded statements.
             let loaded = trust_file::load(bin.dir(), &embedded, &[]);
@@ -596,6 +665,7 @@ impl Notifier {
             Ok(c) => {
                 f.notices = c.notices.iter().map(|n| n.code().to_string()).collect();
                 f.checked = Some(c);
+                f.envelope = Some(envelope);
                 Ok(())
             }
             Err(e) => {
@@ -658,8 +728,8 @@ impl Notifier {
         )
     }
 
-    /// Why this installation can't install itself: always something here,
-    /// since installing isn't built on Windows yet.
+    /// Why this installation can't install itself automatically: always
+    /// something here, since nothing installs on its own on Windows yet.
     fn incapable(&self, skipped_ok: bool) -> Reason {
         if !skipped_ok {
             Reason::SkippedUnreadable
@@ -668,6 +738,29 @@ impl Notifier {
         } else {
             NOT_BUILT_YET
         }
+    }
+
+    /// Why Install isn't offered, or `None` when it is: the MSI, through
+    /// the update helper (PK-win-upd-2), from the checked data folder. The
+    /// portable build's comes with PK-win-portable-upd.
+    fn cannot_install(&self, skipped_ok: bool) -> Option<&'static str> {
+        let ctx = &self.inner.ctx;
+        match self.incapable(skipped_ok) {
+            NOT_BUILT_YET => {}
+            r => return Some(r.code()),
+        }
+        match ctx.kind {
+            InstallKind::Msi => {}
+            InstallKind::Unknown => return Some(NoArtifact::UnknownKind.code()),
+            InstallKind::Portable => return Some(NOT_BUILT_YET.code()),
+        }
+        if !ctx.checked_data {
+            return Some("data_folder_unchecked");
+        }
+        if self.inner.installer.is_none() {
+            return Some(NOT_BUILT_YET.code());
+        }
+        None
     }
 
     /// The policy's plan over the releases offered here.
@@ -723,7 +816,8 @@ impl Notifier {
             (s.effective(), s.unsaved.is_some(), s.unreadable)
         };
         let plan = self.plan(bin.as_ref(), &settings, now);
-        let reason = self.incapable(Notifier::skipped(bin.as_ref()).is_some());
+        let cannot = self.cannot_install(Notifier::skipped(bin.as_ref()).is_some());
+        let installing = lock(&self.inner.installing).clone();
         let found = lock(&self.inner.found);
         let mut notices = found.notices.clone();
         if found.trust_damaged {
@@ -737,6 +831,15 @@ impl Notifier {
         }
         if unreadable {
             notices.push("updater_unreadable".into());
+        }
+        // The update helper's last answer, when it didn't install a newer
+        // version (display only: this account can write that file too).
+        let missed = super::msi::answer(&ctx.data_dir).is_some_and(|a| {
+            a.outcome != "installed"
+                && crate::update::layout::parse_version(&a.version).is_some_and(|v| v > ctx.running)
+        });
+        if missed {
+            notices.push("install_failed".into());
         }
         notices.sort();
         notices.dedup();
@@ -775,8 +878,8 @@ impl Notifier {
                 withdrawn,
             },
             capability: Capability {
-                can_install: false,
-                reason: Some(reason.code().to_string()),
+                can_install: cannot.is_none(),
+                reason: cannot.map(str::to_string),
             },
             policy: Policy {
                 mode: mode_name(settings.mode).into(),
@@ -792,7 +895,10 @@ impl Notifier {
             },
             releases,
             pending: None,
-            installing: None,
+            installing: installing.map(|v| lodestar_api::updates::Installing {
+                version: v.to_string(),
+                when: InstallWhen::Now,
+            }),
             rollback: RollbackInfo {
                 available: false,
                 reason: Some(NOT_BUILT_YET.code().into()),
@@ -803,6 +909,171 @@ impl Notifier {
             notices,
             history: vec![],
         }
+    }
+
+    /// `POST /updates/install` (the MSI): checks Install now's rules as
+    /// the engine does, then downloads the MSI and hands it to the update
+    /// helper in the background, answering at once. Only `when: now`:
+    /// nothing installs at a window on Windows yet.
+    pub async fn install_request(
+        &self,
+        version: String,
+        when: InstallWhen,
+        confirm_manual: bool,
+    ) -> Result<UpdatesStatus, UpdatesError> {
+        let v =
+            crate::update::layout::parse_version(&version).ok_or(UpdatesError::UnknownVersion)?;
+        let n = self.clone();
+        let cannot = blocking(move || {
+            let bin = n.bin();
+            n.cannot_install(Notifier::skipped(bin.as_ref()).is_some())
+        })
+        .await;
+        if let Some(reason) = cannot {
+            return Err(UpdatesError::InstallUnavailable(reason));
+        }
+        if when == InstallWhen::Window {
+            return Err(UpdatesError::InstallUnavailable(NOT_BUILT_YET.code()));
+        }
+        // One at a time, and never during a check.
+        let Ok(one) = self.inner.checking.clone().try_lock_owned() else {
+            return Err(UpdatesError::InstallUnavailable("busy"));
+        };
+        let (n, w) = (self.clone(), v.clone());
+        let (pin, envelope, channel) = blocking(move || n.may_install(&w, confirm_manual)).await?;
+        *lock(&self.inner.installing) = Some(v.clone());
+        let n = self.clone();
+        tokio::spawn(async move {
+            n.run_install(one, v, pin, envelope, channel).await;
+        });
+        let n = self.clone();
+        Ok(blocking(move || n.status()).await)
+    }
+
+    /// Install now's rules (the policy's, with nothing incapable: the
+    /// MSI can install), the manual steps' confirmation, and the pin from
+    /// a current manifest.
+    fn may_install(
+        &self,
+        v: &Version,
+        confirm_manual: bool,
+    ) -> Result<(lodestar_update::Pin, Vec<u8>, lodestar_update::Channel), UpdatesError> {
+        let settings = self.inner.settings.borrow().clone();
+        let now = (self.inner.clock)();
+        let bin = self.bin();
+        let skipped: Vec<String> = Notifier::skipped(bin.as_ref())
+            .ok_or(UpdatesError::InstallUnavailable(
+                Reason::SkippedUnreadable.code(),
+            ))?
+            .into_iter()
+            .map(|s| s.version)
+            .collect();
+        let paused_until = self.updater().paused_until;
+        let ctx = &self.inner.ctx;
+        let found = lock(&self.inner.found);
+        let (Some(c), Some(envelope)) = (found.checked.as_ref(), found.envelope.as_ref()) else {
+            return Err(UpdatesError::UnknownVersion);
+        };
+        let releases: Vec<Release> = c
+            .manifest
+            .releases
+            .iter()
+            .filter(|r| offered(r, ctx.target, ctx.kind))
+            .cloned()
+            .collect();
+        let window_from = |t: i64| t;
+        let inputs = policy::Inputs {
+            settings: &settings,
+            releases: &releases,
+            current: current(c, now),
+            running: &ctx.running,
+            skipped: &skipped,
+            paused_until,
+            held_in_process: false,
+            now,
+            window_from: &window_from,
+            incapable: None,
+        };
+        policy::install_now(&inputs, v).map_err(|r| match r {
+            policy::Refusal::UnknownVersion => UpdatesError::UnknownVersion,
+            policy::Refusal::Skipped => UpdatesError::VersionSkipped,
+            policy::Refusal::NotCandidate => UpdatesError::InstallUnavailable("not_candidate"),
+            policy::Refusal::Incapable(reason) => UpdatesError::InstallUnavailable(reason.code()),
+            policy::Refusal::NotCurrent => UpdatesError::InstallUnavailable("not_current"),
+            policy::Refusal::UpgradePath => UpdatesError::InstallUnavailable("upgrade_path"),
+        })?;
+        let manual = releases.iter().any(|r| r.version == *v && r.manual_steps);
+        if manual && !confirm_manual {
+            return Err(UpdatesError::ManualConfirmationRequired);
+        }
+        let target = ctx.target.ok_or(UpdatesError::InstallUnavailable(
+            NoArtifact::NoTarget.code(),
+        ))?;
+        let pin = lodestar_update::install(c, v, target, ArtifactKind::Msi)
+            .map_err(|e| UpdatesError::InstallUnavailable(e.code()))?;
+        Ok((pin, envelope.clone(), c.manifest.channel))
+    }
+
+    /// The background half of an install, holding the one-check lock: its
+    /// events, and on failure the log line and the `failed` event.
+    async fn run_install(
+        &self,
+        _one: tokio::sync::OwnedMutexGuard<()>,
+        v: Version,
+        pin: lodestar_update::Pin,
+        envelope: Vec<u8>,
+        channel: lodestar_update::Channel,
+    ) {
+        let result = self.install_steps(&v, &pin, envelope, channel).await;
+        *lock(&self.inner.installing) = None;
+        match result {
+            // The helper stops this service: what follows is the MSI's.
+            Ok(()) => self.publish(UpdatesState::Installing, Some(v.to_string()), None),
+            Err(code) => {
+                log_event!(UPDATE_INSTALL_FAILED, error = code);
+                self.publish(
+                    UpdatesState::Failed,
+                    Some(v.to_string()),
+                    Some(code.to_string()),
+                );
+            }
+        }
+    }
+
+    /// Downloads the MSI to `<data>\bin` (verified against the pin), hands
+    /// it to the helper in `<data>\updates\` and starts the helper's task.
+    /// The service has no other rights: the helper trusts none of this.
+    async fn install_steps(
+        &self,
+        v: &Version,
+        pin: &lodestar_update::Pin,
+        envelope: Vec<u8>,
+        channel: lodestar_update::Channel,
+    ) -> Result<(), &'static str> {
+        let installer = self.inner.installer.as_ref().ok_or(NOT_BUILT_YET.code())?;
+        let bin = self.bin().ok_or("bin_unavailable")?;
+        (self.inner.publish)(UpdatesEvent {
+            state: UpdatesState::Downloading,
+            version: Some(v.to_string()),
+            bytes_done: Some(0),
+            bytes_total: Some(pin.size),
+            error: None,
+        });
+        let part = crate::update::download::download(&*installer.source, &bin, pin, &mut |_| {})
+            .await
+            .map_err(crate::update::download::DownloadError::code)?;
+        let (data, w) = (self.inner.ctx.data_dir.clone(), v.clone());
+        blocking(move || super::msi::hand_over(&data, &part, &envelope, &w, channel))
+            .await
+            .map_err(|e| {
+                log_event!(
+                    UPDATE_STATE_UNSAVED,
+                    file = super::msi::REQUEST,
+                    error = lodestar_log::Error::io(&e)
+                );
+                "handover_failed"
+            })?;
+        (installer.start)().map_err(|_| "helper_unavailable")
     }
 
     /// `POST /updates/skip`: hides a version a check found, as on Unix
@@ -828,8 +1099,7 @@ impl Notifier {
                     version: version.to_string(),
                     reason: "user".into(),
                 });
-                let over = list.len().saturating_sub(MAX_SKIPPED);
-                list.drain(..over);
+                trim(&mut list);
                 self.write(Some(&bin), SKIPPED_FILE, &list)?;
             }
         }
@@ -853,6 +1123,17 @@ impl Notifier {
         }
         Ok(self.status())
     }
+}
+
+/// The MSI's download and helper start, on Windows.
+#[cfg(windows)]
+fn installer() -> Option<super::msi::Installer> {
+    super::msi::Installer::system()
+}
+
+#[cfg(not(windows))]
+fn installer() -> Option<super::msi::Installer> {
+    None
 }
 
 /// The releases as `/updates` lists them, in the policy's order. This
@@ -968,11 +1249,11 @@ impl UpdatesApi for Notifier {
 
     fn install(
         &self,
-        _version: String,
-        _when: InstallWhen,
-        _confirm_manual: bool,
+        version: String,
+        when: InstallWhen,
+        confirm_manual: bool,
     ) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
-        Box::pin(async { Err(UpdatesError::InstallUnavailable(NOT_BUILT_YET.code())) })
+        Box::pin(self.install_request(version, when, confirm_manual))
     }
 
     fn skip(&self, version: String) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
@@ -1203,6 +1484,11 @@ mod tests {
         events: Arc<Mutex<Vec<UpdatesEvent>>>,
         /// The write step to fail, if any.
         fail: Arc<Mutex<Option<Step>>>,
+        /// With the MSI's installer: its downloads, and how many times the
+        /// helper's task was started.
+        installer: bool,
+        downloads: Arc<crate::update::download::tests::Fake>,
+        started: Arc<std::sync::atomic::AtomicUsize>,
     }
 
     impl Env {
@@ -1218,9 +1504,20 @@ mod tests {
                 settings,
                 events: Arc::default(),
                 fail: Arc::default(),
+                installer: false,
+                downloads: Arc::default(),
+                started: Arc::default(),
                 n: None,
             };
             e.n = Some(e.open(kind));
+            e
+        }
+
+        /// The MSI with its installer, as the service runs.
+        fn installing() -> Env {
+            let mut e = Env::new(Mode::Notify, InstallKind::Msi);
+            e.installer = true;
+            e.n = Some(e.open(InstallKind::Msi));
             e
         }
 
@@ -1236,6 +1533,7 @@ mod tests {
                     dev: false,
                     kind,
                     target: WIN,
+                    checked_data: true,
                 },
                 self.settings.subscribe(),
                 Arc::new(move |e| lock(&sink).push(e)),
@@ -1247,6 +1545,16 @@ mod tests {
                     fault: Box::new(move |step| match *lock(&fail) {
                         Some(f) if f == step => Err(std::io::Error::other("injected")),
                         _ => Ok(()),
+                    }),
+                    installer: self.installer.then(|| {
+                        let started = self.started.clone();
+                        super::super::msi::Installer {
+                            source: self.downloads.clone(),
+                            start: Box::new(move || {
+                                started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                Ok(())
+                            }),
+                        }
                     }),
                 },
             )
@@ -1536,6 +1844,38 @@ mod tests {
         assert_eq!(list.last().unwrap().version, "0.5.4");
     }
 
+    /// The helper's `failed` entry survives any number of user skips, and
+    /// a user skip never replaces it.
+    #[tokio::test]
+    async fn user_skips_never_push_out_a_failed_one() {
+        let e = Env::new(Mode::Notify, InstallKind::Msi);
+        let bin = Bin::open(e.dir.path()).unwrap();
+        add_skip(&bin, "0.0.9", SKIP_FAILED).unwrap();
+        for i in 0..MAX_SKIPPED {
+            add_skip(&bin, &format!("0.1.{i}"), "user").unwrap();
+        }
+        let list: Vec<Skip> = bin.read(SKIPPED_FILE).unwrap().unwrap();
+        assert_eq!(list.len(), MAX_SKIPPED);
+        assert_eq!(
+            (list[0].version.as_str(), list[0].reason.as_str()),
+            ("0.0.9", "failed")
+        );
+        assert_eq!(list[1].version, "0.1.1", "the oldest user skip went");
+        // A user skip of the failed version doesn't replace it.
+        add_skip(&bin, "0.0.9", "user").unwrap();
+        let again: Vec<Skip> = bin.read(SKIPPED_FILE).unwrap().unwrap();
+        assert_eq!(again, list);
+        // Only failed entries over the limit: all kept.
+        let mut only: Vec<Skip> = (0..MAX_SKIPPED + 2)
+            .map(|i| Skip {
+                version: format!("0.2.{i}"),
+                reason: SKIP_FAILED.into(),
+            })
+            .collect();
+        trim(&mut only);
+        assert_eq!(only.len(), MAX_SKIPPED + 2);
+    }
+
     /// A damaged `trust.json` is named and never written over; the check
     /// still runs from the embedded floor.
     #[tokio::test]
@@ -1622,5 +1962,85 @@ mod tests {
         .unwrap();
         assert_eq!(u.queued.as_deref(), Some("0.5.4"));
         assert!(serde_json::from_str::<Updater>(r#"{"format":1,"x":1}"#).is_err());
+    }
+
+    /// Install (the MSI): the pinned MSI is downloaded, handed over with
+    /// the envelope and a request, and the helper's task started.
+    #[tokio::test]
+    async fn install_hands_the_msi_to_the_helper() {
+        let e = Env::installing();
+        e.serve(Channel::Stable, vec![release_with("0.5.4", &["msi"])]);
+        let url = "https://github.com/dvortsis/lodestar-v2/releases/download/v0.5.4/lodestar.msi";
+        e.downloads.serve(url, 200, None, b"x");
+        let status = e.check().await;
+        assert_eq!(status["capability"]["can_install"], true, "{status}");
+        assert_eq!(status["capability"]["reason"], Value::Null);
+        let answer = e
+            .n()
+            .install_request("0.5.4".into(), InstallWhen::Now, false)
+            .await
+            .unwrap();
+        assert_eq!(answer.installing.unwrap().version, "0.5.4");
+        // The background half: wait for the helper's start, with a deadline.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while e.started.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            assert!(Instant::now() < deadline, "the helper wasn't started");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let updates = e.dir.path().join(super::super::msi::UPDATES);
+        assert_eq!(
+            std::fs::read(updates.join("lodestar-0.5.4.msi")).unwrap(),
+            b"x"
+        );
+        let req = std::fs::read(updates.join(super::super::msi::REQUEST)).unwrap();
+        let (r, v) = super::super::msi::parse_request(&req).unwrap();
+        assert_eq!((r.channel, v), (Channel::Stable, Version::new(0, 5, 4)));
+        // The envelope is the one checked, byte for byte.
+        let envelope = std::fs::read(updates.join(super::super::msi::ENVELOPE)).unwrap();
+        assert_eq!(Some(envelope), lock(&e.n().inner.found).envelope.clone());
+        assert!(
+            e.states()
+                .contains(&(UpdatesState::Installing, Some("0.5.4".into())))
+        );
+    }
+
+    #[tokio::test]
+    async fn install_refuses_what_it_mustnt() {
+        let e = Env::installing();
+        e.serve(
+            Channel::Stable,
+            vec![
+                release_with("0.5.4", &["msi"]),
+                release_with("0.5.2", &["msi"]),
+                release_with("0.5.5", &["portable"]),
+            ],
+        );
+        e.check().await;
+        let ask = |v: &str, when| e.n().install_request(v.into(), when, false);
+        let err = |r: Result<UpdatesStatus, UpdatesError>| format!("{:?}", r.unwrap_err());
+        assert_eq!(
+            err(ask("0.5.2", InstallWhen::Now).await),
+            "InstallUnavailable(\"not_candidate\")"
+        );
+        assert_eq!(err(ask("0.5.5", InstallWhen::Now).await), "UnknownVersion");
+        assert_eq!(err(ask("0.9.9", InstallWhen::Now).await), "UnknownVersion");
+        assert_eq!(
+            err(ask("0.5.4", InstallWhen::Window).await),
+            "InstallUnavailable(\"not_built_yet\")"
+        );
+        e.n().skip("0.5.4").unwrap();
+        assert_eq!(err(ask("0.5.4", InstallWhen::Now).await), "VersionSkipped");
+        assert_eq!(e.started.load(std::sync::atomic::Ordering::SeqCst), 0);
+        // An unknown kind, the portable build or a moved data folder aren't
+        // offered Install.
+        for (kind, reason) in [
+            (InstallKind::Unknown, "install_kind_unknown"),
+            (InstallKind::Portable, "not_built_yet"),
+        ] {
+            let mut e = Env::new(Mode::Notify, kind);
+            e.installer = true;
+            e.n = Some(e.open(kind));
+            assert_eq!(e.status()["capability"]["reason"], reason);
+        }
     }
 }

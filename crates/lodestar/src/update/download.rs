@@ -263,6 +263,7 @@ async fn fetch_to(
 }
 
 /// `path`, created new: never through a link, owner-only.
+#[cfg(unix)]
 fn create_part(path: &Path) -> io::Result<File> {
     use std::os::unix::fs::OpenOptionsExt;
     std::fs::OpenOptions::new()
@@ -271,6 +272,29 @@ fn create_part(path: &Path) -> io::Result<File> {
         .mode(0o600)
         .custom_flags(super::layout::nofollow())
         .open(path)
+}
+
+/// `path`, created new (`CREATE_NEW`, so an existing name, a link or
+/// junction among them, is refused) and opened as itself
+/// (`FILE_FLAG_OPEN_REPARSE_POINT`), then refused if the handle names a
+/// reparse point anyway. It inherits `<data>\bin`'s ACL.
+#[cfg(windows)]
+fn create_part(path: &Path) -> io::Result<File> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .custom_flags(OPEN_REPARSE_POINT)
+        .open(path)?;
+    if file.metadata()?.file_attributes() & ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "the part file is a link",
+        ));
+    }
+    Ok(file)
 }
 
 /// The real source: the check's client (public addresses only), with no
@@ -483,8 +507,6 @@ pub mod tests {
 
     #[tokio::test]
     async fn the_pinned_bytes_land_in_a_private_part_file() {
-        use std::os::unix::fs::PermissionsExt;
-
         let data = tempfile::tempdir().unwrap();
         let bin = Bin::open(data.path()).unwrap();
         let f = Fake::default();
@@ -496,8 +518,12 @@ pub mod tests {
             .await
             .unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b);
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
         assert_eq!(seen, [1000, 2000, 3000, 4000, 4500], "progress per chunk");
     }
 
@@ -696,9 +722,27 @@ pub mod tests {
         std::fs::remove_file(part_path(&bin, &p)).unwrap();
         let target = data.path().join("elsewhere");
         std::fs::write(&target, b"keep").unwrap();
-        // A link in place of the .part file: removed as stale (a link is
-        // not a file to `remove_stale_parts`, so it's refused instead).
+        // A link in place of the .part file: not removed as stale (a link
+        // is not a file to `remove_stale_parts`), so it's refused instead.
+        #[cfg(unix)]
         std::os::unix::fs::symlink(&target, part_path(&bin, &p)).unwrap();
+        // On Windows a junction (`mklink /J` needs no privilege, unlike a
+        // file symlink), to a folder that must stay empty.
+        #[cfg(windows)]
+        let folder = {
+            let folder = data.path().join("elsewhere-folder");
+            std::fs::create_dir(&folder).unwrap();
+            let out = std::process::Command::new("cmd")
+                .arg("/C")
+                .arg("mklink")
+                .arg("/J")
+                .arg(part_path(&bin, &p))
+                .arg(&folder)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{out:?}");
+            folder
+        };
         let got = download(&f, &bin, &p, &mut |_| {}).await;
         assert_eq!(got, Err(DownloadError::Io));
         assert_eq!(
@@ -706,5 +750,7 @@ pub mod tests {
             b"keep",
             "not written through"
         );
+        #[cfg(windows)]
+        assert_eq!(std::fs::read_dir(folder).unwrap().count(), 0);
     }
 }

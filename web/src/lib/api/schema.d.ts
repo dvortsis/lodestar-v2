@@ -281,6 +281,182 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/companions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every catalogue companion. */
+        get: operations["listCompanions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/companions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One companion. */
+        get: operations["getCompanion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/companions/{id}/credentials/{field}/regenerate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replaces one credential with a new random one, offered beside the
+         *     reveal (Q5). The old one stops working; it's never read or returned.
+         */
+        post: operations["regenerateCompanionCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/companions/{id}/credentials/{field}/reveal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Shows one stored credential, after the admin password is entered
+         *     again (Q5), so you can sign in to the companion's own web page. Logged
+         *     as `companions.credential_revealed`, without the value.
+         */
+        post: operations["revealCompanionCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/companions/{id}/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What installing or updating it would fetch: show this, then confirm
+         *     by echoing `version` and `sha256`.
+         */
+        get: operations["getCompanionInstallOffer"];
+        put?: never;
+        /**
+         * Installs or updates it to the pinned version you confirmed. The body
+         *     echoes the offer's `version` and `sha256`; anything else is refused
+         *     before anything is fetched.
+         */
+        post: operations["installCompanion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/companions/{id}/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Its recent output, with its credentials redacted. */
+        get: operations["getCompanionLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/companions/{id}/remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Exactly what removing it deletes. Nothing is deleted. */
+        get: operations["getCompanionRemoval"];
+        put?: never;
+        /**
+         * Removes it: stops it, deletes its credentials, then its folder. `confirm`
+         *     must be the companion's id.
+         */
+        post: operations["removeCompanion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/companions/{id}/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restarts it. `202`: the companion's row shows when it's back. */
+        post: operations["restartCompanion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/companions/{id}/template": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Its compose service or Unraid template, for running it as its own
+         *     container. Each value is checked as `lodestar companion compose`
+         *     checks it; nothing is stored.
+         */
+        post: operations["getCompanionTemplate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/compare": {
         parameters: {
             query?: never;
@@ -3639,6 +3815,79 @@ export interface components {
             /** Format: int64 */
             updated_at: number;
         };
+        /** @description One companion: the list's row and the detail. */
+        Companion: {
+            /**
+             * @description The version an install or update would fetch here; null when it's
+             *     up to date or can't be installed here (`refusal` says why).
+             */
+            available: string | null;
+            /**
+             * @description The stored credentials, by field (`webui_password`, `api_key`):
+             *     names only, never values. What `…/reveal` can show.
+             */
+            credentials: string[];
+            /** @description Null when Lodestar didn't install it. */
+            health: null | ("unknown" | "healthy" | "unhealthy");
+            /** @description The catalogue id, e.g. `qbittorrent`. */
+            id: string;
+            /** @description The version Lodestar installed; null when it didn't. */
+            installed: string | null;
+            /** @description The SPDX licence id, e.g. `GPL-2.0-or-later`. */
+            licence: string;
+            /** @description Its display name, e.g. `qBittorrent`. */
+            name: string;
+            /** @description Off and never installed unless you switch it on (FlareSolverr). */
+            opt_in: boolean;
+            /**
+             * @description Why it can't be installed or updated here, as a stable code
+             *     (`native_in_container`, `awaiting_pin`, `unsupported_platform`,
+             *     `guided_only`, …); null when it can, or when it's up to date.
+             */
+            refusal: string | null;
+            /** @description The templates it offers. */
+            templates: ("compose" | "unraid")[];
+        };
+        /**
+         * @description `202` for a restart or a regenerated credential: the change is under
+         *     way; the companion's row says when it's done.
+         */
+        CompanionAccepted: {
+            id: string;
+        };
+        /**
+         * @description `POST /companions/{id}/install`: the offer's version and SHA-256,
+         *     echoed. Anything else is `409 confirmation_mismatch`.
+         */
+        CompanionInstallRequest: {
+            sha256: string;
+            version: string;
+        };
+        CompanionList: {
+            companions: components["schemas"]["Companion"][];
+        };
+        /** @description A companion's recent output, redacted again on the way out. */
+        CompanionLogs: {
+            id: string;
+            /** @description Oldest first. */
+            lines: string[];
+        };
+        /** @description A generated template, to copy. */
+        CompanionTemplate: {
+            /** @description The compose document, for `kind: compose`; null otherwise. */
+            compose: string | null;
+            id: string;
+            /**
+             * @description A template a companion offers (CMP-7).
+             * @enum {string}
+             */
+            kind: "compose" | "unraid";
+            /**
+             * @description gluetun's template first when it's generated, then the
+             *     companion's, for `kind: unraid`; empty otherwise.
+             */
+            unraid: components["schemas"]["UnraidFile"][];
+        };
         /** @description `POST /compare`'s body. */
         CompareRequest: {
             /** @description 2–5 distinct 40-character hex info hashes, in column order. */
@@ -5653,6 +5902,23 @@ export interface components {
             understand: number;
         };
         /**
+         * @description What an install or update would fetch, shown before you confirm it.
+         *     The confirmation echoes `version` and `sha256` exactly.
+         */
+        InstallOffer: {
+            id: string;
+            /** @description The SPDX licence id. */
+            licence: string;
+            name: string;
+            /** @description The installed version this update replaces; null for an install. */
+            replaces: string | null;
+            /** @description The pinned SHA-256 of the download, 64 lowercase hex digits. */
+            sha256: string;
+            /** Format: int64 */
+            size_bytes: number;
+            version: string;
+        };
+        /**
          * @description `POST /updates/install`. A release with manual steps needs
          *     `confirm_manual: true` (the steps are in its notes), else
          *     `422 manual_confirmation_required`.
@@ -7345,6 +7611,32 @@ export interface components {
             security: boolean;
             version: string;
         };
+        RemovalItem: {
+            /**
+             * @description What a removal deletes.
+             * @enum {string}
+             */
+            kind: "folder" | "setting";
+            /** @description `companions/<id>` for the folder; the row key for a setting. */
+            name: string;
+        };
+        /**
+         * @description Exactly what removing a companion deletes: shown first, and returned
+         *     again once it's done.
+         */
+        RemovalPlan: {
+            deletes: components["schemas"]["RemovalItem"][];
+            id: string;
+            /** @description Whether it has been removed (`POST`), or is only shown (`GET`). */
+            removed: boolean;
+        };
+        /**
+         * @description `POST /companions/{id}/remove`: `confirm` is the companion's id, typed
+         *     or echoed. Anything else is `409 confirmation_mismatch`.
+         */
+        RemoveRequest: {
+            confirm: string;
+        };
         RemovedCount: {
             /** @description Content type, or `unclassified`. */
             key: string;
@@ -7399,6 +7691,23 @@ export interface components {
          * @enum {string}
          */
         ResyncReason: "restarted" | "expired" | "malformed" | "lagged" | "visibility";
+        /**
+         * @description `POST …/reveal`: the admin password, entered again (Q5). Asked every
+         *     time, never remembered.
+         */
+        RevealRequest: {
+            password?: string | null;
+        };
+        /**
+         * @description One stored credential, in the clear: the reveal's response alone
+         *     carries it, with `Cache-Control: no-store`.
+         */
+        RevealedCredential: {
+            /** @description `webui_password` or `api_key`. */
+            field: string;
+            id: string;
+            value: string;
+        };
         /**
          * @description Whether Roll back is offered (§10.10.7's Danger zone): this is the
          *     "can roll back" the Updates screen shows.
@@ -9534,6 +9843,35 @@ export interface components {
             uptime_s: number;
             version: string;
         };
+        /**
+         * @description `POST /companions/{id}/template`: what the template is built from,
+         *     each value checked as `lodestar companion compose` checks it. Nothing
+         *     here is stored.
+         */
+        TemplateRequest: {
+            /** @description The host folder for its settings. */
+            config_dir?: string | null;
+            /** @description The host folder it saves downloads in. */
+            downloads?: string | null;
+            /** @description The gluetun container's name, with `route: existing_gluetun`. */
+            gluetun_container?: string | null;
+            /**
+             * @description A template a companion offers (CMP-7).
+             * @enum {string}
+             */
+            kind: "compose" | "unraid";
+            /** @description The Docker network Lodestar is on; `lodestar` by default. */
+            network?: string;
+            /** @description `1000` by default. */
+            pgid?: string;
+            /** @description `1000` by default. */
+            puid?: string;
+            /**
+             * @description How a templated companion's traffic leaves.
+             * @enum {string}
+             */
+            route?: "direct" | "gluetun" | "existing_gluetun";
+        };
         /** @description One term facet. */
         TermFacet: {
             /** @description Computed on a sample: show the counts with "≈". */
@@ -9892,6 +10230,24 @@ export interface components {
              *     have it yet; later ones do. Null otherwise.
              */
             upto: number | null;
+        };
+        UnraidField: {
+            label: string;
+            /** @description Empty for a VPN setting you fill in yourself. */
+            value: string;
+        };
+        /** @description One filled Unraid template. */
+        UnraidFile: {
+            /**
+             * @description The path on your Unraid server's web UI that opens the saved
+             *     template in Add Container.
+             */
+            add_container_path: string;
+            /** @description Label and value, in the form's order, for filling it by hand. */
+            fields: components["schemas"]["UnraidField"][];
+            /** @description `my-<name>.xml`. */
+            file_name: string;
+            xml: string;
         };
         /**
          * @description `GET /alerts/unread`: the nav badge.
@@ -10920,6 +11276,717 @@ export interface operations {
             };
             /** @description `invalid_value`: not 1–500 hashes. */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listCompanions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanionList"];
+                };
+            };
+            /** @description `companions_unavailable`: companions are off in this process. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getCompanion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The catalogue id, e.g. `qbittorrent`. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Companion"];
+                };
+            };
+            /** @description `unknown_companion`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `companions_unavailable`: companions are off in this process. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    regenerateCompanionCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The catalogue id. */
+                id: string;
+                /** @description `webui_password` or `api_key`. */
+                field: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanionAccepted"];
+                };
+            };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unknown_companion`, `no_credential`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `not_installed`, `not_wired`, `busy`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unsupported_media_type`: not JSON. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `companions_unavailable`: companions are off in this process. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    revealCompanionCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The catalogue id. */
+                id: string;
+                /** @description `webui_password` or `api_key`. */
+                field: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevealRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevealedCredential"];
+                };
+            };
+            /** @description `bad_password`. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unknown_companion`, `no_credential`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unsupported_media_type`: not JSON. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `bad_body`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `confirm_required`: no password. */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `rate_limited`: too many password attempts. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `companions_unavailable`: companions are off in this process. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getCompanionInstallOffer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The catalogue id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstallOffer"];
+                };
+            };
+            /** @description `unknown_companion`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Why it can't be installed here: `native_in_container`, `unsupported_platform`, `awaiting_pin`, `no_build`, `guided_only`, `already_current`, …. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `companions_unavailable`: companions are off in this process. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    installCompanion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The catalogue id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompanionInstallRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Companion"];
+                };
+            };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unknown_companion`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `confirmation_mismatch`, `not_wired`, `busy`, or why it can't be installed here. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unsupported_media_type`: not JSON. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `bad_body`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `companions_unavailable`: companions are off in this process. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getCompanionLogs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The catalogue id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanionLogs"];
+                };
+            };
+            /** @description `unknown_companion`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `not_installed`, `not_wired`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `companions_unavailable`: companions are off in this process. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getCompanionRemoval: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The catalogue id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemovalPlan"];
+                };
+            };
+            /** @description `unknown_companion`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `not_installed`, `native_in_container`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `companions_unavailable`: companions are off in this process. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    removeCompanion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The catalogue id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoveRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemovalPlan"];
+                };
+            };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unknown_companion`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `confirmation_mismatch`, `not_installed`, `busy`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unsupported_media_type`: not JSON. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `bad_body`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `companions_unavailable`: companions are off in this process. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    restartCompanion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The catalogue id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanionAccepted"];
+                };
+            };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unknown_companion`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `not_installed`, `not_wired`, `busy`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unsupported_media_type`: not JSON. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `companions_unavailable`: companions are off in this process. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getCompanionTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The catalogue id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TemplateRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanionTemplate"];
+                };
+            };
+            /** @description `bad_template_input` and the rule's own code, with `field`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unknown_companion`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `no_template`, `awaiting_pin`, …. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unsupported_media_type`: not JSON. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `bad_body`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `companions_unavailable`: companions are off in this process. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -452,6 +452,12 @@ jobs:
         run: |
           (cd infra/akamai/watchdog/deployed && python -m unittest test_watchdog -v)
           (cd infra/aws/expiration-guard/deployed && python -m unittest test_guard -v)
+      # The fleet control plane (OP-1): dry-run only, no cloud call; the
+      # parser's property tests, the workflow checks and the public-log leak test.
+      - name: Fleet control plane tests
+        run: |
+          python -m pip install --no-deps --require-hashes -r infra/fleet/requirements-test.txt
+          ./infra/fleet/run_tests.sh -v
       # Each template inlines its index.py; the committed JSON must be exactly
       # what build_template.py produces from the committed source.
       - name: Templates match their Lambda source

@@ -837,6 +837,979 @@
         ]
       }
     },
+    "/companions": {
+      "get": {
+        "tags": [
+          "companions"
+        ],
+        "summary": "Every catalogue companion.",
+        "operationId": "listCompanions",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanionList"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`companions_unavailable`: companions are off in this process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/companions/{id}": {
+      "get": {
+        "tags": [
+          "companions"
+        ],
+        "summary": "One companion.",
+        "operationId": "getCompanion",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The catalogue id, e.g. `qbittorrent`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Companion"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_companion`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`companions_unavailable`: companions are off in this process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/companions/{id}/credentials/{field}/regenerate": {
+      "post": {
+        "tags": [
+          "companions"
+        ],
+        "summary": "Replaces one credential with a new random one, offered beside the\nreveal (Q5). The old one stops working; it's never read or returned.",
+        "operationId": "regenerateCompanionCredential",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The catalogue id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "field",
+            "in": "path",
+            "description": "`webui_password` or `api_key`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanionAccepted"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_companion`, `no_credential`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`not_installed`, `not_wired`, `busy`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: not JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`companions_unavailable`: companions are off in this process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/companions/{id}/credentials/{field}/reveal": {
+      "post": {
+        "tags": [
+          "companions"
+        ],
+        "summary": "Shows one stored credential, after the admin password is entered\nagain (Q5), so you can sign in to the companion's own web page. Logged\nas `companions.credential_revealed`, without the value.",
+        "operationId": "revealCompanionCredential",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The catalogue id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "field",
+            "in": "path",
+            "description": "`webui_password` or `api_key`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevealRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevealedCredential"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`bad_password`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_companion`, `no_credential`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: not JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`bad_body`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "`confirm_required`: no password.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: too many password attempts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`companions_unavailable`: companions are off in this process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/companions/{id}/install": {
+      "get": {
+        "tags": [
+          "companions"
+        ],
+        "summary": "What installing or updating it would fetch: show this, then confirm\nby echoing `version` and `sha256`.",
+        "operationId": "getCompanionInstallOffer",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The catalogue id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallOffer"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_companion`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Why it can't be installed here: `native_in_container`, `unsupported_platform`, `awaiting_pin`, `no_build`, `guided_only`, `already_current`, ….",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`companions_unavailable`: companions are off in this process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "companions"
+        ],
+        "summary": "Installs or updates it to the pinned version you confirmed. The body\nechoes the offer's `version` and `sha256`; anything else is refused\nbefore anything is fetched.",
+        "operationId": "installCompanion",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The catalogue id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanionInstallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Companion"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_companion`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`confirmation_mismatch`, `not_wired`, `busy`, or why it can't be installed here.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: not JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`bad_body`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`companions_unavailable`: companions are off in this process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/companions/{id}/logs": {
+      "get": {
+        "tags": [
+          "companions"
+        ],
+        "summary": "Its recent output, with its credentials redacted.",
+        "operationId": "getCompanionLogs",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The catalogue id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanionLogs"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_companion`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`not_installed`, `not_wired`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`companions_unavailable`: companions are off in this process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/companions/{id}/remove": {
+      "get": {
+        "tags": [
+          "companions"
+        ],
+        "summary": "Exactly what removing it deletes. Nothing is deleted.",
+        "operationId": "getCompanionRemoval",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The catalogue id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemovalPlan"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_companion`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`not_installed`, `native_in_container`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`companions_unavailable`: companions are off in this process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "companions"
+        ],
+        "summary": "Removes it: stops it, deletes its credentials, then its folder. `confirm`\nmust be the companion's id.",
+        "operationId": "removeCompanion",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The catalogue id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemoveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemovalPlan"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_companion`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`confirmation_mismatch`, `not_installed`, `busy`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: not JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`bad_body`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`companions_unavailable`: companions are off in this process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/companions/{id}/restart": {
+      "post": {
+        "tags": [
+          "companions"
+        ],
+        "summary": "Restarts it. `202`: the companion's row shows when it's back.",
+        "operationId": "restartCompanion",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The catalogue id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanionAccepted"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_companion`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`not_installed`, `not_wired`, `busy`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: not JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`companions_unavailable`: companions are off in this process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/companions/{id}/template": {
+      "post": {
+        "tags": [
+          "companions"
+        ],
+        "summary": "Its compose service or Unraid template, for running it as its own\ncontainer. Each value is checked as `lodestar companion compose`\nchecks it; nothing is stored.",
+        "operationId": "getCompanionTemplate",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The catalogue id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanionTemplate"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`bad_template_input` and the rule's own code, with `field`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_companion`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`no_template`, `awaiting_pin`, ….",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: not JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`bad_body`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`companions_unavailable`: companions are off in this process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/compare": {
       "post": {
         "tags": [
@@ -10948,6 +11921,197 @@
           "updated_at": 1700000200
         }
       },
+      "Companion": {
+        "type": "object",
+        "description": "One companion: the list's row and the detail.",
+        "required": [
+          "available",
+          "credentials",
+          "health",
+          "id",
+          "installed",
+          "licence",
+          "name",
+          "opt_in",
+          "refusal",
+          "templates"
+        ],
+        "properties": {
+          "available": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The version an install or update would fetch here; null when it's\nup to date or can't be installed here (`refusal` says why)."
+          },
+          "credentials": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The stored credentials, by field (`webui_password`, `api_key`):\nnames only, never values. What `…/reveal` can show."
+          },
+          "health": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "description": "The last health check the manager saw.",
+                "enum": [
+                  "unknown",
+                  "healthy",
+                  "unhealthy"
+                ]
+              }
+            ],
+            "description": "Null when Lodestar didn't install it."
+          },
+          "id": {
+            "type": "string",
+            "description": "The catalogue id, e.g. `qbittorrent`."
+          },
+          "installed": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The version Lodestar installed; null when it didn't."
+          },
+          "licence": {
+            "type": "string",
+            "description": "The SPDX licence id, e.g. `GPL-2.0-or-later`."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its display name, e.g. `qBittorrent`."
+          },
+          "opt_in": {
+            "type": "boolean",
+            "description": "Off and never installed unless you switch it on (FlareSolverr)."
+          },
+          "refusal": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it can't be installed or updated here, as a stable code\n(`native_in_container`, `awaiting_pin`, `unsupported_platform`,\n`guided_only`, …); null when it can, or when it's up to date."
+          },
+          "templates": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "A template a companion offers (CMP-7).",
+              "enum": [
+                "compose",
+                "unraid"
+              ]
+            },
+            "description": "The templates it offers."
+          }
+        }
+      },
+      "CompanionAccepted": {
+        "type": "object",
+        "description": "`202` for a restart or a regenerated credential: the change is under\nway; the companion's row says when it's done.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "CompanionInstallRequest": {
+        "type": "object",
+        "description": "`POST /companions/{id}/install`: the offer's version and SHA-256,\nechoed. Anything else is `409 confirmation_mismatch`.",
+        "required": [
+          "sha256",
+          "version"
+        ],
+        "properties": {
+          "sha256": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CompanionList": {
+        "type": "object",
+        "required": [
+          "companions"
+        ],
+        "properties": {
+          "companions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Companion"
+            }
+          }
+        }
+      },
+      "CompanionLogs": {
+        "type": "object",
+        "description": "A companion's recent output, redacted again on the way out.",
+        "required": [
+          "id",
+          "lines"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Oldest first."
+          }
+        }
+      },
+      "CompanionTemplate": {
+        "type": "object",
+        "description": "A generated template, to copy.",
+        "required": [
+          "compose",
+          "id",
+          "kind",
+          "unraid"
+        ],
+        "properties": {
+          "compose": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The compose document, for `kind: compose`; null otherwise."
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "A template a companion offers (CMP-7).",
+            "enum": [
+              "compose",
+              "unraid"
+            ]
+          },
+          "unraid": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnraidFile"
+            },
+            "description": "gluetun's template first when it's generated, then the\ncompanion's, for `kind: unraid`; empty otherwise."
+          }
+        }
+      },
       "CompareRequest": {
         "type": "object",
         "description": "`POST /compare`'s body.",
@@ -15131,6 +16295,50 @@
           }
         }
       },
+      "InstallOffer": {
+        "type": "object",
+        "description": "What an install or update would fetch, shown before you confirm it.\nThe confirmation echoes `version` and `sha256` exactly.",
+        "required": [
+          "id",
+          "licence",
+          "name",
+          "replaces",
+          "sha256",
+          "size_bytes",
+          "version"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "licence": {
+            "type": "string",
+            "description": "The SPDX licence id."
+          },
+          "name": {
+            "type": "string"
+          },
+          "replaces": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The installed version this update replaces; null for an install."
+          },
+          "sha256": {
+            "type": "string",
+            "description": "The pinned SHA-256 of the download, 64 lowercase hex digits."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
       "InstallRequest": {
         "type": "object",
         "description": "`POST /updates/install`. A release with manual steps needs\n`confirm_manual: true` (the steps are in its notes), else\n`422 manual_confirmation_required`.",
@@ -18525,6 +19733,64 @@
           }
         }
       },
+      "RemovalItem": {
+        "type": "object",
+        "required": [
+          "kind",
+          "name"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "What a removal deletes.",
+            "enum": [
+              "folder",
+              "setting"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "description": "`companions/<id>` for the folder; the row key for a setting."
+          }
+        }
+      },
+      "RemovalPlan": {
+        "type": "object",
+        "description": "Exactly what removing a companion deletes: shown first, and returned\nagain once it's done.",
+        "required": [
+          "deletes",
+          "id",
+          "removed"
+        ],
+        "properties": {
+          "deletes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RemovalItem"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "removed": {
+            "type": "boolean",
+            "description": "Whether it has been removed (`POST`), or is only shown (`GET`)."
+          }
+        }
+      },
+      "RemoveRequest": {
+        "type": "object",
+        "description": "`POST /companions/{id}/remove`: `confirm` is the companion's id, typed\nor echoed. Anything else is `409 confirmation_mismatch`.",
+        "required": [
+          "confirm"
+        ],
+        "properties": {
+          "confirm": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "RemovedCount": {
         "type": "object",
         "required": [
@@ -18630,6 +19896,40 @@
           "lagged",
           "visibility"
         ]
+      },
+      "RevealRequest": {
+        "type": "object",
+        "description": "`POST …/reveal`: the admin password, entered again (Q5). Asked every\ntime, never remembered.",
+        "properties": {
+          "password": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "RevealedCredential": {
+        "type": "object",
+        "description": "One stored credential, in the clear: the reveal's response alone\ncarries it, with `Cache-Control: no-store`.",
+        "required": [
+          "field",
+          "id",
+          "value"
+        ],
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "`webui_password` or `api_key`."
+          },
+          "id": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
       },
       "RollbackInfo": {
         "type": "object",
@@ -22491,6 +23791,66 @@
           "version": "0.5.2"
         }
       },
+      "TemplateRequest": {
+        "type": "object",
+        "description": "`POST /companions/{id}/template`: what the template is built from,\neach value checked as `lodestar companion compose` checks it. Nothing\nhere is stored.",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "config_dir": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The host folder for its settings."
+          },
+          "downloads": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The host folder it saves downloads in."
+          },
+          "gluetun_container": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The gluetun container's name, with `route: existing_gluetun`."
+          },
+          "kind": {
+            "type": "string",
+            "description": "A template a companion offers (CMP-7).",
+            "enum": [
+              "compose",
+              "unraid"
+            ]
+          },
+          "network": {
+            "type": "string",
+            "description": "The Docker network Lodestar is on; `lodestar` by default."
+          },
+          "pgid": {
+            "type": "string",
+            "description": "`1000` by default."
+          },
+          "puid": {
+            "type": "string",
+            "description": "`1000` by default."
+          },
+          "route": {
+            "type": "string",
+            "description": "How a templated companion's traffic leaves.",
+            "enum": [
+              "direct",
+              "gluetun",
+              "existing_gluetun"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "TermFacet": {
         "type": "object",
         "description": "One term facet.",
@@ -23280,6 +24640,52 @@
             ],
             "format": "int64",
             "description": "While `backfilling`: torrents with ids in `(done, upto]` may not\nhave it yet; later ones do. Null otherwise."
+          }
+        }
+      },
+      "UnraidField": {
+        "type": "object",
+        "required": [
+          "label",
+          "value"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string",
+            "description": "Empty for a VPN setting you fill in yourself."
+          }
+        }
+      },
+      "UnraidFile": {
+        "type": "object",
+        "description": "One filled Unraid template.",
+        "required": [
+          "add_container_path",
+          "fields",
+          "file_name",
+          "xml"
+        ],
+        "properties": {
+          "add_container_path": {
+            "type": "string",
+            "description": "The path on your Unraid server's web UI that opens the saved\ntemplate in Add Container."
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnraidField"
+            },
+            "description": "Label and value, in the form's order, for filling it by hand."
+          },
+          "file_name": {
+            "type": "string",
+            "description": "`my-<name>.xml`."
+          },
+          "xml": {
+            "type": "string"
           }
         }
       },
@@ -24335,6 +25741,10 @@
     {
       "name": "workers",
       "description": "Remote workers: join, drain, pause, revoke and their budgets (§19.6, §19.7)."
+    },
+    {
+      "name": "companions",
+      "description": "Companions: install, update, remove, templates and the credential reveal (§18.10, Q5)."
     }
   ]
 }
