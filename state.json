@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-09T02:00Z",
+  "updated_at": "2026-11-09T03:40Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4121,7 +4121,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 32,
-  "last_heartbeat": "2026-11-09T00:39Z",
+  "last_heartbeat": "2026-11-09T03:40Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -7352,14 +7352,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T03:10Z",
+    "updated": "2026-11-09T03:40Z",
     "items": [
       {
         "slot": 1,
         "slice": "CMP-5g-1",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: #645 CMP-5g-1 delta CHANGES (B1 hand-over key removal disables a running Prowlarr source; runner call: replace key first) relayed; fix round then delta review",
+        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: #645 CMP-5g-1 round 2 at e5dbc014; delta review running; then CMP-5g-2 (qBittorrent hand-over only)",
         "since": "2026-11-09T00:20Z"
       },
       {
@@ -7375,7 +7375,7 @@
         "slice": "PK-win-upd-3",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAC9TBdvBgyLvxSjGf: #644 PK-win-upd-3 security MERGE, Opus CHANGES (B-1 reinstall exit-code tests, B-2 started-then-failed msiexec) + runner calls relayed; fix round then delta + security delta",
+        "doing": "session_01MMjhnAC9TBdvBgyLvxSjGf: #644 PK-win-upd-3 fix round at 70b3f9a5; delta + security delta running",
         "since": "2026-11-09T00:10Z"
       },
       {
@@ -7383,7 +7383,7 @@
         "slice": "X-lease-test-polish",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #647 merged (e009b89e); now X-lease-test-polish (small), then X-win-restart-followups",
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #648 X-lease-test-polish (CI) and #649 X-win-restart-followups (CI, lock_root Windows retry in)",
         "since": "2026-11-09T02:54Z"
       },
       {
@@ -7450,6 +7450,6 @@
       "answers": "runner recommendation on all items: X-refetch-private ships in v0.5.2; installer Repair may re-secure admin-ACE-only folder (X-win-refusal-ux); v0.5.1 release body replacement (notes/v051-release-body.md); web-ok+e2e-ok required; delete wip/CMP-0-catalogue; Q13 stands, Q14 at G-m6; import host = Unraid box; nightly key deferred; counsel advisory, no reminders; package installers after 1.0"
     }
   ],
-  "heartbeat": "2026-11-09T00:39Z",
+  "heartbeat": "2026-11-09T03:40Z",
   "updated": "2026-11-09T00:22Z"
 }
