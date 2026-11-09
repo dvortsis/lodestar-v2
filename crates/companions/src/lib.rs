@@ -44,6 +44,7 @@ pub mod credentials;
 pub mod detect;
 pub mod extract;
 pub mod fetch;
+pub mod guided;
 pub mod inputs;
 pub mod layout;
 pub mod log_events;
@@ -53,6 +54,7 @@ pub mod state;
 pub mod supervise;
 pub mod unraid;
 pub mod verify;
+pub mod watch;
 
 pub use catalogue::{Catalogue, CatalogueError, Entry, NotAvailable, builtin};
 pub use inputs::{CompanionId, Version};

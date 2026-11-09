@@ -88,6 +88,10 @@ pub struct Handles {
         reason = "CMP-5g starts companions and hands the snapshot on"
     )]
     companions: Option<crate::companions::Companions>,
+    /// The companion gate's feed and the watch (CMP-5g-1), stopped when
+    /// dropped.
+    #[allow(dead_code, reason = "held for its Drop")]
+    companion_wiring: Option<crate::companion_wiring::Wired>,
 }
 
 impl Services {
@@ -339,6 +343,10 @@ impl Services {
             )
             .await
         };
+        // The companion gate (CMP-10): fed by the wiring once the sources'
+        // ops exist. Until then it holds `Unknown`, so nothing gated starts.
+        let (gate_tx, gate_rx) = watch::channel(lodestar_pipeline::requires::Snapshot::Unknown);
+        pipeline_config.companions = companions.as_ref().map(|_| gate_rx);
         // Each enabled plugin's HTTP client is built on its egress
         // setting, with its SOCKS5 credentials from the per-source store
         // (SRC-4, SRC-5). A fixture is served offline: plugins get no
@@ -535,6 +543,13 @@ impl Services {
                     .map(|(stats, node)| ops::DhtReport { stats, node }),
             ),
         );
+        let companion_wiring = match &companions {
+            Some(c) => {
+                crate::companion_wiring::serve(c, control.clone(), &settings, ops.clone(), gate_tx)
+                    .await
+            }
+            None => None,
+        };
         let monitor = pipeline.monitor();
         let api = lodestar_api::ApiState {
             auth,
@@ -682,6 +697,7 @@ impl Services {
                 torrent_cache: cache_task,
                 cluster,
                 companions,
+                companion_wiring,
             },
             listener,
             system,
