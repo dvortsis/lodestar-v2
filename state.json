@@ -7356,14 +7356,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T03:40Z",
+    "updated": "2026-11-09T04:08Z",
     "items": [
       {
         "slot": 1,
         "slice": "CMP-5g-1",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: #645 CMP-5g-1 round 2 at e5dbc014; delta review running; then CMP-5g-2 (qBittorrent hand-over only)",
+        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: #645 CMP-5g-1 delta CHANGES at e5dbc014 (P3 tests missing + polish); round 3; then CMP-5g-2 (qBittorrent only)",
         "since": "2026-11-09T00:20Z"
       },
       {
@@ -7371,7 +7371,7 @@
         "slice": "OP-2b",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #646 OP-2 merged (025fcc02); owner flags sent; building OP-2b (PIA delivery + OP-2 follow-ups S1, P1, P2)",
+        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #650 OP-2b review MERGE w/ 4 LOW at eaa5b974; one last round requested; then delta review",
         "since": "2026-11-09T03:10Z"
       },
       {
@@ -7384,10 +7384,10 @@
       },
       {
         "slot": 4,
-        "slice": "X-lease-test-polish",
+        "slice": "X-win-restart-followups",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #648 X-lease-test-polish (CI) and #649 X-win-restart-followups (CI, lock_root Windows retry in)",
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #648 merged (da8de17a); #649 X-win-restart-followups (CI)",
         "since": "2026-11-09T02:54Z"
       },
       {
