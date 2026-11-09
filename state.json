@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-09T03:40Z",
+  "updated_at": "2026-11-09T05:54Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6646,7 +6646,8 @@
       "note": "CMP-5g-1 merged f5604c58; owner FYI + flags sent (with #648, #649, OP-3 split); CMP-5g-2 launched in same session"
     },
     "After #644 merges: brief X-win-upd-bounds (LOW-B/P-8 boot-identity bound on 3010 reinstall, LOW-C copy waits only for its parent helper, P-3 wait for Installer idle after deadline kill, P-4 try_wait classification + HandedOff race, update/layout.rs:239 busy-lock retry). Owner \u00a72.19 flags for #644: Q13 refinement, marker location, disabled start type, journal cross-version contract.",
-    "OP-3b brief notes (from #652 review): a durable block marker written by start-block and honoured by every mid-block check (closes the arm-switch gap); start-block requires exit 0 AND the final 'ok leak_test' line; follow-up s3:ResourceAccount condition in OP-2a's template for Terraform's S3 backend."
+    "OP-3b brief notes (from #652 review): a durable block marker written by start-block and honoured by every mid-block check (closes the arm-switch gap); start-block requires exit 0 AND the final 'ok leak_test' line; follow-up s3:ResourceAccount condition in OP-2a's template for Terraform's S3 backend.",
+    "On resume (only when the owner explicitly says): record the 2026-11-09 pause in docs/owner-decisions.md; re-enable the watchdog trigger; the pending runner PR items (slices entries OP-3a/b/c, X-prowlarr-settings, X-win-upd-bounds, X-win-restart-followups-2, owns additions, cr-ab-comp-1 decisions file)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7371,7 +7372,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T05:04Z",
+    "updated": "2026-11-09T05:54Z",
     "items": [
       {
         "slot": 1,
@@ -7410,7 +7411,7 @@
         "slice": null,
         "role": "build",
         "agent": "claude",
-        "doing": "idle: owner 5th slot, cloud work done; held under seven-day usage warning",
+        "doing": "idle: runner pausing (owner, usage); no launches",
         "since": "2026-11-08T21:39Z",
         "status": "idle"
       }
@@ -7470,5 +7471,30 @@
     }
   ],
   "heartbeat": "2026-11-09T03:40Z",
-  "updated": "2026-11-09T00:22Z"
+  "updated": "2026-11-09T00:22Z",
+  "pause": {
+    "requested_at": "2026-11-09T05:54Z",
+    "by": "owner (in chat, runner session)",
+    "instruction": "Once the active sessions complete, pause the runner. No further sessions unless explicitly commanded.",
+    "state": "draining",
+    "active": [
+      "#652 OP-3a (slot 2)",
+      "#644 PK-win-upd-3 (slot 3)",
+      "#651 X-win-restart-followups-2 (slot 4)",
+      "CMP-5g-2 (slot 1, building)"
+    ],
+    "no_follow_on": [
+      "OP-3b",
+      "OP-3c",
+      "X-win-upd-bounds",
+      "X-prowlarr-settings",
+      "CMP-5g-3",
+      "PK-win-portable-upd",
+      "X-updates-api-text",
+      "X-natural-wording",
+      "OP-4",
+      "X-event-names-split"
+    ],
+    "watchdog": "trig_0172BngAUoA4NRaRWBYiRWVf disabled so it can't start a replacement runner"
+  }
 }
