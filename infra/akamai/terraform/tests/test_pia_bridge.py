@@ -68,10 +68,11 @@ import lodestar_pia_bridge as bridge
 def make_mock_leak_responses(
     host_ip: str = "192.0.2.100",
     vpn_ip: str = "156.146.54.4",
-    handshake_age: int = 10,
+    handshake_age: Optional[int] = 10,
     rx_bytes: int = 5000,
     tx_bytes: int = 3000,
     endpoint_ip: str = "212.56.54.190",
+    endpoint_port: int = 1337,
     org: str = "Private Internet Access",
     dns_internal_ok: bool = True,
     dns_route_wg0: bool = True,
@@ -79,60 +80,88 @@ def make_mock_leak_responses(
     firewall_drop: bool = True,
     ipv6_disabled: bool = True,
 ):
-    now = 1731000000
-    handshake_ts = 0 if handshake_age is None else (now - handshake_age)
-    responses = [
-        # 1. Host IP
-        subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout=f"{host_ip}\n", stderr=""),
-        # 2. wg-handshake
-        subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout=f"peer_key\t{handshake_ts}\n", stderr=""),
-        # 3. date +%s (Linode clock)
-        subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout=f"{now}\n", stderr=""),
-        # 4. wg-transfer
-        subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout=f"peer_key\t{rx_bytes}\t{tx_bytes}\n", stderr=""),
-        # 5. wg-endpoints
-        subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout=f"peer_key\t{endpoint_ip}:1337\n", stderr=""),
-        # 6. query-egress
-        subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout=f"{vpn_ip}\n", stderr=""),
-        # 7. query-ipinfo
-        subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout=json.dumps({"org": org}), stderr=""),
-        # 8. query-dns (internal DoT resolver: must succeed)
-        subprocess.CompletedProcess(
+    if handshake_age is None or handshake_age < 0:
+        return [subprocess.CompletedProcess(
             args=["ssh"],
-            returncode=0 if dns_internal_ok else 1,
-            stdout="Address: 142.250.190.46\n" if dns_internal_ok else "",
-            stderr="" if dns_internal_ok else "connection timed out",
-        ),
-        # 9. verify-dns-route (routing must go through wg0)
-        subprocess.CompletedProcess(
+            returncode=1,
+            stdout="",
+            stderr="ERROR: WireGuard tunnel handshake missing or inactive",
+        )]
+    if handshake_age > 120:
+        return [subprocess.CompletedProcess(
             args=["ssh"],
-            returncode=0 if dns_route_wg0 else 1,
-            stdout="DNS_ROUTE_WG0_OK\n" if dns_route_wg0 else "ERROR: DNS route does not go through wg0\n",
-            stderr="" if dns_route_wg0 else "route failure",
-        ),
-        # 10. verify-dns-firewall (firewall and routing verification)
-        subprocess.CompletedProcess(
+            returncode=1,
+            stdout="",
+            stderr=f"ERROR: WireGuard handshake is stale ({handshake_age}s > 120s limit)",
+        )]
+    if rx_bytes <= 0 or tx_bytes <= 0:
+        return [subprocess.CompletedProcess(
             args=["ssh"],
-            returncode=0 if dns_bypass_blocked else 1,
-            stdout="DNS_FIREWALL_OK\n" if dns_bypass_blocked else "ERROR: Insecure DNS egress rule detected\n",
-            stderr="" if dns_bypass_blocked else "firewall failure",
-        ),
-        # 11. inspect-firewall (OUTPUT chain must have -P OUTPUT DROP)
-        subprocess.CompletedProcess(
+            returncode=1,
+            stdout="",
+            stderr=f"ERROR: WireGuard transfer inactive (0 transferred bytes: rx={rx_bytes}, tx={tx_bytes})",
+        )]
+    if not dns_internal_ok:
+        return [subprocess.CompletedProcess(
             args=["ssh"],
-            returncode=0 if firewall_drop else 1,
-            stdout="-P OUTPUT DROP\n-A OUTPUT -o wg0 -j ACCEPT\n" if firewall_drop else "-P OUTPUT ACCEPT\n",
-            stderr="",
-        ),
-        # 12. inspect-ipv6 (disable_ipv6 must be 1)
-        subprocess.CompletedProcess(
+            returncode=1,
+            stdout="",
+            stderr="ERROR: Internal DoT DNS resolution failed inside Gluetun container",
+        )]
+    if not dns_route_wg0:
+        return [subprocess.CompletedProcess(
             args=["ssh"],
-            returncode=0,
-            stdout="1\n" if ipv6_disabled else "0\n",
-            stderr="",
-        ),
-    ]
-    return responses
+            returncode=1,
+            stdout="",
+            stderr="ERROR: DNS route does not go through wg0: dev eth0",
+        )]
+    if not dns_bypass_blocked or not firewall_drop:
+        return [subprocess.CompletedProcess(
+            args=["ssh"],
+            returncode=1,
+            stdout="",
+            stderr="ERROR: CRITICAL LEAK: Firewall does not enforce DNS and egress isolation, bypassing WireGuard",
+        )]
+    if not ipv6_disabled:
+        return [subprocess.CompletedProcess(
+            args=["ssh"],
+            returncode=1,
+            stdout="",
+            stderr="ERROR: IPv6 is not disabled inside Gluetun container; potential IPv6 routing leak",
+        )]
+    if vpn_ip == host_ip:
+        return [subprocess.CompletedProcess(
+            args=["ssh"],
+            returncode=1,
+            stdout="",
+            stderr=f"ERROR: CRITICAL LEAK: VPN egress IP ({vpn_ip}) matches host IP ({host_ip})",
+        )]
+    if "linode" in org.lower() or "akamai" in org.lower():
+        return [subprocess.CompletedProcess(
+            args=["ssh"],
+            returncode=1,
+            stdout="",
+            stderr=f"ERROR: CRITICAL LEAK: Container egress is routing through host ISP/cloud ({org})",
+        )]
+
+    payload = {
+        "status": "protected",
+        "vpn_ip": vpn_ip,
+        "host_ip": host_ip,
+        "endpoint": f"{endpoint_ip}:{endpoint_port}",
+        "handshake": "active",
+        "handshake_age": handshake_age,
+        "rx_bytes": rx_bytes,
+        "tx_bytes": tx_bytes,
+        "dns_leak_protected": True,
+        "kill_switch_active": True,
+    }
+    return [subprocess.CompletedProcess(
+        args=["ssh"],
+        returncode=0,
+        stdout=json.dumps(payload) + "\n",
+        stderr="",
+    )]
 
 
 class LodestarPiaBridgeTests(unittest.TestCase):
@@ -481,10 +510,9 @@ class LodestarPiaBridgeTests(unittest.TestCase):
     @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
     def test_20_vpn_disconnection_after_startup(self, mock_cmd: MagicMock) -> None:
         """Confirms that dropped tunnel or unreachable egress raises VpnConnectionError."""
-        # query-egress returns empty/fails
-        responses = make_mock_leak_responses()
-        responses[5] = subprocess.CompletedProcess(args=["ssh"], returncode=1, stdout="", stderr="network unreachable")
-        mock_cmd.side_effect = responses
+        mock_cmd.side_effect = [
+            subprocess.CompletedProcess(args=["ssh"], returncode=1, stdout="", stderr="ERROR: Active tunneled egress check failed (network unreachable)")
+        ]
         prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
         with self.assertRaises(bridge.VpnConnectionError):
             prov.verify_leak_protection(max_retries=1, delay_s=0)
@@ -725,10 +753,9 @@ class LodestarPiaBridgeTests(unittest.TestCase):
     @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
     def test_egress_ownership_lookup_unavailable_blocks_crawler(self, mock_cmd: MagicMock) -> None:
         """Proves that when ipinfo.io is unreachable or missing 'org', verification fails closed."""
-        responses = make_mock_leak_responses()
-        # Query-ipinfo fails with exit code 1
-        responses[6] = subprocess.CompletedProcess(args=["ssh"], returncode=1, stdout="", stderr="timeout")
-        mock_cmd.side_effect = responses
+        mock_cmd.side_effect = [
+            subprocess.CompletedProcess(args=["ssh"], returncode=1, stdout="", stderr="ERROR: Egress ISP ownership lookup unavailable (timeout)")
+        ]
 
         prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
         with self.assertRaises(bridge.LeakDetectedError) as ctx:
@@ -893,16 +920,17 @@ class LodestarPiaBridgeTests(unittest.TestCase):
     @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
     def test_gluetun_restart_recovery_succeeds_on_retry(self, mock_cmd: MagicMock) -> None:
         """Proves that verify_leak_protection recovers when Gluetun restarts on attempt 1 and establishes a fresh handshake on attempt 2."""
-        # Attempt 1: wg-handshake fails (container restarting), wg-transfer fails, wg-endpoints fails, query-egress fails
+        # Attempt 1: verify-tunnel fails (container restarting / health check failure)
         attempt1 = [
-            subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="192.0.2.100\n", stderr=""),  # host IP
-            subprocess.CompletedProcess(args=["ssh"], returncode=1, stdout="", stderr="ERROR: Gluetun container is not running"),
-            subprocess.CompletedProcess(args=["ssh"], returncode=1, stdout="", stderr="ERROR: Gluetun container is not running"),
-            subprocess.CompletedProcess(args=["ssh"], returncode=1, stdout="", stderr="ERROR: Gluetun container is not running"),
-            subprocess.CompletedProcess(args=["ssh"], returncode=1, stdout="", stderr="ERROR: Active tunneled egress check failed"),
+            subprocess.CompletedProcess(
+                args=["ssh"],
+                returncode=1,
+                stdout="",
+                stderr="ERROR: Gluetun health check failed (status: starting, required: healthy)",
+            ),
         ]
-        # Attempt 2: full healthy responses (excluding initial host IP query)
-        attempt2 = make_mock_leak_responses()[1:]
+        # Attempt 2: verify-tunnel succeeds with authoritative gate JSON
+        attempt2 = make_mock_leak_responses()
         mock_cmd.side_effect = attempt1 + attempt2
         prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
         res = prov.verify_leak_protection(max_retries=2, delay_s=0, expected_server_ip="212.56.54.190")
@@ -1705,29 +1733,29 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
         res_hs = self.run_helper("wg-handshake")
         self.assertNotEqual(res_hs.returncode, 0)
         self.assertEqual(res_hs.stdout.strip(), "")
-        self.assertIn("Authoritative WireGuard latest-handshakes inspection unavailable", res_hs.stderr)
+        self.assertIn("WireGuard latest-handshakes inspection unavailable", res_hs.stderr)
 
         res_tx = self.run_helper("wg-transfer")
         self.assertNotEqual(res_tx.returncode, 0)
         self.assertEqual(res_tx.stdout.strip(), "")
-        self.assertIn("Authoritative WireGuard transfer inspection unavailable", res_tx.stderr)
+        self.assertIn("WireGuard transfer inspection unavailable", res_tx.stderr)
 
         res_ep = self.run_helper("wg-endpoints")
         self.assertNotEqual(res_ep.returncode, 0)
         self.assertEqual(res_ep.stdout.strip(), "")
-        self.assertIn("Authoritative WireGuard endpoints inspection unavailable", res_ep.stderr)
+        self.assertIn("WireGuard endpoints inspection unavailable", res_ep.stderr)
 
         res_eg = self.run_helper("query-egress")
         self.assertNotEqual(res_eg.returncode, 0)
         self.assertEqual(res_eg.stdout.strip(), "")
         self.assertIn("Active tunneled egress check failed", res_eg.stderr)
 
-    def test_exec_helper_userspace_and_kernelspace_wireguard_inspection(self) -> None:
-        """Proves that query_wg inspects both userspace (-n -m via /var/run/wireguard/wg0.sock) and kernelspace (-n netlink) WireGuard."""
+    def test_exec_helper_kernelspace_wireguard_netlink_inspection(self) -> None:
+        """Proves that query_wg queries wg in container netns (-n) via Netlink without entering mount namespace (-m), and fails closed if unavailable."""
         self.create_mock_docker(
             'if [[ "$*" =~ "State.Running" ]]; then echo "4321"; exit 0; fi; exit 1'
         )
-        # Mock wg and nsenter in mock_bin: only succeeds when -m is passed (simulating userspace UAPI socket in container mount namespace)
+        # Mock wg and nsenter in mock_bin: verifies -m is rejected and -n netlink succeeds
         wg_path = os.path.join(self.mock_bin, "wg")
         with open(wg_path, "w", encoding="utf-8", newline="\n") as f:
             f.write("#!/usr/bin/env bash\nexit 0\n")
@@ -1737,8 +1765,12 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
         with open(nsenter_path, "w", encoding="utf-8", newline="\n") as f:
             f.write(
                 "#!/usr/bin/env bash\n"
-                "if [[ \"$*\" =~ \"-n -m wg show wg0 latest-handshakes\" ]]; then\n"
-                "  echo 'userspace_peer 1731000000'\n"
+                "if [[ \"$*\" =~ \"-m\" ]]; then\n"
+                "  echo 'ERROR: -m mount namespace entry forbidden' >&2\n"
+                "  exit 1\n"
+                "fi\n"
+                "if [[ \"$*\" =~ \"-n wg show wg0 latest-handshakes\" ]]; then\n"
+                "  echo 'kernel_peer 1731000000'\n"
                 "  exit 0\n"
                 "fi\n"
                 "exit 1\n"
@@ -1747,7 +1779,7 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
 
         res_hs = self.run_helper("wg-handshake")
         self.assertEqual(res_hs.returncode, 0)
-        self.assertEqual(res_hs.stdout.strip(), "userspace_peer 1731000000")
+        self.assertEqual(res_hs.stdout.strip(), "kernel_peer 1731000000")
 
     def test_exec_helper_start_crawler_rejected_when_observed_endpoint_differs_from_configured(self) -> None:
         """Proves that start-crawler fails closed if the observed active peer or endpoint differs from wg0.conf."""
@@ -1971,6 +2003,10 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
         self.assertEqual(res_leak_ip.returncode, 1)
         self.assertIn("CRITICAL LEAK: VPN egress IP (192.0.2.100) matches host IP (192.0.2.100)", res_leak_ip.stderr)
 
+        res_vt_leak_ip = self.run_helper("verify-tunnel")
+        self.assertEqual(res_vt_leak_ip.returncode, 1)
+        self.assertIn("CRITICAL LEAK: VPN egress IP (192.0.2.100) matches host IP (192.0.2.100)", res_vt_leak_ip.stderr)
+
         # 2. Fails closed when egress ISP belongs to Akamai/Linode
         self.create_mock_docker(
             'now=$(date +%s)\n'
@@ -1992,8 +2028,11 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
         )
         with patch.dict(os.environ, {"MOCK_JQ_ORG": "AS63949 Akamai Connected Cloud / Linode"}):
             res_leak_isp = self.run_helper("start-crawler")
+            res_vt_leak_isp = self.run_helper("verify-tunnel")
         self.assertEqual(res_leak_isp.returncode, 1)
         self.assertIn("CRITICAL LEAK: Container egress is routing through host ISP/cloud", res_leak_isp.stderr)
+        self.assertEqual(res_vt_leak_isp.returncode, 1)
+        self.assertIn("CRITICAL LEAK: Container egress is routing through host ISP/cloud", res_vt_leak_isp.stderr)
 
         # 3. Succeeds and prints CRAWLER_STARTED when all consolidated checks pass
         self.create_mock_docker(
@@ -2017,6 +2056,17 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
         res_ok = self.run_helper("start-crawler")
         self.assertEqual(res_ok.returncode, 0, msg=res_ok.stderr)
         self.assertIn("CRAWLER_STARTED", res_ok.stdout)
+
+        # verify-tunnel also succeeds and outputs structured JSON
+        res_vt_ok = self.run_helper("verify-tunnel")
+        self.assertEqual(res_vt_ok.returncode, 0, msg=res_vt_ok.stderr)
+        vt_data = json.loads(res_vt_ok.stdout.strip())
+        self.assertEqual(vt_data["status"], "protected")
+        self.assertEqual(vt_data["vpn_ip"], "156.146.54.4")
+        self.assertEqual(vt_data["endpoint"], "212.56.54.190:1337")
+        self.assertEqual(vt_data["handshake"], "active")
+        self.assertTrue(vt_data["dns_leak_protected"])
+        self.assertTrue(vt_data["kill_switch_active"])
 
 
 # =============================================================================

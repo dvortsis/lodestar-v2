@@ -1186,175 +1186,74 @@ class LinodeSshProvisioner:
         expected_server_ip: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Independently and rigorously validates that all traffic is contained within the VPN:
-        1. Queries Linode host public IP for baseline comparison.
-        2. Validates WireGuard latest handshake timestamp is recent (<= 120s) and non-zero.
-        3. Validates WireGuard transfer statistics show active bidirectional bytes (> 0 rx/tx).
-        4. Validates WireGuard peer endpoint matches expected server IP.
-        5. Validates Gluetun egress public IP is active and does NOT match Linode host public IP.
-        6. Validates egress ISP / organization does NOT belong to Linode / Akamai.
-        7. Validates DNS queries resolve through internal DoT resolver (127.0.0.1) and direct unencrypted 8.8.8.8 DNS is blocked.
-        8. Validates iptables OUTPUT default policy is strictly DROP.
-        9. Validates IPv6 is disabled in the container namespace.
+        Invokes the authoritative remote helper gate (`verify-tunnel`) on the Linode host,
+        which executes `verify_tunnel_isolation_gate()` to verify:
+        - Docker Compose file and wg0.conf integrity and lack of symlinks
+        - Gluetun container health (strictly 'healthy') and compose service label
+        - Approved pinned Gluetun image digest
+        - Authentic WireGuard handshake (<= 120s fresh, non-synthetic)
+        - Active WireGuard peer transfer (rx > 0 and tx > 0)
+        - PIA endpoint authorization against server list metadata and TLS CA verification
+        - Active peer key and endpoint binding matching configuration
+        - Firewall killswitch policy (-P OUTPUT DROP) and DNS isolation
+        - Internal DoT DNS resolution
+        - Active tunneled egress IP mismatch against Linode host IP and ISP (Akamai/Linode)
+        - Crawler container restricted to Gluetun network namespace
 
-        Every check fails closed: any command failure, timeout, or missing/ambiguous output raises an exception.
+        Retries up to max_retries with delay_s to accommodate tunnel convergence.
+        Fails closed with specific exceptions on any gate check failure.
         """
-        # Step 1: Query Linode host public IP
-        host_cmd = "curl -s --max-time 5 https://checkip.amazonaws.com || curl -s --max-time 5 https://api.ipify.org"
-        host_res = self.run_remote_command(host_cmd, check=False)
-        host_ip = host_res.stdout.strip()
-        if not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host_ip):
-            host_ip = self.target_ip
-        if not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host_ip):
-            raise LeakDetectedError("Unable to determine valid Linode host public IP for baseline leak check")
-
-        # Step 2: Poll Gluetun container for handshake, transfer, endpoint, and egress IP
-        handshake_valid = False
-        transfer_valid = False
-        endpoint_valid = False
-        vpn_ip: Optional[str] = None
-        handshake_age: Optional[int] = None
-        rx_bytes = 0
-        tx_bytes = 0
-        actual_ep_ip = ""
+        last_err = ""
+        last_rc: Optional[int] = None
 
         for attempt in range(1, max_retries + 1):
-            # Probe 1: Handshake timestamp
-            hs_res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} wg-handshake", check=False)
-            if hs_res.returncode == 0 and hs_res.stdout.strip():
-                lines = hs_res.stdout.strip().splitlines()
-                parts = lines[0].split()
-                if len(parts) >= 2:
-                    try:
-                        epoch_seconds = int(parts[1])
-                        clock_res = self.run_remote_command("date +%s", check=False)
-                        if clock_res.returncode == 0 and clock_res.stdout.strip():
-                            remote_now = int(clock_res.stdout.strip())
-                            age = remote_now - epoch_seconds
-                            if epoch_seconds > 0:
-                                handshake_age = age
-                                if 0 <= age <= 120:
-                                    handshake_valid = True
-                    except (ValueError, IndexError):
-                        pass
+            res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} verify-tunnel", check=False)
+            last_rc = res.returncode
+            if res.returncode == 0 and res.stdout.strip():
+                for line in res.stdout.strip().splitlines():
+                    line = line.strip()
+                    if line.startswith("{") and line.endswith("}"):
+                        try:
+                            data = json.loads(line)
+                            if data.get("status") == "protected":
+                                if expected_server_ip:
+                                    actual_ep = data.get("endpoint", "")
+                                    actual_ep_ip = actual_ep.split(":")[0] if ":" in actual_ep else actual_ep
+                                    if actual_ep_ip != expected_server_ip:
+                                        raise VpnConnectionError(
+                                            f"WireGuard endpoint mismatch: expected {expected_server_ip}, got {actual_ep_ip}"
+                                        )
+                                return {
+                                    "status": "protected",
+                                    "host_ip": data.get("host_ip", ""),
+                                    "vpn_ip": data.get("vpn_ip", ""),
+                                    "endpoint": data.get("endpoint", ""),
+                                    "handshake": data.get("handshake", "active"),
+                                    "handshake_age": data.get("handshake_age", 0),
+                                    "rx_bytes": data.get("rx_bytes", 0),
+                                    "tx_bytes": data.get("tx_bytes", 0),
+                                    "dns_leak_protected": data.get("dns_leak_protected", True),
+                                    "kill_switch_active": data.get("kill_switch_active", True),
+                                }
+                        except json.JSONDecodeError:
+                            pass
+            last_err = (res.stderr or res.stdout).strip()
+            if attempt < max_retries:
+                time.sleep(delay_s)
 
-            # Probe 2: Transfer bytes
-            tx_res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} wg-transfer", check=False)
-            if tx_res.returncode == 0 and tx_res.stdout.strip():
-                lines = tx_res.stdout.strip().splitlines()
-                parts = lines[0].split()
-                if len(parts) >= 3:
-                    try:
-                        rx_bytes = int(parts[1])
-                        tx_bytes = int(parts[2])
-                        if rx_bytes > 0 and tx_bytes > 0:
-                            transfer_valid = True
-                    except (ValueError, IndexError):
-                        pass
+        err_msg = last_err or f"verify-tunnel failed with exit code {last_rc if last_rc is not None else 'unknown'}"
+        err_lower = err_msg.lower()
 
-            # Probe 3: Endpoint IP
-            ep_res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} wg-endpoints", check=False)
-            if ep_res.returncode == 0 and ep_res.stdout.strip():
-                lines = ep_res.stdout.strip().splitlines()
-                parts = lines[0].split()
-                if len(parts) >= 2:
-                    actual_ep_ip = parts[1].split(":")[0]
-                    if expected_server_ip:
-                        if actual_ep_ip == expected_server_ip:
-                            endpoint_valid = True
-                    else:
-                        endpoint_valid = bool(actual_ep_ip)
+        if "handshake is stale" in err_lower or "handshake missing or inactive" in err_lower or "transfer inactive" in err_lower or "0 transferred bytes" in err_lower:
+            raise VpnHandshakeError(f"WireGuard tunnel handshake failed or inactive on {self.target_ip}: {err_msg}")
+        if "critical leak" in err_lower or "leak" in err_lower or "firewall" in err_lower or "dns" in err_lower or "isp" in err_lower:
+            raise LeakDetectedError(f"Tunnel verification failed security gate on {self.target_ip}: {err_msg}")
+        if "endpoint" in err_lower or "publickey" in err_lower or "pia root ca" in err_lower or "network unreachable" in err_lower:
+            raise VpnConnectionError(f"WireGuard endpoint or network failure on {self.target_ip}: {err_msg}")
+        if "gluetun health" in err_lower or "image digest" in err_lower or "compose" in err_lower:
+            raise VpnConnectionError(f"Gluetun container health failure on {self.target_ip}: {err_msg}")
 
-            # Probe 4: Egress public IP
-            eg_res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} query-egress", check=False)
-            if eg_res.returncode == 0 and eg_res.stdout.strip():
-                candidate_ip = eg_res.stdout.strip()
-                if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", candidate_ip):
-                    vpn_ip = candidate_ip
-
-            if handshake_valid and transfer_valid and endpoint_valid and vpn_ip:
-                break
-            time.sleep(delay_s)
-
-        if not handshake_valid:
-            if handshake_age is not None and handshake_age > 120:
-                raise VpnHandshakeError(f"WireGuard handshake is stale ({handshake_age}s > 120s limit) on {self.target_ip}")
-            raise VpnHandshakeError(f"WireGuard tunnel handshake failed or not established on {self.target_ip}")
-
-        if not transfer_valid:
-            raise VpnHandshakeError(f"WireGuard tunnel has 0 transferred bytes (rx={rx_bytes}, tx={tx_bytes}) on {self.target_ip}")
-
-        if not endpoint_valid:
-            raise VpnConnectionError(f"WireGuard endpoint mismatch: expected {expected_server_ip}, got {actual_ep_ip}")
-
-        if not vpn_ip:
-            raise VpnConnectionError(f"Gluetun container has no outbound VPN connectivity on {self.target_ip}")
-
-        # Step 3: Public IP mismatch check
-        if vpn_ip == host_ip or vpn_ip == self.target_ip:
-            raise LeakDetectedError(
-                f"CRITICAL LEAK: VPN egress IP ({vpn_ip}) matches Linode host public IP ({host_ip})!"
-            )
-
-        # Step 4: Verify ISP / Organization is not Linode/Akamai (fail-closed if missing)
-        org_res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} query-ipinfo", check=False)
-        if org_res.returncode != 0 or not org_res.stdout.strip():
-            raise LeakDetectedError(f"Egress ISP ownership lookup unavailable on {self.target_ip}")
-        try:
-            ip_info = json.loads(org_res.stdout)
-        except json.JSONDecodeError:
-            raise LeakDetectedError("Egress ISP lookup failed: invalid JSON from ipinfo.io")
-        org = ip_info.get("org", "").lower()
-        if not org:
-            raise LeakDetectedError("Egress ISP lookup failed: missing 'org' attribute in ipinfo response")
-        if "linode" in org or "akamai" in org:
-            raise LeakDetectedError(
-                f"CRITICAL LEAK: Container egress is routing through host ISP/cloud ({ip_info.get('org')})!"
-            )
-
-        # Step 5: Path-Aware DNS Leak & Egress Isolation Verification
-        # 5a: Internal DoT resolver (Unbound on 127.0.0.1:53) must resolve successfully
-        dns_res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} query-dns", check=False)
-        if dns_res.returncode != 0 or "Address" not in dns_res.stdout:
-            raise LeakDetectedError(f"Container DNS resolution failed through internal resolver on {self.target_ip}")
-
-        # 5b: Routing path verification - DNS queries to public DNS (8.8.8.8) MUST route via wg0, NEVER via eth0
-        dns_route = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} verify-dns-route", check=False)
-        if dns_route.returncode != 0 or "DNS_ROUTE_WG0_OK" not in dns_route.stdout:
-            raise LeakDetectedError(f"DNS routing leak detected: egress is not bound to WireGuard interface wg0 on {self.target_ip}")
-
-        # 5c: Active physical bypass and firewall check - verify interface isolation and killswitch rules
-        firewall_check = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} verify-dns-firewall", check=False)
-        if firewall_check.returncode != 0 or "DNS_FIREWALL_OK" not in firewall_check.stdout:
-            raise LeakDetectedError(
-                f"CRITICAL LEAK: Firewall does not enforce DNS and egress isolation, bypassing WireGuard on {self.target_ip}!"
-            )
-
-        # Step 6: Firewall policy check (fail-closed)
-        fw_res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} inspect-firewall", check=False)
-        if fw_res.returncode != 0:
-            raise LeakDetectedError(f"Firewall inspection command failed on {self.target_ip}")
-        if "-P OUTPUT DROP" not in fw_res.stdout:
-            raise LeakDetectedError("Gluetun firewall kill switch is inactive (-P OUTPUT DROP not found)")
-
-        # Step 7: IPv6 check (fail-closed)
-        ipv6_res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} inspect-ipv6", check=False)
-        if ipv6_res.returncode != 0:
-            raise LeakDetectedError(f"IPv6 inspection command failed on {self.target_ip}")
-        if ipv6_res.stdout.strip() != "1":
-            raise LeakDetectedError(f"IPv6 is not disabled inside Gluetun container (disable_ipv6='{ipv6_res.stdout.strip()}'); potential IPv6 routing leak")
-
-        return {
-            "status": "protected",
-            "host_ip": host_ip,
-            "vpn_ip": vpn_ip,
-            "handshake": "active",
-            "handshake_age": handshake_age,
-            "rx_bytes": rx_bytes,
-            "tx_bytes": tx_bytes,
-            "dns_leak_protected": True,
-            "kill_switch_active": True,
-        }
+        raise VpnConnectionError(f"Tunnel verification failed on {self.target_ip}: {err_msg}")
 
     def start_crawler(self) -> None:
         """

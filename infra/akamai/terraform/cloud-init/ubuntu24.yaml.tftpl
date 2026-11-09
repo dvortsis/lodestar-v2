@@ -79,11 +79,13 @@ write_files:
           return 1
         fi
         local out=""
-        # Enter Gluetun network and mount namespaces to support both kernelspace netlink
-        # and userspace wireguard-go UAPI socket (/var/run/wireguard/wg0.sock).
-        out="$(nsenter -t "$gluetun_pid" -n -m wg show wg0 "$subcmd" 2>/dev/null || nsenter -t "$gluetun_pid" -n wg show wg0 "$subcmd" 2>/dev/null || true)"
+        # In Ubuntu 24.04 LTS (kernel 6.8+), Gluetun creates wg0 using the kernel WireGuard
+        # module via NET_ADMIN capability. Query the interface in Gluetun's network namespace (-n)
+        # using host /usr/bin/wg via Netlink. Do NOT enter container mount namespace (-m), as
+        # host wg and glibc libraries are not present in Gluetun's minimal Alpine filesystem.
+        out="$(nsenter -t "$gluetun_pid" -n wg show wg0 "$subcmd" 2>/dev/null || true)"
         if [ -z "$out" ]; then
-          echo "ERROR: Authoritative WireGuard $subcmd inspection unavailable for wg0" >&2
+          echo "ERROR: Authoritative kernel WireGuard $subcmd inspection unavailable for wg0" >&2
           return 1
         fi
         echo "$out"
@@ -235,7 +237,7 @@ write_files:
         rx_b="$(echo "$tx_out" | awk '{print $2}')"
         tx_b="$(echo "$tx_out" | awk '{print $3}')"
         if [ -z "$rx_b" ] || [ -z "$tx_b" ] || [ "$rx_b" -le 0 ] || [ "$tx_b" -le 0 ] 2>/dev/null; then
-          echo "ERROR: WireGuard transfer inactive (rx=$${rx_b:-0}, tx=$${tx_b:-0})" >&2
+          echo "ERROR: WireGuard transfer inactive (0 transferred bytes: rx=$${rx_b:-0}, tx=$${tx_b:-0})" >&2
           return 1
         fi
         # 6. Verify PIA endpoint authorization and bind observed active peer & endpoint to wg0.conf
@@ -308,6 +310,10 @@ write_files:
           echo "ERROR: Crawler is not restricted to Gluetun network namespace in $COMPOSE_FILE" >&2
           return 1
         fi
+
+        # Authoritative gate verified all 10 security invariants: output structured JSON
+        printf '{"status":"protected","vpn_ip":"%s","host_ip":"%s","endpoint":"%s","handshake":"active","handshake_age":%d,"rx_bytes":%d,"tx_bytes":%d,"dns_leak_protected":true,"kill_switch_active":true}\n' \
+          "$vpn_ip" "$host_ip" "$obs_ep" "$hs_age" "$rx_b" "$tx_b"
         return 0
       }
 
@@ -316,6 +322,13 @@ write_files:
         preflight)
           docker info >/dev/null 2>&1
           test -c /dev/net/tun
+          if ! command -v wg >/dev/null 2>&1 || ! command -v nsenter >/dev/null 2>&1; then
+            echo "ERROR: Required WireGuard tools (wg, nsenter) unavailable on host" >&2
+            exit 1
+          fi
+          if [ -d /sys/module/wireguard ] || modprobe wireguard 2>/dev/null || [ -e /proc/modules ]; then
+            :
+          fi
           echo "PREFLIGHT_OK"
           ;;
         write-config)
@@ -440,7 +453,7 @@ write_files:
           echo "VPN_STARTED"
           ;;
         start-crawler)
-          if ! verify_tunnel_isolation_gate; then
+          if ! verify_tunnel_isolation_gate >/dev/null; then
             exit 1
           fi
           docker compose -f "$COMPOSE_FILE" --profile crawler up -d crawler
@@ -450,7 +463,6 @@ write_files:
           if ! verify_tunnel_isolation_gate; then
             exit 1
           fi
-          echo "TUNNEL_ISOLATION_OK"
           ;;
         stop-vpn)
           if [ ! -f "$COMPOSE_FILE" ] || [ -L "$COMPOSE_FILE" ]; then
@@ -768,6 +780,8 @@ write_files:
       docker --version
       docker compose version
       test -c /dev/net/tun || { echo "ERROR: /dev/net/tun unavailable" >&2; exit 1; }
+      modprobe wireguard || { echo "ERROR: Kernel wireguard module failed to load" >&2; exit 1; }
+      test -d /sys/module/wireguard || { echo "ERROR: /sys/module/wireguard unavailable" >&2; exit 1; }
       echo "Bootstrap complete UTC=$(date -u +%FT%TZ)"
 runcmd:
   - [bash, /usr/local/sbin/lodestar-bootstrap.sh]
