@@ -1001,7 +1001,7 @@ class LinodeSshProvisioner:
                 f"Insecure permissions on {REMOTE_CONFIG_FILE}: expected '600 root:root', got '{file_stat}'"
             )
 
-    def cleanup_runtime_credentials(self, compose_file: str = REMOTE_COMPOSE_FILE) -> None:
+    def cleanup_runtime_credentials(self) -> None:
         """Securely stops containers and wipes runtime secrets from the Linode's tmpfs."""
         self.verify_host_connectivity()
         res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} cleanup", check=False)
@@ -1009,14 +1009,14 @@ class LinodeSshProvisioner:
             err = (res.stderr or res.stdout).strip()
             raise SshConnectionError(f"Failed to clean up runtime credentials on {self.target_ip}: {err}")
 
-    def validate_remote_compose(self, compose_file: str = REMOTE_COMPOSE_FILE) -> None:
+    def validate_remote_compose(self) -> None:
         """Validates the root-owned immutable Docker Compose configuration on the remote host."""
         res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} validate-compose", check=False)
         if res.returncode != 0 or "COMPOSE_VALID" not in res.stdout:
             err = (res.stderr or res.stdout).strip()
             raise ComposeValidationError(f"Remote Docker Compose validation failed: {err}")
 
-    def start_vpn(self, compose_file: str = REMOTE_COMPOSE_FILE) -> None:
+    def start_vpn(self) -> None:
         """Starts the Gluetun container via Docker Compose using the root deployment helper."""
         res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} start-vpn", check=False)
         if res.returncode != 0 or "VPN_STARTED" not in res.stdout:
@@ -1200,7 +1200,7 @@ class LinodeSshProvisioner:
             "kill_switch_active": True,
         }
 
-    def start_crawler(self, compose_file: str = REMOTE_COMPOSE_FILE) -> None:
+    def start_crawler(self) -> None:
         """Starts the crawler container strictly after re-verifying leak protection."""
         logger.info("Executing pre-crawler leak verification check...")
         try:
@@ -1213,6 +1213,8 @@ class LinodeSshProvisioner:
 
         res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} start-crawler", check=False)
         if res.returncode != 0 or "CRAWLER_STARTED" not in res.stdout:
+            err = (res.stderr or res.stdout).strip()
+            raise VpnConnectionError(f"Failed to start crawler container: {err}")
             err = (res.stderr or res.stdout).strip()
             raise VpnConnectionError(f"Failed to start crawler container: {err}")
 
@@ -1350,7 +1352,7 @@ def run_bridge_workflow(
     provisioner = LinodeSshProvisioner(target_ip=target_ip, user=ssh_user, key_path=ssh_key)
 
     if cleanup_only:
-        provisioner.cleanup_runtime_credentials(remote_compose_path)
+        provisioner.cleanup_runtime_credentials()
         return {"action": "cleanup", "status": "completed", "target": target_ip}
 
     # Step 0: Remote preflight validation
@@ -1389,14 +1391,14 @@ def run_bridge_workflow(
     provisioner.provision_wg0_config(wg0_conf)
 
     # Step 5: Start Gluetun container
-    provisioner.start_vpn(remote_compose_path)
+    provisioner.start_vpn()
 
     # Step 6: Verify leak protection
     leak_res = provisioner.verify_leak_protection(expected_server_ip=region_info["server_ip"])
 
     # Step 7: Optionally start crawler
     if start_crawler_workload:
-        provisioner.start_crawler(remote_compose_path)
+        provisioner.start_crawler()
 
     return {
         "status": "success",
@@ -1432,21 +1434,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_gen.add_argument("--output", required=True, help="Explicit local file destination (NEVER printed to stdout)")
 
     # 3. provision
-    p_prov = subparsers.add_parser("provision", help="Provision wg0.conf and Compose stack to target Linode")
+    p_prov = subparsers.add_parser(
+        "provision",
+        help="Provision ephemeral WireGuard configuration and validate immutable root-owned Compose stack",
+    )
     p_prov.add_argument("--target", required=True, help="Target Linode IP address")
     p_prov.add_argument("--ssh-user", default=REMOTE_DEFAULT_USER, help="SSH username")
     p_prov.add_argument("--ssh-key", default=REMOTE_DEFAULT_KEY, help="Path to Ed25519 private key")
     p_prov.add_argument("--pia-region", default=DEFAULT_PIA_REGION, help="PIA VPN region")
     p_prov.add_argument("--profile", default="lodestar-admin", help="AWS administrative profile")
     p_prov.add_argument("--account-id", default=DEFAULT_AWS_ACCOUNT, help="Authorized AWS Account ID")
-    p_prov.add_argument("--compose-file", help="Optional local compose file override")
 
     # 4. start-vpn
-    p_vpn = subparsers.add_parser("start-vpn", help="Start Gluetun container on target Linode")
+    p_vpn = subparsers.add_parser("start-vpn", help="Start Gluetun container on target Linode via root deployment helper")
     p_vpn.add_argument("--target", required=True, help="Target Linode IP address")
     p_vpn.add_argument("--ssh-user", default=REMOTE_DEFAULT_USER, help="SSH username")
     p_vpn.add_argument("--ssh-key", default=REMOTE_DEFAULT_KEY, help="Path to Ed25519 private key")
-    p_vpn.add_argument("--compose-file", default=REMOTE_COMPOSE_FILE)
 
     # 5. verify-tunnel
     p_leak = subparsers.add_parser("verify-tunnel", help="Independently verify VPN egress and leak protection")
@@ -1455,11 +1458,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_leak.add_argument("--ssh-key", default=REMOTE_DEFAULT_KEY, help="Path to Ed25519 private key")
 
     # 6. start-crawler
-    p_crawl = subparsers.add_parser("start-crawler", help="Start crawler container after proving leak protection")
+    p_crawl = subparsers.add_parser(
+        "start-crawler",
+        help="Start crawler container strictly after proving leak protection",
+    )
     p_crawl.add_argument("--target", required=True, help="Target Linode IP address")
     p_crawl.add_argument("--ssh-user", default=REMOTE_DEFAULT_USER, help="SSH username")
     p_crawl.add_argument("--ssh-key", default=REMOTE_DEFAULT_KEY, help="Path to Ed25519 private key")
-    p_crawl.add_argument("--compose-file", default=REMOTE_COMPOSE_FILE)
 
     # 7. health
     p_health = subparsers.add_parser("health", help="Check VPN container and tunnel status")
@@ -1472,7 +1477,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_clean.add_argument("--target", required=True, help="Target Linode IP address")
     p_clean.add_argument("--ssh-user", default=REMOTE_DEFAULT_USER, help="SSH username")
     p_clean.add_argument("--ssh-key", default=REMOTE_DEFAULT_KEY, help="Path to Ed25519 private key")
-    p_clean.add_argument("--compose-file", default=REMOTE_COMPOSE_FILE)
 
     return parser
 
@@ -1527,7 +1531,6 @@ def main() -> int:
                 aws_account=args.account_id,
                 ssh_user=args.ssh_user,
                 ssh_key=args.ssh_key,
-                local_compose_path=getattr(args, "compose_file", None),
                 start_crawler_workload=False,
             )
             print(f"[OK] Provisioned and verified: target={res['target']}, region={res['region']}, vpn_ip={res['vpn_ip']}")
@@ -1535,7 +1538,7 @@ def main() -> int:
 
         if args.command == "start-vpn":
             prov = LinodeSshProvisioner(target_ip=args.target, user=args.ssh_user, key_path=args.ssh_key)
-            prov.start_vpn(args.compose_file)
+            prov.start_vpn()
             print(f"[OK] Gluetun started on {args.target}")
             return 0
 
@@ -1547,7 +1550,7 @@ def main() -> int:
 
         if args.command == "start-crawler":
             prov = LinodeSshProvisioner(target_ip=args.target, user=args.ssh_user, key_path=args.ssh_key)
-            prov.start_crawler(args.compose_file)
+            prov.start_crawler()
             print(f"[OK] Crawler started behind verified VPN on {args.target}")
             return 0
 
@@ -1559,7 +1562,7 @@ def main() -> int:
 
         if args.command == "cleanup":
             prov = LinodeSshProvisioner(target_ip=args.target, user=args.ssh_user, key_path=args.ssh_key)
-            prov.cleanup_runtime_credentials(args.compose_file)
+            prov.cleanup_runtime_credentials()
             print(f"[OK] Runtime credentials and containers cleaned up on {args.target}")
             return 0
 

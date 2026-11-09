@@ -504,7 +504,9 @@ jobs:
           python -m unittest discover -s infra/akamai/terraform/tests -p "test_pia_bridge.py" -v
       - name: Linux privilege boundary integration test
         run: |
-          bash infra/akamai/terraform/tests/test_linux_privilege_boundary.sh
+          export LODESTAR_ALLOW_PRIVILEGED_TESTS=1
+          export LODESTAR_REQUIRE_INTEGRATION_TESTS=1
+          sudo -E bash infra/akamai/terraform/tests/test_linux_privilege_boundary.sh
 
   # The update manifest (PK-manifest): the builder's tests, then a round trip
   # through the verifier clients run, signed with the minisign CLI as

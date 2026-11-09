@@ -257,13 +257,56 @@ write_files:
             exit 1
           fi
 
-          # 4. Verify NO rule allows port 53 or 853 on physical/non-VPN interface
-          if echo "$fw_rules" | grep -E -- "--dport\s+(53|853)" | grep -v -E -- "-o\s+(lo|wg0)"; then
-            echo "ERROR: Insecure DNS egress rule detected on non-VPN interface!" >&2
+          # 4. Discover legitimate VPN endpoint server IP
+          vpn_server_ip="$(docker exec gluetun wg show wg0 endpoints 2>/dev/null | awk '{print $2}' | cut -d: -f1 || true)"
+          if [ -z "$vpn_server_ip" ] && [ -f "$CONFIG_FILE" ]; then
+            vpn_server_ip="$(grep -E '^\s*Endpoint\s*=' "$CONFIG_FILE" 2>/dev/null | head -n1 | awk '{print $3}' | cut -d: -f1 || true)"
+          fi
+
+          # 5. Strict evaluation of every OUTPUT rule:
+          # Fail closed if ANY rule permits unauthorized egress, custom chain jumps, or unconstrained ACCEPT
+          while IFS= read -r rule; do
+            [ -z "$rule" ] && continue
+            case "$rule" in
+              "-P OUTPUT DROP")
+                # Default policy drop
+                ;;
+              *"-j ACCEPT"*)
+                # Legitimate accept categories:
+                # a) Loopback interface
+                if echo "$rule" | grep -q -E -- '-o\s+lo(\s|$)'; then
+                  :
+                # b) WireGuard VPN tunnel interface
+                elif echo "$rule" | grep -q -E -- '-o\s+wg0(\s|$)'; then
+                  :
+                # c) Stateful established / related connection tracking
+                elif echo "$rule" | grep -q -E -- '(-m\s+conntrack\s+--ctstate\s+RELATED,ESTABLISHED|-m\s+state\s+--state\s+RELATED,ESTABLISHED)'; then
+                  :
+                # d) Legitimate VPN server peer IP connection
+                elif [ -n "$vpn_server_ip" ] && echo "$rule" | grep -q -E -- "-d\s+$vpn_server_ip(/32)?(\s|$)"; then
+                  :
+                else
+                  echo "ERROR: Unauthorized egress rule in Gluetun firewall: $rule" >&2
+                  exit 1
+                fi
+                ;;
+              *"-j DROP"*|*"-j REJECT"*)
+                # Restrictive filtering rules permitted
+                ;;
+              *)
+                echo "ERROR: Unexpected or insecure firewall directive in OUTPUT chain: $rule" >&2
+                exit 1
+                ;;
+            esac
+          done <<< "$fw_rules"
+
+          # 6. IPv6 check: Must be disabled inside Gluetun container
+          if [ "$(docker exec gluetun cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null || true)" != "1" ]; then
+            echo "ERROR: IPv6 is not disabled inside Gluetun container" >&2
             exit 1
           fi
 
-          # 5. Assert ip route get 8.8.8.8 routes via dev wg0
+          # 7. Assert ip route get 8.8.8.8 routes via dev wg0
           route_out="$(docker exec gluetun ip route get 8.8.8.8 2>/dev/null || true)"
           if ! echo "$route_out" | grep -q 'dev wg0'; then
             echo "ERROR: DNS route does not go through wg0: $route_out" >&2

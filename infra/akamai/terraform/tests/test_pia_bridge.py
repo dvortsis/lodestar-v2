@@ -1215,6 +1215,7 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
         self.create_mock_docker(
             'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\n2: eth0: <BROADCAST>\n3: wg0: <POINTOPOINT>"; exit 0;\n'
             'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\n-A OUTPUT -o lo -j ACCEPT\n-A OUTPUT -o wg0 -j ACCEPT"; exit 0;\n'
+            'elif [[ "$*" =~ "disable_ipv6" ]]; then echo "1"; exit 0;\n'
             'elif [[ "$*" =~ "route get" ]]; then echo "8.8.8.8 dev wg0 src 10.0.0.2"; exit 0; fi; exit 0'
         )
         res = self.run_helper("verify-dns-firewall")
@@ -1230,7 +1231,64 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
         )
         res = self.run_helper("verify-dns-firewall")
         self.assertEqual(res.returncode, 1)
-        self.assertIn("Insecure DNS egress rule detected on non-VPN interface", res.stderr)
+        self.assertIn("Unauthorized egress rule in Gluetun firewall", res.stderr)
+
+    def test_exec_helper_dns_firewall_verification_rejected_when_broad_physical_accept_present(self) -> None:
+        """Proves that a default DROP policy with a broad physical-interface ACCEPT rule fails verification."""
+        self.create_mock_docker(
+            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\n2: eth0: <BROADCAST>\n3: wg0: <POINTOPOINT>"; exit 0;\n'
+            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\n-A OUTPUT -o lo -j ACCEPT\n-A OUTPUT -o wg0 -j ACCEPT\n-A OUTPUT -o eth0 -j ACCEPT"; exit 0;\n'
+            'elif [[ "$*" =~ "route get" ]]; then echo "8.8.8.8 dev wg0 src 10.0.0.2"; exit 0; fi; exit 0'
+        )
+        res = self.run_helper("verify-dns-firewall")
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("Unauthorized egress rule in Gluetun firewall", res.stderr)
+
+    def test_exec_helper_dns_firewall_verification_rejected_when_unconstrained_accept_present(self) -> None:
+        """Proves that an unconstrained -j ACCEPT rule fails verification."""
+        self.create_mock_docker(
+            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\n2: eth0: <BROADCAST>\n3: wg0: <POINTOPOINT>"; exit 0;\n'
+            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\n-A OUTPUT -o lo -j ACCEPT\n-A OUTPUT -o wg0 -j ACCEPT\n-A OUTPUT -j ACCEPT"; exit 0;\n'
+            'elif [[ "$*" =~ "route get" ]]; then echo "8.8.8.8 dev wg0 src 10.0.0.2"; exit 0; fi; exit 0'
+        )
+        res = self.run_helper("verify-dns-firewall")
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("Unauthorized egress rule in Gluetun firewall", res.stderr)
+
+    def test_exec_helper_dns_firewall_verification_rejected_when_arbitrary_protocol_accept_present(self) -> None:
+        """Proves that arbitrary non-VPN protocol egress (e.g. -p tcp) fails verification."""
+        self.create_mock_docker(
+            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\n2: eth0: <BROADCAST>\n3: wg0: <POINTOPOINT>"; exit 0;\n'
+            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\n-A OUTPUT -o lo -j ACCEPT\n-A OUTPUT -o wg0 -j ACCEPT\n-A OUTPUT -o eth0 -p tcp -j ACCEPT"; exit 0;\n'
+            'elif [[ "$*" =~ "route get" ]]; then echo "8.8.8.8 dev wg0 src 10.0.0.2"; exit 0; fi; exit 0'
+        )
+        res = self.run_helper("verify-dns-firewall")
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("Unauthorized egress rule in Gluetun firewall", res.stderr)
+
+    def test_exec_helper_dns_firewall_verification_rejected_when_custom_chain_present(self) -> None:
+        """Proves that unexpected chain jumps in OUTPUT chain fail verification."""
+        self.create_mock_docker(
+            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\n2: eth0: <BROADCAST>\n3: wg0: <POINTOPOINT>"; exit 0;\n'
+            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\n-A OUTPUT -o lo -j ACCEPT\n-A OUTPUT -o wg0 -j ACCEPT\n-A OUTPUT -j BYPASS_CHAIN"; exit 0;\n'
+            'elif [[ "$*" =~ "route get" ]]; then echo "8.8.8.8 dev wg0 src 10.0.0.2"; exit 0; fi; exit 0'
+        )
+        res = self.run_helper("verify-dns-firewall")
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("Unexpected or insecure firewall directive in OUTPUT chain", res.stderr)
+
+    def test_exec_helper_dns_firewall_verification_accepted_with_vpn_server_endpoint(self) -> None:
+        """Proves that legitimate Gluetun ruleset including the VPN server endpoint is accepted."""
+        self.create_mock_docker(
+            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\n2: eth0: <BROADCAST>\n3: wg0: <POINTOPOINT>"; exit 0;\n'
+            'elif [[ "$*" =~ "endpoints" ]]; then echo "peer_key 212.56.54.190:1337"; exit 0;\n'
+            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\n-A OUTPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT\n-A OUTPUT -o lo -j ACCEPT\n-A OUTPUT -o wg0 -j ACCEPT\n-A OUTPUT -d 212.56.54.190/32 -p udp -m udp --dport 1337 -j ACCEPT"; exit 0;\n'
+            'elif [[ "$*" =~ "disable_ipv6" ]]; then echo "1"; exit 0;\n'
+            'elif [[ "$*" =~ "route get" ]]; then echo "8.8.8.8 dev wg0 src 10.0.0.2"; exit 0; fi; exit 0'
+        )
+        res = self.run_helper("verify-dns-firewall")
+        self.assertEqual(res.returncode, 0)
+        self.assertIn("DNS_FIREWALL_OK", res.stdout)
 
     def test_exec_helper_dns_firewall_verification_rejected_when_policy_not_drop(self) -> None:
         """Proves that non-DROP output policy fails firewall verification."""
