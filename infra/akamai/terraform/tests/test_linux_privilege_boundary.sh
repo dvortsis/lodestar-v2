@@ -26,6 +26,18 @@ fi
 ALLOW_PRIVILEGED="${LODESTAR_ALLOW_PRIVILEGED_TESTS:-0}"
 REQUIRE_TESTS="${LODESTAR_REQUIRE_INTEGRATION_TESTS:-0}"
 
+for arg in "$@"; do
+  case "$arg" in
+    --allow-privileged)
+      ALLOW_PRIVILEGED="1"
+      ;;
+    --require-integration)
+      REQUIRE_TESTS="1"
+      IS_CI="true"
+      ;;
+  esac
+done
+
 # ------------------------------------------------------------------------------
 # 1. Environment & Safety Checks
 # ------------------------------------------------------------------------------
@@ -50,12 +62,12 @@ fi
 # Ensure root or passwordless sudo prerequisites are available
 if [[ $EUID -ne 0 ]]; then
   if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-    exec sudo -n \
+    exec sudo -n env \
       LODESTAR_ALLOW_PRIVILEGED_TESTS=1 \
       LODESTAR_REQUIRE_INTEGRATION_TESTS="$REQUIRE_TESTS" \
       CI="$IS_CI" \
       GITHUB_ACTIONS="${GITHUB_ACTIONS:-false}" \
-      "$0" "$@"
+      bash "$0" --allow-privileged "$@"
   else
     echo "ERROR: Root or passwordless sudo required to execute Linux privilege boundary integration test." >&2
     exit 1
