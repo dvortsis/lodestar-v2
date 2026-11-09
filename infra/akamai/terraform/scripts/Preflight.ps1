@@ -31,6 +31,8 @@ try {
     Assert-Tool 'terraform'
     Assert-Tool 'ssh-keygen'
     if ([string]::IsNullOrWhiteSpace($env:LINODE_TOKEN)) { throw 'LINODE_TOKEN is missing from the current PowerShell session. Do not paste it in chat.' }
+    . (Join-Path $PSScriptRoot 'StateBackend.ps1')
+    $backend = Get-StateBackendArgs
     $tfvars = Join-Path $root 'terraform.tfvars'
     if (-not (Test-Path -LiteralPath $tfvars -PathType Leaf)) { throw 'Copy terraform.tfvars.example to terraform.tfvars, then customize it.' }
     $config = Get-Content -LiteralPath $tfvars -Raw
@@ -73,7 +75,7 @@ try {
     Audit 'Read access to account firewalls available'
     Push-Location $root
     try {
-        & terraform init -input=false -no-color 2>&1 | ForEach-Object { Audit ([string]$_) }
+        & terraform init -input=false -no-color @backend 2>&1 | ForEach-Object { Audit ([string]$_) }
         if ($LASTEXITCODE -ne 0) { throw "terraform init failed with code $LASTEXITCODE" }
         & terraform validate -no-color 2>&1 | ForEach-Object { Audit ([string]$_) }
         if ($LASTEXITCODE -ne 0) { throw "terraform validate failed with code $LASTEXITCODE" }
