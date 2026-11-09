@@ -6636,7 +6636,11 @@
       "pr": 650,
       "note": "OP-2b merged 5036863b; owner \u00a72.19 flags + X-prowlarr-settings FYI sent via dashboard; OP-3 launched in same session"
     },
-    "Next runner PR: slices.yaml OP-3 -> OP-3a (P8, run path, step runner, vm-status, leak-test, compose.yaml, renew-vpn/gluetun), OP-3b (start-block, arm-switch, outage-watcher, copy-off + scrubber, screen-rules format if not in 3a), OP-3c (runbook); OP-G deps updated. Owner \u00a72.19: gluetun pinned by digest in compose; Lodestar digest per screen in screen-rules file; FLEET_BUCKET_OWNER secret."
+    "Next runner PR: slices.yaml OP-3 -> OP-3a (P8, run path, step runner, vm-status, leak-test, compose.yaml, renew-vpn/gluetun), OP-3b (start-block, arm-switch, outage-watcher, copy-off + scrubber, screen-rules format if not in 3a), OP-3c (runbook); OP-G deps updated. Owner \u00a72.19: gluetun pinned by digest in compose; Lodestar digest per screen in screen-rules file; FLEET_BUCKET_OWNER secret.",
+    {
+      "pr": 649,
+      "note": "X-win-restart-followups merged da15ccab; follow-up X-win-restart-followups-2 launched; later: update/layout.rs:239 busy-lock retry after #644 merges"
+    }
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7361,7 +7365,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T04:46Z",
+    "updated": "2026-11-09T04:58Z",
     "items": [
       {
         "slot": 1,
@@ -7389,11 +7393,11 @@
       },
       {
         "slot": 4,
-        "slice": "X-win-restart-followups",
+        "slice": "X-win-restart-followups-2",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #648 merged (da8de17a); #649 X-win-restart-followups (CI)",
-        "since": "2026-11-09T02:54Z"
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #649 merged (da15ccab); building X-win-restart-followups-2 (relaunch failure visible, companions lock retry, nits)",
+        "since": "2026-11-09T04:58Z"
       },
       {
         "slot": 5,
