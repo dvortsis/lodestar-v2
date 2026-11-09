@@ -244,6 +244,19 @@ class Flows(unittest.TestCase):
         self.assertIn("not main's head", out)
         self.assertEqual(store.calls, [])
 
+    def test_comment_down_and_run_against_main_moving_on(self):
+        # down is a kill path: it runs when main moved on, or when GitHub can't be asked.
+        for remote in ("side", None):
+            with self.subTest(remote=remote):
+                b = DryRunBackend(fleet=new_fleet(L, "screen", self.c["head"], T0))
+                _, out = self.run_cli("act", event_env("/fleet down"), backend=b, remote=remote)
+                self.assertIn("would destroy", out)
+                self.assertIsNone(b.fleet)
+        # run uses the fleet, so it needs main's head.
+        b = DryRunBackend(fleet=new_fleet(L, "screen", self.c["head"], T0))
+        _, out = self.run_cli("act", event_env("/fleet run leak-test main"), backend=b, remote="side")
+        self.assertIn("not main's head", out)
+
     def test_lock_lost_mid_command(self):
         store = MemoryStore()
         b = DryRunBackend()

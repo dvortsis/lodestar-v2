@@ -397,6 +397,28 @@ class Backend(unittest.TestCase):
         self.assertEqual(api.rules["21"], fw_rules())
         self.assertEqual(apply.known_hosts(f).count("\n"), 2)
 
+    def test_first_tombstone_survives_a_lost_response(self):
+        class LostResponse(FakeS3):
+            def put_object(self, Bucket, Key, Body, IfNoneMatch=None):
+                super().put_object(Bucket, Key, Body, IfNoneMatch)
+                if Key == FLEET_KEY:
+                    raise S3Error("RequestTimeout")  # it landed; the answer didn't
+        b, s3, api, _ = backend(s3=LostResponse())
+        api.linodes, api.firewalls = {}, {}
+        self.assertIsNone(b.read_fleet())  # re-read once: a tombstone
+        self.assertIs(s3.doc("control-b", MISMATCH_KEY)["mismatch"], False)
+
+        class Raced(FakeS3):  # someone else wrote a fleet between our read and our put
+            def put_object(self, Bucket, Key, Body, IfNoneMatch=None):
+                if Key == FLEET_KEY and IfNoneMatch == "*":
+                    self.objects[(Bucket, Key)] = json.dumps(new_fleet(L, "screen", "a" * 40, T0)).encode()
+                super().put_object(Bucket, Key, Body, IfNoneMatch)
+        b, s3, api, _ = backend(s3=Raced())
+        api.linodes, api.firewalls = {}, {}
+        with self.assertRaises(FleetUnknown):
+            b.read_fleet()
+        self.assertNotIn(("control-b", MISMATCH_KEY), s3.objects)
+
     def test_first_tombstone_is_conditional(self):
         b, s3, api, _ = backend()
         api.linodes = {}
@@ -470,13 +492,49 @@ class FailClosed(unittest.TestCase):
         b.create(f, noop)
         return b, s3, api, tf, clock
 
-    def reap(self, b, clock, store=None):
+    def reap(self, b, clock, store=None, gh=None):
         out, store = io.StringIO(), store if store is not None else MemoryStore()
+        gh = gh if gh is not None else FakeGitHub()
         with redirect_stdout(out), redirect_stderr(out), \
                 mock.patch.object(ancestry, "remote_main_head", return_value=self.c["head"]):
             rc = fleet.main(["reap"], env=event_env(FLEET_LIVE="true", **ENV), backend=b, store=store,
-                            transport=FakeGitHub(), clock=clock, sleep=clock.sleep, repo=self.repo)
-        return rc, out.getvalue(), store
+                            transport=gh, clock=clock, sleep=clock.sleep, repo=self.repo)
+        return rc, out.getvalue() + "\n".join(gh.bodies()), store
+
+    def test_enforcement_runs_while_every_post_fails(self):
+        class DownGitHub(FakeGitHub):
+            def __call__(self, method, path, body):
+                raise RuntimeError("GitHub API failed: HTTP 502")
+
+        def boom():
+            raise RuntimeError("GitHub API failed: HTTP 503")
+        # An emergency (an hour past expiry) with /meta failing too.
+        b, s3, api, _, clock = self.overdue(minutes_past=60)
+        b.meta = boom
+        rc, out, _ = self.reap(b, clock, gh=DownGitHub())
+        self.assertEqual(rc, 0)
+        self.assertIn("fleet: couldn't post to the channel", out)
+        self.assertFalse(api.linodes.keys() & {"11", "12"})
+        # Just expired (a plain down), with every run lookup failing as well.
+        b, s3, api, _, clock = self.overdue(minutes_past=5)
+        api.rules["21"]["inbound"].append(audit.job_rule("5", "1", "198.51.100.7/32"))
+
+        def lookup(rid):
+            raise RuntimeError("GitHub API failed: HTTP 502")
+        b.lookup_run = lookup
+        rc, out, _ = self.reap(b, clock, gh=DownGitHub())
+        self.assertEqual(rc, 0)
+        self.assertIn("reaper: down", out)
+        self.assertFalse(api.linodes.keys() & {"11", "12"})
+        self.assertIsNone(s3.doc("state-b", FLEET_KEY)["fleet"])
+
+    def test_a_fresh_mismatch_goes_down_even_if_the_flag_reread_fails(self):
+        b, s3, api, _, clock = self.overdue(minutes_past=-120)
+        api.rules["21"]["inbound_policy"] = "ACCEPT"
+        s3.fail_after[("control-b", MISMATCH_KEY)] = 1  # the first read works, the re-read doesn't
+        _, out, _ = self.reap(b, clock)
+        self.assertIn("reaper: emergency (firewall audit mismatch)", out)
+        self.assertFalse(api.linodes.keys() & {"11", "12"})
 
     def test_audit_failure_never_stops_lifetime_enforcement(self):
         def boom():
@@ -526,6 +584,15 @@ class FailClosed(unittest.TestCase):
         self.assertIn("fleet.json unreadable; firewall audit skipped; escalate", out)
         self.assertEqual(len(api.rules["21"]["inbound"]), 1)  # swept
         self.assertTrue({"11", "12"} <= set(api.linodes))
+        # A failed lookup is reported on this path too.
+        api.rules["21"]["inbound"].append(audit.job_rule("6", "1", "198.51.100.8/32"))
+
+        def lookup(rid):
+            raise RuntimeError("GitHub API failed: HTTP 403")
+        b.lookup_run = lookup
+        _, out, _ = self.reap(b, clock)
+        self.assertIn("reaper: 1 job-rule lookups failed, so those rules were swept; escalate", out)
+        self.assertEqual(len(api.rules["21"]["inbound"]), 1)
 
     def test_unreadable_flag_escalates_but_never_destroys(self):
         b, s3, api, _, clock = self.overdue(minutes_past=-120)
@@ -674,11 +741,12 @@ class FailClosed(unittest.TestCase):
         self.assertIsNone(s3.doc("state-b", FLEET_KEY)["fleet"])  # written first
 
     def dispatch_down(self, b, clock, store, head=None):
-        out = io.StringIO()
+        out, gh = io.StringIO(), FakeGitHub()
         with redirect_stdout(out), redirect_stderr(out), \
                 mock.patch.object(ancestry, "remote_main_head", return_value=head or self.c["head"]):
             rc = fleet.main(["dispatch-down"], env=event_env(FLEET_LIVE="true", **ENV), backend=b, store=store,
-                            transport=FakeGitHub(), clock=clock, sleep=clock.sleep, repo=self.repo)
+                            transport=gh, clock=clock, sleep=clock.sleep, repo=self.repo)
+        self.posted = gh.bodies()
         return rc, out.getvalue()
 
     def test_kill_paths_run_when_main_has_moved_on(self):
@@ -699,12 +767,13 @@ class FailClosed(unittest.TestCase):
     def test_kill_paths_refuse_a_rerun_before_any_credential(self):
         for sub in ("reap", "dispatch-down"):
             with self.subTest(sub=sub), mock.patch.object(apply, "live_context", side_effect=AssertionError("minted")):
-                out = io.StringIO()
+                out, gh = io.StringIO(), FakeGitHub()
                 env = dict(event_env(FLEET_LIVE="true", **ENV), GITHUB_RUN_ATTEMPT="2")
                 with redirect_stdout(out), redirect_stderr(out):
-                    rc = fleet.main([sub], env=env, transport=FakeGitHub(), repo=self.repo)
+                    rc = fleet.main([sub], env=env, transport=gh, repo=self.repo)
                 self.assertEqual(rc, 0)
                 self.assertIn("refused, a re-run; escalate", out.getvalue())
+                self.assertTrue(any("refused, a re-run; escalate" in x for x in gh.bodies()))  # reaches the channel
 
     def test_a_failed_lock_read_never_stops_a_preempted_sweep(self):
         class FlakyStore(MemoryStore):
@@ -720,19 +789,25 @@ class FailClosed(unittest.TestCase):
                 self.fail = True  # every lock read after the pre-emption fails
         b, s3, api, _, clock = self.overdue(minutes_past=-120)
         store = FlakyStore()
-        self.dispatch_down(b, clock, store)
+        rc, _ = self.dispatch_down(b, clock, store)
+        self.assertEqual(rc, 0)
         self.assertFalse(api.linodes.keys() & {"11", "12"})
         self.assertIsNone(s3.doc("state-b", FLEET_KEY)["fleet"])
-        # The release's own read fails too, so the marker stays to its expiry (fail closed).
+        # The release's own read fails too, so the marker stays to its expiry (fail
+        # closed), and that is reported beside the outcome, not instead of it.
         self.assertEqual(json.loads(store.objects[LOCK_KEY][0])["kind"], "reaping")
+        posted = "\n".join(self.posted)
+        self.assertIn("owner's down: couldn't release the fleet lock; it expires on its own; escalate", posted)
+        self.assertIn("owner's down: destroy the fleet", posted)
+        self.assertTrue(any(x.startswith(fleet.MARKER) for x in self.posted))  # the status too
         b, s3, api, _, clock = self.overdue(minutes_past=30)  # the reaper's emergency
         self.reap(b, clock, store=FlakyStore())
         self.assertFalse(api.linodes.keys() & {"11", "12"})
 
     def test_a_lost_lock_stops_a_preempted_sweep(self):
         class TakenStore(MemoryStore):
-            def put(self, key, body):
-                super().put(key, json.dumps({"kind": "command", "run_id": "other-1"}).encode())
+            def put(self, key, body):  # another run takes the lock right after our pre-emption
+                super().put(key, FleetLock(MemoryStore(), 90, Clock(T0))._body("run", "other-1"))
         b, s3, api, _, clock = self.overdue(minutes_past=-120)
         before = len([c for c in api.calls if c[0] == "DELETE"])
         rc, out = self.dispatch_down(b, clock, TakenStore())
@@ -793,6 +868,31 @@ class FailClosed(unittest.TestCase):
         self.assertFalse(api.linodes.keys() & {"11", "12"})
         self.assertNotIn(LOCK_KEY, store.objects)  # the inventory is empty: the marker goes
 
+    def test_up_failing_with_any_error_sets_the_flag(self):
+        class SecondWriteFails(FakeS3):  # the slot write (not ApplyFailed) fails
+            def put_object(self, Bucket, Key, Body, IfNoneMatch=None):
+                if Key == FLEET_KEY and any(k == FLEET_KEY for _, k, _ in self.puts):
+                    raise S3Error("InternalError")
+                super().put_object(Bucket, Key, Body, IfNoneMatch)
+        b, s3, api, tf = backend(s3=SecondWriteFails())
+        b._clear_mismatch()
+        with self.assertRaises(S3Error):
+            b.create(new_fleet(L, "screen", "a" * 40, T0), noop)
+        self.assertEqual(tf.calls, ["init", "apply", "output"])
+        self.assertIs(s3.doc("control-b", MISMATCH_KEY)["mismatch"], True)
+        # LockLost after the first write sets it too (the flag write itself is unfenced: fail closed).
+        b, s3, *_ = backend()
+        b._clear_mismatch()
+        calls = []
+
+        def fence():
+            calls.append(1)
+            if len(calls) == 2:
+                raise LockLost("lost")
+        with self.assertRaises(LockLost):
+            b.create(new_fleet(L, "screen", "a" * 40, T0), fence)
+        self.assertIs(s3.doc("control-b", MISMATCH_KEY)["mismatch"], True)
+
     def test_up_that_fails_after_its_first_write_sets_the_flag(self):
         for fail in ("output", "apply"):
             with self.subTest(fail=fail):
@@ -824,6 +924,16 @@ class Pin(unittest.TestCase):
         with self.assertRaises(apply.ApplyFailed):  # not an ancestor of main: no worktree
             apply.pinned_tf_dir("f" * 40, run=lambda *a, **k: calls.append(a))
         self.assertEqual(calls, [])
+
+    def test_worktree_calls_are_bounded(self):
+        calls = []
+
+        def run(argv, **kw):
+            calls.append((argv[3], kw.get("timeout")))
+        with mock.patch.object(ancestry, "is_ancestor", return_value=True):
+            apply.pinned_tf_dir("f" * 40, run=run)
+        apply.unpin_tf_dir(Path("/tmp/fleet-pin-x/infra/akamai/terraform"), run=run)
+        self.assertEqual(calls, [("worktree", 30), ("worktree", 30)])
 
     def test_fingerprint_format(self):
         # OpenSSH's SHA256 fingerprint: "SHA256:" and 43 unpadded base64 characters.

@@ -157,6 +157,10 @@ class FleetLock:
         if holder is None:  # unreadable: fail closed; the reaper can pre-empt it
             return BUSY
         if holder.expires_at > self.clock():
+            if holder.kind == "run" and holder.run_id == run_id:
+                # Our own earlier put whose response was lost (the retry got a
+                # 412): it's ours, so don't strand it for the lease.
+                return ACQUIRED
             return REAPING if holder.kind == "reaping" else BUSY
         return ACQUIRED if self.store.put_if_match(LOCK_KEY, body, cur[1]) else BUSY
 

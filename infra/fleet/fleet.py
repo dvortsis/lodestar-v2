@@ -51,8 +51,9 @@ class Ctx:
             self.channel = Channel(transport or urllib_transport(token), repo_name, pr)
 
     def _connect(self) -> None:
-        """Live credentials are minted on first use, so only after the gates and
-        the main-head check have passed (cmd_act runs those first)."""
+        """Live credentials are minted on first use, so only after the gates (and,
+        for up and run, the main-head check; for the kill paths, the re-run
+        check) have passed."""
         if self._backend is None and self.live:
             import apply  # noqa: PLC0415 - live only; needs boto3 and credentials
             self._backend, self._store = apply.live_context(self.env, self.limits, self.clock, self.run_id())
@@ -99,18 +100,36 @@ class Ctx:
         return render(fleet, self.limits, self.clock(), dry_run=not self.live, unknown=unknown)
 
     def report(self, line: str, with_status: bool = False) -> None:
+        """Best-effort: a channel that fails (GitHub down, a denied token) never
+        stops what the caller does next, above all the reaper's enforcement."""
         print(line)
-        if self.channel:
+        if not self.channel:
+            return
+        try:
             body = f"`fleet.yml` ({'live' if self.live else 'dry-run'}): {line}"
             if with_status:
                 # A fresh, never-edited copy of the status, which the reader
                 # helper trusts; the edited-in-place comment it drops.
                 body += "\n\n" + self._render().replace(MARKER + "\n", "", 1)
             self.channel.post(body)
+        except Exception:  # noqa: BLE001 - fixed line; the error may carry details
+            print("fleet: couldn't post to the channel")
 
     def status(self) -> None:
-        if self.channel:
+        if not self.channel:
+            return
+        try:
             self.channel.upsert_status(self._render())
+        except Exception:  # noqa: BLE001
+            print("fleet: couldn't update the status comment")
+
+    def release(self, run_id: str, who: str) -> None:
+        """Release the lock, reporting (never raising) a failure: the lock then
+        expires on its own, which fails closed."""
+        try:
+            self.lock.release(run_id)
+        except Exception:  # noqa: BLE001
+            self.report(f"{who}: couldn't release the fleet lock; it expires on its own; escalate")
 
 
 def _digits(s: str) -> bool:
@@ -247,7 +266,7 @@ def cmd_act(ctx: Ctx) -> int:
         else:
             line = _execute(ctx, cmd, run_id, fleet)
     except LockLost:
-        ctx.report("failed: the fleet lock was lost (pre-empted); nothing more was written")
+        ctx.report("failed: the fleet lock was lost (pre-empted); stopped before its next fleet write")
         return 1
     except ApplyFailed:
         ctx.report("failed: terraform didn't finish; the fleet is recorded, so run down (output is in the evidence bucket)")
@@ -259,7 +278,7 @@ def cmd_act(ctx: Ctx) -> int:
         ctx.report("failed: fleet.json is invalid; escalate")
         return 1
     finally:
-        ctx.lock.release(run_id)
+        ctx.release(run_id, "act")
     ctx.report(line, with_status=True)
     ctx.status()
     return 0
@@ -304,7 +323,7 @@ def cmd_reap(ctx: Ctx) -> int:
     if marker:
         ctx.lock.preempt(run_id)
     elif not _acquire(ctx, run_id):
-        print("reaper: lock busy; trying again next hour")
+        ctx.report("reaper: lock busy; trying again next hour")
         return 0
     left = emptied = False
     problems = None
@@ -327,13 +346,13 @@ def cmd_reap(ctx: Ctx) -> int:
             except Exception:  # noqa: BLE001
                 problems = None
                 ctx.report("reaper: the firewall audit couldn't run; escalate")
-            failed = getattr(b, "lookup_failures", 0)
-            if failed:
-                ctx.report(f"reaper: {failed} job-rule lookups failed, so those rules were swept; escalate")
-            if problems:
-                b.set_mismatch(problems)
-                ctx.lock.preempt(run_id)  # a mismatch pre-empts as the overdue case does
-                marker = True
+        failed = getattr(b, "lookup_failures", 0)
+        if failed:
+            ctx.report(f"reaper: {failed} job-rule lookups failed, so those rules were swept; escalate")
+        if problems:  # only the audit sets it, so never with fleet.json unreadable
+            b.set_mismatch(problems)
+            ctx.lock.preempt(run_id)  # a mismatch pre-empts as the overdue case does
+            marker = True
         # Decide again with what's true now (a command may have run while we waited).
         fleet, unknown = ctx.fleet()
         flag = b.mismatch_state()
@@ -364,7 +383,7 @@ def cmd_reap(ctx: Ctx) -> int:
         # The reaping marker clears only on a confirmed empty inventory; otherwise
         # it stays until its own expiry, and down-only holds meanwhile.
         if not marker or emptied:
-            ctx.lock.release(run_id)
+            ctx.release(run_id, "reaper")
     line = f"reaper: {d.action} ({d.reason}); Linodes over 44 h: {len(d.age_reap)}"
     if left:
         line += "; tagged resources remain; escalate"
@@ -389,7 +408,7 @@ def cmd_dispatch_down(ctx: Ctx) -> int:
             fleet = None  # malformed: still destroy and sweep
         empty = _down(ctx, run_id, fleet, _tolerant(ctx, run_id))
     except LockLost:
-        ctx.report("owner's down: the fleet lock was lost; run it again")
+        ctx.report("owner's down: the fleet lock was lost; dispatch a new run")
         return 1
     except LedgerUnreadable:
         empty = True
@@ -399,7 +418,7 @@ def cmd_dispatch_down(ctx: Ctx) -> int:
         return 1
     finally:
         if empty:  # the marker clears only once nothing tagged is left
-            ctx.lock.release(run_id)
+            ctx.release(run_id, "owner's down")
     if not empty:
         ctx.report("owner's down: tagged resources remain after destroy; escalate")
     else:

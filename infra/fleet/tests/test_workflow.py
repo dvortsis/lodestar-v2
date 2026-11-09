@@ -241,8 +241,8 @@ class PublicLogLeak(unittest.TestCase):
         for (script, sub), envs in SCENARIOS.items():
             for env in envs:
                 with self.subTest(script=script, sub=sub, body=env.get("COMMENT_BODY")):
-                    # Outside any git repo: the main-head check fails closed
-                    # without a network call.
+                    # Dry-run, outside any git repo: up and run fail the main-head
+                    # check closed without a network call; the rest run dry.
                     r = subprocess.run([sys.executable, str(ROOT / script), sub], cwd=self.outside, capture_output=True,
                                        text=True, env=scrub_env({**env, **secret_env}), timeout=60)
                     self.assertEqual(r.returncode, 0, r.stderr[-400:])

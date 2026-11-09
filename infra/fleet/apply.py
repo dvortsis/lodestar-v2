@@ -193,6 +193,16 @@ class LiveBackend:
                 # The first tombstone: no fleet.json yet and nothing in the account.
                 try:
                     self._put(self.state_bucket, FLEET_KEY, tombstone(self.clock()), IfNoneMatch="*")
+                except Exception:
+                    # Someone else's put, or our own whose response was lost:
+                    # read once more, and accept only a tombstone.
+                    try:
+                        again = self._get(self.state_bucket, FLEET_KEY)
+                    except Exception:
+                        raise FleetUnknown("fleet.json unreadable") from None
+                    if not is_tombstone(again):
+                        raise FleetUnknown("fleet.json changed while it was being created") from None
+                try:
                     self._clear_mismatch()
                 except Exception:
                     raise FleetUnknown("fleet.json unreadable") from None
