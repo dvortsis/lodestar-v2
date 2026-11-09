@@ -118,10 +118,9 @@ async fn a_healthy_companion_goes_down_only_after_three_failures() {
     .await;
     let before = script.checks("prowlarr");
     script.set("prowlarr", HealthStatus::Unreachable);
-    // Two more failed checks keep it healthy.
+    // It goes missing only once three checks in a row have failed (the
+    // debounce itself is unit-tested in `watch.rs`).
     checks_reach(&script, "prowlarr", before + 2).await;
-    // A check is published only after it ran, so the report still says
-    // healthy until the third failure.
     until(&mut rx, "missing", |w| {
         w.get(&id("prowlarr")).map(|x| x.1) == Some(Seen::Missing)
     })

@@ -60,19 +60,25 @@ pub fn target_url(t: &Target) -> String {
     canonical(&url)
 }
 
-/// Compared without a trailing `/`, the scheme and host in lower case.
+/// An address as parsed: scheme, host and port (the scheme's default
+/// filled in, so `http://h` and `http://h:80` are one), then the path
+/// without a trailing `/`. One that doesn't parse is kept as text, trimmed,
+/// so it equals only itself.
 fn canonical(url: &str) -> String {
-    let url = url.trim().trim_end_matches('/');
-    match url.split_once("://") {
-        Some((scheme, rest)) => {
-            let (host, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+    let text = url.trim();
+    match reqwest::Url::parse(text) {
+        Ok(u) => {
+            let host = u.host_str().unwrap_or("");
+            let port = u
+                .port_or_known_default()
+                .map_or(String::new(), |p| format!(":{p}"));
             format!(
-                "{}://{}{path}",
-                scheme.to_ascii_lowercase(),
-                host.to_ascii_lowercase()
+                "{}://{host}{port}{}",
+                u.scheme(),
+                u.path().trim_end_matches('/')
             )
         }
-        None => url.to_owned(),
+        Err(_) => text.trim_end_matches('/').to_owned(),
     }
 }
 
@@ -140,28 +146,39 @@ pub fn present(
     }
 }
 
-/// The Prowlarr source's saved address (its config's `url`), when the
-/// source is on. `None` when it's off, not registered, or has no address
-/// saved. The manifest lists no endpoints for it: the address is the one
-/// you entered, in its saved config.
-async fn prowlarr_endpoints(ops: &dyn OpsApi, store: Arc<Mutex<Store>>) -> Option<Vec<String>> {
-    let sources = ops.sources().await.ok()?;
-    sources
+/// Whether the Prowlarr source is on. `Ok(false)` when it's off or not
+/// registered; `Err` when the sources couldn't be read.
+async fn prowlarr_on(ops: &dyn OpsApi) -> Result<bool, ()> {
+    let sources = ops.sources().await.map_err(|_| ())?;
+    Ok(sources
         .iter()
-        .find(|s| s.plugin == PROWLARR_SOURCE && s.enabled)?;
-    let config = tokio::task::spawn_blocking(move || saved_config(&store))
-        .await
-        .ok()??;
-    Some(vec![config_url(&config)?])
+        .any(|s| s.plugin == PROWLARR_SOURCE && s.enabled))
 }
 
-/// The Prowlarr source's saved config, as its form saved it. Blocking.
-fn saved_config(store: &Mutex<Store>) -> Option<String> {
+/// The Prowlarr source's saved address (its config's `url`), when the
+/// source is on: `Ok(None)` when it's off or has no address saved, `Err`
+/// when either couldn't be read (the gate then keeps what it last knew).
+/// The manifest lists no endpoints for it: the address is the one you
+/// entered, in its saved config.
+async fn prowlarr_endpoints(
+    on: Result<bool, ()>,
+    read: impl FnOnce() -> Result<Option<String>, ()> + Send + 'static,
+) -> Result<Option<Vec<String>>, ()> {
+    if !on? {
+        return Ok(None);
+    }
+    let config = tokio::task::spawn_blocking(read).await.map_err(|_| ())??;
+    Ok(config.and_then(|c| config_url(&c)).map(|u| vec![u]))
+}
+
+/// The Prowlarr source's saved config, as its form saved it: `Ok(None)`
+/// when none is saved, `Err` when the store couldn't be read. Blocking.
+fn saved_config(store: &Mutex<Store>) -> Result<Option<String>, ()> {
     store
         .lock()
-        .ok()?
+        .map_err(|_| ())?
         .source_setting(PROWLARR_SOURCE, lodestar_store::SourceSetting::Config)
-        .ok()?
+        .map_err(|_| ())
 }
 
 /// The `url` in a saved Prowlarr config; `None` when it doesn't parse.
@@ -172,7 +189,7 @@ fn config_url(config: &str) -> Option<String> {
 
 /// The Prowlarr source's addresses when it's on ([`prowlarr_endpoints`];
 /// a fake in tests).
-type Endpoints = Arc<dyn Fn() -> BoxFuture<'static, Option<Vec<String>>> + Send + Sync>;
+type Endpoints = Arc<dyn Fn() -> BoxFuture<'static, Result<Option<Vec<String>>, ()>> + Send + Sync>;
 
 /// A companion you added and confirmed: its id and where it is.
 pub type Added = (CompanionId, Target);
@@ -182,14 +199,14 @@ pub type Added = (CompanionId, Target);
 /// for the run (a fixture, a held lock, a bad catalogue) there's no
 /// receiver, which turns the gate off: the sources run as before
 /// (`lodestar_pipeline::requires`).
-pub fn gate(
-    companions_on: bool,
+pub fn gate<T>(
+    companions: Option<&T>,
 ) -> (
     channel::Sender<requires::Snapshot>,
     Option<requires::Companions>,
 ) {
     let (tx, rx) = channel::channel(requires::Snapshot::Unknown);
-    (tx, companions_on.then_some(rx))
+    (tx, companions.map(|_| rx))
 }
 
 /// What [`start`] runs, stopped when dropped.
@@ -231,7 +248,10 @@ pub fn start(
     let http: Arc<dyn GuardedHttp> = Arc::new(CompanionHttp::new().map_err(|_| "companion_http")?);
     let endpoints: Endpoints = Arc::new(move || {
         let (ops, store) = (ops.clone(), store.clone());
-        Box::pin(async move { prowlarr_endpoints(ops.as_ref(), store).await })
+        Box::pin(async move {
+            let on = prowlarr_on(ops.as_ref()).await;
+            prowlarr_endpoints(on, move || saved_config(&store)).await
+        })
     });
     start_with(
         added,
@@ -292,10 +312,32 @@ fn start_with(
     let (list_tx, list_rx) = channel::channel(added_rx.borrow().clone());
     let (mut watched, watching) = watch::spawn(http, checker, list_rx, every);
     let composing = tokio::spawn(async move {
-        let mut tick = tokio::time::interval(REFRESH.min(every * 3));
+        let period = REFRESH.min(every * 3);
+        let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // What the Prowlarr source last read as: a read that fails keeps
+        // it, so a busy store never stops a working source.
+        let mut known: Option<Vec<String>> = None;
+        let mut failing = false;
         loop {
-            let endpoints = endpoints().await;
+            match endpoints().await {
+                Ok(e) => {
+                    known = e;
+                    failing = false;
+                }
+                Err(()) => {
+                    if !failing {
+                        lodestar_log::log_event!(
+                            lodestar_companions::log_events::CONFIG_FAILED,
+                            companion = PROWLARR_SOURCE,
+                            setting = "gate.prowlarr_address",
+                            reason = "read_failed"
+                        );
+                    }
+                    failing = true;
+                }
+            }
+            let endpoints = known.clone();
             let snapshot = {
                 let added = added_rx.borrow_and_update().clone();
                 list_tx.send_if_modified(|l| {
@@ -319,7 +361,19 @@ fn start_with(
             tokio::select! {
                 _ = tick.tick() => {}
                 r = installed.changed() => if r.is_err() { return },
-                r = watched.changed() => if r.is_err() { return },
+                r = watched.changed() => if r.is_err() {
+                    // The watch stopped (it ended or panicked): the gate's
+                    // sender goes with this task, and the gate reads as
+                    // unknown, which holds gated sources.
+                    lodestar_log::log_event!(
+                        lodestar_companions::log_events::INSTALL_FAILED,
+                        companion = "all",
+                        version = "",
+                        step = "watch",
+                        reason = "stopped"
+                    );
+                    return;
+                },
                 r = integrations.changed() => if r.is_err() { return },
                 r = added_rx.changed() => if r.is_err() { return },
             }
@@ -445,6 +499,7 @@ impl ConfigSink for Sink {
             let store = self.store.clone();
             let previous = tokio::task::spawn_blocking(move || saved_config(&store))
                 .await
+                .map_err(|_| SinkError::Unavailable)?
                 .map_err(|_| SinkError::Unavailable)?;
             let writes = OpsWrites(self.ops.as_ref());
             hand_over_prowlarr(
@@ -631,7 +686,7 @@ mod tests {
         let (_inst_tx, inst) = channel::channel(Snapshot::default());
         let (int_tx, ints) = channel::channel(Integrations::default());
         let (gate_tx, mut gate) = channel::channel(requires::Snapshot::Unknown);
-        let endpoints: Endpoints = Arc::new(|| Box::pin(async { None }));
+        let endpoints: Endpoints = Arc::new(|| Box::pin(async { Ok(None) }));
         let w = start_with(
             Vec::new(),
             inst,
@@ -643,7 +698,9 @@ mod tests {
                 Some(Box::new(AlwaysHealthy(id.clone()))
                     as Box<dyn lodestar_companions::adapter::Health>)
             }),
-            Duration::from_millis(20),
+            // Long: every change below arrives through `changed()`, never
+            // through a tick.
+            Duration::from_secs(3600),
         )
         .unwrap();
         let known = |g: &requires::Snapshot, f: &dyn Fn(&requires::Present) -> bool| match g {
@@ -694,9 +751,9 @@ mod tests {
     /// off and no source waits on it; on, it starts `Unknown`.
     #[test]
     fn the_gate_is_off_when_companions_are() {
-        let (_tx, rx) = gate(false);
+        let (_tx, rx) = gate::<()>(None);
         assert!(rx.is_none());
-        let (_tx, rx) = gate(true);
+        let (_tx, rx) = gate(Some(&()));
         assert_eq!(*rx.unwrap().borrow(), requires::Snapshot::Unknown);
     }
 
@@ -730,7 +787,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("db"), Default::default()).unwrap();
         let store = Mutex::new(store);
-        assert_eq!(saved_config(&store), None);
+        assert_eq!(saved_config(&store), Ok(None));
         store
             .lock()
             .unwrap()
@@ -740,7 +797,10 @@ mod tests {
                 r#"{"url":"http://indexer.lan:9696","manager":"prowlarr"}"#,
             )])
             .unwrap();
-        let url = saved_config(&store).and_then(|c| config_url(&c)).unwrap();
+        let url = saved_config(&store)
+            .unwrap()
+            .and_then(|c| config_url(&c))
+            .unwrap();
         let ours: Vec<Added> = vec![(
             id("prowlarr"),
             Target::Entered(EnteredUrl::parse("http://indexer.lan:9696/").unwrap()),
@@ -817,6 +877,94 @@ mod tests {
             managed.password.as_ref().map(|p| p.0.as_str()),
             Some("second-generated")
         );
+    }
+
+    /// The source on with an address, off, or with none saved; a read that
+    /// fails is an error, never "not external".
+    #[tokio::test]
+    async fn the_prowlarr_address_is_read_only_when_the_source_is_on() {
+        let saved = || {
+            Ok(Some(
+                r#"{"url":"http://indexer.lan:9696","manager":"prowlarr"}"#.to_owned(),
+            ))
+        };
+        assert_eq!(
+            prowlarr_endpoints(Ok(true), saved).await,
+            Ok(Some(vec!["http://indexer.lan:9696".to_owned()]))
+        );
+        assert_eq!(prowlarr_endpoints(Ok(false), saved).await, Ok(None));
+        assert_eq!(prowlarr_endpoints(Ok(true), || Ok(None)).await, Ok(None));
+        assert_eq!(prowlarr_endpoints(Err(()), saved).await, Err(()));
+        assert_eq!(prowlarr_endpoints(Ok(true), || Err(())).await, Err(()));
+    }
+
+    /// Runner's condition (2026-11-09): with companions on and nothing
+    /// installed, your own Prowlarr or download client meets the need as
+    /// soon as the first snapshot arrives, and a read that then fails
+    /// keeps it.
+    #[tokio::test]
+    async fn your_own_setup_keeps_working_with_companions_on() {
+        let deadline = Duration::from_secs(10);
+        let catalogue = lodestar_companions::builtin().unwrap();
+        let reads = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let r = reads.clone();
+        let endpoints: Endpoints = Arc::new(move || {
+            let n = r.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async move {
+                if n == 0 {
+                    Ok(Some(vec!["http://indexer.lan:9696".to_owned()]))
+                } else {
+                    Err(())
+                }
+            })
+        });
+        let (_inst_tx, inst) = channel::channel(Snapshot::default());
+        let mut ints = Integrations::default();
+        ints.clients.push(client("home"));
+        let (int_tx, ints) = channel::channel(ints);
+        let (gate_tx, mut gate) = channel::channel(requires::Snapshot::Unknown);
+        let _w = start_with(
+            Vec::new(),
+            inst,
+            ints,
+            endpoints,
+            gate_tx,
+            Arc::new(NoHttp),
+            Arc::new(|_: &CompanionId| None),
+            Duration::from_secs(3600),
+        )
+        .unwrap();
+        tokio::time::timeout(
+            deadline,
+            gate.wait_for(|g| matches!(g, requires::Snapshot::Known(_))),
+        )
+        .await
+        .expect("no first snapshot")
+        .unwrap();
+        let state = |plugin: &str, g: &requires::Snapshot| {
+            requires::evaluate(
+                &lodestar_companions::requires::requirement(plugin).unwrap(),
+                Some(catalogue),
+                g,
+            )
+        };
+        assert_eq!(state("prowlarr", &gate.borrow()), requires::State::Ok);
+        assert_eq!(
+            state("download_clients", &gate.borrow()),
+            requires::State::Ok
+        );
+        // A later change sends again with a failing read: the address read
+        // first is kept.
+        int_tx.send_modify(|i| i.clients.push(client("office")));
+        tokio::time::timeout(deadline, async {
+            while reads.load(std::sync::atomic::Ordering::SeqCst) < 2 {
+                tokio::task::yield_now().await;
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the gate didn't read again");
+        assert_eq!(state("prowlarr", &gate.borrow()), requires::State::Ok);
     }
 
     /// Records each write; fails the step named in `fail`.

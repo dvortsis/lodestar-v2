@@ -1,6 +1,6 @@
 //! Health for companions Lodestar doesn't supervise (plan
 //! 2026-11-06-v06-companions CMP-5g, Q7, Q12; architecture §18.10): the
-//! ones you added by detection or a URL ([`crate::guided::Record`]).
+//! ones you added by detection or a URL.
 //!
 //! - **Cadence (Q7):** every companion is checked when it's added, then
 //!   every 30 s, through CMP-8a's [`Health`] adapter and the guarded

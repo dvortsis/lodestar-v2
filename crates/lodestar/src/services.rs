@@ -345,7 +345,7 @@ impl Services {
         };
         // The companion gate (CMP-10): fed by the wiring once the sources'
         // ops exist. Until then it holds `Unknown`, so nothing gated starts.
-        let (gate_tx, gate_rx) = crate::companion_wiring::gate(companions.is_some());
+        let (gate_tx, gate_rx) = crate::companion_wiring::gate(companions.as_ref());
         pipeline_config.companions = gate_rx;
         // Each enabled plugin's HTTP client is built on its egress
         // setting, with its SOCKS5 credentials from the per-source store
