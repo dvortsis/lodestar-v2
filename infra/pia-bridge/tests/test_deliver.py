@@ -38,7 +38,7 @@ def host_key(n: int) -> str:
     return "ssh-ed25519 " + base64.b64encode(b"\x00\x00\x00\x0bssh-ed25519" + bytes([n]) * 32).decode()
 
 
-LIVE = {"FLEET_LIVE": "true", "AWS_PIA_ROLE_ARN": "role-x", "STATE_BUCKET": "state-b", "STATE_BUCKET_OWNER": "OWNERID",
+LIVE = {"FLEET_LIVE": "true", "AWS_PIA_ROLE_ARN": "role-x", "STATE_BUCKET": "state-b", "STATE_BUCKET_OWNER": "111122223333",
         "FLEET_SSH_KEY": "-----BEGIN OPENSSH PRIVATE KEY-----\nFLEETKEYBODY\n-----END OPENSSH PRIVATE KEY-----",
         "PIA_SERVERS": json.dumps({"main": "ca_test", "worker": "us_test"}), "GITHUB_TOKEN": "gh",
         "ACTIONS_ID_TOKEN_REQUEST_URL": "u", "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "t"}
@@ -170,7 +170,7 @@ class Deliver(unittest.TestCase):
         self.assertEqual(rc, 0, self.reports)
         self.assertEqual(self.reports, ["deliver-pia: main: delivered; /run clean",
                                         "deliver-pia: worker: delivered; /run clean"])
-        self.assertEqual(self.s3.calls, [{"Bucket": "state-b", "Key": FLEET_KEY, "ExpectedBucketOwner": "OWNERID"}])
+        self.assertEqual(self.s3.calls, [{"Bucket": "state-b", "Key": FLEET_KEY, "ExpectedBucketOwner": "111122223333"}])
         # Each delivery ran with its /32 open, labelled for this run, and the stale rule gone.
         for call in self.ssh.calls:
             for fid in ("21", "22"):
@@ -229,7 +229,7 @@ class Deliver(unittest.TestCase):
             self.assertIn("::add-mask::" + v, masked)
         seen = self.stdout + "\n".join(self.reports)
         for v in (LOGIN["username"], LOGIN["password"], "ca_test", "us_test", MY_IP, "203.0.113", "FLEETKEYBODY",
-                  "OWNERID", "state-b", host_key(1).split()[1], "SHA256:"):
+                  "111122223333", "state-b", host_key(1).split()[1], "SHA256:"):
             self.assertNotIn(v, seen)
 
     def test_mask_escapes_and_splits_lines(self):
@@ -282,6 +282,16 @@ class Deliver(unittest.TestCase):
         self.assertEqual(self.reports, ["deliver-pia: refused: this runner's address isn't in GitHub's Actions ranges"])
         self.assertEqual(self.ssh.calls, [])
         self.assertFalse([r for r in self.fw.log if "job-42-1" in r[2]])
+
+    def test_a_checkip_answer_that_isnt_one_ipv4_refuses(self):
+        for answer in ("198.51.100.77\n198.51.100.78", "", "2001:db8::1", "198.51.100.0/24", "not an address",
+                       "198.51.100.77 extra"):
+            with self.subTest(answer=answer):
+                rc = self.go(my_ip=answer)
+                self.assertEqual(rc, 1)
+                self.assertEqual(self.reports, ["deliver-pia: refused: this runner's address isn't an IPv4 address"])
+                self.assertEqual(self.ssh.calls, [])
+                self.assertFalse([r for r in self.fw.log if "job-42-1" in r[2]])
 
     def test_an_unreachable_vm_is_retried_then_reported_and_the_rule_still_closes(self):
         ssh = FakeSSH(rcs=[255] * 100)
