@@ -7035,6 +7035,12 @@
       "slice": "X-wk-busy-retry",
       "sha": "e964b48772ffc15edab7a4de4ebb95fc5c4bd993",
       "at": "2026-11-08T23:13Z"
+    },
+    {
+      "pr": 640,
+      "slice": "PK-win-upd-2",
+      "sha": "4d65ab2335d1236ad261a436906ea157be13779d",
+      "at": "2026-11-09T00:10Z"
     }
   ],
   "active_sessions": {
@@ -7268,7 +7274,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T00:01Z",
+    "updated": "2026-11-09T00:10Z",
     "items": [
       {
         "slot": 1,
@@ -7288,11 +7294,11 @@
       },
       {
         "slot": 3,
-        "slice": "PK-win-upd-2",
+        "slice": "PK-win-upd-3",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAC9TBdvBgyLvxSjGf: #640 ready at e91851b3 (green); Opus review + security review running",
-        "since": "2026-11-08T20:17Z"
+        "doing": "session_01MMjhnAC9TBdvBgyLvxSjGf: #640 PK-win-upd-2 merged (4d65ab23); building PK-win-upd-3 (brief briefs/PK-win-upd-3.md)",
+        "since": "2026-11-09T00:10Z"
       },
       {
         "slot": 4,
@@ -7367,5 +7373,5 @@
     }
   ],
   "heartbeat": "2026-11-08T21:39Z",
-  "updated": "2026-11-09T00:01Z"
+  "updated": "2026-11-09T00:10Z"
 }
