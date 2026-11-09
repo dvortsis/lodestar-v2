@@ -6570,6 +6570,11 @@
       "id": "reviewer-no-cloud-calls",
       "at": "2026-11-09T00:11Z",
       "note": "Reviewer briefs for infra slices: never run terraform init against an S3 backend or any AWS call, even with dummy creds (the #641 reviewer reached real STS/IAM with a fake key; nothing created)."
+    },
+    {
+      "id": "next-launch-queue",
+      "at": "2026-11-09T00:20Z",
+      "note": "Ready when a slot frees (4/4 in use; slot 5 held for usage warning): X-win-restart-followups (now unblocked by CMP-6; owns windows_service.rs, so it also diagnoses the a_portable_restart_starts_a_new_copy flake), PK-win-portable-upd (after X-win-restart-followups or bring main in), X-updates-api-text (+#640 codes), X-natural-wording, OP-4 (after OP-2a? deps OP-1 only), X-event-names-split."
     }
   ],
   "main_health": [
@@ -7056,6 +7061,12 @@
       "slice": "PK-win-upd-2",
       "sha": "4d65ab2335d1236ad261a436906ea157be13779d",
       "at": "2026-11-09T00:10Z"
+    },
+    {
+      "pr": 639,
+      "slice": "CMP-6",
+      "sha": "e1df499596c5a126975ee895201c3ba7c3c7d621",
+      "at": "2026-11-09T00:20Z"
     }
   ],
   "active_sessions": {
@@ -7289,15 +7300,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T00:11Z",
+    "updated": "2026-11-09T00:20Z",
     "items": [
       {
         "slot": 1,
-        "slice": "CMP-6",
+        "slice": "CMP-5g",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: #639 delta review MERGE at 1ef6844c; merge on green CI",
-        "since": "2026-11-08T20:07Z"
+        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: #639 CMP-6 merged (e1df4995); building CMP-5g (brief briefs/CMP-5g.md)",
+        "since": "2026-11-09T00:20Z"
       },
       {
         "slot": 2,
@@ -7388,5 +7399,5 @@
     }
   ],
   "heartbeat": "2026-11-08T21:39Z",
-  "updated": "2026-11-09T00:11Z"
+  "updated": "2026-11-09T00:20Z"
 }
