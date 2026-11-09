@@ -431,7 +431,9 @@ fn profile(id: &CompanionId, home: &Path, port: u16) -> Option<Profile> {
     }
 }
 
-fn field_of(id: &CompanionId) -> Option<Field> {
+/// The one credential each companion has: qBittorrent's WebUI password,
+/// Prowlarr's `ApiKey`. `None` for a companion with none.
+pub fn field_of(id: &CompanionId) -> Option<Field> {
     match id.as_str() {
         configure::qbittorrent::ID => Some(Field::WebUiPassword),
         configure::prowlarr::ID => Some(Field::ApiKey),
