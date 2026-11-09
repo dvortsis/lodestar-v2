@@ -6652,6 +6652,11 @@
       "id": "X-win-upd-bounds",
       "note": "add from #644 r5 review: R5-1 the rollback Fake's service should exit on MarkerGone like the real idle service (test passes on 93a26643 today); R5-2 test the drop path's marker removal (rollback.rs:~414); R5-3 doc line length service.rs:152-153. Plus the residuals LOW-B/P-8, P-3, P-4, LOW-C.",
       "added": "2026-11-09T09:55:07Z"
+    },
+    {
+      "id": "CMP-5g-3",
+      "note": "from #653 final review nits: N7 target_changed message should say reveal before forget (companions_guided.rs:~99); N8 guided.rs:5 'three kinds' of rows; N9 decisions line ~137 says URL stored 'as you typed it' but it's normalised; CMP-9a forget screen must warn and offer reveal; L4 no rotate without apply + Sink save",
+      "added": "2026-11-09T12:03:06Z"
     }
   ],
   "main_health": [
@@ -7377,15 +7382,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T09:55:07Z",
+    "updated": "2026-11-09T12:03:06Z",
     "items": [
       {
         "slot": 1,
-        "slice": "CMP-5g-2",
+        "slice": null,
         "role": "build",
         "agent": "claude",
-        "doing": "#653 CMP-5g-2 round 2 (review CHANGES: B1 lockout)",
-        "since": "2026-11-09T05:00Z"
+        "doing": "idle: #653 CMP-5g-2 merged (29fd001d); runner paused, no follow-on",
+        "since": "2026-11-09T12:03:06Z",
+        "status": "idle"
       },
       {
         "slot": 2,
@@ -7484,10 +7490,8 @@
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
     "instruction": "Once the active sessions complete, pause the runner. No further sessions unless explicitly commanded.",
-    "state": "draining",
-    "active": [
-      "CMP-5g-2 (slot 1, building)"
-    ],
+    "state": "paused",
+    "active": [],
     "no_follow_on": [
       "OP-3b",
       "OP-3c",
@@ -7504,7 +7508,11 @@
     "merged_during_drain": [
       "#652 OP-3a merged 5da6eb15 at 2026-11-09T06:28:12Z",
       "#651 X-win-restart-followups-2 merged 161c2a1f at 2026-11-09T08:09:30Z",
-      "#644 PK-win-upd-3 merged f44df6a8 at 2026-11-09T09:55:07Z"
-    ]
+      "#644 PK-win-upd-3 merged f44df6a8 at 2026-11-09T09:55:07Z",
+      "#653 CMP-5g-2 merged 29fd001d at 2026-11-09T12:03:06Z"
+    ],
+    "paused_at": "2026-11-09T12:03:06Z",
+    "heartbeat": "trig_01U8KNWyDovQ9omwvZi8cuLW disabled at pause",
+    "resume": "only on the owner's explicit command: re-enable watchdog trig_0172BngAUoA4NRaRWBYiRWVf and heartbeat trig_01U8KNWyDovQ9omwvZi8cuLW, record the pause in owner-decisions, then the pending runner PR"
   }
 }
