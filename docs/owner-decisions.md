@@ -608,7 +608,7 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **Colorado counsel review** stays advisory (§2.38) and is no longer surfaced to the owner.
     - **Package installers:** after 1.0 the owner registers Lodestar with winget and other package installers. That's a post-1.0 owner action (M6 Q6); the owner queue lists it once.
 
-53. **Cloud operator loosenings accepted as written; the AWS and Akamai accounts need no dedicated account** (owner, confirmed directly in the runner session on 2026-11-08 at 22:13Z, after the dashboard session relayed it first; setup step 1 answered via the dashboard session at 22:15Z):
+53. **Cloud operator loosenings accepted as written; no dedicated AWS or Akamai account is needed** (owner, confirmed directly in the runner session on 2026-11-08 at 22:13Z, after the dashboard session relayed it first; setup step 1 answered via the dashboard session at 22:15Z):
     - **The plan's inferred items are accepted as written** (`docs/plan/2026-11-08-cloud-operator.md`, P-cloud-operator):
       - (a) a GitHub App with "Pull requests: write" on `dvortsis/lodestar-v2`, with the plan's containment;
       - (b) a per-job /32 SSH firewall opening, plus the firewall token and an hourly audit.
