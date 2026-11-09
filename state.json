@@ -7372,14 +7372,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T06:28:12Z",
+    "updated": "2026-11-09T08:09:30Z",
     "items": [
       {
         "slot": 1,
         "slice": "CMP-5g-2",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: #645 CMP-5g-1 merged (f5604c58); owner FYI sent; building CMP-5g-2 (guided endpoints; qBittorrent hand-over only)",
+        "doing": "#653 CMP-5g-2 round 2 (review CHANGES: B1 lockout)",
         "since": "2026-11-09T05:00Z"
       },
       {
@@ -7401,11 +7401,12 @@
       },
       {
         "slot": 4,
-        "slice": "X-win-restart-followups-2",
+        "slice": null,
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #649 merged (da15ccab); building X-win-restart-followups-2 (relaunch failure visible, companions lock retry, nits)",
-        "since": "2026-11-09T04:58Z"
+        "doing": "idle: #651 merged (161c2a1f); runner paused, no follow-on",
+        "since": "2026-11-09T08:09:30Z",
+        "status": "idle"
       },
       {
         "slot": 5,
@@ -7480,7 +7481,6 @@
     "state": "draining",
     "active": [
       "#644 PK-win-upd-3 (slot 3)",
-      "#651 X-win-restart-followups-2 (slot 4)",
       "CMP-5g-2 (slot 1, building)"
     ],
     "no_follow_on": [
@@ -7497,7 +7497,8 @@
     ],
     "watchdog": "trig_0172BngAUoA4NRaRWBYiRWVf disabled so it can't start a replacement runner",
     "merged_during_drain": [
-      "#652 OP-3a merged 5da6eb15 at 2026-11-09T06:28:12Z"
+      "#652 OP-3a merged 5da6eb15 at 2026-11-09T06:28:12Z",
+      "#651 X-win-restart-followups-2 merged 161c2a1f at 2026-11-09T08:09:30Z"
     ]
   }
 }
