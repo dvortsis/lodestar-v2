@@ -6575,6 +6575,11 @@
       "id": "next-launch-queue",
       "at": "2026-11-09T00:20Z",
       "note": "Ready when a slot frees (4/4 in use; slot 5 held for usage warning): X-win-restart-followups (now unblocked by CMP-6; owns windows_service.rs, so it also diagnoses the a_portable_restart_starts_a_new_copy flake), PK-win-portable-upd (after X-win-restart-followups or bring main in), X-updates-api-text (+#640 codes), X-natural-wording, OP-4 (after OP-2a? deps OP-1 only), X-event-names-split."
+    },
+    {
+      "id": "runner-pr-cmp5g-split",
+      "at": "2026-11-09T00:21Z",
+      "note": "Next runner PR slices.yaml: split CMP-5g into CMP-5g-1 (wiring, watch.rs, companion_wiring.rs, carry-overs; shared companions.rs/manager.rs field_of), CMP-5g-2 (guided endpoints: guided.rs, api companions_guided*, openapi/schema), CMP-5g-3 (Supervised at serve, Q18 companions.<id>.egress, real restart/logs/regenerate; /security-review). CMP-9a deps -> CMP-5g-2. Persistence approved: settings rows companions.<id>.target (closed type, strict, URL without userinfo/fragment, http/https only), .origin (confirmed|guided), .provenance.<field_of(id)> (pasted|generated), no migration."
     }
   ],
   "main_health": [
@@ -7300,14 +7305,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T00:20Z",
+    "updated": "2026-11-09T00:21Z",
     "items": [
       {
         "slot": 1,
-        "slice": "CMP-5g",
+        "slice": "CMP-5g-1",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: #639 CMP-6 merged (e1df4995); building CMP-5g (brief briefs/CMP-5g.md)",
+        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: CMP-5g split into -1 (wiring+watch+carry-overs), -2 (guided endpoints), -3 (managed at serve, Q18 egress); building CMP-5g-1",
         "since": "2026-11-09T00:20Z"
       },
       {
@@ -7399,5 +7404,5 @@
     }
   ],
   "heartbeat": "2026-11-08T21:39Z",
-  "updated": "2026-11-09T00:20Z"
+  "updated": "2026-11-09T00:21Z"
 }
