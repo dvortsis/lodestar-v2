@@ -6647,7 +6647,12 @@
     },
     "After #644 merges: brief X-win-upd-bounds (LOW-B/P-8 boot-identity bound on 3010 reinstall, LOW-C copy waits only for its parent helper, P-3 wait for Installer idle after deadline kill, P-4 try_wait classification + HandedOff race, update/layout.rs:239 busy-lock retry). Owner \u00a72.19 flags for #644: Q13 refinement, marker location, disabled start type, journal cross-version contract.",
     "OP-3b brief notes (from #652 review): a durable block marker written by start-block and honoured by every mid-block check (closes the arm-switch gap); start-block requires exit 0 AND the final 'ok leak_test' line; follow-up s3:ResourceAccount condition in OP-2a's template for Terraform's S3 backend.",
-    "On resume (only when the owner explicitly says): record the 2026-11-09 pause in docs/owner-decisions.md; re-enable the watchdog trigger; the pending runner PR items (slices entries OP-3a/b/c, X-prowlarr-settings, X-win-upd-bounds, X-win-restart-followups-2, owns additions, cr-ab-comp-1 decisions file)."
+    "On resume (only when the owner explicitly says): record the 2026-11-09 pause in docs/owner-decisions.md; re-enable the watchdog trigger; the pending runner PR items (slices entries OP-3a/b/c, X-prowlarr-settings, X-win-upd-bounds, X-win-restart-followups-2, owns additions, cr-ab-comp-1 decisions file).",
+    {
+      "id": "X-win-upd-bounds",
+      "note": "add from #644 r5 review: R5-1 the rollback Fake's service should exit on MarkerGone like the real idle service (test passes on 93a26643 today); R5-2 test the drop path's marker removal (rollback.rs:~414); R5-3 doc line length service.rs:152-153. Plus the residuals LOW-B/P-8, P-3, P-4, LOW-C.",
+      "added": "2026-11-09T09:55:07Z"
+    }
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7372,7 +7377,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T08:09:30Z",
+    "updated": "2026-11-09T09:55:07Z",
     "items": [
       {
         "slot": 1,
@@ -7393,11 +7398,12 @@
       },
       {
         "slot": 3,
-        "slice": "PK-win-upd-3",
+        "slice": null,
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAC9TBdvBgyLvxSjGf: #644 PK-win-upd-3 round 3 (B-1 forward 3010 probation, LOW-A marker until step 5, P-1, P-2 tests, docs, residuals named for X-win-upd-bounds); then combined delta review",
-        "since": "2026-11-09T00:10Z"
+        "doing": "idle: #644 merged (f44df6a8); runner paused, no follow-on",
+        "since": "2026-11-09T09:55:07Z",
+        "status": "idle"
       },
       {
         "slot": 4,
@@ -7480,7 +7486,6 @@
     "instruction": "Once the active sessions complete, pause the runner. No further sessions unless explicitly commanded.",
     "state": "draining",
     "active": [
-      "#644 PK-win-upd-3 (slot 3)",
       "CMP-5g-2 (slot 1, building)"
     ],
     "no_follow_on": [
@@ -7498,7 +7503,8 @@
     "watchdog": "trig_0172BngAUoA4NRaRWBYiRWVf disabled so it can't start a replacement runner",
     "merged_during_drain": [
       "#652 OP-3a merged 5da6eb15 at 2026-11-09T06:28:12Z",
-      "#651 X-win-restart-followups-2 merged 161c2a1f at 2026-11-09T08:09:30Z"
+      "#651 X-win-restart-followups-2 merged 161c2a1f at 2026-11-09T08:09:30Z",
+      "#644 PK-win-upd-3 merged f44df6a8 at 2026-11-09T09:55:07Z"
     ]
   }
 }
