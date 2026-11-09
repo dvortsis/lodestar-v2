@@ -56,6 +56,9 @@ pub struct Services {
     workers: Arc<dyn lodestar_api::workers::WorkersApi>,
     /// `/companions` (CMP-6); none when companions are off for this run.
     companions_api: Option<Arc<dyn lodestar_api::companions::CompanionsApi>>,
+    /// `/companions/…` guided and detected (CMP-5g-2); none with
+    /// companions off or the wiring failed.
+    guided_api: Option<Arc<dyn lodestar_api::companions_guided::CompanionsGuidedApi>>,
     /// `POST /webhooks/{integration}` (SRC-11c), over the plugin's inbox.
     webhooks: Arc<lodestar_api::webhooks::Webhooks>,
 }
@@ -543,12 +546,23 @@ impl Services {
                     .map(|(stats, node)| ops::DhtReport { stats, node }),
             ),
         );
-        let companion_wiring = match &companions {
-            Some(c) => {
-                crate::companion_wiring::serve(c, &settings, ops.clone(), control.clone(), gate_tx)
-                    .await
-            }
-            None => None,
+        let (companion_wiring, guided_api) = match &companions {
+            Some(c) => crate::companion_wiring::serve(
+                c,
+                settings.clone(),
+                ops.clone(),
+                control.clone(),
+                gate_tx,
+            )
+            .await
+            .map(|(w, g)| {
+                (
+                    Some(w),
+                    Some(g as Arc<dyn lodestar_api::companions_guided::CompanionsGuidedApi>),
+                )
+            })
+            .unwrap_or((None, None)),
+            None => (None, None),
         };
         let monitor = pipeline.monitor();
         let api = lodestar_api::ApiState {
@@ -702,6 +716,7 @@ impl Services {
             listener,
             system,
             companions_api,
+            guided_api,
             updates: updates.api,
             webhooks,
             workers,
@@ -743,6 +758,7 @@ impl Services {
             webhooks,
             workers,
             companions_api,
+            guided_api,
         } = self;
         // Exports and other background jobs (§9): one registry, closed at
         // shutdown so open downloads end rather than hold it.
@@ -770,6 +786,10 @@ impl Services {
             .layer(webhooks.layer());
         let app = match companions_api {
             Some(c) => app.layer(Extension(c)),
+            None => app,
+        };
+        let app = match guided_api {
+            Some(g) => app.layer(Extension(g)),
             None => app,
         }
         .into_make_service_with_connect_info::<SocketAddr>();

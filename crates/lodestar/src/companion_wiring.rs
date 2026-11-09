@@ -5,7 +5,7 @@
 //! - [`present`] and [`start`]: what the pipeline's companion gate
 //!   (`lodestar_pipeline::requires`) reads. Every companion Lodestar
 //!   installed, with its health; every one you added and confirmed
-//!   (CMP-5g-2's records, sent through [`Wired::added`]), watched every 30 s
+//!   (the guided records, sent through [`Wired::added`]), watched every 30 s
 //!   (`lodestar_companions::watch`); whether a download client you set up
 //!   yourself exists; and whether the Prowlarr source runs against an
 //!   indexer you set up yourself.
@@ -88,7 +88,8 @@ fn canonical(url: &str) -> String {
 /// - each one you added, as the watch last saw it; a missing one isn't
 ///   listed, so its dependents need it;
 /// - `external_client`: an `integrations.clients` entry that isn't
-///   [`MANAGED_CLIENT`];
+///   [`MANAGED_CLIENT`], or is when no qBittorrent is Lodestar's (none
+///   installed or added);
 /// - `external_indexer`: the Prowlarr source is on and its saved address
 ///   isn't a companion's.
 pub fn present(
@@ -138,9 +139,19 @@ pub fn present(
                 }),
         )
         .collect();
+    // The managed entry stands for a qBittorrent Lodestar installed or you
+    // added; with neither (you forgot it, say), it's a client like yours,
+    // and it still works (#653's review, L3).
+    let qbittorrent_ours = added.iter().any(|(id, _)| id.as_str() == HANDED_OVER)
+        || installed
+            .companions
+            .iter()
+            .any(|c| c.id.as_str() == HANDED_OVER && c.version.is_some());
     requires::Present {
         companions,
-        external_client: clients.iter().any(|c| c.id != MANAGED_CLIENT),
+        external_client: clients
+            .iter()
+            .any(|c| c.id != MANAGED_CLIENT || !qbittorrent_ours),
         external_indexer: prowlarr
             .is_some_and(|endpoints| endpoints.iter().any(|e| !ours.contains(&canonical(e)))),
     }
@@ -212,12 +223,8 @@ pub fn gate<T>(
 /// What [`start`] runs, stopped when dropped.
 #[derive(Debug)]
 pub struct Wired {
-    /// The companions you added, for CMP-5g-2's endpoints to send after a
+    /// The companions you added, which the guided endpoints send after a
     /// change to their records.
-    #[allow(
-        dead_code,
-        reason = "CMP-5g-2's endpoints send the records after a change"
-    )]
     pub added: channel::Sender<Vec<Added>>,
     tasks: Vec<JoinHandle<()>>,
 }
@@ -265,36 +272,66 @@ pub fn start(
     )
 }
 
-/// At serve: [`start`]s with no companions added (CMP-5g-2 reads its
-/// records and sends them). A failure is logged by
-/// code and leaves the gate `Unknown`: gated plugins wait (fail closed).
+/// At serve: reads the companions you added from their rows, [`start`]s
+/// the watch over them and builds the guided endpoints (CMP-5g-2) over the
+/// same list. A failure is logged by code and leaves the gate `Unknown`:
+/// gated plugins wait (fail closed), and the guided routes answer 503.
 pub async fn serve(
     companions: &crate::companions::Companions,
-    settings: &crate::settings::Registry,
+    settings: Arc<crate::settings::Registry>,
     ops: Arc<dyn OpsApi>,
     store: Arc<Mutex<Store>>,
     gate: channel::Sender<requires::Snapshot>,
-) -> Option<Wired> {
-    match start(
-        Vec::new(),
+) -> Option<(Wired, Arc<Guided>)> {
+    let service = companions.api.clone();
+    let (catalogue, rt) = (service.catalogue(), runtime(service.in_container()));
+    let read = store.clone();
+    let stored = tokio::task::spawn_blocking(move || records(&read, catalogue, rt))
+        .await
+        .unwrap_or_default();
+    let failed = |code: &'static str| {
+        lodestar_log::log_event!(
+            lodestar_companions::log_events::INSTALL_FAILED,
+            companion = "all",
+            version = "",
+            step = "wire",
+            reason = code
+        );
+    };
+    let http: Arc<dyn GuardedHttp> = match CompanionHttp::new() {
+        Ok(h) => Arc::new(h),
+        Err(_) => {
+            failed("companion_http");
+            return None;
+        }
+    };
+    let wired = match start(
+        added_of(&stored),
         companions.snapshot.clone(),
         settings.subscribe(),
-        ops,
-        store,
+        ops.clone(),
+        store.clone(),
         gate,
     ) {
-        Ok(w) => Some(w),
+        Ok(w) => w,
         Err(code) => {
-            lodestar_log::log_event!(
-                lodestar_companions::log_events::INSTALL_FAILED,
-                companion = "all",
-                version = "",
-                step = "wire",
-                reason = code
-            );
-            None
+            failed(code);
+            return None;
         }
-    }
+    };
+    let guided = Arc::new(Guided::new(
+        service.clone(),
+        store.clone(),
+        rt,
+        http,
+        Arc::new(Sink {
+            settings,
+            ops,
+            store,
+        }),
+        wired.added.clone(),
+    ));
+    Some((wired, guided))
 }
 
 #[allow(clippy::too_many_arguments, reason = "test seams")]
@@ -386,10 +423,6 @@ fn start_with(
 }
 
 /// CMP-8b's `ConfigSink` over the settings registry and the sources.
-#[allow(
-    dead_code,
-    reason = "CMP-5g-2's confirmation hands configured companions over through it"
-)]
 pub struct Sink {
     pub settings: Arc<crate::settings::Registry>,
     pub ops: Arc<dyn OpsApi>,
@@ -404,7 +437,6 @@ impl std::fmt::Debug for Sink {
 }
 
 /// What the managed client entry holds, from CMP-8b's entry.
-#[allow(dead_code, reason = "used by Sink, which CMP-5g-2 calls")]
 struct ManagedClient {
     target: Target,
     username: String,
@@ -416,7 +448,6 @@ struct ManagedClient {
 /// list as it is, with [`MANAGED_CLIENT`] replaced or added. Other clients
 /// go without their passwords, which keeps the saved ones (the registry
 /// keeps a saved secret for an item of the same id, kind and address).
-#[allow(dead_code, reason = "used by Sink, which CMP-5g-2 calls")]
 fn client_batch(current: &Integrations, entry: &ManagedClient) -> Result<SettingsBatch, SinkError> {
     let mut clients = Vec::new();
     for c in current.clients.iter().filter(|c| c.id != MANAGED_CLIENT) {
@@ -443,7 +474,6 @@ fn client_batch(current: &Integrations, entry: &ManagedClient) -> Result<Setting
 /// Saves `managed` as the managed client, reading the list right before
 /// the save so a save you made meanwhile isn't overwritten with an old
 /// one. Blocking.
-#[allow(dead_code, reason = "used by Sink, which CMP-5g-2 calls")]
 fn save_client(
     settings: &crate::settings::Registry,
     managed: &ManagedClient,
@@ -458,7 +488,6 @@ fn save_client(
 
 /// The Prowlarr source's new config: the companion's address, keeping any
 /// other setting you saved (its `agents`).
-#[allow(dead_code, reason = "used by Sink, which CMP-5g-2 calls")]
 fn prowlarr_config(previous: Option<&str>, url: &str) -> serde_json::Value {
     let mut config = previous
         .and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok())
@@ -515,7 +544,6 @@ impl ConfigSink for Sink {
 
 /// What the Prowlarr hand-over writes to the source: the ops in shipped
 /// builds, a recorder in tests.
-#[allow(dead_code, reason = "used by Sink, which CMP-5g-2 calls")]
 trait SourceWrites: Send + Sync {
     /// The Prowlarr source's id; `None` when it isn't registered.
     fn source<'a>(&'a self) -> BoxFuture<'a, Option<u8>>;
@@ -524,7 +552,6 @@ trait SourceWrites: Send + Sync {
     fn key<'a>(&'a self, id: u8, key: Option<Secret>) -> BoxFuture<'a, bool>;
 }
 
-#[allow(dead_code, reason = "used by Sink, which CMP-5g-2 calls")]
 struct OpsWrites<'o>(&'o dyn OpsApi);
 
 impl SourceWrites for OpsWrites<'_> {
@@ -571,7 +598,6 @@ impl SourceWrites for OpsWrites<'_> {
 /// **Accepted:** between the two steps the companion's key sits beside
 /// your own address. It can reach that server only after a restart in that
 /// window, or if both step 2 and the removal fail.
-#[allow(dead_code, reason = "used by Sink, which CMP-5g-2 calls")]
 async fn hand_over_prowlarr(
     w: &dyn SourceWrites,
     previous: Option<&str>,
@@ -603,6 +629,867 @@ async fn hand_over_prowlarr(
     }
     Err(SinkError::Rejected)
 }
+
+// ─── CMP-5g-2: guided and detected companions ─────────────────────────
+
+use lodestar_api::companions::CompanionsError;
+use lodestar_api::companions_guided::{CompanionsGuidedApi, GuidedError};
+use lodestar_api::dto::companions::Companion;
+use lodestar_api::dto::companions_guided::{
+    CompanionForgotten, CompanionTarget, DetectedCompanion,
+};
+use lodestar_companions::adapter::{AdapterError, Credentials, EnteredUrl};
+use lodestar_companions::credentials::{CredentialKey, Field};
+use lodestar_companions::detect::Runtime;
+use lodestar_companions::guided::{self, Origin as RecordOrigin, Provenance, Record, StoredTarget};
+use lodestar_companions::{Catalogue, Entry};
+use lodestar_integrations::secret::SecretStore;
+
+/// How long detection may take in all (runner: a request behind a reverse
+/// proxy must stay short). Each probe also keeps its own `Limits::PROBE`.
+pub const DETECT_CAP: Duration = Duration::from_secs(15);
+/// The least time between two plans: each costs qBittorrent a failed
+/// sign-in (CMP-8b), and it bans after five by default.
+pub const PLAN_EVERY: Duration = Duration::from_secs(60);
+/// The one companion whose hand-over this version makes (runner: Prowlarr
+/// waits for `X-prowlarr-settings`).
+const HANDED_OVER: &str = "qbittorrent";
+/// The WebUI account qBittorrent's temporary password is for: its own
+/// built-in one (Q19). The hand-over keeps it; only the password changes.
+const GUIDED_USERNAME: &str = "admin";
+
+/// A guided run's input, as [`GUIDED_USERNAME`], setting the credential
+/// `holding` has. With `temporary` it's the guided install (Q19), signing
+/// in with that; without, it's a companion you confirmed, signing in with
+/// the stored generated password: a retry after a failed apply or
+/// hand-over (#653's review, B1).
+fn input_for<'a>(
+    holding: &'a Holding,
+    target: &Target,
+    temporary: Option<Secret>,
+) -> Result<lodestar_companions::adapter::ConfigureInput<'a>, CompanionsError> {
+    let username = lodestar_companions::config_files::Username::parse(GUIDED_USERNAME)
+        .map_err(|_| CompanionsError::Internal("username"))?;
+    let confirmation = lodestar_companions::configure::Confirmation::of(target.clone());
+    let input = lodestar_companions::adapter::ConfigureInput::new(holding).username(username);
+    Ok(match temporary {
+        Some(t) => input.guided(confirmation, t),
+        None => input.confirmed(confirmation),
+    })
+}
+
+/// Refused sign-ins in a row before plans and confirmations stop asking:
+/// qBittorrent bans an address after five (#653's review, L2).
+pub const SIGN_IN_CAP: u32 = 3;
+
+/// The credential a guided step works with, read with its provenance.
+enum Held {
+    /// The temporary password you pasted, and its sealed row.
+    Pasted(lodestar_integrations::secret::SealedSecret, Secret),
+    /// The generated password, set or being set on qBittorrent, before
+    /// the hand-over completed: a retry signs in with it.
+    Pending(Secret),
+}
+
+/// Detection's runtime here (Q12: container names only under Docker's
+/// DNS).
+pub fn runtime(in_container: bool) -> Runtime {
+    if in_container {
+        Runtime::Container
+    } else {
+        Runtime::Native
+    }
+}
+
+/// Every companion row's text, read once. Blocking.
+fn texts(store: &Mutex<Store>) -> Result<Vec<(String, String)>, ()> {
+    let rows = store
+        .lock()
+        .map_err(|_| ())?
+        .settings_with_prefix_raw(lodestar_companions::credentials::ROW_PREFIX)
+        .map_err(|_| ())?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(k, v)| v.ok().map(|v| (k, v)))
+        .collect())
+}
+
+/// The companions you added and confirmed, from their rows. A row that
+/// doesn't read is no record (`guided`'s rule). Blocking.
+pub fn records(store: &Mutex<Store>, catalogue: &Catalogue, runtime: Runtime) -> Vec<Record> {
+    let rows = texts(store).unwrap_or_default();
+    let text = |key: &str| rows.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone());
+    catalogue
+        .entries()
+        .iter()
+        .filter_map(|e| Record::read(e, runtime, text))
+        .collect()
+}
+
+/// The records as the watch takes them.
+fn added_of(records: &[Record]) -> Vec<Added> {
+    records
+        .iter()
+        .map(|r| (r.id.clone(), r.target.clone()))
+        .collect()
+}
+
+/// One credential, held for a configuration run.
+struct Holding(Field, Secret);
+
+impl Credentials for Holding {
+    fn get(
+        &self,
+        field: &str,
+    ) -> Result<Option<Secret>, lodestar_companions::adapter::CredentialError> {
+        Ok((field == self.0.as_str()).then(|| self.1.clone()))
+    }
+}
+
+/// An adapter's failure as a stable code; never a value.
+fn adapter_code(e: AdapterError) -> &'static str {
+    match e {
+        AdapterError::Refused(code) => code,
+        AdapterError::Unauthorized => "companion_unauthorized",
+        AdapterError::Timeout | AdapterError::Unreachable => "companion_unreachable",
+        AdapterError::Blocked => "address_refused",
+        AdapterError::NotThisCompanion => "not_detected",
+        _ => "companion_protocol",
+    }
+}
+
+/// A guided step on the one companion handed over that failed after it
+/// changed something, by code only.
+fn failed(reason: &'static str) {
+    lodestar_log::log_event!(
+        lodestar_companions::log_events::CONFIG_FAILED,
+        companion = HANDED_OVER,
+        setting = "guided",
+        reason = reason
+    );
+}
+
+fn target_dto(t: &Target) -> CompanionTarget {
+    match StoredTarget::of(t) {
+        StoredTarget::Loopback { port } => CompanionTarget::Loopback { port },
+        StoredTarget::Container { port } => CompanionTarget::Container { port },
+        StoredTarget::Url { url } => CompanionTarget::Url { url },
+    }
+}
+
+/// A requested target as one detection may use for `entry` here: a
+/// catalogue port on loopback (or, in a container, its container name),
+/// or an address you typed that the egress rules let Lodestar reach
+/// (`http`/`https`, no user name, query or fragment; link-local and cloud
+/// metadata addresses refused; a name's answer is checked at connect).
+fn checked_target(
+    entry: &Entry,
+    runtime: Runtime,
+    t: CompanionTarget,
+) -> Result<Target, CompanionsError> {
+    let stored = match t {
+        CompanionTarget::Loopback { port } => StoredTarget::Loopback { port },
+        CompanionTarget::Container { port } => StoredTarget::Container { port },
+        CompanionTarget::Url { url } => {
+            let entered = EnteredUrl::parse(&url).map_err(|_| CompanionsError::BadInput {
+                field: Some("url"),
+                code: "bad_template_input",
+            })?;
+            let parsed =
+                reqwest::Url::parse(entered.as_str()).map_err(|_| CompanionsError::BadInput {
+                    field: Some("url"),
+                    code: "bad_template_input",
+                })?;
+            lodestar_integrations::net::check_url(
+                &parsed,
+                lodestar_integrations::net::NetPolicy::download_client(),
+            )
+            .map_err(|_| CompanionsError::Refused("address_refused"))?;
+            return Ok(Target::Entered(entered));
+        }
+    };
+    stored
+        .target(entry, runtime)
+        .ok_or(CompanionsError::BadInput {
+            field: Some("port"),
+            code: "bad_template_input",
+        })
+}
+
+/// `/companions/{id}/…`'s guided half over the store, the secrets file,
+/// CMP-8a's detection, CMP-8b's configuration and the [`Sink`].
+pub struct Guided {
+    service: Arc<crate::companions::Service>,
+    store: Arc<Mutex<Store>>,
+    secrets: Arc<SecretStore>,
+    catalogue: &'static Catalogue,
+    runtime: Runtime,
+    http: Arc<dyn GuardedHttp>,
+    sink: Arc<dyn ConfigSink>,
+    /// The watch's list (`Wired::added`), sent after every change.
+    added: channel::Sender<Vec<Added>>,
+    /// Detection's overall cap: [`DETECT_CAP`], shorter in tests.
+    detect_cap: Duration,
+    /// One detection at a time.
+    detecting: tokio::sync::Mutex<()>,
+    /// One guided change at a time (target, paste, plan, confirm,
+    /// forget): each reads rows another writes, and a provenance must
+    /// never describe another step's credential.
+    changing: tokio::sync::Mutex<()>,
+    last_plan: Mutex<Option<tokio::time::Instant>>,
+    /// The last plan's settings, taken by the next confirmation: one
+    /// confirmation per plan, and a mismatch is refused before it signs
+    /// in again.
+    planned: Mutex<Option<Vec<String>>>,
+    /// Refused sign-ins in a row, across plans and confirmations; reset by
+    /// one that signs in, or by forget.
+    failures: Mutex<u32>,
+}
+
+impl std::fmt::Debug for Guided {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Guided").finish_non_exhaustive()
+    }
+}
+
+impl Guided {
+    pub fn new(
+        service: Arc<crate::companions::Service>,
+        store: Arc<Mutex<Store>>,
+        runtime: Runtime,
+        http: Arc<dyn GuardedHttp>,
+        sink: Arc<dyn ConfigSink>,
+        added: channel::Sender<Vec<Added>>,
+    ) -> Guided {
+        Guided {
+            secrets: service.secrets(),
+            catalogue: service.catalogue(),
+            service,
+            store,
+            runtime,
+            http,
+            sink,
+            added,
+            detect_cap: DETECT_CAP,
+            detecting: tokio::sync::Mutex::new(()),
+            changing: tokio::sync::Mutex::new(()),
+            last_plan: Mutex::new(None),
+            planned: Mutex::new(None),
+            failures: Mutex::new(0),
+        }
+    }
+
+    fn entry(&self, id: &str) -> Result<&'static Entry, CompanionsError> {
+        CompanionId::parse(id).map_err(|_| CompanionsError::Unknown)?;
+        self.catalogue.get(id).ok_or(CompanionsError::Unknown)
+    }
+
+    /// The guided lock, or `busy`.
+    fn exclusive(&self) -> Result<tokio::sync::MutexGuard<'_, ()>, CompanionsError> {
+        self.changing
+            .try_lock()
+            .map_err(|_| CompanionsError::Refused("busy"))
+    }
+
+    /// Forgets the last plan: the rows it was made from changed.
+    fn unplan(&self) {
+        if let Ok(mut p) = self.planned.lock() {
+            *p = None;
+        }
+    }
+
+    /// Refuses a companion already added and confirmed: its record and
+    /// generated credential stay until you forget it.
+    async fn not_added(&self, e: &'static Entry) -> Result<(), CompanionsError> {
+        let key = guided::origin_key(&e.id);
+        let origin = self
+            .blocking(move |s| Ok(texts(s)?.into_iter().any(|(k, _)| k == key)))
+            .await?;
+        if origin {
+            return Err(CompanionsError::Refused("already_added"));
+        }
+        Ok(())
+    }
+
+    /// The companion this version hands over, and not one Lodestar
+    /// installed (that one is managed on its own) or is installing.
+    async fn handed_over(&self, id: &str) -> Result<&'static Entry, CompanionsError> {
+        let e = self.entry(id)?;
+        if e.id.as_str() != HANDED_OVER {
+            return Err(CompanionsError::Refused("handover_later"));
+        }
+        let service = self.service.clone();
+        let cid = e.id.clone();
+        if let Some(code) = tokio::task::spawn_blocking(move || service.lodestar_owned(&cid))
+            .await
+            .map_err(|_| CompanionsError::Internal("panicked"))??
+        {
+            return Err(CompanionsError::Refused(code));
+        }
+        Ok(e)
+    }
+
+    async fn blocking<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&Mutex<Store>) -> Result<T, ()> + Send + 'static,
+    ) -> Result<T, CompanionsError> {
+        let store = self.store.clone();
+        tokio::task::spawn_blocking(move || f(&store))
+            .await
+            .map_err(|_| CompanionsError::Internal("panicked"))?
+            .map_err(|()| CompanionsError::Internal("store"))
+    }
+
+    /// The saved target, valid here.
+    async fn target(&self, e: &'static Entry) -> Result<Target, CompanionsError> {
+        let key = guided::target_key(&e.id);
+        let rt = self.runtime;
+        self.blocking(move |s| {
+            Ok(texts(s)?
+                .into_iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v))
+        })
+        .await?
+        .and_then(|t| StoredTarget::from_row(&t))
+        .and_then(|t| t.target(e, rt))
+        .ok_or(CompanionsError::Refused("no_target"))
+    }
+
+    /// The provenance of `e`'s credential and its sealed row, read in one
+    /// query.
+    async fn credential(
+        &self,
+        e: &'static Entry,
+    ) -> Result<
+        (
+            Option<Provenance>,
+            Option<lodestar_integrations::secret::SealedSecret>,
+        ),
+        CompanionsError,
+    > {
+        let key = CredentialKey::new(e.id.clone(), Field::WebUiPassword).row_key();
+        let id = e.id.clone();
+        self.blocking(move |s| {
+            let rows = s
+                .lock()
+                .map_err(|_| ())?
+                .settings_with_prefix_raw(lodestar_companions::credentials::ROW_PREFIX)
+                .map_err(|_| ())?;
+            let text = |k: &str| {
+                rows.iter()
+                    .find(|(x, _)| x == k)
+                    .and_then(|(_, v)| v.as_ref().ok().cloned())
+            };
+            let provenance = guided::provenance(&id, Field::WebUiPassword, text);
+            let sealed = match rows.iter().find(|(k, _)| *k == key) {
+                Some((_, Err(bytes))) => Some(
+                    lodestar_integrations::secret::SealedSecret::from_bytes(bytes.clone())
+                        .map_err(|_| ())?,
+                ),
+                _ => None,
+            };
+            Ok((provenance, sealed))
+        })
+        .await
+    }
+
+    /// The credential to work with: the pasted temporary password, or the
+    /// generated one a failed apply or hand-over left.
+    async fn held(&self, e: &'static Entry) -> Result<Held, CompanionsError> {
+        let key = CredentialKey::new(e.id.clone(), Field::WebUiPassword);
+        let (provenance, sealed) = self.credential(e).await?;
+        let sealed = sealed.ok_or(CompanionsError::Refused("no_temporary_password"))?;
+        let open = |s: &lodestar_integrations::secret::SealedSecret| {
+            lodestar_companions::credentials::open(&self.secrets, &key, s)
+                .map_err(|_| CompanionsError::Internal("sealed"))
+        };
+        match provenance {
+            Some(Provenance::Pasted) => {
+                let secret = open(&sealed)?;
+                Ok(Held::Pasted(sealed, secret))
+            }
+            Some(Provenance::Generated) => Ok(Held::Pending(open(&sealed)?)),
+            None => Err(CompanionsError::Refused("no_temporary_password")),
+        }
+    }
+
+    /// Refuses a retry anywhere but the target the generated password was
+    /// set on: the live password never goes to another address (#653's
+    /// review, B2).
+    async fn applied_here(
+        &self,
+        e: &'static Entry,
+        target: &Target,
+    ) -> Result<(), CompanionsError> {
+        let key = guided::applied_key(&e.id);
+        let applied = self
+            .blocking(move |s| {
+                Ok(texts(s)?
+                    .into_iter()
+                    .find(|(k, _)| *k == key)
+                    .map(|(_, v)| v))
+            })
+            .await?;
+        if applied.as_deref().and_then(StoredTarget::from_row) != Some(StoredTarget::of(target)) {
+            return Err(CompanionsError::Refused("target_changed"));
+        }
+        Ok(())
+    }
+
+    /// Refuses once qBittorrent has refused [`SIGN_IN_CAP`] sign-ins in a
+    /// row, before it would ban Lodestar's address.
+    fn sign_ins_left(&self) -> Result<(), CompanionsError> {
+        let n = *self
+            .failures
+            .lock()
+            .map_err(|_| CompanionsError::Internal("lock"))?;
+        if n >= SIGN_IN_CAP {
+            return Err(CompanionsError::Refused("sign_in_refused"));
+        }
+        Ok(())
+    }
+
+    /// Counts a refused sign-in, or resets the count on one that worked.
+    fn counted<T>(&self, r: Result<T, CompanionsError>) -> Result<T, CompanionsError> {
+        if let Ok(mut n) = self.failures.lock() {
+            match &r {
+                Ok(_) => *n = 0,
+                Err(CompanionsError::Refused("companion_unauthorized")) => {
+                    *n = n.saturating_add(1);
+                }
+                Err(_) => {}
+            }
+        }
+        r
+    }
+
+    /// Sends the watch the records as stored now.
+    async fn refresh(&self) {
+        let (store, cat, rt) = (self.store.clone(), self.catalogue, self.runtime);
+        if let Ok(r) = tokio::task::spawn_blocking(move || records(&store, cat, rt)).await {
+            self.added.send_replace(added_of(&r));
+        }
+    }
+
+    /// The plan for `target`: signing in with `temporary` when given (the
+    /// credential held is then the temporary password too, so a wrong one
+    /// costs one refused sign-in), else with `stored`. Plans name settings,
+    /// never values, so the generated password isn't needed to make one.
+    async fn plan_with(
+        &self,
+        e: &'static Entry,
+        target: &Target,
+        stored: Secret,
+        temporary: Option<Secret>,
+    ) -> Result<lodestar_companions::adapter::ConfigPlan, CompanionsError> {
+        let configure = lodestar_companions::configure::configurator(&e.id)
+            .ok_or(CompanionsError::Refused("handover_later"))?;
+        let holding = Holding(Field::WebUiPassword, stored);
+        let input = input_for(&holding, target, temporary)?;
+        self.counted(
+            configure
+                .plan(self.http.as_ref(), target, &input)
+                .await
+                .map_err(|e| CompanionsError::Refused(adapter_code(e))),
+        )
+    }
+
+    /// Applies `plan` setting `stored`, hands the companion over, and
+    /// writes its record: the confirmation's end, first try or retry.
+    async fn finish(
+        &self,
+        e: &'static Entry,
+        target: &Target,
+        plan: &lodestar_companions::adapter::ConfigPlan,
+        stored: Secret,
+        temporary: Option<Secret>,
+    ) -> Result<Companion, GuidedError> {
+        let configure = lodestar_companions::configure::configurator(&e.id)
+            .ok_or(CompanionsError::Refused("handover_later"))?;
+        let holding = Holding(Field::WebUiPassword, stored);
+        let input = input_for(&holding, target, temporary)?;
+        // CMP-8b logs a failed step itself.
+        configure
+            .apply(self.http.as_ref(), target, &input, plan)
+            .await
+            .map_err(|err| CompanionsError::Refused(adapter_code(err)))?;
+        lodestar_companions::configure::hand_over(self.sink.as_ref(), &e.id, target, &input)
+            .await
+            .map_err(|err| CompanionsError::Refused(adapter_code(err)))?;
+        let origin = guided::origin_key(&e.id);
+        self.blocking(move |s| {
+            s.lock()
+                .map_err(|_| ())?
+                .set_settings_text(&[(&origin, RecordOrigin::Confirmed.as_str())])
+                .map_err(|_| ())
+        })
+        .await?;
+        self.refresh().await;
+        Ok(lodestar_api::companions::CompanionsApi::get(
+            self.service.as_ref(),
+            e.id.as_str().to_owned(),
+        )
+        .await?)
+    }
+}
+
+impl CompanionsGuidedApi for Guided {
+    fn detect(
+        &self,
+    ) -> lodestar_api::ops::BoxFuture<'_, Result<Vec<DetectedCompanion>, GuidedError>> {
+        Box::pin(async move {
+            let _one = self
+                .detecting
+                .try_lock()
+                .map_err(|_| CompanionsError::Refused("busy"))?;
+            let probes: Vec<(usize, CompanionId, Target)> =
+                detect::auto_probes(self.catalogue, self.runtime)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (id, t))| (i, id.clone(), t))
+                    .collect();
+            let mut set = tokio::task::JoinSet::new();
+            for (i, id, target) in probes {
+                let http = self.http.clone();
+                set.spawn(async move {
+                    let d = detect::detector(&id)?;
+                    let found = d.detect(http.as_ref(), &target).await.ok().flatten()?;
+                    Some((i, id, found))
+                });
+            }
+            let mut found = Vec::new();
+            let _ = tokio::time::timeout(self.detect_cap, async {
+                while let Some(r) = set.join_next().await {
+                    if let Ok(Some(hit)) = r {
+                        found.push(hit);
+                    }
+                }
+            })
+            .await;
+            set.abort_all();
+            // Each companion once, at the first target that answered, in
+            // the fixed probe order.
+            found.sort_by_key(|(i, _, _)| *i);
+            let mut out: Vec<DetectedCompanion> = Vec::new();
+            for (_, id, d) in found {
+                if out.iter().any(|o| o.id == id.as_str()) {
+                    continue;
+                }
+                out.push(DetectedCompanion {
+                    id: id.as_str().to_owned(),
+                    target: target_dto(&d.target),
+                    version: d.version.map(|v| v.as_str().to_owned()),
+                });
+            }
+            Ok(out)
+        })
+    }
+
+    fn set_target(
+        &self,
+        id: String,
+        target: CompanionTarget,
+    ) -> lodestar_api::ops::BoxFuture<'_, Result<DetectedCompanion, GuidedError>> {
+        Box::pin(async move {
+            let e = self.handed_over(&id).await?;
+            let _one = self.exclusive()?;
+            self.not_added(e).await?;
+            // The generated password may be qBittorrent's: a retry signs in
+            // with it, so its address never moves (#653's review, B2).
+            if self.credential(e).await?.0 == Some(Provenance::Generated) {
+                return Err(CompanionsError::Refused("generated_pending").into());
+            }
+            let target = checked_target(e, self.runtime, target)?;
+            let detector =
+                detect::detector(&e.id).ok_or(CompanionsError::Refused("not_detected"))?;
+            let found = detector
+                .detect(self.http.as_ref(), &target)
+                .await
+                .map_err(|err| CompanionsError::Refused(adapter_code(err)))?
+                .ok_or(CompanionsError::Refused("not_detected"))?;
+            let key = guided::target_key(&e.id);
+            let row = StoredTarget::of(&target).to_row();
+            self.blocking(move |s| {
+                s.lock()
+                    .map_err(|_| ())?
+                    .set_settings_text(&[(&key, &row)])
+                    .map_err(|_| ())
+            })
+            .await?;
+            self.unplan();
+            Ok(DetectedCompanion {
+                id: e.id.as_str().to_owned(),
+                target: target_dto(&target),
+                version: found.version.map(|v| v.as_str().to_owned()),
+            })
+        })
+    }
+
+    fn paste(
+        &self,
+        id: String,
+        value: String,
+    ) -> lodestar_api::ops::BoxFuture<'_, Result<(), GuidedError>> {
+        Box::pin(async move {
+            let e = self.handed_over(&id).await?;
+            let _one = self.exclusive()?;
+            self.not_added(e).await?;
+            // The generated password may already be qBittorrent's: never
+            // drop it for a paste (#653's review, B1).
+            if self.credential(e).await?.0 == Some(Provenance::Generated) {
+                return Err(CompanionsError::Refused("generated_pending").into());
+            }
+            self.unplan();
+            self.target(e).await?;
+            let key = CredentialKey::new(e.id.clone(), Field::WebUiPassword);
+            let sealed = lodestar_companions::credentials::accept_pasted(
+                &self.secrets,
+                &key,
+                Secret::new(value),
+            )
+            .map_err(|_| CompanionsError::BadInput {
+                field: Some("value"),
+                code: "bad_value",
+            })?;
+            let prov = guided::provenance_key(&e.id, Field::WebUiPassword)
+                .ok_or(CompanionsError::Internal("provenance"))?;
+            let rows = crate::companions::StoreRows(self.store.clone());
+            // The provenance first: a crash between the two leaves the old
+            // credential marked pasted, which is never revealed.
+            self.blocking(move |s| {
+                s.lock()
+                    .map_err(|_| ())?
+                    .set_settings_text(&[(&prov, Provenance::Pasted.as_str())])
+                    .map_err(|_| ())?;
+                use lodestar_companions::manager::Rows as _;
+                rows.put(&sealed).map_err(|_| ())
+            })
+            .await?;
+            Ok(())
+        })
+    }
+
+    fn plan(
+        &self,
+        id: String,
+    ) -> lodestar_api::ops::BoxFuture<'_, Result<Vec<String>, GuidedError>> {
+        Box::pin(async move {
+            let e = self.handed_over(&id).await?;
+            let _one = self.exclusive()?;
+            self.not_added(e).await?;
+            let target = self.target(e).await?;
+            let held = self.held(e).await?;
+            self.sign_ins_left()?;
+            {
+                let mut last = self
+                    .last_plan
+                    .lock()
+                    .map_err(|_| CompanionsError::Internal("lock"))?;
+                let now = tokio::time::Instant::now();
+                if let Some(at) = *last {
+                    let since = now.duration_since(at);
+                    if since < PLAN_EVERY {
+                        return Err(GuidedError::RateLimited {
+                            retry_after: (PLAN_EVERY - since).as_secs_f64().ceil().max(1.0) as u64,
+                        });
+                    }
+                }
+                *last = Some(now);
+            }
+            let plan = match held {
+                Held::Pasted(_, temporary) => {
+                    self.plan_with(e, &target, temporary.clone(), Some(temporary))
+                        .await?
+                }
+                Held::Pending(generated) => {
+                    self.applied_here(e, &target).await?;
+                    self.plan_with(e, &target, generated, None).await?
+                }
+            };
+            let settings: Vec<String> = plan
+                .changes()
+                .iter()
+                .map(|k| k.as_str().to_owned())
+                .collect();
+            *self
+                .planned
+                .lock()
+                .map_err(|_| CompanionsError::Internal("lock"))? = Some(settings.clone());
+            Ok(settings)
+        })
+    }
+
+    fn confirm(
+        &self,
+        id: String,
+        settings: Vec<String>,
+    ) -> lodestar_api::ops::BoxFuture<'_, Result<Companion, GuidedError>> {
+        Box::pin(async move {
+            let e = self.handed_over(&id).await?;
+            let _one = self.exclusive()?;
+            self.not_added(e).await?;
+            // One confirmation per plan, and one that doesn't echo it is
+            // refused before qBittorrent is signed in to again.
+            let planned = self
+                .planned
+                .lock()
+                .map_err(|_| CompanionsError::Internal("lock"))?
+                .take();
+            if planned.as_ref() != Some(&settings) {
+                return Err(CompanionsError::Mismatch.into());
+            }
+            let target = self.target(e).await?;
+            let held = self.held(e).await?;
+            self.sign_ins_left()?;
+            let echoes = |p: &lodestar_companions::adapter::ConfigPlan| {
+                p.changes()
+                    .iter()
+                    .map(|k| k.as_str())
+                    .eq(settings.iter().map(String::as_str))
+            };
+            let (sealed, temporary) = match held {
+                // A retry after a failed apply or hand-over: the generated
+                // password signs in, and nothing is replaced.
+                Held::Pending(generated) => {
+                    self.applied_here(e, &target).await?;
+                    let plan = self.plan_with(e, &target, generated.clone(), None).await?;
+                    if !echoes(&plan) {
+                        return Err(CompanionsError::Mismatch.into());
+                    }
+                    return self.finish(e, &target, &plan, generated, None).await;
+                }
+                Held::Pasted(sealed, temporary) => (sealed, temporary),
+            };
+            let key = CredentialKey::new(e.id.clone(), Field::WebUiPassword);
+            let change = lodestar_companions::credentials::replace_temporary_password(
+                &self.secrets,
+                &key,
+                &sealed,
+            )
+            .map_err(|_| CompanionsError::Internal("sealed"))?;
+            let prov = guided::provenance_key(&e.id, Field::WebUiPassword)
+                .ok_or(CompanionsError::Internal("provenance"))?;
+            // The generated password is stored durably first (CMP-8b), then
+            // marked generated: a crash between leaves it marked pasted,
+            // which is never revealed.
+            // The target it's set on goes with the marking: a retry signs in
+            // only there.
+            let rows = crate::companions::StoreRows(self.store.clone());
+            let next_row = change.next.row.clone();
+            let prov_set = prov.clone();
+            let applied = (
+                guided::applied_key(&e.id),
+                StoredTarget::of(&target).to_row(),
+            );
+            self.blocking(move |s| {
+                use lodestar_companions::manager::Rows as _;
+                rows.put(&next_row).map_err(|_| ())?;
+                s.lock()
+                    .map_err(|_| ())?
+                    .update_settings_text(
+                        &[
+                            (&prov_set, Provenance::Generated.as_str()),
+                            (&applied.0, &applied.1),
+                        ],
+                        &[],
+                    )
+                    .map_err(|_| ())
+            })
+            .await?;
+            let plan = self
+                .plan_with(e, &target, temporary.clone(), Some(temporary.clone()))
+                .await;
+            let plan = match plan {
+                Ok(p) if echoes(&p) => p,
+                other => {
+                    // Nothing applied yet: the temporary password goes back,
+                    // so you can look again and confirm.
+                    let restore = lodestar_companions::credentials::accept_pasted(
+                        &self.secrets,
+                        &key,
+                        temporary,
+                    );
+                    let rows = crate::companions::StoreRows(self.store.clone());
+                    let applied_key = guided::applied_key(&e.id);
+                    let restored = self
+                        .blocking(move |s| {
+                            s.lock()
+                                .map_err(|_| ())?
+                                .update_settings_text(
+                                    &[(&prov, Provenance::Pasted.as_str())],
+                                    &[&applied_key],
+                                )
+                                .map_err(|_| ())?;
+                            use lodestar_companions::manager::Rows as _;
+                            rows.put(&restore.map_err(|_| ())?).map_err(|_| ())
+                        })
+                        .await;
+                    if restored.is_err() {
+                        failed("restore_failed");
+                    }
+                    return Err(match other {
+                        Ok(_) => CompanionsError::Mismatch,
+                        Err(e) => e,
+                    }
+                    .into());
+                }
+            };
+            self.finish(e, &target, &plan, change.next.secret, Some(temporary))
+                .await
+        })
+    }
+
+    fn forget(
+        &self,
+        id: String,
+    ) -> lodestar_api::ops::BoxFuture<'_, Result<CompanionForgotten, GuidedError>> {
+        Box::pin(async move {
+            let e = self.entry(&id)?;
+            let _one = self.exclusive()?;
+            self.unplan();
+            let service = self.service.clone();
+            let cid = e.id.clone();
+            if let Some(code) = tokio::task::spawn_blocking(move || service.lodestar_owned(&cid))
+                .await
+                .map_err(|_| CompanionsError::Internal("panicked"))??
+            {
+                return Err(CompanionsError::Refused(code).into());
+            }
+            // A generated credential is, or may be, the password qBittorrent
+            // uses now: the answer says so (#653's review, B1).
+            let in_use = self.credential(e).await?.0 == Some(Provenance::Generated);
+            let mut keys = guided::row_keys(&e.id);
+            keys.extend(
+                Field::ALL
+                    .iter()
+                    .map(|f| CredentialKey::new(e.id.clone(), *f).row_key()),
+            );
+            let gone = keys.clone();
+            self.blocking(move |s| {
+                let keys: Vec<&str> = gone.iter().map(String::as_str).collect();
+                s.lock()
+                    .map_err(|_| ())?
+                    .update_settings_text(&[], &keys)
+                    .map_err(|_| ())
+            })
+            .await?;
+            if let Ok(mut n) = self.failures.lock() {
+                *n = 0;
+            }
+            self.refresh().await;
+            Ok(CompanionForgotten {
+                credential_in_use: in_use,
+                deleted: keys,
+                id: e.id.as_str().to_owned(),
+            })
+        })
+    }
+}
+
+#[cfg(test)]
+#[path = "companion_wiring_guided_tests.rs"]
+mod guided_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1331,7 +2218,16 @@ mod tests {
     fn external_clients_and_indexers_are_the_ones_you_set_up() {
         let none = Snapshot::default();
         let w = Watched::new();
-        assert!(!present(&none, &w, &[client(MANAGED_CLIENT)], None, &[]).external_client);
+        // The managed entry with no qBittorrent of Lodestar's is a client
+        // like yours (forgotten, say); with one, it's that companion's.
+        assert!(present(&none, &w, &[client(MANAGED_CLIENT)], None, &[]).external_client);
+        let ours = installed(&[("qbittorrent", manager::Health::Healthy)]);
+        assert!(!present(&ours, &w, &[client(MANAGED_CLIENT)], None, &[]).external_client);
+        let added = [(
+            id("qbittorrent"),
+            Target::Loopback(PortNumber::new(8080).unwrap()),
+        )];
+        assert!(!present(&none, &w, &[client(MANAGED_CLIENT)], None, &added).external_client);
         assert!(
             present(
                 &none,

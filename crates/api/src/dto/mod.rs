@@ -17,6 +17,7 @@ pub mod alerts;
 pub mod auth;
 pub mod collections;
 pub mod companions;
+pub mod companions_guided;
 pub mod compare;
 pub mod digest;
 pub mod discover;
