@@ -6550,6 +6550,11 @@
       "id": "X-updates-api-text-codes",
       "at": "2026-11-08T23:56Z",
       "note": "From #640: X-updates-api-text also documents capability.reason install_kind_unknown, data_folder_unchecked, notice install_failed, installing set during download (string codes, no shape change)."
+    },
+    {
+      "id": "CMP-5g-notes-639",
+      "at": "2026-11-09T00:01Z",
+      "note": "CMP-5g brief/notes must carry (#639 decisions + delta review 1ef6844c): (1) move Service::installed (companions.rs:570, keys on version.is_some()) onto the journal; (2) never write a pasted credential into an installed companion row without a provenance marker; (3) IMPORTANT carry-over: unit test that s.input() puts DataFolder::from_running(dir) in input.data (positive path of the data-folder guard, companions.rs:604-611, lost with B1); (4) make manager field_of public and drop the own_field copy; (5) I1 end-to-end test through real generators once a pin lands."
     }
   ],
   "main_health": [
@@ -7263,14 +7268,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-08T23:57Z",
+    "updated": "2026-11-09T00:01Z",
     "items": [
       {
         "slot": 1,
         "slice": "CMP-6",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: #639 ready at 1ef6844c (main e964b487 merged); fresh delta Opus review running",
+        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: #639 delta review MERGE at 1ef6844c; merge on green CI",
         "since": "2026-11-08T20:07Z"
       },
       {
@@ -7278,7 +7283,7 @@
         "slice": "OP-2a",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #641 OP-2a ready at fe8c1088 (green); Opus + security review queued (3 reviewers busy)",
+        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #641 OP-2a ready at fe8c1088; Opus+security review running",
         "since": "2026-11-08T22:52Z"
       },
       {
@@ -7362,5 +7367,5 @@
     }
   ],
   "heartbeat": "2026-11-08T21:39Z",
-  "updated": "2026-11-08T23:57Z"
+  "updated": "2026-11-09T00:01Z"
 }
