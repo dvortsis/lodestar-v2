@@ -64,6 +64,7 @@ use zeroize::Zeroizing;
 
 use crate::clock::{Clock, ClockTime};
 use crate::frame::{self, MAX_JOIN_REQUEST};
+use crate::leases::LOSS_BLOCKED;
 use crate::link::{BoxIo, CoordinatorLink, Link, WorkerLink, local_pair, ws_config};
 use crate::proto::*;
 use crate::{
@@ -158,8 +159,6 @@ pub enum KeyCheck {
     /// rest. An error never grants a key, and never ends one.
     Unknown,
 }
-
-use crate::leases::LOSS_BLOCKED;
 
 /// Where the server hands what workers send. Every method runs on the
 /// session's task with no lock held, so it must not block: queue the work

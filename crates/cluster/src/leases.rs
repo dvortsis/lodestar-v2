@@ -710,8 +710,14 @@ impl LeaseAuthority {
     /// ([`restore_if_free`](Self::restore_if_free)). That holds for a claim
     /// already in flight, whose store check ran before the report: its
     /// `checked_at` is older, so the report counts as a commit since. It
-    /// stays refused until the sink's floor-report map, which the server
-    /// fills right after this, and then the store take over.
+    /// stays refused for about [`RECENT_COMMITS`] later commits; by then the
+    /// sink's floor-report map, which the server fills right after this,
+    /// and then the store hold it. A report the sink doesn't keep (over the
+    /// worker's budget, or turned away at the map's cap) is refused only
+    /// that long, then can be claimed again, as before this change. Any
+    /// outcome carrying the reason counts, `PeerFound` included; the sink
+    /// keeps only `Lost`, so a `PeerFound` with it is refused only that
+    /// long, which is harmless.
     pub fn report(
         &self,
         worker: WorkerId,
@@ -1557,11 +1563,17 @@ mod tests {
         assert!(a.get(&key).is_none(), "no lease");
     }
 
-    /// X-lease-report-atomic: a report and a claim racing on two threads.
-    /// Whichever takes the lock first, the claimer never gets a lease: it
-    /// finds the key held (the report comes after) or refused (before).
+    /// X-lease-report-atomic: a claimer racing a blocked report on another
+    /// thread never gets the key. From a shared start, the claimer claims
+    /// again and again until the report has returned, then once more, so
+    /// each round sees the claims before the report (the key held by A),
+    /// claims that land around it, and at least one after it (refused). A
+    /// report whose refusal isn't taken under the lock that ends the lease
+    /// lets a claim in the gap be granted (#647's review).
     #[test]
     fn a_claim_racing_a_blocked_report_never_gets_the_key() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let (mut held, mut refused) = (0u32, 0u32);
         for n in 0..200u32 {
             let (a, _) = counted();
             a.serve_remote();
@@ -1572,29 +1584,42 @@ mod tests {
             };
             let checked_at = a.commit_seq();
             let start = Arc::new(std::sync::Barrier::new(2));
+            let reported = Arc::new(AtomicBool::new(false));
             let claimer = {
-                let (a, start) = (a.clone(), start.clone());
+                let (a, start, reported) = (a.clone(), start.clone(), reported.clone());
                 std::thread::spawn(move || {
                     start.wait();
-                    a.claim_batch(B, &[claim(5, 2)], 1, None, Some(checked_at))
+                    let mut answers = Vec::new();
+                    // Ends one call after the report has returned.
+                    loop {
+                        let done = reported.load(Ordering::Acquire);
+                        let answer = a.claim_batch(B, &[claim(5, 2)], 1, None, Some(checked_at));
+                        answers.push(answer[0]);
+                        if done {
+                            return answers;
+                        }
+                    }
                 })
             };
             start.wait();
             assert!(a.report(A, &key, t, Some(LOSS_BLOCKED)).is_some());
-            let answer = claimer.join().unwrap();
-            assert!(
-                matches!(
-                    answer[0],
-                    BatchAnswer::Committed
-                        | BatchAnswer::Claimed {
-                            claimed: Claimed::Held { holder: A, .. },
-                            ..
-                        }
-                ),
-                "round {n}: {answer:?}"
-            );
+            reported.store(true, Ordering::Release);
+            let answers = claimer.join().unwrap();
+            for answer in &answers {
+                match answer {
+                    BatchAnswer::Committed => refused += 1,
+                    BatchAnswer::Claimed {
+                        claimed: Claimed::Held { holder: A, .. },
+                        ..
+                    } => held += 1,
+                    other => panic!("round {n}: {other:?} in {answers:?}"),
+                }
+            }
+            assert_eq!(answers.last(), Some(&BatchAnswer::Committed), "round {n}");
             assert!(a.get(&key).is_none(), "round {n}: no lease after both");
         }
+        // Every round ends refused; claims before the report are held.
+        assert!(refused >= 200, "refused {refused}, held {held}");
     }
 
     /// More commits than `RECENT_COMMITS` remembers between the late-result

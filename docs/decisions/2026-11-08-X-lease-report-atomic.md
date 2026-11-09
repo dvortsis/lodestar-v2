@@ -11,8 +11,10 @@ This closes WK-10d's residual window between a worker's floor report and the ref
 - **From the moment `report` returns, a remote claim of the key is refused as stored:** `claim_batch` answers `Committed`, and the server denies the key as `Stored`. So is a late result's lease (`restore_if_free`).
 - **That holds for a claim already in flight.** Its store check ran before the report, so its `checked_at` is older, and the report counts as a commit since.
   - If more than `RECENT_COMMITS` commits and floor drops happen meanwhile, the claim is refused as busy anyway (the existing forgotten-window rule).
-  - The memory lasts about ten seconds at the §19.8 ingest rate. The sink fills its map right after `report`, on the same task, and the map then holds the key until the writer's tombstone is in the store. So the store, the map and the authority now overlap with no gap.
+  - The memory lasts about ten seconds at the §19.8 ingest rate. The sink fills its map right after `report`, on the same task, and the map then holds the key until the writer's tombstone is in the store. So for a report the sink keeps (`Reported::Taken`), the store, the map and the authority overlap with no gap.
+  - **A report the sink doesn't keep** (`OverBudget`, past the worker's 100 an hour, or `TurnedAway` at the map's 100,000 cap) is refused only for that memory. After about `RECENT_COMMITS` later commits it can be claimed again, as it could before this change, and the next worker's floor drops it (WK-10d). That's no worse than before (#647's review).
 - **Only `Blocked` is remembered.** Any other loss (peer found, no peers, timeout and so on) leaves the key free to claim again, as before: the DHT should find it and someone may fetch it.
+- **The reason, not the outcome, decides.** The server passes both `PeerFound { reason }` and `Lost { reason }` to `report`, and the sink treats only `Lost { reason: 7 }` as a floor drop. So a `PeerFound { reason: 7 }`, which an honest worker never sends, is refused for the memory's ten seconds or so and then not at all. That's harmless, so `report` stays one rule (#647's review).
 - **`LOSS_BLOCKED` moved from `server.rs` to `leases.rs`** (`pub(crate)`), so both use one constant. The re-grant path's `KeyCheck::Held` report, which already used it, is now remembered too. That's harmless: the key is held in the store.
 
 ## What it doesn't change
@@ -22,7 +24,12 @@ This closes WK-10d's residual window between a worker's floor report and the ref
 ## Tests
 - `a_blocked_report_refuses_the_key_at_once` (`leases.rs`): after a blocked report, another worker's `claim_batch` is `Committed` and a late lease is refused. A key lost for another reason is granted. A stale report remembers nothing.
 - `a_claim_waiting_during_a_blocked_report_is_refused` (`leases.rs`, deterministic): two threads interleaved by barriers. The claim's store check runs first, then the report, then the claim, which is refused.
-- `a_claim_racing_a_blocked_report_never_gets_the_key` (`leases.rs`, 200 rounds): the report and the claim start together from a barrier. Whichever takes the lock first, the claimer never gets a lease: it finds the key held, or refused.
+- `a_claim_racing_a_blocked_report_never_gets_the_key` (`leases.rs`, 200 rounds, #647's review):
+  - The report and the claimer start together from a barrier. The claimer claims again and again until the report has returned (an `AtomicBool`), then makes one more call.
+  - So each round covers claims before the report (the key held by A), claims that land around it, and at least one after it (refused). No answer is ever a grant.
+  - The first version made one claim a round, which always ran before the report, so the refused order never ran.
 - `a_floor_drop_is_refused_to_the_next_claim` (`crates/cluster/tests/transport.rs`): end to end over real sessions, with no store check or sink. Worker A reports `Lost { reason: 7 }`, and worker B's claim is denied as `Stored`. A key lost with reason 1 is granted to B.
 - No fixed sleeps. Barriers order the threads, and the transport test waits on a heartbeat's answer.
-- **Mutation-checked:** without the `remember_commit` call in `report`, all four fail.
+- **Mutation-checked:**
+  - Without the `remember_commit` call in `report`, all four fail.
+  - With the remember moved outside the lock (release, drop the lock, then lock again to remember, with a `yield_now()` in the gap), the race test fails. Only it can tell the two apart.
