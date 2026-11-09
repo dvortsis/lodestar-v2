@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-09T01:45Z",
+  "updated_at": "2026-11-09T02:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6620,6 +6620,11 @@
       "id": "x-wk-busy-metrics-merged",
       "added": "2026-11-09T01:45Z",
       "what": "#642 merged (e3b35b8e). Owner \u00a72.19 flag: causes held_back|check_failed|key_unknown instead of runner's queue_full|store_check|unknown_read (more accurate). OP-2 README module table rides OP-2 fix round or OP-2b."
+    },
+    {
+      "id": "op-2-mismatch-unreadable",
+      "added": "2026-11-09T02:00Z",
+      "what": "runner \u00a72.26 (flag to owner at OP-2 merge): reaper destroys only on readable mismatch=true; unreadable => down-only + escalate. Mismatch flag IAM narrowed (no DeleteObject)."
     }
   ],
   "main_health": [
@@ -7345,22 +7350,22 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T01:45Z",
+    "updated": "2026-11-09T02:00Z",
     "items": [
       {
         "slot": 1,
         "slice": "CMP-5g-1",
-        "role": "review",
+        "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: #645 CMP-5g-1 (d0007b0a): security CHANGES (committed test secrets.key, rollback LOW) relayed; Opus review running",
+        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: #645 CMP-5g-1 both reviews CHANGES (secrets.key, tests/watch.rs, gate tests, read-failure hold, url compare) relayed; fix round then delta review",
         "since": "2026-11-09T00:20Z"
       },
       {
         "slot": 2,
         "slice": "OP-2",
-        "role": "review",
+        "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #646 OP-2 (c9fe4884, ~2,090 lines, one PR): Opus + security review running",
+        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #646 OP-2 both reviews CHANGES (audit fleet.json read error destroys fleet; firewall attach check; sweep order; flag unreadable => down-only; tf timeouts; L1-L5; polish) relayed; fix round then delta + security delta",
         "since": "2026-11-09T01:05Z"
       },
       {
