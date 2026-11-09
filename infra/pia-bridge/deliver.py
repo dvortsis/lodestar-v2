@@ -75,13 +75,17 @@ SSH_TIMEOUT = FLOCK_WAIT + CLOUD_INIT_WAIT + STEP_TIMEOUT + 60  # one session, a
 # wait and its step; the clean check polls past that.
 CLEAN_WAIT_SECONDS = CLOUD_INIT_WAIT + STEP_TIMEOUT + 30
 DELIVER_JOB_MINUTES = 30  # fleet.yml's deliver-pia timeout-minutes (a test keeps them in step)
-# The job's deadline runs from this program's start. Kept back from it: the
-# steps before the program (checkout and pip, 2 min), and the close and the
-# report after the SSH work (2 firewalls x 3 calls x 30 s, then the comments:
-# 4 min). The AWS, checkip, /meta and firewall calls before the SSH work spend
-# the same budget, and every SSH wait is clamped to what's left, so GitHub never
-# cancels the job before it closes its rule and reports.
-RESERVE_SECONDS = 6 * 60
+# The job's deadline runs from this program's start (on a monotonic clock).
+# Kept back from it: the steps before the program (checkout and pip, 120 s); the
+# close (2 firewalls x 3 calls x 30 s, plus a run lookup per other job rule it
+# sweeps, 60 s); the report (up to 3 comments x 30 s); and the clean check's
+# 10 s floor. The AWS, checkip, /meta and firewall calls before the SSH work
+# spend the same budget. A session starts only when a whole one fits, so an
+# orphan's remote bound (FLOCK_WAIT + CLOUD_INIT_WAIT + STEP_TIMEOUT, under
+# SSH_TIMEOUT) ends before the deadline, and the lock outlives it; every other
+# wait is clamped to what's left. GitHub never cancels the job before it closes
+# its rule and reports.
+RESERVE_SECONDS = 8 * 60
 WORK_SECONDS = DELIVER_JOB_MINUTES * 60 - RESERVE_SECONDS
 LEASE_NEEDED = timedelta(minutes=DELIVER_JOB_MINUTES + 2)  # the whole job, and a margin
 NOT_READY, BUSY_VM, STEP_TIMED_OUT = 20, 21, 124
@@ -292,14 +296,15 @@ class Delivery:
     def __init__(self, env: dict, *, linode: Linode, ssh: Callable, my_ip: Callable[[], str],
                  meta: Callable[[], dict], lookup_run: Callable[[str], dict | None], report: Callable[[str], None],
                  emit: Callable[[str], None], clock: Callable[[], datetime], sleep: Callable[[float], None],
-                 deadline: datetime | None = None):
+                 monotonic: Callable[[], float] = time.monotonic, deadline: float | None = None):
         self.env, self.linode, self.ssh, self.my_ip, self.meta = env, linode, ssh, my_ip, meta
         self.lookup_run, self.report, self.emit, self.clock, self.sleep = lookup_run, report, emit, clock, sleep
         self.run_id, self.attempt = env["GITHUB_RUN_ID"], env["GITHUB_RUN_ATTEMPT"]
-        self.deadline = deadline or clock() + timedelta(seconds=WORK_SECONDS)  # the SSH work ends by here
+        self.monotonic = monotonic
+        self.deadline = deadline if deadline is not None else monotonic() + WORK_SECONDS  # the SSH work ends by here
 
     def _left(self) -> float:
-        return (self.deadline - self.clock()).total_seconds()
+        return self.deadline - self.monotonic()
 
     def open_rules(self, fids: list[str]) -> None:
         from apply import writable  # noqa: PLC0415
@@ -353,12 +358,12 @@ class Delivery:
     def _to_target(self, role: str, slot: dict, login: dict, region: str, key: str, workdir: Path) -> str:
         base = self._ssh_base(role, slot, key, workdir)
         data = payload(login, region)
-        retry_until = min(self.clock() + timedelta(seconds=SSH_ATTEMPTS_SECONDS), self.deadline)
+        retry_until = min(self.monotonic() + SSH_ATTEMPTS_SECONDS, self.deadline)
         lost_any, rc = False, None
-        while self._left() >= 60:
-            rc = self.ssh(base + [remote_command()], data, int(min(SSH_TIMEOUT, self._left())))
+        while self._left() >= SSH_TIMEOUT:  # a whole session fits, so its orphan's bound does too
+            rc = self.ssh(base + [remote_command()], data, SSH_TIMEOUT)
             lost_any = lost_any or rc in (255, 256)
-            if rc != 255 or self.clock() >= retry_until:  # 255: SSH itself (not yet reachable, or the key)
+            if rc != 255 or self.monotonic() >= retry_until:  # 255: SSH itself (not yet reachable, or the key)
                 break
             self.sleep(5)
         if rc is None:
@@ -378,11 +383,11 @@ class Delivery:
     def _clean(self, base: list[str], wait: bool) -> str:
         """/run/lodestar-pia must be gone. After a lost session, an orphaned step
         may still be running toward its own bound, so poll until that's past."""
-        until = min(self.clock() + timedelta(seconds=CLEAN_WAIT_SECONDS if wait else 0), self.deadline)
+        until = min(self.monotonic() + (CLEAN_WAIT_SECONDS if wait else 0), self.deadline)
         while True:
             # Always one check, however late; each is clamped to what's left (at least 10 s).
             rc = self.ssh(base + [clean_check_command()], b"", int(max(10, min(60, self._left()))))
-            if rc == 0 or self.clock() + timedelta(seconds=10) >= until:
+            if rc == 0 or self.monotonic() + 10 >= until:
                 break
             self.sleep(10)
         return {0: "clean", 1: "NOT clean; escalate"}.get(rc, "unchecked; escalate")
@@ -419,11 +424,11 @@ class Delivery:
 
 
 def deliver(env: dict, ctx_report: Callable[[str], None], *, connect=None, emit=print,
-            clock=None, sleep=time.sleep, repo: str = ".") -> int:
+            clock=None, sleep=time.sleep, monotonic: Callable[[], float] = time.monotonic, repo: str = ".") -> int:
     """The job's entry point, with the live wiring injectable for tests."""
     limits = limits_mod.load()
     clock = clock or (lambda: datetime.now(timezone.utc))
-    deadline = clock() + timedelta(seconds=WORK_SECONDS)
+    deadline = monotonic() + WORK_SECONDS  # from the program's start: everything below spends it
     if env.get("GITHUB_RUN_ATTEMPT") != "1":
         ctx_report("deliver-pia: refused, a re-run")
         return 0
@@ -458,7 +463,7 @@ def deliver(env: dict, ctx_report: Callable[[str], None], *, connect=None, emit=
         login, token = read_secrets(live["sm"], emit)
         delivery = Delivery(env, linode=live["linode"](token), ssh=live["ssh"], my_ip=live["my_ip"],
                             meta=live["meta"], lookup_run=live["lookup_run"], report=ctx_report, emit=emit,
-                            clock=clock, sleep=sleep, deadline=deadline)
+                            clock=clock, sleep=sleep, monotonic=monotonic, deadline=deadline)
         ok = delivery.run(fleet, roles, servers, login, env["FLEET_SSH_KEY"])
     except Refusal as r:
         ctx_report(f"deliver-pia: refused: {r}")
