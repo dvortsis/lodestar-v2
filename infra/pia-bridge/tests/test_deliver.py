@@ -6,6 +6,7 @@ import base64
 import importlib.util
 import io
 import json
+import re
 import subprocess
 import tarfile
 import tempfile
@@ -435,9 +436,16 @@ class Deliver(unittest.TestCase):
         floor = 10  # the last clean check's minimum
         self.assertGreaterEqual(deliver.RESERVE_SECONDS, setup + close + report + floor)
         # An orphan's remote bound fits inside one session, so it ends before the deadline.
-        self.assertLess(deliver.FLOCK_WAIT + deliver.CLOUD_INIT_WAIT + deliver.STEP_TIMEOUT, deliver.SSH_TIMEOUT)
-        # The clean poll outlasts an orphan's own bound (its cloud-init wait and its step).
-        self.assertGreaterEqual(deliver.CLEAN_WAIT_SECONDS, deliver.CLOUD_INIT_WAIT + deliver.STEP_TIMEOUT)
+        orphan = deliver.CLOUD_INIT_WAIT + deliver.STEP_TIMEOUT + deliver.RESTART_SECONDS
+        self.assertLess(deliver.FLOCK_WAIT + orphan, deliver.SSH_TIMEOUT)
+        # The clean poll outlasts an orphan's own bound (its cloud-init wait, its step and its restart).
+        self.assertGreaterEqual(deliver.CLEAN_WAIT_SECONDS, orphan)
+        # The restart's bound is every Docker call's own timeout added up.
+        boot = deliver.bootstrap()
+        tail = boot[boot.index("pia-wireguard.sh"):]
+        bounds = [int(t) for t in re.findall(r"timeout (\d+) docker ", tail)]
+        self.assertEqual(sum(bounds), deliver.RESTART_SECONDS)
+        self.assertEqual(tail.count("docker "), len(bounds))  # no Docker call unbounded
 
     def run_slow(self, pre_seconds, hang=True):
         """renew-vpn main where the calls before the SSH work (inside connect, so
@@ -485,6 +493,17 @@ class Deliver(unittest.TestCase):
         self.assertEqual(self.fw.rules["21"], rules())
         rc, _, _ = self.run_slow(deliver.WORK_SECONDS - deliver.SSH_TIMEOUT, hang=False)  # exactly enough: it runs
         self.assertEqual((rc, self.reports), (0, ["deliver-pia: main: delivered; /run clean"]))
+
+    def test_renewal_outcomes(self):
+        rc = self.go("/fleet run renew-vpn main", ssh=FakeSSH(rcs=[deliver.MID_BLOCK]))
+        self.assertEqual((rc, self.reports), (0, ["deliver-pia: main: renewed; takes effect after the block; /run clean"]))
+        rc = self.go("/fleet run renew-vpn main", ssh=FakeSSH(rcs=[deliver.DOCKER_UNKNOWN]))
+        self.assertEqual(rc, 1)  # never read as mid-block: escalated
+        self.assertIn("Docker didn't answer, so the tunnel wasn't restarted; escalate", self.reports[-1])
+        self.reports.clear()
+        rc = self.go("/fleet run renew-vpn main", ssh=FakeSSH(rcs=[deliver.RESTART_FAILED]))
+        self.assertEqual((rc, self.reports),
+                         (1, ["deliver-pia: main: delivered, but restarting the tunnel failed; escalate; /run clean"]))
 
     def test_a_busy_vm_after_a_lost_attempt_waits_for_the_orphan(self):
         class Orphan(FakeSSH):  # 255, then the retry finds the orphan holding the lock
@@ -555,7 +574,9 @@ class EndToEnd(unittest.TestCase):
         self.addCleanup(subprocess.run, ["rm", "-rf", str(tmp)])
         stub = tmp / "stub"
         (stub / "bin").mkdir(parents=True)
-        for name, body in (("curl", CURL), ("wg", WG), ("cloud-init", "#!/usr/bin/env bash\nexit 0\n")):
+        # docker: no stack yet, so nothing to restart.
+        for name, body in (("curl", CURL), ("wg", WG), ("cloud-init", "#!/usr/bin/env bash\nexit 0\n"),
+                           ("docker", "#!/usr/bin/env bash\nexit 0\n")):
             (stub / "bin" / name).write_text(body)
             (stub / "bin" / name).chmod(0o755)
         (stub / "token.json").write_text(json.dumps({"token": TOKEN}))
@@ -610,6 +631,52 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(clean(), 1)  # lock free, but the directory is still there
         subprocess.run(["rm", "-rf", str(run_dir)])
         self.assertEqual(clean(), 0)
+
+    def test_a_renewal_restarts_the_tunnel_only_outside_a_block(self):
+        """OP-3a: after the step, gluetun (and Lodestar) restart so the new wg0.conf
+        takes effect, unless a collector is running (mid-block)."""
+        docker = r"""#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$STUB/docker.log"
+case "$1" in
+  ps) [ -n "$PS_FAIL" ] && exit 1; [ -n "$COLLECTOR" ] && echo x; exit 0 ;;
+  inspect) case "${@: -1}" in gluetun) [ -n "$GLUETUN" ] && echo true || exit 1 ;; lodestar) [ -n "$LODESTAR" ] && echo true || exit 1 ;; esac ;;
+  restart) [ -n "$FAIL_RESTART" ] && exit 1; exit 0 ;;
+esac
+"""
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(tmp)])
+        stub = tmp / "stub"
+        (stub / "bin").mkdir(parents=True)
+        for name, body in (("curl", CURL), ("wg", WG), ("docker", docker), ("cloud-init", "#!/bin/sh\nexit 0\n")):
+            (stub / "bin" / name).write_text(body)
+            (stub / "bin" / name).chmod(0o755)
+        (stub / "token.json").write_text(json.dumps({"token": TOKEN}))
+        (stub / "servers.json").write_text(json.dumps(SERVERS))
+        (stub / "addkey.json").write_text(json.dumps(ADDKEY))
+        run_dir, out = tmp / "run" / "lodestar-pia", tmp / "secrets" / "wg0.conf"
+        run_dir.parent.mkdir()
+        out.parent.mkdir(mode=0o700)
+        marker, lock = tmp / "boot-finished", tmp / "run" / "lodestar-pia.lock"
+        marker.write_text("")
+
+        def boot(**flags):
+            log = stub / "docker.log"
+            if log.exists():
+                log.unlink()
+            env = {"PATH": f"{stub / 'bin'}:/usr/bin:/bin", "STUB": str(stub), "STUB_MODE": "", "TOKEN": TOKEN,
+                   "PRIV": PRIV, "PUB": PUB, **{k: "1" for k, v in flags.items() if v}}
+            r = subprocess.run(["bash", "-c", deliver.bootstrap(str(run_dir), str(out), str(marker), str(lock))],
+                               input=deliver.payload(LOGIN, "ca_test"), env=env, capture_output=True, timeout=60)
+            restarts = [ln for ln in (log.read_text().splitlines() if log.exists() else []) if ln.startswith("restart")]
+            return r.returncode, restarts
+        self.assertEqual(boot(), (0, []))  # no stack yet (the first delivery after up)
+        self.assertEqual(boot(GLUETUN=True, LODESTAR=True), (0, ["restart gluetun", "restart -t 60 lodestar"]))
+        self.assertEqual(boot(GLUETUN=True), (0, ["restart gluetun"]))
+        self.assertEqual(boot(GLUETUN=True, LODESTAR=True, COLLECTOR=True), (deliver.MID_BLOCK, []))
+        # Fail closed: if Docker can't say what's running, a block may be running.
+        self.assertEqual(boot(GLUETUN=True, LODESTAR=True, PS_FAIL=True), (deliver.DOCKER_UNKNOWN, []))
+        self.assertEqual(boot(GLUETUN=True, FAIL_RESTART=True), (deliver.RESTART_FAILED, ["restart gluetun"]))
+        self.assertFalse(run_dir.exists())  # the login is gone in every case
 
     def test_remote_command_is_fixed(self):
         cmd = deliver.remote_command()

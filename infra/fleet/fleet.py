@@ -43,8 +43,9 @@ REAPER_WAIT_SECONDS = 300
 
 
 class Ctx:
-    def __init__(self, env, backend, store, transport, clock, sleep, repo):
+    def __init__(self, env, backend, store, transport, clock, sleep, repo, step_io=None):
         self.env, self.repo = env, repo
+        self.step_io = step_io  # OP-3a: {"ssh", "my_ip"} for live steps; None means the real ones
         self.limits = limits_mod.load()
         self.live = env.get("FLEET_LIVE") == "true"
         self.clock = clock or (lambda: datetime.now(timezone.utc))
@@ -229,8 +230,23 @@ def _execute(ctx: Ctx, cmd: Command, run_id: str, fleet) -> str:
         ctx.deliver = True
         return f"run renew-vpn {cmd.vm}: {would}deliver the PIA login again (deliver-pia, under this run's lock)"
     if ctx.live:
-        return f"refused: run {cmd.step}: step not built (OP-3)"
+        return _run_live_step(ctx, cmd, run_id, fleet)
     return f"run {cmd.step} {cmd.vm}: would run the step at the fleet's pinned commit"
+
+
+def _run_live_step(ctx: Ctx, cmd: Command, run_id: str, fleet: dict) -> str:
+    """One committed step on one VM over SSH (OP-3a; steps/run.py)."""
+    from apply import fingerprint  # noqa: PLC0415
+    from steps import remote, run as steps  # noqa: PLC0415
+
+    io = ctx.step_io or {"ssh": remote.run_ssh, "my_ip": steps.checkip}
+    try:
+        line = steps.run_step(ctx.env, ctx.backend, fleet, cmd.step, cmd.vm, run_id, ctx.fence(run_id),
+                              ssh=io["ssh"], my_ip=io["my_ip"], emit=print, repo=ctx.repo, fingerprint=fingerprint,
+                              close_fence=_tolerant(ctx, run_id))
+    except remote.StepRefused as e:
+        return f"refused: run {cmd.step}: {e}"
+    return f"run {cmd.step} {cmd.vm}: {line}"
 
 
 def _on_main_head(repo: str) -> bool:
@@ -516,14 +532,15 @@ COMMANDS = {"gate": cmd_gate, "refuse": cmd_refuse, "act": cmd_act, "reap": cmd_
             "pia-fence": cmd_pia_fence, "pia-release": cmd_pia_release}
 
 
-def main(argv=None, env=None, backend=None, store=None, transport=None, clock=None, sleep=None, repo=".") -> int:
+def main(argv=None, env=None, backend=None, store=None, transport=None, clock=None, sleep=None, repo=".",
+         step_io=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     env = dict(os.environ) if env is None else env
     if len(argv) != 1 or argv[0] not in COMMANDS:
         print("usage: fleet.py " + "|".join(COMMANDS), file=sys.stderr)
         return 2
     try:
-        return COMMANDS[argv[0]](Ctx(env, backend, store, transport, clock, sleep, repo))
+        return COMMANDS[argv[0]](Ctx(env, backend, store, transport, clock, sleep, repo, step_io))
     except SystemExit:
         raise
     except Exception as e:  # noqa: BLE001 - a traceback could carry private values

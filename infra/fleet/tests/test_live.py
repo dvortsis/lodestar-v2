@@ -124,7 +124,7 @@ class FakeLinodeAPI:
 
 def keygen_fake(n=[0]):
     n[0] += 1
-    blob = base64.b64encode(b"\x00\x00\x00\x0bssh-ed25519" + bytes([n[0]]) * 32).decode()
+    blob = base64.b64encode(b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20" + bytes([n[0]]) * 32).decode()
     return f"-----BEGIN OPENSSH PRIVATE KEY-----\nPRIVATEHOSTKEY{n[0]}\n-----END OPENSSH PRIVATE KEY-----\n", f"ssh-ed25519 {blob}"
 
 
@@ -155,6 +155,7 @@ class FakeTerraform:
 
 
 ENV = {"STATE_BUCKET": "state-b", "EVIDENCE_BUCKET": "evidence-b", "CONTROL_BUCKET": "control-b",
+       "FLEET_BUCKET_OWNER": "111122223333",
        "OWNER_ADMIN_CIDR": ADMIN, "FLEET_SSH_PUBLIC_KEY": "ssh-ed25519 AAAAfleet", "OWNER_SSH_PUBLIC_KEY": "ssh-ed25519 AAAAowner",
        "FLEET_LINODE_ACCOUNT_EUUID": "EUUID-FLEET", "GITHUB_TOKEN": "gh", "GITHUB_REPOSITORY": "o/r"}
 
@@ -486,6 +487,50 @@ class Backend(unittest.TestCase):
         self.assertEqual(apply.missing_live_env(dict(ENV, **oidc)), [])
         self.assertEqual(apply.missing_live_env(ENV), sorted(oidc))  # id-token: write and the role ARN are required
         self.assertIn("OWNER_SSH_PUBLIC_KEY", apply.missing_live_env(dict(ENV, OWNER_SSH_PUBLIC_KEY=" ")))
+
+
+class OwnedBuckets(unittest.TestCase):
+    """P8: every cloud-fleet S3 call passes ExpectedBucketOwner."""
+
+    def test_every_call_names_the_owner(self):
+        calls = []
+
+        class Client:
+            def __getattr__(self, name):
+                return lambda **kw: calls.append((name, kw)) or {"Body": io.BytesIO(b"{}"), "ETag": '"1"'}
+        s3 = apply.OwnedS3(Client(), "111122223333")
+        s3.get_object(Bucket="b", Key="k")
+        s3.put_object(Bucket="b", Key="k", Body=b"x", IfNoneMatch="*")
+        s3.delete_object(Bucket="b", Key="k", IfMatch='"1"')
+        self.assertEqual([n for n, _ in calls], ["get_object", "put_object", "delete_object"])
+        self.assertTrue(all(kw["ExpectedBucketOwner"] == "111122223333" for _, kw in calls))
+        with self.assertRaises(AttributeError):  # nothing else is reachable through it
+            s3.list_objects_v2(Bucket="b")
+
+    def test_the_owner_must_be_an_account_id(self):
+        for bad in ("", "11112222333", "1111222233334", "11112222333x", " 111122223333", "١١١١٢٢٢٢٣٣٣٣"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                apply.OwnedS3(object(), bad)
+
+    def test_the_backend_and_evidence_go_through_it(self):
+        calls = []
+
+        class Client:
+            def get_object(self, **kw):
+                calls.append(kw)
+                raise S3Error("NoSuchKey")
+
+            def put_object(self, **kw):
+                calls.append(kw)
+        b, *_ = backend(s3=apply.OwnedS3(Client(), "111122223333"))
+        b.set_mismatch(["x"])
+        b.mismatch_state()
+        apply.Evidence(b.s3, "evidence-b", "1-1").put("init", "text")
+        self.assertTrue(calls)
+        self.assertTrue(all(kw.get("ExpectedBucketOwner") == "111122223333" for kw in calls))
+
+    def test_live_settings_include_the_owner(self):
+        self.assertIn("FLEET_BUCKET_OWNER", apply.missing_live_env({}))
 
 
 class FailClosed(unittest.TestCase):
@@ -996,8 +1041,8 @@ class LiveFlows(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("up screen: create main, worker", out)
         self.assertIn("`fleet.yml` (live)", out)
-        _, out = self.run_cli("act", "/fleet run leak-test main", b)
-        self.assertIn("step not built (OP-3)", out)
+        _, out = self.run_cli("act", "/fleet run arm-switch main", b)
+        self.assertIn("step not built yet (OP-3b)", out)
         _, out = self.run_cli("act", "/fleet down", b)
         self.assertIn("down: destroy the fleet", out)
         self.assertIsNone(s3.doc("state-b", FLEET_KEY)["fleet"])

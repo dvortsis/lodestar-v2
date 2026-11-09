@@ -131,10 +131,12 @@ jobs:
           STATE_BUCKET: ${{ secrets.STATE_BUCKET }}
           EVIDENCE_BUCKET: ${{ secrets.EVIDENCE_BUCKET }}
           CONTROL_BUCKET: ${{ secrets.CONTROL_BUCKET }}
+          FLEET_BUCKET_OWNER: ${{ secrets.FLEET_BUCKET_OWNER }}
           OWNER_ADMIN_CIDR: ${{ secrets.OWNER_ADMIN_CIDR }}
           FLEET_LINODE_ACCOUNT_EUUID: ${{ secrets.FLEET_LINODE_ACCOUNT_EUUID }}
           FLEET_SSH_PUBLIC_KEY: ${{ vars.FLEET_SSH_PUBLIC_KEY }}
           OWNER_SSH_PUBLIC_KEY: ${{ vars.OWNER_SSH_PUBLIC_KEY }}
+          FLEET_SSH_KEY: ${{ secrets.FLEET_SSH_KEY }} # live `run <step>` over SSH (OP-3a)
         run: python3 infra/fleet/fleet.py act
 
   # PIA delivery (OP-2b; plan §3-§4). After a successful `up` or
@@ -186,6 +188,7 @@ jobs:
           STATE_BUCKET: ${{ secrets.STATE_BUCKET }}
           EVIDENCE_BUCKET: ${{ secrets.EVIDENCE_BUCKET }}
           CONTROL_BUCKET: ${{ secrets.CONTROL_BUCKET }}
+          FLEET_BUCKET_OWNER: ${{ secrets.FLEET_BUCKET_OWNER }}
           OWNER_ADMIN_CIDR: ${{ secrets.OWNER_ADMIN_CIDR }}
           FLEET_LINODE_ACCOUNT_EUUID: ${{ secrets.FLEET_LINODE_ACCOUNT_EUUID }}
           FLEET_SSH_PUBLIC_KEY: ${{ vars.FLEET_SSH_PUBLIC_KEY }}
@@ -272,6 +275,7 @@ jobs:
           STATE_BUCKET: ${{ secrets.STATE_BUCKET }}
           EVIDENCE_BUCKET: ${{ secrets.EVIDENCE_BUCKET }}
           CONTROL_BUCKET: ${{ secrets.CONTROL_BUCKET }}
+          FLEET_BUCKET_OWNER: ${{ secrets.FLEET_BUCKET_OWNER }}
           OWNER_ADMIN_CIDR: ${{ secrets.OWNER_ADMIN_CIDR }}
           FLEET_LINODE_ACCOUNT_EUUID: ${{ secrets.FLEET_LINODE_ACCOUNT_EUUID }}
           FLEET_SSH_PUBLIC_KEY: ${{ vars.FLEET_SSH_PUBLIC_KEY }}
@@ -313,6 +317,7 @@ jobs:
           STATE_BUCKET: ${{ secrets.STATE_BUCKET }}
           EVIDENCE_BUCKET: ${{ secrets.EVIDENCE_BUCKET }}
           CONTROL_BUCKET: ${{ secrets.CONTROL_BUCKET }}
+          FLEET_BUCKET_OWNER: ${{ secrets.FLEET_BUCKET_OWNER }}
           OWNER_ADMIN_CIDR: ${{ secrets.OWNER_ADMIN_CIDR }}
           FLEET_LINODE_ACCOUNT_EUUID: ${{ secrets.FLEET_LINODE_ACCOUNT_EUUID }}
           FLEET_SSH_PUBLIC_KEY: ${{ vars.FLEET_SSH_PUBLIC_KEY }}
@@ -355,6 +360,7 @@ jobs:
           STATE_BUCKET: ${{ secrets.STATE_BUCKET }}
           EVIDENCE_BUCKET: ${{ secrets.EVIDENCE_BUCKET }}
           CONTROL_BUCKET: ${{ secrets.CONTROL_BUCKET }}
+          FLEET_BUCKET_OWNER: ${{ secrets.FLEET_BUCKET_OWNER }}
           OWNER_ADMIN_CIDR: ${{ secrets.OWNER_ADMIN_CIDR }}
           FLEET_LINODE_ACCOUNT_EUUID: ${{ secrets.FLEET_LINODE_ACCOUNT_EUUID }}
           FLEET_SSH_PUBLIC_KEY: ${{ vars.FLEET_SSH_PUBLIC_KEY }}

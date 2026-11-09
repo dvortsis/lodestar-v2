@@ -58,6 +58,29 @@ def s3_code(e: Exception) -> str:
     return str(getattr(e, "response", {}).get("Error", {}).get("Code", ""))
 
 
+class OwnedS3:
+    """The S3 client every cloud-fleet call goes through (P8, #650's review): each
+    call passes ExpectedBucketOwner, so a bucket name re-registered in another
+    account can't receive the lock, fleet.json, the flag, the ledger or evidence.
+    Only the three calls the control plane uses exist on it."""
+
+    CALLS = ("get_object", "put_object", "delete_object")
+
+    def __init__(self, client, owner: str):
+        if not (isinstance(owner, str) and len(owner) == 12 and owner.isascii() and owner.isdigit()):
+            raise ValueError("the bucket owner must be a 12-digit account ID")
+        self._client, self._owner = client, owner
+
+    def __getattr__(self, name):
+        if name not in OwnedS3.CALLS:
+            raise AttributeError(name)
+        call = getattr(self._client, name)
+
+        def owned(**kw):
+            return call(ExpectedBucketOwner=self._owner, **kw)
+        return owned
+
+
 class Evidence:
     """Writes job output to the private evidence bucket only."""
 
@@ -456,7 +479,7 @@ def known_hosts(fleet: dict) -> str:
                    if s.get("address") and s.get("host_key"))
 
 
-LIVE_ENV = ("AWS_FLEET_ROLE_ARN", "STATE_BUCKET", "EVIDENCE_BUCKET", "CONTROL_BUCKET", "OWNER_ADMIN_CIDR",
+LIVE_ENV = ("AWS_FLEET_ROLE_ARN", "STATE_BUCKET", "EVIDENCE_BUCKET", "CONTROL_BUCKET", "FLEET_BUCKET_OWNER", "OWNER_ADMIN_CIDR",
             "FLEET_SSH_PUBLIC_KEY", "OWNER_SSH_PUBLIC_KEY", "FLEET_LINODE_ACCOUNT_EUUID", "GITHUB_TOKEN",
             "GITHUB_REPOSITORY", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN")
 
@@ -536,7 +559,10 @@ def live_context(env: dict, limits: dict, clock, run_id: str):  # pragma: no cov
     from lock import S3Store  # noqa: PLC0415
 
     session, keys = oidc_session(env, run_id)  # boto3: installed only when FLEET_LIVE=true
-    s3 = session.client("s3", config=aws_config())
+    try:
+        s3 = OwnedS3(session.client("s3", config=aws_config()), env["FLEET_BUCKET_OWNER"].strip())
+    except ValueError:
+        raise SystemExit("fleet: FLEET_BUCKET_OWNER isn't a 12-digit account ID") from None
     try:
         secret = session.client("secretsmanager", config=aws_config()).get_secret_value(SecretId=LINODE_SECRET)
         token = linode_token(secret["SecretString"])
