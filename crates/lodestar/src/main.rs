@@ -50,6 +50,12 @@ use crate::services::{BoxError, Services};
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() -> ExitCode {
+    // A copy started by Restart now that fails waits for Enter on its
+    // console, so its window doesn't close unread (X-win-restart-followups-2).
+    system::restart::hold_if_relaunch_failed(run())
+}
+
+fn run() -> ExitCode {
     // Started as the companion launcher (CMP-4b): apply the limits and
     // exec the companion before anything reads arguments, config or
     // logging. Returns only on failure. Linux only.

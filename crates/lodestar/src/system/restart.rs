@@ -68,6 +68,10 @@ pub struct Restart {
     /// The step has run for the coming request ([`Restart::prepare`]), so
     /// [`Restart::request`] doesn't run it again.
     prepared: AtomicBool,
+    /// This process is a copy started by Restart now, as its environment
+    /// said when this was made (early in start: the Windows hook's
+    /// `set_prepare`), so a later change can't hide it.
+    relaunched: bool,
 }
 
 impl std::fmt::Debug for Restart {
@@ -104,7 +108,15 @@ impl Restart {
             paused: Mutex::new(None),
             prepare: Mutex::new(None),
             prepared: AtomicBool::new(false),
+            relaunched: relaunched_here(),
         }
+    }
+
+    /// This process is a copy started by Restart now (the portable build's
+    /// relaunch), as recorded when it started.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn relaunched(&self) -> bool {
+        self.relaunched
     }
 
     /// Not offered until Unix time `until`, with `why` as the hint
@@ -338,6 +350,19 @@ impl Restart {
     }
 }
 
+/// Whether this process was started by Restart now: its environment holds
+/// the relaunch token. Off Windows there's no relaunch.
+fn relaunched_here() -> bool {
+    #[cfg(windows)]
+    {
+        std::env::var_os(crate::windows::relaunch::MARKER).is_some()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 #[cfg(unix)]
 const METHOD: RestartMethod = RestartMethod::Reexec;
 /// The portable build; the service sets [`Restart::set_service`].
@@ -409,58 +434,71 @@ pub fn reexec() -> std::io::Error {
 #[cfg_attr(not(windows), allow(dead_code))]
 pub const EXIT_RELAUNCHED: i32 = 80;
 
-/// For `main`: a copy started by Restart now (the portable build's
-/// relaunch) that ends with `code` other than success, while a console is
-/// attached, prints where the error and the log are and waits for Enter on
-/// the console before the process exits. `Start Lodestar.cmd` has already
-/// ended after the hand-over (exit 80), so without this the window would
-/// close before anyone read why (#649's review). Anything else (a success,
-/// a run not started by Restart now, the service, which has no console)
-/// returns at once. `logs` is the log folder, if the config loaded.
-pub fn hold_if_relaunch_failed(
-    code: std::process::ExitCode,
-    logs: Option<&std::path::Path>,
-) -> std::process::ExitCode {
+/// For `main`, around everything it runs: a copy started by Restart now
+/// (the portable build's relaunch, [`Restart::relaunched`]) that ends with
+/// `code` other than success, while a console is attached, says where the
+/// error and the log are and waits for Enter on the console before the
+/// process exits. `Start Lodestar.cmd` has already ended after the
+/// hand-over (exit 80), so without this the window would close before
+/// anyone read why (#649's review). Anything else (a success, a run not
+/// started by Restart now, the service and any run with no console, where
+/// `CONIN$` doesn't open) returns at once.
+pub fn hold_if_relaunch_failed(code: std::process::ExitCode) -> std::process::ExitCode {
     #[cfg(windows)]
+    if Restart::global().relaunched()
+        && code != std::process::ExitCode::SUCCESS
+        && let Ok(console) = std::fs::File::open("CONIN$")
     {
-        let relaunched = std::env::var_os(crate::windows::relaunch::MARKER).is_some();
-        if should_hold(relaunched, code == std::process::ExitCode::SUCCESS) {
-            hold_on_console(logs);
-        }
+        let logs = log_folder();
+        let _ = hold(
+            true,
+            false,
+            logs.as_deref(),
+            Some(std::io::BufReader::new(console)),
+            &mut std::io::stderr(),
+        );
     }
-    #[cfg(not(windows))]
-    let _ = logs;
     code
 }
 
-/// Whether [`hold_if_relaunch_failed`] waits: only a relaunched copy that
-/// failed. (Whether a console is there is the console's to answer.)
-#[cfg_attr(not(windows), allow(dead_code))]
-fn should_hold(relaunched: bool, succeeded: bool) -> bool {
-    relaunched && !succeeded
+/// The log folder of the config this copy was started with (the same
+/// `--config`), for the message; `None` if it doesn't load.
+#[cfg(windows)]
+fn log_folder() -> Option<std::path::PathBuf> {
+    let path = crate::windows::service::service_command(std::env::args_os())?;
+    let config = crate::config::Config::load(path.as_deref(), |k| std::env::var(k).ok()).ok()?;
+    let logs = config.data_dir.join("logs");
+    Some(std::path::absolute(&logs).unwrap_or(logs))
 }
 
-/// Says where to look and waits for a line on `CONIN$`. No console (the
-/// service, a detached run) means `CONIN$` doesn't open: nothing waits.
-#[cfg(windows)]
-fn hold_on_console(logs: Option<&std::path::Path>) {
-    use std::io::{BufRead, Write};
-    let Ok(console) = std::fs::File::open("CONIN$") else {
-        return;
+/// [`hold_if_relaunch_failed`]'s decision and wait, with the console and
+/// the output passed in: only a relaunched copy that failed, with a
+/// console, prints the message and reads one line (an end of file or an
+/// error ends the wait at once). Returns whether it waited.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn hold(
+    relaunched: bool,
+    succeeded: bool,
+    logs: Option<&std::path::Path>,
+    console: Option<impl std::io::BufRead>,
+    out: &mut impl std::io::Write,
+) -> bool {
+    let Some(mut console) = console.filter(|_| relaunched && !succeeded) else {
+        return false;
     };
-    let mut err = std::io::stderr();
-    let _ = writeln!(err);
+    let _ = writeln!(out);
     let _ = writeln!(
-        err,
+        out,
         "Lodestar couldn't start again after Restart now. The error is above."
     );
     if let Some(logs) = logs {
-        let _ = writeln!(err, "The log is in {}.", logs.display());
+        let _ = writeln!(out, "The log is in {}.", logs.display());
     }
-    let _ = write!(err, "Press Enter to close this window.");
-    let _ = err.flush();
+    let _ = write!(out, "Press Enter to close this window.");
+    let _ = out.flush();
     let mut line = String::new();
-    let _ = std::io::BufReader::new(console).read_line(&mut line);
+    let _ = console.read_line(&mut line);
+    true
 }
 
 /// Elsewhere it can't ([`RestartMethod::Manual`]): the request is refused
@@ -660,16 +698,51 @@ mod tests {
         assert_eq!(gone, Path::new("/proc/self/exe"));
     }
 
-    /// #649's review: only a relaunched copy that failed waits on the
-    /// console; a success, or a run Restart now didn't start, never does.
+    /// #649's review: only a relaunched copy that failed, with a console,
+    /// says where to look and waits for one line; anything else returns at
+    /// once and prints nothing. Off Windows the wrapper is the identity.
     #[test]
     fn only_a_failed_relaunch_holds_the_window() {
-        assert!(should_hold(true, false));
-        assert!(!should_hold(true, true));
-        assert!(!should_hold(false, false));
-        assert!(!should_hold(false, true));
-        // Off Windows it's the identity, and never waits.
-        let code = hold_if_relaunch_failed(std::process::ExitCode::FAILURE, None);
+        use std::io::Cursor;
+        let logs = std::path::Path::new("D:/Lodestar/data/logs");
+        let mut out = Vec::new();
+        let console = Cursor::new(b"\nleft over".to_vec());
+        assert!(hold(true, false, Some(logs), Some(console), &mut out));
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.contains("couldn't start again after Restart now"),
+            "{text}"
+        );
+        assert!(
+            text.contains("The log is in D:/Lodestar/data/logs."),
+            "{text}"
+        );
+        assert!(
+            text.ends_with("Press Enter to close this window."),
+            "{text}"
+        );
+        // An end of file ends the wait at once.
+        assert!(hold(
+            true,
+            false,
+            None,
+            Some(Cursor::new(Vec::new())),
+            &mut Vec::new()
+        ));
+        for (relaunched, succeeded, console) in [
+            (true, true, true),
+            (false, false, true),
+            (false, true, true),
+            (true, false, false),
+        ] {
+            let mut out = Vec::new();
+            let console = console.then(|| Cursor::new(b"\n".to_vec()));
+            assert!(!hold(relaunched, succeeded, Some(logs), console, &mut out));
+            assert!(out.is_empty());
+        }
+        #[cfg(not(windows))]
+        assert!(!Restart::new(RestartMethod::Relaunch).relaunched());
+        let code = hold_if_relaunch_failed(std::process::ExitCode::FAILURE);
         assert_eq!(code, std::process::ExitCode::FAILURE);
     }
 
