@@ -19,11 +19,12 @@ Both use named IAM resources, so a deploy needs `CAPABILITY_NAMED_IAM`. Neither 
    - `ExistingOidcProviderArn`: as above, for this account. If it's the same account as step 1, give the provider step 1 created.
    - `PiaSecretArn`: the exact ARN of `lodestar/pia-vpn`, with its six-character suffix.
    - `StateBucketName`: step 1's `StateBucketName` output.
+   - `FleetAccountId`: the 12-digit ID of step 1's account. The `fleet.json` grant holds only for a bucket in that account. Type it into the console; never commit it.
 3. **Only if the two stacks are in different accounts:** update the `fleet-control` stack with `PiaDeliveryRoleArn` set to step 2's `PiaDeliveryRoleArn` output. That grants the role `s3:GetObject` on `fleet/fleet.json` alone.
-4. Put the token values into the two empty secrets in the console (owner setup steps 5 and 6.3), never in a parameter, file or chat. The stacks create those secrets, so don't create them by hand first: a secret that already has the name makes the deploy fail. If one exists already, delete it (or rename it) before deploying.
+4. Put the token values into the two empty secrets in the console (owner setup steps 5 and 6.3), never in a parameter, file or chat. The stacks create those secrets, so don't create them by hand first: a secret that already has the name makes the deploy fail. A deleted secret keeps its name for its 7–30-day recovery window, so if one exists already, delete it with `aws secretsmanager delete-secret --secret-id <name> --force-delete-without-recovery` before deploying.
 5. Copy the outputs into the GitHub environment secrets each output's description names.
 
-If `LodestarPiaDelivery` is ever deleted and recreated in another account, update the `fleet-control` stack again with its ARN: the bucket policy otherwise keeps pointing at the old role.
+If `LodestarPiaDelivery` is ever deleted and recreated, in either account, update the `fleet-control` stack again with its ARN (step 3): a bucket policy names a role by its internal ID, so it otherwise keeps pointing at the old role.
 
 ## Build and test
 The JSON is generated: edit `build_templates.py`, then run it. CI fails when the committed JSON differs from what the builder makes.

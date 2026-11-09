@@ -17,6 +17,11 @@
       "Type": "String",
       "AllowedPattern": "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$",
       "Description": "The fleet-control stack's StateBucketName output."
+    },
+    "FleetAccountId": {
+      "Type": "String",
+      "AllowedPattern": "^[0-9]{12}$",
+      "Description": "The account that owns the state bucket. The fleet.json grant holds only in that account, so a re-registered bucket name elsewhere can't feed deliver-pia."
     }
   },
   "Conditions": {
@@ -115,6 +120,13 @@
                         }
                       }
                     ]
+                  },
+                  "Condition": {
+                    "StringEquals": {
+                      "s3:ResourceAccount": {
+                        "Ref": "FleetAccountId"
+                      }
+                    }
                   }
                 }
               ]

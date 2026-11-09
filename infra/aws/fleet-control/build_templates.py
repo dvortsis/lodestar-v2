@@ -99,16 +99,19 @@ def deny_all(name: str) -> dict:
 
 
 def tls_only(bucket_logical: str, extra: list | None = None) -> dict:
-    statements = [{
-        "Sid": "DenyNonTls",
-        "Effect": "Deny",
-        "Principal": "*",
-        "Action": "s3:*",
-        "Resource": [{"Fn::GetAtt": [bucket_logical, "Arn"]}, {"Fn::Sub": "${" + bucket_logical + ".Arn}/*"}],
-        "Condition": {"Bool": {"aws:SecureTransport": "false"}},
-    }]
+    """Deny any request without TLS, or with TLS older than 1.2. Retained with
+    the bucket, so deleting the stack can't strip TLS-only from a kept bucket."""
+    both = [{"Fn::GetAtt": [bucket_logical, "Arn"]}, {"Fn::Sub": "${" + bucket_logical + ".Arn}/*"}]
+    statements = [
+        {"Sid": "DenyNonTls", "Effect": "Deny", "Principal": "*", "Action": "s3:*", "Resource": both,
+         "Condition": {"Bool": {"aws:SecureTransport": "false"}}},
+        {"Sid": "DenyTlsBelow12", "Effect": "Deny", "Principal": "*", "Action": "s3:*", "Resource": both,
+         "Condition": {"NumericLessThan": {"s3:TlsVersion": "1.2"}}},
+    ]
     return {
         "Type": "AWS::S3::BucketPolicy",
+        "DeletionPolicy": "Retain",
+        "UpdateReplacePolicy": "Retain",
         "Properties": {"Bucket": {"Ref": bucket_logical}, "PolicyDocument": policy(statements + (extra or []))},
     }
 
@@ -125,8 +128,8 @@ def bucket(versioned: bool, expire_days: int | None = None) -> dict:
     if versioned:
         props["VersioningConfiguration"] = {"Status": "Enabled"}
         rules.append({"Id": "ExpireOldVersions", "Status": "Enabled", "NoncurrentVersionExpiration": {"NoncurrentDays": 30}})
-        # Each .tflock and fleet.json delete leaves a marker; drop it once no
-        # older version remains.
+        # Each .tflock delete leaves a marker (fleet.json is tombstoned, never
+        # deleted); drop it once no older version remains.
         rules.append({"Id": "DropDeleteMarkers", "Status": "Enabled", "ExpiredObjectDeleteMarker": True})
     if expire_days:
         rules.append({"Id": "Expire", "Status": "Enabled", "ExpirationInDays": expire_days})
@@ -276,6 +279,11 @@ def pia_delivery() -> dict:
                 "AllowedPattern": "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$",
                 "Description": "The fleet-control stack's StateBucketName output.",
             },
+            "FleetAccountId": {
+                "Type": "String",
+                "AllowedPattern": "^[0-9]{12}$",
+                "Description": "The account that owns the state bucket. The fleet.json grant holds only in that account, so a re-registered bucket name elsewhere can't feed deliver-pia.",
+            },
         },
         "Conditions": OIDC_CONDITION,
         "Resources": {
@@ -297,7 +305,8 @@ def pia_delivery() -> dict:
                     {"Sid": "TwoNamedSecrets", "Effect": "Allow", "Action": "secretsmanager:GetSecretValue",
                      "Resource": [{"Ref": "PiaSecretArn"}, {"Ref": "AkamaiFirewallToken"}]},
                     {"Sid": "FleetJsonOnly", "Effect": "Allow", "Action": "s3:GetObject",
-                     "Resource": obj({"Ref": "StateBucketName"}, FLEET_JSON_KEY)},
+                     "Resource": obj({"Ref": "StateBucketName"}, FLEET_JSON_KEY),
+                     "Condition": {"StringEquals": {"s3:ResourceAccount": {"Ref": "FleetAccountId"}}}},
                 ],
             ),
             "LodestarPiaDenyAll": deny_all("LodestarPiaDenyAll"),

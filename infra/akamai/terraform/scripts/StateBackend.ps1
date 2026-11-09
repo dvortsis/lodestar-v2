@@ -17,11 +17,23 @@ function Get-StateBackendArgs {
     $key = 'terraform/lodestar.tfstate'  # the same key fleet.yml uses (OP-2a)
     $bucket = $env:LODESTAR_TF_STATE_BUCKET
     $region = $env:LODESTAR_TF_STATE_REGION
-    if ([string]::IsNullOrWhiteSpace($bucket) -or $bucket -cnotmatch '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$') {
+    if ([string]::IsNullOrWhiteSpace($bucket) -or $bucket -cnotmatch '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]\z') {
         throw 'Set LODESTAR_TF_STATE_BUCKET to the fleet state bucket (the fleet-control stack''s StateBucketName output). Terraform never falls back to local state. Nothing was run.'
     }
-    if ([string]::IsNullOrWhiteSpace($region) -or $region -cnotmatch '^[a-z]{2}(-[a-z]+)+-[0-9]$') {
+    if ([string]::IsNullOrWhiteSpace($region) -or $region -cnotmatch '^[a-z]{2}(-[a-z]+)+-[0-9]\z') {
         throw 'Set LODESTAR_TF_STATE_REGION to the state bucket''s AWS region, for example us-east-1. Nothing was run.'
     }
     return @("-backend-config=bucket=$bucket", "-backend-config=key=$key", "-backend-config=region=$region")
+}
+
+function Get-FleetStateSummary {
+    <# Classifies `terraform state list` for Lodestar-Fleet.ps1 status: 'managed',
+       'idle' (it ran and listed nothing) or 'unavailable' (it failed: no init, no
+       credentials, no bucket). Only a successful, empty listing means idle; a
+       failure is never reported as an idle fleet. Pure: it only reads its arguments. #>
+    param([int]$ExitCode, $Output)
+    if ($ExitCode -ne 0) { return 'unavailable' }
+    $lines = @($Output | ForEach-Object { [string]$_ } | Where-Object { $_.Trim() -ne '' })
+    if ($lines.Count -eq 0) { return 'idle' }
+    return 'managed'
 }

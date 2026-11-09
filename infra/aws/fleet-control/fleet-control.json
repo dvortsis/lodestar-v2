@@ -106,6 +106,8 @@
     },
     "StateBucketPolicy": {
       "Type": "AWS::S3::BucketPolicy",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
       "Properties": {
         "Bucket": {
           "Ref": "StateBucket"
@@ -132,6 +134,28 @@
               "Condition": {
                 "Bool": {
                   "aws:SecureTransport": "false"
+                }
+              }
+            },
+            {
+              "Sid": "DenyTlsBelow12",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "StateBucket",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Sub": "${StateBucket.Arn}/*"
+                }
+              ],
+              "Condition": {
+                "NumericLessThan": {
+                  "s3:TlsVersion": "1.2"
                 }
               }
             },
@@ -208,6 +232,8 @@
     },
     "EvidenceBucketPolicy": {
       "Type": "AWS::S3::BucketPolicy",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
       "Properties": {
         "Bucket": {
           "Ref": "EvidenceBucket"
@@ -234,6 +260,28 @@
               "Condition": {
                 "Bool": {
                   "aws:SecureTransport": "false"
+                }
+              }
+            },
+            {
+              "Sid": "DenyTlsBelow12",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "EvidenceBucket",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Sub": "${EvidenceBucket.Arn}/*"
+                }
+              ],
+              "Condition": {
+                "NumericLessThan": {
+                  "s3:TlsVersion": "1.2"
                 }
               }
             }
@@ -284,6 +332,8 @@
     },
     "ControlBucketPolicy": {
       "Type": "AWS::S3::BucketPolicy",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
       "Properties": {
         "Bucket": {
           "Ref": "ControlBucket"
@@ -310,6 +360,28 @@
               "Condition": {
                 "Bool": {
                   "aws:SecureTransport": "false"
+                }
+              }
+            },
+            {
+              "Sid": "DenyTlsBelow12",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "ControlBucket",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Sub": "${ControlBucket.Arn}/*"
+                }
+              ],
+              "Condition": {
+                "NumericLessThan": {
+                  "s3:TlsVersion": "1.2"
                 }
               }
             }

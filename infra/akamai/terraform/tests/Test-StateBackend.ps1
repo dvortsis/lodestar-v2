@@ -60,6 +60,23 @@ try {
     } else {
         Write-Host 'ok   valid values give the three -backend-config arguments with the fixed key'
     }
+    # Lodestar-Fleet.ps1 status: a failed state read is never an idle fleet.
+    $cases = @(
+        @{ Name = 'state list failed';            Exit = 1; Out = @('Error: Backend initialization required'); Want = 'unavailable' }
+        @{ Name = 'state list failed, no output'; Exit = 1; Out = @();                                          Want = 'unavailable' }
+        @{ Name = 'state list empty';             Exit = 0; Out = @();                                          Want = 'idle' }
+        @{ Name = 'state list blank lines';       Exit = 0; Out = @('', '  ');                                  Want = 'idle' }
+        @{ Name = 'state list resources';         Exit = 0; Out = @('linode_instance.main');                   Want = 'managed' }
+    )
+    foreach ($c in $cases) {
+        $got = Get-FleetStateSummary -ExitCode $c.Exit -Output $c.Out
+        if ($got -ne $c.Want) {
+            Write-Host "FAIL $($c.Name) : got $got, want $($c.Want)"
+            $script:failures++
+        } else {
+            Write-Host "ok   $($c.Name)"
+        }
+    }
 } finally {
     Set-StateVars $savedBucket $savedRegion
 }

@@ -177,6 +177,10 @@ class LeastPrivilege(unittest.TestCase):
         self.assertEqual(secrets["Action"], "secretsmanager:GetSecretValue")
         self.assertEqual(secrets["Resource"], [{"Ref": "PiaSecretArn"}, {"Ref": "AkamaiFirewallToken"}])
         self.assertEqual(granted("LodestarPiaDelivery"), {("StateBucketName", "fleet/fleet.json"): {"s3:GetObject"}})
+        # Only in the fleet's account: a re-registered bucket name elsewhere can't feed deliver-pia.
+        self.assertEqual(fleet_json["Condition"], {"StringEquals": {"s3:ResourceAccount": {"Ref": "FleetAccountId"}}})
+        self.assertEqual(PIA["Parameters"]["FleetAccountId"]["AllowedPattern"], "^[0-9]{12}$")
+        self.assertNotIn("Default", PIA["Parameters"]["FleetAccountId"])
         pat = re.compile(PIA["Parameters"]["PiaSecretArn"]["AllowedPattern"])
         fake = "arn:aws:secretsmanager:us-east-1:000000000000:secret:"  # a placeholder account
         self.assertTrue(pat.fullmatch(fake + "lodestar/pia-vpn-AbC123"))
@@ -204,7 +208,7 @@ class LeastPrivilege(unittest.TestCase):
         self.assertEqual(self.lists("LodestarPiaDelivery"), {})
 
     def test_cross_account_grant_is_one_object_and_conditional(self):
-        stmt = FC["Resources"]["StateBucketPolicy"]["Properties"]["PolicyDocument"]["Statement"][1]
+        stmt = FC["Resources"]["StateBucketPolicy"]["Properties"]["PolicyDocument"]["Statement"][2]
         cond, grant, none = stmt["Fn::If"]
         self.assertEqual((cond, none), ("GrantPiaDelivery", {"Ref": "AWS::NoValue"}))
         self.assertEqual(grant["Principal"], {"AWS": {"Ref": "PiaDeliveryRoleArn"}})
@@ -232,8 +236,13 @@ class Buckets(unittest.TestCase):
                 self.assertEqual((tls["Sid"], tls["Effect"], tls["Principal"], tls["Action"]), ("DenyNonTls", "Deny", "*", "s3:*"))
                 self.assertEqual(tls["Condition"], {"Bool": {"aws:SecureTransport": "false"}})
                 self.assertEqual(tls["Resource"], [{"Fn::GetAtt": [name, "Arn"]}, {"Fn::Sub": "${" + name + ".Arn}/*"}])
+                floor = stmts[1]
+                self.assertEqual((floor["Sid"], floor["Effect"], floor["Principal"], floor["Action"]), ("DenyTlsBelow12", "Deny", "*", "s3:*"))
+                self.assertEqual(floor["Condition"], {"NumericLessThan": {"s3:TlsVersion": "1.2"}})
+                self.assertEqual(floor["Resource"], tls["Resource"])
+                self.assertEqual(policies[name]["DeletionPolicy"], "Retain")
                 # Nothing else, except the state bucket's one conditional grant.
-                self.assertEqual(len(stmts), 2 if name == "StateBucket" else 1)
+                self.assertEqual(len(stmts), 3 if name == "StateBucket" else 2)
                 for s in stmts:
                     inner = s["Fn::If"][1] if "Fn::If" in s else s
                     if inner["Effect"] == "Allow":
@@ -271,6 +280,15 @@ class NoPrivateLiterals(unittest.TestCase):
                         self.fail("a parameter with a literal default")
 
 
+def ps_code(text: str) -> str:
+    """PowerShell without block or full-line comments, and with string literals
+    emptied, so only code is scanned (a message mentioning terraform is fine)."""
+    code = re.sub(r"<#.*?#>", "", text, flags=re.S)
+    code = "\n".join(ln for ln in code.splitlines() if not ln.lstrip().startswith("#"))
+    # One left-to-right pass, so an apostrophe inside "..." can't pair wrongly.
+    return re.sub(r"'(?:[^']|'')*'|\"(?:[^\"`]|`.)*\"", "''", code)
+
+
 class Terraform(unittest.TestCase):
     TF = ROOT / "infra" / "akamai" / "terraform"
 
@@ -289,14 +307,14 @@ class Terraform(unittest.TestCase):
         self.assertIn(f"$key = '{bt.TF_STATE_KEY}'", helper)  # the key fleet.yml's role is granted
         self.assertIn("LODESTAR_TF_STATE_BUCKET", helper)
         self.assertIn("LODESTAR_TF_STATE_REGION", helper)
-        initing = [p for p in scripts.glob("*.ps1") if re.search(r"&\s*terraform\s+init\b", p.read_text(encoding="utf-8"))]
+        initing = [p for p in scripts.glob("*.ps1") if re.search(r"\bterraform\s+init\b", ps_code(p.read_text(encoding="utf-8")))]
         self.assertEqual({p.name for p in initing}, {"Deploy.ps1", "Destroy.ps1", "Preflight.ps1"})
         for p in initing:
             text = p.read_text(encoding="utf-8")
             with self.subTest(script=p.name):
                 self.assertIn(". (Join-Path $PSScriptRoot 'StateBackend.ps1')", text)
                 self.assertIn("$backend = Get-StateBackendArgs", text)
-                for line in re.findall(r".*&\s*terraform\s+init\b.*", text):
+                for line in re.findall(r".*\bterraform\s+init\b.*", ps_code(text)):
                     self.assertIn("@backend", line)
                     self.assertNotIn("-backend=false", line)
 
@@ -305,11 +323,10 @@ class Terraform(unittest.TestCase):
         # runner's rule is that nothing run in CI can reach a cloud.
         for name in ("scripts/StateBackend.ps1", "tests/Test-StateBackend.ps1"):
             text = (self.TF / name).read_text(encoding="utf-8")
-            code = re.sub(r"<#.*?#>", "", text, flags=re.S)
-            code = "\n".join(ln for ln in code.splitlines() if not ln.lstrip().startswith("#"))
+            code = ps_code(text)
             with self.subTest(file=name):
-                for banned in (r"&\s*terraform", r"(?-i:\baws\s+[a-z0-9-]+)", r"Invoke-(RestMethod|WebRequest|Expression)", r"Start-Process",
-                               r"New-Object\s+System\.Net", r"\[System\.Net\.", r"curl|wget|iwr|irm\b"):
+                for banned in (r"\bterraform\b", r"(?-i:\baws\s+[a-z0-9-]+)", r"Invoke-(RestMethod|WebRequest|Expression)", r"Start-Process",
+                               r"New-Object\s+System\.Net", r"\[System\.Net\.", r"\b(curl|wget|iwr|irm|iex)\b"):
                     self.assertIsNone(re.search(banned, code, re.I), banned)
 
     def test_required_version_has_native_s3_locking(self):
