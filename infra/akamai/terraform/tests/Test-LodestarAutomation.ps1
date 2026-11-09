@@ -174,6 +174,22 @@ Run-Test "IAM Security: lodestar-agent is explicitly DENIED sts:AssumeRole on Lo
     }
 }
 
+Run-Test "IAM Security: lodestar-agent is explicitly DENIED sts:AssumeRole on LodestarPiaSecretReader" {
+    $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try {
+        $expectedAccountId = $env:LODESTAR_AWS_ACCOUNT_ID
+        if ($expectedAccountId -cnotmatch '^[0-9]{12}$') { throw 'Set LODESTAR_AWS_ACCOUNT_ID to the approved AWS account ID before IAM testing.' }
+        $res = (& $awsCli sts assume-role --role-arn "arn:aws:iam::${expectedAccountId}:role/LodestarPiaSecretReader" --role-session-name test-pia-deny-check --profile lodestar-agent 2>&1) -join "`n"
+    } finally { $ErrorActionPreference = $eap }
+    if ($LASTEXITCODE -eq 0) {
+        $res = $null  # holds live LodestarPiaSecretReader credentials; never print it
+        throw "Security failure: lodestar-agent was able to assume LodestarPiaSecretReader. Revoke the session and fix the IAM trust policy."
+    }
+    if ($res -notmatch "AccessDenied") {
+        throw "Security failure: lodestar-agent was not denied assume-role for LodestarPiaSecretReader ($res)"
+    }
+}
+
 Run-Test "IAM Security: lodestar-agent CAN assume LodestarObserver" {
     $expectedAccountId = $env:LODESTAR_AWS_ACCOUNT_ID
     if ($expectedAccountId -cnotmatch '^[0-9]{12}$') { throw 'Set LODESTAR_AWS_ACCOUNT_ID to the approved AWS account ID before IAM testing.' }

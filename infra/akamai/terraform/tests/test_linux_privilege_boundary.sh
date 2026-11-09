@@ -191,9 +191,9 @@ m = re.search(r'- path: /usr/local/sbin/lodestar-vpn-helper\s+owner: root:root\s
 if not m:
     raise SystemExit('Failed to extract helper from cloud-init template')
 content = m.group(1)
-# Unindent 6 spaces and unescape \$\$
+# Unindent 6 spaces and unescape Terraform \$\${ interpolation (preserving bash \$\$)
 lines = [line[6:] if line.startswith('      ') else line for line in content.splitlines()]
-code = '\n'.join(lines).replace('\$\$', '$')
+code = '\n'.join(lines).replace('\$\${', '\${')
 Path('$HELPER_BIN').write_text(code + '\n')
 "
 chmod 0750 "$HELPER_BIN"
@@ -310,12 +310,13 @@ if command -v ip >/dev/null 2>&1 && command -v iptables >/dev/null 2>&1; then
   # Default route points via wg0
   ip -n "$TEST_NETNS" route add default dev wg0
 
-  # Configure compliant Gluetun v3.40.0 firewall policy in the namespace
+  # Configure compliant Gluetun v3.40.0 firewall policy in the namespace (including Docker bridge subnet rule)
   ip netns exec "$TEST_NETNS" iptables -P OUTPUT DROP
   ip netns exec "$TEST_NETNS" iptables -A OUTPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
   ip netns exec "$TEST_NETNS" iptables -A OUTPUT -o lo -j ACCEPT
   ip netns exec "$TEST_NETNS" iptables -A OUTPUT -o wg0 -j ACCEPT
-  ip netns exec "$TEST_NETNS" iptables -A OUTPUT -d 212.56.54.190/32 -p udp -m udp --dport 1337 -j ACCEPT
+  ip netns exec "$TEST_NETNS" iptables -A OUTPUT -d 212.56.54.190/32 -o eth0 -p udp -m udp --dport 1337 -j ACCEPT
+  ip netns exec "$TEST_NETNS" iptables -A OUTPUT -s 172.18.0.2/32 -d 172.18.0.0/16 -o eth0 -j ACCEPT
 
   # Verify IPv6 is disabled in namespace
   ip netns exec "$TEST_NETNS" sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null 2>&1 || true
@@ -340,61 +341,64 @@ except Exception as e:
   fi
   echo "PASS: Physical interface egress was successfully dropped by kernel iptables ($drop_verified)."
 
-  # 7b: Adversarial test - broad physical interface ACCEPT rule (-A OUTPUT -o eth0 -j ACCEPT)
-  base_rules=$(ip netns exec "$TEST_NETNS" iptables -S OUTPUT)
-  adv_broad_rules=$(printf "%s\n-A OUTPUT -o eth0 -j ACCEPT" "$base_rules")
+  # Prepare a mock docker wrapper that executes container commands directly inside $TEST_NETNS
+  MOCK_BIN_DIR="$BACKUP_DIR/mock_bin"
+  mkdir -p "$MOCK_BIN_DIR"
+  cat > "$MOCK_BIN_DIR/docker" <<MOCK_DOCKER
+#!/usr/bin/env bash
+if [[ "\$1" == "exec" && "\$2" == "gluetun" ]]; then
+  shift 2
+  exec ip netns exec "$TEST_NETNS" "\$@"
+fi
+exit 1
+MOCK_DOCKER
+  chmod 0755 "$MOCK_BIN_DIR/docker"
 
-  adv_check=$(python3 -c "
-rules = '''$adv_broad_rules'''.strip().splitlines()
-vpn_server_ip = '212.56.54.190'
-for r in rules:
-    r = r.strip()
-    if not r or r == '-P OUTPUT DROP':
-        continue
-    if '-j ACCEPT' in r:
-        if '-o lo' in r or '-o wg0' in r:
-            continue
-        if 'conntrack' in r and 'RELATED,ESTABLISHED' in r:
-            continue
-        if vpn_server_ip and f'-d {vpn_server_ip}' in r:
-            continue
-        print(f'REJECTED_UNAUTHORIZED_RULE: {r}')
-        exit(1)
-exit(0)
-" 2>&1 || true)
-
-  if ! echo "$adv_check" | grep -q "REJECTED_UNAUTHORIZED_RULE: -A OUTPUT -o eth0 -j ACCEPT"; then
-    echo "FAIL: Adversarial broad eth0 ACCEPT rule was NOT rejected!" >&2
+  # Write a valid wg0.conf via the actual helper write-config command
+  valid_wg0="$(python3 -c '
+import base64, os
+k1 = base64.b64encode(os.urandom(32)).decode()
+k2 = base64.b64encode(os.urandom(32)).decode()
+print(f"[Interface]\nAddress = 10.0.0.2/32\nPrivateKey = {k1}\nDNS = 10.0.0.242\n\n[Peer]\nPublicKey = {k2}\nEndpoint = 212.56.54.190:1337\nAllowedIPs = 0.0.0.0/0\nPersistentKeepalive = 25")
+')"
+  write_out="$(printf "%s\n" "$valid_wg0" | "$HELPER_BIN" write-config 2>&1)"
+  if ! echo "$write_out" | grep -q "CONFIG_OK"; then
+    echo "FAIL: Helper write-config rejected valid wg0.conf: $write_out" >&2
     exit 1
   fi
-  echo "PASS: Adversarial broad eth0 ACCEPT rule was correctly rejected."
 
-  # 7c: Adversarial test - arbitrary protocol ACCEPT rule (-A OUTPUT -o eth0 -p tcp -j ACCEPT)
-  adv_proto_rules=$(printf "%s\n-A OUTPUT -o eth0 -p tcp -j ACCEPT" "$base_rules")
-  adv_proto_check=$(python3 -c "
-rules = '''$adv_proto_rules'''.strip().splitlines()
-vpn_server_ip = '212.56.54.190'
-for r in rules:
-    r = r.strip()
-    if not r or r == '-P OUTPUT DROP':
-        continue
-    if '-j ACCEPT' in r:
-        if '-o lo' in r or '-o wg0' in r:
-            continue
-        if 'conntrack' in r and 'RELATED,ESTABLISHED' in r:
-            continue
-        if vpn_server_ip and f'-d {vpn_server_ip}' in r:
-            continue
-        print(f'REJECTED_UNAUTHORIZED_RULE: {r}')
-        exit(1)
-exit(0)
-" 2>&1 || true)
-
-  if ! echo "$adv_proto_check" | grep -q "REJECTED_UNAUTHORIZED_RULE: -A OUTPUT -o eth0 -p tcp -j ACCEPT"; then
-    echo "FAIL: Adversarial protocol bypass rule was NOT rejected!" >&2
+  # Verify actual helper accepts compliant Gluetun ruleset in $TEST_NETNS
+  ok_check="$(PATH="$MOCK_BIN_DIR:$PATH" "$HELPER_BIN" verify-dns-firewall 2>&1 || true)"
+  if ! echo "$ok_check" | grep -q "DNS_FIREWALL_OK"; then
+    echo "FAIL: Actual helper verify-dns-firewall rejected compliant Gluetun ruleset: $ok_check" >&2
     exit 1
   fi
-  echo "PASS: Adversarial protocol bypass rule was correctly rejected."
+  echo "PASS: Actual helper verify-dns-firewall accepted compliant Gluetun ruleset."
+
+  # 7b: Adversarial test - inject broad physical interface ACCEPT rule (-A OUTPUT -o eth0 -j ACCEPT) into real netns
+  ip netns exec "$TEST_NETNS" iptables -A OUTPUT -o eth0 -j ACCEPT
+  adv_check="$(PATH="$MOCK_BIN_DIR:$PATH" "$HELPER_BIN" verify-dns-firewall 2>&1 || true)"
+  ip netns exec "$TEST_NETNS" iptables -D OUTPUT -o eth0 -j ACCEPT
+
+  if ! echo "$adv_check" | grep -q "ERROR: Unauthorized egress rule in Gluetun firewall: -A OUTPUT -o eth0 -j ACCEPT"; then
+    echo "FAIL: Actual helper did NOT reject broad eth0 ACCEPT rule! Output: $adv_check" >&2
+    exit 1
+  fi
+  echo "PASS: Actual helper rejected adversarial broad eth0 ACCEPT rule."
+
+  # 7c: Adversarial test - inject arbitrary protocol ACCEPT rule (-A OUTPUT -o eth0 -p tcp -j ACCEPT) into real netns
+  ip netns exec "$TEST_NETNS" iptables -A OUTPUT -o eth0 -p tcp -j ACCEPT
+  adv_proto_check="$(PATH="$MOCK_BIN_DIR:$PATH" "$HELPER_BIN" verify-dns-firewall 2>&1 || true)"
+  ip netns exec "$TEST_NETNS" iptables -D OUTPUT -o eth0 -p tcp -j ACCEPT
+
+  if ! echo "$adv_proto_check" | grep -q "ERROR: Unauthorized egress rule in Gluetun firewall: -A OUTPUT -o eth0 -p tcp -j ACCEPT"; then
+    echo "FAIL: Actual helper did NOT reject protocol bypass rule! Output: $adv_proto_check" >&2
+    exit 1
+  fi
+  echo "PASS: Actual helper rejected adversarial protocol bypass rule."
+
+  # Clean up runtime config dir created during test
+  "$HELPER_BIN" cleanup >/dev/null 2>&1 || true
 
   # Clean up network namespace
   ip netns del "$TEST_NETNS"

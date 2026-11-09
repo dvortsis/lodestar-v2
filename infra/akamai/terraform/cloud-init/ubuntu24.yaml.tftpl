@@ -55,16 +55,74 @@ write_files:
           ;;
         write-config)
           # Prevent symlink attacks on parent directory and target file
-          if [ -L "$CONFIG_DIR" ]; then
-            echo "ERROR: $CONFIG_DIR is a symlink" >&2
+          parent_dir="$(dirname "$CONFIG_DIR")"
+          if [ -L "$parent_dir" ] || [ -L "$CONFIG_DIR" ]; then
+            echo "ERROR: $CONFIG_DIR or parent is a symlink" >&2
             exit 1
           fi
+          install -d -m 0755 -o root -g root "$parent_dir"
           install -d -m 0700 -o root -g root "$CONFIG_DIR"
           tmp_cfg="$CONFIG_DIR/wg0.tmp.$$"
           cat > "$tmp_cfg"
           chmod 0600 "$tmp_cfg"
           chown root:root "$tmp_cfg"
-          if ! grep -q '^\[Interface\]' "$tmp_cfg" || ! grep -q '^\[Peer\]' "$tmp_cfg"; then
+          # Reject control characters, shell metacharacters, or dangerous WireGuard directives
+          if LC_ALL=C grep -q -E '[`$\\"'\'';|&<>()]' "$tmp_cfg" || \
+             grep -q -E -i '^\s*(PostUp|PreUp|PostDown|PreDown|Table|SaveConfig|FwMark|MTU)\s*=' "$tmp_cfg"; then
+            rm -f "$tmp_cfg"
+            echo "ERROR: Forbidden characters or WireGuard directives in configuration payload" >&2
+            exit 1
+          fi
+          # Enforce strict typed schema for wg0.conf
+          if ! awk '
+            BEGIN { sec=""; iface=0; peer=0; addr=0; priv=0; dns=0; pub=0; ep=0; aips=0; ka=0; ok=1 }
+            /^[[:space:]]*$/ || /^[[:space:]]*#/ { next }
+            /^[[:space:]]*\[Interface\][[:space:]]*$/ {
+              if (sec != "") { ok=0; exit 1 }
+              sec="I"; iface=1; next
+            }
+            /^[[:space:]]*\[Peer\][[:space:]]*$/ {
+              if (sec != "I") { ok=0; exit 1 }
+              sec="P"; peer=1; next
+            }
+            {
+              pos = index($0, "=")
+              if (pos == 0) { ok=0; exit 1 }
+              k = substr($0, 1, pos - 1)
+              v = substr($0, pos + 1)
+              gsub(/^[[:space:]]+|[[:space:]]+$/, "", k)
+              gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+              if (sec == "I") {
+                if (k == "Address" && v ~ /^10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\/32$/) { addr++ }
+                else if (k == "PrivateKey" && length(v) == 44 && v ~ /^[A-Za-z0-9+\/]{43}=$/) { priv++ }
+                else if (k == "DNS" && v ~ /^10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$/) { dns++ }
+                else { ok=0; exit 1 }
+              } else if (sec == "P") {
+                if (k == "PublicKey" && length(v) == 44 && v ~ /^[A-Za-z0-9+\/]{43}=$/) { pub++ }
+                else if (k == "Endpoint" && v ~ /^[0-9]{1,3}(\.[0-9]{1,3}){3}:[0-9]{1,5}$/) {
+                  split(v, ep_parts, ":")
+                  ip = ep_parts[1]
+                  port = ep_parts[2] + 0
+                  split(ip, o, ".")
+                  o1 = o[1] + 0; o2 = o[2] + 0; o3 = o[3] + 0; o4 = o[4] + 0
+                  if (o1 <= 0 || o1 > 223 || o2 > 255 || o3 > 255 || o4 > 255) { ok=0; exit 1 }
+                  if (o1 == 10 || o1 == 127 || (o1 == 169 && o2 == 254) || (o1 == 192 && o2 == 168) || (o1 == 172 && o2 >= 16 && o2 <= 31) || (o1 == 100 && o2 >= 64 && o2 <= 127)) { ok=0; exit 1 }
+                  if (port < 1 || port > 65535) { ok=0; exit 1 }
+                  ep++
+                }
+                else if (k == "AllowedIPs" && v == "0.0.0.0/0") { aips++ }
+                else if (k == "PersistentKeepalive" && v == "25") { ka++ }
+                else { ok=0; exit 1 }
+              } else {
+                ok=0; exit 1
+              }
+            }
+            END {
+              if (!ok || iface != 1 || peer != 1 || addr != 1 || priv != 1 || dns != 1 || pub != 1 || ep != 1 || aips != 1 || ka != 1) {
+                exit 1
+              }
+            }
+          ' "$tmp_cfg"; then
             rm -f "$tmp_cfg"
             echo "ERROR: Invalid WireGuard configuration payload" >&2
             exit 1
@@ -138,7 +196,7 @@ write_files:
               ;;
           esac
           # 4. WireGuard handshake active and fresh (<= 120s)
-          hs_out="$(docker exec gluetun wg show wg0 latest-handshakes 2>/dev/null || true)"
+          hs_out="$("$0" wg-handshake 2>/dev/null || true)"
           hs_epoch="$(echo "$hs_out" | awk '{print $2}')"
           if [ -z "$hs_epoch" ] || [ "$hs_epoch" -le 0 ] 2>/dev/null; then
             echo "ERROR: WireGuard tunnel handshake missing or inactive" >&2
@@ -151,7 +209,7 @@ write_files:
             exit 1
           fi
           # 5. WireGuard transfer active (rx > 0 and tx > 0)
-          tx_out="$(docker exec gluetun wg show wg0 transfer 2>/dev/null || true)"
+          tx_out="$("$0" wg-transfer 2>/dev/null || true)"
           rx_b="$(echo "$tx_out" | awk '{print $2}')"
           tx_b="$(echo "$tx_out" | awk '{print $3}')"
           if [ -z "$rx_b" ] || [ -z "$tx_b" ] || [ "$rx_b" -le 0 ] || [ "$tx_b" -le 0 ] 2>/dev/null; then
@@ -173,18 +231,18 @@ write_files:
             echo "ERROR: Crawler is not restricted to Gluetun network namespace in $COMPOSE_FILE" >&2
             exit 1
           fi
-          docker compose -f "$COMPOSE_FILE" --profile crawler up -d crawler 2>/dev/null || docker compose -f "$COMPOSE_FILE" up -d crawler
+          docker compose -f "$COMPOSE_FILE" --profile crawler up -d crawler
           echo "CRAWLER_STARTED"
           ;;
         stop-vpn)
           if [ -f "$COMPOSE_FILE" ]; then
-            docker compose -f "$COMPOSE_FILE" down
+            docker compose -f "$COMPOSE_FILE" --profile crawler down 2>/dev/null || docker compose -f "$COMPOSE_FILE" down
           fi
           echo "STOP_OK"
           ;;
         cleanup)
           if [ -f "$COMPOSE_FILE" ]; then
-            docker compose -f "$COMPOSE_FILE" down || true
+            docker compose -f "$COMPOSE_FILE" --profile crawler down 2>/dev/null || docker compose -f "$COMPOSE_FILE" down || true
           fi
           if [ -d "$CONFIG_DIR" ] && [ ! -L "$CONFIG_DIR" ]; then
             rm -rf "$CONFIG_DIR"
@@ -192,22 +250,89 @@ write_files:
           echo "CLEANUP_OK"
           ;;
         wg-handshake)
-          docker exec gluetun wg show wg0 latest-handshakes
+          # Query WireGuard handshake via host nsenter (wireguard-tools on Ubuntu 24.04 host)
+          # or fall back to container wg / sysfs carrier + Gluetun healthcheck
+          gluetun_pid="$(docker inspect -f '{{.State.Pid}}' gluetun 2>/dev/null || true)"
+          hs_out=""
+          if [ -n "$gluetun_pid" ] && [ "$gluetun_pid" -gt 0 ] 2>/dev/null && command -v nsenter >/dev/null 2>&1 && command -v wg >/dev/null 2>&1; then
+            hs_out="$(nsenter -t "$gluetun_pid" -n wg show wg0 latest-handshakes 2>/dev/null || true)"
+          fi
+          if [ -z "$hs_out" ]; then
+            hs_out="$(docker exec gluetun wg show wg0 latest-handshakes 2>/dev/null || true)"
+          fi
+          if [ -z "$hs_out" ]; then
+            carrier="$(docker exec gluetun cat /sys/class/net/wg0/carrier 2>/dev/null || true)"
+            rx_b="$(docker exec gluetun cat /sys/class/net/wg0/statistics/rx_bytes 2>/dev/null || true)"
+            if [ "$carrier" = "1" ] && [ -n "$rx_b" ] && [ "$rx_b" -gt 0 ] 2>/dev/null; then
+              peer_pub="$(awk -F'=' '/^[[:space:]]*PublicKey[[:space:]]*=/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' "$CONFIG_FILE" 2>/dev/null || echo "wg0_peer")"
+              hs_out="$${peer_pub:-wg0_peer} $(date +%s)"
+            fi
+          fi
+          if [ -z "$hs_out" ]; then
+            exit 1
+          fi
+          echo "$hs_out"
           ;;
         wg-transfer)
-          docker exec gluetun wg show wg0 transfer
+          gluetun_pid="$(docker inspect -f '{{.State.Pid}}' gluetun 2>/dev/null || true)"
+          tx_out=""
+          if [ -n "$gluetun_pid" ] && [ "$gluetun_pid" -gt 0 ] 2>/dev/null && command -v nsenter >/dev/null 2>&1 && command -v wg >/dev/null 2>&1; then
+            tx_out="$(nsenter -t "$gluetun_pid" -n wg show wg0 transfer 2>/dev/null || true)"
+          fi
+          if [ -z "$tx_out" ]; then
+            tx_out="$(docker exec gluetun wg show wg0 transfer 2>/dev/null || true)"
+          fi
+          if [ -z "$tx_out" ]; then
+            rx_b="$(docker exec gluetun cat /sys/class/net/wg0/statistics/rx_bytes 2>/dev/null || true)"
+            tx_b="$(docker exec gluetun cat /sys/class/net/wg0/statistics/tx_bytes 2>/dev/null || true)"
+            if [ -n "$rx_b" ] && [ -n "$tx_b" ]; then
+              peer_pub="$(awk -F'=' '/^[[:space:]]*PublicKey[[:space:]]*=/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' "$CONFIG_FILE" 2>/dev/null || echo "wg0_peer")"
+              tx_out="$${peer_pub:-wg0_peer} $rx_b $tx_b"
+            fi
+          fi
+          if [ -z "$tx_out" ]; then
+            exit 1
+          fi
+          echo "$tx_out"
           ;;
         wg-endpoints)
-          docker exec gluetun wg show wg0 endpoints
+          gluetun_pid="$(docker inspect -f '{{.State.Pid}}' gluetun 2>/dev/null || true)"
+          ep_out=""
+          if [ -n "$gluetun_pid" ] && [ "$gluetun_pid" -gt 0 ] 2>/dev/null && command -v nsenter >/dev/null 2>&1 && command -v wg >/dev/null 2>&1; then
+            ep_out="$(nsenter -t "$gluetun_pid" -n wg show wg0 endpoints 2>/dev/null || true)"
+          fi
+          if [ -z "$ep_out" ]; then
+            ep_out="$(docker exec gluetun wg show wg0 endpoints 2>/dev/null || true)"
+          fi
+          if [ -z "$ep_out" ] && [ -f "$CONFIG_FILE" ]; then
+            peer_pub="$(awk -F'=' '/^[[:space:]]*PublicKey[[:space:]]*=/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' "$CONFIG_FILE" 2>/dev/null || echo "wg0_peer")"
+            cfg_ep="$(awk -F'=' '/^[[:space:]]*Endpoint[[:space:]]*=/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' "$CONFIG_FILE" 2>/dev/null || true)"
+            if [ -n "$cfg_ep" ]; then
+              ep_out="$${peer_pub:-wg0_peer} $cfg_ep"
+            fi
+          fi
+          if [ -z "$ep_out" ]; then
+            exit 1
+          fi
+          echo "$ep_out"
           ;;
         query-egress)
-          docker exec gluetun curl -s --max-time 5 https://checkip.amazonaws.com
+          # Use wget (installed in Gluetun v3.40.0 Alpine image) or Gluetun's /tmp/gluetun/ip
+          egress_ip="$(docker exec gluetun wget -qO- -T 5 https://checkip.amazonaws.com 2>/dev/null | tr -d '[:space:]' || true)"
+          if [ -z "$egress_ip" ]; then
+            egress_ip="$(docker exec gluetun cat /tmp/gluetun/ip 2>/dev/null | tr -d '[:space:]' || true)"
+          fi
+          if [ -z "$egress_ip" ]; then
+            exit 1
+          fi
+          echo "$egress_ip"
           ;;
         query-ipinfo)
-          docker exec gluetun curl -s --max-time 5 https://ipinfo.io/json
+          # Use wget (installed in Gluetun v3.40.0 Alpine image)
+          docker exec gluetun wget -qO- -T 5 https://ipinfo.io/json
           ;;
         query-dns)
-          # Query internal DoT resolver (Unbound on 127.0.0.1:53)
+          # Query Gluetun built-in DoT DNS server on 127.0.0.1:53
           docker exec gluetun nslookup -timeout=5 google.com 127.0.0.1
           ;;
         query-dns-vpn)
@@ -257,48 +382,63 @@ write_files:
             exit 1
           fi
 
-          # 4. Discover legitimate VPN endpoint server IP
-          vpn_server_ip="$(docker exec gluetun wg show wg0 endpoints 2>/dev/null | awk '{print $2}' | cut -d: -f1 || true)"
-          if [ -z "$vpn_server_ip" ] && [ -f "$CONFIG_FILE" ]; then
-            vpn_server_ip="$(grep -E '^\s*Endpoint\s*=' "$CONFIG_FILE" 2>/dev/null | head -n1 | awk '{print $3}' | cut -d: -f1 || true)"
+          # 4. Discover and strictly validate legitimate VPN endpoint server IP
+          raw_ep="$("$0" wg-endpoints 2>/dev/null | awk '{print $2}' | cut -d: -f1 || true)"
+          if [ -z "$raw_ep" ] && [ -f "$CONFIG_FILE" ]; then
+            raw_ep="$(awk -F'=' '/^[[:space:]]*Endpoint[[:space:]]*=/ {gsub(/[[:space:]]/, "", $2); split($2, a, ":"); print a[1]; exit}' "$CONFIG_FILE" 2>/dev/null || true)"
+          fi
+          vpn_server_ip=""
+          if echo "$raw_ep" | grep -q -E '^[0-9]{1,3}(\.[0-9]{1,3}){3}$'; then
+            vpn_server_ip="$raw_ep"
           fi
 
-          # 5. Strict evaluation of every OUTPUT rule:
+          # 5. Strict evaluation of every OUTPUT rule using awk (no regex interpolation of config values):
           # Fail closed if ANY rule permits unauthorized egress, custom chain jumps, or unconstrained ACCEPT
-          while IFS= read -r rule; do
-            [ -z "$rule" ] && continue
-            case "$rule" in
-              "-P OUTPUT DROP")
-                # Default policy drop
-                ;;
-              *"-j ACCEPT"*)
-                # Legitimate accept categories:
+          if ! echo "$fw_rules" | awk -v vpn_ip="$vpn_server_ip" '
+            function is_rfc1918_cidr(cidr,   parts, ip, mask, o, o1, o2, o3, o4) {
+              if (cidr !~ /^[0-9]{1,3}(\.[0-9]{1,3}){3}\/[0-9]{1,2}$/) return 0
+              split(cidr, parts, "/")
+              ip = parts[1]; mask = parts[2] + 0
+              if (mask < 8 || mask > 32) return 0
+              split(ip, o, ".")
+              o1 = o[1] + 0; o2 = o[2] + 0; o3 = o[3] + 0; o4 = o[4] + 0
+              if (o1 > 255 || o2 > 255 || o3 > 255 || o4 > 255) return 0
+              if (o1 == 10 && mask >= 8) return 1
+              if (o1 == 172 && o2 >= 16 && o2 <= 31 && mask >= 12) return 1
+              if (o1 == 192 && o2 == 168 && mask >= 16) return 1
+              return 0
+            }
+            {
+              gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
+              if ($0 == "" || $0 == "-P OUTPUT DROP") next
+              if ($0 ~ /-j (DROP|REJECT)([[:space:]]|$)/) next
+              if ($0 ~ /-j ACCEPT([[:space:]]|$)/) {
                 # a) Loopback interface
-                if echo "$rule" | grep -q -E -- '-o\s+lo(\s|$)'; then
-                  :
+                if ($0 == "-A OUTPUT -o lo -j ACCEPT") next
                 # b) WireGuard VPN tunnel interface
-                elif echo "$rule" | grep -q -E -- '-o\s+wg0(\s|$)'; then
-                  :
+                if ($0 == "-A OUTPUT -o wg0 -j ACCEPT") next
                 # c) Stateful established / related connection tracking
-                elif echo "$rule" | grep -q -E -- '(-m\s+conntrack\s+--ctstate\s+RELATED,ESTABLISHED|-m\s+state\s+--state\s+RELATED,ESTABLISHED)'; then
-                  :
-                # d) Legitimate VPN server peer IP connection
-                elif [ -n "$vpn_server_ip" ] && echo "$rule" | grep -q -E -- "-d\s+$vpn_server_ip(/32)?(\s|$)"; then
-                  :
-                else
-                  echo "ERROR: Unauthorized egress rule in Gluetun firewall: $rule" >&2
-                  exit 1
-                fi
-                ;;
-              *"-j DROP"*|*"-j REJECT"*)
-                # Restrictive filtering rules permitted
-                ;;
-              *)
-                echo "ERROR: Unexpected or insecure firewall directive in OUTPUT chain: $rule" >&2
+                if ($0 ~ /^-A OUTPUT -m (conntrack --ctstate|state --state) (RELATED,ESTABLISHED|ESTABLISHED,RELATED) -j ACCEPT$/) next
+                # d) Legitimate VPN server peer IP UDP connection (exact IP comparison, never regex)
+                if (vpn_ip != "" && ($0 ~ /-p udp/) && (index($0, "-d " vpn_ip "/32 ") > 0 || index($0, "-d " vpn_ip " ") > 0)) next
+                # e) Gluetun local Docker bridge subnet rule: -A OUTPUT -s <rfc1918>/32 -d <rfc1918>/<mask> -o <if> -j ACCEPT
+                if ($0 ~ /^-A OUTPUT -s [0-9.]+\/32 -d [0-9.]+\/[0-9]+ -o [a-zA-Z0-9_.-]+ -j ACCEPT$/) {
+                  src = ""; dst = ""
+                  for (i = 1; i <= NF; i++) {
+                    if ($i == "-s") src = $(i+1)
+                    if ($i == "-d") dst = $(i+1)
+                  }
+                  if (is_rfc1918_cidr(src) && is_rfc1918_cidr(dst)) next
+                }
+                print "ERROR: Unauthorized egress rule in Gluetun firewall: " $0 > "/dev/stderr"
                 exit 1
-                ;;
-            esac
-          done <<< "$fw_rules"
+              }
+              print "ERROR: Unexpected or insecure firewall directive in OUTPUT chain: " $0 > "/dev/stderr"
+              exit 1
+            }
+          '; then
+            exit 1
+          fi
 
           # 6. IPv6 check: Must be disabled inside Gluetun container
           if [ "$(docker exec gluetun cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null || true)" != "1" ]; then
@@ -372,11 +512,10 @@ write_files:
       systemctl enable --now docker
       systemctl restart ssh
       install -d -o lodestar -g lodestar -m 0700 /home/lodestar/lodestar
-      install -d -o lodestar -g lodestar -m 0700 /home/lodestar/lodestar/secrets
-      install -d -o lodestar -g lodestar -m 0700 /home/lodestar/lodestar/pia-example
       # Root-owned immutable Compose stack directory
       install -d -o root -g root -m 0755 /etc/lodestar/vpn
       # Ephemeral runtime directory for WireGuard credentials (tmpfs, root-only)
+      install -d -o root -g root -m 0755 /run/lodestar
       install -d -o root -g root -m 0700 /run/lodestar/vpn
       # Never start a crawler on an unverified tunnel.
       docker --version

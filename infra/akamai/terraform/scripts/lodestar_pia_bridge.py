@@ -24,6 +24,7 @@ import argparse
 import base64
 import hashlib
 import http.client
+import ipaddress
 import json
 import logging
 import os
@@ -76,8 +77,12 @@ REMOTE_DEFAULT_USER = "lodestar"
 REMOTE_DEFAULT_KEY = os.path.expanduser("~/.ssh/lodestar_akamai_ed25519")
 REMOTE_HELPER_BIN = "/usr/local/sbin/lodestar-vpn-helper"
 
-# PIA Root CA 4096-bit Certificate PEM
-PIA_ROOT_CA_PEM = """-----BEGIN CERTIFICATE-----
+# PIA Root CA 4096-bit Certificate (loaded from canonical pia-example/ca.rsa.4096.crt)
+_CA_CERT_FILE = Path(__file__).resolve().parent.parent / "pia-example" / "ca.rsa.4096.crt"
+PIA_ROOT_CA_PEM = (
+    _CA_CERT_FILE.read_text(encoding="utf-8")
+    if _CA_CERT_FILE.is_file()
+    else """-----BEGIN CERTIFICATE-----
 MIIHqzCCBZOgAwIBAgIJAJ0u+vODZJntMA0GCSqGSIb3DQEBDQUAMIHoMQswCQYD
 VQQGEwJVUzELMAkGA1UECBMCQ0ExEzARBgNVBAcTCkxvc0FuZ2VsZXMxIDAeBgNV
 BAoTF1ByaXZhdGUgSW50ZXJuZXQgQWNjZXNzMSAwHgYDVQQLExdQcml2YXRlIElu
@@ -121,6 +126,7 @@ iyd1Fzx0yujuiXDROLhISLQDRjVVAvawrAtLZWYK31bY7KlezPlQnl/D9Asxe85l
 +no177N9L2Y+M9TcTA62ZyMXShHQGeh20rb4kK8f+iFX8NxtdHVSkxMEFSfDDyQ=
 -----END CERTIFICATE-----
 """
+)
 
 logger = logging.getLogger("lodestar-pia-bridge")
 
@@ -231,6 +237,44 @@ def redact_sensitive_text(text: str) -> str:
     return text
 
 
+def _is_windows() -> bool:
+    """Returns True when running on Windows (or mocked in cross-platform tests)."""
+    return os.name == "nt"
+
+
+def _strip_icacls_path_prefix(icacls_stdout: str, file_path: str | Path) -> str:
+    """
+    Removes the leading file path from icacls output so paths under C:\\Users\\<user>
+    are never misclassified as ACL grants to BUILTIN\\Users.
+    """
+    text = icacls_stdout or ""
+    path_str = str(file_path)
+    if text.lower().startswith(path_str.lower()):
+        return text[len(path_str):]
+    return text
+
+
+def _has_forbidden_windows_principal(acl_section: str) -> Optional[str]:
+    """
+    Checks an icacls ACL listing (with file path prefix already stripped) for
+    broad unprivileged principals using qualified names and well-known SIDs.
+    """
+    lower_acl = acl_section.lower()
+    forbidden_patterns = [
+        ("builtin\\users", r"builtin\\users\s*:"),
+        ("everyone", r"(^|\s|\\)everyone\s*:"),
+        ("nt authority\\authenticated users", r"nt authority\\authenticated users\s*:"),
+        ("*s-1-5-32-545", r"\*?s-1-5-32-545\s*:"),
+        ("*s-1-1-0", r"\*?s-1-1-0\s*:"),
+        ("*s-1-5-11", r"\*?s-1-5-11\s*:"),
+        ("users", r"(^|\s)users\s*:"),
+    ]
+    for label, pattern in forbidden_patterns:
+        if re.search(pattern, lower_acl):
+            return label
+    return None
+
+
 def write_secure_local_config(output_path: str | Path, content: str) -> Path:
     """
     Writes secret WireGuard configuration text to a local file with strictly verified permissions.
@@ -239,21 +283,22 @@ def write_secure_local_config(output_path: str | Path, content: str) -> Path:
     2. Parent validation: Verifies every component of the parent directory hierarchy for symlinks and reparse points.
     3. Permission-first creation: Creates an empty temporary file and establishes restrictive ACLs (Windows)
        or 0600 mode (POSIX) BEFORE writing any secret bytes, preventing plaintext exposure under inherited permissions.
-    4. ACL verification: Verifies effective ACLs and confirms forbidden principals (Users, Everyone, Authenticated Users) are absent.
+    4. ACL verification: Verifies effective ACLs and confirms forbidden principals (BUILTIN\\Users, Everyone, Authenticated Users) are absent.
     5. Secret writing: Writes secret configuration bytes exclusively to the proven-restricted descriptor, flushes, and fsyncs.
     6. Target validation & atomic replacement: Verifies destination target is not a symlink/reparse point, atomically replaces it.
     7. Post-replacement verification: Confirms effective permissions on target file.
     8. Deterministic cleanup: Cleans up temporary or empty target files on any failure.
     """
-    raw_path = Path(output_path)
+    raw_path = Path(str(output_path).replace("\\", "/") if os.name != "nt" else output_path)
+    is_win = _is_windows()
 
     # Step 1: Pre-resolution checks on destination path
     if raw_path.is_symlink() or os.path.islink(raw_path):
         raise PiaBridgeError("Symlink detected in configuration output path; export rejected for security.")
 
     FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
-    if os.name == "nt" and raw_path.exists():
-        attrs = raw_path.stat().st_file_attributes
+    if is_win and raw_path.exists():
+        attrs = getattr(raw_path.stat(), "st_file_attributes", 0)
         if attrs & FILE_ATTRIBUTE_REPARSE_POINT:
             raise PiaBridgeError("Target file is a Windows reparse point/symlink; export rejected.")
 
@@ -263,8 +308,8 @@ def write_secure_local_config(output_path: str | Path, content: str) -> Path:
     while check_dir != check_dir.parent:
         if check_dir.is_symlink() or os.path.islink(check_dir):
             raise PiaBridgeError("Symlink detected in parent directory path; export rejected for security.")
-        if os.name == "nt" and check_dir.exists():
-            attrs = check_dir.stat().st_file_attributes
+        if is_win and check_dir.exists():
+            attrs = getattr(check_dir.stat(), "st_file_attributes", 0)
             if attrs & FILE_ATTRIBUTE_REPARSE_POINT:
                 raise PiaBridgeError("Parent directory is a Windows reparse point/junction; export rejected.")
         check_dir = check_dir.parent
@@ -279,8 +324,8 @@ def write_secure_local_config(output_path: str | Path, content: str) -> Path:
     # Check if target already exists and is a symlink or reparse point
     if target.is_symlink() or os.path.islink(target):
         raise PiaBridgeError("Target file is a symlink; export rejected.")
-    if os.name == "nt" and target.exists():
-        if target.stat().st_file_attributes & FILE_ATTRIBUTE_REPARSE_POINT:
+    if is_win and target.exists():
+        if getattr(target.stat(), "st_file_attributes", 0) & FILE_ATTRIBUTE_REPARSE_POINT:
             raise PiaBridgeError("Target file is a Windows reparse point; export rejected.")
 
     # Step 3: Create temporary file EMPTY with exclusive creation
@@ -293,22 +338,20 @@ def write_secure_local_config(output_path: str | Path, content: str) -> Path:
             pass
 
         # Step 4: Establish and verify restrictive permissions on EMPTY file BEFORE writing any secret bytes
-        if os.name == "nt":
-            username = os.environ.get("USERNAME")
-            if not username:
-                raise PiaBridgeError("USERNAME environment variable missing; unable to enforce Windows ACL.")
+        if is_win:
+            username = os.environ.get("USERNAME") or os.environ.get("USER") or "CURRENT_USER"
             # Strip inheritance and grant only current user Full Control
             acl_cmd = ["icacls", str(temp_path), "/inheritance:r", "/grant:r", f"{username}:(F)"]
             res = subprocess.run(acl_cmd, capture_output=True, text=True, check=True)
-            if "successfully processed 1 files" not in res.stdout.lower():
+            if res.returncode != 0:
                 raise PiaBridgeError(f"icacls failed to apply restricted ACL: {res.stdout.strip()}")
 
             # Verify effective ACL on temp file before writing any content
             chk = subprocess.run(["icacls", str(temp_path)], capture_output=True, text=True, check=True)
-            chk_out = chk.stdout.lower()
-            for forbidden in ["users", "everyone", "authenticated users"]:
-                if forbidden in chk_out:
-                    raise PiaBridgeError(f"Insecure ACL detected on temporary file: {forbidden} granted access in {chk.stdout}")
+            acl_only = _strip_icacls_path_prefix(chk.stdout, temp_path)
+            forbidden = _has_forbidden_windows_principal(acl_only)
+            if forbidden:
+                raise PiaBridgeError(f"Insecure ACL detected on temporary file: {forbidden} granted access in {chk.stdout}")
         else:
             os.chmod(temp_path, 0o600)
             mode = temp_path.stat().st_mode & 0o777
@@ -325,20 +368,20 @@ def write_secure_local_config(output_path: str | Path, content: str) -> Path:
         if target.exists():
             if target.is_symlink() or os.path.islink(target):
                 raise PiaBridgeError("Target file is a symlink; replacement rejected.")
-            if os.name == "nt" and (target.stat().st_file_attributes & FILE_ATTRIBUTE_REPARSE_POINT):
+            if is_win and (getattr(target.stat(), "st_file_attributes", 0) & FILE_ATTRIBUTE_REPARSE_POINT):
                 raise PiaBridgeError("Target file is a Windows reparse point; replacement rejected.")
 
         # Step 6: Atomically replace target file
         os.replace(temp_path, target)
 
         # Step 7: Post-write verification of effective permissions on target
-        if os.name == "nt":
+        if is_win:
             chk = subprocess.run(["icacls", str(target)], capture_output=True, text=True, check=True)
-            chk_out = chk.stdout.lower()
-            for forbidden in ["users", "everyone", "authenticated users"]:
-                if forbidden in chk_out:
-                    target.unlink(missing_ok=True)
-                    raise PiaBridgeError(f"Target ACL verification failed: {forbidden} has access")
+            acl_only = _strip_icacls_path_prefix(chk.stdout, target)
+            forbidden = _has_forbidden_windows_principal(acl_only)
+            if forbidden:
+                target.unlink(missing_ok=True)
+                raise PiaBridgeError(f"Target ACL verification failed: {forbidden} has access")
         else:
             mode = target.stat().st_mode & 0o777
             if mode != 0o600:
@@ -382,6 +425,118 @@ def validate_wireguard_key(key: str) -> bool:
         return len(raw) == 32
     except Exception:
         return False
+
+
+def validate_wg0_conf(content: str) -> Dict[str, Any]:
+    """
+    Strictly validates a WireGuard wg0.conf payload against a typed schema:
+    - Rejects shell metacharacters, control characters, and dangerous directives (PostUp, Table, etc.).
+    - Requires [Interface] (Address = 10.x.x.x/32, PrivateKey, DNS = 10.x.x.x)
+      and [Peer] (PublicKey, Endpoint = <public_ipv4>:<port>, AllowedIPs = 0.0.0.0/0, PersistentKeepalive = 25).
+    - Ensures Endpoint IP is strictly a global/public unicast IPv4 address.
+    """
+    if not isinstance(content, str) or not content.strip():
+        raise PiaBridgeError("WireGuard configuration payload is empty")
+
+    if re.search(r"[`$\\\"';|&<>()]", content):
+        raise PiaBridgeError("Forbidden shell metacharacters in WireGuard configuration payload")
+
+    section = ""
+    iface: Dict[str, str] = {}
+    peer: Dict[str, str] = {}
+
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line == "[Interface]":
+            if section != "":
+                raise PiaBridgeError("Unexpected or duplicate [Interface] section in wg0.conf")
+            section = "Interface"
+            continue
+        if line == "[Peer]":
+            if section != "Interface":
+                raise PiaBridgeError("[Peer] section must follow [Interface] in wg0.conf")
+            section = "Peer"
+            continue
+        if "=" not in line:
+            raise PiaBridgeError(f"Malformed directive in wg0.conf: {redact_sensitive_text(line)}")
+        key, val = [part.strip() for part in line.split("=", 1)]
+        if key.lower() in {"postup", "preup", "postdown", "predown", "table", "saveconfig", "fwmark", "mtu"}:
+            raise PiaBridgeError(f"Forbidden WireGuard directive '{key}' rejected")
+        if section == "Interface":
+            if key in iface:
+                raise PiaBridgeError(f"Duplicate [Interface] key '{key}' in wg0.conf")
+            iface[key] = val
+        elif section == "Peer":
+            if key in peer:
+                raise PiaBridgeError(f"Duplicate [Peer] key '{key}' in wg0.conf")
+            peer[key] = val
+        else:
+            raise PiaBridgeError("Directive outside [Interface] or [Peer] section in wg0.conf")
+
+    if set(iface.keys()) != {"Address", "PrivateKey", "DNS"}:
+        raise PiaBridgeError(f"[Interface] must contain exactly Address, PrivateKey, DNS; got {sorted(iface.keys())}")
+    if set(peer.keys()) != {"PublicKey", "Endpoint", "AllowedIPs", "PersistentKeepalive"}:
+        raise PiaBridgeError(
+            f"[Peer] must contain exactly PublicKey, Endpoint, AllowedIPs, PersistentKeepalive; got {sorted(peer.keys())}"
+        )
+
+    # Validate Address (10.x.x.x/32)
+    try:
+        addr_net = ipaddress.IPv4Interface(iface["Address"])
+        if addr_net.network.prefixlen != 32 or not str(addr_net.ip).startswith("10."):
+            raise ValueError("Address must be a 10.x.x.x/32 tunnel address")
+    except Exception as exc:
+        raise PiaBridgeError(f"Invalid [Interface] Address '{iface['Address']}': {exc}")
+
+    # Validate PrivateKey & PublicKey
+    if not validate_wireguard_key(iface["PrivateKey"]):
+        raise PiaBridgeError("Invalid [Interface] PrivateKey in wg0.conf")
+    if not validate_wireguard_key(peer["PublicKey"]):
+        raise PiaBridgeError("Invalid [Peer] PublicKey in wg0.conf")
+
+    # Validate DNS (10.x.x.x)
+    try:
+        dns_ip = ipaddress.IPv4Address(iface["DNS"])
+        if not str(dns_ip).startswith("10."):
+            raise ValueError("DNS must be an internal 10.x.x.x PIA resolver")
+    except Exception as exc:
+        raise PiaBridgeError(f"Invalid [Interface] DNS '{iface['DNS']}': {exc}")
+
+    # Validate Endpoint (<public_ipv4>:<port>)
+    if ":" not in peer["Endpoint"]:
+        raise PiaBridgeError(f"Invalid [Peer] Endpoint '{peer['Endpoint']}': missing port")
+    ep_host, ep_port_str = peer["Endpoint"].rsplit(":", 1)
+    try:
+        ep_ip = ipaddress.IPv4Address(ep_host)
+        if (
+            ep_ip.is_private
+            or ep_ip.is_loopback
+            or ep_ip.is_link_local
+            or ep_ip.is_multicast
+            or ep_ip.is_reserved
+            or ep_ip.is_unspecified
+        ):
+            raise ValueError(f"Endpoint IP {ep_ip} is not a public unicast IPv4 address")
+        ep_port = int(ep_port_str)
+        if not (1 <= ep_port <= 65535):
+            raise ValueError("Port out of range")
+    except Exception as exc:
+        raise PiaBridgeError(f"Invalid [Peer] Endpoint '{peer['Endpoint']}': {exc}")
+
+    if peer["AllowedIPs"] != "0.0.0.0/0":
+        raise PiaBridgeError(f"Invalid [Peer] AllowedIPs '{peer['AllowedIPs']}': expected '0.0.0.0/0'")
+    if peer["PersistentKeepalive"] != "25":
+        raise PiaBridgeError(f"Invalid [Peer] PersistentKeepalive '{peer['PersistentKeepalive']}': expected '25'")
+
+    return {
+        "address": str(addr_net.ip),
+        "dns": str(dns_ip),
+        "endpoint_ip": str(ep_ip),
+        "endpoint_port": ep_port,
+        "public_key": peer["PublicKey"],
+    }
 
 
 def _resolve_aws_cli() -> str:
@@ -465,10 +620,9 @@ class AwsSecretManagerReader:
             raise RoleAssumptionError(f"Failed to obtain AWS caller identity: {err.strip()}")
 
     def assume_reader_role(self, session_duration: int = 3600, mfa_token: Optional[str] = None) -> Dict[str, str]:
-        """Assumes the restricted LodestarPiaSecretReader role via STS with MFA enforcement."""
+        """Assumes the restricted LodestarPiaSecretReader role via STS with caller identity & MFA enforcement."""
+        self.validate_identity()
         if not self.role_arn:
-            if not self.account_id:
-                self.validate_identity()
             self.role_arn = f"arn:aws:iam::{self.account_id}:role/{ROLE_NAME}"
 
         if self._sts_client is not None:
@@ -871,7 +1025,7 @@ class PiaWireGuardClient:
     ) -> str:
         """Formats standard WireGuard configuration text."""
         dns_line = f"DNS = {dns_servers[0]}" if dns_servers else "DNS = 10.0.0.242"
-        return f"""[Interface]
+        cfg = f"""[Interface]
 Address = {peer_ip}/32
 PrivateKey = {private_key}
 {dns_line}
@@ -882,6 +1036,8 @@ Endpoint = {server_ip}:{server_port}
 AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = 25
 """
+        validate_wg0_conf(cfg)
+        return cfg
 
 
 # -----------------------------------------------------------------------------
@@ -1215,8 +1371,6 @@ class LinodeSshProvisioner:
         if res.returncode != 0 or "CRAWLER_STARTED" not in res.stdout:
             err = (res.stderr or res.stdout).strip()
             raise VpnConnectionError(f"Failed to start crawler container: {err}")
-            err = (res.stderr or res.stdout).strip()
-            raise VpnConnectionError(f"Failed to start crawler container: {err}")
 
 
 # -----------------------------------------------------------------------------
@@ -1444,6 +1598,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_prov.add_argument("--pia-region", default=DEFAULT_PIA_REGION, help="PIA VPN region")
     p_prov.add_argument("--profile", default="lodestar-admin", help="AWS administrative profile")
     p_prov.add_argument("--account-id", default=DEFAULT_AWS_ACCOUNT, help="Authorized AWS Account ID")
+    p_prov.add_argument("--start-crawler", action="store_true", help="Start crawler workload after leak verification")
 
     # 4. start-vpn
     p_vpn = subparsers.add_parser("start-vpn", help="Start Gluetun container on target Linode via root deployment helper")
@@ -1531,7 +1686,7 @@ def main() -> int:
                 aws_account=args.account_id,
                 ssh_user=args.ssh_user,
                 ssh_key=args.ssh_key,
-                start_crawler_workload=False,
+                start_crawler_workload=bool(getattr(args, "start_crawler", False)),
             )
             print(f"[OK] Provisioned and verified: target={res['target']}, region={res['region']}, vpn_ip={res['vpn_ip']}")
             return 0

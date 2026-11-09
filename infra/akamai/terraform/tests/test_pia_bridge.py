@@ -211,6 +211,7 @@ class LodestarPiaBridgeTests(unittest.TestCase):
         user, pwd = client.get_pia_credentials(self.secret_name)
         self.assertEqual(user, "p1234567")
         self.assertEqual(pwd, "ValidPassword99!")
+        mock_sts.get_caller_identity.assert_called_once()
         mock_sts.assume_role.assert_called_once()
         mock_sm.get_secret_value.assert_called_once_with(SecretId=self.secret_name)
 
@@ -738,23 +739,34 @@ class LodestarPiaBridgeTests(unittest.TestCase):
     # -------------------------------------------------------------------------
     def test_windows_export_with_unsafe_acl_rejected(self) -> None:
         """Proves that write_secure_local_config rejects export if unprivileged groups have access."""
-        mock_file = MagicMock()
-        mock_file.fileno.return_value = 99
-        with patch("os.name", "nt"), \
-             patch("pathlib.Path.is_dir", return_value=True), \
-             patch("os.path.islink", return_value=False), \
-             patch("os.open", return_value=99), \
-             patch("os.fsync"), \
-             patch("os.fdopen") as mock_fdopen, \
-             patch("subprocess.run") as mock_sub:
-            mock_fdopen.return_value.__enter__.return_value = mock_file
-            mock_sub.side_effect = [
-                subprocess.CompletedProcess(args=[], returncode=0, stdout="Successfully processed 1 files"),
-                subprocess.CompletedProcess(args=[], returncode=0, stdout="NT AUTHORITY\\Authenticated Users:(R)"),
-            ]
-            with self.assertRaises(bridge.PiaBridgeError) as ctx:
-                bridge.write_secure_local_config("C:\\secrets\\wg0.conf", "dummy_conf")
-            self.assertIn("insecure acl detected", str(ctx.exception).lower())
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target_file = os.path.join(tmpdir, "wg0.conf")
+            with patch("lodestar_pia_bridge._is_windows", return_value=True), \
+                 patch("subprocess.run") as mock_sub:
+                mock_sub.side_effect = [
+                    subprocess.CompletedProcess(args=[], returncode=0, stdout="Successfully processed 1 files"),
+                    subprocess.CompletedProcess(args=[], returncode=0, stdout=f"{target_file} NT AUTHORITY\\Authenticated Users:(R)"),
+                ]
+                with self.assertRaises(bridge.PiaBridgeError) as ctx:
+                    bridge.write_secure_local_config(target_file, "dummy_conf")
+                self.assertIn("insecure acl detected", str(ctx.exception).lower())
+            self.assertFalse(os.path.exists(target_file))
+
+    def test_windows_export_path_under_users_dir_accepted_when_acl_restricted(self) -> None:
+        """Proves that a file path containing 'Users' (e.g. C:\\Users\\admin) is not falsely rejected as BUILTIN\\Users."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            users_subdir = os.path.join(tmpdir, "Users", "admin")
+            os.makedirs(users_subdir, exist_ok=True)
+            target_file = os.path.join(users_subdir, "wg0.conf")
+            with patch("lodestar_pia_bridge._is_windows", return_value=True), \
+                 patch("subprocess.run") as mock_sub:
+                mock_sub.side_effect = [
+                    subprocess.CompletedProcess(args=[], returncode=0, stdout="Successfully processed 1 files"),
+                    subprocess.CompletedProcess(args=[], returncode=0, stdout=f"{target_file} DESKTOP\\admin:(F)"),
+                    subprocess.CompletedProcess(args=[], returncode=0, stdout=f"{target_file} DESKTOP\\admin:(F)"),
+                ]
+                out = bridge.write_secure_local_config(target_file, "dummy_conf")
+                self.assertTrue(out.exists())
 
     # -------------------------------------------------------------------------
     # Section 9 Remediation: Interrupted secret export leaves no plaintext remnants
@@ -1010,8 +1022,8 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
         script = script.replace("$${", "${")
 
         # Adjust root-specific chown/install for unprivileged local test sandbox
-        script = script.replace("install -d -m 0755 -o root -g root", "install -d -m 0755")
-        script = script.replace("install -d -m 0700 -o root -g root", "install -d -m 0700")
+        script = script.replace("install -d -m 0755 -o root -g root", "mkdir -p")
+        script = script.replace("install -d -m 0700 -o root -g root", "mkdir -p")
         script = script.replace("chown root:root", "true || chown root:root")
 
         # Direct script paths into isolated sandbox directories
@@ -1035,8 +1047,18 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
         docker_path = os.path.join(self.mock_bin, "docker")
         with open(docker_path, "w", encoding="utf-8", newline="\n") as f:
             f.write(f"#!/usr/bin/env bash\n{handler_script}\n")
+        os.chmod(docker_path, 0o755)
+        # Also create a mock nsenter in mock_bin that returns 1 so tests deterministically exercise the mock docker
+        nsenter_path = os.path.join(self.mock_bin, "nsenter")
+        with open(nsenter_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write("#!/usr/bin/env bash\nexit 1\n")
+        os.chmod(nsenter_path, 0o755)
 
     def run_helper(self, cmd: str, input_data: str = "") -> subprocess.CompletedProcess:
+        # Ensure a default failing mock docker exists so tests never fall back to host /usr/bin/docker
+        docker_path = os.path.join(self.mock_bin, "docker")
+        if not os.path.exists(docker_path):
+            self.create_mock_docker("echo 'mock_docker_unconfigured' >&2; exit 1")
         env = os.environ.copy()
         env["PATH"] = f"{self.mock_bin}{os.pathsep}{env['PATH']}"
         return subprocess.run(
@@ -1278,17 +1300,50 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
         self.assertIn("Unexpected or insecure firewall directive in OUTPUT chain", res.stderr)
 
     def test_exec_helper_dns_firewall_verification_accepted_with_vpn_server_endpoint(self) -> None:
-        """Proves that legitimate Gluetun ruleset including the VPN server endpoint is accepted."""
+        """Proves that legitimate Gluetun ruleset including the VPN server endpoint and Docker bridge rule is accepted."""
         self.create_mock_docker(
             'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\n2: eth0: <BROADCAST>\n3: wg0: <POINTOPOINT>"; exit 0;\n'
             'elif [[ "$*" =~ "endpoints" ]]; then echo "peer_key 212.56.54.190:1337"; exit 0;\n'
-            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\n-A OUTPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT\n-A OUTPUT -o lo -j ACCEPT\n-A OUTPUT -o wg0 -j ACCEPT\n-A OUTPUT -d 212.56.54.190/32 -p udp -m udp --dport 1337 -j ACCEPT"; exit 0;\n'
+            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\n-A OUTPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT\n-A OUTPUT -o lo -j ACCEPT\n-A OUTPUT -o wg0 -j ACCEPT\n-A OUTPUT -d 212.56.54.190/32 -o eth0 -p udp -m udp --dport 1337 -j ACCEPT\n-A OUTPUT -s 172.18.0.2/32 -d 172.18.0.0/16 -o eth0 -j ACCEPT"; exit 0;\n'
             'elif [[ "$*" =~ "disable_ipv6" ]]; then echo "1"; exit 0;\n'
-            'elif [[ "$*" =~ "route get" ]]; then echo "8.8.8.8 dev wg0 src 10.0.0.2"; exit 0; fi; exit 0'
+            'elif [[ "$*" =~ "route get" ]]; then echo "8.8.8.8 dev wg0 table 51820 src 10.0.0.2"; exit 0; fi; exit 0'
         )
         res = self.run_helper("verify-dns-firewall")
         self.assertEqual(res.returncode, 0)
         self.assertIn("DNS_FIREWALL_OK", res.stdout)
+
+    def test_exec_helper_write_config_accepts_valid_schema_and_rejects_injections(self) -> None:
+        """Proves that write-config strictly validates wg0.conf schema and rejects PostUp, regex injection, and non-public endpoints."""
+        priv, pub = bridge.generate_wireguard_keypair()
+        valid_cfg = (
+            "[Interface]\n"
+            "Address = 10.0.0.2/32\n"
+            f"PrivateKey = {priv}\n"
+            "DNS = 10.0.0.242\n\n"
+            "[Peer]\n"
+            f"PublicKey = {pub}\n"
+            "Endpoint = 212.56.54.190:1337\n"
+            "AllowedIPs = 0.0.0.0/0\n"
+            "PersistentKeepalive = 25\n"
+        )
+        res_ok = self.run_helper("write-config", input_data=valid_cfg)
+        self.assertEqual(res_ok.returncode, 0, msg=res_ok.stderr)
+        self.assertIn("CONFIG_OK", res_ok.stdout)
+
+        # Reject PostUp directive
+        bad_postup = valid_cfg + "PostUp = /bin/sh -c 'id'\n"
+        res_postup = self.run_helper("write-config", input_data=bad_postup)
+        self.assertNotEqual(res_postup.returncode, 0)
+
+        # Reject regex injection in Endpoint
+        bad_regex = valid_cfg.replace("212.56.54.190:1337", ".*|.*:1337")
+        res_regex = self.run_helper("write-config", input_data=bad_regex)
+        self.assertNotEqual(res_regex.returncode, 0)
+
+        # Reject metadata / link-local / private Endpoint IP
+        bad_meta = valid_cfg.replace("212.56.54.190:1337", "169.254.169.254:1337")
+        res_meta = self.run_helper("write-config", input_data=bad_meta)
+        self.assertNotEqual(res_meta.returncode, 0)
 
     def test_exec_helper_dns_firewall_verification_rejected_when_policy_not_drop(self) -> None:
         """Proves that non-DROP output policy fails firewall verification."""

@@ -100,6 +100,7 @@ if ($VerifyOnly) {
         Audit "AWS verification passed: LodestarPiaSecretReader can access lodestar/pia-vpn."
     } else {
         Audit "AWS verification failed with exit code $LASTEXITCODE."
+        throw "AWS verification failed with exit code $LASTEXITCODE."
     }
     return
 }
@@ -114,7 +115,7 @@ Usage:
   .\scripts\Deploy-PiaVpn.ps1 -Target <LINODE_IP> -Action Health
   .\scripts\Deploy-PiaVpn.ps1 -Target <LINODE_IP> -Action Cleanup
 "@
-    return
+    throw "-Target <Linode_IP> is required for action '$Action'."
 }
 
 if ($Target -notmatch '^[a-zA-Z0-9.-]+$') {
@@ -137,22 +138,16 @@ if ($DryRun) {
 switch ($Action) {
     'FullWorkflow' {
         Audit "=== Executing Lodestar Secure PIA VPN Workflow for $Target ==="
-        Audit "Step 1: Provisioning ephemeral WireGuard configuration to /run/lodestar/vpn/wg0.conf..."
-        & $pythonExe $bridgeScript provision --target $Target --pia-region $Region --ssh-user $SshUser --ssh-key $SshKey @accountArgs
-        if ($LASTEXITCODE -ne 0) { throw "Provisioning failed with exit code $LASTEXITCODE." }
-
-        Audit "Step 2: Starting Gluetun VPN container on $Target..."
-        & $pythonExe $bridgeScript start-vpn --target $Target --ssh-user $SshUser --ssh-key $SshKey
-        if ($LASTEXITCODE -ne 0) { throw "Failed to start Gluetun container." }
-
-        Audit "Step 3: Performing independent leak and tunnel verification..."
-        & $pythonExe $bridgeScript verify-tunnel --target $Target --ssh-user $SshUser --ssh-key $SshKey
-        if ($LASTEXITCODE -ne 0) { throw "Independent leak verification failed! Tunnel is insecure." }
+        $provArgs = @('provision', '--target', $Target, '--pia-region', $Region, '--ssh-user', $SshUser, '--ssh-key', $SshKey)
+        if ($StartCrawler) {
+            $provArgs += '--start-crawler'
+        }
+        $provArgs += $accountArgs
+        Audit "Provisioning wg0.conf, starting Gluetun, and verifying leak protection..."
+        & $pythonExe $bridgeScript @provArgs
+        if ($LASTEXITCODE -ne 0) { throw "VPN provisioning workflow failed with exit code $LASTEXITCODE." }
 
         if ($StartCrawler) {
-            Audit "Step 4: Leak protection confirmed. Starting crawler workload..."
-            & $pythonExe $bridgeScript start-crawler --target $Target --ssh-user $SshUser --ssh-key $SshKey
-            if ($LASTEXITCODE -ne 0) { throw "Failed to start crawler container." }
             Audit "Crawler started cleanly behind verified VPN."
         } else {
             Audit "VPN gateway ready. Crawler was not started (pass -StartCrawler to launch)."
@@ -162,30 +157,36 @@ switch ($Action) {
     'Provision' {
         Audit "Provisioning wg0.conf to $Target..."
         & $pythonExe $bridgeScript provision --target $Target --pia-region $Region --ssh-user $SshUser --ssh-key $SshKey @accountArgs
+        if ($LASTEXITCODE -ne 0) { throw "Provision failed with exit code $LASTEXITCODE." }
     }
 
     'StartVpn' {
         Audit "Starting Gluetun container on $Target..."
         & $pythonExe $bridgeScript start-vpn --target $Target --ssh-user $SshUser --ssh-key $SshKey
+        if ($LASTEXITCODE -ne 0) { throw "StartVpn failed with exit code $LASTEXITCODE." }
     }
 
     'VerifyTunnel' {
         Audit "Verifying VPN egress and leak protection on $Target..."
         & $pythonExe $bridgeScript verify-tunnel --target $Target --ssh-user $SshUser --ssh-key $SshKey
+        if ($LASTEXITCODE -ne 0) { throw "VerifyTunnel failed with exit code $LASTEXITCODE." }
     }
 
     'StartCrawler' {
         Audit "Starting crawler on $Target after leak check..."
         & $pythonExe $bridgeScript start-crawler --target $Target --ssh-user $SshUser --ssh-key $SshKey
+        if ($LASTEXITCODE -ne 0) { throw "StartCrawler failed with exit code $LASTEXITCODE." }
     }
 
     'Health' {
         Audit "Querying VPN health and egress IP for $Target..."
         & $pythonExe $bridgeScript health --target $Target --ssh-user $SshUser --ssh-key $SshKey
+        if ($LASTEXITCODE -ne 0) { throw "Health check failed with exit code $LASTEXITCODE." }
     }
 
     'Cleanup' {
         Audit "Cleaning up runtime secrets on $Target..."
         & $pythonExe $bridgeScript cleanup --target $Target --ssh-user $SshUser --ssh-key $SshKey
+        if ($LASTEXITCODE -ne 0) { throw "Cleanup failed with exit code $LASTEXITCODE." }
     }
 }

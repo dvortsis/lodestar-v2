@@ -38,8 +38,12 @@ services:
       - VPN_TYPE=wireguard
       - TZ=Etc/UTC
       - FIREWALL=on
+      - FIREWALL_ENABLED_DISABLING_IT_SHOOTS_YOU_IN_YOUR_FOOT=on
       - FIREWALL_VPN_INPUT_PORTS=
       - FIREWALL_OUTBOUND_SUBNETS=
+      - WIREGUARD_PERSISTENT_KEEPALIVE_INTERVAL=25s
+      - PUBLICIP_ENABLED=on
+      - PUBLICIP_FILE=/tmp/gluetun/ip
       - DOT=on
       - BLOCK_MALICIOUS=on
     volumes:
@@ -67,6 +71,7 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    mem_limit: 512m
     restart: "no"
     profiles:
       - crawler

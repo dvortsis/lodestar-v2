@@ -245,7 +245,11 @@ To synchronize Terraform state with live Akamai Cloud (dropping watchdog-deleted
         Audit "=== Verifying AWS Secrets Manager Access for PIA VPN ==="
         Push-Location $projectRoot
         try {
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\Deploy-PiaVpn.ps1" -VerifyOnly
+            $exe = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh' } else { 'powershell.exe' }
+            if ($IsLinux -or $IsMacOS) { $exe = 'pwsh' }
+            $psHost = Join-Path $PSHOME $exe
+            & $psHost -NoProfile -File (Join-Path $scriptDir 'Deploy-PiaVpn.ps1') -VerifyOnly
+            if ($LASTEXITCODE -ne 0) { throw "vpn-verify failed with exit code $LASTEXITCODE." }
         } finally { Pop-Location }
     }
 
@@ -253,13 +257,17 @@ To synchronize Terraform state with live Akamai Cloud (dropping watchdog-deleted
         Audit "=== Provisioning Secure PIA WireGuard VPN ==="
         if (-not $Target) {
             Audit "ERROR: -Target <Linode_IP> is required for vpn-provision."
-            return
+            throw "-Target <Linode_IP> is required for vpn-provision."
         }
         Push-Location $projectRoot
         try {
+            $exe = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh' } else { 'powershell.exe' }
+            if ($IsLinux -or $IsMacOS) { $exe = 'pwsh' }
+            $psHost = Join-Path $PSHOME $exe
             $params = @('-Target', $Target, '-Region', $Region)
             if ($StartCrawler) { $params += '-StartCrawler' }
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\Deploy-PiaVpn.ps1" @params
+            & $psHost -NoProfile -File (Join-Path $scriptDir 'Deploy-PiaVpn.ps1') @params
+            if ($LASTEXITCODE -ne 0) { throw "vpn-provision failed with exit code $LASTEXITCODE." }
         } finally { Pop-Location }
     }
 
@@ -267,11 +275,15 @@ To synchronize Terraform state with live Akamai Cloud (dropping watchdog-deleted
         Audit "=== Checking Linode VPN Status and Leak Protection ==="
         if (-not $Target) {
             Audit "ERROR: -Target <Linode_IP> is required for vpn-status."
-            return
+            throw "-Target <Linode_IP> is required for vpn-status."
         }
         Push-Location $projectRoot
         try {
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\Deploy-PiaVpn.ps1" -Target $Target -Action Health
+            $exe = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh' } else { 'powershell.exe' }
+            if ($IsLinux -or $IsMacOS) { $exe = 'pwsh' }
+            $psHost = Join-Path $PSHOME $exe
+            & $psHost -NoProfile -File (Join-Path $scriptDir 'Deploy-PiaVpn.ps1') -Target $Target -Action Health
+            if ($LASTEXITCODE -ne 0) { throw "vpn-status failed with exit code $LASTEXITCODE." }
         } finally { Pop-Location }
     }
 
@@ -279,11 +291,15 @@ To synchronize Terraform state with live Akamai Cloud (dropping watchdog-deleted
         Audit "=== Starting Crawler Behind Verified PIA VPN ==="
         if (-not $Target) {
             Audit "ERROR: -Target <Linode_IP> is required for vpn-crawler."
-            return
+            throw "-Target <Linode_IP> is required for vpn-crawler."
         }
         Push-Location $projectRoot
         try {
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\Deploy-PiaVpn.ps1" -Target $Target -Action StartCrawler
+            $exe = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh' } else { 'powershell.exe' }
+            if ($IsLinux -or $IsMacOS) { $exe = 'pwsh' }
+            $psHost = Join-Path $PSHOME $exe
+            & $psHost -NoProfile -File (Join-Path $scriptDir 'Deploy-PiaVpn.ps1') -Target $Target -Action StartCrawler
+            if ($LASTEXITCODE -ne 0) { throw "vpn-crawler failed with exit code $LASTEXITCODE." }
         } finally { Pop-Location }
     }
 
@@ -291,11 +307,15 @@ To synchronize Terraform state with live Akamai Cloud (dropping watchdog-deleted
         Audit "=== Cleaning Up PIA VPN Runtime Secrets and Containers ==="
         if (-not $Target) {
             Audit "ERROR: -Target <Linode_IP> is required for vpn-cleanup."
-            return
+            throw "-Target <Linode_IP> is required for vpn-cleanup."
         }
         Push-Location $projectRoot
         try {
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\Deploy-PiaVpn.ps1" -Target $Target -Action Cleanup
+            $exe = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh' } else { 'powershell.exe' }
+            if ($IsLinux -or $IsMacOS) { $exe = 'pwsh' }
+            $psHost = Join-Path $PSHOME $exe
+            & $psHost -NoProfile -File (Join-Path $scriptDir 'Deploy-PiaVpn.ps1') -Target $Target -Action Cleanup
+            if ($LASTEXITCODE -ne 0) { throw "vpn-cleanup failed with exit code $LASTEXITCODE." }
         } finally { Pop-Location }
     }
 }
