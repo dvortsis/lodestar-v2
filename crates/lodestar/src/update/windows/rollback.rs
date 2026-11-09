@@ -39,8 +39,9 @@
 //!      SHA-256) in staging's `previous\` or `current\`, checked right
 //!      before it runs (rule 4's one exception: the journal's rollback
 //!      target with SYSTEM-held pins);
-//!   5. the start type back to what it was before (recorded before the
-//!      first change), the service started, the
+//!   5. the start type back to what it was before the install (recorded
+//!      before its stop, since the MSI resets it to delayed automatic;
+//!      delayed automatic when none was recorded), the service started, the
 //!      reinstalled MSI made `current\` again; then the old version's
 //!      health is checked and reported.
 //!
@@ -48,7 +49,8 @@
 //!   every pass, so a resume never finds it running.
 //! - **Stops:** a transient one (the service won't stop yet, a process
 //!   lingers, Windows Installer is busy) leaves the journal, the service
-//!   disabled, for the next run to retry ([`Outcome::RollbackPending`]). A
+//!   disabled, for the next run to retry ([`Outcome::RollbackPending`]):
+//!   until the next boot, unless someone starts the task. A
 //!   final one halts: as §12.2 says, neither version starts. Before step 1
 //!   nothing was changed and the service is left as it is; after it, the
 //!   service stays stopped and disabled (with the marker while the store
@@ -82,7 +84,6 @@ const STEM: &str = "lodestar";
 const ROLLBACK_LOG: &str = "msiexec-rollback.log";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Journal {
     pub format: u32,
     /// The request it came from.
@@ -96,14 +97,32 @@ pub struct Journal {
     /// The install needs Windows to restart (exit 3010).
     #[serde(default)]
     pub restart: bool,
-    /// The service's start type before the rollback disabled it: what
-    /// it's set back to (recorded before the first change).
+    /// The service's start type before the install stopped it, recorded
+    /// then because the MSI resets it to delayed automatic: what a healthy
+    /// probation or a finished rollback sets back. `None` when it was
+    /// disabled or couldn't be read; then delayed automatic (the MSI's).
     #[serde(default)]
     pub start_before: Option<Start>,
+    /// The rollback has touched the service (step 1 began): a halt from
+    /// here on leaves it disabled and stopped. Before, nothing changed.
+    #[serde(default)]
+    pub touched: bool,
     /// The `msiexec` run handed to the helper's copy, while it's pending:
     /// what the copy runs, and nothing else.
     #[serde(default)]
     pub msi: Option<MsiRun>,
+    /// The copy's answer to `msi`, recorded here before its file goes, so
+    /// a crash between the two loses nothing.
+    #[serde(default)]
+    pub answer: Option<MsiResult>,
+    /// Copies started for this rollback's reinstall (bounded by
+    /// [`MAX_COPIES`]).
+    #[serde(default)]
+    pub copies: u32,
+    /// The rollback's reinstall waits for Windows to restart (exit 3010 or
+    /// 1641): step 5 waits until the program on disk is `from`.
+    #[serde(default)]
+    pub reinstall_restart: bool,
     pub state: State,
 }
 
@@ -118,7 +137,6 @@ pub enum Purpose {
 /// An `msiexec` run the helper hands to its copy in staging, so the
 /// install folder isn't in use while Windows Installer replaces it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct MsiRun {
     pub purpose: Purpose,
     /// The MSI, inside staging.
@@ -133,13 +151,15 @@ pub struct MsiRun {
     pub copy: String,
 }
 
+/// Fresh copies a rollback's reinstall may be handed to before it halts.
+pub const MAX_COPIES: u32 = 3;
+
 /// In staging: the copy's answer, `msiexec`'s exit code.
 pub const MSI_RESULT: &str = "msiexec-result.json";
 /// In staging: held by the copy while it runs.
 pub const MSI_LOCK: &str = "msiexec.lock";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct MsiResult {
     pub id: String,
     pub purpose: Purpose,
@@ -163,14 +183,24 @@ pub enum Answer {
 /// The copy's answer for this journal's pending run, consumed: read and
 /// removed. `None` when there's none (yet), or it isn't this run's (its
 /// journal id, purpose and copy must all match).
-pub fn take_result(ctx: &Context, j: &Journal) -> Option<Answer> {
+pub fn take_result(ctx: &Context, j: &mut Journal) -> Option<Answer> {
     let run = j.msi.as_ref()?;
-    let path = ctx.staging.dir.join(MSI_RESULT);
-    let r: MsiResult = layout::read_json(&path).ok().flatten()?;
-    let _ = std::fs::remove_file(&path);
-    if r.id != j.id || r.purpose != run.purpose || r.copy != run.copy {
-        return None;
-    }
+    let r = match j.answer.clone() {
+        Some(r) => r,
+        None => {
+            let path = ctx.staging.dir.join(MSI_RESULT);
+            let r: MsiResult = layout::read_json(&path).ok().flatten()?;
+            if r.id != j.id || r.purpose != run.purpose || r.copy != run.copy {
+                let _ = std::fs::remove_file(&path);
+                return None;
+            }
+            // Recorded in the journal first, then the file goes.
+            j.answer = Some(r.clone());
+            write(ctx, j).ok()?;
+            let _ = std::fs::remove_file(&path);
+            r
+        }
+    };
     Some(match r.refused {
         Some(why) => Answer::Refused(why),
         None => Answer::Code(r.code),
@@ -183,12 +213,14 @@ pub fn write_result(ctx: &Context, r: &MsiResult) -> Result<(), Refusal> {
         .map_err(|e| Refusal::Io(format!("{MSI_RESULT}: {e}")))
 }
 
-/// Takes the copy's lock in staging; `None` while a copy holds it.
-pub fn msi_lock(ctx: &Context) -> std::io::Result<Option<std::fs::File>> {
+/// Takes the copy's lock in staging; `None` while a copy holds it. Only
+/// the copy creates the file (`create`), once it has checked and pinned
+/// staging; a check that finds no file finds no copy.
+pub fn msi_lock(ctx: &Context, create: bool) -> std::io::Result<Option<std::fs::File>> {
     let f = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .create(true)
+        .create(create)
         .truncate(false)
         .open(ctx.staging.dir.join(MSI_LOCK))?;
     match f.try_lock() {
@@ -202,8 +234,10 @@ pub fn msi_lock(ctx: &Context) -> std::io::Result<Option<std::fs::File>> {
 /// read, or this run's copy is still there (a starting copy that hasn't
 /// taken the lock yet can't be removed: its image is running).
 pub fn copy_running(ctx: &Context, j: Option<&Journal>) -> bool {
-    if !matches!(msi_lock(ctx), Ok(Some(_))) {
-        return true;
+    match msi_lock(ctx, false) {
+        Ok(Some(_)) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        _ => return true,
     }
     let Some(copy) = j.and_then(|j| j.msi.as_ref()).map(|r| r.copy.as_str()) else {
         return false;
@@ -216,7 +250,7 @@ pub fn copy_running(ctx: &Context, j: Option<&Journal>) -> bool {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", tag = "step", deny_unknown_fields)]
+#[serde(rename_all = "snake_case", tag = "step")]
 pub enum State {
     /// `msiexec` ran or is about to; probation is next.
     Installing,
@@ -235,7 +269,6 @@ pub enum State {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct SnapshotRef {
     /// A file name beside the store, never a path.
     pub name: String,
@@ -246,10 +279,33 @@ pub struct SnapshotRef {
 /// run rather than guess.
 pub fn read(ctx: &Context) -> Result<Option<Journal>, Refusal> {
     match layout::read_json::<Journal>(&ctx.staging.dir.join(JOURNAL)) {
-        Ok(Some(j)) if j.format == FORMAT => Ok(Some(j)),
+        Ok(Some(j)) if j.format == FORMAT && valid(ctx, &j) => Ok(Some(j)),
         Ok(None) => Ok(None),
         _ => Err(Refusal::Io("journal.json can't be read".into())),
     }
+}
+
+/// A journal's path fields, checked on read: the copy is a `run-<32
+/// hex>.exe`, and the MSI and its log are inside staging.
+fn valid(ctx: &Context, j: &Journal) -> bool {
+    let Some(run) = &j.msi else {
+        return true;
+    };
+    valid_copy(&run.copy)
+        && inside_staging(ctx, Path::new(&run.msi))
+        && inside_staging(ctx, Path::new(&run.log))
+}
+
+/// `run-<32 lowercase hex>.exe`.
+pub fn valid_copy(name: &str) -> bool {
+    name.strip_prefix("run-")
+        .and_then(|n| n.strip_suffix(".exe"))
+        .is_some_and(|h| h.len() == 32 && h.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')))
+}
+
+/// Inside the staging folder, with no `..` step.
+pub fn inside_staging(ctx: &Context, p: &Path) -> bool {
+    p.starts_with(&ctx.staging.dir) && !p.components().any(|c| c == std::path::Component::ParentDir)
 }
 
 pub fn write(ctx: &Context, j: &Journal) -> Result<(), Refusal> {
@@ -282,6 +338,10 @@ pub fn installing(
         restart: false,
         start_before: None,
         msi: None,
+        answer: None,
+        copies: 0,
+        reinstall_restart: false,
+        touched: false,
         state: State::Installing,
     })
 }
@@ -308,6 +368,11 @@ pub fn probation(ctx: &Context, sys: &dyn System, mut journal: Journal, restart:
         };
     }
     if sys.healthy() {
+        // The MSI installs it delayed automatic: what the administrator had
+        // before goes back.
+        if let Some(start) = journal.start_before.filter(|s| *s != Start::Auto) {
+            let _ = sys.set_start(start);
+        }
         clear(ctx);
         return Outcome::Installed {
             version: to,
@@ -337,8 +402,9 @@ pub fn resume(
     }
     // An install handed to the copy: its answer first, or it's still
     // running. Without either the copy died; the program on disk decides.
+    let mut journal = journal;
     if journal.state == State::Installing && journal.msi.is_some() {
-        match take_result(ctx, &journal) {
+        match take_result(ctx, &mut journal) {
             Some(Answer::Code(code)) => {
                 return Ok(Some(helper::after_install(ctx, sys, journal, code)));
             }
@@ -441,9 +507,9 @@ fn done_of(j: &Journal) -> u8 {
 /// until the store is restored. Before that nothing was changed. The
 /// journal, the Event Log and `result.json` say how to recover.
 fn halt(ctx: &Context, sys: &dyn System, mut j: Journal, done: u8, why: String) -> Outcome {
-    // `start_before` is recorded before the rollback first touches the
-    // service: without it nothing was changed.
-    let touched = j.start_before.is_some();
+    // Recorded before the rollback first touches the service: without it
+    // nothing was changed.
+    let touched = j.touched;
     let recovery = recovery(ctx, &j, if touched { done.max(1) } else { 0 }, &why);
     sys.event_log(&recovery);
     eprintln!("lodestar update-helper: {recovery}");
@@ -495,7 +561,8 @@ pub fn recovery(ctx: &Context, j: &Journal, done: u8, why: &str) -> String {
          msiexec logs beside it; 2. installs the {from} MSI by hand, or restores a backup of \
          {data}; 3. once the store is one the installed version reads, deletes {marker} and \
          {journal}, then runs: sc config Lodestar start= delayed-auto, and: sc start Lodestar. \
-         Installing a version other than {from} or {to} clears both files by itself. Neither \
+         Installing a version other than {from} or {to} clears both files at the next \
+         restart (the helper's run at boot). Neither \
          file starts anything.",
         journal = journal.display(),
         data = ctx.data_dir.display(),
@@ -519,19 +586,14 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
     if done < 4 && j.msi.is_none() {
         halt_on(previous_msi(ctx, &j.from))?;
     }
-    // The start type to go back to, recorded before the first change.
-    if j.start_before.is_none() {
-        let before = sys
-            .start_type()
-            .map_err(|e| Stop::Retry(format!("reading the service's start type: {e}")))?;
-        j.start_before = Some(match before {
-            // Only this helper disables it: never what it goes back to.
-            Start::Disabled => Start::Auto,
-            other => other,
-        });
-        save(j, &snapshot, done)?;
-    }
+    // The start type to go back to was recorded by the install, before
+    // its stop (`start_before`); none recorded means delayed automatic.
     if done < 1 {
+        if !j.touched {
+            // Saved first, so a crash from here on resumes the rollback.
+            j.touched = true;
+            save(j, &snapshot, done)?;
+        }
         stopped(sys)?;
         let bin = halt_on(
             Bin::existing(&ctx.data_dir)
@@ -544,10 +606,9 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
             bin.write(MARKER, &serde_json::json!({ "windows_rollback": j.to }))
                 .map_err(|e| format!("the rollback marker: {e}")),
         )?;
-        halt_on(
-            super::check::add_skip(&bin, &j.to, super::check::SKIP_FAILED)
-                .map_err(|e| format!("skipped: {e}")),
-        )?;
+        // Best effort, as `mark_failed`: an unreadable `skipped` mustn't
+        // stop the rollback (the next check offers the version again).
+        let _ = super::check::add_skip(&bin, &j.to, super::check::SKIP_FAILED);
         drop(lock);
         done = 1;
         save(j, &snapshot, done)?;
@@ -576,10 +637,19 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
             Some(Answer::Code(code)) => code,
             Some(Answer::Refused(why)) => {
                 j.msi = None;
+                j.answer = None;
+                j.copies = 0;
                 save(j, &snapshot, done)?;
                 return Err(Stop::Retry(format!("the helper's copy refused: {why}")));
             }
             None if copy_running(ctx, Some(j)) => return Err(Stop::HandedOff),
+            None if j.copies >= MAX_COPIES => {
+                return Err(Stop::Halt(format!(
+                    "the reinstall of {} was handed to {MAX_COPIES} copies of the helper and \
+                     none answered",
+                    j.from
+                )));
+            }
             None => {
                 stopped(sys)?;
                 // Checked again right before it runs.
@@ -593,6 +663,7 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
                     pins,
                     copy: copy.clone(),
                 });
+                j.copies += 1;
                 save(j, &snapshot, done)?;
                 let args = msi::msiexec_args(&staged, &log);
                 match sys.run_msiexec(&ctx.staging.dir, &args, &copy) {
@@ -604,8 +675,19 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
             }
         };
         j.msi = None;
+        j.answer = None;
+        // A copy answered: the bound counts copies in a row that didn't.
+        j.copies = 0;
         match msi::installed(code) {
-            msi::Installed::Done | msi::Installed::RestartNeeded => {}
+            msi::Installed::Done => {}
+            msi::Installed::RestartNeeded => {
+                // The old program replaces the failed one only at the next
+                // restart: until then nothing may start the failed one on
+                // the restored store.
+                j.reinstall_restart = true;
+                let _ = sys.set_start(Start::Disabled);
+                let _ = sys.stop_service();
+            }
             msi::Installed::Busy(c) => {
                 save(j, &snapshot, done)?;
                 return Err(Stop::Retry(format!("Windows Installer is busy ({c})")));
@@ -618,6 +700,16 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
         save(j, &snapshot, done)?;
     }
     if done < 5 {
+        // After a reinstall that waits for a restart, step 5 waits for the
+        // program on disk to be `from` (the boot run's).
+        if j.reinstall_restart
+            && ctx.running.as_ref().map(|v| v.to_string()) != Some(j.from.clone())
+        {
+            return Err(Stop::Retry(format!(
+                "waiting for Windows to restart, which puts {} back in place",
+                j.from
+            )));
+        }
         let back = j.start_before.unwrap_or(Start::Auto);
         sys.set_start(back)
             .map_err(|e| Stop::Retry(format!("setting the service's start type back: {e}")))?;

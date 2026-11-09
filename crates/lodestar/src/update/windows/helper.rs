@@ -472,6 +472,12 @@ fn attempt(
         size: pin.size,
     };
 
+    // The start type now, so a rollback (or a passed probation, since the
+    // MSI resets it) puts back what the administrator chose.
+    let start_before = match sys.start_type() {
+        Ok(Start::Disabled) | Err(_) => None,
+        Ok(other) => Some(other),
+    };
     // The service stops; `.lock` proves it.
     if sys.stop_service().is_err() {
         // It may still stop late: start it either way.
@@ -508,6 +514,7 @@ fn attempt(
             return Err(Refusal::Busy("helper_copy_failed"));
         }
     };
+    journal.start_before = start_before;
     journal.msi = Some(rollback::MsiRun {
         purpose: rollback::Purpose::Install,
         msi: staged.to_string_lossy().into_owned(),
@@ -564,13 +571,32 @@ pub(super) fn after_install(
         done => {
             // Installed: a staging problem doesn't undo that, so it's
             // reported and probation still runs.
-            if let Err(e) = keep(&ctx.staging, Path::new(&run.msi), &run.pins) {
+            let staged = Path::new(&run.msi);
+            if rollback::inside_staging(ctx, staged)
+                && let Err(e) = keep(&ctx.staging, staged, &run.pins)
+            {
                 eprintln!("lodestar update-helper: keeping the MSI for rollback: {e}");
             }
+            // The restart flag and the cleared run in the same write.
+            journal.restart = done == Installed::RestartNeeded;
+            journal.answer = None;
             let _ = rollback::write(ctx, &journal);
             rollback::probation(ctx, sys, journal, done == Installed::RestartNeeded)
         }
     }
+}
+
+/// An `msiexec` that started and then didn't finish with a code (its
+/// deadline, or no exit code): not a refusal, since it may have changed
+/// things.
+const MSIEXEC_UNFINISHED: &str = "msiexec_unfinished";
+
+/// Whether [`System::msiexec`]'s error came after `msiexec` started.
+fn started_then_failed(e: &io::Error) -> bool {
+    matches!(
+        e.kind(),
+        io::ErrorKind::TimedOut | io::ErrorKind::Interrupted
+    )
 }
 
 /// A fresh, unpredictable name for the helper's copy: `run-<32 hex>.exe`.
@@ -597,12 +623,12 @@ pub fn run_copy(
     self_name: &str,
     wait: &dyn Fn() -> bool,
 ) -> Result<i32, Refusal> {
-    let lock = rollback::msi_lock(ctx)
-        .map_err(io_refusal("msiexec.lock"))?
-        .ok_or(Refusal::Busy("copy_running"))?;
     sys.secure_staging(&ctx.staging.dir)
         .map_err(Refusal::Staging)?;
     let _pin = layout::pin_dir(&ctx.staging.dir).map_err(|e| Refusal::Staging(e.to_string()))?;
+    let lock = rollback::msi_lock(ctx, true)
+        .map_err(io_refusal("msiexec.lock"))?
+        .ok_or(Refusal::Busy("copy_running"))?;
     let journal = rollback::read(ctx)?.ok_or(Refusal::Request("no_journal"))?;
     let run = journal
         .msi
@@ -642,11 +668,19 @@ pub fn run_copy(
         sys.stop_service()
             .map_err(|_| Refusal::Busy("service_running"))?;
         rollback::no_service_processes(sys).map_err(|_| Refusal::Busy("service_processes"))?;
-        sys.msiexec(&msi::msiexec_args(&msi, &log))
-            .map_err(io_refusal("msiexec"))
+        sys.msiexec(&msi::msiexec_args(&msi, &log)).map_err(|e| {
+            if started_then_failed(&e) {
+                Refusal::Busy(MSIEXEC_UNFINISHED)
+            } else {
+                Refusal::Busy("msiexec_not_started")
+            }
+        })
     })();
     match &outcome {
         Ok(code) => answer(*code, None)?,
+        // It started: Windows Installer may still finish. No answer, so the
+        // next run judges from the program on disk (or hands off again).
+        Err(Refusal::Busy(MSIEXEC_UNFINISHED)) => {}
         Err(r) => answer(-1, Some(r.code().to_string()))?,
     }
     drop(lock);
@@ -1087,21 +1121,26 @@ impl System for Windows {
         Ok(Ran::HandedOff)
     }
 
-    /// Bounded by [`MSIEXEC_WAIT`]: a hung install is ended (and reported
-    /// as a failure), never left holding the copy's lock for good.
+    /// Bounded by [`MSIEXEC_WAIT`]: a hung install is ended, never left
+    /// holding the copy's lock for good. That error (and one with no exit
+    /// code) comes after `msiexec` started, so it's `TimedOut` or
+    /// `Interrupted`, never answered as a refusal ([`run_copy`]).
     fn msiexec(&self, args: &[OsString]) -> io::Result<i32> {
         let mut child = Self::command("msiexec.exe")?.args(args).spawn()?;
         let deadline = Instant::now() + MSIEXEC_WAIT;
         loop {
             if let Some(status) = child.try_wait()? {
-                return status
-                    .code()
-                    .ok_or_else(|| io::Error::other("msiexec ended without a code"));
+                return status.code().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::Interrupted, "msiexec ended without a code")
+                });
             }
             if Instant::now() >= deadline {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(io::Error::other("msiexec ran past its deadline"));
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "msiexec ran past its deadline",
+                ));
             }
             std::thread::sleep(Duration::from_secs(1));
         }
@@ -1182,6 +1221,9 @@ mod tests {
         events: Mutex<Vec<String>>,
         /// Hand msiexec to the copy instead of running it here.
         hand_off: bool,
+        /// msiexec fails with this instead of answering (as the deadline's
+        /// kill or a lost exit code would).
+        msi_error: Option<io::ErrorKind>,
         /// Called at a test hook (`copied`): (hook name, action).
         at_hook: Option<(&'static str, Hook)>,
         /// A source to overwrite once it's copied: (name, path, bytes).
@@ -1247,6 +1289,9 @@ mod tests {
                 }
             }
             *self.ran.lock().unwrap() = Some((args.to_vec(), msi));
+            if let Some(kind) = self.msi_error {
+                return Err(io::Error::new(kind, "msiexec didn't finish"));
+            }
             Ok(self.code)
         }
         /// Unhealthy at the first look only (the failed version), healthy
@@ -2144,8 +2189,8 @@ mod tests {
         }
     }
 
-    /// A halt once the service was stopped leaves it stopped on manual
-    /// start: neither version starts (§12.2).
+    /// A halt once the service was stopped leaves it stopped and disabled:
+    /// neither version starts (§12.2).
     #[test]
     fn a_halt_after_the_stop_starts_neither_version() {
         // The kept MSI tampered once the store is being restored.
@@ -2211,6 +2256,32 @@ mod tests {
             let calls = fake.calls();
             assert_eq!(calls[calls.len() - 3], note, "{calls:?}");
             assert_eq!(calls.iter().filter(|c| *c == "disabled").count(), 3);
+        }
+    }
+
+    /// A healthy install puts back the start type found before it (the
+    /// MSI resets it to delayed automatic); none recorded leaves the MSI's.
+    #[test]
+    fn a_healthy_install_restores_the_start_type_it_found() {
+        for (before, expect) in [
+            (Some(Start::Manual), Some("manual")),
+            (Some(Start::Immediate), Some("immediate")),
+            (Some(Start::Auto), None),
+            (Some(Start::Disabled), None),
+        ] {
+            let env = Env::new("0.6.0");
+            env.offer("0.7.0");
+            let fake = Fake {
+                start_before: before,
+                ..Fake::default()
+            };
+            assert_eq!(env.run(&fake).unwrap().code(), "installed");
+            let set: Vec<String> = fake
+                .calls()
+                .into_iter()
+                .filter(|c| ["manual", "immediate", "auto", "disabled"].contains(&c.as_str()))
+                .collect();
+            assert_eq!(set, expect.into_iter().collect::<Vec<_>>(), "{before:?}");
         }
     }
 
@@ -2307,6 +2378,10 @@ mod tests {
                 restart: false,
                 start_before: None,
                 msi: None,
+                answer: None,
+                copies: 0,
+                reinstall_restart: false,
+                touched: true,
                 state: rollback::State::RollingBack {
                     snapshot: Some(rollback::SnapshotRef {
                         name: name.into(),
@@ -2337,7 +2412,7 @@ mod tests {
         assert_eq!(env.run(&fake).unwrap(), Outcome::HandedOff);
         assert!(fake.ran.lock().unwrap().is_none(), "never from here");
         // While the copy runs, a run touches nothing.
-        let lock = rollback::msi_lock(&env.ctx).unwrap().unwrap();
+        let lock = rollback::msi_lock(&env.ctx, true).unwrap().unwrap();
         let early = Fake::default();
         assert_eq!(env.run(&early).unwrap(), Outcome::HandedOff);
         assert!(early.calls().is_empty());
@@ -2427,6 +2502,219 @@ mod tests {
         );
     }
 
+    /// A rollback through the copy up to its reinstall: the install
+    /// handed off and run, the program on disk now `to`, probation failed
+    /// and the reinstall handed off in turn. Returns the copy's name.
+    fn rollback_to_the_reinstall(env: &mut Env) -> String {
+        with_previous(env, OLD_MSI);
+        env.offer("0.7.0");
+        let hand = Fake {
+            hand_off: true,
+            ..Fake::default()
+        };
+        assert_eq!(env.run(&hand).unwrap(), Outcome::HandedOff);
+        let copy = Fake {
+            migrate: Some(env.ctx.data_dir.clone()),
+            ..Fake::default()
+        };
+        as_copy(env, &copy).unwrap();
+        env.ctx.running = Some(Version::new(0, 7, 0));
+        let next = Fake {
+            unhealthy: true,
+            hand_off: true,
+            ..Fake::default()
+        };
+        assert_eq!(env.run(&next).unwrap(), Outcome::HandedOff);
+        let j = rollback::read(&env.ctx).unwrap().unwrap();
+        let run = j.msi.expect("the reinstall pending");
+        assert_eq!(run.purpose, rollback::Purpose::Rollback);
+        run.copy
+    }
+
+    fn done(env: &Env) -> u8 {
+        match rollback::read(&env.ctx).unwrap().unwrap().state {
+            rollback::State::RollingBack { done, .. } => done,
+            other => panic!("not rolling back: {other:?}"),
+        }
+    }
+
+    fn started(fake: &Fake) -> bool {
+        fake.calls()
+            .iter()
+            .any(|c| c == "auto" || c == "immediate" || c == "manual" || c == "start")
+    }
+
+    /// The reinstall's Windows Installer was busy (1618): retried, step 3
+    /// kept, nothing started, and the retry runs under a fresh copy.
+    #[test]
+    fn a_busy_reinstall_is_retried_under_a_fresh_copy() {
+        let mut env = Env::new("0.6.0");
+        let first = rollback_to_the_reinstall(&mut env);
+        let copy = Fake {
+            code: 1618,
+            ..Fake::default()
+        };
+        assert_eq!(as_copy(&env, &copy).unwrap(), 1618);
+        let next = Fake::default();
+        let out = env.run(&next).unwrap();
+        assert!(
+            matches!(&out, Outcome::RollbackPending { why } if why.contains("busy")),
+            "{out:?}"
+        );
+        assert!(!started(&next), "{:?}", next.calls());
+        assert_eq!(done(&env), 3);
+        let j = rollback::read(&env.ctx).unwrap().unwrap();
+        assert!(j.msi.is_none() && j.answer.is_none());
+        assert!(!env.ctx.staging.dir.join(rollback::MSI_RESULT).exists());
+        // The retry: a fresh copy, not the one that answered.
+        let again = Fake {
+            hand_off: true,
+            ..Fake::default()
+        };
+        assert_eq!(env.run(&again).unwrap(), Outcome::HandedOff);
+        let second = rollback::read(&env.ctx).unwrap().unwrap().msi.unwrap().copy;
+        assert_ne!(first, second);
+        assert!(!started(&again), "{:?}", again.calls());
+    }
+
+    /// The reinstall failed (1603): halted, and neither version starts.
+    #[test]
+    fn a_failed_reinstall_halts_with_the_service_disabled() {
+        let mut env = Env::new("0.6.0");
+        rollback_to_the_reinstall(&mut env);
+        let copy = Fake {
+            code: 1603,
+            ..Fake::default()
+        };
+        assert_eq!(as_copy(&env, &copy).unwrap(), 1603);
+        let next = Fake::default();
+        let out = env.run(&next).unwrap();
+        assert!(
+            matches!(&out, Outcome::RollbackHalted { why, .. } if why.contains("1603")),
+            "{out:?}"
+        );
+        assert!(!started(&next), "{:?}", next.calls());
+        let calls = next.calls();
+        assert!(calls.contains(&"disabled".to_string()) && calls.contains(&"stop".to_string()));
+        let j = rollback::read(&env.ctx).unwrap().unwrap();
+        assert!(j.msi.is_none());
+        assert!(matches!(j.state, rollback::State::Halted { .. }));
+        // A later run reports the halt and changes nothing.
+        let later = Fake::default();
+        assert!(matches!(
+            env.run(&later).unwrap(),
+            Outcome::RollbackHalted { .. }
+        ));
+        assert!(!started(&later), "{:?}", later.calls());
+    }
+
+    /// The reinstall needs a restart (3010): until the program on disk is
+    /// `from` again the service stays disabled and stopped; the boot run
+    /// finishes the rollback.
+    #[test]
+    fn a_reinstall_that_needs_a_restart_waits_for_it() {
+        let mut env = Env::new("0.6.0");
+        rollback_to_the_reinstall(&mut env);
+        let copy = Fake {
+            code: 3010,
+            ..Fake::default()
+        };
+        assert_eq!(as_copy(&env, &copy).unwrap(), 3010);
+        let next = Fake::default();
+        let out = env.run(&next).unwrap();
+        assert!(
+            matches!(&out, Outcome::RollbackPending { why } if why.contains("restart")),
+            "{out:?}"
+        );
+        assert!(!started(&next), "{:?}", next.calls());
+        assert_eq!(next.calls(), ["disabled", "stop"]);
+        assert_eq!(done(&env), 4);
+        let j = rollback::read(&env.ctx).unwrap().unwrap();
+        assert!(j.reinstall_restart && j.msi.is_none());
+        // Still 0.7.0 on disk (no restart yet): waits again, starting nothing.
+        let early = Fake::default();
+        assert!(matches!(
+            env.run(&early).unwrap(),
+            Outcome::RollbackPending { .. }
+        ));
+        assert!(!started(&early), "{:?}", early.calls());
+        // The boot run, 0.6.0 back in place.
+        env.ctx.running = Some(Version::new(0, 6, 0));
+        let boot = Fake::default();
+        assert_eq!(
+            env.run(&boot).unwrap(),
+            Outcome::RolledBack {
+                failed: "0.7.0".into(),
+                to: "0.6.0".into(),
+                healthy: true
+            }
+        );
+        assert!(boot.calls().contains(&"start".to_string()));
+        assert!(!env.ctx.staging.dir.join(rollback::JOURNAL).exists());
+    }
+
+    /// Copies that never answer are replaced only a few times; then the
+    /// rollback halts with the recovery steps, starting nothing.
+    #[test]
+    fn copies_that_never_answer_halt_the_rollback() {
+        let mut env = Env::new("0.6.0");
+        let mut names = vec![rollback_to_the_reinstall(&mut env)];
+        for _ in 1..rollback::MAX_COPIES {
+            let again = Fake {
+                hand_off: true,
+                ..Fake::default()
+            };
+            assert_eq!(env.run(&again).unwrap(), Outcome::HandedOff);
+            names.push(rollback::read(&env.ctx).unwrap().unwrap().msi.unwrap().copy);
+        }
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), rollback::MAX_COPIES as usize, "each one fresh");
+        let last = Fake {
+            hand_off: true,
+            ..Fake::default()
+        };
+        let out = env.run(&last).unwrap();
+        assert!(
+            matches!(&out, Outcome::RollbackHalted { why, recovery }
+                if why.contains("none answered") && recovery.contains("sc start")),
+            "{out:?}"
+        );
+        assert!(!last.calls().contains(&"hand_off".to_string()));
+        assert!(!started(&last), "{:?}", last.calls());
+    }
+
+    /// An msiexec that started and then didn't finish (the deadline's kill,
+    /// or no exit code) isn't a refusal: no answer is written, so the next
+    /// run judges from the program on disk.
+    #[test]
+    fn an_msiexec_that_started_then_failed_leaves_no_answer() {
+        for kind in [io::ErrorKind::TimedOut, io::ErrorKind::Interrupted] {
+            let env = Env::new("0.6.0");
+            env.offer("0.7.0");
+            let hand = Fake {
+                hand_off: true,
+                ..Fake::default()
+            };
+            assert_eq!(env.run(&hand).unwrap(), Outcome::HandedOff);
+            let copy = Fake {
+                msi_error: Some(kind),
+                ..Fake::default()
+            };
+            assert_eq!(as_copy(&env, &copy).unwrap_err().code(), MSIEXEC_UNFINISHED);
+            assert!(copy.calls().contains(&"msiexec".to_string()));
+            assert!(!env.ctx.staging.dir.join(rollback::MSI_RESULT).exists());
+            // 0.6.0 still on disk: the install was interrupted, not refused.
+            let next = Fake::default();
+            assert_eq!(
+                env.run(&next).unwrap(),
+                Outcome::InstallInterrupted {
+                    version: "0.7.0".into()
+                }
+            );
+        }
+    }
+
     /// The copy runs only the journal's MSI, inside staging, matching its
     /// pins; with no pending run it runs nothing.
     #[test]
@@ -2452,10 +2740,24 @@ mod tests {
             .into_owned();
         rollback::write(&env.ctx, &j).unwrap();
         let fake = Fake::default();
+        let name = good.msi.as_ref().unwrap().copy.clone();
+        // Refused as the journal is read, by the copy and by the helper.
+        assert!(rollback::read(&env.ctx).is_err());
         assert_eq!(
-            as_copy(&env, &fake).unwrap_err().code(),
-            "msiexec_outside_staging"
+            run_copy(&env.ctx, &fake, &name, &|| true)
+                .unwrap_err()
+                .code(),
+            "io"
         );
+        // A log outside staging, or a copy name that isn't one: the same.
+        let mut log = good.clone();
+        log.msi.as_mut().unwrap().log = env.updates("x.log").to_string_lossy().into_owned();
+        let mut copy = good.clone();
+        copy.msi.as_mut().unwrap().copy = "lodestar.exe".into();
+        for bad in [log, copy] {
+            rollback::write(&env.ctx, &bad).unwrap();
+            assert!(rollback::read(&env.ctx).is_err());
+        }
         // The staged MSI changed since it was checked.
         rollback::write(&env.ctx, &good).unwrap();
         std::fs::write(
@@ -2509,7 +2811,7 @@ mod tests {
             )
             .unwrap();
             // Held, as a copy still running: the forged answer isn't taken.
-            lock_held.push(rollback::msi_lock(&env.ctx).unwrap().unwrap());
+            lock_held.push(rollback::msi_lock(&env.ctx, true).unwrap().unwrap());
             assert_eq!(env.run(&Fake::default()).unwrap(), Outcome::HandedOff);
             drop(lock_held.pop());
         }
