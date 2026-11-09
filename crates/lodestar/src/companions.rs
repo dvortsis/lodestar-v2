@@ -571,6 +571,31 @@ impl Service {
         }
     }
 
+    /// Whether `id`'s credential `field` is one Lodestar generated (Q5:
+    /// only that is ever revealed): the companion is one Lodestar
+    /// installed (its journal), or one you added whose credential's
+    /// provenance row says `generated` (a guided qBittorrent's replaced
+    /// password, CMP-5g-2). A pasted one is never. Blocking.
+    fn generated(&self, id: &CompanionId, field: Field) -> Result<bool, CompanionsError> {
+        if self.installed(id)? {
+            return Ok(true);
+        }
+        let rows = self
+            .rows
+            .0
+            .lock()
+            .map_err(|_| CompanionsError::Internal("store"))?
+            .settings_with_prefix_raw(lodestar_companions::credentials::ROW_PREFIX)
+            .map_err(|_| CompanionsError::Internal("store"))?;
+        let text = |key: &str| {
+            rows.iter()
+                .find(|(k, _)| k == key)
+                .and_then(|(_, v)| v.as_ref().ok().cloned())
+        };
+        Ok(lodestar_companions::guided::provenance(id, field, text)
+            == Some(lodestar_companions::guided::Provenance::Generated))
+    }
+
     fn input(&self, r: &TemplateRequest) -> Result<ServiceInput, CompanionsError> {
         let path = |p: &Option<String>, f: &'static str| {
             p.as_deref()
@@ -793,7 +818,7 @@ impl CompanionsApi for Service {
             // guided or detected companion) is never shown again.
             let secret = self
                 .off(move |s| {
-                    if !s.installed(&e.id)? {
+                    if !s.generated(&e.id, f)? {
                         return Ok(None);
                     }
                     s.open(&e.id, f)
@@ -818,7 +843,7 @@ impl CompanionsApi for Service {
             let f = field(&name)?;
             let reachable = field_of(&e.id) == Some(f)
                 && self
-                    .off(move |s| Ok(s.installed(&e.id)? && s.stored(&e.id)?.contains(&f)))
+                    .off(move |s| Ok(s.generated(&e.id, f)? && s.stored(&e.id)?.contains(&f)))
                     .await?;
             if !reachable {
                 return Err(CompanionsError::NoCredential);
@@ -1230,6 +1255,32 @@ mod tests {
             ..s.clone_parts()
         };
         assert!(!docker.installed(&qbt).unwrap());
+    }
+
+    /// Carry-over 2: a companion you added reveals its credential only
+    /// when its provenance says Lodestar generated it.
+    #[tokio::test]
+    async fn an_added_companions_credential_reveals_only_when_generated() {
+        use lodestar_companions::guided::{Provenance, provenance_key};
+        let dir = tempfile::tempdir().unwrap();
+        let s = service(dir.path(), pinned(), NATIVE, Arc::new(Unwired));
+        let password = stored(&s, "qbittorrent", Field::WebUiPassword);
+        let qbt = CompanionId::parse("qbittorrent").unwrap();
+        let key = provenance_key(&qbt, Field::WebUiPassword).unwrap();
+        let mark = |p: Provenance| {
+            s.rows
+                .0
+                .lock()
+                .unwrap()
+                .set_settings_text(&[(&key, p.as_str())])
+                .unwrap();
+        };
+        let reveal = || s.reveal("qbittorrent".into(), "webui_password".into());
+        assert_eq!(reveal().await.err(), Some(CompanionsError::NoCredential));
+        mark(Provenance::Pasted);
+        assert_eq!(reveal().await.err(), Some(CompanionsError::NoCredential));
+        mark(Provenance::Generated);
+        assert_eq!(reveal().await.unwrap().value, password);
     }
 
     /// The template guard's positive path (CMP-6's delta review): on a
