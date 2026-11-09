@@ -6626,7 +6626,8 @@
       "added": "2026-11-09T02:00Z",
       "what": "runner \u00a72.26 (flag to owner at OP-2 merge): reaper destroys only on readable mismatch=true; unreadable => down-only + escalate. Mismatch flag IAM narrowed (no DeleteObject)."
     },
-    "next runner PR: slices.yaml entry X-lease-test-polish (#648, owns crates/cluster/src/leases.rs tests + its decisions file); X-win-restart-followups owns += crates/search/src/rebuild.rs (lock_root Windows LockBusy retry, runner 2026-11-09)"
+    "next runner PR: slices.yaml entry X-lease-test-polish (#648, owns crates/cluster/src/leases.rs tests + its decisions file); X-win-restart-followups owns += crates/search/src/rebuild.rs (lock_root Windows LockBusy retry, runner 2026-11-09)",
+    "next runner PR: new slice X-prowlarr-settings (Opus, core): Prowlarr plugin config_editable + check_config/config_json (egress-validated address), register it in services.rs behind the consent gate, tests; the Prowlarr companion hand-over waits for it (CMP-5g-2 does qBittorrent only); owner FYI (sequencing, CMP-8b unchanged)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
