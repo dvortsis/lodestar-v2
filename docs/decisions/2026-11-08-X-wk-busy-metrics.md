@@ -18,6 +18,7 @@ The coordinator counts the busy denials it sends, by cause. This is the metrics 
   - `held_back`: grants held back. Either the admission hook allowed fewer new leases (the writer's queue at its high-water mark, §19.5), or too many commits happened during the store check (`claim_batch`'s forgotten window). It's the same count as the existing `cluster_busy_total`, which stays as it is so dashboards don't break.
   - `check_failed`: the batch's store check died or came back short, so every key in the batch was denied (#607). Counted per key. `cluster_store_check_errors_total` still counts the failed checks themselves.
   - `key_unknown`: the store couldn't read that one key (`KeyCheck::Unknown`, #628).
+- **The names are this PR's, not the runner's first ones** (`queue_full`, `store_check`, `unknown_read`). The runner accepted the rename in #642's review. `held_back` is the accurate name, because `BatchAnswer::Busy` covers both the admission hook and `claim_batch`'s forgotten window (`leases.rs`), so `queue_full` would mislabel the second case. `check_failed` and `key_unknown` match `cluster_store_check_errors_total` and `KeyCheck::Unknown`.
 - **No per-key, per-worker or free-form label.**
 - **Counters are process-lifetime and summed over every opening of the port**, like the other cluster counters: turning workers off and on never sends them backwards.
 
@@ -29,5 +30,6 @@ The coordinator counts the busy denials it sends, by cause. This is the metrics 
 - `a_claim_whose_check_fails_is_denied`: one failed check, two keys counted as `check_failed`.
 - `a_claim_denies_an_unknown_key_as_busy`: one key counted as `key_unknown`.
 - `claims_busy_renders_each_cause` (`serve.rs`): the three series with their values, summed over two openings, and nothing else in the family.
+- `claims_busy_reads_each_cause_from_the_snapshot` (#642's review): distinct snapshot values through `Totals::of`, so swapped fields fail.
 - `every_family_is_documented` now counts 34 families, and finds the new row in `docs/metrics.md`.
 - Mutation-checked: without the `check_failed` and `key_unknown` increments, their tests fail.

@@ -391,7 +391,7 @@ pub struct WorkerStatus {
 }
 
 /// A consistent view of the fleet and the server's counters.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FleetSnapshot {
     pub workers: Vec<WorkerStatus>,
     /// Leases held now.

@@ -2663,6 +2663,24 @@ mod tests {
         assert_eq!(text.lines().filter(|l| !l.starts_with('#')).count(), 3);
     }
 
+    /// #642's review: each cause is read from its own snapshot field, so
+    /// two swapped fields fail here.
+    #[test]
+    fn claims_busy_reads_each_cause_from_the_snapshot() {
+        let snapshot = lodestar_cluster::FleetSnapshot {
+            busy: 2,
+            busy_check_failed: 3,
+            busy_unknown: 5,
+            ..Default::default()
+        };
+        let mut text = String::new();
+        claims_busy(&mut Out(&mut text), &Totals::of(&snapshot));
+        for (cause, n) in [("held_back", 2), ("check_failed", 3), ("key_unknown", 5)] {
+            let name = format!("lodestar_cluster_claims_busy_total{{cause=\"{cause}\"}}");
+            assert_eq!(series(&text, &name), n, "{text}");
+        }
+    }
+
     #[test]
     fn the_section_sets_the_server() {
         let c = config::Cluster {
