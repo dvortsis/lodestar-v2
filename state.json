@@ -6580,6 +6580,11 @@
       "id": "runner-pr-cmp5g-split",
       "at": "2026-11-09T00:21Z",
       "note": "Next runner PR slices.yaml: split CMP-5g into CMP-5g-1 (wiring, watch.rs, companion_wiring.rs, carry-overs; shared companions.rs/manager.rs field_of), CMP-5g-2 (guided endpoints: guided.rs, api companions_guided*, openapi/schema), CMP-5g-3 (Supervised at serve, Q18 companions.<id>.egress, real restart/logs/regenerate; /security-review). CMP-9a deps -> CMP-5g-2. Persistence approved: settings rows companions.<id>.target (closed type, strict, URL without userinfo/fragment, http/https only), .origin (confirmed|guided), .provenance.<field_of(id)> (pasted|generated), no migration."
+    },
+    {
+      "id": "OP-2-notes-641-polish",
+      "at": "2026-11-09T00:22Z",
+      "note": "OP-2 (touches the fleet-control template for ledger/mismatch keys): N1 test_templates.py ps_code misses quoted/exe/variable terraform init forms; scan comment-stripped text with strings kept, regex (?m)(^|[;&|]\\s*|&\\s*)['\"]?terraform(\\.exe)?['\"]?\\s+init\b, or ban &\\s*[quote$] in the pure files. N2 test_policy_audit.py:178-180 compare Version value 2012-10-17."
     }
   ],
   "main_health": [
@@ -7305,7 +7310,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T00:21Z",
+    "updated": "2026-11-09T00:22Z",
     "items": [
       {
         "slot": 1,
@@ -7320,7 +7325,7 @@
         "slice": "OP-2a",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #641 security MERGE, Opus CHANGES (B1 policy tests miss wildcards; I1 Lodestar-Fleet.ps1 false idle; hardening ResourceAccount/Retain/TLS1.2; P1-P4) relayed; one push then delta review",
+        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #641 fix round 8f4d33b7 delta review MERGE (27 mutations); merge when ci-ok green",
         "since": "2026-11-08T22:52Z"
       },
       {
@@ -7404,5 +7409,5 @@
     }
   ],
   "heartbeat": "2026-11-08T21:39Z",
-  "updated": "2026-11-09T00:21Z"
+  "updated": "2026-11-09T00:22Z"
 }
