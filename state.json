@@ -6635,7 +6635,8 @@
     {
       "pr": 650,
       "note": "OP-2b merged 5036863b; owner \u00a72.19 flags + X-prowlarr-settings FYI sent via dashboard; OP-3 launched in same session"
-    }
+    },
+    "Next runner PR: slices.yaml OP-3 -> OP-3a (P8, run path, step runner, vm-status, leak-test, compose.yaml, renew-vpn/gluetun), OP-3b (start-block, arm-switch, outage-watcher, copy-off + scrubber, screen-rules format if not in 3a), OP-3c (runbook); OP-G deps updated. Owner \u00a72.19: gluetun pinned by digest in compose; Lodestar digest per screen in screen-rules file; FLEET_BUCKET_OWNER secret."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7360,7 +7361,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T04:43Z",
+    "updated": "2026-11-09T04:46Z",
     "items": [
       {
         "slot": 1,
@@ -7372,10 +7373,10 @@
       },
       {
         "slot": 2,
-        "slice": "OP-3",
+        "slice": "OP-3a",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #650 OP-2b merged (5036863b); owner flags sent; building OP-3 (steps, runbook, renew-vpn/gluetun, P8)",
+        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: OP-3 split into 3a/3b/3c (runner approved); building OP-3a (P8, live run path, step runner, output allow-list, vm-status, leak-test, renew-vpn/gluetun)",
         "since": "2026-11-09T04:43Z"
       },
       {
