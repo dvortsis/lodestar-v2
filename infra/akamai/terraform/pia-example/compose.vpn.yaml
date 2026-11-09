@@ -36,7 +36,8 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=custom
       - VPN_TYPE=wireguard
-      - WIREGUARD_IMPLEMENTATION=auto
+      # v3.40.0 supports kernelspace and rejects missing kernel support without userspace fallback.
+      - WIREGUARD_IMPLEMENTATION=kernelspace
       - TZ=Etc/UTC
       - FIREWALL=on
       - FIREWALL_ENABLED_DISABLING_IT_SHOOTS_YOU_IN_YOUR_FOOT=on

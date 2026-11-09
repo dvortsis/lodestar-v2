@@ -326,8 +326,16 @@ write_files:
             echo "ERROR: Required WireGuard tools (wg, nsenter) unavailable on host" >&2
             exit 1
           fi
-          if [ -d /sys/module/wireguard ] || modprobe wireguard 2>/dev/null || [ -e /proc/modules ]; then
-            :
+          # Require kernel WireGuard; a generic module listing is not evidence.
+          if [ ! -d /sys/module/wireguard ]; then
+            if ! modprobe wireguard; then
+              echo "ERROR: Kernel WireGuard unavailable: host modprobe wireguard failed. Install WireGuard support for the running kernel and retry." >&2
+              exit 1
+            fi
+          fi
+          if [ ! -d /sys/module/wireguard ]; then
+            echo "ERROR: Kernel WireGuard unavailable: /sys/module/wireguard missing after modprobe. Use a WireGuard-capable host kernel and retry." >&2
+            exit 1
           fi
           echo "PREFLIGHT_OK"
           ;;
@@ -529,7 +537,7 @@ write_files:
           echo "CLEANUP_OK"
           ;;
         wg-handshake)
-          # Query real kernel/userspace WireGuard handshake via host nsenter.
+          # Query real kernel WireGuard handshake via host nsenter -n wg.
           # Never fabricate handshake timestamps from interface carrier or byte counters.
           query_wg latest-handshakes
           ;;
@@ -780,8 +788,21 @@ write_files:
       docker --version
       docker compose version
       test -c /dev/net/tun || { echo "ERROR: /dev/net/tun unavailable" >&2; exit 1; }
-      modprobe wireguard || { echo "ERROR: Kernel wireguard module failed to load" >&2; exit 1; }
-      test -d /sys/module/wireguard || { echo "ERROR: /sys/module/wireguard unavailable" >&2; exit 1; }
+      if ! command -v wg >/dev/null 2>&1 || ! command -v nsenter >/dev/null 2>&1; then
+        echo "ERROR: Required WireGuard tools (wg, nsenter) unavailable on host" >&2
+        exit 1
+      fi
+      # Require kernel WireGuard; a generic module listing is not evidence.
+      if [ ! -d /sys/module/wireguard ]; then
+        if ! modprobe wireguard; then
+          echo "ERROR: Kernel WireGuard unavailable: host modprobe wireguard failed. Install WireGuard support for the running kernel and retry." >&2
+          exit 1
+        fi
+      fi
+      if [ ! -d /sys/module/wireguard ]; then
+        echo "ERROR: Kernel WireGuard unavailable: /sys/module/wireguard missing after modprobe. Use a WireGuard-capable host kernel and retry." >&2
+        exit 1
+      fi
       echo "Bootstrap complete UTC=$(date -u +%FT%TZ)"
 runcmd:
   - [bash, /usr/local/sbin/lodestar-bootstrap.sh]

@@ -1261,6 +1261,79 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
             env=env,
         )
 
+    def configure_kernel_preflight(self, loader_script: str) -> Path:
+        """Use sandbox evidence and a fake loader; never load/unload host modules."""
+        self.create_mock_docker("exit 0")
+        module_path = Path(self.temp_dir, "sys_module_wireguard")
+        proc_modules = Path(self.temp_dir, "proc_modules")
+        proc_modules.write_text("unrelated_module 1 0 - Live 0x0\n", encoding="utf-8")
+        tun_path = Path(self.temp_dir, "tun")
+        tun_path.touch()
+        script_path = Path(self.script_path)
+        script = script_path.read_text(encoding="utf-8")
+        script = script.replace("/sys/module/wireguard", module_path.as_posix())
+        script = script.replace("/proc/modules", proc_modules.as_posix())
+        script = script.replace("test -c /dev/net/tun", f'test -f "{tun_path.as_posix()}"')
+        script_path.write_text(script, encoding="utf-8", newline="\n")
+        loader = Path(self.mock_bin, "modprobe")
+        loader.write_text("#!/usr/bin/env bash\n" + loader_script + "\n", encoding="utf-8", newline="\n")
+        loader.chmod(0o755)
+        return module_path
+
+    def test_preflight_rejects_missing_kernel_wireguard_despite_proc_modules(self) -> None:
+        """A real process must fail even when the generic module listing exists."""
+        self.configure_kernel_preflight('echo "wireguard module not found" >&2; exit 1')
+        result = self.run_helper("preflight")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("PREFLIGHT_OK", result.stdout)
+        self.assertIn("host modprobe wireguard failed", result.stderr)
+        self.assertIn("Install WireGuard support for the running kernel", result.stderr)
+
+    def test_preflight_rejects_loader_success_without_kernel_evidence(self) -> None:
+        """A zero loader exit status alone cannot authorize kernel WireGuard."""
+        self.configure_kernel_preflight("exit 0")
+        result = self.run_helper("preflight")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("PREFLIGHT_OK", result.stdout)
+        self.assertIn("missing after modprobe", result.stderr)
+
+    def test_preflight_accepts_loaded_kernel_without_modprobe(self) -> None:
+        module_path = self.configure_kernel_preflight('echo "unexpected modprobe" >&2; exit 1')
+        module_path.mkdir()
+        result = self.run_helper("preflight")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("PREFLIGHT_OK", result.stdout)
+        self.assertNotIn("unexpected modprobe", result.stderr)
+
+    def test_preflight_loads_kernel_and_verifies_evidence(self) -> None:
+        module_path = Path(self.temp_dir, "sys_module_wireguard")
+        self.configure_kernel_preflight(f'[ "$*" = "wireguard" ] || exit 2\nmkdir "{module_path.as_posix()}"')
+        result = self.run_helper("preflight")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(module_path.is_dir())
+        self.assertIn("PREFLIGHT_OK", result.stdout)
+
+    def test_bootstrap_and_preflight_kernel_requirements_match(self) -> None:
+        template = Path(__file__).resolve().parent.parent / "cloud-init" / "ubuntu24.yaml.tftpl"
+        content = template.read_text(encoding="utf-8")
+        helper, bootstrap = content.split("  - path: /usr/local/sbin/lodestar-bootstrap.sh", 1)
+        # Compare the actual tool and kernel checks, including diagnostics and exits.
+        marker = "if ! command -v wg"
+        helper_checks = helper[helper.index(marker):helper.index('          echo "PREFLIGHT_OK"')]
+        bootstrap_checks = bootstrap[bootstrap.index(marker):bootstrap.index('      echo "Bootstrap complete')]
+        normalize = lambda block: "\n".join(line.strip() for line in block.strip().splitlines())
+        self.assertEqual(normalize(helper_checks), normalize(bootstrap_checks))
+
+    def test_canonical_compose_requires_kernel_wireguard_and_least_privilege(self) -> None:
+        compose = Path(__file__).resolve().parent.parent / "pia-example" / "compose.vpn.yaml"
+        content = compose.read_text(encoding="utf-8")
+        self.assertIn("image: qmcgaw/gluetun:v3.40.0@" + bridge.GLUETUN_IMAGE_DIGEST, content)
+        implementations = [line.strip() for line in content.splitlines() if "- WIREGUARD_IMPLEMENTATION=" in line]
+        self.assertEqual(implementations, ["- WIREGUARD_IMPLEMENTATION=kernelspace"])
+        self.assertIn("cap_drop:\n      - ALL\n    cap_add:\n      - NET_ADMIN\n", content)
+        self.assertIn("- no-new-privileges:true", content)
+        self.assertNotIn("privileged:", content)
+
     # 1. Arbitrary Docker Commands
     def test_exec_helper_arbitrary_commands_rejected(self) -> None:
         """Proves that helper rejects unauthorized command arguments with non-zero exit code."""
