@@ -911,6 +911,7 @@ See [the decision](decisions/2026-11-06-WK-1.md). Every series renders on every 
 | `cluster_granted_total` | counter | Keys granted to remote workers for the first time ("harvested" at grant, §19.3). |
 | `cluster_regrants_total` | counter | Keys granted again after their lease ended without an outcome. |
 | `cluster_busy_total` | counter | Claimed keys denied because grants were held back (§19.5 backpressure). |
+| `cluster_claims_busy_total{cause}` | counter | Claimed keys denied as busy ("claim again later"), per key, by cause: `held_back` (grants held back, the same denials as `cluster_busy_total`: the writer's queue was full, §19.5, or too many commits happened during the store check), `check_failed` (the batch's store check died or came back short, so the whole batch was denied, #607) and `key_unknown` (the store couldn't read that key, #628). A remote worker claims a busy key again with back-off, about a minute at most, then drops it and logs `worker.claims_gave_up` in its own log. Steady growth means the coordinator can't keep up: check its disk and load ([X-wk-busy-metrics](decisions/2026-11-08-X-wk-busy-metrics.md)). |
 | `cluster_stale_reports_total` | counter | Worker reports with a stale fencing token, ignored. |
 | `cluster_revoked_total` | counter | Sessions closed because their certificate was revoked or expired. |
 | `cluster_protocol_errors_total` | counter | Sessions closed for a protocol error. |

@@ -141,8 +141,8 @@ pub trait StoredKeys: Send + Sync + 'static {
 /// One key's answer before a grant or a re-grant
 /// ([`StoredKeys::key_checks`]). A claim grants only a `Free` key: it
 /// denies a stored or held one as stored, and an `Unknown` one as busy
-/// ("claim again later"), not as stored: it isn't known to be. (Today's
-/// worker drops any denied key; a busy retry is a follow-up.)
+/// ("claim again later"), not as stored: it isn't known to be. The
+/// worker claims a busy key again, with back-off (#637).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyCheck {
     /// Neither stored nor held: it may go out.
@@ -360,6 +360,8 @@ struct Counters {
     pki_errors: AtomicU64,
     ticks: AtomicU64,
     check_failures: AtomicU64,
+    busy_check_failed: AtomicU64,
+    busy_unknown: AtomicU64,
 }
 
 fn bump(c: &AtomicU64) {
@@ -389,7 +391,7 @@ pub struct WorkerStatus {
 }
 
 /// A consistent view of the fleet and the server's counters.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FleetSnapshot {
     pub workers: Vec<WorkerStatus>,
     /// Leases held now.
@@ -427,6 +429,12 @@ pub struct FleetSnapshot {
     /// Store checks that failed or came back short: the claim batch was
     /// denied as busy, or the re-grant's keys waited (#607's review).
     pub check_failures: u64,
+    /// Claimed keys denied as busy because their batch's store check died
+    /// or came back short (#607), per key. `busy` is the held-back cause.
+    pub busy_check_failed: u64,
+    /// Claimed keys denied as busy because the store couldn't read them
+    /// (`KeyCheck::Unknown`, #628), per key.
+    pub busy_unknown: u64,
 }
 
 /// Who is on the other end of a session.
@@ -878,6 +886,8 @@ impl ClusterServer {
             pki_errors: get(&c.pki_errors),
             ticks: get(&c.ticks),
             check_failures: get(&c.check_failures),
+            busy_check_failed: get(&c.busy_check_failed),
+            busy_unknown: get(&c.busy_unknown),
         }
     }
 
@@ -1417,6 +1427,9 @@ impl ClusterServer {
                     Some(checks) => self.claim(peer, &mut batch.items, &checks, checked_at),
                     None => {
                         bump(&self.counters.check_failures);
+                        self.counters
+                            .busy_check_failed
+                            .fetch_add(batch.items.len() as u64, Ordering::Relaxed);
                         batch
                             .items
                             .iter()
@@ -1594,6 +1607,7 @@ impl ClusterServer {
                 out[i] = deny(DenyReason::Stored);
             } else if check == KeyCheck::Unknown {
                 // Not known to be stored: "claim again later" (#615's review).
+                bump(&self.counters.busy_unknown);
                 out[i] = deny(DenyReason::Busy);
             } else if let Some(source) = SourceId::new(item.source) {
                 // Discovery times are the worker's clock; correct them (§19.3).

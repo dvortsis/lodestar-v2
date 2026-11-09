@@ -1,0 +1,167 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Lodestar PIA delivery role, in the account that holds lodestar/pia-vpn: LodestarPiaDelivery, the firewall token secret shell, deny-all policy (OP-2a).",
+  "Parameters": {
+    "ExistingOidcProviderArn": {
+      "Type": "String",
+      "Default": "",
+      "AllowedPattern": "^$|^arn:aws[a-z-]*:iam::[0-9]{12}:oidc-provider/token\\.actions\\.githubusercontent\\.com$",
+      "Description": "Leave empty to create the GitHub OIDC provider. If this account already has one (an account holds one per URL), give its ARN."
+    },
+    "PiaSecretArn": {
+      "Type": "String",
+      "AllowedPattern": "^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:lodestar/pia-vpn-[A-Za-z0-9]{6}$",
+      "Description": "The exact ARN of lodestar/pia-vpn, with its six-character suffix. Never a wildcard."
+    },
+    "StateBucketName": {
+      "Type": "String",
+      "AllowedPattern": "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$",
+      "Description": "The fleet-control stack's StateBucketName output."
+    },
+    "FleetAccountId": {
+      "Type": "String",
+      "AllowedPattern": "^[0-9]{12}$",
+      "Description": "The account that owns the state bucket. The fleet.json grant holds only in that account, so a re-registered bucket name elsewhere can't feed deliver-pia."
+    }
+  },
+  "Conditions": {
+    "CreateOidcProvider": {
+      "Fn::Equals": [
+        {
+          "Ref": "ExistingOidcProviderArn"
+        },
+        ""
+      ]
+    }
+  },
+  "Resources": {
+    "GitHubOidcProvider": {
+      "Type": "AWS::IAM::OIDCProvider",
+      "Condition": "CreateOidcProvider",
+      "Properties": {
+        "Url": "https://token.actions.githubusercontent.com",
+        "ClientIdList": [
+          "sts.amazonaws.com"
+        ]
+      }
+    },
+    "AkamaiFirewallToken": {
+      "Type": "AWS::SecretsManager::Secret",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "Name": "lodestar/akamai-firewall-token",
+        "Description": "Linode token with Firewalls read/write only, for deliver-pia's own /32 (plan \u00a74). Empty: the owner sets the value in the console."
+      }
+    },
+    "LodestarPiaDelivery": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": "LodestarPiaDelivery",
+        "Description": "fleet.yml's deliver-pia job in the pia-delivery environment at refs/heads/main. Two named secrets and fleet.json, nothing else.",
+        "MaxSessionDuration": 3600,
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Federated": {
+                  "Fn::If": [
+                    "CreateOidcProvider",
+                    {
+                      "Ref": "GitHubOidcProvider"
+                    },
+                    {
+                      "Ref": "ExistingOidcProviderArn"
+                    }
+                  ]
+                }
+              },
+              "Action": "sts:AssumeRoleWithWebIdentity",
+              "Condition": {
+                "StringEquals": {
+                  "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+                  "token.actions.githubusercontent.com:sub": "repo:dvortsis/lodestar-v2:environment:pia-delivery:job_workflow_ref:dvortsis/lodestar-v2/.github/workflows/fleet.yml@refs/heads/main"
+                }
+              }
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "LodestarPiaDeliveryAccess",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "TwoNamedSecrets",
+                  "Effect": "Allow",
+                  "Action": "secretsmanager:GetSecretValue",
+                  "Resource": [
+                    {
+                      "Ref": "PiaSecretArn"
+                    },
+                    {
+                      "Ref": "AkamaiFirewallToken"
+                    }
+                  ]
+                },
+                {
+                  "Sid": "FleetJsonOnly",
+                  "Effect": "Allow",
+                  "Action": "s3:GetObject",
+                  "Resource": {
+                    "Fn::Sub": [
+                      "arn:${AWS::Partition}:s3:::${B}/fleet/fleet.json",
+                      {
+                        "B": {
+                          "Ref": "StateBucketName"
+                        }
+                      }
+                    ]
+                  },
+                  "Condition": {
+                    "StringEquals": {
+                      "s3:ResourceAccount": {
+                        "Ref": "FleetAccountId"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "LodestarPiaDenyAll": {
+      "Type": "AWS::IAM::ManagedPolicy",
+      "Properties": {
+        "ManagedPolicyName": "LodestarPiaDenyAll",
+        "Description": "Revocation: attach to the fleet roles to cut all access (plan \u00a74, kill switch step 4). Unattached by design.",
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Deny",
+              "Action": "*",
+              "Resource": "*"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "PiaDeliveryRoleArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "LodestarPiaDelivery",
+          "Arn"
+        ]
+      },
+      "Description": "GitHub secret AWS_PIA_ROLE_ARN (pia-delivery); and the fleet-control stack's PiaDeliveryRoleArn if cross-account"
+    }
+  }
+}

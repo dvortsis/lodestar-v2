@@ -53,6 +53,16 @@ async fn coordinator_events(
     stored: Option<Arc<dyn StoredKeys>>,
     events: Arc<dyn LeaseEvents>,
 ) -> Coord {
+    coordinator_hooks(config, stored, events, None).await
+}
+
+/// A coordinator with every hook given.
+async fn coordinator_hooks(
+    config: ServerConfig,
+    stored: Option<Arc<dyn StoredKeys>>,
+    events: Arc<dyn LeaseEvents>,
+    admission: Option<Arc<dyn GrantAdmission>>,
+) -> Coord {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("lodestar.db");
     let mut store = Store::open(&db, StoreConfig::default()).unwrap();
@@ -69,7 +79,7 @@ async fn coordinator_events(
         authority: Arc::new(LeaseAuthority::new(epoch, config.lease_ttl_secs, events)),
         stored,
         sink: None,
-        admission: None,
+        admission,
     };
     let server = ClusterServer::with_hooks(pki, clock.clone(), config, hooks).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -998,6 +1008,8 @@ async fn a_claim_denies_an_unknown_key_as_busy() {
         token_of(&again[0]);
         let s = c.server.snapshot();
         assert_eq!((s.harvested, s.leases), (2, 2));
+        // Counted by cause, per key (X-wk-busy-metrics).
+        assert_eq!((s.busy_unknown, s.busy_check_failed, s.busy), (1, 0, 0));
     })
     .await;
 }
@@ -1031,6 +1043,49 @@ async fn a_claim_whose_check_fails_is_denied() {
         }
         let s = c.server.snapshot();
         assert_eq!((s.harvested, s.leases, s.check_failures), (0, 0, 1));
+        // One failed check, two keys denied (X-wk-busy-metrics).
+        assert_eq!((s.busy_check_failed, s.busy_unknown, s.busy), (2, 0, 0));
+    })
+    .await;
+}
+
+/// Admits at most this many new leases per claim (§19.5 backpressure).
+struct AdmitAtMost(usize);
+
+impl GrantAdmission for AdmitAtMost {
+    fn admit(&self, _worker: WorkerId, wanted: usize) -> usize {
+        wanted.min(self.0)
+    }
+}
+
+/// X-wk-busy-metrics: keys over what the admission allows are denied as
+/// busy and counted as held back, per key.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn keys_held_back_are_counted_as_busy() {
+    guard(async {
+        let c = coordinator_hooks(
+            config(),
+            None,
+            Arc::new(NoEvents),
+            Some(Arc::new(AdmitAtMost(1))),
+        )
+        .await;
+        let vps = c.join("vps").await;
+        let a = c.session(&vps).await;
+        let grants = a.claim(found(&*c.clock, &[1, 2, 3])).await.unwrap();
+        assert_eq!(grants.len(), 3);
+        token_of(&grants[0]);
+        for (g, n) in grants[1..].iter().zip([2, 3]) {
+            assert_eq!(
+                *g,
+                GrantItem::Denied {
+                    key: key(n),
+                    reason: DenyReason::Busy
+                }
+            );
+        }
+        let s = c.server.snapshot();
+        assert_eq!((s.busy, s.busy_check_failed, s.busy_unknown), (2, 0, 0));
     })
     .await;
 }
