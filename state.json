@@ -7357,7 +7357,7 @@
         "slice": "CMP-5g-1",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: #645 CMP-5g-1 fix round 0e664ff6; delta review (correctness + security) running",
+        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: #645 CMP-5g-1 delta CHANGES (B1 hand-over key removal disables a running Prowlarr source; runner call: replace key first) relayed; fix round then delta review",
         "since": "2026-11-09T00:20Z"
       },
       {
