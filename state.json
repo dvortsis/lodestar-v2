@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-08T22:52Z",
+  "updated_at": "2026-11-09T00:39Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4121,7 +4121,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 32,
-  "last_heartbeat": "2026-11-08T21:39Z",
+  "last_heartbeat": "2026-11-09T00:39Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -7325,14 +7325,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T00:22Z",
+    "updated": "2026-11-09T00:39Z",
     "items": [
       {
         "slot": 1,
         "slice": "CMP-5g-1",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: CMP-5g split into -1 (wiring+watch+carry-overs), -2 (guided endpoints), -3 (managed at serve, Q18 egress); building CMP-5g-1",
+        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: building CMP-5g-1 (runner 00:38Z: restart_required after hand-over; shared edits confirmed, no pub mod guided); then -2, -3",
         "since": "2026-11-09T00:20Z"
       },
       {
@@ -7340,7 +7340,7 @@
         "slice": "OP-2a",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #641 fix round 8f4d33b7 delta review MERGE (27 mutations); merge when ci-ok green",
+        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #641 at 8f4d33b7, delta review MERGE, merge-tree clean vs cd1f30c7; waiting on fuzz jobs for ci-ok",
         "since": "2026-11-08T22:52Z"
       },
       {
@@ -7348,15 +7348,15 @@
         "slice": "PK-win-upd-3",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAC9TBdvBgyLvxSjGf: #640 PK-win-upd-2 merged (4d65ab23); building PK-win-upd-3 (brief briefs/PK-win-upd-3.md)",
+        "doing": "session_01MMjhnAC9TBdvBgyLvxSjGf: building PK-win-upd-3 (runner 00:36Z: update_helper.rs exit-code edit approved; disabled start type, rollback.json marker, halt stays stopped)",
         "since": "2026-11-09T00:10Z"
       },
       {
         "slot": 4,
         "slice": "X-wk-busy-metrics",
-        "role": "build",
+        "role": "review",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #637 merged (e964b487); building X-wk-busy-metrics, then X-lease-report-atomic (brief briefs/X-wk-busy-metrics.md)",
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #642 X-wk-busy-metrics (1cdb74ad) in fresh Opus review; then X-lease-report-atomic",
         "since": "2026-11-08T23:13Z"
       },
       {
@@ -7423,6 +7423,6 @@
       "answers": "runner recommendation on all items: X-refetch-private ships in v0.5.2; installer Repair may re-secure admin-ACE-only folder (X-win-refusal-ux); v0.5.1 release body replacement (notes/v051-release-body.md); web-ok+e2e-ok required; delete wip/CMP-0-catalogue; Q13 stands, Q14 at G-m6; import host = Unraid box; nightly key deferred; counsel advisory, no reminders; package installers after 1.0"
     }
   ],
-  "heartbeat": "2026-11-08T21:39Z",
+  "heartbeat": "2026-11-09T00:39Z",
   "updated": "2026-11-09T00:22Z"
 }
