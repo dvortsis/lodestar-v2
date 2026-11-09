@@ -5,7 +5,7 @@
 //! - [`present`] and [`start`]: what the pipeline's companion gate
 //!   (`lodestar_pipeline::requires`) reads. Every companion Lodestar
 //!   installed, with its health; every one you added and confirmed
-//!   (`lodestar_companions::guided`), watched every 30 s
+//!   (CMP-5g-2's records, sent through [`Wired::added`]), watched every 30 s
 //!   (`lodestar_companions::watch`); whether a download client you set up
 //!   yourself exists; and whether the Prowlarr source runs against an
 //!   indexer you set up yourself.
@@ -19,25 +19,23 @@
 //! apply at Lodestar's next start, as any saved source setting does (the
 //! source shows `restart_required`).
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use lodestar_api::dto::ops::SourcePatch;
 use lodestar_api::dto::settings::{SettingsBatch, SettingsPatch};
 use lodestar_api::ops::OpsApi;
 use lodestar_api::settings::SettingsApi;
+use lodestar_companions::CompanionId;
 use lodestar_companions::adapter::{BoxFuture, GuardedHttp, Target};
 use lodestar_companions::configure::{
     ConfigSink, DownloadClientEntry, IndexerManagerEntry, SinkError,
 };
-use lodestar_companions::detect::{self, CompanionHttp, Runtime};
-use lodestar_companions::guided::Record;
-use lodestar_companions::manager::{self, Host, Snapshot};
+use lodestar_companions::detect::{self, CompanionHttp};
+use lodestar_companions::manager::{self, Snapshot};
 use lodestar_companions::watch::{self, Seen, Watched};
-use lodestar_companions::{Catalogue, CompanionId};
 use lodestar_integrations::secret::Secret;
 use lodestar_pipeline::requires;
-use lodestar_store::Store;
 use tokio::sync::watch as channel;
 use tokio::task::JoinHandle;
 
@@ -77,37 +75,6 @@ fn canonical(url: &str) -> String {
     }
 }
 
-/// The companions you added and confirmed, from their `settings` rows.
-/// A row that doesn't read is no record (`guided`'s rule). Blocking.
-pub fn records(store: &Mutex<Store>, catalogue: &Catalogue, runtime: Runtime) -> Vec<Record> {
-    let rows = match store.lock() {
-        Ok(s) => s
-            .settings_with_prefix_raw(lodestar_companions::credentials::ROW_PREFIX)
-            .unwrap_or_default(),
-        Err(_) => Vec::new(),
-    };
-    let text = |key: &str| {
-        rows.iter()
-            .find(|(k, _)| k == key)
-            .and_then(|(_, v)| v.as_ref().ok().cloned())
-    };
-    catalogue
-        .entries()
-        .iter()
-        .filter_map(|e| Record::read(e, runtime, text))
-        .collect()
-}
-
-/// Detection's runtime here (Q12: container names only under Docker's
-/// DNS).
-pub fn runtime(host: Host) -> Runtime {
-    if host.in_container {
-        Runtime::Container
-    } else {
-        Runtime::Native
-    }
-}
-
 /// What the gate reads, from what's known:
 /// - each companion Lodestar installed, healthy only when its last check
 ///   passed (not yet checked counts as unhealthy: it fails closed);
@@ -122,7 +89,7 @@ pub fn present(
     watched: &Watched,
     clients: &[DownloadClient],
     prowlarr: Option<&[String]>,
-    records: &[Record],
+    added: &[Added],
 ) -> requires::Present {
     let mut companions = std::collections::BTreeMap::new();
     for c in &installed.companions {
@@ -143,10 +110,10 @@ pub fn present(
         // A companion Lodestar installed is judged by its own health.
         companions.entry(id.as_str().to_owned()).or_insert(h);
     }
-    let ours: Vec<String> = records
+    let ours: Vec<String> = added
         .iter()
-        .filter(|r| r.id.as_str() == PROWLARR_SOURCE)
-        .map(|r| target_url(&r.target))
+        .filter(|(id, _)| id.as_str() == PROWLARR_SOURCE)
+        .map(|(_, t)| target_url(t))
         .chain(
             installed
                 .companions
@@ -177,16 +144,34 @@ async fn prowlarr_endpoints(ops: &dyn OpsApi) -> Option<Vec<String>> {
 /// a fake in tests).
 type Endpoints = Arc<dyn Fn() -> BoxFuture<'static, Option<Vec<String>>> + Send + Sync>;
 
+/// A companion you added and confirmed: its id and where it is.
+pub type Added = (CompanionId, Target);
+
+/// The companion gate for the pipeline: its sender, for [`serve`], and
+/// the receiver `PipelineConfig::companions` takes. With companions off
+/// for the run (a fixture, a held lock, a bad catalogue) there's no
+/// receiver, which turns the gate off: the sources run as before
+/// (`lodestar_pipeline::requires`).
+pub fn gate(
+    companions_on: bool,
+) -> (
+    channel::Sender<requires::Snapshot>,
+    Option<requires::Companions>,
+) {
+    let (tx, rx) = channel::channel(requires::Snapshot::Unknown);
+    (tx, companions_on.then_some(rx))
+}
+
 /// What [`start`] runs, stopped when dropped.
 #[derive(Debug)]
 pub struct Wired {
     /// The companions you added, for CMP-5g-2's endpoints to send after a
-    /// change to their rows.
+    /// change to their records.
     #[allow(
         dead_code,
         reason = "CMP-5g-2's endpoints send the records after a change"
     )]
-    pub records: channel::Sender<Vec<Record>>,
+    pub added: channel::Sender<Vec<Added>>,
     tasks: Vec<JoinHandle<()>>,
 }
 
@@ -206,7 +191,7 @@ const REFRESH: Duration = watch::EVERY;
 /// the gate its [`requires::Snapshot`]s. The gate holds `Unknown` until
 /// the first is sent, so nothing gated starts before then.
 pub fn start(
-    records: Vec<Record>,
+    added: Vec<Added>,
     installed: channel::Receiver<Snapshot>,
     integrations: channel::Receiver<Integrations>,
     ops: Arc<dyn OpsApi>,
@@ -218,7 +203,7 @@ pub fn start(
         Box::pin(async move { prowlarr_endpoints(ops.as_ref()).await })
     });
     start_with(
-        records,
+        added,
         installed,
         integrations,
         endpoints,
@@ -229,22 +214,17 @@ pub fn start(
     )
 }
 
-/// At serve: reads the records, then [`start`]s. A failure is logged by
+/// At serve: [`start`]s with no companions added (CMP-5g-2 reads its
+/// records and sends them). A failure is logged by
 /// code and leaves the gate `Unknown`: gated plugins wait (fail closed).
 pub async fn serve(
     companions: &crate::companions::Companions,
-    store: Arc<Mutex<Store>>,
     settings: &crate::settings::Registry,
     ops: Arc<dyn OpsApi>,
     gate: channel::Sender<requires::Snapshot>,
 ) -> Option<Wired> {
-    let catalogue = lodestar_companions::builtin().ok()?;
-    let rt = runtime(crate::companions::host());
-    let found = tokio::task::spawn_blocking(move || records(&store, catalogue, rt))
-        .await
-        .unwrap_or_default();
     match start(
-        found,
+        Vec::new(),
         companions.snapshot.clone(),
         settings.subscribe(),
         ops,
@@ -266,7 +246,7 @@ pub async fn serve(
 
 #[allow(clippy::too_many_arguments, reason = "test seams")]
 fn start_with(
-    records: Vec<Record>,
+    added: Vec<Added>,
     mut installed: channel::Receiver<Snapshot>,
     mut integrations: channel::Receiver<Integrations>,
     endpoints: Endpoints,
@@ -275,11 +255,8 @@ fn start_with(
     checker: watch::Checker,
     every: Duration,
 ) -> Result<Wired, &'static str> {
-    let list = |r: &[Record]| -> Vec<(CompanionId, Target)> {
-        r.iter().map(|r| (r.id.clone(), r.target.clone())).collect()
-    };
-    let (records_tx, mut records_rx) = channel::channel(records);
-    let (list_tx, list_rx) = channel::channel(list(&records_rx.borrow()));
+    let (added_tx, mut added_rx) = channel::channel(added);
+    let (list_tx, list_rx) = channel::channel(added_rx.borrow().clone());
     let (mut watched, watching) = watch::spawn(http, checker, list_rx, every);
     let composing = tokio::spawn(async move {
         let mut tick = tokio::time::interval(REFRESH.min(every * 3));
@@ -287,11 +264,10 @@ fn start_with(
         loop {
             let endpoints = endpoints().await;
             let snapshot = {
-                let records = records_rx.borrow_and_update().clone();
+                let added = added_rx.borrow_and_update().clone();
                 list_tx.send_if_modified(|l| {
-                    let next = list(&records);
-                    let changed = *l != next;
-                    *l = next;
+                    let changed = *l != added;
+                    l.clone_from(&added);
                     changed
                 });
                 requires::Snapshot::Known(present(
@@ -299,7 +275,7 @@ fn start_with(
                     &watched.borrow_and_update(),
                     &integrations.borrow_and_update().clients,
                     endpoints.as_deref(),
-                    &records,
+                    &added,
                 ))
             };
             gate.send_if_modified(|g| {
@@ -312,12 +288,12 @@ fn start_with(
                 r = installed.changed() => if r.is_err() { return },
                 r = watched.changed() => if r.is_err() { return },
                 r = integrations.changed() => if r.is_err() { return },
-                r = records_rx.changed() => if r.is_err() { return },
+                r = added_rx.changed() => if r.is_err() { return },
             }
         }
     });
     Ok(Wired {
-        records: records_tx,
+        added: added_tx,
         tasks: vec![watching, composing],
     })
 }
@@ -440,7 +416,6 @@ impl ConfigSink for Sink {
 mod tests {
     use super::*;
     use lodestar_companions::adapter::EnteredUrl;
-    use lodestar_companions::guided::Origin;
     use lodestar_companions::inputs::PortNumber;
     use lodestar_companions::manager::Present;
     use lodestar_companions::{CompanionId, Version};
@@ -547,11 +522,10 @@ mod tests {
         .await
         .expect("the gate didn't see your client")
         .unwrap();
-        w.records.send_replace(vec![Record {
-            id: id("prowlarr"),
-            target: Target::Loopback(PortNumber::new(9696).unwrap()),
-            origin: Origin::Confirmed,
-        }]);
+        w.added.send_replace(vec![(
+            id("prowlarr"),
+            Target::Loopback(PortNumber::new(9696).unwrap()),
+        )]);
         tokio::time::timeout(
             deadline,
             gate.wait_for(|g| {
@@ -563,7 +537,7 @@ mod tests {
         .await
         .expect("the gate didn't see the companion you added")
         .unwrap();
-        w.records.send_replace(Vec::new());
+        w.added.send_replace(Vec::new());
         tokio::time::timeout(
             deadline,
             gate.wait_for(|g| known(g, &|p| p.companions.is_empty())),
@@ -571,6 +545,16 @@ mod tests {
         .await
         .expect("the gate kept a companion you removed")
         .unwrap();
+    }
+
+    /// Runner's condition (2026-11-09): with companions off, the gate is
+    /// off and no source waits on it; on, it starts `Unknown`.
+    #[test]
+    fn the_gate_is_off_when_companions_are() {
+        let (_tx, rx) = gate(false);
+        assert!(rx.is_none());
+        let (_tx, rx) = gate(true);
+        assert_eq!(*rx.unwrap().borrow(), requires::Snapshot::Unknown);
     }
 
     #[test]
@@ -637,11 +621,10 @@ mod tests {
             )
             .external_client
         );
-        let record = Record {
-            id: id("prowlarr"),
-            target: Target::Entered(EnteredUrl::parse("http://prowlarr.lan:9696").unwrap()),
-            origin: Origin::Confirmed,
-        };
+        let record: Added = (
+            id("prowlarr"),
+            Target::Entered(EnteredUrl::parse("http://prowlarr.lan:9696").unwrap()),
+        );
         let ours = ["http://Prowlarr.lan:9696/".to_owned()];
         let theirs = ["http://indexer.example:9696".to_owned()];
         assert!(

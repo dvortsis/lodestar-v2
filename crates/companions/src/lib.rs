@@ -44,7 +44,6 @@ pub mod credentials;
 pub mod detect;
 pub mod extract;
 pub mod fetch;
-pub mod guided;
 pub mod inputs;
 pub mod layout;
 pub mod log_events;

@@ -345,8 +345,8 @@ impl Services {
         };
         // The companion gate (CMP-10): fed by the wiring once the sources'
         // ops exist. Until then it holds `Unknown`, so nothing gated starts.
-        let (gate_tx, gate_rx) = watch::channel(lodestar_pipeline::requires::Snapshot::Unknown);
-        pipeline_config.companions = companions.as_ref().map(|_| gate_rx);
+        let (gate_tx, gate_rx) = crate::companion_wiring::gate(companions.is_some());
+        pipeline_config.companions = gate_rx;
         // Each enabled plugin's HTTP client is built on its egress
         // setting, with its SOCKS5 credentials from the per-source store
         // (SRC-4, SRC-5). A fixture is served offline: plugins get no
@@ -544,10 +544,7 @@ impl Services {
             ),
         );
         let companion_wiring = match &companions {
-            Some(c) => {
-                crate::companion_wiring::serve(c, control.clone(), &settings, ops.clone(), gate_tx)
-                    .await
-            }
+            Some(c) => crate::companion_wiring::serve(c, &settings, ops.clone(), gate_tx).await,
             None => None,
         };
         let monitor = pipeline.monitor();
