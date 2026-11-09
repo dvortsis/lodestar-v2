@@ -315,13 +315,13 @@ if ! echo "$out" | grep -q "ERROR: $COMPOSE_FILE missing or symlink"; then
 fi
 echo "PASS: Symlinks rejected by validate-compose."
 
-echo "=== Test 6: Helper start-crawler fails closed when Gluetun is missing or not healthy ==="
+echo "=== Test 6: Helper start-crawler fails closed when wg0.conf or Gluetun is missing or not healthy ==="
 out="$(su - "$TEST_USER" -c "sudo -n $HELPER_BIN start-crawler" 2>&1 || true)"
-if ! echo "$out" | grep -q -E "(ERROR: Gluetun health check failed|ERROR: Gluetun container is not running)"; then
-  echo "FAIL: start-crawler did not fail closed on missing/unhealthy Gluetun: $out" >&2
+if ! echo "$out" | grep -q -E "(ERROR: /run/lodestar/vpn/wg0.conf missing or symlink|ERROR: Gluetun health check failed|ERROR: Gluetun container is not running)"; then
+  echo "FAIL: start-crawler did not fail closed on missing wg0.conf/Gluetun: $out" >&2
   exit 1
 fi
-echo "PASS: start-crawler failed closed as expected."
+echo "PASS: start-crawler failed closed as expected ($out)."
 
 # ------------------------------------------------------------------------------
 # 5. Real Linux Network-Namespace Egress Isolation & Firewall Tests
@@ -440,6 +440,14 @@ print(f"[Interface]\nAddress = 10.0.0.2/32\nPrivateKey = {k1}\nDNS = 10.0.0.242\
   rm -f "$PIA_CA_FILE"
   mv "$PIA_CA_FILE.bak" "$PIA_CA_FILE"
   echo "PASS: Helper write-config failed closed on missing and symlinked PIA Root CA."
+
+  # Verify start-crawler also fails closed on missing/unhealthy Gluetun when wg0.conf is present
+  out_unhealthy="$(su - "$TEST_USER" -c "sudo -n $HELPER_BIN start-crawler" 2>&1 || true)"
+  if ! echo "$out_unhealthy" | grep -q "ERROR: Gluetun health check failed"; then
+    echo "FAIL: start-crawler did not fail closed on unhealthy Gluetun: $out_unhealthy" >&2
+    exit 1
+  fi
+  echo "PASS: start-crawler failed closed on missing/unhealthy Gluetun."
 
   # Verify actual helper accepts compliant Gluetun ruleset in $TEST_NETNS
   ok_check="$(PATH="$MOCK_BIN_DIR:$PATH" "$HELPER_BIN" verify-dns-firewall 2>&1 || true)"
