@@ -37,6 +37,7 @@ from lock import ACQUIRED, REAPING, FleetLock, LockLost, MemoryStore
 from reaper import DOWN, EMERGENCY, NONE, decide, only_down
 from state import DryRunBackend, FleetUnknown, LedgerUnreadable, new_fleet, validate
 from status import MARKER, render
+from timefmt import fmt
 
 REAPER_WAIT_SECONDS = 300
 
@@ -292,7 +293,13 @@ def cmd_act(ctx: Ctx) -> int:
         if not ctx.deliver:  # else pia-release releases it, after deliver-pia
             ctx.release(run_id, "act")
     if ctx.deliver:
-        _write_outputs(ctx.env, deliver="true")
+        try:
+            _write_outputs(ctx.env, deliver="true")
+        except Exception:  # noqa: BLE001 - without the output pia-release won't run
+            ctx.deliver = False
+            ctx.release(run_id, "act")
+            ctx.report(line + "; but the lock couldn't be handed to deliver-pia, so nothing was delivered; use run renew-vpn")
+            return 1
     ctx.report(line, with_status=True)
     ctx.status()
     return 0
@@ -464,7 +471,7 @@ def cmd_pia_fence(ctx: Ctx) -> int:
         return 0
     run_id = ctx.run_id()
     try:
-        ctx.lock.fence(run_id)
+        expires = ctx.lock.expires_at(run_id)
         fleet, unknown = ctx.fleet()
         if unknown or fleet is None or only_down(fleet, ctx.backend.mismatch(), ctx.clock()):
             ctx.report("deliver-pia: refused: the fleet is unreadable, gone, overdue or mismatched")
@@ -475,6 +482,9 @@ def cmd_pia_fence(ctx: Ctx) -> int:
     except ValueError:
         ctx.report("deliver-pia: refused: fleet.json is invalid; escalate")
         return 1
+    # deliver-pia refuses unless this lease outlasts its worst case (queue time
+    # and any wait on its environment come out of it). A timestamp, not a secret.
+    _write_outputs(ctx.env, lock_expires=fmt(expires))
     print("pia-fence: this run holds the fleet lock")
     return 0
 

@@ -34,15 +34,29 @@ MY_IP = "198.51.100.77"
 ADMIN = "203.0.113.4/32"
 
 
-def host_key(n: int) -> str:
-    return "ssh-ed25519 " + base64.b64encode(b"\x00\x00\x00\x0bssh-ed25519" + bytes([n]) * 32).decode()
+def host_key(n: int) -> str:  # the real ed25519 public-key blob shape
+    return "ssh-ed25519 " + base64.b64encode(b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20" + bytes([n]) * 32).decode()
 
 
 LIVE = {"FLEET_LIVE": "true", "AWS_PIA_ROLE_ARN": "role-x", "STATE_BUCKET": "state-b", "STATE_BUCKET_OWNER": "111122223333",
         "FLEET_SSH_KEY": "-----BEGIN OPENSSH PRIVATE KEY-----\nFLEETKEYBODY\n-----END OPENSSH PRIVATE KEY-----",
         "PIA_SERVERS": json.dumps({"main": "ca_test", "worker": "us_test"}), "GITHUB_TOKEN": "gh",
-        "ACTIONS_ID_TOKEN_REQUEST_URL": "u", "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "t"}
+        "ACTIONS_ID_TOKEN_REQUEST_URL": "u", "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "t",
+        "LOCK_EXPIRES_AT": (T0 + timedelta(minutes=60)).strftime("%Y-%m-%dT%H:%M:%SZ")}
 LOGIN = {"username": "p1234567", "password": "pw-SECRET-value"}
+FW_TOKEN = "fwtoken-SECRET-value"
+
+
+class FakeSM:
+    def __init__(self, pia=None, fw=FW_TOKEN):
+        self.values = {deliver.PIA_SECRET: json.dumps(LOGIN) if pia is None else pia, deliver.FIREWALL_SECRET: fw}
+        self.calls = []
+
+    def get_secret_value(self, SecretId):
+        self.calls.append(SecretId)
+        if self.values.get(SecretId) is None:
+            raise RuntimeError("AccessDeniedException")
+        return {"SecretString": self.values[SecretId]}
 
 
 def rules(extra=()):
@@ -131,10 +145,12 @@ class Deliver(unittest.TestCase):
         self.reports, self.emitted, self.connected = [], [], False
         runs = runs or {}
 
+        self.tokens = []
+
         def connect(env, emit):
             self.connected = True
-            return {"s3": self.s3, "login": lambda: dict(LOGIN), "linode": Linode(self.fw), "ssh": self.ssh,
-                    "my_ip": lambda: my_ip + "\n", "meta": lambda: RANGES, "lookup_run": runs.get}
+            return {"s3": self.s3, "sm": FakeSM(), "linode": lambda t: self.tokens.append(t) or Linode(self.fw),
+                    "ssh": self.ssh, "my_ip": lambda: my_ip + "\n", "meta": lambda: RANGES, "lookup_run": runs.get}
         env = event_env(body, **{**(LIVE if live else {}), **over})
         out, clock = io.StringIO(), Clock()
         from contextlib import redirect_stdout
@@ -228,7 +244,7 @@ class Deliver(unittest.TestCase):
         for v in ("ca_test", "us_test", MY_IP, "FLEETKEYBODY"):
             self.assertIn("::add-mask::" + v, masked)
         seen = self.stdout + "\n".join(self.reports)
-        for v in (LOGIN["username"], LOGIN["password"], "ca_test", "us_test", MY_IP, "203.0.113", "FLEETKEYBODY",
+        for v in (LOGIN["username"], LOGIN["password"], FW_TOKEN, "ca_test", "us_test", MY_IP, "203.0.113", "FLEETKEYBODY",
                   "111122223333", "state-b", host_key(1).split()[1], "SHA256:"):
             self.assertNotIn(v, seen)
 
@@ -270,7 +286,7 @@ class Deliver(unittest.TestCase):
         self.fw, self.ssh, self.reports, self.emitted = FakeFirewalls(), FakeSSH(), [], []
 
         def connect(env, emit):
-            return {"s3": s3, "login": lambda: dict(LOGIN), "linode": Linode(self.fw), "ssh": self.ssh,
+            return {"s3": s3, "sm": FakeSM(), "linode": lambda t: Linode(self.fw), "ssh": self.ssh,
                     "my_ip": lambda: MY_IP, "meta": lambda: RANGES, "lookup_run": {}.get}
         clock = Clock()
         return deliver.deliver(event_env("/fleet up screen", **LIVE), self.reports.append, connect=connect,
@@ -295,18 +311,113 @@ class Deliver(unittest.TestCase):
 
     def test_an_unreachable_vm_is_retried_then_reported_and_the_rule_still_closes(self):
         ssh = FakeSSH(rcs=[255] * 100)
-        rc = self.go(ssh=ssh)
+        rc = self.go("/fleet run renew-vpn main", ssh=ssh)
         self.assertEqual(rc, 1)
-        self.assertIn("deliver-pia: main: couldn't connect, or its host key didn't match the pin", self.reports)
-        tries = len([c for c in ssh.deliveries() if c["argv"][-2] == "203.0.113.11"])
-        self.assertEqual(tries, deliver.SSH_ATTEMPTS_SECONDS // 5 + 1)  # bounded by the deadline, not a count
+        self.assertEqual(self.reports, ["deliver-pia: main: couldn't connect, or its host key didn't match the pin; "
+                                        "/run clean"])
+        self.assertEqual(len(ssh.deliveries()), deliver.SSH_ATTEMPTS_SECONDS // 5 + 1)  # by deadline, not count
         self.assertEqual(self.fw.rules["21"], rules())
 
     def test_a_failed_step_still_checks_run_is_clean(self):
-        rc = self.go(ssh=FakeSSH(rcs=[12, 0]))
-        self.assertEqual(rc, 1)
-        self.assertEqual(self.reports, ["deliver-pia: main: the VM step failed (exit 12); /run clean",
-                                        "deliver-pia: worker: delivered; /run clean"])
+        for rc_vm, what in ((12, "the VM step failed (exit 12)"), (20, "the VM isn't ready (cloud-init hasn't finished)"),
+                            (21, "another delivery is still running there"), (124, "the VM step timed out"),
+                            (256, "the session didn't finish in time")):
+            with self.subTest(rc=rc_vm):
+                rc = self.go("/fleet run renew-vpn main", ssh=FakeSSH(rcs=[rc_vm]))
+                self.assertEqual(rc, 1)
+                self.assertEqual(self.reports, [f"deliver-pia: main: {what}; /run clean"])
+
+    def test_after_a_lost_session_the_clean_check_waits_for_the_orphan(self):
+        class Orphan(FakeSSH):  # the step outlives the session for a while, then cleans up
+            dirty = 3
+
+            def __call__(s, argv, data, timeout):
+                if argv[-1] == deliver.clean_check_command() and s.dirty:
+                    s.dirty -= 1
+                    s.calls.append({"argv": argv})
+                    return 1
+                return super().__call__(argv, data, timeout)
+        ssh = Orphan(rcs=[256])
+        self.go("/fleet run renew-vpn main", ssh=ssh)
+        self.assertEqual(self.reports, ["deliver-pia: main: the session didn't finish in time; /run clean"])
+        ssh = Orphan(rcs=[256])
+        ssh.dirty = 10 ** 6  # never cleans: escalate once the orphan's own bound is past
+        self.go("/fleet run renew-vpn main", ssh=ssh)
+        self.assertEqual(self.reports, ["deliver-pia: main: the session didn't finish in time; /run NOT clean; escalate"])
+        checks = len([c for c in ssh.calls if c["argv"][-1] == deliver.clean_check_command()])
+        self.assertEqual(checks, deliver.CLEAN_WAIT_SECONDS // 10 + 1)
+        # After a finished step there is no orphan, so one check decides.
+        ssh = Orphan(rcs=[12])
+        self.go("/fleet run renew-vpn main", ssh=ssh)
+        self.assertIn("/run NOT clean; escalate", self.reports[0])
+
+    def test_a_short_lease_delivers_nothing(self):
+        for value in ((T0 + timedelta(minutes=20)).strftime("%Y-%m-%dT%H:%M:%SZ"), "", "junk"):
+            with self.subTest(value=value):
+                rc = self.go(LOCK_EXPIRES_AT=value)
+                self.assertEqual(rc, 1)
+                self.assertEqual(self.reports, ["deliver-pia: refused: the fleet lock's lease is too short for a "
+                                                "delivery; nothing delivered"])
+                self.assertFalse(self.connected)
+
+    def test_secrets_are_masked_before_use(self):
+        out = []
+        login, token = deliver.read_secrets(FakeSM(), out.append)
+        self.assertEqual((login, token), (LOGIN, FW_TOKEN))
+        for v in (json.dumps(LOGIN), LOGIN["username"], LOGIN["password"], FW_TOKEN):
+            self.assertIn("::add-mask::" + v, out)
+        out = []
+        deliver.read_secrets(FakeSM(fw=json.dumps({"token": FW_TOKEN})), out.append)
+        self.assertIn("::add-mask::" + FW_TOKEN, out)
+        for sm, reason in ((FakeSM(pia="nope"), "the PIA secret isn't JSON"),
+                           (FakeSM(fw="  "), "the firewall token secret is empty or malformed"),
+                           (FakeSM(fw=None), "a delivery secret couldn't be read")):
+            with self.assertRaises(deliver.Refusal) as e:
+                deliver.read_secrets(sm, [].append)
+            self.assertEqual(str(e.exception), reason)
+
+    def test_the_firewall_client_gets_the_token(self):
+        self.go()
+        self.assertEqual(self.tokens, [FW_TOKEN])
+
+    def test_slot_shapes(self):
+        good = self.fleet()["roles"]["main"]
+        deliver.check_slot(good)
+        k = host_key(1)
+        cases = {
+            "wildcard line": dict(good, host_key=k + "\n* " + host_key(2)),
+            "rsa": dict(good, host_key="ssh-rsa " + k.split()[1]),
+            "short blob": dict(good, host_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc"),
+            "hostname": dict(good, address="evil.example"),
+            "two addresses": dict(good, address="203.0.113.11 203.0.113.12"),
+            "loopback": dict(good, address="127.0.0.1"),
+            "leading zero": dict(good, address="203.0.113.011"),
+            "firewall path": dict(good, firewall_id="21/../98"),
+        }
+        for name, slot in cases.items():
+            with self.subTest(name), self.assertRaises(deliver.Refusal):
+                deliver.check_slot(slot)
+
+    def test_an_exception_mid_delivery_still_reports_the_close(self):
+        class Boom(FakeSSH):
+            def __call__(s, argv, data, timeout):
+                raise OSError("ssh missing")
+        fw = FakeFirewalls()
+        fw.fail_put = True
+        with self.assertRaises(OSError):
+            self.go("/fleet run renew-vpn main", ssh=Boom(), fw=fw)
+        self.assertEqual(self.reports,
+                         ["deliver-pia: its firewall rule couldn't be closed; the next sweep removes it; escalate"])
+
+    def test_the_close_sweeps_stale_rules_too(self):
+        fw = FakeFirewalls()
+
+        class Stale(FakeSSH):  # a stale rule appears while the job runs
+            def __call__(s, argv, data, timeout):
+                fw.rules["21"]["inbound"].append(audit.job_rule("8", "1", "198.51.100.9/32"))
+                return super().__call__(argv, data, timeout)
+        self.go("/fleet run renew-vpn main", ssh=Stale(), fw=fw)
+        self.assertEqual(fw.rules["21"], rules())
 
     def test_dirty_run_escalates(self):
         rc = self.go(ssh=FakeSSH(clean=1))
@@ -354,23 +465,45 @@ class EndToEnd(unittest.TestCase):
         (stub / "addkey.json").write_text(json.dumps(ADDKEY))
         run_dir, out = tmp / "run" / "lodestar-pia", tmp / "secrets" / "wg0.conf"
         run_dir.parent.mkdir()  # /run itself always exists
+        out.parent.mkdir(mode=0o700)  # cloud-init makes it
+        marker, lock = tmp / "boot-finished", tmp / "run" / "lodestar-pia.lock"
+        marker.write_text("")
+
+        def boot(region, **kw):
+            return subprocess.run(["bash", "-c", deliver.bootstrap(str(run_dir), str(out), str(marker), str(lock))],
+                                  input=deliver.payload(LOGIN, region), env=env, capture_output=True, timeout=60, **kw)
         env = {"PATH": f"{stub / 'bin'}:/usr/bin:/bin", "STUB": str(stub), "STUB_MODE": "", "TOKEN": TOKEN,
                "PRIV": PRIV, "PUB": PUB}
-        r = subprocess.run(["bash", "-c", deliver.bootstrap(str(run_dir), str(out))],
-                           input=deliver.payload(LOGIN, "ca_test"), env=env, capture_output=True, timeout=60)
+        r = boot("ca_test")
         self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(oct(out.stat().st_mode & 0o777), "0o600")
         self.assertIn(f"PrivateKey = {PRIV}", out.read_text())
         self.assertFalse(run_dir.exists())
         clean = subprocess.run(["bash", "-c", deliver.clean_check_command(str(run_dir)).replace("sudo -n ", "")])
         self.assertEqual(clean.returncode, 0)
         # A failing step: the bootstrap's own trap still empties /run.
-        r = subprocess.run(["bash", "-c", deliver.bootstrap(str(run_dir), str(out))],
-                           input=deliver.payload(LOGIN, "nowhere"), env=env, capture_output=True, timeout=60)
+        r = boot("nowhere")
         self.assertEqual(r.returncode, 13)
         self.assertFalse(run_dir.exists())
+        # cloud-init not finished: nothing is unpacked.
+        marker.unlink()
+        self.assertEqual(boot("ca_test").returncode, deliver.NOT_READY)
+        self.assertFalse(run_dir.exists())
+        marker.write_text("")
+        # Another delivery holds the VM's lock: wait, then give up without touching /run.
+        import fcntl
+        from unittest import mock
+        with open(lock, "w") as held, mock.patch.object(deliver, "FLOCK_WAIT", 1):
+            fcntl.flock(held, fcntl.LOCK_EX)
+            run_dir.mkdir()
+            (run_dir / "theirs").write_text("x")
+            self.assertEqual(boot("ca_test").returncode, deliver.BUSY_VM)
+            self.assertTrue((run_dir / "theirs").exists())  # the other delivery's files are left alone
 
     def test_remote_command_is_fixed(self):
         cmd = deliver.remote_command()
+        self.assertIn(f"timeout -s TERM {deliver.STEP_TIMEOUT} bash", cmd)
+        self.assertIn(f"flock -w {deliver.FLOCK_WAIT} 9", cmd)
         self.assertTrue(cmd.startswith("sudo -n bash -c "))
         self.assertIn("/run/lodestar-pia", cmd)
         self.assertIn("trap '\"'\"'rm -rf -- \"$d\"'\"'\"' EXIT", cmd)

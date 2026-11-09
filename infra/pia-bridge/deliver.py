@@ -39,6 +39,7 @@ import sys
 import tarfile
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
@@ -63,8 +64,16 @@ RUN_DIR = "/run/lodestar-pia"
 WG_CONF = "/home/lodestar/lodestar/secrets/wg0.conf"  # pia-example's compose mounts ./secrets/wg0.conf
 SSH_USER = "lodestar"  # root login is off (cloud-init); the step runs under sudo -n
 REGION_ID = re.compile(r"[a-z0-9_-]{1,64}\Z")
+BOOT_MARKER = "/var/lib/cloud/instance/boot-finished"
+RUN_LOCK = "/run/lodestar-pia.lock"  # holds nothing; one delivery at a time per VM
+CLOUD_INIT_WAIT = 480  # jq, wireguard-tools and the secrets directory arrive late in boot
+FLOCK_WAIT = 180  # longer than STEP_TIMEOUT: an orphaned earlier step finishes first
+STEP_TIMEOUT = 150  # the VM step: three PIA calls of at most 30 s each, with room
 SSH_ATTEMPTS_SECONDS = 120  # the firewall rule can take a little while to apply
-SSH_TIMEOUT = 300  # one session: the VM step's three PIA calls are 30 s each
+SSH_TIMEOUT = CLOUD_INIT_WAIT + FLOCK_WAIT + STEP_TIMEOUT + 60  # one session, all of the above
+CLEAN_WAIT_SECONDS = FLOCK_WAIT + 20  # after a lost session, the orphan's own bound
+LEASE_NEEDED = timedelta(minutes=25)  # deliver-pia's worst case, with the close and margin
+NOT_READY, BUSY_VM, STEP_TIMED_OUT = 20, 21, 124
 LIVE_ENV = ("AWS_PIA_ROLE_ARN", "STATE_BUCKET", "STATE_BUCKET_OWNER", "FLEET_SSH_KEY", "PIA_SERVERS",
             "GITHUB_TOKEN", "GITHUB_REPOSITORY", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN")
 
@@ -73,13 +82,30 @@ class Refusal(Exception):
     """A fixed, printable reason. Never carries a value."""
 
 
-def bootstrap(run_dir: str = RUN_DIR, out: str = WG_CONF) -> str:
-    """The remote side, run as root: unpack stdin into a root-only directory in
-    /run, run the VM step, and delete the directory on EXIT, HUP, INT and TERM."""
+def bootstrap(run_dir: str = RUN_DIR, out: str = WG_CONF, boot_marker: str = BOOT_MARKER,
+              lock: str = RUN_LOCK) -> str:
+    """The remote side, run as root.
+    1. Wait for cloud-init to finish (it installs jq and wireguard-tools and
+       makes the secrets directory late in boot); exit 20 if it hasn't.
+    2. Take a per-VM lock, so a retried session waits for an orphaned earlier
+       one instead of sharing its directory; exit 21 if it can't.
+    3. Unpack stdin into a fresh root-only directory in /run, deleted on EXIT
+       (HUP, INT and TERM exit, so EXIT runs), and run the VM step under a hard
+       timeout (exit 124). A dropped session doesn't signal the remote side
+       (no PTY): the step then runs to that bound, and its traps clean up."""
+    d, o, q = shlex.quote(run_dir), shlex.quote(out), shlex.quote
     return "\n".join([
         "set -eu",
         "umask 077",
-        f"d={shlex.quote(run_dir)}",
+        f"if command -v cloud-init >/dev/null 2>&1; then timeout {CLOUD_INIT_WAIT} cloud-init status --wait"
+        " >/dev/null 2>&1 || true; fi",
+        f"test -e {q(boot_marker)} || exit {NOT_READY}",
+        f"command -v jq >/dev/null 2>&1 && command -v wg >/dev/null 2>&1 && command -v curl >/dev/null 2>&1"
+        f" || exit {NOT_READY}",
+        f'test -d "$(dirname -- {o})" || exit {NOT_READY}',
+        f"exec 9>{q(lock)}",
+        f"flock -w {FLOCK_WAIT} 9 || exit {BUSY_VM}",
+        f"d={d}",
         'rm -rf -- "$d"',
         'mkdir -m 0700 -- "$d"',
         "trap 'rm -rf -- \"$d\"' EXIT",
@@ -87,7 +113,7 @@ def bootstrap(run_dir: str = RUN_DIR, out: str = WG_CONF) -> str:
         "trap 'exit 130' INT",
         "trap 'exit 143' TERM",
         'tar -x -C "$d" --no-same-owner -f -',
-        f'bash "$d/pia-wireguard.sh" "$d" {shlex.quote(out)}',
+        f'timeout -s TERM {STEP_TIMEOUT} bash "$d/pia-wireguard.sh" "$d" {o}',
     ])
 
 
@@ -176,16 +202,73 @@ def read_fleet(s3, env: dict, limits: dict, roles: list[str], now: datetime, rep
         slot = fleet["roles"][r]
         if not all(slot.get(k) for k in ("address", "host_key", "fingerprint", "firewall_id")):
             raise Refusal("a target's slot in fleet.json isn't filled")
-        if fingerprint(slot["host_key"]) != slot["fingerprint"]:
-            raise Refusal("a target's host key doesn't match its recorded fingerprint")
+        check_slot(slot)
     if not is_ancestor(fleet["commit"], "origin/main", repo):
         raise Refusal("the fleet's pinned commit is not an ancestor of main")
     return fleet
 
 
+ED25519_KEY = re.compile(r"ssh-ed25519 (AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43})\Z")
+FIREWALL_ID = re.compile(r"[0-9]{1,12}\Z")
+
+
+def check_slot(slot: dict) -> None:
+    """A target's address, host key and firewall ID, shape-checked before any of
+    them reaches known_hosts, an SSH argument or a firewall call."""
+    try:
+        addr = ipaddress.IPv4Address(str(slot["address"]))
+    except ValueError:
+        raise Refusal("a target's address in fleet.json isn't an IPv4 address") from None
+    if str(addr) != slot["address"] or addr.is_loopback or addr.is_link_local or addr.is_multicast \
+            or addr.is_unspecified or addr.is_reserved:
+        raise Refusal("a target's address in fleet.json isn't an IPv4 address")
+    if not isinstance(slot["host_key"], str) or not ED25519_KEY.match(slot["host_key"]):
+        raise Refusal("a target's host key in fleet.json isn't one ed25519 key")
+    if not FIREWALL_ID.match(str(slot["firewall_id"])):
+        raise Refusal("a target's firewall ID in fleet.json is malformed")
+    if fingerprint(slot["host_key"]) != slot["fingerprint"]:
+        raise Refusal("a target's host key doesn't match its recorded fingerprint")
+
+
 def fingerprint(public_key: str) -> str:
     from apply import fingerprint as fp  # noqa: PLC0415 - one definition (OP-2)
-    return fp(public_key)
+    try:
+        return fp(public_key)
+    except Exception:  # noqa: BLE001
+        raise Refusal("a target's host key in fleet.json isn't one ed25519 key") from None
+
+
+def read_secrets(sm, emit: Callable[[str], None]) -> tuple[dict, str]:
+    """The PIA login and the firewall token, each value masked as soon as it's
+    read and before any other use: the raw strings, the username, the password
+    and the token."""
+    def secret(name: str) -> str:
+        try:
+            value = sm.get_secret_value(SecretId=name)["SecretString"]
+        except Exception:
+            raise Refusal("a delivery secret couldn't be read") from None
+        mask(value, emit)
+        return value
+
+    login = pia_login(secret(PIA_SECRET))
+    mask(login["username"], emit)
+    mask(login["password"], emit)
+    from apply import linode_token  # noqa: PLC0415
+    try:
+        token = linode_token(secret(FIREWALL_SECRET))
+    except ValueError:
+        raise Refusal("the firewall token secret is empty or malformed") from None
+    mask(token, emit)
+    return login, token
+
+
+def lease_left(env: dict, now: datetime) -> timedelta:
+    """How long the fleet lock pia-fence checked has left (its expires_at, a
+    job output; nothing private). Unknown or unparsable reads as none."""
+    try:
+        return parse_time(env.get("LOCK_EXPIRES_AT", "")) - now
+    except Exception:  # noqa: BLE001
+        return timedelta(0)
 
 
 class Delivery:
@@ -198,12 +281,8 @@ class Delivery:
         self.lookup_run, self.report, self.emit, self.clock, self.sleep = lookup_run, report, emit, clock, sleep
         self.run_id, self.attempt = env["GITHUB_RUN_ID"], env["GITHUB_RUN_ATTEMPT"]
 
-    def _write_rules(self, fids: list[str], change: Callable[[dict], dict]) -> None:
-        from apply import writable  # noqa: PLC0415
-        for fid in fids:
-            self.linode.put_firewall_rules(fid, writable(change(self.linode.firewall_rules(fid))))
-
     def open_rules(self, fids: list[str]) -> None:
+        from apply import writable  # noqa: PLC0415
         ranges = audit.actions_ranges(self.meta())
         ip = self.my_ip().strip()
         mask(ip, self.emit)
@@ -216,28 +295,35 @@ class Delivery:
         now = self.clock()
         # Read every rule set first (a failed read writes nothing), then sweep and open.
         plans = [(fid, self.linode.firewall_rules(fid)) for fid in fids]
-        from apply import writable  # noqa: PLC0415
         for fid, rules in plans:
             swept, _, _ = audit.sweep(rules, self.lookup_run, now)
             self.linode.put_firewall_rules(fid, writable(audit.open_rule(swept, self.run_id, self.attempt, cidr, ranges)))
 
     def close_rules(self, fids: list[str]) -> bool:
-        ok = True
+        """Its own rule out, and stale job rules swept again (plan §3: each job
+        sweeps at its start and in its cleanup). Every firewall gets its try."""
+        from apply import writable  # noqa: PLC0415
+        ok, now = True, self.clock()
         for fid in fids:
             try:
-                self._write_rules([fid], lambda r: audit.close_rule(r, self.run_id, self.attempt))
-            except Exception:  # noqa: BLE001 - every firewall gets its try
+                rules = audit.close_rule(self.linode.firewall_rules(fid), self.run_id, self.attempt)
+                swept, _, _ = audit.sweep(rules, self.lookup_run, now)
+                self.linode.put_firewall_rules(fid, writable(swept))
+            except Exception:  # noqa: BLE001
                 ok = False
         return ok
 
-    def to_target(self, role: str, slot: dict, login: dict, region: str, key: str, workdir: Path) -> str:
+    def _ssh_base(self, role: str, slot: dict, key: str, workdir: Path) -> list[str]:
         kh = workdir / f"known_hosts-{role}"
-        kh.write_text(f"{slot['address']} {slot['host_key'].strip()}\n")
-        base = ["ssh", "-F", "/dev/null", "-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
+        kh.write_text(f"{slot['address']} {slot['host_key']}\n")
+        return ["ssh", "-F", "/dev/null", "-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
                 "-o", "StrictHostKeyChecking=yes", "-o", f"UserKnownHostsFile={kh}",
                 "-o", "GlobalKnownHostsFile=/dev/null", "-o", "HostKeyAlgorithms=ssh-ed25519",
                 "-o", "UpdateHostKeys=no", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15",
                 "-o", "ServerAliveCountMax=4", "-o", "LogLevel=QUIET", "-l", SSH_USER, "--", slot["address"]]
+
+    def to_target(self, role: str, slot: dict, login: dict, region: str, key: str, workdir: Path) -> str:
+        base = self._ssh_base(role, slot, key, workdir)
         data = payload(login, region)
         deadline = self.clock() + timedelta(seconds=SSH_ATTEMPTS_SECONDS)
         while True:
@@ -245,39 +331,55 @@ class Delivery:
             if rc != 255 or self.clock() >= deadline:  # 255: SSH itself (not yet reachable, or the key)
                 break
             self.sleep(5)
-        if rc == 255:
-            return f"{role}: couldn't connect, or its host key didn't match the pin"
-        if rc != 0:
-            step = f"the VM step failed (exit {rc})" if 0 < rc < 256 else "the VM step didn't finish"
-            # Whatever happened, /run must still be clean.
-            return f"{role}: {step}; /run " + self._clean(base, role)
-        return f"{role}: delivered; /run " + self._clean(base, role)
+        if rc == 0:
+            return f"{role}: delivered; /run " + self._clean(base, wait=False)
+        lost = rc in (255, 256)  # the session (not the step) failed: an orphan may still be running
+        what = {255: "couldn't connect, or its host key didn't match the pin",
+                256: "the session didn't finish in time",
+                NOT_READY: "the VM isn't ready (cloud-init hasn't finished)",
+                BUSY_VM: "another delivery is still running there",
+                STEP_TIMED_OUT: "the VM step timed out"}.get(rc, f"the VM step failed (exit {rc})")
+        return f"{role}: {what}; /run " + self._clean(base, wait=lost)
 
-    def _clean(self, base: list[str], role: str) -> str:
-        rc = self.ssh(base + [clean_check_command()], b"", 60)
+    def _clean(self, base: list[str], wait: bool) -> str:
+        """/run/lodestar-pia must be gone. After a lost session, an orphaned step
+        may still be running toward its own bound, so poll until that's past."""
+        deadline = self.clock() + timedelta(seconds=CLEAN_WAIT_SECONDS if wait else 0)
+        while True:
+            rc = self.ssh(base + [clean_check_command()], b"", 60)
+            if rc == 0 or self.clock() >= deadline:
+                break
+            self.sleep(10)
         return {0: "clean", 1: "NOT clean; escalate"}.get(rc, "unchecked; escalate")
 
     def run(self, fleet: dict, roles: list[str], servers: dict[str, str], login: dict, key_text: str) -> bool:
         fids = sorted({str(fleet["roles"][r]["firewall_id"]) for r in roles})
-        with tempfile.TemporaryDirectory(prefix="pia-") as tmp:
-            workdir = Path(tmp)
-            os.chmod(workdir, 0o700)
-            key = workdir / "id"
-            key.write_text(key_text.strip() + "\n")
-            os.chmod(key, 0o600)
-            lines, ok = [], True
-            try:
-                self.open_rules(fids)
-                for r in roles:
-                    line = self.to_target(r, fleet["roles"][r], login, servers[r], str(key), workdir)
-                    ok = ok and line.endswith("delivered; /run clean")
-                    lines.append(line)
-            finally:
-                if not self.close_rules(fids):
-                    lines.append("its firewall rule couldn't be closed; the next sweep removes it; escalate")
-                    ok = False
-        for line in lines:
-            self.report(f"deliver-pia: {line}")
+        lines: list[str] = []
+        ok = False
+        try:
+            with tempfile.TemporaryDirectory(prefix="pia-") as tmp:
+                workdir = Path(tmp)
+                os.chmod(workdir, 0o700)
+                key = workdir / "id"
+                key.write_text(key_text.strip() + "\n")
+                os.chmod(key, 0o600)
+                try:
+                    self.open_rules(fids)
+                    args = [(r, fleet["roles"][r], login, servers[r], str(key), workdir) for r in roles]
+                    if len(args) == 1:
+                        results = [self.to_target(*args[0])]
+                    else:  # the targets boot together, so deliver to them together
+                        with ThreadPoolExecutor(max_workers=len(args)) as pool:
+                            results = list(pool.map(lambda a: self.to_target(*a), args))
+                    lines += results
+                    ok = all(line.endswith("delivered; /run clean") for line in results)
+                finally:
+                    if not self.close_rules(fids):
+                        lines.append("its firewall rule couldn't be closed; the next sweep removes it; escalate")
+                        ok = False
+        finally:
+            for line in lines:  # reported even when an exception is on its way out
+                self.report(f"deliver-pia: {line}")
         return ok
 
 
@@ -311,11 +413,16 @@ def deliver(env: dict, ctx_report: Callable[[str], None], *, connect=None, emit=
         servers = pia_servers(env["PIA_SERVERS"], roles, all_roles)
         for v in servers.values():
             mask(v, emit)
+        # The lock pia-fence checked must outlast this job's worst case: queue time
+        # before this job, or a wait on the environment, comes out of it.
+        if lease_left(env, clock()) < LEASE_NEEDED:
+            raise Refusal("the fleet lock's lease is too short for a delivery; nothing delivered")
         live = (connect or live_wiring)(env, emit)
         fleet = read_fleet(live["s3"], env, limits, roles, clock(), repo)
-        login = live["login"]()
-        delivery = Delivery(env, linode=live["linode"], ssh=live["ssh"], my_ip=live["my_ip"], meta=live["meta"],
-                            lookup_run=live["lookup_run"], report=ctx_report, emit=emit, clock=clock, sleep=sleep)
+        login, token = read_secrets(live["sm"], emit)
+        delivery = Delivery(env, linode=live["linode"](token), ssh=live["ssh"], my_ip=live["my_ip"],
+                            meta=live["meta"], lookup_run=live["lookup_run"], report=ctx_report, emit=emit,
+                            clock=clock, sleep=sleep)
         ok = delivery.run(fleet, roles, servers, login, env["FLEET_SSH_KEY"])
     except Refusal as r:
         ctx_report(f"deliver-pia: refused: {r}")
@@ -334,8 +441,8 @@ def run_ssh(argv: list[str], data: bytes, timeout: int) -> int:  # pragma: no co
 
 
 def live_wiring(env: dict, emit) -> dict:  # pragma: no cover - live only
-    """LodestarPiaDelivery's session, the two secrets (masked on read), the
-    firewall client and the GitHub lookups."""
+    """LodestarPiaDelivery's session and clients, and the GitHub lookups. The
+    secrets themselves are read (and masked) by read_secrets."""
     import urllib.request
 
     import apply  # noqa: PLC0415 - needs boto3, installed only when FLEET_LIVE=true
@@ -343,27 +450,6 @@ def live_wiring(env: dict, emit) -> dict:  # pragma: no cover - live only
 
     run_id = f"{env['GITHUB_RUN_ID']}-{env['GITHUB_RUN_ATTEMPT']}"
     session, _ = apply.oidc_session(env, run_id, role_env="AWS_PIA_ROLE_ARN")
-    sm = session.client("secretsmanager", config=apply.aws_config())
-
-    def secret(name: str) -> str:
-        try:
-            value = sm.get_secret_value(SecretId=name)["SecretString"]
-        except Exception:
-            raise Refusal("a delivery secret couldn't be read") from None
-        mask(value, emit)
-        return value
-
-    def login() -> dict:
-        doc = pia_login(secret(PIA_SECRET))
-        mask(doc["username"], emit)
-        mask(doc["password"], emit)
-        return doc
-
-    try:
-        token = apply.linode_token(secret(FIREWALL_SECRET))
-    except ValueError:
-        raise Refusal("the firewall token secret is empty") from None
-    mask(token, emit)
 
     def my_ip() -> str:
         with urllib.request.urlopen("https://checkip.amazonaws.com", timeout=30) as r:
@@ -372,8 +458,8 @@ def live_wiring(env: dict, emit) -> dict:  # pragma: no cover - live only
     gh, repo = env["GITHUB_TOKEN"], env["GITHUB_REPOSITORY"]
     return {
         "s3": session.client("s3", config=apply.aws_config()),
-        "login": login,
-        "linode": Linode(urllib_transport(token)),
+        "sm": session.client("secretsmanager", config=apply.aws_config()),
+        "linode": lambda token: Linode(urllib_transport(token)),
         "ssh": run_ssh,
         "my_ip": my_ip,
         "meta": lambda: apply.github_json(gh, "/meta") or {},

@@ -26,7 +26,9 @@ cleanup() {
   rm -rf -- "$work"
 }
 trap cleanup EXIT
-# A hangup (the SSH session dropping) or a kill ends the run; EXIT then cleans.
+# HUP, INT and TERM (a cancelled job, or the bootstrap's timeout) end the run, so
+# EXIT cleans. A dropped SSH session sends none of them (no PTY): the step then
+# runs to the bootstrap's timeout, and EXIT cleans just the same.
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -81,11 +83,10 @@ peer_ip=${peer_ip%/32}
 # 4. wg0.conf, root-only, replaced atomically.
 dir=$(dirname -- "$out")
 [[ -d $dir ]] || install -d -m 0700 -- "$dir"
-tmp=$(mktemp -- "$dir/.wg0.conf.XXXXXX")
+tmp=$(mktemp -- "$dir/.wg0.conf.XXXXXX")  # 0600 under umask 077
 printf '[Interface]\nAddress = %s/32\nPrivateKey = %s\n\n[Peer]\nPublicKey = %s\nAllowedIPs = 0.0.0.0/0\nEndpoint = %s:%s\nPersistentKeepalive = 25\n' \
   "$peer_ip" "$priv" "$server_key" "$wg_ip" "$server_port" >"$tmp"
-chmod 0600 -- "$tmp"
-if [[ $(id -u) == 0 ]]; then chown 0:0 -- "$tmp"; fi
+if [[ $(id -u) == 0 ]]; then chown -h 0:0 -- "$tmp"; fi
 mv -f -- "$tmp" "$out"
 tmp=""
 exit 0

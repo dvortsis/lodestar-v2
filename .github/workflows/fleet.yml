@@ -140,30 +140,35 @@ jobs:
   # `run renew-vpn <vm>`, act keeps the fleet lock. pia-fence checks it's still
   # this run's just before deliver-pia (whose role can't reach the control
   # bucket); pia-release then always releases it with a conditional delete.
-  # 50 + 5 + 25 + 5 minutes, under the lock's 90 (queue time comes out of the
-  # margin; a lock that expires first fails pia-fence closed).
+  # 50 + 4 + 30 + 5 minutes, under the lock's 90. Queue time comes out of the
+  # margin, so pia-fence hands deliver-pia the lease's end, and deliver-pia
+  # refuses unless the lease outlasts its own worst case.
   pia-fence:
     needs: [gate, act]
     if: >-
       github.event_name == 'issue_comment' && github.event.action == 'created'
+      && github.event.issue.pull_request
       && github.ref == 'refs/heads/main' && github.run_attempt == 1
       && needs.act.result == 'success' && needs.act.outputs.deliver == 'true'
       && vars.CHANNEL_PR != '' && format('{0}', github.event.issue.number) == vars.CHANNEL_PR
       && vars.OPERATOR_BOT_USER_ID != '' && format('{0}', github.event.comment.user.id) == vars.OPERATOR_BOT_USER_ID
     environment: cloud-fleet
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 4
     permissions:
       contents: read
       pull-requests: write
       id-token: write # live mode assumes LodestarFleetOperator by OIDC, in-process
+    outputs:
+      lock_expires: ${{ steps.fence.outputs.lock_expires }} # the lease's end (UTC), for deliver-pia
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - if: vars.FLEET_LIVE == 'true'
         run: python3 -m pip install --quiet --no-deps --require-hashes --target "$RUNNER_TEMP/fleet-deps" -r infra/fleet/requirements-live.txt
-      - env:
+      - id: fence
+        env:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_ACTION: ${{ github.event.action }}
           IS_PR: ${{ github.event.issue.pull_request != null }}
@@ -193,13 +198,14 @@ jobs:
     needs: [gate, act, pia-fence]
     if: >-
       github.event_name == 'issue_comment' && github.event.action == 'created'
+      && github.event.issue.pull_request
       && github.ref == 'refs/heads/main' && github.run_attempt == 1
       && needs.pia-fence.result == 'success' && vars.OPERATOR_STOP != 'true'
       && vars.CHANNEL_PR != '' && format('{0}', github.event.issue.number) == vars.CHANNEL_PR
       && vars.OPERATOR_BOT_USER_ID != '' && format('{0}', github.event.comment.user.id) == vars.OPERATOR_BOT_USER_ID
     environment: pia-delivery
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     permissions:
       contents: read
       pull-requests: write
@@ -230,17 +236,19 @@ jobs:
           STATE_BUCKET_OWNER: ${{ secrets.STATE_BUCKET_OWNER }}
           FLEET_SSH_KEY: ${{ secrets.FLEET_SSH_KEY }}
           PIA_SERVERS: ${{ secrets.PIA_SERVERS }}
+          LOCK_EXPIRES_AT: ${{ needs.pia-fence.outputs.lock_expires }}
         run: python3 infra/pia-bridge/deliver.py deliver
 
   # Always after deliver-pia, whatever it did (failed, skipped or cancelled).
+  # No repository variables here: one changed mid-chain (a stop) must not
+  # strand the lock. The code's conditional delete of this run's own ID is
+  # what keeps it safe.
   pia-release:
     needs: [act, pia-fence, deliver-pia]
     if: >-
       github.event_name == 'issue_comment' && always()
       && github.ref == 'refs/heads/main' && github.run_attempt == 1
       && needs.act.outputs.deliver == 'true'
-      && vars.CHANNEL_PR != '' && format('{0}', github.event.issue.number) == vars.CHANNEL_PR
-      && vars.OPERATOR_BOT_USER_ID != '' && format('{0}', github.event.comment.user.id) == vars.OPERATOR_BOT_USER_ID
     environment: cloud-fleet
     runs-on: ubuntu-latest
     timeout-minutes: 5

@@ -1011,8 +1011,10 @@ class LiveFlows(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn(LOCK_KEY, store.objects)  # kept for deliver-pia
         self.assertEqual(outfile.read_text(), "deliver=true\n")
-        rc, out = self.run_cli("pia-fence", "/fleet up screen", b, store=store)
+        outfile.write_text("")
+        rc, out = self.run_cli("pia-fence", "/fleet up screen", b, store=store, GITHUB_OUTPUT=str(outfile))
         self.assertEqual((rc, out.strip()), (0, "pia-fence: this run holds the fleet lock"))
+        self.assertEqual(outfile.read_text(), "lock_expires=" + json.loads(store.objects[LOCK_KEY][0])["expires_at"] + "\n")
         rc, out = self.run_cli("pia-release", "/fleet up screen", b, store=store)
         self.assertEqual(rc, 0)
         self.assertIn("pia-release: released", out)
@@ -1027,6 +1029,15 @@ class LiveFlows(unittest.TestCase):
         self.run_cli("act", "/fleet status", b, store=store, GITHUB_OUTPUT=str(outfile))
         self.assertNotIn(LOCK_KEY, store.objects)
         self.assertEqual(outfile.read_text(), "")
+
+    def test_act_releases_if_it_cant_hand_the_lock_on(self):
+        api = self.empty_account()
+        b, *_ = backend(api=api)
+        store = MemoryStore()
+        rc, out = self.run_cli("act", "/fleet up screen", b, store=store, GITHUB_OUTPUT="/nonexistent/dir/out")
+        self.assertEqual(rc, 1)
+        self.assertIn("the lock couldn't be handed to deliver-pia, so nothing was delivered; use run renew-vpn", out)
+        self.assertNotIn(LOCK_KEY, store.objects)
 
     def test_a_refused_up_never_keeps_the_lock(self):
         api = self.empty_account()

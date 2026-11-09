@@ -147,7 +147,7 @@ class VMStep(unittest.TestCase):
         try:
             self.assertTrue(deadline_wait((self.stub / "started").exists))
             self.assertTrue(self.work.exists())
-            os.killpg(p.pid, signal.SIGHUP)  # as when the SSH session drops
+            os.killpg(p.pid, signal.SIGHUP)  # as a cancelled job signals it (a dropped SSH session sends nothing)
             self.assertEqual(p.wait(timeout=30), 129)
         finally:
             if p.poll() is None:

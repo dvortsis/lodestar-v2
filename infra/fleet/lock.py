@@ -179,6 +179,14 @@ class FleetLock:
         holder = _decode(cur[0]) if cur else None
         return holder is not None and holder.run_id == run_id and holder.expires_at > self.clock()
 
+    def expires_at(self, run_id: str):
+        """This run's lease end while it holds the lock; otherwise LockLost."""
+        cur = self.store.get(LOCK_KEY)
+        holder = _decode(cur[0]) if cur else None
+        if holder is None or holder.run_id != run_id or holder.expires_at <= self.clock():
+            raise LockLost("fleet lock lost")
+        return holder.expires_at
+
     def fence(self, run_id: str) -> None:
         if not self.holds(run_id):
             raise LockLost("fleet lock lost")

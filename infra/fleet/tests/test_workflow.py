@@ -203,6 +203,12 @@ class FleetStructure(unittest.TestCase):
                       "format('{0}', github.event.issue.number) == vars.CHANNEL_PR",
                       "format('{0}', github.event.comment.user.id) == vars.OPERATOR_BOT_USER_ID"):
             self.assertIn(check, deliver["if"])  # its own gates, not inherited through needs
+        self.assertIn("github.event.issue.pull_request", fence["if"])
+        self.assertIn("github.event.issue.pull_request", deliver["if"])
+        self.assertEqual(fence["outputs"], {"lock_expires": "${{ steps.fence.outputs.lock_expires }}"})
+        envs = {k: v for st in steps(deliver) for k, v in (st.get("env") or {}).items()}
+        self.assertEqual(envs["LOCK_EXPIRES_AT"], "${{ needs.pia-fence.outputs.lock_expires }}")
+        self.assertNotIn("vars.", release["if"])  # a variable changed mid-chain can't strand the lock
         self.assertIn("always()", release["if"])  # released whatever deliver-pia did
         self.assertIn("needs.act.outputs.deliver == 'true'", release["if"])
         self.assertEqual(set(release["needs"]), {"act", "pia-fence", "deliver-pia"})
