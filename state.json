@@ -6555,6 +6555,21 @@
       "id": "CMP-5g-notes-639",
       "at": "2026-11-09T00:01Z",
       "note": "CMP-5g brief/notes must carry (#639 decisions + delta review 1ef6844c): (1) move Service::installed (companions.rs:570, keys on version.is_some()) onto the journal; (2) never write a pasted credential into an installed companion row without a provenance marker; (3) IMPORTANT carry-over: unit test that s.input() puts DataFolder::from_running(dir) in input.data (positive path of the data-folder guard, companions.rs:604-611, lost with B1); (4) make manager field_of public and drop the own_field copy; (5) I1 end-to-end test through real generators once a pin lands."
+    },
+    {
+      "id": "runner-pr-op2a-owns-2",
+      "at": "2026-11-09T00:11Z",
+      "note": "OP-2a owns += infra/akamai/terraform/scripts/Lodestar-Fleet.ps1 (status false all-clear fix, I1 of #641 review)."
+    },
+    {
+      "id": "OP-4-notes-trust-gate",
+      "at": "2026-11-09T00:11Z",
+      "note": "OP-4 notes: OIDC trust accepts any event running a workflow from main (issue_comment, pull_request_target); every job assuming the bridge role needs the job-level if: gate before environment:; narrow bridge locks/operator* to exact keys."
+    },
+    {
+      "id": "reviewer-no-cloud-calls",
+      "at": "2026-11-09T00:11Z",
+      "note": "Reviewer briefs for infra slices: never run terraform init against an S3 backend or any AWS call, even with dummy creds (the #641 reviewer reached real STS/IAM with a fake key; nothing created)."
     }
   ],
   "main_health": [
@@ -7274,7 +7289,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T00:10Z",
+    "updated": "2026-11-09T00:11Z",
     "items": [
       {
         "slot": 1,
@@ -7289,7 +7304,7 @@
         "slice": "OP-2a",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #641 OP-2a ready at fe8c1088; Opus+security review running",
+        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #641 security MERGE, Opus CHANGES (B1 policy tests miss wildcards; I1 Lodestar-Fleet.ps1 false idle; hardening ResourceAccount/Retain/TLS1.2; P1-P4) relayed; one push then delta review",
         "since": "2026-11-08T22:52Z"
       },
       {
@@ -7373,5 +7388,5 @@
     }
   ],
   "heartbeat": "2026-11-08T21:39Z",
-  "updated": "2026-11-09T00:10Z"
+  "updated": "2026-11-09T00:11Z"
 }
