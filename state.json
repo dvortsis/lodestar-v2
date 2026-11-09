@@ -6605,6 +6605,11 @@
       "id": "op-2a-merged",
       "added": "2026-11-09T01:05Z",
       "what": "#641 OP-2a merged (ca4cd0a9). Owner \u00a72.19 flags sent via dashboard: PR body refinements incl. ResourceAccount grant, setup step 2.8 OIDC subject template, FleetAccountId parameter, plus #643 OP-G additions."
+    },
+    {
+      "id": "op-2-owns-and-setup",
+      "added": "2026-11-09T01:07Z",
+      "what": "next runner PR: OP-2 owns add infra/fleet/linode.py, audit.py, requirements-live.txt (approved 01:07Z). At OP-2 merge flag owner setup additions: OWNER_SSH_PUBLIC_KEY repo variable, FLEET_LINODE_ACCOUNT_EUUID cloud-fleet secret; host private keys in state bucket + user-data until down (single-use). run <step> refuses until OP-3."
     }
   ],
   "main_health": [
