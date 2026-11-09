@@ -6640,6 +6640,10 @@
     {
       "pr": 649,
       "note": "X-win-restart-followups merged da15ccab; follow-up X-win-restart-followups-2 launched; later: update/layout.rs:239 busy-lock retry after #644 merges"
+    },
+    {
+      "pr": 645,
+      "note": "CMP-5g-1 merged f5604c58; owner FYI + flags sent (with #648, #649, OP-3 split); CMP-5g-2 launched in same session"
     }
   ],
   "main_health": [
@@ -7365,15 +7369,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T04:58Z",
+    "updated": "2026-11-09T05:00Z",
     "items": [
       {
         "slot": 1,
-        "slice": "CMP-5g-1",
+        "slice": "CMP-5g-2",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: #645 CMP-5g-1 delta CHANGES at e5dbc014 (P3 tests missing + polish); round 3; then CMP-5g-2 (qBittorrent only)",
-        "since": "2026-11-09T00:20Z"
+        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: #645 CMP-5g-1 merged (f5604c58); owner FYI sent; building CMP-5g-2 (guided endpoints; qBittorrent hand-over only)",
+        "since": "2026-11-09T05:00Z"
       },
       {
         "slot": 2,
