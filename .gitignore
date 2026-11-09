@@ -6,6 +6,8 @@
 *.db
 *.db-wal
 *.db-shm
+# A sealing key a test or a local run created; never committed.
+**/secrets.key
 __pycache__/
 
 # Local validation output and machine-specific browser launch adapters.

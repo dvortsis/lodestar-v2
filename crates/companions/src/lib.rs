@@ -53,6 +53,7 @@ pub mod state;
 pub mod supervise;
 pub mod unraid;
 pub mod verify;
+pub mod watch;
 
 pub use catalogue::{Catalogue, CatalogueError, Entry, NotAvailable, builtin};
 pub use inputs::{CompanionId, Version};

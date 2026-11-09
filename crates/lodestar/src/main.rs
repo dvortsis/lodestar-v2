@@ -5,6 +5,7 @@
 
 mod cli;
 mod cluster;
+mod companion_wiring;
 mod companions;
 mod config;
 mod filter_load;
