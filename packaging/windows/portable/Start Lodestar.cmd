@@ -3,6 +3,9 @@ rem Starts Lodestar from this folder. Data is kept in the "data" folder beside i
 rem Press Ctrl+C and wait for shutdown to finish before closing this window.
 cd /d "%~dp0"
 set "LODESTAR_DATA_DIR=%~dp0data"
+rem This window can be seen: a copy started by Restart now that fails at start
+rem waits for Enter here instead of closing it unread.
+set "LODESTAR_PORTABLE_WINDOW=1"
 rem Open the web page once the server has had a moment to start.
 start "" cmd /c "timeout /t 3 /nobreak >nul & start http://localhost:8090/"
 echo Starting Lodestar. The first-run setup token is printed below; paste it into the page.

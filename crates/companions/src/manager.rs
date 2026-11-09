@@ -977,9 +977,50 @@ impl Inner {
     }
 }
 
+/// How long a busy companion lock is tried again on Windows
+/// (X-win-restart-followups-2, as `lodestar-search`'s index lock). Windows
+/// releases a lock left on a closed file, or held by a process that ended,
+/// "depending upon available system resources" (`LockFileEx`), so a quick
+/// restart can find the previous run's lock still held for a moment. On
+/// Unix a closed file's lock is gone at once, so a busy lock there is
+/// another running process, refused at once.
+#[cfg(windows)]
+const LOCK_WAIT: Duration = Duration::from_secs(10);
+#[cfg(not(windows))]
+const LOCK_WAIT: Duration = Duration::ZERO;
+/// How often it's tried meanwhile.
+const LOCK_POLL: Duration = Duration::from_millis(100);
+
+/// Calls `attempt` until it gives anything but a busy lock, or `wait` has
+/// passed since the first call, sleeping `poll` between calls. Any other
+/// error is returned at once. The clock and the sleep are passed in, so the
+/// loop is tested on every platform without waiting. A `wait` of zero is
+/// one attempt.
+fn retry_busy<T>(
+    mut attempt: impl FnMut() -> Result<T, std::fs::TryLockError>,
+    wait: Duration,
+    poll: Duration,
+    now: impl Fn() -> std::time::Instant,
+    mut sleep: impl FnMut(Duration),
+) -> Result<T, std::fs::TryLockError> {
+    let start = now();
+    loop {
+        match attempt() {
+            Err(std::fs::TryLockError::WouldBlock)
+                if now().saturating_duration_since(start) < wait =>
+            {
+                sleep(poll);
+            }
+            other => return other,
+        }
+    }
+}
+
 impl Manager {
     /// Takes the data folder's companion lock; [`Refusal::Busy`] while
     /// another process (serve, or a `lodestar companion` command) holds it.
+    /// On Windows a busy lock is tried again for up to [`LOCK_WAIT`] first,
+    /// for the previous run's lock after a quick restart.
     /// Blocking: call it from `spawn_blocking` in async code.
     pub fn open(parts: Parts) -> Result<Manager, ManagerError> {
         let dir = parts.data.join("companions");
@@ -990,7 +1031,13 @@ impl Manager {
             .write(true)
             .open(dir.join(".lock"))
             .map_err(|_| failed("lock")("io"))?;
-        match lock.try_lock() {
+        match retry_busy(
+            || lock.try_lock(),
+            LOCK_WAIT,
+            LOCK_POLL,
+            std::time::Instant::now,
+            std::thread::sleep,
+        ) {
             Ok(()) => {}
             Err(std::fs::TryLockError::WouldBlock) => return Err(Refusal::Busy.into()),
             Err(std::fs::TryLockError::Error(_)) => return Err(failed("lock")("io")),
@@ -1569,5 +1616,77 @@ impl std::fmt::Debug for Launch {
             .field("executable", &self.executable)
             .field("target", &self.target)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::fs::TryLockError;
+    use std::time::Instant;
+
+    /// The busy-lock retry (X-win-restart-followups-2), on a fake clock
+    /// that each sleep moves on. Returns the result and the attempts made.
+    fn retried(
+        answers: Vec<Result<u8, TryLockError>>,
+        wait: Duration,
+    ) -> (Result<u8, TryLockError>, usize) {
+        let start = Instant::now();
+        let elapsed = Cell::new(Duration::ZERO);
+        let attempts = Cell::new(0usize);
+        let mut answers = answers.into_iter();
+        let got = retry_busy(
+            || {
+                attempts.set(attempts.get() + 1);
+                answers.next().unwrap_or(Err(TryLockError::WouldBlock))
+            },
+            wait,
+            LOCK_POLL,
+            || start + elapsed.get(),
+            |d| elapsed.set(elapsed.get() + d),
+        );
+        (got, attempts.get())
+    }
+
+    #[test]
+    fn a_busy_lock_that_frees_is_taken() {
+        let (got, attempts) = retried(
+            vec![Err(TryLockError::WouldBlock), Ok(7)],
+            Duration::from_secs(10),
+        );
+        assert_eq!((got.ok(), attempts), (Some(7), 2));
+    }
+
+    #[test]
+    fn a_lock_busy_past_the_wait_is_refused() {
+        // Tried at 0, 100, …, 1,000 ms: at the deadline it's given up.
+        let (got, attempts) = retried(Vec::new(), Duration::from_secs(1));
+        assert!(matches!(got, Err(TryLockError::WouldBlock)));
+        assert_eq!(attempts, 11);
+        // No wait (Unix): refused at once.
+        let (got, attempts) = retried(Vec::new(), Duration::ZERO);
+        assert!(matches!(got, Err(TryLockError::WouldBlock)));
+        assert_eq!(attempts, 1);
+    }
+
+    /// Unix waits for nothing: a busy lock there is another process.
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_never_waits_for_the_lock() {
+        assert_eq!(LOCK_WAIT, Duration::ZERO);
+    }
+
+    #[test]
+    fn a_lock_error_is_never_retried() {
+        let (got, attempts) = retried(
+            vec![
+                Err(TryLockError::Error(std::io::Error::other("denied"))),
+                Ok(1),
+            ],
+            Duration::from_secs(10),
+        );
+        assert!(matches!(got, Err(TryLockError::Error(_))));
+        assert_eq!(attempts, 1);
     }
 }

@@ -550,7 +550,10 @@ const LOCK_POLL: Duration = Duration::from_millis(100);
 
 /// Takes the exclusive lock on the index root. On Windows a busy lock is
 /// tried again for up to [`LOCK_WAIT`] ([`retry_busy`]); after that, and at
-/// once elsewhere, it's [`Error::Locked`]. An I/O error is never retried.
+/// once elsewhere, it's [`Error::Locked`]. Only opening the lock file can
+/// fail with an I/O error, which is never retried: tantivy 0.27 reports
+/// every failed try-lock as busy, so a filesystem that refuses locks is
+/// tried for the whole wait on Windows, then reported as in use.
 fn lock_root(root: &Path) -> Result<DirectoryLock> {
     let dir = MmapDirectory::open(root)?;
     let lock = Lock {
@@ -1315,6 +1318,13 @@ mod tests {
         let (got, attempts) = retried(Vec::new(), Duration::ZERO);
         assert!(matches!(got, Err(LockError::LockBusy)));
         assert_eq!(attempts, 1);
+    }
+
+    /// Unix waits for nothing: a busy lock there is another instance.
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_never_waits_for_the_lock() {
+        assert_eq!(LOCK_WAIT, Duration::ZERO);
     }
 
     #[test]
