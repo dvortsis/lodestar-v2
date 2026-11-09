@@ -7350,7 +7350,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T02:00Z",
+    "updated": "2026-11-09T02:04Z",
     "items": [
       {
         "slot": 1,
@@ -7365,7 +7365,7 @@
         "slice": "OP-2",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #646 OP-2 both reviews CHANGES (audit fleet.json read error destroys fleet; firewall attach check; sweep order; flag unreadable => down-only; tf timeouts; L1-L5; polish) relayed; fix round then delta + security delta",
+        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #646 OP-2 fix round pushed (efdc7b0b); delta Opus + security delta reviews running",
         "since": "2026-11-09T01:05Z"
       },
       {
@@ -7381,7 +7381,7 @@
         "slice": "X-lease-report-atomic",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #642 X-wk-busy-metrics merged (e3b35b8e); building X-lease-report-atomic",
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #647 X-lease-report-atomic review CHANGES (race test never runs report-first order; PeerFound note; Taken-only no-gap doc; import) relayed 02:04Z; fix round then delta review",
         "since": "2026-11-09T01:45Z"
       },
       {
