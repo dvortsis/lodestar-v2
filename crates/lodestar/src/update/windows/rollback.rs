@@ -127,6 +127,10 @@ pub struct MsiRun {
     pub log: String,
     /// What the MSI was checked against (checked again by the copy).
     pub pins: Pins,
+    /// The copy's file name in staging (`run-<32 hex>.exe`), chosen before
+    /// the journal is written: its answer must name it.
+    #[serde(default)]
+    pub copy: String,
 }
 
 /// In staging: the copy's answer, `msiexec`'s exit code.
@@ -139,17 +143,38 @@ pub const MSI_LOCK: &str = "msiexec.lock";
 pub struct MsiResult {
     pub id: String,
     pub purpose: Purpose,
+    /// The copy that ran it.
+    #[serde(default)]
+    pub copy: String,
     pub code: i32,
+    /// The copy refused before `msiexec` ran (`code` means nothing then).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused: Option<String>,
 }
 
-/// The copy's exit code for this journal's pending run, consumed: read
-/// and removed. `None` when there's none (yet).
-pub fn take_result(ctx: &Context, j: &Journal) -> Option<i32> {
+/// What the copy's answer says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Answer {
+    Code(i32),
+    /// It refused before `msiexec` ran: nothing changed.
+    Refused(String),
+}
+
+/// The copy's answer for this journal's pending run, consumed: read and
+/// removed. `None` when there's none (yet), or it isn't this run's (its
+/// journal id, purpose and copy must all match).
+pub fn take_result(ctx: &Context, j: &Journal) -> Option<Answer> {
     let run = j.msi.as_ref()?;
     let path = ctx.staging.dir.join(MSI_RESULT);
     let r: MsiResult = layout::read_json(&path).ok().flatten()?;
     let _ = std::fs::remove_file(&path);
-    (r.id == j.id && r.purpose == run.purpose).then_some(r.code)
+    if r.id != j.id || r.purpose != run.purpose || r.copy != run.copy {
+        return None;
+    }
+    Some(match r.refused {
+        Some(why) => Answer::Refused(why),
+        None => Answer::Code(r.code),
+    })
 }
 
 pub fn write_result(ctx: &Context, r: &MsiResult) -> Result<(), Refusal> {
@@ -173,9 +198,21 @@ pub fn msi_lock(ctx: &Context) -> std::io::Result<Option<std::fs::File>> {
     }
 }
 
-/// Whether a copy is running an `msiexec` now.
-pub fn copy_running(ctx: &Context) -> bool {
-    matches!(msi_lock(ctx), Ok(None))
+/// Whether a copy may be running: its lock is held, the lock can't be
+/// read, or this run's copy is still there (a starting copy that hasn't
+/// taken the lock yet can't be removed: its image is running).
+pub fn copy_running(ctx: &Context, j: Option<&Journal>) -> bool {
+    if !matches!(msi_lock(ctx), Ok(Some(_))) {
+        return true;
+    }
+    let Some(copy) = j.and_then(|j| j.msi.as_ref()).map(|r| r.copy.as_str()) else {
+        return false;
+    };
+    if copy.is_empty() {
+        return false;
+    }
+    let path = ctx.staging.dir.join(copy);
+    std::fs::symlink_metadata(&path).is_ok() && std::fs::remove_file(&path).is_err()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -301,11 +338,24 @@ pub fn resume(
     // An install handed to the copy: its answer first, or it's still
     // running. Without either the copy died; the program on disk decides.
     if journal.state == State::Installing && journal.msi.is_some() {
-        if let Some(code) = take_result(ctx, &journal) {
-            return Ok(Some(helper::after_install(ctx, sys, journal, code)));
-        }
-        if copy_running(ctx) {
-            return Ok(Some(Outcome::HandedOff));
+        match take_result(ctx, &journal) {
+            Some(Answer::Code(code)) => {
+                return Ok(Some(helper::after_install(ctx, sys, journal, code)));
+            }
+            Some(Answer::Refused(why)) => {
+                // Nothing ran: nothing to roll back, nothing skipped.
+                clear(ctx);
+                let _ = sys.set_start(journal.start_before.unwrap_or(Start::Auto));
+                sys.start_service();
+                sys.event_log(&format!(
+                    "Lodestar's update helper didn't install {}: its copy refused ({why}). \
+                     Nothing was changed.",
+                    journal.to
+                ));
+                return Ok(Some(Outcome::CopyRefused { why }));
+            }
+            None if copy_running(ctx, Some(&journal)) => return Ok(Some(Outcome::HandedOff)),
+            None => {}
         }
     }
     Ok(Some(match journal.state {
@@ -523,22 +573,29 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
     }
     if done < 4 {
         let code = match take_result(ctx, j) {
-            Some(code) => code,
-            None if copy_running(ctx) => return Err(Stop::HandedOff),
+            Some(Answer::Code(code)) => code,
+            Some(Answer::Refused(why)) => {
+                j.msi = None;
+                save(j, &snapshot, done)?;
+                return Err(Stop::Retry(format!("the helper's copy refused: {why}")));
+            }
+            None if copy_running(ctx, Some(j)) => return Err(Stop::HandedOff),
             None => {
                 stopped(sys)?;
                 // Checked again right before it runs.
                 let (staged, pins) = halt_on(previous_msi(ctx, &j.from))?;
                 let log = ctx.staging.dir.join(ROLLBACK_LOG);
+                let copy = helper::copy_name().map_err(|e| Stop::Retry(e.to_string()))?;
                 j.msi = Some(MsiRun {
                     purpose: Purpose::Rollback,
                     msi: staged.to_string_lossy().into_owned(),
                     log: log.to_string_lossy().into_owned(),
                     pins,
+                    copy: copy.clone(),
                 });
                 save(j, &snapshot, done)?;
                 let args = msi::msiexec_args(&staged, &log);
-                match sys.run_msiexec(&ctx.staging.dir, &args) {
+                match sys.run_msiexec(&ctx.staging.dir, &args, &copy) {
                     Ok(helper::Ran::Code(c)) => c,
                     Ok(helper::Ran::HandedOff) => return Err(Stop::HandedOff),
                     // Never from Program Files instead: retried.

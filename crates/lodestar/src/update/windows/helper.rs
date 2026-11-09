@@ -67,6 +67,8 @@ use crate::update::trust_file;
 
 /// The one argument the copy is started with, after `update-helper`.
 pub const COPY_FLAG: &str = "--run-msi";
+/// The longest one `msiexec` may run.
+pub const MSIEXEC_WAIT: Duration = Duration::from_secs(90 * 60);
 /// How long the copy waits for the program in Program Files to end.
 pub const FREE_WAIT: Duration = Duration::from_secs(120);
 
@@ -190,7 +192,7 @@ pub trait System {
     /// to a copy of the helper in staging, so the install folder isn't in
     /// use while it's replaced ([`stage_copy`]). On Windows the copy runs
     /// it and starts the task again; tests run it here.
-    fn run_msiexec(&self, staging: &Path, args: &[OsString]) -> Result<Ran, String>;
+    fn run_msiexec(&self, staging: &Path, args: &[OsString], copy: &str) -> Result<Ran, String>;
     /// Whether the service reaches Running within [`HEALTH_WAIT`] and
     /// stays there for [`HEALTH_HOLD`].
     fn healthy(&self) -> bool;
@@ -264,6 +266,8 @@ pub enum Outcome {
     /// `msiexec` was handed to the helper's copy, which starts the task
     /// again when it's done.
     HandedOff,
+    /// The copy refused before `msiexec` ran: nothing changed.
+    CopyRefused { why: String },
 }
 
 impl Outcome {
@@ -278,6 +282,7 @@ impl Outcome {
             Outcome::RollbackHalted { .. } => "rollback_halted",
             Outcome::InstallInterrupted { .. } => "install_interrupted",
             Outcome::HandedOff => "handed_off",
+            Outcome::CopyRefused { .. } => "copy_refused",
         }
     }
 }
@@ -296,6 +301,10 @@ pub fn run(ctx: &Context, sys: &dyn System) -> Result<Outcome, Refusal> {
     // Cheap first: no journal and no request, nothing to check (as at
     // most boots).
     if !journal_here && std::fs::symlink_metadata(updates.join(REQUEST)).is_err() {
+        // The last copy can't remove itself: it goes here, once it's done.
+        if ctx.staging.dir.is_dir() && !rollback::copy_running(ctx, None) {
+            clean_copies(&ctx.staging.dir);
+        }
         return Ok(Outcome::Nothing);
     }
     let data_pin =
@@ -305,7 +314,7 @@ pub fn run(ctx: &Context, sys: &dyn System) -> Result<Outcome, Refusal> {
     let staging = &ctx.staging;
     sys.secure_staging(&staging.dir).map_err(Refusal::Staging)?;
     // A copy that finished leaves itself behind; one still running stays.
-    if !rollback::copy_running(ctx) {
+    if !rollback::copy_running(ctx, rollback::read(ctx).ok().flatten().as_ref()) {
         clean_copies(&staging.dir);
     }
     if let Some(journal) = rollback::read(ctx)? {
@@ -492,17 +501,25 @@ fn attempt(
             return Err(e);
         }
     };
+    let copy = match copy_name() {
+        Ok(c) => c,
+        Err(_) => {
+            sys.start_service();
+            return Err(Refusal::Busy("helper_copy_failed"));
+        }
+    };
     journal.msi = Some(rollback::MsiRun {
         purpose: rollback::Purpose::Install,
         msi: staged.to_string_lossy().into_owned(),
         log: staging.log().to_string_lossy().into_owned(),
         pins,
+        copy: copy.clone(),
     });
     if let Err(e) = rollback::write(ctx, &journal) {
         sys.start_service();
         return Err(e);
     }
-    match sys.run_msiexec(&staging.dir, &args) {
+    match sys.run_msiexec(&staging.dir, &args, &copy) {
         Ok(Ran::Code(code)) => Ok(after_install(ctx, sys, journal, code)),
         Ok(Ran::HandedOff) => Ok(Outcome::HandedOff),
         // Never from Program Files instead: refused, nothing changed.
@@ -524,6 +541,8 @@ pub(super) fn after_install(
     code: i32,
 ) -> Outcome {
     let Some(run) = journal.msi.take() else {
+        rollback::clear(ctx);
+        sys.start_service();
         return Outcome::InstallInterrupted {
             version: journal.to.clone(),
         };
@@ -554,39 +573,84 @@ pub(super) fn after_install(
     }
 }
 
-/// The helper's copy in staging: runs the journal's pending `msiexec`, and
-/// nothing else, holding the copy's lock; then leaves the exit code for the
-/// next run. The MSI must be inside staging and still match its pins.
-pub fn run_copy(ctx: &Context, sys: &dyn System) -> Result<i32, Refusal> {
+/// A fresh, unpredictable name for the helper's copy: `run-<32 hex>.exe`.
+pub(super) fn copy_name() -> io::Result<String> {
+    let mut b = [0u8; 16];
+    getrandom::fill(&mut b).map_err(|_| io::Error::other("no randomness"))?;
+    let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
+    Ok(format!("run-{hex}.exe"))
+}
+
+/// The helper's copy in staging (`self_name` is its file name): runs the
+/// journal's pending `msiexec`, and nothing else. In order:
+/// 1. its lock, first of all, so no helper run takes the journal from it;
+/// 2. staging checked again (private, not a link) and pinned;
+/// 3. `wait()`: the program in Program Files has ended;
+/// 4. the pending run must name this copy, its MSI and log must be inside
+///    staging, and the MSI must still match its pins;
+/// 5. the service stopped, nothing running as its account;
+/// 6. `msiexec`, then its exit code left for the next run. A refusal from
+///    step 3 on is left as the answer too, so it's reported, not lost.
+pub fn run_copy(
+    ctx: &Context,
+    sys: &dyn System,
+    self_name: &str,
+    wait: &dyn Fn() -> bool,
+) -> Result<i32, Refusal> {
     let lock = rollback::msi_lock(ctx)
         .map_err(io_refusal("msiexec.lock"))?
         .ok_or(Refusal::Busy("copy_running"))?;
+    sys.secure_staging(&ctx.staging.dir)
+        .map_err(Refusal::Staging)?;
+    let _pin = layout::pin_dir(&ctx.staging.dir).map_err(|e| Refusal::Staging(e.to_string()))?;
     let journal = rollback::read(ctx)?.ok_or(Refusal::Request("no_journal"))?;
     let run = journal
         .msi
         .clone()
         .ok_or(Refusal::Request("no_pending_msiexec"))?;
-    let (msi, log) = (PathBuf::from(&run.msi), PathBuf::from(&run.log));
-    if !msi.starts_with(&ctx.staging.dir) || !log.starts_with(&ctx.staging.dir) {
-        return Err(Refusal::Request("msiexec_outside_staging"));
+    if run.copy != self_name {
+        return Err(Refusal::Request("not_this_copy"));
     }
-    let (sha256, size) = rollback::hash(&msi).map_err(io_refusal("msi"))?;
-    if size != run.pins.size || sha256.to_hex() != run.pins.sha256 {
-        return Err(Refusal::Mismatch);
+    let answer = |code: i32, refused: Option<String>| {
+        rollback::write_result(
+            ctx,
+            &rollback::MsiResult {
+                id: journal.id.clone(),
+                purpose: run.purpose,
+                copy: run.copy.clone(),
+                code,
+                refused,
+            },
+        )
+    };
+    let outcome = (|| {
+        if !wait() {
+            return Err(Refusal::Busy("program_files_in_use"));
+        }
+        let (msi, log) = (PathBuf::from(&run.msi), PathBuf::from(&run.log));
+        let inside = |p: &Path| {
+            p.starts_with(&ctx.staging.dir)
+                && !p.components().any(|c| c == std::path::Component::ParentDir)
+        };
+        if !inside(&msi) || !inside(&log) {
+            return Err(Refusal::Request("msiexec_outside_staging"));
+        }
+        let (sha256, size) = rollback::hash(&msi).map_err(io_refusal("msi"))?;
+        if size != run.pins.size || sha256.to_hex() != run.pins.sha256 {
+            return Err(Refusal::Mismatch);
+        }
+        sys.stop_service()
+            .map_err(|_| Refusal::Busy("service_running"))?;
+        rollback::no_service_processes(sys).map_err(|_| Refusal::Busy("service_processes"))?;
+        sys.msiexec(&msi::msiexec_args(&msi, &log))
+            .map_err(io_refusal("msiexec"))
+    })();
+    match &outcome {
+        Ok(code) => answer(*code, None)?,
+        Err(r) => answer(-1, Some(r.code().to_string()))?,
     }
-    let code = sys
-        .msiexec(&msi::msiexec_args(&msi, &log))
-        .map_err(io_refusal("msiexec"))?;
-    rollback::write_result(
-        ctx,
-        &rollback::MsiResult {
-            id: journal.id,
-            purpose: run.purpose,
-            code,
-        },
-    )?;
     drop(lock);
-    Ok(code)
+    outcome
 }
 
 /// Copies the helper (`own`) into staging under a fresh, unpredictable
@@ -595,12 +659,9 @@ pub fn run_copy(ctx: &Context, sys: &dyn System) -> Result<i32, Refusal> {
 /// delete sharing on Windows) and checked: its SHA-256 must be `own`'s.
 /// Earlier copies go first. The caller has checked staging's ACL and
 /// pinned it.
-pub fn stage_copy(staging: &Path, own: &Path) -> io::Result<(PathBuf, std::fs::File)> {
+pub fn stage_copy(staging: &Path, own: &Path, name: &str) -> io::Result<(PathBuf, std::fs::File)> {
     clean_copies(staging);
-    let mut b = [0u8; 16];
-    getrandom::fill(&mut b).map_err(|_| io::Error::other("no randomness"))?;
-    let name: String = b.iter().map(|x| format!("{x:02x}")).collect();
-    let copy = staging.join(format!("run-{name}.exe"));
+    let copy = staging.join(name);
     {
         let mut src = layout::open_nofollow(own)?;
         let mut dst = std::fs::OpenOptions::new()
@@ -623,7 +684,7 @@ pub fn stage_copy(staging: &Path, own: &Path) -> io::Result<(PathBuf, std::fs::F
 
 /// Opens `path` for reading only, sharing only reading on Windows: while
 /// it's held nothing can write, rename or delete it.
-fn hold_read_only(path: &Path) -> io::Result<std::fs::File> {
+pub(crate) fn hold_read_only(path: &Path) -> io::Result<std::fs::File> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
@@ -993,35 +1054,57 @@ impl System for Windows {
     /// Checks staging (private, not a link) and pins it, stages the copy
     /// and starts it (`update-helper --run-msi`, nothing else), then lets
     /// this process end so the install folder isn't in use.
-    fn run_msiexec(&self, staging: &Path, _args: &[OsString]) -> Result<Ran, String> {
+    fn run_msiexec(&self, staging: &Path, _args: &[OsString], copy: &str) -> Result<Ran, String> {
         use std::os::windows::process::CommandExt;
         /// `CREATE_NO_WINDOW` and `DETACHED_PROCESS`.
         const FLAGS: u32 = 0x0800_0000 | 0x0000_0008;
+        /// `CREATE_BREAKAWAY_FROM_JOB`: out of the task's job, so the copy
+        /// outlives this process and the task can be started again.
+        const BREAKAWAY: u32 = 0x0100_0000;
         self.secure_staging(staging)?;
         let _pin = layout::pin_dir(staging).map_err(|e| format!("staging: {e}"))?;
         let own = std::env::current_exe().map_err(|e| e.to_string())?;
-        let (copy, held) =
-            stage_copy(staging, &own).map_err(|e| format!("copying the helper: {e}"))?;
-        let mut cmd = std::process::Command::new(&copy);
-        clean_env(&mut cmd);
-        cmd.creation_flags(FLAGS)
-            .args([msi::COMMAND, COPY_FLAG])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
+        let (path, held) =
+            stage_copy(staging, &own, copy).map_err(|e| format!("copying the helper: {e}"))?;
+        let start = |flags: u32| {
+            let mut cmd = std::process::Command::new(&path);
+            clean_env(&mut cmd);
+            cmd.creation_flags(flags)
+                .args([msi::COMMAND, COPY_FLAG])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+        };
+        // A job that doesn't allow breaking away refuses the flag: then
+        // started in it, as the task's own child.
+        start(FLAGS | BREAKAWAY)
+            .or_else(|_| start(FLAGS))
             .map_err(|e| format!("starting the copy: {e}"))?;
-        // The copy holds its own image from here (a running image can't be
-        // written or deleted), and opens itself read-only too.
+        // The copy holds its own image from here (read-only, and a running
+        // image can't be written or deleted).
         drop(held);
         Ok(Ran::HandedOff)
     }
 
+    /// Bounded by [`MSIEXEC_WAIT`]: a hung install is ended (and reported
+    /// as a failure), never left holding the copy's lock for good.
     fn msiexec(&self, args: &[OsString]) -> io::Result<i32> {
-        let status = Self::command("msiexec.exe")?.args(args).status()?;
-        status
-            .code()
-            .ok_or_else(|| io::Error::other("msiexec ended without a code"))
+        let mut child = Self::command("msiexec.exe")?.args(args).spawn()?;
+        let deadline = Instant::now() + MSIEXEC_WAIT;
+        loop {
+            if let Some(status) = child.try_wait()? {
+                return status
+                    .code()
+                    .ok_or_else(|| io::Error::other("msiexec ended without a code"));
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(io::Error::other("msiexec ran past its deadline"));
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
     }
 
     /// Running within [`HEALTH_WAIT`], then still Running at every look
@@ -1192,7 +1275,7 @@ mod tests {
         fn service_processes(&self) -> io::Result<usize> {
             Ok(self.processes)
         }
-        fn run_msiexec(&self, _: &Path, args: &[OsString]) -> Result<Ran, String> {
+        fn run_msiexec(&self, _: &Path, args: &[OsString], _: &str) -> Result<Ran, String> {
             if self.hand_off {
                 self.note("hand_off");
                 return Ok(Ran::HandedOff);
@@ -1291,6 +1374,16 @@ mod tests {
         fn answer(&self) -> msi::Answer {
             serde_json::from_slice(&std::fs::read(self.updates(msi::RESULT)).unwrap()).unwrap()
         }
+    }
+
+    /// Runs the journal's pending msiexec as the copy it names would.
+    fn as_copy(env: &Env, fake: &Fake) -> Result<i32, Refusal> {
+        let name = rollback::read(&env.ctx)
+            .unwrap()
+            .and_then(|j| j.msi)
+            .map(|r| r.copy)
+            .unwrap_or_default();
+        run_copy(&env.ctx, fake, &name, &|| true)
     }
 
     fn refused(r: Result<Outcome, Refusal>) -> &'static str {
@@ -1661,8 +1754,8 @@ mod tests {
             fn service_processes(&self) -> io::Result<usize> {
                 self.fake.service_processes()
             }
-            fn run_msiexec(&self, d: &Path, a: &[OsString]) -> Result<Ran, String> {
-                self.fake.run_msiexec(d, a)
+            fn run_msiexec(&self, d: &Path, a: &[OsString], c: &str) -> Result<Ran, String> {
+                self.fake.run_msiexec(d, a, c)
             }
             fn copied(&self, _: &str) {
                 let moved = self.updates.with_file_name("moved");
@@ -2251,7 +2344,7 @@ mod tests {
         drop(lock);
         // The copy.
         let copy = Fake::default();
-        assert_eq!(run_copy(&env.ctx, &copy).unwrap(), 0);
+        assert_eq!(as_copy(&env, &copy).unwrap(), 0);
         let (args, bytes) = copy.ran.lock().unwrap().clone().unwrap();
         assert_eq!(bytes, MSI);
         let staged = env.ctx.staging.incoming().join("lodestar-0.7.0.msi");
@@ -2292,7 +2385,7 @@ mod tests {
             migrate: Some(env.ctx.data_dir.clone()),
             ..Fake::default()
         };
-        run_copy(&env.ctx, &copy).unwrap();
+        as_copy(&env, &copy).unwrap();
         // Probation fails; the reinstall is handed off in turn.
         let next = Fake {
             unhealthy: true,
@@ -2310,7 +2403,7 @@ mod tests {
             migrate: Some(data.clone()),
             ..Fake::default()
         };
-        run_copy(&env.ctx, &copy).unwrap();
+        as_copy(&env, &copy).unwrap();
         assert_eq!(copy.ran.lock().unwrap().clone().unwrap().1, OLD_MSI);
         assert_eq!(
             copy.store_seen.lock().unwrap().clone(),
@@ -2341,7 +2434,7 @@ mod tests {
         let env = Env::new("0.6.0");
         std::fs::create_dir_all(&env.ctx.staging.dir).unwrap();
         assert_eq!(
-            run_copy(&env.ctx, &Fake::default()).unwrap_err().code(),
+            as_copy(&env, &Fake::default()).unwrap_err().code(),
             "no_journal"
         );
         env.offer("0.7.0");
@@ -2360,7 +2453,7 @@ mod tests {
         rollback::write(&env.ctx, &j).unwrap();
         let fake = Fake::default();
         assert_eq!(
-            run_copy(&env.ctx, &fake).unwrap_err().code(),
+            as_copy(&env, &fake).unwrap_err().code(),
             "msiexec_outside_staging"
         );
         // The staged MSI changed since it was checked.
@@ -2371,7 +2464,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            run_copy(&env.ctx, &fake).unwrap_err().code(),
+            as_copy(&env, &fake).unwrap_err().code(),
             "artifact_mismatch"
         );
         // No pending run.
@@ -2379,10 +2472,198 @@ mod tests {
         none.msi = None;
         rollback::write(&env.ctx, &none).unwrap();
         assert_eq!(
-            run_copy(&env.ctx, &fake).unwrap_err().code(),
+            as_copy(&env, &fake).unwrap_err().code(),
             "no_pending_msiexec"
         );
         assert!(fake.ran.lock().unwrap().is_none());
+    }
+
+    /// What the copy leaves is used only for this run: a result for
+    /// another journal, purpose or copy is ignored.
+    #[test]
+    fn a_result_for_another_run_is_ignored() {
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        env.run(&Fake {
+            hand_off: true,
+            ..Fake::default()
+        })
+        .unwrap();
+        let j = rollback::read(&env.ctx).unwrap().unwrap();
+        let run = j.msi.clone().unwrap();
+        let mut lock_held = Vec::new();
+        for (id, purpose, copy) in [
+            ("ffffffffffffffff", run.purpose, run.copy.clone()),
+            (j.id.as_str(), rollback::Purpose::Rollback, run.copy.clone()),
+            (j.id.as_str(), run.purpose, "run-other.exe".to_string()),
+        ] {
+            rollback::write_result(
+                &env.ctx,
+                &rollback::MsiResult {
+                    id: id.into(),
+                    purpose,
+                    copy,
+                    code: 0,
+                    refused: None,
+                },
+            )
+            .unwrap();
+            // Held, as a copy still running: the forged answer isn't taken.
+            lock_held.push(rollback::msi_lock(&env.ctx).unwrap().unwrap());
+            assert_eq!(env.run(&Fake::default()).unwrap(), Outcome::HandedOff);
+            drop(lock_held.pop());
+        }
+        assert!(rollback::read(&env.ctx).unwrap().is_some(), "still pending");
+    }
+
+    /// A copy that died leaves no answer and no lock: the install is
+    /// judged from the program on disk; a rollback's reinstall is handed
+    /// off again.
+    #[test]
+    fn a_copy_that_died_is_recovered() {
+        // The install: nothing on disk changed.
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        env.run(&Fake {
+            hand_off: true,
+            ..Fake::default()
+        })
+        .unwrap();
+        assert_eq!(
+            env.run(&Fake::default()).unwrap(),
+            Outcome::InstallInterrupted {
+                version: "0.7.0".into()
+            }
+        );
+        // A rollback's reinstall: handed off again.
+        let env = Env::new("0.6.0");
+        with_previous(&env, OLD_MSI);
+        env.offer("0.7.0");
+        assert_eq!(
+            env.run(&Fake {
+                unhealthy: true,
+                hand_off: true,
+                migrate: Some(env.ctx.data_dir.clone()),
+                ..Fake::default()
+            })
+            .unwrap()
+            .code(),
+            "handed_off"
+        );
+        // That first hand-off was the install's; the copy runs it.
+        as_copy(
+            &env,
+            &Fake {
+                migrate: Some(env.ctx.data_dir.clone()),
+                ..Fake::default()
+            },
+        )
+        .unwrap();
+        let next = Fake {
+            unhealthy: true,
+            hand_off: true,
+            ..Fake::default()
+        };
+        assert_eq!(env.run(&next).unwrap(), Outcome::HandedOff);
+        let first = rollback::read(&env.ctx).unwrap().unwrap().msi.unwrap().copy;
+        // The copy dies: no answer. The next run hands it off again.
+        let again = Fake {
+            hand_off: true,
+            ..Fake::default()
+        };
+        assert_eq!(env.run(&again).unwrap(), Outcome::HandedOff);
+        assert!(again.calls().contains(&"hand_off".to_string()));
+        let second = rollback::read(&env.ctx).unwrap().unwrap().msi.unwrap().copy;
+        assert_ne!(first, second, "a fresh copy");
+    }
+
+    /// A failure code through the copy: skipped, the old service started.
+    #[test]
+    fn a_failed_install_through_the_copy_is_skipped() {
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        env.run(&Fake {
+            hand_off: true,
+            ..Fake::default()
+        })
+        .unwrap();
+        as_copy(
+            &env,
+            &Fake {
+                code: 1603,
+                ..Fake::default()
+            },
+        )
+        .unwrap();
+        let next = Fake::default();
+        assert_eq!(
+            env.run(&next).unwrap(),
+            Outcome::Failed {
+                version: Version::new(0, 7, 0),
+                code: 1603
+            }
+        );
+        assert_eq!(next.calls().last().unwrap(), "start");
+        let skipped: Value = serde_json::from_slice(
+            &std::fs::read(env.ctx.data_dir.join("bin").join("skipped")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(skipped, json!([{"version": "0.7.0", "reason": "failed"}]));
+    }
+
+    /// A copy that refuses (here: the program in Program Files never
+    /// ends) leaves that as its answer: reported, nothing skipped, the
+    /// service started again; and it runs only for its own name.
+    #[test]
+    fn a_copy_that_refuses_is_reported() {
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        env.run(&Fake {
+            hand_off: true,
+            ..Fake::default()
+        })
+        .unwrap();
+        let name = rollback::read(&env.ctx).unwrap().unwrap().msi.unwrap().copy;
+        let copy = Fake::default();
+        assert_eq!(
+            run_copy(&env.ctx, &copy, "run-someone-else.exe", &|| true)
+                .unwrap_err()
+                .code(),
+            "not_this_copy"
+        );
+        assert_eq!(
+            run_copy(&env.ctx, &copy, &name, &|| false)
+                .unwrap_err()
+                .code(),
+            "program_files_in_use"
+        );
+        assert!(copy.ran.lock().unwrap().is_none());
+        let next = Fake::default();
+        let out = env.run(&next).unwrap();
+        assert!(
+            matches!(&out, Outcome::CopyRefused { why } if why == "program_files_in_use"),
+            "{out:?}"
+        );
+        assert!(!env.ctx.data_dir.join("bin").join("skipped").exists());
+        assert_eq!(next.calls(), ["auto", "start", "event"]);
+    }
+
+    /// What the copy rests on, for real: a held copy runs, and can't be
+    /// written, renamed or deleted while it's held.
+    #[cfg(windows)]
+    #[test]
+    fn a_held_copy_runs_and_cant_be_changed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::env::var_os("SystemRoot").unwrap();
+        let own = Path::new(&root).join(r"System32\whoami.exe");
+        let (copy, held) = stage_copy(tmp.path(), &own, &copy_name().unwrap()).unwrap();
+        let out = std::process::Command::new(&copy).output().unwrap();
+        assert!(out.status.success(), "{out:?}");
+        assert!(std::fs::OpenOptions::new().write(true).open(&copy).is_err());
+        assert!(std::fs::rename(&copy, tmp.path().join("moved.exe")).is_err());
+        assert!(std::fs::remove_file(&copy).is_err());
+        drop(held);
+        std::fs::remove_file(&copy).unwrap();
     }
 
     /// A copy that can't be made is refused as an install failure, never
@@ -2409,7 +2690,7 @@ mod tests {
             fn msiexec(&self, a: &[OsString]) -> io::Result<i32> {
                 self.0.msiexec(a)
             }
-            fn run_msiexec(&self, _: &Path, _: &[OsString]) -> Result<Ran, String> {
+            fn run_msiexec(&self, _: &Path, _: &[OsString], _: &str) -> Result<Ran, String> {
                 Err("the copy isn't the helper".into())
             }
             fn healthy(&self) -> bool {
@@ -2450,7 +2731,7 @@ mod tests {
         let staging = tmp.path().join("updates");
         std::fs::create_dir(&staging).unwrap();
         std::fs::write(staging.join("run-old.exe"), b"stale").unwrap();
-        let (copy, held) = stage_copy(&staging, &own).unwrap();
+        let (copy, held) = stage_copy(&staging, &own, &copy_name().unwrap()).unwrap();
         let name = copy.file_name().unwrap().to_str().unwrap().to_string();
         assert!(
             name.starts_with("run-") && name.ends_with(".exe") && name.len() == 40,
@@ -2458,7 +2739,7 @@ mod tests {
         );
         assert_eq!(std::fs::read(&copy).unwrap(), b"the helper");
         assert!(!staging.join("run-old.exe").exists());
-        let (again, _h) = stage_copy(&staging, &own).unwrap();
+        let (again, _h) = stage_copy(&staging, &own, &copy_name().unwrap()).unwrap();
         assert_ne!(again, copy, "a fresh name each time");
         drop(held);
         // A link in place of the helper is never copied through.
@@ -2466,7 +2747,7 @@ mod tests {
         {
             let link = tmp.path().join("link.exe");
             std::os::unix::fs::symlink(&own, &link).unwrap();
-            assert!(stage_copy(&staging, &link).is_err());
+            assert!(stage_copy(&staging, &link, &copy_name().unwrap()).is_err());
         }
     }
 

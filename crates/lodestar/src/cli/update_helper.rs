@@ -98,6 +98,7 @@ fn install() -> ExitCode {
                 Outcome::Nothing | Outcome::Installed { .. } | Outcome::HandedOff => {
                     ExitCode::SUCCESS
                 }
+                Outcome::CopyRefused { .. } => ExitCode::FAILURE,
                 Outcome::Failed { .. }
                 | Outcome::InstallerBusy { .. }
                 | Outcome::RolledBack { .. }
@@ -139,16 +140,21 @@ fn copy() -> ExitCode {
         Ok(c) => c,
         Err(r) => return refused(&r),
     };
-    // Its own image, read-only, for the whole run.
-    let _held = std::fs::File::open(&exe);
+    // Its own image, read-only and sharing only reading, for the whole run.
+    let Ok(_held) = helper::hold_read_only(&exe) else {
+        return refused(&"the copy can't hold its own file");
+    };
+    let name = exe
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_string();
     let installed = exe
         .parent()
         .and_then(Path::parent)
         .map(|d| d.join("lodestar.exe"));
-    if !installed.is_some_and(|p| wait_free(&p)) {
-        return refused(&"the helper in Program Files is still running");
-    }
-    let code = match helper::run_copy(&ctx, &helper::Windows) {
+    let wait = || installed.as_deref().is_some_and(wait_free);
+    let code = match helper::run_copy(&ctx, &helper::Windows, &name, &wait) {
         Ok(_) => ExitCode::SUCCESS,
         Err(r) => refused(&r),
     };
