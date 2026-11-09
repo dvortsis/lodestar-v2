@@ -1014,6 +1014,49 @@ async fn a_claim_denies_an_unknown_key_as_busy() {
     .await;
 }
 
+/// X-lease-report-atomic: a worker's floor drop (`Lost` as blocked, 7) is
+/// refused to another worker's claim as soon as it's handled, with no store
+/// check or sink to help: the lease authority refuses it itself. Another
+/// loss leaves its key free.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_floor_drop_is_refused_to_the_next_claim() {
+    guard(async {
+        let c = coordinator(config()).await;
+        let nas = c.join("nas").await;
+        let vps = c.join("vps").await;
+        let a = c.session(&nas).await;
+        let b = c.session(&vps).await;
+        let grants = a.claim(found(&*c.clock, &[1, 2])).await.unwrap();
+        let tokens: Vec<u64> = grants.iter().map(token_of).collect();
+        a.report(vec![
+            OutcomeItem {
+                key: key(1),
+                token: tokens[0],
+                outcome: Outcome::Lost { reason: 7 },
+            },
+            OutcomeItem {
+                key: key(2),
+                token: tokens[1],
+                outcome: Outcome::Lost { reason: 1 },
+            },
+        ])
+        .await
+        .unwrap();
+        // A heartbeat answered means the report was handled.
+        assert_eq!(a.heartbeat().await.unwrap().leases, 0);
+        let other = b.claim(found(&*c.clock, &[1, 2])).await.unwrap();
+        assert_eq!(
+            other[0],
+            GrantItem::Denied {
+                key: key(1),
+                reason: DenyReason::Stored
+            }
+        );
+        token_of(&other[1]);
+    })
+    .await;
+}
+
 /// A store check that comes back short.
 struct ShortCheck;
 
