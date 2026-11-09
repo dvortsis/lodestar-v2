@@ -72,16 +72,16 @@ class MemoryStore:
 class S3Store:  # pragma: no cover - live only; nothing constructs it in CI
     """Live store. Errors carry no bucket name or key beyond the fixed prefix."""
 
-    def __init__(self, bucket: str, live: bool, client=None):
+    def __init__(self, bucket: str, live: bool, client):
         if not live:
             raise RuntimeError("S3Store is live-only (FLEET_LIVE=true, OP-2)")
-        import boto3  # noqa: PLC0415 - only on the live path
-        from botocore.exceptions import ClientError  # noqa: PLC0415
+        # Only ever the owner-checked client apply.live_context builds (P8): never a
+        # bare boto3 client that would skip ExpectedBucketOwner.
+        if client is None:
+            raise RuntimeError("S3Store needs the owner-checked S3 client")
+        from botocore.exceptions import ClientError  # noqa: PLC0415 - only on the live path
 
-        try:
-            self._s3 = client if client is not None else boto3.client("s3")
-        except Exception:
-            raise RuntimeError("S3 client setup failed") from None
+        self._s3 = client
         self._bucket, self._err = bucket, ClientError
 
     def _cond(self, fn, **kw) -> bool:

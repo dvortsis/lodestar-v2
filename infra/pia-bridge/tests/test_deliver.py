@@ -6,6 +6,7 @@ import base64
 import importlib.util
 import io
 import json
+import re
 import subprocess
 import tarfile
 import tempfile
@@ -435,9 +436,16 @@ class Deliver(unittest.TestCase):
         floor = 10  # the last clean check's minimum
         self.assertGreaterEqual(deliver.RESERVE_SECONDS, setup + close + report + floor)
         # An orphan's remote bound fits inside one session, so it ends before the deadline.
-        self.assertLess(deliver.FLOCK_WAIT + deliver.CLOUD_INIT_WAIT + deliver.STEP_TIMEOUT, deliver.SSH_TIMEOUT)
-        # The clean poll outlasts an orphan's own bound (its cloud-init wait and its step).
-        self.assertGreaterEqual(deliver.CLEAN_WAIT_SECONDS, deliver.CLOUD_INIT_WAIT + deliver.STEP_TIMEOUT)
+        orphan = deliver.CLOUD_INIT_WAIT + deliver.STEP_TIMEOUT + deliver.RESTART_SECONDS
+        self.assertLess(deliver.FLOCK_WAIT + orphan, deliver.SSH_TIMEOUT)
+        # The clean poll outlasts an orphan's own bound (its cloud-init wait, its step and its restart).
+        self.assertGreaterEqual(deliver.CLEAN_WAIT_SECONDS, orphan)
+        # The restart's bound is every Docker call's own timeout added up.
+        boot = deliver.bootstrap()
+        tail = boot[boot.index("pia-wireguard.sh"):]
+        bounds = [int(t) for t in re.findall(r"timeout (\d+) docker ", tail)]
+        self.assertEqual(sum(bounds), deliver.RESTART_SECONDS)
+        self.assertEqual(tail.count("docker "), len(bounds))  # no Docker call unbounded
 
     def run_slow(self, pre_seconds, hang=True):
         """renew-vpn main where the calls before the SSH work (inside connect, so
@@ -562,7 +570,9 @@ class EndToEnd(unittest.TestCase):
         self.addCleanup(subprocess.run, ["rm", "-rf", str(tmp)])
         stub = tmp / "stub"
         (stub / "bin").mkdir(parents=True)
-        for name, body in (("curl", CURL), ("wg", WG), ("cloud-init", "#!/usr/bin/env bash\nexit 0\n")):
+        # docker: no stack yet, so nothing to restart.
+        for name, body in (("curl", CURL), ("wg", WG), ("cloud-init", "#!/usr/bin/env bash\nexit 0\n"),
+                           ("docker", "#!/usr/bin/env bash\nexit 0\n")):
             (stub / "bin" / name).write_text(body)
             (stub / "bin" / name).chmod(0o755)
         (stub / "token.json").write_text(json.dumps({"token": TOKEN}))
@@ -624,7 +634,7 @@ class EndToEnd(unittest.TestCase):
         docker = r"""#!/usr/bin/env bash
 printf '%s\n' "$*" >> "$STUB/docker.log"
 case "$1" in
-  ps) [ -n "$COLLECTOR" ] && echo x; exit 0 ;;
+  ps) [ -n "$PS_FAIL" ] && exit 1; [ -n "$COLLECTOR" ] && echo x; exit 0 ;;
   inspect) case "${@: -1}" in gluetun) [ -n "$GLUETUN" ] && echo true || exit 1 ;; lodestar) [ -n "$LODESTAR" ] && echo true || exit 1 ;; esac ;;
   restart) [ -n "$FAIL_RESTART" ] && exit 1; exit 0 ;;
 esac
@@ -659,6 +669,8 @@ esac
         self.assertEqual(boot(GLUETUN=True, LODESTAR=True), (0, ["restart gluetun", "restart -t 60 lodestar"]))
         self.assertEqual(boot(GLUETUN=True), (0, ["restart gluetun"]))
         self.assertEqual(boot(GLUETUN=True, LODESTAR=True, COLLECTOR=True), (deliver.MID_BLOCK, []))
+        # Fail closed: if Docker can't say what's running, a block may be running.
+        self.assertEqual(boot(GLUETUN=True, LODESTAR=True, PS_FAIL=True), (deliver.MID_BLOCK, []))
         self.assertEqual(boot(GLUETUN=True, FAIL_RESTART=True), (deliver.RESTART_FAILED, ["restart gluetun"]))
         self.assertFalse(run_dir.exists())  # the login is gone in every case
 

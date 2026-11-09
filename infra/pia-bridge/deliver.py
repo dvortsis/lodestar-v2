@@ -70,10 +70,15 @@ CLOUD_INIT_WAIT = 480  # jq, wireguard-tools and the secrets directory arrive la
 FLOCK_WAIT = 180  # a retry waits this long for an orphaned earlier session, then exits 21
 STEP_TIMEOUT = 150  # the VM step: three PIA calls of at most 30 s each, with room
 SSH_ATTEMPTS_SECONDS = 120  # the firewall rule can take a little while to apply
-SSH_TIMEOUT = FLOCK_WAIT + CLOUD_INIT_WAIT + STEP_TIMEOUT + 60  # one session, all of the above
+# The renew restart's Docker calls, each under `timeout`: the collector check and
+# two inspects (30 s each), gluetun's restart (60 s), Lodestar's (its 60 s stop
+# grace, under 90 s).
+DOCKER_CALL, GLUETUN_RESTART, LODESTAR_RESTART = 30, 60, 90
+RESTART_SECONDS = 3 * DOCKER_CALL + GLUETUN_RESTART + LODESTAR_RESTART
+SSH_TIMEOUT = FLOCK_WAIT + CLOUD_INIT_WAIT + STEP_TIMEOUT + RESTART_SECONDS + 60  # one session, all of the above
 # After a lost session the orphan holds the VM's lock for at most its cloud-init
-# wait and its step; the clean check polls past that.
-CLEAN_WAIT_SECONDS = CLOUD_INIT_WAIT + STEP_TIMEOUT + 30
+# wait, its step and its restart; the clean check polls past that.
+CLEAN_WAIT_SECONDS = CLOUD_INIT_WAIT + STEP_TIMEOUT + RESTART_SECONDS + 30
 DELIVER_JOB_MINUTES = 30  # fleet.yml's deliver-pia timeout-minutes (a test keeps them in step)
 # The job's deadline runs from this program's start (on a monotonic clock).
 # Kept back from it: the steps before the program (checkout and pip, 120 s); the
@@ -81,9 +86,9 @@ DELIVER_JOB_MINUTES = 30  # fleet.yml's deliver-pia timeout-minutes (a test keep
 # sweeps, 60 s); the report (up to 3 comments x 30 s); and the clean check's
 # 10 s floor. The AWS, checkip, /meta and firewall calls before the SSH work
 # spend the same budget. A session starts only when a whole one fits, so an
-# orphan's remote bound (FLOCK_WAIT + CLOUD_INIT_WAIT + STEP_TIMEOUT, under
-# SSH_TIMEOUT) ends before the deadline, and the lock outlives it; every other
-# wait is clamped to what's left. GitHub never cancels the job before it closes
+# orphan's remote bound (FLOCK_WAIT + CLOUD_INIT_WAIT + STEP_TIMEOUT +
+# RESTART_SECONDS, under SSH_TIMEOUT) ends before the deadline, and the lock
+# outlives it; every other wait is clamped to what's left. GitHub never cancels the job before it closes
 # its rule and reports.
 RESERVE_SECONDS = 8 * 60
 WORK_SECONDS = DELIVER_JOB_MINUTES * 60 - RESERVE_SECONDS
@@ -136,12 +141,18 @@ def bootstrap(run_dir: str = RUN_DIR, out: str = WG_CONF, boot_marker: str = BOO
         # OP-3a: a new wg0.conf takes effect only when gluetun restarts, and a
         # gluetun restart needs a Lodestar restart (operations 4.3). Never mid-
         # block: with a collector running, leave the tunnel alone (exit 30);
-        # start-block recreates gluetun from the current wg0.conf anyway.
-        f"if docker ps --filter 'name=^lodestar-collector' --format x 2>/dev/null | grep -q .; then exit {MID_BLOCK}; fi",
-        "if [ \"$(docker inspect --type container -f '{{.State.Running}}' gluetun 2>/dev/null)\" = true ]; then",
-        f"  docker restart gluetun >/dev/null 2>&1 || exit {RESTART_FAILED}",
-        "  if [ \"$(docker inspect --type container -f '{{.State.Running}}' lodestar 2>/dev/null)\" = true ]; then",
-        f"    docker restart -t 60 lodestar >/dev/null 2>&1 || exit {RESTART_FAILED}",
+        # start-block recreates gluetun from the current wg0.conf anyway. Fail
+        # closed: if Docker can't say what's running, a block may be running.
+        # Every Docker call is bounded (RESTART_SECONDS in all).
+        f"out=$(timeout {DOCKER_CALL} docker ps --filter 'name=^lodestar-collector' --format x 2>/dev/null)"
+        f" || exit {MID_BLOCK}",
+        f'[ -z "$out" ] || exit {MID_BLOCK}',
+        f"if [ \"$(timeout {DOCKER_CALL} docker inspect --type container -f '{{{{.State.Running}}}}' gluetun"
+        " 2>/dev/null)\" = true ]; then",
+        f"  timeout {GLUETUN_RESTART} docker restart gluetun >/dev/null 2>&1 || exit {RESTART_FAILED}",
+        f"  if [ \"$(timeout {DOCKER_CALL} docker inspect --type container -f '{{{{.State.Running}}}}' lodestar"
+        " 2>/dev/null)\" = true ]; then",
+        f"    timeout {LODESTAR_RESTART} docker restart -t 60 lodestar >/dev/null 2>&1 || exit {RESTART_FAILED}",
         "  fi",
         "fi",
     ])

@@ -25,6 +25,7 @@ services:
     environment:
       VPN_SERVICE_PROVIDER: custom
       VPN_TYPE: wireguard
+      VPN_INTERFACE: wg0  # named, so the leak test reads it rather than assuming
       FIREWALL_VPN_INPUT_PORTS: ""
       TZ: Etc/UTC
     volumes:

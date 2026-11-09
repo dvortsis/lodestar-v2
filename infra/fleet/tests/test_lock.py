@@ -164,7 +164,13 @@ class Lock(unittest.TestCase):
 
     def test_s3_store_refuses_dry_run(self):
         with self.assertRaises(RuntimeError):
-            S3Store("bucket", live=False)
+            S3Store("bucket", live=False, client=object())
+
+    def test_s3_store_needs_the_owner_checked_client(self):
+        with self.assertRaisesRegex(RuntimeError, "owner-checked"):
+            S3Store("bucket", live=True, client=None)
+        with self.assertRaises(TypeError):
+            S3Store("bucket", live=True)  # no default client to fall back on
 
 
 if __name__ == "__main__":

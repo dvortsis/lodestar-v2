@@ -140,7 +140,8 @@ class FakeBackend:
 class RunStep(unittest.TestCase):
     def setUp(self):
         self.fleet = {"commit": "a" * 40, "roles": {"main": slot(1), "worker": slot(2)}}
-        self.emitted, self.ssh_calls = [], []
+        self.emitted, self.ssh_calls, self.slept = [], [], []
+        self.now = 1000.0  # a fake monotonic clock: sleeping advances it, nothing waits
         self.files = mock.patch.object(steps, "step_files", return_value={"step.sh": b"echo"})
         self.files.start()
         self.addCleanup(self.files.stop)
@@ -155,7 +156,11 @@ class RunStep(unittest.TestCase):
         self.b = b or FakeBackend()
         return steps.run_step({"FLEET_SSH_KEY": "KEYLINE1\nKEYLINE2", **env}, self.b, self.fleet, step, vm, "42-1",
                               lambda: None, ssh=ssh or self.ssh(), my_ip=lambda: ip, emit=self.emitted.append,
-                              repo=".", fingerprint=apply.fingerprint)
+                              repo=".", fingerprint=apply.fingerprint, sleep=self.sleep, monotonic=lambda: self.now)
+
+    def sleep(self, s):
+        self.slept.append(s)
+        self.now += s
 
     def test_happy_path(self):
         line = self.go()
@@ -185,6 +190,32 @@ class RunStep(unittest.TestCase):
                          (3, "failed (exit 3)")):
             with self.subTest(rc=rc):
                 self.assertTrue(self.go(ssh=self.ssh(rc=rc, out=b"")).startswith(head))
+
+    def test_ssh_255_is_retried_until_it_connects(self):
+        rcs = [255, 255, 0]
+
+        def ssh(argv, data, timeout):
+            self.ssh_calls.append(argv)
+            return rcs.pop(0), b"ok a\n"
+        b = FakeBackend()
+        self.assertEqual(self.go(b=b, ssh=ssh), "done; 1 ok")
+        self.assertEqual(len(self.ssh_calls), 3)
+        self.assertEqual(self.slept, [steps.SSH_RETRY_PAUSE] * 2)
+        self.assertEqual([c[2] for c in b.calls], ["198.51.100.7/32", None])  # one rule, closed once at the end
+
+    def test_ssh_255_retries_stop_after_about_two_minutes(self):
+        line = self.go(ssh=self.ssh(rc=255, out=b""))
+        self.assertTrue(line.startswith("couldn't connect"))
+        self.assertGreaterEqual(sum(self.slept), steps.SSH_ATTEMPTS_SECONDS)
+        self.assertLess(sum(self.slept), steps.SSH_ATTEMPTS_SECONDS + 2 * steps.SSH_RETRY_PAUSE)
+        self.assertEqual(steps.SSH_ATTEMPTS_SECONDS, 120)
+
+    def test_other_failures_are_never_retried(self):
+        for rc in (0, 256, 21, 124, 1):  # a session ran (or may still be running): never a second one
+            with self.subTest(rc=rc):
+                self.ssh_calls.clear()
+                self.go(ssh=self.ssh(rc=rc, out=b""))
+                self.assertEqual(len(self.ssh_calls), 1)
 
     def test_refusals(self):
         with self.assertRaises(remote.StepRefused):
@@ -313,6 +344,7 @@ class Compose(unittest.TestCase):
         self.assertRegex(g["image"], r"^qmcgaw/gluetun@sha256:[0-9a-f]{64}$")  # never a tag
         self.assertEqual(g["environment"]["VPN_SERVICE_PROVIDER"], "custom")
         self.assertEqual(g["environment"]["VPN_TYPE"], "wireguard")
+        self.assertEqual(g["environment"]["VPN_INTERFACE"], "wg0")  # the leak test's phase B reads it
         self.assertEqual(g["environment"]["TZ"], "Etc/UTC")
         self.assertEqual(g["environment"]["FIREWALL_VPN_INPUT_PORTS"], "")
         self.assertFalse(any(k.startswith("FIREWALL_ENABLED") for k in g["environment"]))  # its firewall stays on
@@ -348,33 +380,62 @@ class Compose(unittest.TestCase):
 
 STUB_DOCKER = r"""#!/usr/bin/env bash
 printf 'docker %s\n' "$*" >> "$STUB/log"
+bad() { printf '%s\n' "$*" >> "$STUB/badargs"; exit 125; }
 case "$1" in
   info) [ -n "$NO_DOCKER" ] && exit 1; echo 27.0 ;;
-  compose) [ -n "$COMPOSE_FAIL" ] && exit 1; exit 0 ;;
+  compose) [ -n "$COMPOSE_FAIL" ] && exit 1; rm -f "$STUB/ifdown"; exit 0 ;;  # a recreated gluetun has its interface back
   inspect)
     case "$*" in
       *Health*) if [ -e "$STUB/was_blocked" ] && [ -n "$NO_RECOVER" ]; then echo unhealthy; else echo healthy; fi ;;
+      *Config.Env*) printf 'PATH=/usr/bin\nVPN_INTERFACE=%s\n' "${VPN_IFACE-wg0}" ;;
       *Running*gluetun) echo true ;;
       *Running*lodestar) [ -n "$LODESTAR" ] && echo true || echo false ;;
     esac ;;
-  ps) [ -n "$COLLECTORS" ] && printf 'a\nb\n'; exit 0 ;;
+  ps)
+    case "$*" in
+      *--filter*) [ -n "$COLLECTORS" ] && printf 'a\nb\n'; exit 0 ;;  # vm-status's count
+      "ps --format {{.Names}}")
+        [ -n "$PS_FAIL" ] && exit 1
+        echo gluetun; [ -n "$LODESTAR" ] && echo lodestar
+        [ -n "$COLLECTORS" ] && printf 'lodestar-collector-1\nlodestar-collector-2\n'
+        exit 0 ;;
+      *) bad "$*" ;;
+    esac ;;
   pull) [ -n "$PULL_FAIL" ] && exit 1; exit 0 ;;
   exec) echo 7 ;;  # exec gluetun cat .../iflink
   run)
-    while [ $# -gt 0 ] && [ "${1#nicolaka/}" = "$1" ]; do shift; done; shift  # to after the image
+    # Exactly: run --rm --network container:gluetun --cap-drop ALL [--cap-add NET_ADMIN]
+    #          <pinned netshoot> sh -c '"$@"; echo "probe_rc=$?"' probe <command...>
+    [ "$1 $2 $3 $4 $5 $6" = "run --rm --network container:gluetun --cap-drop ALL" ] || bad "$*"
+    shift 6
+    admin=
+    if [ "$1 $2" = "--cap-add NET_ADMIN" ]; then admin=1; shift 2; fi
+    case "$1" in nicolaka/netshoot@sha256:????????????????????????????????????????????????????????????????) ;; *) bad "$*" ;; esac
+    shift
+    [ "$1" = sh ] && [ "$2" = -c ] && [ "$3" = '"$@"; echo "probe_rc=$?"' ] && [ "$4" = probe ] || bad "$*"
+    shift 4
+    if [ -n "$admin" ] && [ "$*" != "ip link set dev ${VPN_IFACE-wg0} down" ]; then bad "$*"; fi
     if [ -e "$STUB/blocked" ]; then down=1; else down=; fi
+    [ -n "$down" ] && [ -n "$PROBE_NOT_RUN" ] && exit 125  # the container never ran the command
+    # With the interface down, only gluetun's firewall holds: off, everything leaks.
+    if [ -e "$STUB/ifdown" ] && [ -n "$FIREWALL_OFF" ]; then leak=1; else leak=; fi
     echo "$*" >> "$STUB/probes"
-    case "$*" in
-      "curl -4"*) [ -n "$down" ] && [ -z "$LEAK_V4" ] && exit 1
-                  if [ -n "$down" ] || [ ! -e "$STUB/was_blocked" ] || [ -z "$NEW_EXIT" ]; then echo "${EXIT_IP:-198.51.100.200}"; else echo 198.51.100.201; fi ;;
-      "curl -6"*) [ -n "$V6_OPEN" ] || exit 1 ;;
-      "nc -z"*) [ -n "$down" ] && [ -z "$LEAK_TCP" ] && exit 1; [ -n "$NO_TCP" ] && exit 1; exit 0 ;;
-      "sh -c dig"*) [ -n "$down" ] && exit 1; exit 0 ;;
-      "sh -c command"*) [ -n "$NO_TOOLS" ] && exit 1; exit 0 ;;
-      "grep"*) [ -n "$DNS_REMOTE" ] && exit 1; exit 0 ;;
-      "sh -c echo"*) exit 0 ;;
-      *) exit 99 ;;
-    esac ;;
+    (
+      case "$*" in
+        "curl -4"*) [ -n "$down" ] && [ -z "$LEAK_V4" ] && [ -z "$leak" ] && exit 1
+                    if [ -n "$down" ] || [ ! -e "$STUB/was_blocked" ] || [ -z "$NEW_EXIT" ]; then echo "${EXIT_IP:-198.51.100.200}"; else echo 198.51.100.201; fi ;;
+        "curl -6"*) [ -n "$V6_OPEN" ] || [ -n "$leak" ] || exit 1 ;;
+        "nc -z"*) [ -n "$down" ] && [ -z "$LEAK_TCP" ] && [ -z "$leak" ] && exit 1; [ -n "$NO_TCP" ] && exit 1; exit 0 ;;
+        "sh -c dig"*) [ -n "$down" ] && [ -z "$leak" ] && exit 1; exit 0 ;;
+        "sh -c command"*) [ -n "$NO_TOOLS" ] && exit 1; exit 0 ;;
+        "grep"*) [ -n "$DNS_REMOTE" ] && exit 1; exit 0 ;;
+        "sh -c echo"*) exit 0 ;;
+        "ip link set dev "*) [ -n "$IFDOWN_FAILS" ] && exit 2; : > "$STUB/ifdown"; exit 0 ;;
+        *) exit 99 ;;
+      esac
+    )
+    echo "probe_rc=$?" ;;
+  *) bad "$*" ;;
 esac
 """
 STUB_IPTABLES = r"""#!/usr/bin/env bash
@@ -385,12 +446,23 @@ case "$1" in
       rm -f "$STUB/blocked" ;;
 esac
 """
+# The capture must be on gluetun's veth, with exactly the filter that leaves out
+# only ARP and the tunnel's own UDP to the endpoint.
 STUB_TCPDUMP = r"""#!/usr/bin/env bash
 case "$*" in
-  "-r "*|*" -r "*) [ -n "$READ_FAILS" ] && exit 1; [ -n "$CAPTURED" ] && printf 'pkt\n%.0s' $(seq "$CAPTURED"); exit 0 ;;
-  *) for a in "$@"; do [ "$prev" = "-w" ] && printf 'PCAPHEADER' > "$a"; prev=$a; done
-     [ -n "$CAPTURE_DIES" ] && exit 1  # wrote its header, then went away
-     trap 'exit 0' TERM; while :; do /bin/sleep 0.05; done ;;
+  "-r "*)
+    [ -n "$READ_FAILS" ] && exit 1
+    n=${CAPTURED:-0}
+    case "$2" in *cap-ifdown.pcap) [ -n "$FIREWALL_OFF" ] && n=$((n + 3)) ;; esac
+    [ "$n" -gt 0 ] && printf 'pkt\n%.0s' $(seq "$n"); exit 0 ;;
+  *)
+    if [ "$1 $2 $3 $4 $5" != "-i vethabc123 -n -U -w" ] || [ $# -ne 7 ] \
+       || [ "$7" != "not arp and not (udp and host 192.0.2.77 and port 1337)" ]; then
+      printf 'tcpdump %s\n' "$*" >> "$STUB/badargs"; exit 1
+    fi
+    printf 'PCAPHEADER' > "$6"
+    [ -n "$CAPTURE_DIES" ] && exit 1  # wrote its header, then went away
+    trap 'exit 0' TERM; while :; do /bin/sleep 0.05; done ;;
 esac
 """
 STUB_IP = r"""#!/usr/bin/env bash
@@ -423,6 +495,9 @@ class VMScripts(unittest.TestCase):
                **{k: str(v) for k, v in flags.items()}}
         r = subprocess.run(["bash", str(VM / name), str(self.work), str(self.stack), str(self.tmp / "pia-run")],
                            env=env, capture_output=True, text=True, timeout=120)
+        # Every docker and tcpdump call had exactly the arguments the guards need.
+        bad = self.stub / "badargs"
+        self.assertFalse(bad.exists(), bad.read_text() if bad.exists() else "")
         return r.returncode, remote.parse(r.stdout.encode()), r.stdout
 
     def log(self):
@@ -446,12 +521,16 @@ class VMScripts(unittest.TestCase):
         rc, lines, raw = self.run_script("leak-test.sh")
         self.assertEqual(rc, 0, raw)
         self.assertEqual(lines[-1], "ok leak_test")
-        for name in ("ipv4_through_tunnel", "tcp_literal_up", "ipv6_blocked_up", "dns_up", "dns_local",
-                     "probe_tools", "ipv4_blocked_down", "tcp_literal_blocked_down", "ipv6_blocked_down",
-                     "dns_blocked_down", "dns_direct_blocked_down", "capture_alive", "capture_read",
-                     "no_egress_captured", "tunnel_recovers", "run_clean"):
+        names = ["ipv4_through_tunnel", "tcp_literal_up", "ipv6_blocked_up", "dns_up", "dns_local", "probe_tools",
+                 "veth_found", "endpoint_blocked", "vpn_interface_down", "tunnel_recovers", "run_clean"]
+        for phase in ("down", "ifdown"):  # the dead tunnel, then gluetun's firewall alone
+            names += [f"{n}_{phase}" for n in ("ipv4_blocked", "tcp_literal_blocked", "ipv6_blocked", "dns_blocked",
+                                                 "dns_direct_blocked", "capture_alive", "capture_read",
+                                                 "no_egress_captured")]
+            self.assertIn(f"count captured_packets_{phase} 0", lines)
+        for name in names:
             self.assertIn(f"ok {name}", lines)
-        self.assertIn("count captured_packets 0", lines)
+        self.assertFalse(any(ln.startswith("fail ") for ln in lines))
         self.assertEqual(remote.parse(raw.encode()), raw.splitlines())  # nothing outside the grammar, no address
         self.assertIn("iptables -I DOCKER-USER 1 -d 192.0.2.77/32 -p udp --dport 1337 -j DROP", self.log())
         self.assertIn("iptables -D DOCKER-USER -d 192.0.2.77/32 -p udp --dport 1337 -j DROP", self.log())
@@ -459,12 +538,18 @@ class VMScripts(unittest.TestCase):
         self.assertIn(" up -d --force-recreate gluetun", self.log())  # gluetun alone, from the current wg0.conf
         probes = (self.stub / "probes").read_text()
         self.assertIn("sh -c dig +short +time=5 +tries=1 example.com", probes)  # up
-        self.assertIn("sh -c dig +short +time=3 +tries=1 example.net", probes)  # down: a name not asked before
+        self.assertIn("sh -c dig +short +time=3 +tries=1 example.net  | grep -q .", probes)  # down: a name not asked before
+        self.assertIn("sh -c dig +short +time=3 +tries=1 example.net @1.1.1.1", probes)  # and straight to a resolver
+        self.assertIn("sh -c dig +short +time=3 +tries=1 example.edu  | grep -q .", probes)  # phase B: another fresh name
+        self.assertIn("sh -c dig +short +time=3 +tries=1 example.edu @1.1.1.1", probes)
+        self.assertIn("ip link set dev wg0 down", probes)  # gluetun's own interface, from its config
+        # Phase B runs with the interface down; recovery recreates gluetun.
+        self.assertLess(probes.index("ip link set dev wg0 down"), probes.index("example.edu"))
         self.assertIn("nc -z -w 5 1.1.1.1 443", probes)  # TCP to a literal address, no DNS needed
 
     def test_leak_test_failures(self):
         cases = {
-            "a captured packet": ({"CAPTURED": 2}, "no_egress_captured"),
+            "a captured packet": ({"CAPTURED": 2}, "no_egress_captured_down"),
             "IPv4 leaves with the tunnel down": ({"LEAK_V4": 1}, "ipv4_blocked_down"),
             "IPv6 open": ({"V6_OPEN": 1}, "ipv6_blocked_up"),
             "the exit is the host's address": ({"EXIT_IP": "192.0.2.10"}, "ipv4_through_tunnel"),
@@ -475,8 +560,14 @@ class VMScripts(unittest.TestCase):
             "TCP leaks with the tunnel down": ({"LEAK_TCP": 1}, "tcp_literal_blocked_down"),
             "no TCP even with the tunnel up": ({"NO_TCP": 1}, "tcp_literal_up"),
             "the probe image lacks its tools": ({"NO_TOOLS": 1}, "probe_tools"),
-            "the capture died after its header": ({"CAPTURE_DIES": 1}, "capture_alive"),
-            "the capture can't be read": ({"READ_FAILS": 1}, "capture_read"),
+            "the capture died after its header": ({"CAPTURE_DIES": 1}, "capture_alive_down"),
+            "the capture can't be read": ({"READ_FAILS": 1}, "capture_read_down"),
+            # Phase B: gluetun with its firewall off holds while the tunnel is merely
+            # dead, and leaks once its interface is down.
+            "gluetun's firewall off": ({"FIREWALL_OFF": 1}, "no_egress_captured_ifdown"),
+            "the interface won't go down": ({"IFDOWN_FAILS": 1}, "vpn_interface_down"),
+            # A probe container that never runs its command is never read as blocked.
+            "the probes never run": ({"PROBE_NOT_RUN": 1}, "probe_ran"),
             # The recovery's delete fails: the exit trap still lifts the block.
             "a failed delete": ({"FAIL_FIRST_DELETE": 1, "NO_RECOVER": 1}, "tunnel_recovers"),
         }
@@ -488,8 +579,8 @@ class VMScripts(unittest.TestCase):
                 self.assertIn(f"fail {failed}", lines)
                 self.assertEqual(lines[-1], "fail leak_test")
                 self.assertFalse((self.stub / "blocked").exists())  # the block is always lifted
-                if failed in ("capture_alive", "capture_read"):  # never read as zero packets
-                    self.assertIn("fail no_egress_captured", lines)
+                if failed.startswith(("capture_alive", "capture_read")):  # never read as zero packets
+                    self.assertIn("fail no_egress_captured_down", lines)
 
     def test_leak_test_refuses_bad_inputs(self):
         for name, conf in {"hostile endpoint": "Endpoint = 192.0.2.77;rm -rf /:1337\n",
@@ -524,6 +615,40 @@ class VMScripts(unittest.TestCase):
                 self.assertEqual((rc, lines[-2:]), (1, ["fail block_running", "fail leak_test"]))
                 self.assertNotIn("iptables", self.log())
                 self.assertNotIn("compose", self.log())  # the running stack is never touched
+
+    def test_a_firewall_off_gluetun_fails_phase_b_only(self):
+        rc, lines, _ = self.run_script("leak-test.sh", FIREWALL_OFF=1)
+        self.assertEqual(rc, 1)
+        for n in ("ipv4_blocked", "tcp_literal_blocked", "ipv6_blocked", "dns_blocked", "dns_direct_blocked",
+                  "no_egress_captured"):
+            self.assertIn(f"ok {n}_down", lines)  # a dead tunnel alone can't tell
+            self.assertIn(f"fail {n}_ifdown", lines)
+        self.assertIn("count captured_packets_ifdown 3", lines)
+        self.assertFalse((self.stub / "blocked").exists())
+
+    def test_probes_that_never_ran_never_pass(self):
+        rc, lines, _ = self.run_script("leak-test.sh", PROBE_NOT_RUN=1)
+        self.assertEqual(rc, 1)
+        for n in ("ipv4_blocked", "tcp_literal_blocked", "ipv6_blocked", "dns_blocked", "dns_direct_blocked"):
+            self.assertIn(f"fail {n}_down", lines)
+        self.assertEqual(lines[-2:], ["fail probe_ran", "fail leak_test"])
+
+    def test_the_vpn_interface_comes_from_gluetuns_config(self):
+        rc, lines, _ = self.run_script("leak-test.sh", VPN_IFACE="tun7")
+        self.assertEqual(rc, 0, lines)
+        self.assertIn("ip link set dev tun7 down", (self.stub / "probes").read_text())
+        for hostile in ("wg0;reboot", "-x", "a" * 16):
+            with self.subTest(iface=hostile):
+                self.setUp()
+                rc, lines, _ = self.run_script("leak-test.sh", VPN_IFACE=hostile)
+                self.assertEqual((rc, lines[-2:]), (1, ["fail vpn_interface", "fail leak_test"]))
+                self.assertNotIn("iptables", self.log())
+
+    def test_leak_test_fails_closed_when_docker_cant_list(self):
+        rc, lines, _ = self.run_script("leak-test.sh", PS_FAIL=1)
+        self.assertEqual((rc, lines[-2:]), (1, ["fail block_check", "fail leak_test"]))
+        self.assertNotIn("iptables", self.log())
+        self.assertNotIn("compose", self.log())
 
     def test_leak_test_flags_a_left_over_login(self):
         (self.tmp / "pia-run").mkdir()

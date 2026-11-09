@@ -7,7 +7,9 @@ ancestor checks. In order:
 2. This job's /32 opened on the fleet firewalls (OP-2's set_job_rules, fenced),
    only for an IPv4 address inside GitHub's Actions ranges.
 3. One SSH session: pinned known_hosts, the step and its arguments on stdin,
-   stdout parsed by remote.LINE and everything else dropped.
+   stdout parsed by remote.LINE and everything else dropped. Exit 255 (SSH
+   itself: the new rule not applied yet) is retried for up to
+   SSH_ATTEMPTS_SECONDS, as deliver-pia does; a 255 ran nothing remotely.
 4. Always: the rule closed again.
 The result is one report line of fixed words and grammar names.
 """
@@ -18,6 +20,7 @@ import ipaddress
 import os
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -32,6 +35,8 @@ BUILT = {
     "vm-status": {"files": ("vm-status.sh",), "timeout": 60},
     "leak-test": {"files": ("leak-test.sh", "compose.yaml"), "timeout": 600},
 }
+SSH_ATTEMPTS_SECONDS = 120  # the firewall rule can take a little while to apply (deliver-pia's)
+SSH_RETRY_PAUSE = 5
 OUTCOMES = {255: "couldn't connect, or its host key didn't match the pin",
             256: "the session didn't finish in time",
             remote.BUSY_VM: "the VM is busy (a delivery or another step holds its lock)",
@@ -71,7 +76,8 @@ def summary(rc: int, lines: list[str]) -> str:
 
 def run_step(env: dict, backend, fleet: dict, step: str, vm: str, run_id: str, fence: Callable[[], None], *,
              ssh: Callable, my_ip: Callable[[], str], emit: Callable[[str], None], repo: str,
-             fingerprint: Callable[[str], str], close_fence: Callable[[], None] | None = None) -> str:
+             fingerprint: Callable[[str], str], close_fence: Callable[[], None] | None = None,
+             sleep: Callable[[float], None] = time.sleep, monotonic: Callable[[], float] = time.monotonic) -> str:
     """The step's report line. Raises remote.StepRefused with a fixed reason."""
     if step not in BUILT:
         raise remote.StepRefused("step not built yet (OP-3b)")
@@ -111,8 +117,13 @@ def run_step(env: dict, backend, fleet: dict, step: str, vm: str, run_id: str, f
                     raise
                 refused = "its firewall rule couldn't be opened"
             else:
-                rc, out = ssh(remote.ssh_argv(slot["address"], str(key), kh) + [remote.remote_command(timeout)],
-                              data, timeout + remote.FLOCK_WAIT + 60)
+                argv = remote.ssh_argv(slot["address"], str(key), kh) + [remote.remote_command(timeout)]
+                retry_until = monotonic() + SSH_ATTEMPTS_SECONDS
+                while True:
+                    rc, out = ssh(argv, data, timeout + remote.FLOCK_WAIT + 60)
+                    if rc != 255 or monotonic() >= retry_until:
+                        break
+                    sleep(SSH_RETRY_PAUSE)
         finally:  # whatever happened, including a half-opened rule set or a lost lock
             try:
                 # A lock read that fails (S3) mustn't leave the rule open; a lost lock still stops it.
