@@ -36,6 +36,7 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=custom
       - VPN_TYPE=wireguard
+      - WIREGUARD_IMPLEMENTATION=auto
       - TZ=Etc/UTC
       - FIREWALL=on
       - FIREWALL_ENABLED_DISABLING_IT_SHOOTS_YOU_IN_YOUR_FOOT=on

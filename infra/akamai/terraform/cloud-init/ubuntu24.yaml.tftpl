@@ -46,6 +46,11 @@ write_files:
     permissions: '0644'
     content: |
       ${indent(6, compose_vpn_content)}
+  - path: /etc/lodestar/vpn/ca.rsa.4096.crt
+    owner: root:root
+    permissions: '0644'
+    content: |
+      ${indent(6, pia_ca_cert_content)}
   - path: /usr/local/sbin/lodestar-vpn-helper
     owner: root:root
     permissions: '0750'
@@ -58,6 +63,88 @@ write_files:
       CONFIG_FILE="/run/lodestar/vpn/wg0.conf"
       COMPOSE_DIR="/etc/lodestar/vpn"
       COMPOSE_FILE="/etc/lodestar/vpn/compose.yaml"
+      PIA_CA_FILE="/etc/lodestar/vpn/ca.rsa.4096.crt"
+      PIA_SERVERLIST_URL="https://serverlist.piaservers.net/vpninfo/servers/v4"
+
+      query_wg() {
+        local subcmd="$${1:-}"
+        local gluetun_pid=""
+        gluetun_pid="$(docker inspect -f '{{if .State.Running}}{{.State.Pid}}{{else}}0{{end}}' gluetun 2>/dev/null || true)"
+        local out=""
+        if [ -n "$gluetun_pid" ] && [ "$gluetun_pid" -gt 0 ] 2>/dev/null && command -v nsenter >/dev/null 2>&1 && command -v wg >/dev/null 2>&1; then
+          out="$(nsenter -t "$gluetun_pid" -n -m wg show wg0 "$subcmd" 2>/dev/null || nsenter -t "$gluetun_pid" -n wg show wg0 "$subcmd" 2>/dev/null || true)"
+        fi
+        if [ -z "$out" ]; then
+          out="$(docker exec gluetun wg show wg0 "$subcmd" 2>/dev/null || true)"
+        fi
+        if [ -z "$out" ]; then
+          echo "ERROR: Authoritative WireGuard $subcmd inspection unavailable for wg0" >&2
+          return 1
+        fi
+        echo "$out"
+      }
+
+      extract_cfg_value() {
+        local key="$${1:-}"
+        local cfg_file="$${2:-}"
+        awk -v target="$key" '
+          {
+            pos = index($0, "=")
+            if (pos > 0) {
+              k = substr($0, 1, pos - 1)
+              v = substr($0, pos + 1)
+              gsub(/^[[:space:]]+|[[:space:]]+$/, "", k)
+              gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+              if (k == target) {
+                print v
+                exit
+              }
+            }
+          }
+        ' "$cfg_file" 2>/dev/null || true
+      }
+
+      verify_pia_endpoint_binding() {
+        local cfg_file="$${1:-}"
+        local cfg_ep=""
+        local ep_ip=""
+        local ep_port=""
+        local cfg_pub=""
+        cfg_ep="$(extract_cfg_value "Endpoint" "$cfg_file")"
+        ep_ip="$${cfg_ep%:*}"
+        ep_port="$${cfg_ep#*:}"
+        cfg_pub="$(extract_cfg_value "PublicKey" "$cfg_file")"
+        if [ -z "$ep_ip" ] || [ -z "$ep_port" ] || [ -z "$cfg_pub" ]; then
+          echo "ERROR: Missing Endpoint or PublicKey in WireGuard configuration" >&2
+          return 1
+        fi
+        if [ ! -f "$PIA_CA_FILE" ] || [ -L "$PIA_CA_FILE" ]; then
+          return 0
+        fi
+        local sl_json=""
+        sl_json="$(curl -fsSL --max-time 10 "$PIA_SERVERLIST_URL" 2>/dev/null | head -n 1 || true)"
+        if [ -z "$sl_json" ]; then
+          echo "ERROR: Failed to fetch authoritative PIA server list for endpoint authorization" >&2
+          return 1
+        fi
+        local server_cn=""
+        server_cn="$(printf '%s' "$sl_json" | jq -r --arg ip "$ep_ip" '.regions[]?.servers.wg[]? | select(.ip == $ip) | .cn' 2>/dev/null | tr -d '\r' | head -n 1 || true)"
+        if [ -z "$server_cn" ] || [ "$server_cn" = "null" ]; then
+          echo "ERROR: Unauthorized WireGuard endpoint $ep_ip: not present in authoritative PIA WireGuard server list" >&2
+          return 1
+        fi
+        if ! echo "$server_cn" | grep -q -E '^[a-zA-Z0-9.-]+$'; then
+          echo "ERROR: Invalid server Common Name format from PIA metadata" >&2
+          return 1
+        fi
+        local http_code=""
+        http_code="$(curl -sS --max-time 10 --cacert "$PIA_CA_FILE" --resolve "$${server_cn}:$${ep_port}:$${ep_ip}" -o /dev/null -w '%%{http_code}' "https://$${server_cn}:$${ep_port}/addKey" 2>/dev/null | tr -d ' \t\r\n' || true)"
+        if [ -z "$http_code" ] || [ "$http_code" = "000" ]; then
+          echo "ERROR: Endpoint $ep_ip ($server_cn) failed PIA Root CA TLS verification" >&2
+          return 1
+        fi
+        return 0
+      }
 
       cmd="$${1:-}"
       case "$cmd" in
@@ -140,6 +227,10 @@ write_files:
             echo "ERROR: Invalid WireGuard configuration payload" >&2
             exit 1
           fi
+          if ! verify_pia_endpoint_binding "$tmp_cfg"; then
+            rm -f "$tmp_cfg"
+            exit 1
+          fi
           if [ -L "$CONFIG_FILE" ]; then
             rm -f "$CONFIG_FILE"
           fi
@@ -177,6 +268,9 @@ write_files:
             echo "ERROR: $CONFIG_FILE missing or symlink" >&2
             exit 1
           fi
+          if ! verify_pia_endpoint_binding "$CONFIG_FILE"; then
+            exit 1
+          fi
           docker compose -f "$COMPOSE_FILE" up -d gluetun
           echo "VPN_STARTED"
           ;;
@@ -210,6 +304,7 @@ write_files:
           esac
           # 4. WireGuard handshake active and fresh (<= 120s)
           hs_out="$(bash "$0" wg-handshake 2>/dev/null || true)"
+          hs_peer="$(echo "$hs_out" | awk '{print $1}')"
           hs_epoch="$(echo "$hs_out" | awk '{print $2}')"
           if [ -z "$hs_epoch" ] || [ "$hs_epoch" -le 0 ] 2>/dev/null; then
             echo "ERROR: WireGuard tunnel handshake missing or inactive" >&2
@@ -229,17 +324,36 @@ write_files:
             echo "ERROR: WireGuard transfer inactive (rx=$${rx_b:-0}, tx=$${tx_b:-0})" >&2
             exit 1
           fi
-          # 6. Gluetun killswitch firewall active (-P OUTPUT DROP)
+          # 6. Verify observed active WireGuard peer and endpoint match authorized config if present
+          if [ -f "$CONFIG_FILE" ]; then
+            if ! verify_pia_endpoint_binding "$CONFIG_FILE"; then
+              exit 1
+            fi
+            cfg_pub="$(extract_cfg_value "PublicKey" "$CONFIG_FILE")"
+            cfg_ep="$(extract_cfg_value "Endpoint" "$CONFIG_FILE")"
+            ep_out="$(bash "$0" wg-endpoints 2>/dev/null || true)"
+            obs_peer="$(echo "$ep_out" | awk '{print $1}')"
+            obs_ep="$(echo "$ep_out" | awk '{print $2}')"
+            if [ -n "$cfg_pub" ] && [ "$hs_peer" != "$cfg_pub" ]; then
+              echo "ERROR: Observed WireGuard peer key ($hs_peer) does not match configured PublicKey ($cfg_pub)" >&2
+              exit 1
+            fi
+            if [ -n "$cfg_ep" ] && [ "$obs_ep" != "$cfg_ep" ]; then
+              echo "ERROR: Observed WireGuard peer endpoint ($obs_ep) does not match configured Endpoint ($cfg_ep)" >&2
+              exit 1
+            fi
+          fi
+          # 7. Gluetun killswitch firewall active (-P OUTPUT DROP)
           if ! docker exec gluetun iptables -S OUTPUT 2>/dev/null | grep -q -- '-P OUTPUT DROP'; then
             echo "ERROR: Gluetun firewall killswitch inactive (no -P OUTPUT DROP)" >&2
             exit 1
           fi
-          # 7. IPv6 disabled inside container
+          # 8. IPv6 disabled inside container
           if [ "$(docker exec gluetun cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null || true)" != "1" ]; then
             echo "ERROR: IPv6 is not disabled inside Gluetun container" >&2
             exit 1
           fi
-          # 8. Crawler strictly confined to Gluetun network namespace
+          # 9. Crawler strictly confined to Gluetun network namespace
           if ! grep -q -E 'network_mode:\s*["'\''?]?(service:gluetun|container:gluetun)["'\''?]?' "$COMPOSE_FILE"; then
             echo "ERROR: Crawler is not restricted to Gluetun network namespace in $COMPOSE_FILE" >&2
             exit 1
@@ -248,94 +362,71 @@ write_files:
           echo "CRAWLER_STARTED"
           ;;
         stop-vpn)
-          if [ -f "$COMPOSE_FILE" ]; then
-            docker compose -f "$COMPOSE_FILE" --profile crawler down 2>/dev/null || docker compose -f "$COMPOSE_FILE" down
+          if [ ! -f "$COMPOSE_FILE" ] || [ -L "$COMPOSE_FILE" ]; then
+            echo "ERROR: $COMPOSE_FILE missing or symlink" >&2
+            exit 1
+          fi
+          if ! docker info >/dev/null 2>&1; then
+            echo "ERROR: Docker daemon is unavailable; cannot stop VPN containers safely" >&2
+            exit 1
+          fi
+          if ! docker compose -f "$COMPOSE_FILE" --profile crawler down --remove-orphans; then
+            echo "ERROR: Failed to stop VPN and crawler containers via Docker Compose" >&2
+            exit 1
           fi
           echo "STOP_OK"
           ;;
         cleanup)
-          if [ -f "$COMPOSE_FILE" ]; then
-            docker compose -f "$COMPOSE_FILE" --profile crawler down 2>/dev/null || docker compose -f "$COMPOSE_FILE" down || true
+          if [ -L "$COMPOSE_FILE" ]; then
+            echo "ERROR: $COMPOSE_FILE is a symlink; refusing cleanup" >&2
+            exit 1
           fi
-          if [ -d "$CONFIG_DIR" ] && [ ! -L "$CONFIG_DIR" ]; then
+          if [ -f "$COMPOSE_FILE" ]; then
+            if ! docker info >/dev/null 2>&1; then
+              echo "ERROR: Docker daemon is unavailable; cannot verify container shutdown before removing runtime configuration" >&2
+              exit 1
+            fi
+            if ! docker compose -f "$COMPOSE_FILE" --profile crawler down --remove-orphans; then
+              echo "ERROR: Failed to shut down VPN and crawler containers; preserving runtime configuration" >&2
+              exit 1
+            fi
+            for cname in lodestar-crawler gluetun; do
+              cstate="$(docker inspect -f '{{.State.Running}}' "$cname" 2>/dev/null || echo "absent")"
+              if [ "$cstate" = "true" ]; then
+                echo "ERROR: Container '$cname' is still running after shutdown; aborting cleanup" >&2
+                exit 1
+              fi
+            done
+          fi
+          if [ -L "$CONFIG_DIR" ]; then
+            echo "ERROR: $CONFIG_DIR is a symlink; refusing removal" >&2
+            exit 1
+          fi
+          if [ -d "$CONFIG_DIR" ]; then
             rm -rf "$CONFIG_DIR"
           fi
           echo "CLEANUP_OK"
           ;;
         wg-handshake)
-          # Query WireGuard handshake via host nsenter (wireguard-tools on Ubuntu 24.04 host)
-          # or fall back to container wg / sysfs carrier + Gluetun healthcheck
-          gluetun_pid="$(docker inspect -f '{{.State.Pid}}' gluetun 2>/dev/null || true)"
-          hs_out=""
-          if [ -n "$gluetun_pid" ] && [ "$gluetun_pid" -gt 0 ] 2>/dev/null && command -v nsenter >/dev/null 2>&1 && command -v wg >/dev/null 2>&1; then
-            hs_out="$(nsenter -t "$gluetun_pid" -n wg show wg0 latest-handshakes 2>/dev/null || true)"
-          fi
-          if [ -z "$hs_out" ]; then
-            hs_out="$(docker exec gluetun wg show wg0 latest-handshakes 2>/dev/null || true)"
-          fi
-          if [ -z "$hs_out" ]; then
-            carrier="$(docker exec gluetun cat /sys/class/net/wg0/carrier 2>/dev/null || true)"
-            rx_b="$(docker exec gluetun cat /sys/class/net/wg0/statistics/rx_bytes 2>/dev/null || true)"
-            if [ "$carrier" = "1" ] && [ -n "$rx_b" ] && [ "$rx_b" -gt 0 ] 2>/dev/null; then
-              peer_pub="$(awk -F'=' '/^[[:space:]]*PublicKey[[:space:]]*=/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' "$CONFIG_FILE" 2>/dev/null || echo "wg0_peer")"
-              hs_out="$${peer_pub:-wg0_peer} $(date +%s)"
-            fi
-          fi
-          if [ -z "$hs_out" ]; then
-            exit 1
-          fi
-          echo "$hs_out"
+          # Query real kernel/userspace WireGuard handshake via host nsenter or container wgctrl/UAPI.
+          # Never fabricate handshake timestamps from interface carrier or byte counters.
+          query_wg latest-handshakes
           ;;
         wg-transfer)
-          gluetun_pid="$(docker inspect -f '{{.State.Pid}}' gluetun 2>/dev/null || true)"
-          tx_out=""
-          if [ -n "$gluetun_pid" ] && [ "$gluetun_pid" -gt 0 ] 2>/dev/null && command -v nsenter >/dev/null 2>&1 && command -v wg >/dev/null 2>&1; then
-            tx_out="$(nsenter -t "$gluetun_pid" -n wg show wg0 transfer 2>/dev/null || true)"
-          fi
-          if [ -z "$tx_out" ]; then
-            tx_out="$(docker exec gluetun wg show wg0 transfer 2>/dev/null || true)"
-          fi
-          if [ -z "$tx_out" ]; then
-            rx_b="$(docker exec gluetun cat /sys/class/net/wg0/statistics/rx_bytes 2>/dev/null || true)"
-            tx_b="$(docker exec gluetun cat /sys/class/net/wg0/statistics/tx_bytes 2>/dev/null || true)"
-            if [ -n "$rx_b" ] && [ -n "$tx_b" ]; then
-              peer_pub="$(awk -F'=' '/^[[:space:]]*PublicKey[[:space:]]*=/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' "$CONFIG_FILE" 2>/dev/null || echo "wg0_peer")"
-              tx_out="$${peer_pub:-wg0_peer} $rx_b $tx_b"
-            fi
-          fi
-          if [ -z "$tx_out" ]; then
-            exit 1
-          fi
-          echo "$tx_out"
+          # Query real authenticated WireGuard peer transfer counters.
+          # Never substitute generic interface counters (/sys/class/net/wg0/statistics).
+          query_wg transfer
           ;;
         wg-endpoints)
-          gluetun_pid="$(docker inspect -f '{{.State.Pid}}' gluetun 2>/dev/null || true)"
-          ep_out=""
-          if [ -n "$gluetun_pid" ] && [ "$gluetun_pid" -gt 0 ] 2>/dev/null && command -v nsenter >/dev/null 2>&1 && command -v wg >/dev/null 2>&1; then
-            ep_out="$(nsenter -t "$gluetun_pid" -n wg show wg0 endpoints 2>/dev/null || true)"
-          fi
-          if [ -z "$ep_out" ]; then
-            ep_out="$(docker exec gluetun wg show wg0 endpoints 2>/dev/null || true)"
-          fi
-          if [ -z "$ep_out" ] && [ -f "$CONFIG_FILE" ]; then
-            peer_pub="$(awk -F'=' '/^[[:space:]]*PublicKey[[:space:]]*=/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' "$CONFIG_FILE" 2>/dev/null || echo "wg0_peer")"
-            cfg_ep="$(awk -F'=' '/^[[:space:]]*Endpoint[[:space:]]*=/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' "$CONFIG_FILE" 2>/dev/null || true)"
-            if [ -n "$cfg_ep" ]; then
-              ep_out="$${peer_pub:-wg0_peer} $cfg_ep"
-            fi
-          fi
-          if [ -z "$ep_out" ]; then
-            exit 1
-          fi
-          echo "$ep_out"
+          # Query real active WireGuard peer endpoints.
+          # Never substitute configured Endpoint values from wg0.conf.
+          query_wg endpoints
           ;;
         query-egress)
-          # Use wget (installed in Gluetun v3.40.0 Alpine image) or Gluetun's /tmp/gluetun/ip
+          # Actively query public egress IP over the live tunnel; never fall back to cached /tmp/gluetun/ip.
           egress_ip="$(docker exec gluetun wget -qO- -T 5 https://checkip.amazonaws.com 2>/dev/null | tr -d '[:space:]' || true)"
           if [ -z "$egress_ip" ]; then
-            egress_ip="$(docker exec gluetun cat /tmp/gluetun/ip 2>/dev/null | tr -d '[:space:]' || true)"
-          fi
-          if [ -z "$egress_ip" ]; then
+            echo "ERROR: Active tunneled egress check failed" >&2
             exit 1
           fi
           echo "$egress_ip"

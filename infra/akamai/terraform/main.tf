@@ -80,6 +80,7 @@ resource "linode_instance" "main" {
       host_key_private    = try(var.host_keys["main"].private_key, "")
       host_key_public     = try(var.host_keys["main"].public_key, "")
       compose_vpn_content = file("${path.module}/pia-example/compose.vpn.yaml")
+      pia_ca_cert_content = file("${path.module}/pia-example/ca.rsa.4096.crt")
     }))
   }
 
@@ -113,6 +114,7 @@ resource "linode_instance" "workers" {
       host_key_private    = try(var.host_keys[format("worker-%02d", count.index + 1)].private_key, "")
       host_key_public     = try(var.host_keys[format("worker-%02d", count.index + 1)].public_key, "")
       compose_vpn_content = file("${path.module}/pia-example/compose.vpn.yaml")
+      pia_ca_cert_content = file("${path.module}/pia-example/ca.rsa.4096.crt")
     }))
   }
 

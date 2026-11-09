@@ -838,6 +838,51 @@ class LodestarPiaBridgeTests(unittest.TestCase):
                 prov.start_crawler()
             mock_cmd.assert_called_with("sudo -n /usr/local/sbin/lodestar-vpn-helper cleanup", check=False)
 
+    @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
+    def test_stale_handshake_with_nonzero_historical_traffic_rejected(self, mock_cmd: MagicMock) -> None:
+        """Proves that a stale handshake (e.g. 500s old) is rejected even when rx_bytes and tx_bytes are large non-zero numbers."""
+        mock_cmd.side_effect = make_mock_leak_responses(handshake_age=500, rx_bytes=10_000_000, tx_bytes=5_000_000)
+        prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
+        with self.assertRaises(bridge.VpnHandshakeError) as ctx:
+            prov.verify_leak_protection(max_retries=1, delay_s=0)
+        self.assertIn("stale", str(ctx.exception).lower())
+
+    @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
+    def test_failed_cleanup_propagates_error_to_python_caller(self, mock_cmd: MagicMock) -> None:
+        """Proves that when remote helper cleanup fails or omits CLEANUP_OK, cleanup_runtime_credentials raises SshConnectionError."""
+        mock_cmd.side_effect = [
+            subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="", stderr=""),
+            subprocess.CompletedProcess(
+                args=["ssh"],
+                returncode=1,
+                stdout="",
+                stderr="ERROR: Failed to shut down VPN and crawler containers; preserving runtime configuration",
+            ),
+        ]
+        prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
+        with self.assertRaises(bridge.SshConnectionError) as ctx:
+            prov.cleanup_runtime_credentials()
+        self.assertIn("failed to clean up runtime credentials", str(ctx.exception).lower())
+
+    @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
+    def test_gluetun_restart_recovery_succeeds_on_retry(self, mock_cmd: MagicMock) -> None:
+        """Proves that verify_leak_protection recovers when Gluetun restarts on attempt 1 and establishes a fresh handshake on attempt 2."""
+        # Attempt 1: wg-handshake fails (container restarting), wg-transfer fails, wg-endpoints fails, query-egress fails
+        attempt1 = [
+            subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout="192.0.2.100\n", stderr=""),  # host IP
+            subprocess.CompletedProcess(args=["ssh"], returncode=1, stdout="", stderr="ERROR: Gluetun container is not running"),
+            subprocess.CompletedProcess(args=["ssh"], returncode=1, stdout="", stderr="ERROR: Gluetun container is not running"),
+            subprocess.CompletedProcess(args=["ssh"], returncode=1, stdout="", stderr="ERROR: Gluetun container is not running"),
+            subprocess.CompletedProcess(args=["ssh"], returncode=1, stdout="", stderr="ERROR: Active tunneled egress check failed"),
+        ]
+        # Attempt 2: full healthy responses (excluding initial host IP query)
+        attempt2 = make_mock_leak_responses()[1:]
+        mock_cmd.side_effect = attempt1 + attempt2
+        prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
+        res = prov.verify_leak_protection(max_retries=2, delay_s=0, expected_server_ip="212.56.54.190")
+        self.assertEqual(res["status"], "protected")
+        self.assertEqual(res["vpn_ip"], "156.146.54.4")
+
     # -------------------------------------------------------------------------
     # Section 9 Remediation: Complete secure deployment with mocked dependencies
     # -------------------------------------------------------------------------
@@ -1019,7 +1064,7 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
         raw_script = content[script_start:script_end]
         lines = [line[6:] if line.startswith("      ") else line for line in raw_script.splitlines()]
         script = "\n".join(lines)
-        script = script.replace("$${", "${")
+        script = script.replace("$${", "${").replace("%%{", "%{")
 
         # Adjust root-specific chown/install for unprivileged local test sandbox
         script = script.replace("install -d -m 0755 -o root -g root", "mkdir -p")
@@ -1034,6 +1079,9 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
         script = script.replace('COMPOSE_DIR="/etc/lodestar/vpn"', f'COMPOSE_DIR="{self.compose_dir}"')
         script = script.replace(
             'COMPOSE_FILE="/etc/lodestar/vpn/compose.yaml"', f'COMPOSE_FILE="{self.compose_dir}/compose.yaml"'
+        )
+        script = script.replace(
+            'PIA_CA_FILE="/etc/lodestar/vpn/ca.rsa.4096.crt"', f'PIA_CA_FILE="{self.compose_dir}/ca.rsa.4096.crt"'
         )
 
         self.script_path = os.path.join(self.temp_dir, "helper.sh").replace("\\", "/")
@@ -1061,6 +1109,16 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
         if not os.path.exists(docker_path):
             self.create_mock_docker("echo 'mock_docker_unconfigured' >&2; exit 1")
         env = os.environ.copy()
+        if os.name == "nt":
+            res_p = subprocess.run([self.bash, "-c", "cygpath -u \"$1\"", "_", self.mock_bin], capture_output=True, text=True)
+            posix_mock = res_p.stdout.strip() if res_p.returncode == 0 else self.mock_bin
+            return subprocess.run(
+                [self.bash, "-c", f'export PATH="{posix_mock}:$PATH"; exec "$1" "$2"', "_", self.script_path, cmd],
+                input=input_data,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
         env["PATH"] = f"{self.mock_bin}{os.pathsep}{env['PATH']}"
         return subprocess.run(
             [self.bash, self.script_path, cmd],
@@ -1345,6 +1403,263 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
         bad_meta = valid_cfg.replace("212.56.54.190:1337", "169.254.169.254:1337")
         res_meta = self.run_helper("write-config", input_data=bad_meta)
         self.assertNotEqual(res_meta.returncode, 0)
+
+    def test_exec_helper_endpoint_authorization_rejects_unauthorized_public_endpoint(self) -> None:
+        """Proves that when PIA CA is present, an attacker-controlled public IP not in PIA's server list is rejected."""
+        priv, pub = bridge.generate_wireguard_keypair()
+        ca_path = os.path.join(self.compose_dir, "ca.rsa.4096.crt")
+        with open(ca_path, "w", encoding="utf-8") as f:
+            f.write("-----BEGIN CERTIFICATE-----\ndummy\n-----END CERTIFICATE-----\n")
+
+        # Create mock curl and jq in mock_bin
+        curl_path = os.path.join(self.mock_bin, "curl")
+        with open(curl_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(
+                "#!/usr/bin/env bash\n"
+                "case \"$*\" in\n"
+                "  *serverlist.piaservers.net*)\n"
+                "    echo '{\"regions\":[{\"id\":\"us-newjersey\",\"servers\":{\"wg\":[{\"ip\":\"212.56.54.190\",\"cn\":\"newjersey434\"}]}}]}'\n"
+                "    exit 0\n"
+                "    ;;\n"
+                "  *newjersey434:1337*)\n"
+                "    echo -n '400'\n"
+                "    exit 0\n"
+                "    ;;\n"
+                "  *)\n"
+                "    echo -n '000'\n"
+                "    exit 60\n"
+                "    ;;\n"
+                "esac\n"
+            )
+        os.chmod(curl_path, 0o755)
+
+        jq_path = os.path.join(self.mock_bin, "jq")
+        with open(jq_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(
+                "#!/usr/bin/env bash\n"
+                "cat >/dev/null || true\n"
+                "case \"$*\" in\n"
+                "  *212.56.54.190*)\n"
+                "    echo 'newjersey434'\n"
+                "    ;;\n"
+                "  *)\n"
+                "    echo ''\n"
+                "    ;;\n"
+                "esac\n"
+            )
+        os.chmod(jq_path, 0o755)
+
+        # 1. Authorized PIA endpoint passes both serverlist and TLS verification
+        auth_cfg = (
+            "[Interface]\n"
+            "Address = 10.0.0.2/32\n"
+            f"PrivateKey = {priv}\n"
+            "DNS = 10.0.0.242\n\n"
+            "[Peer]\n"
+            f"PublicKey = {pub}\n"
+            "Endpoint = 212.56.54.190:1337\n"
+            "AllowedIPs = 0.0.0.0/0\n"
+            "PersistentKeepalive = 25\n"
+        )
+        res_auth = self.run_helper("write-config", input_data=auth_cfg)
+        self.assertEqual(res_auth.returncode, 0, msg=res_auth.stderr)
+        self.assertIn("CONFIG_OK", res_auth.stdout)
+
+        # 2. Attacker-controlled public IP (e.g. 198.51.100.77:1337) is rejected by serverlist check
+        attacker_cfg = auth_cfg.replace("212.56.54.190:1337", "198.51.100.77:1337")
+        res_unauth = self.run_helper("write-config", input_data=attacker_cfg)
+        self.assertEqual(res_unauth.returncode, 1)
+        self.assertIn("Unauthorized WireGuard endpoint 198.51.100.77", res_unauth.stderr)
+
+        # 3. Spoofed PIA IP failing TLS certificate verification is rejected
+        with open(curl_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(
+                "#!/usr/bin/env bash\n"
+                "if [[ \"$*\" == *\"serverlist.piaservers.net\"* ]]; then\n"
+                "  echo '{\"regions\":[{\"id\":\"us-newjersey\",\"servers\":{\"wg\":[{\"ip\":\"212.56.54.190\",\"cn\":\"newjersey434\"}]}}]}'\n"
+                "  exit 0\n"
+                "fi\n"
+                "echo -n '000'\n"
+                "exit 60\n"
+            )
+        os.chmod(curl_path, 0o755)
+        res_tls_fail = self.run_helper("write-config", input_data=auth_cfg)
+        self.assertEqual(res_tls_fail.returncode, 1)
+        self.assertIn("failed PIA Root CA TLS verification", res_tls_fail.stderr)
+
+    def test_exec_helper_no_synthetic_wireguard_evidence_when_wg_unavailable(self) -> None:
+        """Proves that wg-handshake, wg-transfer, and wg-endpoints fail closed when wg inspection is unavailable, even if interface carrier=1, rx_bytes>0, and wg0.conf exists."""
+        priv, pub = bridge.generate_wireguard_keypair()
+        valid_cfg = (
+            "[Interface]\n"
+            "Address = 10.0.0.2/32\n"
+            f"PrivateKey = {priv}\n"
+            "DNS = 10.0.0.242\n\n"
+            "[Peer]\n"
+            f"PublicKey = {pub}\n"
+            "Endpoint = 212.56.54.190:1337\n"
+            "AllowedIPs = 0.0.0.0/0\n"
+            "PersistentKeepalive = 25\n"
+        )
+        self.run_helper("write-config", input_data=valid_cfg)
+
+        # Mock docker where carrier=1, rx_bytes=99999, tx_bytes=88888, /tmp/gluetun/ip exists,
+        # but `wg show wg0 ...` and `wget` fail (simulating a dead/disconnected tunnel with historical bytes)
+        self.create_mock_docker(
+            'if [[ "$*" =~ "State.Running" ]]; then echo "1234"; exit 0;\n'
+            'elif [[ "$*" =~ "carrier" ]]; then echo "1"; exit 0;\n'
+            'elif [[ "$*" =~ "rx_bytes" ]]; then echo "99999"; exit 0;\n'
+            'elif [[ "$*" =~ "tx_bytes" ]]; then echo "88888"; exit 0;\n'
+            'elif [[ "$*" =~ "/tmp/gluetun/ip" ]]; then echo "156.146.54.4"; exit 0;\n'
+            'elif [[ "$*" =~ "wg show" ]]; then exit 1;\n'
+            'elif [[ "$*" =~ "wget" ]]; then exit 1; fi; exit 1'
+        )
+
+        res_hs = self.run_helper("wg-handshake")
+        self.assertNotEqual(res_hs.returncode, 0)
+        self.assertEqual(res_hs.stdout.strip(), "")
+        self.assertIn("Authoritative WireGuard latest-handshakes inspection unavailable", res_hs.stderr)
+
+        res_tx = self.run_helper("wg-transfer")
+        self.assertNotEqual(res_tx.returncode, 0)
+        self.assertEqual(res_tx.stdout.strip(), "")
+        self.assertIn("Authoritative WireGuard transfer inspection unavailable", res_tx.stderr)
+
+        res_ep = self.run_helper("wg-endpoints")
+        self.assertNotEqual(res_ep.returncode, 0)
+        self.assertEqual(res_ep.stdout.strip(), "")
+        self.assertIn("Authoritative WireGuard endpoints inspection unavailable", res_ep.stderr)
+
+        res_eg = self.run_helper("query-egress")
+        self.assertNotEqual(res_eg.returncode, 0)
+        self.assertEqual(res_eg.stdout.strip(), "")
+        self.assertIn("Active tunneled egress check failed", res_eg.stderr)
+
+    def test_exec_helper_userspace_and_kernelspace_wireguard_inspection(self) -> None:
+        """Proves that query_wg inspects both userspace (-n -m via /var/run/wireguard/wg0.sock) and kernelspace (-n netlink) WireGuard."""
+        self.create_mock_docker(
+            'if [[ "$*" =~ "State.Running" ]]; then echo "4321"; exit 0; fi; exit 1'
+        )
+        # Mock wg and nsenter in mock_bin: only succeeds when -m is passed (simulating userspace UAPI socket in container mount namespace)
+        wg_path = os.path.join(self.mock_bin, "wg")
+        with open(wg_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write("#!/usr/bin/env bash\nexit 0\n")
+        os.chmod(wg_path, 0o755)
+
+        nsenter_path = os.path.join(self.mock_bin, "nsenter")
+        with open(nsenter_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(
+                "#!/usr/bin/env bash\n"
+                "if [[ \"$*\" =~ \"-n -m wg show wg0 latest-handshakes\" ]]; then\n"
+                "  echo 'userspace_peer 1731000000'\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 1\n"
+            )
+        os.chmod(nsenter_path, 0o755)
+
+        res_hs = self.run_helper("wg-handshake")
+        self.assertEqual(res_hs.returncode, 0)
+        self.assertEqual(res_hs.stdout.strip(), "userspace_peer 1731000000")
+
+    def test_exec_helper_start_crawler_rejected_when_observed_endpoint_differs_from_configured(self) -> None:
+        """Proves that start-crawler fails closed if the observed active peer or endpoint differs from wg0.conf."""
+        priv, pub = bridge.generate_wireguard_keypair()
+        valid_cfg = (
+            "[Interface]\n"
+            "Address = 10.0.0.2/32\n"
+            f"PrivateKey = {priv}\n"
+            "DNS = 10.0.0.242\n\n"
+            "[Peer]\n"
+            f"PublicKey = {pub}\n"
+            "Endpoint = 212.56.54.190:1337\n"
+            "AllowedIPs = 0.0.0.0/0\n"
+            "PersistentKeepalive = 25\n"
+        )
+        self.run_helper("write-config", input_data=valid_cfg)
+        with open(os.path.join(self.compose_dir, "compose.yaml"), "w") as f:
+            f.write("services:\n  crawler:\n    network_mode: service:gluetun\n")
+
+        # Observed endpoint is 198.51.100.99:1337 instead of configured 212.56.54.190:1337
+        self.create_mock_docker(
+            'now=$(date +%s)\n'
+            'if [[ "$*" =~ "State.Health" ]]; then echo "healthy"; exit 0;\n'
+            'elif [[ "$*" =~ "com.docker.compose.service" ]]; then echo "gluetun"; exit 0;\n'
+            'elif [[ "$*" =~ "Config.Image" ]]; then echo "qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00"; exit 0;\n'
+            f'elif [[ "$*" =~ "latest-handshakes" ]]; then echo "{pub} $now"; exit 0;\n'
+            f'elif [[ "$*" =~ "transfer" ]]; then echo "{pub} 5000 3000"; exit 0;\n'
+            f'elif [[ "$*" =~ "endpoints" ]]; then echo "{pub} 198.51.100.99:1337"; exit 0; fi; exit 0'
+        )
+        res = self.run_helper("start-crawler")
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("Observed WireGuard peer endpoint (198.51.100.99:1337) does not match configured Endpoint (212.56.54.190:1337)", res.stderr)
+
+    def test_exec_helper_cleanup_fails_closed_on_daemon_or_shutdown_failure_and_succeeds_idempotently(self) -> None:
+        """Proves that cleanup fails closed when Docker is unavailable, compose down fails, or a container stays running, and preserves wg0.conf until shutdown succeeds."""
+        priv, pub = bridge.generate_wireguard_keypair()
+        valid_cfg = (
+            "[Interface]\n"
+            "Address = 10.0.0.2/32\n"
+            f"PrivateKey = {priv}\n"
+            "DNS = 10.0.0.242\n\n"
+            "[Peer]\n"
+            f"PublicKey = {pub}\n"
+            "Endpoint = 212.56.54.190:1337\n"
+            "AllowedIPs = 0.0.0.0/0\n"
+            "PersistentKeepalive = 25\n"
+        )
+        self.run_helper("write-config", input_data=valid_cfg)
+        cfg_file = os.path.join(self.config_dir, "wg0.conf")
+        self.assertTrue(os.path.exists(cfg_file))
+
+        with open(os.path.join(self.compose_dir, "compose.yaml"), "w") as f:
+            f.write("services:\n  gluetun:\n    image: test\n")
+
+        # Case 1: Docker daemon unavailable -> fails closed, does NOT print CLEANUP_OK, preserves wg0.conf
+        self.create_mock_docker('if [[ "$1" == "info" ]]; then exit 1; fi; exit 0')
+        res_daemon = self.run_helper("cleanup")
+        self.assertEqual(res_daemon.returncode, 1)
+        self.assertNotIn("CLEANUP_OK", res_daemon.stdout)
+        self.assertIn("Docker daemon is unavailable", res_daemon.stderr)
+        self.assertTrue(os.path.exists(cfg_file))
+
+        # Case 2: docker compose down fails -> fails closed, preserves wg0.conf
+        self.create_mock_docker(
+            'if [[ "$1" == "info" ]]; then exit 0;\n'
+            'elif [[ "$1" == "compose" ]]; then echo "compose down error" >&2; exit 1; fi; exit 0'
+        )
+        res_down_fail = self.run_helper("cleanup")
+        self.assertEqual(res_down_fail.returncode, 1)
+        self.assertNotIn("CLEANUP_OK", res_down_fail.stdout)
+        self.assertIn("Failed to shut down VPN and crawler containers", res_down_fail.stderr)
+        self.assertTrue(os.path.exists(cfg_file))
+
+        # Case 3: Stale container remains running after compose down -> fails closed, preserves wg0.conf
+        self.create_mock_docker(
+            'if [[ "$1" == "info" ]]; then exit 0;\n'
+            'elif [[ "$1" == "compose" ]]; then exit 0;\n'
+            'elif [[ "$1" == "inspect" && "$*" =~ "lodestar-crawler" ]]; then echo "true"; exit 0; fi; exit 1'
+        )
+        res_stale = self.run_helper("cleanup")
+        self.assertEqual(res_stale.returncode, 1)
+        self.assertNotIn("CLEANUP_OK", res_stale.stdout)
+        self.assertIn("Container 'lodestar-crawler' is still running after shutdown", res_stale.stderr)
+        self.assertTrue(os.path.exists(cfg_file))
+
+        # Case 4: Clean shutdown -> removes config_dir, prints CLEANUP_OK, and repeated cleanup is idempotent
+        self.create_mock_docker(
+            'if [[ "$1" == "info" ]]; then exit 0;\n'
+            'elif [[ "$1" == "compose" ]]; then exit 0;\n'
+            'elif [[ "$1" == "inspect" ]]; then echo "false"; exit 0; fi; exit 0'
+        )
+        res_ok1 = self.run_helper("cleanup")
+        self.assertEqual(res_ok1.returncode, 0)
+        self.assertIn("CLEANUP_OK", res_ok1.stdout)
+        self.assertFalse(os.path.exists(cfg_file))
+
+        res_ok2 = self.run_helper("cleanup")
+        self.assertEqual(res_ok2.returncode, 0)
+        self.assertIn("CLEANUP_OK", res_ok2.stdout)
 
     def test_exec_helper_dns_firewall_verification_rejected_when_policy_not_drop(self) -> None:
         """Proves that non-DROP output policy fails firewall verification."""

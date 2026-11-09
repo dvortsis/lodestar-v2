@@ -205,7 +205,7 @@ if not m:
 content = m.group(1)
 # Unindent 6 spaces and unescape Terraform \$\${ interpolation (preserving bash \$\$)
 lines = [line[6:] if line.startswith('      ') else line for line in content.splitlines()]
-code = '\n'.join(lines).replace('\$\${', '\${')
+code = '\n'.join(lines).replace('\$\${', '\${').replace('%%{', '%{')
 Path('$HELPER_BIN').write_text(code + '\n')
 "
 chmod 0750 "$HELPER_BIN"
@@ -409,8 +409,35 @@ print(f"[Interface]\nAddress = 10.0.0.2/32\nPrivateKey = {k1}\nDNS = 10.0.0.242\
   fi
   echo "PASS: Actual helper rejected adversarial protocol bypass rule."
 
+  # 7d: Adversarial test - verify dummy wg0 interface (which has carrier=1 and interface bytes, but is NOT an active WireGuard interface)
+  # cannot fabricate wg-handshake, wg-transfer, or wg-endpoints evidence.
+  if PATH="$MOCK_BIN_DIR:$PATH" "$HELPER_BIN" wg-handshake >/dev/null 2>&1; then
+    echo "FAIL: wg-handshake succeeded on non-WireGuard dummy interface!" >&2
+    exit 1
+  fi
+  if PATH="$MOCK_BIN_DIR:$PATH" "$HELPER_BIN" wg-transfer >/dev/null 2>&1; then
+    echo "FAIL: wg-transfer succeeded on non-WireGuard dummy interface!" >&2
+    exit 1
+  fi
+  if PATH="$MOCK_BIN_DIR:$PATH" "$HELPER_BIN" wg-endpoints >/dev/null 2>&1; then
+    echo "FAIL: wg-endpoints succeeded on non-WireGuard dummy interface!" >&2
+    exit 1
+  fi
+  echo "PASS: Non-WireGuard dummy interface cannot fabricate handshake, transfer, or endpoint evidence."
+
+  # 7e: Adversarial test - verify cleanup fails closed when docker compose down fails and preserves wg0.conf
+  if PATH="$MOCK_BIN_DIR:$PATH" "$HELPER_BIN" cleanup >/dev/null 2>&1; then
+    echo "FAIL: cleanup succeeded when docker daemon/compose failed!" >&2
+    exit 1
+  fi
+  if [ ! -f "/run/lodestar/vpn/wg0.conf" ]; then
+    echo "FAIL: cleanup deleted /run/lodestar/vpn/wg0.conf despite failed container shutdown!" >&2
+    exit 1
+  fi
+  echo "PASS: cleanup failed closed on container shutdown failure and preserved runtime state."
+
   # Clean up runtime config dir created during test
-  "$HELPER_BIN" cleanup >/dev/null 2>&1 || true
+  "$HELPER_BIN" cleanup >/dev/null 2>&1 || rm -rf /run/lodestar/vpn
 
   # Clean up network namespace
   ip netns del "$TEST_NETNS"
