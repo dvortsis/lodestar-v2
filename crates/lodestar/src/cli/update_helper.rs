@@ -89,7 +89,8 @@ fn install() -> ExitCode {
                 Outcome::Nothing | Outcome::Installed { .. } => ExitCode::SUCCESS,
                 Outcome::Failed { .. }
                 | Outcome::InstallerBusy { .. }
-                | Outcome::Unhealthy { .. } => ExitCode::FAILURE,
+                | Outcome::RolledBack { .. }
+                | Outcome::RollbackHalted { .. } => ExitCode::FAILURE,
             }
         }
     }

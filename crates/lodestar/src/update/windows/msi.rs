@@ -486,7 +486,7 @@ pub fn task_xml(exe: &Path, service_sid: &str) -> Result<String, &'static str> {
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>{exe}</Command>
+      <Command>"{exe}"</Command>
       <Arguments>{COMMAND}</Arguments>
     </Exec>
   </Actions>
@@ -622,7 +622,7 @@ mod tests {
         assert_eq!(count("<MultipleInstancesPolicy>IgnoreNew"), 1);
         // One action: the program, the one argument.
         assert_eq!(count("<Exec>"), 1);
-        assert!(xml.contains(r"<Command>C:\Program Files\Lodestar\lodestar.exe</Command>"));
+        assert!(xml.contains(r#"<Command>"C:\Program Files\Lodestar\lodestar.exe"</Command>"#));
         assert!(xml.contains("<Arguments>update-helper</Arguments>"));
         // The service may read and start it, nothing more.
         assert!(xml.contains(
@@ -690,7 +690,7 @@ $t.SecurityDescriptor",
         assert_eq!(
             lines.first().copied().unwrap_or_default(),
             format!(
-                "Highest|1|MSFT_TaskBootTrigger|1|{}|update-helper|IgnoreNew",
+                "Highest|1|MSFT_TaskBootTrigger|1|\"{}\"|update-helper|IgnoreNew",
                 exe.display()
             ),
             "{back}"
