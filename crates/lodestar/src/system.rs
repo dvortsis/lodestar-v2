@@ -25,6 +25,7 @@ use lodestar_search::{IndexVersion, RebuildProgress, SearchHandle};
 use lodestar_store::Store;
 
 use lodestar_api::events::EventHub;
+use lodestar_companions::manager::Snapshot;
 use tokio::sync::watch;
 
 use crate::config::Config;
@@ -53,6 +54,15 @@ pub struct System {
     /// The update engine's row: whether updates are on and the last
     /// completed check; `None` without an engine.
     pub updates: Option<UpdatesRow>,
+    /// The companion manager's snapshot (CMP-6's row); `None` when
+    /// companions are off for this run.
+    pub companions: Option<watch::Receiver<Snapshot>>,
+}
+
+/// What `/system`'s rows read from other services.
+pub struct Rows {
+    pub updates: Option<UpdatesRow>,
+    pub companions: Option<watch::Receiver<Snapshot>>,
 }
 
 /// What `/system`'s Updates row reads from the update engine.
@@ -121,6 +131,25 @@ fn on_off(on: bool) -> ConnectionState {
     }
 }
 
+/// The Companions row: how many companions Lodestar installed, `on` when
+/// any is. `off` with no count when companions are off for this run.
+fn companions_row(snapshot: Option<&watch::Receiver<Snapshot>>) -> Connection {
+    let installed = snapshot.map(|rx| {
+        rx.borrow()
+            .companions
+            .iter()
+            .filter(|c| c.version.is_some())
+            .count() as u64
+    });
+    Connection {
+        count: installed,
+        kind: ConnectionKind::Companions,
+        last_checked_at: None,
+        settings: "companions".to_string(),
+        state: Some(on_off(installed.is_some_and(|n| n > 0))),
+    }
+}
+
 impl System {
     fn connections(
         &self,
@@ -159,7 +188,7 @@ impl System {
                 subscriptions.and_then(|(_, at)| at),
             ),
             // Download clients and notification channels aren't stored
-            // yet; companions and workers come in v0.6.
+            // yet; workers come in v0.6.
             row(
                 ConnectionKind::Integrations,
                 "integrations",
@@ -177,7 +206,7 @@ impl System {
                     updates.and_then(|(_, at)| at).map(|t| t.max(0) as u64),
                 )
             },
-            row(ConnectionKind::Companions, "companions", None, None, None),
+            companions_row(self.companions.as_ref()),
             row(ConnectionKind::Workers, "workers", None, None, None),
         ]
     }
@@ -193,8 +222,12 @@ impl System {
         settings: &Arc<Registry>,
         control: Arc<Mutex<Store>>,
         events: &Arc<EventHub>,
-        updates: Option<UpdatesRow>,
+        rows: Rows,
     ) -> Arc<dyn SystemApi> {
+        let Rows {
+            updates,
+            companions,
+        } = rows;
         let restart = Restart::global().clone();
         let address = Arc::new(Address::new(
             bound,
@@ -218,6 +251,7 @@ impl System {
             sizes: Arc::new(info::Sizes::new(config.data_dir.clone())),
             dht: config.dht.enabled,
             updates,
+            companions,
         })
     }
 }
@@ -349,5 +383,46 @@ fn rebuild_event(p: &RebuildProgress) -> RebuildEvent {
         to: p.to.to_string(),
         total: p.total,
         unavailable: p.unavailable.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lodestar_companions::manager::{Health, Present};
+    use lodestar_companions::{CompanionId, Version};
+
+    #[test]
+    fn the_companions_row_counts_what_lodestar_installed() {
+        let off = companions_row(None);
+        assert_eq!(
+            (off.kind, off.state, off.count, off.settings.as_str()),
+            (
+                ConnectionKind::Companions,
+                Some(ConnectionState::Off),
+                None,
+                "companions"
+            )
+        );
+        let (tx, rx) = watch::channel(Snapshot::default());
+        let none = companions_row(Some(&rx));
+        assert_eq!(
+            (none.state, none.count),
+            (Some(ConnectionState::Off), Some(0))
+        );
+        let present = |id: &str, v: Option<&str>| Present {
+            id: CompanionId::parse(id).unwrap(),
+            version: v.map(|v| Version::parse(v).unwrap()),
+            health: Health::Unknown,
+        };
+        tx.send_modify(|s| {
+            s.companions = vec![
+                present("qbittorrent", Some("5.1.2")),
+                present("prowlarr", None),
+            ]
+        });
+        let one = companions_row(Some(&rx));
+        assert_eq!((one.state, one.count), (Some(ConnectionState::On), Some(1)));
+        assert_eq!(one.last_checked_at, None);
     }
 }
