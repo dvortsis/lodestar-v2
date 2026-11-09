@@ -1,6 +1,6 @@
-# The cloud fleet control plane (OP-1), with live mode (OP-2) behind
-# FLEET_LIVE=true. In dry-run nothing calls a cloud and the live-only steps
-# are skipped.
+# The cloud fleet control plane (OP-1), with live mode (OP-2) and PIA delivery
+# (OP-2b) behind FLEET_LIVE=true. In dry-run nothing calls a cloud and the
+# live-only steps are skipped.
 # Plan: docs/plan/2026-11-08-cloud-operator.md §2-§4; decisions:
 # docs/decisions/2026-11-08-OP-1.md. Every change to this file or
 # infra/fleet/** gets a fresh Opus review and a /security-review.
@@ -10,7 +10,10 @@
 # - comment text and every secret reach scripts only through env, never `run:`;
 # - every job sets minimal permissions; jobs with an environment gate on a
 #   job-level `if:` placed before `environment:`;
-# - lock-holding jobs set timeout-minutes below the lock's 90 minutes;
+# - lock-holding jobs set timeout-minutes below the lock's 90 minutes, and the
+#   delivery chain (act, pia-fence, deliver-pia, pia-release) sums below it;
+# - the jobs that take the lock run on disjoint events, so their shared run ID
+#   (run-attempt) never names two owners at once;
 # - no Actions artifacts.
 name: fleet
 
@@ -93,6 +96,9 @@ jobs:
       contents: read
       pull-requests: write
       id-token: write # live mode assumes LodestarFleetOperator by OIDC, in-process
+    outputs:
+      deliver: ${{ steps.act.outputs.deliver }} # "true": this run kept the lock for deliver-pia
+      live: ${{ steps.act.outputs.live }} # the chain's mode, fixed when act ran
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -107,7 +113,8 @@ jobs:
           terraform_wrapper: false
       - if: vars.FLEET_LIVE == 'true'
         run: python3 -m pip install --quiet --no-deps --require-hashes --target "$RUNNER_TEMP/fleet-deps" -r infra/fleet/requirements-live.txt
-      - env:
+      - id: act
+        env:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_ACTION: ${{ github.event.action }}
           IS_PR: ${{ github.event.issue.pull_request != null }}
@@ -129,6 +136,147 @@ jobs:
           FLEET_SSH_PUBLIC_KEY: ${{ vars.FLEET_SSH_PUBLIC_KEY }}
           OWNER_SSH_PUBLIC_KEY: ${{ vars.OWNER_SSH_PUBLIC_KEY }}
         run: python3 infra/fleet/fleet.py act
+
+  # PIA delivery (OP-2b; plan §3-§4). After a successful `up` or
+  # `run renew-vpn <vm>`, act keeps the fleet lock. pia-fence checks it's still
+  # this run's just before deliver-pia (whose role can't reach the control
+  # bucket); pia-release then always releases it with a conditional delete.
+  # 50 + 4 + 30 + 5 minutes, under the lock's 90. Queue time comes out of the
+  # margin, so pia-fence hands deliver-pia the lease's end, and deliver-pia
+  # refuses unless the lease outlasts its own worst case.
+  pia-fence:
+    needs: [gate, act]
+    if: >-
+      github.event_name == 'issue_comment' && github.event.action == 'created'
+      && github.event.issue.pull_request
+      && github.ref == 'refs/heads/main' && github.run_attempt == 1
+      && needs.act.result == 'success' && needs.act.outputs.deliver == 'true'
+      && vars.CHANNEL_PR != '' && format('{0}', github.event.issue.number) == vars.CHANNEL_PR
+      && vars.OPERATOR_BOT_USER_ID != '' && format('{0}', github.event.comment.user.id) == vars.OPERATOR_BOT_USER_ID
+    environment: cloud-fleet
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write # live mode assumes LodestarFleetOperator by OIDC, in-process
+    outputs:
+      lock_expires: ${{ steps.fence.outputs.lock_expires }} # the lease's end (UTC), for deliver-pia
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - if: needs.act.outputs.live == 'true'
+        run: python3 -m pip install --quiet --no-deps --require-hashes --target "$RUNNER_TEMP/fleet-deps" -r infra/fleet/requirements-live.txt
+      - id: fence
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          IS_PR: ${{ github.event.issue.pull_request != null }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          AUTHOR_ID: ${{ github.event.comment.user.id }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          CHANNEL_PR: ${{ vars.CHANNEL_PR }}
+          OPERATOR_BOT_USER_ID: ${{ vars.OPERATOR_BOT_USER_ID }}
+          OPERATOR_STOP: ${{ vars.OPERATOR_STOP }}
+          FLEET_LIVE: ${{ needs.act.outputs.live }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PYTHONPATH: ${{ runner.temp }}/fleet-deps
+          AWS_FLEET_ROLE_ARN: ${{ secrets.AWS_FLEET_ROLE_ARN }}
+          STATE_BUCKET: ${{ secrets.STATE_BUCKET }}
+          EVIDENCE_BUCKET: ${{ secrets.EVIDENCE_BUCKET }}
+          CONTROL_BUCKET: ${{ secrets.CONTROL_BUCKET }}
+          OWNER_ADMIN_CIDR: ${{ secrets.OWNER_ADMIN_CIDR }}
+          FLEET_LINODE_ACCOUNT_EUUID: ${{ secrets.FLEET_LINODE_ACCOUNT_EUUID }}
+          FLEET_SSH_PUBLIC_KEY: ${{ vars.FLEET_SSH_PUBLIC_KEY }}
+          OWNER_SSH_PUBLIC_KEY: ${{ vars.OWNER_SSH_PUBLIC_KEY }}
+        run: python3 infra/fleet/fleet.py pia-fence
+
+  # The PIA login to the fleet's Linodes, in its own environment and role
+  # (LodestarPiaDelivery: two named secrets and fleet.json). Its own gates, the
+  # stop variable included; targets and pins only from fleet.json.
+  deliver-pia:
+    needs: [gate, act, pia-fence]
+    if: >-
+      github.event_name == 'issue_comment' && github.event.action == 'created'
+      && github.event.issue.pull_request
+      && github.ref == 'refs/heads/main' && github.run_attempt == 1
+      && needs.pia-fence.result == 'success' && vars.OPERATOR_STOP != 'true'
+      && vars.CHANNEL_PR != '' && format('{0}', github.event.issue.number) == vars.CHANNEL_PR
+      && vars.OPERATOR_BOT_USER_ID != '' && format('{0}', github.event.comment.user.id) == vars.OPERATOR_BOT_USER_ID
+    environment: pia-delivery
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write # assumes LodestarPiaDelivery by OIDC, in-process
+      actions: read # the stale job-rule sweep reads run status (plan §3)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # the pinned commit must be an ancestor of main
+      - if: needs.act.outputs.live == 'true'
+        run: python3 -m pip install --quiet --no-deps --require-hashes --target "$RUNNER_TEMP/fleet-deps" -r infra/fleet/requirements-live.txt
+      - env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          IS_PR: ${{ github.event.issue.pull_request != null }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          AUTHOR_ID: ${{ github.event.comment.user.id }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          CHANNEL_PR: ${{ vars.CHANNEL_PR }}
+          OPERATOR_BOT_USER_ID: ${{ vars.OPERATOR_BOT_USER_ID }}
+          OPERATOR_STOP: ${{ vars.OPERATOR_STOP }}
+          FLEET_LIVE: ${{ needs.act.outputs.live }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PYTHONPATH: ${{ runner.temp }}/fleet-deps
+          AWS_PIA_ROLE_ARN: ${{ secrets.AWS_PIA_ROLE_ARN }}
+          STATE_BUCKET: ${{ secrets.STATE_BUCKET }}
+          STATE_BUCKET_OWNER: ${{ secrets.STATE_BUCKET_OWNER }}
+          FLEET_SSH_KEY: ${{ secrets.FLEET_SSH_KEY }}
+          PIA_SERVERS: ${{ secrets.PIA_SERVERS }}
+          LOCK_EXPIRES_AT: ${{ needs.pia-fence.outputs.lock_expires }}
+        run: python3 infra/pia-bridge/deliver.py deliver
+
+  # Always after deliver-pia, whatever it did (failed, skipped or cancelled).
+  # No repository variables here: one changed mid-chain (a stop) must not
+  # strand the lock. The code's conditional delete of this run's own ID is
+  # what keeps it safe.
+  pia-release:
+    needs: [act, pia-fence, deliver-pia]
+    if: >-
+      github.event_name == 'issue_comment' && always()
+      && github.ref == 'refs/heads/main' && github.run_attempt == 1
+      && needs.act.outputs.deliver == 'true'
+    environment: cloud-fleet
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write # live mode assumes LodestarFleetOperator by OIDC, in-process
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - if: needs.act.outputs.live == 'true'
+        run: python3 -m pip install --quiet --no-deps --require-hashes --target "$RUNNER_TEMP/fleet-deps" -r infra/fleet/requirements-live.txt
+      - env:
+          CHANNEL_PR: ${{ vars.CHANNEL_PR }}
+          FLEET_LIVE: ${{ needs.act.outputs.live }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PYTHONPATH: ${{ runner.temp }}/fleet-deps
+          AWS_FLEET_ROLE_ARN: ${{ secrets.AWS_FLEET_ROLE_ARN }}
+          STATE_BUCKET: ${{ secrets.STATE_BUCKET }}
+          EVIDENCE_BUCKET: ${{ secrets.EVIDENCE_BUCKET }}
+          CONTROL_BUCKET: ${{ secrets.CONTROL_BUCKET }}
+          OWNER_ADMIN_CIDR: ${{ secrets.OWNER_ADMIN_CIDR }}
+          FLEET_LINODE_ACCOUNT_EUUID: ${{ secrets.FLEET_LINODE_ACCOUNT_EUUID }}
+          FLEET_SSH_PUBLIC_KEY: ${{ vars.FLEET_SSH_PUBLIC_KEY }}
+          OWNER_SSH_PUBLIC_KEY: ${{ vars.OWNER_SSH_PUBLIC_KEY }}
+        run: python3 infra/fleet/fleet.py pia-release
 
   # The hourly reaper. Exempt from OPERATOR_STOP; nothing but disabling this
   # workflow stops it (plan §3).

@@ -197,12 +197,17 @@ class Flows(unittest.TestCase):
 
     def test_busy_and_reaping(self):
         store = MemoryStore()
+        b = DryRunBackend(fleet=new_fleet(L, "screen", self.c["head"], T0))
         FleetLock(store, 90, Clock()).acquire("7-1")
-        _, out = self.run_cli("act", event_env("/fleet status"), store=store)
-        self.assertIn("busy, retry", out)
+        _, out = self.run_cli("act", event_env("/fleet status"), backend=b, store=store)
+        self.assertEqual(out.strip(), "busy, retry")  # nothing ran after it
+        self.assertEqual(json.loads(store.objects[LOCK_KEY][0])["run_id"], "7-1")  # and the holder's lock stays
         FleetLock(store, 90, Clock()).preempt("8-1")
-        _, out = self.run_cli("act", event_env("/fleet down"), store=store)
-        self.assertIn("being reaped", out)
+        _, out = self.run_cli("act", event_env("/fleet down"), backend=b, store=store)
+        self.assertEqual(out.strip(), "busy: the fleet is being reaped; retry later")
+        self.assertEqual(b.log, [])
+        self.assertIsNotNone(b.fleet)
+        self.assertEqual(json.loads(store.objects[LOCK_KEY][0])["kind"], "reaping")
 
     def test_overdue_fleet_only_down(self):
         b = DryRunBackend(fleet=new_fleet(L, "screen", self.c["head"], T0 - timedelta(hours=44)))
@@ -256,6 +261,21 @@ class Flows(unittest.TestCase):
         b = DryRunBackend(fleet=new_fleet(L, "screen", self.c["head"], T0))
         _, out = self.run_cli("act", event_env("/fleet run leak-test main"), backend=b, remote="side")
         self.assertIn("not main's head", out)
+
+    def test_dry_run_delivery_chain(self):
+        import tempfile
+        from pathlib import Path
+        outfile = Path(tempfile.mkdtemp()) / "out"
+        b = DryRunBackend()
+        rc, out = self.run_cli("act", event_env("/fleet up screen", GITHUB_OUTPUT=str(outfile)), backend=b)
+        self.assertEqual(rc, 0)
+        self.assertEqual(outfile.read_text(), "deliver=true\nlive=false\n")
+        rc, out = self.run_cli("act", event_env("/fleet run renew-vpn main"), backend=b)
+        self.assertIn("run renew-vpn main: would deliver the PIA login again", out)
+        for sub, line in (("pia-fence", "pia-fence: would check that this run still holds the fleet lock"),
+                          ("pia-release", "pia-release: would release this run's fleet lock")):
+            rc, out = self.run_cli(sub, event_env("/fleet up screen"))
+            self.assertEqual((rc, out.strip()), (0, line))
 
     def test_lock_lost_mid_command(self):
         store = MemoryStore()
@@ -355,8 +375,23 @@ class Flows(unittest.TestCase):
         b = DryRunBackend(fleet=new_fleet(L, "screen", self.c["head"], T0 - timedelta(hours=44)))
         _, out = self.run_cli("reap", event_env(), backend=b, store=store, clock=clock)
         self.assertIn("lock busy", out)
+        self.assertTrue(any("reaper: lock busy" in x for x in self.gh.bodies()))  # reaches the channel
         self.assertEqual(b.log, [])
         self.assertEqual(clock() - T0, timedelta(seconds=fleet.REAPER_WAIT_SECONDS))
+
+    def test_a_failing_release_is_reported_beside_the_outcome(self):
+        class NoDelete(MemoryStore):
+            def delete_if_match(self, key, etag):
+                raise RuntimeError("S3 503")
+        for sub, body, who, outcome in (("act", "/fleet status", "act", "status: updated the status comment"),
+                                        ("reap", "", "reaper", "reaper: none")):
+            with self.subTest(sub=sub):
+                b = DryRunBackend(fleet=new_fleet(L, "screen", self.c["head"], T0))
+                rc, out = self.run_cli(sub, event_env(body) if body else event_env(), backend=b, store=NoDelete())
+                self.assertEqual(rc, 0)
+                posted = "\n".join(self.gh.bodies())
+                self.assertIn(f"{who}: couldn't release the fleet lock; it expires on its own; escalate", posted)
+                self.assertIn(outcome, out)
 
     def test_reaper_emergency_preempts(self):
         store = MemoryStore()

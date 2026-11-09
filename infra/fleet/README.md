@@ -4,7 +4,7 @@
 
 | File | What it does |
 |---|---|
-| `fleet.py` | Entry point: `gate`, `refuse`, `act`, `reap`, `dispatch-down` |
+| `fleet.py` | Entry point: `gate`, `refuse`, `act`, `reap`, `dispatch-down`, and `pia-fence` and `pia-release` around `deliver-pia` (OP-2b; `infra/pia-bridge/`) |
 | `command.py` | The strict `/fleet` parser |
 | `gates.py` | Channel PR, `created` only, the bot's numeric ID, `OPERATOR_STOP` (not for `down`) |
 | `reader.py` | The operator's thread reader: unedited comments from allowed author IDs only |

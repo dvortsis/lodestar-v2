@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import re
+import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import timedelta
@@ -414,6 +415,18 @@ class Backend(unittest.TestCase):
                     self.objects[(Bucket, Key)] = json.dumps(new_fleet(L, "screen", "a" * 40, T0)).encode()
                 super().put_object(Bucket, Key, Body, IfNoneMatch)
         b, s3, api, _ = backend(s3=Raced())
+        api.linodes, api.firewalls = {}, {}
+        with self.assertRaises(FleetUnknown):
+            b.read_fleet()
+        self.assertNotIn(("control-b", MISMATCH_KEY), s3.objects)
+
+        class Unreadable(FakeS3):  # the put fails and so does the re-read
+            def put_object(self, Bucket, Key, Body, IfNoneMatch=None):
+                if Key == FLEET_KEY:
+                    self.deny.add((Bucket, Key))
+                    raise S3Error("RequestTimeout")
+                super().put_object(Bucket, Key, Body, IfNoneMatch)
+        b, s3, api, _ = backend(s3=Unreadable())
         api.linodes, api.firewalls = {}, {}
         with self.assertRaises(FleetUnknown):
             b.read_fleet()
@@ -839,6 +852,20 @@ class FailClosed(unittest.TestCase):
         self.assertIs(s3.doc("control-b", MISMATCH_KEY)["mismatch"], False)
         self.assertNotIn(LOCK_KEY, store.objects)
 
+    def test_a_firewall_only_mismatch_sweeps_even_if_the_flag_reread_fails(self):
+        # No fleet recorded, an orphan tagged firewall (no device, no tagged Linode):
+        # the audit's fresh problem drives the sweep even with the flag unreadable.
+        b, s3, api, _ = backend()
+        api.linodes = {"99": api.linodes["99"]}
+        api.firewalls = {"98": api.firewalls["98"]}
+        b.read_fleet()  # first tombstone, flag false
+        api.firewalls["23"] = {"id": 23, "tags": ["lodestar"], "status": "enabled"}
+        api.rules["23"], api.devices["23"] = fw_rules(), []
+        s3.fail_after[("control-b", MISMATCH_KEY)] = 1  # the first read works, the re-read doesn't
+        _, out, store = self.reap(b, Clock(T0))
+        self.assertNotIn("23", api.firewalls)
+        self.assertIn("98", api.firewalls)
+
     def test_unreadable_flag_leaves_no_marker_and_never_sweeps_leftovers(self):
         b, s3, api, _, clock = self.overdue(minutes_past=-120)
         s3.objects[("control-b", MISMATCH_KEY)] = b"junk"
@@ -948,9 +975,9 @@ class LiveFlows(unittest.TestCase):
     def setUpClass(cls):
         cls.repo, cls.c = make_repo()
 
-    def run_cli(self, sub, body, b, store=None, clock=None):
+    def run_cli(self, sub, body, b, store=None, clock=None, **over):
         out, gh, clock = io.StringIO(), FakeGitHub(), clock or Clock()
-        env = event_env(body, FLEET_LIVE="true", **ENV)
+        env = event_env(body, FLEET_LIVE="true", **{**ENV, **over})
         with redirect_stdout(out), redirect_stderr(out), \
                 mock.patch.object(ancestry, "remote_main_head", return_value=self.c["head"]):
             rc = fleet.main([sub], env=env, backend=b, store=store or MemoryStore(), transport=gh,
@@ -974,6 +1001,107 @@ class LiveFlows(unittest.TestCase):
         _, out = self.run_cli("act", "/fleet down", b)
         self.assertIn("down: destroy the fleet", out)
         self.assertIsNone(s3.doc("state-b", FLEET_KEY)["fleet"])
+
+    def test_delivery_chain_keeps_then_releases_the_lock(self):
+        api = self.empty_account()
+        b, s3, _, _ = backend(api=api)
+        store, outfile = MemoryStore(), Path(tempfile.mkdtemp()) / "out"
+        self.addCleanup(lambda: outfile.unlink(missing_ok=True))
+        rc, out = self.run_cli("act", "/fleet up screen", b, store=store, GITHUB_OUTPUT=str(outfile))
+        self.assertEqual(rc, 0)
+        self.assertIn(LOCK_KEY, store.objects)  # kept for deliver-pia
+        self.assertEqual(outfile.read_text(), "deliver=true\nlive=true\n")
+        outfile.write_text("")
+        rc, out = self.run_cli("pia-fence", "/fleet up screen", b, store=store, GITHUB_OUTPUT=str(outfile))
+        self.assertEqual((rc, out.strip()), (0, "pia-fence: this run holds the fleet lock"))
+        self.assertEqual(outfile.read_text(), "lock_expires=" + json.loads(store.objects[LOCK_KEY][0])["expires_at"] + "\n")
+        rc, out = self.run_cli("pia-release", "/fleet up screen", b, store=store)
+        self.assertEqual(rc, 0)
+        self.assertIn("pia-release: released", out)
+        self.assertNotIn(LOCK_KEY, store.objects)
+        # renew-vpn chains the same way; a plain command releases at once.
+        outfile.write_text("")
+        self.run_cli("act", "/fleet run renew-vpn worker", b, store=store, GITHUB_OUTPUT=str(outfile))
+        self.assertIn(LOCK_KEY, store.objects)
+        self.assertEqual(outfile.read_text(), "deliver=true\nlive=true\n")
+        self.run_cli("pia-release", "/fleet run renew-vpn worker", b, store=store)
+        outfile.write_text("")
+        self.run_cli("act", "/fleet status", b, store=store, GITHUB_OUTPUT=str(outfile))
+        self.assertNotIn(LOCK_KEY, store.objects)
+        self.assertEqual(outfile.read_text(), "")
+
+    def test_act_releases_if_it_cant_hand_the_lock_on(self):
+        api = self.empty_account()
+        b, *_ = backend(api=api)
+        store = MemoryStore()
+        rc, out = self.run_cli("act", "/fleet up screen", b, store=store, GITHUB_OUTPUT="/nonexistent/dir/out")
+        self.assertEqual(rc, 1)
+        self.assertIn("the lock couldn't be handed to deliver-pia, so nothing was delivered; use run renew-vpn", out)
+        self.assertNotIn(LOCK_KEY, store.objects)
+
+    def test_a_refused_up_never_keeps_the_lock(self):
+        api = self.empty_account()
+        b, *_ = backend(api=api)
+        b.read_fleet()  # the first tombstone
+        api.linodes["13"] = {"id": 13, "tags": ["lodestar"], "created": "2026-11-08T19:00:00"}  # up refuses
+        store = MemoryStore()
+        _, out = self.run_cli("act", "/fleet up screen", b, store=store)
+        self.assertIn("refused: up screen", out)
+        self.assertNotIn(LOCK_KEY, store.objects)
+
+    def test_pia_fence_fails_closed(self):
+        api = self.empty_account()
+        b, s3, _, _ = backend(api=api)
+        store = MemoryStore()
+        self.run_cli("act", "/fleet up screen", b, store=store)
+        cases = (
+            ("another holder", lambda: FleetLock(store, 90, Clock()).preempt("9-1"),
+             "this run no longer holds the fleet lock; nothing delivered"),
+            ("a mismatch", lambda: b.set_mismatch(["x"]), "the fleet is unreadable, gone, overdue or mismatched"),
+        )
+        for name, mutate, reason in cases:
+            with self.subTest(name):
+                store.objects.clear()
+                FleetLock(store, 90, Clock()).acquire("42-1")
+                b._clear_mismatch()
+                mutate()
+                rc, out = self.run_cli("pia-fence", "/fleet up screen", b, store=store)
+                self.assertEqual(rc, 1)
+                self.assertIn(f"deliver-pia: refused: {reason}", out)
+        for over, body in (({"GITHUB_RUN_ATTEMPT": "2"}, "/fleet up screen"), ({}, "/fleet status"), ({}, "/fleet down")):
+            rc, out = self.run_cli("pia-fence", body, b, store=store, **over)
+            self.assertEqual((rc, out.strip()), (1, "pia-fence: refused"))
+        # A tombstoned fleet (down ran meanwhile): nothing to deliver to.
+        store.objects.clear()
+        FleetLock(store, 90, Clock()).acquire("42-1")
+        b._clear_mismatch()
+        s3.objects[("state-b", FLEET_KEY)] = json.dumps({"version": 1, "fleet": None, "at": "2026-11-08T20:00:00Z"}).encode()
+        rc, out = self.run_cli("pia-fence", "/fleet up screen", b, store=store)
+        self.assertEqual(rc, 1)
+        self.assertIn("deliver-pia: refused: the fleet is unreadable, gone, overdue or mismatched", out)
+
+    def test_pia_release_only_releases_its_own_lock(self):
+        b, *_ = backend()
+        store = MemoryStore()
+        FleetLock(store, 90, Clock()).acquire("42-2")
+        rc, out = self.run_cli("pia-release", "/fleet up screen", b, store=store, GITHUB_RUN_ATTEMPT="2")
+        self.assertEqual((rc, out.strip()), (1, "pia-release: refused"))  # a re-run touches nothing
+        self.assertIn(LOCK_KEY, store.objects)
+        store = MemoryStore()
+        FleetLock(store, 90, Clock()).acquire("9-1")
+        rc, out = self.run_cli("pia-release", "/fleet up screen", b, store=store)
+        self.assertEqual(rc, 0)
+        self.assertIn("not this run's lock any more", out)
+        self.assertEqual(json.loads(store.objects[LOCK_KEY][0])["run_id"], "9-1")
+
+        class NoDelete(MemoryStore):
+            def delete_if_match(self, key, etag):
+                raise RuntimeError("S3 503")
+        store = NoDelete()
+        FleetLock(store, 90, Clock()).acquire("42-1")
+        rc, out = self.run_cli("pia-release", "/fleet up screen", b, store=store)
+        self.assertEqual(rc, 1)
+        self.assertIn("pia-release: couldn't release the fleet lock; it expires on its own; escalate", out)
 
     def test_unreadable_state_allows_only_down(self):
         b, *_ = backend(s3=FakeS3(deny={("state-b", FLEET_KEY)}))

@@ -85,7 +85,8 @@ class FleetStructure(unittest.TestCase):
         base = {"contents": "read", "pull-requests": "write"}
         oidc = dict(base, **{"id-token": "write"})
         want = {"gate": {"contents": "read"}, "refuse": base, "act": oidc, "dispatch-down": oidc,
-                "reaper": dict(oidc, actions="read")}  # only the sweeping job reads run status
+                "reaper": dict(oidc, actions="read"),  # the sweeping jobs alone read run status
+                "pia-fence": oidc, "deliver-pia": dict(oidc, actions="read"), "pia-release": oidc}
         self.assertEqual({n: j.get("permissions") for n, j in self.jobs.items()}, want)
 
     def test_live_only_steps_and_secrets(self):
@@ -94,12 +95,25 @@ class FleetStructure(unittest.TestCase):
                 text = yaml.safe_dump(s)
                 with self.subTest(job=name, step=s.get("uses") or s.get("run", "")[:40]):
                     if s.get("uses", "").startswith("hashicorp/setup-terraform") or s.get("run") == LIVE_INSTALL:
-                        self.assertEqual(s.get("if"), "vars.FLEET_LIVE == 'true'")
+                        # The delivery chain takes its mode from act, so a flip mid-chain can't split it.
+                        want = "needs.act.outputs.live == 'true'" if name in CHAIN else "vars.FLEET_LIVE == 'true'"
+                        self.assertEqual(s.get("if"), want)
+                    live = (s.get("env") or {}).get("FLEET_LIVE")
+                    if live is not None:
+                        want = "${{ needs.act.outputs.live }}" if name in CHAIN else "${{ vars.FLEET_LIVE }}"
+                        self.assertEqual(live, want)
                     if "secrets." in text:
-                        # Secrets only reach the fleet.py step, through env, in cloud-fleet jobs.
-                        self.assertEqual(job.get("environment"), "cloud-fleet")
-                        self.assertTrue(str(s.get("run", "")).startswith("python3 infra/fleet/fleet.py "))
+                        # Secrets reach only the one script step, through env: fleet.py in
+                        # cloud-fleet jobs, deliver.py in pia-delivery.
                         self.assertNotIn("secrets.", str(s.get("run", "")))
+                        names = {k for k, v in (s.get("env") or {}).items() if "secrets." in str(v)}
+                        if job.get("environment") == "pia-delivery":
+                            self.assertEqual(s.get("run"), "python3 infra/pia-bridge/deliver.py deliver")
+                            self.assertEqual(names, PIA_SECRETS)
+                        else:
+                            self.assertEqual(job.get("environment"), "cloud-fleet")
+                            self.assertTrue(str(s.get("run", "")).startswith("python3 infra/fleet/fleet.py "))
+                            self.assertFalse(names & {"AWS_PIA_ROLE_ARN", "PIA_SERVERS", "FLEET_SSH_KEY"})
 
     def test_if_before_environment(self):
         for name, job in self.jobs.items():
@@ -168,6 +182,47 @@ class FleetStructure(unittest.TestCase):
         self.assertEqual(self.jobs["reaper"]["if"],
                          "github.event_name == 'schedule' && github.ref == 'refs/heads/main' && github.run_attempt == 1")
 
+    def test_lock_takers_run_on_disjoint_events(self):
+        # The lock's run ID is <run>-<attempt>, shared by every job of a run (P2 of
+        # #646's review: GITHUB_JOB isn't added, because the delivery chain must
+        # share one ID). So the jobs that take or pre-empt the lock must never run
+        # in the same workflow run, and the chain jobs only follow act.
+        takers = {"act": "issue_comment", "reaper": "schedule", "dispatch-down": "workflow_dispatch"}
+        chain = ("pia-fence", "deliver-pia", "pia-release")
+        lock_jobs = {n for n, j in self.jobs.items() if j.get("environment") in ("cloud-fleet", "pia-delivery")}
+        self.assertEqual(lock_jobs, set(takers) | set(chain))
+        for name, event in takers.items():
+            self.assertTrue(self.jobs[name]["if"].startswith(f"github.event_name == '{event}' "), name)
+        self.assertEqual(len(set(takers.values())), len(takers))
+        for name in chain:
+            self.assertTrue(self.jobs[name]["if"].startswith("github.event_name == 'issue_comment' "), name)
+            self.assertIn("act", self.jobs[name]["needs"])
+            self.assertIn("github.run_attempt == 1", self.jobs[name]["if"])
+
+    def test_delivery_chain(self):
+        fence, deliver, release = (self.jobs[n] for n in ("pia-fence", "deliver-pia", "pia-release"))
+        self.assertIn("needs.act.result == 'success' && needs.act.outputs.deliver == 'true'", fence["if"])
+        self.assertEqual(deliver["environment"], "pia-delivery")
+        self.assertIn("pia-fence", deliver["needs"])
+        for check in ("needs.pia-fence.result == 'success'", "vars.OPERATOR_STOP != 'true'",
+                      "github.event.action == 'created'", "github.ref == 'refs/heads/main'",
+                      "format('{0}', github.event.issue.number) == vars.CHANNEL_PR",
+                      "format('{0}', github.event.comment.user.id) == vars.OPERATOR_BOT_USER_ID"):
+            self.assertIn(check, deliver["if"])  # its own gates, not inherited through needs
+        self.assertIn("github.event.issue.pull_request", fence["if"])
+        self.assertIn("github.event.issue.pull_request", deliver["if"])
+        self.assertEqual(fence["outputs"], {"lock_expires": "${{ steps.fence.outputs.lock_expires }}"})
+        envs = {k: v for st in steps(deliver) for k, v in (st.get("env") or {}).items()}
+        self.assertEqual(envs["LOCK_EXPIRES_AT"], "${{ needs.pia-fence.outputs.lock_expires }}")
+        self.assertNotIn("vars.", release["if"])  # a variable changed mid-chain can't strand the lock
+        self.assertIn("always()", release["if"])  # released whatever deliver-pia did
+        self.assertIn("needs.act.outputs.deliver == 'true'", release["if"])
+        self.assertEqual(set(release["needs"]), {"act", "pia-fence", "deliver-pia"})
+        self.assertEqual(self.jobs["act"]["outputs"], {"deliver": "${{ steps.act.outputs.deliver }}",
+                                                       "live": "${{ steps.act.outputs.live }}"})
+        total = sum(self.jobs[n]["timeout-minutes"] for n in ("act", "pia-fence", "deliver-pia", "pia-release"))
+        self.assertLess(total, 90)  # the lock's chain, queue time aside
+
     def test_act_repeats_the_filter(self):
         cond = self.jobs["act"]["if"]
         for check in ("github.event.action == 'created'", "needs.gate.outputs.allowed == 'true'",
@@ -183,8 +238,10 @@ SECRET_NAMES = [
     "GITHUB_TOKEN", "AWS_FLEET_ROLE_ARN", "AWS_PIA_ROLE_ARN", "AWS_BRIDGE_ROLE_ARN", "FLEET_SSH_KEY",
     "OWNER_ADMIN_CIDR", "STATE_BUCKET", "EVIDENCE_BUCKET", "CONTROL_BUCKET", "PIA_SERVERS",
     "OPERATOR_APP_ID", "OPERATOR_APP_PRIVATE_KEY", "ANTHROPIC_API_KEY", "FLEET_SSH_PUBLIC_KEY",
-    "OWNER_SSH_PUBLIC_KEY", "FLEET_LINODE_ACCOUNT_EUUID", "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+    "OWNER_SSH_PUBLIC_KEY", "FLEET_LINODE_ACCOUNT_EUUID", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "STATE_BUCKET_OWNER",
 ]
+CHAIN = ("pia-fence", "deliver-pia", "pia-release")
+PIA_SECRETS = {"AWS_PIA_ROLE_ARN", "STATE_BUCKET", "STATE_BUCKET_OWNER", "FLEET_SSH_KEY", "PIA_SERVERS"}
 
 
 def marks(n):
@@ -209,6 +266,11 @@ SCENARIOS = {
                                       event_env("/fleet run leak-test main"), event_env("/fleet extend")],
     ("infra/fleet/fleet.py", "reap"): [event_env()],
     ("infra/fleet/fleet.py", "dispatch-down"): [event_env()],
+    ("infra/fleet/fleet.py", "pia-fence"): [event_env("/fleet up screen"), event_env("/fleet run renew-vpn main")],
+    ("infra/fleet/fleet.py", "pia-release"): [event_env("/fleet up screen")],
+    ("infra/pia-bridge/deliver.py", "deliver"): [event_env("/fleet up screen"), event_env("/fleet run renew-vpn worker"),
+                                                 event_env("/fleet run renew-vpn main", OPERATOR_STOP="true"),
+                                                 event_env("/fleet status"), event_env(AUTHOR_ID="1")],
 }
 # Every run: step in a covered workflow is exactly one such invocation, so a
 # script can't slip past the scenarios by being started some other way.
@@ -224,7 +286,8 @@ class PublicLogLeak(unittest.TestCase):
                 for s in steps(job):
                     if "run" not in s:
                         continue
-                    if s["run"] == LIVE_INSTALL and s.get("if") == "vars.FLEET_LIVE == 'true'":
+                    if s["run"] == LIVE_INSTALL and s.get("if") in ("vars.FLEET_LIVE == 'true'",
+                                                                     "needs.act.outputs.live == 'true'"):
                         continue  # the one other allowed step: pip from hash-pinned wheels, live only
                     m = INVOKE.fullmatch(s["run"].strip())
                     with self.subTest(workflow=path.name, job=name, run=s["run"][:60]):
@@ -264,6 +327,18 @@ class PublicLogLeak(unittest.TestCase):
                 self.assertIn("FLEET_LINODE_ACCOUNT_EUUID", r.stdout + r.stderr)
                 for v in values:
                     self.assertNotIn(v, r.stdout + r.stderr)
+
+    def test_deliver_live_without_settings_names_them_only(self):
+        values = marks(len(SECRET_NAMES))
+        secret_env = dict(zip(SECRET_NAMES, values))
+        secret_env.pop("STATE_BUCKET_OWNER")
+        r = subprocess.run([sys.executable, str(ROOT / "infra/pia-bridge/deliver.py"), "deliver"], cwd=self.outside,
+                           capture_output=True, text=True, timeout=60,
+                           env=scrub_env({**event_env("/fleet up screen", FLEET_LIVE="true"), **secret_env}))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("STATE_BUCKET_OWNER", r.stdout + r.stderr)
+        for v in values:
+            self.assertNotIn(v, r.stdout + r.stderr)
 
     def test_marked_fleet_values_never_reach_logs_or_comments(self):
         repo, c = make_repo()
