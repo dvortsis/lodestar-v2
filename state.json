@@ -6590,6 +6590,11 @@
       "id": "pk-win-upd-3-owns-update-helper",
       "added": "2026-11-09T00:36Z",
       "what": "next runner PR: add crates/lodestar/src/cli/update_helper.rs to PK-win-upd-3 owns (exit-code shared edit approved 00:36Z); also note start type disabled during rollback, rollback.json marker, halt leaves service stopped (runner agreed; owner \u00a72.19 flag at merge)"
+    },
+    {
+      "id": "source-live-reload-candidate",
+      "added": "2026-11-09T00:38Z",
+      "what": "candidate slice (not queued): reload one source live after a companion hand-over instead of restart_required (CMP-5g-1 chose (a) restart_required; pipeline/control.rs). CMP-5g-1 approved shared edits: companions lib.rs pub mod watch, lodestar main.rs mod companion_wiring, services.rs gate wiring; installed-companion-unhealthy window until CMP-5g-3 (owner \u00a72.19 FYI at merge)"
     }
   ],
   "main_health": [
