@@ -129,16 +129,28 @@ pub enum Idle {
     /// The SCM asked it to stop (or shut down).
     Stopped,
     /// The marker went: the rollback finished, or an administrator
-    /// removed it. The process ends cleanly so a fresh one starts.
+    /// removed it. The service carries on into its normal start in the
+    /// same process (a fresh config load and the same checks), so one the
+    /// MSI started while the marker existed is running afterwards.
     MarkerGone,
+}
+
+impl Idle {
+    /// The exit code to end with, or `None` to carry on into the start.
+    pub fn exit_code(&self) -> Option<u32> {
+        match self {
+            Idle::Stopped => Some(0),
+            Idle::MarkerGone => None,
+        }
+    }
 }
 
 /// How often the idle service looks for the marker and a stop.
 pub const IDLE_POLL: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// While the rollback marker exists the service stays Running and idle:
-/// it never opens the store and serves nothing, until `stopped()` or the
-/// marker goes. Exiting at once instead would fail an MSI's
+/// it never opens the store and serves nothing, until `stopped()` (exit
+/// 0) or the marker goes (on into the normal start). Exiting at once instead would fail an MSI's
 /// `ServiceControl Start="install" Wait="yes"` (error 1920, exit 1603):
 /// the reinstall of the previous version during a rollback, or an
 /// administrator's manual one, would fail on the marker.
@@ -674,67 +686,80 @@ mod scm {
         // The folder's ACL names the service's own SID; without it, the
         // check refuses the folder.
         let own = acl::service_sid(name).ok();
-        let code = match load(own.as_deref()) {
-            // Refused before anything was read or written in the default
-            // folder, so the reason goes outside it, beside the
-            // installer's log; the exit code (3) says it was refused.
-            Err(why) => {
-                log_refusal(&why);
-                REFUSED
-            }
-            // A rollback holds the store: neither version opens it until
-            // the helper (or an administrator) has finished. The service
-            // stays Running and idle meanwhile, so an MSI that starts it
-            // and waits succeeds, and ends cleanly (0, no failure actions)
-            // once stopped or once the marker goes.
-            Ok((_, data_dir, _)) if super::rollback_refusal(&data_dir).is_some() => {
-                log_refusal(&super::rollback_refusal(&data_dir).unwrap_or_default());
-                let _ =
-                    super::idle_during_rollback(&data_dir, &|| *stop_rx.borrow(), super::IDLE_POLL);
-                0
-            }
-            Ok((config, data_dir, witness_refused)) => {
-                let _ = std::env::set_current_dir(&data_dir);
-                init_logging(
-                    &data_dir,
-                    config.as_ref().map_or("info", |c| c.log.as_str()),
-                );
-                lodestar_log::log_event!(
-                    crate::logging::events::SERVICE_STARTING,
-                    path = lodestar_log::Path::new(&data_dir)
-                );
-                if let Some((w, why)) = &witness_refused {
-                    lodestar_log::log_event!(
-                        crate::logging::events::SERVICE_WITNESS_REFUSED,
-                        path = lodestar_log::Path::new(w),
-                        error = lodestar_log::Error::kind(why)
+        // A loop only for the rollback marker: once it goes, the same
+        // process starts normally, from a fresh load.
+        let code = loop {
+            break match load(own.as_deref()) {
+                // Refused before anything was read or written in the default
+                // folder, so the reason goes outside it, beside the
+                // installer's log; the exit code (3) says it was refused.
+                Err(why) => {
+                    log_refusal(&why);
+                    REFUSED
+                }
+                // A rollback holds the store: neither version opens it until
+                // the helper (or an administrator) has finished. The service
+                // stays Running and idle meanwhile, so an MSI that starts it
+                // and waits succeeds. Stopped, it ends cleanly (0, no failure
+                // actions); once the marker goes, it starts normally.
+                Ok((_, data_dir, _)) if super::rollback_refusal(&data_dir).is_some() => {
+                    log_refusal(&super::rollback_refusal(&data_dir).unwrap_or_default());
+                    let idle = super::idle_during_rollback(
+                        &data_dir,
+                        &|| *stop_rx.borrow(),
+                        super::IDLE_POLL,
                     );
-                }
-                match config
-                    .map_err(BoxError::from)
-                    .and_then(|c| serve(&c, stop_rx))
-                {
-                    Ok(Ended::Stopped) => {
-                        lodestar_log::log_event!(crate::logging::events::SERVICE_STOPPED);
-                        0
-                    }
-                    Ok(Ended::Restart) => {
-                        lodestar_log::log_event!(
-                            crate::logging::events::SERVICE_RESTARTING,
-                            code = u64::from(super::scm_code(super::RESTART))
-                        );
-                        super::RESTART
-                    }
-                    // Its message can name a path: the kind only.
-                    Err(_) => {
-                        lodestar_log::log_event!(
-                            crate::logging::events::SERVICE_FAILED,
-                            error = lodestar_log::Error::kind("serve")
-                        );
-                        1
+                    match idle.exit_code() {
+                        Some(code) => code,
+                        // The marker went: on into the normal start, so a
+                        // service the MSI started while the marker existed is
+                        // running when the rollback's step 5 finds it.
+                        None => continue,
                     }
                 }
-            }
+                Ok((config, data_dir, witness_refused)) => {
+                    let _ = std::env::set_current_dir(&data_dir);
+                    init_logging(
+                        &data_dir,
+                        config.as_ref().map_or("info", |c| c.log.as_str()),
+                    );
+                    lodestar_log::log_event!(
+                        crate::logging::events::SERVICE_STARTING,
+                        path = lodestar_log::Path::new(&data_dir)
+                    );
+                    if let Some((w, why)) = &witness_refused {
+                        lodestar_log::log_event!(
+                            crate::logging::events::SERVICE_WITNESS_REFUSED,
+                            path = lodestar_log::Path::new(w),
+                            error = lodestar_log::Error::kind(why)
+                        );
+                    }
+                    match config
+                        .map_err(BoxError::from)
+                        .and_then(|c| serve(&c, stop_rx))
+                    {
+                        Ok(Ended::Stopped) => {
+                            lodestar_log::log_event!(crate::logging::events::SERVICE_STOPPED);
+                            0
+                        }
+                        Ok(Ended::Restart) => {
+                            lodestar_log::log_event!(
+                                crate::logging::events::SERVICE_RESTARTING,
+                                code = u64::from(super::scm_code(super::RESTART))
+                            );
+                            super::RESTART
+                        }
+                        // Its message can name a path: the kind only.
+                        Err(_) => {
+                            lodestar_log::log_event!(
+                                crate::logging::events::SERVICE_FAILED,
+                                error = lodestar_log::Error::kind("serve")
+                            );
+                            1
+                        }
+                    }
+                }
+            };
         };
         report(
             status,
@@ -1431,6 +1456,16 @@ mod tests {
         (handle, rx)
     }
 
+    /// Waits (10 s at most) for the idle wait to end, so a broken one fails
+    /// the test instead of hanging it at the join.
+    fn finishes(handle: &std::thread::JoinHandle<Idle>, rx: &std::sync::mpsc::Receiver<()>) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !handle.is_finished() && std::time::Instant::now() < deadline {
+            let _ = rx.recv_timeout(std::time::Duration::from_millis(100));
+        }
+        assert!(handle.is_finished(), "the idle wait didn't end");
+    }
+
     fn looks(rx: &std::sync::mpsc::Receiver<()>, n: usize) {
         for _ in 0..n {
             rx.recv_timeout(std::time::Duration::from_secs(10))
@@ -1450,11 +1485,14 @@ mod tests {
         looks(&rx, 3);
         assert!(!handle.is_finished());
         stop.store(true, std::sync::atomic::Ordering::SeqCst);
-        assert_eq!(handle.join().unwrap(), Idle::Stopped);
+        finishes(&handle, &rx);
+        let idle = handle.join().unwrap();
+        assert_eq!(idle, Idle::Stopped);
+        assert_eq!(idle.exit_code(), Some(0));
         assert!(!data.path().join("lodestar.db").exists());
     }
 
-    /// The marker removed: the idle wait ends, so the process exits 0.
+    /// The marker removed: the idle wait ends, and the service goes on.
     #[test]
     fn the_idle_service_ends_once_the_marker_goes() {
         let data = tempfile::tempdir().unwrap();
@@ -1465,12 +1503,11 @@ mod tests {
         let (handle, rx) = idle_in_thread(data.path(), stop);
         looks(&rx, 2);
         std::fs::remove_file(&marker).unwrap();
-        // Keep draining looks until it ends.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !handle.is_finished() && std::time::Instant::now() < deadline {
-            let _ = rx.recv_timeout(std::time::Duration::from_millis(100));
-        }
-        assert_eq!(handle.join().unwrap(), Idle::MarkerGone);
+        finishes(&handle, &rx);
+        let idle = handle.join().unwrap();
+        assert_eq!(idle, Idle::MarkerGone);
+        // Not an exit: the caller carries on into the normal start.
+        assert_eq!(idle.exit_code(), None);
         assert!(!data.path().join("lodestar.db").exists());
     }
 

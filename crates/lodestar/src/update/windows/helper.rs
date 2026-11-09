@@ -1234,6 +1234,12 @@ mod tests {
         /// The rollback marker, to record whether it exists at each start.
         watch_marker: Option<PathBuf>,
         marker_at_start: Mutex<Vec<bool>>,
+        /// The service's state, as the SCM would see it: msiexec starts it
+        /// when `msi_starts` (the MSI's StartServices, the process then
+        /// idling on the marker and going on once it's gone); a start of a
+        /// running service changes nothing.
+        msi_starts: bool,
+        running: Mutex<bool>,
         /// Called at a test hook (`copied`): (hook name, action).
         at_hook: Option<(&'static str, Hook)>,
         /// A source to overwrite once it's copied: (name, path, bytes).
@@ -1277,6 +1283,7 @@ mod tests {
             if self.stop_fails {
                 Err(io::Error::other("no"))
             } else {
+                *self.running.lock().unwrap() = false;
                 Ok(())
             }
         }
@@ -1284,6 +1291,7 @@ mod tests {
             if let Some(m) = &self.watch_marker {
                 self.marker_at_start.lock().unwrap().push(m.exists());
             }
+            *self.running.lock().unwrap() = true;
             self.note("start");
         }
         fn msiexec(&self, args: &[OsString]) -> io::Result<i32> {
@@ -1302,6 +1310,9 @@ mod tests {
                 }
             }
             *self.ran.lock().unwrap() = Some((args.to_vec(), msi));
+            if self.msi_starts {
+                *self.running.lock().unwrap() = true;
+            }
             if let Some(kind) = self.msi_error {
                 return Err(io::Error::new(kind, "msiexec didn't finish"));
             }
@@ -1312,6 +1323,10 @@ mod tests {
         fn healthy(&self) -> bool {
             let mut n = self.health_looks.lock().unwrap();
             *n += 1;
+            // A service that isn't running is never healthy, when tracked.
+            if self.msi_starts && !*self.running.lock().unwrap() {
+                return false;
+            }
             !(self.unhealthy && *n == 1)
         }
         fn set_start(&self, start: Start) -> io::Result<()> {
@@ -2023,6 +2038,30 @@ mod tests {
         assert!(!s.previous().exists());
         assert!(!s.dir.join(rollback::JOURNAL).exists());
         assert_eq!(env.answer().outcome, "rolled_back");
+    }
+
+    /// The MSI starts the service itself (StartServices), so the old
+    /// service may already be running, idle on the marker, when step 5
+    /// starts it: after a rollback whose reinstall ends 0, it runs and is
+    /// healthy (the idle process goes on once the marker goes).
+    #[test]
+    fn a_rollback_leaves_the_service_running_when_the_msi_started_it() {
+        let env = Env::new("0.6.0");
+        with_previous(&env, OLD_MSI);
+        env.offer("0.7.0");
+        let fake = Fake {
+            msi_starts: true,
+            ..failing(&env)
+        };
+        assert_eq!(
+            env.run(&fake).unwrap(),
+            Outcome::RolledBack {
+                failed: "0.7.0".into(),
+                to: "0.6.0".into(),
+                healthy: true
+            }
+        );
+        assert!(*fake.running.lock().unwrap(), "{:?}", fake.calls());
     }
 
     /// A crash at any call of the rollback, a step's hooks included
