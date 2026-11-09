@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-09T01:05Z",
+  "updated_at": "2026-11-09T01:45Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6615,6 +6615,11 @@
       "id": "pk-win-upd-3-b1-b2",
       "added": "2026-11-09T01:10Z",
       "what": "next runner PR: PK-win-upd-3 owns add crates/lodestar/src/windows/service.rs (B2: serve checks rollback marker). B1 approved option (a): helper copies itself into SYSTEM-only staging (random name, ACL+reparse check, read-only share handle, SHA-256 of own image) and runs msiexec from the copy; never falls back to Program Files. Owner \u00a72.19 flag at merge: Q13 implementation refinement; marker stays at <data>\\bin\\rollback.json."
+    },
+    {
+      "id": "x-wk-busy-metrics-merged",
+      "added": "2026-11-09T01:45Z",
+      "what": "#642 merged (e3b35b8e). Owner \u00a72.19 flag: causes held_back|check_failed|key_unknown instead of runner's queue_full|store_check|unknown_read (more accurate). OP-2 README module table rides OP-2 fix round or OP-2b."
     }
   ],
   "main_health": [
@@ -7340,22 +7345,22 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T01:05Z",
+    "updated": "2026-11-09T01:45Z",
     "items": [
       {
         "slot": 1,
         "slice": "CMP-5g-1",
-        "role": "build",
+        "role": "review",
         "agent": "claude",
-        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: building CMP-5g-1 (runner 00:38Z: restart_required after hand-over; shared edits confirmed, no pub mod guided); then -2, -3",
+        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: #645 CMP-5g-1 (d0007b0a): security CHANGES (committed test secrets.key, rollback LOW) relayed; Opus review running",
         "since": "2026-11-09T00:20Z"
       },
       {
         "slot": 2,
         "slice": "OP-2",
-        "role": "build",
+        "role": "review",
         "agent": "claude",
-        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #641 OP-2a merged (ca4cd0a9); building OP-2 (brief briefs/OP-2.md)",
+        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #646 OP-2 (c9fe4884, ~2,090 lines, one PR): Opus + security review running",
         "since": "2026-11-09T01:05Z"
       },
       {
@@ -7368,11 +7373,11 @@
       },
       {
         "slot": 4,
-        "slice": "X-wk-busy-metrics",
-        "role": "review",
+        "slice": "X-lease-report-atomic",
+        "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #642 X-wk-busy-metrics (1cdb74ad) in fresh Opus review; then X-lease-report-atomic",
-        "since": "2026-11-08T23:13Z"
+        "doing": "session_01MMjhnAgARNjXHd2povCJ2f: #642 X-wk-busy-metrics merged (e3b35b8e); building X-lease-report-atomic",
+        "since": "2026-11-09T01:45Z"
       },
       {
         "slot": 5,
