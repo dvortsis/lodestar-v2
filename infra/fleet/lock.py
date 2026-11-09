@@ -152,7 +152,7 @@ class FleetLock:
             return ACQUIRED
         cur = self.store.get(LOCK_KEY)
         if cur is None:  # released between the two calls; one more try
-            return ACQUIRED if self.store.put_if_absent(LOCK_KEY, body) else BUSY
+            return ACQUIRED if self.store.put_if_absent(LOCK_KEY, body) or self._ours(run_id) else BUSY
         holder = _decode(cur[0])
         if holder is None:  # unreadable: fail closed; the reaper can pre-empt it
             return BUSY
@@ -162,7 +162,16 @@ class FleetLock:
                 # 412): it's ours, so don't strand it for the lease.
                 return ACQUIRED
             return REAPING if holder.kind == "reaping" else BUSY
-        return ACQUIRED if self.store.put_if_match(LOCK_KEY, body, cur[1]) else BUSY
+        return ACQUIRED if self.store.put_if_match(LOCK_KEY, body, cur[1]) or self._ours(run_id) else BUSY
+
+    def _ours(self, run_id: str) -> bool:
+        """After a conditional put that answered no: read once more. A live
+        `run` holder with our ID means the put landed and only its answer was
+        lost, so the lock is ours; anything else (or a failed read) isn't."""
+        cur = self.store.get(LOCK_KEY)
+        holder = _decode(cur[0]) if cur else None
+        return holder is not None and holder.kind == "run" and holder.run_id == run_id \
+            and holder.expires_at > self.clock()
 
     def holds(self, run_id: str) -> bool:
         """This run holds the lock and its own lease hasn't expired."""

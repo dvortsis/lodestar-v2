@@ -501,9 +501,11 @@ def aws_config():  # pragma: no cover - live only
     return Config(**AWS_CALL)
 
 
-def oidc_session(env: dict, run_id: str):  # pragma: no cover - live only
-    """Assume LodestarFleetOperator with this job's GitHub OIDC token, in-process.
-    No third-party action, and the credentials never reach GITHUB_ENV or a log."""
+def oidc_session(env: dict, run_id: str, role_env: str = "AWS_FLEET_ROLE_ARN"):  # pragma: no cover - live only
+    """Assume the role named by env[role_env] (LodestarFleetOperator, or
+    LodestarPiaDelivery for deliver-pia) with this job's GitHub OIDC token,
+    in-process. No third-party action, and the credentials never reach
+    GITHUB_ENV or a log."""
     import urllib.request
 
     import boto3  # noqa: PLC0415
@@ -515,10 +517,10 @@ def oidc_session(env: dict, run_id: str):  # pragma: no cover - live only
         with urllib.request.urlopen(req, timeout=30) as r:
             jwt = json.loads(r.read())["value"]
         creds = boto3.client("sts", region_name=REGION, config=cfg).assume_role_with_web_identity(
-            RoleArn=env["AWS_FLEET_ROLE_ARN"], RoleSessionName=f"fleet-{run_id}", WebIdentityToken=jwt,
+            RoleArn=env[role_env], RoleSessionName=f"fleet-{run_id}", WebIdentityToken=jwt,
             DurationSeconds=3600)["Credentials"]
     except Exception:
-        raise SystemExit("fleet: couldn't assume the fleet role") from None
+        raise SystemExit("fleet: couldn't assume the role") from None
     keys = {"aws_access_key_id": creds["AccessKeyId"], "aws_secret_access_key": creds["SecretAccessKey"],
             "aws_session_token": creds["SessionToken"]}
     return boto3.Session(region_name=REGION, **keys), keys

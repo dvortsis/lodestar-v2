@@ -31,6 +31,41 @@ class Lock(unittest.TestCase):
         self.lock.preempt("1-1")
         self.assertEqual(self.lock.acquire("1-1"), REAPING)  # a reaping marker never counts as ours
 
+    def test_a_lost_answer_on_a_conditional_put_is_ours(self):
+        class LostAnswer(MemoryStore):  # the write lands, the answer is lost
+            def put_if_match(self, key, body, etag):
+                super().put_if_match(key, body, etag)
+                return False
+
+            def put_if_absent(self, key, body):
+                if self.calls.count("put_if_absent") == 0:
+                    self.calls.append("put_if_absent")
+                    return False  # the first try sees the old holder
+                super().put_if_absent(key, body)
+                return False
+        store = LostAnswer()
+        lock = FleetLock(store, 90, self.clock)
+        # The takeover path: an expired holder replaced by put_if_match.
+        store.objects[LOCK_KEY] = (lock._body("run", "1-1"), '"0"')
+        self.clock.sleep(91 * 60)
+        self.assertEqual(lock.acquire("2-1"), ACQUIRED)
+        self.assertEqual(json.loads(store.objects[LOCK_KEY][0])["run_id"], "2-1")
+        # The released-between-calls path: the second put_if_absent lands silently.
+        store2 = LostAnswer()
+        lock2 = FleetLock(store2, 90, self.clock)
+        self.assertEqual(lock2.acquire("3-1"), ACQUIRED)
+        self.assertTrue(lock2.holds("3-1"))
+
+    def test_an_expired_own_holder_is_renewed_through_put_if_match(self):
+        self.lock.acquire("1-1")
+        first = self.holder()["expires_at"]
+        self.clock.sleep(91 * 60)
+        calls = len(self.store.calls)
+        self.assertEqual(self.lock.acquire("1-1"), ACQUIRED)
+        self.assertIn("put_if_match", self.store.calls[calls:])  # a fresh lease, not the stale one
+        self.assertNotEqual(self.holder()["expires_at"], first)
+        self.assertTrue(self.lock.holds("1-1"))
+
     def test_expired_lock_is_taken_over_conditionally(self):
         self.lock.acquire("1-1")
         self.clock.sleep(89 * 60)
