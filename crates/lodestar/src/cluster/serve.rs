@@ -1460,6 +1460,8 @@ struct Totals {
     skew_flags: u64,
     pki_errors: u64,
     check_failures: u64,
+    busy_check_failed: u64,
+    busy_unknown: u64,
 }
 
 impl Totals {
@@ -1480,6 +1482,8 @@ impl Totals {
             skew_flags: s.skew_flags,
             pki_errors: s.pki_errors,
             check_failures: s.check_failures,
+            busy_check_failed: s.busy_check_failed,
+            busy_unknown: s.busy_unknown,
         }
     }
 
@@ -1500,6 +1504,8 @@ impl Totals {
             skew_flags: self.skew_flags + o.skew_flags,
             pki_errors: self.pki_errors + o.pki_errors,
             check_failures: self.check_failures + o.check_failures,
+            busy_check_failed: self.busy_check_failed + o.busy_check_failed,
+            busy_unknown: self.busy_unknown + o.busy_unknown,
         }
     }
 }
@@ -1878,6 +1884,7 @@ impl ClusterHandle {
                 n,
             );
         }
+        claims_busy(&mut o, &totals);
         for (name, help, n) in [
             (
                 "cluster_join_requests_total",
@@ -2015,6 +2022,28 @@ impl ClusterHandle {
         ] {
             o.one(name, "counter", help, n.load(Ordering::Relaxed));
         }
+    }
+}
+
+/// Claimed keys denied as busy, by cause (X-wk-busy-metrics): the
+/// coordinator's side of the workers' busy retry. A fixed set of three
+/// causes; no key, worker or free-form label.
+fn claims_busy(o: &mut Out<'_>, totals: &Totals) {
+    o.family(
+        "cluster_claims_busy_total",
+        "counter",
+        "Claimed keys denied as busy (claim again later), by cause.",
+    );
+    for (cause, n) in [
+        ("held_back", totals.busy),
+        ("check_failed", totals.busy_check_failed),
+        ("key_unknown", totals.busy_unknown),
+    ] {
+        o.value(
+            "cluster_claims_busy_total",
+            &format!("cause=\"{cause}\""),
+            n,
+        );
     }
 }
 
@@ -2587,7 +2616,7 @@ mod tests {
             .filter_map(|l| l.strip_prefix("# TYPE lodestar_"))
             .map(|l| l.split(' ').next().unwrap())
             .collect();
-        assert_eq!(families.len(), 33, "{text}");
+        assert_eq!(families.len(), 34, "{text}");
         for family in &families {
             assert!(
                 doc.lines().any(|l| l.starts_with(&format!("| `{family}"))),
@@ -2606,6 +2635,50 @@ mod tests {
             );
         }
         cluster.shutdown().await;
+    }
+
+    /// X-wk-busy-metrics: the three causes render with their own values,
+    /// summed over the port's openings like every cluster counter.
+    #[test]
+    fn claims_busy_renders_each_cause() {
+        let first = Totals {
+            busy: 3,
+            busy_check_failed: 5,
+            busy_unknown: 7,
+            ..Totals::default()
+        };
+        let again = Totals {
+            busy: 1,
+            busy_check_failed: 1,
+            busy_unknown: 1,
+            ..Totals::default()
+        };
+        let mut text = String::new();
+        claims_busy(&mut Out(&mut text), &first.plus(again));
+        assert!(text.contains("# TYPE lodestar_cluster_claims_busy_total counter"));
+        for (cause, n) in [("held_back", 4), ("check_failed", 6), ("key_unknown", 8)] {
+            let name = format!("lodestar_cluster_claims_busy_total{{cause=\"{cause}\"}}");
+            assert_eq!(series(&text, &name), n, "{text}");
+        }
+        assert_eq!(text.lines().filter(|l| !l.starts_with('#')).count(), 3);
+    }
+
+    /// #642's review: each cause is read from its own snapshot field, so
+    /// two swapped fields fail here.
+    #[test]
+    fn claims_busy_reads_each_cause_from_the_snapshot() {
+        let snapshot = lodestar_cluster::FleetSnapshot {
+            busy: 2,
+            busy_check_failed: 3,
+            busy_unknown: 5,
+            ..Default::default()
+        };
+        let mut text = String::new();
+        claims_busy(&mut Out(&mut text), &Totals::of(&snapshot));
+        for (cause, n) in [("held_back", 2), ("check_failed", 3), ("key_unknown", 5)] {
+            let name = format!("lodestar_cluster_claims_busy_total{{cause=\"{cause}\"}}");
+            assert_eq!(series(&text, &name), n, "{text}");
+        }
     }
 
     #[test]
