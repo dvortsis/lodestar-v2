@@ -68,11 +68,12 @@ ROLES = {
     "LodestarFleetOperator": (sub("cloud-fleet", "fleet.yml"), [
         ("Allow", (SECRET,), ("ref:AkamaiFleetToken",), NO_COND),
         ("Allow", (GET, PUT), ("s3:StateBucket/terraform/lodestar.tfstate", "s3:StateBucket/terraform/lodestar.tfstate.tflock",
-                               "s3:StateBucket/fleet/fleet.json"), NO_COND),
+                               "s3:StateBucket/fleet/fleet.json", "s3:StateBucket/fleet/spend-ledger.json"), NO_COND),
         ("Allow", (DEL,), ("s3:StateBucket/terraform/lodestar.tfstate.tflock",), NO_COND),
         ("Allow", (LIST,), ("s3:StateBucket",), NO_COND),
         ("Allow", (GET, PUT), ("s3:EvidenceBucket/fleet/*",), NO_COND),
         ("Allow", (DEL, GET, PUT), ("s3:ControlBucket/locks/fleet.json",), NO_COND),
+        ("Allow", (GET, PUT), ("s3:ControlBucket/locks/fleet-mismatch.json",), NO_COND),
         ("Allow", (LIST,), ("s3:ControlBucket",), cond({"StringEquals": {"s3:prefix": ["locks/fleet.json"]}})),
     ]),
     "LodestarOperatorBridge": ([sub("cloud-operator", w) for w in ("operator-wake.yml", "operator-apply.yml", "operator-injection.yml")], [
@@ -177,8 +178,9 @@ def audit(templates: dict) -> list[str]:
                     problems.append(f"{name}: trust differs")
                 pols = p.get("Policies", [])
                 if len(pols) != 1 or set(pols[0]) != {"PolicyName", "PolicyDocument"} \
-                        or set(pols[0]["PolicyDocument"]) != {"Version", "Statement"}:
-                    problems.append(f"{name}: not exactly one inline policy")
+                        or set(pols[0]["PolicyDocument"]) != {"Version", "Statement"} \
+                        or pols[0]["PolicyDocument"]["Version"] != "2012-10-17":
+                    problems.append(f"{name}: not exactly one inline policy with Version 2012-10-17")
                 stmts = [s for pol in pols for s in pol.get("PolicyDocument", {}).get("Statement", [])]
                 if [statement_shape(s) for s in stmts] != want:
                     problems.append(f"{name}: statements differ from the allowlist")
@@ -254,6 +256,10 @@ MUTATIONS = {
     "a wildcard in an Fn::Join": add("LodestarOperatorBridge", {"Effect": "Allow", "Action": "s3:GetObject",
         "Resource": {"Fn::Join": ["", ["arn:aws:s3:::", {"Ref": "StateBucket"}, "/*"]]}}),
     "a longer session": lambda t: role(t, "LodestarFleetOperator").__setitem__("MaxSessionDuration", 43200),
+    "an old policy language version": lambda t: role(t, "LodestarOperatorBridge")["Policies"][0]["PolicyDocument"].__setitem__(
+        "Version", "2008-10-17"),
+    "a wider key than the ledger": add("LodestarFleetOperator", {"Effect": "Allow", "Action": "s3:PutObject",
+        "Resource": {"Fn::Sub": ["arn:${AWS::Partition}:s3:::${B}/fleet/spend-*", {"B": {"Ref": "StateBucket"}}]}}),
 }
 
 

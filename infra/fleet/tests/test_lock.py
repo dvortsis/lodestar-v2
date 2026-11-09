@@ -22,6 +22,15 @@ class Lock(unittest.TestCase):
         self.assertTrue(self.lock.release("1-1"))
         self.assertEqual(self.lock.acquire("2-1"), ACQUIRED)
 
+    def test_own_lost_put_is_ours(self):
+        # The first put landed but its response was lost; the retry sees our own holder.
+        self.assertEqual(self.lock.acquire("1-1"), ACQUIRED)
+        self.assertEqual(self.lock.acquire("1-1"), ACQUIRED)
+        self.assertTrue(self.lock.holds("1-1"))
+        self.assertEqual(self.lock.acquire("1-2"), BUSY)  # another attempt of the run isn't us
+        self.lock.preempt("1-1")
+        self.assertEqual(self.lock.acquire("1-1"), REAPING)  # a reaping marker never counts as ours
+
     def test_expired_lock_is_taken_over_conditionally(self):
         self.lock.acquire("1-1")
         self.clock.sleep(89 * 60)

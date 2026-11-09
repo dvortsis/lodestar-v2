@@ -1,8 +1,14 @@
 """fleet.json (plan §3 "One commit per fleet") and the dry-run backend.
 
 fleet.json lives in the state bucket beside the Terraform state. It is never
-written to or read back from a comment. Addresses, fingerprints and firewall
-IDs are slots that live mode (OP-2) fills; nothing here prints them.
+written to or read back from a comment. Addresses, host keys, fingerprints,
+firewall IDs and admin /32s are slots that live mode (OP-2) fills; nothing here
+prints them.
+
+fleet.json is never deleted (the runner, 2026-11-08): once `down` has emptied
+the inventory it becomes a tombstone, `{"version": 1, "fleet": null, ...}`.
+"No fleet" is read only from a readable tombstone; any read error raises
+FleetUnknown, which means a fleet may exist.
 """
 
 from __future__ import annotations
@@ -15,7 +21,25 @@ from command import HEX40
 from timefmt import fmt, parse_ts
 
 FLEET_KEY = "fleet/fleet.json"
-SLOT_KEYS = ("address", "fingerprint", "firewall_id")
+LEDGER_KEY = "fleet/spend-ledger.json"      # state bucket: {"YYYY-MM": usd}
+MISMATCH_KEY = "locks/fleet-mismatch.json"  # control bucket: a recorded audit mismatch
+SLOT_KEYS = ("address", "host_key", "fingerprint", "firewall_id", "admin_ipv4")
+
+
+class FleetUnknown(RuntimeError):
+    """fleet.json couldn't be read as a fleet or a tombstone: a fleet may exist."""
+
+
+class LedgerUnreadable(RuntimeError):
+    """The monthly spend ledger couldn't be read: `up` refuses (the cap fails closed)."""
+
+
+def tombstone(now: datetime) -> dict:
+    return {"version": 1, "fleet": None, "updated_at": fmt(now)}
+
+
+def is_tombstone(doc) -> bool:
+    return isinstance(doc, dict) and doc.get("version") == 1 and "fleet" in doc and doc["fleet"] is None
 
 
 def new_fleet(limits: Mapping, preset: str, commit: str, now: datetime) -> dict:
@@ -47,7 +71,10 @@ def validate(fleet: Mapping, limits: Mapping) -> None:
     for slot in roles.values():
         if not isinstance(slot, dict) or set(slot) != set(SLOT_KEYS):
             raise ValueError("fleet.json: bad role slot")
-        if any(v is not None and not isinstance(v, str) for v in slot.values()):
+        if any(slot[k] is not None and not isinstance(slot[k], str) for k in SLOT_KEYS if k != "admin_ipv4"):
+            raise ValueError("fleet.json: bad role slot")
+        admin = slot["admin_ipv4"]
+        if admin is not None and (not isinstance(admin, list) or not all(isinstance(a, str) for a in admin)):
             raise ValueError("fleet.json: bad role slot")
 
 
@@ -57,9 +84,12 @@ class DryRunBackend:
 
     fleet: dict | None = None
     linodes: list[dict] = field(default_factory=list)  # {"id": str, "created": iso Z}
+    firewalls: list[dict] = field(default_factory=list)  # {"id": str}
     spend_usd: float = 0.0
     mismatch_flag: bool = False
     log: list[str] = field(default_factory=list)
+
+    audit_problems: list[str] = field(default_factory=list)
 
     def read_fleet(self):
         return self.fleet
@@ -68,9 +98,35 @@ class DryRunBackend:
         self.fleet = fleet
         self.log.append("write_fleet")
 
-    def destroy(self):
+    def create(self, fleet, fence):
+        fence()
+        self.write_fleet(fleet)
+        return fleet
+
+    def destroy(self, fence):
+        fence()
         self.log.append("destroy")
         self.fleet = None
+        self.linodes, self.firewalls = [], []
+        return True
+
+    def finish_down(self, fleet, fence):
+        fence()
+        self.log.append("finish_down")
+        self.mismatch_flag = False
+
+    def audit(self, fence):
+        return list(self.audit_problems)
+
+    def sweep(self, fence):
+        self.log.append("sweep")
+
+    def mismatch_state(self):
+        return "true" if self.mismatch_flag else "false"
+
+    def set_mismatch(self, reasons):
+        self.log.append("set_mismatch")
+        self.mismatch_flag = True
 
     def delete_linodes(self, ids):
         self.log.append(f"delete_linodes:{len(ids)}")
@@ -78,6 +134,9 @@ class DryRunBackend:
 
     def lodestar_linodes(self):
         return list(self.linodes)
+
+    def lodestar_firewalls(self):
+        return list(self.firewalls)
 
     def month_spend_usd(self, now):
         return self.spend_usd

@@ -1,5 +1,6 @@
 #cloud-config
-# The only value embedded from Terraform is the PUBLIC SSH key. No PIA or API credentials.
+# Embedded from Terraform: the PUBLIC SSH keys and, when the control plane pins it,
+# the VM's own SSH host key (OP-2). No PIA or API credentials.
 hostname: lodestar-${role_label}
 manage_etc_hosts: true
 ssh_pwauth: false
@@ -21,7 +22,19 @@ users:
     lock_passwd: true
     sudo: "ALL=(ALL) NOPASSWD:ALL"
     ssh_authorized_keys:
-      - ${ssh_public_key}
+%{ for k in ssh_public_keys ~}
+      - ${k}
+%{ endfor ~}
+%{ if host_key_private != "" ~}
+# The host key the control plane generated, so its fingerprint is pinned before
+# first contact. Other host key types are removed and not regenerated.
+ssh_deletekeys: true
+ssh_genkeytypes: []
+ssh_keys:
+  ed25519_private: |
+    ${indent(4, trimspace(host_key_private))}
+  ed25519_public: ${trimspace(host_key_public)}
+%{ endif ~}
 write_files:
   - path: /etc/ssh/sshd_config.d/99-lodestar.conf
     owner: root:root
