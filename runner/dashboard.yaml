@@ -304,6 +304,7 @@ placement:
   - X-wk15-nits
   - X-wk10d-unknown
   - X-wk-busy-retry
+  - X-wk-busy-metrics
   - X-wk-pause-text
   - X-lease-report-atomic
 - ws: ws-web
@@ -364,6 +365,7 @@ placement:
   - X-natural-strict-parity
   - X-natural-wording
   - X-win-restart-followups
+  - X-event-names-split
   - X-flake-email-bcc
   - X-flake-ops-pause
   - X-flake-query-token-style
@@ -1114,7 +1116,9 @@ roadmap:
     - CMP-4a
     - CMP-4b
     - CMP-5
-    - CMP-5g
+    - CMP-5g-1
+    - CMP-5g-2
+    - CMP-5g-3
     - CMP-6
     - CMP-7
     - CMP-8a
