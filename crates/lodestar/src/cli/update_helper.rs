@@ -5,6 +5,8 @@
 //!
 //! - It reads no config and no `LODESTAR_*` variable: `--config` is
 //!   refused, and the data folder is always the service's default.
+//! - `--run-msi` is the helper's own copy in staging, which runs one
+//!   `msiexec` while the install folder isn't in use (PK-win-upd-3).
 //! - `--register-task` is the MSI's: it registers the task
 //!   ([`msi::task_xml`]) as the installer's custom action, as SYSTEM.
 //! - Exit status: 0 installed or nothing to do, 1 the install failed,
@@ -26,6 +28,10 @@ pub struct UpdateHelperArgs {
     /// Register the scheduled task (the installer runs this as SYSTEM)
     #[arg(long, hide = true)]
     pub register_task: bool,
+    /// The helper's own copy in staging: run the journal's pending msiexec
+    /// (the helper starts this; it refuses anywhere else)
+    #[arg(long, hide = true, conflicts_with = "register_task")]
+    pub run_msi: bool,
 }
 
 pub fn run(args: &UpdateHelperArgs, config_path: Option<&Path>) -> ExitCode {
@@ -35,6 +41,9 @@ pub fn run(args: &UpdateHelperArgs, config_path: Option<&Path>) -> ExitCode {
     }
     #[cfg(windows)]
     {
+        if args.run_msi {
+            return copy();
+        }
         if args.register_task {
             return match register() {
                 Ok(()) => ExitCode::SUCCESS,
@@ -86,7 +95,9 @@ fn install() -> ExitCode {
         Ok(o) => {
             eprintln!("lodestar update-helper: {}", o.code());
             match o {
-                Outcome::Nothing | Outcome::Installed { .. } => ExitCode::SUCCESS,
+                Outcome::Nothing | Outcome::Installed { .. } | Outcome::HandedOff => {
+                    ExitCode::SUCCESS
+                }
                 Outcome::Failed { .. }
                 | Outcome::InstallerBusy { .. }
                 | Outcome::RolledBack { .. }
@@ -95,6 +106,70 @@ fn install() -> ExitCode {
                 | Outcome::InstallInterrupted { .. } => ExitCode::FAILURE,
             }
         }
+    }
+}
+
+/// The helper's copy (`update-helper --run-msi`): refused unless it's a
+/// `run-<hex>.exe` in `%ProgramFiles%\Lodestar\updates`. It waits for the
+/// program in Program Files to end (so Windows Installer can replace it),
+/// runs the journal's pending `msiexec` and nothing else, then starts the
+/// task again so the helper finishes from its answer.
+#[cfg(windows)]
+fn copy() -> ExitCode {
+    let refused = |why: &dyn std::fmt::Display| {
+        eprintln!("lodestar update-helper: refused: {why}");
+        ExitCode::from(3)
+    };
+    let Ok(exe) = std::env::current_exe() else {
+        return refused(&msi::Refusal::NotInstalled);
+    };
+    let embedded = match lodestar_update::Embedded::builtin() {
+        Ok(e) => e,
+        Err(e) => return refused(&e.code()),
+    };
+    let ctx = match helper::Context::for_copy(
+        &exe,
+        msi::system_program_files().as_deref(),
+        std::env::var("ProgramData").ok(),
+        env!("LODESTAR_BUILD_VERSION"),
+        lodestar_update::Target::from_triple(env!("LODESTAR_BUILD_TARGET")),
+        crate::unix_now().max(0) as u64,
+        embedded,
+    ) {
+        Ok(c) => c,
+        Err(r) => return refused(&r),
+    };
+    // Its own image, read-only, for the whole run.
+    let _held = std::fs::File::open(&exe);
+    let installed = exe
+        .parent()
+        .and_then(Path::parent)
+        .map(|d| d.join("lodestar.exe"));
+    if !installed.is_some_and(|p| wait_free(&p)) {
+        return refused(&"the helper in Program Files is still running");
+    }
+    let code = match helper::run_copy(&ctx, &helper::Windows) {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(r) => refused(&r),
+    };
+    // The next run finishes from the answer (or the journal).
+    let _ = msi::start_task();
+    code
+}
+
+/// Waits (up to [`helper::FREE_WAIT`]) until `exe` is no longer running:
+/// opening a running image for writing fails. Nothing is written.
+#[cfg(windows)]
+fn wait_free(exe: &Path) -> bool {
+    let deadline = std::time::Instant::now() + helper::FREE_WAIT;
+    loop {
+        if std::fs::OpenOptions::new().write(true).open(exe).is_ok() {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
     }
 }
 

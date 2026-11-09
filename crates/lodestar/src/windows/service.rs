@@ -113,6 +113,16 @@ pub fn apply_witness_default(
     }
 }
 
+/// Why the service won't open the store: an update rollback is in
+/// progress (the update helper's marker, `<data>\bin\rollback.json`).
+/// The SCM path refuses as `serve` and every CLI subcommand do (§12.2).
+/// The marker only ever stops a start; nothing runs from it.
+pub fn rollback_refusal(data_dir: &Path) -> Option<String> {
+    crate::cli::util::refuse_during_update_rollback(data_dir)
+        .err()
+        .map(|e| e.to_string())
+}
+
 /// Whether `inner` is `outer` or inside it, compared as [`same_dir`] does.
 pub fn within(inner: &Path, outer: &Path) -> bool {
     let (i, o) = (norm(inner), norm(outer));
@@ -637,6 +647,12 @@ mod scm {
                 log_refusal(&why);
                 REFUSED
             }
+            // A rollback holds the store: neither version opens it until
+            // the helper (or an administrator) has finished.
+            Ok((_, data_dir, _)) if super::rollback_refusal(&data_dir).is_some() => {
+                log_refusal(&super::rollback_refusal(&data_dir).unwrap_or_default());
+                REFUSED
+            }
             Ok((config, data_dir, witness_refused)) => {
                 let _ = std::env::set_current_dir(&data_dir);
                 init_logging(
@@ -737,7 +753,9 @@ mod scm {
     /// Appends a refusal's reason to `%SystemRoot%\Temp\lodestar-service.log`,
     /// where the installer logs too, never through a planted link
     /// ([`super::super::temp_log`]). Only [`acl::secure_dir`]'s refusals
-    /// come here: paths, SIDs, account names and the fix.
+    /// (paths, SIDs, account names and the fix) and the update helper's
+    /// rollback marker come here; the SCM records the exit code ([`REFUSED`])
+    /// in the System event log.
     fn log_refusal(why: &str) {
         let _ = crate::windows::temp_log::append("service refused to start", why);
     }
@@ -1339,6 +1357,17 @@ mod tests {
         assert!(within(Path::new(r"C:\A"), Path::new(r"C:\a\")));
         assert!(!within(Path::new(r"C:\Ab"), Path::new(r"C:\A")));
         assert!(!within(Path::new(r"C:\A"), Path::new(r"C:\A\b")));
+    }
+
+    /// The update helper's rollback marker refuses the service's start.
+    #[test]
+    fn a_rollback_marker_refuses_the_start() {
+        let data = tempfile::tempdir().unwrap();
+        assert_eq!(rollback_refusal(data.path()), None);
+        std::fs::create_dir(data.path().join("bin")).unwrap();
+        std::fs::write(data.path().join("bin").join("rollback.json"), b"{}").unwrap();
+        let why = rollback_refusal(data.path()).unwrap();
+        assert!(why.contains("rollback is in progress"), "{why}");
     }
 
     #[test]

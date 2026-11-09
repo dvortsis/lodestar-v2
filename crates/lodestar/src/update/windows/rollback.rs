@@ -100,7 +100,82 @@ pub struct Journal {
     /// it's set back to (recorded before the first change).
     #[serde(default)]
     pub start_before: Option<Start>,
+    /// The `msiexec` run handed to the helper's copy, while it's pending:
+    /// what the copy runs, and nothing else.
+    #[serde(default)]
+    pub msi: Option<MsiRun>,
     pub state: State,
+}
+
+/// What an `msiexec` run is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Purpose {
+    Install,
+    Rollback,
+}
+
+/// An `msiexec` run the helper hands to its copy in staging, so the
+/// install folder isn't in use while Windows Installer replaces it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MsiRun {
+    pub purpose: Purpose,
+    /// The MSI, inside staging.
+    pub msi: String,
+    /// Its log, inside staging.
+    pub log: String,
+    /// What the MSI was checked against (checked again by the copy).
+    pub pins: Pins,
+}
+
+/// In staging: the copy's answer, `msiexec`'s exit code.
+pub const MSI_RESULT: &str = "msiexec-result.json";
+/// In staging: held by the copy while it runs.
+pub const MSI_LOCK: &str = "msiexec.lock";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MsiResult {
+    pub id: String,
+    pub purpose: Purpose,
+    pub code: i32,
+}
+
+/// The copy's exit code for this journal's pending run, consumed: read
+/// and removed. `None` when there's none (yet).
+pub fn take_result(ctx: &Context, j: &Journal) -> Option<i32> {
+    let run = j.msi.as_ref()?;
+    let path = ctx.staging.dir.join(MSI_RESULT);
+    let r: MsiResult = layout::read_json(&path).ok().flatten()?;
+    let _ = std::fs::remove_file(&path);
+    (r.id == j.id && r.purpose == run.purpose).then_some(r.code)
+}
+
+pub fn write_result(ctx: &Context, r: &MsiResult) -> Result<(), Refusal> {
+    let bytes = serde_json::to_vec(r).map_err(|e| Refusal::Io(e.to_string()))?;
+    layout::write_atomic(&ctx.staging.dir, MSI_RESULT, &bytes)
+        .map_err(|e| Refusal::Io(format!("{MSI_RESULT}: {e}")))
+}
+
+/// Takes the copy's lock in staging; `None` while a copy holds it.
+pub fn msi_lock(ctx: &Context) -> std::io::Result<Option<std::fs::File>> {
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(ctx.staging.dir.join(MSI_LOCK))?;
+    match f.try_lock() {
+        Ok(()) => Ok(Some(f)),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(e)) => Err(e),
+    }
+}
+
+/// Whether a copy is running an `msiexec` now.
+pub fn copy_running(ctx: &Context) -> bool {
+    matches!(msi_lock(ctx), Ok(None))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -169,6 +244,7 @@ pub fn installing(
         snapshots_before: before.into_iter().map(|s| s.name).collect(),
         restart: false,
         start_before: None,
+        msi: None,
         state: State::Installing,
     })
 }
@@ -222,6 +298,16 @@ pub fn resume(
         let _ = remove_marker(ctx);
         return Ok(None);
     }
+    // An install handed to the copy: its answer first, or it's still
+    // running. Without either the copy died; the program on disk decides.
+    if journal.state == State::Installing && journal.msi.is_some() {
+        if let Some(code) = take_result(ctx, &journal) {
+            return Ok(Some(helper::after_install(ctx, sys, journal, code)));
+        }
+        if copy_running(ctx) {
+            return Ok(Some(Outcome::HandedOff));
+        }
+    }
     Ok(Some(match journal.state {
         State::Halted {
             ref why,
@@ -263,6 +349,9 @@ enum Stop {
     Retry(String),
     /// Final: nothing more is tried.
     Halt(String),
+    /// The reinstall was handed to the helper's copy; the run that
+    /// follows it finishes.
+    HandedOff,
 }
 
 fn halt_on<T>(r: Result<T, String>) -> Result<T, Stop> {
@@ -282,6 +371,7 @@ fn roll_back(ctx: &Context, sys: &dyn System, mut j: Journal) -> Outcome {
             }
         }
         Err(Stop::Retry(why)) => Outcome::RollbackPending { why },
+        Err(Stop::HandedOff) => Outcome::HandedOff,
         Err(Stop::Halt(why)) => {
             let done = done_of(&j);
             halt(ctx, sys, j, done, why)
@@ -376,7 +466,7 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
         write(ctx, j).map_err(|e| Stop::Halt(e.to_string()))
     };
     // The target first: without it nothing is touched.
-    if done < 4 {
+    if done < 4 && j.msi.is_none() {
         halt_on(previous_msi(ctx, &j.from))?;
     }
     // The start type to go back to, recorded before the first change.
@@ -432,16 +522,35 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
         save(j, &snapshot, done)?;
     }
     if done < 4 {
-        stopped(sys)?;
-        // Checked again right before it runs.
-        let staged = halt_on(previous_msi(ctx, &j.from))?;
-        let args = msi::msiexec_args(&staged, &ctx.staging.dir.join(ROLLBACK_LOG));
-        let code = sys
-            .msiexec(&args)
-            .map_err(|e| Stop::Retry(format!("msiexec: {e}")))?;
+        let code = match take_result(ctx, j) {
+            Some(code) => code,
+            None if copy_running(ctx) => return Err(Stop::HandedOff),
+            None => {
+                stopped(sys)?;
+                // Checked again right before it runs.
+                let (staged, pins) = halt_on(previous_msi(ctx, &j.from))?;
+                let log = ctx.staging.dir.join(ROLLBACK_LOG);
+                j.msi = Some(MsiRun {
+                    purpose: Purpose::Rollback,
+                    msi: staged.to_string_lossy().into_owned(),
+                    log: log.to_string_lossy().into_owned(),
+                    pins,
+                });
+                save(j, &snapshot, done)?;
+                let args = msi::msiexec_args(&staged, &log);
+                match sys.run_msiexec(&ctx.staging.dir, &args) {
+                    Ok(helper::Ran::Code(c)) => c,
+                    Ok(helper::Ran::HandedOff) => return Err(Stop::HandedOff),
+                    // Never from Program Files instead: retried.
+                    Err(why) => return Err(Stop::Retry(format!("the helper's copy: {why}"))),
+                }
+            }
+        };
+        j.msi = None;
         match msi::installed(code) {
             msi::Installed::Done | msi::Installed::RestartNeeded => {}
             msi::Installed::Busy(c) => {
+                save(j, &snapshot, done)?;
                 return Err(Stop::Retry(format!("Windows Installer is busy ({c})")));
             }
             msi::Installed::Failed(c) => {
@@ -503,7 +612,7 @@ fn remove_marker(ctx: &Context) -> bool {
 /// The MSI for `from`, found by its pins in staging's `previous\` (as the
 /// install leaves it) or `current\` (when the install was interrupted
 /// before it rotated them), and checked against them.
-fn previous_msi(ctx: &Context, from: &str) -> Result<PathBuf, String> {
+fn previous_msi(ctx: &Context, from: &str) -> Result<(PathBuf, Pins), String> {
     let mut why = format!("no MSI for {from} is kept, so it can't be reinstalled");
     for dir in [ctx.staging.previous(), ctx.staging.current()] {
         let pins: Pins = match layout::read_json(&dir.join(PINS)) {
@@ -523,7 +632,7 @@ fn previous_msi(ctx: &Context, from: &str) -> Result<PathBuf, String> {
         if size != pins.size || sha256.to_hex() != pins.sha256 {
             return Err("the kept MSI doesn't match its pins".into());
         }
-        return Ok(path);
+        return Ok((path, pins));
     }
     Err(why)
 }
@@ -631,7 +740,7 @@ fn rotate_back(ctx: &Context, from: &str) {
 
 /// The SHA-256 and size of a file opened as itself (never through a link
 /// the service account planted).
-fn hash(path: &Path) -> std::io::Result<(Sha256, u64)> {
+pub(super) fn hash(path: &Path) -> std::io::Result<(Sha256, u64)> {
     let mut f = layout::open_nofollow(path)?;
     let mut h = sha2::Sha256::new();
     let mut buf = vec![0u8; 64 * 1024];
