@@ -67,12 +67,15 @@ REGION_ID = re.compile(r"[a-z0-9_-]{1,64}\Z")
 BOOT_MARKER = "/var/lib/cloud/instance/boot-finished"
 RUN_LOCK = "/run/lodestar-pia.lock"  # holds nothing; one delivery at a time per VM
 CLOUD_INIT_WAIT = 480  # jq, wireguard-tools and the secrets directory arrive late in boot
-FLOCK_WAIT = 180  # longer than STEP_TIMEOUT: an orphaned earlier step finishes first
+FLOCK_WAIT = 180  # a retry waits this long for an orphaned earlier session, then exits 21
 STEP_TIMEOUT = 150  # the VM step: three PIA calls of at most 30 s each, with room
 SSH_ATTEMPTS_SECONDS = 120  # the firewall rule can take a little while to apply
-SSH_TIMEOUT = CLOUD_INIT_WAIT + FLOCK_WAIT + STEP_TIMEOUT + 60  # one session, all of the above
-CLEAN_WAIT_SECONDS = FLOCK_WAIT + 20  # after a lost session, the orphan's own bound
-LEASE_NEEDED = timedelta(minutes=25)  # deliver-pia's worst case, with the close and margin
+SSH_TIMEOUT = FLOCK_WAIT + CLOUD_INIT_WAIT + STEP_TIMEOUT + 60  # one session, all of the above
+# After a lost session the orphan holds the VM's lock for at most its cloud-init
+# wait and its step; the clean check polls past that.
+CLEAN_WAIT_SECONDS = CLOUD_INIT_WAIT + STEP_TIMEOUT + 30
+DELIVER_JOB_MINUTES = 30  # fleet.yml's deliver-pia timeout-minutes (a test keeps them in step)
+LEASE_NEEDED = timedelta(minutes=DELIVER_JOB_MINUTES + 2)  # the whole job, and a margin
 NOT_READY, BUSY_VM, STEP_TIMED_OUT = 20, 21, 124
 LIVE_ENV = ("AWS_PIA_ROLE_ARN", "STATE_BUCKET", "STATE_BUCKET_OWNER", "FLEET_SSH_KEY", "PIA_SERVERS",
             "GITHUB_TOKEN", "GITHUB_REPOSITORY", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN")
@@ -85,10 +88,11 @@ class Refusal(Exception):
 def bootstrap(run_dir: str = RUN_DIR, out: str = WG_CONF, boot_marker: str = BOOT_MARKER,
               lock: str = RUN_LOCK) -> str:
     """The remote side, run as root.
-    1. Wait for cloud-init to finish (it installs jq and wireguard-tools and
+    1. Take a per-VM lock first, so a retried session waits for an orphaned
+       earlier one (in any stage) instead of sharing its directory; exit 21 if
+       it can't. The clean check takes the same lock.
+    2. Wait for cloud-init to finish (it installs jq and wireguard-tools and
        makes the secrets directory late in boot); exit 20 if it hasn't.
-    2. Take a per-VM lock, so a retried session waits for an orphaned earlier
-       one instead of sharing its directory; exit 21 if it can't.
     3. Unpack stdin into a fresh root-only directory in /run, deleted on EXIT
        (HUP, INT and TERM exit, so EXIT runs), and run the VM step under a hard
        timeout (exit 124). A dropped session doesn't signal the remote side
@@ -97,14 +101,14 @@ def bootstrap(run_dir: str = RUN_DIR, out: str = WG_CONF, boot_marker: str = BOO
     return "\n".join([
         "set -eu",
         "umask 077",
+        f"exec 9>{q(lock)}",
+        f"flock -w {FLOCK_WAIT} 9 || exit {BUSY_VM}",
         f"if command -v cloud-init >/dev/null 2>&1; then timeout {CLOUD_INIT_WAIT} cloud-init status --wait"
         " >/dev/null 2>&1 || true; fi",
         f"test -e {q(boot_marker)} || exit {NOT_READY}",
         f"command -v jq >/dev/null 2>&1 && command -v wg >/dev/null 2>&1 && command -v curl >/dev/null 2>&1"
         f" || exit {NOT_READY}",
         f'test -d "$(dirname -- {o})" || exit {NOT_READY}',
-        f"exec 9>{q(lock)}",
-        f"flock -w {FLOCK_WAIT} 9 || exit {BUSY_VM}",
         f"d={d}",
         'rm -rf -- "$d"',
         'mkdir -m 0700 -- "$d"',
@@ -121,8 +125,11 @@ def remote_command(run_dir: str = RUN_DIR, out: str = WG_CONF) -> str:
     return "sudo -n bash -c " + shlex.quote(bootstrap(run_dir, out))
 
 
-def clean_check_command(run_dir: str = RUN_DIR) -> str:
-    return "sudo -n test ! -e " + shlex.quote(run_dir)
+def clean_check_command(run_dir: str = RUN_DIR, lock: str = RUN_LOCK) -> str:
+    """Clean means no delivery holds the VM's lock and /run/lodestar-pia is gone.
+    An orphan still waiting on cloud-init holds the lock, so it reads as not
+    clean yet (exit 1) instead of passing before its directory exists."""
+    return f"sudo -n flock -n {shlex.quote(lock)} test ! -e {shlex.quote(run_dir)}"
 
 
 def payload(login: dict, region: str) -> bytes:
@@ -323,6 +330,14 @@ class Delivery:
                 "-o", "ServerAliveCountMax=4", "-o", "LogLevel=QUIET", "-l", SSH_USER, "--", slot["address"]]
 
     def to_target(self, role: str, slot: dict, login: dict, region: str, key: str, workdir: Path) -> str:
+        """One target's report line. An unexpected error ends only that target's
+        delivery, so the other target's line is still reported."""
+        try:
+            return self._to_target(role, slot, login, region, key, workdir)
+        except Exception as e:  # noqa: BLE001 - the type only; a message could carry a value
+            return f"{role}: unexpected error ({type(e).__name__}); escalate"
+
+    def _to_target(self, role: str, slot: dict, login: dict, region: str, key: str, workdir: Path) -> str:
         base = self._ssh_base(role, slot, key, workdir)
         data = payload(login, region)
         deadline = self.clock() + timedelta(seconds=SSH_ATTEMPTS_SECONDS)

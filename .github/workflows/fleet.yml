@@ -98,6 +98,7 @@ jobs:
       id-token: write # live mode assumes LodestarFleetOperator by OIDC, in-process
     outputs:
       deliver: ${{ steps.act.outputs.deliver }} # "true": this run kept the lock for deliver-pia
+      live: ${{ steps.act.outputs.live }} # the chain's mode, fixed when act ran
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -165,7 +166,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - if: vars.FLEET_LIVE == 'true'
+      - if: needs.act.outputs.live == 'true'
         run: python3 -m pip install --quiet --no-deps --require-hashes --target "$RUNNER_TEMP/fleet-deps" -r infra/fleet/requirements-live.txt
       - id: fence
         env:
@@ -178,7 +179,7 @@ jobs:
           CHANNEL_PR: ${{ vars.CHANNEL_PR }}
           OPERATOR_BOT_USER_ID: ${{ vars.OPERATOR_BOT_USER_ID }}
           OPERATOR_STOP: ${{ vars.OPERATOR_STOP }}
-          FLEET_LIVE: ${{ vars.FLEET_LIVE }}
+          FLEET_LIVE: ${{ needs.act.outputs.live }}
           GITHUB_TOKEN: ${{ github.token }}
           PYTHONPATH: ${{ runner.temp }}/fleet-deps
           AWS_FLEET_ROLE_ARN: ${{ secrets.AWS_FLEET_ROLE_ARN }}
@@ -216,7 +217,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0 # the pinned commit must be an ancestor of main
-      - if: vars.FLEET_LIVE == 'true'
+      - if: needs.act.outputs.live == 'true'
         run: python3 -m pip install --quiet --no-deps --require-hashes --target "$RUNNER_TEMP/fleet-deps" -r infra/fleet/requirements-live.txt
       - env:
           EVENT_NAME: ${{ github.event_name }}
@@ -228,7 +229,7 @@ jobs:
           CHANNEL_PR: ${{ vars.CHANNEL_PR }}
           OPERATOR_BOT_USER_ID: ${{ vars.OPERATOR_BOT_USER_ID }}
           OPERATOR_STOP: ${{ vars.OPERATOR_STOP }}
-          FLEET_LIVE: ${{ vars.FLEET_LIVE }}
+          FLEET_LIVE: ${{ needs.act.outputs.live }}
           GITHUB_TOKEN: ${{ github.token }}
           PYTHONPATH: ${{ runner.temp }}/fleet-deps
           AWS_PIA_ROLE_ARN: ${{ secrets.AWS_PIA_ROLE_ARN }}
@@ -260,11 +261,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - if: vars.FLEET_LIVE == 'true'
+      - if: needs.act.outputs.live == 'true'
         run: python3 -m pip install --quiet --no-deps --require-hashes --target "$RUNNER_TEMP/fleet-deps" -r infra/fleet/requirements-live.txt
       - env:
           CHANNEL_PR: ${{ vars.CHANNEL_PR }}
-          FLEET_LIVE: ${{ vars.FLEET_LIVE }}
+          FLEET_LIVE: ${{ needs.act.outputs.live }}
           GITHUB_TOKEN: ${{ github.token }}
           PYTHONPATH: ${{ runner.temp }}/fleet-deps
           AWS_FLEET_ROLE_ARN: ${{ secrets.AWS_FLEET_ROLE_ARN }}

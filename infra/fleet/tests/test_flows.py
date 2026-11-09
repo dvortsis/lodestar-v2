@@ -269,7 +269,7 @@ class Flows(unittest.TestCase):
         b = DryRunBackend()
         rc, out = self.run_cli("act", event_env("/fleet up screen", GITHUB_OUTPUT=str(outfile)), backend=b)
         self.assertEqual(rc, 0)
-        self.assertEqual(outfile.read_text(), "deliver=true\n")
+        self.assertEqual(outfile.read_text(), "deliver=true\nlive=false\n")
         rc, out = self.run_cli("act", event_env("/fleet run renew-vpn main"), backend=b)
         self.assertIn("run renew-vpn main: would deliver the PIA login again", out)
         for sub, line in (("pia-fence", "pia-fence: would check that this run still holds the fleet lock"),

@@ -200,7 +200,7 @@ class Deliver(unittest.TestCase):
 
     def test_ssh_is_pinned_and_carries_the_login_only_on_stdin(self):
         self.go()
-        main, worker = self.ssh.deliveries()
+        main, worker = sorted(self.ssh.deliveries(), key=lambda c: c["argv"][-2])  # the targets run in parallel
         for call, addr, n, region in ((main, "203.0.113.11", 1, "ca_test"), (worker, "203.0.113.12", 2, "us_test")):
             argv = call["argv"]
             self.assertEqual(argv[:3], ["ssh", "-F", "/dev/null"])
@@ -404,10 +404,29 @@ class Deliver(unittest.TestCase):
                 raise OSError("ssh missing")
         fw = FakeFirewalls()
         fw.fail_put = True
-        with self.assertRaises(OSError):
-            self.go("/fleet run renew-vpn main", ssh=Boom(), fw=fw)
+        self.assertEqual(self.go("/fleet run renew-vpn main", ssh=Boom(), fw=fw), 1)
         self.assertEqual(self.reports,
-                         ["deliver-pia: its firewall rule couldn't be closed; the next sweep removes it; escalate"])
+                         ["deliver-pia: main: unexpected error (OSError); escalate",
+                          "deliver-pia: its firewall rule couldn't be closed; the next sweep removes it; escalate"])
+
+        class MainOnly(FakeSSH):  # one target raises; the other's line is kept
+            def __call__(s, argv, data, timeout):
+                if argv[-2] == "203.0.113.11":
+                    raise OSError("boom")
+                return super().__call__(argv, data, timeout)
+        self.assertEqual(self.go(ssh=MainOnly()), 1)
+        self.assertEqual(self.reports, ["deliver-pia: main: unexpected error (OSError); escalate",
+                                        "deliver-pia: worker: delivered; /run clean"])
+
+    def test_the_lease_covers_the_whole_job(self):
+        import yaml
+        wf = yaml.safe_load((Path(deliver.__file__).resolve().parents[2] / ".github/workflows/fleet.yml").read_text())
+        self.assertEqual(wf["jobs"]["deliver-pia"]["timeout-minutes"], deliver.DELIVER_JOB_MINUTES)
+        self.assertGreater(deliver.LEASE_NEEDED, timedelta(minutes=deliver.DELIVER_JOB_MINUTES))
+        # The job's own bounds fit its timeout: one session and one polled clean check
+        # per target (in parallel), the retries, and the firewall calls.
+        worst = deliver.SSH_TIMEOUT + deliver.CLEAN_WAIT_SECONDS + deliver.SSH_ATTEMPTS_SECONDS + 120
+        self.assertLess(worst, deliver.DELIVER_JOB_MINUTES * 60)
 
     def test_the_close_sweeps_stale_rules_too(self):
         fw = FakeFirewalls()
@@ -457,7 +476,7 @@ class EndToEnd(unittest.TestCase):
         self.addCleanup(subprocess.run, ["rm", "-rf", str(tmp)])
         stub = tmp / "stub"
         (stub / "bin").mkdir(parents=True)
-        for name, body in (("curl", CURL), ("wg", WG)):
+        for name, body in (("curl", CURL), ("wg", WG), ("cloud-init", "#!/usr/bin/env bash\nexit 0\n")):
             (stub / "bin" / name).write_text(body)
             (stub / "bin" / name).chmod(0o755)
         (stub / "token.json").write_text(json.dumps({"token": TOKEN}))
@@ -479,8 +498,10 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(oct(out.stat().st_mode & 0o777), "0o600")
         self.assertIn(f"PrivateKey = {PRIV}", out.read_text())
         self.assertFalse(run_dir.exists())
-        clean = subprocess.run(["bash", "-c", deliver.clean_check_command(str(run_dir)).replace("sudo -n ", "")])
-        self.assertEqual(clean.returncode, 0)
+        def clean():
+            cmd = deliver.clean_check_command(str(run_dir), str(lock)).replace("sudo -n ", "")
+            return subprocess.run(["bash", "-c", cmd], env=env).returncode
+        self.assertEqual(clean(), 0)
         # A failing step: the bootstrap's own trap still empties /run.
         r = boot("nowhere")
         self.assertEqual(r.returncode, 13)
@@ -490,20 +511,34 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(boot("ca_test").returncode, deliver.NOT_READY)
         self.assertFalse(run_dir.exists())
         marker.write_text("")
+        # The secrets directory missing (cloud-init's runcmd hasn't run): not ready either.
+        out.unlink()
+        out.parent.rmdir()
+        self.assertEqual(boot("ca_test").returncode, deliver.NOT_READY)
+        out.parent.mkdir(mode=0o700)
         # Another delivery holds the VM's lock: wait, then give up without touching /run.
         import fcntl
         from unittest import mock
         with open(lock, "w") as held, mock.patch.object(deliver, "FLOCK_WAIT", 1):
             fcntl.flock(held, fcntl.LOCK_EX)
+            # The clean check reads a held lock as not clean yet, even before the
+            # other delivery's directory exists (it may still be waiting on cloud-init).
+            self.assertEqual(clean(), 1)
             run_dir.mkdir()
             (run_dir / "theirs").write_text("x")
             self.assertEqual(boot("ca_test").returncode, deliver.BUSY_VM)
             self.assertTrue((run_dir / "theirs").exists())  # the other delivery's files are left alone
+        self.assertEqual(clean(), 1)  # lock free, but the directory is still there
+        subprocess.run(["rm", "-rf", str(run_dir)])
+        self.assertEqual(clean(), 0)
 
     def test_remote_command_is_fixed(self):
         cmd = deliver.remote_command()
         self.assertIn(f"timeout -s TERM {deliver.STEP_TIMEOUT} bash", cmd)
         self.assertIn(f"flock -w {deliver.FLOCK_WAIT} 9", cmd)
+        self.assertLess(cmd.index("flock -w"), cmd.index("cloud-init status"))  # the lock comes first
+        self.assertEqual(deliver.clean_check_command(),
+                         "sudo -n flock -n /run/lodestar-pia.lock test ! -e /run/lodestar-pia")
         self.assertTrue(cmd.startswith("sudo -n bash -c "))
         self.assertIn("/run/lodestar-pia", cmd)
         self.assertIn("trap '\"'\"'rm -rf -- \"$d\"'\"'\"' EXIT", cmd)

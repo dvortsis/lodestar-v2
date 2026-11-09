@@ -294,7 +294,10 @@ def cmd_act(ctx: Ctx) -> int:
             ctx.release(run_id, "act")
     if ctx.deliver:
         try:
-            _write_outputs(ctx.env, deliver="true")
+            # The chain takes its mode from here, not the repository variable, so
+            # flipping FLEET_LIVE mid-chain can't send pia-release down the
+            # dry-run path and strand the live lock.
+            _write_outputs(ctx.env, deliver="true", live="true" if ctx.live else "false")
         except Exception:  # noqa: BLE001 - without the output pia-release won't run
             ctx.deliver = False
             ctx.release(run_id, "act")

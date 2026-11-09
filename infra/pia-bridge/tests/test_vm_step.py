@@ -131,7 +131,18 @@ class VMStep(unittest.TestCase):
                 ("bad server key", lambda: (self.stub / "addkey.json").write_text(
                     json.dumps(dict(ADDKEY, server_key="x\nPostUp = rm -rf /"))), 16),
                 ("bad endpoint", lambda: (self.stub / "servers.json").write_text(json.dumps(
-                    {"regions": [{"id": "ca_test", "servers": {"wg": [{"ip": "192.0.2.10\nx", "cn": "c"}]}}]})), 13)):
+                    {"regions": [{"id": "ca_test", "servers": {"wg": [{"ip": "192.0.2.10\nx", "cn": "c"}]}}]})), 13),
+                ("bad cn", lambda: (self.stub / "servers.json").write_text(json.dumps(
+                    {"regions": [{"id": "ca_test", "servers": {"wg": [{"ip": "192.0.2.10", "cn": "x::1.2.3.4:"}]}}]})), 13),
+                ("cn with a space", lambda: (self.stub / "servers.json").write_text(json.dumps(
+                    {"regions": [{"id": "ca_test", "servers": {"wg": [{"ip": "192.0.2.10", "cn": "a b"}]}}]})), 13),
+                # Bash arithmetic would run this as root, were the digits check not first.
+                ("hostile port", lambda: (self.stub / "addkey.json").write_text(
+                    json.dumps(dict(ADDKEY, server_port=f"a[$(touch {self.stub}/pwned)]"))), 16),
+                ("port out of range", lambda: (self.stub / "addkey.json").write_text(
+                    json.dumps(dict(ADDKEY, server_port=70000))), 16),
+                ("hostile peer", lambda: (self.stub / "addkey.json").write_text(
+                    json.dumps(dict(ADDKEY, peer_ip="10.1.2.3\nPostUp = id"))), 16)):
             with self.subTest(name):
                 self.setUp()
                 mutate()
@@ -139,6 +150,7 @@ class VMStep(unittest.TestCase):
                 self.assertEqual(r.returncode, code)
                 self.assertFalse(self.work.exists())
                 self.assertFalse(self.out.exists())
+                self.assertFalse((self.stub / "pwned").exists())
 
     def test_a_hangup_deletes_the_login(self):
         os.mkfifo(self.stub / "fifo")

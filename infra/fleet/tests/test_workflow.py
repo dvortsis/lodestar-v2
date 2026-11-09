@@ -95,7 +95,13 @@ class FleetStructure(unittest.TestCase):
                 text = yaml.safe_dump(s)
                 with self.subTest(job=name, step=s.get("uses") or s.get("run", "")[:40]):
                     if s.get("uses", "").startswith("hashicorp/setup-terraform") or s.get("run") == LIVE_INSTALL:
-                        self.assertEqual(s.get("if"), "vars.FLEET_LIVE == 'true'")
+                        # The delivery chain takes its mode from act, so a flip mid-chain can't split it.
+                        want = "needs.act.outputs.live == 'true'" if name in CHAIN else "vars.FLEET_LIVE == 'true'"
+                        self.assertEqual(s.get("if"), want)
+                    live = (s.get("env") or {}).get("FLEET_LIVE")
+                    if live is not None:
+                        want = "${{ needs.act.outputs.live }}" if name in CHAIN else "${{ vars.FLEET_LIVE }}"
+                        self.assertEqual(live, want)
                     if "secrets." in text:
                         # Secrets reach only the one script step, through env: fleet.py in
                         # cloud-fleet jobs, deliver.py in pia-delivery.
@@ -212,7 +218,8 @@ class FleetStructure(unittest.TestCase):
         self.assertIn("always()", release["if"])  # released whatever deliver-pia did
         self.assertIn("needs.act.outputs.deliver == 'true'", release["if"])
         self.assertEqual(set(release["needs"]), {"act", "pia-fence", "deliver-pia"})
-        self.assertEqual(self.jobs["act"]["outputs"], {"deliver": "${{ steps.act.outputs.deliver }}"})
+        self.assertEqual(self.jobs["act"]["outputs"], {"deliver": "${{ steps.act.outputs.deliver }}",
+                                                       "live": "${{ steps.act.outputs.live }}"})
         total = sum(self.jobs[n]["timeout-minutes"] for n in ("act", "pia-fence", "deliver-pia", "pia-release"))
         self.assertLess(total, 90)  # the lock's chain, queue time aside
 
@@ -233,6 +240,7 @@ SECRET_NAMES = [
     "OPERATOR_APP_ID", "OPERATOR_APP_PRIVATE_KEY", "ANTHROPIC_API_KEY", "FLEET_SSH_PUBLIC_KEY",
     "OWNER_SSH_PUBLIC_KEY", "FLEET_LINODE_ACCOUNT_EUUID", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "STATE_BUCKET_OWNER",
 ]
+CHAIN = ("pia-fence", "deliver-pia", "pia-release")
 PIA_SECRETS = {"AWS_PIA_ROLE_ARN", "STATE_BUCKET", "STATE_BUCKET_OWNER", "FLEET_SSH_KEY", "PIA_SERVERS"}
 
 
@@ -278,7 +286,8 @@ class PublicLogLeak(unittest.TestCase):
                 for s in steps(job):
                     if "run" not in s:
                         continue
-                    if s["run"] == LIVE_INSTALL and s.get("if") == "vars.FLEET_LIVE == 'true'":
+                    if s["run"] == LIVE_INSTALL and s.get("if") in ("vars.FLEET_LIVE == 'true'",
+                                                                     "needs.act.outputs.live == 'true'"):
                         continue  # the one other allowed step: pip from hash-pinned wheels, live only
                     m = INVOKE.fullmatch(s["run"].strip())
                     with self.subTest(workflow=path.name, job=name, run=s["run"][:60]):

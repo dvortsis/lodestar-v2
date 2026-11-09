@@ -56,6 +56,34 @@ class Lock(unittest.TestCase):
         self.assertEqual(lock2.acquire("3-1"), ACQUIRED)
         self.assertTrue(lock2.holds("3-1"))
 
+    def test_a_lost_answer_is_ours_only_for_a_live_run_holder(self):
+        class Replaced(MemoryStore):  # put_if_match answers no; the key now holds `after`
+            after = None
+
+            def put_if_match(self, key, body, etag):
+                self.objects[key] = (self.after, '"x"')
+                return False
+        lock = FleetLock(MemoryStore(), 90, self.clock)
+        for name, after in (("a reaping marker with our ID", lock._body("reaping", "2-1")),
+                            ("our ID, already expired", json.dumps({"kind": "run", "run_id": "2-1",
+                                                                    "expires_at": "2026-11-08T20:00:00Z"}).encode())):
+            with self.subTest(name):
+                store = Replaced()
+                store.after = after
+                lk = FleetLock(store, 90, self.clock)
+                store.objects[LOCK_KEY] = (lk._body("run", "1-1"), '"0"')
+                self.clock.sleep(91 * 60)  # the old holder expires; takeover by put_if_match
+                self.assertEqual(lk.acquire("2-1"), BUSY)
+
+    def test_expires_at_only_while_held(self):
+        self.lock.acquire("1-1")
+        self.assertEqual(self.lock.expires_at("1-1").isoformat(), "2026-11-08T21:30:00+00:00")
+        with self.assertRaises(LockLost):
+            self.lock.expires_at("2-1")
+        self.clock.sleep(90 * 60)
+        with self.assertRaises(LockLost):  # its own lease has run out
+            self.lock.expires_at("1-1")
+
     def test_an_expired_own_holder_is_renewed_through_put_if_match(self):
         self.lock.acquire("1-1")
         first = self.holder()["expires_at"]

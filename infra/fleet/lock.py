@@ -167,7 +167,8 @@ class FleetLock:
     def _ours(self, run_id: str) -> bool:
         """After a conditional put that answered no: read once more. A live
         `run` holder with our ID means the put landed and only its answer was
-        lost, so the lock is ours; anything else (or a failed read) isn't."""
+        lost, so the lock is ours; anything else isn't. A failed read raises,
+        as any lock read does, and the caller fails closed."""
         cur = self.store.get(LOCK_KEY)
         holder = _decode(cur[0]) if cur else None
         return holder is not None and holder.kind == "run" and holder.run_id == run_id \

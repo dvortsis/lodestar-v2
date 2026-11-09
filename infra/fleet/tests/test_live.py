@@ -1010,7 +1010,7 @@ class LiveFlows(unittest.TestCase):
         rc, out = self.run_cli("act", "/fleet up screen", b, store=store, GITHUB_OUTPUT=str(outfile))
         self.assertEqual(rc, 0)
         self.assertIn(LOCK_KEY, store.objects)  # kept for deliver-pia
-        self.assertEqual(outfile.read_text(), "deliver=true\n")
+        self.assertEqual(outfile.read_text(), "deliver=true\nlive=true\n")
         outfile.write_text("")
         rc, out = self.run_cli("pia-fence", "/fleet up screen", b, store=store, GITHUB_OUTPUT=str(outfile))
         self.assertEqual((rc, out.strip()), (0, "pia-fence: this run holds the fleet lock"))
@@ -1023,7 +1023,7 @@ class LiveFlows(unittest.TestCase):
         outfile.write_text("")
         self.run_cli("act", "/fleet run renew-vpn worker", b, store=store, GITHUB_OUTPUT=str(outfile))
         self.assertIn(LOCK_KEY, store.objects)
-        self.assertEqual(outfile.read_text(), "deliver=true\n")
+        self.assertEqual(outfile.read_text(), "deliver=true\nlive=true\n")
         self.run_cli("pia-release", "/fleet run renew-vpn worker", b, store=store)
         outfile.write_text("")
         self.run_cli("act", "/fleet status", b, store=store, GITHUB_OUTPUT=str(outfile))
@@ -1071,9 +1071,22 @@ class LiveFlows(unittest.TestCase):
         for over, body in (({"GITHUB_RUN_ATTEMPT": "2"}, "/fleet up screen"), ({}, "/fleet status"), ({}, "/fleet down")):
             rc, out = self.run_cli("pia-fence", body, b, store=store, **over)
             self.assertEqual((rc, out.strip()), (1, "pia-fence: refused"))
+        # A tombstoned fleet (down ran meanwhile): nothing to deliver to.
+        store.objects.clear()
+        FleetLock(store, 90, Clock()).acquire("42-1")
+        b._clear_mismatch()
+        s3.objects[("state-b", FLEET_KEY)] = json.dumps({"version": 1, "fleet": None, "at": "2026-11-08T20:00:00Z"}).encode()
+        rc, out = self.run_cli("pia-fence", "/fleet up screen", b, store=store)
+        self.assertEqual(rc, 1)
+        self.assertIn("deliver-pia: refused: the fleet is unreadable, gone, overdue or mismatched", out)
 
     def test_pia_release_only_releases_its_own_lock(self):
         b, *_ = backend()
+        store = MemoryStore()
+        FleetLock(store, 90, Clock()).acquire("42-2")
+        rc, out = self.run_cli("pia-release", "/fleet up screen", b, store=store, GITHUB_RUN_ATTEMPT="2")
+        self.assertEqual((rc, out.strip()), (1, "pia-release: refused"))  # a re-run touches nothing
+        self.assertIn(LOCK_KEY, store.objects)
         store = MemoryStore()
         FleetLock(store, 90, Clock()).acquire("9-1")
         rc, out = self.run_cli("pia-release", "/fleet up screen", b, store=store)
