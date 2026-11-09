@@ -1,0 +1,2 @@
+409
+{"error":{"code":"restart_failed","message":"Lodestar couldn't start the new copy that takes over, so it's still running. Close Lodestar and start it again to restart it."}}

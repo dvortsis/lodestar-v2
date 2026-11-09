@@ -344,6 +344,14 @@ impl SystemApi for System {
         self.restart.info()
     }
 
+    fn prepare_restart(&self) -> Result<(), SystemError> {
+        // Logged as `app.restart_failed` with the error kind; the answer
+        // carries no detail.
+        self.restart
+            .prepare()
+            .map_err(|_| SystemError::RestartFailed)
+    }
+
     fn restart(&self) {
         self.restart.request();
     }

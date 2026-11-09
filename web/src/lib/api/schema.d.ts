@@ -2215,7 +2215,9 @@ export interface paths {
          * Restarts Lodestar: a graceful shutdown (the queue, DHT state and last
          *     commit are saved), then the same program again. It answers first;
          *     poll `/healthz` until it's back. `409 restart_unavailable` where it
-         *     can't restart itself, with how to restart instead.
+         *     can't restart itself, with how to restart instead; `409
+         *     restart_failed` when it couldn't get ready to (the portable build
+         *     couldn't start its new copy), and it keeps running.
          */
         post: operations["restartSystem"];
         delete?: never;
@@ -15320,7 +15322,7 @@ export interface operations {
                     "application/json": components["schemas"]["RestartAccepted"];
                 };
             };
-            /** @description `restart_unavailable`: restart it the way it was started (the message says how). */
+            /** @description `restart_unavailable`: restart it the way it was started (the message says how). `restart_failed`: it couldn't get ready to restart (the portable build couldn't start its new copy), so it's still running. */
             409: {
                 headers: {
                     [name: string]: unknown;

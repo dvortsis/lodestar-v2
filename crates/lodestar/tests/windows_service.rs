@@ -568,13 +568,33 @@ impl Drop for KillByConfig {
     }
 }
 
-/// Restart now in the portable build: the old process shuts down and exits
-/// cleanly, and a new copy with the same arguments (the same config, so
-/// the same data and log) serves again, signed in as before.
-#[test]
-fn a_portable_restart_starts_a_new_copy() {
+/// The console (stderr, which the relaunched copy shares) and
+/// `lodestar.jsonl`, for a failure message: a copy that died at start
+/// says why on the console.
+fn dump(console: &std::sync::Mutex<String>, jsonl: &Path) -> String {
+    format!(
+        "--- console ---\n{}\n--- lodestar.jsonl ---\n{}",
+        console.lock().unwrap_or_else(|e| e.into_inner()),
+        std::fs::read_to_string(jsonl).unwrap_or_else(|e| format!("(unreadable: {e})"))
+    )
+}
+
+/// Restart now in the portable build, with HTTP on `bind`: the old process
+/// shuts down and exits with 80 (a new copy took over), and a new copy
+/// with the same arguments (the same config, so the same data and log)
+/// serves again, signed in as before. Returns the two ports.
+fn portable_restart(bind: &str) -> (u16, u16) {
     let dir = tempfile::tempdir().unwrap();
-    let config = write_config(dir.path());
+    let config = dir.path().join("config.toml");
+    std::fs::write(
+        &config,
+        format!(
+            "data_dir = '{}'\nlog = \"info\"\n[http]\nbind = \"{bind}\"\n\
+             [dht]\nbind = [\"0.0.0.0:0\"]\n",
+            dir.path().join("data").display(),
+        ),
+    )
+    .unwrap();
     let _cleanup = KillByConfig(config.clone());
     let mut child = Command::new(env!("CARGO_BIN_EXE_lodestar"))
         .arg("--config")
@@ -584,7 +604,8 @@ fn a_portable_restart_starts_a_new_copy() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    // The setup token is on the console (stderr here).
+    // The setup token is on the console (stderr here), and so is anything
+    // the relaunched copy prints: it shares the old process's stderr.
     let stderr = child.stderr.take().unwrap();
     let console = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
     std::thread::spawn({
@@ -602,32 +623,61 @@ fn a_portable_restart_starts_a_new_copy() {
         }
     });
     let jsonl = dir.path().join("data").join("logs").join("lodestar.jsonl");
-    let port = nth_port(&jsonl, 1, Duration::from_secs(60)).expect("server didn't come up");
-    wait_for(Duration::from_secs(60), || healthz(port)).expect("healthz");
+    let first = nth_port(&jsonl, 1, Duration::from_secs(60))
+        .unwrap_or_else(|| panic!("server didn't come up\n{}", dump(&console, &jsonl)));
+    wait_for(Duration::from_secs(60), || healthz(first)).expect("healthz");
     let token_logged = wait_for(Duration::from_secs(30), || {
         let c = console.lock().unwrap().clone();
         c.contains("setup token ").then_some(c)
     })
     .expect("a setup token on the console");
-    let cookie = sign_in(port, &token_logged);
-    let info = restart_info(port, &cookie);
+    let cookie = sign_in(first, &token_logged);
+    let info = restart_info(first, &cookie);
     assert_eq!(info["method"], "relaunch", "{info}");
     assert_eq!(info["available"], true, "{info}");
 
-    let restart = signed_in(port, "POST", "/api/v1/system/restart", &cookie);
+    let restart = signed_in(first, "POST", "/api/v1/system/restart", &cookie);
     assert!(restart.starts_with("HTTP/1.0 202"), "{restart}");
     let status = wait_for(Duration::from_secs(90), || child.try_wait().ok().flatten())
-        .expect("the old process didn't exit");
-    assert!(status.success(), "the old process exited with {status}");
+        .unwrap_or_else(|| panic!("the old process didn't exit\n{}", dump(&console, &jsonl)));
+    assert_eq!(
+        status.code(),
+        Some(80),
+        "the old process exited with {status}\n{}",
+        dump(&console, &jsonl)
+    );
 
     // The new copy: same config, so the same log, and the same store.
-    let port = nth_port(&jsonl, 2, Duration::from_secs(90)).expect("no new copy served");
-    let health = wait_for(Duration::from_secs(60), || healthz(port)).expect("healthz");
+    let second = nth_port(&jsonl, 2, Duration::from_secs(90))
+        .unwrap_or_else(|| panic!("no new copy served\n{}", dump(&console, &jsonl)));
+    let health = wait_for(Duration::from_secs(60), || healthz(second))
+        .unwrap_or_else(|| panic!("no healthz from the new copy\n{}", dump(&console, &jsonl)));
     assert!(health.starts_with("HTTP/1.0 200"), "{health}");
-    let info = restart_info(port, &cookie);
+    let info = restart_info(second, &cookie);
     assert_eq!(info["method"], "relaunch", "{info}");
     let log = std::fs::read_to_string(&jsonl).unwrap();
     assert!(log.contains("app.relaunch"), "{log}");
+    (first, second)
+}
+
+/// Restart now in the portable build, on any port.
+#[test]
+fn a_portable_restart_starts_a_new_copy() {
+    portable_restart(common::ANY_PORT);
+}
+
+/// Restart now in the portable build on a fixed port (X-win-restart-
+/// followups): the new copy waits until the old process has exited and
+/// Windows has released the port, then binds the same one.
+#[test]
+fn a_portable_restart_serves_again_on_the_same_port() {
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let (first, second) = portable_restart(&format!("127.0.0.1:{port}"));
+    assert_eq!((first, second), (port, port));
 }
 
 #[test]

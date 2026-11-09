@@ -7264,7 +7264,7 @@
         "tags": [
           "settings"
         ],
-        "summary": "Restarts Lodestar: a graceful shutdown (the queue, DHT state and last\ncommit are saved), then the same program again. It answers first;\npoll `/healthz` until it's back. `409 restart_unavailable` where it\ncan't restart itself, with how to restart instead.",
+        "summary": "Restarts Lodestar: a graceful shutdown (the queue, DHT state and last\ncommit are saved), then the same program again. It answers first;\npoll `/healthz` until it's back. `409 restart_unavailable` where it\ncan't restart itself, with how to restart instead; `409\nrestart_failed` when it couldn't get ready to (the portable build\ncouldn't start its new copy), and it keeps running.",
         "operationId": "restartSystem",
         "responses": {
           "202": {
@@ -7278,7 +7278,7 @@
             }
           },
           "409": {
-            "description": "`restart_unavailable`: restart it the way it was started (the message says how).",
+            "description": "`restart_unavailable`: restart it the way it was started (the message says how). `restart_failed`: it couldn't get ready to restart (the portable build couldn't start its new copy), so it's still running.",
             "content": {
               "application/json": {
                 "schema": {
