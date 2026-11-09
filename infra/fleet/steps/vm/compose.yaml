@@ -1,0 +1,49 @@
+# The fleet VM's stack (OP-3a; docs/plan/2026-11-08-cloud-test-plan.md 0c-0e).
+# Read at the fleet's pinned commit and copied to the VM by the steps; a change
+# is a reviewed PR (tests in infra/fleet/tests/test_steps.py check its shape).
+#
+# - gluetun, pinned by its multi-arch index digest (v3.41.3; see
+#   docs/decisions/2026-11-09-OP-3a.md), with PIA through its custom WireGuard
+#   provider and its firewall on (the kill switch under test). The leak test
+#   starts it alone.
+# - lodestar in gluetun's network namespace. Its image comes from the screen's
+#   committed rules (start-block, OP-3b), validated there; it starts only with
+#   the "block" profile.
+# - No host port except the UI on the host's loopback, reached over `ssh -L`.
+name: lodestar
+services:
+  gluetun:
+    image: qmcgaw/gluetun@sha256:fa19cc76b2af13d57a8d3dc3066f2ada061b1c761b8aecf989b3877c0486e027
+    container_name: gluetun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      VPN_SERVICE_PROVIDER: custom
+      VPN_TYPE: wireguard
+      FIREWALL_VPN_INPUT_PORTS: ""
+      TZ: Etc/UTC
+    volumes:
+      - ./secrets/wg0.conf:/gluetun/wireguard/wg0.conf:ro
+    ports:
+      - "127.0.0.1:8090:8090"
+    oom_score_adj: -500
+    restart: unless-stopped
+  lodestar:
+    image: ${LODESTAR_IMAGE:?start-block sets it from the screen rules}
+    container_name: lodestar
+    network_mode: service:gluetun
+    depends_on:
+      - gluetun
+    profiles:
+      - block
+    environment:
+      TZ: Etc/UTC
+    volumes:
+      - ./data:/data
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"

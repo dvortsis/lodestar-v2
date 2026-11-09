@@ -89,6 +89,9 @@ RESERVE_SECONDS = 8 * 60
 WORK_SECONDS = DELIVER_JOB_MINUTES * 60 - RESERVE_SECONDS
 LEASE_NEEDED = timedelta(minutes=DELIVER_JOB_MINUTES + 2)  # the whole job, and a margin
 NOT_READY, BUSY_VM, STEP_TIMED_OUT = 20, 21, 124
+MID_BLOCK, RESTART_FAILED = 30, 31  # after the step: renewed but left alone mid-block; the restart failed
+# Exit codes that mean the login was delivered and /run is still to be checked.
+DELIVERED = {0: "delivered", MID_BLOCK: "renewed; takes effect after the block"}
 LIVE_ENV = ("AWS_PIA_ROLE_ARN", "STATE_BUCKET", "STATE_BUCKET_OWNER", "FLEET_SSH_KEY", "PIA_SERVERS",
             "GITHUB_TOKEN", "GITHUB_REPOSITORY", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN")
 
@@ -130,6 +133,17 @@ def bootstrap(run_dir: str = RUN_DIR, out: str = WG_CONF, boot_marker: str = BOO
         "trap 'exit 143' TERM",
         'tar -x -C "$d" --no-same-owner -f -',
         f'timeout -s TERM {STEP_TIMEOUT} bash "$d/pia-wireguard.sh" "$d" {o}',
+        # OP-3a: a new wg0.conf takes effect only when gluetun restarts, and a
+        # gluetun restart needs a Lodestar restart (operations 4.3). Never mid-
+        # block: with a collector running, leave the tunnel alone (exit 30);
+        # start-block recreates gluetun from the current wg0.conf anyway.
+        f"if docker ps --filter 'name=^lodestar-collector' --format x 2>/dev/null | grep -q .; then exit {MID_BLOCK}; fi",
+        "if [ \"$(docker inspect -f '{{.State.Running}}' gluetun 2>/dev/null)\" = true ]; then",
+        f"  docker restart gluetun >/dev/null 2>&1 || exit {RESTART_FAILED}",
+        "  if [ \"$(docker inspect -f '{{.State.Running}}' lodestar 2>/dev/null)\" = true ]; then",
+        f"    docker restart lodestar >/dev/null 2>&1 || exit {RESTART_FAILED}",
+        "  fi",
+        "fi",
     ])
 
 
@@ -368,8 +382,8 @@ class Delivery:
             self.sleep(5)
         if rc is None:
             return f"{role}: out of time before it could connect; /run " + self._clean(base, wait=False)
-        if rc == 0:
-            return f"{role}: delivered; /run " + self._clean(base, wait=False)
+        if rc in DELIVERED:
+            return f"{role}: {DELIVERED[rc]}; /run " + self._clean(base, wait=False)
         # A session (not the step) failed somewhere: an orphan may still be running. A
         # busy VM after a lost attempt is usually that orphan, holding the lock.
         lost = lost_any or rc in (255, 256, BUSY_VM)
@@ -377,7 +391,9 @@ class Delivery:
                 256: "the session didn't finish in time",
                 NOT_READY: "the VM isn't ready (cloud-init hasn't finished)",
                 BUSY_VM: "another delivery is still running there",
-                STEP_TIMED_OUT: "the VM step timed out"}.get(rc, f"the VM step failed (exit {rc})")
+                STEP_TIMED_OUT: "the VM step timed out",
+                RESTART_FAILED: "delivered, but restarting the tunnel failed; escalate"}.get(
+                    rc, f"the VM step failed (exit {rc})")
         return f"{role}: {what}; /run " + self._clean(base, wait=lost)
 
     def _clean(self, base: list[str], wait: bool) -> str:
@@ -412,7 +428,8 @@ class Delivery:
                         with ThreadPoolExecutor(max_workers=len(args)) as pool:
                             results = list(pool.map(lambda a: self.to_target(*a), args))
                     lines += results
-                    ok = all(line.endswith("delivered; /run clean") for line in results)
+                    ok = all(any(line.endswith(f": {word}; /run clean") for word in DELIVERED.values())
+                             for line in results)
                 finally:
                     if not self.close_rules(fids):
                         lines.append("its firewall rule couldn't be closed; the next sweep removes it; escalate")

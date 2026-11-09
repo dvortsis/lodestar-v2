@@ -113,7 +113,11 @@ class FleetStructure(unittest.TestCase):
                         else:
                             self.assertEqual(job.get("environment"), "cloud-fleet")
                             self.assertTrue(str(s.get("run", "")).startswith("python3 infra/fleet/fleet.py "))
-                            self.assertFalse(names & {"AWS_PIA_ROLE_ARN", "PIA_SERVERS", "FLEET_SSH_KEY"})
+                            self.assertFalse(names & {"AWS_PIA_ROLE_ARN", "PIA_SERVERS"})
+                            # The SSH key reaches only act's step (live `run <step>`, OP-3a).
+                            self.assertEqual("FLEET_SSH_KEY" in names, name == "act")
+                            # Every cloud-fleet step names the buckets' owner (P8).
+                            self.assertIn("FLEET_BUCKET_OWNER", names)
 
     def test_if_before_environment(self):
         for name, job in self.jobs.items():
@@ -239,6 +243,7 @@ SECRET_NAMES = [
     "OWNER_ADMIN_CIDR", "STATE_BUCKET", "EVIDENCE_BUCKET", "CONTROL_BUCKET", "PIA_SERVERS",
     "OPERATOR_APP_ID", "OPERATOR_APP_PRIVATE_KEY", "ANTHROPIC_API_KEY", "FLEET_SSH_PUBLIC_KEY",
     "OWNER_SSH_PUBLIC_KEY", "FLEET_LINODE_ACCOUNT_EUUID", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "STATE_BUCKET_OWNER",
+    "FLEET_BUCKET_OWNER",
 ]
 CHAIN = ("pia-fence", "deliver-pia", "pia-release")
 PIA_SECRETS = {"AWS_PIA_ROLE_ARN", "STATE_BUCKET", "STATE_BUCKET_OWNER", "FLEET_SSH_KEY", "PIA_SERVERS"}
@@ -263,7 +268,8 @@ SCENARIOS = {
                                        event_env("/fleet up screen", OPERATOR_STOP="true"), event_env(AUTHOR_ID="1")],
     ("infra/fleet/fleet.py", "refuse"): [{"REFUSAL_REASON": "unknown verb", "CHANNEL_PR": "700"}],
     ("infra/fleet/fleet.py", "act"): [event_env("/fleet status"), event_env("/fleet down"),
-                                      event_env("/fleet run leak-test main"), event_env("/fleet extend")],
+                                      event_env("/fleet run leak-test main"), event_env("/fleet run vm-status worker"),
+                                      event_env("/fleet extend")],
     ("infra/fleet/fleet.py", "reap"): [event_env()],
     ("infra/fleet/fleet.py", "dispatch-down"): [event_env()],
     ("infra/fleet/fleet.py", "pia-fence"): [event_env("/fleet up screen"), event_env("/fleet run renew-vpn main")],

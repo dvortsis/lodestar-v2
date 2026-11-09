@@ -486,6 +486,13 @@ class Deliver(unittest.TestCase):
         rc, _, _ = self.run_slow(deliver.WORK_SECONDS - deliver.SSH_TIMEOUT, hang=False)  # exactly enough: it runs
         self.assertEqual((rc, self.reports), (0, ["deliver-pia: main: delivered; /run clean"]))
 
+    def test_renewal_outcomes(self):
+        rc = self.go("/fleet run renew-vpn main", ssh=FakeSSH(rcs=[deliver.MID_BLOCK]))
+        self.assertEqual((rc, self.reports), (0, ["deliver-pia: main: renewed; takes effect after the block; /run clean"]))
+        rc = self.go("/fleet run renew-vpn main", ssh=FakeSSH(rcs=[deliver.RESTART_FAILED]))
+        self.assertEqual((rc, self.reports),
+                         (1, ["deliver-pia: main: delivered, but restarting the tunnel failed; escalate; /run clean"]))
+
     def test_a_busy_vm_after_a_lost_attempt_waits_for_the_orphan(self):
         class Orphan(FakeSSH):  # 255, then the retry finds the orphan holding the lock
             cleans = [1, 1, 0]
@@ -610,6 +617,50 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(clean(), 1)  # lock free, but the directory is still there
         subprocess.run(["rm", "-rf", str(run_dir)])
         self.assertEqual(clean(), 0)
+
+    def test_a_renewal_restarts_the_tunnel_only_outside_a_block(self):
+        """OP-3a: after the step, gluetun (and Lodestar) restart so the new wg0.conf
+        takes effect, unless a collector is running (mid-block)."""
+        docker = r"""#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$STUB/docker.log"
+case "$1" in
+  ps) [ -n "$COLLECTOR" ] && echo x; exit 0 ;;
+  inspect) case "$4" in gluetun) [ -n "$GLUETUN" ] && echo true || exit 1 ;; lodestar) [ -n "$LODESTAR" ] && echo true || exit 1 ;; esac ;;
+  restart) [ -n "$FAIL_RESTART" ] && exit 1; exit 0 ;;
+esac
+"""
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(tmp)])
+        stub = tmp / "stub"
+        (stub / "bin").mkdir(parents=True)
+        for name, body in (("curl", CURL), ("wg", WG), ("docker", docker), ("cloud-init", "#!/bin/sh\nexit 0\n")):
+            (stub / "bin" / name).write_text(body)
+            (stub / "bin" / name).chmod(0o755)
+        (stub / "token.json").write_text(json.dumps({"token": TOKEN}))
+        (stub / "servers.json").write_text(json.dumps(SERVERS))
+        (stub / "addkey.json").write_text(json.dumps(ADDKEY))
+        run_dir, out = tmp / "run" / "lodestar-pia", tmp / "secrets" / "wg0.conf"
+        run_dir.parent.mkdir()
+        out.parent.mkdir(mode=0o700)
+        marker, lock = tmp / "boot-finished", tmp / "run" / "lodestar-pia.lock"
+        marker.write_text("")
+
+        def boot(**flags):
+            log = stub / "docker.log"
+            if log.exists():
+                log.unlink()
+            env = {"PATH": f"{stub / 'bin'}:/usr/bin:/bin", "STUB": str(stub), "STUB_MODE": "", "TOKEN": TOKEN,
+                   "PRIV": PRIV, "PUB": PUB, **{k: "1" for k, v in flags.items() if v}}
+            r = subprocess.run(["bash", "-c", deliver.bootstrap(str(run_dir), str(out), str(marker), str(lock))],
+                               input=deliver.payload(LOGIN, "ca_test"), env=env, capture_output=True, timeout=60)
+            restarts = [ln for ln in (log.read_text().splitlines() if log.exists() else []) if ln.startswith("restart")]
+            return r.returncode, restarts
+        self.assertEqual(boot(), (0, []))  # no stack yet (the first delivery after up)
+        self.assertEqual(boot(GLUETUN=True, LODESTAR=True), (0, ["restart gluetun", "restart lodestar"]))
+        self.assertEqual(boot(GLUETUN=True), (0, ["restart gluetun"]))
+        self.assertEqual(boot(GLUETUN=True, LODESTAR=True, COLLECTOR=True), (deliver.MID_BLOCK, []))
+        self.assertEqual(boot(GLUETUN=True, FAIL_RESTART=True), (deliver.RESTART_FAILED, ["restart gluetun"]))
+        self.assertFalse(run_dir.exists())  # the login is gone in every case
 
     def test_remote_command_is_fixed(self):
         cmd = deliver.remote_command()
