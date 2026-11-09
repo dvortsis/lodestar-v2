@@ -29,7 +29,8 @@ from typing import Callable
 
 import audit
 from limits import hourly_usd
-from state import FLEET_KEY, LEDGER_KEY, MISMATCH_KEY, FleetUnknown, is_tombstone, tombstone
+from state import (FLEET_KEY, LEDGER_KEY, MISMATCH_KEY, FleetUnknown, LedgerUnreadable, is_tombstone, tombstone,
+                   validate)
 from timefmt import fmt, parse_ts
 
 TF_DIR = Path(__file__).resolve().parents[1] / "akamai" / "terraform"
@@ -38,6 +39,10 @@ REGION = "us-east-1"
 LINODE_SECRET = "lodestar/akamai-fleet-token"
 LOCK_HELD = "Error acquiring the state lock"
 ROLE_LABELS = {"main": "main", "worker": "worker-01"}  # preset role -> Terraform role label
+RULE_FIELDS = ("inbound", "inbound_policy", "outbound", "outbound_policy")  # the writable part of a rule set
+# Terraform's environment is built from these and the run's own values, never os.environ
+# whole (which holds the job's GitHub and OIDC tokens).
+TF_ENV_PASS = ("PATH", "HOME", "TMPDIR", "RUNNER_TEMP", "SSL_CERT_FILE", "HTTPS_PROXY", "NO_PROXY")
 
 
 class ApplyFailed(RuntimeError):
@@ -55,7 +60,10 @@ class Evidence:
         self.s3, self.bucket, self.run_id = s3, bucket, run_id
 
     def put(self, name: str, text: str) -> None:
-        self.s3.put_object(Bucket=self.bucket, Key=f"fleet/{self.run_id}/{name}.log", Body=text.encode())
+        try:
+            self.s3.put_object(Bucket=self.bucket, Key=f"fleet/{self.run_id}/{name}.log", Body=text.encode())
+        except Exception:
+            pass  # losing a log never stops a destroy; the output itself is never printed instead
 
 
 def pinned_tf_dir(commit: str | None, run=subprocess.run) -> Path:
@@ -155,6 +163,7 @@ class LiveBackend:
                 # The first tombstone: no fleet.json yet and nothing in the account.
                 try:
                     self._put(self.state_bucket, FLEET_KEY, tombstone(self.clock()), IfNoneMatch="*")
+                    self._clear_mismatch()
                 except Exception:
                     raise FleetUnknown("fleet.json unreadable") from None
                 return None
@@ -169,14 +178,19 @@ class LiveBackend:
         self._put(self.state_bucket, FLEET_KEY, fleet)
 
     def mismatch(self) -> bool:
+        """The flag is always present once a tombstone is written, so its meaning
+        never rests on 404 versus 403. Anything but a readable false is a mismatch."""
         try:
-            self.s3.get_object(Bucket=self.control_bucket, Key=MISMATCH_KEY)
+            doc = self._get(self.control_bucket, MISMATCH_KEY)
+        except Exception:
             return True
-        except Exception as e:
-            return s3_code(e) != "NoSuchKey"  # unreadable counts as a mismatch
+        return not (isinstance(doc, dict) and doc.get("mismatch") is False)
 
     def set_mismatch(self, reasons: list[str]) -> None:
-        self._put(self.control_bucket, MISMATCH_KEY, {"at": fmt(self.clock()), "reasons": reasons})
+        self._put(self.control_bucket, MISMATCH_KEY, {"mismatch": True, "at": fmt(self.clock()), "reasons": reasons})
+
+    def _clear_mismatch(self) -> None:
+        self._put(self.control_bucket, MISMATCH_KEY, {"mismatch": False, "at": fmt(self.clock())})
 
     def _ledger(self) -> dict:
         try:
@@ -184,16 +198,17 @@ class LiveBackend:
         except Exception as e:
             if s3_code(e) == "NoSuchKey":
                 return {}
-            raise
-        if not isinstance(doc, dict):
-            raise ValueError("spend ledger unreadable")
+            raise LedgerUnreadable("spend ledger unreadable") from None
+        if not isinstance(doc, dict) or not all(isinstance(v, (int, float)) for v in doc.values()):
+            raise LedgerUnreadable("spend ledger unreadable")
         return doc
 
     def _accrued(self, fleet, now) -> float:
+        """Up to now, not the expiry: a fleet that outlives it is still billed."""
         if not fleet:
             return 0.0
-        created, expires = parse_ts(fleet["created_at"]), parse_ts(fleet["expires_at"])
-        return hourly_usd(self.limits, fleet["preset"]) * max(0.0, (min(now, expires) - created).total_seconds() / 3600)
+        created = parse_ts(fleet["created_at"])
+        return hourly_usd(self.limits, fleet["preset"]) * max(0.0, (now - created).total_seconds() / 3600)
 
     def month_spend_usd(self, now) -> float:
         fleet = self.read_fleet()
@@ -207,9 +222,16 @@ class LiveBackend:
             out.append({"id": str(n["id"]), "created": created + "Z"})
         return out
 
+    def lodestar_firewalls(self) -> list[dict]:
+        return [{"id": str(f["id"])} for f in self.linode.firewalls()]
+
     def delete_linodes(self, ids) -> None:
+        """The age reap: those Linodes, then any tagged firewall left with no device."""
         for lid in ids:
             self.linode.delete_linode(lid)
+        for f in self.linode.firewalls():
+            if not self.linode.firewall_devices(f["id"]):
+                self.linode.delete_firewall(f["id"])
 
     # -- Terraform --
     def _tfvars(self, d: str, host_keys: dict | None) -> str:
@@ -233,14 +255,20 @@ class LiveBackend:
         """Record the fleet first (so its expiry holds even if apply fails), then apply."""
         fence()
         self.write_fleet(fleet)
-        keys = {ROLE_LABELS[r]: dict(zip(("private_key", "public_key"), self.keygen())) for r in fleet["roles"]}
-        tf = self.tf.at(fleet["commit"])
+        try:
+            keys = {ROLE_LABELS[r]: dict(zip(("private_key", "public_key"), self.keygen())) for r in fleet["roles"]}
+            tf = self.tf.at(fleet["commit"])
+        except Exception:
+            raise ApplyFailed("host keys or the pinned configuration couldn't be prepared") from None
         with tempfile.TemporaryDirectory() as d:
             varfile = self._tfvars(d, keys)
             tf.init(self.state_bucket)
             fence()
             tf.apply(varfile)
-        hosts = tf.outputs().get("fleet_hosts", {}).get("value") or {}
+        try:
+            hosts = tf.outputs().get("fleet_hosts", {}).get("value") or {}
+        except Exception:
+            raise ApplyFailed("terraform output couldn't be read") from None
         for role, label in ROLE_LABELS.items():
             if role in fleet["roles"]:
                 h = hosts.get(label) or {}
@@ -258,38 +286,40 @@ class LiveBackend:
         fence()
         try:
             fleet = self.read_fleet()
-        except FleetUnknown:
-            fleet = None
+            if fleet is not None:
+                validate(fleet, self.limits)
+        except (FleetUnknown, ValueError):
+            fleet = None  # unknown or malformed: destroy with the current configuration
         try:
             tf = self.tf.at(fleet["commit"] if fleet else None)
             with tempfile.TemporaryDirectory() as d:
                 varfile = self._tfvars(d, None)
                 tf.init(self.state_bucket)
                 tf.destroy(varfile)
-        except ApplyFailed:
-            pass  # a held state lock or a failed destroy: the API sweep below still runs
+        except Exception:  # noqa: BLE001 - down is the kill path: whatever failed above,
+            pass           # the fenced API sweep below still runs
         fence()
-        for n in self.linode.linodes():
-            self.linode.delete_linode(n["id"])
-        for f in self.linode.firewalls():
-            self.linode.delete_firewall(f["id"])
+        for item, delete in [(n, self.linode.delete_linode) for n in self.linode.linodes()] + \
+                            [(f, self.linode.delete_firewall) for f in self.linode.firewalls()]:
+            try:
+                delete(item["id"])
+            except Exception:  # noqa: BLE001 - try every one; what's left is checked below
+                pass
         return not self.linode.linodes() and not self.linode.firewalls()
 
     def finish_down(self, fleet, fence: Callable[[], None]) -> None:
         """After an empty inventory: book the spend, tombstone fleet.json, clear the flag."""
         now = self.clock()
         fence()
+        self._put(self.state_bucket, FLEET_KEY, tombstone(now))  # first, so nothing below can strand it
+        fence()
+        self._clear_mismatch()
         if fleet:
-            ledger = self._ledger()
+            fence()
+            ledger = self._ledger()  # LedgerUnreadable: the caller escalates; up's cap check then refuses
             month = now.strftime("%Y-%m")
             ledger[month] = round(float(ledger.get(month, 0.0)) + self._accrued(fleet, now), 4)
             self._put(self.state_bucket, LEDGER_KEY, ledger)
-        self._put(self.state_bucket, FLEET_KEY, tombstone(now))
-        try:
-            self.s3.delete_object(Bucket=self.control_bucket, Key=MISMATCH_KEY)
-        except Exception as e:
-            if s3_code(e) != "NoSuchKey":
-                raise
 
     # -- firewalls --
     def audit(self, fence: Callable[[], None]) -> list[str]:
@@ -302,15 +332,20 @@ class LiveBackend:
         admin_by_fw = {str(s.get("firewall_id")): s.get("admin_ipv4")
                        for s in (fleet or {}).get("roles", {}).values() if s.get("firewall_id")}
         linode_ids = {str(n["id"]) for n in self.linode.linodes()}
-        problems, now = [], self.clock()
+        now = self.clock()
+        # Read everything first (rules, devices, every run's status), so a failure
+        # in any of those calls sweeps nothing.
+        plan = []
         for fw in self.linode.firewalls():
             rules = self.linode.firewall_rules(fw["id"])
             swept, n = audit.sweep(rules, self.lookup_run, now)
+            plan.append((fw, swept, n, self.linode.firewall_devices(fw["id"])))
+        problems = []
+        for fw, swept, n, devices in plan:
             if n:
                 fence()
-                self.linode.put_firewall_rules(fw["id"], swept)
-            problems += audit.audit_firewall(fw, swept, self.linode.firewall_devices(fw["id"]),
-                                             admin_by_fw.get(str(fw["id"])), ranges, linode_ids)
+                self.linode.put_firewall_rules(fw["id"], writable(swept))
+            problems += audit.audit_firewall(fw, swept, devices, admin_by_fw.get(str(fw["id"])), ranges, linode_ids)
         return sorted(set(problems))
 
     def set_job_rules(self, fleet: dict, run_id: str, attempt: str, cidr: str | None, fence: Callable[[], None]) -> None:
@@ -320,7 +355,12 @@ class LiveBackend:
             rules = self.linode.firewall_rules(fid)
             new = audit.open_rule(rules, run_id, attempt, cidr, ranges) if cidr else audit.close_rule(rules, run_id, attempt)
             fence()
-            self.linode.put_firewall_rules(fid, new)
+            self.linode.put_firewall_rules(fid, writable(new))
+
+
+def writable(rules: dict) -> dict:
+    """Only the rule set's writable fields go back in a PUT (no version or fingerprint)."""
+    return {k: rules[k] for k in RULE_FIELDS if k in rules}
 
 
 def known_hosts(fleet: dict) -> str:
@@ -403,9 +443,13 @@ def live_context(env: dict, limits: dict, clock, run_id: str):  # pragma: no cov
     except Exception:
         raise SystemExit("fleet: the fleet token couldn't be read") from None
     linode = Linode(urllib_transport(token))
-    linode.check_account(env["FLEET_LINODE_ACCOUNT_EUUID"].strip())
-    # Terraform alone gets the Linode token and the role's credentials, in its own environment.
-    tf_env = dict(os.environ, LINODE_TOKEN=token, TF_IN_AUTOMATION="1", TF_INPUT="0", AWS_REGION=REGION,
+    try:
+        linode.check_account(env["FLEET_LINODE_ACCOUNT_EUUID"].strip())
+    except Exception:
+        raise SystemExit("fleet: the Linode token is not for the fleet's account") from None
+    # Terraform alone gets the Linode token and the role's credentials, in a minimal environment.
+    tf_env = {k: os.environ[k] for k in TF_ENV_PASS if k in os.environ}
+    tf_env.update(LINODE_TOKEN=token, TF_IN_AUTOMATION="1", TF_INPUT="0", AWS_REGION=REGION,
                   AWS_ACCESS_KEY_ID=keys["aws_access_key_id"], AWS_SECRET_ACCESS_KEY=keys["aws_secret_access_key"],
                   AWS_SESSION_TOKEN=keys["aws_session_token"])
     tf = Terraform(TF_DIR, tf_env, Evidence(s3, env["EVIDENCE_BUCKET"], run_id))

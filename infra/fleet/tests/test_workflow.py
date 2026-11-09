@@ -255,8 +255,13 @@ class PublicLogLeak(unittest.TestCase):
                 r = subprocess.run([sys.executable, str(ROOT / "infra/fleet/fleet.py"), sub], cwd=self.outside,
                                    capture_output=True, text=True, timeout=60,
                                    env=scrub_env({**event_env("/fleet status", FLEET_LIVE="true"), **secret_env}))
-                self.assertNotEqual(r.returncode, 0)
-                self.assertIn("FLEET_LINODE_ACCOUNT_EUUID", r.stderr)
+                if sub == "act":
+                    # act runs its gates and the main-head check before touching any credential.
+                    self.assertEqual(r.returncode, 0)
+                    self.assertIn("not main's head", r.stdout)
+                else:
+                    self.assertNotEqual(r.returncode, 0)
+                    self.assertIn("FLEET_LINODE_ACCOUNT_EUUID", r.stderr)
                 for v in values:
                     self.assertNotIn(v, r.stdout + r.stderr)
 

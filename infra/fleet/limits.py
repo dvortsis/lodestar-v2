@@ -35,6 +35,8 @@ def check_up(limits: Mapping, preset: str, backend, now) -> str | None:
     """None if `up <preset>` is within limits, else a fixed refusal reason."""
     if backend.lodestar_linodes():
         return "a Lodestar Linode exists"
+    if backend.lodestar_firewalls():
+        return "a Lodestar firewall exists"
     if backend.read_fleet() is not None:
         return "a fleet is recorded"
     if backend.month_spend_usd(now) + projected_usd(limits, preset) > limits["monthly_compute_cap_usd"]:

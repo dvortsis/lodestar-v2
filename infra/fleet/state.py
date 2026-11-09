@@ -30,6 +30,10 @@ class FleetUnknown(RuntimeError):
     """fleet.json couldn't be read as a fleet or a tombstone: a fleet may exist."""
 
 
+class LedgerUnreadable(RuntimeError):
+    """The monthly spend ledger couldn't be read: `up` refuses (the cap fails closed)."""
+
+
 def tombstone(now: datetime) -> dict:
     return {"version": 1, "fleet": None, "updated_at": fmt(now)}
 
@@ -80,6 +84,7 @@ class DryRunBackend:
 
     fleet: dict | None = None
     linodes: list[dict] = field(default_factory=list)  # {"id": str, "created": iso Z}
+    firewalls: list[dict] = field(default_factory=list)  # {"id": str}
     spend_usd: float = 0.0
     mismatch_flag: bool = False
     log: list[str] = field(default_factory=list)
@@ -102,7 +107,7 @@ class DryRunBackend:
         fence()
         self.log.append("destroy")
         self.fleet = None
-        self.linodes = []
+        self.linodes, self.firewalls = [], []
         return True
 
     def finish_down(self, fleet, fence):
@@ -123,6 +128,9 @@ class DryRunBackend:
 
     def lodestar_linodes(self):
         return list(self.linodes)
+
+    def lodestar_firewalls(self):
+        return list(self.firewalls)
 
     def month_spend_usd(self, now):
         return self.spend_usd

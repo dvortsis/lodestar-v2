@@ -18,7 +18,7 @@ import fleet
 import limits
 from linode import Linode, LinodeError
 from lock import LOCK_KEY, FleetLock, LockLost, MemoryStore
-from state import FLEET_KEY, LEDGER_KEY, MISMATCH_KEY, FleetUnknown, new_fleet
+from state import FLEET_KEY, LEDGER_KEY, MISMATCH_KEY, FleetUnknown, LedgerUnreadable, new_fleet
 from tests.helpers import T0, Clock, FakeGitHub, event_env, make_repo
 from timefmt import fmt
 
@@ -78,11 +78,13 @@ class FakeLinodeAPI:
         self.rules = {"21": fw_rules(), "22": fw_rules(), "98": fw_rules()}
         self.devices = {"21": [{"entity": {"type": "linode", "id": 11}}], "22": [{"entity": {"type": "linode", "id": 12}}],
                         "98": [{"entity": {"type": "linode", "id": 99}}]}
-        self.calls = []
+        self.calls, self.fail_deletes = [], False
 
     def __call__(self, method, path, body):
         self.calls.append((method, path.split("?")[0]))
         p = path.split("?")[0]
+        if method == "DELETE" and self.fail_deletes:
+            raise LinodeError("Linode API DELETE failed: HTTP 500")
         if p == "/account":
             return {"euuid": "EUUID-FLEET"}
         if p == "/linode/instances":
@@ -264,9 +266,14 @@ class Backend(unittest.TestCase):
             b.read_fleet()
 
     def test_mismatch_flag_fails_closed(self):
-        b, s3, *_ = backend()
+        b, s3, api, _ = backend()
+        self.assertTrue(b.mismatch())  # absent: only a readable false means no mismatch
+        api.linodes, api.firewalls = {}, {}
+        b.read_fleet()  # the first tombstone also writes the flag as false
         self.assertFalse(b.mismatch())
         b.set_mismatch(["x"])
+        self.assertTrue(b.mismatch())
+        s3.objects[("control-b", MISMATCH_KEY)] = b"junk"
         self.assertTrue(b.mismatch())
         b2, *_ = backend(s3=FakeS3(deny={("control-b", MISMATCH_KEY)}))
         self.assertTrue(b2.mismatch())
@@ -323,8 +330,11 @@ class Backend(unittest.TestCase):
         b.set_mismatch(["x"])
         b.finish_down(f, noop)
         self.assertAlmostEqual(s3.doc("state-b", LEDGER_KEY)["2026-11"], round(0.0795 * 10, 4))
+        # Past the expiry, accrual keeps counting: a fleet that outlives it is still billed.
+        b.finish_down(new_fleet(L, "screen", "a" * 40, T0 - timedelta(hours=50)), noop)
+        self.assertAlmostEqual(s3.doc("state-b", LEDGER_KEY)["2026-11"], round(0.0795 * 10, 4) + round(0.0795 * 60, 4))
         self.assertIsNone(s3.doc("state-b", FLEET_KEY)["fleet"])
-        self.assertNotIn(("control-b", MISMATCH_KEY), s3.objects)
+        self.assertIs(s3.doc("control-b", MISMATCH_KEY)["mismatch"], False)
 
     def test_audit_sweeps_under_the_fence_then_checks(self):
         b, s3, api, _ = backend(runs={"5": {"status": "completed", "run_started_at": fmt(T0)}})
@@ -358,6 +368,120 @@ class Backend(unittest.TestCase):
         self.assertEqual(apply.missing_live_env(dict(ENV, **oidc)), [])
         self.assertEqual(apply.missing_live_env(ENV), sorted(oidc))  # id-token: write and the role ARN are required
         self.assertIn("OWNER_SSH_PUBLIC_KEY", apply.missing_live_env(dict(ENV, OWNER_SSH_PUBLIC_KEY=" ")))
+
+
+class FailClosed(unittest.TestCase):
+    """B1-B3 of the self-review: the audit's failure never stops lifetime
+    enforcement, down always sweeps, and the marker holds while resources remain."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.repo, cls.c = make_repo()
+
+    def overdue(self, api=None, minutes_past=60, **kw):
+        b, s3, api, tf = backend(api=api, **kw)
+        clock = Clock(T0)
+        b.clock = clock
+        f = new_fleet(L, "screen", self.c["head"], T0 - timedelta(hours=44, minutes=minutes_past))
+        b.create(f, noop)
+        return b, s3, api, tf, clock
+
+    def reap(self, b, clock, store=None):
+        out, store = io.StringIO(), store if store is not None else MemoryStore()
+        with redirect_stdout(out), redirect_stderr(out):
+            rc = fleet.main(["reap"], env=event_env(FLEET_LIVE="true", **ENV), backend=b, store=store,
+                            transport=FakeGitHub(), clock=clock, sleep=clock.sleep, repo=self.repo)
+        return rc, out.getvalue(), store
+
+    def test_audit_failure_never_stops_lifetime_enforcement(self):
+        def boom():
+            raise RuntimeError("GitHub API failed: HTTP 503")
+        for label, meta in (("meta raises", boom), ("meta empty", lambda: {})):
+            with self.subTest(label):
+                b, s3, api, _, clock = self.overdue()
+                b.meta = meta
+                rc, out, _ = self.reap(b, clock)
+                self.assertEqual(rc, 0)
+                self.assertIn("the firewall audit couldn't run; escalate", out)
+                self.assertNotIn("fleet.json is invalid", out)
+                self.assertIn("reaper: emergency", out)
+                self.assertFalse(api.linodes.keys() & {"11", "12"})  # the fleet still went down
+                self.assertNotIn("PUT", [m for m, _ in api.calls])
+
+    def test_actions_api_failure_sweeps_nothing(self):
+        b, s3, api, _, clock = self.overdue(minutes_past=-120)  # within lifetime: only the audit runs
+        for fid in ("21", "22"):
+            api.rules[fid]["inbound"].append(audit.job_rule("5", "1", "4.148.1.2/32"))
+        calls = []
+
+        def lookup(rid):
+            calls.append(rid)
+            if len(calls) == 2:
+                raise RuntimeError("GitHub API failed: HTTP 403")
+            return None  # unknown run: stale
+        b.lookup_run = lookup
+        _, out, _ = self.reap(b, clock)
+        self.assertIn("the firewall audit couldn't run; escalate", out)
+        self.assertNotIn("PUT", [m for m, _ in api.calls])  # read first: nothing was half-swept
+        self.assertEqual(len(api.rules["21"]["inbound"]), 2)
+
+    def test_destroy_sweeps_whatever_failed_before(self):
+        b, s3, api, tf = backend()
+        b.create(new_fleet(L, "screen", self.c["head"], T0), noop)
+
+        def bad_pin(c):
+            raise __import__("subprocess").CalledProcessError(128, ["git"])
+        b.tf.pin = bad_pin
+        b.tf.evidence.s3 = None  # the evidence bucket is unreachable too
+        self.assertTrue(b.destroy(noop))
+        self.assertEqual(set(api.linodes), {"99"})
+
+    def test_marker_holds_while_resources_remain(self):
+        b, s3, api, _, clock = self.overdue(minutes_past=30)  # >15 min past expiry: pre-empt
+        api.fail_deletes = True
+        rc, out, store = self.reap(b, clock)
+        self.assertIn("tagged resources remain; escalate", out)
+        holder = json.loads(store.objects[LOCK_KEY][0])
+        self.assertEqual(holder["kind"], "reaping")  # kept until its own expiry
+        self.assertIsNotNone(s3.doc("state-b", FLEET_KEY)["roles"])  # no tombstone
+        # The marker's own expiry: after 90 minutes a normal run can take the lock again.
+        clock.sleep(91 * 60)
+        self.assertEqual(FleetLock(store, 90, clock).acquire("8-1"), "acquired")
+
+    def test_mismatch_flag_kept_when_down_leaves_resources(self):
+        b, s3, api, _, clock = self.overdue(minutes_past=-120)
+        api.rules["21"]["inbound_policy"] = "ACCEPT"
+        api.fail_deletes = True
+        _, out, store = self.reap(b, clock)
+        self.assertIn("reaper: emergency (firewall audit mismatch)", out)
+        self.assertIs(s3.doc("control-b", MISMATCH_KEY)["mismatch"], True)
+        self.assertIn(LOCK_KEY, store.objects)
+
+    def test_age_reap_takes_orphan_firewalls_and_up_refuses_while_one_exists(self):
+        b, s3, api, _ = backend()
+        api.devices["22"] = []
+        b.delete_linodes(["11"])
+        self.assertNotIn("22", api.firewalls)  # no device left: deleted with the age reap
+        api.linodes = {}
+        self.assertEqual(limits.check_up(L, "screen", b, T0), "a Lodestar firewall exists")
+
+    def test_unreadable_ledger_never_strands_the_tombstone(self):
+        b, s3, *_ = backend()
+        s3.objects[("state-b", LEDGER_KEY)] = b'["not", "a", "ledger"]'
+        with self.assertRaises(LedgerUnreadable):
+            b.finish_down(new_fleet(L, "screen", "a" * 40, T0), noop)
+        self.assertIsNone(s3.doc("state-b", FLEET_KEY)["fleet"])  # written first
+
+    def test_credentials_are_minted_only_after_the_gates(self):
+        with mock.patch.object(apply, "live_context", side_effect=AssertionError("minted too early")):
+            out = io.StringIO()
+            with redirect_stdout(out):
+                rc = fleet.main(["act"], env=event_env("/fleet up screen", FLEET_LIVE="true", AUTHOR_ID="1", **ENV))
+            self.assertEqual(rc, 0)
+
+    def test_rule_writes_send_only_writable_fields(self):
+        doc = dict(fw_rules(), version=7, fingerprint="abc")
+        self.assertEqual(set(apply.writable(doc)), set(apply.RULE_FIELDS))
 
 
 class Pin(unittest.TestCase):
@@ -427,7 +551,7 @@ class LiveFlows(unittest.TestCase):
         store = MemoryStore()
         _, out = self.run_cli("reap", "", b, store=store)
         self.assertIn("reaper: emergency (firewall audit mismatch)", out)
-        self.assertNotIn(("control-b", MISMATCH_KEY), s3.objects)  # cleared once the inventory is empty
+        self.assertIs(s3.doc("control-b", MISMATCH_KEY)["mismatch"], False)  # cleared once the inventory is empty
         self.assertIsNone(s3.doc("state-b", FLEET_KEY)["fleet"])
         self.assertNotIn(LOCK_KEY, store.objects)
 
