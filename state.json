@@ -6585,6 +6585,11 @@
       "id": "OP-2-notes-641-polish",
       "at": "2026-11-09T00:22Z",
       "note": "OP-2 (touches the fleet-control template for ledger/mismatch keys): N1 test_templates.py ps_code misses quoted/exe/variable terraform init forms; scan comment-stripped text with strings kept, regex (?m)(^|[;&|]\\s*|&\\s*)['\"]?terraform(\\.exe)?['\"]?\\s+init\b, or ban &\\s*[quote$] in the pure files. N2 test_policy_audit.py:178-180 compare Version value 2012-10-17."
+    },
+    {
+      "id": "pk-win-upd-3-owns-update-helper",
+      "added": "2026-11-09T00:36Z",
+      "what": "next runner PR: add crates/lodestar/src/cli/update_helper.rs to PK-win-upd-3 owns (exit-code shared edit approved 00:36Z); also note start type disabled during rollback, rollback.json marker, halt leaves service stopped (runner agreed; owner \u00a72.19 flag at merge)"
     }
   ],
   "main_health": [
