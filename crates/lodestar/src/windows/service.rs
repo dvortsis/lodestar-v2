@@ -123,6 +123,41 @@ pub fn rollback_refusal(data_dir: &Path) -> Option<String> {
         .map(|e| e.to_string())
 }
 
+/// How the service's idle wait during a rollback ended.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Idle {
+    /// The SCM asked it to stop (or shut down).
+    Stopped,
+    /// The marker went: the rollback finished, or an administrator
+    /// removed it. The process ends cleanly so a fresh one starts.
+    MarkerGone,
+}
+
+/// How often the idle service looks for the marker and a stop.
+pub const IDLE_POLL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// While the rollback marker exists the service stays Running and idle:
+/// it never opens the store and serves nothing, until `stopped()` or the
+/// marker goes. Exiting at once instead would fail an MSI's
+/// `ServiceControl Start="install" Wait="yes"` (error 1920, exit 1603):
+/// the reinstall of the previous version during a rollback, or an
+/// administrator's manual one, would fail on the marker.
+pub fn idle_during_rollback(
+    data_dir: &Path,
+    stopped: &dyn Fn() -> bool,
+    poll: std::time::Duration,
+) -> Idle {
+    loop {
+        if stopped() {
+            return Idle::Stopped;
+        }
+        if rollback_refusal(data_dir).is_none() {
+            return Idle::MarkerGone;
+        }
+        std::thread::sleep(poll);
+    }
+}
+
 /// Whether `inner` is `outer` or inside it, compared as [`same_dir`] does.
 pub fn within(inner: &Path, outer: &Path) -> bool {
     let (i, o) = (norm(inner), norm(outer));
@@ -648,10 +683,15 @@ mod scm {
                 REFUSED
             }
             // A rollback holds the store: neither version opens it until
-            // the helper (or an administrator) has finished.
+            // the helper (or an administrator) has finished. The service
+            // stays Running and idle meanwhile, so an MSI that starts it
+            // and waits succeeds, and ends cleanly (0, no failure actions)
+            // once stopped or once the marker goes.
             Ok((_, data_dir, _)) if super::rollback_refusal(&data_dir).is_some() => {
                 log_refusal(&super::rollback_refusal(&data_dir).unwrap_or_default());
-                REFUSED
+                let _ =
+                    super::idle_during_rollback(&data_dir, &|| *stop_rx.borrow(), super::IDLE_POLL);
+                0
             }
             Ok((config, data_dir, witness_refused)) => {
                 let _ = std::env::set_current_dir(&data_dir);
@@ -1368,6 +1408,70 @@ mod tests {
         std::fs::write(data.path().join("bin").join("rollback.json"), b"{}").unwrap();
         let why = rollback_refusal(data.path()).unwrap();
         assert!(why.contains("rollback is in progress"), "{why}");
+    }
+
+    /// The idle wait on the marker: each look reported on a channel, so
+    /// the test waits for looks (with a deadline), never for time.
+    fn idle_in_thread(
+        data: &Path,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> (std::thread::JoinHandle<Idle>, std::sync::mpsc::Receiver<()>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let dir = data.to_path_buf();
+        let handle = std::thread::spawn(move || {
+            idle_during_rollback(
+                &dir,
+                &|| {
+                    let _ = tx.send(());
+                    stop.load(std::sync::atomic::Ordering::SeqCst)
+                },
+                std::time::Duration::from_millis(5),
+            )
+        });
+        (handle, rx)
+    }
+
+    fn looks(rx: &std::sync::mpsc::Receiver<()>, n: usize) {
+        for _ in 0..n {
+            rx.recv_timeout(std::time::Duration::from_secs(10))
+                .expect("the idle wait looked again");
+        }
+    }
+
+    /// With the marker, the service stays up (it keeps looking) until it's
+    /// stopped, and never opens the store.
+    #[test]
+    fn the_marker_keeps_the_service_idle_until_it_stops() {
+        let data = tempfile::tempdir().unwrap();
+        std::fs::create_dir(data.path().join("bin")).unwrap();
+        std::fs::write(data.path().join("bin").join("rollback.json"), b"{}").unwrap();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (handle, rx) = idle_in_thread(data.path(), stop.clone());
+        looks(&rx, 3);
+        assert!(!handle.is_finished());
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(handle.join().unwrap(), Idle::Stopped);
+        assert!(!data.path().join("lodestar.db").exists());
+    }
+
+    /// The marker removed: the idle wait ends, so the process exits 0.
+    #[test]
+    fn the_idle_service_ends_once_the_marker_goes() {
+        let data = tempfile::tempdir().unwrap();
+        std::fs::create_dir(data.path().join("bin")).unwrap();
+        let marker = data.path().join("bin").join("rollback.json");
+        std::fs::write(&marker, b"{}").unwrap();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (handle, rx) = idle_in_thread(data.path(), stop);
+        looks(&rx, 2);
+        std::fs::remove_file(&marker).unwrap();
+        // Keep draining looks until it ends.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !handle.is_finished() && std::time::Instant::now() < deadline {
+            let _ = rx.recv_timeout(std::time::Duration::from_millis(100));
+        }
+        assert_eq!(handle.join().unwrap(), Idle::MarkerGone);
+        assert!(!data.path().join("lodestar.db").exists());
     }
 
     #[test]

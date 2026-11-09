@@ -1231,6 +1231,9 @@ mod tests {
         /// msiexec fails with this instead of answering (as the deadline's
         /// kill or a lost exit code would).
         msi_error: Option<io::ErrorKind>,
+        /// The rollback marker, to record whether it exists at each start.
+        watch_marker: Option<PathBuf>,
+        marker_at_start: Mutex<Vec<bool>>,
         /// Called at a test hook (`copied`): (hook name, action).
         at_hook: Option<(&'static str, Hook)>,
         /// A source to overwrite once it's copied: (name, path, bytes).
@@ -1278,6 +1281,9 @@ mod tests {
             }
         }
         fn start_service(&self) {
+            if let Some(m) = &self.watch_marker {
+                self.marker_at_start.lock().unwrap().push(m.exists());
+            }
             self.note("start");
         }
         fn msiexec(&self, args: &[OsString]) -> io::Result<i32> {
@@ -1972,6 +1978,7 @@ mod tests {
                 "chosen",
                 Box::new(move || *seen.lock().unwrap() = Some(m.exists())),
             )),
+            watch_marker: Some(marker.clone()),
             ..failing(&env)
         };
         assert_eq!(
@@ -1989,6 +1996,8 @@ mod tests {
             "marker during the restore"
         );
         assert!(!marker.exists(), "and gone after it");
+        // Gone before the service starts again, not after.
+        assert_eq!(*fake.marker_at_start.lock().unwrap(), [false]);
         // The store was the old one again before the old MSI ran.
         let seen = fake.store_seen.lock().unwrap().clone();
         assert_eq!(

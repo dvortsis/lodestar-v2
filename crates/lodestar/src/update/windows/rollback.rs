@@ -519,7 +519,7 @@ fn done_of(j: &Journal) -> u8 {
 
 /// A final stop. Neither version starts once the service was stopped
 /// (§12.2): it stays stopped and disabled, with the marker in place
-/// until the store is restored. Before that nothing was changed. The
+/// (it goes only at step 5). Before step 1 nothing was changed. The
 /// journal, the Event Log and `result.json` say how to recover.
 fn halt(ctx: &Context, sys: &dyn System, mut j: Journal, done: u8, why: String) -> Outcome {
     // Recorded before the rollback first touches the service: without it
@@ -576,7 +576,8 @@ pub fn recovery(ctx: &Context, j: &Journal, done: u8, why: &str) -> String {
         "Lodestar {to} failed its health check, and the rollback to {from} stopped after step \
          {done} of 5: {why}. The Lodestar service is stopped and disabled, so neither version \
          opens the store. {store} To recover, an administrator: 1. reads {journal} and the \
-         msiexec logs beside it; 2. installs the {from} MSI by hand, or restores a backup of \
+         msiexec logs beside it; 2. installs the {from} MSI by hand (the service it starts stays idle \
+         while the marker exists, so the install completes), or restores a backup of \
          {data}; 3. once the store is one the installed version reads, deletes {marker} and \
          {journal}, then runs: sc config Lodestar start= delayed-auto, and: sc start Lodestar. \
          Installing a version other than {from} or {to} clears both files at the next \
@@ -768,8 +769,8 @@ pub fn no_service_processes(sys: &dyn System) -> Result<(), String> {
     }
 }
 
-/// Under `.lock`: the marker goes once the store is restored (or the
-/// journal was dropped). Whether it's gone.
+/// Under `.lock`: the marker goes at step 5, right before the service is
+/// started (or when the journal is dropped). Whether it's gone.
 fn remove_marker(ctx: &Context) -> bool {
     let marker = ctx.data_dir.join("bin").join(MARKER);
     if let Ok(Some(bin)) = Bin::existing(&ctx.data_dir)
