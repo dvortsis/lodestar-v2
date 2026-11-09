@@ -1357,19 +1357,19 @@ class LinodeSshProvisioner:
         }
 
     def start_crawler(self) -> None:
-        """Starts the crawler container strictly after re-verifying leak protection."""
-        logger.info("Executing pre-crawler leak verification check...")
-        try:
-            leak_info = self.verify_leak_protection(max_retries=3, delay_s=2)
-            logger.info(f"Leak verification confirmed: VPN egress is {leak_info['vpn_ip']} (Host is {leak_info['host_ip']})")
-        except Exception as exc:
-            logger.error(f"Pre-crawler leak check failed: {exc}. Aborting crawler start and shutting down containers.")
-            self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} cleanup", check=False)
-            raise
-
+        """
+        Starts the crawler container via the authoritative root helper gate (`start-crawler`),
+        which enforces all Gluetun health, WireGuard handshake/transfer/endpoint binding,
+        firewall, DNS, IPv6, and active tunneled egress checks before starting the crawler.
+        If the gate fails, triggers fail-closed cleanup.
+        """
         res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} start-crawler", check=False)
         if res.returncode != 0 or "CRAWLER_STARTED" not in res.stdout:
             err = (res.stderr or res.stdout).strip()
+            logger.error(f"Authoritative start-crawler gate failed: {err}. Tearing down containers.")
+            self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} cleanup", check=False)
+            if "CRITICAL LEAK" in err or "DNS" in err or "IPv6" in err or "firewall" in err.lower() or "ISP" in err:
+                raise LeakDetectedError(f"Crawler startup blocked by leak protection gate: {err}")
             raise VpnConnectionError(f"Failed to start crawler container: {err}")
 
 

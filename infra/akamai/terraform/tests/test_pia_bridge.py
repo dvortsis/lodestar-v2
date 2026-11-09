@@ -577,11 +577,24 @@ class LodestarPiaBridgeTests(unittest.TestCase):
     def test_26_crawler_startup_while_vpn_disconnected(self, mock_cmd: MagicMock) -> None:
         """Confirms that crawler refuses to start when VPN tunnel is disconnected and shuts down stack."""
         prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
-        with patch.object(prov, "verify_leak_protection", side_effect=bridge.VpnConnectionError("Tunnel down")):
-            with self.assertRaises(bridge.VpnConnectionError):
-                prov.start_crawler()
-            # Verify stack shutdown helper was invoked to prevent unencrypted crawler leakage
-            mock_cmd.assert_called_with("sudo -n /usr/local/sbin/lodestar-vpn-helper cleanup", check=False)
+        mock_cmd.side_effect = [
+            subprocess.CompletedProcess(
+                args=["ssh"],
+                returncode=1,
+                stdout="",
+                stderr="ERROR: Gluetun health check failed (status: unhealthy, required: healthy)",
+            ),
+            subprocess.CompletedProcess(
+                args=["ssh"],
+                returncode=0,
+                stdout="CLEANUP_OK\n",
+                stderr="",
+            ),
+        ]
+        with self.assertRaises(bridge.VpnConnectionError):
+            prov.start_crawler()
+        # Verify stack shutdown helper was invoked to prevent unencrypted crawler leakage
+        mock_cmd.assert_called_with("sudo -n /usr/local/sbin/lodestar-vpn-helper cleanup", check=False)
 
     # -------------------------------------------------------------------------
     # Section 9 Remediation: Arbitrary privileged Docker command rejected
@@ -833,10 +846,23 @@ class LodestarPiaBridgeTests(unittest.TestCase):
     def test_vpn_outage_after_startup_no_direct_crawler_egress(self, mock_cmd: MagicMock) -> None:
         """Proves that if VPN goes down before crawler launch, containers are torn down."""
         prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
-        with patch.object(prov, "verify_leak_protection", side_effect=bridge.LeakDetectedError("Egress leak")):
-            with self.assertRaises(bridge.LeakDetectedError):
-                prov.start_crawler()
-            mock_cmd.assert_called_with("sudo -n /usr/local/sbin/lodestar-vpn-helper cleanup", check=False)
+        mock_cmd.side_effect = [
+            subprocess.CompletedProcess(
+                args=["ssh"],
+                returncode=1,
+                stdout="",
+                stderr="CRITICAL LEAK: Active egress IP matches host public IP",
+            ),
+            subprocess.CompletedProcess(
+                args=["ssh"],
+                returncode=0,
+                stdout="CLEANUP_OK\n",
+                stderr="",
+            ),
+        ]
+        with self.assertRaises(bridge.LeakDetectedError):
+            prov.start_crawler()
+        mock_cmd.assert_called_with("sudo -n /usr/local/sbin/lodestar-vpn-helper cleanup", check=False)
 
     @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
     def test_stale_handshake_with_nonzero_historical_traffic_rejected(self, mock_cmd: MagicMock) -> None:
@@ -1089,18 +1115,97 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
             f.write(script)
         os.chmod(self.script_path, 0o755)
 
+        # Install valid PIA Root CA in compose_dir by default (fail-closed requirement)
+        self.ca_path = os.path.join(self.compose_dir, "ca.rsa.4096.crt")
+        with open(self.ca_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(bridge.PIA_ROOT_CA_PEM)
+
+        # Default mock curl and jq in mock_bin for PIA serverlist, TLS binding, and host IP check
+        curl_path = os.path.join(self.mock_bin, "curl")
+        with open(curl_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(
+                "#!/usr/bin/env bash\n"
+                "case \"$*\" in\n"
+                "  *serverlist.piaservers.net*)\n"
+                "    echo '{\"groups\":{\"wg\":[{\"name\":\"wireguard\",\"ports\":[1337]}]},\"regions\":[{\"id\":\"us-newjersey\",\"servers\":{\"wg\":[{\"ip\":\"212.56.54.190\",\"cn\":\"newjersey434\"}]}}]}'\n"
+                "    exit 0\n"
+                "    ;;\n"
+                "  *newjersey434:1337*)\n"
+                "    echo -n '400'\n"
+                "    exit 0\n"
+                "    ;;\n"
+                "  *checkip.amazonaws.com*)\n"
+                "    echo '192.0.2.100'\n"
+                "    exit 0\n"
+                "    ;;\n"
+                "  *)\n"
+                "    echo -n '000'\n"
+                "    exit 60\n"
+                "    ;;\n"
+                "esac\n"
+            )
+        os.chmod(curl_path, 0o755)
+
+        jq_path = os.path.join(self.mock_bin, "jq")
+        with open(jq_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(
+                "#!/usr/bin/env bash\n"
+                "cat >/dev/null || true\n"
+                'if [[ "$*" == *"groups.wg"* ]]; then\n'
+                '  for arg in "$@"; do\n'
+                '    if [[ "$arg" == "1337" ]]; then\n'
+                "      echo 'yes'\n"
+                "      exit 0\n"
+                "    fi\n"
+                "  done\n"
+                "  echo 'no'\n"
+                "  exit 0\n"
+                "fi\n"
+                'if [[ "$*" == *"212.56.54.190"* ]]; then\n'
+                "  echo 'newjersey434'\n"
+                "  exit 0\n"
+                "fi\n"
+                'if [[ "$*" == *".org"* ]]; then\n'
+                "  echo \"${MOCK_JQ_ORG:-AS60068 Datacamp Limited}\"\n"
+                "  exit 0\n"
+                "fi\n"
+                "echo ''\n"
+                "exit 0\n"
+            )
+        os.chmod(jq_path, 0o755)
+
     def tearDown(self) -> None:
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def create_mock_docker(self, handler_script: str) -> None:
-        docker_path = os.path.join(self.mock_bin, "docker")
+        docker_path = os.path.join(self.mock_bin, "docker").replace("\\", "/")
         with open(docker_path, "w", encoding="utf-8", newline="\n") as f:
-            f.write(f"#!/usr/bin/env bash\n{handler_script}\n")
+            f.write(
+                "#!/usr/bin/env bash\n"
+                'if [[ "$1" == "inspect" && "$*" =~ "State.Running" && "$*" =~ "State.Pid" ]]; then\n'
+                "  echo \"1234\"\n"
+                "  exit 0\n"
+                "fi\n"
+                f"{handler_script}\n"
+            )
         os.chmod(docker_path, 0o755)
-        # Also create a mock nsenter in mock_bin that returns 1 so tests deterministically exercise the mock docker
-        nsenter_path = os.path.join(self.mock_bin, "nsenter")
+
+        wg_path = os.path.join(self.mock_bin, "wg").replace("\\", "/")
+        with open(wg_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write("#!/usr/bin/env bash\nexit 0\n")
+        os.chmod(wg_path, 0o755)
+
+        nsenter_path = os.path.join(self.mock_bin, "nsenter").replace("\\", "/")
         with open(nsenter_path, "w", encoding="utf-8", newline="\n") as f:
-            f.write("#!/usr/bin/env bash\nexit 1\n")
+            f.write(
+                "#!/usr/bin/env bash\n"
+                'for arg in "$@"; do\n'
+                '  if [[ "$arg" == "latest-handshakes" || "$arg" == "transfer" || "$arg" == "endpoints" ]]; then\n'
+                '    exec "$(dirname "$0")/docker" exec gluetun wg show wg0 "$arg"\n'
+                "  fi\n"
+                "done\n"
+                "exit 1\n"
+            )
         os.chmod(nsenter_path, 0o755)
 
     def run_helper(self, cmd: str, input_data: str = "") -> subprocess.CompletedProcess:
@@ -1168,8 +1273,26 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
         self.assertIn("missing or symlink", res.stderr)
 
     # 3. Component Authorization Gate & Gluetun Health/Identity
+    def _write_default_valid_wg0(self) -> tuple[str, str]:
+        priv, pub = bridge.generate_wireguard_keypair()
+        valid_cfg = (
+            "[Interface]\n"
+            "Address = 10.0.0.2/32\n"
+            f"PrivateKey = {priv}\n"
+            "DNS = 10.0.0.242\n\n"
+            "[Peer]\n"
+            f"PublicKey = {pub}\n"
+            "Endpoint = 212.56.54.190:1337\n"
+            "AllowedIPs = 0.0.0.0/0\n"
+            "PersistentKeepalive = 25\n"
+        )
+        res = self.run_helper("write-config", input_data=valid_cfg)
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        return priv, pub
+
     def test_exec_helper_direct_start_crawler_rejected_when_unhealthy(self) -> None:
         """Proves that direct start-crawler invocation fails when Gluetun health status is starting or unhealthy."""
+        self._write_default_valid_wg0()
         self.create_mock_docker(
             'if [[ "$*" =~ "State.Health" ]]; then echo "starting"; exit 0; fi; exit 0'
         )
@@ -1182,6 +1305,7 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
 
     def test_exec_helper_direct_start_crawler_rejected_when_service_label_mismatched(self) -> None:
         """Proves that direct start-crawler invocation fails when container lacks service: gluetun label."""
+        self._write_default_valid_wg0()
         self.create_mock_docker(
             'if [[ "$*" =~ "State.Health" ]]; then echo "healthy"; exit 0;\n'
             'elif [[ "$*" =~ "com.docker.compose.service" ]]; then echo "attacker_service"; exit 0; fi; exit 0'
@@ -1195,6 +1319,7 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
 
     def test_exec_helper_direct_start_crawler_rejected_when_image_digest_mismatched(self) -> None:
         """Proves that direct start-crawler invocation fails when container image is unapproved."""
+        self._write_default_valid_wg0()
         self.create_mock_docker(
             'if [[ "$*" =~ "State.Health" ]]; then echo "healthy"; exit 0;\n'
             'elif [[ "$*" =~ "com.docker.compose.service" ]]; then echo "gluetun"; exit 0;\n'
@@ -1209,11 +1334,12 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
 
     def test_exec_helper_direct_start_crawler_rejected_stale_handshake(self) -> None:
         """Proves that direct start-crawler invocation fails when WireGuard handshake age > 120s."""
+        _, pub = self._write_default_valid_wg0()
         self.create_mock_docker(
             'if [[ "$*" =~ "State.Health" ]]; then echo "healthy"; exit 0;\n'
             'elif [[ "$*" =~ "com.docker.compose.service" ]]; then echo "gluetun"; exit 0;\n'
             'elif [[ "$*" =~ "Config.Image" ]]; then echo "qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00"; exit 0;\n'
-            'elif [[ "$*" =~ "latest-handshakes" ]]; then echo "peer_key 1000"; exit 0; fi; exit 0'
+            f'elif [[ "$*" =~ "latest-handshakes" ]]; then echo "{pub} 1000"; exit 0; fi; exit 0'
         )
         with open(os.path.join(self.compose_dir, "compose.yaml"), "w") as f:
             f.write("services:\n  crawler:\n    network_mode: service:gluetun\n")
@@ -1224,13 +1350,14 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
 
     def test_exec_helper_direct_start_crawler_rejected_zero_transfer(self) -> None:
         """Proves that direct start-crawler invocation fails when transfer rx/tx bytes are 0."""
+        _, pub = self._write_default_valid_wg0()
         self.create_mock_docker(
             'now=$(date +%s)\n'
             'if [[ "$*" =~ "State.Health" ]]; then echo "healthy"; exit 0;\n'
             'elif [[ "$*" =~ "com.docker.compose.service" ]]; then echo "gluetun"; exit 0;\n'
             'elif [[ "$*" =~ "Config.Image" ]]; then echo "qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00"; exit 0;\n'
-            'elif [[ "$*" =~ "latest-handshakes" ]]; then echo "peer_key $now"; exit 0;\n'
-            'elif [[ "$*" =~ "transfer" ]]; then echo "peer_key 0 0"; exit 0; fi; exit 0'
+            f'elif [[ "$*" =~ "latest-handshakes" ]]; then echo "{pub} $now"; exit 0;\n'
+            f'elif [[ "$*" =~ "transfer" ]]; then echo "{pub} 0 0"; exit 0; fi; exit 0'
         )
         with open(os.path.join(self.compose_dir, "compose.yaml"), "w") as f:
             f.write("services:\n  crawler:\n    network_mode: service:gluetun\n")
@@ -1241,13 +1368,30 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
 
     def test_exec_helper_direct_start_crawler_rejected_firewall_not_drop(self) -> None:
         """Proves that direct start-crawler invocation fails when killswitch is inactive."""
+        priv, pub = bridge.generate_wireguard_keypair()
+        valid_cfg = (
+            "[Interface]\n"
+            "Address = 10.0.0.2/32\n"
+            f"PrivateKey = {priv}\n"
+            "DNS = 10.0.0.242\n\n"
+            "[Peer]\n"
+            f"PublicKey = {pub}\n"
+            "Endpoint = 212.56.54.190:1337\n"
+            "AllowedIPs = 0.0.0.0/0\n"
+            "PersistentKeepalive = 25\n"
+        )
+        self.run_helper("write-config", input_data=valid_cfg)
         self.create_mock_docker(
             'now=$(date +%s)\n'
             'if [[ "$*" =~ "State.Health" ]]; then echo "healthy"; exit 0;\n'
             'elif [[ "$*" =~ "com.docker.compose.service" ]]; then echo "gluetun"; exit 0;\n'
             'elif [[ "$*" =~ "Config.Image" ]]; then echo "qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00"; exit 0;\n'
-            'elif [[ "$*" =~ "latest-handshakes" ]]; then echo "peer_key $now"; exit 0;\n'
-            'elif [[ "$*" =~ "transfer" ]]; then echo "peer_key 1000 2000"; exit 0;\n'
+            f'elif [[ "$*" =~ "latest-handshakes" ]]; then echo "{pub} $now"; exit 0;\n'
+            f'elif [[ "$*" =~ "transfer" ]]; then echo "{pub} 1000 2000"; exit 0;\n'
+            f'elif [[ "$*" =~ "endpoints" ]]; then echo "{pub} 212.56.54.190:1337"; exit 0;\n'
+            'elif [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\\n2: eth0: <BROADCAST>\\n3: wg0: <POINTOPOINT>"; exit 0;\n'
+            'elif [[ "$*" =~ "addr show" ]]; then echo "2: eth0    inet 172.18.0.2/16 brd 172.18.255.255 scope global eth0"; exit 0;\n'
+            'elif [[ "$*" =~ "route show" ]]; then echo "172.18.0.0/16 proto kernel scope link src 172.18.0.2"; exit 0;\n'
             'elif [[ "$*" =~ "iptables" ]]; then echo "-P OUTPUT ACCEPT"; exit 0; fi; exit 0'
         )
         with open(os.path.join(self.compose_dir, "compose.yaml"), "w") as f:
@@ -1255,19 +1399,40 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
 
         res = self.run_helper("start-crawler")
         self.assertEqual(res.returncode, 1)
-        self.assertIn("killswitch inactive", res.stderr)
+        self.assertIn("Default OUTPUT policy is not DROP", res.stderr)
 
     def test_exec_helper_direct_start_crawler_rejected_crawler_not_in_gluetun_namespace(self) -> None:
         """Proves that direct start-crawler invocation fails when crawler is not bound to Gluetun."""
+        priv, pub = bridge.generate_wireguard_keypair()
+        valid_cfg = (
+            "[Interface]\n"
+            "Address = 10.0.0.2/32\n"
+            f"PrivateKey = {priv}\n"
+            "DNS = 10.0.0.242\n\n"
+            "[Peer]\n"
+            f"PublicKey = {pub}\n"
+            "Endpoint = 212.56.54.190:1337\n"
+            "AllowedIPs = 0.0.0.0/0\n"
+            "PersistentKeepalive = 25\n"
+        )
+        self.run_helper("write-config", input_data=valid_cfg)
         self.create_mock_docker(
             'now=$(date +%s)\n'
             'if [[ "$*" =~ "State.Health" ]]; then echo "healthy"; exit 0;\n'
             'elif [[ "$*" =~ "com.docker.compose.service" ]]; then echo "gluetun"; exit 0;\n'
             'elif [[ "$*" =~ "Config.Image" ]]; then echo "qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00"; exit 0;\n'
-            'elif [[ "$*" =~ "latest-handshakes" ]]; then echo "peer_key $now"; exit 0;\n'
-            'elif [[ "$*" =~ "transfer" ]]; then echo "peer_key 1000 2000"; exit 0;\n'
-            'elif [[ "$*" =~ "iptables" ]]; then echo "-P OUTPUT DROP"; exit 0;\n'
-            'elif [[ "$*" =~ "disable_ipv6" ]]; then echo "1"; exit 0; fi; exit 0'
+            f'elif [[ "$*" =~ "latest-handshakes" ]]; then echo "{pub} $now"; exit 0;\n'
+            f'elif [[ "$*" =~ "transfer" ]]; then echo "{pub} 1000 2000"; exit 0;\n'
+            f'elif [[ "$*" =~ "endpoints" ]]; then echo "{pub} 212.56.54.190:1337"; exit 0;\n'
+            'elif [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\\n2: eth0: <BROADCAST>\\n3: wg0: <POINTOPOINT>"; exit 0;\n'
+            'elif [[ "$*" =~ "addr show" ]]; then echo "2: eth0    inet 172.18.0.2/16 brd 172.18.255.255 scope global eth0"; exit 0;\n'
+            'elif [[ "$*" =~ "route show" ]]; then echo "172.18.0.0/16 proto kernel scope link src 172.18.0.2"; exit 0;\n'
+            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\\n-A OUTPUT -o lo -j ACCEPT\\n-A OUTPUT -o wg0 -j ACCEPT"; exit 0;\n'
+            'elif [[ "$*" =~ "disable_ipv6" ]]; then echo "1"; exit 0;\n'
+            'elif [[ "$*" =~ "route get" ]]; then echo "8.8.8.8 dev wg0 src 10.0.0.2"; exit 0;\n'
+            'elif [[ "$*" =~ "nslookup" ]]; then echo "Address: 93.184.216.34"; exit 0;\n'
+            'elif [[ "$*" =~ "checkip.amazonaws.com" ]]; then echo "156.146.54.4"; exit 0;\n'
+            'elif [[ "$*" =~ "ipinfo.io/json" ]]; then echo \'{"ip":"156.146.54.4","org":"AS60068 Datacamp Limited"}\'; exit 0; fi; exit 0'
         )
         with open(os.path.join(self.compose_dir, "compose.yaml"), "w") as f:
             f.write("services:\n  crawler:\n    network_mode: host\n")
@@ -1294,20 +1459,24 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
     def test_exec_helper_dns_firewall_verification_accepted(self) -> None:
         """Proves that complete firewall isolation and route binding are confirmed."""
         self.create_mock_docker(
-            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\n2: eth0: <BROADCAST>\n3: wg0: <POINTOPOINT>"; exit 0;\n'
-            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\n-A OUTPUT -o lo -j ACCEPT\n-A OUTPUT -o wg0 -j ACCEPT"; exit 0;\n'
+            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\\n2: eth0: <BROADCAST>\\n3: wg0: <POINTOPOINT>"; exit 0;\n'
+            'elif [[ "$*" =~ "addr show" ]]; then echo "2: eth0    inet 172.18.0.2/16 brd 172.18.255.255 scope global eth0"; exit 0;\n'
+            'elif [[ "$*" =~ "route show" ]]; then echo "172.18.0.0/16 proto kernel scope link src 172.18.0.2"; exit 0;\n'
+            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\\n-A OUTPUT -o lo -j ACCEPT\\n-A OUTPUT -o wg0 -j ACCEPT"; exit 0;\n'
             'elif [[ "$*" =~ "disable_ipv6" ]]; then echo "1"; exit 0;\n'
             'elif [[ "$*" =~ "route get" ]]; then echo "8.8.8.8 dev wg0 src 10.0.0.2"; exit 0; fi; exit 0'
         )
         res = self.run_helper("verify-dns-firewall")
-        self.assertEqual(res.returncode, 0)
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
         self.assertIn("DNS_FIREWALL_OK", res.stdout)
 
     def test_exec_helper_dns_firewall_verification_rejected_when_leak_rule_present(self) -> None:
         """Proves that any DNS egress rule on physical interface triggers critical leak alert."""
         self.create_mock_docker(
-            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\n2: eth0: <BROADCAST>\n3: wg0: <POINTOPOINT>"; exit 0;\n'
-            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\n-A OUTPUT -o lo -j ACCEPT\n-A OUTPUT -o wg0 -j ACCEPT\n-A OUTPUT -o eth0 -p udp --dport 53 -j ACCEPT"; exit 0;\n'
+            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\\n2: eth0: <BROADCAST>\\n3: wg0: <POINTOPOINT>"; exit 0;\n'
+            'elif [[ "$*" =~ "addr show" ]]; then echo "2: eth0    inet 172.18.0.2/16 brd 172.18.255.255 scope global eth0"; exit 0;\n'
+            'elif [[ "$*" =~ "route show" ]]; then echo "172.18.0.0/16 proto kernel scope link src 172.18.0.2"; exit 0;\n'
+            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\\n-A OUTPUT -o lo -j ACCEPT\\n-A OUTPUT -o wg0 -j ACCEPT\\n-A OUTPUT -o eth0 -p udp --dport 53 -j ACCEPT"; exit 0;\n'
             'elif [[ "$*" =~ "route get" ]]; then echo "8.8.8.8 dev wg0 src 10.0.0.2"; exit 0; fi; exit 0'
         )
         res = self.run_helper("verify-dns-firewall")
@@ -1317,8 +1486,10 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
     def test_exec_helper_dns_firewall_verification_rejected_when_broad_physical_accept_present(self) -> None:
         """Proves that a default DROP policy with a broad physical-interface ACCEPT rule fails verification."""
         self.create_mock_docker(
-            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\n2: eth0: <BROADCAST>\n3: wg0: <POINTOPOINT>"; exit 0;\n'
-            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\n-A OUTPUT -o lo -j ACCEPT\n-A OUTPUT -o wg0 -j ACCEPT\n-A OUTPUT -o eth0 -j ACCEPT"; exit 0;\n'
+            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\\n2: eth0: <BROADCAST>\\n3: wg0: <POINTOPOINT>"; exit 0;\n'
+            'elif [[ "$*" =~ "addr show" ]]; then echo "2: eth0    inet 172.18.0.2/16 brd 172.18.255.255 scope global eth0"; exit 0;\n'
+            'elif [[ "$*" =~ "route show" ]]; then echo "172.18.0.0/16 proto kernel scope link src 172.18.0.2"; exit 0;\n'
+            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\\n-A OUTPUT -o lo -j ACCEPT\\n-A OUTPUT -o wg0 -j ACCEPT\\n-A OUTPUT -o eth0 -j ACCEPT"; exit 0;\n'
             'elif [[ "$*" =~ "route get" ]]; then echo "8.8.8.8 dev wg0 src 10.0.0.2"; exit 0; fi; exit 0'
         )
         res = self.run_helper("verify-dns-firewall")
@@ -1328,8 +1499,10 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
     def test_exec_helper_dns_firewall_verification_rejected_when_unconstrained_accept_present(self) -> None:
         """Proves that an unconstrained -j ACCEPT rule fails verification."""
         self.create_mock_docker(
-            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\n2: eth0: <BROADCAST>\n3: wg0: <POINTOPOINT>"; exit 0;\n'
-            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\n-A OUTPUT -o lo -j ACCEPT\n-A OUTPUT -o wg0 -j ACCEPT\n-A OUTPUT -j ACCEPT"; exit 0;\n'
+            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\\n2: eth0: <BROADCAST>\\n3: wg0: <POINTOPOINT>"; exit 0;\n'
+            'elif [[ "$*" =~ "addr show" ]]; then echo "2: eth0    inet 172.18.0.2/16 brd 172.18.255.255 scope global eth0"; exit 0;\n'
+            'elif [[ "$*" =~ "route show" ]]; then echo "172.18.0.0/16 proto kernel scope link src 172.18.0.2"; exit 0;\n'
+            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\\n-A OUTPUT -o lo -j ACCEPT\\n-A OUTPUT -o wg0 -j ACCEPT\\n-A OUTPUT -j ACCEPT"; exit 0;\n'
             'elif [[ "$*" =~ "route get" ]]; then echo "8.8.8.8 dev wg0 src 10.0.0.2"; exit 0; fi; exit 0'
         )
         res = self.run_helper("verify-dns-firewall")
@@ -1339,8 +1512,10 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
     def test_exec_helper_dns_firewall_verification_rejected_when_arbitrary_protocol_accept_present(self) -> None:
         """Proves that arbitrary non-VPN protocol egress (e.g. -p tcp) fails verification."""
         self.create_mock_docker(
-            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\n2: eth0: <BROADCAST>\n3: wg0: <POINTOPOINT>"; exit 0;\n'
-            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\n-A OUTPUT -o lo -j ACCEPT\n-A OUTPUT -o wg0 -j ACCEPT\n-A OUTPUT -o eth0 -p tcp -j ACCEPT"; exit 0;\n'
+            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\\n2: eth0: <BROADCAST>\\n3: wg0: <POINTOPOINT>"; exit 0;\n'
+            'elif [[ "$*" =~ "addr show" ]]; then echo "2: eth0    inet 172.18.0.2/16 brd 172.18.255.255 scope global eth0"; exit 0;\n'
+            'elif [[ "$*" =~ "route show" ]]; then echo "172.18.0.0/16 proto kernel scope link src 172.18.0.2"; exit 0;\n'
+            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\\n-A OUTPUT -o lo -j ACCEPT\\n-A OUTPUT -o wg0 -j ACCEPT\\n-A OUTPUT -o eth0 -p tcp -j ACCEPT"; exit 0;\n'
             'elif [[ "$*" =~ "route get" ]]; then echo "8.8.8.8 dev wg0 src 10.0.0.2"; exit 0; fi; exit 0'
         )
         res = self.run_helper("verify-dns-firewall")
@@ -1350,8 +1525,10 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
     def test_exec_helper_dns_firewall_verification_rejected_when_custom_chain_present(self) -> None:
         """Proves that unexpected chain jumps in OUTPUT chain fail verification."""
         self.create_mock_docker(
-            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\n2: eth0: <BROADCAST>\n3: wg0: <POINTOPOINT>"; exit 0;\n'
-            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\n-A OUTPUT -o lo -j ACCEPT\n-A OUTPUT -o wg0 -j ACCEPT\n-A OUTPUT -j BYPASS_CHAIN"; exit 0;\n'
+            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\\n2: eth0: <BROADCAST>\\n3: wg0: <POINTOPOINT>"; exit 0;\n'
+            'elif [[ "$*" =~ "addr show" ]]; then echo "2: eth0    inet 172.18.0.2/16 brd 172.18.255.255 scope global eth0"; exit 0;\n'
+            'elif [[ "$*" =~ "route show" ]]; then echo "172.18.0.0/16 proto kernel scope link src 172.18.0.2"; exit 0;\n'
+            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\\n-A OUTPUT -o lo -j ACCEPT\\n-A OUTPUT -o wg0 -j ACCEPT\\n-A OUTPUT -j BYPASS_CHAIN"; exit 0;\n'
             'elif [[ "$*" =~ "route get" ]]; then echo "8.8.8.8 dev wg0 src 10.0.0.2"; exit 0; fi; exit 0'
         )
         res = self.run_helper("verify-dns-firewall")
@@ -1361,14 +1538,16 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
     def test_exec_helper_dns_firewall_verification_accepted_with_vpn_server_endpoint(self) -> None:
         """Proves that legitimate Gluetun ruleset including the VPN server endpoint and Docker bridge rule is accepted."""
         self.create_mock_docker(
-            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\n2: eth0: <BROADCAST>\n3: wg0: <POINTOPOINT>"; exit 0;\n'
+            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\\n2: eth0: <BROADCAST>\\n3: wg0: <POINTOPOINT>"; exit 0;\n'
+            'elif [[ "$*" =~ "addr show" ]]; then echo "2: eth0    inet 172.18.0.2/16 brd 172.18.255.255 scope global eth0"; exit 0;\n'
+            'elif [[ "$*" =~ "route show" ]]; then echo "172.18.0.0/16 proto kernel scope link src 172.18.0.2"; exit 0;\n'
             'elif [[ "$*" =~ "endpoints" ]]; then echo "peer_key 212.56.54.190:1337"; exit 0;\n'
-            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\n-A OUTPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT\n-A OUTPUT -o lo -j ACCEPT\n-A OUTPUT -o wg0 -j ACCEPT\n-A OUTPUT -d 212.56.54.190/32 -o eth0 -p udp -m udp --dport 1337 -j ACCEPT\n-A OUTPUT -s 172.18.0.2/32 -d 172.18.0.0/16 -o eth0 -j ACCEPT"; exit 0;\n'
+            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\\n-A OUTPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT\\n-A OUTPUT -o lo -j ACCEPT\\n-A OUTPUT -o wg0 -j ACCEPT\\n-A OUTPUT -d 212.56.54.190/32 -o eth0 -p udp -m udp --dport 1337 -j ACCEPT\\n-A OUTPUT -s 172.18.0.2/32 -d 172.18.0.0/16 -o eth0 -j ACCEPT"; exit 0;\n'
             'elif [[ "$*" =~ "disable_ipv6" ]]; then echo "1"; exit 0;\n'
             'elif [[ "$*" =~ "route get" ]]; then echo "8.8.8.8 dev wg0 table 51820 src 10.0.0.2"; exit 0; fi; exit 0'
         )
         res = self.run_helper("verify-dns-firewall")
-        self.assertEqual(res.returncode, 0)
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
         self.assertIn("DNS_FIREWALL_OK", res.stdout)
 
     def test_exec_helper_write_config_accepts_valid_schema_and_rejects_injections(self) -> None:
@@ -1405,51 +1584,8 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
         self.assertNotEqual(res_meta.returncode, 0)
 
     def test_exec_helper_endpoint_authorization_rejects_unauthorized_public_endpoint(self) -> None:
-        """Proves that when PIA CA is present, an attacker-controlled public IP not in PIA's server list is rejected."""
+        """Proves that PIA endpoint authorization fails closed on unauthorized IP, missing/invalid/symlinked CA, curl failure, unauthorized port, and proxy bypass."""
         priv, pub = bridge.generate_wireguard_keypair()
-        ca_path = os.path.join(self.compose_dir, "ca.rsa.4096.crt")
-        with open(ca_path, "w", encoding="utf-8") as f:
-            f.write("-----BEGIN CERTIFICATE-----\ndummy\n-----END CERTIFICATE-----\n")
-
-        # Create mock curl and jq in mock_bin
-        curl_path = os.path.join(self.mock_bin, "curl")
-        with open(curl_path, "w", encoding="utf-8", newline="\n") as f:
-            f.write(
-                "#!/usr/bin/env bash\n"
-                "case \"$*\" in\n"
-                "  *serverlist.piaservers.net*)\n"
-                "    echo '{\"regions\":[{\"id\":\"us-newjersey\",\"servers\":{\"wg\":[{\"ip\":\"212.56.54.190\",\"cn\":\"newjersey434\"}]}}]}'\n"
-                "    exit 0\n"
-                "    ;;\n"
-                "  *newjersey434:1337*)\n"
-                "    echo -n '400'\n"
-                "    exit 0\n"
-                "    ;;\n"
-                "  *)\n"
-                "    echo -n '000'\n"
-                "    exit 60\n"
-                "    ;;\n"
-                "esac\n"
-            )
-        os.chmod(curl_path, 0o755)
-
-        jq_path = os.path.join(self.mock_bin, "jq")
-        with open(jq_path, "w", encoding="utf-8", newline="\n") as f:
-            f.write(
-                "#!/usr/bin/env bash\n"
-                "cat >/dev/null || true\n"
-                "case \"$*\" in\n"
-                "  *212.56.54.190*)\n"
-                "    echo 'newjersey434'\n"
-                "    ;;\n"
-                "  *)\n"
-                "    echo ''\n"
-                "    ;;\n"
-                "esac\n"
-            )
-        os.chmod(jq_path, 0o755)
-
-        # 1. Authorized PIA endpoint passes both serverlist and TLS verification
         auth_cfg = (
             "[Interface]\n"
             "Address = 10.0.0.2/32\n"
@@ -1461,6 +1597,8 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
             "AllowedIPs = 0.0.0.0/0\n"
             "PersistentKeepalive = 25\n"
         )
+
+        # 1. Authorized PIA endpoint passes serverlist, port, and TLS verification
         res_auth = self.run_helper("write-config", input_data=auth_cfg)
         self.assertEqual(res_auth.returncode, 0, msg=res_auth.stderr)
         self.assertIn("CONFIG_OK", res_auth.stdout)
@@ -1471,21 +1609,70 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
         self.assertEqual(res_unauth.returncode, 1)
         self.assertIn("Unauthorized WireGuard endpoint 198.51.100.77", res_unauth.stderr)
 
-        # 3. Spoofed PIA IP failing TLS certificate verification is rejected
+        # 3. Unauthorized WireGuard UDP port (e.g. 212.56.54.190:9999 not in groups.wg[].ports) is rejected
+        bad_port_cfg = auth_cfg.replace("212.56.54.190:1337", "212.56.54.190:9999")
+        res_bad_port = self.run_helper("write-config", input_data=bad_port_cfg)
+        self.assertEqual(res_bad_port.returncode, 1)
+        self.assertIn("Unauthorized WireGuard UDP port 9999", res_bad_port.stderr)
+
+        # 4. Missing PIA Root CA file fails closed (never fails open)
+        os.remove(self.ca_path)
+        res_no_ca = self.run_helper("write-config", input_data=auth_cfg)
+        self.assertEqual(res_no_ca.returncode, 1)
+        self.assertIn("is missing, unreadable, or a symlink", res_no_ca.stderr)
+
+        # 5. Invalid/corrupted PEM content in PIA Root CA file fails closed
+        with open(self.ca_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write("-----BEGIN CERTIFICATE-----\nnot-valid-base64-cert\n-----END CERTIFICATE-----\n")
+        res_bad_ca = self.run_helper("write-config", input_data=auth_cfg)
+        self.assertEqual(res_bad_ca.returncode, 1)
+        self.assertIn("failed X.509 parsing", res_bad_ca.stderr)
+
+        # Restore valid CA
+        with open(self.ca_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(bridge.PIA_ROOT_CA_PEM)
+
+        # 6. curl non-zero exit code fails closed even if HTTP status code looks like 400
+        curl_path = os.path.join(self.mock_bin, "curl")
         with open(curl_path, "w", encoding="utf-8", newline="\n") as f:
             f.write(
                 "#!/usr/bin/env bash\n"
                 "if [[ \"$*\" == *\"serverlist.piaservers.net\"* ]]; then\n"
-                "  echo '{\"regions\":[{\"id\":\"us-newjersey\",\"servers\":{\"wg\":[{\"ip\":\"212.56.54.190\",\"cn\":\"newjersey434\"}]}}]}'\n"
+                "  echo '{\"groups\":{\"wg\":[{\"name\":\"wireguard\",\"ports\":[1337]}]},\"regions\":[{\"id\":\"us-newjersey\",\"servers\":{\"wg\":[{\"ip\":\"212.56.54.190\",\"cn\":\"newjersey434\"}]}}]}'\n"
                 "  exit 0\n"
                 "fi\n"
-                "echo -n '000'\n"
+                "echo -n '400'\n"
                 "exit 60\n"
             )
         os.chmod(curl_path, 0o755)
         res_tls_fail = self.run_helper("write-config", input_data=auth_cfg)
         self.assertEqual(res_tls_fail.returncode, 1)
         self.assertIn("failed PIA Root CA TLS verification", res_tls_fail.stderr)
+
+        # 7. Proxy environment variables are stripped and --noproxy '*' is enforced
+        with open(curl_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(
+                "#!/usr/bin/env bash\n"
+                "if [[ -n \"${HTTPS_PROXY:-}${https_proxy:-}${HTTP_PROXY:-}${http_proxy:-}${ALL_PROXY:-}${all_proxy:-}\" ]]; then\n"
+                "  echo 'PROXY_ENV_LEAKED' >&2\n"
+                "  exit 99\n"
+                "fi\n"
+                "if [[ \"$*\" != *\"--noproxy *\"* ]]; then\n"
+                "  echo 'MISSING_NOPROXY_FLAG' >&2\n"
+                "  exit 98\n"
+                "fi\n"
+                "if [[ \"$*\" == *\"serverlist.piaservers.net\"* ]]; then\n"
+                "  echo '{\"groups\":{\"wg\":[{\"name\":\"wireguard\",\"ports\":[1337]}]},\"regions\":[{\"id\":\"us-newjersey\",\"servers\":{\"wg\":[{\"ip\":\"212.56.54.190\",\"cn\":\"newjersey434\"}]}}]}'\n"
+                "  exit 0\n"
+                "fi\n"
+                "echo -n '400'\n"
+                "exit 0\n"
+            )
+        os.chmod(curl_path, 0o755)
+        with patch.dict(os.environ, {"HTTPS_PROXY": "http://127.0.0.1:8080", "http_proxy": "http://127.0.0.1:8080"}):
+            res_noproxy = self.run_helper("write-config", input_data=auth_cfg)
+        self.assertEqual(res_noproxy.returncode, 0, msg=res_noproxy.stderr)
+        self.assertIn("CONFIG_OK", res_noproxy.stdout)
 
     def test_exec_helper_no_synthetic_wireguard_evidence_when_wg_unavailable(self) -> None:
         """Proves that wg-handshake, wg-transfer, and wg-endpoints fail closed when wg inspection is unavailable, even if interface carrier=1, rx_bytes>0, and wg0.conf exists."""
@@ -1634,16 +1821,41 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
         self.assertIn("Failed to shut down VPN and crawler containers", res_down_fail.stderr)
         self.assertTrue(os.path.exists(cfg_file))
 
-        # Case 3: Stale container remains running after compose down -> fails closed, preserves wg0.conf
+        # Case 3: Stale container (canonical name lodestar_crawler) remains running after compose down -> fails closed, preserves wg0.conf
         self.create_mock_docker(
             'if [[ "$1" == "info" ]]; then exit 0;\n'
             'elif [[ "$1" == "compose" ]]; then exit 0;\n'
-            'elif [[ "$1" == "inspect" && "$*" =~ "lodestar-crawler" ]]; then echo "true"; exit 0; fi; exit 1'
+            'elif [[ "$1" == "inspect" && "$*" =~ "lodestar_crawler" ]]; then echo "true"; exit 0;\n'
+            'elif [[ "$1" == "inspect" ]]; then echo "No such object: gluetun" >&2; exit 1; fi; exit 1'
         )
         res_stale = self.run_helper("cleanup")
         self.assertEqual(res_stale.returncode, 1)
         self.assertNotIn("CLEANUP_OK", res_stale.stdout)
-        self.assertIn("Container 'lodestar-crawler' is still running after shutdown", res_stale.stderr)
+        self.assertIn("Container 'lodestar_crawler' is still running after shutdown", res_stale.stderr)
+        self.assertTrue(os.path.exists(cfg_file))
+
+        # Case 3b: docker compose ps -q returns remaining active container ID -> fails closed, preserves wg0.conf
+        self.create_mock_docker(
+            'if [[ "$1" == "info" ]]; then exit 0;\n'
+            'elif [[ "$1" == "compose" && "$*" =~ "ps -q" ]]; then echo "abc123def456"; exit 0;\n'
+            'elif [[ "$1" == "compose" ]]; then exit 0; fi; exit 0'
+        )
+        res_ps_active = self.run_helper("cleanup")
+        self.assertEqual(res_ps_active.returncode, 1)
+        self.assertNotIn("CLEANUP_OK", res_ps_active.stdout)
+        self.assertIn("Compose service containers remain active after shutdown", res_ps_active.stderr)
+        self.assertTrue(os.path.exists(cfg_file))
+
+        # Case 3c: docker inspect fails with unexpected daemon/permission error (not 'No such object') -> fails closed, preserves wg0.conf
+        self.create_mock_docker(
+            'if [[ "$1" == "info" ]]; then exit 0;\n'
+            'elif [[ "$1" == "compose" ]]; then exit 0;\n'
+            'elif [[ "$1" == "inspect" ]]; then echo "Error response from daemon: permission denied" >&2; exit 1; fi; exit 0'
+        )
+        res_insp_err = self.run_helper("cleanup")
+        self.assertEqual(res_insp_err.returncode, 1)
+        self.assertNotIn("CLEANUP_OK", res_insp_err.stdout)
+        self.assertIn("Failed to inspect container 'lodestar_crawler' during cleanup", res_insp_err.stderr)
         self.assertTrue(os.path.exists(cfg_file))
 
         # Case 4: Clean shutdown -> removes config_dir, prints CLEANUP_OK, and repeated cleanup is idempotent
@@ -1664,13 +1876,147 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
     def test_exec_helper_dns_firewall_verification_rejected_when_policy_not_drop(self) -> None:
         """Proves that non-DROP output policy fails firewall verification."""
         self.create_mock_docker(
-            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\n2: eth0: <BROADCAST>\n3: wg0: <POINTOPOINT>"; exit 0;\n'
-            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT ACCEPT\n-A OUTPUT -o lo -j ACCEPT\n-A OUTPUT -o wg0 -j ACCEPT"; exit 0;\n'
+            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\\n2: eth0: <BROADCAST>\\n3: wg0: <POINTOPOINT>"; exit 0;\n'
+            'elif [[ "$*" =~ "addr show" ]]; then echo "2: eth0    inet 172.18.0.2/16 brd 172.18.255.255 scope global eth0"; exit 0;\n'
+            'elif [[ "$*" =~ "route show" ]]; then echo "172.18.0.0/16 proto kernel scope link src 172.18.0.2"; exit 0;\n'
+            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT ACCEPT\\n-A OUTPUT -o lo -j ACCEPT\\n-A OUTPUT -o wg0 -j ACCEPT"; exit 0;\n'
             'elif [[ "$*" =~ "route get" ]]; then echo "8.8.8.8 dev wg0 src 10.0.0.2"; exit 0; fi; exit 0'
         )
         res = self.run_helper("verify-dns-firewall")
         self.assertEqual(res.returncode, 1)
         self.assertIn("Default OUTPUT policy is not DROP", res.stderr)
+
+    def test_exec_helper_dns_firewall_rejects_mismatched_local_subnet_and_wrong_vpn_port(self) -> None:
+        """Proves that verify-dns-firewall rejects non-matching private subnet rules and VPN endpoint rules with wrong/missing UDP port."""
+        # 1. Local RFC1918 rule for 10.0.0.0/8 when actual Docker bridge on eth0 is 172.18.0.2/32 -> 172.18.0.0/16
+        self.create_mock_docker(
+            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\\n2: eth0: <BROADCAST>\\n3: wg0: <POINTOPOINT>"; exit 0;\n'
+            'elif [[ "$*" =~ "addr show" ]]; then echo "2: eth0    inet 172.18.0.2/16 brd 172.18.255.255 scope global eth0"; exit 0;\n'
+            'elif [[ "$*" =~ "route show" ]]; then echo "172.18.0.0/16 proto kernel scope link src 172.18.0.2"; exit 0;\n'
+            'elif [[ "$*" =~ "endpoints" ]]; then echo "peer_key 212.56.54.190:1337"; exit 0;\n'
+            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\\n-A OUTPUT -o lo -j ACCEPT\\n-A OUTPUT -o wg0 -j ACCEPT\\n-A OUTPUT -s 10.0.0.2/32 -d 10.0.0.0/8 -o eth0 -j ACCEPT"; exit 0;\n'
+            'elif [[ "$*" =~ "disable_ipv6" ]]; then echo "1"; exit 0;\n'
+            'elif [[ "$*" =~ "route get" ]]; then echo "8.8.8.8 dev wg0 src 10.0.0.2"; exit 0; fi; exit 0'
+        )
+        res_bad_local = self.run_helper("verify-dns-firewall")
+        self.assertEqual(res_bad_local.returncode, 1)
+        self.assertIn("Unauthorized egress rule in Gluetun firewall: -A OUTPUT -s 10.0.0.2/32 -d 10.0.0.0/8 -o eth0 -j ACCEPT", res_bad_local.stderr)
+
+        # 2. VPN endpoint rule with wrong UDP port (--dport 9999 instead of 1337)
+        self.create_mock_docker(
+            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\\n2: eth0: <BROADCAST>\\n3: wg0: <POINTOPOINT>"; exit 0;\n'
+            'elif [[ "$*" =~ "addr show" ]]; then echo "2: eth0    inet 172.18.0.2/16 brd 172.18.255.255 scope global eth0"; exit 0;\n'
+            'elif [[ "$*" =~ "route show" ]]; then echo "172.18.0.0/16 proto kernel scope link src 172.18.0.2"; exit 0;\n'
+            'elif [[ "$*" =~ "endpoints" ]]; then echo "peer_key 212.56.54.190:1337"; exit 0;\n'
+            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\\n-A OUTPUT -o lo -j ACCEPT\\n-A OUTPUT -o wg0 -j ACCEPT\\n-A OUTPUT -d 212.56.54.190/32 -o eth0 -p udp -m udp --dport 9999 -j ACCEPT"; exit 0;\n'
+            'elif [[ "$*" =~ "disable_ipv6" ]]; then echo "1"; exit 0;\n'
+            'elif [[ "$*" =~ "route get" ]]; then echo "8.8.8.8 dev wg0 src 10.0.0.2"; exit 0; fi; exit 0'
+        )
+        res_bad_port = self.run_helper("verify-dns-firewall")
+        self.assertEqual(res_bad_port.returncode, 1)
+        self.assertIn("Unauthorized egress rule in Gluetun firewall: -A OUTPUT -d 212.56.54.190/32 -o eth0 -p udp -m udp --dport 9999 -j ACCEPT", res_bad_port.stderr)
+
+        # 3. VPN endpoint rule without --dport (allowing all UDP ports to endpoint)
+        self.create_mock_docker(
+            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\\n2: eth0: <BROADCAST>\\n3: wg0: <POINTOPOINT>"; exit 0;\n'
+            'elif [[ "$*" =~ "addr show" ]]; then echo "2: eth0    inet 172.18.0.2/16 brd 172.18.255.255 scope global eth0"; exit 0;\n'
+            'elif [[ "$*" =~ "route show" ]]; then echo "172.18.0.0/16 proto kernel scope link src 172.18.0.2"; exit 0;\n'
+            'elif [[ "$*" =~ "endpoints" ]]; then echo "peer_key 212.56.54.190:1337"; exit 0;\n'
+            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\\n-A OUTPUT -o lo -j ACCEPT\\n-A OUTPUT -o wg0 -j ACCEPT\\n-A OUTPUT -d 212.56.54.190/32 -o eth0 -p udp -j ACCEPT"; exit 0;\n'
+            'elif [[ "$*" =~ "disable_ipv6" ]]; then echo "1"; exit 0;\n'
+            'elif [[ "$*" =~ "route get" ]]; then echo "8.8.8.8 dev wg0 src 10.0.0.2"; exit 0; fi; exit 0'
+        )
+        res_no_port = self.run_helper("verify-dns-firewall")
+        self.assertEqual(res_no_port.returncode, 1)
+        self.assertIn("Unauthorized egress rule in Gluetun firewall: -A OUTPUT -d 212.56.54.190/32 -o eth0 -p udp -j ACCEPT", res_no_port.stderr)
+
+    def test_exec_helper_consolidated_start_crawler_gate_enforces_dns_and_egress_checks(self) -> None:
+        """Proves that direct start-crawler invocation enforces DNS route, DoT resolution, active egress IP, and ISP ownership checks."""
+        priv, pub = bridge.generate_wireguard_keypair()
+        valid_cfg = (
+            "[Interface]\n"
+            "Address = 10.0.0.2/32\n"
+            f"PrivateKey = {priv}\n"
+            "DNS = 10.0.0.242\n\n"
+            "[Peer]\n"
+            f"PublicKey = {pub}\n"
+            "Endpoint = 212.56.54.190:1337\n"
+            "AllowedIPs = 0.0.0.0/0\n"
+            "PersistentKeepalive = 25\n"
+        )
+        self.run_helper("write-config", input_data=valid_cfg)
+        with open(os.path.join(self.compose_dir, "compose.yaml"), "w") as f:
+            f.write("services:\n  crawler:\n    network_mode: service:gluetun\n")
+
+        # 1. Fails closed when active egress IP matches host public IP (192.0.2.100)
+        self.create_mock_docker(
+            'now=$(date +%s)\n'
+            'if [[ "$*" =~ "State.Health" ]]; then echo "healthy"; exit 0;\n'
+            'elif [[ "$*" =~ "com.docker.compose.service" ]]; then echo "gluetun"; exit 0;\n'
+            'elif [[ "$*" =~ "Config.Image" ]]; then echo "qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00"; exit 0;\n'
+            f'elif [[ "$*" =~ "latest-handshakes" ]]; then echo "{pub} $now"; exit 0;\n'
+            f'elif [[ "$*" =~ "transfer" ]]; then echo "{pub} 5000 3000"; exit 0;\n'
+            f'elif [[ "$*" =~ "endpoints" ]]; then echo "{pub} 212.56.54.190:1337"; exit 0;\n'
+            'elif [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\\n2: eth0: <BROADCAST>\\n3: wg0: <POINTOPOINT>"; exit 0;\n'
+            'elif [[ "$*" =~ "addr show" ]]; then echo "2: eth0    inet 172.18.0.2/16 brd 172.18.255.255 scope global eth0"; exit 0;\n'
+            'elif [[ "$*" =~ "route show" ]]; then echo "172.18.0.0/16 proto kernel scope link src 172.18.0.2"; exit 0;\n'
+            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\\n-A OUTPUT -o lo -j ACCEPT\\n-A OUTPUT -o wg0 -j ACCEPT"; exit 0;\n'
+            'elif [[ "$*" =~ "disable_ipv6" ]]; then echo "1"; exit 0;\n'
+            'elif [[ "$*" =~ "route get" ]]; then echo "8.8.8.8 dev wg0 src 10.0.0.2"; exit 0;\n'
+            'elif [[ "$*" =~ "nslookup" ]]; then echo "Address: 93.184.216.34"; exit 0;\n'
+            'elif [[ "$*" =~ "checkip.amazonaws.com" ]]; then echo "192.0.2.100"; exit 0;\n'
+            'elif [[ "$*" =~ "ipinfo.io/json" ]]; then echo \'{"ip":"192.0.2.100","org":"AS60068 Datacamp Limited"}\'; exit 0; fi; exit 0'
+        )
+        res_leak_ip = self.run_helper("start-crawler")
+        self.assertEqual(res_leak_ip.returncode, 1)
+        self.assertIn("CRITICAL LEAK: VPN egress IP (192.0.2.100) matches host IP (192.0.2.100)", res_leak_ip.stderr)
+
+        # 2. Fails closed when egress ISP belongs to Akamai/Linode
+        self.create_mock_docker(
+            'now=$(date +%s)\n'
+            'if [[ "$*" =~ "State.Health" ]]; then echo "healthy"; exit 0;\n'
+            'elif [[ "$*" =~ "com.docker.compose.service" ]]; then echo "gluetun"; exit 0;\n'
+            'elif [[ "$*" =~ "Config.Image" ]]; then echo "qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00"; exit 0;\n'
+            f'elif [[ "$*" =~ "latest-handshakes" ]]; then echo "{pub} $now"; exit 0;\n'
+            f'elif [[ "$*" =~ "transfer" ]]; then echo "{pub} 5000 3000"; exit 0;\n'
+            f'elif [[ "$*" =~ "endpoints" ]]; then echo "{pub} 212.56.54.190:1337"; exit 0;\n'
+            'elif [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\\n2: eth0: <BROADCAST>\\n3: wg0: <POINTOPOINT>"; exit 0;\n'
+            'elif [[ "$*" =~ "addr show" ]]; then echo "2: eth0    inet 172.18.0.2/16 brd 172.18.255.255 scope global eth0"; exit 0;\n'
+            'elif [[ "$*" =~ "route show" ]]; then echo "172.18.0.0/16 proto kernel scope link src 172.18.0.2"; exit 0;\n'
+            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\\n-A OUTPUT -o lo -j ACCEPT\\n-A OUTPUT -o wg0 -j ACCEPT"; exit 0;\n'
+            'elif [[ "$*" =~ "disable_ipv6" ]]; then echo "1"; exit 0;\n'
+            'elif [[ "$*" =~ "route get" ]]; then echo "8.8.8.8 dev wg0 src 10.0.0.2"; exit 0;\n'
+            'elif [[ "$*" =~ "nslookup" ]]; then echo "Address: 93.184.216.34"; exit 0;\n'
+            'elif [[ "$*" =~ "checkip.amazonaws.com" ]]; then echo "156.146.54.4"; exit 0;\n'
+            'elif [[ "$*" =~ "ipinfo.io/json" ]]; then echo \'{"ip":"156.146.54.4","org":"AS63949 Akamai Connected Cloud / Linode"}\'; exit 0; fi; exit 0'
+        )
+        with patch.dict(os.environ, {"MOCK_JQ_ORG": "AS63949 Akamai Connected Cloud / Linode"}):
+            res_leak_isp = self.run_helper("start-crawler")
+        self.assertEqual(res_leak_isp.returncode, 1)
+        self.assertIn("CRITICAL LEAK: Container egress is routing through host ISP/cloud", res_leak_isp.stderr)
+
+        # 3. Succeeds and prints CRAWLER_STARTED when all consolidated checks pass
+        self.create_mock_docker(
+            'now=$(date +%s)\n'
+            'if [[ "$*" =~ "State.Health" ]]; then echo "healthy"; exit 0;\n'
+            'elif [[ "$*" =~ "com.docker.compose.service" ]]; then echo "gluetun"; exit 0;\n'
+            'elif [[ "$*" =~ "Config.Image" ]]; then echo "qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00"; exit 0;\n'
+            f'elif [[ "$*" =~ "latest-handshakes" ]]; then echo "{pub} $now"; exit 0;\n'
+            f'elif [[ "$*" =~ "transfer" ]]; then echo "{pub} 5000 3000"; exit 0;\n'
+            f'elif [[ "$*" =~ "endpoints" ]]; then echo "{pub} 212.56.54.190:1337"; exit 0;\n'
+            'elif [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\\n2: eth0: <BROADCAST>\\n3: wg0: <POINTOPOINT>"; exit 0;\n'
+            'elif [[ "$*" =~ "addr show" ]]; then echo "2: eth0    inet 172.18.0.2/16 brd 172.18.255.255 scope global eth0"; exit 0;\n'
+            'elif [[ "$*" =~ "route show" ]]; then echo "172.18.0.0/16 proto kernel scope link src 172.18.0.2"; exit 0;\n'
+            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\\n-A OUTPUT -o lo -j ACCEPT\\n-A OUTPUT -o wg0 -j ACCEPT"; exit 0;\n'
+            'elif [[ "$*" =~ "disable_ipv6" ]]; then echo "1"; exit 0;\n'
+            'elif [[ "$*" =~ "route get" ]]; then echo "8.8.8.8 dev wg0 src 10.0.0.2"; exit 0;\n'
+            'elif [[ "$*" =~ "nslookup" ]]; then echo "Address: 93.184.216.34"; exit 0;\n'
+            'elif [[ "$*" =~ "checkip.amazonaws.com" ]]; then echo "156.146.54.4"; exit 0;\n'
+            'elif [[ "$*" =~ "ipinfo.io/json" ]]; then echo \'{"ip":"156.146.54.4","org":"AS60068 Datacamp Limited"}\'; exit 0; fi; exit 0'
+        )
+        res_ok = self.run_helper("start-crawler")
+        self.assertEqual(res_ok.returncode, 0, msg=res_ok.stderr)
+        self.assertIn("CRAWLER_STARTED", res_ok.stdout)
 
 
 # =============================================================================

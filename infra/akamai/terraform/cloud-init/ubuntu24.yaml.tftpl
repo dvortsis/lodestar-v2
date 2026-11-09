@@ -70,13 +70,18 @@ write_files:
         local subcmd="$${1:-}"
         local gluetun_pid=""
         gluetun_pid="$(docker inspect -f '{{if .State.Running}}{{.State.Pid}}{{else}}0{{end}}' gluetun 2>/dev/null || true)"
+        if [ -z "$gluetun_pid" ] || ! [ "$gluetun_pid" -gt 0 ] 2>/dev/null; then
+          echo "ERROR: Gluetun container is not running; cannot inspect WireGuard $subcmd" >&2
+          return 1
+        fi
+        if ! command -v nsenter >/dev/null 2>&1 || ! command -v wg >/dev/null 2>&1; then
+          echo "ERROR: Required host utilities (nsenter, wg) unavailable for WireGuard $subcmd inspection" >&2
+          return 1
+        fi
         local out=""
-        if [ -n "$gluetun_pid" ] && [ "$gluetun_pid" -gt 0 ] 2>/dev/null && command -v nsenter >/dev/null 2>&1 && command -v wg >/dev/null 2>&1; then
-          out="$(nsenter -t "$gluetun_pid" -n -m wg show wg0 "$subcmd" 2>/dev/null || nsenter -t "$gluetun_pid" -n wg show wg0 "$subcmd" 2>/dev/null || true)"
-        fi
-        if [ -z "$out" ]; then
-          out="$(docker exec gluetun wg show wg0 "$subcmd" 2>/dev/null || true)"
-        fi
+        # Enter Gluetun network and mount namespaces to support both kernelspace netlink
+        # and userspace wireguard-go UAPI socket (/var/run/wireguard/wg0.sock).
+        out="$(nsenter -t "$gluetun_pid" -n -m wg show wg0 "$subcmd" 2>/dev/null || nsenter -t "$gluetun_pid" -n wg show wg0 "$subcmd" 2>/dev/null || true)"
         if [ -z "$out" ]; then
           echo "ERROR: Authoritative WireGuard $subcmd inspection unavailable for wg0" >&2
           return 1
@@ -118,13 +123,35 @@ write_files:
           echo "ERROR: Missing Endpoint or PublicKey in WireGuard configuration" >&2
           return 1
         fi
-        if [ ! -f "$PIA_CA_FILE" ] || [ -L "$PIA_CA_FILE" ]; then
-          return 0
+        # Fail closed when PIA Root CA trust anchor is missing, symlinked, unreadable, or invalid PEM
+        if [ -L "$PIA_CA_FILE" ] || [ ! -f "$PIA_CA_FILE" ] || [ ! -r "$PIA_CA_FILE" ] || [ ! -s "$PIA_CA_FILE" ]; then
+          echo "ERROR: PIA Root CA certificate ($PIA_CA_FILE) is missing, unreadable, or a symlink" >&2
+          return 1
         fi
+        if ! grep -q -- "-----BEGIN CERTIFICATE-----" "$PIA_CA_FILE" 2>/dev/null || ! grep -q -- "-----END CERTIFICATE-----" "$PIA_CA_FILE" 2>/dev/null; then
+          echo "ERROR: PIA Root CA certificate ($PIA_CA_FILE) is invalid or corrupted" >&2
+          return 1
+        fi
+        if command -v openssl >/dev/null 2>&1; then
+          if ! openssl x509 -in "$PIA_CA_FILE" -noout >/dev/null 2>&1; then
+            echo "ERROR: PIA Root CA certificate ($PIA_CA_FILE) failed X.509 parsing" >&2
+            return 1
+          fi
+        fi
+        local sl_raw=""
+        local curl_sl_rc=0
+        sl_raw="$(env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY -u no_proxy -u NO_PROXY curl --noproxy '*' -fsSL --max-time 10 "$PIA_SERVERLIST_URL" 2>/dev/null)" || curl_sl_rc=$?
         local sl_json=""
-        sl_json="$(curl -fsSL --max-time 10 "$PIA_SERVERLIST_URL" 2>/dev/null | head -n 1 || true)"
-        if [ -z "$sl_json" ]; then
-          echo "ERROR: Failed to fetch authoritative PIA server list for endpoint authorization" >&2
+        sl_json="$(printf '%s\n' "$sl_raw" | head -n 1 | tr -d '\r')"
+        if [ "$curl_sl_rc" -ne 0 ] || [ -z "$sl_json" ]; then
+          echo "ERROR: Failed to fetch authoritative PIA server list for endpoint authorization (curl exit $curl_sl_rc)" >&2
+          return 1
+        fi
+        # Validate authorized WireGuard UDP port against PIA serverlist metadata (groups.wg[].ports or 1337)
+        local port_allowed=""
+        port_allowed="$(printf '%s' "$sl_json" | jq -r --argjson p "$ep_port" 'if (.groups.wg | type) == "array" and ([.groups.wg[]?.ports[]?] | length) > 0 then (if ([.groups.wg[]?.ports[]?] | index($p)) != null then "yes" else "no" end) else (if $p == 1337 then "yes" else "no" end) end' 2>/dev/null | tr -d '\r[:space:]' || true)"
+        if [ "$port_allowed" != "yes" ]; then
+          echo "ERROR: Unauthorized WireGuard UDP port $ep_port: not permitted by PIA server list metadata" >&2
           return 1
         fi
         local server_cn=""
@@ -138,9 +165,147 @@ write_files:
           return 1
         fi
         local http_code=""
-        http_code="$(curl -sS --max-time 10 --cacert "$PIA_CA_FILE" --resolve "$${server_cn}:$${ep_port}:$${ep_ip}" -o /dev/null -w '%%{http_code}' "https://$${server_cn}:$${ep_port}/addKey" 2>/dev/null | tr -d ' \t\r\n' || true)"
-        if [ -z "$http_code" ] || [ "$http_code" = "000" ]; then
-          echo "ERROR: Endpoint $ep_ip ($server_cn) failed PIA Root CA TLS verification" >&2
+        local curl_tls_rc=0
+        http_code="$(env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY -u no_proxy -u NO_PROXY curl --noproxy '*' -sS --max-time 10 --cacert "$PIA_CA_FILE" --resolve "$${server_cn}:$${ep_port}:$${ep_ip}" -o /dev/null -w '%%{http_code}' "https://$${server_cn}:$${ep_port}/addKey" 2>/dev/null)" || curl_tls_rc=$?
+        http_code="$(printf '%s' "$http_code" | tr -d ' \t\r\n')"
+        if [ "$curl_tls_rc" -ne 0 ] || [ -z "$http_code" ] || [ "$http_code" = "000" ]; then
+          echo "ERROR: Endpoint $ep_ip ($server_cn:$ep_port) failed PIA Root CA TLS verification (curl exit $curl_tls_rc, http_code $${http_code:-000})" >&2
+          return 1
+        fi
+        return 0
+      }
+
+      verify_tunnel_isolation_gate() {
+        if [ ! -f "$COMPOSE_FILE" ] || [ -L "$COMPOSE_FILE" ]; then
+          echo "ERROR: $COMPOSE_FILE missing or symlink" >&2
+          return 1
+        fi
+        if [ ! -f "$CONFIG_FILE" ] || [ -L "$CONFIG_FILE" ]; then
+          echo "ERROR: $CONFIG_FILE missing or symlink" >&2
+          return 1
+        fi
+        # 1. Gluetun container health status must be strictly 'healthy'
+        local health_status=""
+        health_status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' gluetun 2>/dev/null || echo "inspect_failed")"
+        if [ "$health_status" != "healthy" ]; then
+          echo "ERROR: Gluetun health check failed (status: $health_status, required: healthy)" >&2
+          return 1
+        fi
+        # 2. Verify container service label
+        local svc_label=""
+        svc_label="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}}' gluetun 2>/dev/null || true)"
+        if [ "$svc_label" != "gluetun" ]; then
+          echo "ERROR: Container 'gluetun' missing expected compose service label (got: $svc_label)" >&2
+          return 1
+        fi
+        # 3. Verify pinned container image digest
+        local img_id=""
+        img_id="$(docker inspect -f '{{.Config.Image}}' gluetun 2>/dev/null || true)"
+        case "$img_id" in
+          *sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00*)
+            ;;
+          *)
+            echo "ERROR: Container 'gluetun' is not running approved pinned image digest" >&2
+            return 1
+            ;;
+        esac
+        # 4. WireGuard handshake active and fresh (<= 120s)
+        local hs_out=""
+        hs_out="$(query_wg latest-handshakes)" || return 1
+        local hs_peer=""
+        local hs_epoch=""
+        hs_peer="$(echo "$hs_out" | awk '{print $1}')"
+        hs_epoch="$(echo "$hs_out" | awk '{print $2}')"
+        if [ -z "$hs_epoch" ] || [ "$hs_epoch" -le 0 ] 2>/dev/null; then
+          echo "ERROR: WireGuard tunnel handshake missing or inactive" >&2
+          return 1
+        fi
+        local now=""
+        now="$(date +%s)"
+        local hs_age=$(( now - hs_epoch ))
+        if [ "$hs_age" -lt 0 ] || [ "$hs_age" -gt 120 ]; then
+          echo "ERROR: WireGuard handshake is stale ($${hs_age}s > 120s limit)" >&2
+          return 1
+        fi
+        # 5. WireGuard transfer active (rx > 0 and tx > 0)
+        local tx_out=""
+        tx_out="$(query_wg transfer)" || return 1
+        local rx_b=""
+        local tx_b=""
+        rx_b="$(echo "$tx_out" | awk '{print $2}')"
+        tx_b="$(echo "$tx_out" | awk '{print $3}')"
+        if [ -z "$rx_b" ] || [ -z "$tx_b" ] || [ "$rx_b" -le 0 ] || [ "$tx_b" -le 0 ] 2>/dev/null; then
+          echo "ERROR: WireGuard transfer inactive (rx=$${rx_b:-0}, tx=$${tx_b:-0})" >&2
+          return 1
+        fi
+        # 6. Verify PIA endpoint authorization and bind observed active peer & endpoint to wg0.conf
+        if ! verify_pia_endpoint_binding "$CONFIG_FILE"; then
+          return 1
+        fi
+        local cfg_pub=""
+        local cfg_ep=""
+        cfg_pub="$(extract_cfg_value "PublicKey" "$CONFIG_FILE")"
+        cfg_ep="$(extract_cfg_value "Endpoint" "$CONFIG_FILE")"
+        local ep_out=""
+        ep_out="$(query_wg endpoints)" || return 1
+        local obs_peer=""
+        local obs_ep=""
+        obs_peer="$(echo "$ep_out" | awk '{print $1}')"
+        obs_ep="$(echo "$ep_out" | awk '{print $2}')"
+        if [ -z "$cfg_pub" ] || [ "$hs_peer" != "$cfg_pub" ] || [ "$obs_peer" != "$cfg_pub" ]; then
+          echo "ERROR: Observed WireGuard peer key ($hs_peer) does not match configured PublicKey ($cfg_pub)" >&2
+          return 1
+        fi
+        if [ -z "$cfg_ep" ] || [ "$obs_ep" != "$cfg_ep" ]; then
+          echo "ERROR: Observed WireGuard peer endpoint ($obs_ep) does not match configured Endpoint ($cfg_ep)" >&2
+          return 1
+        fi
+        # 7. Verify firewall rules, Docker bridge binding, exact VPN endpoint/port exception, IPv6 disabled, and wg0 DNS route
+        if ! bash "$0" verify-dns-firewall >/dev/null; then
+          return 1
+        fi
+        # 8. Verify internal DoT DNS resolution succeeds inside Gluetun
+        local dns_out=""
+        dns_out="$(bash "$0" query-dns 2>/dev/null || true)"
+        if ! echo "$dns_out" | grep -q "Address"; then
+          echo "ERROR: Internal DoT DNS resolution failed inside Gluetun container" >&2
+          return 1
+        fi
+        # 9. Verify active tunneled egress IP and ensure it does not match host IP or Linode/Akamai ISP
+        local vpn_ip=""
+        vpn_ip="$(bash "$0" query-egress)" || return 1
+        if ! echo "$vpn_ip" | grep -q -E '^[0-9]{1,3}(\.[0-9]{1,3}){3}$'; then
+          echo "ERROR: Invalid VPN egress IP format ($vpn_ip)" >&2
+          return 1
+        fi
+        local host_ip=""
+        host_ip="$(env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY curl --noproxy '*' -fsSL --max-time 5 https://checkip.amazonaws.com 2>/dev/null | tr -d '[:space:]' || true)"
+        if [ -z "$host_ip" ] || ! echo "$host_ip" | grep -q -E '^[0-9]{1,3}(\.[0-9]{1,3}){3}$'; then
+          host_ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}' || true)"
+        fi
+        if [ -n "$host_ip" ] && [ "$vpn_ip" = "$host_ip" ]; then
+          echo "ERROR: CRITICAL LEAK: VPN egress IP ($vpn_ip) matches host IP ($host_ip)" >&2
+          return 1
+        fi
+        local ipinfo_json=""
+        ipinfo_json="$(bash "$0" query-ipinfo 2>/dev/null || true)"
+        if [ -z "$ipinfo_json" ]; then
+          echo "ERROR: Egress ISP ownership lookup unavailable" >&2
+          return 1
+        fi
+        local org_val=""
+        org_val="$(printf '%s' "$ipinfo_json" | jq -r '.org // empty' 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr -d '\r' || true)"
+        if [ -z "$org_val" ]; then
+          echo "ERROR: Egress ISP lookup failed: missing org attribute in ipinfo response" >&2
+          return 1
+        fi
+        if echo "$org_val" | grep -q -E '(linode|akamai)'; then
+          echo "ERROR: CRITICAL LEAK: Container egress is routing through host ISP/cloud ($org_val)" >&2
+          return 1
+        fi
+        # 10. Crawler strictly confined to Gluetun network namespace
+        if ! grep -q -E 'network_mode:\s*["'\''?]?(service:gluetun|container:gluetun)["'\''?]?' "$COMPOSE_FILE"; then
+          echo "ERROR: Crawler is not restricted to Gluetun network namespace in $COMPOSE_FILE" >&2
           return 1
         fi
         return 0
@@ -275,91 +440,17 @@ write_files:
           echo "VPN_STARTED"
           ;;
         start-crawler)
-          if [ ! -f "$COMPOSE_FILE" ] || [ -L "$COMPOSE_FILE" ]; then
-            echo "ERROR: $COMPOSE_FILE missing or symlink" >&2
-            exit 1
-          fi
-          # Trusted Component Authorization Gate:
-          # 1. Gluetun container health status must be strictly 'healthy'
-          health_status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' gluetun 2>/dev/null || echo "inspect_failed")"
-          if [ "$health_status" != "healthy" ]; then
-            echo "ERROR: Gluetun health check failed (status: $health_status, required: healthy)" >&2
-            exit 1
-          fi
-          # 2. Verify container service label
-          svc_label="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}}' gluetun 2>/dev/null || true)"
-          if [ "$svc_label" != "gluetun" ]; then
-            echo "ERROR: Container 'gluetun' missing expected compose service label (got: $svc_label)" >&2
-            exit 1
-          fi
-          # 3. Verify pinned container image digest
-          img_id="$(docker inspect -f '{{.Config.Image}}' gluetun 2>/dev/null || true)"
-          case "$img_id" in
-            *sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00*)
-              ;;
-            *)
-              echo "ERROR: Container 'gluetun' is not running approved pinned image digest" >&2
-              exit 1
-              ;;
-          esac
-          # 4. WireGuard handshake active and fresh (<= 120s)
-          hs_out="$(bash "$0" wg-handshake 2>/dev/null || true)"
-          hs_peer="$(echo "$hs_out" | awk '{print $1}')"
-          hs_epoch="$(echo "$hs_out" | awk '{print $2}')"
-          if [ -z "$hs_epoch" ] || [ "$hs_epoch" -le 0 ] 2>/dev/null; then
-            echo "ERROR: WireGuard tunnel handshake missing or inactive" >&2
-            exit 1
-          fi
-          now="$(date +%s)"
-          hs_age=$(( now - hs_epoch ))
-          if [ "$hs_age" -lt 0 ] || [ "$hs_age" -gt 120 ]; then
-            echo "ERROR: WireGuard handshake is stale ($${hs_age}s > 120s limit)" >&2
-            exit 1
-          fi
-          # 5. WireGuard transfer active (rx > 0 and tx > 0)
-          tx_out="$(bash "$0" wg-transfer 2>/dev/null || true)"
-          rx_b="$(echo "$tx_out" | awk '{print $2}')"
-          tx_b="$(echo "$tx_out" | awk '{print $3}')"
-          if [ -z "$rx_b" ] || [ -z "$tx_b" ] || [ "$rx_b" -le 0 ] || [ "$tx_b" -le 0 ] 2>/dev/null; then
-            echo "ERROR: WireGuard transfer inactive (rx=$${rx_b:-0}, tx=$${tx_b:-0})" >&2
-            exit 1
-          fi
-          # 6. Verify observed active WireGuard peer and endpoint match authorized config if present
-          if [ -f "$CONFIG_FILE" ]; then
-            if ! verify_pia_endpoint_binding "$CONFIG_FILE"; then
-              exit 1
-            fi
-            cfg_pub="$(extract_cfg_value "PublicKey" "$CONFIG_FILE")"
-            cfg_ep="$(extract_cfg_value "Endpoint" "$CONFIG_FILE")"
-            ep_out="$(bash "$0" wg-endpoints 2>/dev/null || true)"
-            obs_peer="$(echo "$ep_out" | awk '{print $1}')"
-            obs_ep="$(echo "$ep_out" | awk '{print $2}')"
-            if [ -n "$cfg_pub" ] && [ "$hs_peer" != "$cfg_pub" ]; then
-              echo "ERROR: Observed WireGuard peer key ($hs_peer) does not match configured PublicKey ($cfg_pub)" >&2
-              exit 1
-            fi
-            if [ -n "$cfg_ep" ] && [ "$obs_ep" != "$cfg_ep" ]; then
-              echo "ERROR: Observed WireGuard peer endpoint ($obs_ep) does not match configured Endpoint ($cfg_ep)" >&2
-              exit 1
-            fi
-          fi
-          # 7. Gluetun killswitch firewall active (-P OUTPUT DROP)
-          if ! docker exec gluetun iptables -S OUTPUT 2>/dev/null | grep -q -- '-P OUTPUT DROP'; then
-            echo "ERROR: Gluetun firewall killswitch inactive (no -P OUTPUT DROP)" >&2
-            exit 1
-          fi
-          # 8. IPv6 disabled inside container
-          if [ "$(docker exec gluetun cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null || true)" != "1" ]; then
-            echo "ERROR: IPv6 is not disabled inside Gluetun container" >&2
-            exit 1
-          fi
-          # 9. Crawler strictly confined to Gluetun network namespace
-          if ! grep -q -E 'network_mode:\s*["'\''?]?(service:gluetun|container:gluetun)["'\''?]?' "$COMPOSE_FILE"; then
-            echo "ERROR: Crawler is not restricted to Gluetun network namespace in $COMPOSE_FILE" >&2
+          if ! verify_tunnel_isolation_gate; then
             exit 1
           fi
           docker compose -f "$COMPOSE_FILE" --profile crawler up -d crawler
           echo "CRAWLER_STARTED"
+          ;;
+        verify-tunnel)
+          if ! verify_tunnel_isolation_gate; then
+            exit 1
+          fi
+          echo "TUNNEL_ISOLATION_OK"
           ;;
         stop-vpn)
           if [ ! -f "$COMPOSE_FILE" ] || [ -L "$COMPOSE_FILE" ]; then
@@ -390,11 +481,29 @@ write_files:
               echo "ERROR: Failed to shut down VPN and crawler containers; preserving runtime configuration" >&2
               exit 1
             fi
-            for cname in lodestar-crawler gluetun; do
-              cstate="$(docker inspect -f '{{.State.Running}}' "$cname" 2>/dev/null || echo "absent")"
-              if [ "$cstate" = "true" ]; then
-                echo "ERROR: Container '$cname' is still running after shutdown; aborting cleanup" >&2
-                exit 1
+            remaining_q=""
+            if ! remaining_q="$(docker compose -f "$COMPOSE_FILE" --profile crawler ps -q 2>&1)"; then
+              echo "ERROR: Failed to query Compose container state after shutdown: $remaining_q" >&2
+              exit 1
+            fi
+            if [ -n "$(printf '%s' "$remaining_q" | tr -d '[:space:]')" ]; then
+              echo "ERROR: Compose service containers remain active after shutdown ($remaining_q); aborting cleanup" >&2
+              exit 1
+            fi
+            for cname in lodestar_crawler gluetun; do
+              cstate_out=""
+              cstate_rc=0
+              cstate_out="$(docker inspect -f '{{.State.Running}}' "$cname" 2>&1)" || cstate_rc=$?
+              if [ "$cstate_rc" -eq 0 ]; then
+                if [ "$(printf '%s' "$cstate_out" | tr -d '[:space:]')" = "true" ]; then
+                  echo "ERROR: Container '$cname' is still running after shutdown; aborting cleanup" >&2
+                  exit 1
+                fi
+              else
+                if ! printf '%s' "$cstate_out" | grep -q -E -i '(no such (object|container)|not found)'; then
+                  echo "ERROR: Failed to inspect container '$cname' during cleanup: $cstate_out" >&2
+                  exit 1
+                fi
               fi
             done
           fi
@@ -408,7 +517,7 @@ write_files:
           echo "CLEANUP_OK"
           ;;
         wg-handshake)
-          # Query real kernel/userspace WireGuard handshake via host nsenter or container wgctrl/UAPI.
+          # Query real kernel/userspace WireGuard handshake via host nsenter.
           # Never fabricate handshake timestamps from interface carrier or byte counters.
           query_wg latest-handshakes
           ;;
@@ -461,6 +570,42 @@ write_files:
             exit 1
           fi
 
+          # Discover actual container IPv4 address and connected Docker bridge subnet on non_vpn_if
+          if_cidr="$(docker exec gluetun ip -o -4 addr show dev "$non_vpn_if" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="inet") {print $(i+1); exit}}' || true)"
+          container_ip=""
+          if [ -n "$if_cidr" ]; then
+            container_ip="$${if_cidr%/*}"
+          fi
+          bridge_subnet="$(docker exec gluetun ip -o -4 route show dev "$non_vpn_if" proto kernel scope link 2>/dev/null | awk '{print $1; exit}' || true)"
+          if [ -z "$bridge_subnet" ] && [ -n "$if_cidr" ]; then
+            bridge_subnet="$(printf '%s' "$if_cidr" | awk -F'[./]' '
+              function ip2int(a,b,c,d) { return ((a*256+b)*256+c)*256+d }
+              {
+                ip = ip2int($1+0, $2+0, $3+0, $4+0)
+                plen = $5+0
+                mask = (plen == 0) ? 0 : (4294967296 - (2 ^ (32 - plen)))
+                # Bitwise AND via arithmetic
+                net = 0
+                bit = 2147483648
+                for (i = 0; i < 32; i++) {
+                  ib = int(ip / bit) % 2
+                  mb = int(mask / bit) % 2
+                  if (ib == 1 && mb == 1) net += bit
+                  bit = int(bit / 2)
+                }
+                o1 = int(net / 16777216) % 256
+                o2 = int(net / 65536) % 256
+                o3 = int(net / 256) % 256
+                o4 = net % 256
+                printf "%d.%d.%d.%d/%d\n", o1, o2, o3, o4, plen
+              }
+            ')"
+          fi
+          if [ -z "$container_ip" ] || [ -z "$bridge_subnet" ]; then
+            echo "ERROR: Failed to determine Gluetun container IP or Docker bridge subnet for $non_vpn_if" >&2
+            exit 1
+          fi
+
           # Inspect iptables OUTPUT chain in gluetun
           fw_rules="$(docker exec gluetun iptables -S OUTPUT 2>/dev/null || true)"
           if [ -z "$fw_rules" ]; then
@@ -486,32 +631,29 @@ write_files:
             exit 1
           fi
 
-          # 4. Discover and strictly validate legitimate VPN endpoint server IP
-          raw_ep="$(bash "$0" wg-endpoints 2>/dev/null | awk '{print $2}' | cut -d: -f1 || true)"
-          if [ -z "$raw_ep" ] && [ -f "$CONFIG_FILE" ]; then
-            raw_ep="$(awk -F'=' '/^[[:space:]]*Endpoint[[:space:]]*=/ {gsub(/[[:space:]]/, "", $2); split($2, a, ":"); print a[1]; exit}' "$CONFIG_FILE" 2>/dev/null || true)"
+          # 4. Discover and strictly validate legitimate VPN endpoint server IP and UDP port
+          raw_ep_full=""
+          if [ -f "$CONFIG_FILE" ] && [ ! -L "$CONFIG_FILE" ]; then
+            raw_ep_full="$(extract_cfg_value "Endpoint" "$CONFIG_FILE")"
+          fi
+          if [ -z "$raw_ep_full" ]; then
+            raw_ep_full="$(bash "$0" wg-endpoints 2>/dev/null | awk '{print $2}' || true)"
           fi
           vpn_server_ip=""
-          if echo "$raw_ep" | grep -q -E '^[0-9]{1,3}(\.[0-9]{1,3}){3}$'; then
-            vpn_server_ip="$raw_ep"
+          vpn_server_port=""
+          if echo "$raw_ep_full" | grep -q -E '^[0-9]{1,3}(\.[0-9]{1,3}){3}:[0-9]{1,5}$'; then
+            vpn_server_ip="$${raw_ep_full%:*}"
+            vpn_server_port="$${raw_ep_full#*:}"
           fi
 
           # 5. Strict evaluation of every OUTPUT rule using awk (no regex interpolation of config values):
           # Fail closed if ANY rule permits unauthorized egress, custom chain jumps, or unconstrained ACCEPT
-          if ! echo "$fw_rules" | awk -v vpn_ip="$vpn_server_ip" '
-            function is_rfc1918_cidr(cidr,   parts, ip, mask, o, o1, o2, o3, o4) {
-              if (cidr !~ /^[0-9]{1,3}(\.[0-9]{1,3}){3}\/[0-9]{1,2}$/) return 0
-              split(cidr, parts, "/")
-              ip = parts[1]; mask = parts[2] + 0
-              if (mask < 8 || mask > 32) return 0
-              split(ip, o, ".")
-              o1 = o[1] + 0; o2 = o[2] + 0; o3 = o[3] + 0; o4 = o[4] + 0
-              if (o1 > 255 || o2 > 255 || o3 > 255 || o4 > 255) return 0
-              if (o1 == 10 && mask >= 8) return 1
-              if (o1 == 172 && o2 >= 16 && o2 <= 31 && mask >= 12) return 1
-              if (o1 == 192 && o2 == 168 && mask >= 16) return 1
-              return 0
-            }
+          if ! echo "$fw_rules" | awk \
+            -v vpn_ip="$vpn_server_ip" \
+            -v vpn_port="$vpn_server_port" \
+            -v non_vpn_if="$non_vpn_if" \
+            -v container_ip="$container_ip" \
+            -v bridge_subnet="$bridge_subnet" '
             {
               gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
               if ($0 == "" || $0 == "-P OUTPUT DROP") next
@@ -523,16 +665,17 @@ write_files:
                 if ($0 == "-A OUTPUT -o wg0 -j ACCEPT") next
                 # c) Stateful established / related connection tracking
                 if ($0 ~ /^-A OUTPUT -m (conntrack --ctstate|state --state) (RELATED,ESTABLISHED|ESTABLISHED,RELATED) -j ACCEPT$/) next
-                # d) Legitimate VPN server peer IP UDP connection (exact IP comparison, never regex)
-                if (vpn_ip != "" && ($0 ~ /-p udp/) && (index($0, "-d " vpn_ip "/32 ") > 0 || index($0, "-d " vpn_ip " ") > 0)) next
-                # e) Gluetun local Docker bridge subnet rule: -A OUTPUT -s <rfc1918>/32 -d <rfc1918>/<mask> -o <if> -j ACCEPT
-                if ($0 ~ /^-A OUTPUT -s [0-9.]+\/32 -d [0-9.]+\/[0-9]+ -o [a-zA-Z0-9_.-]+ -j ACCEPT$/) {
-                  src = ""; dst = ""
-                  for (i = 1; i <= NF; i++) {
-                    if ($i == "-s") src = $(i+1)
-                    if ($i == "-d") dst = $(i+1)
-                  }
-                  if (is_rfc1918_cidr(src) && is_rfc1918_cidr(dst)) next
+                # d) Legitimate VPN server endpoint exception: exact IP, exact interface, UDP protocol, and exact UDP destination port
+                if (vpn_ip != "" && vpn_port != "") {
+                  expected_vpn_1 = "-A OUTPUT -d " vpn_ip "/32 -o " non_vpn_if " -p udp -m udp --dport " vpn_port " -j ACCEPT"
+                  expected_vpn_2 = "-A OUTPUT -d " vpn_ip "/32 -o " non_vpn_if " -p udp --dport " vpn_port " -j ACCEPT"
+                  expected_vpn_3 = "-A OUTPUT -d " vpn_ip " -o " non_vpn_if " -p udp -m udp --dport " vpn_port " -j ACCEPT"
+                  if ($0 == expected_vpn_1 || $0 == expected_vpn_2 || $0 == expected_vpn_3) next
+                }
+                # e) Gluetun local Docker bridge subnet rule: strictly bound to verified container_ip/32, bridge_subnet, and non_vpn_if
+                if (container_ip != "" && bridge_subnet != "") {
+                  expected_local = "-A OUTPUT -s " container_ip "/32 -d " bridge_subnet " -o " non_vpn_if " -j ACCEPT"
+                  if ($0 == expected_local) next
                 }
                 print "ERROR: Unauthorized egress rule in Gluetun firewall: " $0 > "/dev/stderr"
                 exit 1

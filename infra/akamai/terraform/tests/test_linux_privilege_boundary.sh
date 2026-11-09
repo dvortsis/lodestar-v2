@@ -84,6 +84,7 @@ SUDOERS_FILE="/etc/sudoers.d/99-test-ls-$TEST_PID"
 HELPER_BIN="/usr/local/sbin/lodestar-vpn-helper"
 COMPOSE_DIR="/etc/lodestar/vpn"
 COMPOSE_FILE="$COMPOSE_DIR/compose.yaml"
+PIA_CA_FILE="$COMPOSE_DIR/ca.rsa.4096.crt"
 BACKUP_DIR="$(mktemp -d /tmp/lodestar-priv-test-backup.XXXXXX)"
 DIAGNOSTIC_LOG="/tmp/lodestar-priv-test-diag-$TEST_RUN_ID.log"
 
@@ -91,6 +92,7 @@ TEST_USER_CREATED=0
 SUDOERS_FILE_CREATED=0
 HELPER_PREEXISTED=0
 COMPOSE_PREEXISTED=0
+CA_PREEXISTED=0
 COMPOSE_DIR_PREEXISTED=0
 NETNS_CREATED=0
 TEST_NETNS="ns-$TEST_RUN_ID"
@@ -125,6 +127,15 @@ cleanup() {
     fi
   else
     rm -f "$HELPER_BIN"
+  fi
+
+  # Restore or remove CA file
+  if [[ "$CA_PREEXISTED" -eq 1 ]]; then
+    if [[ -f "$BACKUP_DIR/ca.orig" ]]; then
+      mv -f "$BACKUP_DIR/ca.orig" "$PIA_CA_FILE"
+    fi
+  else
+    rm -f "$PIA_CA_FILE"
   fi
 
   # Restore or remove compose file
@@ -175,6 +186,10 @@ if [[ -e "$COMPOSE_FILE" ]]; then
   COMPOSE_PREEXISTED=1
   cp -p "$COMPOSE_FILE" "$BACKUP_DIR/compose.orig"
 fi
+if [[ -e "$PIA_CA_FILE" ]]; then
+  CA_PREEXISTED=1
+  cp -p "$PIA_CA_FILE" "$BACKUP_DIR/ca.orig"
+fi
 
 echo "=== Step 2: Creating unprivileged test user: $TEST_USER ==="
 useradd -m -s /bin/bash "$TEST_USER"
@@ -193,6 +208,15 @@ fi
 cp "$CANONICAL_COMPOSE" "$COMPOSE_FILE"
 chmod 0644 "$COMPOSE_FILE"
 chown root:root "$COMPOSE_FILE"
+
+CANONICAL_CA="$SCRIPT_DIR/../pia-example/ca.rsa.4096.crt"
+if [[ ! -f "$CANONICAL_CA" ]]; then
+  echo "ERROR: Canonical PIA CA file not found: $CANONICAL_CA" >&2
+  exit 1
+fi
+cp "$CANONICAL_CA" "$PIA_CA_FILE"
+chmod 0644 "$PIA_CA_FILE"
+chown root:root "$PIA_CA_FILE"
 
 # Extract helper script directly from ubuntu24.yaml.tftpl
 python3 -c "
@@ -308,11 +332,11 @@ if command -v ip >/dev/null 2>&1 && command -v iptables >/dev/null 2>&1; then
   NETNS_CREATED=1
   ip -n "$TEST_NETNS" link set lo up
 
-  # Setup simulated physical interface eth0 and WireGuard interface wg0
+  # Setup simulated physical interface eth0 (Docker bridge 172.18.0.2/16) and WireGuard interface wg0
   ip link add name "eth0-$TEST_PID" type dummy
   ip link set "eth0-$TEST_PID" netns "$TEST_NETNS" name eth0
   ip -n "$TEST_NETNS" link set eth0 up
-  ip -n "$TEST_NETNS" addr add 192.0.2.10/24 dev eth0
+  ip -n "$TEST_NETNS" addr add 172.18.0.2/16 dev eth0
 
   ip link add name "wg0-$TEST_PID" type dummy
   ip link set "wg0-$TEST_PID" netns "$TEST_NETNS" name wg0
@@ -366,6 +390,26 @@ exit 1
 MOCK_DOCKER
   chmod 0755 "$MOCK_BIN_DIR/docker"
 
+  # Prepare deterministic mock curl for write-config endpoint authorization in isolated CI environment
+  cat > "$MOCK_BIN_DIR/curl" <<'MOCK_CURL'
+#!/usr/bin/env bash
+case "$*" in
+  *serverlist.piaservers.net*)
+    echo '{"groups":{"wg":[{"name":"wireguard","ports":[1337]}]},"regions":[{"id":"us-newjersey","servers":{"wg":[{"ip":"212.56.54.190","cn":"newjersey434"}]}}]}'
+    exit 0
+    ;;
+  *newjersey434:1337*)
+    echo -n '400'
+    exit 0
+    ;;
+  *)
+    echo -n '000'
+    exit 60
+    ;;
+esac
+MOCK_CURL
+  chmod 0755 "$MOCK_BIN_DIR/curl"
+
   # Write a valid wg0.conf via the actual helper write-config command
   valid_wg0="$(python3 -c '
 import base64, os
@@ -373,11 +417,29 @@ k1 = base64.b64encode(os.urandom(32)).decode()
 k2 = base64.b64encode(os.urandom(32)).decode()
 print(f"[Interface]\nAddress = 10.0.0.2/32\nPrivateKey = {k1}\nDNS = 10.0.0.242\n\n[Peer]\nPublicKey = {k2}\nEndpoint = 212.56.54.190:1337\nAllowedIPs = 0.0.0.0/0\nPersistentKeepalive = 25")
 ')"
-  write_out="$(printf "%s\n" "$valid_wg0" | "$HELPER_BIN" write-config 2>&1)"
+  write_out="$(PATH="$MOCK_BIN_DIR:$PATH" printf "%s\n" "$valid_wg0" | PATH="$MOCK_BIN_DIR:$PATH" "$HELPER_BIN" write-config 2>&1)"
   if ! echo "$write_out" | grep -q "CONFIG_OK"; then
     echo "FAIL: Helper write-config rejected valid wg0.conf: $write_out" >&2
     exit 1
   fi
+
+  # Verify write-config fails closed when PIA_CA_FILE is missing or symlinked
+  mv "$PIA_CA_FILE" "$PIA_CA_FILE.bak"
+  if printf "%s\n" "$valid_wg0" | PATH="$MOCK_BIN_DIR:$PATH" "$HELPER_BIN" write-config >/dev/null 2>&1; then
+    mv "$PIA_CA_FILE.bak" "$PIA_CA_FILE"
+    echo "FAIL: Helper write-config succeeded when PIA Root CA was missing!" >&2
+    exit 1
+  fi
+  ln -s "$PIA_CA_FILE.bak" "$PIA_CA_FILE"
+  if printf "%s\n" "$valid_wg0" | PATH="$MOCK_BIN_DIR:$PATH" "$HELPER_BIN" write-config >/dev/null 2>&1; then
+    rm -f "$PIA_CA_FILE"
+    mv "$PIA_CA_FILE.bak" "$PIA_CA_FILE"
+    echo "FAIL: Helper write-config succeeded when PIA Root CA was a symlink!" >&2
+    exit 1
+  fi
+  rm -f "$PIA_CA_FILE"
+  mv "$PIA_CA_FILE.bak" "$PIA_CA_FILE"
+  echo "PASS: Helper write-config failed closed on missing and symlinked PIA Root CA."
 
   # Verify actual helper accepts compliant Gluetun ruleset in $TEST_NETNS
   ok_check="$(PATH="$MOCK_BIN_DIR:$PATH" "$HELPER_BIN" verify-dns-firewall 2>&1 || true)"
@@ -408,6 +470,28 @@ print(f"[Interface]\nAddress = 10.0.0.2/32\nPrivateKey = {k1}\nDNS = 10.0.0.242\
     exit 1
   fi
   echo "PASS: Actual helper rejected adversarial protocol bypass rule."
+
+  # 7c-2: Adversarial test - inject non-matching private subnet rule (-A OUTPUT -s 10.99.0.2/32 -d 10.99.0.0/16 -o eth0 -j ACCEPT)
+  ip netns exec "$TEST_NETNS" iptables -A OUTPUT -s 10.99.0.2/32 -d 10.99.0.0/16 -o eth0 -j ACCEPT
+  adv_subnet_check="$(PATH="$MOCK_BIN_DIR:$PATH" "$HELPER_BIN" verify-dns-firewall 2>&1 || true)"
+  ip netns exec "$TEST_NETNS" iptables -D OUTPUT -s 10.99.0.2/32 -d 10.99.0.0/16 -o eth0 -j ACCEPT
+
+  if ! echo "$adv_subnet_check" | grep -q "ERROR: Unauthorized egress rule in Gluetun firewall: -A OUTPUT -s 10.99.0.2/32 -d 10.99.0.0/16 -o eth0 -j ACCEPT"; then
+    echo "FAIL: Actual helper did NOT reject mismatched private subnet rule! Output: $adv_subnet_check" >&2
+    exit 1
+  fi
+  echo "PASS: Actual helper rejected non-matching private subnet rule."
+
+  # 7c-3: Adversarial test - inject VPN endpoint rule with unauthorized UDP port (--dport 9999)
+  ip netns exec "$TEST_NETNS" iptables -A OUTPUT -d 212.56.54.190/32 -o eth0 -p udp -m udp --dport 9999 -j ACCEPT
+  adv_port_check="$(PATH="$MOCK_BIN_DIR:$PATH" "$HELPER_BIN" verify-dns-firewall 2>&1 || true)"
+  ip netns exec "$TEST_NETNS" iptables -D OUTPUT -d 212.56.54.190/32 -o eth0 -p udp -m udp --dport 9999 -j ACCEPT
+
+  if ! echo "$adv_port_check" | grep -q "ERROR: Unauthorized egress rule in Gluetun firewall: -A OUTPUT -d 212.56.54.190/32 -o eth0 -p udp -m udp --dport 9999 -j ACCEPT"; then
+    echo "FAIL: Actual helper did NOT reject wrong UDP port on VPN endpoint rule! Output: $adv_port_check" >&2
+    exit 1
+  fi
+  echo "PASS: Actual helper rejected wrong UDP port on VPN endpoint rule."
 
   # 7d: Adversarial test - verify dummy wg0 interface (which has carrier=1 and interface bytes, but is NOT an active WireGuard interface)
   # cannot fabricate wg-handshake, wg-transfer, or wg-endpoints evidence.
