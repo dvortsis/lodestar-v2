@@ -149,10 +149,10 @@ Check the gluetun wiki for the current variable names for PIA if gluetun refuses
 ### T0.5 Leak test (the gate for any crawl)
 Run on each VM, with gluetun up and Lodestar **stopped**:
 1. `docker run --rm --network container:gluetun curlimages/curl -s https://ifconfig.me` → the address must **differ** from the VM's own public address (`curl -s https://ifconfig.me` on the host). Do not write either address anywhere.
-2. Kill switch: `docker stop gluetun`, then from a container sharing gluetun's namespace (use `docker start gluetun` and immediately a test) — simpler and safer: with gluetun running, `docker exec gluetun sh -c 'ip link set tun0 down'` (or `wg0` if WireGuard), then run `docker run --rm --network container:gluetun curlimages/curl -s -m 10 https://ifconfig.me`. It must **fail or time out**. Then `docker restart gluetun` and re-check step 1.
-3. DNS: `docker run --rm --network container:gluetun curlimages/curl -s -m 10 https://ifconfig.me` already uses gluetun's DNS; additionally confirm that no `lodestar` traffic can use the host network: Lodestar is `network_mode: container:gluetun`, so it has no other interface (`docker inspect lodestar --format '{{.HostConfig.NetworkMode}}'` → `container:...`).
+2. Kill switch: with gluetun running, take its tunnel interface down: `docker exec gluetun sh -c 'ip link set tun0 down'` (use `wg0` if the tunnel is WireGuard; `docker exec gluetun ip -br link` lists it). Then run `docker run --rm --network container:gluetun curlimages/curl -s -m 10 https://ifconfig.me`. It must **fail or time out**. Then `docker restart gluetun`, wait for healthy, and repeat step 1.
+3. Lodestar can't bypass the tunnel: it has no network of its own (`docker inspect lodestar --format '{{.HostConfig.NetworkMode}}'` must print `container:gluetun` or the container's id).
 4. Host SSH must still work from the operator's allow-listed address (you're connected, so it does).
-Pass: 1 differs, 2 fails closed and recovers. **Fail = no crawl on that VM.** Contingency: try another US region once (`SERVER_REGIONS`); if it fails twice, the VM does the non-crawl tests only (benchmarks, UX probes), and you journal `BLOCKED`.
+Pass: step 1 differs, step 2 fails closed and recovers, step 3 as stated. **Fail = no crawl on that VM.** Contingency: try another US region once (`SERVER_REGIONS`); if it fails twice, the VM does the non-crawl tests only (benchmarks, UX probes), and you journal `BLOCKED`.
 On Windows (only needed for T-W7): install the PIA client or a WireGuard profile with the kill switch on; the same two checks (the address differs; with the tunnel disabled, `Invoke-WebRequest https://ifconfig.me -TimeoutSec 10` fails). If you can't get a Windows kill switch, **skip T-W7**.
 
 ---
@@ -171,7 +171,7 @@ cd ~/pilot && docker compose up -d && docker compose ps
 wait_for 300 curl -fs http://127.0.0.1:8090/healthz
 docker logs lodestar 2>&1 | grep -i "setup token" | head -1   # do not paste the token anywhere
 ```
-Complete first-run setup in the UI (via an SSH tunnel, §5.1) using the admin password; keep the wizard defaults (the safe choices), and leave all rule packs and the child-safety core as they come. Do **not** import anything.
+Complete first-run setup in the UI (via an SSH tunnel, §4.1) using the admin password; keep the wizard defaults (the safe choices), and leave all rule packs and the child-safety core as they come. Do **not** import anything.
 Pass: `/healthz` ok; the dashboard shows nodes within 10 min (`curl -s localhost:8090/metrics | grep -c dht_`); no restarts in `docker compose ps`.
 Fail: `docker logs lodestar | tail -50`; common causes: gluetun not healthy yet (wait up to 5 min), DNS (restart gluetun then Lodestar), the volume (`docker volume inspect`). Retry 3 times, then `BLOCKED`.
 
@@ -231,7 +231,7 @@ Per VM: mean per-arm window rate (A segments vs B segments), the paired differen
 
 Start only after Main's segment 1 passed T-M1 and has at least 5,000 stored torrents (`curl -s localhost:8090/metrics | grep -i stored`); otherwise the data set is too small to mean anything (journal `SHORTENED` and run on what exists).
 
-### 5.1 Reaching Main without exposing it
+### 4.1 Reaching Main without exposing it
 Main's UI is not opened to the internet. From Win (PowerShell with OpenSSH client):
 ```powershell
 ssh -N -L 18090:127.0.0.1:8090 <user>@<main-address> -i <key>      # keep running in a background job
@@ -245,7 +245,7 @@ cd lodestar-v2\web; npm ci
 npx lighthouse http://127.0.0.1:18090/search --preset=perf --only-categories=performance --chrome-flags="--headless=new --no-sandbox" --output=json --output-path=..\..\pilot\lh-mobile-1.json   # default form factor is mobile (4G simulated)
 npx lighthouse http://127.0.0.1:18090/search --preset=desktop --only-categories=performance --chrome-flags="--headless=new --no-sandbox" --output=json --output-path=..\..\pilot\lh-desktop-1.json
 ```
-Run each **three times** (change the file suffix) and take the median. Targets (`web/lighthouserc*.json`): mobile LCP ≤ 2500 ms, desktop LCP ≤ 1000 ms, TBT ≤ 100 ms, CLS ≤ 0.02, total bytes ≤ 102,400. Note the app needs the admin session; if `/search` redirects to a login or setup page, sign in once in a Chrome profile and pass `--chrome-flags="--user-data-dir=<profile>"` or record `NOTE: lighthouse measured the login page`; both are acceptable if labelled. The SSH tunnel inflates LCP by one round trip; also run the same Lighthouse **on Main** against loopback (use `npx lighthouse` in a container: `docker run --rm --network host --entrypoint npx node:22 lighthouse ...` if Chrome is installed there, otherwise skip) and report both.
+Run each **three times** (change the file suffix) and take the median. Targets (`web/lighthouserc*.json`): mobile LCP ≤ 2500 ms, desktop LCP ≤ 1000 ms, TBT ≤ 100 ms, CLS ≤ 0.02, total bytes ≤ 102,400. Note the app needs the admin session; if `/search` redirects to a login or setup page, sign in once in a Chrome profile and pass `--chrome-flags="--user-data-dir=<profile>"` or record `NOTE: lighthouse measured the login page`; both are acceptable if labelled. The SSH tunnel inflates LCP by one round trip; also run the same Lighthouse **on Main** against loopback (only if Chrome is installed there; otherwise skip) and report both.
 Contingency: if Lighthouse cannot launch Chrome on Windows Server, install Chrome stable; if that fails, use Playwright's bundled Chromium (`npx playwright install chromium` is allowed on **Win** here since there's no preinstalled browser; the "never run it" rule in `web/e2e/README.md` applies only to the cloud coding sessions).
 
 ### T-L2 API latency while the crawl is ingesting
@@ -286,7 +286,7 @@ cargo run --release -p lodestar-bench --example reporting-overhead -- --gate    
 cargo run --release -p lodestar-bench --bin search-bench -- --torrents 1000000          # no --gate: a measurement
 cargo run --release -p lodestar-bench --bin search-bench -- --torrents 10000000 --dir D:\bench10m   # 10M: needs about 25 GB; run once, no --gate
 ```
-Use `--help` on each bin to confirm flags first (bench bins `--dir`, `--seed`, `--only`, `--no-hot` exist; flags were read from source, not run). Repeat the 200k run **three times** and report the median p95 per query class. For 10M, one run is enough; mark it "single run". Report each result against the §3 p95 table, labelling the hardware "EBS gp3, 4 vCPU, not NVMe, Windows". The filter budget is calibrated to an EPYC 7763 (`docs/decisions/2026-10-23-F-perf.md`); a failure on this CPU is a **finding** to record with the measured µs/torrent, not a regression, unless the same test fails on Main after the crawl (T-W5).
+Use `--help` on each bin to confirm flags first (bench bins `--dir`, `--seed`, `--only`, `--no-hot` exist; flags were read from source, not run). Repeat the 200k run **three times** and report the median p95 per query class. For 10M, one run is enough; mark it "single run". Report each result against the §3 p95 table, labelling the hardware "EBS gp3, 4 vCPU, not NVMe, Windows". The filter budget is calibrated to an EPYC 7763 (`docs/decisions/2026-10-23-F-perf.md`); a failure on this CPU is a **finding** to record with the measured µs/torrent, not a regression, unless the same test fails on Main after the crawl (T-M3).
 Contingency: out of disk for 10M → reduce to 5M and mark `SHORTENED`; a gate fails → record the numbers, rerun once to see whether it is noise, then continue.
 
 ### T-W3 Playwright suite on Windows (the repo's own tests)
@@ -301,11 +301,8 @@ Snapshots are baselined on CI's Linux container, so pass `--ignore-snapshots` (t
 ### T-W4 Windows flake hunt
 Run the Rust tests that wait on conditions in a loop, because Windows is CI's slowest platform: `cargo test --workspace` once for a baseline (about 15 to 40 min); then run any test that fails twice more in isolation (`cargo test -p <crate> <name>`); report the test names, failure messages and how often each failed out of three. Don't fix; the runner decides what to do. Stop after 90 minutes total.
 
-### T-W5 (after Main's crawl ends, optional) Bench on Main
+### T-M3 (after Main's crawl ends, optional) Bench on Main
 Only after T-M segments are all analyzed and `docker compose down` is done, run `size-report` and the 200k `search-bench` on Main (Linux) to compare Linux and Windows on similar vCPUs. Needs Rust there; skip it if more than 50 minutes of Main's life remain unmapped.
-
-### T-W6 (optional) Search-while-ingesting benchmark
-Covered by T-L2. No separate test.
 
 ### T-W7 (optional, only if everything above finished and at least 8 h of Win's life remain) Windows crawl arm
 Only through PIA (§2 T0.5, Windows part). Use the pinned binary built in T-W0; run `docs/soak/tools/cr0-soak.ps1` as documented there (`-Exe`, `-Root`, `-Commit`, `-Ui embedded|stub`, `-BuildRecord`; it needs a build record JSON from the build tooling and refuses short baselines: `-BaselineHours 24` minimum). If you can't satisfy its build-record requirement or the window doesn't fit, `SKIPPED: no valid 24 h window`. Don't run a crawl that isn't collected.
@@ -323,8 +320,8 @@ Only through PIA (§2 T0.5, Windows part). Use the pinned binary built in T-W0; 
 | H+16 | Switch to segment 2 | Switch to segment 2 | |
 | H+16 to H+23 | Segment 2 (7 h) | Segment 2 (7 h) | T-W4 flake hunt; T-L2 at about H+20 |
 | H+23 to H+30 | Segment 3 (7 h) | Segment 3 | T-L1 second run; T-L2 at about H+30 |
-| H+30 to H+37 | Segment 4 (7 h) | Segment 4 | T-L3 browser probe; T-W7 only if there is a 24 h window (there isn't); otherwise idle |
-| H+37 to H+40 | Final analysis, T-W5 | Final analysis | Final Lighthouse run on the largest store; copy results; tear down Win |
+| H+30 to H+37 | Segment 4 (7 h) | Segment 4 | T-L3 browser probe; T-W7 is skipped (no 24 h window fits); otherwise idle |
+| H+37 to H+40 | Final analysis, T-M3 | Final analysis | Final Lighthouse run on the largest store; copy results; tear down Win |
 | H+40 to H+44 | Copy evidence, tear down Worker, then Main | | |
 | H+44 to H+48 | Spare buffer. Nothing is meant to run. | | |
 
