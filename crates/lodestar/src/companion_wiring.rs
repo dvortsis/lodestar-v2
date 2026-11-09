@@ -19,7 +19,7 @@
 //! apply at Lodestar's next start, as any saved source setting does (the
 //! source shows `restart_required`).
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lodestar_api::dto::ops::SourcePatch;
@@ -36,6 +36,7 @@ use lodestar_companions::manager::{self, Snapshot};
 use lodestar_companions::watch::{self, Seen, Watched};
 use lodestar_integrations::secret::Secret;
 use lodestar_pipeline::requires;
+use lodestar_store::Store;
 use tokio::sync::watch as channel;
 use tokio::task::JoinHandle;
 
@@ -82,8 +83,8 @@ fn canonical(url: &str) -> String {
 ///   listed, so its dependents need it;
 /// - `external_client`: an `integrations.clients` entry that isn't
 ///   [`MANAGED_CLIENT`];
-/// - `external_indexer`: the Prowlarr source is on and one of the addresses
-///   it runs with isn't a companion's.
+/// - `external_indexer`: the Prowlarr source is on and its saved address
+///   isn't a companion's.
 pub fn present(
     installed: &Snapshot,
     watched: &Watched,
@@ -101,7 +102,12 @@ pub fn present(
             companions.insert(c.id.as_str().to_owned(), h);
         }
     }
-    for (id, seen) in watched {
+    for (id, (target, seen)) in watched {
+        // Only for the target it's added at now: a removed or moved
+        // companion's old result never counts.
+        if !added.iter().any(|(a, t)| a == id && t == target) {
+            continue;
+        }
         let h = match seen {
             Seen::Healthy => requires::Health::Healthy,
             Seen::Unhealthy => requires::Health::Unhealthy,
@@ -119,7 +125,11 @@ pub fn present(
                 .companions
                 .iter()
                 .filter(|c| c.id.as_str() == PROWLARR_SOURCE && c.version.is_some())
-                .map(|_| canonical("http://127.0.0.1:9696")),
+                .filter_map(|c| {
+                    let entry = lodestar_companions::builtin().ok()?.get(c.id.as_str())?;
+                    let port = entry.port("webui")?.number;
+                    Some(canonical(&format!("http://127.0.0.1:{port}")))
+                }),
         )
         .collect();
     requires::Present {
@@ -130,14 +140,34 @@ pub fn present(
     }
 }
 
-/// The Prowlarr source's addresses, when it's on. `None` when it's off or
-/// unknown.
-async fn prowlarr_endpoints(ops: &dyn OpsApi) -> Option<Vec<String>> {
+/// The Prowlarr source's saved address (its config's `url`), when the
+/// source is on. `None` when it's off, not registered, or has no address
+/// saved. The manifest lists no endpoints for it: the address is the one
+/// you entered, in its saved config.
+async fn prowlarr_endpoints(ops: &dyn OpsApi, store: Arc<Mutex<Store>>) -> Option<Vec<String>> {
     let sources = ops.sources().await.ok()?;
-    let s = sources
-        .into_iter()
+    sources
+        .iter()
         .find(|s| s.plugin == PROWLARR_SOURCE && s.enabled)?;
-    Some(s.endpoints)
+    let config = tokio::task::spawn_blocking(move || saved_config(&store))
+        .await
+        .ok()??;
+    Some(vec![config_url(&config)?])
+}
+
+/// The Prowlarr source's saved config, as its form saved it. Blocking.
+fn saved_config(store: &Mutex<Store>) -> Option<String> {
+    store
+        .lock()
+        .ok()?
+        .source_setting(PROWLARR_SOURCE, lodestar_store::SourceSetting::Config)
+        .ok()?
+}
+
+/// The `url` in a saved Prowlarr config; `None` when it doesn't parse.
+fn config_url(config: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(config).ok()?;
+    Some(v.get("url")?.as_str()?.to_owned())
 }
 
 /// The Prowlarr source's addresses when it's on ([`prowlarr_endpoints`];
@@ -195,12 +225,13 @@ pub fn start(
     installed: channel::Receiver<Snapshot>,
     integrations: channel::Receiver<Integrations>,
     ops: Arc<dyn OpsApi>,
+    store: Arc<Mutex<Store>>,
     gate: channel::Sender<requires::Snapshot>,
 ) -> Result<Wired, &'static str> {
     let http: Arc<dyn GuardedHttp> = Arc::new(CompanionHttp::new().map_err(|_| "companion_http")?);
     let endpoints: Endpoints = Arc::new(move || {
-        let ops = ops.clone();
-        Box::pin(async move { prowlarr_endpoints(ops.as_ref()).await })
+        let (ops, store) = (ops.clone(), store.clone());
+        Box::pin(async move { prowlarr_endpoints(ops.as_ref(), store).await })
     });
     start_with(
         added,
@@ -221,6 +252,7 @@ pub async fn serve(
     companions: &crate::companions::Companions,
     settings: &crate::settings::Registry,
     ops: Arc<dyn OpsApi>,
+    store: Arc<Mutex<Store>>,
     gate: channel::Sender<requires::Snapshot>,
 ) -> Option<Wired> {
     match start(
@@ -228,6 +260,7 @@ pub async fn serve(
         companions.snapshot.clone(),
         settings.subscribe(),
         ops,
+        store,
         gate,
     ) {
         Ok(w) => Some(w),
@@ -304,9 +337,10 @@ fn start_with(
     reason = "CMP-5g-2's confirmation hands configured companions over through it"
 )]
 pub struct Sink {
-    pub settings: Arc<dyn SettingsApi>,
-    pub integrations: channel::Receiver<Integrations>,
+    pub settings: Arc<crate::settings::Registry>,
     pub ops: Arc<dyn OpsApi>,
+    /// A read-write connection, for the Prowlarr source's saved config.
+    pub store: Arc<Mutex<Store>>,
 }
 
 impl std::fmt::Debug for Sink {
@@ -317,40 +351,68 @@ impl std::fmt::Debug for Sink {
 
 /// What the managed client entry holds, from CMP-8b's entry.
 #[allow(dead_code, reason = "used by Sink, which CMP-5g-2 calls")]
-struct ManagedClient<'a> {
-    target: &'a Target,
-    username: &'a str,
-    password: &'a Secret,
-    category: &'a str,
+struct ManagedClient {
+    target: Target,
+    username: String,
+    password: Secret,
+    category: String,
 }
 
 /// The `integrations` batch that makes `entry` the managed client: the
 /// list as it is, with [`MANAGED_CLIENT`] replaced or added. Other clients
-/// go without their passwords, which keeps the saved ones.
+/// go without their passwords, which keeps the saved ones (the registry
+/// keeps a saved secret for an item of the same id, kind and address).
 #[allow(dead_code, reason = "used by Sink, which CMP-5g-2 calls")]
-fn client_batch(current: &Integrations, entry: &ManagedClient<'_>) -> SettingsBatch {
-    let mut clients: Vec<serde_json::Value> = current
-        .clients
-        .iter()
-        .filter(|c| c.id != MANAGED_CLIENT)
-        .map(|c| {
-            let mut c = c.clone();
-            c.password = None;
-            serde_json::to_value(c).expect("a client serializes")
-        })
-        .collect();
+fn client_batch(current: &Integrations, entry: &ManagedClient) -> Result<SettingsBatch, SinkError> {
+    let mut clients = Vec::new();
+    for c in current.clients.iter().filter(|c| c.id != MANAGED_CLIENT) {
+        let mut c = c.clone();
+        c.password = None;
+        clients.push(serde_json::to_value(c).map_err(|_| SinkError::Rejected)?);
+    }
     clients.push(serde_json::json!({
         "id": MANAGED_CLIENT,
         "name": "qBittorrent (Lodestar)",
         "kind": "qbittorrent",
-        "url": format!("{}/", target_url(entry.target)),
+        "url": format!("{}/", target_url(&entry.target)),
         "username": entry.username,
         "password": entry.password.expose(),
         "category": entry.category,
     }));
     let mut patch = serde_json::Map::new();
     patch.insert("clients".into(), serde_json::Value::Array(clients));
-    SettingsBatch(std::iter::once(("integrations".to_owned(), SettingsPatch(patch))).collect())
+    Ok(SettingsBatch(
+        std::iter::once(("integrations".to_owned(), SettingsPatch(patch))).collect(),
+    ))
+}
+
+/// Saves `managed` as the managed client, reading the list right before
+/// the save so a save you made meanwhile isn't overwritten with an old
+/// one. Blocking.
+#[allow(dead_code, reason = "used by Sink, which CMP-5g-2 calls")]
+fn save_client(
+    settings: &crate::settings::Registry,
+    managed: &ManagedClient,
+) -> Result<(), SinkError> {
+    let current = settings.subscribe::<Integrations>().borrow().clone();
+    let batch = client_batch(&current, managed)?;
+    settings
+        .save(batch)
+        .map(|_| ())
+        .map_err(|_| SinkError::Rejected)
+}
+
+/// The Prowlarr source's new config: the companion's address, keeping any
+/// other setting you saved (its `agents`).
+#[allow(dead_code, reason = "used by Sink, which CMP-5g-2 calls")]
+fn prowlarr_config(previous: Option<&str>, url: &str) -> serde_json::Value {
+    let mut config = previous
+        .and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok())
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}));
+    config["url"] = url.into();
+    config["manager"] = "prowlarr".into();
+    config
 }
 
 impl ConfigSink for Sink {
@@ -360,18 +422,18 @@ impl ConfigSink for Sink {
     ) -> BoxFuture<'a, Result<(), SinkError>> {
         Box::pin(async move {
             let managed = ManagedClient {
-                target: &entry.target,
-                username: entry.username.as_str(),
-                password: &entry.password,
-                category: entry.category.as_ref().map_or("", |c| c.as_str()),
+                target: entry.target,
+                username: entry.username.as_str().to_owned(),
+                password: entry.password,
+                category: entry
+                    .category
+                    .as_ref()
+                    .map_or(String::new(), |c| c.as_str().to_owned()),
             };
-            let batch = client_batch(&self.integrations.borrow(), &managed);
             let settings = self.settings.clone();
-            tokio::task::spawn_blocking(move || settings.save(batch))
+            tokio::task::spawn_blocking(move || save_client(&settings, &managed))
                 .await
                 .map_err(|_| SinkError::Unavailable)?
-                .map(|_| ())
-                .map_err(|_| SinkError::Rejected)
         })
     }
 
@@ -390,24 +452,43 @@ impl ConfigSink for Sink {
                 .find(|s| s.plugin == PROWLARR_SOURCE)
                 .map(|s| s.id)
                 .ok_or(SinkError::Unavailable)?;
-            // The key first: an address with no key fails its checks
-            // rather than reaching Prowlarr unauthenticated.
-            self.ops
-                .patch_source_credentials(id, vec![("api_key".into(), Some(entry.api_key))])
+            let store = self.store.clone();
+            let previous = tokio::task::spawn_blocking(move || saved_config(&store))
                 .await
-                .map_err(|_| SinkError::Rejected)?;
-            let patch = SourcePatch {
-                config: Some(serde_json::json!({
-                    "url": target_url(&entry.target),
-                    "manager": "prowlarr",
-                })),
+                .map_err(|_| SinkError::Unavailable)?;
+            let config = |c: serde_json::Value| SourcePatch {
+                config: Some(c),
                 ..SourcePatch::default()
             };
+            // The address, then the key. If the key can't be stored, the
+            // address goes back to the one you saved, so the companion's
+            // key never meets another server and yours never meets the
+            // companion. Both apply at the next start.
             self.ops
-                .patch_source(id, patch, false)
+                .patch_source(
+                    id,
+                    config(prowlarr_config(
+                        previous.as_deref(),
+                        &target_url(&entry.target),
+                    )),
+                    false,
+                )
                 .await
-                .map(|_| ())
-                .map_err(|_| SinkError::Rejected)
+                .map_err(|_| SinkError::Rejected)?;
+            let stored = self
+                .ops
+                .patch_source_credentials(id, vec![("api_key".into(), Some(entry.api_key))])
+                .await;
+            if stored.is_err() {
+                if let Some(p) = previous
+                    .as_deref()
+                    .and_then(|p| serde_json::from_str(p).ok())
+                {
+                    let _ = self.ops.patch_source(id, config(p), false).await;
+                }
+                return Err(SinkError::Rejected);
+            }
+            Ok(())
         })
     }
 }
@@ -557,6 +638,118 @@ mod tests {
         assert_eq!(*rx.unwrap().borrow(), requires::Snapshot::Unknown);
     }
 
+    /// The address comes from the saved config: the manifest lists none.
+    #[test]
+    fn the_prowlarr_address_is_its_saved_url_and_agents_are_kept() {
+        assert_eq!(
+            config_url(r#"{"url":"http://indexer.lan:9696","manager":"prowlarr"}"#).as_deref(),
+            Some("http://indexer.lan:9696")
+        );
+        assert_eq!(config_url("not json"), None);
+        assert_eq!(config_url(r#"{"manager":"jackett"}"#), None);
+        let c = prowlarr_config(
+            Some(r#"{"url":"http://indexer.lan:9696","manager":"jackett","agents":3}"#),
+            "http://127.0.0.1:9696",
+        );
+        assert_eq!(
+            c,
+            serde_json::json!({"url":"http://127.0.0.1:9696","manager":"prowlarr","agents":3})
+        );
+        assert_eq!(
+            prowlarr_config(None, "http://h:1"),
+            serde_json::json!({"url":"http://h:1","manager":"prowlarr"})
+        );
+    }
+
+    /// From a real saved config in the store, through the same read the
+    /// gate uses.
+    #[test]
+    fn the_saved_prowlarr_config_is_read_from_the_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("db"), Default::default()).unwrap();
+        let store = Mutex::new(store);
+        assert_eq!(saved_config(&store), None);
+        store
+            .lock()
+            .unwrap()
+            .set_settings_text(&[(
+                // `SourceSetting::Config`'s key for the plugin.
+                "sources.config.prowlarr",
+                r#"{"url":"http://indexer.lan:9696","manager":"prowlarr"}"#,
+            )])
+            .unwrap();
+        let url = saved_config(&store).and_then(|c| config_url(&c)).unwrap();
+        let ours: Vec<Added> = vec![(
+            id("prowlarr"),
+            Target::Entered(EnteredUrl::parse("http://indexer.lan:9696/").unwrap()),
+        )];
+        let none = Snapshot::default();
+        assert!(
+            !present(
+                &none,
+                &Watched::new(),
+                &[],
+                Some(std::slice::from_ref(&url)),
+                &ours
+            )
+            .external_indexer
+        );
+        assert!(
+            present(
+                &none,
+                &Watched::new(),
+                &[],
+                Some(std::slice::from_ref(&url)),
+                &[]
+            )
+            .external_indexer
+        );
+    }
+
+    /// The sink through a real registry (self-review I5): your own client
+    /// keeps its saved password, and the managed entry is added, then
+    /// replaced rather than added twice.
+    #[test]
+    fn the_sink_adds_the_managed_client_and_keeps_yours() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::config::Config::load(None, |_| None).unwrap();
+        let store = Arc::new(Mutex::new(
+            Store::open(dir.path().join("db"), Default::default()).unwrap(),
+        ));
+        let registry = Arc::new(crate::settings::Registry::load(&config, store.clone()).unwrap());
+        let mut home = serde_json::to_value(client("home")).unwrap();
+        home["password"] = "hunter2hunter2".into();
+        registry
+            .save(
+                serde_json::from_value(serde_json::json!({"integrations": {"clients": [home]}}))
+                    .unwrap(),
+            )
+            .unwrap();
+        drop(store);
+        for password in ["first-generated", "second-generated"] {
+            let managed = ManagedClient {
+                target: Target::Loopback(PortNumber::new(8080).unwrap()),
+                username: "lodestar".into(),
+                password: Secret::new(String::from(password)),
+                category: String::new(),
+            };
+            save_client(&registry, &managed).unwrap();
+        }
+        let now = registry.subscribe::<Integrations>().borrow().clone();
+        assert_eq!(now.clients.len(), 2);
+        let mine = now.client("home").unwrap();
+        assert_eq!(
+            mine.password.as_ref().map(|p| p.0.as_str()),
+            Some("hunter2hunter2")
+        );
+        let managed = now.client(MANAGED_CLIENT).unwrap();
+        assert_eq!(managed.url, "http://127.0.0.1:8080/");
+        assert_eq!(
+            managed.password.as_ref().map(|p| p.0.as_str()),
+            Some("second-generated")
+        );
+    }
+
     #[test]
     fn target_urls_are_canonical() {
         let p = PortNumber::new(9696).unwrap();
@@ -588,20 +781,35 @@ mod tests {
 
     #[test]
     fn watched_companions_follow_the_watch_and_missing_ones_leave() {
+        let q = Target::Loopback(PortNumber::new(8080).unwrap());
+        let pr = Target::Loopback(PortNumber::new(9696).unwrap());
+        let added: Vec<Added> = vec![(id("qbittorrent"), q.clone()), (id("prowlarr"), pr.clone())];
         let mut w = Watched::new();
-        w.insert(id("qbittorrent"), Seen::Healthy);
-        w.insert(id("prowlarr"), Seen::Missing);
-        let p = present(&Snapshot::default(), &w, &[], None, &[]);
+        w.insert(id("qbittorrent"), (q.clone(), Seen::Healthy));
+        w.insert(id("prowlarr"), (pr.clone(), Seen::Missing));
+        let p = present(&Snapshot::default(), &w, &[], None, &added);
         assert_eq!(p.companions.len(), 1);
         assert_eq!(p.companions["qbittorrent"], requires::Health::Healthy);
+        // Removed, or moved to another target: the old result doesn't count.
+        let p = present(&Snapshot::default(), &w, &[], None, &added[1..]);
+        assert!(p.companions.is_empty());
+        let moved: Vec<Added> = vec![(
+            id("qbittorrent"),
+            Target::Entered(EnteredUrl::parse("http://qbt.lan:8080").unwrap()),
+        )];
+        assert!(
+            present(&Snapshot::default(), &w, &[], None, &moved)
+                .companions
+                .is_empty()
+        );
         // Lodestar's own install is judged by its own health, not the watch.
-        w.insert(id("prowlarr"), Seen::Healthy);
+        w.insert(id("prowlarr"), (pr, Seen::Healthy));
         let p = present(
             &installed(&[("prowlarr", manager::Health::Unhealthy)]),
             &w,
             &[],
             None,
-            &[],
+            &added,
         );
         assert_eq!(p.companions["prowlarr"], requires::Health::Unhealthy);
     }
@@ -648,15 +856,13 @@ mod tests {
         let mut home = client("home");
         home.password = Some(crate::settings::SecretText("hunter2hunter2".into()));
         current.clients = vec![home, client(MANAGED_CLIENT)];
-        let target = Target::Loopback(PortNumber::new(8080).unwrap());
-        let password = Secret::new(String::from("generated-password"));
         let entry = ManagedClient {
-            target: &target,
-            username: "lodestar",
-            password: &password,
-            category: "lodestar",
+            target: Target::Loopback(PortNumber::new(8080).unwrap()),
+            username: "lodestar".into(),
+            password: Secret::new(String::from("generated-password")),
+            category: "lodestar".into(),
         };
-        let batch = client_batch(&current, &entry);
+        let batch = client_batch(&current, &entry).unwrap();
         let clients = batch.0["integrations"].0["clients"]
             .as_array()
             .unwrap()

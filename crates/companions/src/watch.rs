@@ -64,6 +64,11 @@ impl Tracker {
         }
     }
 
+    /// What it counts as, once checked.
+    pub fn seen(&self) -> Option<Seen> {
+        self.seen
+    }
+
     /// Takes one check's result and returns what the companion now counts
     /// as.
     pub fn observe(&mut self, status: HealthStatus) -> Seen {
@@ -93,8 +98,10 @@ impl Tracker {
 /// shipped builds; a fake in tests).
 pub type Checker = Arc<dyn Fn(&CompanionId) -> Option<Box<dyn Health>> + Send + Sync>;
 
-/// What the loop knows: each watched companion and what it's seen as.
-pub type Watched = BTreeMap<CompanionId, Seen>;
+/// What the loop knows: each watched companion, the target it was checked
+/// at, and what it's seen as there. A reader matches the target too, so a
+/// result never carries over to a companion's new target.
+pub type Watched = BTreeMap<CompanionId, (Target, Seen)>;
 
 /// Starts the loop over the companions `list` names, checking each every
 /// `every` (shipped builds pass [`EVERY`]). The receiver starts empty; a
@@ -109,8 +116,11 @@ pub fn spawn(
     let (tx, rx) = watch::channel(Watched::new());
     let task = tokio::spawn(async move {
         let mut trackers: BTreeMap<CompanionId, (Target, Tracker)> = BTreeMap::new();
-        let mut tick = tokio::time::interval(every);
+        // The first full round is the one at the start: the next is a
+        // whole `every` later.
+        let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut full = true;
         loop {
             let wanted = list.borrow_and_update().clone();
             // A changed target starts its debounce afresh.
@@ -120,22 +130,34 @@ pub fn spawn(
                     .entry(id.clone())
                     .or_insert_with(|| (t.clone(), Tracker::new()));
             }
-            let mut seen = Watched::new();
+            // On the tick every companion is checked; on a change of list
+            // only the new or moved ones, so edits to the list never
+            // hurry another companion's debounce.
             for (id, (target, tracker)) in trackers.iter_mut() {
+                if !full && tracker.seen().is_some() {
+                    continue;
+                }
                 let Some(health) = checker(id) else {
                     continue;
                 };
                 let status = health.check(http.as_ref(), target).await;
-                seen.insert(id.clone(), tracker.observe(status));
+                tracker.observe(status);
             }
+            let seen: Watched = trackers
+                .iter()
+                .filter_map(|(id, (t, tr))| tr.seen().map(|s| (id.clone(), (t.clone(), s))))
+                .collect();
             tx.send_if_modified(|w| {
                 let changed = *w != seen;
                 *w = seen;
                 changed
             });
             tokio::select! {
-                _ = tick.tick() => {}
-                r = list.changed() => if r.is_err() { return },
+                _ = tick.tick() => full = true,
+                r = list.changed() => {
+                    if r.is_err() { return }
+                    full = false;
+                }
             }
         }
     });

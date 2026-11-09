@@ -113,7 +113,7 @@ async fn a_healthy_companion_goes_down_only_after_three_failures() {
         Duration::from_millis(10),
     );
     until(&mut rx, "healthy", |w| {
-        w.get(&id("prowlarr")) == Some(&Seen::Healthy)
+        w.get(&id("prowlarr")).map(|x| x.1) == Some(Seen::Healthy)
     })
     .await;
     let before = script.checks("prowlarr");
@@ -123,13 +123,13 @@ async fn a_healthy_companion_goes_down_only_after_three_failures() {
     // A check is published only after it ran, so the report still says
     // healthy until the third failure.
     until(&mut rx, "missing", |w| {
-        w.get(&id("prowlarr")) == Some(&Seen::Missing)
+        w.get(&id("prowlarr")).map(|x| x.1) == Some(Seen::Missing)
     })
     .await;
     assert!(script.checks("prowlarr") >= before + FAILURES_SEEN);
     script.set("prowlarr", HealthStatus::Healthy);
     until(&mut rx, "healthy again", |w| {
-        w.get(&id("prowlarr")) == Some(&Seen::Healthy)
+        w.get(&id("prowlarr")).map(|x| x.1) == Some(Seen::Healthy)
     })
     .await;
     drop(list_tx);
@@ -157,7 +157,7 @@ async fn the_report_follows_the_list() {
         (id("gluetun"), loopback(8000)),
     ]);
     until(&mut rx, "qbittorrent added", |w| {
-        w.get(&id("qbittorrent")) == Some(&Seen::Unhealthy)
+        w.get(&id("qbittorrent")).map(|x| x.1) == Some(Seen::Unhealthy)
     })
     .await;
     // No adapter, never listed.
@@ -181,7 +181,7 @@ async fn a_changed_target_starts_its_debounce_afresh() {
         Duration::from_secs(3600),
     );
     until(&mut rx, "healthy", |w| {
-        w.get(&id("prowlarr")) == Some(&Seen::Healthy)
+        w.get(&id("prowlarr")).map(|x| x.1) == Some(Seen::Healthy)
     })
     .await;
     // On the new target its first failure counts at once: it was never
@@ -190,8 +190,35 @@ async fn a_changed_target_starts_its_debounce_afresh() {
     let url = lodestar_companions::adapter::EnteredUrl::parse("http://prowlarr.lan:9696/").unwrap();
     list_tx.send_replace(vec![(id("prowlarr"), Target::Entered(url))]);
     until(&mut rx, "missing at once", |w| {
-        w.get(&id("prowlarr")) == Some(&Seen::Missing)
+        w.get(&id("prowlarr")).map(|x| x.1) == Some(Seen::Missing)
     })
     .await;
+    task.abort();
+}
+
+/// A change of list checks only the new companion: edits never hurry
+/// another companion's debounce. The report names the target checked.
+#[tokio::test]
+async fn a_list_change_checks_only_whats_new() {
+    let script = Arc::new(Script::default());
+    let (list_tx, list) = channel::channel(vec![(id("prowlarr"), loopback(9696))]);
+    let (mut rx, task) = watch::spawn(
+        Arc::new(NoHttp),
+        checker(&script),
+        list,
+        Duration::from_secs(3600),
+    );
+    until(&mut rx, "prowlarr", |w| w.contains_key(&id("prowlarr"))).await;
+    assert_eq!(script.checks("prowlarr"), 1);
+    assert_eq!(rx.borrow()[&id("prowlarr")].0, loopback(9696));
+    list_tx.send_replace(vec![
+        (id("prowlarr"), loopback(9696)),
+        (id("qbittorrent"), loopback(8080)),
+    ]);
+    until(&mut rx, "qbittorrent", |w| {
+        w.contains_key(&id("qbittorrent"))
+    })
+    .await;
+    assert_eq!(script.checks("prowlarr"), 1, "prowlarr was checked again");
     task.abort();
 }

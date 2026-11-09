@@ -544,7 +544,10 @@ impl Services {
             ),
         );
         let companion_wiring = match &companions {
-            Some(c) => crate::companion_wiring::serve(c, &settings, ops.clone(), gate_tx).await,
+            Some(c) => {
+                crate::companion_wiring::serve(c, &settings, ops.clone(), control.clone(), gate_tx)
+                    .await
+            }
             None => None,
         };
         let monitor = pipeline.monitor();

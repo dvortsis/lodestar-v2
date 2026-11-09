@@ -205,8 +205,8 @@ pub struct Companions {
     pub manager: Arc<Manager>,
     /// `/companions` (CMP-6), layered over the API.
     pub api: Arc<Service>,
-    /// CMP-10's input. TODO(CMP-5g): hand it to the pipeline as
-    /// `PipelineConfig::companions` once CMP-10 has merged.
+    /// The installed companions, which `companion_wiring` folds into the
+    /// pipeline's companion gate (CMP-5g-1).
     pub snapshot: watch::Receiver<Snapshot>,
 }
 
