@@ -16,12 +16,14 @@ try {
     if ([string]::IsNullOrWhiteSpace($env:LINODE_TOKEN)) { throw 'LINODE_TOKEN environment variable is missing.' }
     # The confirmation phrase must be typed at a console: refuse piped input up front.
     . (Join-Path $PSScriptRoot 'Interactive.ps1')
+    . (Join-Path $PSScriptRoot 'StateBackend.ps1')
+    $backend = Get-StateBackendArgs
     Assert-InteractiveConfirmation
     if (-not (Test-Path -LiteralPath (Join-Path $root 'terraform.tfvars'))) { throw 'terraform.tfvars is missing.' }
     Push-Location $root
     try {
         Audit 'Planning deployment. No billable actions yet.'
-        & terraform init -input=false -no-color 2>&1 | ForEach-Object { Audit ([string]$_) }
+        & terraform init -input=false -no-color @backend 2>&1 | ForEach-Object { Audit ([string]$_) }
         if ($LASTEXITCODE -ne 0) { throw 'terraform init failed.' }
         & terraform plan -input=false -no-color -out="$plan" 2>&1 | ForEach-Object { Audit ([string]$_) }
         if ($LASTEXITCODE -ne 0) { throw 'terraform plan failed.' }

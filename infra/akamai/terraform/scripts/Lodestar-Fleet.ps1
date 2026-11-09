@@ -42,6 +42,7 @@ function Audit([string]$Message) {
 }
 
 . (Join-Path $scriptDir 'AwsCli.ps1')
+. (Join-Path $scriptDir 'StateBackend.ps1')
 $awsCli = $script:AwsCli
 
 switch ($Action) {
@@ -80,13 +81,21 @@ switch ($Action) {
         Push-Location $projectRoot
         try {
             $state = & terraform state list 2>&1
-            if ($LASTEXITCODE -eq 0 -and $state) {
-                Write-Host "Managed Terraform resources:`n$state"
-                & terraform output
-            } else {
-                Audit "No managed Akamai resources in current state (fleet is idle)."
-            }
+            $summary = Get-FleetStateSummary -ExitCode $LASTEXITCODE -Output $state
         } finally { Pop-Location }
+        switch ($summary) {
+            'managed' {
+                Write-Host "Managed Terraform resources:`n$state"
+                Push-Location $projectRoot
+                try { & terraform output } finally { Pop-Location }
+            }
+            'idle' { Audit "No managed Akamai resources in the shared state (fleet is idle)." }
+            default {
+                # Never report a failed read as an idle fleet: a fleet may still exist.
+                Audit "[Akamai] State unavailable: terraform state list failed. Run .\scripts\Preflight.ps1 first, with LODESTAR_TF_STATE_BUCKET, LODESTAR_TF_STATE_REGION and AWS credentials set. A fleet may still exist; check Cloud Manager."
+                exit 1
+            }
+        }
     }
 
     'cost' {

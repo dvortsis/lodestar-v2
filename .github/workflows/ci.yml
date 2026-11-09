@@ -435,8 +435,9 @@ jobs:
         run: ./docs/soak/tools/test_cr0_collector.ps1
 
   # Cloud infrastructure (X-cloud-infra, docs/decisions/2026-11-08-X-cloud-infra.md).
-  # Static checks only: no credentials, no terraform plan or apply, nothing
-  # runs against AWS or Akamai, and no PowerShell script is executed.
+  # No credentials, no terraform plan or apply, and nothing runs against AWS
+  # or Akamai. No script that can reach a cloud runs here; pure test files may
+  # (the runner, OP-2a).
   infra:
     name: infra
     needs: changes
@@ -458,6 +459,12 @@ jobs:
         run: |
           python -m pip install --no-deps --require-hashes -r infra/fleet/requirements-test.txt
           ./infra/fleet/run_tests.sh -v
+      # The fleet's CloudFormation templates (OP-2a): built from build_templates.py,
+      # then policy tests over the parsed JSON. Standard library only; no cloud call.
+      - name: Fleet AWS templates
+        run: |
+          python infra/aws/fleet-control/build_templates.py --check
+          python -m unittest discover -s infra/aws/fleet-control -p 'test_*.py' -v
       # Each template inlines its index.py; the committed JSON must be exactly
       # what build_template.py produces from the committed source.
       - name: Templates match their Lambda source
@@ -467,7 +474,7 @@ jobs:
           git diff --exit-code -- infra/
       - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
-          terraform_version: "1.9.8"
+          terraform_version: "1.10.5" # >= 1.10 for the S3 backend's native locking (OP-2a)
           terraform_wrapper: false
       - name: terraform fmt
         run: terraform fmt -check -recursive -diff infra/
@@ -498,6 +505,11 @@ jobs:
             } else { Write-Host "ok $($f.FullName)" }
           }
           if ($failed) { exit 1 }
+      # A pure unit test (no network, terraform or AWS CLI): the manual scripts
+      # refuse without the shared state's bucket and region (OP-2a).
+      - name: StateBackend.ps1 test
+        shell: pwsh
+        run: ./infra/akamai/terraform/tests/Test-StateBackend.ps1
       - name: Akamai PIA bridge unit tests
         run: |
           python -m pip install cryptography
