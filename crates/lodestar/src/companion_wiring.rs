@@ -522,8 +522,6 @@ trait SourceWrites: Send + Sync {
     fn config<'a>(&'a self, id: u8, config: serde_json::Value) -> BoxFuture<'a, bool>;
     /// Stores (`Some`) or removes (`None`) the source's `api_key`.
     fn key<'a>(&'a self, id: u8, key: Option<Secret>) -> BoxFuture<'a, bool>;
-    /// Turns the source off.
-    fn disable<'a>(&'a self, id: u8) -> BoxFuture<'a, bool>;
 }
 
 #[allow(dead_code, reason = "used by Sink, which CMP-5g-2 calls")]
@@ -556,28 +554,23 @@ impl SourceWrites for OpsWrites<'_> {
                 .is_ok()
         })
     }
-    fn disable<'a>(&'a self, id: u8) -> BoxFuture<'a, bool> {
-        Box::pin(async move {
-            let patch = SourcePatch {
-                enabled: Some(false),
-                ..SourcePatch::default()
-            };
-            self.0.patch_source(id, patch, false).await.is_ok()
-        })
-    }
 }
 
-/// Hands a configured Prowlarr to the source, so that no key ever meets
-/// the wrong server, whatever step fails (#645's security review):
-/// 1. the key you saved is removed first, so it can't go to the
-///    companion's address;
-/// 2. then the address (keeping your other settings, such as `agents`);
-/// 3. then the companion's key.
+/// Hands a configured Prowlarr to the source (runner's call on #645's
+/// delta review, option a, "replace"):
+/// 1. the companion's key replaces the one you saved, so the source never
+///    loses its credential (removing an Account source's last credential
+///    turns it off for good, `Control::update_credentials`);
+/// 2. then the address (keeping your other settings, such as `agents`).
 ///
-/// If step 3 fails, the address goes back to the one you saved, or, with
-/// none saved (or one that doesn't parse), the source is turned off. A
-/// failed rollback is logged by name, never with a value. Every write
-/// applies at the next start.
+/// If step 2 fails, the companion's key is removed, which turns the source
+/// off: it fails closed, and your own key is gone (you enter it again). A
+/// failed removal is logged by name, never with a value. Every write
+/// applies at the next start (`restart_required`).
+///
+/// **Accepted:** between the two steps the companion's key sits beside
+/// your own address. It can reach that server only after a restart in that
+/// window, or if both step 2 and the removal fail.
 #[allow(dead_code, reason = "used by Sink, which CMP-5g-2 calls")]
 async fn hand_over_prowlarr(
     w: &dyn SourceWrites,
@@ -586,20 +579,13 @@ async fn hand_over_prowlarr(
     key: Secret,
 ) -> Result<(), SinkError> {
     let id = w.source().await.ok_or(SinkError::Unavailable)?;
-    if !w.key(id, None).await {
+    if !w.key(id, Some(key)).await {
         return Err(SinkError::Rejected);
     }
-    if !w.config(id, prowlarr_config(previous, url)).await {
-        return Err(SinkError::Rejected);
-    }
-    if w.key(id, Some(key)).await {
+    if w.config(id, prowlarr_config(previous, url)).await {
         return Ok(());
     }
-    let restored = match previous.and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok()) {
-        Some(p) => w.config(id, p).await,
-        None => w.disable(id).await,
-    };
-    if !restored {
+    if !w.key(id, None).await {
         lodestar_log::log_event!(
             lodestar_companions::log_events::CONFIG_FAILED,
             companion = PROWLARR_SOURCE,
@@ -1006,10 +992,6 @@ mod tests {
             let ok = self.step(s, name);
             Box::pin(async move { ok })
         }
-        fn disable<'a>(&'a self, _: u8) -> BoxFuture<'a, bool> {
-            let ok = self.step("disabled".into(), "disable");
-            Box::pin(async move { ok })
-        }
     }
 
     const MINE: &str = r#"{"url":"http://indexer.lan:9696","manager":"jackett","agents":3}"#;
@@ -1018,60 +1000,236 @@ mod tests {
         Secret::new(String::from("0123456789abcdef0123456789abcdef"))
     }
 
-    /// Your key goes before the address changes; the companion's comes
-    /// after.
+    /// The companion's key replaces yours, then the address.
     #[tokio::test]
-    async fn the_prowlarr_hand_over_orders_its_writes() {
+    async fn the_prowlarr_hand_over_replaces_the_key_then_the_address() {
         let w = Writes::default();
         hand_over_prowlarr(&w, Some(MINE), "http://127.0.0.1:9696", key())
             .await
             .unwrap();
-        assert_eq!(
-            w.log(),
-            ["key removed", "config \"http://127.0.0.1:9696\"", "key set"]
-        );
+        assert_eq!(w.log(), ["key set", "config \"http://127.0.0.1:9696\""]);
     }
 
-    /// The companion's key not stored: the address goes back to yours.
+    /// The key not stored: nothing else is written, and yours stays.
     #[tokio::test]
-    async fn a_failed_key_puts_your_address_back() {
+    async fn a_key_that_cant_be_stored_stops_the_hand_over() {
         let w = Writes::failing(&["key set"]);
         let got = hand_over_prowlarr(&w, Some(MINE), "http://127.0.0.1:9696", key()).await;
         assert_eq!(got, Err(SinkError::Rejected));
+        assert_eq!(w.log(), ["key set"]);
+    }
+
+    /// The address not written: the companion's key is removed (the
+    /// source then turns off).
+    #[tokio::test]
+    async fn a_failed_address_removes_the_companions_key() {
+        let w = Writes::failing(&["config"]);
+        let got = hand_over_prowlarr(&w, None, "http://127.0.0.1:9696", key()).await;
+        assert_eq!(got, Err(SinkError::Rejected));
         assert_eq!(
             w.log(),
-            [
-                "key removed",
-                "config \"http://127.0.0.1:9696\"",
-                "key set",
-                "config \"http://indexer.lan:9696\""
-            ]
+            ["key set", "config \"http://127.0.0.1:9696\"", "key removed"]
         );
     }
 
-    /// With no saved config, or one that doesn't parse, the source is
-    /// turned off instead.
+    /// The address not written and the key not removable: logged, by name.
     #[tokio::test]
-    async fn with_no_saved_address_a_failed_key_turns_the_source_off() {
-        for previous in [None, Some("not json")] {
-            let w = Writes::failing(&["key set"]);
-            let got = hand_over_prowlarr(&w, previous, "http://127.0.0.1:9696", key()).await;
-            assert_eq!(got, Err(SinkError::Rejected));
-            assert_eq!(
-                w.log().last().map(String::as_str),
-                Some("disabled"),
-                "{previous:?}"
-            );
+    async fn a_failed_rollback_is_logged() {
+        let before = lodestar_companions::log_events::CONFIG_FAILED::EVENT.count();
+        let w = Writes::failing(&["config", "key removed"]);
+        let got = hand_over_prowlarr(&w, Some(MINE), "http://127.0.0.1:9696", key()).await;
+        assert_eq!(got, Err(SinkError::Rejected));
+        assert!(lodestar_companions::log_events::CONFIG_FAILED::EVENT.count() > before);
+    }
+
+    /// The source writes over a real `Control`, as the ops make them.
+    struct ControlWrites {
+        control: lodestar_pipeline::Control,
+        creds: lodestar_sources::consent::SourceCredentials,
+        id: lodestar_store::SourceId,
+        fail_config: bool,
+    }
+
+    impl SourceWrites for ControlWrites {
+        fn source<'a>(&'a self) -> BoxFuture<'a, Option<u8>> {
+            Box::pin(async move { Some(self.id.get()) })
+        }
+        fn config<'a>(&'a self, _: u8, c: serde_json::Value) -> BoxFuture<'a, bool> {
+            Box::pin(async move {
+                if self.fail_config {
+                    return false;
+                }
+                let change = lodestar_pipeline::control::SourceChange {
+                    config: Some(c.to_string()),
+                    ..Default::default()
+                };
+                self.control.update_source(self.id, change).await.is_ok()
+            })
+        }
+        fn key<'a>(&'a self, _: u8, key: Option<Secret>) -> BoxFuture<'a, bool> {
+            Box::pin(async move {
+                self.control
+                    .update_credentials(self.id, &self.creds, vec![("api_key".into(), key)])
+                    .await
+                    .is_ok()
+            })
         }
     }
 
-    /// If your key can't be removed, nothing else is written.
+    /// The Prowlarr source as the hand-over needs it: an Account source
+    /// whose settings can be saved. (This build's Prowlarr plugin keeps its
+    /// settings fixed, so the decisions file names the gap.)
+    struct StandIn(lodestar_sources::Manifest);
+
+    const MANIFEST: lodestar_sources::Manifest = lodestar_sources::Manifest {
+        id: PROWLARR_SOURCE,
+        name: "Prowlarr",
+        version: "1",
+        kinds: &[lodestar_sources::Kind::Discovery],
+        networks: &[lodestar_sources::Network::Bt],
+        endpoints: &[],
+        risk: lodestar_sources::Risk::Medium,
+        consent: lodestar_sources::Consent::Account,
+        default_priority: lodestar_sources::Priority::Low,
+        enabled_by_default: false,
+        always_adult: false,
+        finds_private: false,
+    };
+
+    impl lodestar_sources::SourcePlugin for StandIn {
+        fn manifest(&self) -> &lodestar_sources::Manifest {
+            &self.0
+        }
+        fn config_editable(&self) -> bool {
+            true
+        }
+        fn config_json(&self) -> Option<String> {
+            Some("{}".into())
+        }
+        fn check_config(&self, json: &str) -> Result<String, lodestar_sources::ConfigRefusal> {
+            Ok(json.to_owned())
+        }
+        fn run(
+            &self,
+            mut ctx: lodestar_sources::SourceCtx,
+        ) -> lodestar_sources::BoxFuture<'_, Result<(), lodestar_sources::PluginError>> {
+            Box::pin(async move {
+                ctx.shutdown.requested().await;
+                Ok(())
+            })
+        }
+    }
+
+    /// A running Prowlarr source with your own address and key, on a real
+    /// pipeline and `Control`.
+    async fn enabled_prowlarr(
+        dir: &std::path::Path,
+        fail_config: bool,
+    ) -> (lodestar_pipeline::Pipeline, ControlWrites) {
+        use lodestar_store::StoreConfig;
+        let db = dir.join("t.db");
+        let plugin: Arc<dyn lodestar_sources::SourcePlugin> = Arc::new(StandIn(MANIFEST));
+        let pipeline = lodestar_pipeline::Pipeline::start(
+            lodestar_pipeline::PipelineConfig::default(),
+            Store::open(&db, StoreConfig::default()).unwrap(),
+            vec![plugin],
+        )
+        .await
+        .unwrap();
+        let status = pipeline
+            .sources()
+            .into_iter()
+            .find(|s| s.plugin == PROWLARR_SOURCE)
+            .unwrap();
+        assert!(status.config_editable);
+        let id = status.id;
+        let store = Arc::new(Mutex::new(
+            Store::open(&db, StoreConfig::default()).unwrap(),
+        ));
+        let control = lodestar_pipeline::Control::start(
+            pipeline.monitor(),
+            None,
+            store.clone(),
+            false,
+            lodestar_dht::node::Intensity::Balanced,
+        )
+        .await
+        .unwrap();
+        let creds = lodestar_sources::consent::SourceCredentials::with_keys(
+            store.clone(),
+            Arc::new(lodestar_sources::consent::SecretStore::from_key(&[5; 32])),
+        );
+        let w = ControlWrites {
+            control,
+            creds,
+            id,
+            fail_config,
+        };
+        // Your own setup, then on (seeded as a build before the consent
+        // gate did, since the API can't enable an Account source now).
+        let change = lodestar_pipeline::control::SourceChange {
+            config: Some(
+                r#"{"url":"http://192.168.1.5:9696","manager":"jackett","agents":3}"#.into(),
+            ),
+            ..Default::default()
+        };
+        if let Err(e) = w.control.update_source(id, change).await {
+            panic!("seeding your own config: {e:?}");
+        }
+        assert!(
+            w.key(
+                0,
+                Some(Secret::new(String::from(
+                    "your-own-key-0000000000000000000"
+                )))
+            )
+            .await
+        );
+        store.lock().unwrap().enable_source(id, None).unwrap();
+        (pipeline, w)
+    }
+
+    fn state(w: &ControlWrites) -> lodestar_store::SourceState {
+        w.control
+            .sources()
+            .unwrap()
+            .into_iter()
+            .find(|v| v.status.id == w.id)
+            .unwrap()
+            .state
+    }
+
+    /// #645's delta review (B1): a successful hand-over leaves a running
+    /// Prowlarr source on, with the companion's key and address.
     #[tokio::test]
-    async fn a_key_that_cant_be_removed_stops_the_hand_over() {
-        let w = Writes::failing(&["key removed"]);
+    async fn a_hand_over_keeps_your_running_source_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_p, w) = enabled_prowlarr(dir.path(), false).await;
+        assert_eq!(state(&w), lodestar_store::SourceState::Enabled);
+        hand_over_prowlarr(&w, Some(MINE), "http://127.0.0.1:9696", key())
+            .await
+            .unwrap();
+        assert_eq!(state(&w), lodestar_store::SourceState::Enabled);
+        assert_eq!(
+            w.creds
+                .get(PROWLARR_SOURCE, "api_key")
+                .unwrap()
+                .unwrap()
+                .expose(),
+            key().expose()
+        );
+    }
+
+    /// A failed address write ends with the source off and no key: it
+    /// fails closed.
+    #[tokio::test]
+    async fn a_failed_hand_over_turns_the_source_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_p, w) = enabled_prowlarr(dir.path(), true).await;
         let got = hand_over_prowlarr(&w, Some(MINE), "http://127.0.0.1:9696", key()).await;
         assert_eq!(got, Err(SinkError::Rejected));
-        assert_eq!(w.log(), ["key removed"]);
+        assert_eq!(state(&w), lodestar_store::SourceState::Disabled);
+        assert!(w.creds.get(PROWLARR_SOURCE, "api_key").unwrap().is_none());
     }
 
     #[test]
