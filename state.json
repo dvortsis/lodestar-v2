@@ -7350,7 +7350,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T02:04Z",
+    "updated": "2026-11-09T02:07Z",
     "items": [
       {
         "slot": 1,
@@ -7373,7 +7373,7 @@
         "slice": "PK-win-upd-3",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAC9TBdvBgyLvxSjGf: building PK-win-upd-3 (runner 00:36Z: update_helper.rs exit-code edit approved; disabled start type, rollback.json marker, halt stays stopped)",
+        "doing": "session_01MMjhnAC9TBdvBgyLvxSjGf: #644 PK-win-upd-3 ready at cc1b42c3 (green); Opus review running, /security-review queued for the next free reviewer slot",
         "since": "2026-11-09T00:10Z"
       },
       {
