@@ -6631,6 +6631,10 @@
     {
       "pr": 648,
       "note": "X-lease-test-polish merged da8de17a 2026-11-09 (self-check, test/doc only)"
+    },
+    {
+      "pr": 650,
+      "note": "OP-2b merged 5036863b; owner \u00a72.19 flags + X-prowlarr-settings FYI sent via dashboard; OP-3 launched in same session"
     }
   ],
   "main_health": [
@@ -7356,7 +7360,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T04:08Z",
+    "updated": "2026-11-09T04:43Z",
     "items": [
       {
         "slot": 1,
@@ -7368,11 +7372,11 @@
       },
       {
         "slot": 2,
-        "slice": "OP-2b",
+        "slice": "OP-3",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #650 OP-2b review MERGE w/ 4 LOW at eaa5b974; one last round requested; then delta review",
-        "since": "2026-11-09T03:10Z"
+        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #650 OP-2b merged (5036863b); owner flags sent; building OP-3 (steps, runbook, renew-vpn/gluetun, P8)",
+        "since": "2026-11-09T04:43Z"
       },
       {
         "slot": 3,
