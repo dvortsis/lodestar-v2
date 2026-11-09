@@ -26,7 +26,8 @@ This closes WK-10d's residual window between a worker's floor report and the ref
 - `a_claim_waiting_during_a_blocked_report_is_refused` (`leases.rs`, deterministic): two threads interleaved by barriers. The claim's store check runs first, then the report, then the claim, which is refused.
 - `a_claim_racing_a_blocked_report_never_gets_the_key` (`leases.rs`, 200 rounds, #647's review):
   - The report and the claimer start together from a barrier. The claimer claims again and again until the report has returned (an `AtomicBool`), then makes one more call.
-  - So each round covers claims before the report (the key held by A), claims that land around it, and at least one after it (refused). No answer is ever a grant.
+  - So every round has at least one claim after the report, which is refused, and the test asserts it. A round whose claimer is already spinning when the report runs also has claims before it (the key held by A) and around it. No answer is ever a grant.
+  - In most rounds the claimer's first call comes after the report, so every answer is `Committed`. The reviewer counted 190 to 199 of 200 rounds like that (X-lease-test-polish). The rounds that do overlap are enough to catch the outside-the-lock mutant below.
   - The first version made one claim a round, which always ran before the report, so the refused order never ran.
 - `a_floor_drop_is_refused_to_the_next_claim` (`crates/cluster/tests/transport.rs`): end to end over real sessions, with no store check or sink. Worker A reports `Lost { reason: 7 }`, and worker B's claim is denied as `Stored`. A key lost with reason 1 is granted to B.
 - No fixed sleeps. Barriers order the threads, and the transport test waits on a heartbeat's answer.
