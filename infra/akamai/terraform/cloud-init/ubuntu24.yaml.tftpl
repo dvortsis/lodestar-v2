@@ -32,55 +32,7 @@ write_files:
     owner: root:root
     permissions: '0644'
     content: |
-      # Lodestar Secure PIA VPN Gateway Stack (Root-Owned Static Configuration)
-      services:
-        gluetun:
-          image: qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00
-          container_name: gluetun
-          cap_drop:
-            - ALL
-          cap_add:
-            - NET_ADMIN
-          devices:
-            - /dev/net/tun:/dev/net/tun
-          security_opt:
-            - no-new-privileges:true
-          sysctls:
-            - net.ipv6.conf.all.disable_ipv6=1
-            - net.ipv6.conf.default.disable_ipv6=1
-          environment:
-            - VPN_SERVICE_PROVIDER=custom
-            - VPN_TYPE=wireguard
-            - TZ=Etc/UTC
-            - FIREWALL=on
-            - FIREWALL_VPN_INPUT_PORTS=
-            - FIREWALL_OUTBOUND_SUBNETS=
-            - DOT=on
-            - BLOCK_MALICIOUS=on
-          volumes:
-            - /run/lodestar/vpn/wg0.conf:/gluetun/wireguard/wg0.conf:ro
-          restart: unless-stopped
-          networks:
-            - vpn_isolated
-
-        crawler:
-          image: ghcr.io/dvortsis/lodestar:v0.5.1
-          container_name: lodestar_crawler
-          network_mode: "service:gluetun"
-          depends_on:
-            - gluetun
-          security_opt:
-            - no-new-privileges:true
-          cap_drop:
-            - ALL
-          restart: "no"
-          profiles:
-            - crawler
-
-      networks:
-        vpn_isolated:
-          driver: bridge
-          internal: false
+      ${indent(6, compose_vpn_content)}
   - path: /usr/local/sbin/lodestar-vpn-helper
     owner: root:root
     permissions: '0750'
@@ -137,101 +89,6 @@ write_files:
           stat -c '%a %U:%G' "$CONFIG_DIR"
           stat -c '%a %U:%G' "$CONFIG_FILE"
           ;;
-        install-compose)
-          # Root-owned static boundary: unprivileged users cannot supply arbitrary Compose definitions
-          if [ -L "$COMPOSE_DIR" ]; then
-            echo "ERROR: $COMPOSE_DIR is a symlink" >&2
-            exit 1
-          fi
-          install -d -m 0755 -o root -g root "$COMPOSE_DIR"
-          tmp_compose="$COMPOSE_DIR/compose.tmp.$$"
-          cat > "$tmp_compose"
-
-          # 1. Reject empty payload
-          if [ ! -s "$tmp_compose" ]; then
-            rm -f "$tmp_compose"
-            echo "ERROR: Empty compose specification rejected" >&2
-            exit 1
-          fi
-
-          # 2. Reject environment variable interpolation ($VAR or $${VAR})
-          if grep -q -E '\$([a-zA-Z_]|\{[a-zA-Z_])' "$tmp_compose"; then
-            rm -f "$tmp_compose"
-            echo "ERROR: Environment variable interpolation forbidden in compose definition" >&2
-            exit 1
-          fi
-
-          # 3. Reject unauthorized top-level keys (only services, networks, name permitted)
-          if grep -q -E '^(volumes|secrets|configs):' "$tmp_compose"; then
-            rm -f "$tmp_compose"
-            echo "ERROR: Unauthorized top-level compose keys (volumes/secrets/configs forbidden)" >&2
-            exit 1
-          fi
-
-          # 4. Enforce permitted services: ONLY gluetun and crawler permitted
-          if awk '/^services:/{flag=1;next}/^[a-zA-Z]/{flag=0}flag && /^  [a-zA-Z0-9_-]+:/{print $1}' "$tmp_compose" | grep -v -E '^(gluetun:|crawler:)$'; then
-            rm -f "$tmp_compose"
-            echo "ERROR: Unauthorized service in compose definition (only gluetun and crawler permitted)" >&2
-            exit 1
-          fi
-
-          # 5. Reject privileged containers, host network, docker socket, and excess capabilities
-          if grep -q -E 'privileged:\s*true' "$tmp_compose"; then
-            rm -f "$tmp_compose"
-            echo "ERROR: privileged: true forbidden" >&2
-            exit 1
-          fi
-          if grep -q -E 'network_mode:\s*["'\''?]host["'\''?]' "$tmp_compose"; then
-            rm -f "$tmp_compose"
-            echo "ERROR: network_mode: host forbidden" >&2
-            exit 1
-          fi
-          if grep -q -E '/var/run/docker\.sock' "$tmp_compose"; then
-            rm -f "$tmp_compose"
-            echo "ERROR: Docker socket mount forbidden" >&2
-            exit 1
-          fi
-
-          # 6. Reject arbitrary host filesystem mounts (only /run/lodestar/vpn/wg0.conf:/gluetun/wireguard/wg0.conf:ro permitted)
-          if grep -E '^\s*-\s*[^:]+:[^:]+' "$tmp_compose" | grep -v -E '/run/lodestar/vpn/wg0\.conf:/gluetun/wireguard/wg0\.conf:ro'; then
-            rm -f "$tmp_compose"
-            echo "ERROR: Unauthorized volume mount rejected (only /run/lodestar/vpn/wg0.conf:ro permitted)" >&2
-            exit 1
-          fi
-
-          # 7. Gluetun capability restriction: only NET_ADMIN permitted
-          if grep -E '^\s*-\s*[A-Z_]+' "$tmp_compose" | grep -v -E '^\s*-\s*(ALL|NET_ADMIN|crawler|vpn_isolated)$'; then
-            rm -f "$tmp_compose"
-            echo "ERROR: Unauthorized capability requested (only NET_ADMIN allowed)" >&2
-            exit 1
-          fi
-
-          # 8. Crawler must strictly share Gluetun network namespace
-          if grep -q '^  crawler:' "$tmp_compose"; then
-            if ! grep -q -E 'network_mode:\s*["'\''?]?(service:gluetun|container:gluetun)["'\''?]?' "$tmp_compose"; then
-              rm -f "$tmp_compose"
-              echo "ERROR: Crawler must use network_mode: service:gluetun" >&2
-              exit 1
-            fi
-          fi
-
-          # 9. Gluetun image must match pinned official digest
-          if ! grep -q 'image:\s*qmcgaw/gluetun:v3\.40\.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00' "$tmp_compose"; then
-            rm -f "$tmp_compose"
-            echo "ERROR: Gluetun image must match verified pinned digest sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00" >&2
-            exit 1
-          fi
-
-          # 10. Syntax and compose config validation
-          if [ -L "$COMPOSE_FILE" ]; then
-            rm -f "$COMPOSE_FILE"
-          fi
-          mv -f "$tmp_compose" "$COMPOSE_FILE"
-          chmod 0644 "$COMPOSE_FILE"
-          chown root:root "$COMPOSE_FILE"
-          docker compose -f "$COMPOSE_FILE" config --quiet
-          echo "COMPOSE_OK"
-          ;;
         validate-compose)
           if [ ! -f "$COMPOSE_FILE" ] || [ -L "$COMPOSE_FILE" ]; then
             echo "ERROR: $COMPOSE_FILE missing or symlink" >&2
@@ -258,12 +115,29 @@ write_files:
             exit 1
           fi
           # Trusted Component Authorization Gate:
-          # 1. Gluetun container running
-          if ! docker inspect -f '{{.State.Running}}' gluetun 2>/dev/null | grep -q 'true'; then
-            echo "ERROR: Gluetun container is not running" >&2
+          # 1. Gluetun container health status must be strictly 'healthy'
+          health_status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' gluetun 2>/dev/null || echo "inspect_failed")"
+          if [ "$health_status" != "healthy" ]; then
+            echo "ERROR: Gluetun health check failed (status: $health_status, required: healthy)" >&2
             exit 1
           fi
-          # 2. WireGuard handshake active and fresh (<= 120s)
+          # 2. Verify container service label
+          svc_label="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}}' gluetun 2>/dev/null || true)"
+          if [ "$svc_label" != "gluetun" ]; then
+            echo "ERROR: Container 'gluetun' missing expected compose service label (got: $svc_label)" >&2
+            exit 1
+          fi
+          # 3. Verify pinned container image digest
+          img_id="$(docker inspect -f '{{.Config.Image}}' gluetun 2>/dev/null || true)"
+          case "$img_id" in
+            *sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00*)
+              ;;
+            *)
+              echo "ERROR: Container 'gluetun' is not running approved pinned image digest" >&2
+              exit 1
+              ;;
+          esac
+          # 4. WireGuard handshake active and fresh (<= 120s)
           hs_out="$(docker exec gluetun wg show wg0 latest-handshakes 2>/dev/null || true)"
           hs_epoch="$(echo "$hs_out" | awk '{print $2}')"
           if [ -z "$hs_epoch" ] || [ "$hs_epoch" -le 0 ] 2>/dev/null; then
@@ -276,7 +150,7 @@ write_files:
             echo "ERROR: WireGuard handshake is stale ($${hs_age}s > 120s limit)" >&2
             exit 1
           fi
-          # 3. WireGuard transfer active (rx > 0 and tx > 0)
+          # 5. WireGuard transfer active (rx > 0 and tx > 0)
           tx_out="$(docker exec gluetun wg show wg0 transfer 2>/dev/null || true)"
           rx_b="$(echo "$tx_out" | awk '{print $2}')"
           tx_b="$(echo "$tx_out" | awk '{print $3}')"
@@ -284,17 +158,17 @@ write_files:
             echo "ERROR: WireGuard transfer inactive (rx=$${rx_b:-0}, tx=$${tx_b:-0})" >&2
             exit 1
           fi
-          # 4. Gluetun killswitch firewall active (-P OUTPUT DROP)
+          # 6. Gluetun killswitch firewall active (-P OUTPUT DROP)
           if ! docker exec gluetun iptables -S OUTPUT 2>/dev/null | grep -q -- '-P OUTPUT DROP'; then
             echo "ERROR: Gluetun firewall killswitch inactive (no -P OUTPUT DROP)" >&2
             exit 1
           fi
-          # 5. IPv6 disabled inside container
+          # 7. IPv6 disabled inside container
           if [ "$(docker exec gluetun cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null || true)" != "1" ]; then
             echo "ERROR: IPv6 is not disabled inside Gluetun container" >&2
             exit 1
           fi
-          # 6. Crawler strictly confined to Gluetun network namespace
+          # 8. Crawler strictly confined to Gluetun network namespace
           if ! grep -q -E 'network_mode:\s*["'\''?]?(service:gluetun|container:gluetun)["'\''?]?' "$COMPOSE_FILE"; then
             echo "ERROR: Crawler is not restricted to Gluetun network namespace in $COMPOSE_FILE" >&2
             exit 1
@@ -350,13 +224,53 @@ write_files:
             exit 1
           fi
           ;;
-        verify-dns-bypass-blocked)
-          # Actively verify that traffic bound to physical host interface eth0 cannot egress (blocked by iptables OUTPUT DROP)
-          if docker exec gluetun ping -c 1 -W 2 -I eth0 8.8.8.8 >/dev/null 2>&1; then
-            echo "ERROR: Interface eth0 bypass succeeded! Killswitch leak detected!" >&2
+        verify-dns-firewall)
+          # Dynamically discover non-VPN interface (e.g. eth0, ens3, etc.)
+          non_vpn_if="$(docker exec gluetun ip -o link show 2>/dev/null | awk -F': ' '{sub(/@.*/, "", $2); if ($2 !~ /^(lo|wg0)$/) print $2}' | head -n1)"
+          if [ -z "$non_vpn_if" ]; then
+            echo "ERROR: Failed to discover non-VPN interface in Gluetun container" >&2
             exit 1
           fi
-          echo "DNS_BYPASS_BLOCKED_OK"
+
+          # Inspect iptables OUTPUT chain in gluetun
+          fw_rules="$(docker exec gluetun iptables -S OUTPUT 2>/dev/null || true)"
+          if [ -z "$fw_rules" ]; then
+            echo "ERROR: Failed to inspect Gluetun iptables OUTPUT rules" >&2
+            exit 1
+          fi
+
+          # 1. Assert default policy is -P OUTPUT DROP
+          if ! echo "$fw_rules" | grep -q -- '-P OUTPUT DROP'; then
+            echo "ERROR: Default OUTPUT policy is not DROP" >&2
+            exit 1
+          fi
+
+          # 2. Assert loopback (-o lo) is accepted
+          if ! echo "$fw_rules" | grep -q -- '-A OUTPUT -o lo -j ACCEPT'; then
+            echo "ERROR: Loopback egress rule (-o lo -j ACCEPT) missing" >&2
+            exit 1
+          fi
+
+          # 3. Assert WireGuard (-o wg0) is accepted
+          if ! echo "$fw_rules" | grep -q -- '-A OUTPUT -o wg0 -j ACCEPT'; then
+            echo "ERROR: WireGuard egress rule (-o wg0 -j ACCEPT) missing" >&2
+            exit 1
+          fi
+
+          # 4. Verify NO rule allows port 53 or 853 on physical/non-VPN interface
+          if echo "$fw_rules" | grep -E -- "--dport\s+(53|853)" | grep -v -E -- "-o\s+(lo|wg0)"; then
+            echo "ERROR: Insecure DNS egress rule detected on non-VPN interface!" >&2
+            exit 1
+          fi
+
+          # 5. Assert ip route get 8.8.8.8 routes via dev wg0
+          route_out="$(docker exec gluetun ip route get 8.8.8.8 2>/dev/null || true)"
+          if ! echo "$route_out" | grep -q 'dev wg0'; then
+            echo "ERROR: DNS route does not go through wg0: $route_out" >&2
+            exit 1
+          fi
+
+          echo "DNS_FIREWALL_OK"
           ;;
         inspect-firewall)
           docker exec gluetun iptables -S OUTPUT

@@ -63,8 +63,9 @@ resource "linode_instance" "main" {
 
   metadata {
     user_data = base64encode(templatefile("${path.module}/cloud-init/ubuntu24.yaml.tftpl", {
-      ssh_public_key = local.ssh_authorized_key
-      role_label     = "main"
+      ssh_public_key      = local.ssh_authorized_key
+      role_label          = "main"
+      compose_vpn_content = file("${path.module}/pia-example/compose.vpn.yaml")
     }))
   }
 
@@ -93,8 +94,9 @@ resource "linode_instance" "workers" {
 
   metadata {
     user_data = base64encode(templatefile("${path.module}/cloud-init/ubuntu24.yaml.tftpl", {
-      ssh_public_key = local.ssh_authorized_key
-      role_label     = "worker-${format("%02d", count.index + 1)}"
+      ssh_public_key      = local.ssh_authorized_key
+      role_label          = "worker-${format("%02d", count.index + 1)}"
+      compose_vpn_content = file("${path.module}/pia-example/compose.vpn.yaml")
     }))
   }
 

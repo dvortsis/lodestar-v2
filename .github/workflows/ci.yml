@@ -498,6 +498,13 @@ jobs:
             } else { Write-Host "ok $($f.FullName)" }
           }
           if ($failed) { exit 1 }
+      - name: Akamai PIA bridge unit tests
+        run: |
+          python -m pip install cryptography
+          python -m unittest discover -s infra/akamai/terraform/tests -p "test_pia_bridge.py" -v
+      - name: Linux privilege boundary integration test
+        run: |
+          bash infra/akamai/terraform/tests/test_linux_privilege_boundary.sh
 
   # The update manifest (PK-manifest): the builder's tests, then a round trip
   # through the verifier clients run, signed with the minisign CLI as

@@ -110,12 +110,12 @@ def make_mock_leak_responses(
             stdout="DNS_ROUTE_WG0_OK\n" if dns_route_wg0 else "ERROR: DNS route does not go through wg0\n",
             stderr="" if dns_route_wg0 else "route failure",
         ),
-        # 10. verify-dns-bypass-blocked (eth0 bypass must be dropped/blocked by iptables)
+        # 10. verify-dns-firewall (firewall and routing verification)
         subprocess.CompletedProcess(
             args=["ssh"],
             returncode=0 if dns_bypass_blocked else 1,
-            stdout="DNS_BYPASS_BLOCKED_OK\n" if dns_bypass_blocked else "ERROR: Interface eth0 bypass succeeded!\n",
-            stderr="" if dns_bypass_blocked else "killswitch failure",
+            stdout="DNS_FIREWALL_OK\n" if dns_bypass_blocked else "ERROR: Insecure DNS egress rule detected\n",
+            stderr="" if dns_bypass_blocked else "firewall failure",
         ),
         # 11. inspect-firewall (OUTPUT chain must have -P OUTPUT DROP)
         subprocess.CompletedProcess(
@@ -406,17 +406,20 @@ class LodestarPiaBridgeTests(unittest.TestCase):
     # -------------------------------------------------------------------------
     @patch.object(bridge.LinodeSshProvisioner, "run_remote_command")
     def test_15_partial_ssh_transfer(self, mock_cmd: MagicMock) -> None:
-        """Confirms that helper install-compose failure raises ComposeValidationError."""
+        """Confirms that helper validate-compose or deploy failure raises ComposeValidationError."""
         prov = bridge.LinodeSshProvisioner(target_ip=self.target_ip)
         deployer = bridge.ComposeDeployer(prov)
 
-        valid_yaml = "services:\n  gluetun:\n    image: qmcgaw/gluetun\n"
-        with patch.object(bridge.ComposeDeployer, "validate_local_compose", return_value=valid_yaml):
-            mock_cmd.return_value = subprocess.CompletedProcess(
-                args=["ssh"], returncode=1, stdout="", stderr="ERROR: compose syntax error"
-            )
-            with self.assertRaises(bridge.ComposeValidationError):
-                deployer.deploy_compose_stack("compose.yaml")
+        # 1. Calling deploy_compose_stack raises ComposeValidationError (disabled caller installation)
+        with self.assertRaises(bridge.ComposeValidationError):
+            deployer.deploy_compose_stack("compose.yaml")
+
+        # 2. Remote validation failure raises ComposeValidationError
+        mock_cmd.return_value = subprocess.CompletedProcess(
+            args=["ssh"], returncode=1, stdout="", stderr="ERROR: compose syntax error"
+        )
+        with self.assertRaises(bridge.ComposeValidationError):
+            prov.validate_remote_compose()
 
     # -------------------------------------------------------------------------
     # 16. Insecure runtime file permissions
@@ -606,11 +609,20 @@ class LodestarPiaBridgeTests(unittest.TestCase):
     # Section 9 Remediation: Path traversal in deployment command rejected
     # -------------------------------------------------------------------------
     def test_path_traversal_in_deployment_command_rejected(self) -> None:
-        """Proves that helper rejects insecure compose files mounting docker.sock or root fs."""
+        """Proves that unprivileged caller cannot install compose and insecure directives are rejected."""
         cloud_init_path = Path(__file__).resolve().parent.parent / "cloud-init" / "ubuntu24.yaml.tftpl"
         content = cloud_init_path.read_text(encoding="utf-8")
-        self.assertIn("docker\\.sock", content)
-        self.assertIn("privileged:\\s*true", content)
+        # Confirms install-compose is removed from helper
+        self.assertNotIn("install-compose)", content)
+        # Confirms ComposeDeployer validates and rejects privileged and docker.sock
+        with self.assertRaises(bridge.ComposeValidationError):
+            with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+                f.write("services:\n  gluetun:\n    privileged: true\n")
+                f_path = f.name
+            try:
+                bridge.ComposeDeployer.validate_local_compose(f_path)
+            finally:
+                os.remove(f_path)
 
     # -------------------------------------------------------------------------
     # Section 9 Remediation: Symlink attack against VPN configuration rejected
@@ -872,6 +884,7 @@ class LodestarPiaBridgeTests(unittest.TestCase):
         self.assertEqual(result["vpn_ip"], "156.146.54.4")
         self.assertTrue(result["crawler_started"])
         mock_prov.validate_remote_prerequisites.assert_called_once()
+        mock_prov.validate_remote_compose.assert_called_once()
         mock_prov.provision_wg0_config.assert_called_once()
         mock_prov.start_vpn.assert_called_once()
         mock_prov.verify_leak_protection.assert_called_once()
@@ -1047,96 +1060,79 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
         self.assertEqual(res.returncode, 1)
         self.assertIn("Unauthorized helper command", res.stderr)
 
-    # 2. Malicious Compose YAML & Bind Mounts
-    def test_exec_helper_malicious_compose_host_mount_rejected(self) -> None:
-        """Proves that arbitrary host directory bind mounts (e.g. /:/host) are rejected."""
-        yaml_content = """services:
-  gluetun:
-    image: qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00
-    volumes:
-      - /:/host
-"""
+    # 2. Immutable Compose & Command Removal
+    def test_exec_helper_install_compose_command_removed(self) -> None:
+        """Proves that install-compose has been removed from helper and is rejected."""
+        yaml_content = "services:\n  gluetun:\n    image: test\n"
         res = self.run_helper("install-compose", input_data=yaml_content)
         self.assertEqual(res.returncode, 1)
-        self.assertIn("Unauthorized volume mount rejected", res.stderr)
+        self.assertIn("Unauthorized helper command: install-compose", res.stderr)
 
-    def test_exec_helper_malicious_compose_docker_sock_rejected(self) -> None:
-        """Proves that Docker daemon socket mounts are rejected."""
-        yaml_content = """services:
-  gluetun:
-    image: qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-"""
-        res = self.run_helper("install-compose", input_data=yaml_content)
+    def test_exec_helper_validate_compose_succeeds(self) -> None:
+        """Proves that validate-compose succeeds on approved compose definition."""
+        self.create_mock_docker("exit 0")
+        with open(os.path.join(self.compose_dir, "compose.yaml"), "w") as f:
+            f.write("services:\n  gluetun:\n    image: test\n")
+        res = self.run_helper("validate-compose")
+        self.assertEqual(res.returncode, 0)
+        self.assertIn("COMPOSE_VALID", res.stdout)
+
+    def test_exec_helper_validate_compose_rejects_missing_file(self) -> None:
+        """Proves that validate-compose fails closed when compose.yaml is missing."""
+        compose_file = os.path.join(self.compose_dir, "compose.yaml")
+        if os.path.exists(compose_file):
+            os.remove(compose_file)
+        res = self.run_helper("validate-compose")
         self.assertEqual(res.returncode, 1)
-        self.assertIn("Docker socket mount forbidden", res.stderr)
+        self.assertIn("missing or symlink", res.stderr)
 
-    # 3. Privileged Containers & Capabilities
-    def test_exec_helper_malicious_compose_privileged_rejected(self) -> None:
-        """Proves that privileged: true is rejected."""
-        yaml_content = """services:
-  gluetun:
-    image: qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00
-    privileged: true
-"""
-        res = self.run_helper("install-compose", input_data=yaml_content)
-        self.assertEqual(res.returncode, 1)
-        self.assertIn("privileged: true forbidden", res.stderr)
-
-    def test_exec_helper_malicious_compose_excess_capabilities_rejected(self) -> None:
-        """Proves that capabilities beyond NET_ADMIN (e.g. SYS_ADMIN) are rejected."""
-        yaml_content = """services:
-  gluetun:
-    image: qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00
-    cap_add:
-      - SYS_ADMIN
-"""
-        res = self.run_helper("install-compose", input_data=yaml_content)
-        self.assertEqual(res.returncode, 1)
-        self.assertIn("Unauthorized capability requested", res.stderr)
-
-    # 4. Environment-Variable Interpolation & Overrides
-    def test_exec_helper_malicious_compose_env_interpolation_rejected(self) -> None:
-        """Proves that ${VAR} interpolation is rejected to prevent parameter injection."""
-        yaml_content = """services:
-  gluetun:
-    image: qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00
-    environment:
-      - ATTACK=${UNTRUSTED_INJECTION}
-"""
-        res = self.run_helper("install-compose", input_data=yaml_content)
-        self.assertEqual(res.returncode, 1)
-        self.assertIn("Environment variable interpolation forbidden", res.stderr)
-
-    def test_exec_helper_malicious_compose_unauthorized_service_rejected(self) -> None:
-        """Proves that arbitrary containers/services outside gluetun and crawler are rejected."""
-        yaml_content = """services:
-  gluetun:
-    image: qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00
-  miner:
-    image: alpine:latest
-"""
-        res = self.run_helper("install-compose", input_data=yaml_content)
-        self.assertEqual(res.returncode, 1)
-        self.assertIn("Unauthorized service in compose definition", res.stderr)
-
-    # 5. Direct Helper Invocation without Verified VPN (Authorized Component Gate)
-    def test_exec_helper_direct_start_crawler_rejected_without_gluetun_running(self) -> None:
-        """Proves that direct start-crawler invocation fails when Gluetun is not running."""
-        self.create_mock_docker("if [[ \"$*\" =~ \"inspect\" ]]; then echo \"false\"; exit 0; fi; exit 0")
+    # 3. Component Authorization Gate & Gluetun Health/Identity
+    def test_exec_helper_direct_start_crawler_rejected_when_unhealthy(self) -> None:
+        """Proves that direct start-crawler invocation fails when Gluetun health status is starting or unhealthy."""
+        self.create_mock_docker(
+            'if [[ "$*" =~ "State.Health" ]]; then echo "starting"; exit 0; fi; exit 0'
+        )
         with open(os.path.join(self.compose_dir, "compose.yaml"), "w") as f:
             f.write("services:\n  crawler:\n    network_mode: service:gluetun\n")
 
         res = self.run_helper("start-crawler")
         self.assertEqual(res.returncode, 1)
-        self.assertIn("Gluetun container is not running", res.stderr)
+        self.assertIn("Gluetun health check failed (status: starting, required: healthy)", res.stderr)
+
+    def test_exec_helper_direct_start_crawler_rejected_when_service_label_mismatched(self) -> None:
+        """Proves that direct start-crawler invocation fails when container lacks service: gluetun label."""
+        self.create_mock_docker(
+            'if [[ "$*" =~ "State.Health" ]]; then echo "healthy"; exit 0;\n'
+            'elif [[ "$*" =~ "com.docker.compose.service" ]]; then echo "attacker_service"; exit 0; fi; exit 0'
+        )
+        with open(os.path.join(self.compose_dir, "compose.yaml"), "w") as f:
+            f.write("services:\n  crawler:\n    network_mode: service:gluetun\n")
+
+        res = self.run_helper("start-crawler")
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("missing expected compose service label", res.stderr)
+
+    def test_exec_helper_direct_start_crawler_rejected_when_image_digest_mismatched(self) -> None:
+        """Proves that direct start-crawler invocation fails when container image is unapproved."""
+        self.create_mock_docker(
+            'if [[ "$*" =~ "State.Health" ]]; then echo "healthy"; exit 0;\n'
+            'elif [[ "$*" =~ "com.docker.compose.service" ]]; then echo "gluetun"; exit 0;\n'
+            'elif [[ "$*" =~ "Config.Image" ]]; then echo "malicious/image:latest"; exit 0; fi; exit 0'
+        )
+        with open(os.path.join(self.compose_dir, "compose.yaml"), "w") as f:
+            f.write("services:\n  crawler:\n    network_mode: service:gluetun\n")
+
+        res = self.run_helper("start-crawler")
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("is not running approved pinned image digest", res.stderr)
 
     def test_exec_helper_direct_start_crawler_rejected_stale_handshake(self) -> None:
         """Proves that direct start-crawler invocation fails when WireGuard handshake age > 120s."""
         self.create_mock_docker(
-            "if [[ \"$*\" =~ \"inspect\" ]]; then echo \"true\"; exit 0;\n"
-            "elif [[ \"$*\" =~ \"latest-handshakes\" ]]; then echo \"peer_key 1000\"; exit 0; fi; exit 0"
+            'if [[ "$*" =~ "State.Health" ]]; then echo "healthy"; exit 0;\n'
+            'elif [[ "$*" =~ "com.docker.compose.service" ]]; then echo "gluetun"; exit 0;\n'
+            'elif [[ "$*" =~ "Config.Image" ]]; then echo "qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00"; exit 0;\n'
+            'elif [[ "$*" =~ "latest-handshakes" ]]; then echo "peer_key 1000"; exit 0; fi; exit 0'
         )
         with open(os.path.join(self.compose_dir, "compose.yaml"), "w") as f:
             f.write("services:\n  crawler:\n    network_mode: service:gluetun\n")
@@ -1148,10 +1144,12 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
     def test_exec_helper_direct_start_crawler_rejected_zero_transfer(self) -> None:
         """Proves that direct start-crawler invocation fails when transfer rx/tx bytes are 0."""
         self.create_mock_docker(
-            "now=$(date +%s)\n"
-            "if [[ \"$*\" =~ \"inspect\" ]]; then echo \"true\"; exit 0;\n"
-            "elif [[ \"$*\" =~ \"latest-handshakes\" ]]; then echo \"peer_key $now\"; exit 0;\n"
-            "elif [[ \"$*\" =~ \"transfer\" ]]; then echo \"peer_key 0 0\"; exit 0; fi; exit 0"
+            'now=$(date +%s)\n'
+            'if [[ "$*" =~ "State.Health" ]]; then echo "healthy"; exit 0;\n'
+            'elif [[ "$*" =~ "com.docker.compose.service" ]]; then echo "gluetun"; exit 0;\n'
+            'elif [[ "$*" =~ "Config.Image" ]]; then echo "qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00"; exit 0;\n'
+            'elif [[ "$*" =~ "latest-handshakes" ]]; then echo "peer_key $now"; exit 0;\n'
+            'elif [[ "$*" =~ "transfer" ]]; then echo "peer_key 0 0"; exit 0; fi; exit 0'
         )
         with open(os.path.join(self.compose_dir, "compose.yaml"), "w") as f:
             f.write("services:\n  crawler:\n    network_mode: service:gluetun\n")
@@ -1163,11 +1161,13 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
     def test_exec_helper_direct_start_crawler_rejected_firewall_not_drop(self) -> None:
         """Proves that direct start-crawler invocation fails when killswitch is inactive."""
         self.create_mock_docker(
-            "now=$(date +%s)\n"
-            "if [[ \"$*\" =~ \"inspect\" ]]; then echo \"true\"; exit 0;\n"
-            "elif [[ \"$*\" =~ \"latest-handshakes\" ]]; then echo \"peer_key $now\"; exit 0;\n"
-            "elif [[ \"$*\" =~ \"transfer\" ]]; then echo \"peer_key 1000 2000\"; exit 0;\n"
-            "elif [[ \"$*\" =~ \"iptables\" ]]; then echo \"-P OUTPUT ACCEPT\"; exit 0; fi; exit 0"
+            'now=$(date +%s)\n'
+            'if [[ "$*" =~ "State.Health" ]]; then echo "healthy"; exit 0;\n'
+            'elif [[ "$*" =~ "com.docker.compose.service" ]]; then echo "gluetun"; exit 0;\n'
+            'elif [[ "$*" =~ "Config.Image" ]]; then echo "qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00"; exit 0;\n'
+            'elif [[ "$*" =~ "latest-handshakes" ]]; then echo "peer_key $now"; exit 0;\n'
+            'elif [[ "$*" =~ "transfer" ]]; then echo "peer_key 1000 2000"; exit 0;\n'
+            'elif [[ "$*" =~ "iptables" ]]; then echo "-P OUTPUT ACCEPT"; exit 0; fi; exit 0'
         )
         with open(os.path.join(self.compose_dir, "compose.yaml"), "w") as f:
             f.write("services:\n  crawler:\n    network_mode: service:gluetun\n")
@@ -1179,12 +1179,14 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
     def test_exec_helper_direct_start_crawler_rejected_crawler_not_in_gluetun_namespace(self) -> None:
         """Proves that direct start-crawler invocation fails when crawler is not bound to Gluetun."""
         self.create_mock_docker(
-            "now=$(date +%s)\n"
-            "if [[ \"$*\" =~ \"inspect\" ]]; then echo \"true\"; exit 0;\n"
-            "elif [[ \"$*\" =~ \"latest-handshakes\" ]]; then echo \"peer_key $now\"; exit 0;\n"
-            "elif [[ \"$*\" =~ \"transfer\" ]]; then echo \"peer_key 1000 2000\"; exit 0;\n"
-            "elif [[ \"$*\" =~ \"iptables\" ]]; then echo \"-P OUTPUT DROP\"; exit 0;\n"
-            "elif [[ \"$*\" =~ \"disable_ipv6\" ]]; then echo \"1\"; exit 0; fi; exit 0"
+            'now=$(date +%s)\n'
+            'if [[ "$*" =~ "State.Health" ]]; then echo "healthy"; exit 0;\n'
+            'elif [[ "$*" =~ "com.docker.compose.service" ]]; then echo "gluetun"; exit 0;\n'
+            'elif [[ "$*" =~ "Config.Image" ]]; then echo "qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00"; exit 0;\n'
+            'elif [[ "$*" =~ "latest-handshakes" ]]; then echo "peer_key $now"; exit 0;\n'
+            'elif [[ "$*" =~ "transfer" ]]; then echo "peer_key 1000 2000"; exit 0;\n'
+            'elif [[ "$*" =~ "iptables" ]]; then echo "-P OUTPUT DROP"; exit 0;\n'
+            'elif [[ "$*" =~ "disable_ipv6" ]]; then echo "1"; exit 0; fi; exit 0'
         )
         with open(os.path.join(self.compose_dir, "compose.yaml"), "w") as f:
             f.write("services:\n  crawler:\n    network_mode: host\n")
@@ -1193,7 +1195,7 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
         self.assertEqual(res.returncode, 1)
         self.assertIn("Crawler is not restricted to Gluetun network namespace", res.stderr)
 
-    # 6. DNS Path-Aware Routing & Bypass Verification
+    # 4. DNS Path-Aware Routing & Firewall Verification
     def test_exec_helper_dns_routing_wg0_accepted(self) -> None:
         """Proves that DNS route query confirms dev wg0 routing."""
         self.create_mock_docker("echo '8.8.8.8 dev wg0 src 10.0.0.2 uid 0'; exit 0")
@@ -1208,19 +1210,38 @@ class TestExecutablePrivilegeBoundary(unittest.TestCase):
         self.assertEqual(res.returncode, 1)
         self.assertIn("DNS route does not go through wg0", res.stderr)
 
-    def test_exec_helper_dns_bypass_blocked_by_killswitch_accepted(self) -> None:
-        """Proves that blocked physical eth0 bypass attempts confirm active leak protection."""
-        self.create_mock_docker("exit 1")  # ping -I eth0 fails as expected
-        res = self.run_helper("verify-dns-bypass-blocked")
+    def test_exec_helper_dns_firewall_verification_accepted(self) -> None:
+        """Proves that complete firewall isolation and route binding are confirmed."""
+        self.create_mock_docker(
+            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\n2: eth0: <BROADCAST>\n3: wg0: <POINTOPOINT>"; exit 0;\n'
+            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\n-A OUTPUT -o lo -j ACCEPT\n-A OUTPUT -o wg0 -j ACCEPT"; exit 0;\n'
+            'elif [[ "$*" =~ "route get" ]]; then echo "8.8.8.8 dev wg0 src 10.0.0.2"; exit 0; fi; exit 0'
+        )
+        res = self.run_helper("verify-dns-firewall")
         self.assertEqual(res.returncode, 0)
-        self.assertIn("DNS_BYPASS_BLOCKED_OK", res.stdout)
+        self.assertIn("DNS_FIREWALL_OK", res.stdout)
 
-    def test_exec_helper_dns_bypass_succeeding_rejected_as_leak(self) -> None:
-        """Proves that successful outbound physical eth0 traffic triggers critical leak alert."""
-        self.create_mock_docker("exit 0")  # ping -I eth0 unexpectedly succeeds!
-        res = self.run_helper("verify-dns-bypass-blocked")
+    def test_exec_helper_dns_firewall_verification_rejected_when_leak_rule_present(self) -> None:
+        """Proves that any DNS egress rule on physical interface triggers critical leak alert."""
+        self.create_mock_docker(
+            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\n2: eth0: <BROADCAST>\n3: wg0: <POINTOPOINT>"; exit 0;\n'
+            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT DROP\n-A OUTPUT -o lo -j ACCEPT\n-A OUTPUT -o wg0 -j ACCEPT\n-A OUTPUT -o eth0 -p udp --dport 53 -j ACCEPT"; exit 0;\n'
+            'elif [[ "$*" =~ "route get" ]]; then echo "8.8.8.8 dev wg0 src 10.0.0.2"; exit 0; fi; exit 0'
+        )
+        res = self.run_helper("verify-dns-firewall")
         self.assertEqual(res.returncode, 1)
-        self.assertIn("Killswitch leak detected", res.stderr)
+        self.assertIn("Insecure DNS egress rule detected on non-VPN interface", res.stderr)
+
+    def test_exec_helper_dns_firewall_verification_rejected_when_policy_not_drop(self) -> None:
+        """Proves that non-DROP output policy fails firewall verification."""
+        self.create_mock_docker(
+            'if [[ "$*" =~ "link show" ]]; then echo -e "1: lo: <LOOPBACK>\n2: eth0: <BROADCAST>\n3: wg0: <POINTOPOINT>"; exit 0;\n'
+            'elif [[ "$*" =~ "iptables" ]]; then echo -e "-P OUTPUT ACCEPT\n-A OUTPUT -o lo -j ACCEPT\n-A OUTPUT -o wg0 -j ACCEPT"; exit 0;\n'
+            'elif [[ "$*" =~ "route get" ]]; then echo "8.8.8.8 dev wg0 src 10.0.0.2"; exit 0; fi; exit 0'
+        )
+        res = self.run_helper("verify-dns-firewall")
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("Default OUTPUT policy is not DROP", res.stderr)
 
 
 # =============================================================================

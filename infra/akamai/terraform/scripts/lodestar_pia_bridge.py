@@ -1009,6 +1009,13 @@ class LinodeSshProvisioner:
             err = (res.stderr or res.stdout).strip()
             raise SshConnectionError(f"Failed to clean up runtime credentials on {self.target_ip}: {err}")
 
+    def validate_remote_compose(self, compose_file: str = REMOTE_COMPOSE_FILE) -> None:
+        """Validates the root-owned immutable Docker Compose configuration on the remote host."""
+        res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} validate-compose", check=False)
+        if res.returncode != 0 or "COMPOSE_VALID" not in res.stdout:
+            err = (res.stderr or res.stdout).strip()
+            raise ComposeValidationError(f"Remote Docker Compose validation failed: {err}")
+
     def start_vpn(self, compose_file: str = REMOTE_COMPOSE_FILE) -> None:
         """Starts the Gluetun container via Docker Compose using the root deployment helper."""
         res = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} start-vpn", check=False)
@@ -1160,11 +1167,11 @@ class LinodeSshProvisioner:
         if dns_route.returncode != 0 or "DNS_ROUTE_WG0_OK" not in dns_route.stdout:
             raise LeakDetectedError(f"DNS routing leak detected: egress is not bound to WireGuard interface wg0 on {self.target_ip}")
 
-        # 5c: Active physical bypass check - unencrypted egress forced over physical eth0 MUST be dropped by killswitch
-        bypass_check = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} verify-dns-bypass-blocked", check=False)
-        if bypass_check.returncode != 0 or "DNS_BYPASS_BLOCKED_OK" not in bypass_check.stdout:
+        # 5c: Active physical bypass and firewall check - verify interface isolation and killswitch rules
+        firewall_check = self.run_remote_command(f"sudo -n {REMOTE_HELPER_BIN} verify-dns-firewall", check=False)
+        if firewall_check.returncode != 0 or "DNS_FIREWALL_OK" not in firewall_check.stdout:
             raise LeakDetectedError(
-                f"CRITICAL LEAK: Container can send packets out physical interface eth0 bypassing WireGuard on {self.target_ip}!"
+                f"CRITICAL LEAK: Firewall does not enforce DNS and egress isolation, bypassing WireGuard on {self.target_ip}!"
             )
 
         # Step 6: Firewall policy check (fail-closed)
@@ -1308,21 +1315,20 @@ class ComposeDeployer:
 
         return content
 
+    def validate_remote_compose(self) -> None:
+        """Validates root-owned Compose definition via helper."""
+        self.ssh.validate_remote_compose()
+
     def deploy_compose_stack(
         self,
         local_compose_path: str,
         remote_compose_path: str = REMOTE_COMPOSE_FILE,
     ) -> None:
-        """Transfers Compose file over SSH, validates syntax locally and remotely via helper."""
-        content = self.validate_local_compose(local_compose_path)
-        res = self.ssh.run_remote_command(
-            f"sudo -n {REMOTE_HELPER_BIN} install-compose",
-            input_data=content,
-            check=False,
+        """Deprecated: Compose stack is installed immutably by root via cloud-init."""
+        raise ComposeValidationError(
+            "Caller-controlled Compose installation is disabled. "
+            "Compose stack is managed immutably via cloud-init."
         )
-        if res.returncode != 0 or "COMPOSE_OK" not in res.stdout:
-            err = (res.stderr or res.stdout).strip()
-            raise ComposeValidationError(f"Remote Docker Compose installation failed: {err}")
 
 
 # -----------------------------------------------------------------------------
@@ -1374,13 +1380,10 @@ def run_bridge_workflow(
         dns_servers=tunnel_params["dns_servers"],
     )
 
-    # Step 3: Deploy and validate Compose stack on Linode
-    if not local_compose_path:
-        script_dir = Path(__file__).resolve().parent
-        local_compose_path = str(script_dir.parent / "pia-example" / "compose.vpn.yaml")
-
-    deployer = ComposeDeployer(provisioner)
-    deployer.deploy_compose_stack(local_compose_path, remote_compose_path)
+    # Step 3: Remote Compose validation on Linode (immutable root-owned stack)
+    if local_compose_path:
+        ComposeDeployer.validate_local_compose(local_compose_path)
+    provisioner.validate_remote_compose()
 
     # Step 4: Stream wg0.conf to Linode tmpfs (/run/lodestar/vpn/wg0.conf)
     provisioner.provision_wg0_config(wg0_conf)
