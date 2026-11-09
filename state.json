@@ -7372,7 +7372,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T05:54Z",
+    "updated": "2026-11-09T06:28:12Z",
     "items": [
       {
         "slot": 1,
@@ -7384,11 +7384,12 @@
       },
       {
         "slot": 2,
-        "slice": "OP-3a",
+        "slice": null,
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: OP-3 split into 3a/3b/3c (runner approved); building OP-3a (P8, live run path, step runner, output allow-list, vm-status, leak-test, renew-vpn/gluetun)",
-        "since": "2026-11-09T04:43Z"
+        "doing": "idle: OP-3a #652 merged (5da6eb15); runner paused, no follow-on",
+        "since": "2026-11-09T06:28:12Z",
+        "status": "idle"
       },
       {
         "slot": 3,
@@ -7478,7 +7479,6 @@
     "instruction": "Once the active sessions complete, pause the runner. No further sessions unless explicitly commanded.",
     "state": "draining",
     "active": [
-      "#652 OP-3a (slot 2)",
       "#644 PK-win-upd-3 (slot 3)",
       "#651 X-win-restart-followups-2 (slot 4)",
       "CMP-5g-2 (slot 1, building)"
@@ -7495,6 +7495,9 @@
       "OP-4",
       "X-event-names-split"
     ],
-    "watchdog": "trig_0172BngAUoA4NRaRWBYiRWVf disabled so it can't start a replacement runner"
+    "watchdog": "trig_0172BngAUoA4NRaRWBYiRWVf disabled so it can't start a replacement runner",
+    "merged_during_drain": [
+      "#652 OP-3a merged 5da6eb15 at 2026-11-09T06:28:12Z"
+    ]
   }
 }
