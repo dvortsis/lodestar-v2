@@ -39,7 +39,8 @@
 //!      SHA-256) in staging's `previous\` or `current\`, checked right
 //!      before it runs (rule 4's one exception: the journal's rollback
 //!      target with SYSTEM-held pins);
-//!   5. the start type back to delayed automatic, the service started, the
+//!   5. the start type back to what it was before (recorded before the
+//!      first change), the service started, the
 //!      reinstalled MSI made `current\` again; then the old version's
 //!      health is checked and reported.
 //!
@@ -50,8 +51,9 @@
 //!   disabled, for the next run to retry ([`Outcome::RollbackPending`]). A
 //!   final one halts: as §12.2 says, neither version starts. Before step 1
 //!   nothing was changed and the service is left as it is; after it, the
-//!   service is set to manual start and left stopped (with the marker
-//!   while the store isn't restored), and the journal says why.
+//!   service stays stopped and disabled (with the marker while the store
+//!   isn't restored). The journal, the Event Log and `result.json` say
+//!   which step stopped and how an administrator recovers ([`recovery`]).
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -94,6 +96,10 @@ pub struct Journal {
     /// The install needs Windows to restart (exit 3010).
     #[serde(default)]
     pub restart: bool,
+    /// The service's start type before the rollback disabled it: what
+    /// it's set back to (recorded before the first change).
+    #[serde(default)]
+    pub start_before: Option<Start>,
     pub state: State,
 }
 
@@ -107,8 +113,13 @@ pub enum State {
         snapshot: Option<SnapshotRef>,
         done: u8,
     },
-    /// It couldn't go on; nothing more is tried.
-    Halted { why: String },
+    /// It couldn't go on; nothing more is tried. `recovery` says what an
+    /// administrator does.
+    Halted {
+        why: String,
+        #[serde(default)]
+        recovery: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -157,6 +168,7 @@ pub fn installing(
         to: to.to_string(),
         snapshots_before: before.into_iter().map(|s| s.name).collect(),
         restart: false,
+        start_before: None,
         state: State::Installing,
     })
 }
@@ -207,11 +219,17 @@ pub fn resume(
     if !is(&journal.from) && !is(&journal.to) {
         // Installed by hand since: whatever this journal was about is over.
         clear(ctx);
-        remove_marker(ctx);
+        let _ = remove_marker(ctx);
         return Ok(None);
     }
     Ok(Some(match journal.state {
-        State::Halted { ref why } => Outcome::RollbackHalted { why: why.clone() },
+        State::Halted {
+            ref why,
+            ref recovery,
+        } => Outcome::RollbackHalted {
+            why: why.clone(),
+            recovery: recovery.clone(),
+        },
         State::RollingBack { .. } => roll_back(ctx, sys, journal),
         State::Installing if is(&journal.from) && journal.restart => {
             // Windows hasn't restarted yet: nothing to judge.
@@ -223,7 +241,7 @@ pub fn resume(
         State::Installing if is(&journal.from) => {
             // The install never finished: the old version is on disk.
             clear(ctx);
-            let _ = sys.set_start(Start::Auto);
+            let _ = sys.set_start(journal.start_before.unwrap_or(Start::Auto));
             sys.start_service();
             Outcome::InstallInterrupted {
                 version: journal.to.clone(),
@@ -232,7 +250,7 @@ pub fn resume(
         State::Installing => {
             // A crash or restart may have left it stopped, or disabled by
             // a rollback's first step that wasn't recorded yet.
-            let _ = sys.set_start(Start::Auto);
+            let _ = sys.set_start(journal.start_before.unwrap_or(Start::Auto));
             sys.start_service();
             probation(ctx, sys, journal, false)
         }
@@ -279,16 +297,70 @@ fn done_of(j: &Journal) -> u8 {
 }
 
 /// A final stop. Neither version starts once the service was stopped
-/// (§12.2): it's set to manual start and left stopped, with the marker in
-/// place until the store is restored. Before that nothing was changed.
+/// (§12.2): it stays stopped and disabled, with the marker in place
+/// until the store is restored. Before that nothing was changed. The
+/// journal, the Event Log and `result.json` say how to recover.
 fn halt(ctx: &Context, sys: &dyn System, mut j: Journal, done: u8, why: String) -> Outcome {
-    j.state = State::Halted { why: why.clone() };
-    let _ = write(ctx, &j);
-    if done >= 1 {
-        let _ = sys.set_start(Start::Manual);
+    // `start_before` is recorded before the rollback first touches the
+    // service: without it nothing was changed.
+    let touched = j.start_before.is_some();
+    let recovery = recovery(ctx, &j, if touched { done.max(1) } else { 0 }, &why);
+    sys.event_log(&recovery);
+    eprintln!("lodestar update-helper: {recovery}");
+    if touched {
+        // Neither version runs: whatever Windows Installer's own rollback
+        // or the SCM may have started is stopped, and stays disabled.
+        let _ = sys.set_start(Start::Disabled);
+        let _ = sys.stop_service();
+        j.state = State::Halted {
+            why: why.clone(),
+            recovery: recovery.clone(),
+        };
+        let _ = write(ctx, &j);
+    } else {
+        // Nothing to resume: the journal goes, so later updates still run.
+        clear(ctx);
     }
-    eprintln!("lodestar update-helper: the rollback stopped: {why}");
-    Outcome::RollbackHalted { why }
+    Outcome::RollbackHalted { why, recovery }
+}
+
+/// What an administrator does after a halt: which step stopped, and how
+/// to bring Lodestar back. Neither the marker nor the journal starts
+/// anything by itself; removing them is the administrator's step, once
+/// the store is one the installed version reads.
+pub fn recovery(ctx: &Context, j: &Journal, done: u8, why: &str) -> String {
+    let (from, to) = (&j.from, &j.to);
+    let journal = ctx.staging.dir.join(JOURNAL);
+    if done == 0 {
+        return format!(
+            "Lodestar {to} failed its health check, and the rollback to {from} couldn't start: \
+             {why}. Nothing was changed: {to} keeps running. To go back to {from}, an \
+             administrator installs the {from} MSI by hand."
+        );
+    }
+    let marker = ctx.data_dir.join("bin").join(MARKER);
+    let store = if done < 3 {
+        format!(
+            "The store may be half restored, so {} stays and every store opener refuses \
+             while it exists.",
+            marker.display()
+        )
+    } else {
+        format!("The store was restored to {from}'s; reinstalling {from} didn't finish.")
+    };
+    format!(
+        "Lodestar {to} failed its health check, and the rollback to {from} stopped after step \
+         {done} of 5: {why}. The Lodestar service is stopped and disabled, so neither version \
+         opens the store. {store} To recover, an administrator: 1. reads {journal} and the \
+         msiexec logs beside it; 2. installs the {from} MSI by hand, or restores a backup of \
+         {data}; 3. once the store is one the installed version reads, deletes {marker} and \
+         {journal}, then runs: sc config Lodestar start= delayed-auto, and: sc start Lodestar. \
+         Installing a version other than {from} or {to} clears both files by itself. Neither \
+         file starts anything.",
+        journal = journal.display(),
+        data = ctx.data_dir.display(),
+        marker = marker.display(),
+    )
 }
 
 fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
@@ -306,6 +378,18 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
     // The target first: without it nothing is touched.
     if done < 4 {
         halt_on(previous_msi(ctx, &j.from))?;
+    }
+    // The start type to go back to, recorded before the first change.
+    if j.start_before.is_none() {
+        let before = sys
+            .start_type()
+            .map_err(|e| Stop::Retry(format!("reading the service's start type: {e}")))?;
+        j.start_before = Some(match before {
+            // Only this helper disables it: never what it goes back to.
+            Start::Disabled => Start::Auto,
+            other => other,
+        });
+        save(j, &snapshot, done)?;
     }
     if done < 1 {
         stopped(sys)?;
@@ -339,7 +423,11 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
         if let Some(s) = &snapshot {
             halt_on(restore(ctx, sys, s))?;
         }
-        remove_marker(ctx);
+        if !remove_marker(ctx) {
+            return Err(Stop::Retry(
+                "the rollback marker couldn't be removed".into(),
+            ));
+        }
         done = 3;
         save(j, &snapshot, done)?;
     }
@@ -364,9 +452,9 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
         save(j, &snapshot, done)?;
     }
     if done < 5 {
-        sys.set_start(Start::Auto).map_err(|e| {
-            Stop::Retry(format!("setting the service back to automatic start: {e}"))
-        })?;
+        let back = j.start_before.unwrap_or(Start::Auto);
+        sys.set_start(back)
+            .map_err(|e| Stop::Retry(format!("setting the service's start type back: {e}")))?;
         sys.start_service();
         rotate_back(ctx, &j.from);
         sys.copied("rotated");
@@ -400,14 +488,16 @@ pub fn no_service_processes(sys: &dyn System) -> Result<(), String> {
     }
 }
 
-/// Best effort, under `.lock`: the marker goes once the store is
-/// restored (or the journal was dropped).
-fn remove_marker(ctx: &Context) {
+/// Under `.lock`: the marker goes once the store is restored (or the
+/// journal was dropped). Whether it's gone.
+fn remove_marker(ctx: &Context) -> bool {
+    let marker = ctx.data_dir.join("bin").join(MARKER);
     if let Ok(Some(bin)) = Bin::existing(&ctx.data_dir)
         && let Ok(Some(_lock)) = bin.lock()
     {
         let _ = bin.remove(MARKER);
     }
+    std::fs::symlink_metadata(marker).is_err()
 }
 
 /// The MSI for `from`, found by its pins in staging's `previous\` (as the
@@ -486,6 +576,16 @@ fn restore(ctx: &Context, sys: &dyn System, s: &SnapshotRef) -> Result<(), Strin
                 s.name
             ))
         };
+    }
+    // A snapshot with its own journal or WAL beside it was mid-write:
+    // SYSTEM never opens SQLite to settle it, so it isn't restored.
+    for side in ["-wal", "-journal"] {
+        if std::fs::symlink_metadata(dir.join(format!("{}{side}", s.name))).is_ok() {
+            return Err(format!(
+                "the snapshot {} has a {side} file beside it",
+                s.name
+            ));
+        }
     }
     let (sha, _) = hash(&snap).map_err(|e| format!("{}: {e}", s.name))?;
     if sha.to_hex() != s.sha256 {

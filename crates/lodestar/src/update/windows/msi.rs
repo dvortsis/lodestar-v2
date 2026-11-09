@@ -81,6 +81,9 @@ pub struct Answer {
     /// Windows must restart to finish replacing an in-use file.
     #[serde(default)]
     pub restart: bool,
+    /// After a halted rollback: what an administrator does to recover.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
     pub at: u64,
 }
 

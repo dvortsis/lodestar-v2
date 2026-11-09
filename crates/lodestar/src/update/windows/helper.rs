@@ -45,8 +45,7 @@
 //!    and stay there for [`HEALTH_HOLD`], within [`HEALTH_WAIT`]. The
 //!    installed MSI and its pins move into staging's `current\` (the one
 //!    before into `previous\`). A failed probation rolls back: the store
-//!    first, then the previous MSI, with the service on manual start
-//!    meanwhile. After exit 3010, and after a crash or a restart, the next
+//!    first, then the previous MSI, with the service disabled meanwhile. After exit 3010, and after a crash or a restart, the next
 //!    run (at boot, the task's trigger) finishes the journal before it
 //!    reads any request.
 
@@ -148,6 +147,10 @@ pub trait System {
     fn healthy(&self) -> bool;
     /// Sets the service's start type.
     fn set_start(&self, start: Start) -> io::Result<()>;
+    /// The service's start type now.
+    fn start_type(&self) -> io::Result<Start>;
+    /// Writes an error to the Windows Event Log (Application).
+    fn event_log(&self, message: &str);
     /// How many processes run as the service's account.
     fn service_processes(&self) -> io::Result<usize>;
     /// Called once each copy into staging is written (tests change the
@@ -156,14 +159,18 @@ pub trait System {
 }
 
 /// A service start type ([`System::set_start`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Start {
-    /// During a rollback: the SCM's failure actions can't start it either.
+    /// During a rollback, and after a halt: the SCM's failure actions
+    /// can't start it either.
     Disabled,
-    /// After a halt: left stopped, startable by an administrator.
+    /// Started by hand only.
     Manual,
     /// Delayed automatic, as the MSI installs it.
     Auto,
+    /// Automatic, not delayed.
+    Immediate,
 }
 
 /// What a run did.
@@ -189,8 +196,9 @@ pub enum Outcome {
     },
     /// The rollback stopped for now (transient); the next run retries.
     RollbackPending { why: String },
-    /// Probation failed and the rollback couldn't go on.
-    RollbackHalted { why: String },
+    /// Probation failed and the rollback couldn't go on: `recovery` says
+    /// what an administrator does.
+    RollbackHalted { why: String, recovery: String },
     /// An install a crash interrupted never happened: the old version is
     /// still the one on disk.
     InstallInterrupted { version: String },
@@ -303,6 +311,10 @@ fn answer(
             Err(r) => Some(r.code().to_string()),
         },
         restart: matches!(result, Ok(Outcome::Installed { restart: true, .. })),
+        detail: match result {
+            Ok(Outcome::RollbackHalted { recovery, .. }) => Some(recovery.clone()),
+            _ => None,
+        },
         at: ctx.now,
     };
     if let Ok(bytes) = serde_json::to_vec_pretty(&answer) {
@@ -460,29 +472,21 @@ fn attempt(
 /// a replayed older, still unexpired manifest out (#640's security
 /// review). The service can only raise them, which refuses more.
 ///
-/// Only the channels' marks are taken, each raised and never lowered:
-/// never the data folder's statements or revocations, which the service
-/// could pad (a revocation entry need only parse as a key), so nothing
-/// the service writes lands in the helper's own state but higher marks.
-/// They're bounded by the check's own plausibility rule (a day ahead).
+/// Its signed statements and channel marks are merged forward-only; never
+/// its revocation list, which the service could pad (an entry need only
+/// parse as a key). Marks more than a day ahead fail the check's own
+/// plausibility rule: the service can delay installs, never allow one.
 fn trust_floor(ctx: &Context, own: &lodestar_update::TrustState) -> lodestar_update::TrustState {
     let data = trust_file::load(&ctx.data_dir.join("bin"), &ctx.embedded, &[]);
-    let mut floor = own.clone();
     if data.damaged() {
-        return floor;
+        return own.clone();
     }
-    for (channel, theirs) in &data.state().channels {
-        let mine = floor.channels.entry(*channel).or_default();
-        if theirs.hwm_ts > mine.hwm_ts {
-            mine.hwm_ts = theirs.hwm_ts;
-            mine.hwm_sha256 = theirs.hwm_sha256;
-        }
-        if theirs.fresh_ts > mine.fresh_ts {
-            mine.fresh_ts = theirs.fresh_ts;
-            mine.fresh_sha256 = theirs.fresh_sha256;
-        }
-    }
-    floor
+    // Its statements come too (each verified under the embedded recovery
+    // key when it loaded), so a rotation it saw doesn't reset the marks it
+    // raised; its revocation list never does.
+    let mut theirs = data.state().clone();
+    theirs.revoked.clear();
+    lodestar_update::TrustState::merge(own, theirs)
 }
 
 /// Takes `.lock`, waiting up to `wait` for the stopped service's handle
@@ -662,6 +666,22 @@ fn clean_env_of(cmd: &mut std::process::Command, names: impl Iterator<Item = OsS
     }
 }
 
+/// The start type in `sc qc` output (`START_TYPE : 2   AUTO_START
+/// (DELAYED)`; the words aren't translated).
+pub fn start_type_of(text: &str) -> Option<Start> {
+    let line = text
+        .lines()
+        .find(|l| l.trim_start().starts_with("START_TYPE"))?;
+    let (_, rest) = line.split_once(':')?;
+    Some(match rest.split_whitespace().next()? {
+        "2" if rest.contains("DELAYED") => Start::Auto,
+        "2" => Start::Immediate,
+        "3" => Start::Manual,
+        "4" => Start::Disabled,
+        _ => return None,
+    })
+}
+
 /// The CSV rows in `tasklist /fo csv /nh` output.
 pub fn count_rows(text: &str) -> usize {
     text.lines()
@@ -738,6 +758,7 @@ impl System for Windows {
             Start::Disabled => "disabled",
             Start::Manual => "demand",
             Start::Auto => "delayed-auto",
+            Start::Immediate => "auto",
         };
         let out = Self::command("sc.exe")?
             .args(["config", crate::windows::service::NAME, "start=", mode])
@@ -747,6 +768,30 @@ impl System for Windows {
         } else {
             Err(io::Error::other("sc config failed"))
         }
+    }
+
+    fn start_type(&self) -> io::Result<Start> {
+        let out = Self::sc(&["qc", crate::windows::service::NAME])?;
+        start_type_of(&out).ok_or_else(|| io::Error::other("sc qc gave no start type"))
+    }
+
+    /// Through `eventcreate` (source "Lodestar update helper"), best effort.
+    fn event_log(&self, message: &str) {
+        let _ = Self::command("eventcreate.exe").and_then(|mut c| {
+            c.args([
+                "/T",
+                "ERROR",
+                "/ID",
+                "900",
+                "/L",
+                "APPLICATION",
+                "/SO",
+                "Lodestar update helper",
+                "/D",
+                message,
+            ])
+            .output()
+        });
     }
 
     /// `tasklist`'s CSV rows for the service's account (the filter's
@@ -832,6 +877,10 @@ mod tests {
         /// `lodestar.db` at each msiexec.
         store_seen: Mutex<Vec<Option<Vec<u8>>>>,
         health_looks: Mutex<usize>,
+        /// The start type before the update (`Auto` when unset).
+        start_before: Option<Start>,
+        /// What went to the Event Log.
+        events: Mutex<Vec<String>>,
         /// Called at a test hook (`copied`): (hook name, action).
         at_hook: Option<(&'static str, Hook)>,
         /// A source to overwrite once it's copied: (name, path, bytes).
@@ -911,8 +960,16 @@ mod tests {
                 Start::Disabled => "disabled",
                 Start::Manual => "manual",
                 Start::Auto => "auto",
+                Start::Immediate => "immediate",
             });
             Ok(())
+        }
+        fn start_type(&self) -> io::Result<Start> {
+            Ok(self.start_before.unwrap_or(Start::Auto))
+        }
+        fn event_log(&self, message: &str) {
+            self.events.lock().unwrap().push(message.into());
+            self.note("event");
         }
         fn service_processes(&self) -> io::Result<usize> {
             Ok(self.processes)
@@ -1370,6 +1427,12 @@ mod tests {
             fn set_start(&self, m: Start) -> io::Result<()> {
                 self.fake.set_start(m)
             }
+            fn start_type(&self) -> io::Result<Start> {
+                self.fake.start_type()
+            }
+            fn event_log(&self, m: &str) {
+                self.fake.event_log(m)
+            }
             fn service_processes(&self) -> io::Result<usize> {
                 self.fake.service_processes()
             }
@@ -1602,12 +1665,11 @@ mod tests {
                 "crash {crash}"
             );
             // The boot run, with 0.7.0 on disk: the journal first, the
-            // request never again. A crash before step 1 was recorded
-            // (calls 4 and 5) leaves probation to judge again (still
-            // failing here).
+            // request never again. The journal says "rolling back" before
+            // the first change, so no crash re-judges probation.
             env.ctx.running = Some(Version::new(0, 7, 0));
             let boot = Fake {
-                unhealthy: crash <= 5,
+                unhealthy: false,
                 ..Fake::default()
             };
             let out = env.run(&boot).unwrap();
@@ -1702,8 +1764,8 @@ mod tests {
 
     /// A previous MSI that doesn't match its pins, wrong pins, none, or
     /// only one planted in the data folder: halted before anything is
-    /// changed (the service left as it is), and the next run tries
-    /// nothing more.
+    /// changed (the service left as it is), reported, and the journal
+    /// dropped so later updates still run.
     #[test]
     fn a_missing_or_tampered_previous_msi_halts_before_anything_changes() {
         for tamper in ["bytes", "pins", "missing", "planted"] {
@@ -1732,9 +1794,13 @@ mod tests {
             assert_eq!(out.code(), "rollback_halted", "{tamper}");
             let calls = fake.calls();
             assert_eq!(
-                calls.last().map(String::as_str),
-                Some("msiexec"),
+                &calls[calls.len() - 2..],
+                ["msiexec", "event"],
                 "{tamper}: {calls:?}"
+            );
+            assert!(
+                fake.events.lock().unwrap()[0].contains("Nothing was changed"),
+                "{tamper}"
             );
             assert_eq!(
                 calls.iter().filter(|c| *c == "msiexec").count(),
@@ -1746,8 +1812,13 @@ mod tests {
                 b"migrated store",
                 "{tamper}"
             );
+            // Nothing to resume: the journal is gone, later updates run.
+            assert!(
+                !env.ctx.staging.dir.join(rollback::JOURNAL).exists(),
+                "{tamper}"
+            );
             let again = Fake::default();
-            assert_eq!(env.run(&again).unwrap().code(), "rollback_halted");
+            assert_eq!(env.run(&again).unwrap(), Outcome::Nothing);
             assert!(again.calls().is_empty());
         }
     }
@@ -1770,12 +1841,26 @@ mod tests {
         };
         assert_eq!(env.run(&fake).unwrap().code(), "rollback_halted");
         let calls = fake.calls();
+        // The halt logs, then makes sure nothing runs: disabled, stopped.
         assert_eq!(
-            calls.last().map(String::as_str),
-            Some("manual"),
+            &calls[calls.len() - 3..],
+            ["event", "disabled", "stop"],
             "{calls:?}"
         );
         assert!(!calls[4..].contains(&"start".to_string()), "{calls:?}");
+        assert!(!calls[4..].contains(&"manual".to_string()), "{calls:?}");
+        assert!(!calls[4..].contains(&"auto".to_string()), "{calls:?}");
+        // How to recover, in the Event Log and in result.json alike.
+        let event = fake.events.lock().unwrap()[0].clone();
+        for needle in [
+            "step 3 of 5",
+            "sc config Lodestar start= delayed-auto",
+            "journal.json",
+            "Neither file starts anything",
+        ] {
+            assert!(event.contains(needle), "{needle}: {event}");
+        }
+        assert_eq!(env.answer().detail.as_deref(), Some(event.as_str()));
         // The store was restored, the marker went with it.
         let data = &env.ctx.data_dir;
         assert_eq!(
@@ -1783,6 +1868,29 @@ mod tests {
             b"old store"
         );
         assert!(!data.join("bin").join(rollback::MARKER).exists());
+    }
+
+    /// A completed rollback puts back the start type the service had
+    /// before it, not delayed automatic by default (runner, 2026-11-09).
+    #[test]
+    fn a_rollback_restores_the_start_type_it_found() {
+        for (before, note) in [
+            (Start::Manual, "manual"),
+            (Start::Immediate, "immediate"),
+            (Start::Auto, "auto"),
+        ] {
+            let env = Env::new("0.6.0");
+            with_previous(&env, OLD_MSI);
+            env.offer("0.7.0");
+            let fake = Fake {
+                start_before: Some(before),
+                ..failing(&env)
+            };
+            assert_eq!(env.run(&fake).unwrap().code(), "rolled_back");
+            let calls = fake.calls();
+            assert_eq!(calls[calls.len() - 3], note, "{calls:?}");
+            assert_eq!(calls.iter().filter(|c| *c == "disabled").count(), 3);
+        }
     }
 
     /// A snapshot changed after it was chosen halts before the restore:
@@ -1802,7 +1910,7 @@ mod tests {
         };
         let out = env.run(&fake).unwrap();
         assert!(
-            matches!(&out, Outcome::RollbackHalted { why } if why.contains("changed")),
+            matches!(&out, Outcome::RollbackHalted { why, .. } if why.contains("changed")),
             "{out:?}"
         );
         let data = &env.ctx.data_dir;
@@ -1811,7 +1919,39 @@ mod tests {
             b"migrated store"
         );
         assert!(data.join("bin").join(rollback::MARKER).exists());
-        assert_eq!(fake.calls().last().map(String::as_str), Some("manual"));
+        let calls = fake.calls();
+        assert_eq!(&calls[calls.len() - 3..], ["event", "disabled", "stop"]);
+        let event = fake.events.lock().unwrap()[0].clone();
+        assert!(
+            event.contains("half restored") && event.contains("rollback.json"),
+            "{event}"
+        );
+    }
+
+    /// A snapshot with its own journal beside it was mid-write: never
+    /// restored (SYSTEM doesn't open SQLite to settle it).
+    #[test]
+    fn a_snapshot_mid_write_isnt_restored() {
+        let env = Env::new("0.6.0");
+        with_previous(&env, OLD_MSI);
+        env.offer("0.7.0");
+        let side = env.ctx.data_dir.join("lodestar.pre-v5.db-journal");
+        let fake = Fake {
+            at_hook: Some((
+                "chosen",
+                Box::new(move || std::fs::write(&side, b"hot").unwrap()),
+            )),
+            ..failing(&env)
+        };
+        let out = env.run(&fake).unwrap();
+        assert!(
+            matches!(&out, Outcome::RollbackHalted { why, .. } if why.contains("beside it")),
+            "{out:?}"
+        );
+        assert_eq!(
+            std::fs::read(env.ctx.data_dir.join("lodestar.db")).unwrap(),
+            b"migrated store"
+        );
     }
 
     /// A snapshot that was there before the install is never restored.
@@ -1844,6 +1984,7 @@ mod tests {
                 to: "0.7.0".into(),
                 snapshots_before: vec![],
                 restart: false,
+                start_before: None,
                 state: rollback::State::RollingBack {
                     snapshot: Some(rollback::SnapshotRef {
                         name: name.into(),
@@ -1855,7 +1996,7 @@ mod tests {
             rollback::write(&env.ctx, &j).unwrap();
             let out = env.run(&Fake::default()).unwrap();
             assert!(
-                matches!(&out, Outcome::RollbackHalted { why } if why.contains("beside the store")),
+                matches!(&out, Outcome::RollbackHalted { why, .. } if why.contains("beside the store")),
                 "{name}: {out:?}"
             );
         }
@@ -1897,6 +2038,53 @@ mod tests {
         // A replayed older, still current manifest.
         let old = env.envelope(Channel::Stable, NOW - 3600, "0.7.0", MSI);
         env.leave("0.7.0", Channel::Stable, &old, MSI);
+        let fake = Fake::default();
+        assert_eq!(refused(env.run(&fake)), "older_than_mark");
+        assert!(fake.ran.lock().unwrap().is_none());
+    }
+
+    /// After a key rotation the floor still holds: the data folder's
+    /// statements come with its marks, so the rotation in a replayed
+    /// manifest doesn't reset them (#640's security review, item 2).
+    #[test]
+    fn the_floor_survives_a_key_rotation() {
+        use lodestar_update::Role;
+        use lodestar_update::testing::{TestKey, statement};
+        let env = Env::new("0.6.0");
+        let k2 = TestKey::new(9);
+        let s = statement(
+            &env.trust.recovery,
+            1,
+            Role::Release,
+            &k2.public(),
+            NOW - 7200,
+        );
+        let signed = |ts: u64, version: &str| {
+            let mut m = manifest(Channel::Stable, ts, version, b"x");
+            m["statements"] = json!([serde_json::to_value(&s).unwrap()]);
+            m["releases"][0]["artifacts"] = json!([{
+                "target": "x86_64-pc-windows-msvc",
+                "kind": "msi",
+                "url": format!("https://github.com/dvortsis/lodestar-v2/releases/download/v{version}/l.msi"),
+                "sha256": Sha256::of(MSI).to_hex(),
+                "size": MSI.len(),
+            }]);
+            envelope(&k2.signed(&bytes(&m)), None)
+        };
+        // The service saw the newer manifest, after the rotation.
+        let bin = env.ctx.data_dir.join("bin");
+        let loaded = trust_file::load(&bin, &env.ctx.embedded, &[]);
+        let c = lodestar_update::check(
+            &signed(NOW - 60, "0.7.1"),
+            Channel::Stable,
+            NOW,
+            &env.ctx.embedded,
+            loaded.state(),
+        )
+        .unwrap();
+        trust_file::save(&bin, &loaded, c.next).unwrap();
+        // Replayed: an older one, after the rotation too, still current.
+        env.leave("0.7.0", Channel::Stable, &signed(NOW - 3600, "0.7.0"), MSI);
         let fake = Fake::default();
         assert_eq!(refused(env.run(&fake)), "older_than_mark");
         assert!(fake.ran.lock().unwrap().is_none());
@@ -1974,6 +2162,16 @@ mod tests {
         let q = "\r\nSERVICE_NAME: Lodestar\r\n        TYPE               : 10  WIN32_OWN_PROCESS\r\n        STATE              : 4  RUNNING\r\n";
         assert_eq!(service_state(q).as_deref(), Some("RUNNING"));
         assert_eq!(service_state("nothing"), None);
+        let qc = |t: &str| {
+            start_type_of(&format!(
+                "SERVICE_NAME: Lodestar\r\n        START_TYPE         : {t}\r\n"
+            ))
+        };
+        assert_eq!(qc("2   AUTO_START  (DELAYED)"), Some(Start::Auto));
+        assert_eq!(qc("2   AUTO_START"), Some(Start::Immediate));
+        assert_eq!(qc("3   DEMAND_START"), Some(Start::Manual));
+        assert_eq!(qc("4   DISABLED"), Some(Start::Disabled));
+        assert_eq!(start_type_of("nothing"), None);
         let rows = "\"lodestar.exe\",\"4120\",\"Services\",\"0\",\"52,000 K\"\r\n";
         assert_eq!(count_rows(rows), 1);
         assert_eq!(
