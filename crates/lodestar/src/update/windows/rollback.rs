@@ -11,6 +11,14 @@
 //! at any point is finished by the next run of the helper, at boot (the
 //! task's trigger) or on demand ([`resume`]), before it reads any request.
 //!
+//! **Across versions:** the journal types accept unknown fields, because
+//! after a reinstall the older helper reads the journal the newer one
+//! wrote. A new field must be safe for an older helper to ignore, with a
+//! `#[serde(default)]` that keeps the old behaviour; a field an older
+//! helper mustn't ignore bumps `FORMAT` instead, so that helper refuses the
+//! journal. (`touched` and `reinstall_restart` aren't safe to ignore; they
+//! stand only because no released helper has journal code without them.)
+//!
 //! - **Installing:** written before `msiexec` runs. Probation follows: the
 //!   new service must reach Running and stay there
 //!   ([`super::helper::System::healthy`]). Passed, the journal goes. The
@@ -33,13 +41,15 @@
 //!      store;
 //!   3. **the store first:** the snapshot renamed over `lodestar.db` (its
 //!      `-wal`, `-shm` and `-journal` removed) beneath the pinned data
-//!      folder, then the marker removed. A repeat that finds the snapshot
+//!      folder. The marker stays until step 5. A repeat that finds the snapshot
 //!      gone and the store at its SHA-256 counts it done;
 //!   4. **then the previous MSI,** found by its pins (version `from`, size,
 //!      SHA-256) in staging's `previous\` or `current\`, checked right
 //!      before it runs (rule 4's one exception: the journal's rollback
 //!      target with SYSTEM-held pins);
-//!   5. the start type back to what it was before the install (recorded
+//!   5. after a reinstall that needs a restart, waiting (disabled and
+//!      stopped on every pass) until the program on disk is `from`; then
+//!      the marker removed, the start type back to what it was before the install (recorded
 //!      before its stop, since the MSI resets it to delayed automatic;
 //!      delayed automatic when none was recorded), the service started, the
 //!      reinstalled MSI made `current\` again; then the old version's
@@ -186,7 +196,11 @@ pub enum Answer {
 pub fn take_result(ctx: &Context, j: &mut Journal) -> Option<Answer> {
     let run = j.msi.as_ref()?;
     let r = match j.answer.clone() {
-        Some(r) => r,
+        Some(r) => {
+            // Recorded before a crash: its file may still be there.
+            let _ = std::fs::remove_file(ctx.staging.dir.join(MSI_RESULT));
+            r
+        }
         None => {
             let path = ctx.staging.dir.join(MSI_RESULT);
             let r: MsiResult = layout::read_json(&path).ok().flatten()?;
@@ -450,8 +464,9 @@ pub fn resume(
             }
         }
         State::Installing => {
-            // A crash or restart may have left it stopped, or disabled by
-            // a rollback's first step that wasn't recorded yet.
+            // A crash or restart may have left it stopped, or disabled by a
+            // rollback whose `touched` save failed (the journal still says
+            // installing).
             let _ = sys.set_start(journal.start_before.unwrap_or(Start::Auto));
             sys.start_service();
             probation(ctx, sys, journal, false)
@@ -509,7 +524,9 @@ fn done_of(j: &Journal) -> u8 {
 fn halt(ctx: &Context, sys: &dyn System, mut j: Journal, done: u8, why: String) -> Outcome {
     // Recorded before the rollback first touches the service: without it
     // nothing was changed.
-    let touched = j.touched;
+    // A journal without the field (an earlier build) counts any rollback
+    // state as touched, as before the field existed.
+    let touched = j.touched || matches!(j.state, State::RollingBack { .. });
     let recovery = recovery(ctx, &j, if touched { done.max(1) } else { 0 }, &why);
     sys.event_log(&recovery);
     eprintln!("lodestar update-helper: {recovery}");
@@ -546,14 +563,15 @@ pub fn recovery(ctx: &Context, j: &Journal, done: u8, why: &str) -> String {
     }
     let marker = ctx.data_dir.join("bin").join(MARKER);
     let store = if done < 3 {
-        format!(
-            "The store may be half restored, so {} stays and every store opener refuses \
-             while it exists.",
-            marker.display()
-        )
+        "The store may be half restored."
     } else {
-        format!("The store was restored to {from}'s; reinstalling {from} didn't finish.")
+        "The store was restored, but reinstalling the previous version didn't finish."
     };
+    let store = format!(
+        "{store} {} stays until the rollback finishes, so every store opener refuses while it \
+         exists.",
+        marker.display()
+    );
     format!(
         "Lodestar {to} failed its health check, and the rollback to {from} stopped after step \
          {done} of 5: {why}. The Lodestar service is stopped and disabled, so neither version \
@@ -624,11 +642,9 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
         if let Some(s) = &snapshot {
             halt_on(restore(ctx, sys, s))?;
         }
-        if !remove_marker(ctx) {
-            return Err(Stop::Retry(
-                "the rollback marker couldn't be removed".into(),
-            ));
-        }
+        // The marker stays until step 5: whatever starts the service before
+        // then (the MSI's own StartServices, a failed version still on disk
+        // after a 3010) refuses before it opens the restored store.
         done = 3;
         save(j, &snapshot, done)?;
     }
@@ -681,12 +697,11 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
         match msi::installed(code) {
             msi::Installed::Done => {}
             msi::Installed::RestartNeeded => {
-                // The old program replaces the failed one only at the next
-                // restart: until then nothing may start the failed one on
-                // the restored store.
+                // The old program may replace the failed one only at the
+                // next restart: until then step 5 keeps the service disabled
+                // and stopped (checked, so a failure is retried), and the
+                // marker keeps the failed one off the restored store.
                 j.reinstall_restart = true;
-                let _ = sys.set_start(Start::Disabled);
-                let _ = sys.stop_service();
             }
             msi::Installed::Busy(c) => {
                 save(j, &snapshot, done)?;
@@ -705,10 +720,17 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
         if j.reinstall_restart
             && ctx.running.as_ref().map(|v| v.to_string()) != Some(j.from.clone())
         {
+            // On every pass: whatever started it meanwhile is stopped again.
+            stopped(sys)?;
             return Err(Stop::Retry(format!(
                 "waiting for Windows to restart, which puts {} back in place",
                 j.from
             )));
+        }
+        if !remove_marker(ctx) {
+            return Err(Stop::Retry(
+                "the rollback marker couldn't be removed".into(),
+            ));
         }
         let back = j.start_before.unwrap_or(Start::Auto);
         sys.set_start(back)

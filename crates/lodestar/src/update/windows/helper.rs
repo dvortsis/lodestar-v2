@@ -577,11 +577,17 @@ pub(super) fn after_install(
             {
                 eprintln!("lodestar update-helper: keeping the MSI for rollback: {e}");
             }
+            // A 3010 waits for the restart only while the program on disk is
+            // still `from`: the copy ran msiexec once the program had ended,
+            // so `to` is usually in place and running, and judged now.
+            let restart = done == Installed::RestartNeeded
+                && ctx.running.as_ref().map(|v| v.to_string()).as_deref()
+                    == Some(journal.from.as_str());
             // The restart flag and the cleared run in the same write.
-            journal.restart = done == Installed::RestartNeeded;
+            journal.restart = restart;
             journal.answer = None;
             let _ = rollback::write(ctx, &journal);
-            rollback::probation(ctx, sys, journal, done == Installed::RestartNeeded)
+            rollback::probation(ctx, sys, journal, restart)
         }
     }
 }
@@ -609,8 +615,9 @@ pub(super) fn copy_name() -> io::Result<String> {
 
 /// The helper's copy in staging (`self_name` is its file name): runs the
 /// journal's pending `msiexec`, and nothing else. In order:
-/// 1. its lock, first of all, so no helper run takes the journal from it;
-/// 2. staging checked again (private, not a link) and pinned;
+/// 1. staging checked again (private, not a link) and pinned;
+/// 2. its lock (created only now, so checks never create it), so no helper
+///    run takes the journal from it;
 /// 3. `wait()`: the program in Program Files has ended;
 /// 4. the pending run must name this copy, its MSI and log must be inside
 ///    staging, and the MSI must still match its pins;
@@ -2227,13 +2234,17 @@ mod tests {
             assert!(event.contains(needle), "{needle}: {event}");
         }
         assert_eq!(env.answer().detail.as_deref(), Some(event.as_str()));
-        // The store was restored, the marker went with it.
+        // The store was restored; the marker stays until step 5.
         let data = &env.ctx.data_dir;
         assert_eq!(
             std::fs::read(data.join("lodestar.db")).unwrap(),
             b"old store"
         );
-        assert!(!data.join("bin").join(rollback::MARKER).exists());
+        assert!(data.join("bin").join(rollback::MARKER).exists());
+        assert!(
+            event.contains("stays until the rollback finishes"),
+            "{event}"
+        );
     }
 
     /// A completed rollback puts back the start type the service had
@@ -2473,7 +2484,9 @@ mod tests {
             std::fs::read(data.join("lodestar.db")).unwrap(),
             b"old store"
         );
-        assert!(!data.join("bin").join(rollback::MARKER).exists());
+        // The marker stays while the old MSI runs: a service it starts
+        // refuses until step 5.
+        assert!(data.join("bin").join(rollback::MARKER).exists());
         let copy = Fake {
             migrate: Some(data.clone()),
             ..Fake::default()
@@ -2493,6 +2506,7 @@ mod tests {
                 healthy: true
             }
         );
+        assert!(!data.join("bin").join(rollback::MARKER).exists());
         assert!(
             env.ctx
                 .staging
@@ -2638,6 +2652,21 @@ mod tests {
             Outcome::RollbackPending { .. }
         ));
         assert!(!started(&early), "{:?}", early.calls());
+        // Stopped again on every pass, whatever started it meanwhile.
+        assert_eq!(early.calls(), ["disabled", "stop"]);
+        let marker = env.ctx.data_dir.join("bin").join(rollback::MARKER);
+        assert!(marker.exists(), "the failed version refuses the store");
+        // A stop that fails is a retry, not lost.
+        let stuck = Fake {
+            stop_fails: true,
+            ..Fake::default()
+        };
+        assert!(matches!(
+            env.run(&stuck).unwrap(),
+            Outcome::RollbackPending { why } if why.contains("didn't stop")
+        ));
+        assert!(!started(&stuck), "{:?}", stuck.calls());
+        assert_eq!(done(&env), 4);
         // The boot run, 0.6.0 back in place.
         env.ctx.running = Some(Version::new(0, 6, 0));
         let boot = Fake::default();
@@ -2650,7 +2679,237 @@ mod tests {
             }
         );
         assert!(boot.calls().contains(&"start".to_string()));
+        assert!(!marker.exists());
         assert!(!env.ctx.staging.dir.join(rollback::JOURNAL).exists());
+    }
+
+    /// The 3010 that takes the reinstall's answer with a stop that fails
+    /// is retried too: `done` is 4, and nothing starts.
+    #[test]
+    fn a_failed_stop_after_a_reinstall_restart_is_retried() {
+        let mut env = Env::new("0.6.0");
+        rollback_to_the_reinstall(&mut env);
+        let copy = Fake {
+            code: 3010,
+            ..Fake::default()
+        };
+        as_copy(&env, &copy).unwrap();
+        let next = Fake {
+            stop_fails: true,
+            ..Fake::default()
+        };
+        assert!(matches!(
+            env.run(&next).unwrap(),
+            Outcome::RollbackPending { why } if why.contains("didn't stop")
+        ));
+        assert!(!started(&next), "{:?}", next.calls());
+        assert_eq!(done(&env), 4);
+        assert!(rollback::read(&env.ctx).unwrap().unwrap().reinstall_restart);
+    }
+
+    /// A forward install's 3010 with `to` already on disk (the copy ran
+    /// msiexec once the program had ended) is judged at once: an unhealthy
+    /// `to` rolls back, a healthy one is installed.
+    #[test]
+    fn a_restart_code_with_the_new_version_on_disk_is_judged_now() {
+        for healthy in [false, true] {
+            let mut env = Env::new("0.6.0");
+            with_previous(&env, OLD_MSI);
+            env.offer("0.7.0");
+            let hand = Fake {
+                hand_off: true,
+                ..Fake::default()
+            };
+            assert_eq!(env.run(&hand).unwrap(), Outcome::HandedOff);
+            let copy = Fake {
+                code: 3010,
+                migrate: Some(env.ctx.data_dir.clone()),
+                ..Fake::default()
+            };
+            assert_eq!(as_copy(&env, &copy).unwrap(), 3010);
+            env.ctx.running = Some(Version::new(0, 7, 0));
+            let next = Fake {
+                unhealthy: !healthy,
+                hand_off: true,
+                ..Fake::default()
+            };
+            let out = env.run(&next).unwrap();
+            if healthy {
+                assert_eq!(
+                    out,
+                    Outcome::Installed {
+                        version: Version::new(0, 7, 0),
+                        restart: false
+                    }
+                );
+                assert!(!env.ctx.staging.dir.join(rollback::JOURNAL).exists());
+            } else {
+                // The rollback ran up to the reinstall, handed off.
+                assert_eq!(out, Outcome::HandedOff);
+                assert_eq!(done(&env), 3);
+                assert_eq!(
+                    std::fs::read(env.ctx.data_dir.join("lodestar.db")).unwrap(),
+                    b"old store"
+                );
+            }
+        }
+    }
+
+    /// A journal from a build without `touched` still counts a rollback
+    /// state as touched: a halt keeps the journal and the service disabled.
+    #[test]
+    fn a_rollback_journal_without_touched_halts_as_touched() {
+        let env = Env::new("0.6.0");
+        // No previous MSI: step 4's target is missing, a halt.
+        std::fs::create_dir_all(&env.ctx.staging.dir).unwrap();
+        std::fs::write(env.ctx.data_dir.join("lodestar.db"), b"old store").unwrap();
+        let j = json!({
+            "format": 1,
+            "id": "0123456789abcdef",
+            "from": "0.6.0",
+            "to": "0.7.0",
+            "snapshots_before": [],
+            "state": {"step": "rolling_back", "snapshot": null, "done": 1},
+        });
+        std::fs::write(
+            env.ctx.staging.dir.join(rollback::JOURNAL),
+            serde_json::to_vec(&j).unwrap(),
+        )
+        .unwrap();
+        assert!(!rollback::read(&env.ctx).unwrap().unwrap().touched);
+        let fake = Fake::default();
+        let out = env.run(&fake).unwrap();
+        match &out {
+            Outcome::RollbackHalted { recovery, .. } => {
+                assert!(!recovery.contains("Nothing was changed"), "{recovery}")
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(fake.calls().contains(&"disabled".to_string()));
+        assert!(matches!(
+            rollback::read(&env.ctx).unwrap().unwrap().state,
+            rollback::State::Halted { .. }
+        ));
+    }
+
+    /// An unreadable `skipped` doesn't stop the rollback.
+    #[test]
+    fn an_unreadable_skipped_list_still_rolls_back() {
+        let env = Env::new("0.6.0");
+        with_previous(&env, OLD_MSI);
+        env.offer("0.7.0");
+        std::fs::write(env.ctx.data_dir.join("bin").join("skipped"), b"not json").unwrap();
+        assert_eq!(env.run(&failing(&env)).unwrap().code(), "rolled_back");
+    }
+
+    /// Only the copy creates `msiexec.lock`: a quiet run, a hand-off and a
+    /// run that resumes don't.
+    #[test]
+    fn checks_never_create_the_copy_lock() {
+        let env = Env::new("0.6.0");
+        let lock = env.ctx.staging.dir.join(rollback::MSI_LOCK);
+        std::fs::create_dir_all(&env.ctx.staging.dir).unwrap();
+        assert_eq!(env.run(&Fake::default()).unwrap(), Outcome::Nothing);
+        assert!(!lock.exists());
+        env.offer("0.7.0");
+        let hand = Fake {
+            hand_off: true,
+            ..Fake::default()
+        };
+        assert_eq!(env.run(&hand).unwrap(), Outcome::HandedOff);
+        assert!(!lock.exists());
+        // The copy died: the next run judges from disk, still no lock.
+        env.run(&Fake::default()).unwrap();
+        assert!(!lock.exists());
+    }
+
+    /// A crash after the answer was recorded in the journal but before its
+    /// file went: the answer is used once, and the file goes.
+    #[test]
+    fn a_recorded_answer_is_used_once() {
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        let hand = Fake {
+            hand_off: true,
+            ..Fake::default()
+        };
+        assert_eq!(env.run(&hand).unwrap(), Outcome::HandedOff);
+        as_copy(&env, &Fake::default()).unwrap();
+        let file = env.ctx.staging.dir.join(rollback::MSI_RESULT);
+        let answer: rollback::MsiResult =
+            serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        let mut j = rollback::read(&env.ctx).unwrap().unwrap();
+        j.answer = Some(answer);
+        rollback::write(&env.ctx, &j).unwrap();
+        // The program on disk is now 0.7.0.
+        let mut env = env;
+        env.ctx.running = Some(Version::new(0, 7, 0));
+        let next = Fake::default();
+        assert_eq!(
+            env.run(&next).unwrap(),
+            Outcome::Installed {
+                version: Version::new(0, 7, 0),
+                restart: false
+            }
+        );
+        assert!(!file.exists());
+        assert!(!env.ctx.staging.dir.join(rollback::JOURNAL).exists());
+        let again = Fake::default();
+        assert_eq!(env.run(&again).unwrap(), Outcome::Nothing);
+        assert!(!again.calls().contains(&"start".to_string()));
+    }
+
+    /// An answer resets the bound on copies: after a busy answer, the full
+    /// number of fresh copies may still be tried.
+    #[test]
+    fn an_answer_resets_the_bound_on_copies() {
+        let mut env = Env::new("0.6.0");
+        rollback_to_the_reinstall(&mut env);
+        as_copy(
+            &env,
+            &Fake {
+                code: 1618,
+                ..Fake::default()
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            env.run(&Fake::default()).unwrap(),
+            Outcome::RollbackPending { .. }
+        ));
+        for _ in 0..rollback::MAX_COPIES {
+            let again = Fake {
+                hand_off: true,
+                ..Fake::default()
+            };
+            assert_eq!(env.run(&again).unwrap(), Outcome::HandedOff);
+        }
+        let last = Fake {
+            hand_off: true,
+            ..Fake::default()
+        };
+        assert!(matches!(
+            env.run(&last).unwrap(),
+            Outcome::RollbackHalted { .. }
+        ));
+    }
+
+    /// A copy's refusal puts back the start type recorded before the stop.
+    #[test]
+    fn a_copy_refusal_restores_the_start_type() {
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        let hand = Fake {
+            hand_off: true,
+            start_before: Some(Start::Manual),
+            ..Fake::default()
+        };
+        assert_eq!(env.run(&hand).unwrap(), Outcome::HandedOff);
+        let name = rollback::read(&env.ctx).unwrap().unwrap().msi.unwrap().copy;
+        run_copy(&env.ctx, &Fake::default(), &name, &|| false).unwrap_err();
+        let next = Fake::default();
+        assert_eq!(env.run(&next).unwrap().code(), "copy_refused");
+        assert_eq!(next.calls(), ["manual", "start", "event"]);
     }
 
     /// Copies that never answer are replaced only a few times; then the
