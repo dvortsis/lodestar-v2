@@ -6610,6 +6610,11 @@
       "id": "op-2-owns-and-setup",
       "added": "2026-11-09T01:07Z",
       "what": "next runner PR: OP-2 owns add infra/fleet/linode.py, audit.py, requirements-live.txt (approved 01:07Z). At OP-2 merge flag owner setup additions: OWNER_SSH_PUBLIC_KEY repo variable, FLEET_LINODE_ACCOUNT_EUUID cloud-fleet secret; host private keys in state bucket + user-data until down (single-use). run <step> refuses until OP-3."
+    },
+    {
+      "id": "pk-win-upd-3-b1-b2",
+      "added": "2026-11-09T01:10Z",
+      "what": "next runner PR: PK-win-upd-3 owns add crates/lodestar/src/windows/service.rs (B2: serve checks rollback marker). B1 approved option (a): helper copies itself into SYSTEM-only staging (random name, ACL+reparse check, read-only share handle, SHA-256 of own image) and runs msiexec from the copy; never falls back to Program Files. Owner \u00a72.19 flag at merge: Q13 implementation refinement; marker stays at <data>\\bin\\rollback.json."
     }
   ],
   "main_health": [
