@@ -345,7 +345,7 @@ class Deliver(unittest.TestCase):
         self.go("/fleet run renew-vpn main", ssh=ssh)
         self.assertEqual(self.reports, ["deliver-pia: main: the session didn't finish in time; /run NOT clean; escalate"])
         checks = len([c for c in ssh.calls if c["argv"][-1] == deliver.clean_check_command()])
-        self.assertEqual(checks, deliver.CLEAN_WAIT_SECONDS // 10 + 1)
+        self.assertEqual(checks, deliver.CLEAN_WAIT_SECONDS // 10)  # every 10 s, to the orphan's bound
         # After a finished step there is no orphan, so one check decides.
         ssh = Orphan(rcs=[12])
         self.go("/fleet run renew-vpn main", ssh=ssh)
@@ -423,10 +423,55 @@ class Deliver(unittest.TestCase):
         wf = yaml.safe_load((Path(deliver.__file__).resolve().parents[2] / ".github/workflows/fleet.yml").read_text())
         self.assertEqual(wf["jobs"]["deliver-pia"]["timeout-minutes"], deliver.DELIVER_JOB_MINUTES)
         self.assertGreater(deliver.LEASE_NEEDED, timedelta(minutes=deliver.DELIVER_JOB_MINUTES))
-        # The job's own bounds fit its timeout: one session and one polled clean check
-        # per target (in parallel), the retries, and the firewall calls.
-        worst = deliver.SSH_TIMEOUT + deliver.CLEAN_WAIT_SECONDS + deliver.SSH_ATTEMPTS_SECONDS + 120
-        self.assertLess(worst, deliver.DELIVER_JOB_MINUTES * 60)
+        # Everything the program does before the close is clamped to the job's timeout
+        # less a reserve for the steps before it (checkout and pip, 120 s) and for the
+        # close (2 firewalls x 3 calls x 30 s) with the report (60 s).
+        self.assertEqual(deliver.WORK_SECONDS + deliver.RESERVE_SECONDS, deliver.DELIVER_JOB_MINUTES * 60)
+        before = 120
+        after = 2 * 3 * 30 + 60
+        self.assertGreaterEqual(deliver.RESERVE_SECONDS, before + after)
+        # The clean poll outlasts an orphan's own bound (its cloud-init wait and its step).
+        self.assertGreaterEqual(deliver.CLEAN_WAIT_SECONDS, deliver.CLOUD_INIT_WAIT + deliver.STEP_TIMEOUT)
+
+    def test_every_ssh_wait_is_clamped_to_the_job_deadline(self):
+        clock = Clock()
+        timeouts = []
+
+        class Hangs(FakeSSH):  # every call runs to its timeout, and the VM never comes clean
+            def __call__(s, argv, data, timeout):
+                timeouts.append(timeout)
+                clock.sleep(timeout)
+                s.calls.append({"argv": argv, "rules": None})
+                return 256 if argv[-1] == deliver.remote_command() else 1
+        self.fw, self.ssh, self.reports = FakeFirewalls(), Hangs(), []
+
+        def slow_ip():  # the calls before the SSH work spend the same budget (here 700 s)
+            clock.sleep(700)
+            return MY_IP
+
+        def connect(env, emit):
+            return {"s3": FakeS3(self.fleet()), "sm": FakeSM(), "linode": lambda t: Linode(self.fw), "ssh": self.ssh,
+                    "my_ip": slow_ip, "meta": lambda: RANGES, "lookup_run": {}.get}
+        rc = deliver.deliver(event_env("/fleet run renew-vpn main", **LIVE), self.reports.append, connect=connect,
+                             emit=[].append, clock=clock, sleep=clock.sleep, repo=self.repo)
+        self.assertEqual(timeouts[0], deliver.WORK_SECONDS - 700)  # the session got only what was left
+        self.assertEqual(rc, 1)
+        elapsed = (clock() - T0).total_seconds()
+        self.assertLessEqual(elapsed, deliver.WORK_SECONDS + 10)  # the last check may take its 10 s minimum
+        self.assertEqual(self.reports, ["deliver-pia: main: the session didn't finish in time; /run NOT clean; escalate"])
+        self.assertEqual(self.fw.rules["21"], rules())  # and there was still time to close the rule
+
+    def test_a_busy_vm_after_a_lost_attempt_waits_for_the_orphan(self):
+        class Orphan(FakeSSH):  # 255, then the retry finds the orphan holding the lock
+            cleans = [1, 1, 0]
+
+            def __call__(s, argv, data, timeout):
+                if argv[-1] == deliver.clean_check_command():
+                    s.calls.append({"argv": argv})
+                    return s.cleans.pop(0)
+                return super().__call__(argv, data, timeout)
+        self.go("/fleet run renew-vpn main", ssh=Orphan(rcs=[255, 21]))
+        self.assertEqual(self.reports, ["deliver-pia: main: another delivery is still running there; /run clean"])
 
     def test_the_close_sweeps_stale_rules_too(self):
         fw = FakeFirewalls()

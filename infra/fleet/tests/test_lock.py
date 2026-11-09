@@ -1,8 +1,10 @@
 import json
 import unittest
+from datetime import timedelta
 
 from lock import ACQUIRED, BUSY, LOCK_KEY, REAPING, FleetLock, LockLost, MemoryStore, S3Store
 from tests.helpers import Clock
+from timefmt import fmt
 
 
 class Lock(unittest.TestCase):
@@ -63,17 +65,23 @@ class Lock(unittest.TestCase):
             def put_if_match(self, key, body, etag):
                 self.objects[key] = (self.after, '"x"')
                 return False
-        lock = FleetLock(MemoryStore(), 90, self.clock)
-        for name, after in (("a reaping marker with our ID", lock._body("reaping", "2-1")),
-                            ("our ID, already expired", json.dumps({"kind": "run", "run_id": "2-1",
-                                                                    "expires_at": "2026-11-08T20:00:00Z"}).encode())):
+        for name, kind, live in (("a live reaping marker with our ID", "reaping", True),
+                                 ("our run ID, already expired", "run", False)):
             with self.subTest(name):
                 store = Replaced()
-                store.after = after
                 lk = FleetLock(store, 90, self.clock)
                 store.objects[LOCK_KEY] = (lk._body("run", "1-1"), '"0"')
                 self.clock.sleep(91 * 60)  # the old holder expires; takeover by put_if_match
+                # Built now, so only the condition under test can reject it.
+                ends = self.clock() + timedelta(minutes=90 if live else -1)
+                store.after = json.dumps({"kind": kind, "run_id": "2-1", "expires_at": fmt(ends)}).encode()
                 self.assertEqual(lk.acquire("2-1"), BUSY)
+                # The control: the same takeover, and the re-read finds a live run holder of ours.
+                store.objects[LOCK_KEY] = (json.dumps({"kind": "run", "run_id": "1-1", "expires_at": fmt(
+                    self.clock() - timedelta(minutes=1))}).encode(), '"0"')
+                store.after = json.dumps({"kind": "run", "run_id": "2-1",
+                                          "expires_at": fmt(self.clock() + timedelta(minutes=90))}).encode()
+                self.assertEqual(lk.acquire("2-1"), ACQUIRED)
 
     def test_expires_at_only_while_held(self):
         self.lock.acquire("1-1")
