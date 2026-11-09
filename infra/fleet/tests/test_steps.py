@@ -405,14 +405,14 @@ case "$1" in
   exec) echo 7 ;;  # exec gluetun cat .../iflink
   run)
     # Exactly: run --rm --network container:gluetun --cap-drop ALL [--cap-add NET_ADMIN]
-    #          <pinned netshoot> sh -c '"$@"; echo "probe_rc=$?"' probe <command...>
+    #          <pinned netshoot> sh -c '"$@"; printf "\nprobe_rc=%s\n" "$?"' probe <command...>
     [ "$1 $2 $3 $4 $5 $6" = "run --rm --network container:gluetun --cap-drop ALL" ] || bad "$*"
     shift 6
     admin=
     if [ "$1 $2" = "--cap-add NET_ADMIN" ]; then admin=1; shift 2; fi
     case "$1" in nicolaka/netshoot@sha256:????????????????????????????????????????????????????????????????) ;; *) bad "$*" ;; esac
     shift
-    [ "$1" = sh ] && [ "$2" = -c ] && [ "$3" = '"$@"; echo "probe_rc=$?"' ] && [ "$4" = probe ] || bad "$*"
+    [ "$1" = sh ] && [ "$2" = -c ] && [ "$3" = '"$@"; printf "\nprobe_rc=%s\n" "$?"' ] && [ "$4" = probe ] || bad "$*"
     shift 4
     if [ -n "$admin" ] && [ "$*" != "ip link set dev ${VPN_IFACE-wg0} down" ]; then bad "$*"; fi
     if [ -e "$STUB/blocked" ]; then down=1; else down=; fi
@@ -426,7 +426,12 @@ case "$1" in
                     if [ -n "$down" ] || [ ! -e "$STUB/was_blocked" ] || [ -z "$NEW_EXIT" ]; then echo "${EXIT_IP:-198.51.100.200}"; else echo 198.51.100.201; fi ;;
         "curl -6"*) [ -n "$V6_OPEN" ] || [ -n "$leak" ] || exit 1 ;;
         "nc -z"*) [ -n "$down" ] && [ -z "$LEAK_TCP" ] && [ -z "$leak" ] && exit 1; [ -n "$NO_TCP" ] && exit 1; exit 0 ;;
-        "sh -c dig"*) [ -n "$down" ] && [ -z "$leak" ] && exit 1; exit 0 ;;
+        # The script's own dig | grep pipeline runs, against the stub dig, which
+        # answers like the real one (a timeout prints ";;" lines on stdout too).
+        "sh -c dig"*) if [ -n "$down" ] && [ -z "$leak" ]; then DIG_FAIL=1; else DIG_FAIL=$DIG_UP_FAIL; fi
+                      DIG_FAIL=$DIG_FAIL "$@" ;;
+        "sh -c ip -o link show up dev \"\$1\" | grep -q . iface ${VPN_IFACE-wg0}")
+                      [ -e "$STUB/ifdown" ] && [ -z "$IFACE_BACK" ] && exit 1; exit 0 ;;
         "sh -c command"*) [ -n "$NO_TOOLS" ] && exit 1; exit 0 ;;
         "grep"*) [ -n "$DNS_REMOTE" ] && exit 1; exit 0 ;;
         "sh -c echo"*) exit 0 ;;
@@ -434,9 +439,17 @@ case "$1" in
         *) exit 99 ;;
       esac
     )
-    echo "probe_rc=$?" ;;
+    printf '\nprobe_rc=%s\n' "$?" ;;
   *) bad "$*" ;;
 esac
+"""
+STUB_DIG = r"""#!/usr/bin/env bash
+if [ -n "$DIG_FAIL" ]; then
+  echo ";; communications error to 1.1.1.1#53: timed out"
+  echo ";; no servers could be reached"
+  exit 9
+fi
+echo 93.184.215.14
 """
 STUB_IPTABLES = r"""#!/usr/bin/env bash
 printf 'iptables %s\n' "$*" >> "$STUB/log"
@@ -482,7 +495,8 @@ class VMScripts(unittest.TestCase):
         # `sleep` is stubbed too: the scripts' waits poll the (stubbed) state, so no
         # test waits on a clock.
         for name, body in (("docker", STUB_DOCKER), ("iptables", STUB_IPTABLES), ("tcpdump", STUB_TCPDUMP),
-                           ("ip", STUB_IP), ("sleep", "#!/bin/sh\nexit 0\n")):
+                           ("ip", STUB_IP), ("dig", STUB_DIG),
+                           ("sleep", "#!/bin/sh\nexit 0\n")):
             (self.stub / "bin" / name).write_text(body)
             (self.stub / "bin" / name).chmod(0o755)
         (self.stack / "secrets").mkdir(parents=True)
@@ -538,11 +552,14 @@ class VMScripts(unittest.TestCase):
         self.assertIn(" up -d --force-recreate gluetun", self.log())  # gluetun alone, from the current wg0.conf
         probes = (self.stub / "probes").read_text()
         self.assertIn("sh -c dig +short +time=5 +tries=1 example.com", probes)  # up
-        self.assertIn("sh -c dig +short +time=3 +tries=1 example.net  | grep -q .", probes)  # down: a name not asked before
+        self.assertIn("sh -c dig +short +time=3 +tries=1 example.net  | grep -Eq", probes)  # down: a name not asked before
         self.assertIn("sh -c dig +short +time=3 +tries=1 example.net @1.1.1.1", probes)  # and straight to a resolver
-        self.assertIn("sh -c dig +short +time=3 +tries=1 example.edu  | grep -q .", probes)  # phase B: another fresh name
+        self.assertIn("sh -c dig +short +time=3 +tries=1 example.edu  | grep -Eq", probes)  # phase B: another fresh name
         self.assertIn("sh -c dig +short +time=3 +tries=1 example.edu @1.1.1.1", probes)
         self.assertIn("ip link set dev wg0 down", probes)  # gluetun's own interface, from its config
+        self.assertIn("ok vpn_interface_stayed_down", lines)
+        # A timed-out dig's ";;" lines never count as an answer: only an address does.
+        self.assertIn("grep -Eq '^[0-9]{1,3}(\\.[0-9]{1,3}){3}$'", probes)
         # Phase B runs with the interface down; recovery recreates gluetun.
         self.assertLess(probes.index("ip link set dev wg0 down"), probes.index("example.edu"))
         self.assertIn("nc -z -w 5 1.1.1.1 443", probes)  # TCP to a literal address, no DNS needed
@@ -568,6 +585,9 @@ class VMScripts(unittest.TestCase):
             "the interface won't go down": ({"IFDOWN_FAILS": 1}, "vpn_interface_down"),
             # A probe container that never runs its command is never read as blocked.
             "the probes never run": ({"PROBE_NOT_RUN": 1}, "probe_ran"),
+            "no DNS answer with the tunnel up": ({"DIG_UP_FAIL": 1}, "dns_up"),
+            # gluetun's own VPN restart brings the interface back mid-phase.
+            "the interface comes back up": ({"IFACE_BACK": 1}, "vpn_interface_stayed_down"),
             # The recovery's delete fails: the exit trap still lifts the block.
             "a failed delete": ({"FAIL_FIRST_DELETE": 1, "NO_RECOVER": 1}, "tunnel_recovers"),
         }

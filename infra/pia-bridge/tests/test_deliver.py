@@ -497,6 +497,10 @@ class Deliver(unittest.TestCase):
     def test_renewal_outcomes(self):
         rc = self.go("/fleet run renew-vpn main", ssh=FakeSSH(rcs=[deliver.MID_BLOCK]))
         self.assertEqual((rc, self.reports), (0, ["deliver-pia: main: renewed; takes effect after the block; /run clean"]))
+        rc = self.go("/fleet run renew-vpn main", ssh=FakeSSH(rcs=[deliver.DOCKER_UNKNOWN]))
+        self.assertEqual(rc, 1)  # never read as mid-block: escalated
+        self.assertIn("Docker didn't answer, so the tunnel wasn't restarted; escalate", self.reports[-1])
+        self.reports.clear()
         rc = self.go("/fleet run renew-vpn main", ssh=FakeSSH(rcs=[deliver.RESTART_FAILED]))
         self.assertEqual((rc, self.reports),
                          (1, ["deliver-pia: main: delivered, but restarting the tunnel failed; escalate; /run clean"]))
@@ -670,7 +674,7 @@ esac
         self.assertEqual(boot(GLUETUN=True), (0, ["restart gluetun"]))
         self.assertEqual(boot(GLUETUN=True, LODESTAR=True, COLLECTOR=True), (deliver.MID_BLOCK, []))
         # Fail closed: if Docker can't say what's running, a block may be running.
-        self.assertEqual(boot(GLUETUN=True, LODESTAR=True, PS_FAIL=True), (deliver.MID_BLOCK, []))
+        self.assertEqual(boot(GLUETUN=True, LODESTAR=True, PS_FAIL=True), (deliver.DOCKER_UNKNOWN, []))
         self.assertEqual(boot(GLUETUN=True, FAIL_RESTART=True), (deliver.RESTART_FAILED, ["restart gluetun"]))
         self.assertFalse(run_dir.exists())  # the login is gone in every case
 

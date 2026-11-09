@@ -9,7 +9,9 @@ ancestor checks. In order:
 3. One SSH session: pinned known_hosts, the step and its arguments on stdin,
    stdout parsed by remote.LINE and everything else dropped. Exit 255 (SSH
    itself: the new rule not applied yet) is retried for up to
-   SSH_ATTEMPTS_SECONDS, as deliver-pia does; a 255 ran nothing remotely.
+   SSH_ATTEMPTS_SECONDS, as deliver-pia does. A 255 is usually a session that
+   never started, but one dropped mid-step exits 255 too; a retry still can't
+   overlap it, because the bootstrap waits on the same per-VM lock.
 4. Always: the rule closed again.
 The result is one report line of fixed words and grammar names.
 """

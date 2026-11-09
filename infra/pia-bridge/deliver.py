@@ -94,7 +94,9 @@ RESERVE_SECONDS = 8 * 60
 WORK_SECONDS = DELIVER_JOB_MINUTES * 60 - RESERVE_SECONDS
 LEASE_NEEDED = timedelta(minutes=DELIVER_JOB_MINUTES + 2)  # the whole job, and a margin
 NOT_READY, BUSY_VM, STEP_TIMED_OUT = 20, 21, 124
-MID_BLOCK, RESTART_FAILED = 30, 31  # after the step: renewed but left alone mid-block; the restart failed
+# After the step: renewed but left alone mid-block; the restart failed; Docker
+# didn't say whether a block is running, so the tunnel was left alone (escalate).
+MID_BLOCK, RESTART_FAILED, DOCKER_UNKNOWN = 30, 31, 32
 # Exit codes that mean the login was delivered and /run is still to be checked.
 DELIVERED = {0: "delivered", MID_BLOCK: "renewed; takes effect after the block"}
 LIVE_ENV = ("AWS_PIA_ROLE_ARN", "STATE_BUCKET", "STATE_BUCKET_OWNER", "FLEET_SSH_KEY", "PIA_SERVERS",
@@ -142,10 +144,12 @@ def bootstrap(run_dir: str = RUN_DIR, out: str = WG_CONF, boot_marker: str = BOO
         # gluetun restart needs a Lodestar restart (operations 4.3). Never mid-
         # block: with a collector running, leave the tunnel alone (exit 30);
         # start-block recreates gluetun from the current wg0.conf anyway. Fail
-        # closed: if Docker can't say what's running, a block may be running.
+        # closed: if Docker can't say what's running, a block may be running, so
+        # leave the tunnel alone, and escalate (exit 32) rather than report it as
+        # mid-block.
         # Every Docker call is bounded (RESTART_SECONDS in all).
         f"out=$(timeout {DOCKER_CALL} docker ps --filter 'name=^lodestar-collector' --format x 2>/dev/null)"
-        f" || exit {MID_BLOCK}",
+        f" || exit {DOCKER_UNKNOWN}",
         f'[ -z "$out" ] || exit {MID_BLOCK}',
         f"if [ \"$(timeout {DOCKER_CALL} docker inspect --type container -f '{{{{.State.Running}}}}' gluetun"
         " 2>/dev/null)\" = true ]; then",
@@ -403,7 +407,8 @@ class Delivery:
                 NOT_READY: "the VM isn't ready (cloud-init hasn't finished)",
                 BUSY_VM: "another delivery is still running there",
                 STEP_TIMED_OUT: "the VM step timed out",
-                RESTART_FAILED: "delivered, but restarting the tunnel failed; escalate"}.get(
+                RESTART_FAILED: "delivered, but restarting the tunnel failed; escalate",
+                DOCKER_UNKNOWN: "delivered, but Docker didn't answer, so the tunnel wasn't restarted; escalate"}.get(
                     rc, f"the VM step failed (exit {rc})")
         return f"{role}: {what}; /run " + self._clean(base, wait=lost)
 

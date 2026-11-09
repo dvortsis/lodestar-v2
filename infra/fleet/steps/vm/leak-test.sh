@@ -62,14 +62,16 @@ probe_in() {
   while [[ $1 != -- ]]; do extra+=("$1"); shift; done
   shift
   out=$(timeout 40 docker run --rm --network container:gluetun --cap-drop ALL "${extra[@]}" "$PROBE_IMAGE" \
-    sh -c '"$@"; echo "probe_rc=$?"' probe "$@" 2>/dev/null)
+    sh -c '"$@"; printf "\nprobe_rc=%s\n" "$?"' probe "$@" 2>/dev/null)
   rc=$(printf '%s\n' "$out" | sed -n 's/^probe_rc=\([0-9]\{1,3\}\)$/\1/p' | tail -n 1)
   if [[ -z $rc ]]; then not_run=1; return "$NOT_RUN"; fi
   printf '%s\n' "$out" | sed '/^probe_rc=/d'
   return "$rc"
 }
 probe() { probe_in -- "$@"; }
-resolves() { probe sh -c "dig +short +time=$2 +tries=1 $1 ${3:-} | grep -q ."; }
+# resolves name timeout [@server]: an address came back. Only an address line
+# counts: on a timeout dig prints ";; ... timed out" on stdout too.
+resolves() { probe sh -c "dig +short +time=$2 +tries=1 $1 ${3:-} | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}\$'"; }
 healthy() { [[ "$(docker inspect --type container -f '{{.State.Health.Status}}' gluetun 2>/dev/null)" == "healthy" ]]; }
 wait_healthy() {
   local i
@@ -108,6 +110,7 @@ down_probes() {  # $1: phase; $2: a name not asked before (no cache can answer i
   refute "dns_direct_blocked_$1" resolves "$2" 3 @1.1.1.1
   probe sh -c 'echo probe | nc -u -w 2 1.1.1.1 53' >/dev/null 2>&1  # the capture judges it
 }
+iface_up() { probe sh -c 'ip -o link show up dev "$1" | grep -q .' iface "$iface"; }
 
 # Inputs. The endpoint is read from the root-only wg0.conf and validated; it
 # never leaves this VM.
@@ -172,6 +175,9 @@ judge_capture down
 check vpn_interface_down probe_in --cap-add NET_ADMIN -- ip link set dev "$iface" down
 start_capture ifdown
 down_probes ifdown example.edu
+# gluetun's own VPN restart could bring the interface back mid-phase: fail
+# closed unless it's still down (or gone) after the last probe.
+refute vpn_interface_stayed_down iface_up
 judge_capture ifdown
 
 # Recovery: lift the block, recreate gluetun (its interface comes back), and the
