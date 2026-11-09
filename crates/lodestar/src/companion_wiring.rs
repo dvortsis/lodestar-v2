@@ -442,55 +442,117 @@ impl ConfigSink for Sink {
         entry: IndexerManagerEntry,
     ) -> BoxFuture<'a, Result<(), SinkError>> {
         Box::pin(async move {
-            let sources = self
-                .ops
-                .sources()
-                .await
-                .map_err(|_| SinkError::Unavailable)?;
-            let id = sources
-                .iter()
-                .find(|s| s.plugin == PROWLARR_SOURCE)
-                .map(|s| s.id)
-                .ok_or(SinkError::Unavailable)?;
             let store = self.store.clone();
             let previous = tokio::task::spawn_blocking(move || saved_config(&store))
                 .await
                 .map_err(|_| SinkError::Unavailable)?;
-            let config = |c: serde_json::Value| SourcePatch {
-                config: Some(c),
-                ..SourcePatch::default()
-            };
-            // The address, then the key. If the key can't be stored, the
-            // address goes back to the one you saved, so the companion's
-            // key never meets another server and yours never meets the
-            // companion. Both apply at the next start.
-            self.ops
-                .patch_source(
-                    id,
-                    config(prowlarr_config(
-                        previous.as_deref(),
-                        &target_url(&entry.target),
-                    )),
-                    false,
-                )
-                .await
-                .map_err(|_| SinkError::Rejected)?;
-            let stored = self
-                .ops
-                .patch_source_credentials(id, vec![("api_key".into(), Some(entry.api_key))])
-                .await;
-            if stored.is_err() {
-                if let Some(p) = previous
-                    .as_deref()
-                    .and_then(|p| serde_json::from_str(p).ok())
-                {
-                    let _ = self.ops.patch_source(id, config(p), false).await;
-                }
-                return Err(SinkError::Rejected);
-            }
-            Ok(())
+            let writes = OpsWrites(self.ops.as_ref());
+            hand_over_prowlarr(
+                &writes,
+                previous.as_deref(),
+                &target_url(&entry.target),
+                entry.api_key,
+            )
+            .await
         })
     }
+}
+
+/// What the Prowlarr hand-over writes to the source: the ops in shipped
+/// builds, a recorder in tests.
+#[allow(dead_code, reason = "used by Sink, which CMP-5g-2 calls")]
+trait SourceWrites: Send + Sync {
+    /// The Prowlarr source's id; `None` when it isn't registered.
+    fn source<'a>(&'a self) -> BoxFuture<'a, Option<u8>>;
+    fn config<'a>(&'a self, id: u8, config: serde_json::Value) -> BoxFuture<'a, bool>;
+    /// Stores (`Some`) or removes (`None`) the source's `api_key`.
+    fn key<'a>(&'a self, id: u8, key: Option<Secret>) -> BoxFuture<'a, bool>;
+    /// Turns the source off.
+    fn disable<'a>(&'a self, id: u8) -> BoxFuture<'a, bool>;
+}
+
+#[allow(dead_code, reason = "used by Sink, which CMP-5g-2 calls")]
+struct OpsWrites<'o>(&'o dyn OpsApi);
+
+impl SourceWrites for OpsWrites<'_> {
+    fn source<'a>(&'a self) -> BoxFuture<'a, Option<u8>> {
+        Box::pin(async move {
+            let sources = self.0.sources().await.ok()?;
+            sources
+                .iter()
+                .find(|s| s.plugin == PROWLARR_SOURCE)
+                .map(|s| s.id)
+        })
+    }
+    fn config<'a>(&'a self, id: u8, config: serde_json::Value) -> BoxFuture<'a, bool> {
+        Box::pin(async move {
+            let patch = SourcePatch {
+                config: Some(config),
+                ..SourcePatch::default()
+            };
+            self.0.patch_source(id, patch, false).await.is_ok()
+        })
+    }
+    fn key<'a>(&'a self, id: u8, key: Option<Secret>) -> BoxFuture<'a, bool> {
+        Box::pin(async move {
+            self.0
+                .patch_source_credentials(id, vec![("api_key".into(), key)])
+                .await
+                .is_ok()
+        })
+    }
+    fn disable<'a>(&'a self, id: u8) -> BoxFuture<'a, bool> {
+        Box::pin(async move {
+            let patch = SourcePatch {
+                enabled: Some(false),
+                ..SourcePatch::default()
+            };
+            self.0.patch_source(id, patch, false).await.is_ok()
+        })
+    }
+}
+
+/// Hands a configured Prowlarr to the source, so that no key ever meets
+/// the wrong server, whatever step fails (#645's security review):
+/// 1. the key you saved is removed first, so it can't go to the
+///    companion's address;
+/// 2. then the address (keeping your other settings, such as `agents`);
+/// 3. then the companion's key.
+///
+/// If step 3 fails, the address goes back to the one you saved, or, with
+/// none saved (or one that doesn't parse), the source is turned off. A
+/// failed rollback is logged by name, never with a value. Every write
+/// applies at the next start.
+#[allow(dead_code, reason = "used by Sink, which CMP-5g-2 calls")]
+async fn hand_over_prowlarr(
+    w: &dyn SourceWrites,
+    previous: Option<&str>,
+    url: &str,
+    key: Secret,
+) -> Result<(), SinkError> {
+    let id = w.source().await.ok_or(SinkError::Unavailable)?;
+    if !w.key(id, None).await {
+        return Err(SinkError::Rejected);
+    }
+    if !w.config(id, prowlarr_config(previous, url)).await {
+        return Err(SinkError::Rejected);
+    }
+    if w.key(id, Some(key)).await {
+        return Ok(());
+    }
+    let restored = match previous.and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok()) {
+        Some(p) => w.config(id, p).await,
+        None => w.disable(id).await,
+    };
+    if !restored {
+        lodestar_log::log_event!(
+            lodestar_companions::log_events::CONFIG_FAILED,
+            companion = PROWLARR_SOURCE,
+            setting = "lodestar.settings",
+            reason = "rollback_failed"
+        );
+    }
+    Err(SinkError::Rejected)
 }
 
 #[cfg(test)]
@@ -712,7 +774,14 @@ mod tests {
     #[test]
     fn the_sink_adds_the_managed_client_and_keeps_yours() {
         let dir = tempfile::tempdir().unwrap();
-        let config = crate::config::Config::load(None, |_| None).unwrap();
+        // Everything in the temporary folder: no config is read from the
+        // working directory, and the sealing key is created here, never in
+        // the source tree (#645's security review).
+        let data = dir.path().to_string_lossy().into_owned();
+        let mut config =
+            crate::config::Config::load(None, |k| (k == "LODESTAR_DATA_DIR").then(|| data.clone()))
+                .unwrap();
+        config.data_dir = dir.path().to_path_buf();
         let store = Arc::new(Mutex::new(
             Store::open(dir.path().join("db"), Default::default()).unwrap(),
         ));
@@ -748,6 +817,113 @@ mod tests {
             managed.password.as_ref().map(|p| p.0.as_str()),
             Some("second-generated")
         );
+    }
+
+    /// Records each write; fails the step named in `fail`.
+    #[derive(Default)]
+    struct Writes {
+        log: Mutex<Vec<String>>,
+        fail: Vec<&'static str>,
+    }
+
+    impl Writes {
+        fn failing(steps: &[&'static str]) -> Writes {
+            Writes {
+                fail: steps.to_vec(),
+                ..Writes::default()
+            }
+        }
+        fn step(&self, s: String, name: &'static str) -> bool {
+            self.log.lock().unwrap().push(s);
+            !self.fail.contains(&name)
+        }
+        fn log(&self) -> Vec<String> {
+            self.log.lock().unwrap().clone()
+        }
+    }
+
+    impl SourceWrites for Writes {
+        fn source<'a>(&'a self) -> BoxFuture<'a, Option<u8>> {
+            Box::pin(async { Some(7) })
+        }
+        fn config<'a>(&'a self, _: u8, c: serde_json::Value) -> BoxFuture<'a, bool> {
+            let ok = self.step(format!("config {}", c["url"]), "config");
+            Box::pin(async move { ok })
+        }
+        fn key<'a>(&'a self, _: u8, key: Option<Secret>) -> BoxFuture<'a, bool> {
+            let (s, name) = match key {
+                Some(_) => ("key set".to_owned(), "key set"),
+                None => ("key removed".to_owned(), "key removed"),
+            };
+            let ok = self.step(s, name);
+            Box::pin(async move { ok })
+        }
+        fn disable<'a>(&'a self, _: u8) -> BoxFuture<'a, bool> {
+            let ok = self.step("disabled".into(), "disable");
+            Box::pin(async move { ok })
+        }
+    }
+
+    const MINE: &str = r#"{"url":"http://indexer.lan:9696","manager":"jackett","agents":3}"#;
+
+    fn key() -> Secret {
+        Secret::new(String::from("0123456789abcdef0123456789abcdef"))
+    }
+
+    /// Your key goes before the address changes; the companion's comes
+    /// after.
+    #[tokio::test]
+    async fn the_prowlarr_hand_over_orders_its_writes() {
+        let w = Writes::default();
+        hand_over_prowlarr(&w, Some(MINE), "http://127.0.0.1:9696", key())
+            .await
+            .unwrap();
+        assert_eq!(
+            w.log(),
+            ["key removed", "config \"http://127.0.0.1:9696\"", "key set"]
+        );
+    }
+
+    /// The companion's key not stored: the address goes back to yours.
+    #[tokio::test]
+    async fn a_failed_key_puts_your_address_back() {
+        let w = Writes::failing(&["key set"]);
+        let got = hand_over_prowlarr(&w, Some(MINE), "http://127.0.0.1:9696", key()).await;
+        assert_eq!(got, Err(SinkError::Rejected));
+        assert_eq!(
+            w.log(),
+            [
+                "key removed",
+                "config \"http://127.0.0.1:9696\"",
+                "key set",
+                "config \"http://indexer.lan:9696\""
+            ]
+        );
+    }
+
+    /// With no saved config, or one that doesn't parse, the source is
+    /// turned off instead.
+    #[tokio::test]
+    async fn with_no_saved_address_a_failed_key_turns_the_source_off() {
+        for previous in [None, Some("not json")] {
+            let w = Writes::failing(&["key set"]);
+            let got = hand_over_prowlarr(&w, previous, "http://127.0.0.1:9696", key()).await;
+            assert_eq!(got, Err(SinkError::Rejected));
+            assert_eq!(
+                w.log().last().map(String::as_str),
+                Some("disabled"),
+                "{previous:?}"
+            );
+        }
+    }
+
+    /// If your key can't be removed, nothing else is written.
+    #[tokio::test]
+    async fn a_key_that_cant_be_removed_stops_the_hand_over() {
+        let w = Writes::failing(&["key removed"]);
+        let got = hand_over_prowlarr(&w, Some(MINE), "http://127.0.0.1:9696", key()).await;
+        assert_eq!(got, Err(SinkError::Rejected));
+        assert_eq!(w.log(), ["key removed"]);
     }
 
     #[test]
