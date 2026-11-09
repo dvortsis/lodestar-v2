@@ -8,6 +8,15 @@ start "" cmd /c "timeout /t 3 /nobreak >nul & start http://localhost:8090/"
 echo Starting Lodestar. The first-run setup token is printed below; paste it into the page.
 echo To stop, press Ctrl+C and wait for shutdown to finish before closing this window.
 "%~dp0lodestar.exe" serve
-echo.
-echo Lodestar stopped.
-pause
+rem 80: Restart now handed over to a new copy, which keeps running in this
+rem window. Don't pause or say it stopped; Ctrl+C still stops it gracefully.
+rem No labels: cmd can miss them in a file with Unix line endings.
+if %errorlevel% equ 80 (
+  echo.
+  echo Lodestar restarted and keeps running in this window.
+  echo To stop it, press Ctrl+C and wait for shutdown to finish before closing this window.
+) else (
+  echo.
+  echo Lodestar stopped.
+  pause
+)

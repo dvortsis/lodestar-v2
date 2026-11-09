@@ -31,6 +31,9 @@ use tower::ServiceExt;
 struct FakeSystem {
     method: RestartMethod,
     restarts: AtomicU32,
+    /// Calls to `prepare_restart`, and whether they fail.
+    prepares: AtomicU32,
+    prepare_fails: std::sync::atomic::AtomicBool,
     /// What keep and revert answer.
     address: Mutex<Option<AddressChange>>,
 }
@@ -151,6 +154,15 @@ impl SystemApi for FakeSystem {
         info(self.method, None).restart
     }
 
+    fn prepare_restart(&self) -> Result<(), SystemError> {
+        self.prepares.fetch_add(1, Ordering::SeqCst);
+        if self.prepare_fails.load(Ordering::SeqCst) {
+            Err(SystemError::RestartFailed)
+        } else {
+            Ok(())
+        }
+    }
+
     fn restart(&self) {
         self.restarts.fetch_add(1, Ordering::SeqCst);
     }
@@ -221,6 +233,8 @@ fn fixture_with(method: Option<RestartMethod>) -> Fixture {
         Arc::new(FakeSystem {
             method,
             restarts: AtomicU32::new(0),
+            prepares: AtomicU32::new(0),
+            prepare_fails: Default::default(),
             address: Mutex::new(None),
         })
     });
@@ -297,6 +311,10 @@ fn restarts(f: &Fixture) -> u32 {
     f.system.as_ref().unwrap().restarts.load(Ordering::SeqCst)
 }
 
+fn prepares(f: &Fixture) -> u32 {
+    f.system.as_ref().unwrap().prepares.load(Ordering::SeqCst)
+}
+
 #[tokio::test]
 async fn every_route_needs_a_session() {
     let f = fixture();
@@ -348,7 +366,8 @@ async fn restart_answers_then_restarts() {
         .unwrap();
     assert_eq!(resp.status(), 202);
     assert_eq!(resp.headers()[header::CONTENT_TYPE], "application/json");
-    // Not before the answer has gone out.
+    // Readied before the answer, restarted only after it has gone out.
+    assert_eq!(prepares(&f), 1);
     assert_eq!(restarts(&f), 0);
     let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
         .await
@@ -358,6 +377,27 @@ async fn restart_answers_then_restarts() {
         r#"{"estimated_seconds":4,"restarting":true}"#
     );
     assert_eq!(restarts(&f), 1);
+}
+
+/// X-win-restart-followups: when readying fails (the portable build
+/// couldn't start its new copy), the answer is `409 restart_failed` and
+/// nothing restarts; it keeps serving.
+#[tokio::test]
+async fn restart_that_cant_get_ready_is_refused() {
+    let f = fixture();
+    f.system
+        .as_ref()
+        .unwrap()
+        .prepare_fails
+        .store(true, Ordering::SeqCst);
+    let c = session(&f);
+    golden(
+        &f,
+        "restart_failed",
+        req("POST", "/api/v1/system/restart", Some(&c), true),
+    )
+    .await;
+    assert_eq!((prepares(&f), restarts(&f)), (1, 0));
 }
 
 #[tokio::test]
@@ -370,7 +410,7 @@ async fn restart_where_it_cant_is_refused_with_the_hint() {
         req("POST", "/api/v1/system/restart", Some(&c), true),
     )
     .await;
-    assert_eq!(restarts(&f), 0);
+    assert_eq!((prepares(&f), restarts(&f)), (0, 0));
 }
 
 #[tokio::test]

@@ -26,11 +26,14 @@
 //!   SCM's recovery action starts it again after 60 s. It's offered only
 //!   while Lodestar's own count of recoveries used in the last 24 h is 0
 //!   ([`Restart::refuse`] otherwise), so a crash always has one left.
-//! - **Windows portable: `relaunch`.** The request first starts a new copy
-//!   of the same program with the same arguments, which waits until this
-//!   process hands over and exits ([`crate::windows::relaunch`]). If that
-//!   copy can't be started, the request is dropped and this run keeps
-//!   serving. After the graceful shutdown, [`reexec`] hands over and exits.
+//! - **Windows portable: `relaunch`.** A new copy of the same program with
+//!   the same arguments is started first, which waits until this process
+//!   hands over and exits ([`crate::windows::relaunch`]). `POST
+//!   /system/restart` starts it before answering ([`Restart::prepare`]), so
+//!   a copy that can't be started is a `409 restart_failed` and this run
+//!   keeps serving; any other request (the address timer) starts it in
+//!   [`Restart::request`] and drops the request if it can't. After the
+//!   graceful shutdown, [`reexec`] hands over and exits.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -62,6 +65,9 @@ pub struct Restart {
     /// successor there); an error drops the request and this run keeps
     /// serving.
     prepare: Mutex<Option<Prepare>>,
+    /// The step has run for the coming request ([`Restart::prepare`]), so
+    /// [`Restart::request`] doesn't run it again.
+    prepared: AtomicBool,
 }
 
 impl std::fmt::Debug for Restart {
@@ -97,6 +103,7 @@ impl Restart {
             service: AtomicBool::new(false),
             paused: Mutex::new(None),
             prepare: Mutex::new(None),
+            prepared: AtomicBool::new(false),
         }
     }
 
@@ -241,11 +248,39 @@ impl Restart {
         }
     }
 
+    /// Readies a request before it's made, so a caller can refuse instead of
+    /// promising a restart that won't come (`POST /system/restart` answers
+    /// `409 restart_failed`). For [`RestartMethod::Relaunch`] it runs the
+    /// [`Restart::set_prepare`] step (the portable build starts its new
+    /// copy), once: later calls, and the [`Restart::request`] that follows,
+    /// don't run it again. An error is logged (`app.restart_failed`) and
+    /// returned, and nothing stops. Elsewhere there's nothing to ready.
+    pub fn prepare(&self) -> std::io::Result<()> {
+        let mut prepare = self.prepare.lock().unwrap_or_else(|e| e.into_inner());
+        if self.method() != RestartMethod::Relaunch
+            || self.was_requested()
+            || self.prepared.load(Ordering::SeqCst)
+        {
+            return Ok(());
+        }
+        if let Some(step) = prepare.as_mut()
+            && let Err(e) = step()
+        {
+            lodestar_log::log_event!(
+                crate::logging::events::APP_RESTART_FAILED,
+                error = lodestar_log::Error::io(&e)
+            );
+            return Err(e);
+        }
+        self.prepared.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
     /// Asks for a restart; [`Restart::requested`] resolves. Asking twice is
     /// asking once. For [`RestartMethod::Relaunch`], a
-    /// [`Restart::set_prepare`] step runs first, under a lock so two
-    /// requests can't both run it; if it fails the request is dropped and
-    /// this run keeps serving.
+    /// [`Restart::set_prepare`] step runs first unless [`Restart::prepare`]
+    /// already ran it, under a lock so two requests can't both run it; if
+    /// it fails the request is dropped and this run keeps serving.
     pub fn request(&self) {
         {
             let mut prepare = self.prepare.lock().unwrap_or_else(|e| e.into_inner());
@@ -265,6 +300,7 @@ impl Restart {
                 return;
             }
             if self.method() == RestartMethod::Relaunch
+                && !self.prepared.load(Ordering::SeqCst)
                 && let Some(step) = prepare.as_mut()
                 && let Err(e) = step()
             {
@@ -350,17 +386,26 @@ pub(crate) fn program(
 
 /// Windows portable ([`RestartMethod::Relaunch`]): this process has shut
 /// down gracefully, so the copy started at the request takes over, and
-/// this process exits. Returns only if no copy could take over; `serve`
-/// then fails and the process exits non-zero.
+/// this process exits with [`EXIT_RELAUNCHED`], so `Start Lodestar.cmd`
+/// can tell a restart from a stop and say the new copy runs on in its
+/// window.
+/// Returns only if no copy could take over; `serve` then fails and the
+/// process exits non-zero.
 #[cfg(windows)]
 pub fn reexec() -> std::io::Error {
     match crate::windows::relaunch::hand_over() {
         // Like `exec`, nothing after this runs: the services have stopped
         // and logs are written as they happen.
-        Ok(()) => std::process::exit(0),
+        Ok(()) => std::process::exit(EXIT_RELAUNCHED),
         Err(e) => e,
     }
 }
+
+/// The portable build's exit code once a new copy has taken over: 80, as
+/// the Unix supervisor's `EXIT_RESTART` and the service's code, so "80"
+/// means a restart on every platform. `Start Lodestar.cmd` reads it.
+#[cfg(windows)]
+pub const EXIT_RELAUNCHED: i32 = 80;
 
 /// Elsewhere it can't ([`RestartMethod::Manual`]): the request is refused
 /// before it gets here.
@@ -502,6 +547,47 @@ mod tests {
         s.set_prepare(Box::new(|| Err(std::io::Error::other("unused"))));
         s.request();
         assert!(s.was_requested());
+    }
+
+    /// X-win-restart-followups: `POST /system/restart` readies a relaunch
+    /// before answering. A copy that can't be started is an error and
+    /// nothing is requested; once one has started, neither a second
+    /// `prepare` nor the request starts another. Other methods have
+    /// nothing to ready.
+    #[test]
+    fn a_relaunch_starts_its_copy_before_the_answer() {
+        use std::sync::atomic::AtomicUsize;
+        let r = Restart::new(RestartMethod::Relaunch);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let fail = Arc::new(AtomicBool::new(true));
+        r.set_prepare(Box::new({
+            let (calls, fail) = (calls.clone(), fail.clone());
+            move || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                if fail.load(Ordering::SeqCst) {
+                    Err(std::io::Error::other("spawn failed"))
+                } else {
+                    Ok(())
+                }
+            }
+        }));
+        assert!(r.prepare().is_err());
+        assert!(!r.was_requested(), "a failed copy requests nothing");
+        fail.store(false, Ordering::SeqCst);
+        assert!(r.prepare().is_ok());
+        assert!(r.prepare().is_ok());
+        r.request();
+        assert!(r.was_requested());
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "one failure, one copy");
+        for method in [RestartMethod::Reexec, RestartMethod::Manual] {
+            let other = Restart::new(method);
+            other.set_prepare(Box::new(|| Err(std::io::Error::other("unused"))));
+            assert!(other.prepare().is_ok());
+        }
+        let service = Restart::new(RestartMethod::Relaunch);
+        service.set_service();
+        service.set_prepare(Box::new(|| Err(std::io::Error::other("unused"))));
+        assert!(service.prepare().is_ok());
     }
 
     #[cfg(unix)]
