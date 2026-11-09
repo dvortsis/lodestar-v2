@@ -404,8 +404,64 @@ pub fn reexec() -> std::io::Error {
 /// The portable build's exit code once a new copy has taken over: 80, as
 /// the Unix supervisor's `EXIT_RESTART` and the service's code, so "80"
 /// means a restart on every platform. `Start Lodestar.cmd` reads it.
-#[cfg(windows)]
+/// Defined everywhere (that module is Unix-only, this code Windows-only)
+/// so a Unix test pins the two equal.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub const EXIT_RELAUNCHED: i32 = 80;
+
+/// For `main`: a copy started by Restart now (the portable build's
+/// relaunch) that ends with `code` other than success, while a console is
+/// attached, prints where the error and the log are and waits for Enter on
+/// the console before the process exits. `Start Lodestar.cmd` has already
+/// ended after the hand-over (exit 80), so without this the window would
+/// close before anyone read why (#649's review). Anything else (a success,
+/// a run not started by Restart now, the service, which has no console)
+/// returns at once. `logs` is the log folder, if the config loaded.
+pub fn hold_if_relaunch_failed(
+    code: std::process::ExitCode,
+    logs: Option<&std::path::Path>,
+) -> std::process::ExitCode {
+    #[cfg(windows)]
+    {
+        let relaunched = std::env::var_os(crate::windows::relaunch::MARKER).is_some();
+        if should_hold(relaunched, code == std::process::ExitCode::SUCCESS) {
+            hold_on_console(logs);
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = logs;
+    code
+}
+
+/// Whether [`hold_if_relaunch_failed`] waits: only a relaunched copy that
+/// failed. (Whether a console is there is the console's to answer.)
+#[cfg_attr(not(windows), allow(dead_code))]
+fn should_hold(relaunched: bool, succeeded: bool) -> bool {
+    relaunched && !succeeded
+}
+
+/// Says where to look and waits for a line on `CONIN$`. No console (the
+/// service, a detached run) means `CONIN$` doesn't open: nothing waits.
+#[cfg(windows)]
+fn hold_on_console(logs: Option<&std::path::Path>) {
+    use std::io::{BufRead, Write};
+    let Ok(console) = std::fs::File::open("CONIN$") else {
+        return;
+    };
+    let mut err = std::io::stderr();
+    let _ = writeln!(err);
+    let _ = writeln!(
+        err,
+        "Lodestar couldn't start again after Restart now. The error is above."
+    );
+    if let Some(logs) = logs {
+        let _ = writeln!(err, "The log is in {}.", logs.display());
+    }
+    let _ = write!(err, "Press Enter to close this window.");
+    let _ = err.flush();
+    let mut line = String::new();
+    let _ = std::io::BufReader::new(console).read_line(&mut line);
+}
 
 /// Elsewhere it can't ([`RestartMethod::Manual`]): the request is refused
 /// before it gets here.
@@ -602,6 +658,27 @@ mod tests {
         assert_eq!(installed, Path::new("/usr/bin/lodestar"));
         let gone = program(PathBuf::from("/opt/lodestar (deleted)"), |_| false);
         assert_eq!(gone, Path::new("/proc/self/exe"));
+    }
+
+    /// #649's review: only a relaunched copy that failed waits on the
+    /// console; a success, or a run Restart now didn't start, never does.
+    #[test]
+    fn only_a_failed_relaunch_holds_the_window() {
+        assert!(should_hold(true, false));
+        assert!(!should_hold(true, true));
+        assert!(!should_hold(false, false));
+        assert!(!should_hold(false, true));
+        // Off Windows it's the identity, and never waits.
+        let code = hold_if_relaunch_failed(std::process::ExitCode::FAILURE, None);
+        assert_eq!(code, std::process::ExitCode::FAILURE);
+    }
+
+    /// "80" means a restart everywhere: the portable build's code is the
+    /// supervisor's (#649's review).
+    #[cfg(unix)]
+    #[test]
+    fn the_relaunch_exit_code_is_the_restart_code() {
+        assert_eq!(EXIT_RELAUNCHED, crate::update::control::EXIT_RESTART);
     }
 
     #[test]
