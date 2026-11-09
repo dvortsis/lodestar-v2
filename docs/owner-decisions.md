@@ -608,6 +608,14 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **Colorado counsel review** stays advisory (§2.38) and is no longer surfaced to the owner.
     - **Package installers:** after 1.0 the owner registers Lodestar with winget and other package installers. That's a post-1.0 owner action (M6 Q6); the owner queue lists it once.
 
+53. **Cloud operator loosenings accepted as written; no dedicated AWS or Akamai account is needed** (owner, confirmed directly in the runner session on 2026-11-08 at 22:13Z, after the dashboard session relayed it first; setup step 1 answered via the dashboard session at 22:15Z):
+    - **The plan's inferred items are accepted as written** (`docs/plan/2026-11-08-cloud-operator.md`, P-cloud-operator):
+      - (a) a GitHub App with "Pull requests: write" on `dvortsis/lodestar-v2`, with the plan's containment;
+      - (b) a per-job /32 SSH firewall opening, plus the firewall token and an hourly audit.
+    - **Owner setup step 1 is answered:** the AWS and Akamai accounts are empty apart from this fleet, so no dedicated account is needed. The watchdog stays pointed at the existing Akamai account.
+    - **Runner additions (§2.19):** install the App on this repository only; confirm main's protection blocks App bypass; the OP-G dry up/down cycle tests the stop switch before `FLEET_LIVE=true`. These are in the OP-G notes in `runner/slices.yaml`.
+    - No `ext:` condition matches these loosenings. `owner-operator-answers` already holds, and `owner-operator-setup` stays unmet until setup steps 2-6 are done.
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.
