@@ -556,6 +556,26 @@ impl Service {
         })
     }
 
+    /// The secrets file credentials are sealed with (CMP-5g-2's paste).
+    pub(crate) fn secrets(&self) -> Arc<SecretStore> {
+        self.secrets.clone()
+    }
+
+    /// [`Service::installed`] for CMP-5g-2's guided endpoints. Blocking.
+    pub(crate) fn lodestar_installed(&self, id: &CompanionId) -> Result<bool, CompanionsError> {
+        self.installed(id)
+    }
+
+    /// The host's container detection, for detection's runtime.
+    pub(crate) fn in_container(&self) -> bool {
+        self.host.in_container
+    }
+
+    /// The catalogue it serves.
+    pub(crate) fn catalogue(&self) -> &'static Catalogue {
+        self.catalogue
+    }
+
     /// Whether Lodestar installed it: its own journal (CMP-5's
     /// `state.json`) records an installed version. Never the snapshot,
     /// which detected companions join with a version too (CMP-6's
@@ -872,6 +892,34 @@ fn plan(e: &Entry, rows: &[String], removed: bool) -> RemovalPlan {
         id: e.id.as_str().to_owned(),
         removed,
     }
+}
+
+/// A [`Service`] over `store` and the compiled-in catalogue, on Linux
+/// x86-64, with nothing started: for the guided endpoints' tests.
+#[cfg(test)]
+pub(crate) fn test_service(
+    dir: &std::path::Path,
+    store: Arc<Mutex<Store>>,
+    in_container: bool,
+) -> Arc<Service> {
+    let catalogue = lodestar_companions::builtin().unwrap();
+    let host = Host {
+        platform: Some((
+            lodestar_companions::catalogue::Platform::Linux,
+            lodestar_companions::catalogue::Arch::X86_64,
+        )),
+        in_container,
+    };
+    let (m, secrets) = manager_with(dir.to_path_buf(), store.clone(), catalogue, host).unwrap();
+    Arc::new(Service {
+        manager: Arc::new(m),
+        catalogue,
+        host,
+        data: dir.to_path_buf(),
+        secrets,
+        rows: StoreRows(store),
+        live: Arc::new(Unwired),
+    })
 }
 
 #[cfg(test)]
