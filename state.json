@@ -7350,14 +7350,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T02:07Z",
+    "updated": "2026-11-09T02:13Z",
     "items": [
       {
         "slot": 1,
         "slice": "CMP-5g-1",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: #645 CMP-5g-1 both reviews CHANGES (secrets.key, tests/watch.rs, gate tests, read-failure hold, url compare) relayed; fix round then delta review",
+        "doing": "session_01MMjhnBsTrGEcACYGQjoYqp: #645 CMP-5g-1 fix round 0e664ff6; delta review (correctness + security) running",
         "since": "2026-11-09T00:20Z"
       },
       {
@@ -7365,7 +7365,7 @@
         "slice": "OP-2",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #646 OP-2 fix round pushed (efdc7b0b); delta Opus + security delta reviews running",
+        "doing": "session_01MMjhn8vnSa2hCANaKahuAe: #646 OP-2 delta + security delta CHANGES (kill paths fail closed on head check; L1 sweep; L-B; timeouts; tests) relayed; fix round then both delta reviews",
         "since": "2026-11-09T01:05Z"
       },
       {
@@ -7373,7 +7373,7 @@
         "slice": "PK-win-upd-3",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAC9TBdvBgyLvxSjGf: #644 PK-win-upd-3 ready at cc1b42c3 (green); Opus review running, /security-review queued for the next free reviewer slot",
+        "doing": "session_01MMjhnAC9TBdvBgyLvxSjGf: #644 PK-win-upd-3 at cc1b42c3 (green); Opus review + security review running",
         "since": "2026-11-09T00:10Z"
       },
       {
