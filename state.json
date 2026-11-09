@@ -6644,7 +6644,8 @@
     {
       "pr": 645,
       "note": "CMP-5g-1 merged f5604c58; owner FYI + flags sent (with #648, #649, OP-3 split); CMP-5g-2 launched in same session"
-    }
+    },
+    "After #644 merges: brief X-win-upd-bounds (LOW-B/P-8 boot-identity bound on 3010 reinstall, LOW-C copy waits only for its parent helper, P-3 wait for Installer idle after deadline kill, P-4 try_wait classification + HandedOff race, update/layout.rs:239 busy-lock retry). Owner \u00a72.19 flags for #644: Q13 refinement, marker location, disabled start type, journal cross-version contract."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7369,7 +7370,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T05:00Z",
+    "updated": "2026-11-09T05:04Z",
     "items": [
       {
         "slot": 1,
@@ -7392,7 +7393,7 @@
         "slice": "PK-win-upd-3",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAC9TBdvBgyLvxSjGf: #644 PK-win-upd-3 fix round at 70b3f9a5; delta + security delta running",
+        "doing": "session_01MMjhnAC9TBdvBgyLvxSjGf: #644 PK-win-upd-3 round 3 (B-1 forward 3010 probation, LOW-A marker until step 5, P-1, P-2 tests, docs, residuals named for X-win-upd-bounds); then combined delta review",
         "since": "2026-11-09T00:10Z"
       },
       {
