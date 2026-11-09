@@ -163,8 +163,10 @@ class FleetStructure(unittest.TestCase):
     def test_stop_never_gates_reaper_or_dispatch(self):
         for name in ("reaper", "dispatch-down"):
             self.assertNotIn("OPERATOR_STOP", yaml.safe_dump(self.jobs[name]))
-        # Only disabling the workflow stops the reaper: no variable gates it.
-        self.assertEqual(self.jobs["reaper"]["if"], "github.event_name == 'schedule' && github.ref == 'refs/heads/main'")
+        # Only disabling the workflow stops the reaper: no variable gates it. A manual
+        # re-run is refused, since it would run the old run's code (see fleet.py).
+        self.assertEqual(self.jobs["reaper"]["if"],
+                         "github.event_name == 'schedule' && github.ref == 'refs/heads/main' && github.run_attempt == 1")
 
     def test_act_repeats_the_filter(self):
         cond = self.jobs["act"]["if"]
@@ -256,10 +258,10 @@ class PublicLogLeak(unittest.TestCase):
                 r = subprocess.run([sys.executable, str(ROOT / "infra/fleet/fleet.py"), sub], cwd=self.outside,
                                    capture_output=True, text=True, timeout=60,
                                    env=scrub_env({**event_env("/fleet status", FLEET_LIVE="true"), **secret_env}))
-                # Every live subcommand checks main's head before touching any credential,
-                # so outside a checkout it refuses without asking for its settings.
-                self.assertEqual(r.returncode, 0)
-                self.assertIn("not main's head", r.stdout)
+                # status, the reaper and the owner's down skip the head check, so they reach
+                # the settings check, which names the missing setting and never a value.
+                self.assertNotEqual(r.returncode, 0)
+                self.assertIn("FLEET_LINODE_ACCOUNT_EUUID", r.stdout + r.stderr)
                 for v in values:
                     self.assertNotIn(v, r.stdout + r.stderr)
 

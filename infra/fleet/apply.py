@@ -83,7 +83,7 @@ def pinned_tf_dir(commit: str | None, run=subprocess.run) -> Path:
     if not is_ancestor(commit, "origin/main", repo):
         raise ApplyFailed("the fleet's pinned commit is not an ancestor of main")
     d = tempfile.mkdtemp(prefix="fleet-pin-")
-    run(["git", "-C", repo, "worktree", "add", "--detach", d, commit], check=True, capture_output=True, timeout=120)
+    run(["git", "-C", repo, "worktree", "add", "--detach", d, commit], check=True, capture_output=True, timeout=30)
     return Path(d) / "infra" / "akamai" / "terraform"
 
 
@@ -93,7 +93,7 @@ def unpin_tf_dir(path: Path, run=subprocess.run) -> None:
         return
     root = path.parents[2]
     run(["git", "-C", str(TF_DIR.parents[2]), "worktree", "remove", "--force", str(root)],
-        check=False, capture_output=True, timeout=120)
+        check=False, capture_output=True, timeout=30)
 
 
 class Terraform:
@@ -175,6 +175,7 @@ class LiveBackend:
         self.s3, self.linode, self.tf, self.env, self.limits = s3, linode, tf, env, limits
         self.clock, self.lookup_run, self.meta, self.keygen = clock, lookup_run, meta, keygen
         self.state_bucket, self.control_bucket = env["STATE_BUCKET"], env["CONTROL_BUCKET"]
+        self.lookup_failures = 0  # the last sweep's failed run lookups, for the reaper to report
 
     # -- S3 documents --
     def _get(self, bucket: str, key: str):
@@ -289,9 +290,21 @@ class LiveBackend:
         return path
 
     def create(self, fleet: dict, fence: Callable[[], None]) -> dict:
-        """Record the fleet first (so its expiry holds even if apply fails), then apply."""
+        """Record the fleet first (so its expiry holds even if apply fails), then apply.
+        If anything after that first write fails, the flag goes up, so commands go
+        down-only at once rather than waiting for the next audit."""
         fence()
         self.write_fleet(fleet)
+        try:
+            return self._create(fleet, fence)
+        except BaseException:
+            try:
+                self.set_mismatch(["up didn't finish"])
+            except Exception:  # noqa: BLE001 - the expiry recorded above still holds
+                pass
+            raise
+
+    def _create(self, fleet: dict, fence: Callable[[], None]) -> dict:
         try:
             keys = {ROLE_LABELS[r]: dict(zip(("private_key", "public_key"), self.keygen())) for r in fleet["roles"]}
             tf = self.tf.at(fleet["commit"])
@@ -380,10 +393,11 @@ class LiveBackend:
     def _sweep(self, fence: Callable[[], None]) -> list[tuple]:
         """Sweep stale job rules, fenced. Everything is read first (rules, devices,
         each run's status), so a failed read writes nothing."""
-        now, plan = self.clock(), []
+        now, plan, self.lookup_failures = self.clock(), [], 0
         for fw in self.linode.firewalls():
             rules = self.linode.firewall_rules(fw["id"])
-            swept, n = audit.sweep(rules, self.lookup_run, now)
+            swept, n, failed = audit.sweep(rules, self.lookup_run, now)
+            self.lookup_failures += failed
             plan.append((fw, swept, n, self.linode.firewall_devices(fw["id"])))
         for fw, swept, n, _ in plan:
             if n:
@@ -467,6 +481,16 @@ def github_json(token: str, path: str) -> dict | None:  # pragma: no cover - net
         raise RuntimeError("GitHub API failed") from None
 
 
+# Every AWS call is bounded: a hung S3 or STS endpoint costs at most about
+# 3 x (10 + 30) s, which the jobs' timeout arithmetic counts (decisions file).
+AWS_CALL = {"connect_timeout": 10, "read_timeout": 30, "retries": {"max_attempts": 3, "mode": "standard"}}
+
+
+def aws_config():  # pragma: no cover - live only
+    from botocore.config import Config  # noqa: PLC0415
+    return Config(**AWS_CALL)
+
+
 def oidc_session(env: dict, run_id: str):  # pragma: no cover - live only
     """Assume LodestarFleetOperator with this job's GitHub OIDC token, in-process.
     No third-party action, and the credentials never reach GITHUB_ENV or a log."""
@@ -474,12 +498,13 @@ def oidc_session(env: dict, run_id: str):  # pragma: no cover - live only
 
     import boto3  # noqa: PLC0415
 
+    cfg = aws_config()
     req = urllib.request.Request(env["ACTIONS_ID_TOKEN_REQUEST_URL"] + "&audience=sts.amazonaws.com",
                                  headers={"Authorization": f"Bearer {env['ACTIONS_ID_TOKEN_REQUEST_TOKEN']}"})
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             jwt = json.loads(r.read())["value"]
-        creds = boto3.client("sts", region_name=REGION).assume_role_with_web_identity(
+        creds = boto3.client("sts", region_name=REGION, config=cfg).assume_role_with_web_identity(
             RoleArn=env["AWS_FLEET_ROLE_ARN"], RoleSessionName=f"fleet-{run_id}", WebIdentityToken=jwt,
             DurationSeconds=3600)["Credentials"]
     except Exception:
@@ -499,9 +524,9 @@ def live_context(env: dict, limits: dict, clock, run_id: str):  # pragma: no cov
     from lock import S3Store  # noqa: PLC0415
 
     session, keys = oidc_session(env, run_id)  # boto3: installed only when FLEET_LIVE=true
-    s3 = session.client("s3")
+    s3 = session.client("s3", config=aws_config())
     try:
-        secret = session.client("secretsmanager").get_secret_value(SecretId=LINODE_SECRET)
+        secret = session.client("secretsmanager", config=aws_config()).get_secret_value(SecretId=LINODE_SECRET)
         token = linode_token(secret["SecretString"])
     except Exception:
         raise SystemExit("fleet: the fleet token couldn't be read") from None

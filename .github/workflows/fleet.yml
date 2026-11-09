@@ -133,10 +133,10 @@ jobs:
   # The hourly reaper. Exempt from OPERATOR_STOP; nothing but disabling this
   # workflow stops it (plan §3).
   reaper:
-    if: github.event_name == 'schedule' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'schedule' && github.ref == 'refs/heads/main' && github.run_attempt == 1
     environment: cloud-fleet
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40 # under the role's 1-hour session, and the lock's 90 minutes
     permissions:
       contents: read
       pull-requests: write
@@ -179,7 +179,7 @@ jobs:
       && vars.OWNER_USER_ID != '' && github.actor_id == vars.OWNER_USER_ID
     environment: cloud-fleet
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40 # under the role's 1-hour session, and the lock's 90 minutes
     permissions:
       contents: read
       pull-requests: write

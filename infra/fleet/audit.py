@@ -78,7 +78,8 @@ def run_is_live(run: dict | None, attempt: str, now: datetime) -> bool:
     and started within the lock's 90-minute chain."""
     if not run or run.get("status") not in LIVE_STATUSES:
         return False
-    if run.get("path") != FLEET_WORKFLOW or str(run.get("run_attempt")) != str(attempt):
+    path = str(run.get("path", ""))
+    if (path != FLEET_WORKFLOW and not path.startswith(FLEET_WORKFLOW + "@")) or str(run.get("run_attempt")) != str(attempt):
         return False
     try:
         started = datetime.fromisoformat(str(run.get("run_started_at")).replace("Z", "+00:00"))
@@ -87,23 +88,24 @@ def run_is_live(run: dict | None, attempt: str, now: datetime) -> bool:
     return now - started <= CHAIN
 
 
-def sweep(rules: dict, lookup_run: Callable[[str], dict | None], now: datetime) -> tuple[dict, int]:
+def sweep(rules: dict, lookup_run: Callable[[str], dict | None], now: datetime) -> tuple[dict, int, int]:
     """Drop job rules whose run isn't live (see run_is_live). Anything else is
-    kept for the audit to judge. A lookup that fails keeps its rule: it may be
-    live, the next hour's sweep tries again, and a well-formed rule is no mismatch."""
-    kept, swept = [], 0
+    kept for the audit to judge. A lookup that fails counts as not live, so its
+    rule is swept (fail closed: it costs a live job only its SSH), and is
+    counted so the reaper escalates. Returns (rules, swept, failed lookups)."""
+    kept, swept, failed = [], 0, 0
     for rule in rules.get("inbound") or []:
         m = JOB_LABEL.match(str(rule.get("label", "")))
         if m:
             try:
                 live = run_is_live(lookup_run(m.group(1)), m.group(2), now)
             except Exception:  # noqa: BLE001
-                live = True
+                live, failed = False, failed + 1
             if not live:
                 swept += 1
                 continue
         kept.append(rule)
-    return dict(rules, inbound=kept), swept
+    return dict(rules, inbound=kept), swept, failed
 
 
 def open_rule(rules: dict, run_id: str, attempt: str, cidr: str, ranges) -> dict:

@@ -228,7 +228,9 @@ def cmd_act(ctx: Ctx) -> int:
     except Refused as r:
         ctx.report(f"refused: {r.reason}")
         return 0
-    if not _on_main_head(ctx.repo):
+    # Paths that create or change the fleet run only main's current code. A down
+    # never waits on that: slightly older main code is the safe direction for a kill.
+    if cmd.verb in ("up", "run") and not _on_main_head(ctx.repo):
         ctx.report("refused: this run's code is not main's head")
         return 0
     run_id = ctx.run_id()
@@ -272,9 +274,17 @@ def _acquire(ctx: Ctx, run_id: str) -> bool:
     return True
 
 
+def _first_attempt(ctx: Ctx, who: str) -> bool:
+    """Kill paths refuse only a re-run (which replays an old event with old code),
+    never main having moved on: they must not skip an hour of lifetime enforcement."""
+    if ctx.env.get("GITHUB_RUN_ATTEMPT") != "1":
+        ctx.report(f"{who}: refused, a re-run; escalate")
+        return False
+    return True
+
+
 def cmd_reap(ctx: Ctx) -> int:
-    if not _on_main_head(ctx.repo):  # before any credential
-        print("reaper: this run's code is not main's head; next hour")
+    if not _first_attempt(ctx, "reaper"):  # before any credential
         return 0
     run_id, b = ctx.run_id(), ctx.backend
     try:
@@ -297,6 +307,7 @@ def cmd_reap(ctx: Ctx) -> int:
         print("reaper: lock busy; trying again next hour")
         return 0
     left = emptied = False
+    problems = None
     try:
         if unknown:
             try:
@@ -316,6 +327,9 @@ def cmd_reap(ctx: Ctx) -> int:
             except Exception:  # noqa: BLE001
                 problems = None
                 ctx.report("reaper: the firewall audit couldn't run; escalate")
+            failed = getattr(b, "lookup_failures", 0)
+            if failed:
+                ctx.report(f"reaper: {failed} job-rule lookups failed, so those rules were swept; escalate")
             if problems:
                 b.set_mismatch(problems)
                 ctx.lock.preempt(run_id)  # a mismatch pre-empts as the overdue case does
@@ -323,14 +337,15 @@ def cmd_reap(ctx: Ctx) -> int:
         # Decide again with what's true now (a command may have run while we waited).
         fleet, unknown = ctx.fleet()
         flag = b.mismatch_state()
-        d = decide(fleet, b.lodestar_linodes(), flag == "true", ctx.clock(), ctx.limits)
+        # A mismatch found just now goes down this hour even if the flag's re-read fails.
+        d = decide(fleet, b.lodestar_linodes(), flag == "true" or bool(problems), ctx.clock(), ctx.limits)
         fence = _tolerant(ctx, run_id) if marker else ctx.fence(run_id)
         if d.action in (DOWN, EMERGENCY):
             emptied = _down(ctx, run_id, fleet, fence)
             left = not emptied
         elif d.age_reap:
             ctx.lock.fenced(run_id, lambda: b.delete_linodes(d.age_reap))
-        elif flag == "true" and not fleet and not unknown:
+        elif (flag == "true" or problems) and not fleet and not unknown:
             emptied = _down(ctx, run_id, None, fence)  # a flag with nothing recorded: sweep and clear it
             left = not emptied
     except LockLost:
@@ -362,8 +377,7 @@ def cmd_reap(ctx: Ctx) -> int:
 
 
 def cmd_dispatch_down(ctx: Ctx) -> int:
-    if not _on_main_head(ctx.repo):  # before any credential
-        ctx.report("owner's down: refused, this run's code is not main's head; dispatch it again")
+    if not _first_attempt(ctx, "owner's down"):  # before any credential
         return 0
     run_id = ctx.run_id()
     ctx.lock.preempt(run_id)
