@@ -1,4 +1,4 @@
-"""fleet.yml's entry point (OP-1, dry-run only; plan §2-§3).
+"""fleet.yml's entry point (OP-1, with live mode from OP-2; plan §2-§3).
 
     fleet.py gate            filter job: no secrets; writes allowed/reason
     fleet.py refuse          answers a refused /fleet command
@@ -9,8 +9,9 @@
 
 Everything comes from the environment the workflow sets; comment text only
 through COMMENT_BODY. Logs carry fixed strings and counts, never a value from
-a secret, fleet.json's slots or an inventory ID. Live mode is OP-2's: with
-FLEET_LIVE=true every acting subcommand refuses.
+a secret, fleet.json's slots or an inventory ID. Dry-run uses an in-memory
+backend and lock; FLEET_LIVE=true switches to apply.py's live backend and the
+S3 lock (OP-2). In live mode `run <step>` refuses until OP-3 adds the steps.
 """
 
 from __future__ import annotations
@@ -27,9 +28,10 @@ from ancestry import head_of, is_ancestor
 from comments import Channel, urllib_transport
 from command import REASONS, Command, Refused
 from gates import Gated, gate
+from apply import ApplyFailed
 from lock import ACQUIRED, REAPING, FleetLock, LockLost, MemoryStore
-from reaper import DOWN, EMERGENCY, Decision, decide, only_down
-from state import DryRunBackend, new_fleet, validate
+from reaper import DOWN, EMERGENCY, NONE, decide, only_down
+from state import DryRunBackend, FleetUnknown, new_fleet, validate
 from status import MARKER, render
 
 REAPER_WAIT_SECONDS = 300
@@ -39,9 +41,13 @@ class Ctx:
     def __init__(self, env, backend, store, transport, clock, sleep, repo):
         self.env, self.repo = env, repo
         self.limits = limits_mod.load()
-        self.backend = backend if backend is not None else DryRunBackend()
+        self.live = env.get("FLEET_LIVE") == "true"
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.sleep = sleep or time.sleep
+        if self.live and backend is None:
+            import apply  # noqa: PLC0415 - live only; needs boto3 and credentials
+            backend, store = apply.live_context(env, self.limits, self.clock, self.run_id())
+        self.backend = backend if backend is not None else DryRunBackend()
         self.lock = FleetLock(store if store is not None else MemoryStore(), self.limits["lock_ttl_minutes"], self.clock)
         self.channel = None
         repo_name, pr, token = env.get("GITHUB_REPOSITORY", ""), env.get("CHANNEL_PR", ""), env.get("GITHUB_TOKEN", "")
@@ -54,20 +60,39 @@ class Ctx:
             raise SystemExit("fleet: GITHUB_RUN_ID missing")
         return f"{rid}-{att}"
 
+    def fence(self, run_id: str):
+        return lambda: self.lock.fence(run_id)
+
+    def fleet(self):
+        """(fleet or None, unknown): unknown when fleet.json can't be read."""
+        try:
+            fleet = self.backend.read_fleet()
+        except FleetUnknown:
+            return None, True
+        if fleet is not None:
+            validate(fleet, self.limits)
+        return fleet, False
+
+    def _render(self) -> str:
+        try:
+            fleet, unknown = self.fleet()
+        except ValueError:
+            fleet, unknown = None, True
+        return render(fleet, self.limits, self.clock(), dry_run=not self.live, unknown=unknown)
+
     def report(self, line: str, with_status: bool = False) -> None:
         print(line)
         if self.channel:
-            body = f"`fleet.yml` (dry-run): {line}"
+            body = f"`fleet.yml` ({'live' if self.live else 'dry-run'}): {line}"
             if with_status:
                 # A fresh, never-edited copy of the status, which the reader
                 # helper trusts; the edited-in-place comment it drops.
-                rendered = render(self.backend.read_fleet(), self.limits, self.clock(), dry_run=True)
-                body += "\n\n" + rendered.replace(MARKER + "\n", "", 1)
+                body += "\n\n" + self._render().replace(MARKER + "\n", "", 1)
             self.channel.post(body)
 
     def status(self) -> None:
         if self.channel:
-            self.channel.upsert_status(render(self.backend.read_fleet(), self.limits, self.clock(), dry_run=True))
+            self.channel.upsert_status(self._render())
 
 
 def _digits(s: str) -> bool:
@@ -105,8 +130,17 @@ def cmd_refuse(ctx: Ctx) -> int:
     return 0
 
 
+def _down(ctx: Ctx, run_id: str, fleet) -> bool:
+    """Destroy, then, once nothing tagged is left, book the spend, tombstone
+    fleet.json and clear the mismatch flag. False if anything remains."""
+    if not ctx.backend.destroy(ctx.fence(run_id)):
+        return False
+    ctx.backend.finish_down(fleet, ctx.fence(run_id))
+    return True
+
+
 def _execute(ctx: Ctx, cmd: Command, run_id: str, fleet) -> str:
-    b, now = ctx.backend, ctx.clock()
+    b, now, would = ctx.backend, ctx.clock(), "" if ctx.live else "would "
     if cmd.verb == "status":
         return "status: updated the status comment"
     if cmd.verb == "up":
@@ -114,16 +148,14 @@ def _execute(ctx: Ctx, cmd: Command, run_id: str, fleet) -> str:
         if why:
             return f"refused: up {cmd.preset}: {why}"
         commit = head_of("origin/main", ctx.repo)
-        new = new_fleet(ctx.limits, cmd.preset, commit, now)
-        ctx.lock.fenced(run_id, lambda: b.write_fleet(new))
+        new = b.create(new_fleet(ctx.limits, cmd.preset, commit, now), ctx.fence(run_id))
         roles = ", ".join(new["roles"])
         cost = limits_mod.projected_usd(ctx.limits, cmd.preset)
-        return f"up {cmd.preset}: would create {roles}, pinned to main; expires {new['expires_at']}; at most ${cost:.2f}"
+        return f"up {cmd.preset}: {would}create {roles}, pinned to main; expires {new['expires_at']}; at most ${cost:.2f}"
     if cmd.verb == "down":
-        if fleet is None:
-            return "down: no fleet recorded"
-        ctx.lock.fenced(run_id, b.destroy)
-        return "down: would destroy the fleet in state"
+        if not _down(ctx, run_id, fleet):
+            return "down: tagged resources remain after destroy; escalate"
+        return f"down: {would}destroy the fleet" if fleet else "down: no fleet recorded; nothing tagged is left"
     # run <step> <vm> [<commit>]
     if fleet is None:
         return f"refused: run {cmd.step}: no fleet"
@@ -131,6 +163,8 @@ def _execute(ctx: Ctx, cmd: Command, run_id: str, fleet) -> str:
         return f"refused: run {cmd.step}: the fleet's pinned commit is not an ancestor of main"
     if cmd.commit is not None and not is_ancestor(cmd.commit, "origin/main", ctx.repo):
         return f"refused: run {cmd.step}: the commit is not an ancestor of main"
+    if ctx.live:
+        return f"refused: run {cmd.step}: step not built (OP-3)"
     return f"run {cmd.step} {cmd.vm}: would run the step at the fleet's pinned commit"
 
 
@@ -169,15 +203,18 @@ def cmd_act(ctx: Ctx) -> int:
         ctx.report("busy: the fleet is being reaped; retry later" if got == REAPING else "busy, retry")
         return 0
     try:
-        fleet = ctx.backend.read_fleet()
-        if fleet is not None:
-            validate(fleet, ctx.limits)
-        if cmd.verb != "down" and only_down(fleet, ctx.backend.mismatch(), ctx.clock()):
+        fleet, unknown = ctx.fleet()
+        if cmd.verb != "down" and unknown:
+            line = "refused: fleet state unreadable: only down runs"
+        elif cmd.verb != "down" and only_down(fleet, ctx.backend.mismatch(), ctx.clock()):
             line = "refused: fleet overdue or mismatched: only down runs"
         else:
             line = _execute(ctx, cmd, run_id, fleet)
     except LockLost:
         ctx.report("failed: the fleet lock was lost (pre-empted); nothing more was written")
+        return 1
+    except ApplyFailed:
+        ctx.report("failed: terraform didn't finish; the fleet is recorded, so run down (output is in the evidence bucket)")
         return 1
     except ValueError:
         ctx.report("failed: fleet.json is invalid; escalate")
@@ -189,44 +226,48 @@ def cmd_act(ctx: Ctx) -> int:
     return 0
 
 
-def _decide(ctx: Ctx):
-    b = ctx.backend
-    fleet = b.read_fleet()
-    if fleet is not None:
-        validate(fleet, ctx.limits)
-    return decide(fleet, b.lodestar_linodes(), b.mismatch(), ctx.clock(), ctx.limits)
+def _acquire(ctx: Ctx, run_id: str) -> bool:
+    deadline = ctx.clock().timestamp() + REAPER_WAIT_SECONDS
+    while ctx.lock.acquire(run_id) != ACQUIRED:
+        if ctx.clock().timestamp() >= deadline:
+            return False
+        ctx.sleep(30)
+    return True
 
 
 def cmd_reap(ctx: Ctx) -> int:
     run_id, b = ctx.run_id(), ctx.backend
     try:
-        d = _decide(ctx)
+        fleet, unknown = ctx.fleet()
+        d = decide(fleet, b.lodestar_linodes(), b.mismatch(), ctx.clock(), ctx.limits)
     except ValueError:
         ctx.report("reaper: fleet.json is invalid; escalate")
         return 1
+    # The emergency path doesn't wait for the lock; everything else, the
+    # firewall audit included, runs under it.
     if d.action == EMERGENCY:
         ctx.lock.preempt(run_id)
-    elif d.action == DOWN or d.age_reap:
-        deadline = ctx.clock().timestamp() + REAPER_WAIT_SECONDS
-        while ctx.lock.acquire(run_id) != ACQUIRED:
-            if ctx.clock().timestamp() >= deadline:
-                print("reaper: lock busy; trying again next hour")
-                return 0
-            ctx.sleep(30)
-    else:
-        print(f"reaper: nothing to do ({d.reason})")
-        ctx.status()
+    elif not _acquire(ctx, run_id):
+        print("reaper: lock busy; trying again next hour")
         return 0
     try:
-        # Decide again under the lock: a command may have changed the fleet
-        # while the reaper waited.
-        d2 = _decide(ctx)
-        if d.action == EMERGENCY and b.read_fleet() is not None:
-            d2 = Decision(EMERGENCY, d.reason, d2.age_reap)
-        if d2.action in (DOWN, EMERGENCY):
-            ctx.lock.fenced(run_id, b.destroy)
-        if d2.age_reap:
-            ctx.lock.fenced(run_id, lambda: b.delete_linodes(d2.age_reap))
+        if unknown:
+            ctx.report("reaper: fleet.json unreadable; firewall audit skipped; escalate")
+        else:
+            problems = b.audit(ctx.fence(run_id))  # sweeps stale job rules first
+            if problems:
+                b.set_mismatch(problems)
+                ctx.lock.preempt(run_id)  # a mismatch pre-empts as the overdue case does
+        # Decide again with what's true now (a command may have run while we waited).
+        fleet, unknown = ctx.fleet()
+        d = decide(fleet, b.lodestar_linodes(), b.mismatch(), ctx.clock(), ctx.limits)
+        left = True
+        if d.action in (DOWN, EMERGENCY):
+            left = not _down(ctx, run_id, fleet)
+        elif d.age_reap:
+            ctx.lock.fenced(run_id, lambda: b.delete_linodes(d.age_reap))
+        elif d.action == NONE and b.mismatch() and not fleet and not unknown and not b.lodestar_linodes():
+            b.finish_down(None, ctx.fence(run_id))  # a stale flag with nothing left: clear it
     except LockLost:
         ctx.report("reaper: the fleet lock was lost; trying again next hour")
         return 1
@@ -235,8 +276,10 @@ def cmd_reap(ctx: Ctx) -> int:
         return 1
     finally:
         ctx.lock.release(run_id)
-    line = f"reaper: {d2.action} ({d2.reason}); Linodes over 44 h: {len(d2.age_reap)}"
-    if d2.action == EMERGENCY:
+    line = f"reaper: {d.action} ({d.reason}); Linodes over 44 h: {len(d.age_reap)}"
+    if d.action in (DOWN, EMERGENCY) and left:
+        line += "; tagged resources remain; escalate"
+    if d.action == EMERGENCY or (d.action == DOWN and left):
         ctx.report(line)
     else:
         print(line)
@@ -248,15 +291,21 @@ def cmd_dispatch_down(ctx: Ctx) -> int:
     run_id = ctx.run_id()
     ctx.lock.preempt(run_id)
     try:
-        had = ctx.backend.read_fleet() is not None
-        if had:
-            ctx.lock.fenced(run_id, ctx.backend.destroy)
+        try:
+            fleet = ctx.backend.read_fleet()
+        except FleetUnknown:
+            fleet = None
+        empty = _down(ctx, run_id, fleet)
     except LockLost:
         ctx.report("owner's down: the fleet lock was lost; run it again")
         return 1
     finally:
         ctx.lock.release(run_id)
-    ctx.report("owner's down: would destroy the fleet in state" if had else "owner's down: no fleet recorded")
+    if not empty:
+        ctx.report("owner's down: tagged resources remain after destroy; escalate")
+    else:
+        would = "" if ctx.live else "would "
+        ctx.report(f"owner's down: {would}destroy the fleet" if fleet else "owner's down: no fleet recorded; nothing tagged is left")
     ctx.status()
     return 0
 
@@ -269,9 +318,6 @@ def main(argv=None, env=None, backend=None, store=None, transport=None, clock=No
     env = dict(os.environ) if env is None else env
     if len(argv) != 1 or argv[0] not in COMMANDS:
         print("usage: fleet.py " + "|".join(COMMANDS), file=sys.stderr)
-        return 2
-    if argv[0] not in ("gate", "refuse") and env.get("FLEET_LIVE") == "true":
-        print("fleet: live mode is not built yet (OP-2); refusing", file=sys.stderr)
         return 2
     try:
         return COMMANDS[argv[0]](Ctx(env, backend, store, transport, clock, sleep, repo))

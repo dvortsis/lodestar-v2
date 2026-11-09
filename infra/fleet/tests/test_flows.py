@@ -21,7 +21,23 @@ L = limits.load()
 
 class Limits(unittest.TestCase):
     def test_values(self):
-        self.assertEqual((L["max_lifetime_hours"], L["monthly_compute_cap_usd"], L["max_fleets"]), (44, 40, 1))
+        self.assertEqual((L["max_lifetime_hours"], L["monthly_compute_cap_usd"]), (44, 40))
+        self.assertNotIn("max_fleets", L)  # one fleet is enforced by check_up, not a count
+
+    def test_load_refuses_values_outside_the_plan(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        base = json.loads(json.dumps(L))
+        bad = [("monthly_compute_cap_usd", 41), ("monthly_compute_cap_usd", 0), ("monthly_compute_cap_usd", True),
+               ("monthly_compute_cap_usd", "40"), ("max_lifetime_hours", 45), ("lock_ttl_minutes", 91),
+               ("reap_grace_minutes", 16), ("max_fleets", 2)]
+        for key, value in bad:
+            with self.subTest(key=key, value=value), tempfile.TemporaryDirectory() as d:
+                p = Path(d) / "limits.yaml"
+                p.write_text(json.dumps(dict(base, **{key: value})), encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    limits.load(p)
         self.assertEqual(set(L["presets"]), {"screen"})
         self.assertEqual(set(L["presets"]["screen"]["roles"]), {"main", "worker"})
         self.assertAlmostEqual(limits.projected_usd(L, "screen"), 0.0795 * 44)
@@ -44,7 +60,7 @@ class FleetJson(unittest.TestCase):
     def test_new_and_validate(self):
         f = new_fleet(L, "screen", "b" * 40, T0)
         self.assertEqual(f["expires_at"], fmt(T0 + timedelta(hours=44)))
-        self.assertEqual(f["roles"]["main"], {"address": None, "fingerprint": None, "firewall_id": None})
+        self.assertEqual(f["roles"]["main"], dict.fromkeys(("address", "host_key", "fingerprint", "firewall_id", "admin_ipv4")))
         bad = [("commit", "B" * 40), ("commit", "b" * 39), ("expires_at", fmt(T0 + timedelta(hours=44, seconds=1))),
                ("expires_at", fmt(T0)), ("preset", "windows"), ("version", 2), ("created_at", "2026-11-08 20:00")]
         for k, v in bad:
@@ -53,7 +69,11 @@ class FleetJson(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate(dict(f, roles={"main": f["roles"]["main"]}), L)
         with self.assertRaises(ValueError):
-            validate(dict(f, roles={**f["roles"], "main": {"address": 1, "fingerprint": None, "firewall_id": None}}), L)
+            validate(dict(f, roles={**f["roles"], "main": dict(f["roles"]["main"], address=1)}), L)
+        with self.assertRaises(ValueError):
+            validate(dict(f, roles={**f["roles"], "main": dict(f["roles"]["main"], admin_ipv4="203.0.113.1/32")}), L)
+        with self.assertRaises(ValueError):
+            validate(dict(f, roles={**f["roles"], "main": {"address": None}}), L)
 
 
 class Reaper(unittest.TestCase):
@@ -67,7 +87,10 @@ class Reaper(unittest.TestCase):
         self.assertEqual(decide(self.fleet(44.25), [], False, T0, L).action, DOWN)
         self.assertEqual(decide(self.fleet(44.26), [], False, T0, L).action, EMERGENCY)
         self.assertEqual(decide(self.fleet(1), [], True, T0, L).action, EMERGENCY)
-        self.assertEqual(decide(self.fleet(1), [], False, T0, L, audit=lambda f: True).action, EMERGENCY)
+        # A recorded mismatch goes down whether or not a fleet is recorded, if anything exists.
+        node = [{"id": "n", "created": fmt(T0)}]
+        self.assertEqual(decide(None, node, True, T0, L).action, EMERGENCY)
+        self.assertEqual(decide(None, [], True, T0, L).action, NONE)
 
     def test_age_reap_by_creation_time(self):
         nodes = [{"id": "a", "created": fmt(T0 - timedelta(hours=44))}, {"id": "b", "created": fmt(T0 - timedelta(hours=43))}]
@@ -83,14 +106,15 @@ class Reaper(unittest.TestCase):
 class Status(unittest.TestCase):
     def test_render(self):
         f = new_fleet(L, "screen", "d" * 40, T0 - timedelta(hours=2, minutes=5))
-        f["roles"]["main"] = {"address": "203.0.113.9", "fingerprint": "SHA256:zz", "firewall_id": "12345"}
+        f["roles"]["main"] = {"address": "203.0.113.9", "host_key": "ssh-ed25519 AAAAzz", "fingerprint": "SHA256:zz",
+                              "firewall_id": "12345", "admin_ipv4": ["198.51.100.4/32"]}
         out = render(f, L, T0, dry_run=False)
         self.assertTrue(out.startswith(MARKER))
         self.assertIn("| main | 2 h 05 min |", out)
         self.assertIn("| worker | 2 h 05 min |", out)
         self.assertIn("Expires: 2026-11-10 13:55Z (in 41 h 55 min)", out)
         self.assertIn("Compute cost so far: $0.17", out)
-        for secret in ("203.0.113.9", "SHA256:zz", "12345", "d" * 40, "lodestar-"):
+        for secret in ("203.0.113.9", "AAAAzz", "SHA256:zz", "12345", "198.51.100.4", "d" * 40, "lodestar-"):
             self.assertNotIn(secret, out)
         self.assertIn("No fleet.", render(None, L, T0, dry_run=True))
 
@@ -269,10 +293,15 @@ class Flows(unittest.TestCase):
         self.assertIn("reaper: none (no fleet)", out.getvalue())
         self.assertEqual(b.log, [])
 
-    def test_live_mode_refused(self):
+    def test_live_mode_refuses_without_its_settings(self):
+        secret = "LEAKMARK-not-printed"
         for sub in ("act", "reap", "dispatch-down"):
-            rc, _ = self.run_cli(sub, event_env("/fleet status", FLEET_LIVE="true"))
-            self.assertEqual(rc, 2)
+            with self.subTest(sub=sub), self.assertRaises(SystemExit) as cm:
+                self.run_cli(sub, event_env("/fleet status", FLEET_LIVE="true", STATE_BUCKET=secret))
+            msg = str(cm.exception)
+            self.assertIn("live mode needs", msg)
+            self.assertIn("FLEET_LINODE_ACCOUNT_EUUID", msg)
+            self.assertNotIn(secret, msg)  # names only, never values
 
     def test_gate_outputs(self):
         import os
@@ -305,7 +334,7 @@ class Flows(unittest.TestCase):
                           linodes=[{"id": "x", "created": fmt(T0 - timedelta(hours=45))}])
         _, out = self.run_cli("reap", event_env(OPERATOR_STOP="true"), backend=b, clock=clock)
         self.assertIn("reaper: down (past expiry); Linodes over 44 h: 1", out)
-        self.assertEqual(b.log, ["destroy", "delete_linodes:1"])
+        self.assertEqual(b.log, ["destroy", "finish_down"])  # destroy also takes the over-44 h Linode
 
     def test_reaper_waits_then_gives_up_on_a_live_holder(self):
         clock, store = Clock(), MemoryStore()
@@ -322,7 +351,7 @@ class Flows(unittest.TestCase):
         b = DryRunBackend(fleet=new_fleet(L, "screen", self.c["head"], T0 - timedelta(hours=44, minutes=16)))
         _, out = self.run_cli("reap", event_env(), backend=b, store=store)
         self.assertIn("reaper: emergency", out)
-        self.assertEqual(b.log, ["destroy"])
+        self.assertEqual(b.log, ["destroy", "finish_down"])
 
     def test_dispatch_down_does_only_down(self):
         # Whatever the environment holds, a dispatch never parses a command.
@@ -332,11 +361,12 @@ class Flows(unittest.TestCase):
         env = event_env("/fleet up screen", OPERATOR_STOP="true", EVENT_NAME="workflow_dispatch")
         _, out = self.run_cli("dispatch-down", env, backend=b, store=store)
         self.assertIn("owner's down: would destroy", out)
-        self.assertEqual(b.log, ["destroy"])
+        self.assertEqual(b.log, ["destroy", "finish_down"])
         self.assertNotIn(LOCK_KEY, store.objects)
+        # With no fleet recorded it still sweeps, in case anything unrecorded is left.
         _, out = self.run_cli("dispatch-down", env, backend=b)
-        self.assertIn("no fleet recorded", out)
-        self.assertEqual(b.log, ["destroy"])
+        self.assertIn("no fleet recorded; nothing tagged is left", out)
+        self.assertEqual(b.log, ["destroy", "finish_down", "destroy", "finish_down"])
 
 
 if __name__ == "__main__":

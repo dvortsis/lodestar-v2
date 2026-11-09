@@ -13,7 +13,12 @@ def load(path: Path = LIMITS_PATH) -> dict:
     # limits.yaml is JSON with full-line `#` comments (still valid YAML).
     lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if not ln.lstrip().startswith("#")]
     limits = json.loads("\n".join(lines))
-    if limits.get("version") != 1 or limits["max_lifetime_hours"] > 44 or limits["lock_ttl_minutes"] > 90:
+    cap = limits.get("monthly_compute_cap_usd")
+    if (limits.get("version") != 1 or not 0 < limits["max_lifetime_hours"] <= 44
+            or not 0 < limits["lock_ttl_minutes"] <= 90 or not 0 < limits["reap_grace_minutes"] <= 15
+            or isinstance(cap, bool) or not isinstance(cap, (int, float)) or not 0 < cap <= 40
+            or "max_fleets" in limits):
+        # The owner set the $40 cap; 44 h, 90 min and 15 min are the plan's (§3).
         raise ValueError("limits.yaml is outside the plan's bounds")
     return limits
 

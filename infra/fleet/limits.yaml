@@ -3,9 +3,10 @@
 # a slice PR with a fresh Opus /security-review. Written in JSON syntax so
 # limits.py parses it with the standard library; it is still valid YAML.
 # Prices are Linode list rates, as in infra/akamai/terraform/main.tf.
+# One fleet at a time is enforced by `up` refusing while any Lodestar Linode
+# exists or a fleet is recorded (limits.check_up), not by a count here.
 {
   "version": 1,
-  "max_fleets": 1,
   "max_lifetime_hours": 44,
   "monthly_compute_cap_usd": 40,
   "lock_ttl_minutes": 90,

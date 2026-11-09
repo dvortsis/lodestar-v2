@@ -24,8 +24,10 @@ def _utc(t: datetime) -> str:
     return t.strftime("%Y-%m-%d %H:%MZ")
 
 
-def render(fleet: Mapping | None, limits: Mapping, now: datetime, dry_run: bool) -> str:
+def render(fleet: Mapping | None, limits: Mapping, now: datetime, dry_run: bool, unknown: bool = False) -> str:
     head = [MARKER, f"**Fleet status** ({'dry-run, ' if dry_run else ''}updated {_utc(now)})", ""]
+    if unknown:
+        return "\n".join(head + ["Fleet state unreadable: a fleet may exist. Only `down` runs."]) + "\n"
     if fleet is None:
         return "\n".join(head + ["No fleet."]) + "\n"
     created, expires = parse_ts(fleet["created_at"]), parse_ts(fleet["expires_at"])

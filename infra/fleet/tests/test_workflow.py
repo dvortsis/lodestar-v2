@@ -82,12 +82,24 @@ class FleetStructure(unittest.TestCase):
 
     def test_permissions_minimal(self):
         self.assertEqual(self.wf["permissions"], {})
-        allowed = {("contents", "read"), ("pull-requests", "write")}
+        base = {"contents": "read", "pull-requests": "write"}
+        oidc = dict(base, **{"id-token": "write"})
+        want = {"gate": {"contents": "read"}, "refuse": base, "act": oidc, "dispatch-down": oidc,
+                "reaper": dict(oidc, actions="read")}  # only the sweeping job reads run status
+        self.assertEqual({n: j.get("permissions") for n, j in self.jobs.items()}, want)
+
+    def test_live_only_steps_and_secrets(self):
         for name, job in self.jobs.items():
-            with self.subTest(job=name):
-                self.assertIsInstance(job.get("permissions"), dict)
-                self.assertLessEqual(set(job["permissions"].items()), allowed)
-        self.assertEqual(self.jobs["gate"]["permissions"], {"contents": "read"})
+            for s in steps(job):
+                text = yaml.safe_dump(s)
+                with self.subTest(job=name, step=s.get("uses") or s.get("run", "")[:40]):
+                    if s.get("uses", "").startswith("hashicorp/setup-terraform") or s.get("run") == LIVE_INSTALL:
+                        self.assertEqual(s.get("if"), "vars.FLEET_LIVE == 'true'")
+                    if "secrets." in text:
+                        # Secrets only reach the fleet.py step, through env, in cloud-fleet jobs.
+                        self.assertEqual(job.get("environment"), "cloud-fleet")
+                        self.assertTrue(str(s.get("run", "")).startswith("python3 infra/fleet/fleet.py "))
+                        self.assertNotIn("secrets.", str(s.get("run", "")))
 
     def test_if_before_environment(self):
         for name, job in self.jobs.items():
@@ -140,7 +152,7 @@ class FleetStructure(unittest.TestCase):
                     self.assertTrue(cond.startswith("github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'"))
                     self.assertIn("github.actor_id == vars.OWNER_USER_ID", cond)
                     self.assertIn("vars.OWNER_USER_ID != ''", cond)
-                    runs = [s["run"] for s in steps(job) if "run" in s]
+                    runs = [s["run"] for s in steps(job) if "run" in s and s["run"] != LIVE_INSTALL]
                     self.assertEqual(runs, ["python3 infra/fleet/fleet.py dispatch-down"])
                     envs = {k for s in steps(job) for k in (s.get("env") or {})}
                     self.assertNotIn("COMMENT_BODY", envs)
@@ -168,6 +180,7 @@ SECRET_NAMES = [
     "GITHUB_TOKEN", "AWS_FLEET_ROLE_ARN", "AWS_PIA_ROLE_ARN", "AWS_BRIDGE_ROLE_ARN", "FLEET_SSH_KEY",
     "OWNER_ADMIN_CIDR", "STATE_BUCKET", "EVIDENCE_BUCKET", "CONTROL_BUCKET", "PIA_SERVERS",
     "OPERATOR_APP_ID", "OPERATOR_APP_PRIVATE_KEY", "ANTHROPIC_API_KEY", "FLEET_SSH_PUBLIC_KEY",
+    "OWNER_SSH_PUBLIC_KEY", "FLEET_LINODE_ACCOUNT_EUUID", "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
 ]
 
 
@@ -196,6 +209,8 @@ SCENARIOS = {
 }
 # Every run: step in a covered workflow is exactly one such invocation, so a
 # script can't slip past the scenarios by being started some other way.
+LIVE_INSTALL = ('python3 -m pip install --quiet --no-deps --require-hashes --target "$RUNNER_TEMP/fleet-deps" '
+                '-r infra/fleet/requirements-live.txt')
 INVOKE = re.compile(r"python3 (infra/[\w/.-]+\.py) ([a-z][\w-]*)")
 
 
@@ -206,6 +221,8 @@ class PublicLogLeak(unittest.TestCase):
                 for s in steps(job):
                     if "run" not in s:
                         continue
+                    if s["run"] == LIVE_INSTALL and s.get("if") == "vars.FLEET_LIVE == 'true'":
+                        continue  # the one other allowed step: pip from hash-pinned wheels, live only
                     m = INVOKE.fullmatch(s["run"].strip())
                     with self.subTest(workflow=path.name, job=name, run=s["run"][:60]):
                         self.assertIsNotNone(m, "a run: step must be one `python3 infra/<script>.py <sub>`")
@@ -229,12 +246,26 @@ class PublicLogLeak(unittest.TestCase):
                     for v in values:
                         self.assertNotIn(v, r.stdout + r.stderr)
 
+    def test_live_mode_without_settings_names_them_only(self):
+        values = marks(len(SECRET_NAMES))
+        secret_env = dict(zip(SECRET_NAMES, values))
+        secret_env.pop("FLEET_LINODE_ACCOUNT_EUUID")  # one missing setting
+        for sub in ("act", "reap", "dispatch-down"):
+            with self.subTest(sub=sub):
+                r = subprocess.run([sys.executable, str(ROOT / "infra/fleet/fleet.py"), sub], cwd=self.outside,
+                                   capture_output=True, text=True, timeout=60,
+                                   env=scrub_env({**event_env("/fleet status", FLEET_LIVE="true"), **secret_env}))
+                self.assertNotEqual(r.returncode, 0)
+                self.assertIn("FLEET_LINODE_ACCOUNT_EUUID", r.stderr)
+                for v in values:
+                    self.assertNotIn(v, r.stdout + r.stderr)
+
     def test_marked_fleet_values_never_reach_logs_or_comments(self):
         repo, c = make_repo()
-        m = marks(8)
+        m = marks(12)
         f = new_fleet(L, "screen", c["head"], T0 - timedelta(hours=3))
-        f["roles"]["main"] = {"address": m[0], "fingerprint": m[1], "firewall_id": m[2]}
-        f["roles"]["worker"] = {"address": m[3], "fingerprint": m[4], "firewall_id": m[5]}
+        f["roles"]["main"] = {"address": m[0], "host_key": m[8], "fingerprint": m[1], "firewall_id": m[2], "admin_ipv4": [m[9]]}
+        f["roles"]["worker"] = {"address": m[3], "host_key": m[10], "fingerprint": m[4], "firewall_id": m[5], "admin_ipv4": [m[11]]}
         secret_env = dict(zip(SECRET_NAMES, marks(len(SECRET_NAMES))))
         old = [{"id": m[6], "created": fmt(T0 - timedelta(hours=50))}, {"id": m[7], "created": fmt(T0)}]
         runs = [("act", "/fleet status", 1), ("act", "/fleet run leak-test main", 1), ("act", "/fleet down", 1),

@@ -33,6 +33,8 @@ REPO = "dvortsis/lodestar-v2"
 # and this slice's decisions for the Terraform state key).
 FLEET_LOCK_KEY = "locks/fleet.json"
 FLEET_JSON_KEY = "fleet/fleet.json"
+SPEND_LEDGER_KEY = "fleet/spend-ledger.json"   # OP-2: the monthly fleet-compute ledger
+MISMATCH_KEY = "locks/fleet-mismatch.json"     # OP-2: the recorded audit mismatch
 TF_STATE_KEY = "terraform/lodestar.tfstate"
 TF_LOCK_KEY = TF_STATE_KEY + ".tflock"  # Terraform >= 1.10 use_lockfile
 OPERATOR_LOCK_PREFIX = "locks/operator"  # OP-4 names the exact keys beneath it
@@ -178,7 +180,8 @@ def fleet_control() -> dict:
              "Resource": {"Ref": "AkamaiFleetToken"}},
             {"Sid": "TerraformStateAndFleetJson", "Effect": "Allow",
              "Action": ["s3:GetObject", "s3:PutObject"],
-             "Resource": [obj(state, TF_STATE_KEY), obj(state, TF_LOCK_KEY), obj(state, FLEET_JSON_KEY)]},
+             "Resource": [obj(state, TF_STATE_KEY), obj(state, TF_LOCK_KEY), obj(state, FLEET_JSON_KEY),
+                          obj(state, SPEND_LEDGER_KEY)]},
             # fleet.json is never deleted: `down` overwrites it with a tombstone
             # (the runner's refinement), so only the lock file may be deleted.
             {"Sid": "DeleteTerraformLock", "Effect": "Allow", "Action": "s3:DeleteObject",
@@ -190,9 +193,9 @@ def fleet_control() -> dict:
             {"Sid": "ListStateBucket", "Effect": "Allow", "Action": "s3:ListBucket", "Resource": bucket_arn(state)},
             {"Sid": "Evidence", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject"],
              "Resource": obj(evidence, "fleet/*")},
-            {"Sid": "FleetLock", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-             "Resource": obj(control, FLEET_LOCK_KEY)},
-            {"Sid": "ListFleetLock", **list_prefixes(control, [FLEET_LOCK_KEY])},
+            {"Sid": "FleetLockAndMismatchFlag", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+             "Resource": [obj(control, FLEET_LOCK_KEY), obj(control, MISMATCH_KEY)]},
+            {"Sid": "ListFleetLock", **list_prefixes(control, [FLEET_LOCK_KEY, MISMATCH_KEY])},
         ],
     )
     bridge = role(
