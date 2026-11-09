@@ -32,13 +32,27 @@ Follow-ups to PK-win-restart (#605) from its review: the portable successor star
 
 ## The relaunch flake (`a_portable_restart_starts_a_new_copy`, "no new copy served")
 - **Diagnostics first, as asked.** On any failure after the start, the test now prints the console (stderr, which the relaunched copy shares, so its start error shows) and `lodestar.jsonl`.
-- **The likely cause.** It couldn't be reproduced here: this session has no Windows, and the failure logs from #636 and #637 have only the assertion.
+- **The likely cause.** It couldn't be reproduced here: this session has no Windows, and the failure logs from #636 and #637 have only the assertion. The evidence:
   - The search index takes its root lock non-blocking (`crates/search/src/rebuild.rs` `lock_root`). A busy lock is `Error::Locked`, and the start fails at once. The store doesn't fail that way: SQLite has a busy timeout.
   - tantivy 0.27 releases that lock only by closing the file (`ReleaseLockFile`'s drop just logs). It never unlocks it explicitly.
   - Microsoft's `LockFileEx` documentation says a lock left on a file that's closed, or held by a process that ends, is released by the OS "depending upon available system resources", not at once.
   - The new copy starts when its stdin pipe ends, that is when the old process has exited. On a loaded runner, the index lock can still be held then.
   - **The timing fits.** On #637 the test failed 97 s after it began, so the 90 s wait for the second `app.serving` ran out. A new copy that waited out the 60 s end-of-file deadline would still have served; one that died at start never does.
-- **The fix is outside this slice's owns.** It was put to the runner (2026-11-09T03:05Z): a bounded retry of `LockBusy` in `lock_root`, or an explicit lock-and-unlock before the hand-over. The next failure's dump confirms or refutes the cause.
+- **The fix (runner's decision, 2026-11-09T03:00Z, a shared edit to `crates/search/src/rebuild.rs`).** On Windows, `lock_root` tries a busy lock again every 100 ms for up to 10 s (`LOCK_WAIT`, `LOCK_POLL`). After that it's `Error::Locked(root)`, with the same message as before. An I/O error is never retried.
+  - **Unix is unchanged:** a closed file's lock is gone at once there, so a busy lock is another running instance, refused at once.
+  - **The loop is `retry_busy`.** It takes the attempt, the wait, the clock and the sleep, so it's tested on every platform on a fake clock, with no waiting:
+    - busy then free: taken;
+    - busy past the wait: refused;
+    - no wait: one attempt;
+    - an I/O error: returned at once.
+  - `the_index_root_is_locked_once` checks the real lock.
+  - Mutation-checked: with the retry disabled, the first two fail.
+- **What it costs:** a genuine second instance on the same data folder on Windows is now refused after up to 10 s instead of at once.
+- **What it covers:** any quick restart on Windows, not only the portable relaunch: a service restart, or a user who closes Lodestar and starts it again at once.
+- **Every caller can wait 10 s.** `lock_root` has one caller, `Serving::open_or_rebuild`, which takes the lock once when the index is opened. A rebuild swaps versions under that same lock and never takes it again.
+  - In production, that's `Services::start` (`crates/lodestar/src/services.rs`), on a `spawn_blocking` thread during start, before anything serves.
+  - The other callers are tests (`percolator.rs`, `services.rs`, and the search crate's own).
+- **The failure dump stays in the test,** so a future failure still shows its cause.
 
 ## For PK-win-portable-upd
 - **Children inheriting `LODESTAR_RELAUNCH_TOKEN` is harmless.** `icacls` and other children of a relaunched copy inherit it unless it's removed, but the variable does nothing without a pipe that delivers the same token, and a console stdin skips the wait.
