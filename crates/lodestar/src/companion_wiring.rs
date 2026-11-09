@@ -580,6 +580,14 @@ async fn hand_over_prowlarr(
 ) -> Result<(), SinkError> {
     let id = w.source().await.ok_or(SinkError::Unavailable)?;
     if !w.key(id, Some(key)).await {
+        // It may have been saved before the read-back failed, so it's
+        // left as it is (removing it could take your own key) and logged.
+        lodestar_log::log_event!(
+            lodestar_companions::log_events::CONFIG_FAILED,
+            companion = PROWLARR_SOURCE,
+            setting = "lodestar.settings",
+            reason = "key_not_confirmed"
+        );
         return Err(SinkError::Rejected);
     }
     if w.config(id, prowlarr_config(previous, url)).await {
@@ -1039,6 +1047,13 @@ mod tests {
         let w = Writes::failing(&["config", "key removed"]);
         let got = hand_over_prowlarr(&w, Some(MINE), "http://127.0.0.1:9696", key()).await;
         assert_eq!(got, Err(SinkError::Rejected));
+        // The path itself: key, address, the removal tried.
+        assert_eq!(
+            w.log(),
+            ["key set", "config \"http://127.0.0.1:9696\"", "key removed"]
+        );
+        // A process-wide count: other tests can only raise it, so this
+        // proves the line was logged, and the order above proves where.
         assert!(lodestar_companions::log_events::CONFIG_FAILED::EVENT.count() > before);
     }
 
@@ -1047,7 +1062,8 @@ mod tests {
         control: lodestar_pipeline::Control,
         creds: lodestar_sources::consent::SourceCredentials,
         id: lodestar_store::SourceId,
-        fail_config: bool,
+        /// The stand-in's settings can be saved while this is set.
+        editable: Arc<std::sync::atomic::AtomicBool>,
     }
 
     impl SourceWrites for ControlWrites {
@@ -1056,9 +1072,6 @@ mod tests {
         }
         fn config<'a>(&'a self, _: u8, c: serde_json::Value) -> BoxFuture<'a, bool> {
             Box::pin(async move {
-                if self.fail_config {
-                    return false;
-                }
                 let change = lodestar_pipeline::control::SourceChange {
                     config: Some(c.to_string()),
                     ..Default::default()
@@ -1079,7 +1092,10 @@ mod tests {
     /// The Prowlarr source as the hand-over needs it: an Account source
     /// whose settings can be saved. (This build's Prowlarr plugin keeps its
     /// settings fixed, so the decisions file names the gap.)
-    struct StandIn(lodestar_sources::Manifest);
+    struct StandIn(
+        lodestar_sources::Manifest,
+        Arc<std::sync::atomic::AtomicBool>,
+    );
 
     const MANIFEST: lodestar_sources::Manifest = lodestar_sources::Manifest {
         id: PROWLARR_SOURCE,
@@ -1101,13 +1117,17 @@ mod tests {
             &self.0
         }
         fn config_editable(&self) -> bool {
-            true
+            self.1.load(std::sync::atomic::Ordering::SeqCst)
         }
         fn config_json(&self) -> Option<String> {
             Some("{}".into())
         }
         fn check_config(&self, json: &str) -> Result<String, lodestar_sources::ConfigRefusal> {
-            Ok(json.to_owned())
+            if self.config_editable() {
+                Ok(json.to_owned())
+            } else {
+                Err(lodestar_sources::ConfigRefusal("refused by the test"))
+            }
         }
         fn run(
             &self,
@@ -1124,11 +1144,12 @@ mod tests {
     /// pipeline and `Control`.
     async fn enabled_prowlarr(
         dir: &std::path::Path,
-        fail_config: bool,
     ) -> (lodestar_pipeline::Pipeline, ControlWrites) {
         use lodestar_store::StoreConfig;
         let db = dir.join("t.db");
-        let plugin: Arc<dyn lodestar_sources::SourcePlugin> = Arc::new(StandIn(MANIFEST));
+        let editable = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let plugin: Arc<dyn lodestar_sources::SourcePlugin> =
+            Arc::new(StandIn(MANIFEST, editable.clone()));
         let pipeline = lodestar_pipeline::Pipeline::start(
             lodestar_pipeline::PipelineConfig::default(),
             Store::open(&db, StoreConfig::default()).unwrap(),
@@ -1163,7 +1184,7 @@ mod tests {
             control,
             creds,
             id,
-            fail_config,
+            editable,
         };
         // Your own setup, then on (seeded as a build before the consent
         // gate did, since the API can't enable an Account source now).
@@ -1204,7 +1225,7 @@ mod tests {
     #[tokio::test]
     async fn a_hand_over_keeps_your_running_source_on() {
         let dir = tempfile::tempdir().unwrap();
-        let (_p, w) = enabled_prowlarr(dir.path(), false).await;
+        let (_p, w) = enabled_prowlarr(dir.path()).await;
         assert_eq!(state(&w), lodestar_store::SourceState::Enabled);
         hand_over_prowlarr(&w, Some(MINE), "http://127.0.0.1:9696", key())
             .await
@@ -1225,7 +1246,10 @@ mod tests {
     #[tokio::test]
     async fn a_failed_hand_over_turns_the_source_off() {
         let dir = tempfile::tempdir().unwrap();
-        let (_p, w) = enabled_prowlarr(dir.path(), true).await;
+        let (_p, w) = enabled_prowlarr(dir.path()).await;
+        // A real refusal from `Control`: the source's settings can't be
+        // saved now.
+        w.editable.store(false, std::sync::atomic::Ordering::SeqCst);
         let got = hand_over_prowlarr(&w, Some(MINE), "http://127.0.0.1:9696", key()).await;
         assert_eq!(got, Err(SinkError::Rejected));
         assert_eq!(state(&w), lodestar_store::SourceState::Disabled);
@@ -1242,6 +1266,13 @@ mod tests {
             "http://prowlarr.lan:9696/base"
         );
         assert_eq!(canonical("http://h:1/"), canonical("HTTP://H:1"));
+        // Only a parsed comparison passes these: default ports, case.
+        assert_eq!(canonical("http://h"), canonical("http://h:80"));
+        assert_eq!(canonical("https://h"), canonical("https://h:443"));
+        assert_ne!(canonical("http://h:80"), canonical("http://h:8080"));
+        assert_eq!(canonical("https://h/x/"), canonical("HTTPS://H:443/x"));
+        assert_ne!(canonical("http://h"), canonical("https://h"));
+        assert_eq!(canonical(" not a url/ "), "not a url");
     }
 
     #[test]
