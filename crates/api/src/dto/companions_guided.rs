@@ -3,7 +3,7 @@
 //! detection found, the target you add, the key or temporary password you
 //! paste, and the configuration you confirm.
 //!
-//! **What never appears here:** the value you paste ([`PasteRequest`]
+//! **What never appears here:** the value you paste ([`CompanionPasteRequest`]
 //! hides it from `Debug`, and no response carries it), a credential, or a
 //! path on this machine.
 
@@ -44,7 +44,7 @@ pub struct DetectedCompanion {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-pub struct DetectedList {
+pub struct DetectedCompanions {
     pub found: Vec<DetectedCompanion>,
 }
 
@@ -52,14 +52,14 @@ pub struct DetectedList {
 /// (Q19), sealed at once and never shown again.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct PasteRequest {
+pub struct CompanionPasteRequest {
     #[schema(example = json!("(pasted from qBittorrent's log)"))]
     pub value: String,
 }
 
-impl fmt::Debug for PasteRequest {
+impl fmt::Debug for CompanionPasteRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PasteRequest")
+        f.debug_struct("CompanionPasteRequest")
             .field("value", &REDACTED)
             .finish()
     }
@@ -77,14 +77,14 @@ pub struct CompanionPlan {
 /// `POST /companions/{id}/confirm`: the plan's settings, echoed exactly.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct ConfirmRequest {
+pub struct CompanionConfirmRequest {
     pub settings: Vec<String>,
 }
 
 /// `POST /companions/{id}/guided/forget`: `confirm` is the companion's id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct ForgetRequest {
+pub struct CompanionForgetRequest {
     pub confirm: String,
 }
 
@@ -92,7 +92,7 @@ pub struct ForgetRequest {
 /// and its stored credential, by `settings` key. The download client entry
 /// in Integrations stays.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-pub struct Forgotten {
+pub struct CompanionForgotten {
     pub deleted: Vec<String>,
     pub id: String,
 }
@@ -103,7 +103,7 @@ mod tests {
 
     #[test]
     fn a_pasted_value_never_reaches_debug() {
-        let p = PasteRequest {
+        let p = CompanionPasteRequest {
             value: "TempPass123".into(),
         };
         assert!(!format!("{p:?}").contains("TempPass123"));

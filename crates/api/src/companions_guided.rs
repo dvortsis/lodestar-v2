@@ -39,8 +39,8 @@ use utoipa::OpenApi;
 use crate::companions::CompanionsError;
 use crate::dto::companions::Companion;
 use crate::dto::companions_guided::{
-    CompanionPlan, CompanionTarget, ConfirmRequest, DetectedCompanion, DetectedList, ForgetRequest,
-    Forgotten, PasteRequest,
+    CompanionConfirmRequest, CompanionForgetRequest, CompanionForgotten, CompanionPasteRequest,
+    CompanionPlan, CompanionTarget, DetectedCompanion, DetectedCompanions,
 };
 use crate::dto::error::ErrorEnvelope;
 use crate::error::{ApiError, ApiResult};
@@ -90,6 +90,7 @@ fn message(code: &str) -> Option<&'static str> {
             "Setting up Prowlarr from here comes in a later version. Add it in its source settings."
         }
         "installed" => "Lodestar installed this companion; it's managed on its own.",
+        "already_added" => "This companion is already added. Forget it first to add it again.",
         "no_target" => "Add the companion's address first.",
         "no_temporary_password" => "Paste qBittorrent's temporary password first.",
         "bad_value" => "That doesn't look like qBittorrent's temporary password.",
@@ -183,7 +184,7 @@ fn check_id(id: &str) -> ApiResult<()> {
     path = "/companions/detect",
     tag = "companions",
     responses(
-        (status = 200, body = DetectedList),
+        (status = 200, body = DetectedCompanions),
         (status = 403, description = "`cross_origin`.", body = ErrorEnvelope),
         (status = 409, description = "`busy`: detection is already running.", body = ErrorEnvelope),
         (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
@@ -193,10 +194,10 @@ fn check_id(id: &str) -> ApiResult<()> {
 pub(crate) async fn detect_companions(
     handle: Handle,
     headers: HeaderMap,
-) -> ApiResult<Json<DetectedList>> {
+) -> ApiResult<Json<DetectedCompanions>> {
     same_origin_json(&headers)?;
     let found = api(handle)?.detect().await.map_err(ApiError::from)?;
-    Ok(Json(DetectedList { found }))
+    Ok(Json(DetectedCompanions { found }))
 }
 
 /// Adds the companion at `target`, once detection confirms it answers
@@ -213,7 +214,7 @@ pub(crate) async fn detect_companions(
         (status = 400, description = "`bad_template_input` with `field`: a port or address that can't be used.", body = ErrorEnvelope),
         (status = 403, description = "`cross_origin`.", body = ErrorEnvelope),
         (status = 404, description = "`unknown_companion`.", body = ErrorEnvelope),
-        (status = 409, description = "`not_detected`, `address_refused`, `handover_later`, `installed`.", body = ErrorEnvelope),
+        (status = 409, description = "`not_detected`, `address_refused`, `handover_later`, `installed`, `already_added`, `busy`, or the companion's own refusal code (`companion_unreachable`, `companion_unauthorized`, `companion_protocol`).", body = ErrorEnvelope),
         (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
         (status = 422, description = "`bad_body`.", body = ErrorEnvelope),
         (status = 503, description = "`companions_unavailable`.", body = ErrorEnvelope),
@@ -243,13 +244,13 @@ pub(crate) async fn set_target(
     path = "/companions/{id}/paste",
     tag = "companions",
     params(("id" = String, Path, description = "The catalogue id.")),
-    request_body = PasteRequest,
+    request_body = CompanionPasteRequest,
     responses(
         (status = 204, description = "Sealed."),
         (status = 400, description = "`bad_value` with `field`: empty, too long, or not printable.", body = ErrorEnvelope),
         (status = 403, description = "`cross_origin`.", body = ErrorEnvelope),
         (status = 404, description = "`unknown_companion`.", body = ErrorEnvelope),
-        (status = 409, description = "`no_target`, `handover_later`, `installed`.", body = ErrorEnvelope),
+        (status = 409, description = "`no_target`, `handover_later`, `installed`, `already_added`, `busy`.", body = ErrorEnvelope),
         (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
         (status = 422, description = "`bad_body`.", body = ErrorEnvelope),
         (status = 503, description = "`companions_unavailable`.", body = ErrorEnvelope),
@@ -259,7 +260,7 @@ pub(crate) async fn paste_credential(
     handle: Handle,
     headers: HeaderMap,
     Path(id): Path<String>,
-    extract::Json(body): extract::Json<PasteRequest>,
+    extract::Json(body): extract::Json<CompanionPasteRequest>,
 ) -> ApiResult<StatusCode> {
     same_origin_json(&headers)?;
     check_id(&id)?;
@@ -288,7 +289,7 @@ pub(crate) async fn paste_credential(
         (status = 200, body = CompanionPlan),
         (status = 403, description = "`cross_origin`.", body = ErrorEnvelope),
         (status = 404, description = "`unknown_companion`.", body = ErrorEnvelope),
-        (status = 409, description = "`no_target`, `no_temporary_password`, `handover_later`, or the companion's own refusal code.", body = ErrorEnvelope),
+        (status = 409, description = "`no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, or the companion's own refusal code.", body = ErrorEnvelope),
         (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
         (status = 429, description = "`rate_limited`, with `Retry-After`.", body = ErrorEnvelope),
         (status = 503, description = "`companions_unavailable`.", body = ErrorEnvelope),
@@ -316,12 +317,12 @@ pub(crate) async fn plan_configuration(
     path = "/companions/{id}/confirm",
     tag = "companions",
     params(("id" = String, Path, description = "The catalogue id.")),
-    request_body = ConfirmRequest,
+    request_body = CompanionConfirmRequest,
     responses(
         (status = 200, body = Companion),
         (status = 403, description = "`cross_origin`.", body = ErrorEnvelope),
         (status = 404, description = "`unknown_companion`.", body = ErrorEnvelope),
-        (status = 409, description = "`confirmation_mismatch`, `no_target`, `no_temporary_password`, `handover_later`, or the companion's own refusal code.", body = ErrorEnvelope),
+        (status = 409, description = "`confirmation_mismatch`, `no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, or the companion's own refusal code.", body = ErrorEnvelope),
         (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
         (status = 422, description = "`bad_body`.", body = ErrorEnvelope),
         (status = 503, description = "`companions_unavailable`.", body = ErrorEnvelope),
@@ -331,7 +332,7 @@ pub(crate) async fn confirm_configuration(
     handle: Handle,
     headers: HeaderMap,
     Path(id): Path<String>,
-    extract::Json(body): extract::Json<ConfirmRequest>,
+    extract::Json(body): extract::Json<CompanionConfirmRequest>,
 ) -> ApiResult<Json<Companion>> {
     same_origin_json(&headers)?;
     check_id(&id)?;
@@ -351,12 +352,12 @@ pub(crate) async fn confirm_configuration(
     path = "/companions/{id}/guided/forget",
     tag = "companions",
     params(("id" = String, Path, description = "The catalogue id.")),
-    request_body = ForgetRequest,
+    request_body = CompanionForgetRequest,
     responses(
-        (status = 200, body = Forgotten),
+        (status = 200, body = CompanionForgotten),
         (status = 403, description = "`cross_origin`.", body = ErrorEnvelope),
         (status = 404, description = "`unknown_companion`.", body = ErrorEnvelope),
-        (status = 409, description = "`confirmation_mismatch`, `installed`.", body = ErrorEnvelope),
+        (status = 409, description = "`confirmation_mismatch`, `installed`, `busy`.", body = ErrorEnvelope),
         (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
         (status = 422, description = "`bad_body`.", body = ErrorEnvelope),
         (status = 503, description = "`companions_unavailable`.", body = ErrorEnvelope),
@@ -366,8 +367,8 @@ pub(crate) async fn forget_companion(
     handle: Handle,
     headers: HeaderMap,
     Path(id): Path<String>,
-    extract::Json(body): extract::Json<ForgetRequest>,
-) -> ApiResult<Json<Forgotten>> {
+    extract::Json(body): extract::Json<CompanionForgetRequest>,
+) -> ApiResult<Json<CompanionForgotten>> {
     same_origin_json(&headers)?;
     check_id(&id)?;
     let api = api(handle)?;
@@ -375,7 +376,7 @@ pub(crate) async fn forget_companion(
         return Err(CompanionsError::Mismatch.into());
     }
     let deleted = api.forget(id.clone()).await.map_err(ApiError::from)?;
-    Ok(Json(Forgotten { deleted, id }))
+    Ok(Json(CompanionForgotten { deleted, id }))
 }
 
 /// `e` as a response, with `Retry-After` on a `429`.
@@ -404,6 +405,7 @@ mod tests {
             "address_refused",
             "handover_later",
             "installed",
+            "already_added",
             "no_target",
             "no_temporary_password",
             "busy",

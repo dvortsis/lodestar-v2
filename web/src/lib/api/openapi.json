@@ -889,7 +889,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DetectedList"
+                  "$ref": "#/components/schemas/DetectedCompanions"
                 }
               }
             }
@@ -1027,7 +1027,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ConfirmRequest"
+                "$ref": "#/components/schemas/CompanionConfirmRequest"
               }
             }
           },
@@ -1065,7 +1065,7 @@
             }
           },
           "409": {
-            "description": "`confirmation_mismatch`, `no_target`, `no_temporary_password`, `handover_later`, or the companion's own refusal code.",
+            "description": "`confirmation_mismatch`, `no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, or the companion's own refusal code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1375,7 +1375,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ForgetRequest"
+                "$ref": "#/components/schemas/CompanionForgetRequest"
               }
             }
           },
@@ -1387,7 +1387,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Forgotten"
+                  "$ref": "#/components/schemas/CompanionForgotten"
                 }
               }
             }
@@ -1413,7 +1413,7 @@
             }
           },
           "409": {
-            "description": "`confirmation_mismatch`, `installed`.",
+            "description": "`confirmation_mismatch`, `installed`, `busy`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1733,7 +1733,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/PasteRequest"
+                "$ref": "#/components/schemas/CompanionPasteRequest"
               }
             }
           },
@@ -1774,7 +1774,7 @@
             }
           },
           "409": {
-            "description": "`no_target`, `handover_later`, `installed`.",
+            "description": "`no_target`, `handover_later`, `installed`, `already_added`, `busy`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1874,7 +1874,7 @@
             }
           },
           "409": {
-            "description": "`no_target`, `no_temporary_password`, `handover_later`, or the companion's own refusal code.",
+            "description": "`no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, or the companion's own refusal code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2262,7 +2262,7 @@
             }
           },
           "409": {
-            "description": "`not_detected`, `address_refused`, `handover_later`, `installed`.",
+            "description": "`not_detected`, `address_refused`, `handover_later`, `installed`, `already_added`, `busy`, or the companion's own refusal code (`companion_unreachable`, `companion_unauthorized`, `companion_protocol`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -12646,6 +12646,54 @@
           }
         }
       },
+      "CompanionConfirmRequest": {
+        "type": "object",
+        "description": "`POST /companions/{id}/confirm`: the plan's settings, echoed exactly.",
+        "required": [
+          "settings"
+        ],
+        "properties": {
+          "settings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "CompanionForgetRequest": {
+        "type": "object",
+        "description": "`POST /companions/{id}/guided/forget`: `confirm` is the companion's id.",
+        "required": [
+          "confirm"
+        ],
+        "properties": {
+          "confirm": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CompanionForgotten": {
+        "type": "object",
+        "description": "What forgetting a companion you added deleted: Lodestar's record of it\nand its stored credential, by `settings` key. The download client entry\nin Integrations stays.",
+        "required": [
+          "deleted",
+          "id"
+        ],
+        "properties": {
+          "deleted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string"
+          }
+        }
+      },
       "CompanionInstallRequest": {
         "type": "object",
         "description": "`POST /companions/{id}/install`: the offer's version and SHA-256,\nechoed. Anything else is `409 confirmation_mismatch`.",
@@ -12696,6 +12744,20 @@
             "description": "Oldest first."
           }
         }
+      },
+      "CompanionPasteRequest": {
+        "type": "object",
+        "description": "`POST /companions/{id}/paste`: qBittorrent's temporary WebUI password\n(Q19), sealed at once and never shown again.",
+        "required": [
+          "value"
+        ],
+        "properties": {
+          "value": {
+            "type": "string",
+            "example": "(pasted from qBittorrent's log)"
+          }
+        },
+        "additionalProperties": false
       },
       "CompanionPlan": {
         "type": "object",
@@ -13780,7 +13842,7 @@
           }
         }
       },
-      "DetectedList": {
+      "DetectedCompanions": {
         "type": "object",
         "required": [
           "found"
@@ -15809,38 +15871,6 @@
             "paused": 1,
             "stored_per_hour": 4200,
             "workers": 3
-          }
-        }
-      },
-      "ForgetRequest": {
-        "type": "object",
-        "description": "`POST /companions/{id}/guided/forget`: `confirm` is the companion's id.",
-        "required": [
-          "confirm"
-        ],
-        "properties": {
-          "confirm": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": false
-      },
-      "Forgotten": {
-        "type": "object",
-        "description": "What forgetting a companion you added deleted: Lodestar's record of it\nand its stored credential, by `settings` key. The download client entry\nin Integrations stays.",
-        "required": [
-          "deleted",
-          "id"
-        ],
-        "properties": {
-          "deleted": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "id": {
-            "type": "string"
           }
         }
       },
@@ -19436,20 +19466,6 @@
             "type": "string"
           }
         }
-      },
-      "PasteRequest": {
-        "type": "object",
-        "description": "`POST /companions/{id}/paste`: qBittorrent's temporary WebUI password\n(Q19), sealed at once and never shown again.",
-        "required": [
-          "value"
-        ],
-        "properties": {
-          "value": {
-            "type": "string",
-            "example": "(pasted from qBittorrent's log)"
-          }
-        },
-        "additionalProperties": false
       },
       "PauseRequest": {
         "type": "object",

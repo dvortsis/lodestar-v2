@@ -42,6 +42,9 @@ use lodestar_integrations::secret::{SealedSecret, Secret, SecretStore};
 use lodestar_store::Store;
 use tokio::sync::watch;
 
+/// A `settings` row as the store reads it: text, or the bytes of a blob.
+type RawRow = (String, Result<String, Vec<u8>>);
+
 /// Companion credential rows in the store's `settings` table.
 #[derive(Debug, Clone)]
 pub struct StoreRows(pub Arc<Mutex<Store>>);
@@ -600,20 +603,52 @@ impl Service {
         if self.installed(id)? {
             return Ok(true);
         }
-        let rows = self
-            .rows
+        let rows = self.companion_rows()?;
+        Ok(Self::generated_in(&rows, id, field))
+    }
+
+    /// Every companion row, read in one query: a provenance and the
+    /// credential it describes are always seen together.
+    fn companion_rows(&self) -> Result<Vec<RawRow>, CompanionsError> {
+        self.rows
             .0
             .lock()
             .map_err(|_| CompanionsError::Internal("store"))?
             .settings_with_prefix_raw(lodestar_companions::credentials::ROW_PREFIX)
-            .map_err(|_| CompanionsError::Internal("store"))?;
+            .map_err(|_| CompanionsError::Internal("store"))
+    }
+
+    fn generated_in(rows: &[RawRow], id: &CompanionId, field: Field) -> bool {
         let text = |key: &str| {
             rows.iter()
                 .find(|(k, _)| k == key)
                 .and_then(|(_, v)| v.as_ref().ok().cloned())
         };
-        Ok(lodestar_companions::guided::provenance(id, field, text)
-            == Some(lodestar_companions::guided::Provenance::Generated))
+        lodestar_companions::guided::provenance(id, field, text)
+            == Some(lodestar_companions::guided::Provenance::Generated)
+    }
+
+    /// The credential, when [`Service::generated`] allows it. For a
+    /// companion you added, the provenance and the sealed row come from
+    /// the same read, so a paste landing in between can't be shown.
+    /// Blocking.
+    fn revealable(&self, id: &CompanionId, f: Field) -> Result<Option<Secret>, CompanionsError> {
+        if self.installed(id)? {
+            return self.open(id, f);
+        }
+        let rows = self.companion_rows()?;
+        if !Self::generated_in(&rows, id, f) {
+            return Ok(None);
+        }
+        let key = CredentialKey::new(id.clone(), f);
+        let Some((_, Err(bytes))) = rows.into_iter().find(|(k, _)| *k == key.row_key()) else {
+            return Ok(None);
+        };
+        let sealed =
+            SealedSecret::from_bytes(bytes).map_err(|_| CompanionsError::Internal("sealed"))?;
+        credentials::open(&self.secrets, &key, &sealed)
+            .map(Some)
+            .map_err(|_| CompanionsError::Internal("sealed"))
     }
 
     fn input(&self, r: &TemplateRequest) -> Result<ServiceInput, CompanionsError> {
@@ -837,12 +872,7 @@ impl CompanionsApi for Service {
             // installed has one. A pasted key or temporary password (a
             // guided or detected companion) is never shown again.
             let secret = self
-                .off(move |s| {
-                    if !s.generated(&e.id, f)? {
-                        return Ok(None);
-                    }
-                    s.open(&e.id, f)
-                })
+                .off(move |s| s.revealable(&e.id, f))
                 .await?
                 .ok_or(CompanionsError::NoCredential)?;
             Ok(Revealed {

@@ -58,6 +58,8 @@ struct QState {
     failed: usize,
     /// Every sign-in is refused, as after a ban.
     banned: bool,
+    /// Every settings write is refused.
+    refuse_writes: bool,
 }
 
 type Qbit = Arc<Mutex<QState>>;
@@ -130,6 +132,7 @@ fn answer(
     match (method, path) {
         ("GET", "/api/v2/app/preferences") => (200, None, PREFS.into()),
         ("GET", "/api/v2/torrents/categories") => (200, None, "{}".into()),
+        ("POST", "/api/v2/app/setPreferences") if s.refuse_writes => (400, None, String::new()),
         ("POST", "/api/v2/app/setPreferences") => {
             let f = form(body);
             let m: serde_json::Map<String, serde_json::Value> =
@@ -200,6 +203,7 @@ async fn qbittorrent(password: &str) -> (SocketAddr, Qbit) {
         logins: 0,
         failed: 0,
         banned: false,
+        refuse_writes: false,
     }));
     let s = state.clone();
     tokio::spawn(async move {
@@ -212,15 +216,22 @@ async fn qbittorrent(password: &str) -> (SocketAddr, Qbit) {
 
 // ─── The binary's half over a temporary data folder ─────────────────────
 
-/// What the hand-over was given.
+/// What the hand-over was given; `reject` refuses it, as a settings
+/// save that fails.
 #[derive(Default)]
-struct Recorder(Mutex<Vec<(String, StoredTarget, String, String)>>);
+struct Recorder(
+    Mutex<Vec<(String, StoredTarget, String, String)>>,
+    std::sync::atomic::AtomicBool,
+);
 
 impl ConfigSink for Recorder {
     fn download_client<'a>(
         &'a self,
         entry: DownloadClientEntry,
     ) -> BoxFuture<'a, Result<(), SinkError>> {
+        if self.1.load(Ordering::SeqCst) {
+            return Box::pin(async { Err(SinkError::Rejected) });
+        }
         self.0.lock().unwrap().push((
             entry.companion.as_str().to_owned(),
             StoredTarget::of(&entry.target),
@@ -558,6 +569,16 @@ async fn the_guided_flow_hands_qbittorrent_over() {
             url: format!("http://{addr}")
         }
     );
+    // Added: neither its target nor its credential changes in place, so
+    // the generated password stays the one you can reveal.
+    for e in [
+        g.set_target(id(), url(addr)).await.unwrap_err(),
+        g.paste(id(), TEMPORARY.into()).await.unwrap_err(),
+    ] {
+        assert_eq!(refused(e), "already_added");
+    }
+    assert_eq!(f.credential(), Some(generated.clone()));
+    assert_eq!(f.provenance().as_deref(), Some("generated"));
     // The temporary password is gone: a second confirmation has nothing to
     // sign in with.
     f.a_minute_passes();
@@ -721,4 +742,74 @@ async fn detection_is_capped_and_one_at_a_time() {
     }
     assert_eq!(refused(f.guided.detect().await.unwrap_err()), "busy");
     first.abort();
+}
+
+/// One guided change at a time: while one runs, every other is `busy`
+/// and touches nothing.
+#[tokio::test]
+async fn guided_changes_run_one_at_a_time() {
+    let f = fixture();
+    let g = &f.guided;
+    let id = || "qbittorrent".to_owned();
+    let _held = g.changing.try_lock().unwrap();
+    let t = CompanionTarget::Loopback { port: 8080 };
+    for e in [
+        g.set_target(id(), t).await.unwrap_err(),
+        g.paste(id(), TEMPORARY.into()).await.unwrap_err(),
+        g.plan(id()).await.unwrap_err(),
+        g.confirm(id(), vec!["webui.password".into()])
+            .await
+            .unwrap_err(),
+        g.forget(id()).await.unwrap_err(),
+    ] {
+        assert_eq!(refused(e), "busy");
+    }
+    assert!(texts(&f.store).unwrap().is_empty());
+}
+
+/// Once the apply has started the generated password stays, marked
+/// generated, whatever fails after; nothing is recorded or handed over.
+/// Pasting the temporary password again (still valid when qBittorrent
+/// never took the new one) and confirming again recovers.
+#[tokio::test]
+async fn a_failed_apply_or_hand_over_keeps_the_generated_password() {
+    let (addr, q) = qbittorrent(TEMPORARY).await;
+    let f = fixture();
+    let g = &f.guided;
+    let id = || "qbittorrent".to_owned();
+    g.set_target(id(), url(addr)).await.unwrap();
+    g.paste(id(), TEMPORARY.into()).await.unwrap();
+
+    q.lock().unwrap().refuse_writes = true;
+    let plan = g.plan(id()).await.unwrap();
+    assert!(g.confirm(id(), plan).await.is_err());
+    let generated = f.credential().unwrap();
+    assert_ne!(generated, TEMPORARY);
+    assert_eq!(f.provenance().as_deref(), Some("generated"));
+    assert_eq!(
+        q.lock().unwrap().password,
+        TEMPORARY,
+        "qBittorrent refused it"
+    );
+    assert_eq!(f.row(&guided::origin_key(&qbt())), None);
+    assert!(f.sink.0.lock().unwrap().is_empty());
+    assert!(f.added.borrow().is_empty());
+
+    // The recovery: paste again, and a refused hand-over this time.
+    q.lock().unwrap().refuse_writes = false;
+    g.paste(id(), TEMPORARY.into()).await.unwrap();
+    assert_eq!(f.provenance().as_deref(), Some("pasted"));
+    f.a_minute_passes();
+    let plan = g.plan(id()).await.unwrap();
+    f.sink.1.store(true, Ordering::SeqCst);
+    assert!(g.confirm(id(), plan).await.is_err());
+    let generated = f.credential().unwrap();
+    assert_eq!(
+        q.lock().unwrap().password,
+        generated,
+        "applied before the hand-over"
+    );
+    assert_eq!(f.provenance().as_deref(), Some("generated"));
+    assert_eq!(f.row(&guided::origin_key(&qbt())), None);
+    assert!(f.added.borrow().is_empty());
 }

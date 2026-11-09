@@ -3975,6 +3975,23 @@ export interface components {
         CompanionAccepted: {
             id: string;
         };
+        /** @description `POST /companions/{id}/confirm`: the plan's settings, echoed exactly. */
+        CompanionConfirmRequest: {
+            settings: string[];
+        };
+        /** @description `POST /companions/{id}/guided/forget`: `confirm` is the companion's id. */
+        CompanionForgetRequest: {
+            confirm: string;
+        };
+        /**
+         * @description What forgetting a companion you added deleted: Lodestar's record of it
+         *     and its stored credential, by `settings` key. The download client entry
+         *     in Integrations stays.
+         */
+        CompanionForgotten: {
+            deleted: string[];
+            id: string;
+        };
         /**
          * @description `POST /companions/{id}/install`: the offer's version and SHA-256,
          *     echoed. Anything else is `409 confirmation_mismatch`.
@@ -3991,6 +4008,14 @@ export interface components {
             id: string;
             /** @description Oldest first. */
             lines: string[];
+        };
+        /**
+         * @description `POST /companions/{id}/paste`: qBittorrent's temporary WebUI password
+         *     (Q19), sealed at once and never shown again.
+         */
+        CompanionPasteRequest: {
+            /** @example (pasted from qBittorrent's log) */
+            value: string;
         };
         /**
          * @description The settings a configuration changes, by name (never a value), shown
@@ -4520,7 +4545,7 @@ export interface components {
             /** @description The version it reports, when it reports one. */
             version: string | null;
         };
-        DetectedList: {
+        DetectedCompanions: {
             found: components["schemas"]["DetectedCompanion"][];
         };
         Detection: {
@@ -5496,19 +5521,6 @@ export interface components {
          */
         FleetSummary: {
             fleet: null | components["schemas"]["Fleet"];
-        };
-        /** @description `POST /companions/{id}/guided/forget`: `confirm` is the companion's id. */
-        ForgetRequest: {
-            confirm: string;
-        };
-        /**
-         * @description What forgetting a companion you added deleted: Lodestar's record of it
-         *     and its stored credential, by `settings` key. The download client entry
-         *     in Integrations stays.
-         */
-        Forgotten: {
-            deleted: string[];
-            id: string;
         };
         /** @description One discovery cohort (or a UTC day of them) in the funnel (§10.9.3). */
         FunnelCohort: {
@@ -7187,14 +7199,6 @@ export interface components {
             /** @description At least 10 characters. */
             new: string;
             old: string;
-        };
-        /**
-         * @description `POST /companions/{id}/paste`: qBittorrent's temporary WebUI password
-         *     (Q19), sealed at once and never shown again.
-         */
-        PasteRequest: {
-            /** @example (pasted from qBittorrent's log) */
-            value: string;
         };
         /** @description `POST /updates/pause`: 1, 7 or 30 days; 0 resumes. */
         PauseRequest: {
@@ -11509,7 +11513,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DetectedList"];
+                    "application/json": components["schemas"]["DetectedCompanions"];
                 };
             };
             /** @description `cross_origin`. */
@@ -11604,7 +11608,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ConfirmRequest"];
+                "application/json": components["schemas"]["CompanionConfirmRequest"];
             };
         };
         responses: {
@@ -11634,7 +11638,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `confirmation_mismatch`, `no_target`, `no_temporary_password`, `handover_later`, or the companion's own refusal code. */
+            /** @description `confirmation_mismatch`, `no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, or the companion's own refusal code. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -11856,7 +11860,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ForgetRequest"];
+                "application/json": components["schemas"]["CompanionForgetRequest"];
             };
         };
         responses: {
@@ -11865,7 +11869,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Forgotten"];
+                    "application/json": components["schemas"]["CompanionForgotten"];
                 };
             };
             /** @description `cross_origin`. */
@@ -11886,7 +11890,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `confirmation_mismatch`, `installed`. */
+            /** @description `confirmation_mismatch`, `installed`, `busy`. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -12118,7 +12122,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["PasteRequest"];
+                "application/json": components["schemas"]["CompanionPasteRequest"];
             };
         };
         responses: {
@@ -12156,7 +12160,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `no_target`, `handover_later`, `installed`. */
+            /** @description `no_target`, `handover_later`, `installed`, `already_added`, `busy`. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -12233,7 +12237,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `no_target`, `no_temporary_password`, `handover_later`, or the companion's own refusal code. */
+            /** @description `no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, or the companion's own refusal code. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -12522,7 +12526,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `not_detected`, `address_refused`, `handover_later`, `installed`. */
+            /** @description `not_detected`, `address_refused`, `handover_later`, `installed`, `already_added`, `busy`, or the companion's own refusal code (`companion_unreachable`, `companion_unauthorized`, `companion_protocol`). */
             409: {
                 headers: {
                     [name: string]: unknown;

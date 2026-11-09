@@ -729,6 +729,17 @@ fn adapter_code(e: AdapterError) -> &'static str {
     }
 }
 
+/// A guided step on the one companion handed over that failed after it
+/// changed something, by code only.
+fn failed(reason: &'static str) {
+    lodestar_log::log_event!(
+        lodestar_companions::log_events::CONFIG_FAILED,
+        companion = HANDED_OVER,
+        setting = "guided",
+        reason = reason
+    );
+}
+
 fn target_dto(t: &Target) -> CompanionTarget {
     match StoredTarget::of(t) {
         StoredTarget::Loopback { port } => CompanionTarget::Loopback { port },
@@ -790,9 +801,12 @@ pub struct Guided {
     added: channel::Sender<Vec<Added>>,
     /// Detection's overall cap: [`DETECT_CAP`], shorter in tests.
     detect_cap: Duration,
-    /// One detection, and one configuration, at a time.
+    /// One detection at a time.
     detecting: tokio::sync::Mutex<()>,
-    configuring: tokio::sync::Mutex<()>,
+    /// One guided change at a time (target, paste, plan, confirm,
+    /// forget): each reads rows another writes, and a provenance must
+    /// never describe another step's credential.
+    changing: tokio::sync::Mutex<()>,
     last_plan: Mutex<Option<tokio::time::Instant>>,
     /// The last plan's settings, taken by the next confirmation: one
     /// confirmation per plan, and a mismatch is refused before it signs
@@ -826,7 +840,7 @@ impl Guided {
             added,
             detect_cap: DETECT_CAP,
             detecting: tokio::sync::Mutex::new(()),
-            configuring: tokio::sync::Mutex::new(()),
+            changing: tokio::sync::Mutex::new(()),
             last_plan: Mutex::new(None),
             planned: Mutex::new(None),
         }
@@ -835,6 +849,33 @@ impl Guided {
     fn entry(&self, id: &str) -> Result<&'static Entry, CompanionsError> {
         CompanionId::parse(id).map_err(|_| CompanionsError::Unknown)?;
         self.catalogue.get(id).ok_or(CompanionsError::Unknown)
+    }
+
+    /// The guided lock, or `busy`.
+    fn exclusive(&self) -> Result<tokio::sync::MutexGuard<'_, ()>, CompanionsError> {
+        self.changing
+            .try_lock()
+            .map_err(|_| CompanionsError::Refused("busy"))
+    }
+
+    /// Forgets the last plan: the rows it was made from changed.
+    fn unplan(&self) {
+        if let Ok(mut p) = self.planned.lock() {
+            *p = None;
+        }
+    }
+
+    /// Refuses a companion already added and confirmed: its record and
+    /// generated credential stay until you forget it.
+    async fn not_added(&self, e: &'static Entry) -> Result<(), CompanionsError> {
+        let key = guided::origin_key(&e.id);
+        let origin = self
+            .blocking(move |s| Ok(texts(s)?.into_iter().any(|(k, _)| k == key)))
+            .await?;
+        if origin {
+            return Err(CompanionsError::Refused("already_added"));
+        }
+        Ok(())
     }
 
     /// The companion this version hands over, and not one Lodestar
@@ -991,6 +1032,8 @@ impl CompanionsGuidedApi for Guided {
     ) -> lodestar_api::ops::BoxFuture<'_, Result<DetectedCompanion, GuidedError>> {
         Box::pin(async move {
             let e = self.handed_over(&id).await?;
+            let _one = self.exclusive()?;
+            self.not_added(e).await?;
             let target = checked_target(e, self.runtime, target)?;
             let detector =
                 detect::detector(&e.id).ok_or(CompanionsError::Refused("not_detected"))?;
@@ -1008,6 +1051,7 @@ impl CompanionsGuidedApi for Guided {
                     .map_err(|_| ())
             })
             .await?;
+            self.unplan();
             Ok(DetectedCompanion {
                 id: e.id.as_str().to_owned(),
                 target: target_dto(&target),
@@ -1023,6 +1067,9 @@ impl CompanionsGuidedApi for Guided {
     ) -> lodestar_api::ops::BoxFuture<'_, Result<(), GuidedError>> {
         Box::pin(async move {
             let e = self.handed_over(&id).await?;
+            let _one = self.exclusive()?;
+            self.not_added(e).await?;
+            self.unplan();
             self.target(e).await?;
             let key = CredentialKey::new(e.id.clone(), Field::WebUiPassword);
             let sealed = lodestar_companions::credentials::accept_pasted(
@@ -1058,6 +1105,7 @@ impl CompanionsGuidedApi for Guided {
     ) -> lodestar_api::ops::BoxFuture<'_, Result<Vec<String>, GuidedError>> {
         Box::pin(async move {
             let e = self.handed_over(&id).await?;
+            let _one = self.exclusive()?;
             let target = self.target(e).await?;
             let sealed = self.temporary(e).await?;
             {
@@ -1070,7 +1118,7 @@ impl CompanionsGuidedApi for Guided {
                     let since = now.duration_since(at);
                     if since < PLAN_EVERY {
                         return Err(GuidedError::RateLimited {
-                            retry_after: (PLAN_EVERY - since).as_secs().max(1),
+                            retry_after: (PLAN_EVERY - since).as_secs_f64().ceil().max(1.0) as u64,
                         });
                     }
                 }
@@ -1105,10 +1153,7 @@ impl CompanionsGuidedApi for Guided {
     ) -> lodestar_api::ops::BoxFuture<'_, Result<Companion, GuidedError>> {
         Box::pin(async move {
             let e = self.handed_over(&id).await?;
-            let _one = self
-                .configuring
-                .try_lock()
-                .map_err(|_| CompanionsError::Refused("busy"))?;
+            let _one = self.exclusive()?;
             // One confirmation per plan, and one that doesn't echo it is
             // refused before qBittorrent is signed in to again.
             let planned = self
@@ -1171,7 +1216,7 @@ impl CompanionsGuidedApi for Guided {
                         change.temporary.clone(),
                     );
                     let rows = crate::companions::StoreRows(self.store.clone());
-                    let _ = self
+                    let restored = self
                         .blocking(move |s| {
                             s.lock()
                                 .map_err(|_| ())?
@@ -1181,6 +1226,9 @@ impl CompanionsGuidedApi for Guided {
                             rows.put(&restore.map_err(|_| ())?).map_err(|_| ())
                         })
                         .await;
+                    if restored.is_err() {
+                        failed("restore_failed");
+                    }
                     return Err(match other {
                         Ok(_) => CompanionsError::Mismatch,
                         Err(e) => e,
@@ -1192,13 +1240,23 @@ impl CompanionsGuidedApi for Guided {
                 .ok_or(CompanionsError::Refused("handover_later"))?;
             let holding = Holding(Field::WebUiPassword, change.next.secret.clone());
             let input = guided_input(&holding, &target, change.temporary.clone())?;
-            configure
+            if let Err(err) = configure
                 .apply(self.http.as_ref(), &target, &input, &plan)
                 .await
-                .map_err(|err| CompanionsError::Refused(adapter_code(err)))?;
-            lodestar_companions::configure::hand_over(self.sink.as_ref(), &e.id, &target, &input)
-                .await
-                .map_err(|err| CompanionsError::Refused(adapter_code(err)))?;
+            {
+                // CMP-8b logs the failed step itself.
+                return Err(CompanionsError::Refused(adapter_code(err)).into());
+            }
+            if let Err(err) = lodestar_companions::configure::hand_over(
+                self.sink.as_ref(),
+                &e.id,
+                &target,
+                &input,
+            )
+            .await
+            {
+                return Err(CompanionsError::Refused(adapter_code(err)).into());
+            }
             let origin = guided::origin_key(&e.id);
             self.blocking(move |s| {
                 s.lock()
@@ -1222,6 +1280,8 @@ impl CompanionsGuidedApi for Guided {
     ) -> lodestar_api::ops::BoxFuture<'_, Result<Vec<String>, GuidedError>> {
         Box::pin(async move {
             let e = self.entry(&id)?;
+            let _one = self.exclusive()?;
+            self.unplan();
             let service = self.service.clone();
             let cid = e.id.clone();
             if tokio::task::spawn_blocking(move || service.lodestar_installed(&cid))
