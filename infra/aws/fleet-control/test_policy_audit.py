@@ -72,9 +72,9 @@ ROLES = {
         ("Allow", (DEL,), ("s3:StateBucket/terraform/lodestar.tfstate.tflock",), NO_COND),
         ("Allow", (LIST,), ("s3:StateBucket",), NO_COND),
         ("Allow", (GET, PUT), ("s3:EvidenceBucket/fleet/*",), NO_COND),
-        ("Allow", (DEL, GET, PUT), ("s3:ControlBucket/locks/fleet.json", "s3:ControlBucket/locks/fleet-mismatch.json"), NO_COND),
-        ("Allow", (LIST,), ("s3:ControlBucket",),
-         cond({"StringEquals": {"s3:prefix": ["locks/fleet.json", "locks/fleet-mismatch.json"]}})),
+        ("Allow", (DEL, GET, PUT), ("s3:ControlBucket/locks/fleet.json",), NO_COND),
+        ("Allow", (GET, PUT), ("s3:ControlBucket/locks/fleet-mismatch.json",), NO_COND),
+        ("Allow", (LIST,), ("s3:ControlBucket",), cond({"StringEquals": {"s3:prefix": ["locks/fleet.json"]}})),
     ]),
     "LodestarOperatorBridge": ([sub("cloud-operator", w) for w in ("operator-wake.yml", "operator-apply.yml", "operator-injection.yml")], [
         ("Allow", (DEL, GET, PUT), ("s3:ControlBucket/locks/operator*",), NO_COND),

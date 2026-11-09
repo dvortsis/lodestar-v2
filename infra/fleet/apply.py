@@ -38,6 +38,11 @@ TF_STATE_KEY = "terraform/lodestar.tfstate"
 REGION = "us-east-1"
 LINODE_SECRET = "lodestar/akamai-fleet-token"
 LOCK_HELD = "Error acquiring the state lock"
+# Subprocess timeouts (seconds) and the state-lock wait, sized so the slowest
+# path still fits its job (docs/decisions/2026-11-09-OP-2.md, "Timeouts").
+TF_TIMEOUTS = {"init": 120, "apply": 720, "destroy": 300, "output": 60}
+TF_LOCK_TIMEOUT = "2m"
+TF_ATTEMPTS = 2
 ROLE_LABELS = {"main": "main", "worker": "worker-01"}  # preset role -> Terraform role label
 RULE_FIELDS = ("inbound", "inbound_policy", "outbound", "outbound_policy")  # the writable part of a rule set
 # Terraform's environment is built from these and the run's own values, never os.environ
@@ -78,25 +83,49 @@ def pinned_tf_dir(commit: str | None, run=subprocess.run) -> Path:
     if not is_ancestor(commit, "origin/main", repo):
         raise ApplyFailed("the fleet's pinned commit is not an ancestor of main")
     d = tempfile.mkdtemp(prefix="fleet-pin-")
-    run(["git", "-C", repo, "worktree", "add", "--detach", d, commit], check=True, capture_output=True)
+    run(["git", "-C", repo, "worktree", "add", "--detach", d, commit], check=True, capture_output=True, timeout=120)
     return Path(d) / "infra" / "akamai" / "terraform"
 
 
+def unpin_tf_dir(path: Path, run=subprocess.run) -> None:
+    """Remove a worktree pinned_tf_dir made (never the checkout itself)."""
+    if path == TF_DIR:
+        return
+    root = path.parents[2]
+    run(["git", "-C", str(TF_DIR.parents[2]), "worktree", "remove", "--force", str(root)],
+        check=False, capture_output=True, timeout=120)
+
+
 class Terraform:
-    def __init__(self, workdir: Path, env: dict, evidence: Evidence, run=subprocess.run, attempts: int = 3,
-                 pin: Callable[[str | None], Path] = pinned_tf_dir):
-        self.workdir, self.env, self.evidence, self.run, self.attempts, self.pin = workdir, env, evidence, run, attempts, pin
+    def __init__(self, workdir: Path, env: dict, evidence: Evidence, run=subprocess.run, attempts: int = TF_ATTEMPTS,
+                 pin: Callable[[str | None], Path] = pinned_tf_dir, unpin: Callable[[Path], None] = unpin_tf_dir):
+        self.workdir, self.env, self.evidence, self.run, self.attempts = workdir, env, evidence, run, attempts
+        self.pin, self.unpin = pin, unpin
 
     def at(self, commit: str | None) -> "Terraform":
-        """This runner, working in the configuration at `commit`."""
-        return Terraform(self.pin(commit), self.env, self.evidence, self.run, self.attempts, self.pin)
+        """This runner, working in the configuration at `commit`. Call close() after."""
+        return Terraform(self.pin(commit), self.env, self.evidence, self.run, self.attempts, self.pin, self.unpin)
+
+    def close(self) -> None:
+        try:
+            self.unpin(self.workdir)
+        except Exception:  # noqa: BLE001 - a leftover temp worktree on an ephemeral runner
+            pass
+
+    def _call(self, args: list[str]):
+        """(returncode, stdout, stderr); a timeout counts as a failure (124)."""
+        try:
+            r = self.run(["terraform", *args], cwd=self.workdir, env=self.env, capture_output=True, text=True,
+                         timeout=TF_TIMEOUTS[args[0]])
+        except subprocess.TimeoutExpired:
+            return 124, "", f"terraform {args[0]} timed out after {TF_TIMEOUTS[args[0]]} s"
+        return r.returncode, r.stdout or "", r.stderr or ""
 
     def _tf(self, args: list[str], log: str | None) -> tuple[int, str]:
-        r = self.run(["terraform", *args], cwd=self.workdir, env=self.env, capture_output=True, text=True)
-        out = (r.stdout or "") + (r.stderr or "")
+        rc, out, err = self._call(args)
         if log:
-            self.evidence.put(log, out)
-        return r.returncode, out
+            self.evidence.put(log, out + err)
+        return rc, out + err
 
     def init(self, bucket: str) -> None:
         rc, _ = self._tf(["init", "-input=false", "-no-color", f"-backend-config=bucket={bucket}",
@@ -106,7 +135,7 @@ class Terraform:
 
     def _with_retries(self, verb: str, varfile: str) -> None:
         for n in range(1, self.attempts + 1):
-            rc, out = self._tf([verb, "-input=false", "-no-color", "-auto-approve", "-lock-timeout=5m",
+            rc, out = self._tf([verb, "-input=false", "-no-color", "-auto-approve", f"-lock-timeout={TF_LOCK_TIMEOUT}",
                                 f"-var-file={varfile}"], f"terraform-{verb}-{n}")
             if rc == 0:
                 return
@@ -121,10 +150,10 @@ class Terraform:
         self._with_retries("destroy", varfile)
 
     def outputs(self) -> dict:
-        rc, out = self._tf(["output", "-json", "-no-color"], None)  # holds addresses: never logged
+        rc, out, _ = self._call(["output", "-json", "-no-color"])  # holds addresses: never logged
         if rc != 0:
             raise ApplyFailed("terraform output failed")
-        return json.loads(out)
+        return json.loads(out)  # stdout only: a warning on stderr can't break the parse
 
 
 def fingerprint(public_key: str) -> str:
@@ -177,14 +206,22 @@ class LiveBackend:
     def write_fleet(self, fleet: dict) -> None:
         self._put(self.state_bucket, FLEET_KEY, fleet)
 
-    def mismatch(self) -> bool:
-        """The flag is always present once a tombstone is written, so its meaning
-        never rests on 404 versus 403. Anything but a readable false is a mismatch."""
+    def mismatch_state(self) -> str:
+        """"true", "false" or "unreadable". The flag is always present once a
+        tombstone is written, so a 404 never decides it."""
         try:
             doc = self._get(self.control_bucket, MISMATCH_KEY)
         except Exception:
-            return True
-        return not (isinstance(doc, dict) and doc.get("mismatch") is False)
+            return "unreadable"
+        if isinstance(doc, dict) and doc.get("mismatch") is False:
+            return "false"
+        if isinstance(doc, dict) and doc.get("mismatch") is True:
+            return "true"
+        return "unreadable"
+
+    def mismatch(self) -> bool:
+        """For down-only: anything but a readable false (fail closed)."""
+        return self.mismatch_state() != "false"
 
     def set_mismatch(self, reasons: list[str]) -> None:
         self._put(self.control_bucket, MISMATCH_KEY, {"mismatch": True, "at": fmt(self.clock()), "reasons": reasons})
@@ -260,15 +297,18 @@ class LiveBackend:
             tf = self.tf.at(fleet["commit"])
         except Exception:
             raise ApplyFailed("host keys or the pinned configuration couldn't be prepared") from None
-        with tempfile.TemporaryDirectory() as d:
-            varfile = self._tfvars(d, keys)
-            tf.init(self.state_bucket)
-            fence()
-            tf.apply(varfile)
         try:
-            hosts = tf.outputs().get("fleet_hosts", {}).get("value") or {}
-        except Exception:
-            raise ApplyFailed("terraform output couldn't be read") from None
+            with tempfile.TemporaryDirectory() as d:
+                varfile = self._tfvars(d, keys)
+                tf.init(self.state_bucket)
+                fence()
+                tf.apply(varfile)
+            try:
+                hosts = tf.outputs().get("fleet_hosts", {}).get("value") or {}
+            except Exception:
+                raise ApplyFailed("terraform output couldn't be read") from None
+        finally:
+            tf.close()
         for role, label in ROLE_LABELS.items():
             if role in fleet["roles"]:
                 h = hosts.get(label) or {}
@@ -292,20 +332,35 @@ class LiveBackend:
             fleet = None  # unknown or malformed: destroy with the current configuration
         try:
             tf = self.tf.at(fleet["commit"] if fleet else None)
-            with tempfile.TemporaryDirectory() as d:
-                varfile = self._tfvars(d, None)
-                tf.init(self.state_bucket)
-                tf.destroy(varfile)
+            try:
+                with tempfile.TemporaryDirectory() as d:
+                    varfile = self._tfvars(d, None)
+                    tf.init(self.state_bucket)
+                    tf.destroy(varfile)
+            finally:
+                tf.close()
         except Exception:  # noqa: BLE001 - down is the kill path: whatever failed above,
             pass           # the fenced API sweep below still runs
         fence()
-        for item, delete in [(n, self.linode.delete_linode) for n in self.linode.linodes()] + \
-                            [(f, self.linode.delete_firewall) for f in self.linode.firewalls()]:
+        # Linodes first. A firewall goes only once no tagged Linode is left and it
+        # has no device, so a Linode that survives keeps its firewall.
+        for n in self.linode.linodes():
             try:
-                delete(item["id"])
+                self.linode.delete_linode(n["id"])
             except Exception:  # noqa: BLE001 - try every one; what's left is checked below
                 pass
-        return not self.linode.linodes() and not self.linode.firewalls()
+        if not self.linode.linodes():
+            for f in self.linode.firewalls():
+                try:
+                    if not self.linode.firewall_devices(f["id"]):
+                        self.linode.delete_firewall(f["id"])
+                except Exception:  # noqa: BLE001
+                    pass
+        if self.linode.linodes() or self.linode.firewalls():
+            # Commands go down-only and the reaper retries hourly.
+            self.set_mismatch(["tagged resources remain after down"])
+            return False
+        return True
 
     def finish_down(self, fleet, fence: Callable[[], None]) -> None:
         """After an empty inventory: book the spend, tombstone fleet.json, clear the flag."""
@@ -322,30 +377,38 @@ class LiveBackend:
             self._put(self.state_bucket, LEDGER_KEY, ledger)
 
     # -- firewalls --
-    def audit(self, fence: Callable[[], None]) -> list[str]:
-        """Sweep stale job rules (fenced writes), then check every tagged firewall."""
-        ranges = audit.actions_ranges(self.meta())
-        try:
-            fleet = self.read_fleet()
-        except FleetUnknown:
-            fleet = None
-        admin_by_fw = {str(s.get("firewall_id")): s.get("admin_ipv4")
-                       for s in (fleet or {}).get("roles", {}).values() if s.get("firewall_id")}
-        linode_ids = {str(n["id"]) for n in self.linode.linodes()}
-        now = self.clock()
-        # Read everything first (rules, devices, every run's status), so a failure
-        # in any of those calls sweeps nothing.
-        plan = []
+    def _sweep(self, fence: Callable[[], None]) -> list[tuple]:
+        """Sweep stale job rules, fenced. Everything is read first (rules, devices,
+        each run's status), so a failed read writes nothing."""
+        now, plan = self.clock(), []
         for fw in self.linode.firewalls():
             rules = self.linode.firewall_rules(fw["id"])
             swept, n = audit.sweep(rules, self.lookup_run, now)
             plan.append((fw, swept, n, self.linode.firewall_devices(fw["id"])))
-        problems = []
-        for fw, swept, n, devices in plan:
+        for fw, swept, n, _ in plan:
             if n:
                 fence()
                 self.linode.put_firewall_rules(fw["id"], writable(swept))
-            problems += audit.audit_firewall(fw, swept, devices, admin_by_fw.get(str(fw["id"])), ranges, linode_ids)
+        return plan
+
+    def sweep(self, fence: Callable[[], None]) -> None:
+        """The sweep alone, for an hour when fleet.json is unreadable."""
+        self._sweep(fence)
+
+    def audit(self, fence: Callable[[], None]) -> list[str]:
+        """Sweep, then check every tagged firewall and every fleet Linode's attachment.
+        Raises (FleetUnknown, a /meta failure, an API error) rather than guess:
+        the reaper escalates, and an audit that can't run is never a mismatch."""
+        ranges = audit.actions_ranges(self.meta())
+        fleet = self.read_fleet()  # FleetUnknown propagates
+        recorded = {str(s["firewall_id"]): s.get("admin_ipv4")
+                    for s in (fleet or {}).get("roles", {}).values() if s.get("firewall_id")}
+        linodes = [str(n["id"]) for n in self.linode.linodes()]
+        attached = {lid: self.linode.linode_firewalls(lid) for lid in linodes}
+        plan = self._sweep(fence)
+        problems = audit.attachment_problems(attached, {str(fw["id"]) for fw, *_ in plan}, set(recorded))
+        for fw, swept, _, devices in plan:
+            problems += audit.audit_firewall(fw, swept, devices, recorded.get(str(fw["id"])), ranges, set(linodes))
         return sorted(set(problems))
 
     def set_job_rules(self, fleet: dict, run_id: str, attempt: str, cidr: str | None, fence: Callable[[], None]) -> None:

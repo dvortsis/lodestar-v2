@@ -193,9 +193,12 @@ def fleet_control() -> dict:
             {"Sid": "ListStateBucket", "Effect": "Allow", "Action": "s3:ListBucket", "Resource": bucket_arn(state)},
             {"Sid": "Evidence", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject"],
              "Resource": obj(evidence, "fleet/*")},
-            {"Sid": "FleetLockAndMismatchFlag", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-             "Resource": [obj(control, FLEET_LOCK_KEY), obj(control, MISMATCH_KEY)]},
-            {"Sid": "ListFleetLock", **list_prefixes(control, [FLEET_LOCK_KEY, MISMATCH_KEY])},
+            {"Sid": "FleetLock", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+             "Resource": obj(control, FLEET_LOCK_KEY)},
+            # The flag is overwritten, never deleted, and its meaning never rests on a 404.
+            {"Sid": "MismatchFlag", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject"],
+             "Resource": obj(control, MISMATCH_KEY)},
+            {"Sid": "ListFleetLock", **list_prefixes(control, [FLEET_LOCK_KEY])},
         ],
     )
     bridge = role(

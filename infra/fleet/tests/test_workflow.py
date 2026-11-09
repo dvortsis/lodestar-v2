@@ -151,6 +151,7 @@ class FleetStructure(unittest.TestCase):
                 if name == "dispatch-down":
                     self.assertTrue(cond.startswith("github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'"))
                     self.assertIn("github.actor_id == vars.OWNER_USER_ID", cond)
+                    self.assertIn("github.run_attempt == 1", cond)  # a re-run keeps the owner's actor_id
                     self.assertIn("vars.OWNER_USER_ID != ''", cond)
                     runs = [s["run"] for s in steps(job) if "run" in s and s["run"] != LIVE_INSTALL]
                     self.assertEqual(runs, ["python3 infra/fleet/fleet.py dispatch-down"])
@@ -255,13 +256,10 @@ class PublicLogLeak(unittest.TestCase):
                 r = subprocess.run([sys.executable, str(ROOT / "infra/fleet/fleet.py"), sub], cwd=self.outside,
                                    capture_output=True, text=True, timeout=60,
                                    env=scrub_env({**event_env("/fleet status", FLEET_LIVE="true"), **secret_env}))
-                if sub == "act":
-                    # act runs its gates and the main-head check before touching any credential.
-                    self.assertEqual(r.returncode, 0)
-                    self.assertIn("not main's head", r.stdout)
-                else:
-                    self.assertNotEqual(r.returncode, 0)
-                    self.assertIn("FLEET_LINODE_ACCOUNT_EUUID", r.stderr)
+                # Every live subcommand checks main's head before touching any credential,
+                # so outside a checkout it refuses without asking for its settings.
+                self.assertEqual(r.returncode, 0)
+                self.assertIn("not main's head", r.stdout)
                 for v in values:
                     self.assertNotIn(v, r.stdout + r.stderr)
 

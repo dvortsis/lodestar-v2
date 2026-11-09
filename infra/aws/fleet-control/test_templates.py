@@ -157,7 +157,7 @@ class LeastPrivilege(unittest.TestCase):
             ("StateBucket", "fleet/spend-ledger.json"): {"s3:GetObject", "s3:PutObject"},
             ("EvidenceBucket", "fleet/*"): {"s3:GetObject", "s3:PutObject"},
             ("ControlBucket", "locks/fleet.json"): {"s3:GetObject", "s3:PutObject", "s3:DeleteObject"},
-            ("ControlBucket", "locks/fleet-mismatch.json"): {"s3:GetObject", "s3:PutObject", "s3:DeleteObject"},
+            ("ControlBucket", "locks/fleet-mismatch.json"): {"s3:GetObject", "s3:PutObject"},  # overwritten, never deleted
         })
         actions = {a for s in allow_statements(roles()["LodestarFleetOperator"]) for a in as_list(s["Action"])}
         self.assertFalse({a for a in actions if a.split(":")[0] in ("ec2", "ssm", "iam", "sts", "kms")})
@@ -204,7 +204,7 @@ class LeastPrivilege(unittest.TestCase):
     def test_list_grants_are_exact(self):
         self.assertEqual(self.lists("LodestarFleetOperator"), {
             "StateBucket": None,  # unconditional: Terraform needs 404 on a fresh state
-            "ControlBucket": {"StringEquals": {"s3:prefix": ["locks/fleet.json", "locks/fleet-mismatch.json"]}},
+            "ControlBucket": {"StringEquals": {"s3:prefix": ["locks/fleet.json"]}},
         })
         self.assertEqual(self.lists("LodestarOperatorBridge"), {
             "ControlBucket": {"StringLike": {"s3:prefix": ["locks/operator*", "operator/claude-lock.json"]}},

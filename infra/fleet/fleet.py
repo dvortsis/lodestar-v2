@@ -148,13 +148,29 @@ def cmd_refuse(ctx: Ctx) -> int:
     return 0
 
 
-def _down(ctx: Ctx, run_id: str, fleet) -> bool:
+def _down(ctx: Ctx, run_id: str, fleet, fence=None) -> bool:
     """Destroy, then, once nothing tagged is left, book the spend, tombstone
     fleet.json and clear the mismatch flag. False if anything remains."""
-    if not ctx.backend.destroy(ctx.fence(run_id)):
+    fence = fence or ctx.fence(run_id)
+    if not ctx.backend.destroy(fence):
         return False
-    ctx.backend.finish_down(fleet, ctx.fence(run_id))
+    ctx.backend.finish_down(fleet, fence)
     return True
+
+
+def _tolerant(ctx: Ctx, run_id: str):
+    """The fence for paths that have already pre-empted (the reaping marker): a
+    lock read that fails (S3) doesn't stop the sweep; losing the lock still does."""
+    fence = ctx.fence(run_id)
+
+    def check():
+        try:
+            fence()
+        except LockLost:
+            raise
+        except Exception:  # noqa: BLE001
+            pass
+    return check
 
 
 def _execute(ctx: Ctx, cmd: Command, run_id: str, fleet) -> str:
@@ -257,13 +273,21 @@ def _acquire(ctx: Ctx, run_id: str) -> bool:
 
 
 def cmd_reap(ctx: Ctx) -> int:
+    if not _on_main_head(ctx.repo):  # before any credential
+        print("reaper: this run's code is not main's head; next hour")
+        return 0
     run_id, b = ctx.run_id(), ctx.backend
     try:
         fleet, unknown = ctx.fleet()
-        d = decide(fleet, b.lodestar_linodes(), b.mismatch(), ctx.clock(), ctx.limits)
+        flag = b.mismatch_state()
+        d = decide(fleet, b.lodestar_linodes(), flag == "true", ctx.clock(), ctx.limits)
     except ValueError:
         ctx.report("reaper: fleet.json is invalid; escalate")
         return 1
+    if flag == "unreadable":
+        # Only a readable true destroys. Commands stay down-only (fail closed),
+        # and lifetime enforcement below goes on.
+        ctx.report("reaper: the mismatch flag is unreadable; commands are down-only; escalate")
     # The emergency path doesn't wait for the lock; everything else, the
     # firewall audit included, runs under it.
     marker = d.action == EMERGENCY
@@ -272,13 +296,19 @@ def cmd_reap(ctx: Ctx) -> int:
     elif not _acquire(ctx, run_id):
         print("reaper: lock busy; trying again next hour")
         return 0
-    left = False
+    left = emptied = False
     try:
         if unknown:
+            try:
+                b.sweep(ctx.fence(run_id))  # stale job rules still go
+            except LockLost:
+                raise
+            except Exception:  # noqa: BLE001
+                pass
             ctx.report("reaper: fleet.json unreadable; firewall audit skipped; escalate")
         else:
-            # The audit's own failure (GitHub /meta or Actions API, Linode) must never stop
-            # the lifetime checks below: it escalates, and lifetime enforcement goes on.
+            # The audit's own failure must never stop the lifetime checks below:
+            # it escalates, and an audit that can't run is never a mismatch.
             try:
                 problems = b.audit(ctx.fence(run_id))  # sweeps stale job rules first
             except LockLost:
@@ -292,25 +322,33 @@ def cmd_reap(ctx: Ctx) -> int:
                 marker = True
         # Decide again with what's true now (a command may have run while we waited).
         fleet, unknown = ctx.fleet()
-        d = decide(fleet, b.lodestar_linodes(), b.mismatch(), ctx.clock(), ctx.limits)
+        flag = b.mismatch_state()
+        d = decide(fleet, b.lodestar_linodes(), flag == "true", ctx.clock(), ctx.limits)
+        fence = _tolerant(ctx, run_id) if marker else ctx.fence(run_id)
         if d.action in (DOWN, EMERGENCY):
-            left = not _down(ctx, run_id, fleet)
+            emptied = _down(ctx, run_id, fleet, fence)
+            left = not emptied
         elif d.age_reap:
             ctx.lock.fenced(run_id, lambda: b.delete_linodes(d.age_reap))
-        elif b.mismatch() and not fleet and not unknown:
-            left = not _down(ctx, run_id, None)  # a flag with nothing recorded: sweep and clear it
+        elif flag == "true" and not fleet and not unknown:
+            emptied = _down(ctx, run_id, None, fence)  # a flag with nothing recorded: sweep and clear it
+            left = not emptied
     except LockLost:
         ctx.report("reaper: the fleet lock was lost; trying again next hour")
         return 1
     except LedgerUnreadable:
+        emptied = True
         ctx.report("reaper: fleet down and tombstoned, but the spend ledger is unreadable; escalate")
     except ValueError:
         ctx.report("reaper: fleet.json is invalid; escalate")
         return 1
+    except Exception as e:  # noqa: BLE001 - the marker stays; a person looks
+        ctx.report(f"reaper: unexpected error ({type(e).__name__}); escalate")
+        return 1
     finally:
-        # The reaping marker clears only once down has emptied the inventory;
-        # otherwise it stays until its own expiry, and down-only holds meanwhile.
-        if not (marker and left):
+        # The reaping marker clears only on a confirmed empty inventory; otherwise
+        # it stays until its own expiry, and down-only holds meanwhile.
+        if not marker or emptied:
             ctx.lock.release(run_id)
     line = f"reaper: {d.action} ({d.reason}); Linodes over 44 h: {len(d.age_reap)}"
     if left:
@@ -324,6 +362,9 @@ def cmd_reap(ctx: Ctx) -> int:
 
 
 def cmd_dispatch_down(ctx: Ctx) -> int:
+    if not _on_main_head(ctx.repo):  # before any credential
+        ctx.report("owner's down: refused, this run's code is not main's head; dispatch it again")
+        return 0
     run_id = ctx.run_id()
     ctx.lock.preempt(run_id)
     empty = False
@@ -332,13 +373,16 @@ def cmd_dispatch_down(ctx: Ctx) -> int:
             fleet, _ = ctx.fleet()
         except ValueError:
             fleet = None  # malformed: still destroy and sweep
-        empty = _down(ctx, run_id, fleet)
+        empty = _down(ctx, run_id, fleet, _tolerant(ctx, run_id))
     except LockLost:
         ctx.report("owner's down: the fleet lock was lost; run it again")
         return 1
     except LedgerUnreadable:
         empty = True
         ctx.report("owner's down: done, but the spend ledger is unreadable; escalate")
+    except Exception as e:  # noqa: BLE001 - the marker stays; a person looks
+        ctx.report(f"owner's down: unexpected error ({type(e).__name__}); escalate")
+        return 1
     finally:
         if empty:  # the marker clears only once nothing tagged is left
             ctx.lock.release(run_id)

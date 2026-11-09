@@ -175,7 +175,7 @@ jobs:
   # the /fleet parser, and it pre-empts the lock with the reaping marker.
   dispatch-down:
     if: >-
-      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.run_attempt == 1
       && vars.OWNER_USER_ID != '' && github.actor_id == vars.OWNER_USER_ID
     environment: cloud-fleet
     runs-on: ubuntu-latest

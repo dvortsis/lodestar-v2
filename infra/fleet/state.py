@@ -118,6 +118,12 @@ class DryRunBackend:
     def audit(self, fence):
         return list(self.audit_problems)
 
+    def sweep(self, fence):
+        self.log.append("sweep")
+
+    def mismatch_state(self):
+        return "true" if self.mismatch_flag else "false"
+
     def set_mismatch(self, reasons):
         self.log.append("set_mismatch")
         self.mismatch_flag = True

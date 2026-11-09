@@ -58,8 +58,10 @@ class Linode:
                 raise
             except Exception:
                 raise LinodeError(f"Linode API {op} returned an unexpected shape") from None
-            if page >= pages or page >= 50:
+            if page >= pages:
                 return out
+            if page >= 50:
+                raise LinodeError(f"Linode API {op} has more than 50 pages")
             page += 1
 
     def account_euuid(self) -> str:
@@ -75,6 +77,12 @@ class Linode:
 
     def linodes(self) -> list[dict]:
         return [n for n in self._pages("/linode/instances", "list linodes") if TAG in (n.get("tags") or [])]
+
+    def linode_firewalls(self, lid) -> list[str]:
+        """The IDs of the firewalls a tagged Linode sits behind."""
+        if not any(str(n.get("id")) == str(lid) for n in self.linodes()):
+            raise LinodeError("refused: that Linode isn't tagged for the fleet")
+        return [str(f.get("id")) for f in self._pages(f"/linode/instances/{int(lid)}/firewalls", "list a Linode's firewalls")]
 
     def firewalls(self) -> list[dict]:
         return [f for f in self._pages("/networking/firewalls", "list firewalls") if TAG in (f.get("tags") or [])]

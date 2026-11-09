@@ -23,8 +23,8 @@ from tests.helpers import T0, Clock, FakeGitHub, event_env, make_repo
 from timefmt import fmt
 
 L = limits.load()
-RANGES = {"actions": ["4.148.0.0/16", "2a01:111::/32"]}
-ADMIN = "198.51.100.4/32"
+RANGES = {"actions": ["198.51.100.0/24", "2001:db8::/32"]}  # RFC 5737 / 3849 documentation ranges
+ADMIN = "203.0.113.4/32"
 HERE = Path(__file__).resolve().parent.parent
 
 
@@ -36,9 +36,14 @@ class S3Error(Exception):
 
 class FakeS3:
     def __init__(self, deny=()):
-        self.objects, self.deny = {}, set(deny)
+        self.objects, self.deny, self.puts, self.fail_after = {}, set(deny), [], {}
 
     def get_object(self, Bucket, Key):
+        if (Bucket, Key) in self.fail_after:  # {(bucket, key): reads left before it starts failing}
+            left = self.fail_after[(Bucket, Key)]
+            self.fail_after[(Bucket, Key)] = left - 1
+            if left <= 0:
+                raise S3Error("ServiceUnavailable")
         if (Bucket, Key) in self.deny:
             raise S3Error("AccessDenied")
         if (Bucket, Key) not in self.objects:
@@ -46,6 +51,7 @@ class FakeS3:
         return {"Body": io.BytesIO(self.objects[(Bucket, Key)])}
 
     def put_object(self, Bucket, Key, Body, IfNoneMatch=None):
+        self.puts.append((Bucket, Key, IfNoneMatch))
         if IfNoneMatch == "*" and (Bucket, Key) in self.objects:
             raise S3Error("PreconditionFailed")
         self.objects[(Bucket, Key)] = Body
@@ -92,8 +98,13 @@ class FakeLinodeAPI:
         if p == "/networking/firewalls":
             return {"data": list(self.firewalls.values()), "page": 1, "pages": 1}
         parts = p.strip("/").split("/")
+        if parts[:2] == ["linode", "instances"] and len(parts) == 4 and parts[3] == "firewalls":
+            fws = [fid for fid, devs in self.devices.items() if any(str(d["entity"]["id"]) == parts[2] for d in devs)]
+            return {"data": [{"id": int(f)} for f in fws], "page": 1, "pages": 1}
         if parts[:2] == ["linode", "instances"] and method == "DELETE":
             del self.linodes[parts[2]]
+            for fid in self.devices:  # deleting a Linode detaches it from its firewall
+                self.devices[fid] = [d for d in self.devices[fid] if str(d["entity"]["id"]) != parts[2]]
             return {}
         if parts[:2] == ["networking", "firewalls"]:
             fid = parts[2]
@@ -120,9 +131,10 @@ class FakeTerraform:
     """Stands in for subprocess.run(["terraform", ...])."""
 
     def __init__(self, lock_held=0, fail=()):
-        self.calls, self.lock_held, self.fail, self.varfiles = [], lock_held, set(fail), []
+        self.calls, self.lock_held, self.fail, self.varfiles, self.timeouts = [], lock_held, set(fail), [], []
 
-    def __call__(self, argv, cwd, env, capture_output, text):
+    def __call__(self, argv, cwd, env, capture_output, text, timeout=None):
+        self.timeouts.append((argv[1], timeout))
         verb = argv[1]
         self.calls.append(verb)
         for a in argv:
@@ -151,9 +163,10 @@ def backend(s3=None, api=None, tf=None, runs=None, clock=None):
     clock = clock or Clock()
     runs = runs if runs is not None else {}
     pins = []
+    unpins = []
     tf_runner = apply.Terraform(Path("/nonexistent"), {}, apply.Evidence(s3, "evidence-b", "7-1"), run=tf,
-                                pin=lambda c: pins.append(c) or Path("/pinned"))
-    tf.pins = pins
+                                pin=lambda c: pins.append(c) or Path("/pinned"), unpin=unpins.append)
+    tf.pins, tf.unpins = pins, unpins
     b = apply.LiveBackend(s3, Linode(api), tf_runner,
                           ENV, L, clock, lookup_run=lambda rid: runs.get(rid), meta=lambda: RANGES, keygen=keygen_fake)
     return b, s3, api, tf
@@ -183,7 +196,7 @@ class LinodeClient(unittest.TestCase):
 class Audit(unittest.TestCase):
     R = audit.actions_ranges(RANGES)
 
-    def job(self, run="5", ip="4.148.1.2/32", **over):
+    def job(self, run="5", ip="198.51.100.7/32", **over):
         return dict(audit.job_rule(run, "1", ip), **over)
 
     def problems(self, rules, devices=None, admin=(ADMIN,), status="enabled"):
@@ -192,9 +205,9 @@ class Audit(unittest.TestCase):
                                     self.R, {"11", "12"})
 
     def test_ranges(self):
-        self.assertEqual([str(n) for n in self.R], ["4.148.0.0/16"])
+        self.assertEqual([str(n) for n in self.R], ["198.51.100.0/24"])
         with self.assertRaises(ValueError):
-            audit.actions_ranges({"actions": ["2a01:111::/32"]})
+            audit.actions_ranges({"actions": ["2001:db8::/32"]})
 
     def test_clean_firewall_passes(self):
         self.assertEqual(self.problems(fw_rules(extra=[self.job()])), [])
@@ -209,14 +222,14 @@ class Audit(unittest.TestCase):
             "admin changed": dict(rules=fw_rules(admin=("0.0.0.0/0",))),
             "admin missing": dict(rules=dict(fw_rules(), inbound=[])),
             "unrecorded": dict(rules=fw_rules(), admin=None),
-            "out of range": dict(rules=fw_rules(extra=[self.job(ip="8.8.8.8/32")])),
-            "wide": dict(rules=fw_rules(extra=[self.job(ip="4.148.0.0/24")])),
-            "two addresses": dict(rules=fw_rules(extra=[dict(self.job(), addresses={"ipv4": ["4.148.1.2/32", "4.148.1.3/32"]})])),
-            "ipv6": dict(rules=fw_rules(extra=[dict(self.job(), addresses={"ipv4": ["4.148.1.2/32"], "ipv6": ["::/0"]})])),
+            "out of range": dict(rules=fw_rules(extra=[self.job(ip="192.0.2.9/32")])),
+            "wide": dict(rules=fw_rules(extra=[self.job(ip="198.51.100.0/25")])),
+            "two addresses": dict(rules=fw_rules(extra=[dict(self.job(), addresses={"ipv4": ["198.51.100.7/32", "198.51.100.8/32"]})])),
+            "ipv6": dict(rules=fw_rules(extra=[dict(self.job(), addresses={"ipv4": ["198.51.100.7/32"], "ipv6": ["::/0"]})])),
             "all ports": dict(rules=fw_rules(extra=[self.job(ports="1-65535")])),
             "udp": dict(rules=fw_rules(extra=[self.job(protocol="UDP")])),
             "bad label": dict(rules=fw_rules(extra=[self.job(label="debug")])),
-            "two for one run": dict(rules=fw_rules(extra=[self.job(), self.job(ip="4.148.1.3/32", label="job-5-2")])),
+            "two for one run": dict(rules=fw_rules(extra=[self.job(), self.job(ip="198.51.100.8/32", label="job-5-2")])),
         }
         for name, kw in cases.items():
             with self.subTest(name):
@@ -226,21 +239,36 @@ class Audit(unittest.TestCase):
 
     def test_sweep(self):
         now = T0
-        live = {"status": "in_progress", "run_started_at": fmt(now - timedelta(minutes=10))}
-        old = {"status": "in_progress", "run_started_at": fmt(now - timedelta(minutes=91))}
-        done = {"status": "completed", "run_started_at": fmt(now - timedelta(minutes=5))}
+        run = {"path": ".github/workflows/fleet.yml", "run_attempt": 1}
+        live = dict(run, status="in_progress", run_started_at=fmt(now - timedelta(minutes=10)))
+        old = dict(run, status="in_progress", run_started_at=fmt(now - timedelta(minutes=91)))
+        done = dict(run, status="completed", run_started_at=fmt(now - timedelta(minutes=5)))
         rules = fw_rules(extra=[self.job("1"), self.job("2"), self.job("3"), self.job("4"), {"label": "odd"}])
         runs = {"1": live, "2": old, "3": done}
         kept, n = audit.sweep(rules, runs.get, now)
         self.assertEqual(n, 3)  # old, done, and unknown run 4
         self.assertEqual([r["label"] for r in kept["inbound"]], ["ssh-admin-only", "job-1-1", "odd"])
 
+    def test_a_run_is_live_only_as_fleet_yml_at_its_attempt(self):
+        now = T0
+        base = {"path": ".github/workflows/fleet.yml", "run_attempt": 2, "status": "in_progress",
+                "run_started_at": fmt(now - timedelta(minutes=5))}
+        self.assertTrue(audit.run_is_live(base, "2", now))
+        self.assertFalse(audit.run_is_live(base, "1", now))  # a different attempt
+        self.assertFalse(audit.run_is_live(dict(base, path=".github/workflows/ci.yml"), "2", now))
+        self.assertFalse(audit.run_is_live(None, "2", now))
+
+    def test_more_shapes(self):
+        self.assertTrue(self.problems(fw_rules(extra=[self.job(action="DROP")])))  # a job rule must be ACCEPT
+        two_admins = dict(fw_rules(), inbound=fw_rules()["inbound"] * 2)
+        self.assertIn("a fleet firewall's admin rule isn't exactly the recorded one", self.problems(two_admins))
+
     def test_open_and_close(self):
-        opened = audit.open_rule(fw_rules(), "5", "1", "4.148.1.2/32", self.R)
+        opened = audit.open_rule(fw_rules(), "5", "1", "198.51.100.7/32", self.R)
         self.assertEqual(self.problems(opened), [])
         self.assertEqual(audit.close_rule(opened, "5", "1"), fw_rules())
         with self.assertRaises(ValueError):
-            audit.open_rule(fw_rules(), "5", "1", "8.8.8.8/32", self.R)
+            audit.open_rule(fw_rules(), "5", "1", "192.0.2.9/32", self.R)
 
 
 class Backend(unittest.TestCase):
@@ -318,7 +346,7 @@ class Backend(unittest.TestCase):
         b, s3, api, tf = backend(tf=FakeTerraform(lock_held=5))
         self.assertTrue(b.destroy(noop))
         self.assertEqual(tf.pins, [None])  # nothing recorded: the current configuration
-        self.assertEqual(tf.calls.count("destroy"), 3)  # retried, never force-unlock
+        self.assertEqual(tf.calls.count("destroy"), apply.TF_ATTEMPTS)  # retried, never force-unlock
         self.assertNotIn("force-unlock", tf.calls)
         self.assertEqual(set(api.linodes), {"99"})  # tagged ones deleted, the untagged one untouched
         self.assertEqual(set(api.firewalls), {"98"})
@@ -340,7 +368,7 @@ class Backend(unittest.TestCase):
         b, s3, api, _ = backend(runs={"5": {"status": "completed", "run_started_at": fmt(T0)}})
         f = new_fleet(L, "screen", "a" * 40, T0)
         b.create(f, noop)
-        api.rules["21"]["inbound"].append(audit.job_rule("5", "1", "4.148.1.2/32"))
+        api.rules["21"]["inbound"].append(audit.job_rule("5", "1", "198.51.100.7/32"))
         fences = []
         self.assertEqual(b.audit(lambda: fences.append(1)), [])
         self.assertEqual(fences, [1])
@@ -352,12 +380,57 @@ class Backend(unittest.TestCase):
         b, s3, api, _ = backend()
         f = b.create(new_fleet(L, "screen", "a" * 40, T0), noop)
         fences = []
-        b.set_job_rules(f, "5", "1", "4.148.1.2/32", lambda: fences.append(1))
+        b.set_job_rules(f, "5", "1", "198.51.100.7/32", lambda: fences.append(1))
         self.assertEqual(len(fences), 2)
         self.assertEqual(len(api.rules["21"]["inbound"]), 2)
         b.set_job_rules(f, "5", "1", None, noop)
         self.assertEqual(api.rules["21"], fw_rules())
         self.assertEqual(apply.known_hosts(f).count("\n"), 2)
+
+    def test_first_tombstone_is_conditional(self):
+        b, s3, api, _ = backend()
+        api.linodes = {}
+        b.read_fleet()
+        self.assertIn(("state-b", FLEET_KEY, "*"), s3.puts)
+
+    def test_403_with_an_empty_account_still_means_a_fleet_may_exist(self):
+        b, s3, api, _ = backend(s3=FakeS3(deny={("state-b", FLEET_KEY)}))
+        api.linodes, api.firewalls = {}, {}
+        with self.assertRaises(FleetUnknown):
+            b.read_fleet()
+        self.assertNotIn(("state-b", FLEET_KEY), s3.objects)  # no tombstone over a fleet.json it couldn't read
+
+    def test_terraform_timeouts_count_as_failure(self):
+        calls = []
+
+        def slow(argv, **kw):
+            calls.append((argv[1], kw["timeout"]))
+            raise __import__("subprocess").TimeoutExpired(argv, kw["timeout"])
+        tf = apply.Terraform(Path("/x"), {}, apply.Evidence(FakeS3(), "e", "1"), run=slow)
+        with self.assertRaises(apply.ApplyFailed):
+            tf.destroy("v.json")
+        self.assertEqual(calls, [("destroy", apply.TF_TIMEOUTS["destroy"])])  # only a held lock is retried
+        b, s3, api, ftf = backend()
+        b.create(new_fleet(L, "screen", "a" * 40, T0), noop)
+        self.assertTrue(all(t == apply.TF_TIMEOUTS[v] for v, t in ftf.timeouts))
+        self.assertEqual(ftf.unpins, [Path("/pinned")])  # the pinned worktree is removed after use
+        b.destroy(noop)
+        self.assertEqual(len(ftf.unpins), 2)
+
+    def test_outputs_parse_stdout_only(self):
+        def run(argv, **kw):
+            return mock.Mock(returncode=0, stdout='{"fleet_hosts": {"value": {}}}', stderr="Warning: something")
+        tf = apply.Terraform(Path("/x"), {}, apply.Evidence(FakeS3(), "e", "1"), run=run)
+        self.assertEqual(tf.outputs(), {"fleet_hosts": {"value": {}}})
+
+    def test_terraform_env_holds_no_github_or_oidc_token(self):
+        for name in apply.TF_ENV_PASS:
+            self.assertNotRegex(name, r"GITHUB|ACTIONS_|TOKEN|AWS_")
+
+    def test_pages_past_fifty_raise(self):
+        ln = Linode(lambda m, p, b: {"data": [], "page": 1, "pages": 99})
+        with self.assertRaises(LinodeError):
+            ln.linodes()
 
     def test_token_secret_shapes(self):
         self.assertEqual(apply.linode_token("tok\n"), "tok")
@@ -383,12 +456,14 @@ class FailClosed(unittest.TestCase):
         clock = Clock(T0)
         b.clock = clock
         f = new_fleet(L, "screen", self.c["head"], T0 - timedelta(hours=44, minutes=minutes_past))
+        b._clear_mismatch()  # as after any earlier tombstone
         b.create(f, noop)
         return b, s3, api, tf, clock
 
     def reap(self, b, clock, store=None):
         out, store = io.StringIO(), store if store is not None else MemoryStore()
-        with redirect_stdout(out), redirect_stderr(out):
+        with redirect_stdout(out), redirect_stderr(out), \
+                mock.patch.object(ancestry, "remote_main_head", return_value=self.c["head"]):
             rc = fleet.main(["reap"], env=event_env(FLEET_LIVE="true", **ENV), backend=b, store=store,
                             transport=FakeGitHub(), clock=clock, sleep=clock.sleep, repo=self.repo)
         return rc, out.getvalue(), store
@@ -408,22 +483,82 @@ class FailClosed(unittest.TestCase):
                 self.assertFalse(api.linodes.keys() & {"11", "12"})  # the fleet still went down
                 self.assertNotIn("PUT", [m for m, _ in api.calls])
 
-    def test_actions_api_failure_sweeps_nothing(self):
+    def test_a_failed_run_lookup_keeps_its_rule(self):
         b, s3, api, _, clock = self.overdue(minutes_past=-120)  # within lifetime: only the audit runs
         for fid in ("21", "22"):
-            api.rules[fid]["inbound"].append(audit.job_rule("5", "1", "4.148.1.2/32"))
-        calls = []
+            api.rules[fid]["inbound"].append(audit.job_rule("5", "1", "198.51.100.7/32"))
 
         def lookup(rid):
-            calls.append(rid)
-            if len(calls) == 2:
-                raise RuntimeError("GitHub API failed: HTTP 403")
-            return None  # unknown run: stale
+            raise RuntimeError("GitHub API failed: HTTP 403")
         b.lookup_run = lookup
         _, out, _ = self.reap(b, clock)
-        self.assertIn("the firewall audit couldn't run; escalate", out)
-        self.assertNotIn("PUT", [m for m, _ in api.calls])  # read first: nothing was half-swept
+        self.assertNotIn("couldn't run", out)  # only a /meta failure stops the audit
+        self.assertNotIn("PUT", [m for m, _ in api.calls])  # kept: it may be live
         self.assertEqual(len(api.rules["21"]["inbound"]), 2)
+        self.assertTrue({"11", "12"} <= set(api.linodes))  # and the fleet is untouched
+        self.assertIs(s3.doc("control-b", MISMATCH_KEY)["mismatch"], False)
+
+    def test_transient_fleet_json_error_inside_the_audit_never_destroys(self):
+        b, s3, api, _, clock = self.overdue(minutes_past=-120)
+        # Readable for the reaper's first look, unreadable once the audit reads it.
+        s3.fail_after[("state-b", FLEET_KEY)] = 1
+        _, out, store = self.reap(b, clock)
+        self.assertIn("the firewall audit couldn't run; escalate", out)
+        self.assertTrue({"11", "12"} <= set(api.linodes))
+        self.assertIs(s3.doc("control-b", MISMATCH_KEY)["mismatch"], False)
+
+    def test_unreadable_fleet_json_still_sweeps_but_never_audits(self):
+        b, s3, api, _, clock = self.overdue(minutes_past=-120)
+        api.rules["21"]["inbound"].append(audit.job_rule("5", "1", "198.51.100.7/32"))  # run 5 is unknown: stale
+        s3.deny.add(("state-b", FLEET_KEY))
+        _, out, _ = self.reap(b, clock)
+        self.assertIn("fleet.json unreadable; firewall audit skipped; escalate", out)
+        self.assertEqual(len(api.rules["21"]["inbound"]), 1)  # swept
+        self.assertTrue({"11", "12"} <= set(api.linodes))
+
+    def test_unreadable_flag_escalates_but_never_destroys(self):
+        b, s3, api, _, clock = self.overdue(minutes_past=-120)
+        s3.objects[("control-b", MISMATCH_KEY)] = b"junk"
+        _, out, _ = self.reap(b, clock)
+        self.assertIn("the mismatch flag is unreadable; commands are down-only; escalate", out)
+        self.assertTrue({"11", "12"} <= set(api.linodes))
+        self.assertTrue(b.mismatch())  # commands stay down-only
+
+    def test_stale_flag_with_nothing_left_is_cleared(self):
+        b, s3, api, _ = backend()
+        api.linodes, api.firewalls = {"99": api.linodes["99"]}, {"98": api.firewalls["98"]}
+        b.read_fleet()  # first tombstone
+        b.set_mismatch(["old"])
+        clock = Clock(T0)
+        _, out, _ = self.reap(b, clock)
+        self.assertIs(s3.doc("control-b", MISMATCH_KEY)["mismatch"], False)
+        self.assertIn("99", api.linodes)  # untagged: untouched
+
+    def test_recorded_firewall_deleted_untagged_or_detached(self):
+        def case(mutate):
+            b, s3, api, _ = backend()
+            b.create(new_fleet(L, "screen", self.c["head"], T0), noop)
+            b._clear_mismatch()
+            mutate(api)
+            return b.audit(noop)
+        self.assertEqual(case(lambda api: None), [])
+        deleted = case(lambda api: (api.firewalls.pop("21"), api.devices.pop("21")))
+        self.assertIn("a recorded fleet firewall is missing or untagged", deleted)
+        self.assertIn("a fleet Linode isn't behind exactly one firewall", deleted)
+        untagged = case(lambda api: api.firewalls["21"].__setitem__("tags", []))
+        self.assertIn("a recorded fleet firewall is missing or untagged", untagged)
+        self.assertIn("a fleet Linode's firewall isn't a recorded, tagged fleet firewall", untagged)
+
+        def detach_and_untag(api):
+            api.devices["21"] = []
+            api.firewalls["21"]["tags"] = []
+        detached = case(detach_and_untag)
+        self.assertIn("a fleet Linode isn't behind exactly one firewall", detached)
+        self.assertIn("a recorded fleet firewall is missing or untagged", detached)
+
+        def second_firewall(api):
+            api.devices["98"].append({"entity": {"type": "linode", "id": 11}})
+        self.assertIn("a fleet Linode isn't behind exactly one firewall", case(second_firewall))
 
     def test_destroy_sweeps_whatever_failed_before(self):
         b, s3, api, tf = backend()
@@ -459,11 +594,66 @@ class FailClosed(unittest.TestCase):
 
     def test_age_reap_takes_orphan_firewalls_and_up_refuses_while_one_exists(self):
         b, s3, api, _ = backend()
-        api.devices["22"] = []
         b.delete_linodes(["11"])
-        self.assertNotIn("22", api.firewalls)  # no device left: deleted with the age reap
-        api.linodes = {}
+        self.assertNotIn("21", api.firewalls)  # its Linode gone, no device left: deleted too
+        self.assertIn("22", api.firewalls)  # still attached to Linode 12: kept
+        api.linodes = {"99": api.linodes["99"]}
         self.assertEqual(limits.check_up(L, "screen", b, T0), "a Lodestar firewall exists")
+
+    def test_down_keeps_the_firewall_of_a_linode_it_couldnt_delete(self):
+        b, s3, api, _ = backend()
+        b._clear_mismatch()
+        real = api.__call__
+
+        def flaky(method, path, body):
+            if method == "DELETE" and path == "/linode/instances/12":
+                raise LinodeError("Linode API DELETE failed: HTTP 500")
+            return real(method, path, body)
+        b.linode._t = flaky
+        self.assertFalse(b.destroy(noop))
+        self.assertIn("12", api.linodes)
+        self.assertIn("21", api.firewalls)  # no firewall goes while a tagged Linode remains
+        self.assertIn("22", api.firewalls)
+        self.assertIs(s3.doc("control-b", MISMATCH_KEY)["mismatch"], True)  # down-only, and the reaper retries
+
+    def test_destroy_fences_before_the_api_sweep(self):
+        b, s3, api, _ = backend()
+        calls = []
+
+        def fence():
+            calls.append(1)
+            if len(calls) == 2:
+                raise LockLost("lost")
+        with self.assertRaises(LockLost):
+            b.destroy(fence)
+        self.assertTrue({"11", "12"} <= set(api.linodes))  # nothing deleted after the lost fence
+
+    def test_marker_stays_on_an_unexpected_error(self):
+        b, s3, api, _, clock = self.overdue(minutes_past=30)
+
+        def boom(fence):
+            raise RuntimeError("unexpected")
+        b.destroy = boom
+        rc, out, store = self.reap(b, clock)
+        self.assertEqual(rc, 1)
+        self.assertIn("unexpected error (RuntimeError); escalate", out)
+        self.assertEqual(json.loads(store.objects[LOCK_KEY][0])["kind"], "reaping")
+
+    def test_owner_down_keeps_the_marker_while_resources_remain(self):
+        b, s3, api, _, clock = self.overdue(minutes_past=-120)
+        api.fail_deletes = True
+        store, out = MemoryStore(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(out), \
+                mock.patch.object(ancestry, "remote_main_head", return_value=self.c["head"]):
+            fleet.main(["dispatch-down"], env=event_env(FLEET_LIVE="true", **ENV), backend=b, store=store,
+                       transport=FakeGitHub(), clock=clock, sleep=clock.sleep, repo=self.repo)
+        self.assertIn("tagged resources remain after destroy; escalate", out.getvalue())
+        self.assertEqual(json.loads(store.objects[LOCK_KEY][0])["kind"], "reaping")
+        api.fail_deletes = False
+        with redirect_stdout(io.StringIO()), mock.patch.object(ancestry, "remote_main_head", return_value=self.c["head"]):
+            fleet.main(["dispatch-down"], env=event_env(FLEET_LIVE="true", **ENV), backend=b, store=store,
+                       transport=FakeGitHub(), clock=clock, sleep=clock.sleep, repo=self.repo)
+        self.assertNotIn(LOCK_KEY, store.objects)  # released once the inventory is empty
 
     def test_unreadable_ledger_never_strands_the_tombstone(self):
         b, s3, *_ = backend()

@@ -545,35 +545,41 @@
                   }
                 },
                 {
-                  "Sid": "FleetLockAndMismatchFlag",
+                  "Sid": "FleetLock",
                   "Effect": "Allow",
                   "Action": [
                     "s3:GetObject",
                     "s3:PutObject",
                     "s3:DeleteObject"
                   ],
-                  "Resource": [
-                    {
-                      "Fn::Sub": [
-                        "arn:${AWS::Partition}:s3:::${B}/locks/fleet.json",
-                        {
-                          "B": {
-                            "Ref": "ControlBucket"
-                          }
+                  "Resource": {
+                    "Fn::Sub": [
+                      "arn:${AWS::Partition}:s3:::${B}/locks/fleet.json",
+                      {
+                        "B": {
+                          "Ref": "ControlBucket"
                         }
-                      ]
-                    },
-                    {
-                      "Fn::Sub": [
-                        "arn:${AWS::Partition}:s3:::${B}/locks/fleet-mismatch.json",
-                        {
-                          "B": {
-                            "Ref": "ControlBucket"
-                          }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "Sid": "MismatchFlag",
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:PutObject"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": [
+                      "arn:${AWS::Partition}:s3:::${B}/locks/fleet-mismatch.json",
+                      {
+                        "B": {
+                          "Ref": "ControlBucket"
                         }
-                      ]
-                    }
-                  ]
+                      }
+                    ]
+                  }
                 },
                 {
                   "Sid": "ListFleetLock",
@@ -592,8 +598,7 @@
                   "Condition": {
                     "StringEquals": {
                       "s3:prefix": [
-                        "locks/fleet.json",
-                        "locks/fleet-mismatch.json"
+                        "locks/fleet.json"
                       ]
                     }
                   }

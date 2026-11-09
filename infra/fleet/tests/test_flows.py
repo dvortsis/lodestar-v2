@@ -273,7 +273,7 @@ class Flows(unittest.TestCase):
                 raise KeyError("LEAKMARK-secret-value")
         rc, out = self.run_cli("dispatch-down", event_env(), backend=Boom())
         self.assertEqual(rc, 1)
-        self.assertIn("internal error (KeyError)", out)
+        self.assertIn("unexpected error (KeyError); escalate", out)
         self.assertNotIn("LEAKMARK", out)
 
     def test_reaper_decides_again_under_the_lock(self):
@@ -287,7 +287,7 @@ class Flows(unittest.TestCase):
             b.fleet = None
             holder.release("7-1")
         out = io.StringIO()
-        with redirect_stdout(out):
+        with redirect_stdout(out), mock.patch.object(ancestry, "remote_main_head", return_value=self.c["head"]):
             fleet.main(["reap"], env=event_env(), backend=b, store=store, transport=FakeGitHub(),
                        clock=clock, sleep=sleep, repo=self.repo)
         self.assertIn("reaper: none (no fleet)", out.getvalue())

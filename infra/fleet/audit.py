@@ -22,6 +22,7 @@ JOB_LABEL = re.compile(r"^job-([0-9]{1,20})-([0-9]{1,4})$")
 ADMIN_LABEL = "ssh-admin-only"
 CHAIN = timedelta(minutes=90)  # the lock's whole chain (plan §3)
 LIVE_STATUSES = {"queued", "in_progress", "waiting", "requested", "pending"}
+FLEET_WORKFLOW = ".github/workflows/fleet.yml"  # only its runs open job rules
 
 
 def actions_ranges(meta: dict) -> list[ipaddress.IPv4Network]:
@@ -72,8 +73,12 @@ def job_rule(run_id: str, attempt: str, cidr: str) -> dict:
             "addresses": {"ipv4": [cidr]}}
 
 
-def run_is_live(run: dict | None, now: datetime) -> bool:
+def run_is_live(run: dict | None, attempt: str, now: datetime) -> bool:
+    """Live: a fleet.yml run, at the attempt the label names, queued or running,
+    and started within the lock's 90-minute chain."""
     if not run or run.get("status") not in LIVE_STATUSES:
+        return False
+    if run.get("path") != FLEET_WORKFLOW or str(run.get("run_attempt")) != str(attempt):
         return False
     try:
         started = datetime.fromisoformat(str(run.get("run_started_at")).replace("Z", "+00:00"))
@@ -83,14 +88,20 @@ def run_is_live(run: dict | None, now: datetime) -> bool:
 
 
 def sweep(rules: dict, lookup_run: Callable[[str], dict | None], now: datetime) -> tuple[dict, int]:
-    """Drop job rules whose run isn't live, or started more than 90 minutes ago.
-    Anything else is kept for the audit to judge."""
+    """Drop job rules whose run isn't live (see run_is_live). Anything else is
+    kept for the audit to judge. A lookup that fails keeps its rule: it may be
+    live, the next hour's sweep tries again, and a well-formed rule is no mismatch."""
     kept, swept = [], 0
     for rule in rules.get("inbound") or []:
         m = JOB_LABEL.match(str(rule.get("label", "")))
-        if m and not run_is_live(lookup_run(m.group(1)), now):
-            swept += 1
-            continue
+        if m:
+            try:
+                live = run_is_live(lookup_run(m.group(1)), m.group(2), now)
+            except Exception:  # noqa: BLE001
+                live = True
+            if not live:
+                swept += 1
+                continue
         kept.append(rule)
     return dict(rules, inbound=kept), swept
 
@@ -137,4 +148,20 @@ def audit_firewall(firewall: dict, rules: dict, devices: list[dict], admin: list
             runs.append(JOB_LABEL.match(r["label"]).group(1))
     if len(runs) != len(set(runs)):
         problems.append("a fleet firewall has more than one job rule for a run")
+    return problems
+
+
+def attachment_problems(linode_firewalls: dict[str, list[str]], tagged: set[str], recorded: set[str]) -> list[str]:
+    """Each fleet Linode sits behind exactly one firewall, a recorded and tagged
+    one; and every recorded firewall still exists and is tagged. This catches a
+    fleet firewall deleted, untagged or detached, which the per-firewall audit
+    (which sees only tagged firewalls) can't."""
+    problems = []
+    for fws in linode_firewalls.values():
+        if len(fws) != 1:
+            problems.append("a fleet Linode isn't behind exactly one firewall")
+        elif fws[0] not in tagged or fws[0] not in recorded:
+            problems.append("a fleet Linode's firewall isn't a recorded, tagged fleet firewall")
+    if recorded - tagged:
+        problems.append("a recorded fleet firewall is missing or untagged")
     return problems
