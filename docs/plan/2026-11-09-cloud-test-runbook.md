@@ -36,7 +36,7 @@ You may be restarted at any time, so everything you need to resume lives in a fi
 ```
 2026-11-09T14:02Z | H+00:12 | T0.2 | PASS | akamai canary deleted in 21 min, email received
 ```
-Fields: UTC time, hours since pilot start `H`, test id, `PASS` / `FAIL` / `SKIPPED` / `SHORTENED` / `BLOCKED` / `NOTE`, a one-line reason. On start, **read the journal first**; if it exists, resume at the first test without a `PASS`/`SKIPPED`. Also keep `~/pilot/state.json` with: pilot start time, each VM's creation time and expiry time, the pinned commit and image digest, the current segment per lane.
+Fields: UTC time, hours since pilot start `H` (H+0 = the earliest VM creation time, because the 48 h limit runs from creation, not from when you start), test id, `PASS` / `FAIL` / `SKIPPED` / `SHORTENED` / `BLOCKED` / `NOTE`, a one-line reason. On start, **read the journal first**; if it exists, resume at the first test without a `PASS`/`SKIPPED`. Also keep `~/pilot/state.json` with: pilot start time, each VM's creation time and expiry time, the pinned commit and image digest, the current segment per lane.
 
 ### 0.4 Waiting and polling
 Use a helper like this for every wait (the deadline is mandatory):
@@ -89,6 +89,7 @@ Pass: all present. Contingency: install what's missing with the OS package manag
 
 ### T0.1 Inventory and expiry
 List the three VMs through the provider APIs. Record each VM's creation time and **expiry tag/value** in `state.json`; compute the hard deadlines in §0.5.
+**Remaining life check:** compute each VM's hours left. If Main or Worker has under 40 h, plan fewer segments (under 40 h: segments 1 and 2 only, an AB pair; under 20 h: one 6 h segment on `--rehearsal`, no block); if Win has under 12 h, run T-W1 and T-W2 only. Journal the decision.
 Pass: each VM exists and has an expiry. Contingency: if a VM has no expiry tag, **tell the operator** (`NOTE`) and treat 48 h from creation as the deadline; if no VMs exist, see §1.2.
 
 ### T0.2 Watchdog canary (closes "never tested end to end")
@@ -249,7 +250,7 @@ Run each **three times** (change the file suffix) and take the median. Targets (
 Contingency: if Lighthouse cannot launch Chrome on Windows Server, install Chrome stable; if that fails, use Playwright's bundled Chromium (`npx playwright install chromium` is allowed on **Win** here since there's no preinstalled browser; the "never run it" rule in `web/e2e/README.md` applies only to the cloud coding sessions).
 
 ### T-L2 API latency while the crawl is ingesting
-From Win through the tunnel, authenticated (use the session cookie from a normal login, never printing it), run **200 sequential** requests per query class and compute p50/p95/p99. The API's search, suggest and facets endpoints are described by the OpenAPI document (`GET /api/v1/openapi.json` or `crates/lodestar/src/bin/openapi.rs` output; read it, don't guess paths). Query classes: typeahead prefix (`ubu`), keyword (`ubuntu`), a filter query (`size:>2GB res:2160p`), and the architecture §17 file query (`file:(ext:mkv size:>2GB) res:2160p seeders:>=1`). Targets are the §3 table; the 10M numbers don't apply to a store of tens of thousands, so report them as "observed at N torrents" and **compare p95 at the start and at the end of the crawl** (the trend is the finding). Do it at about H+10, H+20 and H+30.
+From Win through the tunnel, authenticated (use the session cookie from a normal login, never printing it), run **200 sequential** requests per query class and compute p50/p95/p99. The API's search, suggest and facets endpoints are described by the OpenAPI document (generate it with `cargo run -p lodestar --bin openapi` in the repo, or find the checked-in copy under `web/`; read it, don't guess paths). Query classes: typeahead prefix (`ubu`), keyword (`ubuntu`), a filter query (`size:>2GB res:2160p`), and the architecture §17 file query (`file:(ext:mkv size:>2GB) res:2160p seeders:>=1`). Targets are the §3 table; the 10M numbers don't apply to a store of tens of thousands, so report them as "observed at N torrents" and **compare p95 at the start and at the end of the crawl** (the trend is the finding). Do it at about H+10, H+20 and H+30.
 Contingency: if the API requires a token you don't have, mark `SKIPPED: auth` and rely on T-L1.
 
 ### T-L3 Browser behaviour on a real, crawl-grown store (manual probe, scripted where possible)
