@@ -114,7 +114,6 @@ impl Restart {
 
     /// This process is a copy started by Restart now (the portable build's
     /// relaunch), as recorded when it started.
-    #[cfg_attr(not(windows), allow(dead_code))]
     pub fn relaunched(&self) -> bool {
         self.relaunched
     }
@@ -435,7 +434,8 @@ pub fn reexec() -> std::io::Error {
 pub const EXIT_RELAUNCHED: i32 = 80;
 
 /// For `main`, around everything it runs: a copy started by Restart now
-/// (the portable build's relaunch, [`Restart::relaunched`]) that ends with
+/// (`relaunched`, read by `main` before anything else runs, so a config
+/// that fails early still counts: [`Restart::relaunched`]) that ends with
 /// `code` other than success, while a console is attached, says where the
 /// error and the log are and waits for Enter on the console before the
 /// process exits. `Start Lodestar.cmd` has already ended after the
@@ -443,9 +443,12 @@ pub const EXIT_RELAUNCHED: i32 = 80;
 /// anyone read why (#649's review). Anything else (a success, a run not
 /// started by Restart now, the service and any run with no console, where
 /// `CONIN$` doesn't open) returns at once.
-pub fn hold_if_relaunch_failed(code: std::process::ExitCode) -> std::process::ExitCode {
+pub fn hold_if_relaunch_failed(
+    relaunched: bool,
+    code: std::process::ExitCode,
+) -> std::process::ExitCode {
     #[cfg(windows)]
-    if Restart::global().relaunched()
+    if relaunched
         && code != std::process::ExitCode::SUCCESS
         && let Ok(console) = std::fs::File::open("CONIN$")
     {
@@ -458,6 +461,8 @@ pub fn hold_if_relaunch_failed(code: std::process::ExitCode) -> std::process::Ex
             &mut std::io::stderr(),
         );
     }
+    #[cfg(not(windows))]
+    let _ = relaunched;
     code
 }
 
@@ -740,10 +745,14 @@ mod tests {
             assert!(!hold(relaunched, succeeded, Some(logs), console, &mut out));
             assert!(out.is_empty());
         }
+        // Off Windows the wrapper is the identity. (On Windows it would
+        // wait on a developer's console; `windows_service.rs` tests it.)
         #[cfg(not(windows))]
-        assert!(!Restart::new(RestartMethod::Relaunch).relaunched());
-        let code = hold_if_relaunch_failed(std::process::ExitCode::FAILURE);
-        assert_eq!(code, std::process::ExitCode::FAILURE);
+        {
+            assert!(!Restart::new(RestartMethod::Relaunch).relaunched());
+            let code = hold_if_relaunch_failed(true, std::process::ExitCode::FAILURE);
+            assert_eq!(code, std::process::ExitCode::FAILURE);
+        }
     }
 
     /// "80" means a restart everywhere: the portable build's code is the

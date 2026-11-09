@@ -680,6 +680,116 @@ fn a_portable_restart_serves_again_on_the_same_port() {
     assert_eq!((first, second), (port, port));
 }
 
+/// A run with a config that doesn't load, in a console of its own (so
+/// `CONIN$` opens, as in `Start Lodestar.cmd`'s window), its stderr kept.
+/// `relaunched`: started as Restart now starts a copy, with the token in
+/// its environment and the hand-over on stdin (the token, then end of
+/// file, as the old process gives once it has exited).
+fn bad_config_run(
+    dir: &Path,
+    relaunched: bool,
+) -> (
+    std::process::Child,
+    std::sync::Arc<std::sync::Mutex<String>>,
+) {
+    use std::os::windows::process::CommandExt;
+    /// `CREATE_NEW_CONSOLE`.
+    const NEW_CONSOLE: u32 = 0x0000_0010;
+    const TOKEN: &str = "lodestar-test-token";
+    let config = dir.join("config.toml");
+    std::fs::write(&config, "this is not [ toml").unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_lodestar"));
+    cmd.arg("--config")
+        .arg(&config)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .creation_flags(NEW_CONSOLE)
+        .env_remove("LODESTAR_RELAUNCH_TOKEN");
+    if relaunched {
+        cmd.env("LODESTAR_RELAUNCH_TOKEN", TOKEN);
+    }
+    let mut child = cmd.spawn().unwrap();
+    {
+        let mut stdin = child.stdin.take().unwrap();
+        if relaunched {
+            writeln!(stdin, "{TOKEN}").unwrap();
+        }
+        // Dropped: end of file.
+    }
+    let stderr = child.stderr.take().unwrap();
+    let console = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    std::thread::spawn({
+        let console = console.clone();
+        move || {
+            use std::io::BufRead;
+            let mut reader = std::io::BufReader::new(stderr);
+            let mut line = Vec::new();
+            // Read to each newline or the end; the last prompt has none.
+            loop {
+                line.clear();
+                match reader.read_until(b'\n', &mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => console
+                        .lock()
+                        .unwrap()
+                        .push_str(&String::from_utf8_lossy(&line)),
+                }
+            }
+        }
+    });
+    (child, console)
+}
+
+/// X-win-restart-followups-2: a copy started by Restart now whose config
+/// doesn't load says where to look and waits for Enter on its console,
+/// instead of its window closing unread.
+#[test]
+fn a_relaunched_copy_that_fails_at_start_waits_for_enter() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut child, console) = bad_config_run(dir.path(), true);
+    let shown = wait_for(Duration::from_secs(30), || {
+        let c = console.lock().unwrap().clone();
+        c.contains("Press Enter to close this window.").then_some(c)
+    });
+    let still_running = child.try_wait().ok().flatten().is_none();
+    let _ = child.kill();
+    let _ = child.wait();
+    let shown = shown.unwrap_or_else(|| {
+        panic!(
+            "no prompt; console:\n{}",
+            console.lock().unwrap_or_else(|e| e.into_inner())
+        )
+    });
+    assert!(shown.contains("config:"), "{shown}");
+    assert!(
+        shown.contains("couldn't start again after Restart now"),
+        "{shown}"
+    );
+    assert!(still_running, "it should wait for Enter:\n{shown}");
+}
+
+/// The same failure in a run Restart now didn't start ends at once, as
+/// before: no prompt, a failure exit.
+#[test]
+fn an_ordinary_run_that_fails_at_start_exits() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut child, console) = bad_config_run(dir.path(), false);
+    let status = wait_for(Duration::from_secs(30), || child.try_wait().ok().flatten());
+    if status.is_none() {
+        let _ = child.kill();
+    }
+    let status = status.expect("it should exit");
+    assert!(!status.success(), "{status}");
+    // The reader has the whole stderr once the process has ended.
+    let shown = wait_for(Duration::from_secs(10), || {
+        let c = console.lock().unwrap().clone();
+        c.contains("config:").then_some(c)
+    })
+    .expect("the config error on stderr");
+    assert!(!shown.contains("Press Enter"), "{shown}");
+}
+
 #[test]
 fn reads_sc_output() {
     let out = "SERVICE_NAME: x\r\n        TYPE               : 10  WIN32_OWN_PROCESS\r\n\

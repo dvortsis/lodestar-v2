@@ -9,7 +9,7 @@ The follow-ups from #649's review (`reviews/rv-649-8d4ac5f6.md`: findings 1, 2, 
   - prints the log folder (`<data>\logs`, from the same `--config` the copy was started with), if that config loads;
   - prints "Press Enter to close this window.";
   - then reads one line from `CONIN$`. An end of file or an error ends the wait at once.
-- **"Relaunched" is recorded once, early** (`Restart::relaunched`). `Restart` reads the relaunch token when it's created, which on Windows is the hook's `set_prepare` at the start. A later change to the environment can't hide it.
+- **"Relaunched" is read once, first thing in `main`** (`Restart::global().relaunched()`, before `run`, so before the Windows hook and any config load), and passed to the wrapper. `Restart` reads the relaunch token when it's created, which is that call. So a config that fails early still counts, and a later change to the environment can't hide it (#651's review). The token is never removed anyway: edition 2024 makes that `unsafe`.
 - **Who never waits:**
   - With no console (the service, a detached run), `CONIN$` doesn't open, so nothing waits. The service never has the token anyway.
   - A success, or a run Restart now didn't start, returns at once.
@@ -20,7 +20,10 @@ The follow-ups from #649's review (`reviews/rv-649-8d4ac5f6.md`: findings 1, 2, 
   - an end of file: the wait ends;
   - a success, not relaunched, or no console: no wait, nothing printed;
   - off Windows: the identity.
-  - The wait on a real Windows console isn't tested on CI, which runs without one: `CONIN$` doesn't open there, which is the "nothing waits" path.
+  - On Windows (`crates/lodestar/tests/windows_service.rs`), a run with a config that doesn't load, started in a console of its own (`CREATE_NEW_CONSOLE`, so `CONIN$` opens) with stderr kept:
+    - `a_relaunched_copy_that_fails_at_start_waits_for_enter`: with the token and the hand-over on stdin, it prints the config error and the prompt, and is still running.
+    - `an_ordinary_run_that_fails_at_start_exits`: without them it exits with a failure and no prompt.
+  - The unit test calls the wrapper itself only off Windows, so a developer's console never waits.
 
 ## The companions lock (finding 2)
 - **The problem:** `Manager::open` (`crates/companions/src/manager.rs`) answering `Busy` after a quick restart on Windows turned companions off for the whole run (`install_failed step=open reason=busy`).
