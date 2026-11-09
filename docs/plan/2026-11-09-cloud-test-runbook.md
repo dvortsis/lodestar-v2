@@ -18,7 +18,7 @@ Written 2026-11-09Z for whoever runs the cloud pilot without the original author
 | Shorten a test to fit the clock (§6), marked `SHORTENED` | Creating cloud resources other than the three pilot VMs and the Phase 0 canaries |
 | Re-order tests inside a lane | Any change to an owner-set number (budgets, gates). Record the measurement, don't edit the number |
 | Tear down a VM early once its lane is finished | Deleting or altering anything in the AWS or Akamai accounts that you didn't create in this pilot |
-| Commit evidence and notes to the evidence branch (§7) | Pushing to `main`, opening PRs, or merging. Never. |
+| **Extend a pilot VM's lifespan, only so that evidence can be committed** (owner, 2026-11-09; §7.5) |  Pushing to `main`, opening PRs, or merging. Never. |
 
 ### 0.2 Hard rules (no exceptions)
 1. **Every crawling session goes through PIA (a US region, no port forwarding).** Never crawl on a VM before the Phase 0 leak test passed on that VM. If the tunnel drops and the kill switch doesn't stop the traffic, run `docker stop` on Lodestar immediately, then report.
@@ -50,6 +50,7 @@ Check each lane at least every 30 minutes during crawls and every 5 minutes duri
 ### 0.5 Cost caps and the clock
 - Akamai: about $3.82 for 48 h (the brief); AWS Windows c6a.xlarge about $15 for 48 h (accepted by the owner). **Cap: $25 total.** If the AWS console or Akamai API shows spend heading above it, tear down the Windows VM first.
 - The watchdogs delete VMs at their expiry (tag read in T0.1). **Hard deadline for copying evidence off each VM = expiry minus 4 h.** Copy evidence every 6 h in the meantime (§7.1) so an unexpected deletion loses little.
+- **Extension (owner, 2026-11-09):** if evidence has not been committed and pushed (§7.1) when a VM's expiry nears and you cannot do it in time, you may extend that VM's expiry. Rules in §7.5. This is the only reason to extend.
 - Teardown order: Win, Worker, Main. Confirm deletion with the provider (§7.3).
 
 ---
@@ -224,7 +225,7 @@ Per VM: mean per-arm window rate (A segments vs B segments), the paired differen
 | Disk below 20 GB | Stop; copy evidence; do not delete the data volume unless a block is lost anyway |
 | A segment runs long at the clock (§6) | Shorten the later segments (`SHORTENED`): minimum viable arm = 60 min warm-up + 3 h window, `--rehearsal` required; never shorten the first segment's suppression |
 | No new torrents after the warm-up + 2 h | Check tunnel (T0.5 step 1), `curl localhost:8090/metrics | grep dht_routing_nodes`, a US-region switch (new gluetun region, recreate both containers, new block) once; else `BLOCKED` on that VM |
-| VM about to expire (expiry − 4 h) | Stop the collector cleanly, analyze, copy evidence off (§7.1) |
+| VM about to expire (expiry − 4 h) | Stop the collector cleanly, analyze, copy evidence off (§7.1). If that fails, extend (§7.5) |
 
 ---
 
@@ -333,7 +334,14 @@ Only through PIA (§2 T0.5, Windows part). Use the pinned binary built in T-W0; 
 ## 7. Evidence, scrubbing and teardown
 
 ### 7.1 Copy-off (every 6 h, and at the deadline)
-Evidence lives in `~/evidence` on each Linux VM and `C:\pilot` on Win. Every 6 h, `rsync -a` (Linux) or `scp` (Win) to the control host's `~/pilot/collected/<vm>/`. Commit **only** what is listed here to a **new branch** `cloud-pilot/2026-11` (never `main`): the collector evidence directories (`run.json`, `samples.jsonl`, `metrics/`, `status.json`, `disk.jsonl`, `result.json`, `analysis.*`), `block-summary.md`, the benchmark outputs, the Lighthouse JSON after scrubbing, and the journal. Path in the repo: `docs/soak/evidence/2026-11-cloud-pilot/<vm>/`. If you cannot push (no repo access), archive to the operator's location and journal where; **never leave evidence only on a VM**.
+Evidence lives in `~/evidence` on each Linux VM and `C:\pilot` on Win. Every 6 h, `rsync -a` (Linux) or `scp` (Win) to the control host's `~/pilot/collected/<vm>/`. Commit **only** what is listed here to a **new branch** `cloud-pilot/2026-11` (never `main`): the collector evidence directories (`run.json`, `samples.jsonl`, `metrics/`, `status.json`, `disk.jsonl`, `result.json`, `analysis.*`), `block-summary.md`, the benchmark outputs, the Lighthouse JSON after scrubbing, and the journal. Path in the repo: `docs/soak/evidence/2026-11-cloud-pilot/<vm>/`. If you cannot push (no repo access), archive to the operator's location and journal where; **never leave evidence only on a VM**. If neither works before expiry, extend the VM per §7.5.
+
+### 7.5 Extending a VM's lifespan to save evidence (owner-approved, 2026-11-09)
+Permitted **only** when the evidence from that VM (or its journal) is not yet committed or archived off the VM, and a copy or commit is failing or can't finish before expiry. Not for running more tests.
+1. Extend the expiry the way T0.1 showed it is stored (the tag or field the watchdog reads), by **at most 6 h at a time**, on **that VM only**. Do not touch the watchdogs, their schedules or any other resource. If you can't tell how the expiry is stored or can't change it, do not guess: journal `BLOCKED: cannot extend`, and copy off whatever you can immediately.
+2. Stop all crawling and tests on the VM first (collector stop, `docker compose stop lodestar`), so the extension costs only idle time.
+3. Journal the old and new expiry, and the reason (`NOTE`). Repeat step 1 only while the commit or copy is still failing, and try a different route each time (another remote, `scp` to the control host, an archive to the operator's location). After 3 extensions, or if the total cost would exceed the §0.5 cap, stop extending and report `BLOCKED` so the operator can decide.
+4. As soon as the evidence is verified off the VM (matching `sha256sum` lists), tear the VM down yourself (§7.3). Do not leave it running to the new expiry.
 
 ### 7.2 Scrub before any commit
 ```bash
@@ -366,5 +374,5 @@ Send the REPORT's last status line to the operator, if you have a way to; otherw
 | Out of time | §6 decision clock |
 | Out of disk | §3.7; reduce bench size |
 | Windows toolchain won't install | T-W0: `BLOCKED` for builds; T-W1 still runs |
-| Can't push evidence | §7.1: archive elsewhere, journal location |
+| Can't push or copy evidence | §7.1: archive elsewhere; if still stuck before expiry, extend that VM (§7.5) |
 | Anything touching safety/security/owner numbers | §0.1: stop and report |
