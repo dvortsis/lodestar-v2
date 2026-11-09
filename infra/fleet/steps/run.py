@@ -30,7 +30,7 @@ STEPS_PATH = "infra/fleet/steps/vm"
 # in live mode until OP-3b adds them.
 BUILT = {
     "vm-status": {"files": ("vm-status.sh",), "timeout": 60},
-    "leak-test": {"files": ("leak-test.sh", "compose.yaml"), "timeout": 420},
+    "leak-test": {"files": ("leak-test.sh", "compose.yaml"), "timeout": 600},
 }
 OUTCOMES = {255: "couldn't connect, or its host key didn't match the pin",
             256: "the session didn't finish in time",
@@ -71,7 +71,7 @@ def summary(rc: int, lines: list[str]) -> str:
 
 def run_step(env: dict, backend, fleet: dict, step: str, vm: str, run_id: str, fence: Callable[[], None], *,
              ssh: Callable, my_ip: Callable[[], str], emit: Callable[[str], None], repo: str,
-             fingerprint: Callable[[str], str]) -> str:
+             fingerprint: Callable[[str], str], close_fence: Callable[[], None] | None = None) -> str:
     """The step's report line. Raises remote.StepRefused with a fixed reason."""
     if step not in BUILT:
         raise remote.StepRefused("step not built yet (OP-3b)")
@@ -86,12 +86,11 @@ def run_step(env: dict, backend, fleet: dict, step: str, vm: str, run_id: str, f
     files = step_files(step, fleet["commit"], repo)
     data = remote.payload(files, {})
     ip = my_ip().strip()
-    if ip:
-        emit("::add-mask::" + ip.replace("%", "%25"))
     try:
         cidr = str(ipaddress.IPv4Network(f"{ip}/32"))
     except ValueError:
         raise remote.StepRefused("this runner's address isn't an IPv4 address") from None
+    emit("::add-mask::" + ip)  # validated first: one IPv4 address, nothing to escape
     run_num, attempt = run_id.rsplit("-", 1)
     timeout = BUILT[step]["timeout"]
     with tempfile.TemporaryDirectory(prefix="step-") as tmp:
@@ -116,7 +115,8 @@ def run_step(env: dict, backend, fleet: dict, step: str, vm: str, run_id: str, f
                               data, timeout + remote.FLOCK_WAIT + 60)
         finally:  # whatever happened, including a half-opened rule set or a lost lock
             try:
-                backend.set_job_rules(fleet, run_num, attempt, None, fence)
+                # A lock read that fails (S3) mustn't leave the rule open; a lost lock still stops it.
+                backend.set_job_rules(fleet, run_num, attempt, None, close_fence or fence)
                 closed = True
             except Exception:  # noqa: BLE001 - reported below; the next sweep removes it
                 closed = False

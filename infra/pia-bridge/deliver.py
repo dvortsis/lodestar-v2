@@ -138,10 +138,10 @@ def bootstrap(run_dir: str = RUN_DIR, out: str = WG_CONF, boot_marker: str = BOO
         # block: with a collector running, leave the tunnel alone (exit 30);
         # start-block recreates gluetun from the current wg0.conf anyway.
         f"if docker ps --filter 'name=^lodestar-collector' --format x 2>/dev/null | grep -q .; then exit {MID_BLOCK}; fi",
-        "if [ \"$(docker inspect -f '{{.State.Running}}' gluetun 2>/dev/null)\" = true ]; then",
+        "if [ \"$(docker inspect --type container -f '{{.State.Running}}' gluetun 2>/dev/null)\" = true ]; then",
         f"  docker restart gluetun >/dev/null 2>&1 || exit {RESTART_FAILED}",
-        "  if [ \"$(docker inspect -f '{{.State.Running}}' lodestar 2>/dev/null)\" = true ]; then",
-        f"    docker restart lodestar >/dev/null 2>&1 || exit {RESTART_FAILED}",
+        "  if [ \"$(docker inspect --type container -f '{{.State.Running}}' lodestar 2>/dev/null)\" = true ]; then",
+        f"    docker restart -t 60 lodestar >/dev/null 2>&1 || exit {RESTART_FAILED}",
         "  fi",
         "fi",
     ])

@@ -242,7 +242,8 @@ def _run_live_step(ctx: Ctx, cmd: Command, run_id: str, fleet: dict) -> str:
     io = ctx.step_io or {"ssh": remote.run_ssh, "my_ip": steps.checkip}
     try:
         line = steps.run_step(ctx.env, ctx.backend, fleet, cmd.step, cmd.vm, run_id, ctx.fence(run_id),
-                              ssh=io["ssh"], my_ip=io["my_ip"], emit=print, repo=ctx.repo, fingerprint=fingerprint)
+                              ssh=io["ssh"], my_ip=io["my_ip"], emit=print, repo=ctx.repo, fingerprint=fingerprint,
+                              close_fence=_tolerant(ctx, run_id))
     except remote.StepRefused as e:
         return f"refused: run {cmd.step}: {e}"
     return f"run {cmd.step} {cmd.vm}: {line}"

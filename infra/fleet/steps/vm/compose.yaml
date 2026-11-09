@@ -6,7 +6,8 @@
 #   docs/decisions/2026-11-09-OP-3a.md), with PIA through its custom WireGuard
 #   provider and its firewall on (the kill switch under test). The leak test
 #   starts it alone.
-# - lodestar in gluetun's network namespace. Its image comes from the screen's
+# - lodestar in gluetun's network namespace, with every capability dropped
+#   except the three it needs to drop root. Its image comes from the screen's
 #   committed rules (start-block, OP-3b), validated there; it starts only with
 #   the "block" profile.
 # - No host port except the UI on the host's loopback, reached over `ssh -L`.
@@ -44,6 +45,16 @@ services:
       TZ: Etc/UTC
     volumes:
       - ./data:/data
+    # No raw sockets (NET_RAW could send frames past gluetun's firewall). Only
+    # what the image needs to hand /data over and drop root
+    # (packaging/docker/README.md).
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
     security_opt:
       - no-new-privileges:true
+    stop_grace_period: 60s
     restart: "no"

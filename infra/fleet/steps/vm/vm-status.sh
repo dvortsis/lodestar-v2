@@ -8,7 +8,7 @@ STACK=${2:-/home/lodestar/lodestar}  # tests pass a temporary stack; the bootstr
 PIA_RUN=${3:-/run/lodestar-pia}
 
 running() {  # exactly that container name, running
-  [[ "$(docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null)" == "true" ]]
+  [[ "$(docker inspect --type container -f '{{.State.Running}}' "$1" 2>/dev/null)" == "true" ]]
 }
 say() { if "$@" >/dev/null 2>&1; then echo "ok $NAME"; else echo "fail $NAME"; fi; }
 digits() { tr -dc '0-9' | head -c 15; }  # counters are bare integers, whatever a tool printed

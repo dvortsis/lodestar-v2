@@ -625,7 +625,7 @@ class EndToEnd(unittest.TestCase):
 printf '%s\n' "$*" >> "$STUB/docker.log"
 case "$1" in
   ps) [ -n "$COLLECTOR" ] && echo x; exit 0 ;;
-  inspect) case "$4" in gluetun) [ -n "$GLUETUN" ] && echo true || exit 1 ;; lodestar) [ -n "$LODESTAR" ] && echo true || exit 1 ;; esac ;;
+  inspect) case "${@: -1}" in gluetun) [ -n "$GLUETUN" ] && echo true || exit 1 ;; lodestar) [ -n "$LODESTAR" ] && echo true || exit 1 ;; esac ;;
   restart) [ -n "$FAIL_RESTART" ] && exit 1; exit 0 ;;
 esac
 """
@@ -656,7 +656,7 @@ esac
             restarts = [ln for ln in (log.read_text().splitlines() if log.exists() else []) if ln.startswith("restart")]
             return r.returncode, restarts
         self.assertEqual(boot(), (0, []))  # no stack yet (the first delivery after up)
-        self.assertEqual(boot(GLUETUN=True, LODESTAR=True), (0, ["restart gluetun", "restart lodestar"]))
+        self.assertEqual(boot(GLUETUN=True, LODESTAR=True), (0, ["restart gluetun", "restart -t 60 lodestar"]))
         self.assertEqual(boot(GLUETUN=True), (0, ["restart gluetun"]))
         self.assertEqual(boot(GLUETUN=True, LODESTAR=True, COLLECTOR=True), (deliver.MID_BLOCK, []))
         self.assertEqual(boot(GLUETUN=True, FAIL_RESTART=True), (deliver.RESTART_FAILED, ["restart gluetun"]))

@@ -225,6 +225,14 @@ class RunStep(unittest.TestCase):
             self.go(b=FakeBackend(open_error=LockLost("lost")))
         self.assertEqual(self.ssh_calls, [])
 
+    def test_the_close_uses_the_tolerant_fence(self):
+        used = []
+        b = FakeBackend()
+        steps.run_step({"FLEET_SSH_KEY": "K"}, b, self.fleet, "vm-status", "main", "42-1", lambda: used.append("strict"),
+                       ssh=self.ssh(), my_ip=lambda: "198.51.100.7", emit=[].append, repo=".",
+                       fingerprint=apply.fingerprint, close_fence=lambda: used.append("tolerant"))
+        self.assertEqual(used, ["strict", "tolerant"])  # opened under the strict fence, closed under the tolerant one
+
     def test_an_ssh_error_still_closes_the_rule(self):
         def boom(argv, data, timeout):
             raise OSError("ssh missing")
@@ -321,16 +329,21 @@ class Compose(unittest.TestCase):
         self.assertEqual(lod["network_mode"], "service:gluetun")
         self.assertEqual(lod["image"], "${LODESTAR_IMAGE:?start-block sets it from the screen rules}")
         self.assertEqual(lod["profiles"], ["block"])  # tunnel-up never starts it
-        for k in ("privileged", "cap_add", "devices", "pid", "ports"):
+        for k in ("privileged", "devices", "pid", "ports"):
             self.assertNotIn(k, lod)
+        # No raw sockets past gluetun's firewall: everything dropped but the three
+        # capabilities the image needs to drop root.
+        self.assertEqual(lod["cap_drop"], ["ALL"])
+        self.assertEqual(lod["cap_add"], ["CHOWN", "SETGID", "SETUID"])
         self.assertEqual(lod["environment"]["TZ"], "Etc/UTC")
         self.assertIn("no-new-privileges:true", lod["security_opt"])
         self.assertEqual(set(self.svc), {"gluetun", "lodestar"})
 
-    def test_a_tag_only_reference_is_refused(self):
-        for image in ("qmcgaw/gluetun:latest", "qmcgaw/gluetun:v3.41.3", "qmcgaw/gluetun",
-                      "qmcgaw/gluetun@sha256:abc", "evil/gluetun@sha256:" + "a" * 64):
-            self.assertNotRegex(image, r"^qmcgaw/gluetun@sha256:[0-9a-f]{64}$")
+    def test_the_probe_image_is_pinned_too(self):
+        text = (VM / "leak-test.sh").read_text()
+        pins = [ln for ln in text.splitlines() if ln.startswith("PROBE_IMAGE=")]
+        self.assertEqual(len(pins), 1)
+        self.assertRegex(pins[0], r"^PROBE_IMAGE=nicolaka/netshoot@sha256:[0-9a-f]{64}$")
 
 
 STUB_DOCKER = r"""#!/usr/bin/env bash
@@ -345,16 +358,22 @@ case "$1" in
       *Running*lodestar) [ -n "$LODESTAR" ] && echo true || echo false ;;
     esac ;;
   ps) [ -n "$COLLECTORS" ] && printf 'a\nb\n'; exit 0 ;;
-  exec)
-    shift 2  # exec gluetun
+  pull) [ -n "$PULL_FAIL" ] && exit 1; exit 0 ;;
+  exec) echo 7 ;;  # exec gluetun cat .../iflink
+  run)
+    while [ $# -gt 0 ] && [ "${1#nicolaka/}" = "$1" ]; do shift; done; shift  # to after the image
     if [ -e "$STUB/blocked" ]; then down=1; else down=; fi
-    case "$1 $*" in
-      "wget"*"checkip"*) [ -n "$down" ] && [ -z "$LEAK_V4" ] && exit 1; echo "${EXIT_IP:-198.51.100.200}" ;;
-      "wget"*"2606"*) [ -n "$V6_OPEN" ] || exit 1 ;;
-      "nslookup"*) [ -n "$down" ] && exit 1; exit 0 ;;
+    echo "$*" >> "$STUB/probes"
+    case "$*" in
+      "curl -4"*) [ -n "$down" ] && [ -z "$LEAK_V4" ] && exit 1
+                  if [ -n "$down" ] || [ ! -e "$STUB/was_blocked" ] || [ -z "$NEW_EXIT" ]; then echo "${EXIT_IP:-198.51.100.200}"; else echo 198.51.100.201; fi ;;
+      "curl -6"*) [ -n "$V6_OPEN" ] || exit 1 ;;
+      "nc -z"*) [ -n "$down" ] && [ -z "$LEAK_TCP" ] && exit 1; [ -n "$NO_TCP" ] && exit 1; exit 0 ;;
+      "sh -c dig"*) [ -n "$down" ] && exit 1; exit 0 ;;
+      "sh -c command"*) [ -n "$NO_TOOLS" ] && exit 1; exit 0 ;;
       "grep"*) [ -n "$DNS_REMOTE" ] && exit 1; exit 0 ;;
-      "cat"*) echo 7 ;;
-      "sh"*) exit 0 ;;
+      "sh -c echo"*) exit 0 ;;
+      *) exit 99 ;;
     esac ;;
 esac
 """
@@ -368,8 +387,10 @@ esac
 """
 STUB_TCPDUMP = r"""#!/usr/bin/env bash
 case "$*" in
-  "-r "*|*" -r "*) [ -n "$CAPTURED" ] && printf 'pkt\n%.0s' $(seq "$CAPTURED"); exit 0 ;;
-  *) for a in "$@"; do [ "$prev" = "-w" ] && printf 'PCAPHEADER' > "$a"; prev=$a; done; trap 'exit 0' TERM; while :; do /bin/sleep 0.05; done ;;
+  "-r "*|*" -r "*) [ -n "$READ_FAILS" ] && exit 1; [ -n "$CAPTURED" ] && printf 'pkt\n%.0s' $(seq "$CAPTURED"); exit 0 ;;
+  *) for a in "$@"; do [ "$prev" = "-w" ] && printf 'PCAPHEADER' > "$a"; prev=$a; done
+     [ -n "$CAPTURE_DIES" ] && exit 1  # wrote its header, then went away
+     trap 'exit 0' TERM; while :; do /bin/sleep 0.05; done ;;
 esac
 """
 STUB_IP = r"""#!/usr/bin/env bash
@@ -425,16 +446,21 @@ class VMScripts(unittest.TestCase):
         rc, lines, raw = self.run_script("leak-test.sh")
         self.assertEqual(rc, 0, raw)
         self.assertEqual(lines[-1], "ok leak_test")
-        for name in ("ipv4_through_tunnel", "ipv6_blocked_up", "dns_up", "dns_local", "ipv4_blocked_down",
-                     "ipv6_blocked_down", "dns_blocked_down", "dns_direct_blocked_down", "no_egress_captured",
-                     "tunnel_recovers", "run_clean"):
+        for name in ("ipv4_through_tunnel", "tcp_literal_up", "ipv6_blocked_up", "dns_up", "dns_local",
+                     "probe_tools", "ipv4_blocked_down", "tcp_literal_blocked_down", "ipv6_blocked_down",
+                     "dns_blocked_down", "dns_direct_blocked_down", "capture_alive", "capture_read",
+                     "no_egress_captured", "tunnel_recovers", "run_clean"):
             self.assertIn(f"ok {name}", lines)
         self.assertIn("count captured_packets 0", lines)
         self.assertEqual(remote.parse(raw.encode()), raw.splitlines())  # nothing outside the grammar, no address
         self.assertIn("iptables -I DOCKER-USER 1 -d 192.0.2.77/32 -p udp --dport 1337 -j DROP", self.log())
         self.assertIn("iptables -D DOCKER-USER -d 192.0.2.77/32 -p udp --dport 1337 -j DROP", self.log())
         self.assertIn("docker compose -f " + str(self.stack / "compose.yaml"), self.log())
-        self.assertIn(" up -d gluetun", self.log())  # gluetun alone, never lodestar
+        self.assertIn(" up -d --force-recreate gluetun", self.log())  # gluetun alone, from the current wg0.conf
+        probes = (self.stub / "probes").read_text()
+        self.assertIn("sh -c dig +short +time=5 +tries=1 example.com", probes)  # up
+        self.assertIn("sh -c dig +short +time=3 +tries=1 example.net", probes)  # down: a name not asked before
+        self.assertIn("nc -z -w 5 1.1.1.1 443", probes)  # TCP to a literal address, no DNS needed
 
     def test_leak_test_failures(self):
         cases = {
@@ -445,6 +471,12 @@ class VMScripts(unittest.TestCase):
             "a non-address exit": ({"EXIT_IP": "<html>"}, "ipv4_through_tunnel"),
             "DNS not through gluetun": ({"DNS_REMOTE": 1}, "dns_local"),
             "no recovery": ({"NO_RECOVER": 1}, "tunnel_recovers"),
+            "healthy again, but through another exit": ({"NEW_EXIT": 1}, "tunnel_recovers"),
+            "TCP leaks with the tunnel down": ({"LEAK_TCP": 1}, "tcp_literal_blocked_down"),
+            "no TCP even with the tunnel up": ({"NO_TCP": 1}, "tcp_literal_up"),
+            "the probe image lacks its tools": ({"NO_TOOLS": 1}, "probe_tools"),
+            "the capture died after its header": ({"CAPTURE_DIES": 1}, "capture_alive"),
+            "the capture can't be read": ({"READ_FAILS": 1}, "capture_read"),
             # The recovery's delete fails: the exit trap still lifts the block.
             "a failed delete": ({"FAIL_FIRST_DELETE": 1, "NO_RECOVER": 1}, "tunnel_recovers"),
         }
@@ -456,10 +488,14 @@ class VMScripts(unittest.TestCase):
                 self.assertIn(f"fail {failed}", lines)
                 self.assertEqual(lines[-1], "fail leak_test")
                 self.assertFalse((self.stub / "blocked").exists())  # the block is always lifted
+                if failed in ("capture_alive", "capture_read"):  # never read as zero packets
+                    self.assertIn("fail no_egress_captured", lines)
 
     def test_leak_test_refuses_bad_inputs(self):
         for name, conf in {"hostile endpoint": "Endpoint = 192.0.2.77;rm -rf /:1337\n",
                            "port out of range": "Endpoint = 192.0.2.77:70000\n",
+                           "port zero": "Endpoint = 192.0.2.77:0\n",
+                           "leading-zero port out of range": "Endpoint = 192.0.2.77:099999\n",
                            "hostname": "Endpoint = vpn.example:1337\n",
                            "no endpoint": "[Peer]\n"}.items():
             with self.subTest(name):
@@ -475,6 +511,19 @@ class VMScripts(unittest.TestCase):
         self.setUp()
         rc, lines, _ = self.run_script("leak-test.sh", COMPOSE_FAIL=1)
         self.assertEqual(lines[-2:], ["fail tunnel_started", "fail leak_test"])
+        self.setUp()
+        rc, lines, _ = self.run_script("leak-test.sh", PULL_FAIL=1)
+        self.assertEqual(lines[-2:], ["fail probe_image", "fail leak_test"])
+        self.assertNotIn("iptables", self.log())
+
+    def test_leak_test_refuses_mid_block(self):
+        for flags in ({"LODESTAR": 1}, {"COLLECTORS": 1}):
+            with self.subTest(flags=flags):
+                self.setUp()
+                rc, lines, _ = self.run_script("leak-test.sh", **flags)
+                self.assertEqual((rc, lines[-2:]), (1, ["fail block_running", "fail leak_test"]))
+                self.assertNotIn("iptables", self.log())
+                self.assertNotIn("compose", self.log())  # the running stack is never touched
 
     def test_leak_test_flags_a_left_over_login(self):
         (self.tmp / "pia-run").mkdir()
