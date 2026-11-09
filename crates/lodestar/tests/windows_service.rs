@@ -722,18 +722,17 @@ fn bad_config_run(
     std::thread::spawn({
         let console = console.clone();
         move || {
-            use std::io::BufRead;
-            let mut reader = std::io::BufReader::new(stderr);
-            let mut line = Vec::new();
-            // Read to each newline or the end; the last prompt has none.
+            // Raw chunks, not lines: the prompt ends without a newline, and
+            // a line reader would hold it until the process ends.
+            let mut stderr = stderr;
+            let mut chunk = [0u8; 1024];
             loop {
-                line.clear();
-                match reader.read_until(b'\n', &mut line) {
+                match stderr.read(&mut chunk) {
                     Ok(0) | Err(_) => break,
-                    Ok(_) => console
+                    Ok(n) => console
                         .lock()
                         .unwrap()
-                        .push_str(&String::from_utf8_lossy(&line)),
+                        .push_str(&String::from_utf8_lossy(&chunk[..n])),
                 }
             }
         }
