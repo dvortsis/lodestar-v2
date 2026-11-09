@@ -146,14 +146,24 @@ pub trait System {
     /// Whether the service reaches Running within [`HEALTH_WAIT`] and
     /// stays there for [`HEALTH_HOLD`].
     fn healthy(&self) -> bool;
-    /// Sets the service to manual start (`true`, during a rollback) or
-    /// back to delayed automatic start.
-    fn set_manual(&self, manual: bool) -> io::Result<()>;
+    /// Sets the service's start type.
+    fn set_start(&self, start: Start) -> io::Result<()>;
     /// How many processes run as the service's account.
     fn service_processes(&self) -> io::Result<usize>;
     /// Called once each copy into staging is written (tests change the
     /// data folder here).
     fn copied(&self, _name: &str) {}
+}
+
+/// A service start type ([`System::set_start`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Start {
+    /// During a rollback: the SCM's failure actions can't start it either.
+    Disabled,
+    /// After a halt: left stopped, startable by an administrator.
+    Manual,
+    /// Delayed automatic, as the MSI installs it.
+    Auto,
 }
 
 /// What a run did.
@@ -170,10 +180,20 @@ pub enum Outcome {
     /// nothing is skipped.
     InstallerBusy { version: Version, code: i32 },
     /// Installed, but probation failed, and the rollback restored the
-    /// store and reinstalled `to` ([`super::rollback`]).
-    RolledBack { failed: String, to: String },
+    /// store and reinstalled `to` ([`super::rollback`]); `healthy` is the
+    /// old version's own health afterwards.
+    RolledBack {
+        failed: String,
+        to: String,
+        healthy: bool,
+    },
+    /// The rollback stopped for now (transient); the next run retries.
+    RollbackPending { why: String },
     /// Probation failed and the rollback couldn't go on.
     RollbackHalted { why: String },
+    /// An install a crash interrupted never happened: the old version is
+    /// still the one on disk.
+    InstallInterrupted { version: String },
 }
 
 impl Outcome {
@@ -184,7 +204,9 @@ impl Outcome {
             Outcome::Failed { .. } => "install_failed",
             Outcome::InstallerBusy { .. } => "installer_busy",
             Outcome::RolledBack { .. } => "rolled_back",
+            Outcome::RollbackPending { .. } => "rollback_pending",
             Outcome::RollbackHalted { .. } => "rollback_halted",
+            Outcome::InstallInterrupted { .. } => "install_interrupted",
         }
     }
 }
@@ -212,13 +234,22 @@ pub fn run(ctx: &Context, sys: &dyn System) -> Result<Outcome, Refusal> {
     let staging = &ctx.staging;
     sys.secure_staging(&staging.dir).map_err(Refusal::Staging)?;
     if let Some(journal) = rollback::read(ctx)? {
-        let result = rollback::resume(ctx, sys).map(|o| o.unwrap_or(Outcome::Nothing));
-        if let Ok(updates_pin) = layout::pin_dir(&updates) {
-            answer(ctx, &updates, &journal.id, &journal.to, &result);
-            drop(updates_pin);
+        match rollback::resume(ctx, sys, &running) {
+            // Dropped (another version was installed by hand): go on.
+            Ok(None) => {}
+            result => {
+                let result = result.map(|o| o.unwrap_or(Outcome::Nothing));
+                if let Ok(updates_pin) = layout::pin_dir(&updates) {
+                    answer(ctx, &updates, &journal.id, &journal.to, &result);
+                    drop(updates_pin);
+                }
+                drop(data_pin);
+                return result;
+            }
         }
-        drop(data_pin);
-        return result;
+    }
+    if std::fs::symlink_metadata(updates.join(REQUEST)).is_err() {
+        return Ok(Outcome::Nothing);
     }
     let updates_pin =
         layout::pin_dir(&updates).map_err(|e| Refusal::UncheckedBin(e.to_string()))?;
@@ -268,7 +299,6 @@ fn answer(
             Ok(Outcome::Failed { code, .. } | Outcome::InstallerBusy { code, .. }) => {
                 Some(code.to_string())
             }
-            Ok(Outcome::RollbackHalted { why }) => Some(why.clone()),
             Ok(_) => None,
             Err(r) => Some(r.code().to_string()),
         },
@@ -375,11 +405,15 @@ fn attempt(
         return Err(Refusal::Busy("service_processes"));
     }
     // Before msiexec: a crash from here on is finished by the next run.
-    let journal = rollback::installing(ctx, &request.id, running, &version);
-    if let Err(e) = rollback::write(ctx, &journal) {
-        sys.start_service();
-        return Err(e);
-    }
+    let journal = match rollback::installing(ctx, &request.id, running, &version)
+        .and_then(|j| rollback::write(ctx, &j).map(|()| j))
+    {
+        Ok(j) => j,
+        Err(e) => {
+            sys.start_service();
+            return Err(e);
+        }
+    };
 
     let args = msi::msiexec_args(&staged, &staging.log());
     let code = match sys.msiexec(&args) {
@@ -425,12 +459,30 @@ fn attempt(
 /// install the helper has seen no manifest yet; the service's marks keep
 /// a replayed older, still unexpired manifest out (#640's security
 /// review). The service can only raise them, which refuses more.
+///
+/// Only the channels' marks are taken, each raised and never lowered:
+/// never the data folder's statements or revocations, which the service
+/// could pad (a revocation entry need only parse as a key), so nothing
+/// the service writes lands in the helper's own state but higher marks.
+/// They're bounded by the check's own plausibility rule (a day ahead).
 fn trust_floor(ctx: &Context, own: &lodestar_update::TrustState) -> lodestar_update::TrustState {
     let data = trust_file::load(&ctx.data_dir.join("bin"), &ctx.embedded, &[]);
+    let mut floor = own.clone();
     if data.damaged() {
-        return own.clone();
+        return floor;
     }
-    lodestar_update::TrustState::merge(own, data.state().clone())
+    for (channel, theirs) in &data.state().channels {
+        let mine = floor.channels.entry(*channel).or_default();
+        if theirs.hwm_ts > mine.hwm_ts {
+            mine.hwm_ts = theirs.hwm_ts;
+            mine.hwm_sha256 = theirs.hwm_sha256;
+        }
+        if theirs.fresh_ts > mine.fresh_ts {
+            mine.fresh_ts = theirs.fresh_ts;
+            mine.fresh_sha256 = theirs.fresh_sha256;
+        }
+    }
+    floor
 }
 
 /// Takes `.lock`, waiting up to `wait` for the stopped service's handle
@@ -562,6 +614,18 @@ impl Windows {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
+    /// How many processes run as `account` (`tasklist` filtered by it).
+    pub fn processes_of(account: &str) -> io::Result<usize> {
+        let filter = format!("USERNAME eq {account}");
+        let out = Self::command("tasklist.exe")?
+            .args(["/fi", &filter, "/fo", "csv", "/nh"])
+            .output()?;
+        if !out.status.success() {
+            return Err(io::Error::other("tasklist failed"));
+        }
+        Ok(count_rows(&String::from_utf8_lossy(&out.stdout)))
+    }
+
     /// Polls `sc query` until `state` (`sc`'s state words aren't
     /// translated), or `wait` passes.
     fn wait_for(state: &str, wait: Duration) -> bool {
@@ -669,8 +733,12 @@ impl System for Windows {
         let _ = Self::sc(&["start", crate::windows::service::NAME]);
     }
 
-    fn set_manual(&self, manual: bool) -> io::Result<()> {
-        let mode = if manual { "demand" } else { "delayed-auto" };
+    fn set_start(&self, start: Start) -> io::Result<()> {
+        let mode = match start {
+            Start::Disabled => "disabled",
+            Start::Manual => "demand",
+            Start::Auto => "delayed-auto",
+        };
         let out = Self::command("sc.exe")?
             .args(["config", crate::windows::service::NAME, "start=", mode])
             .output()?;
@@ -685,14 +753,7 @@ impl System for Windows {
     /// words and the account name aren't translated; a row starts with a
     /// quote, the "no tasks" message doesn't).
     fn service_processes(&self) -> io::Result<usize> {
-        let user = format!("USERNAME eq NT SERVICE\\{}", crate::windows::service::NAME);
-        let out = Self::command("tasklist.exe")?
-            .args(["/fi", &user, "/fo", "csv", "/nh"])
-            .output()?;
-        if !out.status.success() {
-            return Err(io::Error::other("tasklist failed"));
-        }
-        Ok(count_rows(&String::from_utf8_lossy(&out.stdout)))
+        Self::processes_of(&format!("NT SERVICE\\{}", crate::windows::service::NAME))
     }
 
     fn msiexec(&self, args: &[OsString]) -> io::Result<i32> {
@@ -750,6 +811,9 @@ mod tests {
     const NOW: u64 = 1_800_000_000;
     const MSI: &[u8] = b"the 0.7.0 msi";
 
+    /// An action a test runs at one of the helper's hooks.
+    type Hook = Box<dyn Fn() + Send + Sync>;
+
     #[derive(Default)]
     struct Fake {
         data_private: Option<String>,
@@ -767,6 +831,9 @@ mod tests {
         crash_at: Option<usize>,
         /// `lodestar.db` at each msiexec.
         store_seen: Mutex<Vec<Option<Vec<u8>>>>,
+        health_looks: Mutex<usize>,
+        /// Called at a test hook (`copied`): (hook name, action).
+        at_hook: Option<(&'static str, Hook)>,
         /// A source to overwrite once it's copied: (name, path, bytes).
         swap: Option<(String, PathBuf, Vec<u8>)>,
         calls: Mutex<Vec<String>>,
@@ -832,17 +899,30 @@ mod tests {
             *self.ran.lock().unwrap() = Some((args.to_vec(), msi));
             Ok(self.code)
         }
+        /// Unhealthy at the first look only (the failed version), healthy
+        /// after (the old one, once rolled back).
         fn healthy(&self) -> bool {
-            !self.unhealthy
+            let mut n = self.health_looks.lock().unwrap();
+            *n += 1;
+            !(self.unhealthy && *n == 1)
         }
-        fn set_manual(&self, manual: bool) -> io::Result<()> {
-            self.note(if manual { "manual" } else { "auto" });
+        fn set_start(&self, start: Start) -> io::Result<()> {
+            self.note(match start {
+                Start::Disabled => "disabled",
+                Start::Manual => "manual",
+                Start::Auto => "auto",
+            });
             Ok(())
         }
         fn service_processes(&self) -> io::Result<usize> {
             Ok(self.processes)
         }
         fn copied(&self, name: &str) {
+            if let Some((hook, act)) = &self.at_hook
+                && *hook == name
+            {
+                act();
+            }
             self.note(&format!("copied {name}"));
             if let Some((n, path, bytes)) = &self.swap
                 && n == name
@@ -1287,8 +1367,8 @@ mod tests {
             fn healthy(&self) -> bool {
                 true
             }
-            fn set_manual(&self, m: bool) -> io::Result<()> {
-                self.fake.set_manual(m)
+            fn set_start(&self, m: Start) -> io::Result<()> {
+                self.fake.set_start(m)
             }
             fn service_processes(&self) -> io::Result<usize> {
                 self.fake.service_processes()
@@ -1337,10 +1417,11 @@ mod tests {
     }
 
     /// After exit 3010 probation waits for the restart: the journal
-    /// stays, and the next run (at boot) judges it.
+    /// stays, a run before the restart (the old program still on disk)
+    /// judges nothing, and the first run after it (the new one) does.
     #[test]
-    fn a_restart_defers_probation_to_the_next_run() {
-        let env = Env::new("0.6.0");
+    fn a_restart_defers_probation_until_after_it() {
+        let mut env = Env::new("0.6.0");
         env.offer("0.7.0");
         let out = env
             .run(&Fake {
@@ -1357,12 +1438,22 @@ mod tests {
         );
         let journal = env.ctx.staging.dir.join(rollback::JOURNAL);
         assert!(journal.exists());
+        // Before the restart: nothing judged, nothing started.
+        let early = Fake {
+            unhealthy: true,
+            ..Fake::default()
+        };
+        assert_eq!(env.run(&early).unwrap().code(), "installed");
+        assert!(early.calls().is_empty());
+        assert!(journal.exists());
         // A planted answer is display only: it decides nothing.
         std::fs::write(
             env.updates(msi::RESULT),
             br#"{"format":1,"id":"0000000000000000","version":"0.7.0","outcome":"rollback_halted","at":0}"#,
         )
         .unwrap();
+        // After the restart the program on disk is 0.7.0.
+        env.ctx.running = Some(Version::new(0, 7, 0));
         let boot = Fake::default();
         assert_eq!(
             env.run(&boot).unwrap(),
@@ -1396,39 +1487,72 @@ mod tests {
 
     const OLD_MSI: &[u8] = b"the 0.6.0 msi";
 
+    /// Every call of a whole rollback after a failed probation, in order.
+    const ROLLBACK: [&str; 16] = [
+        "copied manifest.json",
+        "copied lodestar-0.7.0.msi",
+        "stop",
+        "msiexec",
+        // Step 1: disabled, stopped, marker and skip.
+        "disabled",
+        "stop",
+        // Step 2: the snapshot chosen.
+        "copied chosen",
+        // Step 3: stopped again, the store restored.
+        "disabled",
+        "stop",
+        "copied sides_removed",
+        // Step 4: stopped again, the previous MSI.
+        "disabled",
+        "stop",
+        "msiexec",
+        // Step 5.
+        "auto",
+        "start",
+        "copied rotated",
+    ];
+
+    fn failing(env: &Env) -> Fake {
+        Fake {
+            unhealthy: true,
+            migrate: Some(env.ctx.data_dir.clone()),
+            ..Fake::default()
+        }
+    }
+
     /// Probation fails: the store is restored before the previous MSI is
-    /// reinstalled, with the service on manual start meanwhile.
+    /// reinstalled, with the service disabled meanwhile and the marker
+    /// keeping every store opener out while the store is restored.
     #[test]
     fn a_failed_probation_restores_the_store_then_the_previous_msi() {
         let env = Env::new("0.6.0");
         with_previous(&env, OLD_MSI);
         env.offer("0.7.0");
+        let marker = env.ctx.data_dir.join("bin").join(rollback::MARKER);
+        let seen_marker = std::sync::Arc::new(Mutex::new(None));
+        let (m, seen) = (marker.clone(), seen_marker.clone());
         let fake = Fake {
-            unhealthy: true,
-            migrate: Some(env.ctx.data_dir.clone()),
-            ..Fake::default()
+            at_hook: Some((
+                "chosen",
+                Box::new(move || *seen.lock().unwrap() = Some(m.exists())),
+            )),
+            ..failing(&env)
         };
         assert_eq!(
             env.run(&fake).unwrap(),
             Outcome::RolledBack {
                 failed: "0.7.0".into(),
-                to: "0.6.0".into()
+                to: "0.6.0".into(),
+                healthy: true
             }
         );
+        assert_eq!(fake.calls(), ROLLBACK);
         assert_eq!(
-            fake.calls(),
-            [
-                "copied manifest.json",
-                "copied lodestar-0.7.0.msi",
-                "stop",
-                "msiexec",
-                "manual",
-                "stop",
-                "msiexec",
-                "auto",
-                "start"
-            ]
+            *seen_marker.lock().unwrap(),
+            Some(true),
+            "marker during the restore"
         );
+        assert!(!marker.exists(), "and gone after it");
         // The store was the old one again before the old MSI ran.
         let seen = fake.store_seen.lock().unwrap().clone();
         assert_eq!(
@@ -1436,6 +1560,8 @@ mod tests {
             [Some(b"old store".to_vec()), Some(b"old store".to_vec())]
         );
         assert_eq!(fake.ran.lock().unwrap().clone().unwrap().1, OLD_MSI);
+        let args = fake.ran.lock().unwrap().clone().unwrap().0;
+        assert!(args[5].to_string_lossy().ends_with("msiexec-rollback.log"));
         let data = &env.ctx.data_dir;
         assert_eq!(
             std::fs::read(data.join("lodestar.db")).unwrap(),
@@ -1454,21 +1580,20 @@ mod tests {
         assert_eq!(env.answer().outcome, "rolled_back");
     }
 
-    /// A crash at any step of the rollback is finished by the next run.
+    /// A crash at any call of the rollback, a step's hooks included
+    /// (after the snapshot is chosen, inside the restore, after the last
+    /// rotation), is finished by the next run.
     #[test]
     fn an_interrupted_rollback_is_finished_by_the_next_run() {
-        // Calls 4 to 8 are the rollback's: manual, stop, msiexec, auto, start.
-        for crash in 4..=8 {
-            let env = Env::new("0.6.0");
+        for (crash, call) in ROLLBACK.iter().enumerate().skip(4) {
+            let mut env = Env::new("0.6.0");
             with_previous(&env, OLD_MSI);
             env.offer("0.7.0");
             let data = env.ctx.data_dir.clone();
             let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 env.run(&Fake {
-                    unhealthy: true,
-                    migrate: Some(data.clone()),
                     crash_at: Some(crash),
-                    ..Fake::default()
+                    ..failing(&env)
                 })
             }));
             assert!(crashed.is_err(), "crash {crash}");
@@ -1476,26 +1601,45 @@ mod tests {
                 env.ctx.staging.dir.join(rollback::JOURNAL).exists(),
                 "crash {crash}"
             );
-            // The boot run: the journal first, the request never again.
-            let boot = Fake::default();
+            // The boot run, with 0.7.0 on disk: the journal first, the
+            // request never again. A crash before step 1 was recorded
+            // (calls 4 and 5) leaves probation to judge again (still
+            // failing here).
+            env.ctx.running = Some(Version::new(0, 7, 0));
+            let boot = Fake {
+                unhealthy: crash <= 5,
+                ..Fake::default()
+            };
             let out = env.run(&boot).unwrap();
             assert_eq!(
                 out,
                 Outcome::RolledBack {
                     failed: "0.7.0".into(),
-                    to: "0.6.0".into()
+                    to: "0.6.0".into(),
+                    healthy: true
                 },
-                "crash {crash}"
+                "crash {crash} ({call})"
             );
             assert_eq!(
                 std::fs::read(data.join("lodestar.db")).unwrap(),
                 b"old store"
             );
+            assert!(
+                !data.join("bin").join(rollback::MARKER).exists(),
+                "crash {crash}"
+            );
             assert!(!env.ctx.staging.dir.join(rollback::JOURNAL).exists());
+            assert!(
+                env.ctx
+                    .staging
+                    .current()
+                    .join("lodestar-0.6.0.msi")
+                    .exists()
+            );
             // The old MSI runs again only if its step wasn't recorded done
-            // (calls 4 to 6 come before that); never twice after it.
+            // (call 12 is that msiexec); never twice after it.
             let reran = boot.ran.lock().unwrap().clone().map(|r| r.1);
-            if crash <= 6 {
+            if crash <= 12 {
                 assert_eq!(reran.as_deref(), Some(OLD_MSI), "crash {crash}");
             } else {
                 assert_eq!(reran, None, "crash {crash}");
@@ -1504,100 +1648,216 @@ mod tests {
         }
     }
 
-    /// A crash during the install itself: the next run judges probation.
+    /// A crash during the install: the next run tells from the program on
+    /// disk whether it happened.
     #[test]
     fn a_crash_during_the_install_is_judged_by_the_next_run() {
-        let env = Env::new("0.6.0");
-        with_previous(&env, OLD_MSI);
-        env.offer("0.7.0");
-        // Call 3 is the install's msiexec.
-        let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            env.run(&Fake {
-                crash_at: Some(3),
-                ..Fake::default()
-            })
-        }));
-        assert!(crashed.is_err());
-        assert_eq!(env.run(&Fake::default()).unwrap().code(), "installed");
-        assert!(!env.ctx.staging.dir.join(rollback::JOURNAL).exists());
-    }
-
-    /// A previous MSI that doesn't match its pins never runs: the
-    /// rollback halts before touching the store, and the service goes
-    /// back to automatic start.
-    #[test]
-    fn a_tampered_previous_msi_halts_before_anything_runs() {
-        for tamper in ["bytes", "pins", "missing"] {
-            let env = Env::new("0.6.0");
+        for installed in [false, true] {
+            let mut env = Env::new("0.6.0");
             with_previous(&env, OLD_MSI);
             env.offer("0.7.0");
-            let fake = Fake {
-                unhealthy: true,
-                migrate: Some(env.ctx.data_dir.clone()),
-                ..Fake::default()
-            };
-            // Tampered once it's rotated into `previous\`: at probation.
-            struct Tamper<'a>(&'a Fake, &'a Env, &'a str);
-            impl System for Tamper<'_> {
-                fn check_data(&self, d: &Path) -> Result<(), String> {
-                    self.0.check_data(d)
-                }
-                fn secure_staging(&self, d: &Path) -> Result<(), String> {
-                    self.0.secure_staging(d)
-                }
-                fn authenticode(&self, m: &Path) -> Result<(), String> {
-                    self.0.authenticode(m)
-                }
-                fn stop_service(&self) -> io::Result<()> {
-                    self.0.stop_service()
-                }
-                fn start_service(&self) {
-                    self.0.start_service()
-                }
-                fn msiexec(&self, a: &[OsString]) -> io::Result<i32> {
-                    self.0.msiexec(a)
-                }
-                fn healthy(&self) -> bool {
-                    let prev = self.1.ctx.staging.previous();
-                    match self.2 {
-                        "bytes" => {
-                            std::fs::write(prev.join("lodestar-0.6.0.msi"), b"evil").unwrap()
-                        }
-                        "pins" => std::fs::write(
-                            prev.join(PINS),
-                            br#"{"version":"0.5.0","channel":"stable","sha256":"00","size":1}"#,
-                        )
-                        .unwrap(),
-                        _ => std::fs::remove_dir_all(&prev).unwrap(),
+            // Call 3 is the install's msiexec.
+            let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                env.run(&Fake {
+                    crash_at: Some(3),
+                    ..Fake::default()
+                })
+            }));
+            assert!(crashed.is_err());
+            if installed {
+                env.ctx.running = Some(Version::new(0, 7, 0));
+                let next = Fake::default();
+                assert_eq!(env.run(&next).unwrap().code(), "installed");
+                assert_eq!(next.calls()[..2], ["auto", "start"]);
+            } else {
+                let next = Fake::default();
+                assert_eq!(
+                    env.run(&next).unwrap(),
+                    Outcome::InstallInterrupted {
+                        version: "0.7.0".into()
                     }
-                    self.0.healthy()
-                }
-                fn set_manual(&self, m: bool) -> io::Result<()> {
-                    self.0.set_manual(m)
-                }
-                fn service_processes(&self) -> io::Result<usize> {
-                    self.0.service_processes()
-                }
+                );
+                assert_eq!(next.calls(), ["auto", "start"]);
             }
-            let out = run(&env.ctx, &Tamper(&fake, &env, tamper)).unwrap();
+            assert!(!env.ctx.staging.dir.join(rollback::JOURNAL).exists());
+        }
+    }
+
+    /// Someone installed another version by hand: the journal is over.
+    #[test]
+    fn a_manual_install_drops_the_journal() {
+        let mut env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        env.run(&Fake {
+            code: 3010,
+            ..Fake::default()
+        })
+        .unwrap();
+        env.ctx.running = Some(Version::new(0, 8, 0));
+        let next = Fake::default();
+        assert_eq!(env.run(&next).unwrap(), Outcome::Nothing);
+        assert!(!env.ctx.staging.dir.join(rollback::JOURNAL).exists());
+        assert!(next.calls().is_empty());
+    }
+
+    /// A previous MSI that doesn't match its pins, wrong pins, none, or
+    /// only one planted in the data folder: halted before anything is
+    /// changed (the service left as it is), and the next run tries
+    /// nothing more.
+    #[test]
+    fn a_missing_or_tampered_previous_msi_halts_before_anything_changes() {
+        for tamper in ["bytes", "pins", "missing", "planted"] {
+            let env = Env::new("0.6.0");
+            if tamper == "planted" {
+                // No kept MSI; one in the data folder is never used.
+                std::fs::write(env.ctx.data_dir.join("lodestar.db"), b"old store").unwrap();
+                std::fs::write(env.updates("lodestar-0.6.0.msi"), OLD_MSI).unwrap();
+            } else {
+                with_previous(&env, OLD_MSI);
+            }
+            let prev = env.ctx.staging.current();
+            match tamper {
+                "bytes" => std::fs::write(prev.join("lodestar-0.6.0.msi"), b"evil").unwrap(),
+                "pins" => std::fs::write(
+                    prev.join(PINS),
+                    br#"{"version":"0.6.0","channel":"stable","sha256":"00","size":1}"#,
+                )
+                .unwrap(),
+                "missing" => std::fs::remove_dir_all(&prev).unwrap(),
+                _ => {}
+            }
+            env.offer("0.7.0");
+            let fake = failing(&env);
+            let out = env.run(&fake).unwrap();
             assert_eq!(out.code(), "rollback_halted", "{tamper}");
             let calls = fake.calls();
             assert_eq!(
-                calls.iter().filter(|c| *c == "msiexec").count(),
-                1,
+                calls.last().map(String::as_str),
+                Some("msiexec"),
                 "{tamper}: {calls:?}"
             );
-            assert_eq!(&calls[calls.len() - 2..], ["auto", "start"], "{tamper}");
-            // The store wasn't touched.
+            assert_eq!(
+                calls.iter().filter(|c| *c == "msiexec").count(),
+                1,
+                "{tamper}"
+            );
             assert_eq!(
                 std::fs::read(env.ctx.data_dir.join("lodestar.db")).unwrap(),
                 b"migrated store",
                 "{tamper}"
             );
-            // Halted is final: the next run tries nothing more.
             let again = Fake::default();
             assert_eq!(env.run(&again).unwrap().code(), "rollback_halted");
-            assert!(again.ran.lock().unwrap().is_none());
+            assert!(again.calls().is_empty());
+        }
+    }
+
+    /// A halt once the service was stopped leaves it stopped on manual
+    /// start: neither version starts (§12.2).
+    #[test]
+    fn a_halt_after_the_stop_starts_neither_version() {
+        // The kept MSI tampered once the store is being restored.
+        let env = Env::new("0.6.0");
+        with_previous(&env, OLD_MSI);
+        env.offer("0.7.0");
+        let kept = env.ctx.staging.previous().join("lodestar-0.6.0.msi");
+        let fake = Fake {
+            at_hook: Some((
+                "sides_removed",
+                Box::new(move || std::fs::write(&kept, b"evil").unwrap()),
+            )),
+            ..failing(&env)
+        };
+        assert_eq!(env.run(&fake).unwrap().code(), "rollback_halted");
+        let calls = fake.calls();
+        assert_eq!(
+            calls.last().map(String::as_str),
+            Some("manual"),
+            "{calls:?}"
+        );
+        assert!(!calls[4..].contains(&"start".to_string()), "{calls:?}");
+        // The store was restored, the marker went with it.
+        let data = &env.ctx.data_dir;
+        assert_eq!(
+            std::fs::read(data.join("lodestar.db")).unwrap(),
+            b"old store"
+        );
+        assert!(!data.join("bin").join(rollback::MARKER).exists());
+    }
+
+    /// A snapshot changed after it was chosen halts before the restore:
+    /// the store stays, the service stopped, the marker in place.
+    #[test]
+    fn a_snapshot_changed_since_it_was_chosen_halts() {
+        let env = Env::new("0.6.0");
+        with_previous(&env, OLD_MSI);
+        env.offer("0.7.0");
+        let snap = env.ctx.data_dir.join("lodestar.pre-v5.db");
+        let fake = Fake {
+            at_hook: Some((
+                "chosen",
+                Box::new(move || std::fs::write(&snap, b"other").unwrap()),
+            )),
+            ..failing(&env)
+        };
+        let out = env.run(&fake).unwrap();
+        assert!(
+            matches!(&out, Outcome::RollbackHalted { why } if why.contains("changed")),
+            "{out:?}"
+        );
+        let data = &env.ctx.data_dir;
+        assert_eq!(
+            std::fs::read(data.join("lodestar.db")).unwrap(),
+            b"migrated store"
+        );
+        assert!(data.join("bin").join(rollback::MARKER).exists());
+        assert_eq!(fake.calls().last().map(String::as_str), Some("manual"));
+    }
+
+    /// A snapshot that was there before the install is never restored.
+    #[test]
+    fn only_the_failed_versions_snapshot_is_restored() {
+        let env = Env::new("0.6.0");
+        with_previous(&env, OLD_MSI);
+        let older = env.ctx.data_dir.join("lodestar.pre-v3.db");
+        std::fs::write(&older, b"months old").unwrap();
+        env.offer("0.7.0");
+        assert_eq!(env.run(&failing(&env)).unwrap().code(), "rolled_back");
+        assert_eq!(
+            std::fs::read(env.ctx.data_dir.join("lodestar.db")).unwrap(),
+            b"old store"
+        );
+        assert_eq!(std::fs::read(&older).unwrap(), b"months old");
+    }
+
+    /// A journal naming a snapshot that isn't one beside the store halts.
+    #[test]
+    fn a_snapshot_name_that_isnt_beside_the_store_halts() {
+        let env = Env::new("0.6.0");
+        with_previous(&env, OLD_MSI);
+        std::fs::create_dir_all(&env.ctx.staging.dir).unwrap();
+        for name in ["../lodestar.pre-v5.db", "other.pre-v5.db", "lodestar.db"] {
+            let j = rollback::Journal {
+                format: 1,
+                id: "0123456789abcdef".into(),
+                from: "0.6.0".into(),
+                to: "0.7.0".into(),
+                snapshots_before: vec![],
+                restart: false,
+                state: rollback::State::RollingBack {
+                    snapshot: Some(rollback::SnapshotRef {
+                        name: name.into(),
+                        sha256: "00".into(),
+                    }),
+                    done: 2,
+                },
+            };
+            rollback::write(&env.ctx, &j).unwrap();
+            let out = env.run(&Fake::default()).unwrap();
+            assert!(
+                matches!(&out, Outcome::RollbackHalted { why } if why.contains("beside the store")),
+                "{name}: {out:?}"
+            );
         }
     }
 
@@ -1640,6 +1900,32 @@ mod tests {
         let fake = Fake::default();
         assert_eq!(refused(env.run(&fake)), "older_than_mark");
         assert!(fake.ran.lock().unwrap().is_none());
+    }
+
+    /// The data folder's revocations never reach the helper's own state,
+    /// and a damaged `trust.json` there is ignored.
+    #[test]
+    fn the_data_folder_raises_only_marks() {
+        let env = Env::new("0.6.0");
+        let bin = env.ctx.data_dir.join("bin");
+        let loaded = trust_file::load(&bin, &env.ctx.embedded, &[]);
+        let mut padded = loaded.state().clone();
+        let key = env.trust.nightly.public().to_base64();
+        padded.revoked.push(key.clone());
+        std::fs::write(bin.join("trust.json"), padded.to_bytes().unwrap()).unwrap();
+        env.offer("0.7.0");
+        assert_eq!(env.run(&Fake::default()).unwrap().code(), "installed");
+        let own = std::fs::read_to_string(env.ctx.staging.dir.join("trust.json")).unwrap();
+        assert!(!own.contains(&key), "{own}");
+        // Damaged: ignored, not a refusal.
+        let env = Env::new("0.6.0");
+        std::fs::write(
+            env.ctx.data_dir.join("bin").join("trust.json"),
+            b"{nonsense",
+        )
+        .unwrap();
+        env.offer("0.7.0");
+        assert_eq!(env.run(&Fake::default()).unwrap().code(), "installed");
     }
 
     #[test]
@@ -1720,6 +2006,19 @@ mod tests {
             removed
                 .iter()
                 .all(|k| k.to_ascii_uppercase().starts_with("LODESTAR_"))
+        );
+    }
+
+    /// The same `tasklist` filter for real: SYSTEM always runs processes,
+    /// so a filter that silently matched nothing would show here.
+    #[cfg(windows)]
+    #[test]
+    fn tasklist_counts_an_accounts_processes_for_real() {
+        let system = Windows::processes_of("NT AUTHORITY\\SYSTEM").unwrap();
+        assert!(system >= 1, "{system}");
+        assert_eq!(
+            Windows::processes_of("NT SERVICE\\LodestarNoSuchService").unwrap(),
+            0
         );
     }
 

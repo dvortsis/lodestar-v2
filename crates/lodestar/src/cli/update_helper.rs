@@ -90,7 +90,9 @@ fn install() -> ExitCode {
                 Outcome::Failed { .. }
                 | Outcome::InstallerBusy { .. }
                 | Outcome::RolledBack { .. }
-                | Outcome::RollbackHalted { .. } => ExitCode::FAILURE,
+                | Outcome::RollbackPending { .. }
+                | Outcome::RollbackHalted { .. }
+                | Outcome::InstallInterrupted { .. } => ExitCode::FAILURE,
             }
         }
     }
