@@ -15,7 +15,9 @@ use axum::{Extension, Router};
 use lodestar_api::companions::CompanionsError;
 use lodestar_api::companions_guided::{CompanionsGuidedApi, GuidedError, PASTE_MAX};
 use lodestar_api::dto::companions::{Companion, TemplateKind};
-use lodestar_api::dto::companions_guided::{CompanionTarget, DetectedCompanion};
+use lodestar_api::dto::companions_guided::{
+    CompanionForgotten, CompanionTarget, DetectedCompanion,
+};
 use lodestar_api::ops::BoxFuture;
 use lodestar_api::{ApiState, Auth, router};
 use lodestar_log::{Mask, Record, Sink};
@@ -127,10 +129,14 @@ impl CompanionsGuidedApi for Fake {
             })
         })
     }
-    fn forget(&self, id: String) -> BoxFuture<'_, Result<Vec<String>, GuidedError>> {
+    fn forget(&self, id: String) -> BoxFuture<'_, Result<CompanionForgotten, GuidedError>> {
         Box::pin(async move {
             self.call(format!("forget {id}"))?;
-            Ok(vec![format!("companions.{id}.target")])
+            Ok(CompanionForgotten {
+                credential_in_use: true,
+                deleted: vec![format!("companions.{id}.target")],
+                id,
+            })
         })
     }
 }
@@ -348,7 +354,11 @@ async fn each_route_reaches_the_binary_with_what_it_was_given() {
             "/api/v1/companions/qbittorrent/guided/forget" => {
                 assert_eq!(
                     r.body,
-                    json!({ "id": "qbittorrent", "deleted": ["companions.qbittorrent.target"] })
+                    json!({
+                        "id": "qbittorrent",
+                        "credential_in_use": true,
+                        "deleted": ["companions.qbittorrent.target"]
+                    })
                 );
             }
             _ => {}

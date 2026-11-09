@@ -530,8 +530,8 @@ async fn the_guided_flow_hands_qbittorrent_over() {
 
     assert_eq!(
         q.lock().unwrap().failed,
-        1,
-        "a plan tries the new password first"
+        0,
+        "a plan signs in with the temporary password only"
     );
     let c = g.confirm(id(), plan).await.unwrap();
     assert_eq!(c.id, "qbittorrent");
@@ -540,8 +540,8 @@ async fn the_guided_flow_hands_qbittorrent_over() {
     assert_eq!(q.lock().unwrap().password, generated, "qBittorrent took it");
     assert_eq!(
         q.lock().unwrap().failed,
-        2,
-        "the flow costs two failed sign-ins, under qBittorrent's ban at five"
+        0,
+        "the flow costs no refused sign-in with the right password"
     );
     assert_eq!(f.provenance().as_deref(), Some("generated"));
     assert_eq!(
@@ -570,31 +570,31 @@ async fn the_guided_flow_hands_qbittorrent_over() {
         }
     );
     // Added: neither its target nor its credential changes in place, so
-    // the generated password stays the one you can reveal.
+    // the generated password stays the one you can reveal, and nothing
+    // plans or confirms again.
+    f.a_minute_passes();
     for e in [
         g.set_target(id(), url(addr)).await.unwrap_err(),
         g.paste(id(), TEMPORARY.into()).await.unwrap_err(),
+        g.plan(id()).await.unwrap_err(),
+        g.confirm(id(), vec![]).await.unwrap_err(),
     ] {
         assert_eq!(refused(e), "already_added");
     }
     assert_eq!(f.credential(), Some(generated.clone()));
     assert_eq!(f.provenance().as_deref(), Some("generated"));
-    // The temporary password is gone: a second confirmation has nothing to
-    // sign in with.
-    f.a_minute_passes();
-    assert_eq!(
-        refused(g.plan(id()).await.unwrap_err()),
-        "no_temporary_password"
-    );
-
     let gone = g.forget(id()).await.unwrap();
+    assert!(
+        gone.credential_in_use,
+        "the generated password was qBittorrent's"
+    );
     for k in [
         "companions.qbittorrent.target",
         "companions.qbittorrent.origin",
         "companions.qbittorrent.provenance.webui_password",
         "companions.qbittorrent.secret.webui_password",
     ] {
-        assert!(gone.iter().any(|g| g == k), "{k} in {gone:?}");
+        assert!(gone.deleted.iter().any(|g| g == k), "{k} in {gone:?}");
         assert_eq!(f.row(k), None, "{k}");
     }
     assert!(texts(&f.store).unwrap().is_empty());
@@ -768,11 +768,13 @@ async fn guided_changes_run_one_at_a_time() {
 }
 
 /// Once the apply has started the generated password stays, marked
-/// generated, whatever fails after; nothing is recorded or handed over.
-/// Pasting the temporary password again (still valid when qBittorrent
-/// never took the new one) and confirming again recovers.
+/// generated, whatever fails after; nothing is recorded or handed over
+/// (#653's review, B1). A paste is refused then, so the password that may
+/// already be qBittorrent's is never dropped, and a retry signs in with
+/// it and finishes. If qBittorrent never took it, the retry is refused,
+/// and forget says the credential was a generated one.
 #[tokio::test]
-async fn a_failed_apply_or_hand_over_keeps_the_generated_password() {
+async fn a_failed_hand_over_is_retried_with_the_generated_password() {
     let (addr, q) = qbittorrent(TEMPORARY).await;
     let f = fixture();
     let g = &f.guided;
@@ -780,30 +782,12 @@ async fn a_failed_apply_or_hand_over_keeps_the_generated_password() {
     g.set_target(id(), url(addr)).await.unwrap();
     g.paste(id(), TEMPORARY.into()).await.unwrap();
 
-    q.lock().unwrap().refuse_writes = true;
-    let plan = g.plan(id()).await.unwrap();
-    assert!(g.confirm(id(), plan).await.is_err());
-    let generated = f.credential().unwrap();
-    assert_ne!(generated, TEMPORARY);
-    assert_eq!(f.provenance().as_deref(), Some("generated"));
-    assert_eq!(
-        q.lock().unwrap().password,
-        TEMPORARY,
-        "qBittorrent refused it"
-    );
-    assert_eq!(f.row(&guided::origin_key(&qbt())), None);
-    assert!(f.sink.0.lock().unwrap().is_empty());
-    assert!(f.added.borrow().is_empty());
-
-    // The recovery: paste again, and a refused hand-over this time.
-    q.lock().unwrap().refuse_writes = false;
-    g.paste(id(), TEMPORARY.into()).await.unwrap();
-    assert_eq!(f.provenance().as_deref(), Some("pasted"));
-    f.a_minute_passes();
+    // The hand-over fails after qBittorrent took the new password.
     let plan = g.plan(id()).await.unwrap();
     f.sink.1.store(true, Ordering::SeqCst);
     assert!(g.confirm(id(), plan).await.is_err());
     let generated = f.credential().unwrap();
+    assert_ne!(generated, TEMPORARY);
     assert_eq!(
         q.lock().unwrap().password,
         generated,
@@ -812,4 +796,146 @@ async fn a_failed_apply_or_hand_over_keeps_the_generated_password() {
     assert_eq!(f.provenance().as_deref(), Some("generated"));
     assert_eq!(f.row(&guided::origin_key(&qbt())), None);
     assert!(f.added.borrow().is_empty());
+
+    // Pasting the temporary password again would drop the only copy of the
+    // live one: refused.
+    assert_eq!(
+        refused(g.paste(id(), TEMPORARY.into()).await.unwrap_err()),
+        "generated_pending"
+    );
+    assert_eq!(f.credential(), Some(generated.clone()));
+
+    // The retry signs in with the generated password and finishes.
+    f.sink.1.store(false, Ordering::SeqCst);
+    f.a_minute_passes();
+    let failed = q.lock().unwrap().failed;
+    let plan = g.plan(id()).await.unwrap();
+    g.confirm(id(), plan).await.unwrap();
+    assert_eq!(q.lock().unwrap().failed, failed, "no refused sign-in");
+    assert_eq!(q.lock().unwrap().password, generated);
+    assert_eq!(f.credential(), Some(generated.clone()));
+    assert_eq!(
+        f.row(&guided::origin_key(&qbt())).as_deref(),
+        Some("confirmed")
+    );
+    let handed = f.sink.0.lock().unwrap().clone();
+    assert_eq!(handed.len(), 1);
+    assert_eq!(
+        (handed[0].2.as_str(), handed[0].3.as_str()),
+        ("admin", generated.as_str())
+    );
+    assert_eq!(f.added.borrow().len(), 1);
+}
+
+/// An apply qBittorrent refuses before it takes the new password: the
+/// retry's sign-in is refused, paste stays refused, and forget answers
+/// that the deleted credential was a generated one; adding it again then
+/// works.
+#[tokio::test]
+async fn a_refused_apply_can_be_forgotten_and_added_again() {
+    let (addr, q) = qbittorrent(TEMPORARY).await;
+    let f = fixture();
+    let g = &f.guided;
+    let id = || "qbittorrent".to_owned();
+    g.set_target(id(), url(addr)).await.unwrap();
+    g.paste(id(), TEMPORARY.into()).await.unwrap();
+    q.lock().unwrap().refuse_writes = true;
+    let plan = g.plan(id()).await.unwrap();
+    assert!(g.confirm(id(), plan).await.is_err());
+    assert_eq!(
+        q.lock().unwrap().password,
+        TEMPORARY,
+        "qBittorrent refused it"
+    );
+    assert_eq!(f.provenance().as_deref(), Some("generated"));
+    assert_eq!(
+        refused(g.paste(id(), TEMPORARY.into()).await.unwrap_err()),
+        "generated_pending"
+    );
+    f.a_minute_passes();
+    assert_eq!(
+        refused(g.plan(id()).await.unwrap_err()),
+        "companion_unauthorized"
+    );
+
+    let gone = g.forget(id()).await.unwrap();
+    assert!(gone.credential_in_use);
+    assert!(texts(&f.store).unwrap().is_empty());
+    q.lock().unwrap().refuse_writes = false;
+    g.set_target(id(), url(addr)).await.unwrap();
+    g.paste(id(), TEMPORARY.into()).await.unwrap();
+    f.a_minute_passes();
+    let plan = g.plan(id()).await.unwrap();
+    g.confirm(id(), plan).await.unwrap();
+    assert_eq!(q.lock().unwrap().password, f.credential().unwrap());
+}
+
+/// A wrong temporary password costs one refused sign-in per plan, and
+/// after three in a row plans stop asking qBittorrent, before its ban at
+/// five; forget resets the count (#653's review, L2).
+#[tokio::test]
+async fn wrong_passwords_stop_before_qbittorrents_ban() {
+    let (addr, q) = qbittorrent(TEMPORARY).await;
+    let f = fixture();
+    let g = &f.guided;
+    let id = || "qbittorrent".to_owned();
+    g.set_target(id(), url(addr)).await.unwrap();
+    for n in 1..=super::SIGN_IN_CAP {
+        g.paste(id(), "not the password".into()).await.unwrap();
+        f.a_minute_passes();
+        assert_eq!(
+            refused(g.plan(id()).await.unwrap_err()),
+            "companion_unauthorized"
+        );
+        assert_eq!(
+            q.lock().unwrap().failed as u32,
+            n,
+            "one refused sign-in a plan"
+        );
+    }
+    g.paste(id(), TEMPORARY.into()).await.unwrap();
+    f.a_minute_passes();
+    let logins = q.lock().unwrap().logins;
+    assert_eq!(refused(g.plan(id()).await.unwrap_err()), "sign_in_refused");
+    assert_eq!(q.lock().unwrap().logins, logins, "qBittorrent wasn't asked");
+
+    g.forget(id()).await.unwrap();
+    g.set_target(id(), url(addr)).await.unwrap();
+    g.paste(id(), TEMPORARY.into()).await.unwrap();
+    f.a_minute_passes();
+    assert_eq!(g.plan(id()).await.unwrap(), ["webui.password"]);
+}
+
+/// While Lodestar installs qBittorrent itself, no guided step races it
+/// (#653's review, L1).
+#[tokio::test]
+async fn a_guided_step_waits_for_an_install_under_way() {
+    let f = fixture();
+    let home = f.dir.path().join("companions/qbittorrent");
+    std::fs::create_dir_all(&home).unwrap();
+    lodestar_companions::state::save(
+        &home,
+        &lodestar_companions::state::Record {
+            installed: None,
+            op: Some(lodestar_companions::state::Op {
+                kind: lodestar_companions::state::OpKind::Install,
+                version: Some(Version::parse("5.1.2").unwrap()),
+                step: lodestar_companions::state::Step::Begun,
+            }),
+        },
+    )
+    .unwrap();
+    let g = &f.guided;
+    let id = || "qbittorrent".to_owned();
+    let t = CompanionTarget::Loopback { port: 8080 };
+    for e in [
+        g.set_target(id(), t).await.unwrap_err(),
+        g.paste(id(), TEMPORARY.into()).await.unwrap_err(),
+        g.plan(id()).await.unwrap_err(),
+        g.confirm(id(), vec![]).await.unwrap_err(),
+        g.forget(id()).await.unwrap_err(),
+    ] {
+        assert_eq!(refused(e), "busy");
+    }
+    assert!(texts(&f.store).unwrap().is_empty());
 }

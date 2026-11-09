@@ -1065,7 +1065,7 @@
             }
           },
           "409": {
-            "description": "`confirmation_mismatch`, `no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, or the companion's own refusal code.",
+            "description": "`confirmation_mismatch`, `no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, `sign_in_refused`, or the companion's own refusal code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1358,7 +1358,7 @@
         "tags": [
           "companions"
         ],
-        "summary": "Deletes Lodestar's record of a companion you added and its stored\ncredential. `confirm` must name it. The Integrations entry stays.",
+        "summary": "Deletes Lodestar's record of a companion you added and its stored\ncredential. `confirm` must name it. The Integrations entry stays. A\ngenerated credential is the password qBittorrent uses once it's set:\nreveal it first if you'll sign in to qBittorrent yourself\n(`credential_in_use` says it was one).",
         "operationId": "forgetCompanion",
         "parameters": [
           {
@@ -1774,7 +1774,7 @@
             }
           },
           "409": {
-            "description": "`no_target`, `handover_later`, `installed`, `already_added`, `busy`.",
+            "description": "`no_target`, `handover_later`, `installed`, `already_added`, `generated_pending` (a new password may already be qBittorrent's: confirm again, or reveal it first), `busy`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1874,7 +1874,7 @@
             }
           },
           "409": {
-            "description": "`no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, or the companion's own refusal code.",
+            "description": "`no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, `sign_in_refused` (three refused sign-ins in a row), or the companion's own refusal code.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12679,10 +12679,15 @@
         "type": "object",
         "description": "What forgetting a companion you added deleted: Lodestar's record of it\nand its stored credential, by `settings` key. The download client entry\nin Integrations stays.",
         "required": [
+          "credential_in_use",
           "deleted",
           "id"
         ],
         "properties": {
+          "credential_in_use": {
+            "type": "boolean",
+            "description": "The deleted credential was one Lodestar generated, which is, or may\nbe, the password qBittorrent uses now. Reveal it before forgetting\nif you'll need to sign in to qBittorrent yourself."
+          },
           "deleted": {
             "type": "array",
             "items": {

@@ -405,7 +405,10 @@ export interface paths {
         put?: never;
         /**
          * Deletes Lodestar's record of a companion you added and its stored
-         *     credential. `confirm` must name it. The Integrations entry stays.
+         *     credential. `confirm` must name it. The Integrations entry stays. A
+         *     generated credential is the password qBittorrent uses once it's set:
+         *     reveal it first if you'll sign in to qBittorrent yourself
+         *     (`credential_in_use` says it was one).
          */
         post: operations["forgetCompanion"];
         delete?: never;
@@ -3989,6 +3992,12 @@ export interface components {
          *     in Integrations stays.
          */
         CompanionForgotten: {
+            /**
+             * @description The deleted credential was one Lodestar generated, which is, or may
+             *     be, the password qBittorrent uses now. Reveal it before forgetting
+             *     if you'll need to sign in to qBittorrent yourself.
+             */
+            credential_in_use: boolean;
             deleted: string[];
             id: string;
         };
@@ -11638,7 +11647,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `confirmation_mismatch`, `no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, or the companion's own refusal code. */
+            /** @description `confirmation_mismatch`, `no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, `sign_in_refused`, or the companion's own refusal code. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -12160,7 +12169,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `no_target`, `handover_later`, `installed`, `already_added`, `busy`. */
+            /** @description `no_target`, `handover_later`, `installed`, `already_added`, `generated_pending` (a new password may already be qBittorrent's: confirm again, or reveal it first), `busy`. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -12237,7 +12246,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, or the companion's own refusal code. */
+            /** @description `no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, `sign_in_refused` (three refused sign-ins in a row), or the companion's own refusal code. */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -355,7 +355,8 @@ async fn login(
 /// Signs in with the stored credential, or, for a guided install, the
 /// temporary password. `temporary_first` tries the temporary one first
 /// (an apply whose plan replaces it), so a run costs at most one failed
-/// sign-in. True when the temporary password signed in.
+/// sign-in. True when the temporary password signed in. When the stored
+/// credential is the temporary password itself, it signs in once.
 async fn sign_in(
     http: &dyn GuardedHttp,
     target: &Target,
@@ -366,6 +367,12 @@ async fn sign_in(
     let Origin::Guided { temporary, .. } = &input.origin else {
         return Ok((login(http, target, input, &stored).await?, false));
     };
+    // The temporary password held as the credential too (a guided plan,
+    // before any password is generated): one sign-in, so a wrong
+    // temporary password costs one failure, not two.
+    if stored.expose() == temporary.expose() {
+        return Ok((login(http, target, input, temporary).await?, true));
+    }
     let order = if temporary_first {
         [(temporary, true), (&stored, false)]
     } else {

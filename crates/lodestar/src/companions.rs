@@ -564,9 +564,25 @@ impl Service {
         self.secrets.clone()
     }
 
-    /// [`Service::installed`] for CMP-5g-2's guided endpoints. Blocking.
-    pub(crate) fn lodestar_installed(&self, id: &CompanionId) -> Result<bool, CompanionsError> {
-        self.installed(id)
+    /// Whether Lodestar owns `id` here, for CMP-5g-2's guided endpoints:
+    /// `Some("installed")` when its journal records an installed version,
+    /// `Some("busy")` while an install is under way (so a guided step
+    /// can't race CMP-5's first install), `None` otherwise. Inside a
+    /// container nothing is native. Blocking.
+    pub(crate) fn lodestar_owned(
+        &self,
+        id: &CompanionId,
+    ) -> Result<Option<&'static str>, CompanionsError> {
+        if self.host.in_container {
+            return Ok(None);
+        }
+        let home = self.data.join("companions").join(id.as_str());
+        match lodestar_companions::state::load(&home) {
+            Ok(Some(r)) if r.installed.is_some() => Ok(Some("installed")),
+            Ok(Some(r)) if r.op.is_some() => Ok(Some("busy")),
+            Ok(_) => Ok(None),
+            Err(_) => Err(CompanionsError::Internal("journal")),
+        }
     }
 
     /// The host's container detection, for detection's runtime.

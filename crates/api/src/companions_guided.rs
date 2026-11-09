@@ -90,6 +90,12 @@ fn message(code: &str) -> Option<&'static str> {
             "Setting up Prowlarr from here comes in a later version. Add it in its source settings."
         }
         "installed" => "Lodestar installed this companion; it's managed on its own.",
+        "generated_pending" => {
+            "Lodestar already set a new password on qBittorrent. Confirm again to finish, or reveal the password before you forget it."
+        }
+        "sign_in_refused" => {
+            "qBittorrent refused the password three times, and it bans an address after five. Restart qBittorrent for a new temporary password, then forget this companion and add it again."
+        }
         "already_added" => "This companion is already added. Forget it first to add it again.",
         "no_target" => "Add the companion's address first.",
         "no_temporary_password" => "Paste qBittorrent's temporary password first.",
@@ -136,8 +142,9 @@ pub trait CompanionsGuidedApi: Send + Sync + std::fmt::Debug {
         id: String,
         settings: Vec<String>,
     ) -> BoxFuture<'_, Result<Companion, GuidedError>>;
-    /// Deletes Lodestar's record of it; the row keys it deleted.
-    fn forget(&self, id: String) -> BoxFuture<'_, Result<Vec<String>, GuidedError>>;
+    /// Deletes Lodestar's record of it: the row keys it deleted, and
+    /// whether the credential was the one qBittorrent may use now.
+    fn forget(&self, id: String) -> BoxFuture<'_, Result<CompanionForgotten, GuidedError>>;
 }
 
 pub fn routes() -> Router<ApiState> {
@@ -250,7 +257,7 @@ pub(crate) async fn set_target(
         (status = 400, description = "`bad_value` with `field`: empty, too long, or not printable.", body = ErrorEnvelope),
         (status = 403, description = "`cross_origin`.", body = ErrorEnvelope),
         (status = 404, description = "`unknown_companion`.", body = ErrorEnvelope),
-        (status = 409, description = "`no_target`, `handover_later`, `installed`, `already_added`, `busy`.", body = ErrorEnvelope),
+        (status = 409, description = "`no_target`, `handover_later`, `installed`, `already_added`, `generated_pending` (a new password may already be qBittorrent's: confirm again, or reveal it first), `busy`.", body = ErrorEnvelope),
         (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
         (status = 422, description = "`bad_body`.", body = ErrorEnvelope),
         (status = 503, description = "`companions_unavailable`.", body = ErrorEnvelope),
@@ -289,7 +296,7 @@ pub(crate) async fn paste_credential(
         (status = 200, body = CompanionPlan),
         (status = 403, description = "`cross_origin`.", body = ErrorEnvelope),
         (status = 404, description = "`unknown_companion`.", body = ErrorEnvelope),
-        (status = 409, description = "`no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, or the companion's own refusal code.", body = ErrorEnvelope),
+        (status = 409, description = "`no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, `sign_in_refused` (three refused sign-ins in a row), or the companion's own refusal code.", body = ErrorEnvelope),
         (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
         (status = 429, description = "`rate_limited`, with `Retry-After`.", body = ErrorEnvelope),
         (status = 503, description = "`companions_unavailable`.", body = ErrorEnvelope),
@@ -322,7 +329,7 @@ pub(crate) async fn plan_configuration(
         (status = 200, body = Companion),
         (status = 403, description = "`cross_origin`.", body = ErrorEnvelope),
         (status = 404, description = "`unknown_companion`.", body = ErrorEnvelope),
-        (status = 409, description = "`confirmation_mismatch`, `no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, or the companion's own refusal code.", body = ErrorEnvelope),
+        (status = 409, description = "`confirmation_mismatch`, `no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, `sign_in_refused`, or the companion's own refusal code.", body = ErrorEnvelope),
         (status = 415, description = "`unsupported_media_type`: not JSON.", body = ErrorEnvelope),
         (status = 422, description = "`bad_body`.", body = ErrorEnvelope),
         (status = 503, description = "`companions_unavailable`.", body = ErrorEnvelope),
@@ -345,7 +352,10 @@ pub(crate) async fn confirm_configuration(
 }
 
 /// Deletes Lodestar's record of a companion you added and its stored
-/// credential. `confirm` must name it. The Integrations entry stays.
+/// credential. `confirm` must name it. The Integrations entry stays. A
+/// generated credential is the password qBittorrent uses once it's set:
+/// reveal it first if you'll sign in to qBittorrent yourself
+/// (`credential_in_use` says it was one).
 #[utoipa::path(
     operation_id = "forgetCompanion",
     post,
@@ -375,8 +385,7 @@ pub(crate) async fn forget_companion(
     if body.confirm != id {
         return Err(CompanionsError::Mismatch.into());
     }
-    let deleted = api.forget(id.clone()).await.map_err(ApiError::from)?;
-    Ok(Json(CompanionForgotten { deleted, id }))
+    Ok(Json(api.forget(id).await.map_err(ApiError::from)?))
 }
 
 /// `e` as a response, with `Retry-After` on a `429`.
@@ -406,6 +415,8 @@ mod tests {
             "handover_later",
             "installed",
             "already_added",
+            "generated_pending",
+            "sign_in_refused",
             "no_target",
             "no_temporary_password",
             "busy",

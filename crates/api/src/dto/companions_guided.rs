@@ -93,6 +93,10 @@ pub struct CompanionForgetRequest {
 /// in Integrations stays.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct CompanionForgotten {
+    /// The deleted credential was one Lodestar generated, which is, or may
+    /// be, the password qBittorrent uses now. Reveal it before forgetting
+    /// if you'll need to sign in to qBittorrent yourself.
+    pub credential_in_use: bool,
     pub deleted: Vec<String>,
     pub id: String,
 }
