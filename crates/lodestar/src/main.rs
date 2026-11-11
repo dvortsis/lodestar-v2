@@ -98,7 +98,8 @@ fn run() -> ExitCode {
         | Command::Reindex
         | Command::Rollup(_)
         | Command::Worker(_)
-        | Command::Companion(_) => Some(privdrop::Scope::DataDir),
+        | Command::Companion(_)
+        | Command::Settings(_) => Some(privdrop::Scope::DataDir),
         Command::Healthcheck | Command::Stats(_) => Some(privdrop::Scope::ProcessOnly),
         Command::Lists => None,
         // Windows only, where there's no PUID/PGID drop; it reads no config.

@@ -13,7 +13,9 @@
 //! - `import`: bring a Magnetico or Bitmagnet database in (IMP-4), with
 //!   `import-bitmagnet` kept as its old name;
 //! - `companion`: list, install, remove or print a compose service for
-//!   a companion (CMP-5).
+//!   a companion (CMP-5);
+//! - `settings`: get, set or reset the settings saved in the app, server
+//!   stopped, through the same checks as the API ([`settings`], §10.10.6).
 //!
 //! Each refuses while B-update's rollback journal exists (§12.2), and the
 //! offline ones refuse while anything has the store open ([`lock`]).
@@ -25,6 +27,7 @@ mod lock;
 mod reindex;
 mod rollback;
 mod rollup;
+mod settings;
 mod stats;
 mod update_helper;
 pub(crate) mod util;
@@ -124,6 +127,15 @@ pub enum Command {
     /// Companions: list, install, remove (server stopped), or print a
     /// compose service (see `lodestar companion --help`)
     Companion(companion::CompanionArgs),
+    /// The settings saved in the app: get, set or reset them with the
+    /// server stopped, checked as the app checks them (see `lodestar
+    /// settings --help`)
+    ///
+    /// Recovery when the app can't be reached. `reset --all` removes every
+    /// saved value; config.toml and the LODESTAR_* variables are never
+    /// changed, and a variable always wins. `set` refuses secrets, privacy
+    /// opt-ins and turning on adult content: change those in the app.
+    Settings(settings::SettingsArgs),
     /// The MSI's update helper, run as SYSTEM by its scheduled task
     /// (Windows; §12.2, plan Q13)
     #[command(hide = true)]
@@ -243,6 +255,10 @@ pub fn run(command: Command, config_path: Option<&Path>, dropped: &privdrop::Rep
     };
     crate::settings::log::init(&config.log);
     dropped.log(&config.data_dir);
+    // Its own exit statuses: a bad setting or value is 2, as clap's are.
+    if let Command::Settings(a) = command {
+        return settings::run(&config, a);
+    }
     let (name, outcome) = match command {
         Command::Backup(a) => (
             "backup",
@@ -276,6 +292,9 @@ pub fn run(command: Command, config_path: Option<&Path>, dropped: &privdrop::Rep
         | Command::Lists
         | Command::UpdateHelper(_) => {
             unreachable!("main.rs runs these")
+        }
+        Command::Settings(_) => {
+            unreachable!("run above")
         }
     };
     match outcome {

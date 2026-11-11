@@ -27,13 +27,20 @@
 //!   prunes the query log and gives back the pages it freed.
 //! - **The imported total** mirrors `insights_state.imported`, which the
 //!   store keeps exact (no scan at start).
+//! - **Host exceptions** (PK-exc): the data folder on a FUSE or network
+//!   filesystem (`data_filesystem`) and, on Windows, a narrow ephemeral
+//!   port range (`ephemeral_ports`). [`HostChecks`] re-checks them at most
+//!   every [`HOST_RECHECK_S`], from the overview request that finds the
+//!   last check old: one check at a time, never under a lock.
 
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use lodestar_api::insights::{self as api, InsightsSource, OverviewCache, StageSnapshot};
+use lodestar_api::insights::{
+    self as api, InsightsException, InsightsSource, OverviewCache, StageSnapshot,
+};
 use lodestar_pipeline::Monitor;
 use lodestar_pipeline::metric::{self, coverage};
 use lodestar_search::{CommitHook, Committed, IndexStats};
@@ -102,6 +109,9 @@ pub struct Insights {
     compact_after: Duration,
     /// The stage pages' snapshot ([`Insights::set_snapshot`]).
     snapshot: std::sync::OnceLock<Box<dyn Fn() -> StageSnapshot + Send + Sync>>,
+    /// The host exceptions' checks, set by [`spawn`] (which knows the
+    /// data folder).
+    host: std::sync::OnceLock<HostChecks>,
 }
 
 impl std::fmt::Debug for Insights {
@@ -134,6 +144,7 @@ impl Insights {
             cache: OverviewCache::default(),
             compact_after: COMPACT_AFTER,
             snapshot: std::sync::OnceLock::new(),
+            host: std::sync::OnceLock::new(),
         }
     }
 
@@ -141,6 +152,20 @@ impl Insights {
     /// set once, at start.
     pub fn set_snapshot(&self, f: Box<dyn Fn() -> StageSnapshot + Send + Sync>) {
         let _ = self.snapshot.set(f);
+    }
+
+    /// Checks `data_dir`'s filesystem and the port range for the
+    /// overview's exceptions; set once.
+    pub fn set_host_checks(&self, data_dir: PathBuf) {
+        self.set_host_probe(data_dir, crate::windows::ports::probe);
+    }
+
+    /// [`Insights::set_host_checks`] with the port probe given (a fake in
+    /// tests, since the real one reads a process-wide count).
+    fn set_host_probe(&self, data_dir: PathBuf, ports: PortProbe) {
+        let _ = self.host.set(HostChecks::new(Box::new(move |now| {
+            probe_host(&data_dir, now, ports)
+        })));
     }
 
     fn bump(&self) {
@@ -178,11 +203,156 @@ impl InsightsSource for Insights {
             .map_or_else(StageSnapshot::default, |f| f())
     }
 
+    fn host_exceptions(&self, now: i64) -> Vec<InsightsException> {
+        self.host.get().map_or_else(Vec::new, |h| h.get(now))
+    }
+
     fn seal_floor(&self) -> Option<i64> {
         let floor = self.floor.load(Ordering::Acquire);
         (floor != i64::MAX && crate::unix_now() < self.floor_until.load(Ordering::Acquire))
             .then_some(floor)
     }
+}
+
+/// The host exceptions are re-checked at most this often (an hour): the
+/// mount table is cheap to read but not free, and `netsh` is a process.
+pub const HOST_RECHECK_S: i64 = 3600;
+/// ... or this soon when a check couldn't see everything yet (the port
+/// check before `services` has set the socket count).
+pub const HOST_RETRY_S: i64 = 60;
+
+/// What a host check finds at a time: the exceptions, `since` that time,
+/// and whether every check could run.
+type HostProbe = Box<dyn Fn(i64) -> HostFound + Send + Sync>;
+
+/// [`HostProbe`]'s answer.
+pub struct HostFound {
+    pub exceptions: Vec<InsightsException>,
+    /// False when a check couldn't run yet: the next is due after
+    /// [`HOST_RETRY_S`], not [`HOST_RECHECK_S`].
+    pub complete: bool,
+}
+
+/// The host exceptions, checked at most every [`HOST_RECHECK_S`] (every
+/// [`HOST_RETRY_S`] while a check can't run yet).
+///
+/// The overview request that finds the last check old (or none) claims
+/// the next one and runs it on its own blocking thread, with no lock
+/// held; requests meanwhile get the last answer at once (none before the
+/// first check ends), so concurrent requests never queue behind it or
+/// start a second. An exception still found keeps the `since` it was
+/// first found at.
+pub struct HostChecks {
+    probe: HostProbe,
+    state: Mutex<HostState>,
+}
+
+#[derive(Default)]
+struct HostState {
+    /// When the last check was claimed.
+    checked_at: Option<i64>,
+    /// How long after `checked_at` the next is due.
+    interval: i64,
+    /// A check is out.
+    running: bool,
+    found: Vec<InsightsException>,
+}
+
+impl HostChecks {
+    fn new(probe: HostProbe) -> HostChecks {
+        HostChecks {
+            probe,
+            state: Mutex::default(),
+        }
+    }
+
+    /// The exceptions at `now`, checking first when that's due.
+    pub fn get(&self, now: i64) -> Vec<InsightsException> {
+        {
+            let mut s = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            // A clock set back makes the check due, rather than hold it
+            // off for as long as the clock went back.
+            let due = s
+                .checked_at
+                .is_none_or(|t| now < t || now - t >= s.interval);
+            if !due || s.running {
+                return s.found.clone();
+            }
+            // Claimed now, so a check that fails is tried again an hour on,
+            // not by every request.
+            s.running = true;
+            s.checked_at = Some(now);
+            s.interval = HOST_RECHECK_S;
+        }
+        let mut claim = Claim {
+            state: &self.state,
+            held: true,
+        };
+        let fresh = (self.probe)(now);
+        let mut s = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if !fresh.complete {
+            s.interval = HOST_RETRY_S;
+        }
+        let found: Vec<InsightsException> = fresh
+            .exceptions
+            .into_iter()
+            .map(|mut e| {
+                if let Some(old) = s.found.iter().find(|o| o.kind == e.kind) {
+                    e.since = old.since;
+                }
+                e
+            })
+            .collect();
+        s.found = found.clone();
+        s.running = false;
+        claim.held = false;
+        found
+    }
+}
+
+/// Releases a claimed check if its probe panics.
+struct Claim<'a> {
+    state: &'a Mutex<HostState>,
+    held: bool,
+}
+
+impl Drop for Claim<'_> {
+    fn drop(&mut self) {
+        if self.held {
+            self.state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .running = false;
+        }
+    }
+}
+
+/// `ports::probe`: whether the port check can answer yet, and its warning.
+type PortProbe = fn() -> (bool, Option<crate::windows::ports::Warning>);
+
+/// The host exceptions at `now`: the data folder's filesystem (every OS)
+/// and the port range (`ports`: Windows; never elsewhere). Incomplete
+/// until the socket count is set (`ports::ready`), which `services` does
+/// at start.
+fn probe_host(data_dir: &Path, now: i64, ports: PortProbe) -> HostFound {
+    let (complete, pressure) = ports();
+    let filesystem = crate::fsdetect::detect(data_dir)
+        .exception_detail()
+        .map(|fs| api::data_filesystem(fs, now));
+    let pressure = pressure.map(|w| api::ephemeral_ports(w.detail(), now));
+    HostFound {
+        exceptions: filesystem.into_iter().chain(pressure).collect(),
+        complete,
+    }
+}
+
+/// The data folder of the store at `db`: `Config::db_path` is
+/// `<data>/lodestar.db`, and a bare file name is in the working directory.
+fn data_dir_of(db: &Path) -> PathBuf {
+    db.parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+        .to_path_buf()
 }
 
 /// What the recorder follows.
@@ -206,6 +376,7 @@ pub fn spawn(
     follow: Follow,
     stop: watch::Receiver<bool>,
 ) -> JoinHandle<()> {
+    insights.set_host_checks(data_dir_of(&follow.db));
     let (tx, rx) = mpsc::channel(QUEUE);
     if let Some((hook, _)) = &follow.index {
         hook.add(move |c: Committed| {
@@ -608,6 +779,229 @@ fn coverage_rows(from: i64, to: i64, indexing: bool, crawling: bool) -> Vec<Coun
         t = end;
     }
     out
+}
+
+#[cfg(test)]
+mod host_tests {
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
+    use std::sync::mpsc as std_mpsc;
+
+    use lodestar_api::insights::{DataFilesystem, DataFsKind};
+
+    use super::*;
+
+    const T: i64 = 1_800_000_000;
+    /// Generous for the slowest CI runner; a passing run never waits it out.
+    const DEADLINE: Duration = Duration::from_secs(10);
+
+    fn shfs(since: i64) -> InsightsException {
+        api::data_filesystem(
+            DataFilesystem {
+                kind: DataFsKind::UnraidUserShare,
+                path: "/data".into(),
+                fs_type: Some("fuse.shfs".into()),
+            },
+            since,
+        )
+    }
+
+    /// A probe that counts its runs and answers what `answer` holds.
+    fn counted(answer: Arc<Mutex<Vec<InsightsException>>>) -> (HostChecks, Arc<AtomicUsize>) {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let r = runs.clone();
+        let checks = HostChecks::new(Box::new(move |now| {
+            r.fetch_add(1, Ordering::SeqCst);
+            let mut exceptions = answer.lock().unwrap().clone();
+            for e in &mut exceptions {
+                e.since = now;
+            }
+            HostFound {
+                exceptions,
+                complete: true,
+            }
+        }));
+        (checks, runs)
+    }
+
+    #[test]
+    fn checks_at_most_hourly_on_the_clock_given() {
+        let answer = Arc::new(Mutex::new(vec![shfs(0)]));
+        let (checks, runs) = counted(answer.clone());
+        assert_eq!(checks.get(T), vec![shfs(T)]);
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+        // Within the hour: the cached answer, even after the cause is fixed.
+        answer.lock().unwrap().clear();
+        assert_eq!(checks.get(T + 1), vec![shfs(T)]);
+        assert_eq!(checks.get(T + HOST_RECHECK_S - 1), vec![shfs(T)]);
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+        // An hour on, checked again: fixed, so gone.
+        assert_eq!(checks.get(T + HOST_RECHECK_S), vec![]);
+        assert_eq!(runs.load(Ordering::SeqCst), 2);
+        // Found again later: since is the new time, not the first one.
+        *answer.lock().unwrap() = vec![shfs(0)];
+        assert_eq!(
+            checks.get(T + 2 * HOST_RECHECK_S),
+            vec![shfs(T + 2 * HOST_RECHECK_S)]
+        );
+        assert_eq!(runs.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn an_exception_still_found_keeps_its_since() {
+        let answer = Arc::new(Mutex::new(vec![shfs(0)]));
+        let (checks, _) = counted(answer);
+        assert_eq!(checks.get(T)[0].since, T);
+        assert_eq!(checks.get(T + HOST_RECHECK_S)[0].since, T);
+        assert_eq!(checks.get(T + 5 * HOST_RECHECK_S)[0].since, T);
+    }
+
+    #[test]
+    fn a_clock_set_back_checks_again() {
+        let (checks, runs) = counted(Arc::new(Mutex::new(Vec::new())));
+        checks.get(T);
+        checks.get(T - 1);
+        assert_eq!(runs.load(Ordering::SeqCst), 2);
+        // ... and the hour then counts from the new time.
+        checks.get(T - 1 + HOST_RECHECK_S - 1);
+        assert_eq!(runs.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn concurrent_requests_run_one_check_and_never_wait_for_it() {
+        let (entered_tx, entered) = std_mpsc::channel();
+        let (release, release_rx) = std_mpsc::channel::<()>();
+        let release_rx = Mutex::new(release_rx);
+        let runs = Arc::new(AtomicUsize::new(0));
+        let r = runs.clone();
+        let checks = Arc::new(HostChecks::new(Box::new(move |now| {
+            r.fetch_add(1, Ordering::SeqCst);
+            entered_tx.send(()).unwrap();
+            // The check is slow (a stuck `netsh`) until the test lets it go.
+            release_rx.lock().unwrap().recv_timeout(DEADLINE).unwrap();
+            HostFound {
+                exceptions: vec![shfs(now)],
+                complete: true,
+            }
+        })));
+        let first = {
+            let c = checks.clone();
+            std::thread::spawn(move || c.get(T))
+        };
+        entered.recv_timeout(DEADLINE).unwrap();
+        // While it runs, others get the last answer (none yet) at once,
+        // and don't start a second check, now or after the hour.
+        for now in [T, T + 1, T + HOST_RECHECK_S] {
+            assert_eq!(checks.get(now), vec![]);
+        }
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+        release.send(()).unwrap();
+        assert_eq!(first.join().unwrap(), vec![shfs(T)]);
+        assert_eq!(checks.get(T + 1), vec![shfs(T)]);
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_check_that_panics_is_tried_again_an_hour_on() {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let r = runs.clone();
+        let checks = Arc::new(HostChecks::new(Box::new(move |now| {
+            if r.fetch_add(1, Ordering::SeqCst) == 0 {
+                panic!("the first check fails");
+            }
+            HostFound {
+                exceptions: vec![shfs(now)],
+                complete: true,
+            }
+        })));
+        let c = checks.clone();
+        assert!(std::thread::spawn(move || c.get(T)).join().is_err());
+        // Released, but not due again within the hour.
+        assert_eq!(checks.get(T + 1), vec![]);
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            checks.get(T + HOST_RECHECK_S),
+            vec![shfs(T + HOST_RECHECK_S)]
+        );
+        assert_eq!(runs.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn an_incomplete_check_is_retried_within_a_minute() {
+        let ready = Arc::new(AtomicBool::new(false));
+        let runs = Arc::new(AtomicUsize::new(0));
+        let (r, ready_now) = (runs.clone(), ready.clone());
+        let checks = HostChecks::new(Box::new(move |now| {
+            r.fetch_add(1, Ordering::SeqCst);
+            HostFound {
+                exceptions: vec![shfs(now)],
+                complete: ready_now.load(Ordering::SeqCst),
+            }
+        }));
+        assert_eq!(checks.get(T), vec![shfs(T)]);
+        checks.get(T + HOST_RETRY_S - 1);
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+        checks.get(T + HOST_RETRY_S);
+        assert_eq!(runs.load(Ordering::SeqCst), 2, "retried after a minute");
+        // Complete now: back to hourly, and the first `since` is kept.
+        ready.store(true, Ordering::SeqCst);
+        assert_eq!(checks.get(T + 2 * HOST_RETRY_S), vec![shfs(T)]);
+        assert_eq!(runs.load(Ordering::SeqCst), 3);
+        checks.get(T + 2 * HOST_RETRY_S + HOST_RECHECK_S - 1);
+        assert_eq!(runs.load(Ordering::SeqCst), 3);
+        checks.get(T + 2 * HOST_RETRY_S + HOST_RECHECK_S);
+        assert_eq!(runs.load(Ordering::SeqCst), 4);
+    }
+
+    #[test]
+    fn the_data_folder_is_the_stores_folder() {
+        assert_eq!(
+            data_dir_of(Path::new("/data/lodestar.db")),
+            Path::new("/data")
+        );
+        assert_eq!(
+            data_dir_of(Path::new("data/lodestar.db")),
+            Path::new("data")
+        );
+        assert_eq!(data_dir_of(Path::new("lodestar.db")), Path::new("."));
+    }
+
+    #[test]
+    fn the_source_lists_the_data_folders_filesystem() {
+        let dir = tempfile::tempdir().unwrap();
+        let filesystem: Vec<InsightsException> = crate::fsdetect::detect(dir.path())
+            .exception_detail()
+            .map(|fs| api::data_filesystem(fs, T))
+            .into_iter()
+            .collect();
+        let insights = Insights::with_clock(Box::new(|| 0), T);
+        // Before `spawn` sets the checks: none.
+        assert_eq!(insights.host_exceptions(T), vec![]);
+        insights.set_host_probe(dir.path().to_path_buf(), || (true, None));
+        assert_eq!(insights.host_exceptions(T), filesystem);
+
+        // A narrow range comes after the filesystem, with its detail.
+        fn narrow() -> (bool, Option<crate::windows::ports::Warning>) {
+            use crate::windows::ports::{Family, Range, assess};
+            let range = Range {
+                start: 49152,
+                count: 16384,
+                excluded: 15000,
+            };
+            (true, assess(Family::V4, range, 400))
+        }
+        let insights = Insights::with_clock(Box::new(|| 0), T);
+        insights.set_host_probe(dir.path().to_path_buf(), narrow);
+        let mut expected = filesystem.clone();
+        expected.push(api::ephemeral_ports(narrow().1.unwrap().detail(), T));
+        assert_eq!(insights.host_exceptions(T), expected);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn no_port_exception_off_windows() {
+        // Whatever count is set: there's no range to read.
+        assert_eq!(crate::windows::ports::probe(), (true, None));
+    }
 }
 
 #[cfg(test)]
