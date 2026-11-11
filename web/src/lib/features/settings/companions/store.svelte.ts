@@ -2,6 +2,7 @@
 // it. A failed or refused request leaves the list as it was; nothing here says "installed" or
 // "removed" without a response that does. The server decides every install: the request is built
 // only from the offer it sent.
+import { SvelteSet } from 'svelte/reactivity';
 import { api, ApiError } from '$lib/api/client';
 import type {
 	Companion,
@@ -23,6 +24,18 @@ export class CompanionsStore {
 	private ctl = new AbortController();
 	readonly signal = this.ctl.signal;
 	private live = true;
+	private timers = new SvelteSet<ReturnType<typeof setTimeout>>();
+
+	/** After a restart, looks at the row every few seconds (up to a minute) so its health shows. */
+	private watch(id: string, left = 20) {
+		if (!this.live || left === 0) return;
+		const t = setTimeout(async () => {
+			this.timers.delete(t);
+			await this.refresh(id);
+			if (this.items.find((x) => x.id === id)?.health !== 'healthy') this.watch(id, left - 1);
+		}, 3000);
+		this.timers.add(t);
+	}
 
 	start() {
 		this.live = true;
@@ -31,6 +44,8 @@ export class CompanionsStore {
 	stop() {
 		this.live = false;
 		this.ctl.abort();
+		for (const t of this.timers) clearTimeout(t);
+		this.timers.clear();
 	}
 
 	async load() {
@@ -87,6 +102,7 @@ export class CompanionsStore {
 	async restart(id: string) {
 		await api.post('/companions/{id}/restart', { path: { id } });
 		await this.refresh(id);
+		this.watch(id);
 	}
 
 	async logs(id: string): Promise<string[]> {
@@ -97,8 +113,9 @@ export class CompanionsStore {
 		this.detected = (await api.post('/companions/detect', {})).found;
 	}
 
-	async addAt(id: string, url: string) {
-		await api.post('/companions/{id}/target', { path: { id }, body: { kind: 'url', url } });
+	/** Adds a companion at a target the server found, or at an address typed in. */
+	async addAt(id: string, target: Detected['target']) {
+		await api.post('/companions/{id}/target', { path: { id }, body: target });
 		await this.load();
 	}
 

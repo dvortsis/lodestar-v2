@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { tick } from 'svelte';
 	// One companion: health, version, update notice, why it can't be set up here (in words), and
 	// Set up / Update / Remove behind their confirmations. The server decides every one: a
 	// refusal shows as a sentence and changes nothing.
@@ -19,6 +20,7 @@
 	let error = $state('');
 	let dialogError = $state('');
 	let note = $state('');
+	let heading = $state<HTMLElement>();
 
 	const health = $derived(isHealth(c.health) ? c.health : null);
 	const installed = $derived(c.installed !== null);
@@ -49,6 +51,9 @@
 		try {
 			await store.install(offer);
 			offer = null;
+			// The button that opened the dialog may be gone now: focus goes to the row's name.
+			await tick();
+			heading?.focus();
 		} catch (e) {
 			dialogError = failureWords(e);
 		} finally {
@@ -73,6 +78,8 @@
 			await store.remove(c.id);
 			plan = null;
 			panel = null;
+			await tick();
+			heading?.focus();
 		} catch (e) {
 			dialogError = failureWords(e);
 		} finally {
@@ -95,7 +102,7 @@
 
 <li class="flex flex-col gap-3 border-b border-field-border py-4" data-companion={c.id}>
 	<div class="flex flex-wrap items-center gap-2">
-		<h3 class="text-small font-semibold">{c.name}</h3>
+		<h3 class="text-small font-semibold" tabindex="-1" bind:this={heading}>{c.name}</h3>
 		{#if health === 'healthy'}
 			<Badge variant="success">{m.settings_companions_health_healthy()}</Badge>
 		{:else if health === 'unhealthy'}
@@ -174,7 +181,7 @@
 			/>{/await}{/if}
 	{#if panel === 'credentials'}
 		{#await import('./Credentials.svelte') then { default: Credentials }}
-			<Credentials {store} id={c.id} fields={c.credentials} {pasteOffered} />
+			<Credentials {store} id={c.id} name={c.name} fields={c.credentials} {pasteOffered} />
 		{/await}
 	{/if}
 	{#if panel === 'template'}{#await import('./Templates.svelte') then { default: Templates }}<Templates

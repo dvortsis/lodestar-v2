@@ -6,7 +6,7 @@
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import Dialog from '$lib/ui/overlays/Dialog.svelte';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
-	import type { InstallOffer } from './logic';
+	import { bytesText, type InstallOffer } from './logic';
 
 	interface Props {
 		offer: InstallOffer;
@@ -17,14 +17,7 @@
 	}
 	let { offer, busy, error, onconfirm, onclose }: Props = $props();
 	let open = $state(true);
-	/** `12.0 MiB`: one place of decimals, in the reader's number format. */
-	const mebibytes = (n: number) =>
-		m.settings_companions_offer_mib({
-			size: new Intl.NumberFormat(currentLocale(), {
-				minimumFractionDigits: 1,
-				maximumFractionDigits: 1
-			}).format(n / 1048576)
-		});
+	const size = $derived(bytesText(offer.size_bytes, currentLocale()));
 	const rows = $derived([
 		[m.settings_companions_offer_program(), offer.name],
 		[
@@ -34,7 +27,7 @@
 				: offer.version
 		],
 		[m.settings_companions_offer_licence(), offer.licence],
-		[m.settings_companions_offer_size(), mebibytes(offer.size_bytes)],
+		[m.settings_companions_offer_size(), size],
 		[m.settings_companions_offer_runs(), m.settings_companions_offer_runs_value()]
 	]);
 </script>
@@ -53,9 +46,9 @@
 	<div class="flex flex-col gap-4">
 		<p class="text-small">{m.settings_companions_offer_intro()}</p>
 		<dl class="grid grid-cols-1 gap-2 text-small sm:grid-cols-2">
-			{#each rows as [k, v] (k)}
+			{#each rows as [k, v], i (k)}
 				<dt class="text-muted-text">{k}</dt>
-				<dd class="break-words" data-offer-field={k}>{v}</dd>
+				<dd class="break-words" data-offer-field={i} data-testid={`offer-field-${i}`}>{v}</dd>
 			{/each}
 			<dt class="text-muted-text">{m.settings_companions_offer_sha()}</dt>
 			<dd class="break-all font-mono text-caption" data-offer-sha>{offer.sha256}</dd>

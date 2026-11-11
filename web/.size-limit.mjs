@@ -370,7 +370,7 @@ const settingsAboutParts = [
 const settingsUpdatesModules = [/features\/settings\/updates\/(icon|about)\.ts$/];
 // Advanced loads when its section is opened, and is gated on its own below.
 // Companions (CMP-9a): the icon and the purpose line load after the first view, like Updates'.
-const settingsCompanionsModules = [/features\/settings\/companions\/(icon|about)\.ts$/];
+const settingsCompanionsModules = [/features\/settings\/companions\/icon\.ts$/];
 // Companions' dialogs and panels load on the first press that needs them; gated on their own below.
 const settingsCompanionsParts = [
 	/features\/settings\/companions\/(InstallDialog|RemoveDialog|Credentials|Logs|Templates)\.svelte$/
@@ -1382,11 +1382,11 @@ export default [
 					: name === 'BlocklistsScreen'
 						? '30.4 KB'
 						: name === 'CompanionsScreen'
-							? '31.5 KB'
+							? '33 KB'
 							: name === 'SourcesScreen'
 								? '30.9 KB'
 								: name === 'NotificationsScreen'
-									? '45.2 KB'
+									? '45.1 KB'
 									: '45 KB'
 		)
 	),

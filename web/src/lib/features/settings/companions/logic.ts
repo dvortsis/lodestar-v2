@@ -64,3 +64,24 @@ export const prowlarrFamily = (id: string) => id === 'prowlarr' || id === 'flare
 
 /** Where the route notes apply: the companions that take a route (Q18). */
 export const hasRoute = (id: string) => id === 'qbittorrent' || prowlarrFamily(id);
+
+/**
+ * A download size in IEC units, as `src/lib/format`'s `formatBytes` prints it (`512 B`, `38.2 MiB`,
+ * `4.37 GiB`). Kept here: importing the shared formatter splits its chunk and adds ≈ 120 B to the
+ * routes held at their §10.1 caps (docs/decisions/2026-11-11-CMP-9a.md).
+ */
+export function bytesText(n: number, locale: string): string {
+	const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+	let i = 0;
+	let v = Math.max(0, n);
+	while (v >= 1024 && i < units.length - 1) {
+		v /= 1024;
+		i++;
+	}
+	const digits = i === 0 ? 0 : i >= 3 ? 2 : 1;
+	const num = new Intl.NumberFormat(locale, {
+		minimumFractionDigits: digits,
+		maximumFractionDigits: digits
+	}).format(v);
+	return `${num}\u00a0${units[i]}`;
+}

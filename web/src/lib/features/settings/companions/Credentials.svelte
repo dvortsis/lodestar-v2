@@ -15,11 +15,12 @@
 	interface Props {
 		store: CompanionsStore;
 		id: string;
+		name: string;
 		fields: string[];
 		/** Offer the temporary-password paste (a companion Lodestar didn't install). */
 		pasteOffered: boolean;
 	}
-	let { store, id, fields, pasteOffered }: Props = $props();
+	let { store, id, name, fields, pasteOffered }: Props = $props();
 
 	let asking = $state<string | null>(null);
 	let password = $state('');
@@ -79,6 +80,7 @@
 	}
 	async function paste(e: Event) {
 		e.preventDefault();
+		if (!pasted) return;
 		busy = true;
 		error = '';
 		note = '';
@@ -145,7 +147,10 @@
 	{/each}
 	{#if pasteOffered}
 		<form class="flex flex-col gap-2" onsubmit={paste}>
-			<Field label={m.settings_companions_paste_label()} help={m.settings_companions_paste_help()}>
+			<Field
+				label={m.settings_companions_paste_label_named({ name })}
+				help={m.settings_companions_paste_help()}
+			>
 				{#snippet children(props)}
 					<Input
 						{...props}

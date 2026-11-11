@@ -10,13 +10,17 @@
 	import Field from '$lib/ui/fields/Field.svelte';
 	import Input from '$lib/ui/fields/Input.svelte';
 	import CompanionRow from './CompanionRow.svelte';
-	import { failureWords } from './logic';
+	import { failureWords, type Detected } from './logic';
 	import { CompanionsStore } from './store.svelte';
 
 	const store = new CompanionsStore();
 	onMount(() => store.start());
 	onDestroy(() => store.stop());
 
+	async function retry() {
+		store.loading = true;
+		await store.load();
+	}
 	let busy = $state(false);
 	let error = $state('');
 	let url = $state('');
@@ -33,13 +37,27 @@
 			busy = false;
 		}
 	}
-	async function add(e: Event) {
-		e.preventDefault();
-		if (!target || !url) return;
+	async function addFound(d: Detected) {
 		busy = true;
 		error = '';
 		try {
-			await store.addAt(target, url);
+			await store.addAt(d.id, d.target);
+		} catch (x) {
+			error = failureWords(x);
+		} finally {
+			busy = false;
+		}
+	}
+	async function add(e: Event) {
+		e.preventDefault();
+		if (!target || !url) {
+			error = m.settings_companions_add_choose_first();
+			return;
+		}
+		busy = true;
+		error = '';
+		try {
+			await store.addAt(target, { kind: 'url', url });
 			url = '';
 		} catch (x) {
 			error = failureWords(x);
@@ -62,7 +80,7 @@
 	{:else if store.loadFailed && store.items.length === 0}
 		<Banner kind="error">
 			{m.settings_companions_load_failed()}
-			{#snippet action()}<Button dense onclick={() => store.load()}
+			{#snippet action()}<Button dense loading={store.loading} onclick={retry}
 					>{m.settings_companions_retry()}</Button
 				>{/snippet}
 		</Banner>
@@ -84,7 +102,23 @@
 				{:else}
 					<ul class="text-small" data-detected>
 						{#each store.detected as d (d.id)}
-							<li>{m.settings_companions_detect_found({ id: d.id, version: d.version ?? '' })}</li>
+							<li class="flex flex-wrap items-center gap-2">
+								<span>
+									{m.settings_companions_detect_found({
+										id:
+											store.items.find((c) => c.id === d.id)?.name ??
+											m.settings_companions_unknown_name(),
+										version: d.version ?? ''
+									})}
+								</span>
+								<Button dense loading={busy} onclick={() => addFound(d)}>
+									{m.settings_companions_detect_add({
+										name:
+											store.items.find((c) => c.id === d.id)?.name ??
+											m.settings_companions_unknown_name()
+									})}
+								</Button>
+							</li>
 						{/each}
 					</ul>
 				{/if}
