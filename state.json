@@ -7576,7 +7576,7 @@
         "slice": "WK-11",
         "role": "build",
         "agent": "claude",
-        "doing": "#699 ready at 85d8d267; fresh Opus review + security review running (session_01MMjhn97qDUZKniFoSzjMNE)",
+        "doing": "#699 CHANGES round (B1 full-spool gates, sec L1-L3, I1/I2/I4, nits); then delta + security delta review",
         "since": "2026-11-11T14:05:33Z"
       },
       {
@@ -7710,7 +7710,6 @@
     }
   ],
   "review_queue": [
-    "#698 c997044d (delta)",
     "#700 bc077b8b (PK-ops, docs-only, ready 16:53Z)",
     "#701 bc90ad54 (PK-ui, web, ready 17:12Z)"
   ],
