@@ -8,8 +8,8 @@ Install v0.5.1 from the published Windows or Linux downloads. Check the download
 > - Check a download against its [checksum](glossary.md#checksum) with PowerShell.
 > - Decide when to run the file and when to stop.
 > - Install the Windows service, portable ZIP or Linux service, and say what each leaves on your PC.
-> - Move a data folder off a slow or unsafe filesystem.
-> - Fix the Windows port warning with the `netsh` command Insights gives you.
+> - Move a data folder off a slow or unsafe filesystem, and fix the Windows port warning with the `netsh` command Insights gives you.
+> - Choose an update setting, install an update and read an [update rollback](glossary.md#update-rollback) on Windows **(newer than v0.5.1)**.
 
 ## 4.1 Understand the SmartScreen warning
 <!-- index: SmartScreen; unsigned; code signing -->
@@ -343,22 +343,124 @@ Then restart Lodestar, because the change applies at the next start:
 - Portable ZIP: press **Ctrl+C**, wait for shutdown, then open **Start Lodestar.cmd** again.
 - Linux: run `sudo systemctl restart lodestar`.
 
-## 4.8 Check your understanding
+## 4.8 Keep Lodestar up to date on Windows
+<!-- index: updates; Windows update; Install now; install window; rollback; probation; Restart now; Event Viewer; update helper; previous.exe; signed manifest -->
+
+> [!NOTE]
+> **(Newer than v0.5.1)** v0.5.1 has no in-app update engine. To update it, install the newer MSI over the old one, or replace the portable folder's program, by hand, as [section 3.5](03-keep-lodestar-safe.md#35-choose-how-updates-work) describes. Everything in this section needs a newer version.
+
+A newer Lodestar can check for updates and install one when you press **Install now**. It goes back by itself if the new version doesn't start properly. This works for the MSI service and the portable ZIP. A Windows install never updates unattended, so you always press **Install now**. For the Docker and Linux ways of updating, and the command line, see [Upgrades and Backups](../operations.md#7-upgrades-and-backups).
+
+### Choose the update setting
+
+Open **Settings → Updates** in the **System** group. Under **How to update**, choose one:
+
+| Choice | What it does | Windows |
+|---|---|---|
+| **Off** | Lodestar never contacts GitHub. **Check now** still works when you press it. | The default until you choose. |
+| **Check and notify (recommended)** | Lodestar checks every 6 hours and tells you about new releases. Nothing installs unless you press **Install now**. | Safe choice. |
+| **Install automatically** | Installs by itself at the level you pick, inside the [install window](glossary.md#install-window). | Not built for Windows yet. It behaves like **Check and notify**, and the screen says "Automatic installs are off here". |
+| **Container image updates** | For Docker and Unraid. | Not for Windows. |
+
+**Recommended:** **Check and notify**. You see each release, read its notes, and choose when the service is down. Checking contacts GitHub and sends nothing about you beyond what any download shows, your IP address. Turn it on only if you accept that. Leave **Off** if you would rather update by hand.
+
+A setting locked by a `LODESTAR_UPDATES*` variable shows "Set by …" and can't be changed in the app.
+
+### Know when an install can run
+
+Two rules decide when an install may start.
+
+- **The install window** is a daily time range in the PC's local time, `03:00-05:00` by default. It holds back automatic installs. A Windows install is never automatic. So **Install now** ignores the window and the **Days to wait** setting.
+- **Updates Off or paused.** **Check now** and **Install now** both work while updates are **Off** or paused: they are your own request. Switching to **Off**, or starting a pause, withdraws an **Install now** that still waits for the update helper. An example is one waiting for Windows to restart. That install then doesn't happen. To pause updates, use **Pause automatic updates** on the same screen.
+
+If an **Install now** is waiting and you would rather it didn't run, switch to **Check and notify** and back to **Off**; that cancels it.
+
+### What Lodestar checks before it installs
+
+Lodestar installs a release only if the project's key signed its list of releases. The download must also match the size and SHA-256 [checksum](glossary.md#checksum) that list gives. A file that doesn't match is thrown away, so nobody can swap an update on the way to you. The Windows files carry no publisher signature yet, so the signed list is the check ([section 4.1](#41-understand-the-smartscreen-warning)).
+
+### Update the MSI service
+
+1. Open **Settings → Updates**. If the status card says a version is available, read its notes.
+2. Take a [backup](03-keep-lodestar-safe.md#37-back-up-and-restore) if you want one. The update keeps a snapshot of your library before it changes how data is stored, but a backup is cheaper than needing one.
+3. Select **Install now**. A release with manual steps first shows its notes and asks you to confirm with **Install**; read them.
+   **Result:** The card shows the steps: downloading, verifying, installing, restarting, checking health. The **Lodestar update helper**, a scheduled task the installer set up, does the install as SYSTEM. The web page goes quiet while the **Lodestar** service stops, the new version installs and the service starts again.
+4. Wait for the page to come back. It can take a few minutes. The service must stay running for 60 seconds before the new version counts as good.
+   **Result:** The card says Lodestar is up to date on the new version, and **History** lists the install.
+
+The previous version is kept in `C:\Program Files\Lodestar\updates` (the folder only administrators can change), so a failed update can put it back. Automatic installs work only from the default data folder, `C:\ProgramData\Lodestar`. With any other data folder the card says to download the installer and run it. If Windows asks for a restart to finish, restart when it suits you; the helper carries on at the next start.
+
+![The Updates screen with the status card showing 0.5.3 available and an Install now button](images/windows-update-status-illustration.svg)
+*Figure 4.3: The Updates status card and its steps. Illustration, not a live screenshot.*
+
+### Update the portable ZIP
+
+1. Open **Settings → Updates** and select **Install now**. A portable copy installs only when it sits in a normal folder with a `data` folder beside `lodestar.exe`, as the ZIP lays it out.
+2. Wait. Lodestar downloads the new ZIP, checks it, swaps its own program for the new one and restarts.
+   **Result:** The console window stays open and keeps running Lodestar. The page comes back on the new version. There is no service to stop, so the only break is the restart.
+3. Leave it running for 5 minutes. The old program is kept as `data\bin\previous.exe` until the new one passes its health check, then it is removed.
+
+### Roll back
+
+An [update rollback](glossary.md#update-rollback) puts the previous version back.
+
+Lodestar checks every new version after it installs, and this check is called [probation](glossary.md#probation). The new version must start, open your library, answer a search, listen on its web port and report healthy. If it doesn't, Lodestar rolls the update back **on its own**. You don't press anything.
+
+- **Service:** the helper restores the library snapshot taken before the update, then reinstalls the previous version, then starts the service. A version that failed is skipped, so Lodestar doesn't offer it again.
+- **Portable:** Lodestar puts `previous.exe` back and starts the old version again. It tries the new one up to 3 times first.
+
+What you see:
+
+- On **Settings → Updates**, the status card says the last update didn't work and was rolled back, with the reason, and **History** shows **Rolled back**.
+- In **Event Viewer**, under **Windows Logs → Application**, the service writes a **Warning** from the source **Lodestar**, event ID 4, while the rollback runs. It says the service is waiting because an update is being undone in its data folder. The service carries on by itself afterwards. Until then it stays idle, so nothing opens a half-restored library. Older versions don't write this Warning.
+
+Manual rollback isn't available on Windows. To go back to an older version on purpose, install that version's MSI by hand.
+
+**If a rollback fails,** Lodestar stops the service and keeps it disabled, so that neither version opens a library that might be half restored. The **Lodestar update helper** then writes an **Error**, event ID 900, to the Application log, and the exact steps are in the helper's journal. The first things to read are:
+
+- service: `C:\Windows\Temp\lodestar-service.log` (administrators only)
+- portable: `data\logs\lodestar.log`
+
+Then follow [section 6.1](06-troubleshooting.md#61-common-problems). Don't delete the data folder.
+
+### Restart Lodestar yourself
+
+A restart is separate from an update. Settings tells you when saved changes wait for one ("3 changes apply after a restart"). **Restart now** in the web page is **(planned)**: the button isn't there yet, though the server side is built. Until it is, restart as [section 4.7](#47-fix-the-windows-port-warning) shows. Use `Restart-Service Lodestar`, or **Ctrl+C** and **Start Lodestar.cmd** for the portable ZIP.
+
+What to expect once a restart is offered:
+
+- **Service:** Lodestar shuts down cleanly and Windows starts it again after 60 seconds. The estimate is the last start time plus a minute.
+- **Paused for about a day:** Windows restarts the service on its own only twice a day. Lodestar keeps one for a crash. So Restart now is **paused for about a day** after three events: a Restart now, an unexpected stop and the first start after an upgrade. Restart the service from **Services** (`services.msc`) instead. Each service restart also writes events 7024 and 7031 to the **System** log, which is normal.
+- **Portable:** a new copy starts first and takes over when the old one has finished. The console keeps running. It prints "Lodestar restarted and keeps running in this window." It doesn't print "Lodestar stopped." To stop it, press **Ctrl+C** and wait.
+
+**Recommended:** after a restart, keep the browser tab open until the page comes back. Then close it if you like.
+
+### Fix update problems
+
+| Problem | What to do |
+|---|---|
+| **Install now** is missing or does nothing | The button shows only while a newer release is offered, it hasn't been skipped, the last check is recent and this install can update itself. Select **Check now**. For a service, the data folder must be `C:\ProgramData\Lodestar`. The portable folder must hold `lodestar.exe` with `data` beside it. The card gives the reason. |
+| The page says the update is waiting | Windows wouldn't start the service at the end of the install, so nothing changed. Lodestar tries again at the next Windows start unless you switch updates **Off** or pause them first. |
+| The update rolled back | Read the reason on the status card and in **History**, then try again when it suits you. If it fails again, take a [backup](03-keep-lodestar-safe.md#37-back-up-and-restore) and install the newer MSI by hand. |
+| The portable window says "Lodestar stopped." but it still runs | An older **Start Lodestar.cmd**, from a ZIP made before the fix, prints this after a restart while the new copy keeps running in the window. Open `http://localhost:8090/`: if the page answers, Lodestar is running, and **Ctrl+C** in that window stops it. Closing the window kills it without a clean shutdown. Use the newer ZIP's launcher. |
+| The service stays stopped after a rollback | Follow "If a rollback fails" above. |
+
+## 4.9 Check your understanding
 
 1. Why does the MSI installer have no folder page, and where does the program go?
 2. What stays on your PC after you uninstall the MSI, and how do you remove it as well?
 3. Your data folder is on Unraid's `/mnt/user`. Where should it go, and why?
 4. Insights shows the ports exception with no command. What do you do?
+5. Why does Lodestar roll an update back, and what do you do about it?
 
 Answers are in [Appendix A](appendix-a-answers.md#chapter-4-install-on-windows-and-linux).
 
 > [!TIP]
 > **Key takeaways**
-> - Windows builds are unsigned, so SmartScreen warns.
-> - Compare the `Get-FileHash` value with the checksum before you run anything.
-> - If the hashes differ, don't run the file.
+> - Windows builds are unsigned, so SmartScreen warns. Compare the `Get-FileHash` value with the checksum, and if they differ, don't run the file.
 > - The MSI is the recommended Windows install; uninstalling keeps your data unless you ask otherwise.
 > - A data folder on a share or FUSE filesystem belongs on a local disk.
+> - On Windows, **Check and notify** is the safe update setting. You press **Install now**, a failed update rolls back on its own, and a failed rollback means reading the log before you reinstall.
 
 <!-- nav:start -->
 ---

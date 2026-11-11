@@ -2,6 +2,7 @@
 
 Terms used in this guide, A to Z. Each chapter links a term here the first time it uses it.
 
+
 ## Cache pool
 
 A group of SSDs or NVMe drives in Unraid, used for fast storage. A path starting `/mnt/cache` is on it.
@@ -34,6 +35,10 @@ A PowerShell window opened with **Run as administrator**. Windows asks you to co
 
 The layer behind Unraid's `/mnt/user` paths. It adds overhead that databases notice.
 
+## Install window
+
+A daily time range, in the PC's local time, when automatic updates may install. On Windows nothing installs automatically, so **Install now** ignores it.
+
 ## Metadata
 
 The description a torrent publishes about itself: name, file list, sizes and dates. It is not the content.
@@ -53,6 +58,10 @@ A router rule that sends traffic from the internet to one device on your network
 ## Port mapping
 
 A rule that connects a port on your server to the port an app listens on inside its container.
+
+## Probation
+
+The check Lodestar runs on a new version right after an update: it must start, open your library, answer a search and stay healthy. If it fails, the update is rolled back.
 
 ## PUID and PGID
 
@@ -77,6 +86,10 @@ A web server in front of an app that adds HTTPS. Lodestar needs `LODESTAR_SECURE
 ## UDP
 
 A network protocol without a connection setup, used for peer discovery. Firewall and router rules list it separately from TCP.
+
+## Update rollback
+
+Putting the previous version back after an update fails its probation, on its own. It also restores your library from the snapshot taken before the update.
 
 ## VPN
 
