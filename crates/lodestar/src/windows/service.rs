@@ -171,6 +171,11 @@ pub fn event_log_text(refusal: Refusal, dir: &Path) -> String {
         .map(|c| if c.is_control() { ' ' } else { c })
         .filter(|c| !invisible(*c))
         .collect();
+    // A configured folder can be long; `eventcreate` takes a short line.
+    let dir = match dir.char_indices().nth(MAX_SHOWN) {
+        Some((at, _)) => format!("{}…", &dir[..at]),
+        None => dir,
+    };
     let log = super::temp_log::NAME;
     match refusal {
         Refusal::NotPrivate => format!(
@@ -188,6 +193,9 @@ pub fn event_log_text(refusal: Refusal, dir: &Path) -> String {
         ),
     }
 }
+
+/// The most of a folder's name the Event Log message shows, in characters.
+const MAX_SHOWN: usize = 260;
 
 /// The bidirectional controls and zero-width characters, which could make
 /// a folder name read as other text.
@@ -1565,13 +1573,24 @@ mod tests {
                 !text.contains('"'),
                 "no quotes on eventcreate's line: {text}"
             );
-            assert!(text.len() < 1024, "{}", text.len());
+            assert!(text.chars().count() < 1024, "{}", text.chars().count());
             let (kind, id) = refusal.event();
             assert!(matches!(kind, "ERROR" | "WARNING"));
             assert!((1..=1000).contains(&id), "eventcreate's own message range");
         }
         assert!(event_log_text(Refusal::NotPrivate, dir).contains("Repair"));
         assert_ne!(Refusal::NotPrivate.event(), Refusal::RollingBack.event());
+    }
+
+    /// A long configured folder is cut, so the message stays short.
+    #[test]
+    fn the_event_log_text_cuts_a_long_folder() {
+        let long = format!(r"D:\{}", "é".repeat(5000));
+        let text = event_log_text(Refusal::RollingBack, Path::new(&long));
+        assert!(text.chars().count() < 1024, "{}", text.chars().count());
+        assert!(text.contains("é…,"), "{text}");
+        let short = event_log_text(Refusal::RollingBack, Path::new(r"D:\data"));
+        assert!(!short.contains('…'));
     }
 
     /// A folder name can't forge a second line or hide text.

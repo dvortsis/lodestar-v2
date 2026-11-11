@@ -487,15 +487,18 @@ fn event_log_writers_match_section_5() {
         "what the helper and the service write there",
     );
 
-    // What writes: `eventcreate`, the Win32 calls, or PowerShell's cmdlets,
-    // in every crate's source and the Windows packaging scripts.
-    const WRITERS: [&str; 6] = [
+    // What writes: `eventcreate`, the Win32 calls, PowerShell's cmdlets or
+    // .NET's `EventLog`, in every crate's source and the Windows packaging
+    // scripts. Compared lowercased: Windows and PowerShell ignore case.
+    const WRITERS: [&str; 8] = [
         "eventcreate",
-        "ReportEvent",
-        "RegisterEventSource",
-        "EvtReport",
-        "Write-EventLog",
-        "New-EventLog",
+        "reportevent",
+        "registereventsource",
+        "evtreport",
+        "write-eventlog",
+        "new-eventlog",
+        "diagnostics.eventlog",
+        "writeentry",
     ];
     let mut sources = files("crates", "rs");
     sources.retain(|f| f.contains("/src/"));
@@ -503,7 +506,7 @@ fn event_log_writers_match_section_5() {
     let writing: Vec<&String> = sources
         .iter()
         .filter(|f| {
-            let src = read(f);
+            let src = read(f).to_lowercase();
             WRITERS.iter().any(|w| src.contains(w))
         })
         .collect();
@@ -549,8 +552,23 @@ fn event_log_writers_match_section_5() {
     );
 
     // The service's writes are the refusals alone, with the folder and
-    // the fix (`event_log_text`, unit-tested in windows/service.rs).
+    // the fix (`event_log_text`, unit-tested in windows/service.rs): its
+    // writer and the two refusals that call it, no third call site.
     let service = read("crates/lodestar/src/windows/service.rs");
+    let sites = service
+        .match_indices("event_log(")
+        .filter(|(at, _)| {
+            !service[..*at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_')
+        })
+        .count();
+    assert_eq!(
+        sites, 3,
+        "windows/service.rs writes to the Event Log from a new place. Legal Notice section {s5} \
+         names only the service's refused start there: update that section, then this test"
+    );
     assert!(
         service.contains("pub fn event_log_text(refusal: Refusal, dir: &Path) -> String"),
         "the service's Event Log message builder changed; check it against section {s5}"
