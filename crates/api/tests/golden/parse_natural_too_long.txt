@@ -1,2 +1,2 @@
 400
-{"error":{"code":"natural_too_long","field":"q","message":"Natural phrasing reads at most 512 bytes and 32 words and operators; this is more than 32 words and operators."}}
+{"error":{"code":"natural_too_long","field":"q","message":"A natural search can hold at most 32 words and symbols; brackets and a lone minus sign count as one each. Shorten the search, or switch to the query language."}}

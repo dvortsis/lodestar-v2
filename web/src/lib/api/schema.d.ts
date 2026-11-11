@@ -1645,7 +1645,8 @@ export interface paths {
          * Parses a query: the AST and its canonical text, or a `query_syntax`
          *     error whose `start`/`end` span the UI highlights. With
          *     `natural=true`, also the query `q` means as natural phrasing
-         *     (`natural_too_long` past 512 bytes or 32 words).
+         *     (`natural_too_long` past 512 bytes or 32 tokens: words and symbols,
+         *     where each bracket and each lone minus sign counts as one).
          */
         get: operations["parseQuery"];
         put?: never;
