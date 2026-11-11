@@ -6849,6 +6849,11 @@
       "for": "WK-G",
       "from": "WK-20 (2026-11-11)",
       "note": "lodestar is bin-only: cluster_gate.rs needs the #[path] include into the binary tests like tests/cluster_chaos/scenarios.rs. Runtime seals/timestamps with wall clock unix_now, not Clock; heartbeat 5 s and lease TTL 600 s not in Wiring (TTL jumps drop sessions). Add to WK-G notes and owns in next runner PR."
+    },
+    {
+      "for": "runner PR (slices.yaml)",
+      "from": "PK-guide-3 #708 (2026-11-11)",
+      "note": "New slices found by PK-guide-3, all checked on main: (1) X-restart-banner (sonnet, web): \u00a710.10.6 restart banner + Restart now dialog + Restarting\u2026 /healthz poll; none in web/src; G-m6 dep. (2) X-win-upd-history (opus): Windows install history (check.rs:1090 history: vec![]) and the rollback notice in Updates; G-m6 dep. (3) X-win-upd-manual-rollback (opus): manual Roll back is not_built_yet on Windows. (4) X-win-upd-first-rollback (opus, /security-review): no rollback for the first in-app update after a hand-installed MSI (rollback.rs:725, helper caches only MSIs it installed); accepted for G-m6 with backup guidance; owner \u00a72.19 flag. Each updates its PK-guide-3 \"planned\" marks in docs/user/04."
     }
   ],
   "main_health": [
@@ -7740,7 +7745,9 @@
   ],
   "review_queue": [
     "#699 CHANGES @13397e42 relayed (B1 tests L4/L6, I1 link+secure_remove, Windows reparse); then fresh delta+sec review",
-    "#692 delta review running @cfc09faa"
+    "#692 delta review running @cfc09faa",
+    "#708 PK-guide-3 1443a549: fresh Opus review running",
+    "#705 CMP-11 3544233f: fresh Opus review running"
   ],
   "merged": [
     {
