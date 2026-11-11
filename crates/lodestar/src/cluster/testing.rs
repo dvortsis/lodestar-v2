@@ -44,10 +44,15 @@
 //! [`NodeClock`], whose offset [`Harness::skew`] and
 //! [`Harness::skew_coordinator`] set. The coordinator's leases, heartbeat
 //! offsets, silent-session sweep and certificate checks, and each worker's
-//! TLS and session upkeep, follow these clocks. The base starts
-//! [`BASE_BEHIND`] behind the wall clock, so the coordinator's day is never
-//! after the day the workers seal under (by the wall clock) while a test's
-//! jumps add up to less than that.
+//! TLS and session upkeep, follow these clocks. The base starts at the
+//! wall clock and only moves forward, so it is never behind it: the
+//! pipeline also expires remote leases by the wall clock (its heartbeat
+//! task), and a base behind the wall would let leases expire before the
+//! test moved time at all. The converse limit: a test whose wall time
+//! outruns its base time by a TTL (10 minutes) would see the same early
+//! expiry, so keep a scenario well under that. A coordinator ahead of the
+//! workers' wall-clock sealing day by less than an hour is fine: from
+//! 23:00Z it pre-sends the next day's key.
 //!
 //! Two things in the stack still read the wall clock, so a test can't move
 //! them: the worker runtime's sealing day and discovery times, and the
@@ -79,9 +84,9 @@
 //!   they expire. It's a crash for the cluster, not for the disk: the
 //!   runtime's `Drop` still runs (its DHT saves its state), so a torn or
 //!   unflushed file needs a process kill (as `tests/worker_join.rs`
-//!   starts the binary) or a crash hook in the runtime. [`restart`](Harness::restart) runs it again from its
-//!   saved credentials and the same data folder (and so its spool, once
-//!   WK-11 has one).
+//!   starts the binary) or a crash hook in the runtime.
+//!   [`restart`](Harness::restart) runs it again from its saved credentials
+//!   and the same data folder (and so its spool, once WK-11 has one).
 //! - [`partition`](Harness::partition) with a [`Cut`]: each worker dials
 //!   the coordinator through its own TCP relay. A cut direction holds its
 //!   bytes, end of stream included, as a real partition does under TCP's
@@ -104,11 +109,12 @@
 //!   together with a condition, since the writer flushes the counts on its
 //!   own cadence.
 //! - [`fetch_violations`](Harness::fetch_violations): from the fetch log,
-//!   each key fetched by two nodes with no hand-over of its lease between
-//!   them. Each fetch records the key's lease (holder and token) as the
-//!   coordinator's authority has it then; a second node's fetch that saw
-//!   the same lease is a violation. A fetch that saw no lease falls back
-//!   to time: less than a TTL apart in one generation.
+//!   each key fetched by two nodes outside a lease expiry: a second node
+//!   may fetch it only after a coordinator restart, a TTL of base time, or
+//!   an early hand-back the test recorded ([`Swarm::handed_back`]). Each
+//!   fetch also records the key's lease (holder and token), and two
+//!   fetches under the same lease are a violation at any gap; the leases
+//!   never excuse a fetch, so a coordinator bug can't hide behind them.
 //!
 //! Every wait is a condition with a deadline of at least 10 s
 //! ([`wait_until`]); there are no fixed sleeps.
@@ -151,9 +157,6 @@ mod scenarios;
 
 /// The default deadline for a wait.
 pub(crate) const DEADLINE: Duration = Duration::from_secs(30);
-
-/// How far behind the wall clock the base clock starts.
-pub(crate) const BASE_BEHIND: Duration = Duration::from_secs(15 * 60);
 
 /// How many peers every find names ([`peer`]), so each of the planner's
 /// per-peer-IP groups has some (members behind one public IP divide each
@@ -414,6 +417,16 @@ pub(crate) struct FetchRecord {
     /// The key's lease as the coordinator's authority had it as the fetch
     /// started: holder and token (`None`: no lease).
     pub lease: Option<(WorkerId, u64)>,
+    /// Its place in the log (marks are placed between fetches by it).
+    pub seq: usize,
+}
+
+/// A node's leases handed back early (a drain or a revoke), before the
+/// fetch at `seq` in the log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct HandBack {
+    pub node: usize,
+    pub seq: usize,
 }
 
 /// The peers every worker fetches from: an info dict per key, and a log
@@ -427,6 +440,7 @@ pub(crate) struct Swarm {
     generation: AtomicU32,
     /// The running coordinator's lease authority, for each fetch's lease.
     authority: Mutex<Option<Arc<LeaseAuthority>>>,
+    marks: Mutex<Vec<HandBack>>,
 }
 
 impl Swarm {
@@ -438,6 +452,7 @@ impl Swarm {
             held: watch::channel(HashSet::new()).0,
             generation: AtomicU32::new(0),
             authority: Mutex::new(None),
+            marks: Mutex::default(),
         })
     }
 
@@ -464,6 +479,18 @@ impl Swarm {
 
     pub(crate) fn log(&self) -> Vec<FetchRecord> {
         lock(&self.log).clone()
+    }
+
+    /// Records that `node`'s leases were handed back early, by a drain or
+    /// a revoke the test asked for: another node may then fetch its keys
+    /// before a TTL has passed. Call it once the hand-back is done.
+    pub(crate) fn handed_back(&self, node: usize) {
+        let seq = lock(&self.log).len();
+        lock(&self.marks).push(HandBack { node, seq });
+    }
+
+    pub(crate) fn hand_backs(&self) -> Vec<HandBack> {
+        lock(&self.marks).clone()
     }
 
     /// The keys `node` has started fetching.
@@ -503,7 +530,10 @@ impl Fetcher for NodeFetch {
             .as_ref()
             .and_then(|a| a.get(&key))
             .map(|l| (l.holder, l.token.0));
-        lock(&swarm.log).push(FetchRecord {
+        let mut log = lock(&swarm.log);
+        let seq = log.len();
+        log.push(FetchRecord {
+            seq,
             lease,
             key,
             node,
@@ -511,6 +541,7 @@ impl Fetcher for NodeFetch {
             generation: swarm.generation.load(Ordering::SeqCst),
             at_ms: swarm.base.now_ms(),
         });
+        drop(log);
         let mut held = swarm.held.subscribe();
         Box::pin(async move {
             held.wait_for(|h| !h.contains(&node))
@@ -781,8 +812,7 @@ impl Harness {
     /// Starts the coordinator, then joins and starts each worker, and
     /// waits until every one is connected.
     pub(crate) async fn start(options: Options) -> Harness {
-        let behind = i64::try_from(BASE_BEHIND.as_millis()).unwrap();
-        let base = Arc::new(ManualClock::new(SystemClock.now_ms() - behind));
+        let base = Arc::new(ManualClock::starting_now());
         let coord_clock = NodeClock::new(&base);
         let coord_dir = tempfile::tempdir().unwrap();
         let swarm = Swarm::new(base.clone());
@@ -1130,6 +1160,30 @@ impl Harness {
         self.wait_stored_within(keys, within, true).await;
     }
 
+    /// Waits until `done` holds, sighting `keys` every 2 s meanwhile
+    /// ([`sight`](Self::sight)): for example until a key's new holder has
+    /// started fetching it.
+    pub(crate) async fn wait_sighting(
+        &self,
+        name: &str,
+        keys: &[InfoHash],
+        within: Duration,
+        mut done: impl FnMut() -> bool,
+    ) {
+        let mut last = None::<Instant>;
+        self.wait(name, within, || {
+            if done() {
+                return true;
+            }
+            if last.is_none_or(|t| t.elapsed() >= Duration::from_secs(2)) {
+                self.sight(keys);
+                last = Some(Instant::now());
+            }
+            false
+        })
+        .await;
+    }
+
     async fn wait_stored_within(&self, keys: &[InfoHash], within: Duration, sighting: bool) {
         let mut last = None::<Instant>;
         self.wait("stored", within, || {
@@ -1283,9 +1337,10 @@ impl Harness {
             .iter()
             .map(|c| c.value)
             .sum();
-        // Waiting for a re-grant first: a key moving from waiting to held
-        // between the two reads is counted twice (the wait tries again),
-        // never missed.
+        // Two reads, not one snapshot: a key re-granted between them (from
+        // waiting to held) is counted twice, and one expiring (from held to
+        // waiting) not at all. Either way the count is off for one poll,
+        // and a wait polls again.
         let authority = self.coord().pipeline.monitor().lease_authority().clone();
         let waiting = authority.pending();
         f.in_flight = i64::try_from(waiting + authority.len()).unwrap();
@@ -1307,7 +1362,7 @@ impl Harness {
     /// between them ([`violations`]).
     pub(crate) fn fetch_violations(&self) -> Vec<String> {
         let ttl = i64::try_from(self.lease_ttl().as_millis()).unwrap();
-        violations(&self.swarm.log(), ttl)
+        violations(&self.swarm.log(), &self.swarm.hand_backs(), ttl)
     }
 
     /// Stops every worker (a local stop) and the coordinator.
@@ -1354,12 +1409,17 @@ fn fmt_counts(c: &Counts) -> String {
     )
 }
 
-/// Keys fetched by two different nodes with no hand-over of the lease
-/// between them: the later fetch saw the same lease (holder and token) as
-/// the earlier one, so neither an expiry, an eviction nor a restart had
-/// moved it. A fetch that saw no lease falls back to time: within
-/// `ttl_ms` of the other node's fetch, in the same generation.
-fn violations(log: &[FetchRecord], ttl_ms: i64) -> Vec<String> {
+/// Keys fetched by two different nodes outside a lease expiry. A second
+/// node's fetch is allowed only after a hand-over the coordinator can
+/// make: a coordinator restart (a new generation), a TTL of base time with
+/// no fetch by the first node (an expiry; heartbeats renew a live
+/// holder's lease, so the bound is the least an expiry needs), or an early
+/// hand-back the test recorded ([`Swarm::handed_back`]) between the two.
+/// Two fetches that saw the same lease are a violation whatever the gap:
+/// nothing moved it. The leases recorded aren't trusted to allow a
+/// fetch; a coordinator that re-granted a live key under a new token
+/// would otherwise hide its own bug.
+fn violations(log: &[FetchRecord], marks: &[HandBack], ttl_ms: i64) -> Vec<String> {
     let mut by_key: HashMap<InfoHash, Vec<FetchRecord>> = HashMap::new();
     for r in log {
         by_key.entry(r.key).or_default().push(*r);
@@ -1371,11 +1431,13 @@ fn violations(log: &[FetchRecord], ttl_ms: i64) -> Vec<String> {
             let Some(a) = fetches[..j].iter().rev().find(|a| a.node != b.node) else {
                 continue;
             };
-            let same_lease = match (a.lease, b.lease) {
-                (Some(x), Some(y)) => x == y,
-                _ => a.generation == b.generation && b.at_ms - a.at_ms < ttl_ms,
-            };
-            if same_lease {
+            let same_lease = a.lease.is_some() && a.lease == b.lease;
+            let handed_over = a.generation != b.generation
+                || b.at_ms - a.at_ms >= ttl_ms
+                || marks
+                    .iter()
+                    .any(|m| m.node == a.node && a.seq < m.seq && m.seq <= b.seq);
+            if same_lease || !handed_over {
                 out.push(format!(
                     "{key:?}: node {} ({:?}) and node {} ({:?}) at {} and {} ms",
                     a.node, a.lease, b.node, b.lease, a.at_ms, b.at_ms

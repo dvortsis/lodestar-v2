@@ -44,7 +44,23 @@ async fn a_worker_killed_mid_lease_has_its_keys_released_after_expiry() {
         .await;
     assert_eq!(h.stored(&keys), 0);
 
-    h.advance(h.lease_ttl() + Duration::from_secs(1));
+    // Not before the TTL: a little short of it, two ticks later, the dead
+    // worker still holds all three and nothing waits for a re-grant.
+    let margin = Duration::from_secs(30);
+    h.advance(h.lease_ttl() - margin);
+    let ticks = h.fleet().ticks;
+    h.wait("two ticks", DEADLINE, || h.fleet().ticks >= ticks + 2)
+        .await;
+    let f = h.fleet();
+    let dead = f.workers.iter().find(|w| w.worker == h.worker_id(0));
+    assert_eq!(
+        (f.pending, dead.map(|w| w.leases)),
+        (0, Some(3)),
+        "expired early: {}",
+        h.diagnosis()
+    );
+
+    h.advance(margin + Duration::from_secs(1));
     h.wait_leased(3).await;
     // The others' DHTs see them too, with peers (a re-grant carries none).
     h.wait_stored_sighting(&keys, DEADLINE).await;
@@ -84,9 +100,12 @@ async fn a_worker_killed_mid_lease_has_its_keys_released_after_expiry() {
 }
 
 /// A worker cut off both ways while it holds leases: they expire and go
-/// to the other worker. Once the link heals, the cut-off worker's results
-/// arrive under its old tokens and are ignored as stale (fencing): each
-/// key is stored once and the funnel still reconciles.
+/// to the other workers under new tokens. While those new leases are live
+/// (their holders' fetches are held), the link heals and the cut-off
+/// worker's results arrive under its old tokens: each is dropped as stale
+/// because a newer token holds the key (fencing), and nothing is stored.
+/// Then the new holders finish, each key is stored once, and the funnel
+/// reconciles.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_partitioned_workers_stale_results_are_fenced_off() {
     let h = Harness::start(Options::workers(3)).await;
@@ -100,23 +119,65 @@ async fn a_partitioned_workers_stale_results_are_fenced_off() {
     h.wait_reconciled(|f| f.harvested == 3 && f.in_flight == 3)
         .await;
 
+    // The new holders' fetches will wait, so their leases stay live.
+    h.swarm.hold(1);
+    h.swarm.hold(2);
     h.advance(h.lease_ttl() + Duration::from_secs(1));
     h.wait_leased(3).await;
     // The others' DHTs see them too, with peers (a re-grant carries none).
-    h.wait_stored_sighting(&keys, DEADLINE).await;
-    h.wait_reconciled(|f| f.stored == 3 && f.in_flight == 0)
-        .await;
+    let new_holders_fetching = || {
+        let by: HashSet<InfoHash> = h
+            .swarm
+            .fetched_by(1)
+            .union(&h.swarm.fetched_by(2))
+            .copied()
+            .collect();
+        keys.iter().all(|k| by.contains(k))
+    };
+    h.wait_sighting(
+        "the new holders fetching",
+        &keys,
+        DEADLINE,
+        new_holders_fetching,
+    )
+    .await;
 
-    // Its fetches finish while it's still cut off; then the link heals.
-    let stale = h.remote_stats();
-    let before = stale.stale.load(Ordering::Relaxed);
+    // Seen again while those leases are live: each claim must only relay
+    // hints to the holder. A coordinator that gave a live key to the
+    // claimer would show here as a second worker fetching it.
+    let relayed = h.fleet().hints_relayed;
+    h.wait_sighting("the sightings relayed as hints", &keys, DEADLINE, || {
+        h.fleet().hints_relayed >= relayed + 3 || !h.fetch_violations().is_empty()
+    })
+    .await;
+    assert_eq!(h.fetch_violations(), Vec::<String>::new());
+
+    // The cut-off worker's fetches finish and the link heals, in either
+    // order: its results come in under tokens a newer lease replaced.
+    let stats = h.remote_stats();
+    let before = stats.stale.load(Ordering::Relaxed);
     h.swarm.release(0);
     h.heal(0);
     wait_until("the stale results ignored", DEADLINE, || {
-        let n = stale.stale.load(Ordering::Relaxed) - before;
+        let n = stats.stale.load(Ordering::Relaxed) - before;
         (n >= 3, (n, h.lines(0)))
     })
     .await;
+    assert_eq!(h.stored(&keys), 0, "a stale result was stored");
+    let authority = h.coord().pipeline.monitor().lease_authority().clone();
+    let live: Vec<_> = keys
+        .iter()
+        .map(|k| authority.get(k).map(|l| l.holder))
+        .collect();
+    assert!(
+        live.iter()
+            .all(|w| *w == Some(h.worker_id(1)) || *w == Some(h.worker_id(2))),
+        "the new leases were live: {live:?}"
+    );
+
+    h.swarm.release(1);
+    h.swarm.release(2);
+    h.wait_stored(&keys).await;
     h.wait_connected(0).await;
     let f = h.wait_reconciled(|f| f.in_flight == 0).await;
     assert_eq!(
@@ -315,47 +376,76 @@ async fn a_cut_holds_one_direction_until_healed() {
 }
 
 #[test]
-fn fetches_by_two_workers_under_one_lease_are_violations() {
+fn fetches_by_two_workers_outside_an_expiry_are_violations() {
     let key = InfoHash([1; 20]);
     let (a, b) = (WorkerId(1), WorkerId(2));
-    let at = |node, at_ms, lease| FetchRecord {
+    let ttl = 600_000;
+    let mut seq = 0;
+    let mut at = |node, at_ms, lease| {
+        seq += 1;
+        FetchRecord {
+            key,
+            node,
+            peer: peer(1),
+            generation: 0,
+            at_ms,
+            lease,
+            seq,
+        }
+    };
+    let none: &[HandBack] = &[];
+    // After an expiry's worth of time, under a new lease: fine.
+    let log = [at(0, 0, Some((a, 1))), at(1, ttl, Some((b, 2)))];
+    assert!(violations(&log, none, ttl).is_empty());
+    // A new lease sooner than an expiry could give one: a coordinator that
+    // re-granted a live key. The leases don't excuse it.
+    let log = [at(0, 0, Some((a, 1))), at(1, ttl - 1, Some((b, 2)))];
+    assert_eq!(violations(&log, none, ttl).len(), 1);
+    // ...unless the test recorded an early hand-back (a drain, a revoke)
+    // of the first node's leases between the two.
+    let marks = [HandBack {
+        node: 0,
+        seq: log[1].seq,
+    }];
+    assert!(violations(&log, &marks, ttl).is_empty());
+    // The same lease seen by two nodes, at any gap (heartbeats renew it).
+    let log = [at(0, 0, Some((a, 1))), at(1, 2 * ttl, Some((a, 1)))];
+    assert_eq!(violations(&log, none, ttl).len(), 1);
+    // A node's own retries are never a violation.
+    let log = [at(0, 0, Some((a, 1))), at(0, 5, Some((a, 1)))];
+    assert!(violations(&log, none, ttl).is_empty());
+    // With no lease seen, time decides.
+    let log = [at(0, 0, None), at(1, ttl - 1, None)];
+    assert_eq!(violations(&log, none, ttl).len(), 1);
+    // A coordinator restart (a new generation) ends every lease.
+    let first = at(0, 0, Some((a, 1)));
+    let later = FetchRecord {
+        generation: 1,
+        ..at(1, 0, Some((WorkerId::LOCAL, 9)))
+    };
+    assert!(violations(&[first, later], none, ttl).is_empty());
+}
+
+/// A hand-back the test records sits between the fetches before and after
+/// it, and excuses a second node's fetch only after it.
+#[test]
+fn a_recorded_hand_back_excuses_only_later_fetches() {
+    let swarm = Swarm::new(Arc::new(ManualClock::new(0)));
+    let key = InfoHash([2; 20]);
+    let at = |node, seq| FetchRecord {
         key,
         node,
         peer: peer(1),
         generation: 0,
-        at_ms,
-        lease,
+        at_ms: 0,
+        lease: None,
+        seq,
     };
-    // Handed over (an expiry): fine, however close in time.
-    assert!(violations(&[at(0, 0, Some((a, 1))), at(1, 0, Some((b, 2)))], 600_000).is_empty());
-    // The same lease seen by two nodes: a second fetch before any
-    // hand-over, however far apart in time (heartbeats renew a lease).
-    assert_eq!(
-        violations(
-            &[at(0, 0, Some((a, 1))), at(1, 900_000, Some((a, 1)))],
-            600_000
-        )
-        .len(),
-        1
-    );
-    // The old holder fetching again under the new holder's lease.
-    let log = [
-        at(0, 0, Some((a, 1))),
-        at(1, 600_001, Some((b, 2))),
-        at(0, 600_002, Some((b, 2))),
-    ];
-    assert_eq!(violations(&log, 600_000).len(), 1);
-    // A node's own retries are never a violation.
-    assert!(violations(&[at(0, 0, Some((a, 1))), at(0, 5, Some((a, 1)))], 600_000).is_empty());
-    // With no lease seen, time decides, within a generation.
-    assert_eq!(
-        violations(&[at(0, 0, None), at(1, 599_999, None)], 600_000).len(),
-        1
-    );
-    assert!(violations(&[at(0, 0, None), at(1, 600_000, None)], 600_000).is_empty());
-    let later = FetchRecord {
-        generation: 1,
-        ..at(1, 0, None)
-    };
-    assert!(violations(&[at(0, 0, None), later], 600_000).is_empty());
+    lock(&swarm.log).push(at(0, 0));
+    swarm.handed_back(0);
+    lock(&swarm.log).push(at(1, 1));
+    assert_eq!(swarm.hand_backs(), vec![HandBack { node: 0, seq: 1 }]);
+    assert!(violations(&swarm.log(), &swarm.hand_backs(), 600_000).is_empty());
+    // Without it, the same two fetches are a violation.
+    assert_eq!(violations(&swarm.log(), &[], 600_000).len(), 1);
 }
