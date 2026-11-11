@@ -6859,6 +6859,11 @@
       "for": "CMP-11b",
       "from": "rv-705-3544233f (2026-11-11)",
       "note": "Must-dos before registering the gate: I1 UNC loopback refusal misses octal (0177.), hex (0x7f, 0x7f000001) and .ipv6-literal.net spellings (windows_qbittorrent.rs:682-694); add to windows_paths_refuse_hostile_inputs and correct decisions I1. I2 tie SavePath kind to platform (gate refuses Host, ungated adapter refuses Windows). I3 manager refusal on Windows is awaiting_pin/guided_only, not no_platform: UI maps both to guided install. Nits: configurator(id) None for non-qbittorrent; Windows.old and Users\\Default; last_refusal shared across calls; I5 size; mm(found) twice at :139. Order: CMP-13 pin needed before Windows config works."
+    },
+    {
+      "for": "runner PR",
+      "from": "X-prowlarr-register (2026-11-11)",
+      "note": "docs/plan/2026-11-06-v052-feature-manifest.md G1 row (~559): note that on main the registered set grows with Prowlarr (off, gated) per \u00a72.55; v0.5.2 G1 stays pinned on release/v0.5.2. Test renamed in webhooks_e2e.rs by X-prowlarr-register."
     }
   ],
   "main_health": [
