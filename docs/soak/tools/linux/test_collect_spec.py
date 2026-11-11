@@ -419,6 +419,44 @@ class SpecLaunchTests(SpecBase):
         self.assertIn("comparator", self.refused("comparator"))
         self.assertIn("https", self.refused("ab", "--ip-echo-url", "ftp://example.test/"))
 
+    def prepare_with_checklist(self, *checklist):
+        """Launches in docker mode with exactly this checklist (no default one)."""
+        write_cgroup(self.cgroup)
+        instance = collect.DockerInstance(SpecDocker(), "lodestar", self.cgroup, clock=self.clock.clock,
+                                          sleep=self.clock.sleep)
+        password = self.tmp / "password"
+        password.write_text(PASSWORD + "\n")
+        password.chmod(0o600)
+        argv = ["--run-kind", "ab", "--treatment", "utp", "--warmup-minutes", "2", "--baseline-hours", "2",
+                "--hour-seconds", "300", "--password-file", str(password), "--spec-commit", COMMIT,
+                "--ip-echo-url", "http://127.0.0.1:9/", *checklist]
+        args = args_for(self.root, "--url", self.lodestar.url, *argv)
+        collect.Collector(args, instance, clock=self.clock.clock, sleep=self.clock.sleep, now=self.clock.now,
+                          volumes=fixed_volumes()).prepare()
+
+    def test_docker_refuses_not_applicable_items_at_launch(self):
+        for item in collect.CHECKLIST_ITEMS:
+            other = next(i for i in collect.CHECKLIST_ITEMS if i != item)
+            with self.assertRaises(SystemExit) as caught:
+                self.prepare_with_checklist("--checklist", f"{item}=not_applicable", "--checklist",
+                                            f"{other}=excluded", "--next-run", f"{other}=2026-11-10T03:00:00Z")
+            message = str(caught.exception)
+            self.assertIn(f"{item}=not_applicable", message)
+            self.assertIn(f"{item}=excluded", message)
+            self.assertIn("--next-run", message)
+
+    def test_docker_accepts_excluded_items_with_a_next_run(self):
+        self.prepare_with_checklist(
+            "--checklist", "auto_update=excluded", "--next-run", "auto_update=2026-11-10T03:00:00Z",
+            "--checklist", "backup=excluded", "--next-run", "backup=2026-11-09T03:00:00Z")
+
+    def test_native_still_accepts_not_applicable(self):
+        checklist = collect.parse_checklist(["auto_update=not_applicable", "backup=not_applicable"], [])
+        collect.check_docker_checklist("native", checklist)
+        for item in collect.CHECKLIST_ITEMS:
+            with self.assertRaises(SystemExit):
+                collect.check_docker_checklist("docker", collect.parse_checklist([f"{item}=not_applicable"], []))
+
     def test_credentials_are_guarded(self):
         self.root = self.tmp / "public"
         self.assertIn("private", self.refused("ab", "--url", "http://8.8.8.8:8484"))
