@@ -1,0 +1,66 @@
+# The tripwire (OP-4; plan "Loosenings", the Pull requests write row): an
+# escalation whenever the operator App's bot acts anywhere but a new comment
+# on the channel PR, and operator-wake.yml disabled (never fleet.yml).
+# Decisions: docs/decisions/2026-11-11-OP-4.md.
+#
+# pull_request_target never checks out PR code here: the checkout is main's,
+# and the job reads only numbers and the event's enum fields, never a title,
+# body, label or branch name. No secrets, no environment.
+name: operator-tripwire
+
+on:
+  pull_request_target:
+    types: [opened, edited, closed, reopened, labeled, unlabeled, ready_for_review, converted_to_draft]
+  issue_comment:
+    types: [created, edited, deleted]
+  schedule:
+    - cron: "41 * * * *"
+
+permissions: {}
+
+jobs:
+  trip:
+    if: >-
+      (github.event_name == 'pull_request_target' || github.event_name == 'issue_comment')
+      && vars.OPERATOR_BOT_USER_ID != '' && format('{0}', github.event.sender.id) == vars.OPERATOR_BOT_USER_ID
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: write # disables operator-wake.yml on a trip
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          SENDER_ID: ${{ github.event.sender.id }}
+          TARGET_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          CHANNEL_PR: ${{ vars.CHANNEL_PR }}
+          OPERATOR_BOT_USER_ID: ${{ vars.OPERATOR_BOT_USER_ID }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 infra/operator/tripwire.py trip
+
+  # Reviews and review comments have no _target trigger, and PRs against an
+  # old base run that base's workflows: the hourly sweep catches both.
+  sweep:
+    if: github.event_name == 'schedule' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: write
+      actions: write # disables operator-wake.yml on a trip
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - env:
+          CHANNEL_PR: ${{ vars.CHANNEL_PR }}
+          OPERATOR_BOT_USER_ID: ${{ vars.OPERATOR_BOT_USER_ID }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 infra/operator/tripwire.py sweep

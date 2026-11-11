@@ -1,0 +1,12 @@
+{
+  "display_name": "lodestar-operator",
+  "credential": {
+    "display_name": "operator App installation token (refreshed per wake)",
+    "auth": {
+      "type": "environment_variable",
+      "secret_name": "GITHUB_TOKEN",
+      "networking": {"type": "limited", "allowed_hosts": ["api.github.com"]},
+      "injection_location": {"header": true, "body": false}
+    }
+  }
+}

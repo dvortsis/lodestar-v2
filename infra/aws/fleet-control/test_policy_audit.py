@@ -77,9 +77,9 @@ ROLES = {
         ("Allow", (LIST,), ("s3:ControlBucket",), cond({"StringEquals": {"s3:prefix": ["locks/fleet.json"]}})),
     ]),
     "LodestarOperatorBridge": ([sub("cloud-operator", w) for w in ("operator-wake.yml", "operator-apply.yml", "operator-injection.yml")], [
-        ("Allow", (DEL, GET, PUT), ("s3:ControlBucket/locks/operator*",), NO_COND),
+        ("Allow", (DEL, GET, PUT), ("s3:ControlBucket/locks/operator.json",), NO_COND),
         ("Allow", (GET, PUT), ("s3:ControlBucket/operator/claude-lock.json",), NO_COND),
-        ("Allow", (LIST,), ("s3:ControlBucket",), cond({"StringLike": {"s3:prefix": ["locks/operator*", "operator/claude-lock.json"]}})),
+        ("Allow", (LIST,), ("s3:ControlBucket",), cond({"StringEquals": {"s3:prefix": ["locks/operator.json", "operator/claude-lock.json"]}})),
         ("Allow", (GET,), ("s3:StateBucket/fleet/fleet.json",), NO_COND),
     ]),
     "LodestarPiaDelivery": (sub("pia-delivery", "fleet.yml"), [
@@ -114,9 +114,7 @@ BUCKET_POLICIES = {
 
 # The only strings in any resource that may hold `*` or `?`.
 WILDCARD_OK = {
-    "arn:${AWS::Partition}:s3:::${B}/locks/operator*",
     "arn:${AWS::Partition}:s3:::${B}/fleet/*",
-    "locks/operator*",
 }
 
 
