@@ -15,7 +15,7 @@ For the owner, who runs the cloud test fleet: two Linodes (Main and Worker) that
   - It answers each command with a result comment, and keeps one status comment up to date: roles, ages, expiry and compute cost. No address, label or fingerprint ever appears in a comment or log.
 - **The operator** is an AI agent with no cloud or VPN credential. It holds only a short-lived token for the `lodestar-operator` GitHub App. The runner instructs it.
   - It's meant to post only `/fleet` commands and `operator-report` comments on the channel PR. Its App can do more on any PR (Pull requests: write), which `operator-tripwire.yml` watches. That's why suspending the App is in [Stop everything](#4-stop-everything).
-  - Its workflows: `operator-wake.yml` (wakes it for each runner instruction), `operator-apply.yml` (creates the agent), `operator-tripwire.yml` (the detector), and `operator-injection.yml` (the injection test, after OP-5 merges).
+  - Its workflows: `operator-wake.yml` (wakes it for each runner instruction), `operator-apply.yml` (creates the agent), `operator-tripwire.yml` (the detector), and `operator-injection.yml` (the injection test; see `docs/operations/cloud-operator-first-run.md`).
   - **`fleet.yml` accepts `/fleet` commands only from the App's bot account** (`OPERATOR_BOT_USER_ID`). Nothing can issue one until your setup is done: the App installed, `OPERATOR_BOT_USER_ID` and `RUNNER_USER_ID` set, and `operator-apply.yml` run.
 - **Words:** **PIA** is the VPN service each VM's traffic goes through. **gluetun** is the VPN container on each VM; Lodestar shares its network, and its firewall is the kill switch that keeps traffic inside the VPN.
 - **You:**
@@ -194,7 +194,7 @@ Fastest first. Do as many steps as the situation needs; each says how to undo it
 2. **Disable the operator's workflows, and take the fleet down.**
    - **Where:** GitHub → Actions → the workflow (by its name in the sidebar) → **Disable workflow**:
      - **operator-wake** (`operator-wake.yml`) and **operator-apply** (`operator-apply.yml`). Both hold the Anthropic key through the `cloud-operator` environment. Disabling operator-wake also stops a running session at its next poll, within about 10 seconds;
-     - **operator-injection** (`operator-injection.yml`), after OP-5 merges.
+     - **operator-injection** (`operator-injection.yml`), which holds the same key. Disabling it doesn't stop a test that's already running: cancel that run too (the run's page → **Cancel workflow run**). It starts no more sessions and interrupts those running. Its sessions have no network route, and each stops at its $1 budget.
    - **Leave operator-tripwire (`operator-tripwire.yml`) on.** It holds no secrets. It's the detector, and it disables operator-wake itself on a trip.
    - **Take the fleet down without the operator:** GitHub → Actions → **fleet** (`fleet.yml`) → **Run workflow**, on `main`.
      - It runs only `down`, only for your user ID (the `OWNER_USER_ID` variable), and takes no inputs. It answers `owner's down: destroy the fleet`.
