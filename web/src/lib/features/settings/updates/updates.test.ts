@@ -538,7 +538,7 @@ describe('the Updates screen', () => {
 		);
 	});
 
-	it('shows a notice code it has no words for', async () => {
+	it("words a notice code it doesn't know without showing it", async () => {
 		status.notices = ['brand_new_code'];
 		render(UpdatesScreen);
 		expect((await screen.findByTestId('updates-notice-brand_new_code')).textContent).toContain(
@@ -551,7 +551,7 @@ describe('the Updates screen', () => {
 
 	it.each([
 		['install_kind_unknown', "couldn't tell how it was installed"],
-		['data_folder_unchecked', "couldn't check its data folder"],
+		['data_folder_unchecked', "isn't the default one under ProgramData"],
 		['brand_new_reason', "This installation can't update itself."]
 	])('words the capability reason %s and never shows the code', async (reason, words) => {
 		status.capability = { can_install: false, reason };
@@ -564,12 +564,24 @@ describe('the Updates screen', () => {
 	it('words the install_failed notice and never shows its code', async () => {
 		status.notices = ['install_failed'];
 		render(UpdatesScreen);
-		const banner = await screen.findByTestId('updates-notices');
 		await until(() => expect(screen.getByTestId('updates-notice-install_failed')).toBeTruthy());
+		const banner = screen.getByTestId('updates-notices');
 		expect(banner.textContent).toContain("The last update didn't install");
 		expect(banner.textContent).toContain('still on the old version');
+		expect(banner.textContent).toContain('Event Log');
 		expect(banner.textContent).not.toContain('install_failed');
 	});
+
+	it.each(['fixture', 'network', 'windows_helper'])(
+		'words the no-engine banner for %s without the code',
+		async (why) => {
+			status.unavailable = why as never;
+			render(UpdatesScreen);
+			const t = (await screen.findByTestId('updates-unavailable')).textContent ?? '';
+			expect(t).toContain('no update engine');
+			expect(t).not.toContain(why);
+		}
+	);
 
 	describe('Roll back', () => {
 		const offer = () => {

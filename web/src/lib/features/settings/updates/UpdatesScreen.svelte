@@ -406,9 +406,7 @@
 	<Skeleton lines={4} />
 {:else if status === undefined && settings === undefined}
 	<Banner kind="error">
-		{store.unavailable
-			? m.settings_updates_unavailable({ reason: '—' })
-			: m.settings_updates_load_failed()}
+		{store.unavailable ? m.settings_updates_unavailable() : m.settings_updates_load_failed()}
 		{#snippet action()}
 			<Button onclick={() => store.load()}>{m.settings_updates_reload()}</Button>
 		{/snippet}
@@ -421,9 +419,7 @@
 		{/if}
 		{#if noEngine}
 			<Banner kind="info"
-				><span data-testid="updates-unavailable"
-					>{m.settings_updates_unavailable({ reason: status?.unavailable ?? '—' })}</span
-				></Banner
+				><span data-testid="updates-unavailable">{m.settings_updates_unavailable()}</span></Banner
 			>
 		{/if}
 

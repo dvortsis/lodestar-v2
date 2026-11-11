@@ -21,9 +21,8 @@ pub enum UpdatesUnavailable {
     /// Windows: checking and installing come with the Windows helper
     /// (E-M6), so the screen says that instead of offering updates.
     /// Kept for clients and other platforms; the Windows engine now checks
-    /// and notifies, and
-    /// reports what it can't do yet as `capability.reason`
-    /// `not_built_yet` rather than as this.
+    /// and notifies, and reports what it can't do yet as
+    /// `capability.reason` `not_built_yet` rather than as this.
     WindowsHelper,
 }
 
