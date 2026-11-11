@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T13:24:41Z",
+  "updated_at": "2026-11-11T13:25:04Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7516,7 +7516,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T13:14:59Z",
+    "updated": "2026-11-11T13:25:04Z",
     "items": [
       {
         "slot": 1,
@@ -7528,11 +7528,11 @@
       },
       {
         "slot": 2,
-        "slice": "X-win-upd-reoffer",
+        "slice": "PK-win-soak-ci",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnABmNGgA3BNrwp6U3q: 0-exit with from on disk skips; linear 1920 matcher; saturating counters (Opus, /security-review), same session after #677 merged 74052431",
-        "since": "2026-11-11T11:19:02Z"
+        "doing": "session_01MMjhnD6gMrbMAMw2vKVwXQ: Windows merge/GC retry stress in CI (Opus, concurrency); fresh session after #686 X-win-upd-reoffer merged 369f5ec0 (old session archived)",
+        "since": "2026-11-11T13:25:04Z"
       },
       {
         "slot": 3,
