@@ -186,15 +186,31 @@ fn sample(h: &Hir, rng: &mut Rng, out: &mut String) -> Option<()> {
     Some(())
 }
 
-const PIECES: &[&str] = &[
-    "a", "b", "c", "ab", "abc", "the", "S", "s", "k", "K", "ſ", "\u{212A}", "ß", "İ", "Σ", "σ",
-    "ς", "千", "と", "0", "1", "e", "E", ".", r"\d", r"\w", r"\s", r"\b", "^", "$", "[a-c]",
-    "[Ss]", "[^a]", "[0-9]", "[xyz]", r"\pL", "(?-i)", "(?i)", "(", ")", "(?:", "|", "?", "*", "+",
-    "{2}", "{0,1}", "{1,3}", "{3,}", "{5}", "{2,6}",
+/// Leaves: literals with the awkward case foldings, small and large
+/// classes, anchors.
+const LEAVES: &[&str] = &[
+    "a", "b", "c", "ab", "abc", "the", "S", "s", "k", "K", "ſ", "\u{212A}", "ß", "İ", "ı", "Σ",
+    "σ", "ς", "ǅ", "ﬀ", "千", "と", "0", "1", "e", "E", ".", r"\d", r"\w", r"\s", r"\b", "^", "$",
+    "[a-c]", "[Ss]", "[^a]", "[0-9]", "[xyz]", r"\pL", r"[^\s\S]", "",
 ];
 
+const REPEATS: &[&str] = &[
+    "?", "*", "+", "{2}", "{0,1}", "{1,3}", "{3,}", "{5}", "{2,6}",
+];
+
+/// Balanced patterns: concatenations, alternations, repetitions and
+/// case-sensitive groups of leaves, a few levels deep, so nearly every
+/// case parses and reaches the planner.
 fn pattern() -> impl Strategy<Value = String> {
-    prop::collection::vec(prop::sample::select(PIECES), 1..14).prop_map(|v| v.concat())
+    let leaf = prop::sample::select(LEAVES).prop_map(str::to_owned);
+    leaf.prop_recursive(4, 48, 6, |inner| {
+        prop_oneof![
+            prop::collection::vec(inner.clone(), 1..6).prop_map(|v| v.concat()),
+            prop::collection::vec(inner.clone(), 2..5).prop_map(|v| format!("(?:{})", v.join("|"))),
+            (inner.clone(), prop::sample::select(REPEATS)).prop_map(|(x, r)| format!("(?:{x}){r}")),
+            inner.prop_map(|x| format!("(?-i:{x})")),
+        ]
+    })
 }
 
 fn affix() -> impl Strategy<Value = String> {
@@ -205,6 +221,28 @@ fn affix() -> impl Strategy<Value = String> {
     .prop_map(|v| v.concat())
 }
 
+/// Panics unless strings `pattern` matches, between `before` and
+/// `after`, pass its plan.
+fn check_sound(pattern: &str, seed: u64, before: &str, after: &str) {
+    let parsed = parse(pattern).expect(pattern);
+    assert!(parsed.plan().size() <= MAX_PLAN_NODES, "{pattern:?}");
+    let hir = regex_syntax::parse(&parsed.verify_pattern()).expect("it parsed once");
+    let mut rng = Rng(seed);
+    for _ in 0..8 {
+        let mut m = before.to_owned();
+        if sample(&hir, &mut rng, &mut m).is_none() {
+            assert_eq!(parsed.plan(), &Plan::Nothing, "{pattern:?}");
+            return;
+        }
+        m.push_str(after);
+        assert!(
+            admits(parsed.plan(), &m),
+            "{pattern:?} matches {m:?} but the plan is {}",
+            parsed.plan()
+        );
+    }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(4000))]
 
@@ -212,18 +250,8 @@ proptest! {
     /// passes the plan.
     #[test]
     fn every_match_passes_the_plan(p in pattern(), seed in 1u64.., before in affix(), after in affix()) {
-        let Ok(parsed) = parse(&p) else { return Ok(()) };
-        prop_assert!(parsed.plan().size() <= MAX_PLAN_NODES);
-        let hir = regex_syntax::parse(&parsed.verify_pattern()).expect("it parsed once");
-        let mut rng = Rng(seed);
-        for _ in 0..8 {
-            let mut m = before.clone();
-            if sample(&hir, &mut rng, &mut m).is_none() {
-                prop_assert_eq!(parsed.plan(), &Plan::Nothing);
-                break;
-            }
-            m.push_str(&after);
-            prop_assert!(admits(parsed.plan(), &m), "{:?} matches {:?} but the plan is {}", p, m, parsed.plan());
+        if parse(&p).is_ok() {
+            check_sound(&p, seed, &before, &after);
         }
     }
 
@@ -237,7 +265,7 @@ proptest! {
 }
 
 /// Patterns at the limits, built to make sets and plans as large as they
-/// can be: each parses within the caps.
+/// can be: each parses within the caps, and its weakened plan is sound.
 #[test]
 fn worst_cases_stay_within_the_caps() {
     let alts = |item: &str| vec![item; 32].join("|");
@@ -247,12 +275,15 @@ fn worst_cases_stay_within_the_caps() {
         "(s|k|ſ)".repeat(30),
         format!("({})", alts("sksksk")),
         format!("({}){{4}}", alts("[a-p]")),
-        format!("(({}){{10}}){{100}}", alts("[a-p]s")),
-        r"(\w|\pL|\d){100}".repeat(3),
+        format!("(({}){{10}}){{50}}", alts("[a-p]s")),
+        r"(\w|\pL|\d){10}".repeat(3),
         "(((((ab)+c)+d)+e)+f)".to_owned(),
     ];
     for p in &cases {
-        let parsed = parse(p).unwrap_or_else(|e| panic!("{p:?}: {e}"));
-        assert!(parsed.plan().size() <= MAX_PLAN_NODES, "{p:?}");
+        parse(p).unwrap_or_else(|e| panic!("{p:?}: {e}"));
+        // The weakening paths keep the plan sound.
+        for seed in 1..50 {
+            check_sound(p, seed, "x", "y");
+        }
     }
 }

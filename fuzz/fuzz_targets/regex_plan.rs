@@ -1,7 +1,9 @@
 //! The regex parser and trigram planner (RX-0, `lodestar_search::regex`)
 //! never panic on any input, stay within their limits, and are
-//! deterministic. Time and memory are bounded by the limits themselves:
-//! libFuzzer's timeout and RSS limit catch a pattern that slips past them.
+//! deterministic. Time and memory are bounded by the limits themselves;
+//! CI runs libFuzzer without a short `-timeout`, so the target fails any
+//! parse slower than a second itself (release builds take milliseconds),
+//! and libFuzzer's RSS limit catches memory.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
@@ -11,7 +13,14 @@ fuzz_target!(|data: &[u8]| {
     let Ok(text) = std::str::from_utf8(data) else {
         return;
     };
-    match parse(text) {
+    let started = std::time::Instant::now();
+    let parsed = parse(text);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(1),
+        "{text:?} took {:?}",
+        started.elapsed()
+    );
+    match parsed {
         Ok(p) => {
             assert!(text.len() <= MAX_PATTERN_BYTES);
             assert!(p.plan().size() <= MAX_PLAN_NODES, "{text:?}");

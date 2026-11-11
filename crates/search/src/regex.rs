@@ -7,9 +7,9 @@
 //!
 //! Every bound is checked before the work it guards grows: the pattern's
 //! length before parsing, nesting during parsing (the parser's own nest
-//! limit), node count, repetition, alternation and flags on the syntax tree
-//! before it's translated, class sizes on the translation before the plan
-//! is built. Each refusal is a [`RegexError`] with a stable
+//! limit), node count, repetition, alternation, flags, the codepoints the
+//! classes cover and an estimate of the compiled size on the syntax tree
+//! before it's translated (case folding a wide class is the costly step). Each refusal is a [`RegexError`] with a stable
 //! [`Reason::code`]. The plan's own size is held under [`MAX_PLAN_NODES`]
 //! by weakening it, which never loses a match (a smaller AND, or no
 //! constraint at all), so a valid pattern is never refused for its plan.
@@ -40,11 +40,21 @@ pub const MAX_REPEAT: u32 = 100;
 pub const MAX_REPEAT_PRODUCT: u64 = 1_000;
 /// The most branches one alternation may have.
 pub const MAX_ALTERNATION: usize = 32;
-/// The most ranges one character class may have after translation
-/// (Unicode `\w` is about 800, with case folding a little more).
-pub const MAX_CLASS_RANGES: usize = 2_048;
-/// The most class ranges in the whole pattern.
-pub const MAX_TOTAL_CLASS_RANGES: usize = 8_192;
+/// The most codepoints the pattern's Unicode classes (`\pL`, `\w`,
+/// `[a-z]`, …) may cover between them, counted before translation. Case
+/// folding works through every codepoint of a class, so this is what
+/// bounds translation (and the verifier's own folding): Unicode `\w` is
+/// about 140,000, `\p{Any}` 1,114,112.
+pub const MAX_CLASS_CODEPOINTS: u64 = 2_500_000;
+/// The largest estimated compiled size: each class item's ranges (one for
+/// a literal), times the counts of the repetitions around it. Unicode
+/// `\w` is about 770 ranges, so `\w{60}` is about 46,000. It's an
+/// estimate made before translation; RX-1's verifier keeps `regex`'s own
+/// size limit too.
+pub const MAX_COMPILED_WEIGHT: u64 = 50_000;
+/// A backstop on one translated class's ranges. The codepoint budget
+/// keeps real classes well under it (the largest is about 1,600).
+pub const MAX_CLASS_RANGES: usize = 4_096;
 /// The most nodes a plan may have; past it the plan is weakened.
 pub const MAX_PLAN_NODES: usize = 256;
 /// Patterns are case-insensitive unless they say `(?-i)`.
@@ -83,9 +93,11 @@ pub enum Reason {
     RepeatTooLarge,
     /// An alternation wider than [`MAX_ALTERNATION`].
     AlternationTooWide,
-    /// A class over [`MAX_CLASS_RANGES`], or all of them over
-    /// [`MAX_TOTAL_CLASS_RANGES`].
+    /// Classes covering more than [`MAX_CLASS_CODEPOINTS`], or one class
+    /// over [`MAX_CLASS_RANGES`].
     ClassTooLarge,
+    /// An estimated compiled size over [`MAX_COMPILED_WEIGHT`].
+    TooLarge,
     /// A flag other than `i` (`m`, `s`, `x`, `u`, `U`, `R`).
     FlagNotAllowed,
 }
@@ -102,6 +114,7 @@ impl Reason {
             Reason::RepeatTooLarge => "regex_repeat_too_large",
             Reason::AlternationTooWide => "regex_alternation_too_wide",
             Reason::ClassTooLarge => "regex_class_too_large",
+            Reason::TooLarge => "regex_too_large",
             Reason::FlagNotAllowed => "regex_flag_not_allowed",
         }
     }
@@ -268,7 +281,16 @@ pub fn parse(pattern: &str) -> Result<Pattern, RegexError> {
             ),
             kind => RegexError::new(Reason::Syntax, kind.to_string()),
         })?;
-    ast::visit(&ast, Bounds::default())?;
+    ast::visit(
+        &ast,
+        Bounds {
+            pattern,
+            nodes: 0,
+            repeats: Vec::new(),
+            codepoints: 0,
+            weight: 0,
+        },
+    )?;
     let hir = regex_syntax::hir::translate::TranslatorBuilder::new()
         .utf8(true)
         .case_insensitive(CASE_INSENSITIVE)
@@ -276,8 +298,7 @@ pub fn parse(pattern: &str) -> Result<Pattern, RegexError> {
         .translate(pattern, &ast)
         .map_err(|e| RegexError::new(Reason::Syntax, e.kind().to_string()))?;
     drop(ast);
-    let mut ranges = 0;
-    let plan = finish(info(&hir, 0, &mut ranges)?);
+    let plan = finish(info(&hir, 0)?);
     Ok(Pattern {
         source: pattern.to_owned(),
         plan,
@@ -286,14 +307,65 @@ pub fn parse(pattern: &str) -> Result<Pattern, RegexError> {
 
 /// The syntax-tree limits, checked in one heap-stack walk (the crate's
 /// visitor never recurses).
-#[derive(Default)]
-struct Bounds {
+struct Bounds<'a> {
+    pattern: &'a str,
     nodes: usize,
     /// The running product of the enclosing repetitions' counts.
     repeats: Vec<u64>,
+    /// Codepoints the classes cover so far.
+    codepoints: u64,
+    /// The compiled-size estimate so far.
+    weight: u64,
 }
 
-impl Bounds {
+impl Bounds<'_> {
+    /// Counts a leaf: `codepoints` against the class budget once, and
+    /// `ranges` times the enclosing repetitions against the size estimate.
+    fn leaf(&mut self, codepoints: u64, ranges: u64) -> Result<(), RegexError> {
+        self.codepoints = self.codepoints.saturating_add(codepoints);
+        if self.codepoints > MAX_CLASS_CODEPOINTS {
+            return Err(RegexError::new(
+                Reason::ClassTooLarge,
+                "character classes too large",
+            ));
+        }
+        let times = self.repeats.last().copied().unwrap_or(1);
+        self.weight = self.weight.saturating_add(ranges.saturating_mul(times));
+        if self.weight > MAX_COMPILED_WEIGHT {
+            return Err(RegexError::new(
+                Reason::TooLarge,
+                "pattern too large to run",
+            ));
+        }
+        Ok(())
+    }
+
+    /// A Unicode or Perl class (`\pL`, `\W`, …), measured by translating
+    /// its own text case-sensitively, which costs little even for
+    /// `\p{Any}`: it's case folding that walks every codepoint.
+    fn named_class(&mut self, span: &ast::Span) -> Result<(), RegexError> {
+        let text = self
+            .pattern
+            .get(span.start.offset..span.end.offset)
+            .unwrap_or_default();
+        let hir = regex_syntax::ParserBuilder::new()
+            .build()
+            .parse(text)
+            .map_err(|e| RegexError::new(Reason::Syntax, e.to_string()))?;
+        match hir.kind() {
+            HirKind::Class(Class::Unicode(c)) => {
+                let width = c
+                    .ranges()
+                    .iter()
+                    .map(|r| u64::from(r.end()) - u64::from(r.start()) + 1)
+                    .sum();
+                self.leaf(width, c.ranges().len() as u64)
+            }
+            // Not expected for a class's own text; count it like a range.
+            _ => self.leaf(1, 1),
+        }
+    }
+
     fn node(&mut self) -> Result<(), RegexError> {
         self.nodes += 1;
         if self.nodes > MAX_AST_NODES {
@@ -332,7 +404,7 @@ fn flags(f: &ast::Flags) -> Result<(), RegexError> {
     Ok(())
 }
 
-impl ast::Visitor for Bounds {
+impl ast::Visitor for Bounds<'_> {
     type Output = ();
     type Err = RegexError;
 
@@ -355,6 +427,11 @@ impl ast::Visitor for Bounds {
                     format!("more than {MAX_ALTERNATION} alternatives"),
                 ));
             }
+            Ast::Literal(_) => self.leaf(0, 1)?,
+            // Any character: a handful of UTF-8 ranges, never case-folded.
+            Ast::Dot(_) => self.leaf(0, 4)?,
+            Ast::ClassUnicode(c) => self.named_class(&c.span)?,
+            Ast::ClassPerl(c) => self.named_class(&c.span)?,
             Ast::Repetition(r) => {
                 use ast::{RepetitionKind as K, RepetitionRange as R};
                 let factor = match r.op.kind {
@@ -384,8 +461,23 @@ impl ast::Visitor for Bounds {
         Ok(())
     }
 
-    fn visit_class_set_item_pre(&mut self, _: &ast::ClassSetItem) -> Result<(), RegexError> {
-        self.node()
+    fn visit_class_set_item_pre(&mut self, item: &ast::ClassSetItem) -> Result<(), RegexError> {
+        self.node()?;
+        match item {
+            ast::ClassSetItem::Literal(_) => self.leaf(1, 1),
+            ast::ClassSetItem::Range(r) => {
+                let width = u64::from(r.end.c).saturating_sub(u64::from(r.start.c)) + 1;
+                self.leaf(width, 1)
+            }
+            // `[[:alpha:]]`: ASCII only, a few ranges.
+            ast::ClassSetItem::Ascii(_) => self.leaf(128, 4),
+            ast::ClassSetItem::Unicode(c) => self.named_class(&c.span),
+            ast::ClassSetItem::Perl(c) => self.named_class(&c.span),
+            // Their items are visited on their own.
+            ast::ClassSetItem::Empty(_)
+            | ast::ClassSetItem::Bracketed(_)
+            | ast::ClassSetItem::Union(_) => Ok(()),
+        }
     }
 
     fn visit_class_set_binary_op_pre(
@@ -695,10 +787,8 @@ fn repeat(x: Info, min: u32, max: Option<u32>) -> Info {
     }
 }
 
-fn class(c: &ClassUnicode, ranges: &mut usize) -> Result<Info, RegexError> {
-    let n = c.ranges().len();
-    *ranges += n;
-    if n > MAX_CLASS_RANGES || *ranges > MAX_TOTAL_CLASS_RANGES {
+fn class(c: &ClassUnicode) -> Result<Info, RegexError> {
+    if c.ranges().len() > MAX_CLASS_RANGES {
         return Err(RegexError::new(
             Reason::ClassTooLarge,
             "character class too large",
@@ -720,7 +810,7 @@ fn class(c: &ClassUnicode, ranges: &mut usize) -> Result<Info, RegexError> {
     Ok(Info::exact(set))
 }
 
-fn info(h: &Hir, depth: u32, ranges: &mut usize) -> Result<Info, RegexError> {
+fn info(h: &Hir, depth: u32) -> Result<Info, RegexError> {
     if depth > MAX_HIR_DEPTH {
         return Err(RegexError::new(
             Reason::TooDeep,
@@ -734,25 +824,25 @@ fn info(h: &Hir, depth: u32, ranges: &mut usize) -> Result<Info, RegexError> {
             Ok(s) => Info::exact(single(s.chars().map(fold).collect())),
             Err(_) => Info::any(),
         },
-        HirKind::Class(Class::Unicode(c)) => class(c, ranges)?,
+        HirKind::Class(Class::Unicode(c)) => class(c)?,
         // The translator's "fail" (`[^\s\S]`) is an empty byte class.
         // Others are unreachable with Unicode on and `u` refused;
         // "anything" is sound for them.
         HirKind::Class(Class::Bytes(c)) if c.ranges().is_empty() => Info::exact(Set::new()),
         HirKind::Class(Class::Bytes(_)) => Info::any(),
-        HirKind::Repetition(r) => repeat(info(&r.sub, d, ranges)?, r.min, r.max),
-        HirKind::Capture(c) => info(&c.sub, d, ranges)?,
+        HirKind::Repetition(r) => repeat(info(&r.sub, d)?, r.min, r.max),
+        HirKind::Capture(c) => info(&c.sub, d)?,
         HirKind::Concat(hs) => {
             let mut out = Info::empty();
             for h in hs {
-                out = concat(out, info(h, d, ranges)?);
+                out = concat(out, info(h, d)?);
             }
             out
         }
         HirKind::Alternation(hs) => {
             let mut out: Option<Info> = None;
             for h in hs {
-                let i = info(h, d, ranges)?;
+                let i = info(h, d)?;
                 out = Some(match out {
                     None => i,
                     Some(o) => alt(o, i),
@@ -875,9 +965,22 @@ mod tests {
             assert_eq!(refused(&format!("(?{f})a")), Reason::FlagNotAllowed, "{f}");
             assert_eq!(refused(&format!("(?{f}:a)")), Reason::FlagNotAllowed, "{f}");
         }
-        // Many large classes: each is fine, all of them aren't.
-        let classes = r"\w".repeat(MAX_TOTAL_CLASS_RANGES / 700 + 1);
-        assert_eq!(refused(&classes), Reason::ClassTooLarge);
+        // Wide classes are refused before they're case-folded, wherever
+        // they are: bare, negated, in brackets, as a range.
+        assert_eq!(refused(r"\p{Any}\p{Any}\p{Any}"), Reason::ClassTooLarge);
+        assert_eq!(refused(r"\PL\PL\PL"), Reason::ClassTooLarge);
+        assert_eq!(
+            refused(r"[\p{Any}][\W\pL][^a\p{Any}]"),
+            Reason::ClassTooLarge
+        );
+        assert_eq!(
+            refused(r"[\x{0}-\x{10FFFF}][\x{0}-\x{10FFFF}][\x{0}-\x{10FFFF}]"),
+            Reason::ClassTooLarge
+        );
+        // The compiled-size estimate: repetitions multiply class ranges.
+        assert_eq!(refused(r"(\w{10}){100}"), Reason::TooLarge);
+        assert_eq!(refused(r"\pL{100}"), Reason::TooLarge);
+        assert_eq!(refused(&r"\w{20}".repeat(4)), Reason::TooLarge);
         for r in [
             Reason::Empty,
             Reason::TooLong,
@@ -887,6 +990,7 @@ mod tests {
             Reason::RepeatTooLarge,
             Reason::AlternationTooWide,
             Reason::ClassTooLarge,
+            Reason::TooLarge,
             Reason::FlagNotAllowed,
         ] {
             assert!(r.code().starts_with("regex_"));
@@ -901,6 +1005,11 @@ mod tests {
         parse(&vec!["a"; MAX_ALTERNATION].join("|")).unwrap();
         parse(&format!("{}a{}", "(".repeat(16), ")".repeat(16))).unwrap();
         parse(r"\w\pL").unwrap();
+        // Realistic patterns with many word classes, and one wide class.
+        parse(&r"\w+\.".repeat(16)).unwrap();
+        parse(r"\p{Any}\p{Any}").unwrap();
+        parse(r"\w{60}").unwrap();
+        parse(".{0,100}").unwrap();
         parse("(?i)a(?-i:b)").unwrap();
     }
 
