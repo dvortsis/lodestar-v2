@@ -1,5 +1,6 @@
 import io
 import unittest
+from pathlib import Path
 from contextlib import redirect_stdout
 from datetime import timedelta
 
@@ -276,36 +277,85 @@ class ReviewsLookback(unittest.TestCase):
 
 
 class ManyPRs(RestReviews):
-    """Many active PRs, each with a full list of old reviews."""
+    """Active PRs 1..n, PR k with sizes[k-1] old reviews."""
 
-    def __init__(self, prs, per_pr):
+    def __init__(self, sizes):
         super().__init__([])
-        self.prs, self.per_pr = prs, per_pr
+        self.sizes = sizes
 
     def __call__(self, method, path, body):
         if method == "GET" and path.startswith("/repos/o/r/pulls?") and path.endswith("&page=1"):
-            return [{"user": {"id": 1}, "number": n, "updated_at": ISO(timedelta(minutes=5))} for n in range(1, self.prs + 1)]
+            return [{"user": {"id": 1}, "number": n, "updated_at": ISO(timedelta(minutes=5))}
+                    for n in range(1, len(self.sizes) + 1)]
         if method == "GET" and "/reviews" in path:
             self.pages.append(path)
-            page = int(path.rsplit("page=", 1)[1])
+            n, page = int(path.split("/pulls/")[1].split("/")[0]), int(path.rsplit("page=", 1)[1])
             old = timedelta(minutes=tripwire.LOOKBACK_MINUTES + 60)
-            return [review(1, old)] * max(0, min(100, self.per_pr - (page - 1) * 100))
+            return [review(1, old)] * max(0, min(100, self.sizes[n - 1] - (page - 1) * 100))
         return super().__call__(method, path, body)
 
 
 class ReviewBudget(unittest.TestCase):
-    def test_many_prs_of_old_reviews_spend_the_budget_and_trip(self):
-        gh = ManyPRs(prs=10, per_pr=4000)  # 41 pages each, 410 in all, past the 200-page budget
-        run(["sweep"], env(), gh)
-        self.assertIn("the sweep is incomplete: reviews ran past 200 pages", gh.bodies()[0])
-        self.assertTrue(gh.disabled())
-        self.assertLessEqual(len(gh.pages), tripwire.REVIEW_PAGE_BUDGET)
+    def test_the_budget_fits_seven_sweeps_an_hour(self):
+        # 6 wakes an hour (wake.PER_HOUR) plus the hourly cron share the token's ~1,000 requests:
+        # each sweep's other lists take at most 4 x 10 pages, plus a post and a disable.
+        import wake
+        self.assertEqual(tripwire.REVIEW_PAGE_BUDGET, 90)
+        self.assertLessEqual((wake.PER_HOUR + 1) * (tripwire.REVIEW_PAGE_BUDGET + 4 * tripwire.MAX_PAGES + 2), 950)
 
-    def test_within_the_budget_is_complete(self):
-        gh = ManyPRs(prs=4, per_pr=4000)  # 164 pages
+    def test_exactly_the_budget_is_complete(self):
+        gh = ManyPRs([2900, 2900, 2900])  # 30 pages each (29 full, then an empty one): 90
         run(["sweep"], env(), gh)
         self.assertEqual(gh.bodies(), [])
-        self.assertEqual(len(gh.pages), 164)
+        self.assertEqual(len(gh.pages), 90)
+
+    def test_one_page_over_the_budget_trips(self):
+        gh = ManyPRs([2900, 2900, 3000])  # the last PR needs 31 pages
+        run(["sweep"], env(), gh)
+        self.assertIn("the sweep is incomplete: reviews ran past 90 pages", gh.bodies()[0])
+        self.assertTrue(gh.disabled())
+        self.assertEqual(len(gh.pages), 90)
+
+
+class Deadline(unittest.TestCase):
+    def test_a_sweep_past_its_deadline_trips(self):
+        tick = [0.0]
+
+        def mono():
+            tick[0] += 7.0  # every request seems to take 7 s
+            return tick[0]
+        gh = ManyPRs([4000] * 2)
+        with redirect_stdout(io.StringIO()):
+            tripwire.main(["sweep"], env=env(), transport=gh, clock=lambda: NOW, monotonic=mono)
+        self.assertIn("the sweep is incomplete: it ran past its 6-minute deadline", gh.bodies()[0])
+        self.assertTrue(gh.disabled())  # the escalation and the disable go out after the deadline
+
+    def test_the_deadline_sits_under_the_job_timeout(self):
+        import yaml
+        root = Path(tripwire.__file__).resolve().parents[2] / ".github" / "workflows"
+        for name, job in (("operator-tripwire.yml", "sweep"), ("operator-wake.yml", "sweep")):
+            wf = yaml.safe_load((root / name).read_text())
+            self.assertLessEqual(tripwire.SWEEP_DEADLINE_SECONDS + 120, wf["jobs"][job]["timeout-minutes"] * 60, name)
+
+
+class Unreadable(unittest.TestCase):
+    def test_a_page_that_isnt_a_list_trips(self):
+        gh = RestReviews([])
+        bad = lambda m, p, b: {"message": "odd"} if p.startswith("/repos/o/r/issues/events") else gh(m, p, b)  # noqa: E731
+        run(["sweep"], env(), bad)
+        self.assertIn("the sweep is incomplete: unreadable_page", gh.bodies()[0])
+        self.assertTrue(gh.disabled())
+
+    def test_a_pr_number_that_isnt_digits_trips(self):
+        gh = RestReviews([])
+
+        def odd(m, p, b):
+            if m == "GET" and p.startswith("/repos/o/r/pulls?") and p.endswith("&page=1"):
+                return [{"user": {"id": 1}, "number": "12; x", "updated_at": ISO(timedelta(minutes=5))}]
+            return gh(m, p, b)
+        run(["sweep"], env(), odd)
+        self.assertIn("the sweep is incomplete: unreadable_pr_number", gh.bodies()[0])
+        self.assertTrue(gh.disabled())
 
 
 class FullEvents(RestReviews):

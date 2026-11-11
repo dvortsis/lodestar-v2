@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -38,7 +39,11 @@ REVIEW_MAX_PAGES = 50
 # Review pages across the whole sweep: the job's token has a per-hour request
 # budget, so many PRs full of old reviews can't use it up and turn a trip into
 # an API error (which disables nothing). Past it, the sweep is incomplete: a trip.
-REVIEW_PAGE_BUDGET = 200
+REVIEW_PAGE_BUDGET = 90  # 7 sweeps an hour x (90 + 42 other requests) = 924, under ~1,000 (decisions file)
+# The sweep's own deadline, under the jobs' 10-minute timeout: a job cancelled
+# for time can neither escalate nor disable, so the sweep stops itself first and
+# counts the unfinished run as a trip.
+SWEEP_DEADLINE_SECONDS = 360
 
 
 def _digits(v) -> str | None:
@@ -111,7 +116,11 @@ def _list(transport, path: str, stop_before: datetime | None = None, key: str = 
     out = []
     sep = "&" if "?" in path else "?"
     for page in range(1, max_pages + 1):
-        items = transport("GET", f"{path}{sep}per_page=100&page={page}", None) or []
+        items = transport("GET", f"{path}{sep}per_page=100&page={page}", None)
+        if items is None:
+            items = []
+        if not isinstance(items, list):  # an unreadable page can't end a list as complete
+            raise Incomplete("unreadable_page")
         items = [i for i in items if isinstance(i, dict)]
         out += items
         if len(items) < 100 or (stop_before and items and (_when(items[-1].get(key)) or stop_before) < stop_before):
@@ -131,8 +140,10 @@ def _recent_reviews(transport, repo: str, number: str, since: datetime, budget: 
     pages = min(REVIEW_MAX_PAGES, budget[0])  # none left: _list reads nothing and raises, a budget trip
     try:
         items = _list(transport, f"/repos/{repo}/pulls/{number}/reviews", max_pages=pages)
-    except Incomplete:
-        if pages < REVIEW_MAX_PAGES:  # the sweep's budget ran out, not this PR's own limit
+    except Incomplete as e:
+        # Only a page-limit stop on this list means the budget ran out; a deadline
+        # or an unreadable page passes through as itself.
+        if e.args == ("reviews", pages) and pages < REVIEW_MAX_PAGES:
             raise Incomplete("reviews", REVIEW_PAGE_BUDGET) from None
         raise
     budget[0] -= len(items) // 100 + 1
@@ -172,10 +183,12 @@ def sweep(env, transport, now: datetime) -> tuple[list[str], bool]:
     for p in pulls:
         if not recent(p, "updated_at"):
             continue
-        n = _digits(p.get("number")) or "?"
+        n = _digits(p.get("number"))
+        if n is None:  # its reviews can't be read: never skip them silently
+            raise Incomplete("unreadable_pr_number")
         if _uid(p) == bot:
             bot_hits.append(f"the operator's bot opened #{n} (active in the lookback)")
-        for r in _recent_reviews(transport, repo, n, since, review_budget) if n != "?" else []:
+        for r in _recent_reviews(transport, repo, n, since, review_budget):
             if _uid(r) == bot:
                 bot_hits.append(f"the operator's bot reviewed #{n}")
 
@@ -197,19 +210,37 @@ def sweep(env, transport, now: datetime) -> tuple[list[str], bool]:
     return sorted(set(bot_hits)) + sorted(set(other)), bool(bot_hits)
 
 
-def cmd_sweep(env, transport, now) -> int:
+def with_deadline(transport, monotonic, seconds: int = SWEEP_DEADLINE_SECONDS):
+    """The sweep's transport: past the deadline, the next request raises Incomplete."""
+    end = monotonic() + seconds
+
+    def call(method, path, body):
+        if monotonic() >= end:
+            raise Incomplete("deadline")
+        return transport(method, path, body)
+    return call
+
+
+def describe(e: Incomplete) -> str:
+    name = e.args[0] if e.args else ""
+    what = name if isinstance(name, str) and name.replace("_", "").isalpha() else "a list"
+    if what == "deadline":
+        return f"the sweep is incomplete: it ran past its {SWEEP_DEADLINE_SECONDS // 60}-minute deadline; check by hand"
+    if len(e.args) > 1 and isinstance(e.args[1], int):
+        return f"the sweep is incomplete: {what} ran past {e.args[1]} pages; check by hand"
+    return f"the sweep is incomplete: {what}; check by hand"
+
+
+def cmd_sweep(env, transport, now, monotonic=time.monotonic) -> int:
     if not _digits(env.get("OPERATOR_BOT_USER_ID")):
         # Nothing can be attributed without the bot's ID: say so (best effort), then fail the job.
         act(env, transport, ["OPERATOR_BOT_USER_ID isn't set; nothing was checked this run"], False)
         raise SystemExit("tripwire: OPERATOR_BOT_USER_ID isn't set")
     try:
-        findings, disable = sweep(env, transport, now)
+        findings, disable = sweep(env, with_deadline(transport, monotonic), now)
     except Incomplete as e:
         # Fail closed (the runner, 2026-11-11): a sweep we can't finish counts as a trip.
-        name = e.args[0] if e.args else ""
-        what = name if isinstance(name, str) and name.replace("_", "").isalpha() else "a list"
-        limit = e.args[1] if len(e.args) > 1 and isinstance(e.args[1], int) else MAX_PAGES
-        findings, disable = [f"the sweep is incomplete: {what} ran past {limit} pages; check by hand"], True
+        findings, disable = [describe(e)], True
     except Exception as e:  # noqa: BLE001 - an API error: say so (best effort), then fail the job
         act(env, transport, [f"the sweep failed ({type(e).__name__}); nothing was checked this run"], False)
         raise SystemExit("tripwire: the sweep failed") from None
@@ -220,7 +251,7 @@ def cmd_sweep(env, transport, now) -> int:
     return 0
 
 
-def main(argv=None, env=None, transport=None, clock=None) -> int:
+def main(argv=None, env=None, transport=None, clock=None, monotonic=None) -> int:
     env = dict(os.environ if env is None else env)
     argv = sys.argv[1:] if argv is None else argv
     if transport is None:  # pragma: no cover - network
@@ -231,7 +262,7 @@ def main(argv=None, env=None, transport=None, clock=None) -> int:
     if argv == ["sweep"]:
         if not env.get("GITHUB_REPOSITORY"):
             raise SystemExit("tripwire: GITHUB_REPOSITORY isn't set")
-        return cmd_sweep(env, transport, (clock or (lambda: datetime.now(timezone.utc)))())
+        return cmd_sweep(env, transport, (clock or (lambda: datetime.now(timezone.utc)))(), monotonic or time.monotonic)
     raise SystemExit("usage: tripwire.py trip|sweep")
 
 
