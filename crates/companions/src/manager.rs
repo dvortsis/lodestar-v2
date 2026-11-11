@@ -1868,9 +1868,28 @@ pub struct Prelaunch {
 
 /// The proxy variables every HTTP stack a companion uses reads at start
 /// (.NET's `HttpClient.DefaultProxy`, which Prowlarr's clients use while
-/// its own proxy setting is empty, on Linux and Windows alike). Upper case:
-/// .NET reads it on both.
+/// its own proxy setting is empty, on Linux and Windows alike), each set to
+/// the same value. Upper case is read everywhere; on Unix the lower case
+/// too, which .NET's Unix reader checks first, so the result doesn't
+/// depend on the order (runner, 2026-11-11). Windows' names aren't case
+/// sensitive, so one of each.
+#[cfg(unix)]
+const PROXY_VARS: [&str; 6] = [
+    "ALL_PROXY",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "all_proxy",
+    "http_proxy",
+    "https_proxy",
+];
+#[cfg(not(unix))]
 const PROXY_VARS: [&str; 3] = ["ALL_PROXY", "HTTP_PROXY", "HTTPS_PROXY"];
+
+/// The bypass variable's names, as [`PROXY_VARS`].
+#[cfg(unix)]
+const NO_PROXY_VARS: [&str; 2] = ["NO_PROXY", "no_proxy"];
+#[cfg(not(unix))]
+const NO_PROXY_VARS: [&str; 1] = ["NO_PROXY"];
 
 /// Loopback only, which never leaves the machine: a companion's own WebUI
 /// and other companions on this machine.
@@ -1887,12 +1906,12 @@ pub fn launch_env(p: &Prelaunch) -> Option<Vec<(EnvName, OsString)>> {
         (RouteKind::Direct, _) => Some(Vec::new()),
         (RouteKind::Socks5, Some(proxy)) => {
             let url = OsString::from(format!("socks5://{}", proxy.get()));
-            let mut env: Vec<(EnvName, OsString)> = PROXY_VARS
-                .iter()
-                .map(|v| Some((EnvName::parse(v).ok()?, url.clone())))
-                .collect::<Option<_>>()?;
-            env.push((EnvName::parse("NO_PROXY").ok()?, NO_PROXY.into()));
-            Some(env)
+            let proxies = PROXY_VARS.iter().map(|v| (*v, url.clone()));
+            let bypass = NO_PROXY_VARS.iter().map(|v| (*v, OsString::from(NO_PROXY)));
+            proxies
+                .chain(bypass)
+                .map(|(k, v)| Some((EnvName::parse(k).ok()?, v)))
+                .collect()
         }
         _ => None,
     }
@@ -2018,7 +2037,9 @@ impl Run for Supervised {
             let env: Vec<(EnvName, OsString)> = spec
                 .env
                 .iter()
-                .filter(|(k, _)| PROXY_VARS.contains(&k.as_str()) || k.as_str() == "NO_PROXY")
+                .filter(|(k, _)| {
+                    PROXY_VARS.contains(&k.as_str()) || NO_PROXY_VARS.contains(&k.as_str())
+                })
                 .cloned()
                 .collect();
             let c = Companion {

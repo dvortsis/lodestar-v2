@@ -14,7 +14,7 @@ Checked against Prowlarr's source (`develop`, `src/`; there's no pinned version 
   - That reads `ALL_PROXY`, `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` first on every platform: `SystemProxyInfo.Unix.cs`, and `SystemProxyInfo.Windows.cs`, which tries `HttpEnvironmentProxy.TryCreate` before the system settings (dotnet/runtime, `main` and `release/8.0`).
   - It accepts `socks5://`, and `SocksHelper.cs` sends a host name to a SOCKS5 proxy as a name, so the proxy resolves it.
   - Prowlarr's code has one `SocketsHttpHandler` (that dispatcher), no `UseProxy = false`, and no other `HttpClient` outside its tests. Sentry's client takes `DefaultProxy` too, so the variables cover it, which Prowlarr's own proxy setting doesn't.
-- **So every start of a companion on a SOCKS5 route** is launched with `ALL_PROXY`, `HTTP_PROXY` and `HTTPS_PROXY` set to `socks5://<proxy>`, and `NO_PROXY=localhost,127.0.0.1,::1` (`manager::launch_env`).
+- **So every start of a companion on a SOCKS5 route** is launched with `ALL_PROXY`, `HTTP_PROXY` and `HTTPS_PROXY` set to `socks5://<proxy>`, and `NO_PROXY=localhost,127.0.0.1,::1` (`manager::launch_env`). On Unix the lower-case forms are set too, to the same values, so the result doesn't depend on which one .NET's Unix reader checks first (it checks lower case first); Windows' names aren't case sensitive (runner, 2026-11-11). A direct route adds none of them. Unit tests assert both exactly.
   - That's the same proxy it's then configured for (`manager::Prelaunch`, built with the route by `CompanionRoutes`).
   - It's set from the first instruction and stays for the process's life, not only until it's configured.
   - Loopback alone is bypassed; it never leaves the machine (its own WebUI, other companions here).
@@ -25,7 +25,20 @@ Checked against Prowlarr's source (`develop`, `src/`; there's no pinned version 
   - It also covers interface and bind-address routes, which have no launch form yet. No companion setting can choose them: sources offer direct and SOCKS5 only.
   - A route the companion can't follow at all keeps its own refusal first (`cant_follow_route`: qBittorrent and FlareSolverr on SOCKS5).
 - **Not chosen: "no network until configured".** Windows has no unprivileged way to start a process without network. Linux has one only with Landlock's TCP rules (kernel 6.7 or later), which don't cover UDP, so name lookups would still leave. It would also take a restart after every configuration.
-- **Residual trust:** this relies on Prowlarr's HTTP going through .NET's handler, which holds for the source checked. A pinned version is checked again when CMP-13 pins it (the first pin's review should re-run the searches above).
+- **Traffic outside `HttpClient`** (runner's point 2). A search of Prowlarr's source, tests aside, finds:
+  - no `TcpClient`, `UdpClient`, `WebRequest.Create` or `HttpWebRequest`;
+  - one `new Socket(` and six `Dns.*` calls. Each is either harmless here or a residual:
+  - `HttpHappyEyeballs.OnConnect` (`Socket` and `Dns.GetHostAddressesAsync`) is the dispatcher's `ConnectCallback`. Behind a proxy, .NET uses it for the connection to the proxy, and Lodestar's proxy is an IP literal (`Socks5Proxy`), so no name is looked up.
+  - `ConfigureHostFilteringOptions` calls `Dns.GetHostName()`, the machine's own name, which is no network traffic.
+  - `ProxyCheck` (a health check) resolves Prowlarr's own proxy host only while that's enabled, and CMP-8b sets it to the same IP literal.
+  - `RequestExtensions.GetHostName` does a reverse lookup of an incoming client's address: Lodestar on loopback here.
+  - **Residual:** `X509CertificateValidationService.GetIPAddresses` resolves a site's host name with the system resolver when that site's TLS certificate fails validation, to decide whether it's a local address. So a site with a bad certificate has its name looked up outside the route; nothing is sent to it that way. This is listed, not fixed here.
+- **Credentials** (runner's point 3): the route carries none today. CMP-8b's `Socks5Proxy` is an address and a port, and a source's SOCKS5 setting saves its credentials apart (SRC-4), never into the companion's row. So the launch value is `socks5://<ip>:<port>`, with no secret in it. The launch environment is never logged: the supervisor emits no log events, `SpawnSpec`'s `Debug` shows variable names only, and `Supervised`'s shows nothing (tested). If a route ever carries proxy credentials, the value would contain them. Then they belong in the companion's redaction secrets, and this file's successor must say so.
+- **Pinning** (runner's point 4): this relies on the pinned Prowlarr's .NET version and its dispatcher. **For CMP-13, at pin time:**
+  - re-check that `ProxyEnabled` still defaults to `false` in `ConfigService.cs`;
+  - re-check that the dispatcher still leaves `Proxy` unset, with `UseProxy` at its default, when Prowlarr's own proxy is off, so `DefaultProxy` and its proxy variables apply;
+  - re-check that the pinned .NET still reads them, `socks5://` included;
+  - re-run the searches above. The runner carries this into CMP-13's `slices.yaml` notes.
 
 ## #660's L1: the follower waits for the slot
 - A companion that has to be configured once it runs, while an operation holds its slot, used to be left running unconfigured. The follower now waits for the slot, polling every 250 ms, for as long as its run is current.

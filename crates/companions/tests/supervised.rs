@@ -140,6 +140,8 @@ async fn a_held_companion_fails_its_health_check_at_once() {
     s.start(l).await.unwrap();
     let status = s.status(&id).expect("not supervised");
     assert_eq!(status.borrow().state, State::Held);
+    // Nothing it shows names the value it's launched with.
+    assert!(!format!("{s:?}").contains("10.8.0.1"));
     // It's launched on its proxy (X-cmp-egress-prelaunch).
     let env = s.launched_env(&id).unwrap();
     assert!(
@@ -217,19 +219,32 @@ fn the_launch_environment_carries_the_route() {
                 .collect::<Vec<_>>()
         })
     };
-    let url = "socks5://10.8.0.1:1080".to_owned();
-    assert_eq!(
-        env(&pre(RouteKind::Socks5, Some(proxy()))),
-        Some(vec![
-            ("ALL_PROXY".to_owned(), url.clone()),
-            ("HTTP_PROXY".to_owned(), url.clone()),
-            ("HTTPS_PROXY".to_owned(), url),
-            ("NO_PROXY".to_owned(), "localhost,127.0.0.1,::1".to_owned()),
-        ])
-    );
+    let url = "socks5://10.8.0.1:1080";
+    let loopback = "localhost,127.0.0.1,::1";
+    let mut want = vec![
+        ("ALL_PROXY", url),
+        ("HTTP_PROXY", url),
+        ("HTTPS_PROXY", url),
+    ];
+    if cfg!(unix) {
+        want.extend([
+            ("all_proxy", url),
+            ("http_proxy", url),
+            ("https_proxy", url),
+        ]);
+        want.extend([("NO_PROXY", loopback), ("no_proxy", loopback)]);
+    } else {
+        want.push(("NO_PROXY", loopback));
+    }
+    let want: Vec<(String, String)> = want
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+    assert_eq!(env(&pre(RouteKind::Socks5, Some(proxy()))), Some(want));
     let v6 = Socks5Proxy::new("[fd00::1]:1080".parse().unwrap()).unwrap();
     let got = env(&pre(RouteKind::Socks5, Some(v6))).unwrap();
     assert_eq!(got[0].1, "socks5://[fd00::1]:1080");
+    // Direct adds none of them, even with a proxy known.
     assert_eq!(
         env(&pre(RouteKind::Direct, Some(proxy()))),
         Some(Vec::new())
