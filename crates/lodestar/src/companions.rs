@@ -236,6 +236,10 @@ impl Companions {
     /// refused at its hand-over (`not_wired`).
     pub(crate) fn wire_sink(&self, sink: Arc<dyn ManagedSink>) {
         let _ = self.wiring.sink.set(sink);
+        // What a crash's undone first install had handed over goes now
+        // (#679's I2).
+        let manager = self.api.manager.clone();
+        tokio::spawn(async move { manager.release_pending().await });
     }
 
     /// Serve's shutdown (#619 N3): stops following the integrations and
@@ -368,6 +372,7 @@ async fn start_with(
         secrets,
         rows,
         live,
+        changing: Arc::default(),
     });
     Some(Companions {
         api,
@@ -759,6 +764,11 @@ pub struct Service {
     secrets: Arc<SecretStore>,
     rows: StoreRows,
     live: Arc<dyn Live>,
+    /// One change to a qBittorrent's hand-over at a time: a native install
+    /// (its checks, hand-over and undo) and every guided step take it, so
+    /// neither writes the managed entry while the other is deciding
+    /// (#679's review, Important 1).
+    changing: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl std::fmt::Debug for Service {
@@ -778,10 +788,11 @@ fn refused(e: ManagerError) -> CompanionsError {
         } => CompanionsError::Refused("not_wired"),
         // The hand-over to Integrations, or taking it out again, refused:
         // nothing was installed or removed, and the code says why
-        // (`managed_client_in_use`, `sink_refused`, `timed_out`, …).
+        // (`managed_client_in_use`, `sink_refused`, `timed_out`; `not_wired`
+        // above). Any other failure stays an internal one.
         ManagerError::Step {
             step: "handover" | "release",
-            code,
+            code: code @ ("managed_client_in_use" | "sink_refused" | "timed_out"),
         } => CompanionsError::Refused(code),
         e => CompanionsError::Internal(e.code()),
     }
@@ -900,6 +911,7 @@ impl Service {
             secrets: self.secrets.clone(),
             rows: self.rows.clone(),
             live: self.live.clone(),
+            changing: self.changing.clone(),
         }
     }
 
@@ -1006,6 +1018,11 @@ impl Service {
             Ok(_) => Ok(None),
             Err(_) => Err(CompanionsError::Internal("journal")),
         }
+    }
+
+    /// The lock a native install and the guided steps share.
+    pub(crate) fn changes(&self) -> Arc<tokio::sync::Mutex<()>> {
+        self.changing.clone()
     }
 
     /// Whether you added `id` and confirmed it (CMP-5g-2's `origin` row).
@@ -1202,6 +1219,14 @@ impl CompanionsApi for Service {
                 version: Version::parse(&version).map_err(|_| CompanionsError::Mismatch)?,
                 sha256: Sha256::parse_hex(&sha256).map_err(|_| CompanionsError::Mismatch)?,
             };
+            // Held through the install, its hand-over and any undo, so no
+            // guided step runs meanwhile; and the checks below are made
+            // under it (#679's review, Important 1).
+            let _one = self
+                .changing
+                .clone()
+                .try_lock_owned()
+                .map_err(|_| CompanionsError::Refused("busy"))?;
             // One you added and confirmed is yours: an install would take
             // over its Integrations entry (#674's self-review B1). Forget
             // it first, as the guided steps refuse one Lodestar installed.
@@ -1420,6 +1445,7 @@ pub(crate) fn test_service(
         secrets,
         rows: StoreRows(store),
         live: Arc::new(Unwired),
+        changing: Arc::default(),
     })
 }
 
@@ -1639,6 +1665,7 @@ mod tests {
             secrets,
             rows: StoreRows(store),
             live,
+            changing: Arc::default(),
         }
     }
 
@@ -2507,6 +2534,14 @@ mod tests {
                 code: "sink_refused",
             });
             assert_eq!(e, CompanionsError::Refused("sink_refused"));
+            // A failure that isn't a refusal stays one: no `409` for a
+            // credential that couldn't be read (#679's review).
+            for code in ["credentials", "unauthorized"] {
+                assert_eq!(
+                    refused(ManagerError::Step { step, code }),
+                    CompanionsError::Internal(code)
+                );
+            }
             let body = lodestar_api::error::ApiError::from(e).body().to_string();
             assert!(!body.contains(&password), "{body}");
         }

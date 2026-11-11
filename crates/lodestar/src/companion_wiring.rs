@@ -506,21 +506,28 @@ fn clients_batch(revision: u64, clients: Vec<serde_json::Value>) -> SettingsBatc
 }
 
 /// Saves the `clients` list `edit` makes from the one saved now (`None`:
-/// nothing to save), never over a save made in between: the section's
-/// revision is read first and sent as `if_revision`, and a stale one is
-/// read and made again, at most [`SAVE_TRIES`] times. The revision is read
-/// before the list because the registry bumps it before it publishes the
-/// new list, so a save in between shows as stale. Blocking.
+/// nothing to save), never over a save made in between: the list and its
+/// revision come from one read of the section (the registry makes both
+/// under one lock), the revision is sent as `if_revision`, and a stale one
+/// is read and made again, at most [`SAVE_TRIES`] times (#679's review).
+/// The read has no passwords, which `edit` never sends for your clients
+/// anyway. Blocking.
 fn save_clients(
     settings: &crate::settings::Registry,
     edit: impl Fn(&Integrations) -> Result<Option<Vec<serde_json::Value>>, SinkError>,
 ) -> Result<(), SinkError> {
     for _ in 0..SAVE_TRIES {
-        let revision = settings
+        let values = settings
             .section("integrations")
+            .ok_or(SinkError::Unavailable)?;
+        let mut current = settings.subscribe::<Integrations>().borrow().clone();
+        current.clients = values
+            .fields
+            .get("clients")
+            .map(|v| serde_json::from_value(v.value.clone()))
             .ok_or(SinkError::Unavailable)?
-            .revision;
-        let current = settings.subscribe::<Integrations>().borrow().clone();
+            .map_err(|_| SinkError::Unavailable)?;
+        let revision = values.revision;
         let Some(clients) = edit(&current)? else {
             return Ok(());
         };
@@ -930,8 +937,10 @@ pub struct Guided {
     detecting: tokio::sync::Mutex<()>,
     /// One guided change at a time (target, paste, plan, confirm,
     /// forget): each reads rows another writes, and a provenance must
-    /// never describe another step's credential.
-    changing: tokio::sync::Mutex<()>,
+    /// never describe another step's credential. Shared with a native
+    /// install (`Service::changes`), so neither writes the managed entry
+    /// while the other runs (#679's review, Important 1).
+    changing: Arc<tokio::sync::Mutex<()>>,
     last_plan: Mutex<Option<tokio::time::Instant>>,
     /// The last plan's settings, taken by the next confirmation: one
     /// confirmation per plan, and a mismatch is refused before it signs
@@ -958,6 +967,7 @@ impl Guided {
         added: channel::Sender<Vec<Added>>,
     ) -> Guided {
         Guided {
+            changing: service.changes(),
             secrets: service.secrets(),
             catalogue: service.catalogue(),
             service,
@@ -968,7 +978,6 @@ impl Guided {
             added,
             detect_cap: DETECT_CAP,
             detecting: tokio::sync::Mutex::new(()),
-            changing: tokio::sync::Mutex::new(()),
             last_plan: Mutex::new(None),
             planned: Mutex::new(None),
             failures: Mutex::new(0),
@@ -981,9 +990,10 @@ impl Guided {
     }
 
     /// The guided lock, or `busy`.
-    fn exclusive(&self) -> Result<tokio::sync::MutexGuard<'_, ()>, CompanionsError> {
+    fn exclusive(&self) -> Result<tokio::sync::OwnedMutexGuard<()>, CompanionsError> {
         self.changing
-            .try_lock()
+            .clone()
+            .try_lock_owned()
             .map_err(|_| CompanionsError::Refused("busy"))
     }
 
@@ -1288,8 +1298,10 @@ impl CompanionsGuidedApi for Guided {
         target: CompanionTarget,
     ) -> lodestar_api::ops::BoxFuture<'_, Result<DetectedCompanion, GuidedError>> {
         Box::pin(async move {
-            let e = self.handed_over(&id).await?;
+            // The lock first, then the check: an install that finished
+            // just before is seen (#679's review, Important 1).
             let _one = self.exclusive()?;
+            let e = self.handed_over(&id).await?;
             self.not_added(e).await?;
             // The generated password may be qBittorrent's: a retry signs in
             // with it, so its address never moves (#653's review, B2).
@@ -1328,8 +1340,10 @@ impl CompanionsGuidedApi for Guided {
         value: String,
     ) -> lodestar_api::ops::BoxFuture<'_, Result<(), GuidedError>> {
         Box::pin(async move {
-            let e = self.handed_over(&id).await?;
+            // The lock first, then the check: an install that finished
+            // just before is seen (#679's review, Important 1).
             let _one = self.exclusive()?;
+            let e = self.handed_over(&id).await?;
             self.not_added(e).await?;
             // The generated password may already be qBittorrent's: never
             // drop it for a paste (#653's review, B1).
@@ -1371,8 +1385,10 @@ impl CompanionsGuidedApi for Guided {
         id: String,
     ) -> lodestar_api::ops::BoxFuture<'_, Result<Vec<String>, GuidedError>> {
         Box::pin(async move {
-            let e = self.handed_over(&id).await?;
+            // The lock first, then the check: an install that finished
+            // just before is seen (#679's review, Important 1).
             let _one = self.exclusive()?;
+            let e = self.handed_over(&id).await?;
             self.not_added(e).await?;
             let target = self.target(e).await?;
             let held = self.held(e).await?;
@@ -1422,8 +1438,10 @@ impl CompanionsGuidedApi for Guided {
         settings: Vec<String>,
     ) -> lodestar_api::ops::BoxFuture<'_, Result<Companion, GuidedError>> {
         Box::pin(async move {
-            let e = self.handed_over(&id).await?;
+            // The lock first, then the check: an install that finished
+            // just before is seen (#679's review, Important 1).
             let _one = self.exclusive()?;
+            let e = self.handed_over(&id).await?;
             self.not_added(e).await?;
             // One confirmation per plan, and one that doesn't echo it is
             // refused before qBittorrent is signed in to again.

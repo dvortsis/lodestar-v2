@@ -1471,6 +1471,11 @@ async fn a_journal_mid_operation_refuses_a_restart() {
     let busy = Some(ManagerError::Refused(Refusal::Busy));
     assert_eq!(m.restart(&qbt()).await.err(), busy);
     assert_eq!(m.regenerate(&qbt()).await.err(), busy);
+    // A removal too, before it releases anything (#679's review,
+    // Important 3).
+    assert_eq!(m.remove(&qbt()).await, refused(Refusal::Busy));
+    assert_eq!(w.api.releases.load(Ordering::SeqCst), 0);
+    assert!(w.folder().exists());
 }
 
 async fn wait_count(n: &AtomicUsize, at_least: usize) {
@@ -1874,4 +1879,70 @@ async fn an_install_that_cant_be_handed_over_is_refused_before_it_begins() {
     assert!(!w.folder().exists());
     assert!(w.run.started.lock().unwrap().is_empty());
     assert_eq!(*w.api.asked.lock().unwrap(), [true]);
+}
+
+/// #679's I2: a crash between a first install's hand-over and its
+/// `configured` step leaves a marker. Recovery undoes the install, and
+/// once the settings can be reached the managed entry it may have saved is
+/// released and the marker goes. An install that finishes leaves none.
+#[tokio::test]
+async fn a_crash_after_the_hand_over_is_released_once_the_settings_are_there() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let marker = w.data.path().join("companions/.handed-over-qbittorrent");
+    let cat = catalogue("5.0.3");
+    let m = w.manager(cat, LINUX);
+    m.crash_at(Some(Fault::After(Step::Configured)));
+    assert_eq!(m.install(&token("5.0.3")).await, Err(ManagerError::Crashed));
+    assert_eq!(w.api.sink.passwords().len(), 1);
+    assert!(marker.is_file());
+    drop(m);
+    let m = w.manager(cat, LINUX);
+    let got = m.recover().await;
+    assert!(got.iter().all(|(_, r)| matches!(r, Ok(None))), "{got:?}");
+    assert_eq!(w.api.releases.load(Ordering::SeqCst), 0);
+    // The sink is wired: released, and the marker goes.
+    m.release_pending().await;
+    assert_eq!(w.api.releases.load(Ordering::SeqCst), 1);
+    assert!(!marker.exists());
+    // Nothing left to release a second time.
+    m.release_pending().await;
+    assert_eq!(w.api.releases.load(Ordering::SeqCst), 1);
+    // A release that fails keeps the marker for the next start.
+    m.crash_at(Some(Fault::After(Step::Configured)));
+    assert_eq!(m.install(&token("5.0.3")).await, Err(ManagerError::Crashed));
+    drop(m);
+    let m = w.manager(cat, LINUX);
+    m.recover().await;
+    w.api.refuse_release.store(true, Ordering::SeqCst);
+    m.release_pending().await;
+    assert!(marker.is_file());
+    w.api.refuse_release.store(false, Ordering::SeqCst);
+    drop(m);
+    let m = w.manager(cat, LINUX);
+    m.recover().await;
+    m.release_pending().await;
+    assert!(!marker.exists());
+    // A first install that finishes leaves none.
+    m.install(&token("5.0.3")).await.unwrap();
+    assert!(!marker.exists());
+}
+
+/// A pending release is skipped once the companion is installed again
+/// before the sink is wired: its entry is that install's now, and it stays.
+#[tokio::test]
+async fn a_pending_release_spares_a_companion_installed_since() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let cat = catalogue("5.0.3");
+    let m = w.manager(cat, LINUX);
+    m.crash_at(Some(Fault::After(Step::Configured)));
+    assert_eq!(m.install(&token("5.0.3")).await, Err(ManagerError::Crashed));
+    drop(m);
+    let m = w.manager(cat, LINUX);
+    m.recover().await;
+    m.install(&token("5.0.3")).await.unwrap();
+    m.release_pending().await;
+    assert_eq!(w.api.releases.load(Ordering::SeqCst), 0);
+    assert!(w.on_disk().is_some());
 }

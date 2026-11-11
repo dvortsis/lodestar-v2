@@ -170,6 +170,16 @@ fn refusal_message(code: &str) -> &'static str {
         }
         "no_launch_profile" => "This version of Lodestar can't run it yet.",
         "no_template" => "It doesn't offer that template.",
+        "managed_client_in_use" => {
+            "A download client named \"qBittorrent (Lodestar)\" is already set up in Integrations. Remove it there first, then install again."
+        }
+        "already_added" => {
+            "You added this companion yourself. Forget it on its screen first, then install it here."
+        }
+        "sink_refused" => {
+            "Lodestar couldn't save it as your download client in Integrations, so nothing was changed. Try again."
+        }
+        "timed_out" => "This took too long, so it was stopped. Try again.",
         _ => "The companion manager refused this; nothing was changed.",
     }
 }
@@ -616,6 +626,11 @@ mod tests {
             (CompanionsError::Mismatch, 409, "confirmation_mismatch"),
             (CompanionsError::Refused("not_wired"), 409, "not_wired"),
             (CompanionsError::Refused("busy"), 409, "busy"),
+            (
+                CompanionsError::Refused("managed_client_in_use"),
+                409,
+                "managed_client_in_use",
+            ),
         ];
         for (e, status, code) in cases {
             let e = ApiError::from(e);
@@ -635,6 +650,23 @@ mod tests {
         let e = ApiError::from(CompanionsError::Internal("store"));
         assert_eq!(e.status().as_u16(), 500);
         assert!(!e.body().to_string().contains("store"));
+    }
+
+    /// #679's review, Important 2: the hand-over's refusals each say what
+    /// to do, never the general sentence; the entry already there is
+    /// removed in Integrations.
+    #[test]
+    fn the_hand_over_refusals_have_their_own_sentences() {
+        let general = refusal_message("no_such_code");
+        for code in [
+            "managed_client_in_use",
+            "already_added",
+            "sink_refused",
+            "timed_out",
+        ] {
+            assert_ne!(refusal_message(code), general, "{code}");
+        }
+        assert!(refusal_message("managed_client_in_use").contains("Integrations"));
     }
 
     #[test]

@@ -90,7 +90,7 @@ No route or response shape changes. The wizard can tell the hand-over happened f
   - the removal's release and its journal check before it;
   - the regenerate and restart hand-over;
   - the undone install's release, and its "was it tried" condition;
-  - the removal's journal-operation check;
+  - the removal's journal-operation check: **corrected by X-cmp-handover-followups**. #679's review found that this one survived, since no test asserted that nothing was released. That test now does (`2026-11-11-X-cmp-handover-followups.md`);
   - `if_revision`;
   - keeping your name;
   - the existing-entry refusal;

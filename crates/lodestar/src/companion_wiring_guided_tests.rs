@@ -250,6 +250,7 @@ impl ConfigSink for Recorder {
 
 struct Fixture {
     guided: Arc<Guided>,
+    service: Arc<crate::companions::Service>,
     store: Arc<Mutex<Store>>,
     sink: Arc<Recorder>,
     added: channel::Receiver<Vec<Added>>,
@@ -265,7 +266,7 @@ fn fixture_with(http: Arc<dyn GuardedHttp>) -> Fixture {
     let sink = Arc::new(Recorder::default());
     let (tx, added) = channel::channel(Vec::new());
     let guided = Arc::new(Guided::new(
-        service,
+        service.clone(),
         store.clone(),
         Runtime::Native,
         http,
@@ -274,6 +275,7 @@ fn fixture_with(http: Arc<dyn GuardedHttp>) -> Fixture {
     ));
     Fixture {
         guided,
+        service,
         store,
         sink,
         added,
@@ -765,6 +767,47 @@ async fn guided_changes_run_one_at_a_time() {
         assert_eq!(refused(e), "busy");
     }
     assert!(texts(&f.store).unwrap().is_empty());
+}
+
+/// #679's review, Important 1: a native install and the guided steps take
+/// one lock. While a guided step runs, an install is `busy` before it
+/// checks or downloads anything; while an install runs (its checks,
+/// hand-over and undo), every guided step is `busy` and writes nothing.
+/// So neither writes the managed entry while the other is deciding.
+#[tokio::test]
+async fn a_native_install_and_the_guided_steps_exclude_each_other() {
+    use lodestar_api::companions::CompanionsApi;
+    let f = fixture();
+    let g = &f.guided;
+    let install = || {
+        f.service
+            .install("qbittorrent".into(), "5.1.2".into(), "ab".repeat(32))
+    };
+    let guided_step = g.changing.clone().try_lock_owned().unwrap();
+    assert_eq!(install().await, Err(CompanionsError::Refused("busy")));
+    drop(guided_step);
+    // Free again: it goes on to the manager, which has no pin to install.
+    assert_eq!(
+        install().await,
+        Err(CompanionsError::Refused("awaiting_pin"))
+    );
+    let installing = f.service.changes().try_lock_owned().unwrap();
+    let id = || "qbittorrent".to_owned();
+    let t = CompanionTarget::Loopback { port: 8080 };
+    for e in [
+        g.set_target(id(), t).await.unwrap_err(),
+        g.paste(id(), TEMPORARY.into()).await.unwrap_err(),
+        g.plan(id()).await.unwrap_err(),
+        g.confirm(id(), vec!["webui.password".into()])
+            .await
+            .unwrap_err(),
+        g.forget(id()).await.unwrap_err(),
+    ] {
+        assert_eq!(refused(e), "busy");
+    }
+    assert!(texts(&f.store).unwrap().is_empty());
+    assert!(f.sink.0.lock().unwrap().is_empty());
+    drop(installing);
 }
 
 /// Once the apply has started the generated password stays, marked
