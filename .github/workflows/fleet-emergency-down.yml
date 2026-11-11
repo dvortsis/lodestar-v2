@@ -1,0 +1,27 @@
+name: Fleet emergency teardown
+on:
+  workflow_dispatch:
+permissions: {}
+jobs:
+  cleanup:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.actor_id == '83323977' && github.run_attempt == 1
+    environment: fleet-cleanup
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - if: vars.FLEET_CLEANUP_ENABLED == 'true'
+        run: python3 -m pip install --quiet --no-deps --require-hashes --target "$RUNNER_TEMP/fleet-deps" -r infra/fleet/requirements-live.txt
+      - env:
+          FLEET_CLEANUP_ENABLED: ${{ vars.FLEET_CLEANUP_ENABLED }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PYTHONPATH: ${{ runner.temp }}/fleet-deps
+          AWS_CLEANUP_ROLE_ARN: ${{ secrets.AWS_CLEANUP_ROLE_ARN }}
+          AWS_CLEANUP_FUNCTION_ARN: ${{ secrets.AWS_CLEANUP_FUNCTION_ARN }}
+        run: python3 infra/fleet/emergency_cleanup.py invoke

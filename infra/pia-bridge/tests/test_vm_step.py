@@ -80,7 +80,7 @@ class VMStep(unittest.TestCase):
         (self.work / "pia-ca.crt").write_bytes(CA.read_bytes())
 
     def env(self, mode=""):
-        return {"PATH": f"{self.stub / 'bin'}:/usr/bin:/bin", "STUB": str(self.stub), "STUB_MODE": mode,
+        return {"PATH": f"{self.stub / 'bin'}:{os.environ.get('PATH', '/usr/bin:/bin')}", "STUB": str(self.stub), "STUB_MODE": mode,
                 "TOKEN": TOKEN, "PRIV": PRIV, "PUB": PUB}
 
     def run_step(self, mode=""):

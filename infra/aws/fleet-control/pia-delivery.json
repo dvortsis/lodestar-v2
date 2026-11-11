@@ -1,5 +1,17 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
+  "Metadata": {
+    "AWSToolsMetrics": {
+      "AWSAgentToolkit": "aws-cloudformation@3"
+    },
+    "com.aws.cloudformation.Context": {
+      "ref": [
+        {
+          "at": "docs/operations/fleet-control-bootstrap.md"
+        }
+      ]
+    }
+  },
   "Description": "Lodestar PIA delivery role, in the account that holds lodestar/pia-vpn: LodestarPiaDelivery, the firewall token secret shell, deny-all policy (OP-2a).",
   "Parameters": {
     "ExistingOidcProviderArn": {
@@ -82,7 +94,7 @@
               "Condition": {
                 "StringEquals": {
                   "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-                  "token.actions.githubusercontent.com:sub": "repo:dvortsis/lodestar-v2:environment:pia-delivery:job_workflow_ref:dvortsis/lodestar-v2/.github/workflows/fleet.yml@refs/heads/main"
+                  "token.actions.githubusercontent.com:sub": "repo:dvortsis@83323977/lodestar-v2@1427502271:environment:pia-delivery:workflow_ref:dvortsis/lodestar-v2/.github/workflows/fleet.yml@refs/heads/main"
                 }
               }
             }

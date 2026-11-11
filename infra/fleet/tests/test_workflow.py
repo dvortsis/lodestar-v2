@@ -29,7 +29,7 @@ from timefmt import fmt
 
 ROOT = Path(__file__).resolve().parents[3]
 WORKFLOWS = ROOT / ".github" / "workflows"
-COVERED = ["fleet.yml", "operator-wake.yml", "operator-injection.yml"]
+COVERED = ["fleet.yml", "fleet-emergency-down.yml", "operator-wake.yml", "operator-apply.yml", "operator-injection.yml"]
 FLEET = WORKFLOWS / "fleet.yml"
 L = limits.load()
 
@@ -76,16 +76,15 @@ class FleetStructure(unittest.TestCase):
 
     def test_triggers(self):
         on = self.wf["on"]
-        self.assertEqual(set(on), {"issue_comment", "schedule", "workflow_dispatch"})
+        self.assertEqual(set(on), {"issue_comment"})
         self.assertEqual(on["issue_comment"], {"types": ["created"]})
-        self.assertFalse(on["workflow_dispatch"], "workflow_dispatch must take no inputs")
+        self.assertNotIn("schedule", on)  # Expiration is independent EventBridge, not an approval-gated job.
 
     def test_permissions_minimal(self):
         self.assertEqual(self.wf["permissions"], {})
         base = {"contents": "read", "pull-requests": "write"}
-        oidc = dict(base, **{"id-token": "write"})
-        want = {"gate": {"contents": "read"}, "refuse": base, "act": oidc, "dispatch-down": oidc,
-                "reaper": dict(oidc, actions="read"),  # the sweeping jobs alone read run status
+        oidc = dict(base, **{"id-token": "write", "actions": "read"})
+        want = {"gate": {"contents": "read"}, "refuse": base, "act": oidc,
                 "pia-fence": oidc, "deliver-pia": dict(oidc, actions="read"), "pia-release": oidc}
         self.assertEqual({n: j.get("permissions") for n, j in self.jobs.items()}, want)
 
@@ -127,6 +126,21 @@ class FleetStructure(unittest.TestCase):
                 keys = list(job)
                 self.assertIn("if", job)
                 self.assertLess(keys.index("if"), keys.index("environment"))
+
+    def test_all_deployment_jobs_pin_main_and_can_read_approval_settings(self):
+        from deployment_policy import POLICY
+        for path in WORKFLOWS.glob("*.yml"):
+            for name, job in load(path)["jobs"].items():
+                environment = job.get("environment")
+                if isinstance(environment, dict):
+                    environment = environment.get("name")
+                if environment not in POLICY["environments"]:
+                    continue
+                with self.subTest(workflow=path.name, job=name):
+                    self.assertIn(path.name, POLICY["environments"][environment])
+                    self.assertIn("github.ref == 'refs/heads/main'", job.get("if", ""))
+                    self.assertLess(list(job).index("if"), list(job).index("environment"))
+                    self.assertEqual(job["permissions"].get("actions"), "read")
 
     def test_filter_job_has_no_secrets_or_environment(self):
         gate = self.jobs["gate"]
@@ -178,20 +192,16 @@ class FleetStructure(unittest.TestCase):
                 else:
                     self.assertRegex(cond, r"^github\.event_name == '(issue_comment|schedule)' && ")
 
-    def test_stop_never_gates_reaper_or_dispatch(self):
-        for name in ("reaper", "dispatch-down"):
-            self.assertNotIn("OPERATOR_STOP", yaml.safe_dump(self.jobs[name]))
-        # Only disabling the workflow stops the reaper: no variable gates it. A manual
-        # re-run is refused, since it would run the old run's code (see fleet.py).
-        self.assertEqual(self.jobs["reaper"]["if"],
-                         "github.event_name == 'schedule' && github.ref == 'refs/heads/main' && github.run_attempt == 1")
+    def test_approval_gated_workflow_has_no_live_cleanup_jobs(self):
+        self.assertNotIn("reaper", self.jobs)
+        self.assertNotIn("dispatch-down", self.jobs)
 
     def test_lock_takers_run_on_disjoint_events(self):
         # The lock's run ID is <run>-<attempt>, shared by every job of a run (P2 of
         # #646's review: GITHUB_JOB isn't added, because the delivery chain must
         # share one ID). So the jobs that take or pre-empt the lock must never run
         # in the same workflow run, and the chain jobs only follow act.
-        takers = {"act": "issue_comment", "reaper": "schedule", "dispatch-down": "workflow_dispatch"}
+        takers = {"act": "issue_comment"}
         chain = ("pia-fence", "deliver-pia", "pia-release")
         lock_jobs = {n for n, j in self.jobs.items() if j.get("environment") in ("cloud-fleet", "pia-delivery")}
         self.assertEqual(lock_jobs, set(takers) | set(chain))
@@ -243,7 +253,7 @@ SECRET_NAMES = [
     "OWNER_ADMIN_CIDR", "STATE_BUCKET", "EVIDENCE_BUCKET", "CONTROL_BUCKET", "PIA_SERVERS",
     "OPERATOR_APP_ID", "OPERATOR_APP_PRIVATE_KEY", "ANTHROPIC_API_KEY", "FLEET_SSH_PUBLIC_KEY",
     "OWNER_SSH_PUBLIC_KEY", "FLEET_LINODE_ACCOUNT_EUUID", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "STATE_BUCKET_OWNER",
-    "FLEET_BUCKET_OWNER",
+    "FLEET_BUCKET_OWNER", "AWS_CLEANUP_ROLE_ARN", "AWS_CLEANUP_FUNCTION_ARN",
 ]
 CHAIN = ("pia-fence", "deliver-pia", "pia-release")
 PIA_SECRETS = {"AWS_PIA_ROLE_ARN", "STATE_BUCKET", "STATE_BUCKET_OWNER", "FLEET_SSH_KEY", "PIA_SERVERS"}
@@ -264,6 +274,7 @@ def scrub_env(extra):
 
 # (script, subcommand) -> the event environments it runs under in its workflow.
 SCENARIOS = {
+    ("infra/fleet/emergency_cleanup.py", "invoke"): [{"FLEET_CLEANUP_ENABLED": "false"}],
     ("infra/fleet/fleet.py", "gate"): [event_env("/fleet status"), event_env("/fleet nope"),
                                        event_env("/fleet up screen", OPERATOR_STOP="true"), event_env(AUTHOR_ID="1")],
     ("infra/fleet/fleet.py", "refuse"): [{"REFUSAL_REASON": "unknown verb", "CHANNEL_PR": "700"}],
@@ -292,8 +303,8 @@ class PublicLogLeak(unittest.TestCase):
                 for s in steps(job):
                     if "run" not in s:
                         continue
-                    if s["run"] == LIVE_INSTALL and s.get("if") in ("vars.FLEET_LIVE == 'true'",
-                                                                     "needs.act.outputs.live == 'true'"):
+                    if s["run"] == LIVE_INSTALL and (s.get("if") in ("vars.FLEET_LIVE == 'true'", "needs.act.outputs.live == 'true'") or
+                            path.name == "fleet-emergency-down.yml" and s.get("if") == "vars.FLEET_CLEANUP_ENABLED == 'true'"):
                         continue  # the one other allowed step: pip from hash-pinned wheels, live only
                     m = INVOKE.fullmatch(s["run"].strip())
                     with self.subTest(workflow=path.name, job=name, run=s["run"][:60]):
@@ -322,7 +333,7 @@ class PublicLogLeak(unittest.TestCase):
         values = marks(len(SECRET_NAMES))
         secret_env = dict(zip(SECRET_NAMES, values))
         secret_env.pop("FLEET_LINODE_ACCOUNT_EUUID")  # one missing setting
-        for sub in ("act", "reap", "dispatch-down"):
+        for sub in ("act",):
             with self.subTest(sub=sub):
                 r = subprocess.run([sys.executable, str(ROOT / "infra/fleet/fleet.py"), sub], cwd=self.outside,
                                    capture_output=True, text=True, timeout=60,

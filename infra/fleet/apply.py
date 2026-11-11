@@ -297,12 +297,7 @@ class LiveBackend:
         return [{"id": str(f["id"])} for f in self.linode.firewalls()]
 
     def delete_linodes(self, ids) -> None:
-        """The age reap: those Linodes, then any tagged firewall left with no device."""
-        for lid in ids:
-            self.linode.delete_linode(lid)
-        for f in self.linode.firewalls():
-            if not self.linode.firewall_devices(f["id"]):
-                self.linode.delete_firewall(f["id"])
+        raise ApplyFailed("legacy live deletion disabled; use the independent cleanup broker")
 
     # -- Terraform --
     def _tfvars(self, d: str, host_keys: dict | None) -> str:
@@ -361,52 +356,15 @@ class LiveBackend:
                 pub = keys[label]["public_key"]
                 fleet["roles"][role] = {"address": h.get("address"), "host_key": pub, "fingerprint": fingerprint(pub),
                                         "firewall_id": h.get("firewall_id"), "admin_ipv4": h.get("admin_ipv4")}
+        from cleanup_registration import authorization
+        approved = authorization(fleet, hosts, self.linode, self.env["FLEET_LINODE_ACCOUNT_EUUID"].strip(), self.clock())
         fence()
+        self._put(self.state_bucket, "fleet/cleanup-authorization.json", approved)
         self.write_fleet(fleet)
         return fleet
 
     def destroy(self, fence: Callable[[], None]) -> bool:
-        """terraform destroy (at the fleet's pinned commit, when one is recorded),
-        then delete any tagged leftovers through the API. True once no tagged
-        Linode or firewall is left."""
-        fence()
-        try:
-            fleet = self.read_fleet()
-            if fleet is not None:
-                validate(fleet, self.limits)
-        except (FleetUnknown, ValueError):
-            fleet = None  # unknown or malformed: destroy with the current configuration
-        try:
-            tf = self.tf.at(fleet["commit"] if fleet else None)
-            try:
-                with tempfile.TemporaryDirectory() as d:
-                    varfile = self._tfvars(d, None)
-                    tf.init(self.state_bucket)
-                    tf.destroy(varfile)
-            finally:
-                tf.close()
-        except Exception:  # noqa: BLE001 - down is the kill path: whatever failed above,
-            pass           # the fenced API sweep below still runs
-        fence()
-        # Linodes first. A firewall goes only once no tagged Linode is left and it
-        # has no device, so a Linode that survives keeps its firewall.
-        for n in self.linode.linodes():
-            try:
-                self.linode.delete_linode(n["id"])
-            except Exception:  # noqa: BLE001 - try every one; what's left is checked below
-                pass
-        if not self.linode.linodes():
-            for f in self.linode.firewalls():
-                try:
-                    if not self.linode.firewall_devices(f["id"]):
-                        self.linode.delete_firewall(f["id"])
-                except Exception:  # noqa: BLE001
-                    pass
-        if self.linode.linodes() or self.linode.firewalls():
-            # Commands go down-only and the reaper retries hourly.
-            self.set_mismatch(["tagged resources remain after down"])
-            return False
-        return True
+        raise ApplyFailed("legacy live deletion disabled; use the independent cleanup broker")
 
     def finish_down(self, fleet, fence: Callable[[], None]) -> None:
         """After an empty inventory: book the spend, tombstone fleet.json, clear the flag."""
@@ -530,6 +488,12 @@ def oidc_session(env: dict, run_id: str, role_env: str = "AWS_FLEET_ROLE_ARN"): 
     in-process. No third-party action, and the credentials never reach
     GITHUB_ENV or a log."""
     import urllib.request
+    from deployment_policy import DeploymentBlocked, require_for_run, require_token_claims
+
+    try:
+        environment = require_for_run(env, role_env, lambda path: github_json(env["GITHUB_TOKEN"], path))
+    except DeploymentBlocked as exc:
+        raise SystemExit(str(exc)) from None
 
     import boto3  # noqa: PLC0415
 
@@ -539,6 +503,7 @@ def oidc_session(env: dict, run_id: str, role_env: str = "AWS_FLEET_ROLE_ARN"): 
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             jwt = json.loads(r.read())["value"]
+        require_token_claims(jwt, env, environment)
         creds = boto3.client("sts", region_name=REGION, config=cfg).assume_role_with_web_identity(
             RoleArn=env[role_env], RoleSessionName=f"fleet-{run_id}", WebIdentityToken=jwt,
             DurationSeconds=3600)["Credentials"]

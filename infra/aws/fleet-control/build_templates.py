@@ -22,12 +22,18 @@ come from AWS pseudo-parameters, stack parameters and references.
 from __future__ import annotations
 
 import json
+import ast
+import io
+import tokenize
 import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 OIDC_HOST = "token.actions.githubusercontent.com"
 REPO = "dvortsis/lodestar-v2"
+GITHUB_POLICY = json.loads((HERE / "github-deployment-policy.json").read_text(encoding="utf-8"))
+OWNER, NAME = REPO.split("/")
+SUB_PREFIX = f"repo:{OWNER}@{GITHUB_POLICY['owner_id']}/{NAME}@{GITHUB_POLICY['repository_id']}"
 
 # The exact object keys the control plane uses (docs/decisions/2026-11-08-OP-1.md,
 # and this slice's decisions for the Terraform state key).
@@ -42,9 +48,14 @@ CLAUDE_LOCK_KEY = "operator/claude-lock.json"
 
 
 def sub(environment: str, workflow: str) -> str:
-    """The OIDC `sub` with the repo's customized claim template
-    (repo, context, job_workflow_ref; owner setup step 2.8)."""
-    return f"repo:{REPO}:environment:{environment}:job_workflow_ref:{REPO}/.github/workflows/{workflow}@refs/heads/main"
+    """Immutable identity plus the environment and direct workflow at main.
+
+    workflow_ref is present for direct jobs; job_workflow_ref is reusable-only.
+    The owner must separately apply the reviewed GitHub claim configuration.
+    """
+    if workflow not in GITHUB_POLICY["environments"].get(environment, []):
+        raise ValueError("workflow/environment is not in the deployment policy")
+    return f"{SUB_PREFIX}:environment:{environment}:workflow_ref:{REPO}/.github/workflows/{workflow}@refs/heads/main"
 
 
 def trust(provider_arn, subs: list) -> dict:
@@ -181,7 +192,7 @@ def fleet_control() -> dict:
             {"Sid": "TerraformStateAndFleetJson", "Effect": "Allow",
              "Action": ["s3:GetObject", "s3:PutObject"],
              "Resource": [obj(state, TF_STATE_KEY), obj(state, TF_LOCK_KEY), obj(state, FLEET_JSON_KEY),
-                          obj(state, SPEND_LEDGER_KEY)]},
+                          obj(state, SPEND_LEDGER_KEY), obj(state, "fleet/cleanup-authorization.json")]},
             # fleet.json is never deleted: `down` overwrites it with a tombstone
             # (the runner's refinement), so only the lock file may be deleted.
             {"Sid": "DeleteTerraformLock", "Effect": "Allow", "Action": "s3:DeleteObject",
@@ -227,6 +238,8 @@ def fleet_control() -> dict:
     }
     return {
         "AWSTemplateFormatVersion": "2010-09-09",
+        "Metadata": {"AWSToolsMetrics": {"AWSAgentToolkit": "aws-cloudformation@3"},
+                     "com.aws.cloudformation.Context": {"ref": [{"at": "docs/operations/fleet-control-bootstrap.md"}]}},
         "Description": "Lodestar cloud fleet control plane: OIDC provider, LodestarFleetOperator, LodestarOperatorBridge, state/evidence/control buckets, fleet token secret shell, deny-all policy (OP-2a).",
         "Parameters": {
             **OIDC_PARAMS,
@@ -272,6 +285,8 @@ def fleet_control() -> dict:
 def pia_delivery() -> dict:
     return {
         "AWSTemplateFormatVersion": "2010-09-09",
+        "Metadata": {"AWSToolsMetrics": {"AWSAgentToolkit": "aws-cloudformation@3"},
+                     "com.aws.cloudformation.Context": {"ref": [{"at": "docs/operations/fleet-control-bootstrap.md"}]}},
         "Description": "Lodestar PIA delivery role, in the account that holds lodestar/pia-vpn: LodestarPiaDelivery, the firewall token secret shell, deny-all policy (OP-2a).",
         "Parameters": {
             **OIDC_PARAMS,
@@ -324,11 +339,110 @@ def pia_delivery() -> dict:
     }
 
 
-TEMPLATES = {"fleet-control.json": fleet_control, "pia-delivery.json": pia_delivery}
+def cleanup_code():
+    # Package the existing pure auditor into the inline module. No dynamic code
+    # execution, external package or credential-bearing deployment artifact.
+    audit_source = (HERE.parents[1] / "fleet/audit.py").read_text(encoding="utf-8")
+    handler = (HERE / "cleanup_handler.py").read_text(encoding="utf-8")
+    handler = handler.replace("from audit import actions_ranges, audit_firewall, run_is_live, JOB_LABEL\n", "")
+    text = "from __future__ import annotations\n" + audit_source.replace("from __future__ import annotations\n", "") + "\n" + handler.replace("from __future__ import annotations\n", "")
+    # Keep original source spelling: ast.unparse changes across Python versions.
+    # AST positions select only unused helpers and non-executable docstrings.
+    tree = ast.parse(text)
+    unused = {"job_rule", "sweep", "open_rule", "close_rule", "attachment_problems"}
+    omit = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.FunctionDef) and node.name in unused
+                or isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)):
+            omit.update(range(node.lineno, node.end_lineno + 1))
+    lines = text.splitlines()
+    for token in tokenize.generate_tokens(io.StringIO(text).readline):
+        if token.type == tokenize.COMMENT:
+            lines[token.start[0] - 1] = lines[token.start[0] - 1][:token.start[1]]
+    return "\n".join(line.rstrip() for i, line in enumerate(lines, 1) if i not in omit and line.strip()) + "\n"
+
+
+def cleanup_stack() -> dict:
+    """Owner-authorized broker; the GitHub caller never receives a Linode token."""
+    account = {"Ref": "AWS::AccountId"}
+    same_owner = {"StringEquals": {"s3:ResourceAccount": account}}
+    params = {name: {"Type": "String", "AllowedPattern": "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$"}
+              for name in ("StateBucketName", "ControlBucketName")}
+    params.update({
+        "LinodeAccountEuuid": {"Type": "String", "AllowedPattern": "^[A-Za-z0-9-]{1,128}$"},
+        "MinCreatedUtc": {"Type": "String", "AllowedPattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+        "NotificationTopicName": {"Type": "String", "AllowedPattern": "^[A-Za-z0-9_-]{1,256}$"},
+        "EnableExpiration": {"Type": "String", "Default": "false", "AllowedValues": ["false", "true"],
+                             "Description": "Owner enables only after credential, scope, dry-run, alerts and canary verification."},
+    })
+    resources = {
+        "CleanupToken": {"Type": "AWS::SecretsManager::Secret", "DeletionPolicy": "Retain", "UpdateReplacePolicy": "Retain",
+                         "Properties": {"Name": "lodestar/akamai-cleanup-token", "Description": "Owner-installed dedicated cleanup credential; never delivered to GitHub. Empty shell."}},
+        "Executor": {"Type": "AWS::IAM::Role", "Properties": {
+            "AssumeRolePolicyDocument": policy([{"Effect": "Allow", "Principal": {"Service": "lambda.amazonaws.com"}, "Action": "sts:AssumeRole"}]),
+            "Policies": [{"PolicyName": "ScopedCleanup", "PolicyDocument": policy([
+                {"Effect": "Allow", "Action": "s3:GetObject", "Resource": obj({"Ref": "StateBucketName"}, "fleet/cleanup-authorization.json"), "Condition": same_owner},
+                {"Effect": "Allow", "Action": "s3:PutObject", "Resource": obj({"Ref": "ControlBucketName"}, MISMATCH_KEY), "Condition": same_owner},
+                {"Effect": "Allow", "Action": "secretsmanager:GetSecretValue", "Resource": {"Ref": "CleanupToken"}},
+                {"Effect": "Allow", "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
+                 "Resource": [{"Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-expiration:*"},
+                              {"Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-emergency:*"}]},
+            ])}],
+        }},
+    }
+    code = cleanup_code()
+    for name, mode in (("Expiration", "expiration"), ("Emergency", "emergency")):
+        resources[name + "Log"] = {"Type": "AWS::Logs::LogGroup", "DeletionPolicy": "Retain", "UpdateReplacePolicy": "Retain",
+                                  "Properties": {"LogGroupName": {"Fn::Sub": "/aws/lambda/${AWS::StackName}-" + mode}, "RetentionInDays": 14}}
+        resources[name] = {"Type": "AWS::Lambda::Function", "DependsOn": name + "Log", "Properties": {
+            "FunctionName": {"Fn::Sub": "${AWS::StackName}-" + mode}, "Runtime": "python3.13", "Handler": "index.handler",
+            "Role": {"Fn::GetAtt": ["Executor", "Arn"]}, "Timeout": 300, "MemorySize": 256,
+            "ReservedConcurrentExecutions": 1, "Code": {"ZipFile": code},
+            "Environment": {"Variables": {"AWS_ACCOUNT_ID": account, "STATE_BUCKET": {"Ref": "StateBucketName"},
+                "CONTROL_BUCKET": {"Ref": "ControlBucketName"}, "CLEANUP_SECRET_ARN": {"Ref": "CleanupToken"},
+                "LINODE_ACCOUNT_EUUID": {"Ref": "LinodeAccountEuuid"}, "MIN_CREATED_UTC": {"Ref": "MinCreatedUtc"}, "CLEANUP_MODE": mode}},
+        }}
+        resources[name + "Errors"] = {"Type": "AWS::CloudWatch::Alarm", "Properties": {
+            "Namespace": "AWS/Lambda", "MetricName": "Errors", "Dimensions": [{"Name": "FunctionName", "Value": {"Ref": name}}],
+            "Statistic": "Sum", "Period": 300, "EvaluationPeriods": 1, "Threshold": 1, "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+            "TreatMissingData": "notBreaching", "AlarmActions": [{"Fn::Sub": "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${NotificationTopicName}"}]}}
+    resources["ExpirationSchedule"] = {"Type": "AWS::Events::Rule", "Properties": {"ScheduleExpression": "rate(15 minutes)", "State": {"Fn::If": ["ExpirationEnabled", "ENABLED", "DISABLED"]},
+        "Targets": [{"Arn": {"Fn::GetAtt": ["Expiration", "Arn"]}, "Id": "expiration", "RetryPolicy": {"MaximumEventAgeInSeconds": 900, "MaximumRetryAttempts": 1}}]}}
+    resources["SchedulePermission"] = {"Type": "AWS::Lambda::Permission", "Properties": {
+        "Action": "lambda:InvokeFunction", "FunctionName": {"Ref": "Expiration"}, "Principal": "events.amazonaws.com",
+        "SourceAccount": account, "SourceArn": {"Fn::GetAtt": ["ExpirationSchedule", "Arn"]}}}
+    resources["LodestarFleetCleanupInvoker"] = {"Type": "AWS::IAM::Role", "Properties": {
+        "RoleName": "LodestarFleetCleanupInvoker", "MaxSessionDuration": 3600,
+        "AssumeRolePolicyDocument": {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "sts:AssumeRoleWithWebIdentity",
+            "Principal": {"Federated": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"}}, "Condition": {"StringEquals": {
+                f"{OIDC_HOST}:aud": "sts.amazonaws.com", f"{OIDC_HOST}:sub": sub("fleet-cleanup", "fleet-emergency-down.yml"),
+                f"{OIDC_HOST}:actor_id": str(GITHUB_POLICY["owner_id"]), f"{OIDC_HOST}:ref": "refs/heads/main",
+                f"{OIDC_HOST}:repository_id": str(GITHUB_POLICY["repository_id"]), f"{OIDC_HOST}:environment": "fleet-cleanup"}}}]},
+        "Policies": [{"PolicyName": "InvokeEmergencyOnly", "PolicyDocument": policy([{"Effect": "Allow", "Action": "lambda:InvokeFunction",
+                                                                                     "Resource": {"Fn::GetAtt": ["Emergency", "Arn"]}}])}],
+    }}
+    resources["HeartbeatMetric"] = {"Type": "AWS::Logs::MetricFilter", "Properties": {"LogGroupName": {"Ref": "ExpirationLog"},
+        "FilterPattern": '{ $.event = "cleanup_complete" }', "MetricTransformations": [{"MetricNamespace": "LodestarCleanup", "MetricName": {"Fn::Sub": "${AWS::StackName}-heartbeat"}, "MetricValue": "1"}]}}
+    resources["HeartbeatAlarm"] = {"Type": "AWS::CloudWatch::Alarm", "Properties": {"Namespace": "LodestarCleanup",
+        "MetricName": {"Fn::Sub": "${AWS::StackName}-heartbeat"}, "Statistic": "Sum", "Period": 3600, "EvaluationPeriods": 1,
+        "Threshold": 1, "ComparisonOperator": "LessThanThreshold", "TreatMissingData": "breaching", "AlarmActions": [{"Fn::Sub": "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${NotificationTopicName}"}]}}
+    return {"AWSTemplateFormatVersion": "2010-09-09", "Description": "Independently authorized expiration and owner-emergency cleanup; no Terraform or Linode credentials in GitHub.",
+            "Metadata": {"AWSToolsMetrics": {"AWSAgentToolkit": "aws-cloudformation@3"}, "com.aws.cloudformation.Context": {"ref": [{"at": "docs/operations/fleet-control-cleanup.md"}]}},
+            "Parameters": params, "Conditions": {"ExpirationEnabled": {"Fn::Equals": [{"Ref": "EnableExpiration"}, "true"]}}, "Resources": resources, "Outputs": {
+                "CleanupRoleArn": {"Value": {"Fn::GetAtt": ["LodestarFleetCleanupInvoker", "Arn"]}},
+                "EmergencyFunctionArn": {"Value": {"Fn::GetAtt": ["Emergency", "Arn"]}},
+                "CleanupSecretArn": {"Value": {"Ref": "CleanupToken"}},
+            }}
+
+
+TEMPLATES = {"fleet-control.json": fleet_control, "pia-delivery.json": pia_delivery, "cleanup.json": cleanup_stack}
 
 
 def render(build) -> str:
-    return json.dumps(build(), indent=2, sort_keys=False) + "\n"
+    text = json.dumps(build(), indent=0 if build is cleanup_stack else 2, sort_keys=False) + "\n"
+    if len(text.encode("utf-8")) > 51200:
+        raise ValueError("template exceeds inline body limit; owner-reviewed packaging required")
+    return text
 
 
 def main(argv: list[str]) -> int:
