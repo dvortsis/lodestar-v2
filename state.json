@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T10:57:25Z",
+  "updated_at": "2026-11-11T11:19:02Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6760,9 +6760,9 @@
     },
     "next runner PR: PK-win-portable-upd owns += .gitattributes (the one *.cmd eol=crlf line, rv-659-7f651d09 I2); update/mod.rs already in owns since #676; X-updates-raw-codes owns openapi.json/schema.d.ts already added in #676",
     "X-cmp-egress-api (Opus, core): Companion gains its route (egress) field + PUT /companions/{id}/egress that restarts the companion; then X-cmp-egress-ui (Sonnet): CMP-9a's editor, restart warning, live SOCKS5 warnings (email/MailKit, FlareSolverr, per-indexer proxies). From CMP-9a 2026-11-11: no route reads/writes egress today. Add both to slices.yaml in next runner PR; CMP-G deps should include them.",
-    "X-win-upd-reoffer (Opus, from #677 item 2): a 0 exit with `from` still on disk should skip the version, not report installed; reworks install tests to model the program on disk",
     "When install windows (\u00a72.13) reach Windows: the 1920 boot retry must honour mode Off and pause, not only the skip list (#677 flag)",
-    "#659 owner (check.rs): install_blocked currently shows the install_failed notice; give it its own plain wording after #677 merges"
+    "#659 owner (check.rs): install_blocked currently shows the install_failed notice; give it its own plain wording after #677 merges",
+    "next runner PR: add X-win-upd-reoffer (Opus, core, deps [X-win-upd-1920]; owns update/windows/helper.rs, msi.rs, rollback.rs, tests/update_windows_msi.rs, its decisions file) and X-win-upd-window (check.rs removes request.json on mode Off/pause; after #659) to slices.yaml"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7495,7 +7495,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T10:57:25Z",
+    "updated": "2026-11-11T11:19:02Z",
     "items": [
       {
         "slot": 1,
@@ -7507,11 +7507,11 @@
       },
       {
         "slot": 2,
-        "slice": "X-win-upd-1920",
+        "slice": "X-win-upd-reoffer",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnABmNGgA3BNrwp6U3q: MSI 1920 held-file retry + #663 review follow-ups (Opus, /security-review), same session after #663",
-        "since": "2026-11-11T07:59:22Z"
+        "doing": "session_01MMjhnABmNGgA3BNrwp6U3q: 0-exit with from on disk skips; linear 1920 matcher; saturating counters (Opus, /security-review), same session after #677 merged 74052431",
+        "since": "2026-11-11T11:19:02Z"
       },
       {
         "slot": 3,
