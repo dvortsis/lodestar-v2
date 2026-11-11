@@ -328,7 +328,7 @@ class Flows(unittest.TestCase):
 
     def test_live_mode_refuses_without_its_settings(self):
         secret = "LEAKMARK-not-printed"
-        for sub in ("act", "reap", "dispatch-down"):
+        for sub in ("act",):
             with self.subTest(sub=sub), self.assertRaises(SystemExit) as cm:
                 self.run_cli(sub, event_env("/fleet status", FLEET_LIVE="true", STATE_BUCKET=secret))
             msg = str(cm.exception)

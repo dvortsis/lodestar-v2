@@ -20,10 +20,6 @@ name: fleet
 on:
   issue_comment:
     types: [created]
-  schedule:
-    - cron: "17 * * * *"
-  # The owner's down (plan §4, kill switch step 2). No inputs, by design.
-  workflow_dispatch:
 
 permissions: {}
 
@@ -96,6 +92,7 @@ jobs:
       contents: read
       pull-requests: write
       id-token: write # live mode assumes LodestarFleetOperator by OIDC, in-process
+      actions: read # verify main-only environment and owner approval before OIDC
     outputs:
       deliver: ${{ steps.act.outputs.deliver }} # "true": this run kept the lock for deliver-pia
       live: ${{ steps.act.outputs.live }} # the chain's mode, fixed when act ran
@@ -162,6 +159,7 @@ jobs:
       contents: read
       pull-requests: write
       id-token: write # live mode assumes LodestarFleetOperator by OIDC, in-process
+      actions: read # verify main-only environment and owner approval before OIDC
     outputs:
       lock_expires: ${{ steps.fence.outputs.lock_expires }} # the lease's end (UTC), for deliver-pia
     steps:
@@ -260,6 +258,7 @@ jobs:
       contents: read
       pull-requests: write
       id-token: write # live mode assumes LodestarFleetOperator by OIDC, in-process
+      actions: read # verify main-only environment and owner approval before OIDC
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -281,88 +280,3 @@ jobs:
           FLEET_SSH_PUBLIC_KEY: ${{ vars.FLEET_SSH_PUBLIC_KEY }}
           OWNER_SSH_PUBLIC_KEY: ${{ vars.OWNER_SSH_PUBLIC_KEY }}
         run: python3 infra/fleet/fleet.py pia-release
-
-  # The hourly reaper. Exempt from OPERATOR_STOP; nothing but disabling this
-  # workflow stops it (plan §3).
-  reaper:
-    if: github.event_name == 'schedule' && github.ref == 'refs/heads/main' && github.run_attempt == 1
-    environment: cloud-fleet
-    runs-on: ubuntu-latest
-    timeout-minutes: 40 # under the role's 1-hour session, and the lock's 90 minutes
-    permissions:
-      contents: read
-      pull-requests: write
-      id-token: write # live mode assumes LodestarFleetOperator by OIDC, in-process
-      actions: read # the stale job-rule sweep reads run status (plan §3)
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 0 # the pinned worktree needs history
-      # Live mode only (OP-2): Terraform, and boto3 from hash-pinned wheels into
-      # a target directory (the run step puts it on PYTHONPATH).
-      - if: vars.FLEET_LIVE == 'true'
-        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
-        with:
-          terraform_version: "1.10.5"
-          terraform_wrapper: false
-      - if: vars.FLEET_LIVE == 'true'
-        run: python3 -m pip install --quiet --no-deps --require-hashes --target "$RUNNER_TEMP/fleet-deps" -r infra/fleet/requirements-live.txt
-      - env:
-          CHANNEL_PR: ${{ vars.CHANNEL_PR }}
-          FLEET_LIVE: ${{ vars.FLEET_LIVE }}
-          GITHUB_TOKEN: ${{ github.token }}
-          PYTHONPATH: ${{ runner.temp }}/fleet-deps
-          AWS_FLEET_ROLE_ARN: ${{ secrets.AWS_FLEET_ROLE_ARN }}
-          STATE_BUCKET: ${{ secrets.STATE_BUCKET }}
-          EVIDENCE_BUCKET: ${{ secrets.EVIDENCE_BUCKET }}
-          CONTROL_BUCKET: ${{ secrets.CONTROL_BUCKET }}
-          FLEET_BUCKET_OWNER: ${{ secrets.FLEET_BUCKET_OWNER }}
-          OWNER_ADMIN_CIDR: ${{ secrets.OWNER_ADMIN_CIDR }}
-          FLEET_LINODE_ACCOUNT_EUUID: ${{ secrets.FLEET_LINODE_ACCOUNT_EUUID }}
-          FLEET_SSH_PUBLIC_KEY: ${{ vars.FLEET_SSH_PUBLIC_KEY }}
-          OWNER_SSH_PUBLIC_KEY: ${{ vars.OWNER_SSH_PUBLIC_KEY }}
-        run: python3 infra/fleet/fleet.py reap
-
-  # The owner's down: gated on the owner's numeric ID, no input, never through
-  # the /fleet parser, and it pre-empts the lock with the reaping marker.
-  dispatch-down:
-    if: >-
-      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.run_attempt == 1
-      && vars.OWNER_USER_ID != '' && github.actor_id == vars.OWNER_USER_ID
-    environment: cloud-fleet
-    runs-on: ubuntu-latest
-    timeout-minutes: 40 # under the role's 1-hour session, and the lock's 90 minutes
-    permissions:
-      contents: read
-      pull-requests: write
-      id-token: write # live mode assumes LodestarFleetOperator by OIDC, in-process
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 0 # the pinned worktree needs history
-      # Live mode only (OP-2): Terraform, and boto3 from hash-pinned wheels into
-      # a target directory (the run step puts it on PYTHONPATH).
-      - if: vars.FLEET_LIVE == 'true'
-        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
-        with:
-          terraform_version: "1.10.5"
-          terraform_wrapper: false
-      - if: vars.FLEET_LIVE == 'true'
-        run: python3 -m pip install --quiet --no-deps --require-hashes --target "$RUNNER_TEMP/fleet-deps" -r infra/fleet/requirements-live.txt
-      - env:
-          CHANNEL_PR: ${{ vars.CHANNEL_PR }}
-          FLEET_LIVE: ${{ vars.FLEET_LIVE }}
-          GITHUB_TOKEN: ${{ github.token }}
-          PYTHONPATH: ${{ runner.temp }}/fleet-deps
-          AWS_FLEET_ROLE_ARN: ${{ secrets.AWS_FLEET_ROLE_ARN }}
-          STATE_BUCKET: ${{ secrets.STATE_BUCKET }}
-          EVIDENCE_BUCKET: ${{ secrets.EVIDENCE_BUCKET }}
-          CONTROL_BUCKET: ${{ secrets.CONTROL_BUCKET }}
-          FLEET_BUCKET_OWNER: ${{ secrets.FLEET_BUCKET_OWNER }}
-          OWNER_ADMIN_CIDR: ${{ secrets.OWNER_ADMIN_CIDR }}
-          FLEET_LINODE_ACCOUNT_EUUID: ${{ secrets.FLEET_LINODE_ACCOUNT_EUUID }}
-          FLEET_SSH_PUBLIC_KEY: ${{ vars.FLEET_SSH_PUBLIC_KEY }}
-          OWNER_SSH_PUBLIC_KEY: ${{ vars.OWNER_SSH_PUBLIC_KEY }}
-        run: python3 infra/fleet/fleet.py dispatch-down

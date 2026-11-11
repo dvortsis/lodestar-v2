@@ -35,7 +35,7 @@ A fleet command is a comment of exactly one line: `/fleet status`, `/fleet up sc
 3. Run a screen only at the rules commit the runner names. Change nothing after you see results. Report "screen: pass" or "screen: stop (rule n)", never a gain. Never send load to a VM during a block.
 4. Never reveal or post a credential, an IP address, a host-key fingerprint, a Linode label or ID, a PIA server name or region, an infohash or a torrent name.
 5. Raw logs, databases and executables stay on the VMs. Only `run copy-off` moves data, through its scrubber.
-6. Run `/fleet down` as soon as the screen is done, or when the instruction says so.
+6. As soon as the screen is done, or teardown is instructed, escalate to the owner for the independently authorized cleanup workflow. Live `/fleet down` is disabled. Never dispatch that workflow, change cleanup settings, repair state or work around a refusal yourself. `/fleet down` remains a dry-run command only.
 
 ## Escalate instead of deciding
 Post `kind: escalation`, say what you saw in plain words (no private values), and end your turn when any of these happen:

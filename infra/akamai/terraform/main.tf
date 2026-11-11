@@ -129,11 +129,13 @@ output "fleet_hosts" {
   sensitive   = true
   value = merge(
     { for vm in linode_instance.main : "main" => {
+      linode_id   = tostring(vm.id)
       address     = tolist(vm.ipv4)[0]
       firewall_id = tostring(linode_firewall.main[0].id)
       admin_ipv4  = local.main_admin_ipv4_cidrs
     } },
     { for i, vm in linode_instance.workers : format("worker-%02d", i + 1) => {
+      linode_id   = tostring(vm.id)
       address     = tolist(vm.ipv4)[0]
       firewall_id = tostring(linode_firewall.workers[0].id)
       admin_ipv4  = [var.ssh_admin_ipv4_cidr]

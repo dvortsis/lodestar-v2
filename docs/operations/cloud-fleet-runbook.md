@@ -2,6 +2,8 @@
 
 For the owner, who runs the cloud test fleet: two Linodes (Main and Worker) that screen a crawler change before it goes to the experiment host. This page says what each step does, what you see when it works, and what to do when it doesn't.
 
+**Commissioning gate:** the [bootstrap](fleet-control-bootstrap.md) and [independent cleanup](fleet-control-cleanup.md) runbooks govern approvals, OIDC, expiration and teardown. No live setup, inventory, token or canary is certified by this source. Provisioning/PIA/operator jobs require explicit owner approval; expiration must be separately commissioned before live provisioning. All cloud/settings/state changes below are owner actions requiring separate authorization.
+
 - **The plan:** `docs/plan/2026-11-08-cloud-operator.md` (the control plane and the operator) and `docs/plan/2026-11-08-cloud-test-plan.md` (the screen).
 - **The decisions behind the code:** `docs/decisions/` for OP-1, OP-2a, OP-2, OP-2b, OP-3a, OP-3b and OP-3c.
 - **Times are UTC.** Values in angle brackets (`<state bucket>`, `<vm address>`) are placeholders; the only account ID shown is the fake `111122223333`.
@@ -26,7 +28,7 @@ For the owner, who runs the cloud test fleet: two Linodes (Main and Worker) that
   - can always take the fleet down yourself, without the operator ([Stop everything](#4-stop-everything), step 2).
 - **Live or dry-run.** With `FLEET_LIVE` anything but `true`, every command runs dry: it answers "would create", "would destroy" or "would run the step", and touches no cloud.
   - Set it to `true` only after the OP-G gate's dry cycle.
-  - **Never change it while a fleet exists.** A dry-run `down` or reaper touches nothing, so a live fleet would keep running and billing until the watchdog's 48 h. If it's already off with a fleet up, set it back to `true`, then `down`.
+  - **This is not a teardown switch.** Live `/fleet down` and the GitHub reaper are disabled. The independently commissioned expiration broker and owner emergency workflow do not depend on `FLEET_LIVE`. Do not toggle it to try to recover a fleet.
 
 The runner instructs the operator, the operator posts `/fleet` commands, and `fleet.yml` acts on the Linodes and reports back, while you hold the switches and the consoles:
 ```mermaid
@@ -44,7 +46,7 @@ In words: runner → operator → `/fleet` comment → `fleet.yml` → the Linod
 |---|---|
 | Fleets at a time | one: `up` refuses while any Lodestar Linode or firewall exists, or a fleet is recorded |
 | Preset | `screen` only: Main (`g6-standard-4`) and Worker (`g6-nanode-1`) |
-| Lifetime | 44 h from `up`; then the hourly reaper runs `down` |
+| Lifetime | At most 44 h from `up`; the separately commissioned expiration broker checks every 15 minutes |
 | Compute cap | $40 a month, your number; one screen fleet costs at most about $3.50 |
 | Fleet lock | 90 min, so one command runs at a time |
 | Code | `up` and `run` use only `main`'s current head (`down` is exempt), and a fleet stays pinned to the commit it was created from |
@@ -84,7 +86,7 @@ flowchart TD
   lt --> sb["run start-block main / worker RULES-COMMIT"]
   sb --> aw[segments 1-4, each ended by run arm-switch]
   aw --> co["run copy-off main / worker"]
-  co --> dn["/fleet down"]
+  co --> dn["owner independent cleanup"]
 ```
 In words: up → deliver-pia → (leak test) → start-block → four segments with arm switches → copy-off → down.
 
@@ -97,9 +99,9 @@ In words: up → deliver-pia → (leak test) → start-block → four segments w
   - `up screen: create main, worker, pinned to main; expires <UTC time>; at most $3.50`;
   - then one comment per VM: `deliver-pia: main: delivered; /run clean`, and the same for `worker`.
 - **Fails:**
-  - `refused: up screen: a Lodestar Linode exists` (or `a Lodestar firewall exists`, or `a fleet is recorded`): a previous fleet wasn't fully removed. Check Cloud Manager, then `down`.
+  - `refused: up screen: a Lodestar Linode exists` (or `a Lodestar firewall exists`, or `a fleet is recorded`): stop and have the owner reconcile exact inventory/state. Do not create a replacement fleet or delete by label alone.
   - `refused: up screen: the monthly fleet-compute cap would be exceeded`: wait for next month. The cap is yours, at most $40 by code.
-  - `failed: terraform didn't finish; the fleet is recorded, so run down`: run `down`. Terraform's output is in the evidence bucket under `fleet/<run id>/`.
+  - `failed: terraform didn't finish; owner recovery required; inspect cleanup registration and inventory`: the owner must inspect partial resources and authorization. The broker cannot safely adopt an unregistered partial apply. Terraform's output is in the private evidence bucket under `fleet/<run id>/`.
   - A `deliver-pia` line that isn't `delivered; /run clean`: ask for `run renew-vpn <vm>` ([§7](#7-renewing-the-vpn-host-keys-and-where-the-evidence-lands)).
   - A line ending `NOT clean; escalate`: `/run/lodestar-pia` may still hold the login. Tell the runner.
 
@@ -128,7 +130,7 @@ In words: up → deliver-pia → (leak test) → start-block → four segments w
   - **`failed: block_running, start_block`:** a block is already recorded there. `copy-off` ends it.
   - **`failed: evidence_copied, start_block`:** the last block's evidence hasn't been copied off. Run `copy-off` first.
   - **Any other failure after the marker:** start-block stops Lodestar and the Docker proxy again, and the block stays recorded. Run `copy-off` to end it, then tell the runner.
-    - If `copy-off` then answers `failed: evidence_present, copy_off`, the block failed before anything was staged, and can't be ended that way. Run `down`.
+    - If `copy-off` then answers `failed: evidence_present, copy_off`, the block failed before anything was staged, and can't be ended that way. Escalate to the owner for cleanup.
 
 ### 3.4 `/fleet run arm-switch <vm>`, after each segment
 - **What it does:** the operator runs it shortly before a segment ends, at the booked times.
@@ -165,26 +167,26 @@ In words: up → deliver-pia → (leak test) → start-block → four segments w
   - **`the evidence couldn't be stored; it's still on the VM, so copy-off can run again`:** run it again.
 - **Raw logs, databases, executables and the password never leave the VM.** They're destroyed with it.
 
-### 3.8 `/fleet down`
-- **What it does:** destroys everything in the Terraform state, deletes any tagged Lodestar resource left over, and records the fleet as gone. It runs even with `OPERATOR_STOP` set, and on any `main` commit.
-- **Works:** `down: destroy the fleet`.
-- **Fails:** `down: tagged resources remain after destroy; escalate`. Check Cloud Manager (Linodes and Firewalls), and delete what's left by hand.
+### 3.8 Owner cleanup (`/fleet down` is dry-run only)
+- Live `/fleet down` refuses before cloud access. The operator must escalate to the owner; it cannot dispatch cleanup.
+- The separately installed owner-only `fleet-emergency-down.yml` deletes only the exact registered VMs within the approved account/region/ownership/lifetime scope, without a provisioning approval queue or Terraform destroy. See [the cleanup runbook](fleet-control-cleanup.md) for commissioning, verification and failure recovery.
+- Firewalls and Terraform state are retained, and the mismatch flag stays set. Confirm deletion and separately reconcile retained resources/state before any recreation. A partial apply without valid registration requires human recovery; do not assume it is covered by the broker.
 
 ### 3.9 Other answers you may see
 - **`refused: this run's code is not main's head`:** `main` moved between the comment and the job, which happens often. Post the command again.
 - **`busy, retry`:** another command holds the fleet lock. **`busy: the fleet is being reaped; retry later`:** the reaper is taking the fleet down.
 - **`refused: OPERATOR_STOP is set: only down runs`:** the soft stop is on.
-- **`refused: fleet overdue or mismatched: only down runs`:** the fleet is past its expiry, or the hourly firewall audit found a mismatch. The reaper takes it down at its next run after 15 minutes' grace, so within about 75 minutes; nothing else runs.
-- **`reaper: …; escalate`:** the hourly reaper (minute 17) couldn't do part of its job. Tell the runner.
+- **`refused: fleet overdue or mismatched: only down runs`:** work is blocked. This historical message does not enable live `down`; use owner cleanup. Expiration is independent once commissioned, while confirmed unsafe ingress may authorize scoped early deletion. Unreadable audit data only blocks/alerts; it cannot authorize early deletion.
+- **Cleanup failure, missing heartbeat or unreadable authorization:** tell the owner and inspect the scoped receipt/alarms. Never treat a failed read as an empty fleet.
 
 ## 4. Stop everything
 Fastest first. Do as many steps as the situation needs; each says how to undo it.
 
-> **Not a stop: never switch `FLEET_LIVE` off while a fleet exists.** Dry-run `down` and the reaper touch nothing, so the fleet would keep running until the watchdog's 48 h.
+> **Switching `FLEET_LIVE` off does not delete a fleet.** Verify independent cleanup is commissioned; do not rely on an unverified legacy watchdog.
 
 1. **Set `OPERATOR_STOP` to `true`.**
    - **Where:** GitHub → the repository → Settings → Secrets and variables → Actions → Variables → `OPERATOR_STOP`.
-   - **Effect:** every fleet command except `down` is refused; the reaper still runs. `operator-wake.yml` and `operator-apply.yml` refuse to start unless it's exactly `false`. Any other value is a stop. The App can't change variables.
+   - **Effect:** work is refused. `operator-wake.yml` and `operator-apply.yml` refuse to start unless it's exactly `false`. Independently commissioned expiration and owner emergency cleanup do not depend on this switch. The App can't change variables.
    - **Residual:**
      - The fleet, and its billing, keep running until `down`.
      - It doesn't stop an operator session that's already running.
@@ -196,18 +198,17 @@ Fastest first. Do as many steps as the situation needs; each says how to undo it
      - **operator-wake** (`operator-wake.yml`) and **operator-apply** (`operator-apply.yml`). Both hold the Anthropic key through the `cloud-operator` environment. Disabling operator-wake also stops a running session at its next poll, within about 10 seconds;
      - **operator-injection** (`operator-injection.yml`), which holds the same key. Disabling it doesn't stop a test that's already running: cancel that run too (the run's page → **Cancel workflow run**). It starts no more sessions and interrupts those running. Its sessions have no network route, and each stops at its $1 budget.
    - **Leave operator-tripwire (`operator-tripwire.yml`) on.** It holds no secrets. It's the detector, and it disables operator-wake itself on a trip.
-   - **Take the fleet down without the operator:** GitHub → Actions → **fleet** (`fleet.yml`) → **Run workflow**, on `main`.
-     - It runs only `down`, only for your user ID (the `OWNER_USER_ID` variable), and takes no inputs. It answers `owner's down: destroy the fleet`.
-     - If `OWNER_USER_ID` isn't set, or you aren't that user, the job is skipped without a word; use Cloud Manager (step 5).
-   - **Disable `fleet.yml` only after the fleet is down.** It runs the hourly reaper; once it's disabled, the Akamai watchdog is the only lifetime backstop.
-   - **Residual:** any session posting as you can dispatch `down` and end a screen mid-block. That costs a screen, nothing else.
+   - **Take the fleet down without the operator:** after independent commissioning, GitHub → Actions → **Fleet emergency teardown** (`fleet-emergency-down.yml`) → **Run workflow**, on `main`. Only the pinned immutable owner identity on the first dispatch attempt may invoke it; no target inputs or provisioning credentials are accepted.
+     - Inspect the run and broker receipt, confirm every registered VM is gone, and separately reconcile retained firewalls and state. A skipped, disabled or failed run is not a teardown.
+   - Disabling `fleet.yml` does not disable independently installed expiration. Do not disable its broker/schedule or revoke its credential while relying on it for cleanup.
+   - **Residual:** a session holding your own owner identity could dispatch emergency cleanup and end a screen mid-block. Protect owner sessions; the operator App identity cannot assume the invoker role.
    - **Undo:** Actions → each workflow → **Enable workflow**. If the tripwire disabled operator-wake, re-enable it only after the runner has looked at why.
 3. **Suspend the GitHub App, and stop Anthropic spend.**
    - **GitHub:** the `lodestar-operator` App's installation on `dvortsis/lodestar-v2`: suspend it.
    - **Anthropic Console:** in the `lodestar-operator` workspace, revoke the API key (or set the workspace's spend limit to $0). Then interrupt or archive any running session: a revoked key may not stop a session already running.
    - **Undo:** unsuspend the installation. A revoked key can't come back: make a new one and put it in the `cloud-operator` environment's `ANTHROPIC_API_KEY`. Restore the spend limit ($200).
 4. **Cut cloud access.**
-   > **The revocations and the key deletion in this step can't be undone, only replaced.** With the roles denied, `fleet.yml` can't run `down` or the reaper either, so step 5 is then by hand.
+   > **The revocations and the key deletion in this step can't be undone, only replaced.** These provisioning/PIA revocations do not revoke the independent cleanup role/token. Verify that separation live before relying on it; a full cleanup-credential revocation requires owner recovery.
    - **AWS:** IAM → Roles → the role → Permissions → Add permissions → Attach policies:
      - `LodestarFleetDenyAll` on `LodestarFleetOperator` and `LodestarOperatorBridge`;
      - `LodestarPiaDenyAll` on `LodestarPiaDelivery`. If the fleet has its own AWS account, this role is in the account that holds the PIA secret.
@@ -219,9 +220,9 @@ Fastest first. Do as many steps as the situation needs; each says how to undo it
      - make new Linode tokens with the same scopes, and store them in the same two secrets;
      - for SSH, make a new key pair (`ssh-keygen -t ed25519`). Put the private key in both environments' `FLEET_SSH_KEY`, and the public key in the `FLEET_SSH_PUBLIC_KEY` variable; then delete the private key from your machine.
 5. **Tear down by hand.**
-   - **Where:** Linode Cloud Manager → Linodes → `lodestar-main-fleet` and `lodestar-worker-01-fleet` → Delete. Then Firewalls → `lodestar-main-fw-fleet` and `lodestar-worker-fw-fleet` → Delete.
-   - Or let the watchdog delete the Linodes at 48 h. It leaves their firewalls, so delete those by hand.
-   - **Then clear the record before any `up` or script runs.** `up` refuses while a fleet is recorded. Detach the deny-all policies first (step 4's undo), then dispatch `down` (step 2). It finds nothing left, and records the fleet as gone.
+   - The owner must first verify the intended account, region, exact IDs, creation times, ownership, shared-state registration and firewall attachments. Labels or tags alone do not authorize deletion. Resolve partial/unregistered resources explicitly; do not adopt them blindly.
+   - After separately approved manual cleanup, independently verify no intended compute remains. Firewalls require their own ownership/attachment review; the broker retains them.
+   - Reconcile state, ledger, manifest, authorization and mismatch flag through a separately approved owner procedure before another `up`. No automatic record clearing, Terraform apply/destroy or replacement fleet is authorized by this runbook.
 
 **What doesn't depend on the repository:** the Akamai watchdog, the IAM roles' scopes, and the Anthropic workspace's spend limit. A bad merge to the control plane can't remove them.
 
@@ -265,7 +266,7 @@ For Worker, use `"worker"` in place of `"main"`. Check the address against Cloud
        sh -c 'nc -z -w 5 1.1.1.1 443; echo "tcp rc=$?"; curl -6 -s -m 8 "http://[2606:4700:4700::1111]/"; echo "v6 rc=$?"; ip -o addr'
      ```
    - **What you should see:** both `rc` values non-zero, and no `eth0` in `ip -o addr`. Only `lo` is left; an old `wg0` can't send without `eth0`.
-   - **If either `rc` is 0, or `eth0` is listed, it's a stop.** Stop Lodestar at once (`sudo docker stop -t 60 lodestar`), log out, dispatch `down` ([Stop everything](#4-stop-everything), step 2), and tell the runner.
+   - **If either `rc` is 0, or `eth0` is listed, it's a stop.** The owner stops Lodestar (`sudo docker stop -t 60 lodestar`), logs out, uses independently authorized cleanup ([Stop everything](#4-stop-everything), step 2), and tells the runner.
    - **Why this proves it:** Lodestar shares gluetun's namespace, so with gluetun gone it has no network at all. It's cut off, not leaking. The test uses an address, not a name, so a failure isn't just DNS.
    - **Why `container:lodestar`:** Docker refuses to join a stopped container's network (`container:gluetun`), but Lodestar's is still there.
 4. **Confirm the watcher recorded it:**

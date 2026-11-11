@@ -48,20 +48,37 @@ class Linode:
         self._t = transport
 
     def _pages(self, path: str, op: str) -> list[dict]:
-        out, page = [], 1
+        # A short/malformed response is never proof of a complete inventory.
+        # These endpoints document page, pages and results; request 100 per page.
+        out, page, snapshot, seen = [], 1, None, set()
         while True:
             try:
                 r = self._t("GET", f"{path}?page={page}&page_size=100", None)
-                out += list(r["data"])
-                pages = int(r.get("pages", 1))
+                if not isinstance(r, dict):
+                    raise ValueError
+                data, pages, total = r["data"], r["pages"], r["results"]
+                if (type(r["page"]) is not int or r["page"] != page
+                        or type(pages) is not int or not 1 <= pages <= 50
+                        or type(total) is not int or total < 0
+                        or pages != max(1, (total + 99) // 100)
+                        or not isinstance(data, list) or len(data) != min(100, total - len(out))):
+                    raise ValueError
+                if snapshot is None:
+                    snapshot = (pages, total)
+                elif snapshot != (pages, total):
+                    raise ValueError
+                for item in data:
+                    if (not isinstance(item, dict) or type(item.get("id")) is not int
+                            or item["id"] <= 0 or item["id"] in seen):
+                        raise ValueError
+                    seen.add(item["id"])
+                out.extend(data)
             except LinodeError:
                 raise
             except Exception:
-                raise LinodeError(f"Linode API {op} returned an unexpected shape") from None
-            if page >= pages:
+                raise LinodeError(f"Linode API {op} returned malformed or incomplete inventory") from None
+            if page == pages:
                 return out
-            if page >= 50:
-                raise LinodeError(f"Linode API {op} has more than 50 pages")
             page += 1
 
     def account_euuid(self) -> str:
