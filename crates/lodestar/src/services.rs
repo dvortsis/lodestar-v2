@@ -738,6 +738,24 @@ impl Services {
         }
     }
 
+    /// The Windows portable update's self-test probe (PK-win-portable-upd):
+    /// the same as [`Services::probe`]'s.
+    #[cfg(windows)]
+    pub fn portable_probe(&self) -> crate::update::windows::portable::Probe {
+        crate::update::windows::portable::Probe {
+            http: self
+                .listener
+                .local_addr()
+                .unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], 0))),
+            dht: self.http.dht.clone().map(|d| {
+                let up: Arc<dyn Fn() -> bool + Send + Sync> =
+                    Arc::new(move || d.lock().is_ok_and(|s| s.is_some()));
+                up
+            }),
+            search: self.handles.search.clone().map(SearchHandle::serving),
+        }
+    }
+
     /// Serves HTTP until `signal` resolves, then shuts everything down.
     pub async fn run(
         self,
