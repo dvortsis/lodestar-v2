@@ -205,9 +205,12 @@ fn natural_too_long(e: NaturalError) -> String {
         NaturalError::TooLong => "A natural search can be at most 512 bytes long. \
              Shorten the search, or switch to the query language."
             .to_owned(),
-        _ => "A natural search can hold at most 32 words and symbols; brackets and a lone \
-             minus sign count as one each. Shorten the search, or switch to the query language."
+        NaturalError::TooManyWords => "A natural search can hold at most 32 words and symbols; \
+             brackets and a lone minus sign count as one each. Shorten the search, or switch \
+             to the query language."
             .to_owned(),
+        // `/parse` has already parsed `q` strictly, so this can't be it.
+        NaturalError::Syntax => unreachable!("handled by the caller"),
     }
 }
 

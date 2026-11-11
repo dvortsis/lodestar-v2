@@ -334,7 +334,7 @@ async fn parse_proposes_natural_phrasing() {
         &format!("/api/v1/parse?q={}&natural=true", encode(&words)),
     )
     .await;
-    // 33 words is over; the 512-byte case has its own sentence.
+    // Past 512 bytes the refusal has its own sentence.
     let long = format!("a{}", "b".repeat(520));
     let (status, _, body) = call(
         &f.app,
@@ -348,8 +348,8 @@ async fn parse_proposes_natural_phrasing() {
     assert!(body.contains("at most 512 bytes long"), "{body}");
 }
 
-/// The cap counts tokens, and brackets are tokens: 8 visible words in
-/// 13 pairs of brackets is 34 tokens, refused with the words-and-symbols
+/// The cap counts tokens, and brackets are tokens: 8 visible words, one
+/// of them inside 13 nested pairs of brackets, is 34 tokens, refused with the words-and-symbols
 /// text rather than a word count the user can't match.
 #[tokio::test]
 async fn natural_refusal_counts_symbols_not_just_words() {
