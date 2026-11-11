@@ -373,8 +373,12 @@ struct Shared {
     /// The pool's peer requests, to the DHT; `None` with no DHT.
     peer_requests: Option<mpsc::Sender<lodestar_sources::PeerRequest>>,
     dht_counts: Arc<super::dht::DhtCounts>,
-    /// The spool (WK-11), if configured and it opened.
+    /// The spool (WK-11), if configured.
     spool: Option<Arc<WorkerSpool>>,
+    /// Bumped just before each session change, so the session task
+    /// notices one it missed while busy (a watch can change twice between
+    /// looks).
+    generation: AtomicU64,
 }
 
 /// The runtime (see the module docs).
@@ -444,12 +448,14 @@ impl Runtime {
                 config.dht_linger,
             ));
         }
+        // Opened by the session task, on a blocking thread.
         let spool = config
             .spool
-            .as_ref()
-            .and_then(|c| WorkerSpool::open(c, config.worker.0).ok().map(Arc::new));
+            .clone()
+            .map(|c| Arc::new(WorkerSpool::new(c, config.worker.0)));
         let shared = Arc::new(Shared {
             spool,
+            generation: AtomicU64::new(0),
             have: WorkerHave::new(),
             judge: Arc::new(Judge::new(config.worker)),
             leases: Arc::new(WorkerLeases::default()),
@@ -728,12 +734,17 @@ impl Work for Runtime {
         // and dictionary snapshots over by itself (WK-10a).
         let _ = self.shared.acks.try_send(self.shared.have.reconnected());
         self.shared.fresh_session.store(true, Ordering::Release);
+        // Before the session itself: the session task reads the
+        // generation first, so a new session is never seen as the old
+        // generation (and reset again a moment later).
+        self.shared.generation.fetch_add(1, Ordering::AcqRel);
         self.shared.session.send_replace(Some(session));
         want_dht(&self.shared);
         self.shared.refresh_pause();
     }
 
     fn disconnected(&mut self) {
+        self.shared.generation.fetch_add(1, Ordering::AcqRel);
         self.shared.session.send_replace(None);
 
         // The pool opens no new connection, then the DHT pauses: the
@@ -1994,7 +2005,24 @@ async fn send_results(
     let mut retry = tokio::time::interval(s.config.retry_every);
     retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut replay = Replay::default();
+    if let Some(sp) = &s.spool {
+        sp.start().await;
+    }
+    let mut seen = s.generation.load(Ordering::Acquire);
     loop {
+        // A session change, even one missed while busy below: whatever
+        // wasn't accepted goes again (a batch id is idempotent, §19.2).
+        // Replayed batches are dropped here and read again from the
+        // spool, past what was accepted.
+        let now_gen = s.generation.load(Ordering::Acquire);
+        if now_gen != seen {
+            seen = now_gen;
+            flight.retain(|_, f| f.from.is_none());
+            replay.restart();
+            for f in flight.values_mut() {
+                f.sent = false;
+            }
+        }
         // Send whatever is due on the current session.
         let session = sessions.borrow_and_update().clone();
         if let Some(sp) = &s.spool {
@@ -2019,6 +2047,8 @@ async fn send_results(
                     );
                     next_batch += 1;
                 }
+                // A segment removed on the way may have cleared "full".
+                s.refresh_pause();
             }
         }
         send_due(&s, session, &mut flight, false).await;
@@ -2059,9 +2089,9 @@ async fn send_results(
                         }
                         // A spooled segment goes once all of it is in.
                         if let (Some(from), Some(sp)) = (f.from, &s.spool)
-                            && let Some((seq, n)) = replay.accepted(from)
+                            && let Some(seq) = replay.accepted(from)
                         {
-                            sp.remove(seq, n).await;
+                            sp.remove(seq).await;
                             s.refresh_pause();
                         }
                     }
@@ -2075,15 +2105,7 @@ async fn send_results(
                 if changed.is_err() {
                     return;
                 }
-                // A new session: whatever wasn't accepted goes again (a
-                // batch id is idempotent, §19.2). Replayed batches are
-                // dropped here and read again from the spool, past what
-                // was accepted.
-                flight.retain(|_, f| f.from.is_none());
-                replay.restart();
-                for f in flight.values_mut() {
-                    f.sent = false;
-                }
+                // The reset is at the top of the loop, by generation.
             }
             _ = retry.tick() => {
                 for f in flight.values_mut().filter(|f| f.refused) {

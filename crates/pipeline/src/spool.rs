@@ -48,11 +48,11 @@
 //! it, then unlinks it, as owner §2.17 asks of the store. The decisions
 //! file says what that does and doesn't give on SSDs and on Windows.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::hash::Hasher;
-use std::io::{self, Read, Write};
+use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -555,6 +555,11 @@ pub struct Segment {
     pub seq: u64,
     /// Its records that opened and are young enough, in order.
     pub records: Vec<Record>,
+    /// Each record's frame position in the segment (0-based), so a
+    /// caller can tell records apart across reads whatever was dropped.
+    pub index: Vec<usize>,
+    /// The segment's whole frames, good or not.
+    pub frames: usize,
     /// What was damaged, by the segment's file name and the part only
     /// (never a byte of it), for the caller to report.
     pub damage: Vec<Damage>,
@@ -568,10 +573,18 @@ pub struct Damage {
     pub part: &'static str,
 }
 
+/// A closed segment's size, and its frames (the records gauge).
+#[derive(Debug, Clone, Copy)]
+struct Closed {
+    bytes: u64,
+    frames: u64,
+}
+
 struct Active {
     seq: u64,
     file: File,
     bytes: u64,
+    frames: u64,
     created: i64,
     synced: Instant,
     dirty: bool,
@@ -584,11 +597,16 @@ pub struct Spool {
     worker: u32,
     caps: Caps,
     sealer: Arc<dyn Sealer>,
-    /// Closed segments: seq → bytes.
-    closed: BTreeMap<u64, u64>,
+    /// Closed segments, by seq.
+    closed: BTreeMap<u64, Closed>,
     active: Option<Active>,
     next_seq: u64,
     stats: Arc<SpoolStats>,
+    /// Segments whose drops were counted already: a segment read again
+    /// (after a lost session) counts nothing twice.
+    counted: HashSet<u64>,
+    /// Records counted as too old, by segment and frame.
+    old: HashSet<(u64, usize)>,
 }
 
 impl fmt::Debug for Spool {
@@ -707,7 +725,8 @@ impl Spool {
                         && Header::decode(&head).is_ok_and(|h| h.worker == worker && h.seq == seq);
                     if ours {
                         let len = entry.metadata().map_err(io_err("list"))?.len();
-                        closed.insert(seq, len);
+                        let frames = count_frames(&path).unwrap_or(0);
+                        closed.insert(seq, Closed { bytes: len, frames });
                     } else {
                         secure_remove(&path)?;
                         bump(&stats.dropped_corrupt);
@@ -720,7 +739,10 @@ impl Spool {
         sync_dir(dir)?;
         stats
             .bytes
-            .store(closed.values().sum::<u64>(), Ordering::Relaxed);
+            .store(closed.values().map(|c| c.bytes).sum(), Ordering::Relaxed);
+        stats
+            .records
+            .store(closed.values().map(|c| c.frames).sum(), Ordering::Relaxed);
         Ok(Spool {
             dir: dir.to_path_buf(),
             worker,
@@ -730,6 +752,8 @@ impl Spool {
             active: None,
             next_seq,
             stats,
+            counted: HashSet::new(),
+            old: HashSet::new(),
         })
     }
 
@@ -811,6 +835,7 @@ impl Spool {
             return Err(SpoolError::Io("append to", e.kind()));
         }
         active.bytes += frame.len() as u64;
+        active.frames += 1;
         active.dirty = true;
         self.stats
             .bytes
@@ -843,6 +868,7 @@ impl Spool {
             seq,
             file,
             bytes: HEADER_LEN as u64,
+            frames: 0,
             created: now,
             synced: Instant::now(),
             dirty: false,
@@ -867,7 +893,13 @@ impl Spool {
     pub fn close_active(&mut self) -> Result<(), SpoolError> {
         self.sync()?;
         if let Some(a) = self.active.take() {
-            self.closed.insert(a.seq, a.bytes);
+            self.closed.insert(
+                a.seq,
+                Closed {
+                    bytes: a.bytes,
+                    frames: a.frames,
+                },
+            );
         }
         Ok(())
     }
@@ -878,52 +910,64 @@ impl Spool {
     }
 
     /// Reads a closed segment at `now`: its records that open and are
-    /// younger than the age cap, in order. The rest are counted: a torn
-    /// final write, damage (the segment stops there; reported by name only),
-    /// a record that doesn't open, or one too old.
-    pub fn read(&self, seq: u64, now: i64) -> Result<Segment, SpoolError> {
+    /// younger than the age cap, in order, with their frame positions. The
+    /// rest are counted, the first time this segment is read only: a torn
+    /// final write, damage (the segment stops there; reported by name
+    /// only), a record that doesn't open, or one too old.
+    pub fn read(&mut self, seq: u64, now: i64) -> Result<Segment, SpoolError> {
         let path = self.dir.join(segment_name(seq, SEGMENT_EXT));
         let bytes = read_capped(&path, SEGMENT_BYTES + MAX_FRAME as u64 + FRAME_HEAD as u64)?;
-        let mut records = Vec::new();
-        let mut damage = Vec::new();
+        let count = self.counted.insert(seq);
+        let mut seg = Segment {
+            seq,
+            records: Vec::new(),
+            index: Vec::new(),
+            frames: 0,
+            damage: Vec::new(),
+        };
         let decoded = match decode_segment(&bytes) {
             Ok(d) if d.header.worker == self.worker && d.header.seq == seq => d,
             _ => {
-                self.damaged(seq, "header", &mut damage);
-                return Ok(Segment {
-                    seq,
-                    records,
-                    damage,
-                });
+                self.damaged(seq, "header", count, &mut seg.damage);
+                return Ok(seg);
             }
         };
+        seg.frames = decoded.frames.len();
         match decoded.tail {
             Tail::Clean => {}
-            Tail::Torn => bump(&self.stats.dropped_torn),
-            Tail::Corrupt => self.damaged(seq, "frame", &mut damage),
+            Tail::Torn if count => bump(&self.stats.dropped_torn),
+            Tail::Torn => {}
+            Tail::Corrupt => self.damaged(seq, "frame", count, &mut seg.damage),
         }
         let oldest = now.saturating_sub(self.caps.max_age_secs);
         let context = self.context(seq);
-        for frame in decoded.frames {
+        for (i, frame) in decoded.frames.into_iter().enumerate() {
             let Ok(plain) = self.sealer.open(&context, frame) else {
-                self.damaged(seq, "seal", &mut damage);
+                self.damaged(seq, "seal", count, &mut seg.damage);
                 continue;
             };
             match Record::decode(&plain[..]) {
-                Ok(r) if r.at < oldest => bump(&self.stats.dropped_old),
-                Ok(r) => records.push(r),
-                Err(_) => self.damaged(seq, "record", &mut damage),
+                Ok(r) if r.at < oldest => {
+                    // Once per record, even one that turned old between
+                    // two reads.
+                    if self.old.insert((seq, i)) {
+                        bump(&self.stats.dropped_old);
+                    }
+                }
+                Ok(r) => {
+                    seg.records.push(r);
+                    seg.index.push(i);
+                }
+                Err(_) => self.damaged(seq, "record", count, &mut seg.damage),
             }
         }
-        Ok(Segment {
-            seq,
-            records,
-            damage,
-        })
+        Ok(seg)
     }
 
-    fn damaged(&self, seq: u64, part: &'static str, out: &mut Vec<Damage>) {
-        bump(&self.stats.dropped_corrupt);
+    fn damaged(&self, seq: u64, part: &'static str, count: bool, out: &mut Vec<Damage>) {
+        if count {
+            bump(&self.stats.dropped_corrupt);
+        }
         out.push(Damage {
             segment: segment_name(seq, SEGMENT_EXT),
             part,
@@ -944,23 +988,51 @@ impl Spool {
         })
     }
 
-    /// Removes closed segment `seq` securely (overwrite, sync, unlink),
-    /// with `records` of its records leaving the count.
-    pub fn remove(&mut self, seq: u64, records: u64) -> Result<(), SpoolError> {
-        let Some(bytes) = self.closed.remove(&seq) else {
+    /// Removes closed segment `seq` securely (overwrite, sync, unlink).
+    /// It leaves the counts only once it's gone: a removal that fails
+    /// (a file another program holds open on Windows) keeps it, to be
+    /// tried again.
+    pub fn remove(&mut self, seq: u64) -> Result<(), SpoolError> {
+        if !self.closed.contains_key(&seq) {
             return Ok(());
-        };
+        }
         secure_remove(&self.dir.join(segment_name(seq, SEGMENT_EXT)))?;
         sync_dir(&self.dir)?;
-        self.stats.bytes.fetch_sub(bytes, Ordering::Relaxed);
-        let _ = self
-            .stats
-            .records
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
-                Some(n.saturating_sub(records))
-            });
+        self.forget(seq);
         bump(&self.stats.removed);
         Ok(())
+    }
+
+    /// Removes closed segment `seq` as wholly past the age cap
+    /// ([`is_expired`](Self::is_expired)): its records not counted as old
+    /// yet are, without opening any.
+    pub fn drop_expired(&mut self, seq: u64) -> Result<(), SpoolError> {
+        let Some(c) = self.closed.get(&seq).copied() else {
+            return Ok(());
+        };
+        let counted = self.old.iter().filter(|&&(s, _)| s == seq).count() as u64;
+        self.remove(seq)?;
+        self.stats
+            .dropped_old
+            .fetch_add(c.frames.saturating_sub(counted), Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Stops tracking closed segment `seq` without touching the disk: one
+    /// that can't be read or removed now is left for the next start, so it
+    /// never holds up the segments after it.
+    pub fn forget(&mut self, seq: u64) {
+        if let Some(c) = self.closed.remove(&seq) {
+            self.counted.remove(&seq);
+            self.old.retain(|&(s, _)| s != seq);
+            let sub = |n: &AtomicU64, by: u64| {
+                let _ = n.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                    Some(v.saturating_sub(by))
+                });
+            };
+            sub(&self.stats.bytes, c.bytes);
+            sub(&self.stats.records, c.frames);
+        }
     }
 
     /// Re-seals every segment with the sealer's current key (a secrets-key
@@ -983,6 +1055,7 @@ impl Spool {
             }
             let context = self.context(seq);
             let mut out = decoded.header.encode().to_vec();
+            let mut frames = 0;
             for frame in &decoded.frames {
                 let Ok(plain) = self.sealer.open(&context, frame) else {
                     bump(&self.stats.dropped_corrupt);
@@ -993,13 +1066,23 @@ impl Spool {
                     .seal(&context, &plain[..])
                     .map_err(|_| SpoolError::Seal)?;
                 out.extend_from_slice(&encode_frame(&sealed).map_err(SpoolError::Format)?);
+                frames += 1;
             }
+            // Renamed over the old file, whose blocks aren't zeroed: what
+            // they hold is sealed under the key about to be retired.
             write_atomic(&self.dir, seq, &out)?;
-            let old = self.closed.insert(seq, out.len() as u64).unwrap_or(0);
+            self.forget(seq);
+            self.closed.insert(
+                seq,
+                Closed {
+                    bytes: out.len() as u64,
+                    frames,
+                },
+            );
             self.stats
                 .bytes
                 .fetch_add(out.len() as u64, Ordering::Relaxed);
-            self.stats.bytes.fetch_sub(old, Ordering::Relaxed);
+            self.stats.records.fetch_add(frames, Ordering::Relaxed);
             rewritten += 1;
         }
         Ok(rewritten)
@@ -1017,6 +1100,29 @@ fn read_capped(path: &Path, cap: u64) -> Result<Vec<u8>, SpoolError> {
         .read_to_end(&mut out)
         .map_err(io_err("read a segment of"))?;
     Ok(out)
+}
+
+/// Counts a segment's frames by their lengths alone (no sum checked, no
+/// body read), for the records gauge at open.
+fn count_frames(path: &Path) -> io::Result<u64> {
+    let file = File::open(path)?;
+    let len = file.metadata()?.len();
+    let mut r = BufReader::new(file);
+    r.seek(SeekFrom::Start(HEADER_LEN as u64))?;
+    let mut at = HEADER_LEN as u64;
+    let mut n = 0;
+    let mut head = [0u8; FRAME_HEAD];
+    while at + FRAME_HEAD as u64 <= len {
+        r.read_exact(&mut head)?;
+        let body = u64::from(u32::from_le_bytes(head[..4].try_into().expect("4 bytes")));
+        if body == 0 || body > MAX_FRAME as u64 || at + FRAME_HEAD as u64 + body > len {
+            break;
+        }
+        r.seek_relative(body as i64)?;
+        at += FRAME_HEAD as u64 + body;
+        n += 1;
+    }
+    Ok(n)
 }
 
 fn bump(n: &AtomicU64) {

@@ -77,13 +77,19 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// The spool, shared by the runtime's tasks.
+/// The spool, shared by the runtime's tasks. It's opened on a blocking
+/// thread by the session task as it starts ([`start`](Self::start)), never
+/// on an async thread: opening lists the folder and removes leftovers.
 #[derive(Debug)]
 pub struct WorkerSpool {
-    spool: Arc<Mutex<Spool>>,
-    stats: Arc<SpoolStats>,
+    config: SpoolConfig,
+    worker: u32,
+    spool: Arc<Mutex<Option<Spool>>>,
+    stats: std::sync::OnceLock<Arc<SpoolStats>>,
     full: AtomicBool,
-    /// Write and read failures (the disk, not the format).
+    /// The spool couldn't be opened: the runtime runs without one.
+    pub unavailable: AtomicBool,
+    /// Write, read and removal failures (the disk, not the format).
     pub errors: AtomicU64,
     /// Lease-count drift seen after a replay: the difference between the
     /// worker's leases and the coordinator's, each time they differed.
@@ -92,7 +98,7 @@ pub struct WorkerSpool {
     compare: AtomicBool,
 }
 
-/// One spooled record being replayed: its segment and position.
+/// One spooled record being replayed: its segment and frame position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Origin {
     pub seq: u64,
@@ -108,11 +114,12 @@ pub struct Replayed {
     pub payload: Vec<u8>,
 }
 
-/// The segment being replayed: which of its records are accepted.
+/// The segment being replayed: which of its frames are done (accepted, or
+/// never to be sent: too old or damaged), by frame position.
 #[derive(Debug, Default)]
 pub struct Replay {
     current: Option<(u64, Vec<bool>)>,
-    /// Records accepted from segments read since (kept across sessions).
+    /// Frames accepted from segments read since (kept across sessions).
     accepted: HashMap<u64, Vec<bool>>,
 }
 
@@ -130,9 +137,9 @@ impl Replay {
         }
     }
 
-    /// Marks `from` accepted; `Some((seq, records))` once its whole
-    /// segment is, for removal.
-    pub fn accepted(&mut self, from: Origin) -> Option<(u64, u64)> {
+    /// Marks `from` accepted; `Some(seq)` once its whole segment is done,
+    /// for removal.
+    pub fn accepted(&mut self, from: Origin) -> Option<u64> {
         let (seq, done) = self.current.as_mut()?;
         if *seq != from.seq {
             return None;
@@ -141,39 +148,69 @@ impl Replay {
             *d = true;
         }
         if done.iter().all(|&d| d) {
-            let n = done.len() as u64;
             let seq = *seq;
             self.current = None;
             self.accepted.remove(&seq);
-            return Some((seq, n));
+            return Some(seq);
         }
         None
     }
 }
 
+/// What reading the next segment found.
+enum Next {
+    Empty,
+    /// Wholly past the age cap, or unreadable: removed or set aside.
+    Skip,
+    Read(lodestar_pipeline::spool::Segment),
+}
+
 impl WorkerSpool {
-    /// Opens the spool for `worker` (blocking: lists the folder).
-    pub fn open(config: &SpoolConfig, worker: u32) -> Result<WorkerSpool, SpoolError> {
-        let spool = Spool::open(&config.dir, worker, config.caps, config.sealer.clone())?;
-        let stats = spool.stats();
-        Ok(WorkerSpool {
-            spool: Arc::new(Mutex::new(spool)),
-            stats,
+    /// The spool for `worker`, not opened yet (no I/O here).
+    pub fn new(config: SpoolConfig, worker: u32) -> WorkerSpool {
+        WorkerSpool {
+            config,
+            worker,
+            spool: Arc::new(Mutex::new(None)),
+            stats: std::sync::OnceLock::new(),
             full: AtomicBool::new(false),
+            unavailable: AtomicBool::new(false),
             errors: AtomicU64::new(0),
             drift: AtomicU64::new(0),
             compare: AtomicBool::new(false),
-        })
+        }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub fn stats(&self) -> &SpoolStats {
-        &self.stats
+    /// Opens the folder on a blocking thread. `false` if it couldn't be
+    /// opened: counted, and the runtime keeps batches in memory as before.
+    pub async fn start(&self) -> bool {
+        let (config, worker) = (self.config.clone(), self.worker);
+        let opened = tokio::task::spawn_blocking(move || {
+            Spool::open(&config.dir, worker, config.caps, config.sealer)
+        })
+        .await;
+        match opened {
+            Ok(Ok(spool)) => {
+                let _ = self.stats.set(spool.stats());
+                *lock(&self.spool) = Some(spool);
+                true
+            }
+            _ => {
+                self.unavailable.store(true, Ordering::Release);
+                self.errors.fetch_add(1, Ordering::Relaxed);
+                false
+            }
+        }
+    }
+
+    /// The spool's counters (`None` until it's open).
+    pub fn stats(&self) -> Option<&SpoolStats> {
+        self.stats.get().map(|s| &**s)
     }
 
     /// Bytes on disk now (the heartbeat's `spool_bytes`).
     pub fn bytes(&self) -> u64 {
-        self.stats.bytes.load(Ordering::Relaxed)
+        self.stats().map_or(0, |s| s.bytes.load(Ordering::Relaxed))
     }
 
     /// Whether the last write found the spool full (fetching pauses).
@@ -181,18 +218,21 @@ impl WorkerSpool {
         self.full.load(Ordering::Acquire)
     }
 
+    /// Runs `f` on the open spool on a blocking thread; `None` if it isn't
+    /// open (or the thread failed).
     async fn blocking<T: Send + 'static>(
         &self,
         f: impl FnOnce(&mut Spool) -> T + Send + 'static,
     ) -> Option<T> {
         let spool = self.spool.clone();
-        tokio::task::spawn_blocking(move || f(&mut lock(&spool)))
+        tokio::task::spawn_blocking(move || lock(&spool).as_mut().map(f))
             .await
             .ok()
+            .flatten()
     }
 
-    /// Writes one batch. `false` if it wasn't (full, or the disk failed):
-    /// the batch stays in memory and is sent once a session is up.
+    /// Writes one batch. `false` if it wasn't (full, no spool, or the disk
+    /// failed): the batch stays in memory and is sent once a session is up.
     pub async fn put(
         &self,
         kind: Kind,
@@ -207,13 +247,13 @@ impl WorkerSpool {
             leases,
             payload,
         };
-        let r = self.blocking(move |s| s.append(&record, record.at)).await;
-        match r {
+        match self.blocking(move |s| s.append(&record, record.at)).await {
             Some(Ok(())) => true,
             Some(Err(SpoolError::Full)) => {
                 self.full.store(true, Ordering::Release);
                 false
             }
+            None if self.unavailable.load(Ordering::Acquire) => false,
             _ => {
                 self.errors.fetch_add(1, Ordering::Relaxed);
                 false
@@ -223,16 +263,18 @@ impl WorkerSpool {
 
     /// Syncs what was appended (the end of each round of writes).
     pub async fn sync(&self) {
-        if !matches!(self.blocking(|s| s.sync()).await, Some(Ok(()))) {
+        if matches!(self.blocking(|s| s.sync()).await, Some(Err(_))) {
             self.errors.fetch_add(1, Ordering::Relaxed);
         }
     }
 
     /// The next segment's records to replay, oldest first, starting it in
-    /// `replay`; `None` when nothing is spooled. Segments wholly past the
-    /// age cap, and segments with nothing left to send, are removed on
-    /// the way. Damage is counted (`dropped_corrupt`) and named by segment
-    /// only, never by its bytes.
+    /// `replay`; empty when nothing is spooled. On the way, a segment
+    /// wholly past the age cap or with nothing left to send is removed,
+    /// and one that can't be read is set aside until the next start, so it
+    /// never holds up the rest. Damage is counted (`dropped_corrupt`).
+    /// After it, the caller re-checks the pool's pause (a removal can
+    /// clear "full").
     pub async fn next(&self, replay: &mut Replay) -> Vec<Replayed> {
         loop {
             let now = unix_now();
@@ -242,35 +284,60 @@ impl WorkerSpool {
                         s.close_active()?;
                     }
                     let Some(seq) = s.segments().first().copied() else {
-                        return Ok(None);
+                        return Ok(Next::Empty);
                     };
                     if s.is_expired(seq, now) {
-                        let seg = s.read(seq, now)?;
-                        s.remove(seq, seg.records.len() as u64)?;
-                        return Ok(Some((seq, Vec::new(), Vec::new())));
+                        // Every record in it is past the cap: dropped and
+                        // counted without opening any.
+                        if s.drop_expired(seq).is_err() {
+                            s.forget(seq);
+                        }
+                        return Ok(Next::Skip);
                     }
-                    let seg = s.read(seq, now)?;
-                    Ok::<_, SpoolError>(Some((seq, seg.records, seg.damage)))
+                    match s.read(seq, now) {
+                        Ok(seg) => Ok(Next::Read(seg)),
+                        // Gone, or unreadable now: set aside.
+                        Err(_) => {
+                            s.forget(seq);
+                            Err(SpoolError::Io("read", std::io::ErrorKind::Other))
+                        }
+                    }
                 })
                 .await;
-            let (seq, records, _damage) = match read {
-                Some(Ok(Some(r))) => r,
-                Some(Ok(None)) => return Vec::new(),
-                _ => {
-                    self.errors.fetch_add(1, Ordering::Relaxed);
-                    return Vec::new();
+            let seg = match read {
+                Some(Ok(Next::Read(seg))) => seg,
+                Some(Ok(Next::Skip)) => {
+                    self.after_removal().await;
+                    continue;
                 }
+                Some(Err(_)) => {
+                    self.errors.fetch_add(1, Ordering::Relaxed);
+                    self.after_removal().await;
+                    continue;
+                }
+                Some(Ok(Next::Empty)) | None => return Vec::new(),
             };
-            let done = replay
+            let seq = seg.seq;
+            // Done: accepted on an earlier read, or never to be sent (too
+            // old, damaged), by frame position.
+            let mut done = replay
                 .accepted
                 .remove(&seq)
-                .filter(|d| d.len() == records.len())
-                .unwrap_or_else(|| vec![false; records.len()]);
-            let out: Vec<Replayed> = records
+                .filter(|d| d.len() == seg.frames)
+                .unwrap_or_else(|| vec![false; seg.frames]);
+            let mut live = vec![false; seg.frames];
+            for &i in &seg.index {
+                live[i] = true;
+            }
+            for (d, l) in done.iter_mut().zip(&live) {
+                *d |= !l;
+            }
+            let out: Vec<Replayed> = seg
+                .records
                 .into_iter()
-                .enumerate()
-                .filter(|(i, _)| !done[*i])
-                .map(|(index, r)| Replayed {
+                .zip(seg.index)
+                .filter(|(_, i)| !done[*i])
+                .map(|(r, index)| Replayed {
                     from: Origin { seq, index },
                     kind: r.kind,
                     leases: r.leases,
@@ -278,7 +345,7 @@ impl WorkerSpool {
                 })
                 .collect();
             if out.is_empty() {
-                self.remove(seq, done.len() as u64).await;
+                self.remove(seq).await;
                 continue;
             }
             replay.current = Some((seq, done));
@@ -286,27 +353,38 @@ impl WorkerSpool {
         }
     }
 
-    /// Removes a segment securely once all of it is accepted.
-    pub async fn remove(&self, seq: u64, records: u64) {
+    /// Removes a segment securely (all of it accepted, or past the age
+    /// cap). One that can't be removed now is set aside until the next
+    /// start, so replay goes on.
+    pub async fn remove(&self, seq: u64) {
         let r = self
             .blocking(move |s| {
-                s.remove(seq, records)?;
-                // Half empty again (so a spool near its cap doesn't flap).
-                Ok::<_, SpoolError>(s.bytes() <= s.caps().max_bytes() / 2)
+                let r = s.remove(seq);
+                if r.is_err() {
+                    s.forget(seq);
+                }
+                r
             })
             .await;
-        match r {
-            Some(Ok(room)) => {
-                if room {
-                    self.full.store(false, Ordering::Release);
-                }
-                if self.bytes() == 0 {
-                    self.compare.store(true, Ordering::Release);
-                }
-            }
-            _ => {
-                self.errors.fetch_add(1, Ordering::Relaxed);
-            }
+        if !matches!(r, Some(Ok(()))) {
+            self.errors.fetch_add(1, Ordering::Relaxed);
+        }
+        self.after_removal().await;
+    }
+
+    /// After any segment leaves: "full" clears once the spool is half
+    /// empty (so one near its cap doesn't flap), and an empty spool asks
+    /// for the lease-count comparison.
+    async fn after_removal(&self) {
+        let room = self
+            .blocking(|s| s.bytes() <= s.caps().max_bytes() / 2)
+            .await
+            .unwrap_or(true);
+        if room {
+            self.full.store(false, Ordering::Release);
+        }
+        if self.bytes() == 0 {
+            self.compare.store(true, Ordering::Release);
         }
     }
 
@@ -366,8 +444,18 @@ pub fn needs_reseal(data: &Path, worker: u32, secrets: &SecretStore) -> Result<b
         if path.extension().is_none_or(|e| e != "lsp") {
             continue;
         }
-        let bytes =
-            std::fs::read(&path).map_err(|e| ClusterError::Io("read the spool", e.kind()))?;
+        // Capped as the spool's own reads are: a segment never exceeds it.
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(
+            &mut std::io::Read::take(
+                std::fs::File::open(&path)
+                    .map_err(|e| ClusterError::Io("read the spool", e.kind()))?,
+                lodestar_pipeline::spool::SEGMENT_BYTES
+                    + 2 * lodestar_pipeline::spool::MAX_FRAME as u64,
+            ),
+            &mut bytes,
+        )
+        .map_err(|e| ClusterError::Io("read the spool", e.kind()))?;
         let Ok(d) = lodestar_pipeline::spool::decode_segment(&bytes) else {
             continue;
         };
@@ -411,7 +499,7 @@ mod tests {
     }
 
     fn records(sp: &WorkerSpool) -> u64 {
-        sp.stats().records.load(Ordering::Relaxed)
+        sp.stats().map_or(0, |s| s.appended.load(Ordering::Relaxed))
     }
 
     async fn accept(
@@ -561,6 +649,58 @@ mod tests {
         rt.shutdown().await;
     }
 
+    /// A full spool that ages out entirely while offline: on the next
+    /// session every segment is dropped by its age, "full" clears and the
+    /// pool resumes (the self-review's B2).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_full_spool_that_ages_out_resumes_fetching() {
+        let dir = tempfile::tempdir().unwrap();
+        let caps = Caps::unclamped(3_000, 3600);
+        let mut rt = Runtime::start(spooled(dir.path(), caps));
+        let (_coord, session) = session_pair().await;
+        rt.connected(session.handle());
+        rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
+        rt.disconnected();
+        let out = rt.test_outbound();
+        let sp = rt.spool().unwrap();
+        let mut n = 0u64;
+        while !sp.is_full() {
+            n += 1;
+            assert!(n < 200, "never full");
+            out.send(sealed(n as usize)).await.unwrap();
+            until("spooled or full", || {
+                (records(&sp) == n || sp.is_full(), records(&sp))
+            })
+            .await;
+        }
+        rt.shutdown().await;
+        drop(sp);
+        // Two days on: every segment is wholly past the age cap.
+        for e in std::fs::read_dir(dir.path()).unwrap() {
+            let path = e.unwrap().path();
+            let mut bytes = std::fs::read(&path).unwrap();
+            let mut h = lodestar_pipeline::spool::Header::decode(&bytes).unwrap();
+            h.created -= 2 * 86_400;
+            bytes[..lodestar_pipeline::spool::HEADER_LEN].copy_from_slice(&h.encode());
+            std::fs::write(&path, &bytes).unwrap();
+        }
+        let mut rt = Runtime::start(spooled(dir.path(), caps));
+        let sp = rt.spool().unwrap();
+        until("opened", || (sp.stats().is_some(), ())).await;
+        // Full, as a live worker would be at the reconnect.
+        sp.full.store(true, Ordering::Release);
+        assert!(rt.test_pool_paused());
+        let (_coord, session) = session_pair().await;
+        rt.connected(session.handle());
+        rt.event(WorkerEvent::Assign(assignment(2, 0, 1)));
+        until("drained by age", || (sp.bytes() == 0, sp.bytes())).await;
+        until("resumed", || (!rt.test_pool_paused(), sp.is_full())).await;
+        let st = sp.stats().unwrap();
+        assert!(st.dropped_old.load(Ordering::Relaxed) >= 1);
+        assert_eq!(st.records.load(Ordering::Relaxed), 0);
+        rt.shutdown().await;
+    }
+
     /// A torrent fetched from a known peer and spooled: no form of the
     /// peer's address is in the segment, sealed or opened.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -612,28 +752,45 @@ mod tests {
                 .any(|n| hay.windows(n.len()).any(|w| w == n.as_slice()))
         };
         let sealer: Arc<dyn Sealer> = Arc::new(SecretStore::from_key(&[4; 32]));
-        let spool = Spool::open(dir.path(), W.0, Caps::default(), sealer.clone()).unwrap();
+        let mut spool = Spool::open(dir.path(), W.0, Caps::default(), sealer.clone()).unwrap();
         let segs = spool.segments();
         assert_eq!(segs.len(), 1);
         let bytes = std::fs::read(dir.path().join(format!("{:016x}.lsp", segs[0]))).unwrap();
         assert!(!has(&bytes), "the segment names the peer");
         let seg = spool.read(segs[0], unix_now()).unwrap();
         assert_eq!(seg.records.len(), 1);
+        // Inside each payload too: its records opened with the wire key,
+        // as the coordinator opens them, and re-encoded in clear.
+        let keys = lodestar_pipeline::wire::filter_snapshot::WireKeys::default();
+        keys.set(crate::cluster::filter::wire_keys(&[4; 32], unix_now()));
         for r in &seg.records {
             assert!(!has(&r.encode().unwrap()), "a record names the peer");
             assert_eq!(r.leases, vec![(key_of(&raw).0, 9)]);
+            let (_, sealed) = ResultsBatch::decode_with(&r.payload).unwrap();
+            assert_eq!(sealed.len(), 1);
+            for s in &sealed {
+                let opened = keys.open(s, W).expect("the record opens");
+                let clear = ResultsBatch {
+                    batch: 1,
+                    records: vec![opened],
+                }
+                .encode()
+                .unwrap();
+                assert!(!has(&clear), "an opened record names the peer");
+            }
         }
     }
 
-    #[test]
-    fn a_reconcile_counts_the_drift() {
+    #[tokio::test]
+    async fn a_reconcile_counts_the_drift() {
         let dir = tempfile::tempdir().unwrap();
         let config = SpoolConfig {
             dir: dir.path().to_path_buf(),
             caps: Caps::default(),
             sealer: Arc::new(SecretStore::from_key(&[4; 32])),
         };
-        let sp = WorkerSpool::open(&config, 1).unwrap();
+        let sp = WorkerSpool::new(config, 1);
+        assert!(sp.start().await);
         assert_eq!(sp.reconcile(5, 5), 0);
         assert_eq!(sp.reconcile(3, 5), 2);
         assert_eq!(sp.reconcile(6, 5), 1);
@@ -650,7 +807,8 @@ mod tests {
         layout.save(&creds).unwrap();
         let mut config = SpoolConfig::for_layout(&layout).unwrap();
         config.caps = Caps::default();
-        let sp = WorkerSpool::open(&config, worker).unwrap();
+        let sp = WorkerSpool::new(config, worker);
+        assert!(sp.start().await);
         assert!(
             sp.put(Kind::Results, 1, vec![([1; 20], 2)], b"payload".to_vec())
                 .await
@@ -663,7 +821,7 @@ mod tests {
         assert_ne!(secrets.primary_key_id(), old);
         assert_eq!(secrets.key_count(), 1, "the old key is retired");
         assert!(!needs_reseal(&layout.data, worker, &secrets).unwrap());
-        let spool = Spool::open(
+        let mut spool = Spool::open(
             &layout.data.join(SPOOL_DIR),
             worker,
             Caps::default(),

@@ -46,7 +46,7 @@ fn only_segment(dir: &Path) -> std::path::PathBuf {
     files.pop().unwrap()
 }
 
-fn all_records(s: &Spool, now: i64) -> Vec<Record> {
+fn all_records(s: &mut Spool, now: i64) -> Vec<Record> {
     s.segments()
         .into_iter()
         .flat_map(|seq| s.read(seq, now).unwrap().records)
@@ -121,8 +121,8 @@ fn records_written_are_read_back_in_order_across_a_reopen() {
     }
     s.close_active().unwrap();
     drop(s);
-    let s = spool(dir.path(), Caps::default());
-    assert_eq!(all_records(&s, NOW), written);
+    let mut s = spool(dir.path(), Caps::default());
+    assert_eq!(all_records(&mut s, NOW), written);
     assert!(s.bytes() > 0);
 }
 
@@ -158,8 +158,8 @@ fn a_torn_final_record_is_dropped_not_half_used() {
     let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
     file.set_len(len - 7).unwrap();
     drop(file);
-    let s = spool(dir.path(), Caps::default());
-    let got = all_records(&s, NOW);
+    let mut s = spool(dir.path(), Caps::default());
+    let got = all_records(&mut s, NOW);
     assert_eq!(got, vec![record(1, NOW, 400), record(2, NOW, 400)]);
     assert_eq!(
         s.stats()
@@ -238,7 +238,7 @@ fn records_older_than_the_age_cap_are_dropped_and_counted() {
         .unwrap();
     s.append(&record(2, NOW - 5, 10), NOW).unwrap();
     s.close_active().unwrap();
-    assert_eq!(all_records(&s, NOW), vec![record(2, NOW - 5, 10)]);
+    assert_eq!(all_records(&mut s, NOW), vec![record(2, NOW - 5, 10)]);
     assert_eq!(
         s.stats()
             .dropped_old
@@ -260,7 +260,7 @@ fn removal_overwrites_then_unlinks() {
     // A second link sees the same bytes: they're zeros before the unlink.
     let peek = dir.path().join("peek");
     fs::hard_link(&path, &peek).unwrap();
-    s.remove(1, 1).unwrap();
+    s.remove(1).unwrap();
     assert!(!path.exists());
     assert!(fs::read(&peek).unwrap().iter().all(|&b| b == 0));
     assert_eq!(s.bytes(), 0);
@@ -341,7 +341,7 @@ fn a_reseal_moves_every_record_to_the_new_key() {
     // Nothing left to do on a second run.
     assert_eq!(s.reseal().unwrap(), 0);
     store.retire_old_keys().unwrap();
-    let s = Spool::open(
+    let mut s = Spool::open(
         dir.path(),
         W,
         Caps::default(),
@@ -349,7 +349,7 @@ fn a_reseal_moves_every_record_to_the_new_key() {
     )
     .unwrap();
     assert_eq!(
-        all_records(&s, NOW),
+        all_records(&mut s, NOW),
         (1..=3).map(|b| record(b, NOW, 200)).collect::<Vec<_>>()
     );
     assert_eq!(s.bytes(), seg.len() as u64);
