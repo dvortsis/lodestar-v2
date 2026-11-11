@@ -255,6 +255,20 @@ class Wake(unittest.TestCase):
         del self.store.objects[CLAUDE_LOCK_KEY]
         self.assertEqual(self.outputs(wake_env()[0], FakeAnthropic()), (0, ""))
 
+    def test_a_create_without_an_id_still_says_started(self):
+        # The session may exist server-side even if the reply was lost or malformed.
+        env, _ = wake_env()
+
+        class Api(FakeAnthropic):
+            def __call__(self, method, path, body):
+                if method == "POST" and path == "/v1/sessions":
+                    self.calls.append((method, path, body))
+                    return {}
+                return super().__call__(method, path, body)
+        rc, out = self.outputs(env, Api())
+        self.assertIsInstance(rc, SystemExit)
+        self.assertEqual(out, "started=true\n")
+
     def test_a_failure_after_the_start_has_already_said_started(self):
         env, _ = wake_env()
 

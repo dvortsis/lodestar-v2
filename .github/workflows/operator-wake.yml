@@ -87,7 +87,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45 # the session's 30 minutes, the setup and the cleanup; under the lock's 60
     outputs:
-      started: ${{ steps.wake.outputs.started }} # "true" once a session has started
+      started: ${{ steps.wake.outputs.started }} # "true" once a session may exist
     permissions:
       contents: read
       pull-requests: write
@@ -121,8 +121,8 @@ jobs:
         id: wake
         run: python3 infra/operator/wake.py wake
 
-  # The end-of-session tripwire sweep (plan "Loosenings"): no secrets. Only after a
-  # session really started, or the wake job failed or was cancelled: a refusal (rate
+  # The end-of-session tripwire sweep (plan "Loosenings"): no secrets. Only once a
+  # session may exist, or the wake job failed or was cancelled: a refusal (rate
   # limit, duplicate id, $ cap, busy lock) exits 0 and costs no sweep.
   sweep:
     needs: [gate, wake]
