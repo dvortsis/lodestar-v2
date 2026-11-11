@@ -130,6 +130,7 @@ struct State {
     password: String,
     prefs: Map<String, Value>,
     sessions: u32,
+    failed_logins: u32,
     seen: Vec<Seen>,
     /// The version to switch to once the plan is made (a qBittorrent
     /// updated between the plan and the apply).
@@ -152,6 +153,7 @@ fn fake(version: &'static str) -> Fake {
         password: PASTED.to_owned(),
         prefs: prefs.as_object().unwrap().clone(),
         sessions: 0,
+        failed_logins: 0,
         seen: Vec::new(),
         then: None,
     })))
@@ -210,6 +212,7 @@ impl Fake {
                 s.sessions += 1;
                 return (200, b"Ok.".to_vec(), Some(format!("SID=sid{}", s.sessions)));
             }
+            s.failed_logins += 1;
             return (200, b"Fails.".to_vec(), None);
         }
         let authed = headers
@@ -412,9 +415,11 @@ async fn a_version_outside_the_pin_is_refused_before_anything_is_written() {
         assert_eq!(err, AdapterError::Refused(VERSION_UNSUPPORTED), "{found}");
         assert!(http.writes().is_empty(), "{found}");
         assert_eq!(http.0.lock().unwrap().password, PASTED);
-        // The plain message names both versions, nothing qBittorrent sent.
+        // The plain message names both versions, nothing qBittorrent sent,
+        // and the gate keeps it for the screen.
         let msg = gate.explain(&Version::parse(found).unwrap()).unwrap();
         assert!(msg.contains(found) && msg.contains("5.0.3"), "{msg}");
+        assert_eq!(gate.last_refusal().unwrap().to_string(), msg);
     }
     let gate = WindowsQBittorrent::new(pinned("5.0.3"));
     assert_eq!(gate.explain(&Version::parse("5.0.9").unwrap()), None);
@@ -443,7 +448,8 @@ async fn an_unpinned_installer_or_an_unreadable_version_refuses() {
     let http = fake("5.0.3");
     let err = gate.plan(&http, &t, &input(&creds, &t)).await.unwrap_err();
     assert_eq!(err, AdapterError::Refused(AWAITING_PIN));
-    assert!(http.writes().is_empty());
+    // Refused before anything is sent: not even a sign-in.
+    assert!(http.0.lock().unwrap().seen.is_empty());
 
     let gate = WindowsQBittorrent::new(pinned("5.0.3"));
     let http = fake("5.0.3-beta");
@@ -470,6 +476,40 @@ async fn a_wrong_password_costs_one_sign_in() {
         .count();
     assert_eq!(logins, 1);
     assert!(!format!("{err:?} {err}").contains(PASTED));
+}
+
+fn failed_logins(http: &Fake) -> u32 {
+    http.0.lock().unwrap().failed_logins
+}
+
+/// The gate checks on CMP-8b's own session, so it never adds a failed
+/// sign-in: a stored credential that isn't qBittorrent's yet costs one in
+/// the plan, and a retried apply whose password was already replaced costs
+/// one in the apply, as without the gate.
+#[tokio::test]
+async fn the_gate_adds_no_sign_in_of_its_own() {
+    let gate = WindowsQBittorrent::new(pinned("5.0.3"));
+    let http = fake("5.0.3");
+    let creds = Creds(GENERATED);
+    let t = loopback();
+    let i = input(&creds, &t);
+    let plan = gate.plan(&http, &t, &i).await.unwrap();
+    assert_eq!(failed_logins(&http), 1);
+    assert_eq!(gate.last_refusal(), None);
+    // An earlier apply already wrote the generated password.
+    http.0.lock().unwrap().password = GENERATED.into();
+    let dyn_gate: &dyn Configure = &gate;
+    dyn_gate.apply(&http, &t, &i, &plan).await.unwrap();
+    assert_eq!(failed_logins(&http), 2);
+    let version_reads = http
+        .0
+        .lock()
+        .unwrap()
+        .seen
+        .iter()
+        .filter(|r| r.path == "/api/v2/app/version" && r.headers.iter().any(|(n, _)| n == "cookie"))
+        .count();
+    assert_eq!(version_reads, 2, "checked in the plan and the apply");
 }
 
 /// The gate is what `configure::configurator` hands out on Windows; with
@@ -550,7 +590,7 @@ fn windows_paths_refuse_hostile_inputs() {
         (r"C:\Downloads:hidden", Character),
         (r"C:\PROGRA~1\x", Character),
         (r"\\nas\C$", Character),
-        (r"\\localhost\ADMIN$\x", Character),
+        (r"\\nas\ADMIN$\x", Character),
         (r"C:\%APPDATA%\x", Character),
         (r"C:\Down*", Character),
         ("C:\\Downloads\u{ff0e}\u{ff0e}", Character),
@@ -570,6 +610,28 @@ fn windows_paths_refuse_hostile_inputs() {
         (r"C:\Users\me", Forbidden),
         (r"C:\Users\me\AppData\Roaming\qBittorrent", Forbidden),
         (r"C:\Users\me\.ssh", Forbidden),
+        // Junctions Windows ships into the refused folders.
+        (r"C:\Users\All Users\Lodestar", Forbidden),
+        (r"C:\Users\Default User\x", Forbidden),
+        (r"C:\Documents and Settings\me\Downloads", Forbidden),
+        (r"C:\Users\me\Application Data\x", Forbidden),
+        (r"C:\Users\me\Local Settings\Temp", Forbidden),
+        (r"C:\Users\me\Start Menu", Forbidden),
+        (r"C:\Users\me\SendTo", Forbidden),
+        // UNC: this machine, pipes and mailslots, and shared system roots.
+        (r"\\localhost\Users\me\AppData\Roaming", Forbidden),
+        (r"\\LOCALHOST\downloads", Forbidden),
+        (r"\\127.0.0.1\downloads", Forbidden),
+        (r"\\127.1\downloads", Forbidden),
+        (r"\\2130706433\downloads", Forbidden),
+        (r"\\0.0.0.0\downloads", Forbidden),
+        (r"\\a.localhost\downloads", Forbidden),
+        (r"\\nas\pipe\x", Forbidden),
+        (r"\\nas\MailSlot\x", Forbidden),
+        (r"\\nas\Users\me\AppData", Forbidden),
+        (r"\\nas\Windows\System32", Forbidden),
+        (r"\\nas\ProgramData\Lodestar", Forbidden),
+        (r"\\nas\share\", Component),
         // UNC without a share.
         (r"\\nas", Component),
         (r"\\nas\", Component),
@@ -638,4 +700,59 @@ async fn a_windows_save_path_is_compared_and_written_as_windows_does() {
         http.0.lock().unwrap().prefs["save_path"],
         json!(r"D:\Torrents")
     );
+}
+
+#[test]
+fn same_compares_as_windows_does() {
+    let p = WindowsPath::parse(r"\\nas\Media\Done").unwrap();
+    for have in [
+        r"\\nas\media\done",
+        "//nas/Media/Done/",
+        r"\\NAS\Media\Done\",
+    ] {
+        assert!(p.same(have), "{have}");
+    }
+    assert!(!p.same(r"\\nas\Media"));
+    assert!(!p.same(r"\\nas\Media\Done2"));
+    let d = WindowsPath::parse(r"D:\Torrents").unwrap();
+    assert!(d.same("d:/torrents/") && d.same(r"D:\Torrents\"));
+    assert!(!d.same(r"D:\"));
+}
+
+proptest::proptest! {
+    /// Whatever is typed, an accepted path has none of the refused shapes.
+    #[test]
+    fn an_accepted_path_is_never_a_refused_shape(
+        s in proptest::prop_oneof![
+            ".{0,80}",
+            r"([A-Za-z]:|\\\\[a-z0-9.?-]{0,6})(\\[A-Za-z0-9 ._$~:/?-]{0,12}){0,5}",
+        ]
+    ) {
+        if let Ok(p) = WindowsPath::parse(&s) {
+            let t = p.as_str();
+            proptest::prop_assert!(t.is_ascii() && !t.contains('/'));
+            proptest::prop_assert!(!t.starts_with(r"\\?") && !t.starts_with(r"\\.") && !t.starts_with(r"\??"));
+            proptest::prop_assert!(!t[2..].contains(':'));
+            proptest::prop_assert!(p.same(t));
+            let start = if t.starts_with(r"\\") { 2 } else { 3 };
+            let folders: Vec<String> = t[start..].split('\\').map(str::to_ascii_lowercase).collect();
+            for (i, f) in folders.iter().enumerate() {
+                proptest::prop_assert!(!f.is_empty() && f != "." && f != "..");
+                proptest::prop_assert!(!f.ends_with('.') && !f.ends_with(' ') && !f.starts_with(' '));
+                let stem = f.split('.').next().unwrap().trim_end();
+                proptest::prop_assert!(!["con", "prn", "aux", "nul"].contains(&stem));
+                proptest::prop_assert!(!(stem.len() == 4 && (stem.starts_with("com") || stem.starts_with("lpt")) && stem.as_bytes()[3].is_ascii_digit()));
+                if i == 0 && start == 2 {
+                    proptest::prop_assert!(f != "localhost" && !f.starts_with("127."));
+                }
+            }
+            let rooted = if start == 2 { &folders[1..] } else { &folders[..] };
+            if let Some(first) = rooted.first() {
+                proptest::prop_assert!(!["windows", "programdata", "program files", "documents and settings"].contains(&first.as_str()));
+                if first == "users" {
+                    proptest::prop_assert!(rooted.len() >= 3 && rooted[2] != "appdata" && rooted[1] != "all users");
+                }
+            }
+        }
+    }
 }

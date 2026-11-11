@@ -118,14 +118,33 @@ fn limits() -> Limits {
 }
 
 /// The qBittorrent configuration adapter.
-#[derive(Debug)]
 pub struct QBittorrent {
     id: CompanionId,
+    /// CMP-11's version gate on Windows; `None` elsewhere.
+    gate: Option<VersionGate>,
+}
+
+impl std::fmt::Debug for QBittorrent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QBittorrent")
+            .field("id", &self.id)
+            .field("gate", &self.gate.is_some())
+            .finish()
+    }
 }
 
 impl QBittorrent {
     pub(crate) fn new(id: CompanionId) -> QBittorrent {
-        QBittorrent { id }
+        QBittorrent { id, gate: None }
+    }
+
+    /// With CMP-11's version gate, checked right after each sign-in on the
+    /// same session, so it costs no sign-in of its own.
+    pub(crate) fn gated(id: CompanionId, gate: VersionGate) -> QBittorrent {
+        QBittorrent {
+            id,
+            gate: Some(gate),
+        }
     }
 }
 
@@ -419,19 +438,22 @@ async fn call(
     }
 }
 
-/// The version a signed-in qBittorrent reports, for CMP-11's Windows
-/// gate. Consent first, as for every other call; the sign-in is the
-/// adapter's own ([`sign_in`]).
-pub(crate) async fn signed_in_version(
+/// A check of the signed-in qBittorrent's version, run on the adapter's
+/// own session before anything is read or written (CMP-11's Windows gate).
+/// It sees only Lodestar's parsed [`Version`].
+pub(crate) type VersionGate = Box<dyn Fn(&Version) -> Result<(), AdapterError> + Send + Sync>;
+
+/// Reads the version on `session` and runs `gate` on it.
+async fn check_version(
     http: &dyn GuardedHttp,
     target: &Target,
-    input: &ConfigureInput<'_>,
-    temporary_first: bool,
-) -> Result<Version, AdapterError> {
-    consent(input, target)?;
-    let (session, _) = sign_in(http, target, input, temporary_first).await?;
-    let r = call(http, target, &session, VERSION, None).await?;
-    crate::detect::qbittorrent::parse_version(r.body()).ok_or(AdapterError::Protocol("version"))
+    session: &Session,
+    gate: &VersionGate,
+) -> Result<(), AdapterError> {
+    let r = call(http, target, session, VERSION, None).await?;
+    let v = crate::detect::qbittorrent::parse_version(r.body())
+        .ok_or(AdapterError::Protocol("version"))?;
+    gate(&v)
 }
 
 async fn read_prefs(
@@ -593,6 +615,9 @@ impl QBittorrent {
         let guided = matches!(input.origin, Origin::Guided { .. });
         let bypassed = guided && auth_bypassed(http, target).await?;
         let (session, temporary) = sign_in(http, target, input, false).await?;
+        if let Some(g) = &self.gate {
+            check_version(http, target, &session, g).await?;
+        }
         let prefs = read_prefs(http, target, &session).await?;
         if loosens(&w, &prefs) {
             return Err(AdapterError::Refused(WOULD_LOOSEN));
@@ -631,6 +656,11 @@ impl QBittorrent {
         let (session, _) = sign_in(http, target, input, listed(&PASSWORD))
             .await
             .map_err(|e| failed(ID, "apply", e))?;
+        if let Some(g) = &self.gate {
+            check_version(http, target, &session, g)
+                .await
+                .map_err(|e| failed(ID, "version", e))?;
+        }
         let stored = credential(input, Field::WebUiPassword).map_err(|e| failed(ID, "apply", e))?;
 
         // The password first: qBittorrent printed the temporary one to its

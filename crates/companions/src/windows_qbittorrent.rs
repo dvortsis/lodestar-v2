@@ -35,13 +35,14 @@
 //! in a URL, a log line, an error or `Debug`.
 
 use std::fmt;
+use std::sync::{Arc, Mutex};
 
 use crate::adapter::{
     AdapterError, BoxFuture, CheckedPlan, ConfigPlan, Configure, ConfigureInput, GuardedHttp,
     Target,
 };
 use crate::catalogue::{Arch, ArchiveKind, Entry, NotAvailable, Pin, Platform};
-use crate::configure::qbittorrent;
+use crate::configure::{self, qbittorrent};
 use crate::inputs::{CompanionId, InputError, Version};
 
 /// qBittorrent's own download page. The installer is linked from there;
@@ -119,9 +120,11 @@ impl Supported {
     }
 
     pub fn check(&self, found: &Version) -> Result<(), Unsupported> {
+        // `Version` already holds digits only; anything unreadable counts
+        // as outside the range rather than as `0`.
         let mm = |v: &Version| {
-            let mut it = v.as_str().split('.').map(|p| p.parse::<u32>().unwrap_or(0));
-            (it.next().unwrap_or(0), it.next().unwrap_or(0))
+            let mut it = v.as_str().split('.').map(|p| p.parse::<u32>().ok());
+            (it.next().flatten(), it.next().unwrap_or(Some(0)))
         };
         let out = |older| {
             let (found, pinned) = (found.clone(), self.pinned.clone());
@@ -133,7 +136,7 @@ impl Supported {
         };
         if *found < self.pinned {
             out(true)
-        } else if mm(found) != mm(&self.pinned) {
+        } else if mm(found).0.is_none() || mm(found) != mm(&self.pinned) {
             out(false)
         } else {
             Ok(())
@@ -312,19 +315,24 @@ impl Guide {
 
 // ─── The configuration gate ─────────────────────────────────────────────
 
-/// CMP-8b's qBittorrent adapter with the Windows version gate: signed in,
-/// a version outside the pin's range is refused before anything is
-/// written. Registered for qBittorrent on Windows
-/// ([`crate::configure::configurator`]).
+/// CMP-8b's qBittorrent adapter with the Windows version gate. Signed in,
+/// on the adapter's own session (so it costs no sign-in of its own), a
+/// version outside the pin's range is refused before anything is read or
+/// written, in the plan and again in the apply. Registered for qBittorrent
+/// on Windows ([`crate::configure::configurator`]).
 pub struct WindowsQBittorrent {
-    inner: Box<dyn Configure>,
-    entry: &'static Entry,
+    id: CompanionId,
+    /// `None` only if the compiled-in catalogue couldn't be read: then
+    /// every call refuses ([`NO_INSTALLER`]).
+    entry: Option<&'static Entry>,
+    inner: qbittorrent::QBittorrent,
+    refused: Arc<Mutex<Option<Unsupported>>>,
 }
 
 impl fmt::Debug for WindowsQBittorrent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WindowsQBittorrent")
-            .field("companion", &self.entry.id)
+            .field("companion", &self.id)
             .finish_non_exhaustive()
     }
 }
@@ -332,42 +340,74 @@ impl fmt::Debug for WindowsQBittorrent {
 impl WindowsQBittorrent {
     /// For `entry`, the catalogue's qBittorrent.
     pub fn new(entry: &'static Entry) -> WindowsQBittorrent {
+        WindowsQBittorrent::with(entry.id.clone(), Some(entry))
+    }
+
+    fn with(id: CompanionId, entry: Option<&'static Entry>) -> WindowsQBittorrent {
+        let refused = Arc::new(Mutex::new(None));
+        let supported = entry
+            .and_then(|e| Installer::of(e).ok())
+            .map(|i| i.supported());
+        let seen = Arc::clone(&refused);
+        let gate: qbittorrent::VersionGate = Box::new(move |found: &Version| {
+            // Unpinned never reaches here (`ready`); refuse all the same.
+            let Some(s) = &supported else {
+                return Err(AdapterError::Refused(AWAITING_PIN));
+            };
+            let r = s.check(found);
+            let ok = r.is_ok();
+            if let Ok(mut last) = seen.lock() {
+                *last = r.err();
+            }
+            if ok {
+                Ok(())
+            } else {
+                Err(AdapterError::Refused(VERSION_UNSUPPORTED))
+            }
+        });
         WindowsQBittorrent {
-            inner: Box::new(qbittorrent::QBittorrent::new(entry.id.clone())),
+            inner: qbittorrent::QBittorrent::gated(id.clone(), gate),
+            id,
             entry,
+            refused,
         }
     }
 
-    /// Signs in and checks the version against the pin.
-    async fn gate(
-        &self,
-        http: &dyn GuardedHttp,
-        target: &Target,
-        input: &ConfigureInput<'_>,
-        temporary_first: bool,
-    ) -> Result<(), AdapterError> {
-        let supported = match Installer::of(self.entry) {
-            Ok(i) => i.supported(),
-            Err(NotAvailable::AwaitingPin) => return Err(AdapterError::Refused(AWAITING_PIN)),
-            Err(_) => return Err(AdapterError::Refused(NO_INSTALLER)),
-        };
-        let found = qbittorrent::signed_in_version(http, target, input, temporary_first).await?;
-        supported
-            .check(&found)
-            .map_err(|_| AdapterError::Refused(VERSION_UNSUPPORTED))
+    /// Refuses before anything is sent while there's no pin to check
+    /// against.
+    fn ready(&self) -> Result<(), AdapterError> {
+        let entry = self.entry.ok_or(AdapterError::Refused(NO_INSTALLER))?;
+        match Installer::of(entry) {
+            Ok(_) => Ok(()),
+            Err(NotAvailable::AwaitingPin) => Err(AdapterError::Refused(AWAITING_PIN)),
+            Err(_) => Err(AdapterError::Refused(NO_INSTALLER)),
+        }
+    }
+
+    /// Why the last call was refused with [`VERSION_UNSUPPORTED`]: the
+    /// version found and the pinned one, for the screen's plain message
+    /// (its `Display`). `None` after a call that wasn't.
+    pub fn last_refusal(&self) -> Option<Unsupported> {
+        self.refused.lock().ok()?.clone()
     }
 
     /// Why `found` is refused, as a plain message, or `None` when it's
     /// supported. For the screen's text beside [`VERSION_UNSUPPORTED`].
     pub fn explain(&self, found: &Version) -> Option<String> {
-        let i = Installer::of(self.entry).ok()?;
+        let i = Installer::of(self.entry?).ok()?;
         i.supported().check(found).err().map(|u| u.to_string())
+    }
+
+    fn clear(&self) {
+        if let Ok(mut last) = self.refused.lock() {
+            *last = None;
+        }
     }
 }
 
 impl Configure for WindowsQBittorrent {
     fn companion(&self) -> &CompanionId {
-        &self.entry.id
+        &self.id
     }
 
     fn plan<'a>(
@@ -377,11 +417,10 @@ impl Configure for WindowsQBittorrent {
         input: &'a ConfigureInput<'a>,
     ) -> BoxFuture<'a, Result<ConfigPlan, AdapterError>> {
         Box::pin(async move {
-            // CMP-8b's plan first: a wrong password then costs one refused
-            // sign-in, as on any other platform.
-            let plan = self.inner.plan(http, target, input).await?;
-            self.gate(http, target, input, false).await?;
-            Ok(plan)
+            self.clear();
+            self.ready()
+                .map_err(|e| configure::failed(qbittorrent::ID, "version", e))?;
+            self.inner.plan(http, target, input).await
         })
     }
 
@@ -393,20 +432,21 @@ impl Configure for WindowsQBittorrent {
         plan: CheckedPlan<'a>,
     ) -> BoxFuture<'a, Result<(), AdapterError>> {
         Box::pin(async move {
-            // The gate before any write: a qBittorrent changed between the
-            // plan and the apply is checked again.
-            let replaces = plan.plan().changes().contains(&qbittorrent::PASSWORD);
-            self.gate(http, target, input, replaces).await?;
+            self.clear();
+            self.ready()
+                .map_err(|e| configure::failed(qbittorrent::ID, "version", e))?;
+            // An empty plan writes nothing, so CMP-8b sends nothing and
+            // there's no session to check on.
             self.inner.apply_plan(http, target, input, plan).await
         })
     }
 }
 
 /// The Windows configurator for qBittorrent, from the compiled-in
-/// catalogue.
+/// catalogue. Always one: without the catalogue it refuses every call.
 pub(crate) fn configurator(id: &CompanionId) -> Option<Box<dyn Configure>> {
-    let entry = crate::builtin().ok()?.get(id.as_str())?;
-    Some(Box::new(WindowsQBittorrent::new(entry)))
+    let entry = crate::builtin().ok().and_then(|c| c.get(id.as_str()));
+    Some(Box::new(WindowsQBittorrent::with(id.clone(), entry)))
 }
 
 // ─── Windows save paths ─────────────────────────────────────────────────
@@ -419,8 +459,9 @@ pub const WINDOWS_PATH_MAX: usize = 247;
 /// (`C:\x\nul.txt` is the null device).
 const DEVICES: &[&str] = &["con", "prn", "aux", "nul"];
 
-/// Folders directly in a drive's root that a companion is never given,
-/// with everything below them.
+/// Folders directly in a drive's root (or a share's) that a companion is
+/// never given, with everything below them. `documents and settings` is a
+/// junction to `Users`.
 const FORBIDDEN_ROOTS: &[&str] = &[
     "windows",
     "program files",
@@ -429,7 +470,31 @@ const FORBIDDEN_ROOTS: &[&str] = &[
     "recovery",
     "boot",
     "perflogs",
+    "documents and settings",
 ];
+
+/// Junctions in `Users` that Windows ships: `All Users` is
+/// `C:\ProgramData` (Lodestar's own data), `Default User` is `Default`.
+const USERS_JUNCTIONS: &[&str] = &["all users", "default user"];
+
+/// Folders directly in a profile that a companion is never given:
+/// `AppData`, and the junctions Windows ships into it.
+const PROFILE_FORBIDDEN: &[&str] = &[
+    "appdata",
+    "application data",
+    "local settings",
+    "cookies",
+    "nethood",
+    "printhood",
+    "recent",
+    "sendto",
+    "start menu",
+    "templates",
+];
+
+/// Share names that aren't folders: the named-pipe and mailslot
+/// namespaces reached over UNC.
+const RESERVED_SHARES: &[&str] = &["pipe", "mailslot"];
 
 /// A save path for qBittorrent on Windows, as qBittorrent itself sees it.
 ///
@@ -461,8 +526,20 @@ const FORBIDDEN_ROOTS: &[&str] = &[
 ///   `AppData` or dot folders (`.ssh`) with everything below them.
 ///   `C:\Users\<name>\Downloads` is fine.
 ///
+/// - the junctions Windows ships into those: `Documents and Settings`,
+///   `Users\All Users` (`ProgramData`), `Users\Default User`, and a
+///   profile's `Application Data`, `Local Settings`, `Cookies`, `NetHood`,
+///   `PrintHood`, `Recent`, `SendTo`, `Start Menu` and `Templates`;
+/// - for a UNC path, a loopback server (`localhost`, `127.x`, all-numeric
+///   short forms), the `pipe` and `mailslot` shares, and the same folders
+///   as above after the share (a share may be a drive's root).
+///
 /// Compared without case, as Windows does. Lodestar's own data on Windows
 /// is under `C:\ProgramData\Lodestar`, which the list keeps out.
+///
+/// **What this can't see:** it checks the path as typed. A junction or
+/// link you made yourself, or this machine reached by its own name or a
+/// LAN address, passes. The guide says to pick a plain downloads folder.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WindowsPath(String);
 
@@ -482,6 +559,9 @@ impl WindowsPath {
             let mut parts = unc.split('\\');
             let server = parts.next().unwrap_or("");
             host_name(server)?;
+            if loopback(server) {
+                return Err(InputError::Forbidden);
+            }
             let rest: Vec<&str> = parts.collect();
             if rest.is_empty() {
                 return Err(InputError::Component);
@@ -489,7 +569,10 @@ impl WindowsPath {
             for c in &rest {
                 folder(c)?;
             }
-            return Ok(WindowsPath(s.to_owned()));
+            if RESERVED_SHARES.contains(&rest[0].to_ascii_lowercase().as_str()) {
+                return Err(InputError::Forbidden);
+            }
+            rest
         } else if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
             if b.get(2) != Some(&b'\\') {
                 return Err(InputError::NotAbsolute);
@@ -497,13 +580,16 @@ impl WindowsPath {
             if b.len() == 3 {
                 return Err(InputError::Forbidden);
             }
-            s[3..].split('\\').collect()
+            let f: Vec<&str> = s[3..].split('\\').collect();
+            for c in &f {
+                folder(c)?;
+            }
+            f
         } else {
             return Err(InputError::NotAbsolute);
         };
-        for c in &folders {
-            folder(c)?;
-        }
+        // A share may be a drive's root shared (`\\nas\Users`), so the same
+        // folders are refused after it.
         if forbidden(&folders) {
             return Err(InputError::Forbidden);
         }
@@ -586,15 +672,38 @@ fn host_name(s: &str) -> Result<(), InputError> {
     }
 }
 
-/// Whether a drive path's folders (at least one) name a forbidden folder
-/// or one that contains one.
+/// Whether a UNC server is this machine by a loopback name: `localhost`
+/// (and below it), or any all-numeric name, which Windows may read as an
+/// IPv4 address in a short or decimal form (`127.1`, `2130706433`), unless
+/// it's a full dotted address outside `127.0.0.0/8` and `0.0.0.0/8`. The
+/// machine's own name can't be known here (see [`WindowsPath`]).
+fn loopback(server: &str) -> bool {
+    let s = server.to_ascii_lowercase();
+    if s == "localhost" || s.ends_with(".localhost") {
+        return true;
+    }
+    if !s.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
+        return false;
+    }
+    let octets: Vec<Option<u8>> = s.split('.').map(|o| o.parse().ok()).collect();
+    !(octets.len() == 4
+        && octets.iter().all(Option::is_some)
+        && !matches!(octets[0], Some(0 | 127)))
+}
+
+/// Whether a path's folders (at least one; after the drive, or the share
+/// and what follows it) name a forbidden folder or one that contains one.
 fn forbidden(original: &[&str]) -> bool {
     let c: Vec<String> = original.iter().map(|x| x.to_ascii_lowercase()).collect();
     let first = c[0].as_str();
     if FORBIDDEN_ROOTS.contains(&first) || first.starts_with("program files ") {
         return true;
     }
-    first == "users" && (c.len() <= 2 || c[2] == "appdata" || c[2].starts_with('.'))
+    first == "users"
+        && (c.len() <= 2
+            || USERS_JUNCTIONS.contains(&c[1].as_str())
+            || PROFILE_FORBIDDEN.contains(&c[2].as_str())
+            || c[2].starts_with('.'))
 }
 
 #[cfg(test)]
