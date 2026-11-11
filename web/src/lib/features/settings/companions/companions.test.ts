@@ -101,16 +101,16 @@ describe('the list', () => {
 		expect(document.body.textContent).not.toContain('native_in_container');
 		expect(screen.getByText(/can't install this program itself/)).toBeTruthy();
 	});
-	it('says the route is copied at first start and that a change restarts it', async () => {
+	it('says the route is copied at first start and that a later change does not reach it', async () => {
 		await open();
 		expect(screen.getAllByText(/copied from the source that needs it/).length).toBeGreaterThan(0);
-		expect(screen.getAllByText(/restarts the companion/).length).toBeGreaterThan(0);
+		expect(screen.getAllByText(/keeps the route it started with/).length).toBeGreaterThan(0);
 	});
 	it('warns about email, a FlareSolverr pairing and indexer proxies on SOCKS5', async () => {
 		await open();
-		expect(screen.getByText(/Email notifications connect directly/)).toBeTruthy();
-		expect(screen.getByText(/FlareSolverr pairing leaves directly/)).toBeTruthy();
-		expect(screen.getByText(/Per-indexer proxies .* bypass the route/)).toBeTruthy();
+		expect(screen.getByText(/email notifications connect directly/)).toBeTruthy();
+		expect(screen.getByText(/a FlareSolverr pairing leaves directly/)).toBeTruthy();
+		expect(screen.getByText(/per-indexer proxies .* bypass the route/)).toBeTruthy();
 	});
 });
 
