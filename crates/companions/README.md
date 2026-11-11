@@ -80,7 +80,7 @@ Each entry has at least one of `native` and `container`. An entry needed for `vp
 
 ## Unpinned entries
 The v0.6 entries follow owner §2.47 (cq6):
-- **qBittorrent:** the userdocs static `qbittorrent-nox` on Linux x86_64 and aarch64 (Windows is CMP-11's), and `lscr.io/linuxserver/qbittorrent`;
+- **qBittorrent:** the userdocs static `qbittorrent-nox` on Linux x86_64 and aarch64; on Windows x64, upstream's installer, which Lodestar only shows with its pinned version and SHA-256 and never downloads or runs (owner cq4, CMP-11's `windows_qbittorrent`); and `lscr.io/linuxserver/qbittorrent`;
 - **Prowlarr:** upstream builds for Linux x86_64 and aarch64 and Windows x64, and `lscr.io/linuxserver/prowlarr`;
 - **gluetun:** container only, `docker.io/qmcgaw/gluetun`;
 - **FlareSolverr:** comes with CMP-12, opt-in.

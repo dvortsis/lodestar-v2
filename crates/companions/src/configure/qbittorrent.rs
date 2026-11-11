@@ -49,12 +49,13 @@ use crate::adapter::{
     SettingKey, Target,
 };
 use crate::credentials::Field;
-use crate::inputs::CompanionId;
+use crate::inputs::{CompanionId, Version};
 use crate::log_events::CONFIG_APPLIED;
 
 use super::{
-    BIND_UNSUITED, CONTENT_TYPE, Origin, PLAN_MISMATCH, ROUTE_UNSUPPORTED, Route, UNKNOWN_SETTING,
-    WOULD_LOOSEN, WebUiBind, consent, cookie, credential, failed, form, header, key, plain,
+    BIND_UNSUITED, CONTENT_TYPE, Origin, PLAN_MISMATCH, ROUTE_UNSUPPORTED, Route, SavePath,
+    UNKNOWN_SETTING, WOULD_LOOSEN, WebUiBind, consent, cookie, credential, failed, form, header,
+    key, plain,
 };
 
 /// Its catalogue id.
@@ -298,6 +299,15 @@ fn same_path(a: &str, b: &str) -> bool {
     trim(a) == trim(b)
 }
 
+/// The save path qBittorrent has against the wanted one: a Windows path
+/// without case and with either separator (CMP-11), else [`same_path`].
+fn same_save_path(have: &str, want: &SavePath) -> bool {
+    match want {
+        SavePath::Host(p) => same_path(have, p.as_str()),
+        SavePath::Windows(p) => p.same(have),
+    }
+}
+
 /// Two bind addresses: both empty, or the same address however written.
 fn same_address(have: &str, want: &str) -> bool {
     match (have.trim(), want) {
@@ -409,6 +419,21 @@ async fn call(
     }
 }
 
+/// The version a signed-in qBittorrent reports, for CMP-11's Windows
+/// gate. Consent first, as for every other call; the sign-in is the
+/// adapter's own ([`sign_in`]).
+pub(crate) async fn signed_in_version(
+    http: &dyn GuardedHttp,
+    target: &Target,
+    input: &ConfigureInput<'_>,
+    temporary_first: bool,
+) -> Result<Version, AdapterError> {
+    consent(input, target)?;
+    let (session, _) = sign_in(http, target, input, temporary_first).await?;
+    let r = call(http, target, &session, VERSION, None).await?;
+    crate::detect::qbittorrent::parse_version(r.body()).ok_or(AdapterError::Protocol("version"))
+}
+
 async fn read_prefs(
     http: &dyn GuardedHttp,
     target: &Target,
@@ -454,7 +479,7 @@ fn differing(input: &ConfigureInput<'_>, w: &Wanted, p: &Prefs) -> Vec<SettingKe
         out.push(LOCAL_AUTH);
     }
     if let Some(d) = &input.downloads
-        && !same_path(&p.save_path, d.save_path().as_str())
+        && !same_save_path(&p.save_path, d.save_path())
     {
         out.push(SAVE_PATH);
     }

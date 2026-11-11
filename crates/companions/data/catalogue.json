@@ -16,7 +16,8 @@
         "release": "https://github.com/userdocs/qbittorrent-nox-static/releases/download/",
         "artifacts": [
           {"platform": "linux", "arch": "x86_64", "archive": "binary", "executable": null, "pin": null},
-          {"platform": "linux", "arch": "aarch64", "archive": "binary", "executable": null, "pin": null}
+          {"platform": "linux", "arch": "aarch64", "archive": "binary", "executable": null, "pin": null},
+          {"platform": "windows", "arch": "x86_64", "archive": "installer", "executable": null, "pin": null}
         ]
       },
       "container": {"image": "lscr.io/linuxserver/qbittorrent", "digest": null, "name": "qbittorrent"},
