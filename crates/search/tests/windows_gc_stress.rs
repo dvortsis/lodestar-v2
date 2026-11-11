@@ -13,7 +13,9 @@
 //!
 //! - no commit, merge or collection fails or panics while maps are held;
 //! - a held lease keeps returning what it returned when taken;
-//! - every committed torrent is found by a search taken after the commit;
+//! - every committed torrent is found by a search taken after the commit,
+//!   and each is found alone by its own word once the run settles;
+//! - merges land: the final segment count is a fraction of the commits;
 //! - once every lease is gone and one more commit runs, each index folder
 //!   holds only its live segments' files (per its own `meta.json`), its
 //!   meta files and locks: every delete that failed was retried;
@@ -291,7 +293,8 @@ fn read_meta(dir: &Path) -> Vec<u8> {
     loop {
         match std::fs::read(&path) {
             Ok(bytes) => return bytes,
-            Err(_) if Instant::now() < until => std::thread::yield_now(),
+            // Polls a condition (the replace finishing), not a pause.
+            Err(_) if Instant::now() < until => std::thread::sleep(Duration::from_millis(1)),
             Err(e) => panic!("reading {}: {e}", path.display()),
         }
     }
@@ -467,11 +470,7 @@ fn merges_and_collection_while_readers_hold_maps() {
     assert_eq!(index.num_docs(), committed);
     // Each torrent has two files.
     assert_eq!(index.num_files(), committed * 2);
-    let merged = ever.iter().map(HashSet::len).sum::<usize>();
-    assert!(
-        merged > 2 * 8,
-        "only {merged} segments ever: the run never merged"
-    );
+    let segments_ever = ever.iter().map(HashSet::len).sum::<usize>();
     // On Windows a held map makes the delete fail; the run must have
     // shown that, or it tested nothing there. Elsewhere unlinking a
     // mapped file succeeds and this is normally 0 (not asserted).
@@ -482,14 +481,32 @@ fn merges_and_collection_while_readers_hold_maps() {
         );
     }
 
-    drop(indexer);
+    // The production shutdown: waits for the merges in flight, so none
+    // finishes after `settle` has looked, and fails if one failed.
+    indexer.finish().unwrap();
     let rounds = settle(&index, &root);
-    // Everything committed is still there after the collections.
+    // Tantivy only logs a failed merge. Every commit made a segment in
+    // each index, so without merges each would hold one per commit.
+    let segments = index.segment_counts();
+    assert!(
+        segments.iter().all(|&n| n < COMMITS / 10),
+        "{segments:?} live segments after {COMMITS} commits: merges didn't land"
+    );
+    // Everything committed is still there after the merges, each torrent
+    // found alone by its own word.
     let all = lease(&index, CORPUS);
     assert_eq!(all.total().value as u64, committed);
+    for id in 1..=committed as i64 {
+        assert_eq!(
+            page_ids(&lease(&index, &word(id))),
+            [id as u64],
+            "torrent {id} ({}) not found alone after settling",
+            word(id)
+        );
+    }
     eprintln!(
-        "{COMMITS} commits, {committed} torrents, {} leases, {merged} segments, \
-         {survived} retired segments outlived a collection, settled in {rounds} round(s)",
+        "{COMMITS} commits, {committed} torrents, {} leases, {segments_ever} segments ever, \
+         {segments:?} at the end, {survived} retired segments outlived a collection, settled in {rounds} round(s)",
         taken.load(Ordering::Relaxed)
     );
 }
