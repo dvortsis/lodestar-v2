@@ -26,5 +26,5 @@
   <text x="322" y="240" fill="#243C44" font-family="&#x27;Atkinson Hyperlegible Mono&#x27;, Consolas, monospace" font-size="12">balanced</text>
   <path d="M1 262 L719 262 L719 299 Q719 307 711 307 L9 307 Q1 307 1 299 Z" fill="#E0E7E2"/>
   <line x1="1" y1="262" x2="719" y2="262" stroke="#DFDFDF" stroke-width="1"/>
-  <text x="18" y="285" fill="#6B6B6B" font-family="&#x27;Atkinson Hyperlegible Next&#x27;, -apple-system, BlinkMacSystemFont, &#x27;Segoe UI&#x27;, sans-serif" font-size="11">Illustration, not a live screenshot · Source: packaging/unraid/lodestar.xml:30-33</text>
+  <text x="18" y="285" fill="#6B6B6B" font-family="&#x27;Atkinson Hyperlegible Next&#x27;, -apple-system, BlinkMacSystemFont, &#x27;Segoe UI&#x27;, sans-serif" font-size="11">Illustration, not a live screenshot · Source: packaging/unraid/lodestar.xml:28-31</text>
 </svg>
