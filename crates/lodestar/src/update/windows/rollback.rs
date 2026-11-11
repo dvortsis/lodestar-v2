@@ -146,6 +146,10 @@ pub struct Journal {
     /// Restarts that didn't put `from` back.
     #[serde(default)]
     pub restarts: u32,
+    /// The rollback's reinstalls in a row that failed on 1920
+    /// ([`msi::held_open`]), bounded by [`msi::MAX_BLOCKED`].
+    #[serde(default)]
+    pub blocked: u32,
     pub state: State,
 }
 
@@ -416,6 +420,7 @@ pub fn installing(
         reinstall_restart: false,
         restart_boot: None,
         restarts: 0,
+        blocked: 0,
         touched: false,
         state: State::Installing,
     })
@@ -431,6 +436,7 @@ pub fn probation(ctx: &Context, sys: &dyn System, mut journal: Journal, restart:
             journal,
             0,
             "the journal's version is invalid".into(),
+            Cause::Step,
         );
     };
     if restart {
@@ -561,6 +567,9 @@ enum Stop {
     Retry(String),
     /// Final: nothing more is tried.
     Halt(String),
+    /// Final too: the journal couldn't be saved, so the rollback stops
+    /// where it is (its recovery text says so, not what the step was).
+    Journal(String),
     /// The reinstall was handed to the helper's copy; the run that
     /// follows it finishes.
     HandedOff,
@@ -586,7 +595,11 @@ fn roll_back(ctx: &Context, sys: &dyn System, mut j: Journal) -> Outcome {
         Err(Stop::HandedOff) => Outcome::HandedOff,
         Err(Stop::Halt(why)) => {
             let done = done_of(&j);
-            halt(ctx, sys, j, done, why)
+            halt(ctx, sys, j, done, why, Cause::Step)
+        }
+        Err(Stop::Journal(why)) => {
+            let done = done_of(&j);
+            halt(ctx, sys, j, done, why, Cause::Journal)
         }
     }
 }
@@ -598,17 +611,33 @@ fn done_of(j: &Journal) -> u8 {
     }
 }
 
+/// What made a rollback halt, for its recovery text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cause {
+    /// A step couldn't be done (or a bound ran out).
+    Step,
+    /// The journal couldn't be saved after a step.
+    Journal,
+}
+
 /// A final stop. Neither version starts once the service was stopped
 /// (§12.2): it stays stopped and disabled, with the marker in place
 /// (it goes only at step 5). Before step 1 nothing was changed. The
 /// journal, the Event Log and `result.json` say how to recover.
-fn halt(ctx: &Context, sys: &dyn System, mut j: Journal, done: u8, why: String) -> Outcome {
+fn halt(
+    ctx: &Context,
+    sys: &dyn System,
+    mut j: Journal,
+    done: u8,
+    why: String,
+    cause: Cause,
+) -> Outcome {
     // Recorded before the rollback first touches the service: without it
     // nothing was changed.
     // A journal without the field (an earlier build) counts any rollback
     // state as touched, as before the field existed.
     let touched = j.touched || matches!(j.state, State::RollingBack { .. });
-    let recovery = recovery(ctx, &j, if touched { done.max(1) } else { 0 }, &why);
+    let recovery = recovery(ctx, &j, if touched { done.max(1) } else { 0 }, &why, cause);
     sys.event_log(&recovery);
     eprintln!("lodestar update-helper: {recovery}");
     if touched {
@@ -632,7 +661,7 @@ fn halt(ctx: &Context, sys: &dyn System, mut j: Journal, done: u8, why: String) 
 /// to bring Lodestar back. Neither the marker nor the journal starts
 /// anything by itself; removing them is the administrator's step, once
 /// the store is one the installed version reads.
-pub fn recovery(ctx: &Context, j: &Journal, done: u8, why: &str) -> String {
+pub fn recovery(ctx: &Context, j: &Journal, done: u8, why: &str, cause: Cause) -> String {
     let (from, to) = (&j.from, &j.to);
     let journal = ctx.staging.dir.join(JOURNAL);
     if done == 0 {
@@ -643,7 +672,15 @@ pub fn recovery(ctx: &Context, j: &Journal, done: u8, why: &str) -> String {
         );
     }
     let marker = ctx.data_dir.join("bin").join(MARKER);
-    let store = if done < 3 {
+    let store = if cause == Cause::Journal {
+        if done < 3 {
+            "The rollback's journal couldn't be saved, so it stopped there; the store may be \
+             half restored."
+        } else {
+            "The rollback's journal couldn't be saved, so it stopped there; the store was \
+             restored before it did."
+        }
+    } else if done < 3 {
         "The store may be half restored."
     } else if j.reinstall_restart {
         "The store was restored and the previous version reinstalled, but Windows didn't put \
@@ -683,7 +720,7 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
             snapshot: snapshot.clone(),
             done,
         };
-        write(ctx, j).map_err(|e| Stop::Halt(e.to_string()))
+        write(ctx, j).map_err(|e| Stop::Journal(e.to_string()))
     };
     // The target first: without it nothing is touched.
     if done < 4 && j.msi.is_none() {
@@ -756,6 +793,8 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
                 // Checked again right before it runs.
                 let (staged, pins) = halt_on(previous_msi(ctx, &j.from))?;
                 let log = ctx.staging.dir.join(ROLLBACK_LOG);
+                // The run's log is its own: an earlier one's 1920 is never read.
+                let _ = std::fs::remove_file(&log);
                 let copy = helper::copy_name().map_err(|e| Stop::Retry(e.to_string()))?;
                 j.msi = Some(MsiRun {
                     purpose: Purpose::Rollback,
@@ -779,7 +818,34 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
         j.answer = None;
         // A copy answered: the bound counts copies in a row that didn't.
         j.copies = 0;
+        // Any other answer ends the reinstall's step (done, a restart, or a
+        // halt), so the count needs no reset.
+        let blocked = helper::blocked_by_1920(ctx, code, &ctx.staging.dir.join(ROLLBACK_LOG));
         match msi::installed(code) {
+            msi::Installed::Failed(c) if blocked && j.blocked + 1 < msi::MAX_BLOCKED => {
+                // The service couldn't start at the reinstall's end (1920),
+                // as when lodestar.exe is held open: Windows Installer rolled
+                // it back. Kept disabled and stopped, tried again next run.
+                j.blocked += 1;
+                save(j, &snapshot, done)?;
+                stopped(sys)?;
+                return Err(Stop::Retry(format!(
+                    "reinstalling {} failed ({c}): Windows Installer couldn't start the service \
+                     (error 1920; another program may hold lodestar.exe open). Tried again at \
+                     the next run ({} of {})",
+                    j.from,
+                    j.blocked,
+                    msi::MAX_BLOCKED
+                )));
+            }
+            msi::Installed::Failed(c) if blocked => {
+                return Err(Stop::Halt(format!(
+                    "reinstalling {} failed ({c}) {} times in a row: Windows Installer couldn't \
+                     start the service (error 1920; another program may hold lodestar.exe open)",
+                    j.from,
+                    msi::MAX_BLOCKED
+                )));
+            }
             msi::Installed::Done => {}
             msi::Installed::RestartNeeded => {
                 // The old program may replace the failed one only at the
@@ -871,7 +937,7 @@ fn restarted(
         snapshot: snapshot.clone(),
         done,
     };
-    write(ctx, j).map_err(|e| Stop::Halt(e.to_string()))
+    write(ctx, j).map_err(|e| Stop::Journal(e.to_string()))
 }
 
 /// The service disabled and stopped, and nothing left running as its
