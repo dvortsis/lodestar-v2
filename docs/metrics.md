@@ -954,3 +954,18 @@ See the decisions for [WK-9](decisions/2026-11-07-WK-9.md) and [WK-9b](decisions
 | `remote_grants_held_back_total` | counter | Keys denied a new lease because the writer's queue was at or past its high-water mark (three quarters full) or the intake's queue was full (§19.5 backpressure), per key. `cluster_busy_total` counts the same denials on the server's side. |
 | `remote_parked_total` | counter | Keys waiting for a re-grant that went to the built-in worker because no cluster server was running ("Allow workers" off), with their privacy kept. |
 | `remote_parked_refused_total` | counter | Keys waiting for a re-grant that the built-in worker refused (tombstoned, quarantined or blocked by the filter): their leases ended as blocked, and they're never fetched. |
+
+## Worker spool (WK-11, 2026-11-11)
+
+See [the decision](decisions/2026-11-11-WK-11.md). A remote worker's on-disk spool (§19.6): what it fetched and processed while the coordinator couldn't be reached, kept until the coordinator accepts it. The coordinator sees only the first row, in each worker's heartbeat (`GET /workers`' `spool_bytes`). The rest are the worker's own counters (`lodestar_pipeline::spool::SpoolStats`, and the lease drift on `WorkerSpool`), process-lifetime, for the worker's own metrics when it serves them. No series carries a key, a name, a peer address or a byte of a record.
+
+| Series | Type | Meaning |
+| --- | --- | --- |
+| `spool_bytes` (heartbeat stat) | gauge | Bytes the worker's spool holds on disk now: segment headers and sealed records. At most 1 GB (the cap); 0 with nothing spooled, or no spool. |
+| `worker_spool_records` | gauge | Records (one `Results` or `Counters` batch each) spooled and not yet removed. |
+| `worker_spool_appended_total` | counter | Records written to the spool. |
+| `worker_spool_full_total` | counter | Batches the spool refused because they would pass the byte cap. They stay in memory and go out on the next session. |
+| `worker_spool_paused` | gauge | 1 while the spool is full: fetching is paused until a replay brings it back under half the cap. |
+| `worker_spool_dropped_total{reason}` | counter | Records dropped when read back, never replayed: `old` (spooled more than 24 h ago, the age cap), `torn` (a final write cut short by a crash; once per segment), `damaged` (a bad frame with more after it, which ends its segment; a record that doesn't open or decode; a segment of another worker or with an unreadable header). |
+| `worker_spool_segments_removed_total` | counter | Segments removed, overwritten with zeros first: every record accepted, wholly past the age cap, or dropped as damaged. |
+| `worker_spool_lease_drift_total` | counter | After a replay drains, the difference between the leases the worker holds and the coordinator's count for it (`HeartbeatAck.leases`), summed each time they differ. |
