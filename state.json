@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-09T05:54Z",
+  "updated_at": "2026-11-11T04:06Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4121,7 +4121,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 32,
-  "last_heartbeat": "2026-11-09T03:40Z",
+  "last_heartbeat": "2026-11-11T04:06Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -6924,7 +6924,8 @@
     "2026-10-30T22:43Z S-appearance opened #243; reviewer launched. Open PRs: #240 (review), #241 (MERGE, CI), #242 (review), #243 (review).",
     "2026-10-30T22:44Z merged #240 F-filters-packs (0cfaac67) on the reviewer's MERGE (2 mutations caught, floor untouched) and green CI incl. the filter budget. Author and reviewer archived. LU-1 lure-file follow-up stays in followups.",
     "2026-10-30T22:47Z merged #241 F-rollback-journal (953d5c41); author archived; launched F-rollback-holds (session_01MMjhnCSUiGHzqBGRGbDTLj). Check-in re-armed for 23:50Z. Open: #242 (review), #243 (review, baselines regenerating).",
-    "2026-10-30T22:48Z #242 review MERGE at 19c08f88 (mutation: restore no-op fails); reviewer archived; merge on green ci-ok."
+    "2026-10-30T22:48Z #242 review MERGE at 19c08f88 (mutation: restore no-op fails); reviewer archived; merge on green ci-ok.",
+    "2026-11-11T04:06Z resumed on owner's command (up to 8 sessions); watchdog re-enabled; launched OP-3b, X-win-upd-bounds, X-prowlarr-settings, CMP-5g-3, PK-win-portable-upd, OP-4, X-updates-api-text, X-event-names-split"
   ],
   "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
   "release": {
@@ -7368,8 +7369,9 @@
     }
   ],
   "limits": {
-    "phase_total": 12,
-    "note": "owner \u00a72.36 (2026-11-04): up to 12 slots; cut to 4 at 2026-11-06T00:00Z by trig_01RJzwL47gE81BrRv2vR2cx4 (running ones finish). \u00a72.33 auto-approve best-practice decisions. Owner 2026-11-05 ~01:20Z: memory/performance and soak r5 first; keep other slots busy with work that does not compete. The 2026-11-02 two-slot cut and launch pause are superseded. Owner 2026-11-05 ~02:45Z (\u00a72.41): until 2026-11-06T00:00Z, launch the next ready slice whenever a slot is free (critical path, then unlocks); a slot stays empty only for a recorded reason (status idle, reason in doing); hourly check from the dashboard session."
+    "phase_total": 8,
+    "note": "owner \u00a72.36 (2026-11-04): up to 12 slots; cut to 4 at 2026-11-06T00:00Z by trig_01RJzwL47gE81BrRv2vR2cx4 (running ones finish). \u00a72.33 auto-approve best-practice decisions. Owner 2026-11-05 ~01:20Z: memory/performance and soak r5 first; keep other slots busy with work that does not compete. The 2026-11-02 two-slot cut and launch pause are superseded. Owner 2026-11-05 ~02:45Z (\u00a72.41): until 2026-11-06T00:00Z, launch the next ready slice whenever a slot is free (critical path, then unlocks); a slot stays empty only for a recorded reason (status idle, reason in doing); hourly check from the dashboard session.",
+    "source": "owner 2026-11-11 (replaces \u00a72.42 4)"
   },
   "owner_instructions": [
     {
@@ -7382,56 +7384,73 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-09T12:03:06Z",
+    "updated": "2026-11-11T04:06Z",
     "items": [
       {
         "slot": 1,
-        "slice": null,
+        "slice": "OP-3b",
         "role": "build",
         "agent": "claude",
-        "doing": "idle: #653 CMP-5g-2 merged (29fd001d); runner paused, no follow-on",
-        "since": "2026-11-09T12:03:06Z",
-        "status": "idle"
+        "doing": "session_01MMjhn9NvKRMZMg1baoPCau",
+        "since": "2026-11-11T04:06Z"
       },
       {
         "slot": 2,
-        "slice": null,
+        "slice": "X-win-upd-bounds",
         "role": "build",
         "agent": "claude",
-        "doing": "idle: OP-3a #652 merged (5da6eb15); runner paused, no follow-on",
-        "since": "2026-11-09T06:28:12Z",
-        "status": "idle"
+        "doing": "session_01MMjhnABmNGgA3BNrwp6U3q",
+        "since": "2026-11-11T04:06Z"
       },
       {
         "slot": 3,
-        "slice": null,
+        "slice": "X-prowlarr-settings",
         "role": "build",
         "agent": "claude",
-        "doing": "idle: #644 merged (f44df6a8); runner paused, no follow-on",
-        "since": "2026-11-09T09:55:07Z",
-        "status": "idle"
+        "doing": "session_01MMjhn8tTJD1DZeuMq9kZKw",
+        "since": "2026-11-11T04:06Z"
       },
       {
         "slot": 4,
-        "slice": null,
+        "slice": "CMP-5g-3",
         "role": "build",
         "agent": "claude",
-        "doing": "idle: #651 merged (161c2a1f); runner paused, no follow-on",
-        "since": "2026-11-09T08:09:30Z",
-        "status": "idle"
+        "doing": "session_01MMjhnCL9xrv5oTMJ9KBcEc",
+        "since": "2026-11-11T04:06Z"
       },
       {
         "slot": 5,
-        "slice": null,
+        "slice": "PK-win-portable-upd",
         "role": "build",
         "agent": "claude",
-        "doing": "idle: runner pausing (owner, usage); no launches",
-        "since": "2026-11-08T21:39Z",
-        "status": "idle"
+        "doing": "session_01MMjhnAS5qWBVBGfPNAHPjt",
+        "since": "2026-11-11T04:06Z"
+      },
+      {
+        "slot": 6,
+        "slice": "OP-4",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhnAunU7rxhXrv1ZpJoC",
+        "since": "2026-11-11T04:06Z"
+      },
+      {
+        "slot": 7,
+        "slice": "X-updates-api-text",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhnCVGtYWSJVrREyne22",
+        "since": "2026-11-11T04:06Z"
+      },
+      {
+        "slot": 8,
+        "slice": "X-event-names-split",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhn9hN5eQzNrbjqS337K",
+        "since": "2026-11-11T04:06Z"
       }
-    ],
-    "limit": 4,
-    "limit_note": "Owner in chat 2026-11-05T16:15Z: \"Let's bring the slots down to 8. Complete the existing slices.\" Running slices finish; no refill while 8 or more run. The cut to 4 at 2026-11-06T00:00Z (trig_01RJzwL47gE81BrRv2vR2cx4) still applies. | Owner 2026-11-05T23:25Z via dashboard: \"Keep running. We have usage available.\" Usage pause lifted; fill up to 8 until 00:00Z; the cut to 4 at 00:00Z is unchanged. | Owner 2026-11-05T23:35Z: \"Use as many resources as needed to get as much done in the next 30 mins as possible.\" Owner ~23:45Z in the runner chat: \"There is no limit to slices or subagents for the next 30 mins if it would be useful to overall progress.\" Six planning slices launched 23:36-23:37Z; they finish under the 4-slot limit from 00:00Z. | 00:01Z: the weekly usage limit reset (status allowed). From ~00:15Z the 4-slot limit applies; running slices finish. | Owner \u00a72.42: limit is 4 slots (current)."
+    ]
   },
   "soak_notes_r4": "h16.77 provisional fit 12.88 MiB/h [10.95,14.81] (h12-16.7, incomplete). Likely FAIL. Step up to 418-471 MiB band; collector CPU/h rising with corpus; mmap cache bounded. X-merge-policy prioritised; rc.4 path if fail.",
   "owner_actions": [
@@ -7484,26 +7503,15 @@
       "answers": "runner recommendation on all items: X-refetch-private ships in v0.5.2; installer Repair may re-secure admin-ACE-only folder (X-win-refusal-ux); v0.5.1 release body replacement (notes/v051-release-body.md); web-ok+e2e-ok required; delete wip/CMP-0-catalogue; Q13 stands, Q14 at G-m6; import host = Unraid box; nightly key deferred; counsel advisory, no reminders; package installers after 1.0"
     }
   ],
-  "heartbeat": "2026-11-09T03:40Z",
+  "heartbeat": "2026-11-11T04:06Z",
   "updated": "2026-11-09T00:22Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
     "instruction": "Once the active sessions complete, pause the runner. No further sessions unless explicitly commanded.",
-    "state": "paused",
+    "state": "resumed",
     "active": [],
-    "no_follow_on": [
-      "OP-3b",
-      "OP-3c",
-      "X-win-upd-bounds",
-      "X-prowlarr-settings",
-      "CMP-5g-3",
-      "PK-win-portable-upd",
-      "X-updates-api-text",
-      "X-natural-wording",
-      "OP-4",
-      "X-event-names-split"
-    ],
+    "no_follow_on": [],
     "watchdog": "trig_0172BngAUoA4NRaRWBYiRWVf disabled so it can't start a replacement runner",
     "merged_during_drain": [
       "#652 OP-3a merged 5da6eb15 at 2026-11-09T06:28:12Z",
@@ -7513,6 +7521,8 @@
     ],
     "paused_at": "2026-11-09T12:03:06Z",
     "heartbeat": "trig_01U8KNWyDovQ9omwvZi8cuLW disabled at pause",
-    "resume": "only on the owner's explicit command: re-enable watchdog trig_0172BngAUoA4NRaRWBYiRWVf and heartbeat trig_01U8KNWyDovQ9omwvZi8cuLW, record the pause in owner-decisions, then the pending runner PR"
+    "resume": "only on the owner's explicit command: re-enable watchdog trig_0172BngAUoA4NRaRWBYiRWVf and heartbeat trig_01U8KNWyDovQ9omwvZi8cuLW, record the pause in owner-decisions, then the pending runner PR",
+    "resumed_at": "2026-11-11T04:06Z",
+    "resumed_by": "owner, 2026-11-11: \"We reset credit. Continue with up to 8 sessions in one time,\""
   }
 }
