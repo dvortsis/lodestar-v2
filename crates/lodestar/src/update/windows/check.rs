@@ -72,6 +72,9 @@ pub const SKIPPED_FILE: &str = "skipped";
 /// The update helper's answer, and the notice, when Windows wouldn't start
 /// the service at the end of an install (error 1920) and a retry remains.
 pub const INSTALL_BLOCKED: &str = "install_blocked";
+/// The notice for a blocked install whose retry is waiting while updates
+/// are Off: switching Off and pausing can't take it back from there.
+pub const INSTALL_BLOCKED_OFF: &str = "install_blocked_off";
 /// Why Install and Roll back refuse until they're built on Windows (the
 /// one place to change).
 pub const NOT_BUILT_YET: Reason = Reason::NotBuiltYet;
@@ -441,6 +444,9 @@ struct Inner {
     /// ([`Notifier::withdraw`]): an install that wrote its request across
     /// a bump takes the request back.
     withdrawals: std::sync::atomic::AtomicU64,
+    /// Settings changes the Off watcher has handled, for the tests.
+    #[cfg(test)]
+    handled: std::sync::atomic::AtomicU64,
     /// The version being downloaded for the helper.
     installing: Mutex<Option<Version>>,
 }
@@ -504,6 +510,8 @@ impl Notifier {
                 installer,
                 portable,
                 withdrawals: std::sync::atomic::AtomicU64::new(0),
+                #[cfg(test)]
+                handled: std::sync::atomic::AtomicU64::new(0),
                 installing: Mutex::new(None),
             }),
         };
@@ -556,48 +564,65 @@ impl Notifier {
             // between would otherwise be taken for the starting mode.
             let mut was_off = settings.borrow_and_update().mode == Mode::Off;
             tokio::spawn(async move {
+                let handle = |n: Notifier, before: bool| {
+                    blocking(move || {
+                        let mut w = before;
+                        n.settings_changed(&mut w);
+                        #[cfg(test)]
+                        n.inner
+                            .handled
+                            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        w
+                    })
+                };
                 loop {
+                    // A change waiting is handled before a stop, and once
+                    // more at the stop, so a switch to Off just before the
+                    // service stops still takes its request back.
                     tokio::select! {
-                        _ = stop.changed() => return,
+                        biased;
                         r = settings.changed() => {
                             if r.is_err() { return; }
-                            let n = n.clone();
-                            let before = was_off;
-                            was_off = blocking(move || {
-                                let mut w = before;
-                                n.settings_changed(&mut w);
-                                w
-                            })
-                            .await;
+                            was_off = handle(n.clone(), was_off).await;
+                        }
+                        _ = stop.changed() => {
+                            handle(n.clone(), was_off).await;
+                            return;
                         }
                     }
                 }
             })
         };
         tokio::spawn(async move {
-            let _watcher = AbortOnDrop(watcher);
-            loop {
-                let wait = n.until_scheduled();
-                tokio::select! {
-                    _ = stop.changed() => return,
-                    r = settings.changed() => {
-                        if r.is_err() { return; }
-                        continue;
-                    }
-                    () = sleep(wait.map(|w| w.min(MAX_SLEEP))) => {}
-                }
-                if n.due() {
-                    let one = tokio::select! {
-                        one = n.inner.checking.clone().lock_owned() => one,
+            // Aborted if this task is; otherwise waited for, so its last
+            // look at the settings at a stop always finishes.
+            let mut watcher = AbortOnDrop(watcher);
+            let checks = async {
+                loop {
+                    let wait = n.until_scheduled();
+                    tokio::select! {
                         _ = stop.changed() => return,
-                    };
-                    // Still due once the lock is ours: a manual check may
-                    // have run meanwhile.
+                        r = settings.changed() => {
+                            if r.is_err() { return; }
+                            continue;
+                        }
+                        () = sleep(wait.map(|w| w.min(MAX_SLEEP))) => {}
+                    }
                     if n.due() {
-                        n.run_check(one).await;
+                        let one = tokio::select! {
+                            one = n.inner.checking.clone().lock_owned() => one,
+                            _ = stop.changed() => return,
+                        };
+                        // Still due once the lock is ours: a manual check may
+                        // have run meanwhile.
+                        if n.due() {
+                            n.run_check(one).await;
+                        }
                     }
                 }
-            }
+            };
+            checks.await;
+            let _ = (&mut watcher.0).await;
         })
     }
 
@@ -985,7 +1010,10 @@ impl Notifier {
             // retry is still there (Off or a pause takes it back).
             let retry =
                 a.outcome == INSTALL_BLOCKED && pending_request(&ctx.data_dir) == Some(a.id);
-            notices.push(if retry {
+            notices.push(if retry && settings.mode == Mode::Off {
+                // Already Off: the way to cancel is a switch to Off.
+                INSTALL_BLOCKED_OFF.into()
+            } else if retry {
                 INSTALL_BLOCKED.into()
             } else {
                 "install_failed".into()
@@ -2383,6 +2411,15 @@ mod tests {
             has(&n, "install_blocked") && !has(&n, "install_failed"),
             "{n:?}"
         );
+        // The same while updates are already Off: switching off or pausing
+        // can't cancel it from there, so it has words of its own.
+        e.settings.send_modify(|s| s.mode = Mode::Off);
+        let n = answer("install_blocked", "0.5.4");
+        assert!(
+            has(&n, "install_blocked_off") && !has(&n, "install_blocked"),
+            "{n:?}"
+        );
+        e.settings.send_modify(|s| s.mode = Mode::Notify);
         // Blocked, but its request was taken back (Off, a pause) or is
         // another one: no retry is coming, so no "tries again".
         for other in [None, Some("cd".repeat(16))] {
@@ -2502,17 +2539,50 @@ mod tests {
         handed_over(&e).await;
         let (stop, stopped) = watch::channel(false);
         let task = e.n().spawn(stopped);
-        // Another setting changing while Off is no switch either.
+        // Another setting changing while Off is no switch either: the real
+        // watcher handles it, and the request stays.
+        let handled = || {
+            e.n()
+                .inner
+                .handled
+                .load(std::sync::atomic::Ordering::SeqCst)
+        };
         e.settings.send_modify(|s| s.level = Level::All);
-        let mut was_off = true;
-        e.n().settings_changed(&mut was_off);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while handled() == 0 {
+            assert!(
+                Instant::now() < deadline,
+                "the watcher didn't handle the change"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(request(&e).exists());
         stop.send(true).unwrap();
         task.await.unwrap();
         assert!(request(&e).exists());
     }
 
+    /// A switch to Off sent just before the stop still takes the request
+    /// back: the watcher handles a waiting change first, and once more at
+    /// the stop.
+    #[tokio::test]
+    async fn a_switch_off_just_before_a_stop_still_withdraws() {
+        let e = Env::installing();
+        handed_over(&e).await;
+        let (stop, stopped) = watch::channel(false);
+        let task = e.n().spawn(stopped);
+        e.settings.send_modify(|s| s.mode = Mode::Off);
+        stop.send(true).unwrap();
+        // The task waits for the watcher's last look.
+        task.await.unwrap();
+        assert!(!request(&e).exists(), "Off just before the stop was lost");
+    }
+
     /// A switch to Off is acted on while a check or an install holds the
-    /// check lock: the watcher doesn't wait for it.
+    /// check lock: the watcher doesn't wait for it. The scheduled check is
+    /// due here, so the check loop is parked on the lock the test holds;
+    /// and the loop never withdraws, so the removal can only be the
+    /// watcher's.
     #[tokio::test]
     async fn a_switch_off_is_seen_while_the_check_lock_is_held() {
         let e = Env::installing();

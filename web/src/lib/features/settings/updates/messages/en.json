@@ -104,6 +104,7 @@
 	"settings_updates_notice_install_failed_body": "Lodestar is still on the old version. If the installer ran, its log is msiexec.log in the updates folder inside Lodestar's install folder, for example C:\\Program Files\\Lodestar\\updates\\msiexec.log. Try again later, or download the new version's installer (.msi) and run it.",
 	"settings_updates_notice_install_blocked": "The update is waiting",
 	"settings_updates_notice_install_blocked_body": "Windows wouldn't start the Lodestar service at the end of the install, so the update wasn't installed. Nothing changed. Lodestar tries again the next time Windows starts, unless you switch updates off or pause them first.",
+	"settings_updates_notice_install_blocked_off_body": "Windows wouldn't start the Lodestar service at the end of the install, so the update wasn't installed. Nothing changed. Lodestar tries again the next time Windows starts, even with updates Off. To cancel that, set updates to Check and notify, then back to Off.",
 	"settings_updates_notice_revoked_key": "Installed under a revoked signing key",
 	"settings_updates_notice_revoked_key_body": "The key that signed this version has been revoked. Install a newer release as soon as one is offered.",
 	"settings_updates_notice_trust_damaged": "Update trust data is damaged",

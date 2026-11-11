@@ -143,6 +143,10 @@
 			m.settings_updates_notice_install_blocked,
 			m.settings_updates_notice_install_blocked_body
 		],
+		install_blocked_off: [
+			m.settings_updates_notice_install_blocked,
+			m.settings_updates_notice_install_blocked_off_body
+		],
 		channel_unavailable: [
 			m.settings_updates_notice_channel_unavailable,
 			m.settings_updates_notice_channel_unavailable_body

@@ -268,7 +268,9 @@ pub struct UpdatesStatus {
     /// `install_blocked` (that answer was a blocked install: Windows
     /// wouldn't start the service, nothing changed, and the helper tries
     /// again at the next boot unless updates are switched off or paused
-    /// first; display only), …
+    /// first; display only) and `install_blocked_off` (the same, while
+    /// updates are already Off: switching to another mode and back to Off
+    /// cancels the retry; display only), …
     pub notices: Vec<String>,
     pub history: Vec<HistoryEntry>,
 }

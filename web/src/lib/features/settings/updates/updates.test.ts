@@ -588,6 +588,20 @@ describe('the Updates screen', () => {
 		expect(screen.queryByTestId('updates-notice-install_failed')).toBeNull();
 	});
 
+	it('words install_blocked_off for updates already Off, with the way to cancel', async () => {
+		status.notices = ['install_blocked_off'];
+		render(UpdatesScreen);
+		await until(() =>
+			expect(screen.getByTestId('updates-notice-install_blocked_off')).toBeTruthy()
+		);
+		const banner = screen.getByTestId('updates-notices');
+		expect(banner.textContent).toContain('The update is waiting');
+		expect(banner.textContent).toContain('even with updates Off');
+		expect(banner.textContent).toContain('set updates to Check and notify, then back to Off');
+		expect(banner.textContent).not.toContain('switch updates off or pause them');
+		expect(banner.textContent).not.toContain('install_blocked_off');
+	});
+
 	it('still shows a notice code it has no words for, in general words', async () => {
 		status.notices = ['some_future_notice'];
 		render(UpdatesScreen);
