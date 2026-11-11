@@ -5,8 +5,6 @@
 import { api } from '$lib/api/client';
 import { pendingOf, type Pending, type System, type Waiting } from './logic';
 
-const hostname = () => (typeof location === 'undefined' ? '' : location.hostname);
-
 function createRestartStore() {
 	let system = $state.raw<System>();
 	let waiting = $state.raw<Waiting | null>(null);
@@ -16,7 +14,7 @@ function createRestartStore() {
 			return system;
 		},
 		get pending(): Pending | null {
-			return pendingOf(system, hostname());
+			return pendingOf(system);
 		},
 		/** The restart in progress; null when none. */
 		get waiting() {

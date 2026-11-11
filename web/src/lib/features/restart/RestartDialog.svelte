@@ -7,7 +7,8 @@
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Dialog from '$lib/ui/overlays/Dialog.svelte';
-	import { failureOf, type Pending, type RestartFailure } from './logic';
+	import { failureOf, usableUrl, type RestartFailure } from './flow';
+	import type { Pending } from './logic';
 	import { restart } from './restart.svelte';
 
 	interface Props {
@@ -17,6 +18,8 @@
 		onclose: () => void;
 	}
 	let { pending, startedAt, onclose }: Props = $props();
+	// The server can't name its own address when it binds every interface.
+	const newUrl = $derived(pending.newUrl && usableUrl(pending.newUrl, location.hostname));
 	let open = $state(true);
 	let busy = $state(false);
 	let failure = $state<RestartFailure>();
@@ -26,7 +29,7 @@
 		try {
 			const accepted = await api.post('/system/restart');
 			restart.begin({
-				target: pending.newUrl,
+				target: newUrl,
 				startedAt,
 				estimateSeconds: accepted.estimated_seconds
 			});
@@ -54,7 +57,7 @@
 	{#if pending.newUrl}
 		<p class="mt-2">
 			{m.restart_confirm_address()}
-			<span class="font-mono break-words" data-testid="restart-new-url">{pending.newUrl}</span>
+			<span class="font-mono break-words" data-testid="restart-new-url">{newUrl}</span>
 		</p>
 		<p class="mt-2 text-muted-text">{m.restart_confirm_address_help()}</p>
 	{/if}

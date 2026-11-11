@@ -5,13 +5,14 @@
 	// they are needed.
 	import { onMount, type Component } from 'svelte';
 	import { page } from '$app/state';
-	import { formatCount } from '$lib/format';
 	import { m } from '$lib/paraglide/messages.js';
-	import Button from '$lib/ui/controls/Button.svelte';
-	import Banner from '$lib/ui/feedback/Banner.svelte';
+	import { FOCUS_RING, TARGET_MIN } from '$lib/ui/classes';
 	import type { Pending, System, Waiting } from './logic';
 	import { restart } from './restart.svelte';
 
+	// The count is a small whole number, so it goes in as is: `$lib/format` is 0.8 KB gzipped that a
+	// Settings first view otherwise doesn't carry.
+	const door = () => import('./door');
 	const REFRESH_MS = 15_000;
 	let reviewing = $state(false);
 	let Review = $state<Component<{ fields: string[] }>>();
@@ -47,21 +48,25 @@
 	});
 	$effect(() => {
 		if (awaiting && !Prompt)
-			void import('./AddressPrompt.svelte').then((mod) => (Prompt = mod.default));
+			void door()
+				.then((d) => d.parts.prompt())
+				.then((c) => (Prompt = c));
 	});
 
 	// The full-page state is the store's, so it outlives the dialog and the prompt that began it.
 	$effect(() => {
 		if (restart.waiting && !Restarting)
-			void import('./RestartingPage.svelte').then((mod) => (Restarting = mod.default));
+			void door()
+				.then((d) => d.parts.restarting())
+				.then((c) => (Restarting = c));
 	});
 
 	async function review() {
 		reviewing = !reviewing;
-		if (reviewing && !Review) Review = (await import('./ReviewList.svelte')).default;
+		if (reviewing && !Review) Review = await (await door()).parts.review();
 	}
 	async function openDialog() {
-		Dialog ??= (await import('./RestartDialog.svelte')).default;
+		Dialog ??= await (await door()).parts.dialog();
 		confirming = true;
 	}
 </script>
@@ -70,26 +75,35 @@
 
 {#if pending}
 	<div class="flex flex-col gap-3" data-testid="restart-banner">
-		<Banner kind="info">
-			<span data-testid="restart-count"
-				>{(pending.fields.length === 1 ? m.restart_banner_one : m.restart_banner)({
-					count: formatCount(pending.fields.length)
-				})}</span
+		<!-- Plain markup on purpose: this is all of the feature a Settings first view carries. -->
+		<div
+			role="status"
+			class="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-box border border-info bg-base-100 p-3"
+		>
+			<span class="min-w-0 flex-1">
+				<span data-testid="restart-count"
+					>{(pending.fields.length === 1 ? m.restart_banner_one : m.restart_banner)({
+						count: pending.fields.length
+					})}</span
+				>
+				{#if !pending.canRestart && pending.hint}
+					<span data-testid="restart-hint"> · {pending.hint}</span>
+				{/if}
+			</span>
+			<button
+				type="button"
+				class="btn btn-ghost {FOCUS_RING} {TARGET_MIN}"
+				aria-expanded={reviewing}
+				onclick={() => void review()}>{m.restart_review()}</button
 			>
-			{#if !pending.canRestart && pending.hint}
-				<span data-testid="restart-hint"> · {pending.hint}</span>
+			{#if pending.canRestart}
+				<button
+					type="button"
+					class="btn btn-primary {FOCUS_RING} {TARGET_MIN}"
+					onclick={() => void openDialog()}>{m.restart_now()}</button
+				>
 			{/if}
-			{#snippet action()}
-				<div class="flex flex-wrap gap-2">
-					<Button variant="quiet" aria-expanded={reviewing} onclick={() => void review()}
-						>{m.restart_review()}</Button
-					>
-					{#if pending.canRestart}
-						<Button variant="primary" onclick={() => void openDialog()}>{m.restart_now()}</Button>
-					{/if}
-				</div>
-			{/snippet}
-		</Banner>
+		</div>
 		{#if reviewing && Review}<Review fields={pending.fields} />{/if}
 	</div>
 {/if}

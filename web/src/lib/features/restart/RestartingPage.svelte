@@ -7,7 +7,7 @@
 	import { formatCount } from '$lib/format';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
-	import { waitForServer } from './logic';
+	import { waitForServer } from './flow';
 
 	import type { Waiting } from './logic';
 

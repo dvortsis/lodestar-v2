@@ -5,11 +5,10 @@ import {
 	addressPromptOf,
 	backoffMs,
 	failureOf,
-	pendingOf,
 	usableUrl,
-	waitForServer,
-	type System
-} from './logic';
+	waitForServer
+} from './flow';
+import { pendingOf, type System } from './logic';
 
 type Change = NonNullable<System['address_change']>;
 
@@ -193,7 +192,7 @@ describe('usableUrl', () => {
 			restart_required: ['network.http_bind'],
 			address_change: change({ url: "http://<this host's address>:9000/" })
 		});
-		expect(pendingOf(s, 'nas.local')?.newUrl).toBe('http://nas.local:9000/');
+		expect(pendingOf(s)?.newUrl).toBe("http://<this host's address>:9000/");
 		const w = system({
 			address_change: change({
 				state: 'awaiting_confirmation',

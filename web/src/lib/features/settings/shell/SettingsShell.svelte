@@ -4,7 +4,6 @@
 	import { page } from '$app/state';
 	import { m } from '$lib/paraglide/messages.js';
 	import { withDensity, type Route } from '$lib/shell/nav';
-	import RestartBanner from '$lib/features/restart/RestartBanner.svelte';
 	import NavIcon from './NavIcon.svelte';
 	import { aboutOf, groups, matchesScreen, screens, type About } from './screens';
 	let { children }: { children: Snippet } = $props();
@@ -66,7 +65,8 @@
 		{#if !overview}<a class="settings-back ls-focus text-primary underline" href={href('/settings')}
 				>{m.settings_shell_back()}</a
 			>{/if}
-		<RestartBanner />
+		<!-- The restart banner (§10.10.6) mounts here once a change waits: restart/watch.svelte.ts -->
+		<div id="restart-slot" class="contents"></div>
 		{@render children()}
 	</div>
 </div>

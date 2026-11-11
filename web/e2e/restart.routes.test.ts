@@ -17,9 +17,21 @@ function systemWith(mock: OpenApiMock, over: Json): Json {
 	return { ...example, ...over };
 }
 
+/**
+ * The chrome starts the restart watch (and with it the banner) on the first interaction, or 30 s
+ * after load. A key press is the interaction; it is repeated until the page has hydrated and taken
+ * it, then the banner is waited for.
+ */
+const engage = (page: Page) =>
+	expect(async () => {
+		await page.keyboard.press('Shift');
+		await expect(page.getByTestId('restart-count')).toBeVisible({ timeout: 1_000 });
+	}).toPass({ timeout: 15_000 });
+
 const pending = { restart_required: ['network.dht_port', 'crawler.timeout_secs'] };
 
 async function openRestartConfirmation(page: Page) {
+	await engage(page);
 	await expect(page.getByTestId('restart-count')).toHaveText(
 		/2 changes apply after a restart/,
 		DEADLINE
@@ -50,6 +62,7 @@ test.describe('restart banner', () => {
 			}) as never
 		);
 		await go('/settings');
+		await engage(page);
 		await expect(page.getByTestId('restart-count')).toBeVisible(DEADLINE);
 		await expect(page.getByTestId('restart-hint')).toContainText('Restart the container');
 		await expect(page.getByRole('button', { name: 'Restart now' })).toHaveCount(0);
@@ -133,6 +146,7 @@ test.describe('restart banner', () => {
 	}) => {
 		mock.on('getSystem', systemWith(mock, pending) as never);
 		await go('/settings');
+		await engage(page);
 		await expect(page.getByTestId('restart-count')).toBeVisible(DEADLINE);
 		await page.getByRole('button', { name: 'Restart now' }).focus();
 		await page.keyboard.press('Enter');

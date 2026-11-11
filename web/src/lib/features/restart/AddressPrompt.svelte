@@ -8,7 +8,8 @@
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
-	import { addressPromptOf, failureOf, type RestartFailure, type System } from './logic';
+	import { addressPromptOf, failureOf, type RestartFailure } from './flow';
+	import type { System } from './logic';
 	import { restart } from './restart.svelte';
 
 	let { system }: { system: System } = $props();
