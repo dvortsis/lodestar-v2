@@ -54,21 +54,29 @@ START = (r"(?:^|[;&|({!]|\$\(|\b(?:then|do|else|elif)\b)\s*"
 # A network tool's name as a word anywhere in code, however it's started: by
 # path, quoted or escaped, through a wrapper, or inside `bash -c` (rv-673).
 NET_CMD = re.compile(r"(?<![\w.-])(curl|wget|ssh|scp|sftp|nc|ncat|netcat|socat|telnet|ftp|rsync|s_client|gh|pip[0-9.]*"
-                     r"|npm|npx|yarn|node|nodejs|perl|ruby|php|lynx|aria2c|httpie|http)(?![\w.-])"
-                     r"|\bgit\b[^\n;&|]*?\b(?:clone|fetch|pull|push|ls-remote|archive|submodule|remote)\b")
+                     r"|npm|npx|yarn|node|nodejs|perl|ruby|php|lynx|aria2c|httpie|http)"
+                     # a suffix counts too: nc.openbsd, ssh-keyscan, wget.real, node.exe, pip-sync
+                     r"(?:[.-][\w.-]*)?(?!\w)"
+                     # a bounded gap, so a long line of git words stays linear
+                     r"|\bgit\b[^\n;&|]{0,200}?\b(?:clone|fetch|pull|push|ls-remote|archive|submodule|remote)\b")
 NET_MODULES = {"socket", "requests", "httpx", "urllib", "urllib3", "http", "aiohttp", "ftplib", "smtplib", "telnetlib",
                "xmlrpc", "websocket", "websockets", "paramiko", "pycurl"}
 IMPORT = re.compile(r"\bimport\s+([\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+(?:\s+as\s+\w+)?)*)|\bfrom\s+([\w.]+)\s+import\b")
 NET_CODE = re.compile(r"urllib\.request|\burlopen\s*\(|http\.client"
                       r"|\brequests\.(?:get|post|put|patch|delete|head|request|Session)\b|\bhttpx\.\w+\s*\("
-                      r"|\bsocket\.(?:socket|create_connection)\s*\(|/dev/(?:tcp|udp)/|-m\s+pip\b")
+                      r"|\bsocket\.(?:socket|create_connection)\s*\(|/dev/(?:tcp|udp)/|-m\s+pip\b"
+                      r"|\basyncio\.open_connection\b"
+                      r"|(?:__import__|import_module)\s*\(\s*['\"](?:socket|http|urllib|requests|httpx|aiohttp|ftplib|asyncio)")
 NET_ERROR = re.compile(r"Could not resolve host|Could not resolve hostname|Failed to connect to|Connection refused"
                        r"|CONNECT tunnel failed|Name or service not known|Temporary failure in name resolution"
                        r"|Network is unreachable|No route to host|unable to resolve host address|URLError"
                        r"|getaddrinfo failed|Connection timed out|nodename nor servname|Tunnel connection failed"
                        r"|Proxy tunneling failed|ProxyError|from proxy after CONNECT|Could not connect to proxy")
 CURL_INFO = re.compile(r"^\s*curl\s+(?:--version|-V|--help)\s*$")
-WRITE = re.compile(r"(?:^|[;&|(\n])\s*(?:cat|tee)\b[^|;&\n]*>\s*(\S+)\s*$")
+# A here-document only written to a file: the line is `cat` or `tee` (after an
+# optional `cd DIR &&`), with nothing that could run or pipe it.
+WRITER = re.compile(r"^\s*(?:cd\s+[^\s;&|]+\s*&&\s*)?(cat|tee)\b(.*)$")
+UNSAFE = re.compile(r"[|;&`]|[<>]\(|\$\(")
 TOKEN_EXPANSION = re.compile(r"\$\{?GITHUB_TOKEN\b")
 ALLOWED_HEADER = re.compile(r"""-H\s*(["'])Authorization: Bearer \$\{?GITHUB_TOKEN\}?\1""")
 ENV_READ = re.compile(START + r"(?:printenv|env|export\s+-p|declare\s+-[xp]|set|compgen\s+-v)\s*(?:$|[;&|)>])", re.M)
@@ -111,19 +119,50 @@ def code_of(cmd: str, written: dict | None = None) -> str:
     def keep(m):
         body = m.group(3)
         prefix = cmd[cmd.rfind("\n", 0, m.start()) + 1:m.start()]
-        to = WRITE.search(prefix)
+        rest = m.group(0).split("\n", 1)[0]
+        rest = rest[rest.index(m.group(2)) + len(m.group(2)) + len(m.group(1)):]  # after the delimiter
+        to = write_target(prefix, rest)
         if to and is_report(body) and (m.group(1) or not TOKEN_EXPANSION.search(body)):
             if written is not None:
-                written[to.group(1).rsplit("/", 1)[-1]] = body
+                written[to] = body
             return "<<" + m.group(2) + "\n"
         return m.group(0)
     return HEREDOC.sub(keep, cmd)
 
 
+def write_target(prefix: str, rest: str) -> str | None:
+    """The file a `cat`/`tee` here-document line only writes to, by base
+    name, or None when the line could run or pipe it (rv-673: `|`, `>(`,
+    `;`, `&`, `$(`). Shapes: `cat > f <<E`, `cat <<E > f`, `tee f <<E`,
+    `tee f > /dev/null <<E`."""
+    m = WRITER.match(prefix)
+    if not m:
+        return None
+    tool, args = m.group(1), (m.group(2) + " " + rest).strip()
+    if UNSAFE.search(args):
+        return None
+    words = args.split()
+    out, i = [], 0
+    while i < len(words):
+        w = words[i]
+        if w in (">", ">>") and i + 1 < len(words):
+            out.append(words[i + 1])
+            i += 2
+            continue
+        if w.startswith(">"):
+            out.append(w.lstrip(">"))
+        elif tool == "tee" and not w.startswith("-"):
+            out.append(w)  # cat's other words (files, options) only add to what it writes
+        i += 1
+    files = [f for f in out if f and f != "/dev/null"]
+    return files[-1].rsplit("/", 1)[-1] if files else None
+
+
 def _executed(name: str, cmds: list[str]) -> bool:
     n = re.escape(name)
     run = re.compile(rf"(?:\b(?:bash|sh|zsh|dash|source|python[0-9.]*|perl|ruby|node)\s+(?:-\S+\s+)*\S*\b{n}\b"
-                     rf"|(?:^|[\s;&|(])\.\s+\S*\b{n}\b|\./{n}\b|<\s*\S*\b{n}\b)")
+                     rf"|(?:^|[\s;&|(])\.\s+\S*\b{n}\b|\./{n}\b|<\s*\S*\b{n}\b"
+                     rf"|\b(?:cat|tee)\b[^\n|]*\b{n}\b[^\n|]*\|\s*(?:sudo\s+)?\S*\b(?:ba|z|da)?sh\b)")
     return any(run.search(c) for c in cmds)
 
 
