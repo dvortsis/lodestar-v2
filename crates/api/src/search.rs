@@ -197,6 +197,20 @@ pub fn routes() -> Router<ApiState> {
     )
 }
 
+/// What to tell the user when a natural search is refused for its size.
+/// The cap counts tokens, not words (brackets and a lone `-` count as one
+/// each), so this says so instead of repeating the engine's own wording.
+fn natural_too_long(e: NaturalError) -> String {
+    match e {
+        NaturalError::TooLong => "A natural search can be at most 512 bytes long. \
+             Shorten the search, or switch to the query language."
+            .to_owned(),
+        _ => "A natural search can hold at most 32 words and symbols; brackets and a lone \
+             minus sign count as one each. Shorten the search, or switch to the query language."
+            .to_owned(),
+    }
+}
+
 /// A query syntax error, with the span the UI highlights.
 fn parse_error(e: ParseError) -> ApiError {
     ApiError::bad_request("query_syntax", e.message)
@@ -207,7 +221,8 @@ fn parse_error(e: ParseError) -> ApiError {
 /// Parses a query: the AST and its canonical text, or a `query_syntax`
 /// error whose `start`/`end` span the UI highlights. With
 /// `natural=true`, also the query `q` means as natural phrasing
-/// (`natural_too_long` past 512 bytes or 32 words).
+/// (`natural_too_long` past 512 bytes or 32 tokens: words and symbols,
+/// where each bracket and each lone minus sign counts as one).
 #[utoipa::path(
     operation_id = "parseQuery",
     get,
@@ -228,11 +243,7 @@ pub(crate) async fn parse_query(
         .or_else(|e| match e {
             // `q` parsed above, so it can't be this; nothing to propose.
             NaturalError::Syntax => Ok(None),
-            e => Err(ApiError::bad_request(
-                "natural_too_long",
-                format!("Natural phrasing reads at most 512 bytes and 32 words and operators; this is {e}."),
-            )
-            .field("q")),
+            e => Err(ApiError::bad_request("natural_too_long", natural_too_long(e)).field("q")),
         })?
         .map(|n| NaturalProposal {
             ast: n.ast,

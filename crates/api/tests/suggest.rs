@@ -334,6 +334,45 @@ async fn parse_proposes_natural_phrasing() {
         &format!("/api/v1/parse?q={}&natural=true", encode(&words)),
     )
     .await;
+    // 33 words is over; the 512-byte case has its own sentence.
+    let long = format!("a{}", "b".repeat(520));
+    let (status, _, body) = call(
+        &f.app,
+        get(
+            &format!("/api/v1/parse?q={}&natural=true", encode(&long)),
+            Some(&c),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.contains("at most 512 bytes long"), "{body}");
+}
+
+/// The cap counts tokens, and brackets are tokens: 8 visible words in
+/// 13 pairs of brackets is 34 tokens, refused with the words-and-symbols
+/// text rather than a word count the user can't match.
+#[tokio::test]
+async fn natural_refusal_counts_symbols_not_just_words() {
+    let f = fixture();
+    let c = session(&f).await;
+    let q = format!("{}word{}", "(".repeat(13), ")".repeat(13)) + " a b c d e f g";
+    let (status, _, body) = call(
+        &f.app,
+        get(
+            &format!("/api/v1/parse?q={}&natural=true", encode(&q)),
+            Some(&c),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let v: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"]["code"], "natural_too_long");
+    let m = v["error"]["message"].as_str().unwrap();
+    assert!(
+        m.contains("at most 32 words and symbols") && m.contains("lone minus sign"),
+        "{m}"
+    );
+    assert!(!m.contains("more than 32 words and operators"), "{m}");
 }
 
 #[tokio::test]
