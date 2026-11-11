@@ -665,10 +665,6 @@ fn halt(
     Outcome::RollbackHalted { why, recovery }
 }
 
-/// What an administrator does after a halt: which step stopped, and how
-/// to bring Lodestar back. Neither the marker nor the journal starts
-/// anything by itself; removing them is the administrator's step, once
-/// the store is one the installed version reads.
 /// What the store holds after a halt at `done`.
 fn store_state(j: &Journal, done: u8, cause: Cause) -> &'static str {
     if cause == Cause::Journal {
@@ -691,13 +687,20 @@ fn store_state(j: &Journal, done: u8, cause: Cause) -> &'static str {
 
 /// A version from the journal's own text, for the Event Log: shown only
 /// as a version (semver holds `0-9 A-Z a-z . - +` alone), else as
-/// `otherwise` (X-event-log-followups).
+/// `otherwise` (X-event-log-followups). A pre-release or build part is a
+/// word, so the bound is the grammar, which rules out paths, spaces and
+/// accounts (`DOMAIN\user`). The journal is in the private staging folder,
+/// written by the helper from a signed manifest's versions.
 pub(super) fn shown_version(s: &str, otherwise: &str) -> String {
     Version::parse(s).map_or_else(|_| otherwise.to_owned(), |v| v.to_string())
 }
 
 /// The copy's refusal, read back from its result file: a code (`a-z` and
-/// `_`, as `msi::Refusal::code` writes) or fixed words.
+/// `_`, as `msi::Refusal::code` writes) or fixed words. The shape is the
+/// bound, not a list of codes: the file is in the private staging folder,
+/// which only SYSTEM and Administrators can write, and the copy writes
+/// only `Refusal::code()`. So a lowercase word that isn't a code could
+/// come only from an administrator.
 pub(super) fn shown_code(s: &str) -> &str {
     let code =
         !s.is_empty() && s.len() <= 40 && s.bytes().all(|b| b.is_ascii_lowercase() || b == b'_');
@@ -713,10 +716,15 @@ pub fn recovery_event(j: &Journal, done: u8, cause: Cause) -> String {
     let to = shown_version(&j.to, "the new version");
     let journal = format!("{JOURNAL} in Lodestar's update staging folder");
     if done == 0 {
+        // Nothing was touched, so the journal is cleared (`halt`): the
+        // reason is in the answer the helper leaves, `updates\result.json`.
         return format!(
             "Lodestar {to} failed its health check, and the rollback to {from} couldn't start. \
-             Nothing was changed: {to} keeps running. The reason is in {journal}. To go back \
-             to {from}, an administrator installs the {from} MSI by hand."
+             Nothing was changed: {to} keeps running. The reason is in {updates}\\{result} in \
+             Lodestar's data folder. To go back to {from}, an administrator installs the {from} \
+             MSI by hand.",
+            updates = msi::UPDATES,
+            result = msi::RESULT,
         );
     }
     let marker = format!("bin\\{MARKER} in Lodestar's data folder");
@@ -736,6 +744,10 @@ pub fn recovery_event(j: &Journal, done: u8, cause: Cause) -> String {
     )
 }
 
+/// What an administrator does after a halt: which step stopped, and how
+/// to bring Lodestar back. Neither the marker nor the journal starts
+/// anything by itself; removing them is the administrator's step, once
+/// the store is one the installed version reads.
 pub fn recovery(ctx: &Context, j: &Journal, done: u8, why: &str, cause: Cause) -> String {
     let (from, to) = (&j.from, &j.to);
     let journal = ctx.staging.dir.join(JOURNAL);

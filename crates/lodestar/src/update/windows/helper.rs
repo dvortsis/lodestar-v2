@@ -1155,7 +1155,8 @@ const EVENT_LOG_POLL: Duration = Duration::from_millis(50);
 
 /// Runs `cmd` with no input or output, for at most `limit`: past it the
 /// child is killed and reaped, and the call answers `TimedOut`. Through
-/// [`supervise`], so the bound and the kill are the ones msiexec gets.
+/// [`supervise`], so the bound and the kill are the ones msiexec gets;
+/// its error text names msiexec, which the Event Log's caller discards.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub(super) fn run_bounded(mut cmd: std::process::Command, limit: Duration) -> io::Result<i32> {
     use std::process::Stdio;
@@ -4493,7 +4494,14 @@ mod tests {
                     !text.contains("alice") && !text.contains("denied"),
                     "{text}"
                 );
-                assert!(text.contains("journal.json"), "{text}");
+                // Before step 1 the journal is cleared, so the pointer is
+                // the helper's answer; after it, the journal.
+                let pointer = if done == 0 {
+                    r"updates\result.json in Lodestar's data folder"
+                } else {
+                    "journal.json in Lodestar's update staging folder"
+                };
+                assert!(text.contains(pointer), "{done}: {text}");
                 assert!(
                     text.chars().all(|c| c.is_ascii_graphic() || c == ' '),
                     "{text}"
@@ -4519,6 +4527,12 @@ mod tests {
         assert_eq!(
             rollback::shown_code("artifact_mismatch"),
             "artifact_mismatch"
+        );
+        // The bound is the shape (see `shown_code`): a lowercase word
+        // passes, which only an administrator's own edit could put there.
+        assert_eq!(
+            rollback::shown_code("msiexec_not_started"),
+            "msiexec_not_started"
         );
         for bad in ["io: C:\\Users\\alice", "Artifact", "", &"a".repeat(41)] {
             assert_eq!(rollback::shown_code(bad), "an unexpected reason", "{bad:?}");

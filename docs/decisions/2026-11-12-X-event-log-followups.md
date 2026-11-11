@@ -10,11 +10,12 @@ Section 5 of the Legal Notice allows the Application log to hold what happened, 
   - `event_log_reasons_have_fixed_shapes` pins both texts, and checks that a path, an account, a setting or a second line in `from` never reaches them.
 - **The rollback (`update/windows/rollback.rs`, its Event Log text only; runner, 2026-11-11, option (a)):**
   - The copy-refused note shows the copy's refusal only as a code (`a-z` and `_`, at most 40 bytes, as `msi::Refusal::code` writes it), else "an unexpected reason". It's read back from the copy's result file.
+  - **The bound is the shape, not a list,** for these codes and for versions: a lowercase word, or a semver pre-release such as `0.6.0-alice`, still passes. Both files sit in the private staging folder, which only SYSTEM and Administrators can write, and the helper writes only codes and a signed manifest's versions there. So a word could come only from an administrator's own edit. The shape still rules out paths, spaces, accounts (`DOMAIN\user`) and second lines.
   - The restart note shows `to` and `from` only as versions, else fixed words.
   - **The halt's recovery text has an Event Log copy, `recovery_event`:**
     - the same steps, the parsed versions, and the files by name (`journal.json`, `bin\rollback.json`);
     - the folders by role ("Lodestar's data folder", "Lodestar's update staging folder");
-    - no reason text. The halt's reason comes from step errors, which can name files.
+    - no reason text. The halt's reason comes from step errors, which can name files. Before step 1 nothing was touched and the journal is cleared, so the note points to `updates\result.json` in the data folder instead, where the helper's answer keeps the reason.
   - The full `recovery`, with the paths and the reason, still goes to the journal and `result.json`, for the administrator who follows it.
   - A configured data folder can sit in a user profile, so its path stays out of the Event Log even though section 5 would allow a folder path.
   - `the_rollbacks_event_log_text_has_fixed_shapes` pins it at every step and cause, with hostile journal text.
@@ -31,7 +32,10 @@ Section 5 of the Legal Notice allows the Application log to hold what happened, 
 - **`run_bounded` runs it through `supervise`,** the same bounded wait msiexec gets, with no input or output. Past `EVENT_LOG_WAIT` (10 s) the child is killed and reaped, and the entry is given up: it's best effort, and a hung `eventcreate` must never hold up a rollback or a restart.
 - **No fixed sleep:** `supervise` polls with a deadline.
 - **`a_hung_event_log_command_is_killed_at_its_bound`** uses a real child that never exits (`sleep 600`, or `Start-Sleep` on Windows). It's killed at a short bound, well inside the test's 10 s deadline. It also checks that a command that ends answers its code.
-- **Not changed here:** the service's own `eventcreate` (`windows/service.rs`, run as it refuses) still waits without a bound, as it did before #702. The service is exiting at that point, and the SCM's stop timeout bounds it. It's a candidate for the same `run_bounded` later.
+- **Not changed here: the service's own `eventcreate` is still unbounded** (`windows/service.rs`, run as it refuses; rv-702's N2, still open). The brief's item 5 names the helper only.
+  - Nothing bounds it. The service has already reported Running when it refuses, so a hung `eventcreate` keeps the process Running until the Event Log service answers. The SCM doesn't end a Running service, and a stop request times out without killing it.
+  - On the rollback path the hang comes before the idle wait, so the stop signal isn't seen either.
+  - The fix is the same bounded run. `run_bounded` is `pub(super)` in `update::windows::helper` today, so moving it beside the service (for example into `windows/mod.rs`) is a small follow-up. I named it to the runner rather than widen this slice.
 
 ## Docs and checks
 - **`settings/logging.rs`:** the comments said nothing writes to the Windows Event Log. They now say Lodestar's logging never does, that the service's and the update helper's fixed notes do, and that `event_log_errors` stays hidden and unused.
