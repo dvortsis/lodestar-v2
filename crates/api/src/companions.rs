@@ -171,7 +171,7 @@ fn refusal_message(code: &str) -> &'static str {
         "no_launch_profile" => "This version of Lodestar can't run it yet.",
         "no_template" => "It doesn't offer that template.",
         "managed_client_in_use" => {
-            "The download client Lodestar manages is already set up in Integrations, from a qBittorrent you added before. Remove it there first, then install again."
+            "The download client Lodestar manages is already set up in Integrations. Remove it there first, then install again."
         }
         "already_added" => {
             "You added this companion yourself. Forget it on its screen first, then install it here."

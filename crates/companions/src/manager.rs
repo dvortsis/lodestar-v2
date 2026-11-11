@@ -357,6 +357,12 @@ pub trait ApiConfigure: Send + Sync {
         Box::pin(async { Ok(()) })
     }
 
+    /// Whether [`ApiConfigure::hand_over`] saves anything for `id`: only
+    /// then does a first install write its marker. No by default.
+    fn hands_over(&self, _id: &CompanionId) -> bool {
+        false
+    }
+
     /// Takes what [`ApiConfigure::hand_over`] saved out of Lodestar's
     /// settings again: before a removal, and after a first install that
     /// was rolled back. Nothing by default.
@@ -1459,7 +1465,9 @@ impl Manager {
         // A first install marks it first (#679's I2): a crash before
         // `configured` is undone by recovery, which can't reach the
         // settings, so the marker says what to release once it can.
-        if fresh {
+        // Only one this build hands over (qBittorrent) can save anything.
+        let marks = fresh && m.p.api.hands_over(id);
+        if marks {
             self.off(move |m| m.mark(id)).await?;
         }
         *handed = true;
@@ -1478,7 +1486,7 @@ impl Manager {
         *rec = self
             .off(move |m| m.save(id, &next, Step::Configured))
             .await?;
-        if fresh {
+        if marks {
             self.off(move |m| {
                 m.unmark(id);
                 Ok(())
@@ -1765,6 +1773,8 @@ impl Manager {
             }
             match self.release_now(id).await {
                 Ok(()) => self.0.unmark(id),
+                // Logged already, once it settled.
+                Err(e) if e.code() == "timed_out" => {}
                 Err(e) => lodestar_log::log_event!(
                     INSTALL_FAILED,
                     companion = self.0.label(id),
@@ -1818,10 +1828,6 @@ impl LiveOp {
 /// the configuration's requests, with room to spare. The stop before it
 /// is bounded by the supervisor.
 pub const LIVE_DEADLINE: Duration = Duration::from_secs(5 * 60);
-
-/// The hand-over's outer bound: three of [`LIVE_DEADLINE`], against a
-/// store that never answers.
-pub const HANDOVER_DEADLINE: Duration = Duration::from_secs(15 * 60);
 
 /// How often a follower that has to configure its companion looks for the
 /// slot while an operation holds it.
@@ -1948,12 +1954,29 @@ impl Manager {
         result
     }
 
-    /// [`ApiConfigure::release`], bounded like every settings write.
+    /// [`ApiConfigure::release`], bounded like every settings write. One
+    /// that passes the deadline is logged and then waited for: it may still
+    /// save, and whoever releases holds the slot and, for an install's undo
+    /// or a pending release, the guided lock, so no guided confirmation
+    /// can save an entry that it then takes out (#692's review,
+    /// Important 3). It still answers `timed_out`, so the marker stays and
+    /// the next start releases whatever is left.
     async fn release_now(&self, id: &CompanionId) -> Result<(), ManagerError> {
-        tokio::time::timeout(self.0.deadline(), self.0.p.api.release(id))
-            .await
-            .map_err(|_| failed("release")("timed_out"))?
-            .map_err(|e| failed("release")(configure::code(&e)))
+        let mut release = std::pin::pin!(self.0.p.api.release(id));
+        match tokio::time::timeout(self.0.deadline(), release.as_mut()).await {
+            Ok(r) => r.map_err(|e| failed("release")(configure::code(&e))),
+            Err(_) => {
+                lodestar_log::log_event!(
+                    INSTALL_FAILED,
+                    companion = self.0.label(id),
+                    version = "",
+                    step = "release",
+                    reason = "timed_out"
+                );
+                let _ = release.await;
+                Err(failed("release")("timed_out"))
+            }
+        }
     }
 
     /// [`ApiConfigure::hand_over`] with the credential stored now.
@@ -1976,7 +1999,9 @@ impl Manager {
                 .p
                 .api
                 .hand_over(id, target, InstallReceipt::new(target.clone()), &opened);
-        tokio::time::timeout(HANDOVER_DEADLINE, handed)
+        // The outer bound: three of the live deadline (15 min in shipped
+        // builds), against a store that never answers.
+        tokio::time::timeout(3 * self.0.deadline(), handed)
             .await
             .map_err(|_| failed("handover")("timed_out"))?
             .map_err(|e| failed("handover")(configure::code(&e)))
@@ -2259,12 +2284,29 @@ pub fn reads_proxy_env(executable: &Path) -> bool {
             (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32,
         );
     }
+    // On Windows, the link itself is opened (`FILE_FLAG_OPEN_REPARSE_POINT`)
+    // and then refused by its attribute, as `O_NOFOLLOW` refuses it on Unix
+    // (#692's review).
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        opts.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
     let Ok(file) = opts.open(&path) else {
         return false;
     };
     let Ok(meta) = file.metadata() else {
         return false;
     };
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return false;
+        }
+    }
     if !meta.is_file() || meta.len() > RUNTIMECONFIG_MAX {
         return false;
     }

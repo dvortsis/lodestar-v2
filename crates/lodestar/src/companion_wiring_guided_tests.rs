@@ -217,11 +217,12 @@ async fn qbittorrent(password: &str) -> (SocketAddr, Qbit) {
 // ─── The binary's half over a temporary data folder ─────────────────────
 
 /// What the hand-over was given; `reject` refuses it, as a settings
-/// save that fails.
+/// save that fails; `park` holds the save in flight until told.
 #[derive(Default)]
 struct Recorder(
     Mutex<Vec<(String, StoredTarget, String, String)>>,
     std::sync::atomic::AtomicBool,
+    Mutex<Option<Arc<(tokio::sync::Notify, tokio::sync::Notify)>>>,
 );
 
 impl ConfigSink for Recorder {
@@ -238,7 +239,14 @@ impl ConfigSink for Recorder {
             entry.username.as_str().to_owned(),
             entry.password.expose().to_owned(),
         ));
-        Box::pin(async { Ok(()) })
+        let park = self.2.lock().unwrap().clone();
+        Box::pin(async move {
+            if let Some(p) = park {
+                p.0.notify_one();
+                p.1.notified().await;
+            }
+            Ok(())
+        })
     }
     fn indexer_manager<'a>(
         &'a self,
@@ -893,6 +901,53 @@ async fn a_guided_confirmation_clears_a_pending_release() {
     let plan = g.plan(id()).await.unwrap();
     g.confirm(id(), plan).await.unwrap();
     assert!(!marker.exists(), "the marker would release your entry");
+}
+
+/// #692's review, Important 1: a confirmation whose request is dropped
+/// while its hand-over is still saving keeps the lock until that save and
+/// its record land, so a native install can't pass its check in between.
+#[tokio::test]
+async fn a_dropped_confirmation_keeps_the_lock_until_its_save_lands() {
+    use lodestar_api::companions::CompanionsApi;
+    let (addr, _q) = qbittorrent(TEMPORARY).await;
+    let f = fixture();
+    let g = f.guided.clone();
+    let id = || "qbittorrent".to_owned();
+    g.set_target(id(), url(addr)).await.unwrap();
+    g.paste(id(), TEMPORARY.into()).await.unwrap();
+    let plan = g.plan(id()).await.unwrap();
+    let park = Arc::new((tokio::sync::Notify::new(), tokio::sync::Notify::new()));
+    *f.sink.2.lock().unwrap() = Some(park.clone());
+    let request = tokio::spawn(async move { g.confirm(id(), plan).await });
+    tokio::time::timeout(Duration::from_secs(10), park.0.notified())
+        .await
+        .expect("the hand-over never began");
+    request.abort();
+    assert!(request.await.unwrap_err().is_cancelled());
+    let install = || {
+        f.service
+            .install("qbittorrent".into(), "5.1.2".into(), "ab".repeat(32))
+    };
+    assert_eq!(install().await, Err(CompanionsError::Refused("busy")));
+    park.1.notify_one();
+    let origin = guided::origin_key(&qbt());
+    let landed = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Ok(held) = f.service.changes().try_lock_owned() {
+                return held;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert!(landed.is_ok(), "the confirmation never let the lock go");
+    assert_eq!(f.row(&origin).as_deref(), Some("confirmed"));
+    drop(landed);
+    // Its entry is there now, so a native install is refused.
+    assert_eq!(
+        install().await,
+        Err(CompanionsError::Refused("already_added"))
+    );
 }
 
 /// Once the apply has started the generated password stays, marked

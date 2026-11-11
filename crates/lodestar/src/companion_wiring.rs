@@ -1202,9 +1202,13 @@ impl Guided {
     }
 
     /// Applies `plan` setting `stored`, hands the companion over, and
-    /// writes its record: the confirmation's end, first try or retry.
+    /// writes its record: the confirmation's end, first try or retry. The
+    /// hand-over and the record run in a task that owns the guided lock
+    /// (`one`), so a dropped request can't let it go while their saves are
+    /// still in flight (#692's review, Important 1).
     async fn finish(
         &self,
+        one: tokio::sync::OwnedMutexGuard<()>,
         e: &'static Entry,
         target: &Target,
         plan: &lodestar_companions::adapter::ConfigPlan,
@@ -1213,32 +1217,48 @@ impl Guided {
     ) -> Result<Companion, GuidedError> {
         let configure = lodestar_companions::configure::configurator(&e.id)
             .ok_or(CompanionsError::Refused("handover_later"))?;
-        let holding = Holding(Field::WebUiPassword, stored);
-        let input = input_for(&holding, target, temporary)?;
-        // CMP-8b logs a failed step itself.
-        configure
-            .apply(self.http.as_ref(), target, &input, plan)
+        {
+            let holding = Holding(Field::WebUiPassword, stored.clone());
+            let input = input_for(&holding, target, temporary.clone())?;
+            // CMP-8b logs a failed step itself.
+            configure
+                .apply(self.http.as_ref(), target, &input, plan)
+                .await
+                .map_err(|err| CompanionsError::Refused(adapter_code(err)))?;
+        }
+        let (service, sink, store) = (self.service.clone(), self.sink.clone(), self.store.clone());
+        let target = target.clone();
+        let tail = tokio::spawn(async move {
+            let _one = one;
+            // Under the guided lock, before its own hand-over: anything a
+            // crashed native install left pending for it is no longer
+            // Lodestar's to release, now that this entry is yours (#679
+            // follow-up's self-review B2). Cleared first, so a crash after
+            // the hand-over never leaves a marker that would release your
+            // entry at the next start.
+            let cid = e.id.clone();
+            tokio::task::spawn_blocking(move || service.clear_handover(&cid))
+                .await
+                .map_err(|_| CompanionsError::Internal("panicked"))?;
+            let holding = Holding(Field::WebUiPassword, stored);
+            let input = input_for(&holding, &target, temporary)?;
+            lodestar_companions::configure::hand_over(sink.as_ref(), &e.id, &target, &input)
+                .await
+                .map_err(|err| CompanionsError::Refused(adapter_code(err)))?;
+            let origin = guided::origin_key(&e.id);
+            tokio::task::spawn_blocking(move || {
+                store
+                    .lock()
+                    .map_err(|_| ())?
+                    .set_settings_text(&[(&origin, RecordOrigin::Confirmed.as_str())])
+                    .map_err(|_| ())
+            })
             .await
-            .map_err(|err| CompanionsError::Refused(adapter_code(err)))?;
-        // Under the guided lock: anything a crashed native install left
-        // pending for it is no longer Lodestar's to release, now that this
-        // entry is yours (#679 follow-up's self-review B2).
-        let service = self.service.clone();
-        let cid = e.id.clone();
-        tokio::task::spawn_blocking(move || service.clear_handover(&cid))
-            .await
-            .map_err(|_| CompanionsError::Internal("panicked"))?;
-        lodestar_companions::configure::hand_over(self.sink.as_ref(), &e.id, target, &input)
-            .await
-            .map_err(|err| CompanionsError::Refused(adapter_code(err)))?;
-        let origin = guided::origin_key(&e.id);
-        self.blocking(move |s| {
-            s.lock()
-                .map_err(|_| ())?
-                .set_settings_text(&[(&origin, RecordOrigin::Confirmed.as_str())])
-                .map_err(|_| ())
-        })
-        .await?;
+            .map_err(|_| CompanionsError::Internal("panicked"))?
+            .map_err(|()| CompanionsError::Internal("store"))
+        });
+        tail.await
+            .map_err(|_| CompanionsError::Internal("panicked"))??;
         self.refresh().await;
         Ok(lodestar_api::companions::CompanionsApi::get(
             self.service.as_ref(),
@@ -1448,7 +1468,7 @@ impl CompanionsGuidedApi for Guided {
         Box::pin(async move {
             // The lock first, then the check: an install that finished
             // just before is seen (#679's review, Important 1).
-            let _one = self.exclusive()?;
+            let one = self.exclusive()?;
             let e = self.handed_over(&id).await?;
             self.not_added(e).await?;
             // One confirmation per plan, and one that doesn't echo it is
@@ -1479,7 +1499,7 @@ impl CompanionsGuidedApi for Guided {
                     if !echoes(&plan) {
                         return Err(CompanionsError::Mismatch.into());
                     }
-                    return self.finish(e, &target, &plan, generated, None).await;
+                    return self.finish(one, e, &target, &plan, generated, None).await;
                 }
                 Held::Pasted(sealed, temporary) => (sealed, temporary),
             };
@@ -1557,7 +1577,7 @@ impl CompanionsGuidedApi for Guided {
                     .into());
                 }
             };
-            self.finish(e, &target, &plan, change.next.secret, Some(temporary))
+            self.finish(one, e, &target, &plan, change.next.secret, Some(temporary))
                 .await
         })
     }

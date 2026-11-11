@@ -263,6 +263,26 @@ struct FakeApi {
     refuse_pre_check: AtomicBool,
     /// Each check's `fresh`.
     asked: Mutex<Vec<bool>>,
+    /// The hand-over never answers.
+    hang_hand_over: AtomicBool,
+    /// Says nothing is handed over, as for a companion this build doesn't.
+    no_hand_over: AtomicBool,
+    /// The release waits for `release_gate`, as a slow store's save does;
+    /// `release_dropped` says one was given up on before it answered.
+    hold_release: AtomicBool,
+    release_gate: tokio::sync::Notify,
+    release_dropped: AtomicBool,
+}
+
+/// Sets its flag when dropped before it's marked done.
+struct Settles<'a>(&'a AtomicBool, bool);
+
+impl Drop for Settles<'_> {
+    fn drop(&mut self) {
+        if !self.1 {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
 }
 
 /// Lodestar's settings, as the hand-over writes them: each password it
@@ -330,6 +350,9 @@ impl ApiConfigure for FakeApi {
             if self.refuse_hand_over.load(Ordering::SeqCst) {
                 return Err(AdapterError::Refused("sink_refused"));
             }
+            if self.hang_hand_over.load(Ordering::SeqCst) {
+                std::future::pending::<()>().await;
+            }
             let input = ConfigureInput::new(credentials).installed(receipt);
             configure::hand_over(&self.sink, id, target, &input).await
         })
@@ -351,10 +374,20 @@ impl ApiConfigure for FakeApi {
         })
     }
 
+    fn hands_over(&self, id: &CompanionId) -> bool {
+        *id == qbt() && !self.no_hand_over.load(Ordering::SeqCst)
+    }
+
     fn release<'a>(&'a self, _: &'a CompanionId) -> BoxFuture<'a, Result<(), AdapterError>> {
         self.releases.fetch_add(1, Ordering::SeqCst);
         let refuse = self.refuse_release.load(Ordering::SeqCst);
+        let hold = self.hold_release.load(Ordering::SeqCst);
         Box::pin(async move {
+            let mut settles = Settles(&self.release_dropped, false);
+            if hold {
+                self.release_gate.notified().await;
+            }
+            settles.1 = true;
             if refuse {
                 Err(AdapterError::Refused("sink_refused"))
             } else {
@@ -1978,4 +2011,114 @@ async fn a_live_undo_keeps_the_marker_only_when_its_release_fails() {
     );
     assert!(w.api.sink.passwords().is_empty());
     assert_eq!(w.on_disk(), None);
+}
+
+/// #692's review, Important 2: a hand-over that never answers is given up
+/// at its bound (three of the live deadline, shortened here). It may still
+/// save, so the undo releases nothing and the marker stays for the next
+/// start.
+#[tokio::test]
+async fn a_hung_hand_over_keeps_its_marker_and_isnt_released() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let marker = w.data.path().join("companions/.handed-over-qbittorrent");
+    let m = w.manager(catalogue("5.0.3"), LINUX);
+    m.set_live_deadline(std::time::Duration::from_secs(1));
+    w.api.hang_hand_over.store(true, Ordering::SeqCst);
+    let got = tokio::time::timeout(WAIT, m.install(&token("5.0.3")))
+        .await
+        .expect("the hand-over wasn't bounded");
+    assert_eq!(
+        got,
+        Err(ManagerError::Step {
+            step: "handover",
+            code: "timed_out"
+        })
+    );
+    assert_eq!(w.api.releases.load(Ordering::SeqCst), 0);
+    assert!(marker.is_file());
+    assert_eq!(w.on_disk(), None);
+}
+
+/// #692's review, Important 3: a pending release that passes its deadline
+/// is still waited for, under the slot (and serve's guided lock), so
+/// nothing else writes the entry while it may still save; it keeps its
+/// marker, and the next start releases what's left.
+#[tokio::test]
+async fn a_release_past_its_deadline_is_waited_for_and_keeps_its_marker() {
+    let _g = SERIAL.lock().await;
+    let lines = capture();
+    let w = World::new();
+    let marker = w.data.path().join("companions/.handed-over-qbittorrent");
+    let cat = catalogue("5.0.3");
+    let m = w.manager(cat, LINUX);
+    m.crash_at(Some(Fault::After(Step::Configured)));
+    assert_eq!(m.install(&token("5.0.3")).await, Err(ManagerError::Crashed));
+    drop(m);
+    let m = Arc::new(w.manager(cat, LINUX));
+    m.recover().await;
+    m.set_live_deadline(std::time::Duration::from_millis(200));
+    w.api.hold_release.store(true, Ordering::SeqCst);
+    let timed_out = |l: &String| {
+        l.contains("companions.install_failed") && l.contains("release") && l.contains("timed_out")
+    };
+    let seen = lines
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| timed_out(l))
+        .count();
+    let pending = tokio::spawn({
+        let m = m.clone();
+        async move { m.release_pending().await }
+    });
+    // Past the deadline: logged, and still waited for, not dropped.
+    let logged = tokio::time::timeout(WAIT, async {
+        while lines
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|l| timed_out(l))
+            .count()
+            == seen
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert!(logged.is_ok(), "the release never timed out");
+    assert!(!w.api.release_dropped.load(Ordering::SeqCst));
+    assert!(!pending.is_finished());
+    // Its slot is still held: nothing else can change the companion.
+    assert_eq!(
+        m.install(&token("5.0.3")).await,
+        Err(ManagerError::Refused(Refusal::Busy))
+    );
+    w.api.release_gate.notify_one();
+    tokio::time::timeout(WAIT, pending).await.unwrap().unwrap();
+    assert!(!w.api.release_dropped.load(Ordering::SeqCst));
+    assert!(marker.is_file(), "a late release kept no marker");
+    // The next start releases what's left, and the marker goes.
+    w.api.hold_release.store(false, Ordering::SeqCst);
+    drop(m);
+    let m = w.manager(cat, LINUX);
+    m.recover().await;
+    m.release_pending().await;
+    assert!(!marker.exists());
+}
+
+/// A companion this build doesn't hand over writes no marker: nothing it
+/// saved needs releasing.
+#[tokio::test]
+async fn only_a_companion_that_is_handed_over_is_marked() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let marker = w.data.path().join("companions/.handed-over-qbittorrent");
+    let m = w.manager(catalogue("5.0.3"), LINUX);
+    w.api.no_hand_over.store(true, Ordering::SeqCst);
+    m.crash_at(Some(Fault::After(Step::Configured)));
+    assert_eq!(m.install(&token("5.0.3")).await, Err(ManagerError::Crashed));
+    assert!(!marker.exists());
 }

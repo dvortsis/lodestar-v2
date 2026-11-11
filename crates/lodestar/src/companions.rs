@@ -555,6 +555,11 @@ impl ApiConfigure for Wiring {
         })
     }
 
+    /// Only qBittorrent's hand-over saves anything here.
+    fn hands_over(&self, id: &CompanionId) -> bool {
+        id.as_str() == configure::qbittorrent::ID
+    }
+
     fn release<'a>(&'a self, id: &'a CompanionId) -> BoxFuture<'a, Result<(), AdapterError>> {
         Box::pin(async move {
             if id.as_str() != configure::qbittorrent::ID {
