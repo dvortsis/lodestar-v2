@@ -131,6 +131,44 @@ class DeploymentBoundary(unittest.TestCase):
         self.assertTrue(errors)
         self.assertNotIn("LEAKMARK", str(errors))
 
+    def test_owner_approval_requires_explicitly_available_self_review(self):
+        # A sole owner reviewer cannot approve their own dispatch when this is
+        # true. Missing/ill-typed metadata cannot prove approval is available.
+        for environment in ("cloud-fleet", "pia-delivery", "cloud-operator"):
+            role = next(k for k, v in dp.ROLE_ENVIRONMENTS.items() if v == environment)
+            for workflow in dp.POLICY["environments"][environment]:
+                for value in (True, None, "false", 0, "missing"):
+                    with self.subTest(environment=environment, workflow=workflow, value=value):
+                        data = settings()
+                        rule = data[f"/repos/{REPO}/environments/{environment}"]["protection_rules"][0]
+                        if value == "missing":
+                            rule.pop("prevent_self_review")
+                        else:
+                            rule["prevent_self_review"] = value
+                        self.assertIn(f"deployment: {environment} requires prevent_self_review=false for sole-owner approval",
+                                      dp.configuration_errors(data.__getitem__, [environment]))
+                        with self.assertRaises(dp.DeploymentBlocked):
+                            dp.require_for_run(job(workflow), role, data.__getitem__)
+
+    def test_unavailable_owner_self_review_stops_before_oidc_and_sts(self):
+        for role, environment in dp.ROLE_ENVIRONMENTS.items():
+            if environment == "fleet-cleanup":
+                continue  # Independently authorized owner dispatch has no reviewer queue.
+            for workflow in dp.POLICY["environments"][environment]:
+                with self.subTest(environment=environment, workflow=workflow):
+                    data = settings()
+                    data[f"/repos/{REPO}/environments/{environment}"]["protection_rules"][0]["prevent_self_review"] = True
+                    with mock.patch.object(apply, "github_json", side_effect=lambda _, path: data[path]), \
+                            mock.patch("urllib.request.urlopen") as http, \
+                            mock.patch.object(apply, "aws_config"), \
+                            mock.patch.dict(sys.modules, {"boto3": mock.Mock()}) as modules:
+                        with self.assertRaisesRegex(SystemExit, "prevent_self_review=false"):
+                            apply.oidc_session({**job(workflow), role: "fake-role",
+                                                "ACTIONS_ID_TOKEN_REQUEST_URL": "https://example.invalid/token?x=1",
+                                                "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "fake-oidc"}, "1-1", role_env=role)
+                        http.assert_not_called()
+                        modules["boto3"].client.assert_not_called()
+
     def test_wrong_run_context_is_blocked_before_any_api_read(self):
         for key, value in (("GITHUB_REF", "refs/heads/feature"), ("GITHUB_REF", "refs/tags/main"),
                            ("GITHUB_REPOSITORY_ID", "1427502272"), ("GITHUB_REPOSITORY_OWNER_ID", "1"),

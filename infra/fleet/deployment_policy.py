@@ -67,6 +67,11 @@ def configuration_errors(get, environments=None) -> list[str]:
                 problems.append(f"deployment: {name} must not queue behind environment approvals/timers")
             if not independent and not owner_review:
                 problems.append(f"deployment: {name} requires the owner as its sole approval reviewer")
+            if not independent and owner_review and reviewers[0].get("prevent_self_review") is not False:
+                # With one eligible reviewer, blocking their own approval
+                # deadlocks owner-triggered deployments. Require explicit API
+                # evidence; missing/ill-typed metadata must also fail closed.
+                problems.append(f"deployment: {name} requires prevent_self_review=false for sole-owner approval")
             if env.get("can_admins_bypass") is not False:
                 problems.append(f"deployment: {name} must disable administrator approval bypass")
             # Exactly one branch rule; extra patterns/tags or a partial response fail closed.
