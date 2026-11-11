@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T22:39:16Z",
+  "updated_at": "2026-11-11T22:50:16Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6951,6 +6951,11 @@
       "id": "X-upd-stop-early",
       "note": "From #714: Handles::shutdown sends the updates stop only after serving drains (up to SHUTDOWN_GRACE 10 s); an install reaching switch during the drain still switches (supervisor stop wins, but version dequeued and overlay left). Fix: send the updates stop when the shutdown signal fires, in services.rs. Launch after #709 and #715 land (services.rs contention). Opus.",
       "at": "2026-11-11T22:38:29Z"
+    },
+    {
+      "id": "X-spool-damage-log+rv699r3",
+      "note": "Fold rv-699-f0eaa328 into X-spool-damage-log (owns spool.rs): I1 set next_seq before write_atomic in start_segment (dir-sync failure or planted <next_seq>.lsp wedges the spool); I2 reword 'a planted link's target is never zeroed, on either platform' (Windows shared() always false: hard links still zeroed) in the secure_remove doc comment + a decisions note; N1 reject shared(&opened) in start_segment's post-open check; N2 optional claim() test for runtime.rs:1727 (runtime.rs is X-wk-own-lease-lost's; coordinate).",
+      "at": "2026-11-11T22:50:16Z"
     }
   ],
   "main_health": [
@@ -7684,7 +7689,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T22:39:16Z",
+    "updated": "2026-11-11T22:50:16Z",
     "items": [
       {
         "slot": 1,
@@ -7848,7 +7853,7 @@
     }
   ],
   "heartbeat": "2026-11-11T21:38:36Z",
-  "updated": "2026-11-11T22:39:16Z",
+  "updated": "2026-11-11T22:50:16Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
