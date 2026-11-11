@@ -900,8 +900,11 @@ impl Control {
             monitor.pool().set_paused(false).await;
         }
         // What a pinning plugin was built with: the start's credentials.
-        // Nothing can write them between its build and here, since the
-        // API isn't serving yet.
+        // This relies on nothing writing a credential between the plugin's
+        // build and here. It holds because the API, the only writer
+        // (`update_credentials`), starts serving after `Control::start`.
+        // Keep that order: a write in between would leave the source
+        // running on an older key with `config_pending` false.
         let pinning: Vec<SourceStatus> = monitor
             .sources()
             .into_iter()
