@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T12:39:14Z",
+  "updated_at": "2026-11-11T12:43:58Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7500,7 +7500,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T12:39:14Z",
+    "updated": "2026-11-11T12:43:58Z",
     "items": [
       {
         "slot": 1,
@@ -7552,11 +7552,11 @@
       },
       {
         "slot": 7,
-        "slice": "X-smoke-polish",
+        "slice": "M8-THEME",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCVGtYWSJVrREyne22: PK-smoke review nits (password wording, state cleanup, no proxy, Windows redaction) (Sonnet), same session after #683 merged 503a1575",
-        "since": "2026-11-11T12:19:17Z"
+        "doing": "session_01MMjhnCVGtYWSJVrREyne22: nightly all-themes tracking issue (separate issues:write job, no npm) + run summary (Sonnet, /security-review); same session after #685 X-smoke-polish merged 4b9e0e7a",
+        "since": "2026-11-11T12:43:58Z"
       },
       {
         "slot": 8,
@@ -7659,5 +7659,12 @@
     "#665 CMP-9c (delta; merge held on X-cmp-native-handover)",
     "#673 OP-5"
   ],
-  "merged": []
+  "merged": [
+    {
+      "pr": 685,
+      "slice": "X-smoke-polish",
+      "sha": "4b9e0e7aa710f3a29d11745e8ce9d073b7780e9d",
+      "at": "2026-11-11T12:43:58Z"
+    }
+  ]
 }
