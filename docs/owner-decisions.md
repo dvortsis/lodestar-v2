@@ -616,6 +616,11 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **Runner additions (§2.19):** install the App on this repository only; confirm main's protection blocks App bypass; the OP-G dry up/down cycle tests the stop switch before `FLEET_LIVE=true`. These are in the OP-G notes in `runner/slices.yaml`.
     - No `ext:` condition matches these loosenings. `owner-operator-answers` already holds, and `owner-operator-setup` stays unmet until setup steps 2-6 are done.
 
+54. **Pause, then resume with up to eight sessions at once** (owner, in the runner session):
+    - **Pause, 2026-11-09T05:54Z:** "I'm almost out of usage, complete these sessions and pause runner and prevent more sessions from starting.", then "Once the active sessions complete, pause the runner. No further sessions unless explicitly commanded." The four running PRs (#652, #644, #651, #653) were finished and merged, and the runner paused at 2026-11-09T12:03Z with its heartbeat and watchdog disabled.
+    - **Resume, 2026-11-11T03:57Z:** "We reset credit. Continue with up to 8 sessions in one time,". The runner resumed at 04:05Z and re-enabled both scheduled tasks.
+    - **At most eight slices at a time in total,** Opus, helper and docs slices alike, replacing §2.42's four. `runner/slices.yaml` `limits.phase_total` is 8. Filling every slot isn't required, and the other §2.42 rules (no overlapping `owns`, the ladder decides) are unchanged. The runner still runs at most three reviewers at once.
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.
