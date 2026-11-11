@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T22:15:41Z",
+  "updated_at": "2026-11-11T22:21:06Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6936,6 +6936,16 @@
       "id": "X-ci-ok-stuck",
       "note": "2026-11-11: ci-ok stuck 'queued' in completed runs 43089754858 (#709) and 43094561922 (#711); rerun-failed-jobs answers 403 'cannot be retried'. Workaround: workflow_dispatch CI on the PR branch at the same head (no commit). Watch for recurrence. Also: runs that never reach 'queued' (WK-11 f0eaa328 runs 43098511134/148/175/205, ENR-4 2026-11-05) can't be cancelled or re-run (409); only a new head helps. CI is capacity-bound at 12 sessions (~20 concurrent jobs on a public repo; CI = 52 jobs). Owner FYI pending: CI throughput is the bottleneck at 12 sessions.",
       "at": "2026-11-11T22:02:27Z"
+    },
+    {
+      "id": "D-outputs-guide",
+      "note": "New docs slice for next runner PR: Sonnet, user-docs; deps TZ-0, OUT-0, OUT-2; 'Connect Prowlarr, Sonarr and Radarr' (torznab key scope, /api/v1/torznab/api, Sonarr 5000/5045 trap) + bitmagnet export. Facts in TZ-0's decisions file.",
+      "at": "2026-11-11T22:21:06Z"
+    },
+    {
+      "id": "owner-flags-pending-1111b",
+      "note": "Flag to owner (\u00a72.19): TZ-0 kept as one ~3,050-line PR (>half tests; runner call); X-restart-banner new size-limit entry 'Restart flow (on demand)' (measured +10%); X-restart-banner Review shows saved values (no running value in API); CI throughput is the bottleneck at 12 sessions.",
+      "at": "2026-11-11T22:21:06Z"
     }
   ],
   "main_health": [
@@ -7669,7 +7679,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T22:15:41Z",
+    "updated": "2026-11-11T22:21:06Z",
     "items": [
       {
         "slot": 1,
@@ -7833,7 +7843,7 @@
     }
   ],
   "heartbeat": "2026-11-11T21:38:36Z",
-  "updated": "2026-11-11T22:15:41Z",
+  "updated": "2026-11-11T22:21:06Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
