@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use lodestar_companions::adapter::ConfigureInput;
 use lodestar_companions::adapter::{AdapterError, BoxFuture, Credentials, Target};
-use lodestar_companions::catalogue::{Arch, Catalogue, Platform, Sha256};
+use lodestar_companions::catalogue::{Arch, Catalogue, NotAvailable, Platform, Sha256};
 use lodestar_companions::configure::{
     self, ConfigSink, DownloadClientEntry, IndexerManagerEntry, InstallReceipt, SinkError,
 };
@@ -563,6 +563,12 @@ async fn refusals_are_typed_and_change_nothing() {
     assert_eq!(
         w.manager(shipped, windows).install(&token("5.0.3")).await,
         refused(Refusal::GuidedOnly)
+    );
+    // A build Lodestar installs still answers `awaiting_pin` while it
+    // waits: the shipped Linux binary isn't pinned yet.
+    assert_eq!(
+        w.manager(shipped, LINUX).offer(&qbt()),
+        refused(Refusal::NotAvailable(NotAvailable::AwaitingPin))
     );
     let m = w.manager(cat, LINUX);
     assert_eq!(m.install(&wrong).await, refused(Refusal::Confirmation));

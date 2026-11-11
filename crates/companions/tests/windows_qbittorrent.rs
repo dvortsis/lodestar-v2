@@ -18,7 +18,7 @@ use lodestar_companions::configure::{
 };
 use lodestar_companions::inputs::{HostPath, InputError, PortNumber, Version};
 use lodestar_companions::windows_qbittorrent::{
-    AWAITING_PIN, DOWNLOAD_PAGE, Guide, Installer, Step, VERSION_UNSUPPORTED, WindowsQBittorrent,
+    DOWNLOAD_PAGE, Guide, Installer, Step, VERSION_UNSUPPORTED, WindowsQBittorrent,
 };
 use lodestar_companions::{CompanionId, builtin};
 use lodestar_integrations::secret::Secret;
@@ -83,8 +83,16 @@ fn an_unpinned_guide_claims_no_checksum() {
     let all: Vec<String> = g.steps().iter().filter_map(|s| g.text(*s)).collect();
     assert_eq!(all.len(), Step::ALL.len() - 1);
     assert!(all[0].contains(DOWNLOAD_PAGE) && all[0].contains("doesn't download or run"));
+    assert!(
+        all[0].contains("no checked qBittorrent installer yet"),
+        "{}",
+        all[0]
+    );
     for t in &all {
-        assert!(!t.contains("SHA") && !t.contains("hash"), "{t}");
+        assert!(
+            !t.contains("SHA") && !t.contains("hash") && !t.contains("Get-FileHash"),
+            "{t}"
+        );
     }
 }
 
@@ -440,17 +448,43 @@ async fn the_apply_checks_the_version_again() {
     assert_eq!(http.0.lock().unwrap().password, PASTED);
 }
 
+/// While the installer awaits its pin, the gate accepts exactly CMP-8b's
+/// checked range (4.6.0 to below 5.3): inside it, configured; below it,
+/// at 5.3 and past it, refused with nothing written (runner, option (D)).
 #[tokio::test]
-async fn an_unpinned_installer_or_an_unreadable_version_refuses() {
+async fn an_unpinned_installer_accepts_the_checked_range_only() {
     let creds = Creds(GENERATED);
     let t = loopback();
-    let gate = WindowsQBittorrent::new(builtin_qbt());
-    let http = fake("5.0.3");
-    let err = gate.plan(&http, &t, &input(&creds, &t)).await.unwrap_err();
-    assert_eq!(err, AdapterError::Refused(AWAITING_PIN));
-    // Refused before anything is sent: not even a sign-in.
-    assert!(http.0.lock().unwrap().seen.is_empty());
+    for ok in ["4.6.0", "5.0.3", "5.2.9"] {
+        let gate = WindowsQBittorrent::new(builtin_qbt());
+        let http = fake(ok);
+        run(&gate, &http, &input(&creds, &t)).await.unwrap();
+        assert_eq!(http.0.lock().unwrap().password, GENERATED, "{ok}");
+    }
+    for refused in ["4.5.9", "5.3.0", "5.3", "6.0.0"] {
+        let gate = WindowsQBittorrent::new(builtin_qbt());
+        let http = fake(refused);
+        let err = gate.plan(&http, &t, &input(&creds, &t)).await.unwrap_err();
+        assert_eq!(err, AdapterError::Refused(VERSION_UNSUPPORTED), "{refused}");
+        assert!(http.writes().is_empty(), "{refused}");
+        assert_eq!(http.0.lock().unwrap().password, PASTED);
+        assert!(gate.last_refusal().is_some());
+    }
+}
 
+#[tokio::test]
+async fn an_unreadable_version_refuses() {
+    let creds = Creds(GENERATED);
+    let t = loopback();
+    for gate in [
+        WindowsQBittorrent::new(builtin_qbt()),
+        WindowsQBittorrent::new(pinned("5.0.3")),
+    ] {
+        let http = fake("5.0.3-beta");
+        let err = gate.plan(&http, &t, &input(&creds, &t)).await.unwrap_err();
+        assert_eq!(err, AdapterError::Protocol("version"));
+        assert!(http.writes().is_empty());
+    }
     let gate = WindowsQBittorrent::new(pinned("5.0.3"));
     let http = fake("5.0.3-beta");
     let err = gate.plan(&http, &t, &input(&creds, &t)).await.unwrap_err();
@@ -512,19 +546,27 @@ async fn the_gate_adds_no_sign_in_of_its_own() {
     assert_eq!(version_reads, 2, "checked in the plan and the apply");
 }
 
-/// The configurator CMP-11b registers for Windows is the gate: with the
-/// compiled-in catalogue awaiting its pin, it refuses before sending
-/// anything. Not registered yet, so `configure::configurator` is still
-/// CMP-8b's adapter on every platform.
+/// The configurator registered for Windows is the gate: with the
+/// compiled-in catalogue awaiting its pin, it refuses a version past the
+/// checked range. On Windows that's what `configure::configurator` hands
+/// out; elsewhere it's CMP-8b's adapter, which reads no version.
 #[tokio::test]
 async fn the_windows_configurator_is_the_gate() {
     let id = CompanionId::parse("qbittorrent").unwrap();
-    let c = lodestar_companions::windows_qbittorrent::configurator(&id).unwrap();
     let creds = Creds(GENERATED);
     let t = loopback();
-    let http = fake("5.0.3");
+    let c = lodestar_companions::windows_qbittorrent::configurator(&id).unwrap();
+    let http = fake("5.3.0");
     let err = c.plan(&http, &t, &input(&creds, &t)).await.unwrap_err();
-    assert_eq!(err, AdapterError::Refused(AWAITING_PIN));
+    assert_eq!(err, AdapterError::Refused(VERSION_UNSUPPORTED));
+    let registered = configure::configurator(&id).unwrap();
+    let http = fake("5.3.0");
+    let got = registered.plan(&http, &t, &input(&creds, &t)).await;
+    if cfg!(windows) {
+        assert_eq!(got.unwrap_err(), AdapterError::Refused(VERSION_UNSUPPORTED));
+    } else {
+        assert!(got.is_ok(), "{got:?}");
+    }
 }
 
 // ─── Windows save paths ─────────────────────────────────────────────────

@@ -20,9 +20,10 @@
 //!
 //! **One gate of its own:** the version. [`WindowsQBittorrent`] wraps
 //! CMP-8b's qBittorrent adapter; signed in, it reads the version and
-//! refuses one outside the pin's range ([`Supported`]) with
-//! [`VERSION_UNSUPPORTED`] before anything is written. An unpinned
-//! catalogue entry refuses everything (`awaiting_pin`).
+//! refuses one outside the range ([`Supported`]) with
+//! [`VERSION_UNSUPPORTED`] before anything is written. The range is the
+//! pin's once the installer is pinned, and until then the releases CMP-8b
+//! was checked against ([`CHECKED_RANGE`]).
 //!
 //! **Windows save paths** ([`WindowsPath`]) are the ones CMP-8b's
 //! [`HostPath`](crate::inputs::HostPath) refused: a drive letter or a UNC
@@ -51,8 +52,6 @@ pub const DOWNLOAD_PAGE: &str = "https://www.qbittorrent.org/download";
 
 /// The refusal for a qBittorrent outside the pinned version's range.
 pub const VERSION_UNSUPPORTED: &str = "qbittorrent_version_unsupported";
-/// The refusal while the Windows installer awaits its pin (CMP-13).
-pub const AWAITING_PIN: &str = "awaiting_pin";
 /// The refusal when the catalogue has no Windows installer for it.
 pub const NO_INSTALLER: &str = "no_platform";
 
@@ -97,51 +96,101 @@ impl<'a> Installer<'a> {
     }
 }
 
-/// The versions a pin accepts: the pinned one and later patch releases of
-/// the same `major.minor` (`5.0.3` accepts `5.0.3` to `5.0.x`, not `5.0.2`
-/// or `5.1.0`). An older one may lack the pin's fixes; a newer minor
-/// release is one Lodestar hasn't checked CMP-8b's adapter against.
+/// The qBittorrent releases CMP-8b's adapter was checked against, which
+/// the gate accepts while the Windows installer awaits its pin: from
+/// `4.6.0` up to, not including, `5.3`. CMP-8b checked `release-4.6.3`,
+/// `5.0.3`, `5.1.2` and `5.2.0` and supports every line from 4.6
+/// (`docs/decisions/2026-11-08-CMP-8b.md`, "qBittorrent (WebUI API v2)").
+/// Once the installer is pinned, the pin's range replaces it (runner,
+/// 2026-11-11, CMP-11b option (D)).
+pub const CHECKED_RANGE: (&str, (u32, u32)) = ("4.6.0", (5, 3));
+
+/// The newest `major.minor` inside [`CHECKED_RANGE`], for messages.
+const CHECKED_UP_TO: &str = "5.2";
+
+/// The versions the gate accepts: at least `min`, and a `major.minor`
+/// below `below`.
+/// - **Pinned:** the pinned version and later patch releases of the same
+///   `major.minor` (`5.0.3` accepts `5.0.3` to `5.0.x`, not `5.0.2` or
+///   `5.1.0`). An older one may lack the pin's fixes; a newer minor
+///   release is one Lodestar hasn't checked CMP-8b's adapter against.
+/// - **Unpinned:** [`CHECKED_RANGE`].
+///
+/// Neither contains the other: a pin at `5.0.3` refuses `4.6.7`, which
+/// the checked range accepts, and a later pin at `5.3.1` would accept
+/// `5.3.2`, which it refuses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Supported {
-    pinned: Version,
+    min: Version,
+    below: (u32, u32),
+    pinned: bool,
 }
 
 /// Why a version is outside [`Supported`]. Carries only Lodestar's own
 /// parsed versions, so its message can be shown as it is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Unsupported {
-    Older { found: Version, pinned: Version },
-    Newer { found: Version, pinned: Version },
+    /// Older than `min`: the pinned version, or the oldest checked one.
+    Older {
+        found: Version,
+        min: Version,
+        pinned: bool,
+    },
+    /// A newer `major.minor` than Lodestar accepts. `pinned` is the pinned
+    /// version, or `None` under [`CHECKED_RANGE`].
+    Newer {
+        found: Version,
+        pinned: Option<Version>,
+    },
+}
+
+/// A version's `major.minor`; `None` for a part that doesn't read
+/// (`Version` holds digits only, so that never happens), which then counts
+/// as outside every range rather than as `0`.
+fn major_minor(v: &Version) -> Option<(u32, u32)> {
+    let mut it = v.as_str().split('.').map(|p| p.parse::<u32>().ok());
+    Some((it.next()??, it.next().unwrap_or(Some(0))?))
 }
 
 impl Supported {
+    /// The pin's range.
     pub fn from_pin(pinned: Version) -> Supported {
-        Supported { pinned }
+        // `major.minor + 1`; an unreadable or overflowing pin accepts
+        // nothing (`below` of `(0, 0)`).
+        let below = major_minor(&pinned)
+            .and_then(|(ma, mi)| Some((ma, mi.checked_add(1)?)))
+            .unwrap_or((0, 0));
+        Supported {
+            min: pinned,
+            below,
+            pinned: true,
+        }
+    }
+
+    /// [`CHECKED_RANGE`], while the installer awaits its pin.
+    pub fn checked() -> Supported {
+        let (min, below) = CHECKED_RANGE;
+        Supported {
+            min: Version::parse(min).expect("a valid constant"),
+            below,
+            pinned: false,
+        }
     }
 
     pub fn check(&self, found: &Version) -> Result<(), Unsupported> {
-        // `Version` already holds digits only; anything unreadable counts
-        // as outside the range rather than as `0`.
-        let mm = |v: &Version| {
-            let mut it = v.as_str().split('.').map(|p| p.parse::<u32>().ok());
-            (it.next().flatten(), it.next().unwrap_or(Some(0)))
-        };
-        let out = |older| {
-            let (found, pinned) = (found.clone(), self.pinned.clone());
-            Err(if older {
-                Unsupported::Older { found, pinned }
-            } else {
-                Unsupported::Newer { found, pinned }
-            })
-        };
-        if *found < self.pinned {
-            out(true)
-        } else if let f = mm(found)
-            && (f.0.is_none() || f != mm(&self.pinned))
-        {
-            out(false)
-        } else {
-            Ok(())
+        if *found < self.min {
+            return Err(Unsupported::Older {
+                found: found.clone(),
+                min: self.min.clone(),
+                pinned: self.pinned,
+            });
+        }
+        match major_minor(found) {
+            Some(mm) if mm < self.below => Ok(()),
+            _ => Err(Unsupported::Newer {
+                found: found.clone(),
+                pinned: self.pinned.then(|| self.min.clone()),
+            }),
         }
     }
 }
@@ -149,17 +198,37 @@ impl Supported {
 impl fmt::Display for Unsupported {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Unsupported::Older { found, pinned } => write!(
+            Unsupported::Older {
+                found,
+                min,
+                pinned: true,
+            } => write!(
                 f,
-                "This qBittorrent is {found}, older than {pinned}, the version Lodestar \
-                 supports on Windows. Install {pinned} from qBittorrent's download page, then \
+                "This qBittorrent is {found}, older than {min}, the version Lodestar \
+                 supports on Windows. Install {min} from qBittorrent's download page, then \
                  try again."
             ),
-            Unsupported::Newer { found, pinned } => write!(
+            Unsupported::Older { found, min, .. } => write!(
+                f,
+                "This qBittorrent is {found}, older than {min}, the oldest release Lodestar \
+                 supports on Windows. Install the current release from qBittorrent's \
+                 download page, then try again."
+            ),
+            Unsupported::Newer {
+                found,
+                pinned: Some(pinned),
+            } => write!(
                 f,
                 "This qBittorrent is {found}, newer than the {pinned} release Lodestar has \
                  checked on Windows. Install {pinned} from qBittorrent's download page, or \
                  wait for a Lodestar update that supports {found}."
+            ),
+            Unsupported::Newer { found, .. } => write!(
+                f,
+                "This qBittorrent is {found}, newer than the {CHECKED_UP_TO} releases \
+                 Lodestar has checked on Windows. Wait for a Lodestar update that supports \
+                 {found}, or install a {CHECKED_UP_TO} release from qBittorrent's download \
+                 page."
             ),
         }
     }
@@ -280,8 +349,10 @@ impl Guide {
                     p.version, p.file_name
                 ),
                 None => format!(
-                    "Open {page} and download qBittorrent's 64-bit Windows installer from \
-                     there. Lodestar doesn't download or run it for you."
+                    "This release of Lodestar has no checked qBittorrent installer yet, so \
+                     there's no checksum to compare. Open {page}, qBittorrent's official \
+                     download page, and download its 64-bit Windows installer from there. \
+                     Lodestar doesn't download or run it for you."
                 ),
             },
             Step::CheckSha256 => {
@@ -348,14 +419,12 @@ impl WindowsQBittorrent {
 
     fn with(id: CompanionId, entry: Option<&'static Entry>) -> WindowsQBittorrent {
         let refused = Arc::new(Mutex::new(None));
-        let supported = entry
-            .and_then(|e| Installer::of(e).ok())
-            .map(|i| i.supported());
+        let supported = entry.and_then(supported_for);
         let seen = Arc::clone(&refused);
         let gate: qbittorrent::VersionGate = Box::new(move |found: &Version| {
-            // Unpinned never reaches here (`ready`); refuse all the same.
+            // No installer never reaches here (`ready`); refuse all the same.
             let Some(s) = &supported else {
-                return Err(AdapterError::Refused(AWAITING_PIN));
+                return Err(AdapterError::Refused(NO_INSTALLER));
             };
             let r = s.check(found);
             let ok = r.is_ok();
@@ -376,15 +445,13 @@ impl WindowsQBittorrent {
         }
     }
 
-    /// Refuses before anything is sent while there's no pin to check
-    /// against.
+    /// Refuses before anything is sent when there's no Windows installer
+    /// to check against: no catalogue, or no installer in it.
     fn ready(&self) -> Result<(), AdapterError> {
-        let entry = self.entry.ok_or(AdapterError::Refused(NO_INSTALLER))?;
-        match Installer::of(entry) {
-            Ok(_) => Ok(()),
-            Err(NotAvailable::AwaitingPin) => Err(AdapterError::Refused(AWAITING_PIN)),
-            Err(_) => Err(AdapterError::Refused(NO_INSTALLER)),
-        }
+        self.entry
+            .and_then(supported_for)
+            .map(|_| ())
+            .ok_or(AdapterError::Refused(NO_INSTALLER))
     }
 
     /// Why the last call was refused with [`VERSION_UNSUPPORTED`]: the
@@ -401,8 +468,8 @@ impl WindowsQBittorrent {
     /// Why `found` is refused, as a plain message, or `None` when it's
     /// supported. For the screen's text beside [`VERSION_UNSUPPORTED`].
     pub fn explain(&self, found: &Version) -> Option<String> {
-        let i = Installer::of(self.entry?).ok()?;
-        i.supported().check(found).err().map(|u| u.to_string())
+        let s = supported_for(self.entry?)?;
+        s.check(found).err().map(|u| u.to_string())
     }
 
     fn clear(&self) {
@@ -446,6 +513,16 @@ impl Configure for WindowsQBittorrent {
             // there's no session to check on.
             self.inner.apply_plan(http, target, input, plan).await
         })
+    }
+}
+
+/// The range for `entry`'s Windows installer: the pin's once pinned,
+/// [`CHECKED_RANGE`] while it awaits its pin, and `None` without one.
+pub fn supported_for(entry: &Entry) -> Option<Supported> {
+    match Installer::of(entry) {
+        Ok(i) => Some(i.supported()),
+        Err(NotAvailable::AwaitingPin) => Some(Supported::checked()),
+        Err(_) => None,
     }
 }
 
@@ -765,6 +842,46 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(msg.contains("4.6.7") && msg.contains("5.0.3"), "{msg}");
+    }
+
+    /// While unpinned: exactly CMP-8b's checked range.
+    #[test]
+    fn the_checked_range_is_cmp_8bs() {
+        let s = Supported::checked();
+        for ok in [
+            "4.6.0", "4.6.3", "4.7.1", "5.0.3", "5.1.2", "5.2.0", "5.2.9",
+        ] {
+            assert_eq!(s.check(&Version::parse(ok).unwrap()), Ok(()), "{ok}");
+        }
+        for old in ["4.5.9", "4.5", "3.3.16"] {
+            assert!(matches!(
+                s.check(&Version::parse(old).unwrap()),
+                Err(Unsupported::Older { pinned: false, .. })
+            ));
+        }
+        for new in ["5.3", "5.3.0", "5.10.1", "6.0.0"] {
+            assert!(matches!(
+                s.check(&Version::parse(new).unwrap()),
+                Err(Unsupported::Newer { pinned: None, .. })
+            ));
+        }
+        let msg = s
+            .check(&Version::parse("5.3.0").unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(msg.contains("5.3.0") && msg.contains("5.2"), "{msg}");
+    }
+
+    /// A pin's range replaces the checked one, and neither contains the
+    /// other.
+    #[test]
+    fn a_pin_replaces_the_checked_range() {
+        let pin = Supported::from_pin(Version::parse("5.0.3").unwrap());
+        let later = Supported::from_pin(Version::parse("5.3.1").unwrap());
+        let checked = Supported::checked();
+        let v = |s: &str| Version::parse(s).unwrap();
+        assert!(checked.check(&v("4.6.7")).is_ok() && pin.check(&v("4.6.7")).is_err());
+        assert!(checked.check(&v("5.3.2")).is_err() && later.check(&v("5.3.2")).is_ok());
     }
 
     #[test]
