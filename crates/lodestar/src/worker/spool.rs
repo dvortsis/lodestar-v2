@@ -56,15 +56,17 @@ impl std::fmt::Debug for SpoolConfig {
     }
 }
 
-// `lodestar worker` sets `runtime::Config::spool` from this; that line is in
-// `cli/worker.rs`, which another slice owns (see the decisions file).
-#[cfg_attr(not(test), allow(dead_code))]
 impl SpoolConfig {
     /// `<data>/spool`, sealed with `<data>/secrets.key`, at the default
     /// caps (1 GB, 24 h).
+    /// The folder is created here, so one that can't be stops the worker
+    /// with its message instead of leaving it without a spool.
     pub fn for_layout(layout: &Layout) -> Result<SpoolConfig, ClusterError> {
+        let dir = layout.data.join(SPOOL_DIR);
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| ClusterError::Io("create the spool folder", e.kind()))?;
         Ok(SpoolConfig {
-            dir: layout.data.join(SPOOL_DIR),
+            dir,
             caps: Caps::default(),
             sealer: Arc::new(layout.secrets()?),
         })

@@ -644,7 +644,12 @@ mod replay {
         assert!(rig.replay(100, &r));
         rig.wait_records(1).await;
         assert_eq!(rig.stat(|s| &s.committed), 0);
+        assert_eq!(rig.stat(|s| &s.late_refused), 1);
         assert!(!rig.stored(&key));
+        // Its lease went back to wait for a re-grant, not lost.
+        let authority = rig.pipeline.monitor().lease_authority().clone();
+        assert!(authority.get(&key).is_none(), "no longer the worker's");
+        assert!(authority.in_flight(&key), "waiting for a re-grant");
         rig.standing.refused.lock().unwrap().clear();
 
         // Leased before the worker's last purge: refused too.

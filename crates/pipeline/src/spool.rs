@@ -15,7 +15,7 @@
 //! torn or damaged frame without opening it (it's no defence against an
 //! attacker; the seal is). Each body is one [`Record`], sealed with the
 //! worker's own secrets key ([`Sealer`], owner wkq1) for the context
-//! `lodestar:spool:<worker>:<seq>`, so a record can't be moved into another
+//! `worker-spool/v1:<worker>:<seq>`, so a record can't be moved into another
 //! segment or another worker's spool and still open. A record is one
 //! `Results` or `Counters` payload exactly as it was encoded for the wire,
 //! with its batch id, when it was spooled, and the fencing tokens of the
@@ -58,6 +58,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use lodestar_integrations::secret::Zeroizing;
 use siphasher::sip::SipHasher13;
 
 use crate::wire::MAX_PAYLOAD;
@@ -72,17 +73,21 @@ pub const HEADER_LEN: usize = 4 + 1 + 3 + 4 + 8 + 8 + 8;
 /// A frame's own bytes before its body: `len` and `sum`.
 pub const FRAME_HEAD: usize = 4 + 8;
 /// The largest sealed body a frame may hold: a record's largest plaintext
-/// ([`MAX_PLAIN`]) with the seal's overhead and its text encoding (4/3)
-/// fits well inside it.
+/// ([`MAX_PLAIN`], under `SecretStore::MAX_BYTES`) with the seal's
+/// 45 bytes fits inside it.
 pub const MAX_FRAME: usize = 1 << 20;
 /// Leases one record may carry: a `Results` batch's record cap.
 pub const MAX_LEASES: usize = crate::wire::results::MAX_RECORDS;
 /// A record's largest plaintext.
 pub const MAX_PLAIN: usize = RECORD_HEAD + MAX_LEASES * LEASE_LEN + 4 + MAX_PAYLOAD;
 const RECORD_HEAD: usize = 1 + 1 + 8 + 8 + 4;
+const _: () = assert!(MAX_PLAIN <= lodestar_integrations::SecretStore::MAX_BYTES);
+const _: () = assert!(MAX_PLAIN + 64 <= MAX_FRAME);
 const LEASE_LEN: usize = 20 + 8;
 /// The record encoding's version.
 const RECORD_VERSION: u8 = 1;
+/// The seal context's prefix, followed by `:<worker>:<seq>`.
+pub const CONTEXT: &str = "worker-spool/v1";
 
 /// A segment is closed once it holds this many bytes: replay reads one
 /// segment at a time, so this bounds what a replay holds in memory.
@@ -404,9 +409,10 @@ pub fn decode_segment(bytes: &[u8]) -> Result<Decoded<'_>, FormatError> {
 }
 
 /// Seals and opens spool records with the worker's own key (owner wkq1).
+/// Plaintext comes out in a buffer zeroed when dropped.
 pub trait Sealer: Send + Sync {
     fn seal(&self, context: &str, plain: &[u8]) -> Result<Vec<u8>, SealError>;
-    fn open(&self, context: &str, sealed: &[u8]) -> Result<Vec<u8>, SealError>;
+    fn open(&self, context: &str, sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>, SealError>;
     /// Whether `sealed` was sealed with a key other than the one
     /// [`seal`](Self::seal) uses now (a rotation is under way).
     fn is_stale(&self, sealed: &[u8]) -> bool;
@@ -425,107 +431,26 @@ impl fmt::Display for SealError {
 impl std::error::Error for SealError {}
 
 /// The worker's [`SecretStore`](lodestar_integrations::SecretStore) as a
-/// spool sealer: its XChaCha20-Poly1305 seal under its primary key, so
-/// `--rotate-key` covers the spool as it does the credentials.
+/// spool sealer: its XChaCha20-Poly1305 byte seal (`seal_bytes`) under
+/// its primary key, so `--rotate-key` covers the spool as it does the
+/// credentials. The byte seal's associated data can't match a credential's,
+/// so a spool record never opens as a credential, nor one as a record.
 impl Sealer for lodestar_integrations::SecretStore {
     fn seal(&self, context: &str, plain: &[u8]) -> Result<Vec<u8>, SealError> {
-        let text = lodestar_integrations::Secret::new(base64::encode(plain));
-        lodestar_integrations::SecretStore::seal(self, context, &text)
+        self.seal_bytes(context, plain)
             .map(|s| s.as_bytes().to_vec())
             .map_err(|_| SealError)
     }
 
-    fn open(&self, context: &str, sealed: &[u8]) -> Result<Vec<u8>, SealError> {
+    fn open(&self, context: &str, sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>, SealError> {
         let sealed = lodestar_integrations::SealedSecret::from_bytes(sealed.to_vec())
             .map_err(|_| SealError)?;
-        let text = lodestar_integrations::SecretStore::open(self, context, &sealed)
-            .map_err(|_| SealError)?;
-        base64::decode(text.expose()).ok_or(SealError)
+        self.open_bytes(context, &sealed).map_err(|_| SealError)
     }
 
     fn is_stale(&self, sealed: &[u8]) -> bool {
         lodestar_integrations::SealedSecret::from_bytes(sealed.to_vec())
             .map_or(true, |s| self.needs_reseal(&s))
-    }
-}
-
-/// Standard base64 with padding, for the seal's text form.
-mod base64 {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-    pub(super) fn encode(bytes: &[u8]) -> String {
-        let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-        for chunk in bytes.chunks(3) {
-            let b = [
-                chunk[0],
-                chunk.get(1).copied().unwrap_or(0),
-                chunk.get(2).copied().unwrap_or(0),
-            ];
-            let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
-            for i in 0..4 {
-                if i <= chunk.len() {
-                    out.push(char::from(ALPHABET[(n >> (18 - 6 * i)) as usize & 63]));
-                } else {
-                    out.push('=');
-                }
-            }
-        }
-        out
-    }
-
-    fn value(c: u8) -> Option<u32> {
-        Some(match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            _ => return None,
-        } as u32)
-    }
-
-    pub(super) fn decode(text: &str) -> Option<Vec<u8>> {
-        let t = text.as_bytes();
-        if !t.len().is_multiple_of(4) {
-            return None;
-        }
-        let mut out = Vec::with_capacity(t.len() / 4 * 3);
-        for (i, q) in t.chunks(4).enumerate() {
-            let last = i + 1 == t.len() / 4;
-            let pad = q.iter().rev().take_while(|&&c| c == b'=').count();
-            if pad > 2 || (pad > 0 && !last) {
-                return None;
-            }
-            let mut n = 0u32;
-            for &c in &q[..4 - pad] {
-                n = (n << 6) | value(c)?;
-            }
-            n <<= 6 * pad as u32;
-            let got = [(n >> 16) as u8, (n >> 8) as u8, n as u8];
-            out.extend_from_slice(&got[..3 - pad]);
-        }
-        Some(out)
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use proptest::prelude::*;
-
-        proptest! {
-            #[test]
-            fn round_trips(bytes in proptest::collection::vec(any::<u8>(), 0..300)) {
-                prop_assert_eq!(super::decode(&super::encode(&bytes)), Some(bytes));
-            }
-        }
-
-        #[test]
-        fn known_answers() {
-            assert_eq!(super::encode(b"foobar"), "Zm9vYmFy");
-            assert_eq!(super::encode(b"fo"), "Zm8=");
-            assert_eq!(super::decode("Zm8="), Some(b"fo".to_vec()));
-            assert_eq!(super::decode("Zm=8"), None);
-            assert_eq!(super::decode("Zm8"), None);
-        }
     }
 }
 
@@ -832,19 +757,19 @@ impl Spool {
     }
 
     fn frame_estimate(len: usize) -> u64 {
-        // The seal's text form (4/3) and overhead, the frame and a header.
-        (FRAME_HEAD + 64 + (RECORD_HEAD + len).div_ceil(3) * 4 + HEADER_LEN) as u64
+        // The seal's overhead, the frame and a header.
+        (FRAME_HEAD + 64 + RECORD_HEAD + len + HEADER_LEN) as u64
     }
 
     fn context(&self, seq: u64) -> String {
-        format!("lodestar:spool:{}:{seq}", self.worker)
+        format!("{CONTEXT}:{}:{seq}", self.worker)
     }
 
     /// Appends `record` at `now`: sealed, framed, written; synced if the
     /// last sync is [`SYNC_EVERY`] old. A record that would pass the byte
     /// cap is refused ([`SpoolError::Full`], counted).
     pub fn append(&mut self, record: &Record, now: i64) -> Result<(), SpoolError> {
-        let plain = record.encode().map_err(SpoolError::Format)?;
+        let plain = Zeroizing::new(record.encode().map_err(SpoolError::Format)?);
         let roll = self.active.as_ref().is_some_and(|a| {
             a.bytes >= SEGMENT_BYTES || now.saturating_sub(a.created) >= SEGMENT_SPAN_SECS
         });
@@ -984,7 +909,7 @@ impl Spool {
                 self.damaged(seq, "seal", &mut damage);
                 continue;
             };
-            match Record::decode(&plain) {
+            match Record::decode(&plain[..]) {
                 Ok(r) if r.at < oldest => bump(&self.stats.dropped_old),
                 Ok(r) => records.push(r),
                 Err(_) => self.damaged(seq, "record", &mut damage),
@@ -1065,7 +990,7 @@ impl Spool {
                 };
                 let sealed = self
                     .sealer
-                    .seal(&context, &plain)
+                    .seal(&context, &plain[..])
                     .map_err(|_| SpoolError::Seal)?;
                 out.extend_from_slice(&encode_frame(&sealed).map_err(SpoolError::Format)?);
             }
@@ -1134,15 +1059,15 @@ mod tests {
         plain.extend_from_slice(&1u64.to_le_bytes());
         plain.extend_from_slice(&0i64.to_le_bytes());
         plain.extend_from_slice(&u32::MAX.to_le_bytes());
-        assert_eq!(Record::decode(&plain), Err(FormatError::Invalid));
+        assert_eq!(Record::decode(&plain[..]), Err(FormatError::Invalid));
         let mut plain = vec![RECORD_VERSION, 1];
         plain.extend_from_slice(&1u64.to_le_bytes());
         plain.extend_from_slice(&0i64.to_le_bytes());
         plain.extend_from_slice(&0u32.to_le_bytes());
         plain.extend_from_slice(&u32::MAX.to_le_bytes());
-        assert_eq!(Record::decode(&plain), Err(FormatError::Invalid));
+        assert_eq!(Record::decode(&plain[..]), Err(FormatError::Invalid));
         plain.truncate(plain.len() - 4);
         plain.extend_from_slice(&10u32.to_le_bytes());
-        assert_eq!(Record::decode(&plain), Err(FormatError::Truncated));
+        assert_eq!(Record::decode(&plain[..]), Err(FormatError::Truncated));
     }
 }
