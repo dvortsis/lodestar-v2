@@ -136,7 +136,9 @@ impl Supported {
         };
         if *found < self.pinned {
             out(true)
-        } else if mm(found).0.is_none() || mm(found) != mm(&self.pinned) {
+        } else if let f = mm(found)
+            && (f.0.is_none() || f != mm(&self.pinned))
+        {
             out(false)
         } else {
             Ok(())
@@ -388,6 +390,10 @@ impl WindowsQBittorrent {
     /// Why the last call was refused with [`VERSION_UNSUPPORTED`]: the
     /// version found and the pinned one, for the screen's plain message
     /// (its `Display`). `None` after a call that wasn't.
+    ///
+    /// One slot shared by every call on this configurator, cleared as each
+    /// starts: two plans run at once can overwrite each other's. The guided
+    /// path runs one at a time.
     pub fn last_refusal(&self) -> Option<Unsupported> {
         self.refused.lock().ok()?.clone()
     }
@@ -447,6 +453,9 @@ impl Configure for WindowsQBittorrent {
 /// catalogue. Always one: without the catalogue it refuses every call.
 /// CMP-11b registers it in `configure::configurator` under `cfg(windows)`.
 pub fn configurator(id: &CompanionId) -> Option<Box<dyn Configure>> {
+    if id.as_str() != qbittorrent::ID {
+        return None;
+    }
     let entry = crate::builtin().ok().and_then(|c| c.get(id.as_str()));
     Some(Box::new(WindowsQBittorrent::with(id.clone(), entry)))
 }
@@ -466,6 +475,7 @@ const DEVICES: &[&str] = &["con", "prn", "aux", "nul"];
 /// junction to `Users`.
 const FORBIDDEN_ROOTS: &[&str] = &[
     "windows",
+    "windows.old",
     "program files",
     "programdata",
     "system volume information",
@@ -539,9 +549,19 @@ const RESERVED_SHARES: &[&str] = &["pipe", "mailslot"];
 /// Compared without case, as Windows does. Lodestar's own data on Windows
 /// is under `C:\ProgramData\Lodestar`, which the list keeps out.
 ///
-/// **What this can't see:** it checks the path as typed. A junction or
-/// link you made yourself, or this machine reached by its own name or a
-/// LAN address, passes. The guide says to pick a plain downloads folder.
+/// **What this can't see:** it checks the path as typed. These pass:
+/// - a junction or link you made yourself;
+/// - this machine reached by its own name or a LAN address;
+/// - a drive's root shared under another name than its folder's
+///   (`\\nas\C\Windows`): the folders after a share are checked only as
+///   if the share were named after the root folder.
+///
+/// `X:\Windows.old` (an earlier install and its profiles) is refused with
+/// `Windows`. `X:\Users\Default\…`, the template profile, passes like
+/// any other profile's folders: below it, `AppData` and dot folders are
+/// still refused.
+///
+/// The guide says to pick a plain downloads folder.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WindowsPath(String);
 
@@ -681,7 +701,17 @@ fn host_name(s: &str) -> Result<(), InputError> {
 /// machine's own name can't be known here (see [`WindowsPath`]).
 fn loopback(server: &str) -> bool {
     let s = server.to_ascii_lowercase();
-    if s == "localhost" || s.ends_with(".localhost") {
+    if s == "localhost" || s.ends_with(".localhost") || s.ends_with(".ipv6-literal.net") {
+        return true;
+    }
+    // Windows' address parser reads `0177` as octal and `0x7f` as hex, so
+    // any such label may be an address in another spelling (#705's review,
+    // I1): refused rather than decoded.
+    let other_base = |l: &str| {
+        (l.len() > 1 && l.starts_with('0') && l.bytes().all(|b| b.is_ascii_digit()))
+            || (l.starts_with("0x") && l[2..].bytes().all(|b| b.is_ascii_hexdigit()))
+    };
+    if s.split('.').any(other_base) {
         return true;
     }
     if !s.bytes().all(|b| b.is_ascii_digit() || b == b'.') {

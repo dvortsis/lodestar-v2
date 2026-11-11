@@ -53,9 +53,9 @@ use crate::inputs::{CompanionId, Version};
 use crate::log_events::CONFIG_APPLIED;
 
 use super::{
-    BIND_UNSUITED, CONTENT_TYPE, Origin, PLAN_MISMATCH, ROUTE_UNSUPPORTED, Route, SavePath,
-    UNKNOWN_SETTING, WOULD_LOOSEN, WebUiBind, consent, cookie, credential, failed, form, header,
-    key, plain,
+    BIND_UNSUITED, CONTENT_TYPE, Origin, PLAN_MISMATCH, ROUTE_UNSUPPORTED, Route,
+    SAVE_PATH_PLATFORM, SavePath, UNKNOWN_SETTING, WOULD_LOOSEN, WebUiBind, consent, cookie,
+    credential, failed, form, header, key, plain,
 };
 
 /// Its catalogue id.
@@ -136,6 +136,19 @@ impl std::fmt::Debug for QBittorrent {
 impl QBittorrent {
     pub(crate) fn new(id: CompanionId) -> QBittorrent {
         QBittorrent { id, gate: None }
+    }
+
+    /// A Windows save path only behind the Windows gate, and a Linux one
+    /// only without it, refused before anything is sent.
+    fn path_kind(&self, input: &ConfigureInput<'_>) -> Result<(), AdapterError> {
+        let windows = self.gate.is_some();
+        match input.downloads.as_ref().map(|d| d.save_path()) {
+            Some(SavePath::Host(_)) if windows => Err(AdapterError::Refused(SAVE_PATH_PLATFORM)),
+            Some(SavePath::Windows(_)) if !windows => {
+                Err(AdapterError::Refused(SAVE_PATH_PLATFORM))
+            }
+            _ => Ok(()),
+        }
     }
 
     /// With CMP-11's version gate, checked right after each sign-in on the
@@ -611,6 +624,7 @@ impl QBittorrent {
         input: &ConfigureInput<'_>,
     ) -> Result<ConfigPlan, AdapterError> {
         consent(input, target)?;
+        self.path_kind(input)?;
         let w = wanted(input, target)?;
         let guided = matches!(input.origin, Origin::Guided { .. });
         let bypassed = guided && auth_bypassed(http, target).await?;
@@ -646,6 +660,7 @@ impl QBittorrent {
         plan: &ConfigPlan,
     ) -> Result<(), AdapterError> {
         consent(input, target)?;
+        self.path_kind(input).map_err(|e| failed(ID, "apply", e))?;
         let w = wanted(input, target).map_err(|e| failed(ID, "apply", e))?;
         check_plan(plan, input, &w).map_err(|e| failed(ID, "apply", e))?;
         let listed = |k: &SettingKey| plan.changes().contains(k);

@@ -627,6 +627,14 @@ fn windows_paths_refuse_hostile_inputs() {
         (r"\\2130706433\downloads", Forbidden),
         (r"\\0.0.0.0\downloads", Forbidden),
         (r"\\a.localhost\downloads", Forbidden),
+        // Loopback in octal, hex and Windows' IPv6-literal names.
+        (r"\\0177.0.0.1\share\x", Forbidden),
+        (r"\\0x7f.0.0.1\share\x", Forbidden),
+        (r"\\0x7f000001\share\x", Forbidden),
+        (r"\\0--1.ipv6-literal.net\share\x", Forbidden),
+        (r"\\192.168.001.20\share", Forbidden),
+        (r"\\nas\Windows.old\x", Forbidden),
+        (r"C:\Windows.old\Users\me", Forbidden),
         (r"\\nas\pipe\x", Forbidden),
         (r"\\nas\MailSlot\x", Forbidden),
         (r"\\nas\Users\me\AppData", Forbidden),
@@ -782,4 +790,49 @@ async fn the_gated_plan_signs_in_exactly_once() {
         .filter(|r| r.path == "/api/v2/app/version" && r.headers.iter().any(|(n, _)| n == "cookie"))
         .count();
     assert_eq!(signed_in_version, 1);
+}
+
+/// A save path's kind must match the adapter: a Linux path never reaches
+/// Windows' qBittorrent, and a Windows path never reaches anyone else's.
+/// Both are refused before anything is sent.
+#[tokio::test]
+async fn a_save_path_of_the_wrong_platform_is_refused() {
+    let creds = Creds(PASTED);
+    let t = loopback();
+    let linux = Downloads::new(HostPath::parse("/downloads").unwrap(), Vec::new()).unwrap();
+    let windows = Downloads::new(WindowsPath::parse(r"D:\Downloads").unwrap(), Vec::new()).unwrap();
+
+    let gate = WindowsQBittorrent::new(pinned("5.0.3"));
+    let http = fake("5.0.3");
+    let err = gate
+        .plan(&http, &t, &input(&creds, &t).downloads(linux.clone()))
+        .await
+        .unwrap_err();
+    assert_eq!(err, AdapterError::Refused(configure::SAVE_PATH_PLATFORM));
+    assert!(http.0.lock().unwrap().seen.is_empty());
+
+    let id = CompanionId::parse("qbittorrent").unwrap();
+    let plain = configure::configurator(&id).unwrap();
+    let http = fake("5.0.3");
+    let err = plain
+        .plan(&http, &t, &input(&creds, &t).downloads(windows))
+        .await
+        .unwrap_err();
+    assert_eq!(err, AdapterError::Refused(configure::SAVE_PATH_PLATFORM));
+    assert!(http.0.lock().unwrap().seen.is_empty());
+
+    // The matching kinds still plan.
+    let http = fake("5.0.3");
+    plain
+        .plan(&http, &t, &input(&creds, &t).downloads(linux))
+        .await
+        .unwrap();
+}
+
+#[test]
+fn the_windows_configurator_is_only_qbittorrents() {
+    for other in ["prowlarr", "gluetun"] {
+        let id = CompanionId::parse(other).unwrap();
+        assert!(lodestar_companions::windows_qbittorrent::configurator(&id).is_none());
+    }
 }
