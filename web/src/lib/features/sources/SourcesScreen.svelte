@@ -173,6 +173,7 @@
 								onsetup={() => show('consent', s)}
 								onpurge={() => show('purge', s)}
 								onsettings={() => show('config', s)}
+								onrefresh={load}
 							/>
 						{/each}
 					</ul>

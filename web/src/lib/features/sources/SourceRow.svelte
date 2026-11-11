@@ -35,8 +35,20 @@
 		onpurge: () => void;
 		/** Opens the generated settings form. */
 		onsettings: () => void;
+		/** Reads the sources again (a companion this source waited for was installed). */
+		onrefresh?: () => void | Promise<void>;
 	}
-	let { source: s, busy, onenable, onpriority, onsetup, onpurge, onsettings }: Props = $props();
+	let {
+		source: s,
+		busy,
+		onenable,
+		onpriority,
+		onsetup,
+		onpurge,
+		onsettings,
+		onrefresh
+	}: Props = $props();
+	let heading = $state<HTMLElement>();
 
 	const id = $derived(`source-${s.id}`);
 	const status = $derived(statusOf(s));
@@ -81,7 +93,7 @@
 
 <li class="flex flex-col gap-2 rounded-box border border-field-border p-4" data-testid={id}>
 	<div class="flex flex-wrap items-center gap-x-4 gap-y-2">
-		<h3 class="text-body font-semibold">{s.name}</h3>
+		<h3 class="text-body font-semibold" tabindex="-1" bind:this={heading}>{s.name}</h3>
 		<StatusPill {status} testid="{id}-status" />
 		{#if s.restart_required}
 			<Badge variant="info"><span data-testid="{id}-restart">{m.sources_restart()}</span></Badge>
@@ -121,6 +133,11 @@
 		<p class="text-small" id="{id}-need" data-testid="{id}-need">
 			{setupText(need)}
 		</p>
+	{/if}
+	{#if s.companion_need}
+		{#await import('../companions/NeedChip.svelte') then { default: NeedChip }}
+			<NeedChip need={s.companion_need} oninstalled={onrefresh} focusAfter={() => heading} />
+		{/await}
 	{/if}
 	{#if showAddresses}
 		<div class="flex flex-col gap-1 text-small" data-testid="{id}-addresses">
