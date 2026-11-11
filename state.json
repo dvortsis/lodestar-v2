@@ -7611,7 +7611,7 @@
         "slice": "CMP-9b",
         "role": "build",
         "agent": "claude",
-        "doing": "#698 CHANGES at e687ae6c (B1 recheck-stop tests, I1 chunk {:catch}, nits); then fresh delta review (session_01MMjhn8mGSt1DA24S2gjPE6)",
+        "doing": "#698 ready at c997044d; fresh delta review queued after #692 (session_01MMjhn8mGSt1DA24S2gjPE6)",
         "since": "2026-11-11T14:10:36Z"
       }
     ]
@@ -7703,9 +7703,8 @@
     }
   ],
   "review_queue": [
-    "#659 PK-win-portable-upd",
-    "#665 CMP-9c (delta; merge held on X-cmp-native-handover)",
-    "#673 OP-5"
+    "#692 ead0d88d (delta, concurrency)",
+    "#698 c997044d (delta)"
   ],
   "merged": [
     {
