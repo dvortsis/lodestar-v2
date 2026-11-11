@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T22:33:56Z",
+  "updated_at": "2026-11-11T22:38:29Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6946,6 +6946,11 @@
       "id": "owner-flags-pending-1111b",
       "note": "Flag to owner (\u00a72.19): TZ-0 kept as one ~3,050-line PR (>half tests; runner call); X-restart-banner new size-limit entry 'Restart flow (on demand)' (measured +10%); X-restart-banner Review shows saved values (no running value in API); CI throughput is the bottleneck at 12 sessions. OUT-0 (#716): bitmagnet export leaves out every flags::PRIVACY row (not only private_source) and refuses hidden=true (stricter only).",
       "at": "2026-11-11T22:21:06Z"
+    },
+    {
+      "id": "X-upd-stop-early",
+      "note": "From #714: Handles::shutdown sends the updates stop only after serving drains (up to SHUTDOWN_GRACE 10 s); an install reaching switch during the drain still switches (supervisor stop wins, but version dequeued and overlay left). Fix: send the updates stop when the shutdown signal fires, in services.rs. Launch after #709 and #715 land (services.rs contention). Opus.",
+      "at": "2026-11-11T22:38:29Z"
     }
   ],
   "main_health": [
@@ -7679,7 +7684,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T22:33:56Z",
+    "updated": "2026-11-11T22:38:29Z",
     "items": [
       {
         "slot": 1,
@@ -7843,7 +7848,7 @@
     }
   ],
   "heartbeat": "2026-11-11T21:38:36Z",
-  "updated": "2026-11-11T22:33:56Z",
+  "updated": "2026-11-11T22:38:29Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
