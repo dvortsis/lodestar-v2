@@ -7540,7 +7540,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T14:41Z",
+    "updated": "2026-11-11T14:56Z",
     "items": [
       {
         "slot": 1,
@@ -7579,7 +7579,7 @@
         "slice": "X-win-upd-window",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAS5qWBVBGfPNAHPjt: #693 ready at 83b59238; fresh Opus review running",
+        "doing": "#693 CHANGES (B1 watcher start-mode test, I1 Off wording, I2 biased select + final check on stop, nits); then fresh delta review",
         "since": "2026-11-11T12:16:21Z"
       },
       {
