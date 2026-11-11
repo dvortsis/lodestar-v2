@@ -2234,6 +2234,12 @@ impl Runtime {
             .as_ref()
             .is_some_and(|w| matches!(*w.borrow(), super::dht::Desired::Run(_)))
     }
+    /// Whether the DHT is told to run, as it stands (no re-check).
+    pub(crate) fn test_dht_told_to_run(&self) -> bool {
+        lock(&self.shared.dht_want)
+            .as_ref()
+            .is_some_and(|w| matches!(*w.borrow(), super::dht::Desired::Run(_)))
+    }
     /// Whether a fresh find would be claimed now.
     pub(crate) fn test_would_claim(&self, key: InfoHash) -> bool {
         sift(&self.shared, Found::key(key, 0), true, false).is_some()

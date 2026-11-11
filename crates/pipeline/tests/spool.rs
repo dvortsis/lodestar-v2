@@ -257,12 +257,21 @@ fn removal_overwrites_then_unlinks() {
     s.append(&record(1, NOW, 100), NOW).unwrap();
     s.close_active().unwrap();
     let path = only_segment(dir.path());
-    // A second link sees the same bytes: they're zeros before the unlink.
-    let peek = dir.path().join("peek");
-    fs::hard_link(&path, &peek).unwrap();
+    // A handle opened before sees the file's bytes after the unlink: zeros.
+    // (Unix; Windows can't remove a file that's open without delete
+    // sharing. A second hard link would be left intact, by design.)
+    #[cfg(unix)]
+    let mut peek = fs::File::open(&path).unwrap();
     s.remove(1).unwrap();
     assert!(!path.exists());
-    assert!(fs::read(&peek).unwrap().iter().all(|&b| b == 0));
+    #[cfg(unix)]
+    {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        peek.read_to_end(&mut bytes).unwrap();
+        assert!(!bytes.is_empty());
+        assert!(bytes.iter().all(|&b| b == 0));
+    }
     assert_eq!(s.bytes(), 0);
     assert!(s.is_empty());
 }
@@ -401,6 +410,64 @@ fn planted_links_are_never_followed() {
     std::os::unix::fs::symlink(&victim, &seg).unwrap();
     s.remove(3).unwrap();
     assert_eq!(fs::read(&victim).unwrap(), b"precious");
+}
+
+/// A file with a second hard link (a temp name left linked to its
+/// segment, or a planted link to another file) is unlinked, never zeroed:
+/// zeroing it would zero the file it shares.
+#[cfg(unix)]
+#[test]
+fn a_hard_linked_file_is_unlinked_not_zeroed() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = spool(dir.path(), Caps::default());
+    for b in 1..=2 {
+        s.append(&record(b, NOW, 100), NOW).unwrap();
+    }
+    s.close_active().unwrap();
+    drop(s);
+    let seg = dir.path().join("0000000000000001.lsp");
+    fs::hard_link(&seg, dir.path().join("0000000000000001.tmp")).unwrap();
+    // And a planted link to a file outside the folder.
+    let outside = tempfile::tempdir().unwrap();
+    let victim = outside.path().join("victim");
+    fs::write(&victim, b"precious").unwrap();
+    fs::hard_link(&victim, dir.path().join("0000000000000002.tmp")).unwrap();
+    let mut s = spool(dir.path(), Caps::default());
+    assert!(!dir.path().join("0000000000000001.tmp").exists());
+    assert!(!dir.path().join("0000000000000002.tmp").exists());
+    assert_eq!(fs::read(&victim).unwrap(), b"precious");
+    assert_eq!(
+        all_records(&mut s, NOW),
+        vec![record(1, NOW, 100), record(2, NOW, 100)]
+    );
+    // Removing a segment that has another link leaves the other intact.
+    let keep = outside.path().join("keep");
+    fs::hard_link(&seg, &keep).unwrap();
+    let before = fs::read(&keep).unwrap();
+    s.remove(1).unwrap();
+    assert!(!seg.exists());
+    assert_eq!(fs::read(&keep).unwrap(), before);
+}
+
+/// A clock set back rolls the open segment, so the records stamped by the
+/// new clock aren't dropped with an older header that now reads as from
+/// the future.
+#[test]
+fn a_clock_set_back_starts_a_new_segment() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = spool(dir.path(), Caps::default());
+    s.append(&record(1, NOW, 10), NOW).unwrap();
+    let back = NOW - 10 * MAX_FUTURE_SECS;
+    s.append(&record(2, back, 10), back).unwrap();
+    s.close_active().unwrap();
+    assert_eq!(s.segments(), vec![1, 2]);
+    assert!(
+        s.is_expired(1, back),
+        "the first now reads as from the future"
+    );
+    assert!(!s.is_expired(2, back));
+    let seg = s.read(2, back).unwrap();
+    assert_eq!(seg.records, vec![record(2, back, 10)]);
 }
 
 /// L2: the folder is 0700 and its files 0600, whatever the umask.

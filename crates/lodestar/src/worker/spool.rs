@@ -749,6 +749,95 @@ mod tests {
         rt.shutdown().await;
     }
 
+    /// The DHT resumes by itself once a replay frees room: a real full
+    /// spool, a real replay, and the DHT's state read as it stands, with
+    /// nothing re-checked by the test (the runner's delta review).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_dht_resumes_when_a_replay_frees_room() {
+        use lodestar_cluster::assign::{Intensity, ShardSpec};
+        let dir = tempfile::tempdir().unwrap();
+        let mut rt = Runtime::start(spooled(dir.path(), Caps::default()));
+        let (_coord, session) = session_pair().await;
+        rt.connected(session.handle());
+        let shard = ShardSpec::new(64..128, 0xff).unwrap();
+        rt.event(WorkerEvent::Assign(assign_dht(
+            1,
+            Some(shard),
+            Intensity::Balanced,
+        )));
+        let (_, chunks) = filter_chunks().await;
+        for c in chunks {
+            rt.event(WorkerEvent::Snapshot(c));
+        }
+        until("started", || (rt.is_started(), ())).await;
+        until("the DHT runs", || (rt.test_dht_told_to_run(), ())).await;
+        // Offline: a spooled batch (written as the session task would),
+        // and the spool full, as a reconnect at the cap finds it.
+        rt.disconnected();
+        drop((_coord, session));
+        let sp = rt.spool().unwrap();
+        until("opened", || (sp.stats().is_some(), ())).await;
+        assert!(
+            sp.put(
+                Kind::Results,
+                77,
+                unix_now(),
+                vec![([5; 20], 6)],
+                b"a spooled batch".to_vec()
+            )
+            .await
+        );
+        sp.full.store(true, Ordering::Release);
+        // Back, still full: the DHT stays at routing until room is made.
+        let (mut coord, mut session) = session_pair().await;
+        rt.connected(session.handle());
+        rt.event(WorkerEvent::Assign(assign_dht(
+            2,
+            Some(shard),
+            Intensity::Balanced,
+        )));
+        assert!(!rt.test_dht_told_to_run(), "full: routing only");
+        // The replay: the batch is accepted and its segment removed, which
+        // frees the room.
+        let p = next_results(&mut coord).await;
+        assert_eq!(p.bytes, b"a spooled batch");
+        accept(&mut coord, &mut session, &mut rt, p.batch, true).await;
+        until("the DHT runs again by itself", || {
+            (rt.test_dht_told_to_run(), sp.bytes())
+        })
+        .await;
+        rt.shutdown().await;
+    }
+
+    /// A record's age is the time `put` is given (when its batch was made),
+    /// not when it was written: an old batch reads back as past its cap.
+    #[tokio::test]
+    async fn put_keeps_the_batchs_own_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = SpoolConfig {
+            dir: dir.path().to_path_buf(),
+            caps: Caps::default(),
+            sealer: Arc::new(SecretStore::from_key(&[4; 32])),
+        };
+        let sp = WorkerSpool::new(config, 1);
+        assert!(sp.start().await);
+        let old = unix_now() - lodestar_pipeline::spool::MAX_AGE_SECS - 10;
+        assert!(
+            sp.put(Kind::Results, 1, old, vec![([1; 20], 2)], b"old".to_vec())
+                .await
+        );
+        let fresh = unix_now();
+        assert!(
+            sp.put(Kind::Results, 2, fresh, vec![([2; 20], 3)], b"new".to_vec())
+                .await
+        );
+        let mut replay = Replay::default();
+        let got = sp.next(&mut replay).await;
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].payload, b"new");
+        assert_eq!(sp.stats().unwrap().dropped_old.load(Ordering::Relaxed), 1);
+    }
+
     /// A torrent fetched from a known peer and spooled: no form of the
     /// peer's address is in the segment, sealed or opened.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -686,23 +686,30 @@ fn sync_dir(dir: &Path) -> Result<(), SpoolError> {
 
 /// Overwrites `path` with zeros, syncs it, closes it, then removes it
 /// (owner §2.17). A file that is already gone is fine. **Links are never
-/// followed:** a symbolic link, or anything else that isn't a regular file,
-/// is unlinked without being opened, and on Unix the file opened is checked
-/// to be the one looked at (device and inode), so a link planted in the
-/// folder can't have its target zeroed.
+/// followed:**
+/// - a symbolic link, or anything else that isn't a regular file, is
+///   unlinked without being opened;
+/// - the open itself doesn't follow one (`O_NOFOLLOW` on Unix, the reparse
+///   point itself on Windows) and doesn't wait on a FIFO (`O_NONBLOCK`),
+///   and the file opened must be the one looked at (device and inode on
+///   Unix; not a reparse point on Windows);
+/// - a file with another hard link (Unix: a link count above 1, the rule
+///   `privdrop.rs` follows) is unlinked without being overwritten, since
+///   zeroing it would zero the file it shares.
+///
+/// So nothing planted in the folder can have another file zeroed.
 pub fn secure_remove(path: &Path) -> Result<(), SpoolError> {
     let meta = match fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(SpoolError::Io("overwrite a segment of", e.kind())),
     };
-    if meta.file_type().is_file() {
-        let mut file = OpenOptions::new()
-            .write(true)
+    if meta.file_type().is_file() && !shared(&meta) {
+        let mut file = no_follow(OpenOptions::new().write(true))
             .open(path)
             .map_err(io_err("overwrite a segment of"))?;
         let opened = file.metadata().map_err(io_err("overwrite a segment of"))?;
-        if !same_file(&meta, &opened) {
+        if !same_file(&meta, &opened) || shared(&opened) {
             // Swapped for something else between the look and the open.
             return Err(SpoolError::Io(
                 "overwrite a segment of",
@@ -732,11 +739,52 @@ fn same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
     a.dev() == b.dev() && a.ino() == b.ino()
 }
 
-/// Windows: the data folder is checked for reparse points at start, and the
-/// look itself refused a link; the file's identity isn't on stable Rust.
-#[cfg(not(unix))]
+/// Windows: the file's identity isn't on stable Rust, so the handle is
+/// opened on the reparse point itself (never its target) and refused if it
+/// is one. A file symlink swapped in after the look is caught here.
+#[cfg(windows)]
+fn same_file(_: &fs::Metadata, b: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    b.is_file() && b.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
+}
+
+#[cfg(not(any(unix, windows)))]
 fn same_file(_: &fs::Metadata, b: &fs::Metadata) -> bool {
     b.is_file()
+}
+
+/// Whether a file has another hard link (Unix). Windows' link count isn't
+/// on stable Rust: there the spool never leaves a second link it would then
+/// remove (`Spool::open` unlinks a leftover temp file beside its segment
+/// without overwriting it).
+#[cfg(unix)]
+fn shared(m: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    m.nlink() > 1
+}
+
+#[cfg(not(unix))]
+fn shared(_: &fs::Metadata) -> bool {
+    false
+}
+
+/// An open that never follows a link at the last component and never
+/// waits on a FIFO (Unix); on Windows, one that opens a reparse point
+/// itself rather than what it points to.
+fn no_follow(o: &mut OpenOptions) -> &mut OpenOptions {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        o.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    o
 }
 
 /// Opens a new file for writing, never one that exists (so never through a
@@ -796,7 +844,12 @@ fn write_atomic(dir: &Path, seq: u64, bytes: &[u8], place: Place) -> Result<(), 
     }
     let placed = match place {
         Place::Replace => fs::rename(&tmp, &target),
-        Place::New => fs::hard_link(&tmp, &target).and_then(|()| fs::remove_file(&tmp)),
+        // Linked is placed: a temp name that can't be removed now (another
+        // program holds it) is cleaned up at the next open, and must not
+        // stop the segment counting as made.
+        Place::New => fs::hard_link(&tmp, &target).map(|()| {
+            let _ = fs::remove_file(&tmp);
+        }),
     };
     if let Err(e) = placed {
         let _ = fs::remove_file(&tmp);
@@ -837,7 +890,19 @@ impl Spool {
                 // One that can't be removed now (another program holds it)
                 // is skipped and counted; the next start tries again.
                 TEMP_EXT => {
-                    if secure_remove(&path).is_err() {
+                    // Beside its segment, a temp name may be a second link
+                    // to it (placed, then not unlinked): unlinked without
+                    // being overwritten, which would zero the segment. It
+                    // holds nothing but a header, or a reseal's copy of
+                    // records sealed with the worker's key.
+                    // (Unix tells by its link count, in `secure_remove`.)
+                    let beside = !cfg!(unix) && dir.join(segment_name(seq, SEGMENT_EXT)).exists();
+                    let gone = if beside {
+                        fs::remove_file(&path).is_ok()
+                    } else {
+                        secure_remove(&path).is_ok()
+                    };
+                    if !gone {
                         bump(&stats.leftovers);
                     }
                 }
@@ -918,8 +983,13 @@ impl Spool {
     /// cap is refused ([`SpoolError::Full`], counted).
     pub fn append(&mut self, record: &Record, now: i64) -> Result<(), SpoolError> {
         let plain = Zeroizing::new(record.encode().map_err(SpoolError::Format)?);
+        // A clock set back rolls it too: the segment's header would
+        // otherwise read as from the future once it closes, and drop the
+        // records stamped by the new clock with it.
         let roll = self.active.as_ref().is_some_and(|a| {
-            a.bytes >= SEGMENT_BYTES || now.saturating_sub(a.created) >= SEGMENT_SPAN_SECS
+            a.bytes >= SEGMENT_BYTES
+                || now.saturating_sub(a.created) >= SEGMENT_SPAN_SECS
+                || now < a.created.saturating_sub(MAX_FUTURE_SECS)
         });
         if roll {
             self.close_active()?;
@@ -988,10 +1058,18 @@ impl Spool {
         };
         write_atomic(&self.dir, seq, &header.encode(), Place::New)?;
         self.next_seq = next;
-        let file = OpenOptions::new()
-            .append(true)
-            .open(self.dir.join(segment_name(seq, SEGMENT_EXT)))
+        let path = self.dir.join(segment_name(seq, SEGMENT_EXT));
+        let file = no_follow(OpenOptions::new().append(true))
+            .open(&path)
             .map_err(io_err("open a segment of"))?;
+        let looked = fs::symlink_metadata(&path).map_err(io_err("open a segment of"))?;
+        let opened = file.metadata().map_err(io_err("open a segment of"))?;
+        if !looked.file_type().is_file() || !same_file(&looked, &opened) {
+            return Err(SpoolError::Io(
+                "open a segment of",
+                io::ErrorKind::InvalidInput,
+            ));
+        }
         self.stats
             .bytes
             .fetch_add(HEADER_LEN as u64, Ordering::Relaxed);
