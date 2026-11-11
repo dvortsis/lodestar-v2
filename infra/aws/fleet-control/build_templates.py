@@ -50,7 +50,8 @@ CLAUDE_LOCK_KEY = "operator/claude-lock.json"
 def sub(environment: str, workflow: str) -> str:
     """Immutable identity plus the environment and direct workflow at main.
 
-    workflow_ref is present for direct jobs; job_workflow_ref is reusable-only.
+    The subject carries workflow_ref. Tokens also carry job_workflow_ref, which names a
+    reusable workflow when one runs the job and otherwise equals workflow_ref.
     The owner must separately apply the reviewed GitHub claim configuration.
     """
     if workflow not in GITHUB_POLICY["environments"].get(environment, []):

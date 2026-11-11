@@ -2,7 +2,7 @@
 
 Historical evidence snapshot. The subsequent proposed OIDC and cleanup remediation is described in `fleet-control-bootstrap.md` and `fleet-control-cleanup.md`; this snapshot does not describe those changes as deployed.
 
-Investigation date: 2026-11-10 America/Denver (GitHub reads extend into 2026-11-11 UTC).
+Investigation dates: 2026-11-10 to 2026-11-11 (UTC).
 Working tree: `feat/lodestar-secure-pia-bridge`, `bcf434743c1219192972bf810d86b55b6236afeb`.
 This is a read-only investigation and a proposed remediation procedure. No cloud resources, IAM policies, repository settings or secrets were changed. No Terraform apply, backend initialization, state migration, live VPN connection or crawler was run.
 

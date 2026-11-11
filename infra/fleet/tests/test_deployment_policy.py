@@ -180,6 +180,13 @@ class DeploymentBoundary(unittest.TestCase):
                     dp.require_for_run(env, "AWS_FLEET_ROLE_ARN", get)
                 get.assert_not_called()
 
+    def test_direct_workflow_job_workflow_ref_equal_to_workflow_ref_is_accepted(self):
+        # Real tokens carry job_workflow_ref; for a direct workflow it equals workflow_ref.
+        dp.require_token_claims(token(claims()), job(), "cloud-fleet")
+        payload = claims()
+        payload["job_workflow_ref"] = job()["GITHUB_WORKFLOW_REF"]
+        dp.require_token_claims(token(payload), job(), "cloud-fleet")
+
     def test_wrong_actual_token_claims_fail(self):
         for key in claims():
             payload = claims()
@@ -187,10 +194,13 @@ class DeploymentBoundary(unittest.TestCase):
             with self.subTest(claim=key), self.assertRaises(dp.DeploymentBlocked) as caught:
                 dp.require_token_claims(token(payload), job(), "cloud-fleet")
             self.assertNotIn("LEAKMARK", str(caught.exception))
-        payload = claims()
-        payload["job_workflow_ref"] = job()["GITHUB_WORKFLOW_REF"]
-        with self.assertRaises(dp.DeploymentBlocked):
-            dp.require_token_claims(token(payload), job(), "cloud-fleet")
+        for other in (f"{REPO}/.github/workflows/reusable.yml@refs/heads/main",
+                      f"{REPO}/.github/workflows/fleet.yml@refs/heads/feature", "LEAKMARK"):
+            payload = claims()
+            payload["job_workflow_ref"] = other
+            with self.subTest(job_workflow_ref=other), self.assertRaises(dp.DeploymentBlocked) as caught:
+                dp.require_token_claims(token(payload), job(), "cloud-fleet")
+            self.assertNotIn("LEAKMARK", str(caught.exception))
         for malformed in ("invalid", "x.bad.z", token([]), "x" * 65537):
             with self.assertRaises(dp.DeploymentBlocked):
                 dp.require_token_claims(malformed, job(), "cloud-fleet")

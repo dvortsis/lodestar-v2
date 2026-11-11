@@ -121,7 +121,10 @@ def require_token_claims(jwt: str, env: dict, environment: str) -> None:
                     "workflow_ref": env["GITHUB_WORKFLOW_REF"], "ref": MAIN}
         if environment in POLICY["owner_dispatch_environments"]:
             expected.update(actor_id=str(POLICY["owner_id"]), event_name="workflow_dispatch", run_attempt="1")
-        if any(claims.get(k) != v for k, v in expected.items()) or "job_workflow_ref" in claims:
+        # GitHub issues job_workflow_ref on every Actions token; for a direct workflow it
+        # equals workflow_ref. Any other value means a reusable workflow ran this job.
+        if (any(claims.get(k) != v for k, v in expected.items())
+                or claims.get("job_workflow_ref", env["GITHUB_WORKFLOW_REF"]) != env["GITHUB_WORKFLOW_REF"]):
             raise ValueError
     except Exception:
         raise DeploymentBlocked("deployment: issued OIDC claims do not match the exact role trust") from None

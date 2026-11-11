@@ -176,8 +176,19 @@ class CompletePagination(unittest.TestCase):
         self.assertEqual(len(Linode(transport).linodes()), 101)
         self.assertEqual(calls, [1, 2])
 
+    def test_page_count_that_disagrees_with_total_is_not_complete(self):
+        # pages=1 while results=150 would otherwise end after 100 of 150 items.
+        calls = []
+        def transport(method, path, body):
+            calls.append(path)
+            return {"data": [{"id": n, "tags": ["lodestar"]} for n in range(1, 101)],
+                    "page": 1, "pages": 1, "results": 150}
+        with self.assertRaises(LinodeError):
+            Linode(transport).linodes()
+        self.assertEqual(len(calls), 1)
+
     def test_failed_repeated_changed_or_duplicate_second_page_is_not_partial_success(self):
-        for failure in ("error", "repeat", "changed", "duplicate", "empty"):
+        for failure in ("error", "repeat", "changed", "consistent change", "duplicate", "empty"):
             calls = []
             def transport(method, path, body):
                 page = 2 if "?page=2&" in path else 1
@@ -191,6 +202,10 @@ class CompletePagination(unittest.TestCase):
                         result["page"] = 1
                     elif failure == "changed":
                         result["results"] = 102
+                    elif failure == "consistent change":
+                        # A self-consistent but different total on page 2 (150 with 50 items).
+                        result["results"] = 150
+                        result["data"] = [{"id": n, "tags": ["lodestar"]} for n in range(101, 151)]
                     elif failure == "duplicate":
                         result["data"][0]["id"] = 1
                     elif failure == "empty":
