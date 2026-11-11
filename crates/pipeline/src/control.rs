@@ -511,7 +511,9 @@ pub struct SourceView {
     /// the source stays off until a purge run again finishes it.
     pub purge_pending: bool,
     /// Its saved settings differ from the ones it was built with at this
-    /// start: they apply at the next one.
+    /// start, or its plugin keeps the credentials it was built with
+    /// (`SourcePlugin::pins_credentials`) and they've been saved since:
+    /// either applies at the next start.
     pub config_pending: bool,
     /// Its plugin was stopped since this start, because it was turned off
     /// or purged (X-tcache-recheck). Turned on again, it runs only from
@@ -803,6 +805,28 @@ struct Inner {
     toggle: tokio::sync::Mutex<()>,
     state: Mutex<State>,
     samples: Mutex<Samples>,
+    /// For each source whose plugin keeps the credentials it was built
+    /// with (`SourcePlugin::pins_credentials`), its credentials as stored
+    /// at this start ([`sealed_credentials`]).
+    sealed_at_start: HashMap<SourceId, Sealed>,
+}
+
+/// A source's credentials as stored: each name its policy declares, with
+/// its sealed value, or `None` when none is stored. Every write seals
+/// afresh with a new random nonce, so any write since changes it, even
+/// one of the same value. It holds ciphertext only, never a secret or a
+/// hash of one, and is never logged or returned.
+type Sealed = Vec<(&'static str, Option<Vec<u8>>)>;
+
+/// `status`'s declared credentials as stored now (blocking: reads the
+/// store).
+fn sealed_credentials(store: &Store, status: &SourceStatus) -> Result<Sealed, Error> {
+    status
+        .policy
+        .credentials
+        .iter()
+        .map(|c| Ok((c.name, store.source_secret(status.manifest.id, c.name)?)))
+        .collect()
 }
 
 /// A cloneable handle on the running pipeline's controls.
@@ -875,6 +899,26 @@ impl Control {
         if monitor.setup_done().is_some() && !held && !paused {
             monitor.pool().set_paused(false).await;
         }
+        // What a pinning plugin was built with: the start's credentials.
+        // Nothing can write them between its build and here, since the
+        // API isn't serving yet.
+        let pinning: Vec<SourceStatus> = monitor
+            .sources()
+            .into_iter()
+            .filter(|s| monitor.pins_credentials(s.id))
+            .collect();
+        let sealed_at_start = {
+            let store = store.clone();
+            tokio::task::spawn_blocking(move || {
+                let store = store.lock().expect("store lock");
+                pinning
+                    .iter()
+                    .map(|s| Ok((s.id, sealed_credentials(&store, s)?)))
+                    .collect::<Result<HashMap<_, _>, Error>>()
+            })
+            .await
+            .map_err(Error::Join)??
+        };
         let control = Control {
             inner: Arc::new(Inner {
                 monitor,
@@ -893,6 +937,7 @@ impl Control {
                     stopped: Default::default(),
                 }),
                 samples: Mutex::default(),
+                sealed_at_start,
             }),
         };
         control.sample_now();
@@ -1146,7 +1191,13 @@ impl Control {
                     } else {
                         None
                     };
-                    Ok((s.id, (need, names, settings, pending, config)))
+                    // A pinning plugin runs on the start's credentials, so
+                    // any saved since wait for the next start.
+                    let rekeyed = match self.inner.sealed_at_start.get(&s.id) {
+                        Some(at_start) => sealed_credentials(&store, s)? != *at_start,
+                        None => false,
+                    };
+                    Ok((s.id, (need, names, settings, pending, config, rekeyed)))
                 })
                 .collect::<Result<HashMap<_, _>, Error>>()?;
             (store.sources()?, store.cohorts(hour - 23, hour + 1)?, gates)
@@ -1161,7 +1212,7 @@ impl Control {
             .into_iter()
             .map(|status| {
                 let row = rows.iter().find(|r| r.id == status.id);
-                let (need, credentials, settings, purge_pending, saved_config) =
+                let (need, credentials, settings, purge_pending, saved_config, rekeyed) =
                     gates.get(&status.id).cloned().unwrap_or_default();
                 // Compared in the plugin's saved form. Settings it refuses
                 // are built as its defaults at the start, so they aren't
@@ -1172,7 +1223,7 @@ impl Control {
                         Some(Ok(form)) => monitor.running_config(status.id) != Some(form),
                         _ => false,
                     }
-                });
+                }) || rekeyed;
                 let egress_warnings = egress_warnings(
                     &settings.egress,
                     status.egress.as_ref(),

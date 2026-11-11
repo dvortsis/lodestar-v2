@@ -340,6 +340,12 @@ impl SourcePlugin for Prowlarr {
         true
     }
 
+    /// Built by [`Prowlarr::at_start`], it keeps the key stored then
+    /// ([`KeyAtStart`]).
+    fn pins_credentials(&self) -> bool {
+        matches!(self.key_at_start, KeyAtStart::Pinned(_))
+    }
+
     /// `None` until it's set up: there's nothing to compare a saved form
     /// with.
     fn config_json(&self) -> Option<String> {
