@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T04:27Z",
+  "updated_at": "2026-11-11T04:53Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6681,6 +6681,16 @@
       "id": "CMP-5g-3",
       "note": "from #653 final review nits: N7 target_changed message should say reveal before forget (companions_guided.rs:~99); N8 guided.rs:5 'three kinds' of rows; N9 decisions line ~137 says URL stored 'as you typed it' but it's normalised; CMP-9a forget screen must warn and offer reveal; L4 no rotate without apply + Sink save",
       "added": "2026-11-09T12:03:06Z"
+    },
+    {
+      "at": "2026-11-11T04:53Z",
+      "id": "X-prowlarr-register",
+      "item": "register Prowlarr in services.rs behind the consent gate AND update Legal Notice \u00a72 (Account sources inventory), embedded copy, NOTICE_VERSION, legal_facts.rs; notice wording needs owner approval first; deps X-prowlarr-settings (#658)"
+    },
+    {
+      "at": "2026-11-11T04:53Z",
+      "id": "X-restart-required-creds",
+      "item": "crates/pipeline/src/control.rs: restart_required must also cover a changed credential (incl. a CMP-5g hand-over to the same address), not only saved settings (X-prowlarr-settings self-review I1)"
     }
   ],
   "main_health": [
@@ -7548,5 +7558,12 @@
     "resume": "only on the owner's explicit command: re-enable watchdog trig_0172BngAUoA4NRaRWBYiRWVf and heartbeat trig_01U8KNWyDovQ9omwvZi8cuLW, record the pause in owner-decisions, then the pending runner PR",
     "resumed_at": "2026-11-11T04:06Z",
     "resumed_by": "owner, 2026-11-11: \"We reset credit. Continue with up to 8 sessions in one time,\""
-  }
+  },
+  "owner_queue_pending": [
+    {
+      "at": "2026-11-11T04:53Z",
+      "item": "Legal Notice \u00a72 wording for registering Prowlarr as an Account source (X-prowlarr-register); runner drafts the text, owner approves",
+      "send": "with the X-prowlarr-settings merge FYI"
+    }
+  ]
 }
