@@ -24,21 +24,6 @@ def run(argv, e, gh):
         return tripwire.main(argv, env=e, transport=gh, clock=lambda: NOW)
 
 
-class SweepGitHub(FakeGitHub):
-    """FakeGitHub plus the reviews GraphQL query, answering one page of `reviews`."""
-
-    def __init__(self, reviews=(), **kw):
-        super().__init__(**kw)
-        self.reviews = list(reviews)
-
-    def __call__(self, method, path, body, bearer=None):
-        if method == "POST" and path == "/graphql":
-            self.calls.append((method, path, body, bearer))
-            page = {"nodes": self.reviews, "pageInfo": {"hasPreviousPage": False, "startCursor": None}}
-            return {"data": {"repository": {"pullRequest": {"reviews": page}}}}
-        return super().__call__(method, path, body, bearer)
-
-
 class Trip(unittest.TestCase):
     def test_bot_actions_trip_and_disable(self):
         for over in ({}, {"EVENT_ACTION": "labeled"}, {"EVENT_NAME": "issue_comment", "EVENT_ACTION": "edited", "TARGET_NUMBER": "700"},
@@ -74,9 +59,9 @@ class Trip(unittest.TestCase):
 
 class Sweep(unittest.TestCase):
     def sweep(self, **lists):
-        prefixes = {"events": "/repos/o/r/issues/events", "pulls": "/repos/o/r/pulls?", "graph_reviews": "/unused",
+        prefixes = {"events": "/repos/o/r/issues/events", "pulls": "/repos/o/r/pulls?", "reviews": "/repos/o/r/pulls/12/reviews",
                     "review_comments": "/repos/o/r/pulls/comments", "comments": "/repos/o/r/issues/comments"}
-        gh = SweepGitHub(lists={prefixes[k]: v for k, v in lists.items()}, reviews=lists.get("graph_reviews", []))
+        gh = FakeGitHub(lists={prefixes[k]: v for k, v in lists.items()})
         run(["sweep"], env(), gh)
         return gh
 
@@ -92,7 +77,7 @@ class Sweep(unittest.TestCase):
             "issue event": {"events": [{"actor": {"id": BOT}, "event": "renamed", "created_at": recent, "issue": {"number": 3}}]},
             "opened PR": {"pulls": [{"user": {"id": BOT}, "number": 12, "updated_at": recent}]},
             "review": {"pulls": [{"user": {"id": 1}, "number": 12, "updated_at": recent}],
-                       "graph_reviews": [{"submittedAt": recent, "author": {"databaseId": BOT}}]},
+                       "reviews": [{"user": {"id": BOT}, "submitted_at": recent}]},
             "review comment": {"review_comments": [{"user": {"id": BOT}, "pull_request_url": "x/pulls/12",
                                                     "created_at": recent, "updated_at": recent}]},
             "comment elsewhere": {"comments": [{"user": {"id": BOT}, "issue_url": "x/issues/12", "created_at": recent,
@@ -190,28 +175,24 @@ class Unconfigured(unittest.TestCase):
         self.assertFalse([c for c in gh.calls if c[0] == "GET"])  # nothing listed without the ID
 
 
+
 def review(uid, delta):
-    return {"submittedAt": ISO(delta), "createdAt": ISO(delta), "author": {"databaseId": uid}}
+    return {"user": {"id": uid}, "submitted_at": None if delta is None else ISO(delta)}
 
 
-class GraphReviews:
-    """A fake for the reviews query: `reviews` oldest first, served `last: 100` pages backwards."""
+class RestReviews:
+    """A fake for the paged REST reviews list (creation order), plus one active PR."""
 
-    def __init__(self, reviews, pulls=None):
-        self.reviews, self.queries = reviews, []
-        self.pulls = pulls if pulls is not None else [{"user": {"id": 1}, "number": 12, "updated_at": ISO(timedelta(minutes=5))}]
-        self.posts = []
+    def __init__(self, reviews):
+        self.reviews, self.pages, self.posts = reviews, [], []
 
     def __call__(self, method, path, body):
-        if method == "POST" and path == "/graphql":
-            v = body["variables"]
-            self.queries.append(v)
-            end = len(self.reviews) if v["before"] is None else int(v["before"])
-            start = max(0, end - 100)
-            page = {"nodes": self.reviews[start:end], "pageInfo": {"hasPreviousPage": start > 0, "startCursor": str(start)}}
-            return {"data": {"repository": {"pullRequest": {"reviews": page}}}}
+        if method == "GET" and path.startswith("/repos/o/r/pulls/12/reviews"):
+            page = int(path.rsplit("page=", 1)[1])
+            self.pages.append(page)
+            return self.reviews[(page - 1) * 100:page * 100]
         if method == "GET" and path.startswith("/repos/o/r/pulls?") and path.endswith("&page=1"):
-            return self.pulls
+            return [{"user": {"id": 1}, "number": 12, "updated_at": ISO(timedelta(minutes=5))}]
         if method == "GET":
             return []
         self.posts.append((method, path, body))
@@ -228,59 +209,63 @@ class ReviewsLookback(unittest.TestCase):
     old = timedelta(minutes=tripwire.LOOKBACK_MINUTES + 60)
     new = timedelta(minutes=5)
 
-    def test_a_recent_bot_review_trips(self):
-        gh = GraphReviews([review(1, self.old)] * 30 + [review(BOT, self.new)])
+    def sweep(self, reviews):
+        gh = RestReviews(reviews)
         run(["sweep"], env(), gh)
+        return gh
+
+    def test_a_recent_bot_review_trips(self):
+        gh = self.sweep([review(1, self.old)] * 30 + [review(BOT, self.new)])
         self.assertTrue(gh.disabled())
         self.assertIn("the operator's bot reviewed #12", gh.bodies()[0])
-        self.assertEqual(gh.queries[0], {"owner": "o", "name": "r", "number": 12, "before": None})
+
+    def test_the_window_edge_is_inside(self):
+        edge = timedelta(minutes=tripwire.LOOKBACK_MINUTES)
+        self.assertTrue(self.sweep([review(BOT, edge)]).disabled())  # exactly at the start counts
+        self.assertTrue(self.sweep([review(BOT, edge - timedelta(seconds=30))]).disabled())
+        self.assertFalse(self.sweep([review(BOT, edge + timedelta(seconds=1))]).disabled())
 
     def test_an_old_bot_review_is_outside_the_lookback(self):
-        gh = GraphReviews([review(BOT, self.old)] + [review(1, self.new)] * 3)
-        run(["sweep"], env(), gh)
+        gh = self.sweep([review(BOT, self.old)] + [review(1, self.new)] * 3)
         self.assertEqual(gh.bodies(), [])
 
     def test_a_thousand_old_reviews_on_an_updated_pr_dont_trip(self):
-        gh = GraphReviews([review(1, self.old)] * 1500 + [review(1, self.new)] * 20)
-        run(["sweep"], env(), gh)
+        gh = self.sweep([review(1, self.old)] * 1500 + [review(1, self.new)] * 20)
         self.assertEqual(gh.bodies(), [])
         self.assertFalse(gh.disabled())
-        self.assertEqual(len(gh.queries), 1)  # the newest page already reaches past the window
+        self.assertEqual(gh.pages, list(range(1, 17)))  # every page read, none skipped
 
-    def test_a_thousand_reviews_inside_the_window_still_trip(self):
-        gh = GraphReviews([review(1, self.new)] * 1001)
-        run(["sweep"], env(), gh)
-        self.assertIn("the sweep is incomplete: reviews ran past 10 pages", gh.bodies()[0])
+    def test_a_review_created_early_and_submitted_late_trips(self):
+        # Creation order: the bot's pending review sits first, its submission comes later (B1).
+        gh = self.sweep([review(BOT, self.new)] + [review(1, self.old)] * 300)
         self.assertTrue(gh.disabled())
-        self.assertEqual(len(gh.queries), tripwire.MAX_PAGES)
 
-    def test_exactly_the_page_limit_in_the_window_is_complete(self):
-        gh = GraphReviews([review(1, self.new)] * 1000)
-        run(["sweep"], env(), gh)
+    def test_a_bot_review_on_an_earlier_page_trips(self):
+        gh = self.sweep([review(BOT, self.new)] + [review(1, self.new)] * 150)
+        self.assertTrue(gh.disabled())
+        self.assertEqual(gh.pages, [1, 2])
+
+    def test_a_pr_past_the_review_page_limit_is_a_trip(self):
+        gh = self.sweep([review(1, self.old)] * (tripwire.REVIEW_MAX_PAGES * 100))
+        self.assertIn("the sweep is incomplete: reviews ran past", gh.bodies()[0])
+        self.assertTrue(gh.disabled())
+
+    def test_just_under_the_limit_is_complete(self):
+        gh = self.sweep([review(1, self.old)] * (tripwire.REVIEW_MAX_PAGES * 100 - 1))
         self.assertEqual(gh.bodies(), [])
 
     def test_undated_or_unzoned_reviews_count_as_recent(self):
-        for r in ({"submittedAt": None, "createdAt": None, "author": {"databaseId": BOT}},
-                  {"submittedAt": "2026-11-11T11:00:00", "author": {"databaseId": BOT}}):
+        for r in (review(BOT, None), {"user": {"id": BOT}, "submitted_at": "2026-11-11T11:00:00"}):
             with self.subTest(r=r):
-                gh = GraphReviews([review(1, self.old), r])
-                run(["sweep"], env(), gh)
+                gh = self.sweep([review(1, self.old), r])
                 self.assertTrue(gh.disabled())
 
-    def test_a_graphql_error_escalates_then_fails_the_job(self):
-        posts = []
 
-        # GraphQL can answer errors beside partial data: an empty page then must not read as clean.
-        partial = {"reviews": {"nodes": [], "pageInfo": {"hasPreviousPage": False}}}
-
-        def gh(method, path, body):
-            if path == "/graphql":
-                return {"errors": [{"message": "x"}], "data": {"repository": {"pullRequest": partial}}}
-            if method == "GET" and path.startswith("/repos/o/r/pulls?") and path.endswith("&page=1"):
-                return [{"user": {"id": 1}, "number": 12, "updated_at": ISO(timedelta(minutes=5))}]
-            if method == "GET":
-                return []
-            posts.append(body)
-        with self.assertRaises(SystemExit):
-            run(["sweep"], env(), gh)
-        self.assertIn("the sweep failed (RuntimeError)", posts[0]["body"])
+class UnzonedLists(unittest.TestCase):
+    def test_an_unzoned_time_keeps_a_list_paging_and_fails_closed(self):
+        # A full page whose last item has no zone can't stop the list early.
+        page = [{"actor": {"id": 1}, "event": "labeled", "created_at": "2026-11-11T11:00:00", "issue": {"number": 3}}] * 100
+        gh = FakeGitHub()
+        gh_full = lambda m, p, b: (gh.calls.append((m, p, b, None)) or (page if p.startswith("/repos/o/r/issues/events") else []))  # noqa: E731
+        run(["sweep"], env(), gh_full)
+        self.assertIn("the sweep is incomplete: events ran past 10 pages", gh.bodies()[0])

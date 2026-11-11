@@ -32,6 +32,9 @@ import message  # noqa: E402
 LOOKBACK_MINUTES = 130
 WAKE_WORKFLOW = "operator-wake.yml"
 MAX_PAGES = 10
+# A PR's reviews are read whole (see _recent_reviews): 5,000 before a PR's own
+# list counts as an incomplete sweep, so old reviews alone don't trip it.
+REVIEW_MAX_PAGES = 50
 
 
 def _digits(v) -> str | None:
@@ -98,10 +101,11 @@ class Incomplete(Exception):
     """A list ran past MAX_PAGES before the lookback: a finding, never a silent pass."""
 
 
-def _list(transport, path: str, stop_before: datetime | None = None, key: str = "updated_at") -> list[dict]:
+def _list(transport, path: str, stop_before: datetime | None = None, key: str = "updated_at",
+          max_pages: int = MAX_PAGES) -> list[dict]:
     out = []
     sep = "&" if "?" in path else "?"
-    for page in range(1, MAX_PAGES + 1):
+    for page in range(1, max_pages + 1):
         items = transport("GET", f"{path}{sep}per_page=100&page={page}", None) or []
         items = [i for i in items if isinstance(i, dict)]
         out += items
@@ -110,47 +114,20 @@ def _list(transport, path: str, stop_before: datetime | None = None, key: str = 
     raise Incomplete(path.split("?")[0].rsplit("/", 1)[-1])
 
 
-REVIEWS_QUERY = """query($owner: String!, $name: String!, $number: Int!, $before: String) {
-  repository(owner: $owner, name: $name) { pullRequest(number: $number) {
-    reviews(last: 100, before: $before) {
-      nodes { submittedAt createdAt author { ... on Bot { databaseId } ... on User { databaseId } } }
-      pageInfo { hasPreviousPage startCursor } } } } }"""
-
-
 def _recent_reviews(transport, repo: str, number: str, since: datetime) -> list[dict]:
-    """A PR's reviews from the lookback only, newest pages first.
+    """A PR's reviews submitted in the lookback.
 
-    The REST reviews list runs oldest first and can't be sorted, so a PR with
-    1,000 old reviews would read as an incomplete sweep forever. GraphQL's
-    `last`/`before` pages back from the newest and stops at the first page that
-    reaches past `since`. A page limit hit inside the window is still a trip.
-    Each review comes back REST-shaped: {"user": {"id"}, "submitted_at"}."""
-    owner, name = repo.split("/", 1)
-    out, before = [], None
-    for _ in range(MAX_PAGES):
-        res = transport("POST", "/graphql", {"query": REVIEWS_QUERY, "variables": {
-            "owner": owner, "name": name, "number": int(number), "before": before}}) or {}
-        try:
-            if res.get("errors"):
-                raise KeyError("errors")
-            reviews = res["data"]["repository"]["pullRequest"]["reviews"]
-            nodes, info = reviews["nodes"], reviews["pageInfo"]
-        except (KeyError, TypeError, AttributeError):
-            raise RuntimeError("GitHub GraphQL reviews query failed") from None
-        reached_past = False
-        for r in nodes or []:
-            if not isinstance(r, dict):
-                continue
-            when = _when(r.get("submittedAt") or r.get("createdAt"))
-            if when is not None and when < since:
-                reached_past = True  # pages run oldest first: this page reaches the window's start
-                continue
-            author = r.get("author") if isinstance(r.get("author"), dict) else {}
-            out.append({"user": {"id": author.get("databaseId")}, "submitted_at": r.get("submittedAt")})
-        if reached_past or not info.get("hasPreviousPage"):
-            return out
-        before = info.get("startCursor")
-    raise Incomplete("reviews")
+    The reviews list runs in creation order and can't be sorted, and a review
+    created pending is submitted later, so no page can be skipped by its
+    position: every page is read (up to REVIEW_MAX_PAGES, then a trip) and each
+    review is kept by its own `submitted_at`. A missing or unzoned time counts
+    as recent (fail closed)."""
+    out = []
+    for r in _list(transport, f"/repos/{repo}/pulls/{number}/reviews", max_pages=REVIEW_MAX_PAGES):
+        when = _when(r.get("submitted_at"))
+        if when is None or when >= since:
+            out.append(r)
+    return out
 
 
 def sweep(env, transport, now: datetime) -> tuple[list[str], bool]:
