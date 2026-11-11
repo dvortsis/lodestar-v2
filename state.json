@@ -6766,7 +6766,8 @@
     "owner \u00a72.19 flag sent? PK-guide-1 omitted Q12 2nd sentence (safe restart unreleased in v0.5.1) -> include in next owner FYI",
     "next runner PR: add X-cmp-handover-followups (Opus, core; deps [X-cmp-native-handover]; owns per briefs/X-cmp-handover-followups.md) to slices.yaml",
     "user docs (CMP guide slice): Restart re-adds a managed qBittorrent entry the user deleted on purpose",
-    "next runner PR also: X-win-upd-window owns (check.rs, portable.rs, main.rs serve::stopped, PK-win-portable-upd decisions, its own) and X-cmp-handover-followups; PK-smoke #683 leftovers: packaging/windows/README.md python note; package-linux stale step name"
+    "next runner PR also: X-win-upd-window owns (check.rs, portable.rs, main.rs serve::stopped, PK-win-portable-upd decisions, its own) and X-cmp-handover-followups; PK-smoke #683 leftovers: packaging/windows/README.md python note; package-linux stale step name",
+    "next runner PR: X-win-upd-window owns += web/src/lib/features/settings/updates/messages/{en,zh}.json, updates/updates.test.ts, crates/api notice-code doc comment, web/src/lib/api/openapi.json + schema.d.ts (regenerated) \u2014 runner approved option (a) 2026-11-11"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
