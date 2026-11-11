@@ -20,11 +20,13 @@ use lodestar_companions::manager::{
     Parts, Refusal, RowError, Rows, Run,
 };
 use lodestar_companions::state::{self, Step};
+use lodestar_companions::supervise::{State, Status};
 use lodestar_companions::{CompanionId, Version};
 use lodestar_integrations::secret::{SealedSecret, SecretStore};
 use reqwest::Url;
 use serde_json::json;
 use sha2::Digest;
+use tokio::sync::watch;
 
 /// The download slot is per companion and per process: tests take turns.
 static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -171,6 +173,30 @@ struct FakeRun {
     park: AtomicBool,
     parked: tokio::sync::Notify,
     release: tokio::sync::Notify,
+    /// The supervisor's state for the companion started last; dropped at
+    /// its stop, as the supervisor's is.
+    status: Mutex<Option<watch::Sender<Status>>>,
+    /// Health checks made.
+    checks: AtomicUsize,
+}
+
+impl FakeRun {
+    /// The current run's state sender.
+    fn run(&self) -> watch::Sender<Status> {
+        self.status
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("nothing running")
+    }
+}
+
+fn status(state: State) -> Status {
+    Status {
+        state,
+        restarts: 0,
+        last_exit: None,
+    }
 }
 
 impl Run for FakeRun {
@@ -183,6 +209,14 @@ impl Run for FakeRun {
             .unwrap()
             .to_string_lossy()
             .into_owned();
+        {
+            // As the supervisor: one run at a time.
+            let mut st = self.status.lock().unwrap();
+            if st.is_some() {
+                return Box::pin(async { Err("duplicate") });
+            }
+            *st = Some(watch::channel(status(State::Running)).0);
+        }
         self.started.lock().unwrap().push(version);
         let park = self.park.load(Ordering::SeqCst);
         Box::pin(async move {
@@ -195,11 +229,16 @@ impl Run for FakeRun {
     }
     fn healthy<'a>(&'a self, _: &'a CompanionId, _: &'a Target) -> BoxFuture<'a, bool> {
         let ok = !self.sick.load(Ordering::SeqCst);
+        self.checks.fetch_add(1, Ordering::SeqCst);
         Box::pin(async move { ok })
     }
     fn stop<'a>(&'a self, _: &'a CompanionId) -> BoxFuture<'a, ()> {
         self.stops.fetch_add(1, Ordering::SeqCst);
+        self.status.lock().unwrap().take();
         Box::pin(async {})
+    }
+    fn status(&self, _: &CompanionId) -> Option<watch::Receiver<Status>> {
+        self.status.lock().unwrap().as_ref().map(|s| s.subscribe())
     }
 }
 
@@ -1103,4 +1142,330 @@ async fn an_unready_run_refuses_before_anything_is_fetched() {
     wrong.sha256 = Sha256::parse_hex(&"ab".repeat(32)).unwrap();
     assert_eq!(m.install(&wrong).await, refused(Refusal::Confirmation));
     assert_eq!(fetched.0.load(Ordering::SeqCst), 0);
+}
+
+const WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+fn health(m: &Manager) -> Option<Health> {
+    m.snapshot()
+        .borrow()
+        .companions
+        .iter()
+        .find(|c| c.id == qbt())
+        .map(|c| c.health)
+}
+
+async fn wait_health(m: &Manager, want: Health) {
+    let mut rx = m.snapshot();
+    let got = tokio::time::timeout(
+        WAIT,
+        rx.wait_for(|s| {
+            s.companions
+                .iter()
+                .any(|c| c.id == qbt() && c.health == want)
+        }),
+    )
+    .await;
+    assert!(got.is_ok(), "never {want:?}: {:?}", health(m));
+}
+
+/// CMP-5g-3: serve's start and a restart each start and configure the
+/// installed version; the snapshot then follows the supervisor (held for
+/// its route is unhealthy, running again is healthy), and a run that
+/// ended stops publishing, so an old run can't overwrite a new one.
+#[tokio::test]
+async fn an_installed_companion_starts_restarts_and_follows_its_supervisor() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let m = w.manager(catalogue("5.0.3"), LINUX);
+    m.install(&token("5.0.3")).await.unwrap();
+    // Already running: serve's start leaves it as it is.
+    m.start(&qbt()).await.unwrap();
+    assert_eq!(*w.run.started.lock().unwrap(), ["5.0.3"]);
+    // As at a fresh serve: nothing runs yet.
+    w.run.status.lock().unwrap().take();
+    m.start(&qbt()).await.unwrap();
+    assert_eq!(*w.run.started.lock().unwrap(), ["5.0.3", "5.0.3"]);
+    assert_eq!(w.api.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(health(&m), Some(Health::Healthy));
+    w.run.run().send_replace(status(State::Held));
+    wait_health(&m, Health::Unhealthy).await;
+    w.run.run().send_replace(status(State::Running));
+    wait_health(&m, Health::Healthy).await;
+
+    let old = w.run.run();
+    let stops = w.run.stops.load(Ordering::SeqCst);
+    m.restart(&qbt()).await.unwrap().finished().await.unwrap();
+    assert_eq!(w.run.stops.load(Ordering::SeqCst), stops + 1);
+    assert_eq!(w.run.started.lock().unwrap().len(), 3);
+    assert_eq!(w.api.calls.load(Ordering::SeqCst), 3);
+    // The old run's last word is ignored, and its follower ends.
+    old.send_replace(status(State::Stopped));
+    let ended = tokio::time::timeout(WAIT, old.closed()).await;
+    assert!(ended.is_ok(), "the old run's follower kept going");
+    assert_eq!(health(&m), Some(Health::Healthy));
+    w.run.run().send_replace(status(State::BackingOff {
+        delay: std::time::Duration::from_secs(1),
+    }));
+    wait_health(&m, Health::Unhealthy).await;
+}
+
+/// A failed health check after a restart shows unhealthy, and the
+/// companion is still followed: one held for its route shows healthy once
+/// it runs.
+#[tokio::test]
+async fn a_restart_that_fails_its_health_is_still_followed() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let m = w.manager(catalogue("5.0.3"), LINUX);
+    m.install(&token("5.0.3")).await.unwrap();
+    w.run.sick.store(true, Ordering::SeqCst);
+    let got = m.restart(&qbt()).await.unwrap().finished().await;
+    assert!(
+        matches!(got, Err(ManagerError::Step { step: "health", .. })),
+        "{got:?}"
+    );
+    assert_eq!(health(&m), Some(Health::Unhealthy));
+    w.run.sick.store(false, Ordering::SeqCst);
+    w.run.run().send_replace(status(State::Starting));
+    w.run.run().send_replace(status(State::Running));
+    wait_health(&m, Health::Healthy).await;
+}
+
+/// Start, restart and regenerate are for a companion Lodestar installed,
+/// one operation at a time: refused during an install (`busy`), and for
+/// one it didn't install or inside a container.
+#[tokio::test]
+async fn live_operations_are_refused_during_an_install_and_when_not_installed() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let cat = catalogue("5.0.3");
+    let m = Arc::new(w.manager(cat, LINUX));
+    assert_eq!(m.start(&qbt()).await, refused(Refusal::NotInstalled));
+    assert_eq!(
+        m.restart(&qbt()).await.err(),
+        Some(ManagerError::Refused(Refusal::NotInstalled))
+    );
+    assert_eq!(
+        m.regenerate(&qbt()).await.err(),
+        Some(ManagerError::Refused(Refusal::NotInstalled))
+    );
+    w.run.park.store(true, Ordering::SeqCst);
+    let held = tokio::spawn({
+        let m = m.clone();
+        async move { m.install(&token("5.0.3")).await }
+    });
+    tokio::time::timeout(WAIT, w.run.parked.notified())
+        .await
+        .expect("the install never reached its start");
+    let busy = Some(ManagerError::Refused(Refusal::Busy));
+    assert_eq!(m.start(&qbt()).await.err(), busy);
+    assert_eq!(m.restart(&qbt()).await.err(), busy);
+    assert_eq!(m.regenerate(&qbt()).await.err(), busy);
+    w.run.park.store(false, Ordering::SeqCst);
+    w.run.release.notify_one();
+    tokio::time::timeout(WAIT, held)
+        .await
+        .expect("the install didn't finish")
+        .unwrap()
+        .unwrap();
+    // A restart under way holds the slot too.
+    w.run.park.store(true, Ordering::SeqCst);
+    let pending = m.restart(&qbt()).await.unwrap();
+    tokio::time::timeout(WAIT, w.run.parked.notified())
+        .await
+        .expect("the restart never reached its start");
+    assert_eq!(m.regenerate(&qbt()).await.err(), busy);
+    assert_eq!(m.remove(&qbt()).await, refused(Refusal::Busy));
+    w.run.park.store(false, Ordering::SeqCst);
+    w.run.release.notify_one();
+    tokio::time::timeout(WAIT, pending.finished())
+        .await
+        .expect("the restart didn't finish")
+        .unwrap();
+    drop(m);
+    let docker = Host {
+        in_container: true,
+        ..LINUX
+    };
+    let m = w.manager(cat, docker);
+    assert_eq!(
+        m.restart(&qbt()).await.err(),
+        Some(ManagerError::Refused(Refusal::NotInstalled))
+    );
+}
+
+fn conf(w: &World) -> std::path::PathBuf {
+    w.folder().join("home/qBittorrent/config/qBittorrent.conf")
+}
+
+const ROW: &str = "companions.qbittorrent.secret.webui_password";
+
+/// Regenerate rotates the credential into its row and the companion's own
+/// file, keeping the file's other lines, then starts and configures it
+/// with the new one.
+#[tokio::test]
+async fn regenerate_rotates_the_row_and_the_file_together() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let m = w.manager(catalogue("5.0.3"), LINUX);
+    m.install(&token("5.0.3")).await.unwrap();
+    let mut text = std::fs::read_to_string(conf(&w)).unwrap();
+    text.push_str("\n[Mine]\nkept=yes\n");
+    std::fs::write(conf(&w), &text).unwrap();
+    let row = w.rows.get(ROW).unwrap().unwrap();
+    m.regenerate(&qbt())
+        .await
+        .unwrap()
+        .finished()
+        .await
+        .unwrap();
+    let after = std::fs::read_to_string(conf(&w)).unwrap();
+    assert_ne!(w.rows.get(ROW).unwrap().unwrap(), row);
+    let hash = |t: &str| {
+        t.lines()
+            .find(|l| l.starts_with("WebUI\\Password_PBKDF2"))
+            .map(str::to_owned)
+    };
+    assert!(hash(&after).is_some());
+    assert_ne!(hash(&after), hash(&text));
+    assert!(after.contains("kept=yes"));
+    assert_eq!(w.run.started.lock().unwrap().len(), 2);
+    assert_eq!(w.api.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(health(&m), Some(Health::Healthy));
+}
+
+/// A rotation whose file can't be written puts the old row back, so the
+/// row and the file still agree. The start after it writes the file too,
+/// so it fails the same way and nothing runs on a file Lodestar couldn't
+/// write.
+#[tokio::test]
+async fn a_regenerate_that_cant_write_the_file_keeps_the_old_credential() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let m = w.manager(catalogue("5.0.3"), LINUX);
+    m.install(&token("5.0.3")).await.unwrap();
+    let row = w.rows.get(ROW).unwrap().unwrap();
+    std::fs::remove_file(conf(&w)).unwrap();
+    std::fs::create_dir(conf(&w)).unwrap();
+    let got = m.regenerate(&qbt()).await.unwrap().finished().await;
+    assert_eq!(
+        got,
+        Err(ManagerError::Step {
+            step: "files",
+            code: "write"
+        })
+    );
+    assert_eq!(w.rows.get(ROW).unwrap().unwrap(), row);
+    assert_eq!(w.run.started.lock().unwrap().len(), 1);
+    assert_eq!(health(&m), Some(Health::Unhealthy));
+}
+
+/// A journal that still holds an operation (one a crash interrupted,
+/// before recovery) refuses a restart: only recovery may touch it.
+#[tokio::test]
+async fn a_journal_mid_operation_refuses_a_restart() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let m = w.manager(catalogue("5.0.3"), LINUX);
+    m.install(&token("5.0.3")).await.unwrap();
+    let mut rec = state::load(&w.folder()).unwrap().unwrap();
+    rec.op = Some(state::Op {
+        kind: state::OpKind::Update,
+        version: Some(Version::parse("5.0.3").unwrap()),
+        step: Step::Staged,
+    });
+    state::save(&w.folder(), &rec).unwrap();
+    let busy = Some(ManagerError::Refused(Refusal::Busy));
+    assert_eq!(m.restart(&qbt()).await.err(), busy);
+    assert_eq!(m.regenerate(&qbt()).await.err(), busy);
+}
+
+async fn wait_count(n: &AtomicUsize, at_least: usize) {
+    let got = tokio::time::timeout(WAIT, async {
+        while n.load(Ordering::SeqCst) < at_least {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert!(got.is_ok(), "never reached {at_least}");
+}
+
+/// Running again after a hold is healthy only once a health check passes:
+/// the supervisor says running as soon as it has spawned it.
+#[tokio::test]
+async fn running_again_is_healthy_only_after_a_check() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let m = w.manager(catalogue("5.0.3"), LINUX);
+    m.install(&token("5.0.3")).await.unwrap();
+    w.run.run().send_replace(status(State::Held));
+    wait_health(&m, Health::Unhealthy).await;
+    w.run.sick.store(true, Ordering::SeqCst);
+    let checks = w.run.checks.load(Ordering::SeqCst);
+    w.run.run().send_replace(status(State::Running));
+    wait_count(&w.run.checks, checks + 1).await;
+    assert_eq!(health(&m), Some(Health::Unhealthy));
+    w.run.sick.store(false, Ordering::SeqCst);
+    w.run.run().send_replace(status(State::Running));
+    wait_health(&m, Health::Healthy).await;
+}
+
+/// #608's re-assert holds for a start that failed its health check (held
+/// for a route that was down): it's configured once it runs, before it
+/// shows healthy, and stopped if that fails (Q8).
+#[tokio::test]
+async fn a_start_held_for_its_route_is_configured_once_it_runs() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let m = w.manager(catalogue("5.0.3"), LINUX);
+    m.install(&token("5.0.3")).await.unwrap();
+    w.run.sick.store(true, Ordering::SeqCst);
+    let calls = w.api.calls.load(Ordering::SeqCst);
+    assert!(m.restart(&qbt()).await.unwrap().finished().await.is_err());
+    assert_eq!(
+        w.api.calls.load(Ordering::SeqCst),
+        calls,
+        "configured without health"
+    );
+    w.run.sick.store(false, Ordering::SeqCst);
+    w.run.run().send_replace(status(State::Running));
+    wait_health(&m, Health::Healthy).await;
+    assert_eq!(w.api.calls.load(Ordering::SeqCst), calls + 1);
+
+    // A configuration that fails stops it.
+    w.run.sick.store(true, Ordering::SeqCst);
+    assert!(m.restart(&qbt()).await.unwrap().finished().await.is_err());
+    w.api.fail.store(true, Ordering::SeqCst);
+    w.run.sick.store(false, Ordering::SeqCst);
+    let stops = w.run.stops.load(Ordering::SeqCst);
+    w.run.run().send_replace(status(State::Running));
+    wait_count(&w.run.stops, stops + 1).await;
+    assert_eq!(health(&m), Some(Health::Unhealthy));
+    assert!(w.run.status.lock().unwrap().is_none());
+}
+
+/// A crash between a regenerate's row and its file heals at the next
+/// start: the stored credential is written into the file again.
+#[tokio::test]
+async fn a_start_writes_the_stored_credential_into_the_file_again() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let m = w.manager(catalogue("5.0.3"), LINUX);
+    m.install(&token("5.0.3")).await.unwrap();
+    let good = std::fs::read_to_string(conf(&w)).unwrap();
+    let line = |t: &str| {
+        t.lines()
+            .find(|l| l.starts_with("WebUI\\Password_PBKDF2"))
+            .map(str::to_owned)
+            .unwrap()
+    };
+    let stale = good.replace(
+        &line(&good),
+        "WebUI\\Password_PBKDF2=\"@ByteArray(AAAA:BBBB)\"",
+    );
+    std::fs::write(conf(&w), &stale).unwrap();
+    m.restart(&qbt()).await.unwrap().finished().await.unwrap();
+    let now = std::fs::read_to_string(conf(&w)).unwrap();
+    assert_ne!(line(&now), line(&stale));
 }
