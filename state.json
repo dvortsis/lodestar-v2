@@ -7564,7 +7564,7 @@
         "slice": "CMP-11",
         "role": "build",
         "agent": "claude",
-        "doing": "holding for #692 merge; fallback (b) cut-off moved to 17:45Z (session_01MMjhnAaZaaUjzMSyGVFdTA)",
+        "doing": "fallback (b) go at 17:3xZ (#692 not merged); building PR",
         "since": "2026-11-11T14:10:36Z"
       },
       {
@@ -7589,7 +7589,7 @@
         "slice": "X-cmp-handover-followups",
         "role": "build",
         "agent": "claude",
-        "doing": "#692 ready at ead0d88d; fresh Opus delta review queued (3 reviewers busy); marker-before-hand_over kept (runner) (session_01MMjhnCL9xrv5oTMJ9KBcEc)",
+        "doing": "#692 CHANGES round (B1 hands_over default+Wiring test, N1 lock after bound, N2/N3/N4/N6); then delta review",
         "since": "2026-11-11T11:46:21Z"
       },
       {
