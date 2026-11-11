@@ -1392,7 +1392,7 @@ export default [
 						: name === 'CompanionsScreen'
 							? '33 KB'
 							: name === 'SourcesScreen'
-								? '30.9 KB'
+								? '31.1 KB'
 								: name === 'NotificationsScreen'
 									? '45.2 KB'
 									: '45 KB'
@@ -1413,7 +1413,7 @@ export default [
 	entry('Filters pack impact (on demand)', filtersPackImpactLazy, '2.4 KB'),
 	entry('Sources dialogs (on demand)', sourcesDialogsLazy, '40 KB'),
 	entry('Sources config dialog (on demand)', sourcesConfigLazy, '6 KB'),
-	entry('Sources companion chip and setup (on demand)', sourcesCompanionLazy, '99 KB'),
+	entry('Sources companion chip and setup (on demand)', sourcesCompanionLazy, '27 KB'),
 	// S-filters-2c: the flows' one door, `flows-door.ts`: the root's preload list (~0.5 KB), fetched
 	// before the flows on the first change from Filters, a result's menu, the drawer or /t, as Save
 	// search's loader is. Measured 0.53 KB; limit = measured + 10%.
