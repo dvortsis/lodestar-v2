@@ -1972,7 +1972,8 @@ mod tests {
     /// The launcher's way out of the one gap: with no `lodestar.exe` and a
     /// `previous.exe`, it moves that back before it starts anything, and
     /// never over an existing program. No labels: cmd can miss them in a
-    /// file with Unix line endings (#651).
+    /// file with Unix line endings (#651). (Line endings themselves aren't
+    /// checked: a Windows checkout may convert them.)
     #[test]
     fn the_launcher_puts_the_previous_program_back_after_an_interrupted_update() {
         let cmd = include_str!("../../../../../packaging/windows/portable/Start Lodestar.cmd");
@@ -1987,7 +1988,6 @@ mod tests {
         for other in [NEXT, FAILED] {
             assert!(!cmd.contains(other), "the launcher never touches {other}");
         }
-        assert!(!cmd.contains('\r'), "the file keeps its line endings");
     }
 
     #[test]
