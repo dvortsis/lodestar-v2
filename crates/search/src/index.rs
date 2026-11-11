@@ -687,8 +687,9 @@ impl SearchIndex {
         SearchIndex::open_wrapped(dir, |d, _| Retrying::new(d))
     }
 
-    /// [`SearchIndex::open`], with each delete the fault is given the
-    /// whole path of failing (PK-win-soak-ci's fault-injection test).
+    /// [`SearchIndex::open`], failing each delete that `fault` returns true
+    /// for; it's given the file's whole path (PK-win-soak-ci's
+    /// fault-injection test).
     #[cfg(test)]
     pub(crate) fn open_with_delete_fault(
         dir: &Path,

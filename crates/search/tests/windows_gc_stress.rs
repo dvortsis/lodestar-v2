@@ -25,13 +25,13 @@
 //! - the mmap cache gauge (X-mmap-cache-prune) then counts exactly the
 //!   live segment files that are mapped.
 //!
-//! It runs on every OS; CI's `windows-gc-stress` job runs it on Windows. The work is fixed (commits and
-//! batches come from a seeded generator); no assertion is on timing. The
-//! only waits are condition waits with a deadline.
+//! It runs on every OS; CI's `windows-gc-stress` job runs it on Windows.
+//! The work is fixed (commits and batches come from a seeded generator);
+//! no assertion is on timing. The only waits are condition waits with a
+//! deadline.
 
 use std::collections::{BTreeSet, HashSet, VecDeque};
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -250,10 +250,12 @@ fn recheck(h: &Held) {
     );
 }
 
-/// One reader: on each commit it takes a lease, holds up to [`HELD`]
-/// across later commits, and re-checks each one before dropping it.
-fn reader(index: Arc<SearchIndex>, shared: Arc<Shared>, seed: u64, taken: Arc<AtomicUsize>) {
+/// One reader: on each commit it sees it takes a lease, holds up to
+/// [`HELD`] across later commits, and re-checks each one before dropping
+/// it. Returns how many leases it took.
+fn reader(index: Arc<SearchIndex>, shared: Arc<Shared>, seed: u64) -> usize {
     let mut rng = Rng(seed);
+    let mut taken = 0;
     let mut held: VecDeque<Held> = VecDeque::new();
     let mut seen = 0;
     loop {
@@ -276,7 +278,7 @@ fn reader(index: Arc<SearchIndex>, shared: Arc<Shared>, seed: u64, taken: Arc<At
         if committed > 0 {
             let until = commits + rng.upto(MAX_HOLD);
             held.push_back(take(&index, &mut rng, committed, until));
-            taken.fetch_add(1, Ordering::Relaxed);
+            taken += 1;
         }
         // A search on the handle's current searcher too, as `/search`
         // does; dropped at once.
@@ -285,6 +287,7 @@ fn reader(index: Arc<SearchIndex>, shared: Arc<Shared>, seed: u64, taken: Arc<At
             .unwrap_or_else(|e| panic!("search: {e}"));
         assert!(current.total >= committed as usize);
     }
+    taken
 }
 
 /// `dir`'s `meta.json`. A merge thread may be replacing it: on Windows the
@@ -430,11 +433,10 @@ fn merges_and_collection_while_readers_hold_maps() {
     let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
     let mut indexer = index.writer(15 << 20).unwrap();
     let shared = Arc::new(Shared::default());
-    let taken = Arc::new(AtomicUsize::new(0));
     let readers: Vec<_> = (0..READERS)
         .map(|i| {
-            let (index, shared, taken) = (index.clone(), shared.clone(), taken.clone());
-            std::thread::spawn(move || reader(index, shared, 0x9E37_79B9 + i as u64, taken))
+            let (index, shared) = (index.clone(), shared.clone());
+            std::thread::spawn(move || reader(index, shared, 0x9E37_79B9 + i as u64))
         })
         .collect();
 
@@ -463,11 +465,20 @@ fn merges_and_collection_while_readers_hold_maps() {
         }
     }
     shared.publish(|p| p.done = true);
+    let mut taken = Vec::new();
     for r in readers {
-        if let Err(panic) = r.join() {
-            std::panic::resume_unwind(panic);
+        match r.join() {
+            Ok(n) => taken.push(n),
+            Err(panic) => std::panic::resume_unwind(panic),
         }
     }
+    // Readers really held maps: each took leases, and together at least one
+    // per commit. A reader takes one per commit it sees (it can miss some
+    // while it pages), so it would take far fewer only if it stalled.
+    assert!(
+        taken.iter().all(|&n| n > 0) && taken.iter().sum::<usize>() >= COMMITS as usize,
+        "readers took {taken:?} leases over {COMMITS} commits"
+    );
     let committed = (next - 1) as u64;
     assert_eq!(index.num_docs(), committed);
     // Each torrent has two files.
@@ -503,6 +514,6 @@ fn merges_and_collection_while_readers_hold_maps() {
     eprintln!(
         "{COMMITS} commits, {committed} torrents, {} leases, {segments_ever} segments ever, \
          {segments:?} at the end, {survived} retired segments outlived a collection, settled in {rounds} round(s)",
-        taken.load(Ordering::Relaxed)
+        taken.iter().sum::<usize>()
     );
 }
