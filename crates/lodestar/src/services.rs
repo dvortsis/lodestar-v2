@@ -889,8 +889,9 @@ pub(crate) async fn stop_updates(
 
 /// How long the runtime waits, once serving has ended, for blocking tasks
 /// still running (a stuck read): the exit, and the Windows service's stop,
-/// never hang on one. With [`SHUTDOWN_GRACE`] and the saves, inside the
-/// update supervisor's and the SCM's 30 s.
+/// never hang on one. With [`SHUTDOWN_GRACE`], [`UPDATES_STOP_WAIT`] (2 s
+/// on Windows) and the saves, inside the update supervisor's and the
+/// SCM's 30 s.
 pub const RUNTIME_GRACE: Duration = Duration::from_secs(5);
 
 /// `serve`'s result, or `None` once `grace` has passed since `stopping`

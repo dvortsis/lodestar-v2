@@ -593,12 +593,14 @@ impl Notifier {
                 }
             })
         };
+        // Made before the task, which owns it from the start: aborted with
+        // this task, even one aborted before its first poll; otherwise
+        // waited for. The service's shutdown gives this task
+        // `UPDATES_STOP_WAIT` after the stop before it aborts it, so the
+        // watcher's last look finishes unless it overruns that.
+        let watcher = AbortOnDrop(watcher);
         tokio::spawn(async move {
-            // Aborted if this task is; otherwise waited for. The service's
-            // shutdown gives this task `UPDATES_STOP_WAIT` after the stop
-            // before it aborts it, so the watcher's last look finishes
-            // unless it overruns that.
-            let mut watcher = AbortOnDrop(watcher);
+            let mut watcher = watcher;
             let checks = async {
                 loop {
                     let wait = n.until_scheduled();

@@ -8,8 +8,10 @@ Follow-up to #693 (X-win-upd-window), from the runner's delta review at 5e260f33
 - **The budget:**
   - `SHUTDOWN_GRACE` (10 s, open connections) + `UPDATES_STOP_WAIT` (2 s) + `RUNTIME_GRACE` (5 s, blocking work at exit) is 17 s, plus the pipeline's and indexer's saves.
   - The service tells the SCM `STOP_WAIT_HINT` (30 s), and reports progress every 5 s, so the SCM never gives up on a stop inside that.
-  - That's measured against a Stop. At system shutdown (Preshutdown and Shutdown, mapped to the same stop), Windows has a shorter timeout of its own; 17 s was already over it before this change. The 2 s is only spent when a check is mid-download.
+  - That's measured against a Stop. At system shutdown (Preshutdown and Shutdown, mapped to the same stop), Windows has a shorter timeout of its own; 15 s was already over it before this change. The 2 s is only spent when a check is mid-download.
   - The watcher's last look is one file removal, retried for about a second. 2 s covers it with room, and costs a stop nothing when the task ends at once, as it does when no check is under way.
+
+- **The watcher is owned by its task from the start** (runner review N2). Its abort guard is made before the task is spawned, so an updates task aborted before its first poll aborts the watcher too, instead of leaving it detached.
 
 ## Not on Unix
 - **On Unix the wait is zero, and the task is aborted at once,** as before. The Unix engine's task runs installs itself. One allowed to run on at a stop could reach its switch: it would set the Switch intent and ask for a restart, so a `docker stop` would come back up on the new version. Unix has no last work at a stop that needs the wait.
