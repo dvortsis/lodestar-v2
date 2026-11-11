@@ -120,15 +120,19 @@ OPENERS = [re.compile(rf"\A[ \t]*{PRE}{shape}{TAIL}[ \t]*\Z") for shape in (
     rf"cat[ \t]+{OP}[ \t]+>>?[ \t]*(?P<f>{PATH})",
     rf"tee[ \t]+(?:-a[ \t]+)?(?P<f>{PATH})(?:[ \t]*>[ \t]*/dev/null)?[ \t]+{OP}",
 )]
-POST_LINE = re.compile(rf"\A[ \t]*(?:cd[ \t]+{PATH}[ \t]*&&[ \t]*)?{POST}[ \t]*\Z")
+POST_LINE = re.compile(rf"\A[ \t]*(?:cd[ \t]+{PATH}[ \t]*&&[ \t]*)?{POST}(?:[ \t]+2>&1)?[ \t]*\Z")
+CD_LINE = re.compile(rf"\A[ \t]*cd[ \t]+{PATH}[ \t]*\Z")
 SPECIAL = ("/dev/", "/proc/", "/sys/")
 # A report's base name: a plain word with a data extension, never a dot-file,
 # so no `.pth`, rc or script file can pass as one (rv-673 at 1a49cde2).
 REPORT_NAME = re.compile(r"[A-Za-z0-9_-]+\.(?:md|json|txt)\Z")
 HELPER_NAMES = ("thread.py", "thread_real.py", "reader.py")
 # A command that writes one of the helper's files: then the post exceptions stop.
-HELPER_WRITE = re.compile(r"(?:>|\btee\b[^\n|;&]*|\b(?:cp|mv|ln|install|dd|rsync|sed\s+-i|perl\s+-i)\b[^\n|;&]*)"
-                          r"[ \t]*\S*\b(?:thread(?:_real)?|reader)\.py\b|\bopen\(\s*['\"]\S*\b(?:thread(?:_real)?|reader)\.py")
+# Gaps are bounded, as in NET_CMD, so a long line stays linear (rv-673 I2).
+HELPER_WRITE = re.compile(r"(?:>|\btee\b[^\n|;&]{0,200}?|\b(?:cp|mv|ln|install|dd|rsync|sed\s+-i|perl\s+-i)\b[^\n|;&]{0,200}?)"
+                          r"[ \t]*\S{0,200}?\b(?:thread(?:_real)?|reader)\.py\b"
+                          r"|\bopen\(\s*['\"]\S{0,200}?\b(?:thread(?:_real)?|reader)\.py")
+WRITE_KEYS = ("content", "new_string", "edits")  # the write and edit tools; the read tool has none
 
 
 def joined(cmd: str) -> str:
@@ -192,9 +196,10 @@ def mentions(name: str, text: str, allow_post: bool = True) -> bool:
     It catches a name, not every touch: globs, directory walks and a
     shadowed `cat` don't name it (the residual)."""
     t = joined(text).strip()
-    if allow_post and POST_LINE.match(t):
-        return False
-    if re.fullmatch(rf"cat[ \t]+(?:\S*/)?{re.escape(name)}", t):
+    cat = re.compile(rf"\A[ \t]*cat[ \t]+(?:\S*/)?{re.escape(name)}[ \t]*\Z")
+    lines = [ln for ln in t.split("\n") if ln.strip()]
+    # Each line exactly `cd P`, `cat F` or the post line, and nothing else (rv-673 I3).
+    if lines and all(CD_LINE.match(ln) or cat.match(ln) or (allow_post and POST_LINE.match(ln)) for ln in lines):
         return False
     return re.search(rf"(?<![\w.-]){re.escape(name)}(?![\w.-])", t) is not None
 
@@ -267,9 +272,15 @@ def _helper_written(inputs: list) -> bool:
         if not isinstance(inp, dict):
             continue
         path = inp.get("file_path")
-        if isinstance(path, str) and path.rsplit("/", 1)[-1] in HELPER_NAMES:
+        writes = any(k in inp for k in WRITE_KEYS)
+        if writes and isinstance(path, str) and path.rsplit("/", 1)[-1] in HELPER_NAMES:
             return True
-        if any(HELPER_WRITE.search(joined(x)) for x in strings(inp) if x is not path):
+        if isinstance(inp.get("command"), str):
+            hd = report_heredoc(inp["command"])  # a report's own text isn't a write
+            texts = [hd[2] if hd else inp["command"]]
+        else:
+            texts = [x for x in strings(inp) if x is not path and not is_report(x)]
+        if any(HELPER_WRITE.search(joined(x)) for x in texts):
             return True
     return False
 
