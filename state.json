@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T07:06:31Z",
+  "updated_at": "2026-11-11T07:09:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6730,7 +6730,8 @@
     "2026-11-11: next runner PR: CMP-13 notes += at pin time re-check Prowlarr ProxyEnabled default and .NET DefaultProxy env behaviour (X-cmp-egress-prelaunch launch-env route); add X-win-upd-1920 entry",
     "2026-11-11: #655 OP-4 merged (aa13e524); owner setup steps 2.6/3.4/4 + flags sent; slot 6 continues with X-op4-polish (owns infra/operator/wake.py, tripwire.py, tests/**, decisions file); add entry in next runner PR",
     "2026-11-11: #669 X-op4-polish merged (93cc99f1); slot 6 continues with X-tripwire-reviews-lookback (owns infra/operator/tripwire.py, tests/test_tripwire.py, its decisions file + one line in X-op4-polish decisions); add both entries in next runner PR",
-    "2026-11-11: #668 OP-3c merged (fca40580) after runner check of the docs delta; slot 1 continues with OP-5 (briefs/OP-5.md); OP-5 owns += infra/fleet/tests/test_workflow.py in next runner PR"
+    "2026-11-11: #668 OP-3c merged (fca40580) after runner check of the docs delta; slot 1 continues with OP-5 (briefs/OP-5.md); OP-5 owns += infra/fleet/tests/test_workflow.py in next runner PR",
+    "2026-11-11: runner PR #670 opened (138798bc): X-op4-polish, X-tripwire-reviews-lookback, X-win-upd-1920 entries; OP-5/X-restart-required-creds owns; CMP-13 note"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7463,14 +7464,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T07:06:31Z",
+    "updated": "2026-11-11T07:09:00Z",
     "items": [
       {
         "slot": 1,
         "slice": "OP-5",
         "role": "build",
         "agent": "claude",
-        "doing": "Cloud fleet runbook, Stop everything page, gluetun-stop drill (same session after #661)",
+        "doing": "session_01MMjhn9NvKRMZMg1baoPCau: operator prompt-injection harness (Opus, /security-review), same session after #668",
         "since": "2026-11-11T07:06:31Z"
       },
       {
