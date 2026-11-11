@@ -43,8 +43,10 @@ jobs:
       run:
         shell: bash
     steps:
-      # A pin's trust policy is upstream.py as merged: a run from any other
-      # branch could carry a weakened one, so it's refused.
+      # A pin's trust policy is upstream.py as merged. This refuses another
+      # branch by mistake only: a run there uses that branch's own workflow,
+      # which could drop this step. The pin PR's reviewer checks the run
+      # itself (tools/companion-pins/README.md, "Reviewing a pin PR").
       - name: main only
         env:
           REF: ${{ github.ref }}
@@ -74,7 +76,11 @@ jobs:
           [ -n "$TAG" ] && args+=(--tag "$TAG")
           [ -n "$IMAGE_TAG" ] && args+=(--image-tag "$IMAGE_TAG")
           [ -n "$ARTIFACTS" ] && args+=(--artifacts "$ARTIFACTS")
-          python3 tools/companion-pins/pin.py "${args[@]}" 2> >(tee "$out/refused.txt" >&2)
+          # stderr goes to a file first, so the summary step reads it whole.
+          status=0
+          python3 tools/companion-pins/pin.py "${args[@]}" 2> "$out/refused.txt" || status=$?
+          cat "$out/refused.txt" >&2
+          [ "$status" -eq 0 ] || exit "$status"
           git diff --no-index -- crates/companions/data/catalogue.json "$out/catalogue.json" > "$out/catalogue.diff" || true
       - name: job summary
         if: always()

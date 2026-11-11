@@ -66,7 +66,8 @@ VERSION = re.compile(r"^(0|[1-9][0-9]{0,8})(\.(0|[1-9][0-9]{0,8})){0,3}$")
 URL_PART = re.compile(r"^[A-Za-z0-9_~+-][A-Za-z0-9._~+-]*$")
 MAX_SOURCE_FILE = 1024 * 1024
 # What upstream text may be in the report as it is; anything else becomes `?`.
-_UNSAFE = re.compile(r"[^A-Za-z0-9 ._/+:@=(),;!\"'-]")
+# `@` is out too: an `@name` would mention someone once the report is pasted.
+_UNSAFE = re.compile(r"[^A-Za-z0-9 ._/+:=(),;!\"'-]")
 
 
 def safe(text, limit: int = 200) -> str:
@@ -404,7 +405,7 @@ def check_prowlarr_source(t: Transport, owner: str, project: str, tag: str, work
         raise Refused("check_failed", "ConfigService.cs no longer defaults ProxyEnabled to false")
     if len(dispatchers) != 1:
         raise Refused("check_failed", f"expected one ManagedHttpDispatcher.cs, found {len(dispatchers)}")
-    lines = ["ProxyEnabled defaults to false (ConfigService.cs)", f"dispatcher: {safe(dispatchers[0])}"]
+    lines = ["ProxyEnabled defaults to false (ConfigService.cs)", f"dispatcher: `{safe(dispatchers[0])}`"]
     for k, (_, limit) in upstream.PROWLARR_DISPATCHER_LIMITS.items():
         if dispatcher_counts[k] > limit:
             raise Refused(
@@ -419,7 +420,7 @@ def check_prowlarr_source(t: Transport, owner: str, project: str, tag: str, work
             where = ", ".join(safe(f) for f in sorted(set(found)))
             raise Refused("check_failed", f"`{k}` occurs {len(found)} times (at most {limit}): {where}")
         where = ", ".join(safe(f) for f in sorted(set(found)))
-        lines.append(f"`{k}`: {len(found)} (at most {limit}){': ' + where if found else ''}")
+        lines.append(f"`{k}`: {len(found)} (at most {limit}){': `' + where + '`' if found else ''}")
     return lines
 
 
@@ -694,7 +695,9 @@ def make_pins(args, doc: dict, t: Transport, gpg: str, keys_dir: Path, recipes=N
         report += [
             *([""] if report[-1] else []),
             f"- **image** `{container['image']}:{image_tag}` → `{digest}`",
-            f"  - platforms: {safe(', '.join(platforms)) or 'a single-platform manifest'}",
+            f"  - platforms: `{safe(', '.join(platforms))}`"
+            if platforms
+            else "  - platforms: a single-platform manifest",
         ]
     return report
 
@@ -712,25 +715,33 @@ def main(argv=None, transport=None, keys_dir=KEYS) -> int:
     p.add_argument("--skip-image", action="store_true", help="leave the container digest as it is")
     p.add_argument("--gpg", default="gpg")
     args = p.parse_args(argv)
+    staged = []
     try:
         doc = load_catalogue(args.catalogue.read_text(encoding="utf-8"))
         report = make_pins(args, doc, transport or Transport(), shutil.which(args.gpg) or args.gpg, keys_dir)
         text = format_catalogue(doc)
         load_catalogue(text)
+        # Written only once every check passed. Both files are staged first,
+        # then renamed, so a failed write never leaves a catalogue without
+        # its report.
+        outputs = [(args.out, text)]
+        if args.report:
+            outputs.append((args.report, "\n".join(["# Companion pin report", "", *report, *provenance(), ""])))
+        for path, body in outputs:
+            tmp = path.with_name(path.name + ".tmp")
+            staged.append(tmp)
+            tmp.write_text(body, encoding="utf-8")
+        for (path, _), tmp in zip(outputs, staged, strict=True):
+            os.replace(tmp, path)
     except Refused as e:
         print(f"companion-pins: refused, nothing written. {safe(e, 2000)}", file=sys.stderr)
         return 1
     except Exception as e:  # anything unforeseen fails closed, with a stable code too
         print(f"companion-pins: refused, nothing written. error: {type(e).__name__}: {safe(e)}", file=sys.stderr)
         return 1
-    # Written only once every check passed; each file whole or not at all.
-    outputs = [(args.out, text)]
-    if args.report:
-        outputs.append((args.report, "\n".join(["# Companion pin report", "", *report, *provenance(), ""])))
-    for path, body in outputs:
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(body, encoding="utf-8")
-        os.replace(tmp, path)
+    finally:
+        for tmp in staged:
+            tmp.unlink(missing_ok=True)
     print("\n".join(report))
     return 0
 

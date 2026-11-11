@@ -300,6 +300,18 @@ class Download(Case):
             err = self.refused(Fake(), "error", recipe=unsigned_recipe())
         self.assertIn("OSError", err)
 
+    def test_a_failed_report_write_leaves_no_catalogue(self):
+        real = Path.write_text
+
+        def write_text(path, body, *a, **k):
+            if path.name == "report.md.tmp":
+                raise OSError("disk full")
+            return real(path, body, *a, **k)
+
+        with mock.patch.object(Path, "write_text", write_text):
+            self.refused(Fake({URL: ok(BODY)}), "error", recipe=unsigned_recipe())
+        self.assertEqual(sorted(p.name for p in self.tmp.iterdir()), ["catalogue.json", "keys"])
+
     def test_the_report_says_what_made_the_pin(self):
         with mock.patch.dict(os.environ, {"GITHUB_SHA": "abc123", "GITHUB_REF": "refs/heads/main"}):
             self.assertEqual(self.run_pin(Fake({URL: ok(BODY)}), recipe=unsigned_recipe())[0], 0)
@@ -549,6 +561,7 @@ class Prowlarr(unittest.TestCase):
 
     def test_upstream_text_in_the_report_is_defanged(self):
         self.assertEqual(pin.safe("a`b[c](d)<e>\n*"), "a?b?c?(d)?e???")
+        self.assertEqual(pin.safe("ping @someone"), "ping ?someone")
 
     def test_source_checks_fail_closed(self):
         for extra in (
@@ -713,6 +726,40 @@ class Container(Case):
                 mutate(r)
                 with self.assertRaises(pin.Refused):
                     pin.resolve_digest(Fake(r), "lscr.io/linuxserver/prowlarr", tag)
+
+
+class RealOpener(unittest.TestCase):
+    """The real transport hands a redirect back instead of following it."""
+
+    def test_a_302_is_returned_not_followed(self):
+        import http.server
+        import threading
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path == "/start":
+                    self.send_response(302)
+                    self.send_header("Location", "/followed")
+                    self.end_headers()
+                else:
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(b"followed")
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        with mock.patch.dict(os.environ, {"NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"}):
+            r = pin.Transport().get(f"http://127.0.0.1:{server.server_port}/start", {})
+        try:
+            self.assertEqual(r.status, 302)
+            self.assertEqual(r.headers["location"], "/followed")
+        finally:
+            r.close()
 
 
 if __name__ == "__main__":
