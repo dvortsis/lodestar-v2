@@ -7564,7 +7564,7 @@
     }
   ],
   "heartbeat": "2026-11-11T04:06Z",
-  "updated": "2026-11-11T06:00Z",
+  "updated": "2026-11-11T06:05Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -7590,6 +7590,15 @@
       "at": "2026-11-11T04:53Z",
       "item": "Legal Notice \u00a72 wording for registering Prowlarr as an Account source (X-prowlarr-register); runner drafts the text, owner approves",
       "send": "with the X-prowlarr-settings merge FYI"
+    }
+  ],
+  "review_queue": [
+    {
+      "pr": 661,
+      "slice": "OP-3b",
+      "head": "f75a21097800d59435755c409283b87e30139403",
+      "ready_at": "2026-11-11T06:04Z",
+      "needs": "Opus + /security-review"
     }
   ]
 }
