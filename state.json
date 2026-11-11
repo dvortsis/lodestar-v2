@@ -6757,7 +6757,8 @@
       "pr": 673,
       "merged": "d94800207d6cd25944ac22ed79a49be66a2adb5c",
       "note": "OP-5 merged; owner told setup (STATE_BUCKET, tombstone) and flags (24 h wake pause, $50 cap, scope call); first live run at OP-G records per-session costs and judge residuals"
-    }
+    },
+    "next runner PR: PK-win-portable-upd owns += .gitattributes (the one *.cmd eol=crlf line, rv-659-7f651d09 I2); update/mod.rs already in owns since #676; X-updates-raw-codes owns openapi.json/schema.d.ts already added in #676"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
