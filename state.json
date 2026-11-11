@@ -7736,7 +7736,7 @@
   "review_queue": [
     "#699 WK-11 delta+sec review running",
     "#702 X-event-log-notice review running",
-    "#703 X-cmp9b-catch review running"
+    "#703 MERGE @1666594d; asked for asyncUtilTimeout 10s in SourceRow/NeedChip chunk tests; self-check delta then merge"
   ],
   "merged": [
     {
