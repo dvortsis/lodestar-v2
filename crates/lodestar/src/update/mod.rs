@@ -143,6 +143,7 @@ pub fn start(
             dev: crate::system::info::channel() == lodestar_api::system::Channel::Dev,
             kind: win::detect(&win::signals(&config.data_dir)),
             target: lodestar_update::Target::from_triple(env!("LODESTAR_BUILD_TARGET")),
+            db: config.db_path(),
             checked_data: crate::windows::service::same_dir(
                 &config.data_dir,
                 &crate::windows::service::default_data_dir(std::env::var("ProgramData").ok()),

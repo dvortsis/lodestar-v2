@@ -54,6 +54,10 @@ def check(path: Path, rules: dict) -> list[str]:
                 errors.append(f"Config {c.get('Name')!r} lacks {a}")
         if c.get("Type") not in {"Port", "Path", "Variable"}:
             errors.append(f"Config {c.get('Name')!r} has bad Type")
+        # A field the app doesn't read yet is clutter that a user fills in for nothing. ("(planned)"
+        # on the Peers (TCP) port is fine: that port is mapped for the peer listener.)
+        if "not used yet" in (c.get("Description") or "").lower():
+            errors.append(f"Config {c.get('Name')!r} is described as not used yet; remove the field")
     targets = {c.get("Target") for c in configs}
     for p in rules.get("ports", ()):
         if p not in targets:

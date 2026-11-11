@@ -3418,8 +3418,8 @@ export interface components {
              *     `skipped_unreadable`, `noexec_unknown`, `channel_unavailable` or
              *     `not_built_yet` (Windows: this install path isn't built yet, e.g.
              *     the portable build, or no installer wired in); on Windows also
-             *     `install_kind_unknown` (the build is neither the MSI service nor
-             *     the portable zip, so no artifact is chosen) and
+             *     `install_kind_unknown` (Lodestar couldn't tell whether it's the MSI
+             *     service or the portable zip, so no artifact is chosen) and
              *     `data_folder_unchecked` (the data folder isn't the default one
              *     under ProgramData whose permissions the installer sets, so nothing
              *     installs from it); or, when `unavailable` is

@@ -9,6 +9,7 @@
 	import { dayOf } from './time';
 	import { ask } from '../form/dialogs';
 	import { badges, safeHttps } from './logic';
+	import { historyReasonWords } from './reasons';
 	import type { UpdatesStore } from './store.svelte';
 
 	let { store }: { store: UpdatesStore } = $props();
@@ -103,11 +104,16 @@
 					</thead>
 					<tbody>
 						{#each status.history as h, i (i)}
+							{@const why = historyReasonWords(h.reason)}
 							<tr data-testid="updates-history-row">
 								<th scope="row" class="font-normal">{h.version}</th>
-								<td>{h.level ? (badge[h.level]?.() ?? h.level) : '—'}</td>
+								<td>{h.level ? (badge[h.level]?.() ?? '—') : '—'}</td>
 								<td>{day(h.at)}</td>
-								<td>{result[h.result]?.() ?? h.result}{h.reason ? `: ${h.reason}` : ''}</td>
+								<td
+									>{result[h.result]?.() ?? m.settings_updates_history_result_other()}{why
+										? `: ${why}`
+										: ''}</td
+								>
 							</tr>
 						{/each}
 					</tbody>

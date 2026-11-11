@@ -7,7 +7,7 @@ The setup illustration uses labels from `web/src/lib/features/auth/messages/en.j
 | Chapter | Screenshot | Source | Status |
 |---|---|---|---|
 | 2.1 | Unraid Add Container with Repository pinned to `0.5.1` and Data on the pool | Owner | Pending host capture; `unraid-template-illustration.svg` shows the main fields |
-| 2.3 | PUID 99 and PGID 100 in Advanced View | Owner | Pending host capture; `unraid-puid-pgid-illustration.svg` |
+| 2.3 | PUID 99 and PGID 100 in Advanced View | Owner | Pending host capture; `unraid-puid-pgid-illustration.svg` (its source stamp is `lodestar.xml:28-31` since the unused Hot path and Cold path fields were removed) |
 | 2.5 | Container log with setup token redacted | Owner | Pending host capture |
 | 2.5 | v0.5.1 setup: token, Legal Notice, then password | Release UI | Pending release capture; `setup-v051-illustration.svg` replaces the development setup capture |
 | 4.2 | Checksum and Minisign verification | Owner | Pending host capture |

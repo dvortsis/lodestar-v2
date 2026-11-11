@@ -11095,7 +11095,7 @@
               "string",
               "null"
             ],
-            "description": "Why not: `not_supervised`, `dev_build`, `noexec`, `not_writable`,\n`package_managed`, `image_mode`, `trust_damaged`,\n`skipped_unreadable`, `noexec_unknown`, `channel_unavailable` or\n`not_built_yet` (Windows: this install path isn't built yet, e.g.\nthe portable build, or no installer wired in); on Windows also\n`install_kind_unknown` (the build is neither the MSI service nor\nthe portable zip, so no artifact is chosen) and\n`data_folder_unchecked` (the data folder isn't the default one\nunder ProgramData whose permissions the installer sets, so nothing\ninstalls from it); or, when `unavailable` is\nset, the same reason (`fixture`, `network`, `windows_helper`).\nInstall automatically then behaves as Check and notify."
+            "description": "Why not: `not_supervised`, `dev_build`, `noexec`, `not_writable`,\n`package_managed`, `image_mode`, `trust_damaged`,\n`skipped_unreadable`, `noexec_unknown`, `channel_unavailable` or\n`not_built_yet` (Windows: this install path isn't built yet, e.g.\nthe portable build, or no installer wired in); on Windows also\n`install_kind_unknown` (Lodestar couldn't tell whether it's the MSI\nservice or the portable zip, so no artifact is chosen) and\n`data_folder_unchecked` (the data folder isn't the default one\nunder ProgramData whose permissions the installer sets, so nothing\ninstalls from it); or, when `unavailable` is\nset, the same reason (`fixture`, `network`, `windows_helper`).\nInstall automatically then behaves as Check and notify."
           }
         }
       },

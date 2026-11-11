@@ -100,6 +100,7 @@ fn install() -> ExitCode {
                 }
                 Outcome::CopyRefused { .. } => ExitCode::FAILURE,
                 Outcome::Failed { .. }
+                | Outcome::InstallBlocked { .. }
                 | Outcome::InstallerBusy { .. }
                 | Outcome::RolledBack { .. }
                 | Outcome::RollbackPending { .. }

@@ -8,6 +8,9 @@ rem waits for Enter here instead of closing it unread.
 set "LODESTAR_PORTABLE_WINDOW=1"
 rem Open the web page once the server has had a moment to start.
 start "" cmd /c "timeout /t 3 /nobreak >nul & start http://localhost:8090/"
+rem An update interrupted between its two renames leaves no lodestar.exe here and
+rem the previous version in data\bin: put it back. Never over an existing one.
+if not exist "%~dp0lodestar.exe" if exist "%~dp0data\bin\previous.exe" move "%~dp0data\bin\previous.exe" "%~dp0lodestar.exe" >nul && echo Lodestar put the previous version back after an interrupted update.
 echo Starting Lodestar. The first-run setup token is printed below; paste it into the page.
 echo To stop, press Ctrl+C and wait for shutdown to finish before closing this window.
 "%~dp0lodestar.exe" serve

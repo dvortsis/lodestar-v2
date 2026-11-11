@@ -36,6 +36,15 @@ fn registering_the_task_needs_the_installed_program() {
     assert!(err.contains("not_installed"), "{err}");
 }
 
+/// The copy's own entry (`--run-msi`) is refused outside staging, before
+/// it waits for anything or looks at a journal.
+#[test]
+fn the_copy_runs_only_from_staging() {
+    let (code, err) = helper(&["update-helper", "--run-msi"]);
+    assert_eq!(code, Some(3), "{err}");
+    assert!(err.contains("not_installed"), "{err}");
+}
+
 #[test]
 fn it_takes_no_config() {
     let (code, err) = helper(&["--config", r"C:\x\config.toml", "update-helper"]);
