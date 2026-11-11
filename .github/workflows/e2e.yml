@@ -294,11 +294,11 @@ jobs:
           fs.mkdirSync(out, { recursive: true });
           const clean = (t) =>
             String(t).replace(/[^\x20-\x7e]/g, ' ').replace(/[`@<>|]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
-          const s = { available: false, passed: 0, failed: 0, flaky: 0, skipped: 0, failing: [], more: 0 };
+          const s = { available: false, passed: 0, failed: 0, flaky: 0, skipped: 0, errors: 0, failing: [], more: 0 };
           try {
             const r = JSON.parse(fs.readFileSync('playwright-json/results.json', 'utf8'));
             const st = r.stats || {};
-            Object.assign(s, { available: true, passed: st.expected | 0, failed: st.unexpected | 0, flaky: st.flaky | 0, skipped: st.skipped | 0 });
+            Object.assign(s, { available: true, passed: st.expected | 0, failed: st.unexpected | 0, flaky: st.flaky | 0, skipped: st.skipped | 0, errors: (r.errors || []).length });
             const all = [];
             const walk = (suite, trail) => {
               const t = suite.title ? trail.concat(suite.title) : trail;
@@ -312,11 +312,11 @@ jobs:
             // No report: the run stopped before the tests produced one.
           }
           const md = s.available
-            ? [`**All themes:** ${s.passed} passed, ${s.failed} failed, ${s.flaky} flaky, ${s.skipped} skipped.`]
+            ? [`**All themes:** ${s.passed} passed, ${s.failed} failed, ${s.flaky} flaky, ${s.skipped} skipped${s.errors ? `, ${s.errors} errors outside the tests` : ''}.`]
             : ['**All themes:** no test report was produced (the run stopped before the tests finished).'];
           if (s.failing.length) {
-            md.push('', 'Failing specs:', ...s.failing.map((t) => `- ${t}`));
-            if (s.more) md.push(`- and ${s.more} more`);
+            // A fenced block: a title can't contain a backtick, so it can't close the fence.
+            md.push('', 'Failing specs:', '```', ...s.failing, ...(s.more ? [`and ${s.more} more`] : []), '```');
           }
           fs.writeFileSync(`${out}/summary.json`, JSON.stringify(s));
           fs.writeFileSync(`${out}/summary.md`, md.join('\n') + '\n');
@@ -376,6 +376,9 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RESULT: ${{ needs.all-themes.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REF: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SHA: ${{ github.sha }}
           SUMMARY_DIR: ${{ runner.temp }}/summary
           WORK_DIR: ${{ runner.temp }}
         run: |
@@ -397,15 +400,21 @@ jobs:
           # or angle brackets, at most 25 titles of 200 characters.
           if [ -f "$SUMMARY_DIR/summary.json" ] && jq -e . "$SUMMARY_DIR/summary.json" >/dev/null 2>&1; then
             jq -r '
-              def num: if type == "number" then (floor | tostring) else "?" end;
+              def num: if type == "number" and . == . and . >= 0 and . < 1e9 then (floor | tostring) else "?" end;
               def clean: tostring | gsub("[^\\x20-\\x7e]"; " ") | gsub("[`@<>|]"; " ") | .[0:200];
-              if .available == true then
-                "\(.passed | num) passed, \(.failed | num) failed, \(.flaky | num) flaky, \(.skipped | num) skipped."
-              else "No test report was produced: the run stopped before the tests finished." end,
-              (if ((.failing // []) | length) > 0 then
-                 "", "Failing specs:", ((.failing // [])[:25][] | "- " + clean),
-                 (if ((.more // 0) | type) == "number" and .more > 0 then "- and \(.more | num) more" else empty end)
-               else empty end)
+              if type != "object" then "The run summary had an unexpected shape."
+              else
+                (if .available == true then
+                   "\(.passed | num) passed, \(.failed | num) failed, \(.flaky | num) flaky, \(.skipped | num) skipped"
+                   + (if ((.errors // 0) | num) != "0" then ", \(.errors | num) errors outside the tests" else "" end) + "."
+                 else "No test report was produced: the run stopped before the tests finished." end),
+                ((.failing | if type == "array" then . else [] end) as $f
+                 | if ($f | length) > 0 then
+                     "", "Failing specs:", "```", ($f[:25][] | clean),
+                     (if ((.more // 0) | type) == "number" and .more > 0 then "and \(.more | num) more" else empty end),
+                     "```"
+                   else empty end)
+              end
             ' "$SUMMARY_DIR/summary.json" > "$WORK_DIR/summary-text.md"
           else
             echo "No run summary was available." > "$WORK_DIR/summary-text.md"
@@ -415,6 +424,7 @@ jobs:
               echo "The nightly all-themes run failed on $today (UTC)."
               echo
               echo "Run: $RUN_URL"
+              echo "Ref: $REF at $SHA"
               echo
               cat "$WORK_DIR/summary-text.md"
             } > "$body"
@@ -427,11 +437,16 @@ jobs:
           elif [ -n "$existing" ]; then
             {
               echo "The all-themes run passed on $today (UTC): $RUN_URL"
+              echo "Ref: $REF at $SHA"
               echo
               cat "$WORK_DIR/summary-text.md"
             } > "$body"
             gh issue comment "$existing" --body-file "$body"
-            gh issue close "$existing" --reason completed
+            # Only a pass on the default branch closes it: a manual run on another branch says
+            # nothing about whether main is fixed.
+            if [ "$REF" = "$DEFAULT_BRANCH" ]; then
+              gh issue close "$existing" --reason completed
+            fi
           else
             echo "The run passed and no tracking issue is open."
           fi
