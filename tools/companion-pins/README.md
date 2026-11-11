@@ -11,7 +11,7 @@ Standard library Python (3.12 or later) and the system `gpg`. Decisions, the ups
 - `test_pin.py`: offline tests: `python3 -m unittest discover -s tools/companion-pins -p 'test_*.py' -v`.
 
 ## Making a pin
-Run the **Companion pins** workflow (Actions, then Run workflow) with the companion and version. It needs nothing but read access. It uploads `catalogue.json`, `report.md` and `catalogue.diff` as the `companion-pins` artifact and shows the report in the job summary. It never commits or opens a PR: you open the pin PR with that `catalogue.json` and paste the report into its description, and the runner reviews it.
+Run the **Companion pins** workflow from `main` (Actions, then Run workflow; any other branch is refused) with the companion and version. It needs nothing but read access. It uploads `catalogue.json`, `report.md` and `catalogue.diff` as the `companion-pins` artifact and shows the report in the job summary. It never commits or opens a PR: you open the pin PR with that `catalogue.json` and paste the report into its description, and the runner reviews it.
 
 Locally, the same run:
 

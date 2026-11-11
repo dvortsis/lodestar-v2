@@ -40,6 +40,10 @@ class Recipe:
     signature: dict[str, OpenPgp | Unsigned]  # "<platform>-<arch>" -> what upstream signs
     image_tag: str | None  # e.g. "{version}"; None: the image tag must be given
     checks: tuple[str, ...] = ()
+    # A regular expression a given --tag must match in full, "{version}"
+    # standing for the version; None: a given tag must equal `tag`. It ties
+    # the tag to the version the pins are labelled with.
+    tag_pattern: str | None = None
 
 
 USERDOCS = Unsigned(
@@ -60,6 +64,7 @@ RECIPES: dict[str, Recipe] = {
         },
         signature={"linux-x86_64": USERDOCS, "linux-aarch64": USERDOCS},
         image_tag="{version}",
+        tag_pattern=r"release-{version}_v[0-9]+(\.[0-9]+){1,3}",
     ),
     "prowlarr": Recipe(
         tag="v{version}",
@@ -88,6 +93,21 @@ PROWLARR_SOURCE_LIMITS: dict[str, tuple[str, int]] = {
     "new SocketsHttpHandler": (r"\bnew\s+SocketsHttpHandler\b", 1),
     "new Socket(": (r"\bnew\s+Socket\s*\(", 1),
     "Dns.*": (r"\bDns\.[A-Z]\w*", 6),
+    # The dispatcher's one client; any other client, handler or process-wide
+    # proxy could take traffic past DefaultProxy.
+    "new HttpClient(": (r"\bnew\s+(System\.Net\.Http\.)?HttpClient\s*\(", 1),
+    "new HttpClientHandler": (r"\bnew\s+(System\.Net\.Http\.)?HttpClientHandler\b", 0),
+    "DefaultProxy =": (r"\bDefaultProxy\s*=(?!=)", 0),
+    "DefaultWebProxy =": (r"\bDefaultWebProxy\s*=(?!=)", 0),
+}
+# In ManagedHttpDispatcher.cs: the one `Proxy =` (set only when Prowlarr's own
+# proxy is configured), and no `UseProxy` assignment at all, so with its own
+# proxy off the handler keeps UseProxy's default and .NET's DefaultProxy.
+# The report lists the dispatcher's `Proxy` lines for the pin PR's reviewer,
+# who confirms the assignment is still behind that check.
+PROWLARR_DISPATCHER_LIMITS: dict[str, tuple[str, int]] = {
+    "Proxy =": (r"\bProxy\s*=(?!=)", 1),
+    "UseProxy =": (r"\bUseProxy\s*=(?!=)", 0),
 }
 # `ProxyEnabled` must default to false, so its own proxy is off at the first
 # start and .NET's DefaultProxy (the launch environment's route) applies.

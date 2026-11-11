@@ -9,11 +9,14 @@ import contextlib
 import hashlib
 import io
 import json
+import os
+import re
 import shutil
 import subprocess
 import tarfile
 import tempfile
 import unittest
+import warnings
 import zipfile
 from pathlib import Path
 from unittest import mock
@@ -100,8 +103,8 @@ class Gpg:
             check=True,
         ).stdout
 
-    def new_key(self, name):
-        self.run("--quick-gen-key", f"{name} <{name}@test.invalid>", "ed25519", "sign", "never")
+    def new_key(self, name, *opts):
+        self.run(*opts, "--quick-gen-key", f"{name} <{name}@test.invalid>", "ed25519", "sign", "never")
         out = self.run("--with-colons", "--list-keys", f"{name}@test.invalid").decode()
         return pin.primaries(out)[0]
 
@@ -154,8 +157,8 @@ class Case(unittest.TestCase):
             code = pin.main(argv, transport=fake, keys_dir=self.keys)
         return code, err.getvalue()
 
-    def refused(self, fake, code, **kw):
-        status, err = self.run_pin(fake, **kw)
+    def refused(self, fake, code, *extra, **kw):
+        status, err = self.run_pin(fake, *extra, **kw)
         self.assertEqual(status, 1, err)
         self.assertIn(f"{code}:", err)
         self.assertFalse(self.out.exists(), "a refused pin wrote a catalogue")
@@ -251,8 +254,58 @@ class Download(Case):
             with self.subTest(version=version):
                 self.refused(Fake(), "request", version=version, recipe=unsigned_recipe())
         self.refused(Fake(), "request", companion="nobody")
-        status, err = self.run_pin(Fake(), "--tag", "v1/../x", recipe=unsigned_recipe())
-        self.assertIn("request:", err)
+        for tag in ("v1/../x", "..", ".", ".v1.2.3", "v1.2.4"):
+            with self.subTest(tag=tag):
+                self.refused(Fake({URL: ok(BODY)}), "request", "--tag", tag, recipe=unsigned_recipe())
+
+    def test_qbittorrent_tag_must_be_the_versions_release(self):
+        files = {
+            f"https://github.com/userdocs/qbittorrent-nox-static/releases/download/{tag}/{arch}-qbittorrent-nox": ok(
+                BODY
+            )
+            for tag in ("release-5.0.3_v2.0.11", "release-5.1.0_v2.0.11")
+            for arch in ("x86_64", "aarch64")
+        }
+        for tag in ("release-5.1.0_v2.0.11", "release-5.0.3", "release-5.0.3_v2.0.11/x", "5.0.3"):
+            with self.subTest(tag=tag):
+                self.refused(
+                    Fake(files), "request", "--tag", tag, "--skip-image", companion="qbittorrent", version="5.0.3"
+                )
+        status, err = self.run_pin(
+            Fake(files), "--tag", "release-5.0.3_v2.0.11", "--skip-image", companion="qbittorrent", version="5.0.3"
+        )
+        self.assertEqual(status, 0, err)
+        self.assertIn("image digest was not re-pinned", self.report.read_text())
+
+    def test_relative_redirect_is_resolved_and_checked(self):
+        fake = Fake({URL: (302, {"Location": "/test/testco/x"}, b""), "https://github.com/test/testco/x": ok(BODY)})
+        self.assertEqual(self.run_pin(fake, recipe=unsigned_recipe())[0], 0)
+
+    def test_same_version_with_other_bytes_is_refused(self):
+        self.assertEqual(self.run_pin(Fake({URL: ok(BODY)}), recipe=unsigned_recipe())[0], 0)
+        self.cat.write_text(self.out.read_text())
+        self.out.unlink()
+        self.report.unlink()
+        self.refused(Fake({URL: ok(BODY + b"replaced")}), "sha_changed", recipe=unsigned_recipe())
+
+    def test_a_new_minisig_beside_an_unsigned_artifact(self):
+        self.refused(
+            Fake({URL: ok(BODY), URL + ".minisig": ok(b"untrusted comment")}),
+            "signature_unexpected",
+            recipe=unsigned_recipe(),
+        )
+
+    def test_an_unforeseen_error_fails_closed(self):
+        with mock.patch.object(pin, "fetch_file", side_effect=OSError("disk")):
+            err = self.refused(Fake(), "error", recipe=unsigned_recipe())
+        self.assertIn("OSError", err)
+
+    def test_the_report_says_what_made_the_pin(self):
+        with mock.patch.dict(os.environ, {"GITHUB_SHA": "abc123", "GITHUB_REF": "refs/heads/main"}):
+            self.assertEqual(self.run_pin(Fake({URL: ok(BODY)}), recipe=unsigned_recipe())[0], 0)
+        report = self.report.read_text()
+        self.assertIn("GITHUB_SHA: `abc123`", report)
+        self.assertIn("`upstream.py` SHA-256", report)
 
     def test_mixed_versions_in_one_entry(self):
         recipe = upstream.Recipe(
@@ -275,6 +328,21 @@ class Download(Case):
         )
         self.assertEqual(status, 1)
         self.assertIn("several versions", err)
+
+
+class Drift(unittest.TestCase):
+    """The tool's copies of the Rust constants it mirrors."""
+
+    def test_constants_match_the_rust_sources(self):
+        cat = (ROOT / "crates/companions/src/catalogue.rs").read_text()
+        hosts = re.search(r"pub const DOWNLOAD_HOSTS: &\[&str\] = &\[(.*?)\];", cat, re.S).group(1)
+        self.assertEqual(tuple(re.findall(r'"([^"]+)"', hosts)), pin.DOWNLOAD_HOSTS)
+        self.assertIn("pub const MAX_ARTIFACT_SIZE: u64 = 512 * 1024 * 1024;", cat)
+        self.assertEqual(pin.MAX_ARTIFACT_SIZE, 512 * 1024 * 1024)
+        registries = re.search(r"pub const REGISTRIES: &\[&str\] = &\[(.*?)\];", cat, re.S).group(1)
+        self.assertEqual(sorted(re.findall(r'"([^"]+)"', registries)), sorted(pin.REGISTRIES))
+        check = (ROOT / "crates/lodestar/src/update/check.rs").read_text()
+        self.assertIn(f"pub const MAX_HOPS: usize = {pin.MAX_HOPS};", check)
 
 
 class Determinism(Case):
@@ -371,6 +439,19 @@ class Signatures(Case):
         fake = Fake({URL: ok(BODY), URL + ".asc": redirect("https://evil.example/sig")})
         self.refused(fake, "host_not_allowed", recipe=self.recipe())
 
+    def test_a_text_mode_signature_is_refused(self):
+        sig = self.gpg.run("--armor", "--local-user", self.a, "--textmode", "--detach-sign", data=BODY)
+        self.refused(Fake({URL: ok(BODY), URL + ".asc": ok(sig)}), "bad_signature", recipe=self.recipe())
+
+    def test_a_key_with_an_expired_unused_subkey_still_verifies(self):
+        fpr = self.gpg.new_key("old", "--faked-system-time", "20200101T000000")
+        self.gpg.run("--faked-system-time", "20200101T000000", "--quick-add-key", fpr, "ed25519", "sign", "2021-01-01")
+        self.gpg.export(fpr)
+        shutil.copy(self.gpg.keys / f"{fpr}.asc", self.keys / f"{fpr}.asc")
+        sig = self.gpg.run("--armor", "--local-user", fpr + "!", "--detach-sign", data=BODY)
+        status, err = self.run_pin(Fake({URL: ok(BODY), URL + ".asc": ok(sig)}), recipe=self.recipe((fpr,)))
+        self.assertEqual(status, 0, err)
+
     def test_pinned_key_without_its_file_or_fingerprint(self):
         self.refused(Fake({URL: ok(BODY), URL + ".asc": ok(b"x")}), "key_not_pinned", recipe=self.recipe(("ABCD",)))
         (self.keys / f"{self.a}.asc").unlink()
@@ -417,6 +498,14 @@ class DotNet(unittest.TestCase):
                 f.addfile(info, io.BytesIO(data))
         with self.assertRaises(pin.Refused):  # no runtimeconfig.json beside it
             pin.check_dotnet_socks5(t, {"archive": "tar_gz", "executable": "Prowlarr/Prowlarr"})
+        d = tmp / "dup.zip"
+        with zipfile.ZipFile(d, "w") as f, warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            f.writestr("Prowlarr/Prowlarr.exe", b"MZ")
+            f.writestr("Prowlarr/Prowlarr.runtimeconfig.json", cfg)
+            f.writestr("Prowlarr/Prowlarr.runtimeconfig.json", b"{}")
+        with self.assertRaises(pin.Refused):  # CMP-2 refuses two members of one name
+            pin.check_dotnet_socks5(d, {"archive": "zip", "executable": "Prowlarr/Prowlarr.exe"})
 
 
 SRC_ROOT = "Prowlarr-1.2.3/src"
@@ -450,11 +539,29 @@ class Prowlarr(unittest.TestCase):
             return pin.check_prowlarr_source(Fake({self.SRC: ok(body)}), "Prowlarr", "Prowlarr", "v1.2.3", Path(work))
 
     def test_source_checks_pass_and_skip_tests(self):
-        lines = self.check(prowlarr_source())
+        lines = self.check(prowlarr_source(" if (p != null) { handler.Proxy = p; }"))
         self.assertIn("ProxyEnabled defaults to false (ConfigService.cs)", lines)
+        self.assertIn(
+            "  - `var handler = new SocketsHttpHandler(); Dns.GetHostAddressesAsync(h); new Socket(a, b, c);"
+            " if (p != null) { handler.Proxy = p; }`".replace("{", "?").replace("}", "?"),
+            lines,
+        )
+
+    def test_upstream_text_in_the_report_is_defanged(self):
+        self.assertEqual(pin.safe("a`b[c](d)<e>\n*"), "a?b?c?(d)?e???")
 
     def test_source_checks_fail_closed(self):
-        for extra in (" UseProxy = false;", " new TcpClient();", " new SocketsHttpHandler();"):
+        for extra in (
+            " UseProxy = false;",
+            " new TcpClient();",
+            " new SocketsHttpHandler();",
+            " handler.UseProxy = x;",
+            " handler.Proxy = a; handler.Proxy = b;",
+            " new HttpClientHandler();",
+            " HttpClient.DefaultProxy = p;",
+            " WebRequest.DefaultWebProxy = p;",
+            " new HttpClient(a); new HttpClient(b);",
+        ):
             with self.subTest(extra=extra), self.assertRaises(pin.Refused):
                 self.check(prowlarr_source(extra))
         buf = io.BytesIO()

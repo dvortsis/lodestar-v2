@@ -62,7 +62,18 @@ MANIFEST_TYPES = (
 # OpenPGP hash algorithms accepted on a signature: SHA-256, SHA-384, SHA-512, SHA-224.
 GOOD_HASHES = {"8", "9", "10", "11"}
 VERSION = re.compile(r"^(0|[1-9][0-9]{0,8})(\.(0|[1-9][0-9]{0,8})){0,3}$")
-URL_PART = re.compile(r"^[A-Za-z0-9._~+-]+$")
+# A tag or file name: URL-safe, and never `.`, `..` or a leading dot (HttpsUrl).
+URL_PART = re.compile(r"^[A-Za-z0-9_~+-][A-Za-z0-9._~+-]*$")
+MAX_SOURCE_FILE = 1024 * 1024
+# What upstream text may be in the report as it is; anything else becomes `?`.
+_UNSAFE = re.compile(r"[^A-Za-z0-9 ._/+:@=(),;!\"'-]")
+
+
+def safe(text, limit: int = 200) -> str:
+    """Upstream text for the report and messages: no Markdown, no code-fence breakout."""
+    return _UNSAFE.sub("?", str(text))[:limit]
+
+
 FINGERPRINT = re.compile(r"^([0-9A-F]{40}|[0-9A-F]{64})$")
 KEYS = Path(__file__).resolve().parent / "keys"
 
@@ -254,7 +265,9 @@ def verify_openpgp(gpg: str, artifact: Path, sig: bytes, pinned: tuple[str, ...]
         res = gpg_run(gpg, home, ["--status-fd", "1", "--verify", str(sigfile), str(artifact)])
         status = [line.split()[1:] for line in res.stdout.splitlines() if line.startswith("[GNUPG:] ")]
         words = [s[0] for s in status if s]
-        bad = {"BADSIG", "ERRSIG", "EXPSIG", "EXPKEYSIG", "REVKEYSIG", "NO_PUBKEY", "KEYREVOKED", "KEYEXPIRED"}
+        # KEYEXPIRED and KEYREVOKED also report an unused subkey, so the
+        # signature's own status words decide (gnupg doc/DETAILS).
+        bad = {"BADSIG", "ERRSIG", "EXPSIG", "EXPKEYSIG", "REVKEYSIG", "NO_PUBKEY"}
         valid = [s for s in status if s and s[0] == "VALIDSIG"]
         if res.returncode != 0 or bad & set(words) or not valid:
             raise Refused(
@@ -268,8 +281,12 @@ def verify_openpgp(gpg: str, artifact: Path, sig: bytes, pinned: tuple[str, ...]
             primary = v[10] if len(v) > 10 else v[1]
             if primary not in pinned:
                 raise Refused("unknown_key", f"signed by {primary}, which isn't pinned")
-            if len(v) < 9 or v[8] not in GOOD_HASHES:
+            if len(v) < 10 or v[8] not in GOOD_HASHES:
                 raise Refused("bad_signature", "the signature uses a weak hash")
+            # Class 00, a binary document: a text-mode signature (01) also
+            # verifies a file whose line endings differ.
+            if v[9] != "00":
+                raise Refused("bad_signature", f"signature class {safe(v[9])}, not a binary document (00)")
             signers.add(primary)
         if len(signers) != 1:
             raise Refused("bad_signature", "signed by more than one key")
@@ -284,6 +301,9 @@ def read_member(path: Path, archive: str, name: str, cap: int, probe_only=False)
     absent. With `probe_only`, b"" if it's there, nothing read."""
     if archive == "zip":
         with zipfile.ZipFile(path) as z:
+            names = z.namelist()
+            if len(names) != len(set(names)):
+                raise Refused("check_failed", "the archive holds two members of one name (CMP-2 refuses it)")
             try:
                 info = z.getinfo(name)
             except KeyError:
@@ -295,7 +315,11 @@ def read_member(path: Path, archive: str, name: str, cap: int, probe_only=False)
             with z.open(info) as f:
                 return f.read(cap + 1)
     with tarfile.open(path, "r:gz") as tf:
-        for m in tf:
+        members = tf.getmembers()
+        names = [m.name.removeprefix("./") for m in members]
+        if len(names) != len(set(names)):
+            raise Refused("check_failed", "the archive holds two members of one name (CMP-2 refuses it)")
+        for m in members:
             if m.name.removeprefix("./") == name:
                 if probe_only and m.isreg():
                     return b""
@@ -332,9 +356,9 @@ def dotnet_reads_socks5(text: bytes) -> str:
             "check_failed", "runtimeconfig.json names no Microsoft.NETCore.App (Lodestar refuses it on SOCKS5)"
         )
     if tfm_major is None or tfm_major < 8 or any(m is None or m < 8 for m in core):
-        raise Refused("check_failed", f"{tfm} is older than .NET 8, whose proxy variables take socks5://")
+        raise Refused("check_failed", f"{safe(tfm)} is older than .NET 8, whose proxy variables take socks5://")
     kind = "self-contained" if "includedFrameworks" in opts else "framework-dependent"
-    return f"{tfm}, {kind}, Microsoft.NETCore.App {', '.join(map(str, versions))}"
+    return safe(f"{tfm}, {kind}, Microsoft.NETCore.App {', '.join(map(str, versions))}")
 
 
 def check_dotnet_socks5(path: Path, artifact: dict) -> str:
@@ -356,12 +380,16 @@ def check_prowlarr_source(t: Transport, owner: str, project: str, tag: str, work
     fetch_file(t, url, SOURCE_HOSTS, MAX_SOURCE, tarball)
     counts = {k: [] for k in upstream.PROWLARR_SOURCE_LIMITS}
     defaults, dispatchers = 0, []
+    dispatcher_counts = {k: 0 for k in upstream.PROWLARR_DISPATCHER_LIMITS}
+    proxy_lines = []
     with tarfile.open(tarball, "r:gz") as tf:
         for m in tf:
             parts = m.name.split("/")
             if not m.isreg() or not m.name.endswith(".cs") or any("Test" in p.split(".") for p in parts):
                 continue
-            text = tf.extractfile(m).read().decode("utf-8", "replace")
+            if m.size > MAX_SOURCE_FILE:
+                raise Refused("check_failed", f"{safe(m.name)} is over {MAX_SOURCE_FILE} bytes")
+            text = tf.extractfile(m).read(MAX_SOURCE_FILE + 1).decode("utf-8", "replace")
             rel = "/".join(parts[1:])
             for k, (pattern, _) in upstream.PROWLARR_SOURCE_LIMITS.items():
                 counts[k] += [rel] * len(re.findall(pattern, text))
@@ -369,16 +397,29 @@ def check_prowlarr_source(t: Transport, owner: str, project: str, tag: str, work
                 defaults += len(re.findall(upstream.PROWLARR_PROXY_DEFAULT, text))
             if rel.endswith("ManagedHttpDispatcher.cs"):
                 dispatchers.append(rel)
+                for k, (pattern, _) in upstream.PROWLARR_DISPATCHER_LIMITS.items():
+                    dispatcher_counts[k] += len(re.findall(pattern, text))
+                proxy_lines += [ln.strip() for ln in text.splitlines() if re.search(r"\bProxy\b", ln)]
     if defaults != 1:
         raise Refused("check_failed", "ConfigService.cs no longer defaults ProxyEnabled to false")
     if len(dispatchers) != 1:
         raise Refused("check_failed", f"expected one ManagedHttpDispatcher.cs, found {len(dispatchers)}")
-    lines = ["ProxyEnabled defaults to false (ConfigService.cs)", f"dispatcher: {dispatchers[0]}"]
+    lines = ["ProxyEnabled defaults to false (ConfigService.cs)", f"dispatcher: {safe(dispatchers[0])}"]
+    for k, (_, limit) in upstream.PROWLARR_DISPATCHER_LIMITS.items():
+        if dispatcher_counts[k] > limit:
+            raise Refused(
+                "check_failed", f"`{k}` occurs {dispatcher_counts[k]} times in the dispatcher (at most {limit})"
+            )
+        lines.append(f"dispatcher `{k}`: {dispatcher_counts[k]} (at most {limit})")
+    lines.append("dispatcher lines naming `Proxy`, for the pin PR's reviewer to read:")
+    lines += [f"  - `{safe(ln)}`" for ln in proxy_lines[:20]]
     for k, (_, limit) in upstream.PROWLARR_SOURCE_LIMITS.items():
         found = counts[k]
         if len(found) > limit:
-            raise Refused("check_failed", f"`{k}` occurs {len(found)} times (at most {limit}): {sorted(set(found))}")
-        lines.append(f"`{k}`: {len(found)} (at most {limit}){': ' + ', '.join(sorted(set(found))) if found else ''}")
+            where = ", ".join(safe(f) for f in sorted(set(found)))
+            raise Refused("check_failed", f"`{k}` occurs {len(found)} times (at most {limit}): {where}")
+        where = ", ".join(safe(f) for f in sorted(set(found)))
+        lines.append(f"`{k}`: {len(found)} (at most {limit}){': ' + where if found else ''}")
     return lines
 
 
@@ -445,14 +486,14 @@ def resolve_digest(t: Transport, image: str, tag: str) -> tuple[str, list[str]]:
         raise Refused("registry", "the manifest isn't JSON") from None
     media = doc.get("mediaType") or seen.get("content-type", "").split(";")[0]
     if media not in MANIFEST_TYPES:
-        raise Refused("registry", f"unexpected manifest type {media!r}")
+        raise Refused("registry", f"unexpected manifest type {safe(media)}")
     platforms = sorted(
         "/".join(filter(None, (m["platform"].get(k) for k in ("os", "architecture", "variant"))))
         for m in doc.get("manifests", [])
         if isinstance(m, dict) and isinstance(m.get("platform"), dict) and m["platform"].get("os") != "unknown"
     )
     if "manifests" in doc and "linux/amd64" not in platforms:
-        raise Refused("registry", f"the image has no linux/amd64 build ({platforms})")
+        raise Refused("registry", f"the image has no linux/amd64 build ({safe(', '.join(platforms))})")
     return digest, platforms
 
 
@@ -504,6 +545,30 @@ def format_catalogue(doc: dict) -> str:
 # ─── A pin ──────────────────────────────────────────────────────────────────
 
 
+def loader_url_ok(url: str, release: str) -> bool:
+    """`catalogue.rs`'s HttpsUrl and pin-URL rules: `<release><tag>/<file>`,
+    a path of `[A-Za-z0-9._~/+-]`, no empty, `.` or `..` segment."""
+    path = urllib.parse.urlsplit(url).path
+    if not url.startswith("https://") or not re.fullmatch(r"/[A-Za-z0-9._~/+-]*", path):
+        return False
+    if any(seg in ("", ".", "..") for seg in path[1:].split("/")):
+        return False
+    rest = url.removeprefix(release)
+    return rest != url and rest.count("/") == 1 and all(rest.split("/"))
+
+
+def provenance() -> list[str]:
+    """What made this pin: the commit, and the tool's and policy's own hashes."""
+    here = Path(__file__).resolve().parent
+    files = [here / "pin.py", here / "upstream.py", *sorted((here / "keys").glob("*.asc"))]
+    lines = ["", "### Provenance", ""]
+    for var in ("GITHUB_REPOSITORY", "GITHUB_REF", "GITHUB_SHA", "GITHUB_RUN_ID"):
+        if os.environ.get(var):
+            lines.append(f"- {var}: `{safe(os.environ[var])}`")
+    lines += [f"- `{f.relative_to(here)}` SHA-256 `{hashlib.sha256(f.read_bytes()).hexdigest()}`" for f in files]
+    return lines
+
+
 def make_pins(args, doc: dict, t: Transport, gpg: str, keys_dir: Path, recipes=None) -> list[str]:
     """Pins `args.companion` in `doc` in place. Returns the report's lines."""
     recipes = upstream.RECIPES if recipes is None else recipes
@@ -524,6 +589,12 @@ def make_pins(args, doc: dict, t: Transport, gpg: str, keys_dir: Path, recipes=N
         tag = args.tag or (fill(recipe.tag) if recipe.tag else None)
         if not tag or not URL_PART.match(tag):
             raise Refused("request", "a release tag is needed (--tag), of URL-safe characters")
+        if recipe.tag_pattern is not None:
+            tag_ok = re.fullmatch(recipe.tag_pattern.replace("{version}", re.escape(args.version)), tag)
+        else:
+            tag_ok = recipe.tag is not None and tag == fill(recipe.tag)
+        if not tag_ok:
+            raise Refused("request", f"tag {safe(tag)} isn't the release of version {args.version}")
         release = native["release"]
         parts = urllib.parse.urlsplit(release).path.split("/")  # ['', owner, project, 'releases', 'download', '']
         hosts = tuple(h for h in entry["hosts"] if h in DOWNLOAD_HOSTS)
@@ -550,6 +621,8 @@ def make_pins(args, doc: dict, t: Transport, gpg: str, keys_dir: Path, recipes=N
                 if not URL_PART.match(name):
                     raise Refused("request", f"{name!r} isn't a URL-safe file name")
                 url = f"{release}{tag}/{name}"
+                if not loader_url_ok(url, release):
+                    raise Refused("request", f"{safe(url)} isn't a URL the catalogue accepts")
                 path = work / key
                 size, sha = fetch_file(t, url, hosts, MAX_ARTIFACT_SIZE, path)
                 if size == 0:
@@ -565,24 +638,33 @@ def make_pins(args, doc: dict, t: Transport, gpg: str, keys_dir: Path, recipes=N
                     upstream_sig = {"kind": "verified_at_pin", "fingerprint": fpr}
                     sig_line = f"OpenPGP signature verified, key `{fpr}`"
                 else:
-                    for suffix in (".asc", ".sig", ".gpg"):
+                    for suffix in (".asc", ".sig", ".gpg", ".minisig"):
                         if fetch_bytes(t, url + suffix, hosts, MAX_SIG, missing_ok=True) is not None:
                             raise Refused(
                                 "signature_unexpected",
                                 f"upstream now publishes {name}{suffix}: pin its key in upstream.py",
                             )
                     upstream_sig = {"kind": "none"}
-                    sig_line = f"no upstream signature ({policy.why}; no .asc, .sig or .gpg found)"
+                    sig_line = f"no upstream signature ({policy.why}; no .asc, .sig, .gpg or .minisig found)"
                 checks = []
                 if "dotnet_socks5" in recipe.checks:
                     checks.append(f".NET: {check_dotnet_socks5(path, a)}")
-                a["pin"] = {
-                    "version": args.version,
-                    "url": url,
-                    "size": size,
-                    "sha256": sha,
-                    "upstream_sig": upstream_sig,
-                }
+                new = {"version": args.version, "url": url, "size": size, "sha256": sha, "upstream_sig": upstream_sig}
+                old = a.get("pin")
+                if (
+                    old
+                    and old.get("version") == args.version
+                    and (old.get("url"), old.get("size"), old.get("sha256"))
+                    != (
+                        url,
+                        size,
+                        sha,
+                    )
+                ):
+                    # Upstream replaced a published file, or a host served
+                    # other bytes: never re-pin one version silently.
+                    raise Refused("sha_changed", f"{key} {args.version} was pinned as other bytes or another file")
+                a["pin"] = new
                 report += [f"- **{key}** `{url}`", f"  - size {size}, SHA-256 `{sha}`", f"  - {sig_line}"]
                 report += [f"  - {c}" for c in checks]
             if "prowlarr_source" in recipe.checks:
@@ -593,9 +675,16 @@ def make_pins(args, doc: dict, t: Transport, gpg: str, keys_dir: Path, recipes=N
             raise Refused(
                 "request", f"the entry would hold pins of several versions {sorted(versions)}: pin every artifact"
             )
+        if wanted:
+            report += ["", f"Only {', '.join(wanted)} pinned; the other artifacts keep the pins they had."]
     elif wanted:
         raise Refused("request", f"{args.companion} has no native artifacts")
     container = entry.get("container")
+    if container and args.skip_image:
+        report += [
+            "",
+            "The image digest was not re-pinned: it may be another version's (the catalogue has no image version).",
+        ]
     if container and not args.skip_image:
         image_tag = args.image_tag or (fill(recipe.image_tag) if recipe.image_tag else None)
         if not image_tag:
@@ -605,7 +694,7 @@ def make_pins(args, doc: dict, t: Transport, gpg: str, keys_dir: Path, recipes=N
         report += [
             *([""] if report[-1] else []),
             f"- **image** `{container['image']}:{image_tag}` → `{digest}`",
-            f"  - platforms: {', '.join(platforms) or 'a single-platform manifest'}",
+            f"  - platforms: {safe(', '.join(platforms)) or 'a single-platform manifest'}",
         ]
     return report
 
@@ -629,12 +718,15 @@ def main(argv=None, transport=None, keys_dir=KEYS) -> int:
         text = format_catalogue(doc)
         load_catalogue(text)
     except Refused as e:
-        print(f"companion-pins: refused, nothing written. {e}", file=sys.stderr)
+        print(f"companion-pins: refused, nothing written. {safe(e, 2000)}", file=sys.stderr)
+        return 1
+    except Exception as e:  # anything unforeseen fails closed, with a stable code too
+        print(f"companion-pins: refused, nothing written. error: {type(e).__name__}: {safe(e)}", file=sys.stderr)
         return 1
     # Written only once every check passed; each file whole or not at all.
     outputs = [(args.out, text)]
     if args.report:
-        outputs.append((args.report, "\n".join(["# Companion pin report", "", *report, ""])))
+        outputs.append((args.report, "\n".join(["# Companion pin report", "", *report, *provenance(), ""])))
     for path, body in outputs:
         tmp = path.with_name(path.name + ".tmp")
         tmp.write_text(body, encoding="utf-8")

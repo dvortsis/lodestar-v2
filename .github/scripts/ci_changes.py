@@ -14,7 +14,8 @@ request gets:
   crate that job builds, following the workspace's path dependencies (the
   logging bench: `lodestar-log` or the binary's `logging/` runtime);
 - the soak tools' Python tests only if it touches `docs/soak/tools/`;
-- the companion pin tool's tests only if it touches `tools/companion-pins/`;
+- the companion pin tool's tests only if it touches `tools/companion-pins/`, its
+  workflow, the catalogue or the Rust constants the tool mirrors (COMPANION_PINS);
 - the cloud infrastructure checks (Lambda tests, template rebuilds, Terraform
   fmt/validate, PowerShell parse) only if it touches `infra/` or this workflow;
 - the update-manifest round trip only if it touches the manifest builder,
@@ -77,6 +78,13 @@ INFRA = re.compile(r"^(infra/|\.github/workflows/(fleet|operator-wake|operator-a
 # verifier it round-trips through.
 UPDATE_MANIFEST = re.compile(
     r"^(\.github/scripts/(test_)?update_manifest\.py$|\.github/workflows/release\.yml$|crates/update/)"
+)
+
+# The pin tool (CMP-13), and what its tests read: the committed catalogue's
+# layout and the Rust constants it mirrors.
+COMPANION_PINS = re.compile(
+    r"^(tools/companion-pins/|\.github/workflows/companion-pins\.yml$|crates/companions/data/catalogue\.json$"
+    r"|crates/companions/src/catalogue\.rs$|crates/lodestar/src/update/check\.rs$)"
 )
 
 EVERYTHING = re.compile(
@@ -212,7 +220,7 @@ def main() -> None:
         )
     ).lower()
     out["soak_tools"] = str(everything or any(f.startswith("docs/soak/tools/") for f in changed)).lower()
-    out["companion_pins"] = str(everything or any(f.startswith("tools/companion-pins/") for f in changed)).lower()
+    out["companion_pins"] = str(everything or any(COMPANION_PINS.match(f) for f in changed)).lower()
     out["infra"] = str(everything or any(INFRA.match(f) for f in changed)).lower()
     out["update_manifest"] = str(everything or any(UPDATE_MANIFEST.match(f) for f in changed)).lower()
     # The mmap-cache retention test (X-mmap-cache-prune): the bench crate
