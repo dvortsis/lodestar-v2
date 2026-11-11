@@ -6717,7 +6717,8 @@
     "X-updates-raw-codes (Sonnet, later): Updates screen shows install_kind_unknown, data_folder_unchecked and the install_failed notice as raw codes; plus rv-657 nits: dto/updates.rs install_kind_unknown wording ('couldn't tell'), WindowsHelper doc 'kept for clients and other platforms'",
     "next runner PR: X-updates-api-text owns += UpdatesScreen.svelte + updates.test.ts (runner-approved on #657)",
     "X-flake-portable-restart-2 (Opus, small, after #662): from rv-662: Wait-Process instead of WaitForExit (works under Constrained Language Mode); a started marker so slow PowerShell start doesn't eat the 30 s; a stderr line when the wait is skipped; decisions-file note that the Windows test adds ~30 s",
-    "X-fleet-polish (small, later): from rv-661 delta: policy() asserts len(words)==6 for query/path ACLs (a second pattern would be ORed by HAProxy); decisions-file wording 'removes it at once' holds only after Lodestar starts"
+    "X-fleet-polish (small, later): from rv-661 delta: policy() asserts len(words)==6 for query/path ACLs (a second pattern would be ORed by HAProxy); decisions-file wording 'removes it at once' holds only after Lodestar starts",
+    "2026-11-11: #662 X-flake-portable-restart merged (2542fe5c); PK-win-portable-upd and OP-4 told; owner FYI sent"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7569,7 +7570,7 @@
       "answers": "runner recommendation on all items: X-refetch-private ships in v0.5.2; installer Repair may re-secure admin-ACE-only folder (X-win-refusal-ux); v0.5.1 release body replacement (notes/v051-release-body.md); web-ok+e2e-ok required; delete wip/CMP-0-catalogue; Q13 stands, Q14 at G-m6; import host = Unraid box; nightly key deferred; counsel advisory, no reminders; package installers after 1.0"
     }
   ],
-  "heartbeat": "2026-11-11T04:06Z",
+  "heartbeat": "2026-11-11T06:50Z",
   "updated": "2026-11-11T06:50Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
@@ -7600,8 +7601,10 @@
     {
       "id": "notice-v5-prowlarr",
       "sent": "2026-11-11",
-      "ask": "Approve Legal Notice v5 \u00a72 wording for registering Prowlarr/Jackett (runner-state briefs/X-prowlarr-register-notice-draft.md); gates X-prowlarr-register"
+      "ask": "Approve Legal Notice v5 \u00a72 wording for registering Prowlarr/Jackett (runner-state briefs/X-prowlarr-register-notice-draft.md); gates X-prowlarr-register",
+      "relayed": "2026-11-11 via dashboard session"
     }
   ],
-  "review_queue": []
+  "review_queue": [],
+  "merged": []
 }
