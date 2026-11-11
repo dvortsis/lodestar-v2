@@ -533,21 +533,73 @@ impl std::fmt::Debug for Serving {
     }
 }
 
-/// Takes the exclusive lock on the index root.
+/// How long a busy index lock is tried again on Windows (X-win-restart-
+/// followups). Windows releases a lock left on a closed file, or held by a
+/// process that ended, "depending upon available system resources"
+/// (`LockFileEx`), and tantivy releases its lock only by closing the file.
+/// So a quick restart (the portable relaunch, a service restart) can find
+/// the previous run's lock still held for a moment. On Unix a closed file's
+/// lock is gone at once, so a busy lock there is another running instance,
+/// refused at once.
+#[cfg(windows)]
+const LOCK_WAIT: Duration = Duration::from_secs(10);
+#[cfg(not(windows))]
+const LOCK_WAIT: Duration = Duration::ZERO;
+/// How often it's tried meanwhile.
+const LOCK_POLL: Duration = Duration::from_millis(100);
+
+/// Takes the exclusive lock on the index root. On Windows a busy lock is
+/// tried again for up to [`LOCK_WAIT`] ([`retry_busy`]); after that, and at
+/// once elsewhere, it's [`Error::Locked`]. Only opening the lock file can
+/// fail with an I/O error, which is never retried: tantivy 0.27 reports
+/// every failed try-lock as busy, so a filesystem that refuses locks is
+/// tried for the whole wait on Windows, then reported as in use.
 fn lock_root(root: &Path) -> Result<DirectoryLock> {
-    use tantivy::directory::error::LockError;
-    MmapDirectory::open(root)?
-        .acquire_lock(&Lock {
-            filepath: PathBuf::from(LOCK_FILE),
-            is_blocking: false,
-        })
-        .map_err(|e| match e {
+    let dir = MmapDirectory::open(root)?;
+    let lock = Lock {
+        filepath: PathBuf::from(LOCK_FILE),
+        is_blocking: false,
+    };
+    retry_busy(
+        || dir.acquire_lock(&lock),
+        LOCK_WAIT,
+        LOCK_POLL,
+        Instant::now,
+        std::thread::sleep,
+    )
+    .map_err(|e| {
+        use tantivy::directory::error::LockError;
+        match e {
             LockError::LockBusy => Error::Locked(root.to_path_buf()),
             LockError::IoError(io) => Error::LockFailed {
                 root: root.to_path_buf(),
                 error: std::io::Error::new(io.kind(), io.to_string()),
             },
-        })
+        }
+    })
+}
+
+/// Calls `attempt` until it gives anything but a busy lock, or `wait` has
+/// passed since the first call, sleeping `poll` between calls. The clock
+/// and the sleep are passed in, so the loop is tested on every platform
+/// without waiting. A `wait` of zero is one attempt.
+fn retry_busy<T>(
+    mut attempt: impl FnMut() -> std::result::Result<T, tantivy::directory::error::LockError>,
+    wait: Duration,
+    poll: Duration,
+    now: impl Fn() -> Instant,
+    mut sleep: impl FnMut(Duration),
+) -> std::result::Result<T, tantivy::directory::error::LockError> {
+    use tantivy::directory::error::LockError;
+    let start = now();
+    loop {
+        match attempt() {
+            Err(LockError::LockBusy) if now().saturating_duration_since(start) < wait => {
+                sleep(poll);
+            }
+            other => return other,
+        }
+    }
 }
 
 impl Serving {
@@ -1215,6 +1267,85 @@ fn discard(path: &Path) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use crate::files::FileFields;
+
+    /// X-win-restart-followups: the busy-lock retry, on a fake clock that
+    /// each sleep moves on. Returns the result and the attempts made.
+    fn retried(
+        answers: Vec<std::result::Result<u8, tantivy::directory::error::LockError>>,
+        wait: Duration,
+    ) -> (
+        std::result::Result<u8, tantivy::directory::error::LockError>,
+        usize,
+    ) {
+        use std::cell::Cell;
+        let start = Instant::now();
+        let elapsed = Cell::new(Duration::ZERO);
+        let mut answers = answers.into_iter();
+        let attempts = Cell::new(0usize);
+        let got = retry_busy(
+            || {
+                attempts.set(attempts.get() + 1);
+                answers
+                    .next()
+                    .unwrap_or(Err(tantivy::directory::error::LockError::LockBusy))
+            },
+            wait,
+            LOCK_POLL,
+            || start + elapsed.get(),
+            |d| elapsed.set(elapsed.get() + d),
+        );
+        (got, attempts.get())
+    }
+
+    #[test]
+    fn a_busy_lock_that_frees_is_taken() {
+        use tantivy::directory::error::LockError;
+        let (got, attempts) = retried(
+            vec![Err(LockError::LockBusy), Err(LockError::LockBusy), Ok(7)],
+            Duration::from_secs(10),
+        );
+        assert_eq!((got.ok(), attempts), (Some(7), 3));
+    }
+
+    #[test]
+    fn a_lock_busy_past_the_wait_is_refused() {
+        use tantivy::directory::error::LockError;
+        // Tried at 0, 100, …, 1,000 ms: at the deadline it's given up.
+        let (got, attempts) = retried(Vec::new(), Duration::from_secs(1));
+        assert!(matches!(got, Err(LockError::LockBusy)));
+        assert_eq!(attempts, 11);
+        // No wait (Unix): refused at once.
+        let (got, attempts) = retried(Vec::new(), Duration::ZERO);
+        assert!(matches!(got, Err(LockError::LockBusy)));
+        assert_eq!(attempts, 1);
+    }
+
+    /// Unix waits for nothing: a busy lock there is another instance.
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_never_waits_for_the_lock() {
+        assert_eq!(LOCK_WAIT, Duration::ZERO);
+    }
+
+    #[test]
+    fn a_lock_io_error_is_never_retried() {
+        use tantivy::directory::error::LockError;
+        let io = LockError::IoError(Arc::new(std::io::Error::other("denied")));
+        let (got, attempts) = retried(vec![Err(io), Ok(1)], Duration::from_secs(10));
+        assert!(matches!(got, Err(LockError::IoError(_))));
+        assert_eq!(attempts, 1);
+    }
+
+    /// The real lock: held by one handle, it's refused to another once the
+    /// wait is over (at once on Unix), and taken once released.
+    #[test]
+    fn the_index_root_is_locked_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let held = lock_root(dir.path()).unwrap();
+        assert!(matches!(lock_root(dir.path()), Err(Error::Locked(_))));
+        drop(held);
+        assert!(lock_root(dir.path()).is_ok());
+    }
     use crate::schema::Fields;
     use crate::{LiveConfig, TorrentDoc};
     use tantivy::TantivyDocument;

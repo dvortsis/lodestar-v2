@@ -166,6 +166,12 @@ const ROUTES: &[(&str, &str)] = &[
     ("POST", "/companions/{id}/template"),
     ("POST", "/companions/{id}/credentials/{field}/reveal"),
     ("POST", "/companions/{id}/credentials/{field}/regenerate"),
+    ("POST", "/companions/detect"),
+    ("POST", "/companions/{id}/target"),
+    ("POST", "/companions/{id}/paste"),
+    ("POST", "/companions/{id}/plan"),
+    ("POST", "/companions/{id}/confirm"),
+    ("POST", "/companions/{id}/guided/forget"),
     ("GET", "/openapi.json"),
 ];
 const OPEN: [&str; 6] = [

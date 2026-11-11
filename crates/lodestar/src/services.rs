@@ -56,6 +56,9 @@ pub struct Services {
     workers: Arc<dyn lodestar_api::workers::WorkersApi>,
     /// `/companions` (CMP-6); none when companions are off for this run.
     companions_api: Option<Arc<dyn lodestar_api::companions::CompanionsApi>>,
+    /// `/companions/…` guided and detected (CMP-5g-2); none with
+    /// companions off or the wiring failed.
+    guided_api: Option<Arc<dyn lodestar_api::companions_guided::CompanionsGuidedApi>>,
     /// `POST /webhooks/{integration}` (SRC-11c), over the plugin's inbox.
     webhooks: Arc<lodestar_api::webhooks::Webhooks>,
 }
@@ -88,6 +91,10 @@ pub struct Handles {
         reason = "CMP-5g starts companions and hands the snapshot on"
     )]
     companions: Option<crate::companions::Companions>,
+    /// The companion gate's feed and the watch (CMP-5g-1), stopped when
+    /// dropped.
+    #[allow(dead_code, reason = "held for its Drop")]
+    companion_wiring: Option<crate::companion_wiring::Wired>,
 }
 
 impl Services {
@@ -339,6 +346,10 @@ impl Services {
             )
             .await
         };
+        // The companion gate (CMP-10): fed by the wiring once the sources'
+        // ops exist. Until then it holds `Unknown`, so nothing gated starts.
+        let (gate_tx, gate_rx) = crate::companion_wiring::gate(companions.as_ref());
+        pipeline_config.companions = gate_rx;
         // Each enabled plugin's HTTP client is built on its egress
         // setting, with its SOCKS5 credentials from the per-source store
         // (SRC-4, SRC-5). A fixture is served offline: plugins get no
@@ -535,6 +546,24 @@ impl Services {
                     .map(|(stats, node)| ops::DhtReport { stats, node }),
             ),
         );
+        let (companion_wiring, guided_api) = match &companions {
+            Some(c) => crate::companion_wiring::serve(
+                c,
+                settings.clone(),
+                ops.clone(),
+                control.clone(),
+                gate_tx,
+            )
+            .await
+            .map(|(w, g)| {
+                (
+                    Some(w),
+                    Some(g as Arc<dyn lodestar_api::companions_guided::CompanionsGuidedApi>),
+                )
+            })
+            .unwrap_or((None, None)),
+            None => (None, None),
+        };
         let monitor = pipeline.monitor();
         let api = lodestar_api::ApiState {
             auth,
@@ -682,10 +711,12 @@ impl Services {
                 torrent_cache: cache_task,
                 cluster,
                 companions,
+                companion_wiring,
             },
             listener,
             system,
             companions_api,
+            guided_api,
             updates: updates.api,
             webhooks,
             workers,
@@ -727,6 +758,7 @@ impl Services {
             webhooks,
             workers,
             companions_api,
+            guided_api,
         } = self;
         // Exports and other background jobs (§9): one registry, closed at
         // shutdown so open downloads end rather than hold it.
@@ -754,6 +786,10 @@ impl Services {
             .layer(webhooks.layer());
         let app = match companions_api {
             Some(c) => app.layer(Extension(c)),
+            None => app,
+        };
+        let app = match guided_api {
+            Some(g) => app.layer(Extension(g)),
             None => app,
         }
         .into_make_service_with_connect_info::<SocketAddr>();

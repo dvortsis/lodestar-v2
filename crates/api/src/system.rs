@@ -11,7 +11,11 @@
 //!   `503 system_unavailable`.
 //! - **Restart answers first:** `202`, then the restart is asked for once
 //!   the answer's body has been handed to the connection, so the browser
-//!   learns it's coming before the server goes away.
+//!   learns it's coming before the server goes away. Anything that must
+//!   succeed first (the portable build starts the copy that takes over)
+//!   runs before the answer ([`SystemApi::prepare_restart`]), so a failure
+//!   is a `409 restart_failed`, not a `202` for a restart that never
+//!   comes.
 //! - **Security:** every route is behind a session, and the writes are
 //!   same-origin JSON. Nothing returned is a secret, a URL credential or
 //!   a torrent detail.
@@ -53,6 +57,13 @@ pub trait SystemApi: Send + Sync + fmt::Debug {
     fn info(&self) -> BoxFuture<'_, SystemInfo>;
     /// Whether and how this process can restart itself.
     fn restart_info(&self) -> RestartInfo;
+    /// Readies a restart before `POST /system/restart` answers: the
+    /// portable build starts the copy that takes over here. An error is
+    /// answered as `409 restart_failed` and nothing stops. By default
+    /// there's nothing to ready.
+    fn prepare_restart(&self) -> Result<(), SystemError> {
+        Ok(())
+    }
     /// Asks for a restart: the graceful shutdown starts, then the process
     /// comes back. Called once `POST /system/restart`'s answer is out.
     fn restart(&self);
@@ -69,6 +80,9 @@ pub trait SystemApi: Send + Sync + fmt::Debug {
 pub enum SystemError {
     /// This process can't restart itself; the hint says how instead.
     RestartUnavailable { hint: String },
+    /// Readying the restart failed ([`SystemApi::prepare_restart`]), so
+    /// this process keeps running.
+    RestartFailed,
     /// There's no address change to keep or revert in that state.
     NoAddressChange,
     /// Logged, never shown.
@@ -81,6 +95,12 @@ impl From<SystemError> for ApiError {
             SystemError::RestartUnavailable { hint } => {
                 ApiError::new(StatusCode::CONFLICT, "restart_unavailable", hint)
             }
+            SystemError::RestartFailed => ApiError::new(
+                StatusCode::CONFLICT,
+                "restart_failed",
+                "Lodestar couldn't start the new copy that takes over, so it's still running. \
+                 Close Lodestar and start it again to restart it.",
+            ),
             SystemError::NoAddressChange => ApiError::new(
                 StatusCode::CONFLICT,
                 "no_address_change",
@@ -131,7 +151,9 @@ pub(crate) async fn system(handle: Handle) -> ApiResult<Json<SystemInfo>> {
 /// Restarts Lodestar: a graceful shutdown (the queue, DHT state and last
 /// commit are saved), then the same program again. It answers first;
 /// poll `/healthz` until it's back. `409 restart_unavailable` where it
-/// can't restart itself, with how to restart instead.
+/// can't restart itself, with how to restart instead; `409
+/// restart_failed` when it couldn't get ready to (the portable build
+/// couldn't start its new copy), and it keeps running.
 #[utoipa::path(
     operation_id = "restartSystem",
     post,
@@ -139,7 +161,7 @@ pub(crate) async fn system(handle: Handle) -> ApiResult<Json<SystemInfo>> {
     tag = "settings",
     responses(
         (status = 202, body = RestartAccepted),
-        (status = 409, description = "`restart_unavailable`: restart it the way it was started (the message says how).", body = ErrorEnvelope),
+        (status = 409, description = "`restart_unavailable`: restart it the way it was started (the message says how). `restart_failed`: it couldn't get ready to restart (the portable build couldn't start its new copy), so it's still running.", body = ErrorEnvelope),
     )
 )]
 pub(crate) async fn restart(handle: Handle, headers: HeaderMap) -> ApiResult<Response> {
@@ -152,6 +174,8 @@ pub(crate) async fn restart(handle: Handle, headers: HeaderMap) -> ApiResult<Res
         }
         .into());
     }
+    // Before the answer: a 202 promises a restart that will happen.
+    api.prepare_restart()?;
     let body = RestartAccepted {
         estimated_seconds: info.estimated_seconds,
         restarting: true,

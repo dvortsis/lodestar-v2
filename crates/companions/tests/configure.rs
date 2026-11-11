@@ -666,6 +666,44 @@ async fn qbittorrent_refused_credentials_and_a_ban() {
     clean_urls(&server.seen());
 }
 
+/// A guided plan holding the temporary password as the credential too (no
+/// password generated yet) signs in once: a wrong one costs one refused
+/// sign-in, not two (#653's review, L2).
+#[tokio::test]
+async fn qbittorrent_guided_plan_with_only_the_temporary_password_signs_in_once() {
+    capture();
+    let state = qbit_state(TEMPORARY);
+    state.lock().unwrap().username = "admin".into();
+    let server = Server::start(qbit_handler(Arc::clone(&state))).await;
+    let target = server.entered();
+    let logins = |s: &Server| {
+        s.seen()
+            .iter()
+            .filter(|r| r.path.ends_with("/login"))
+            .count()
+    };
+    let input_with = |creds: &'static Creds, t: &'static str| {
+        ConfigureInput::new(creds)
+            .guided(Confirmation::of(target.clone()), Secret::new(t))
+            .username(Username::parse("admin").unwrap())
+    };
+    let right: &'static Creds = Box::leak(Box::new(qbit_creds(TEMPORARY)));
+    let plan = qbit()
+        .plan(&http(), &target, &input_with(right, TEMPORARY))
+        .await
+        .unwrap();
+    assert_eq!(names(&plan), ["webui.password"]);
+    assert_eq!(logins(&server), 1);
+    let wrong: &'static Creds = Box::leak(Box::new(qbit_creds("wrong")));
+    assert_eq!(
+        qbit()
+            .plan(&http(), &target, &input_with(wrong, "wrong"))
+            .await,
+        Err(AdapterError::Unauthorized)
+    );
+    assert_eq!(logins(&server), 2, "one refused sign-in");
+}
+
 #[tokio::test]
 async fn qbittorrent_guided_install_replaces_the_temporary_password() {
     capture();

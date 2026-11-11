@@ -41,17 +41,28 @@ pub fn rollback_journal(data_dir: &Path) -> PathBuf {
     data_dir.join("bin").join("rollback.json")
 }
 
-/// Refuses while an update rollback is in progress.
+/// Refuses while an update rollback is in progress: while the marker
+/// exists, or when it can't be told whether it does (any error but "not
+/// found", so an unreadable folder fails closed). `symlink_metadata`, so a
+/// link counts as a marker whatever it points at.
 pub fn refuse_during_update_rollback(data_dir: &Path) -> Outcome {
     let journal = rollback_journal(data_dir);
-    if journal.exists() {
-        return Err(Failure::Refused(format!(
-            "an update rollback is in progress ({}). Start Lodestar to let it finish; \
-             nothing else may open the store until then.",
+    match std::fs::symlink_metadata(&journal) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(Failure::Refused(format!(
+            "can't tell whether an update rollback is in progress ({}): {e}. \
+             Nothing may open the store until that's clear.",
             journal.display()
-        )));
+        ))),
+        Ok(_) => Err(Failure::Refused(format!(
+            "an update rollback is in progress ({}). Nothing may open the store \
+             until it finishes. On Windows the update helper finishes it (an \
+             administrator can start the \"Lodestar update helper\" task); \
+             starting Lodestar meanwhile refuses. Elsewhere, start Lodestar to \
+             let it finish.",
+            journal.display()
+        ))),
     }
-    Ok(())
 }
 
 /// A read-only connection that never creates the file.
@@ -331,6 +342,42 @@ pub fn file_stamp(secs: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_rollback_marker_refuses_and_fails_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        // No marker (and no bin folder): allowed.
+        assert!(refuse_during_update_rollback(dir.path()).is_ok());
+        std::fs::create_dir(dir.path().join("bin")).unwrap();
+        assert!(refuse_during_update_rollback(dir.path()).is_ok());
+        // A marker: refused, and the message names the helper.
+        let marker = rollback_journal(dir.path());
+        std::fs::write(&marker, b"{}").unwrap();
+        match refuse_during_update_rollback(dir.path()) {
+            Err(Failure::Refused(m)) => assert!(m.contains("update helper"), "{m}"),
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+        std::fs::remove_file(&marker).unwrap();
+        // A dangling link counts as a marker.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(dir.path().join("nowhere"), &marker).unwrap();
+            assert!(matches!(
+                refuse_during_update_rollback(dir.path()),
+                Err(Failure::Refused(_))
+            ));
+            std::fs::remove_file(&marker).unwrap();
+        }
+        // Can't tell (bin is a file, so the lookup fails with something
+        // other than "not found"): refused.
+        std::fs::remove_dir(dir.path().join("bin")).unwrap();
+        std::fs::write(dir.path().join("bin"), b"").unwrap();
+        #[cfg(unix)]
+        assert!(matches!(
+            refuse_during_update_rollback(dir.path()),
+            Err(Failure::Refused(_))
+        ));
+    }
 
     #[test]
     fn formats_bytes_like_the_ui() {

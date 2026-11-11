@@ -33,7 +33,7 @@ use lodestar_companions::inputs::{ContainerName, HostPath, NetworkName, Pgid, Pu
 use lodestar_companions::log_events::INSTALL_FAILED;
 use lodestar_companions::manager::{
     ApiConfigure, Downloader, Health, Host, InstallToken, Launch, Manager, ManagerError, Parts,
-    Refusal, RowError, Rows, Run, Snapshot,
+    Refusal, RowError, Rows, Run, Snapshot, field_of,
 };
 use lodestar_companions::supervise::logs::Redactor;
 use lodestar_companions::{Catalogue, CompanionId, Entry, Version, unraid};
@@ -41,6 +41,9 @@ use lodestar_integrations::net::Route;
 use lodestar_integrations::secret::{SealedSecret, Secret, SecretStore};
 use lodestar_store::Store;
 use tokio::sync::watch;
+
+/// A `settings` row as the store reads it: text, or the bytes of a blob.
+type RawRow = (String, Result<String, Vec<u8>>);
 
 /// Companion credential rows in the store's `settings` table.
 #[derive(Debug, Clone)]
@@ -205,8 +208,8 @@ pub struct Companions {
     pub manager: Arc<Manager>,
     /// `/companions` (CMP-6), layered over the API.
     pub api: Arc<Service>,
-    /// CMP-10's input. TODO(CMP-5g): hand it to the pipeline as
-    /// `PipelineConfig::companions` once CMP-10 has merged.
+    /// The installed companions, which `companion_wiring` folds into the
+    /// pipeline's companion gate (CMP-5g-1).
     pub snapshot: watch::Receiver<Snapshot>,
 }
 
@@ -448,15 +451,6 @@ fn blame<T>(
     }
 }
 
-/// The one credential each companion has (as the manager's own map).
-fn own_field(id: &CompanionId) -> Option<Field> {
-    match id.as_str() {
-        lodestar_companions::configure::qbittorrent::ID => Some(Field::WebUiPassword),
-        lodestar_companions::configure::prowlarr::ID => Some(Field::ApiKey),
-        _ => None,
-    }
-}
-
 impl Service {
     fn entry(&self, id: &str) -> Result<&'static Entry, CompanionsError> {
         CompanionId::parse(id).map_err(|_| CompanionsError::Unknown)?;
@@ -565,15 +559,112 @@ impl Service {
         })
     }
 
-    /// Whether Lodestar installed it (the manager's snapshot, which
-    /// recovery fills from each journal at start).
-    fn installed(&self, id: &CompanionId) -> bool {
-        self.manager
-            .snapshot()
-            .borrow()
-            .companions
-            .iter()
-            .any(|c| &c.id == id && c.version.is_some())
+    /// The secrets file credentials are sealed with (CMP-5g-2's paste).
+    pub(crate) fn secrets(&self) -> Arc<SecretStore> {
+        self.secrets.clone()
+    }
+
+    /// Whether Lodestar owns `id` here, for CMP-5g-2's guided endpoints:
+    /// `Some("installed")` when its journal records an installed version,
+    /// `Some("busy")` while an install is under way (so a guided step
+    /// can't race CMP-5's first install), `None` otherwise. Inside a
+    /// container nothing is native. Blocking.
+    pub(crate) fn lodestar_owned(
+        &self,
+        id: &CompanionId,
+    ) -> Result<Option<&'static str>, CompanionsError> {
+        if self.host.in_container {
+            return Ok(None);
+        }
+        let home = self.data.join("companions").join(id.as_str());
+        match lodestar_companions::state::load(&home) {
+            Ok(Some(r)) if r.installed.is_some() => Ok(Some("installed")),
+            Ok(Some(r)) if r.op.is_some() => Ok(Some("busy")),
+            Ok(_) => Ok(None),
+            Err(_) => Err(CompanionsError::Internal("journal")),
+        }
+    }
+
+    /// The host's container detection, for detection's runtime.
+    pub(crate) fn in_container(&self) -> bool {
+        self.host.in_container
+    }
+
+    /// The catalogue it serves.
+    pub(crate) fn catalogue(&self) -> &'static Catalogue {
+        self.catalogue
+    }
+
+    /// Whether Lodestar installed it: its own journal (CMP-5's
+    /// `state.json`) records an installed version. Never the snapshot,
+    /// which detected companions join with a version too (CMP-6's
+    /// decisions). Inside a container nothing is native. Blocking.
+    fn installed(&self, id: &CompanionId) -> Result<bool, CompanionsError> {
+        if self.host.in_container {
+            return Ok(false);
+        }
+        let home = self.data.join("companions").join(id.as_str());
+        match lodestar_companions::state::load(&home) {
+            Ok(rec) => Ok(rec.is_some_and(|r| r.installed.is_some())),
+            Err(_) => Err(CompanionsError::Internal("journal")),
+        }
+    }
+
+    /// Whether `id`'s credential `field` is one Lodestar generated (Q5:
+    /// only that is ever revealed): the companion is one Lodestar
+    /// installed (its journal), or one you added whose credential's
+    /// provenance row says `generated` (a guided qBittorrent's replaced
+    /// password, CMP-5g-2). A pasted one is never. Blocking.
+    fn generated(&self, id: &CompanionId, field: Field) -> Result<bool, CompanionsError> {
+        if self.installed(id)? {
+            return Ok(true);
+        }
+        let rows = self.companion_rows()?;
+        Ok(Self::generated_in(&rows, id, field))
+    }
+
+    /// Every companion row, read in one query: a provenance and the
+    /// credential it describes are always seen together.
+    fn companion_rows(&self) -> Result<Vec<RawRow>, CompanionsError> {
+        self.rows
+            .0
+            .lock()
+            .map_err(|_| CompanionsError::Internal("store"))?
+            .settings_with_prefix_raw(lodestar_companions::credentials::ROW_PREFIX)
+            .map_err(|_| CompanionsError::Internal("store"))
+    }
+
+    fn generated_in(rows: &[RawRow], id: &CompanionId, field: Field) -> bool {
+        let text = |key: &str| {
+            rows.iter()
+                .find(|(k, _)| k == key)
+                .and_then(|(_, v)| v.as_ref().ok().cloned())
+        };
+        lodestar_companions::guided::provenance(id, field, text)
+            == Some(lodestar_companions::guided::Provenance::Generated)
+    }
+
+    /// The credential, when [`Service::generated`] allows it. For a
+    /// companion you added, the provenance and the sealed row come from
+    /// the same read, so a paste landing in between can't be shown.
+    /// Blocking.
+    fn revealable(&self, id: &CompanionId, f: Field) -> Result<Option<Secret>, CompanionsError> {
+        if self.installed(id)? {
+            return self.open(id, f);
+        }
+        let rows = self.companion_rows()?;
+        if !Self::generated_in(&rows, id, f) {
+            return Ok(None);
+        }
+        let key = CredentialKey::new(id.clone(), f);
+        let Some((_, Err(bytes))) = rows.into_iter().find(|(k, _)| *k == key.row_key()) else {
+            return Ok(None);
+        };
+        let sealed =
+            SealedSecret::from_bytes(bytes).map_err(|_| CompanionsError::Internal("sealed"))?;
+        credentials::open(&self.secrets, &key, &sealed)
+            .map(Some)
+            .map_err(|_| CompanionsError::Internal("sealed"))
     }
 
     fn input(&self, r: &TemplateRequest) -> Result<ServiceInput, CompanionsError> {
@@ -790,17 +881,14 @@ impl CompanionsApi for Service {
         Box::pin(async move {
             let e = self.entry(&id)?;
             let f = field(&name)?;
-            if own_field(&e.id) != Some(f) {
+            if field_of(&e.id) != Some(f) {
                 return Err(CompanionsError::NoCredential);
             }
             // Q5 is about generated credentials: only a companion Lodestar
             // installed has one. A pasted key or temporary password (a
             // guided or detected companion) is never shown again.
-            if !self.installed(&e.id) {
-                return Err(CompanionsError::NoCredential);
-            }
             let secret = self
-                .off(move |s| s.open(&e.id, f))
+                .off(move |s| s.revealable(&e.id, f))
                 .await?
                 .ok_or(CompanionsError::NoCredential)?;
             Ok(Revealed {
@@ -819,10 +907,11 @@ impl CompanionsApi for Service {
         Box::pin(async move {
             let e = self.entry(&id)?;
             let f = field(&name)?;
-            if own_field(&e.id) != Some(f)
-                || !self.installed(&e.id)
-                || !self.off(move |s| s.stored(&e.id)).await?.contains(&f)
-            {
+            let reachable = field_of(&e.id) == Some(f)
+                && self
+                    .off(move |s| Ok(s.generated(&e.id, f)? && s.stored(&e.id)?.contains(&f)))
+                    .await?;
+            if !reachable {
                 return Err(CompanionsError::NoCredential);
             }
             self.live
@@ -849,6 +938,34 @@ fn plan(e: &Entry, rows: &[String], removed: bool) -> RemovalPlan {
         id: e.id.as_str().to_owned(),
         removed,
     }
+}
+
+/// A [`Service`] over `store` and the compiled-in catalogue, on Linux
+/// x86-64, with nothing started: for the guided endpoints' tests.
+#[cfg(test)]
+pub(crate) fn test_service(
+    dir: &std::path::Path,
+    store: Arc<Mutex<Store>>,
+    in_container: bool,
+) -> Arc<Service> {
+    let catalogue = lodestar_companions::builtin().unwrap();
+    let host = Host {
+        platform: Some((
+            lodestar_companions::catalogue::Platform::Linux,
+            lodestar_companions::catalogue::Arch::X86_64,
+        )),
+        in_container,
+    };
+    let (m, secrets) = manager_with(dir.to_path_buf(), store.clone(), catalogue, host).unwrap();
+    Arc::new(Service {
+        manager: Arc::new(m),
+        catalogue,
+        host,
+        data: dir.to_path_buf(),
+        secrets,
+        rows: StoreRows(store),
+        live: Arc::new(Unwired),
+    })
 }
 
 #[cfg(test)]
@@ -1184,8 +1301,110 @@ mod tests {
             },
         )
         .unwrap();
+        assert!(s.installed(&CompanionId::parse(id).unwrap()).unwrap());
+    }
+
+    /// The installed check reads the journal, not the snapshot: a journal
+    /// recovery hasn't published yet counts, and a snapshot whose journal
+    /// is gone doesn't (CMP-6's decisions: detected companions join the
+    /// snapshot with a version).
+    #[tokio::test]
+    async fn installed_means_the_journal_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = service(dir.path(), pinned(), NATIVE, Arc::new(Unwired));
+        let qbt = CompanionId::parse("qbittorrent").unwrap();
+        assert!(!s.installed(&qbt).unwrap());
+        installed(&s, dir.path(), "qbittorrent").await;
+        let password = stored(&s, "qbittorrent", Field::WebUiPassword);
+        assert!(s.manager.snapshot().borrow().companions.is_empty());
+        let r = s
+            .reveal("qbittorrent".into(), "webui_password".into())
+            .await
+            .unwrap();
+        assert_eq!(r.value, password);
+        // Published, then the journal goes: the snapshot still lists it.
         s.manager.recover().await;
-        assert!(s.installed(&CompanionId::parse(id).unwrap()));
+        std::fs::remove_file(dir.path().join("companions/qbittorrent/state.json")).unwrap();
+        assert!(
+            s.manager
+                .snapshot()
+                .borrow()
+                .companions
+                .iter()
+                .any(|c| c.id == qbt && c.version.is_some())
+        );
+        assert_eq!(
+            s.reveal("qbittorrent".into(), "webui_password".into())
+                .await
+                .err(),
+            Some(CompanionsError::NoCredential)
+        );
+        // Inside a container nothing is native, whatever the journal says.
+        installed(&s, dir.path(), "qbittorrent").await;
+        let docker = Service {
+            host: Host {
+                in_container: true,
+                ..NATIVE
+            },
+            ..s.clone_parts()
+        };
+        assert!(!docker.installed(&qbt).unwrap());
+    }
+
+    /// Carry-over 2: a companion you added reveals its credential only
+    /// when its provenance says Lodestar generated it.
+    #[tokio::test]
+    async fn an_added_companions_credential_reveals_only_when_generated() {
+        use lodestar_companions::guided::{Provenance, provenance_key};
+        let dir = tempfile::tempdir().unwrap();
+        let s = service(dir.path(), pinned(), NATIVE, Arc::new(Unwired));
+        let password = stored(&s, "qbittorrent", Field::WebUiPassword);
+        let qbt = CompanionId::parse("qbittorrent").unwrap();
+        let key = provenance_key(&qbt, Field::WebUiPassword).unwrap();
+        let mark = |p: Provenance| {
+            s.rows
+                .0
+                .lock()
+                .unwrap()
+                .set_settings_text(&[(&key, p.as_str())])
+                .unwrap();
+        };
+        let reveal = || s.reveal("qbittorrent".into(), "webui_password".into());
+        assert_eq!(reveal().await.err(), Some(CompanionsError::NoCredential));
+        mark(Provenance::Pasted);
+        assert_eq!(reveal().await.err(), Some(CompanionsError::NoCredential));
+        mark(Provenance::Generated);
+        assert_eq!(reveal().await.unwrap().value, password);
+    }
+
+    /// The template guard's positive path (CMP-6's delta review): on a
+    /// native install the resolved data folder goes into the generator's
+    /// input, so a guard that resolved it and dropped it would fail here.
+    #[cfg(unix)]
+    #[test]
+    fn the_data_folder_reaches_the_template_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = service(dir.path(), pinned(), NATIVE, Arc::new(Unwired));
+        let req: TemplateRequest =
+            serde_json::from_value(serde_json::json!({"kind": "compose"})).unwrap();
+        let input = s.input(&req).unwrap();
+        let want = format!(
+            "{:?}",
+            DataFolders::none().with(DataFolder::from_running(dir.path()).unwrap())
+        );
+        assert_eq!(format!("{:?}", input.data), want);
+        assert_ne!(want, format!("{:?}", DataFolders::none()));
+        let docker = Service {
+            host: Host {
+                in_container: true,
+                ..NATIVE
+            },
+            ..s.clone_parts()
+        };
+        assert_eq!(
+            format!("{:?}", docker.input(&req).unwrap().data),
+            format!("{:?}", DataFolders::none())
+        );
     }
 
     /// Q5: a credential of a companion Lodestar didn't install is a pasted

@@ -6,12 +6,16 @@
     fleet.py reap            the hourly reaper (exempt from OPERATOR_STOP)
     fleet.py dispatch-down   the owner's workflow_dispatch down: no input,
                              never through the parser, pre-empts the lock
+    fleet.py pia-fence       just before deliver-pia: this run still holds
+                             the lock act kept, and the fleet allows it (OP-2b)
+    fleet.py pia-release     after deliver-pia, always: the conditional release
 
 Everything comes from the environment the workflow sets; comment text only
 through COMMENT_BODY. Logs carry fixed strings and counts, never a value from
 a secret, fleet.json's slots or an inventory ID. Dry-run uses an in-memory
 backend and lock; FLEET_LIVE=true switches to apply.py's live backend and the
-S3 lock (OP-2). In live mode `run <step>` refuses until OP-3 adds the steps.
+S3 lock (OP-2). In live mode `run <step>` refuses until OP-3 adds the steps,
+except `renew-vpn`, which chains into deliver-pia like `up` (OP-2b).
 """
 
 from __future__ import annotations
@@ -33,18 +37,21 @@ from lock import ACQUIRED, REAPING, FleetLock, LockLost, MemoryStore
 from reaper import DOWN, EMERGENCY, NONE, decide, only_down
 from state import DryRunBackend, FleetUnknown, LedgerUnreadable, new_fleet, validate
 from status import MARKER, render
+from timefmt import fmt
 
 REAPER_WAIT_SECONDS = 300
 
 
 class Ctx:
-    def __init__(self, env, backend, store, transport, clock, sleep, repo):
+    def __init__(self, env, backend, store, transport, clock, sleep, repo, step_io=None):
         self.env, self.repo = env, repo
+        self.step_io = step_io  # OP-3a: {"ssh", "my_ip"} for live steps; None means the real ones
         self.limits = limits_mod.load()
         self.live = env.get("FLEET_LIVE") == "true"
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.sleep = sleep or time.sleep
         self._backend, self._store, self._lock = backend, store, None
+        self.deliver = False  # act keeps the lock for deliver-pia (OP-2b)
         self.channel = None
         repo_name, pr, token = env.get("GITHUB_REPOSITORY", ""), env.get("CHANNEL_PR", ""), env.get("GITHUB_TOKEN", "")
         if _digits(pr) and repo_name and (transport or token):
@@ -204,6 +211,7 @@ def _execute(ctx: Ctx, cmd: Command, run_id: str, fleet) -> str:
         new = b.create(new_fleet(ctx.limits, cmd.preset, commit, now), ctx.fence(run_id))
         roles = ", ".join(new["roles"])
         cost = limits_mod.projected_usd(ctx.limits, cmd.preset)
+        ctx.deliver = True  # deliver-pia follows, under this run's lock
         return f"up {cmd.preset}: {would}create {roles}, pinned to main; expires {new['expires_at']}; at most ${cost:.2f}"
     if cmd.verb == "down":
         if not _down(ctx, run_id, fleet):
@@ -216,9 +224,29 @@ def _execute(ctx: Ctx, cmd: Command, run_id: str, fleet) -> str:
         return f"refused: run {cmd.step}: the fleet's pinned commit is not an ancestor of main"
     if cmd.commit is not None and not is_ancestor(cmd.commit, "origin/main", ctx.repo):
         return f"refused: run {cmd.step}: the commit is not an ancestor of main"
+    if cmd.step == "renew-vpn":
+        # The WireGuard step runs only inside deliver-pia (plan §3): this run keeps
+        # the lock, and the chained jobs fence, deliver and release it.
+        ctx.deliver = True
+        return f"run renew-vpn {cmd.vm}: {would}deliver the PIA login again (deliver-pia, under this run's lock)"
     if ctx.live:
-        return f"refused: run {cmd.step}: step not built (OP-3)"
+        return _run_live_step(ctx, cmd, run_id, fleet)
     return f"run {cmd.step} {cmd.vm}: would run the step at the fleet's pinned commit"
+
+
+def _run_live_step(ctx: Ctx, cmd: Command, run_id: str, fleet: dict) -> str:
+    """One committed step on one VM over SSH (OP-3a; steps/run.py)."""
+    from apply import fingerprint  # noqa: PLC0415
+    from steps import remote, run as steps  # noqa: PLC0415
+
+    io = ctx.step_io or {"ssh": remote.run_ssh, "my_ip": steps.checkip}
+    try:
+        line = steps.run_step(ctx.env, ctx.backend, fleet, cmd.step, cmd.vm, run_id, ctx.fence(run_id),
+                              ssh=io["ssh"], my_ip=io["my_ip"], emit=print, repo=ctx.repo, fingerprint=fingerprint,
+                              close_fence=_tolerant(ctx, run_id))
+    except remote.StepRefused as e:
+        return f"refused: run {cmd.step}: {e}"
+    return f"run {cmd.step} {cmd.vm}: {line}"
 
 
 def _on_main_head(repo: str) -> bool:
@@ -278,7 +306,19 @@ def cmd_act(ctx: Ctx) -> int:
         ctx.report("failed: fleet.json is invalid; escalate")
         return 1
     finally:
-        ctx.release(run_id, "act")
+        if not ctx.deliver:  # else pia-release releases it, after deliver-pia
+            ctx.release(run_id, "act")
+    if ctx.deliver:
+        try:
+            # The chain takes its mode from here, not the repository variable, so
+            # flipping FLEET_LIVE mid-chain can't send pia-release down the
+            # dry-run path and strand the live lock.
+            _write_outputs(ctx.env, deliver="true", live="true" if ctx.live else "false")
+        except Exception:  # noqa: BLE001 - without the output pia-release won't run
+            ctx.deliver = False
+            ctx.release(run_id, "act")
+            ctx.report(line + "; but the lock couldn't be handed to deliver-pia, so nothing was delivered; use run renew-vpn")
+            return 1
     ctx.report(line, with_status=True)
     ctx.status()
     return 0
@@ -428,17 +468,79 @@ def cmd_dispatch_down(ctx: Ctx) -> int:
     return 0
 
 
-COMMANDS = {"gate": cmd_gate, "refuse": cmd_refuse, "act": cmd_act, "reap": cmd_reap, "dispatch-down": cmd_dispatch_down}
+def _delivery_command(ctx: Ctx) -> bool:
+    """The comment again, through the same gates: only `up` and `run renew-vpn`
+    chain into deliver-pia."""
+    try:
+        cmd = gate(ctx.env, ctx.limits)
+    except (Gated, Refused):
+        return False
+    return cmd.verb == "up" or (cmd.verb == "run" and cmd.step == "renew-vpn")
 
 
-def main(argv=None, env=None, backend=None, store=None, transport=None, clock=None, sleep=None, repo=".") -> int:
+def cmd_pia_fence(ctx: Ctx) -> int:
+    """Just before deliver-pia (which can't reach the control bucket): this run
+    still holds the fleet lock, and the fleet is readable, recorded and not
+    overdue or mismatched. Fails the job otherwise, so deliver-pia is skipped."""
+    if ctx.env.get("GITHUB_RUN_ATTEMPT") != "1" or not _delivery_command(ctx):
+        print("pia-fence: refused")
+        return 1
+    if not ctx.live:
+        print("pia-fence: would check that this run still holds the fleet lock")
+        return 0
+    run_id = ctx.run_id()
+    try:
+        expires = ctx.lock.expires_at(run_id)
+        fleet, unknown = ctx.fleet()
+        if unknown or fleet is None or only_down(fleet, ctx.backend.mismatch(), ctx.clock()):
+            ctx.report("deliver-pia: refused: the fleet is unreadable, gone, overdue or mismatched")
+            return 1
+    except LockLost:
+        ctx.report("deliver-pia: refused: this run no longer holds the fleet lock; nothing delivered")
+        return 1
+    except ValueError:
+        ctx.report("deliver-pia: refused: fleet.json is invalid; escalate")
+        return 1
+    # deliver-pia refuses unless this lease outlasts its worst case (queue time
+    # and any wait on its environment come out of it). A timestamp, not a secret.
+    _write_outputs(ctx.env, lock_expires=fmt(expires))
+    print("pia-fence: this run holds the fleet lock")
+    return 0
+
+
+def cmd_pia_release(ctx: Ctx) -> int:
+    """After deliver-pia, whatever it did: a conditional delete that succeeds
+    only while the lock still holds this run's ID."""
+    if ctx.env.get("GITHUB_RUN_ATTEMPT") != "1":
+        print("pia-release: refused")
+        return 1
+    if not ctx.live:
+        print("pia-release: would release this run's fleet lock")
+        return 0
+    run_id = ctx.run_id()
+    try:
+        released = ctx.lock.release(run_id)
+    except Exception:  # noqa: BLE001 - the lock then expires on its own
+        ctx.report("pia-release: couldn't release the fleet lock; it expires on its own; escalate")
+        return 1
+    print("pia-release: released" if released else "pia-release: not this run's lock any more; nothing to release")
+    ctx.status()
+    return 0
+
+
+COMMANDS = {"gate": cmd_gate, "refuse": cmd_refuse, "act": cmd_act, "reap": cmd_reap, "dispatch-down": cmd_dispatch_down,
+            "pia-fence": cmd_pia_fence, "pia-release": cmd_pia_release}
+
+
+def main(argv=None, env=None, backend=None, store=None, transport=None, clock=None, sleep=None, repo=".",
+         step_io=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     env = dict(os.environ) if env is None else env
     if len(argv) != 1 or argv[0] not in COMMANDS:
         print("usage: fleet.py " + "|".join(COMMANDS), file=sys.stderr)
         return 2
     try:
-        return COMMANDS[argv[0]](Ctx(env, backend, store, transport, clock, sleep, repo))
+        return COMMANDS[argv[0]](Ctx(env, backend, store, transport, clock, sleep, repo, step_io))
     except SystemExit:
         raise
     except Exception as e:  # noqa: BLE001 - a traceback could carry private values

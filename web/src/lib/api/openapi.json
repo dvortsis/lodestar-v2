@@ -876,6 +876,75 @@
         ]
       }
     },
+    "/companions/detect": {
+      "post": {
+        "tags": [
+          "companions"
+        ],
+        "summary": "Runs detection on its fixed targets and lists what answered.",
+        "operationId": "detectCompanions",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectedCompanions"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`busy`: detection is already running.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: not JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`companions_unavailable`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/companions/{id}": {
       "get": {
         "tags": [
@@ -917,6 +986,116 @@
           },
           "503": {
             "description": "`companions_unavailable`: companions are off in this process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/companions/{id}/confirm": {
+      "post": {
+        "tags": [
+          "companions"
+        ],
+        "summary": "Applies the plan you were shown (its settings echoed exactly), replaces\nthe temporary password with a generated one, and adds qBittorrent to\nIntegrations as `lodestar-qbittorrent`.",
+        "operationId": "confirmCompanionConfiguration",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The catalogue id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanionConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Companion"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_companion`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`confirmation_mismatch`, `no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, `sign_in_refused`, `target_changed`, or the companion's own refusal code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: not JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`bad_body`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`companions_unavailable`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1174,6 +1353,116 @@
         ]
       }
     },
+    "/companions/{id}/guided/forget": {
+      "post": {
+        "tags": [
+          "companions"
+        ],
+        "summary": "Deletes Lodestar's record of a companion you added and its stored\ncredential. `confirm` must name it. The Integrations entry stays. A\ngenerated credential is the password qBittorrent uses once it's set:\nreveal it first if you'll sign in to qBittorrent yourself\n(`credential_in_use` says it was one).",
+        "operationId": "forgetCompanion",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The catalogue id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanionForgetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanionForgotten"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_companion`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`confirmation_mismatch`, `installed`, `busy`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: not JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`bad_body`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`companions_unavailable`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/companions/{id}/install": {
       "get": {
         "tags": [
@@ -1403,6 +1692,219 @@
           },
           "503": {
             "description": "`companions_unavailable`: companions are off in this process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/companions/{id}/paste": {
+      "post": {
+        "tags": [
+          "companions"
+        ],
+        "summary": "Seals qBittorrent's temporary WebUI password (Q19). Answers `204`; the\nvalue is never shown again or logged.",
+        "operationId": "pasteCompanionCredential",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The catalogue id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanionPasteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Sealed."
+          },
+          "400": {
+            "description": "`bad_value` with `field`: empty, too long, or not printable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_companion`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`no_target`, `handover_later`, `installed`, `already_added`, `generated_pending` (a new password may already be qBittorrent's: confirm again, or reveal it first), `busy`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: not JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`bad_body`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`companions_unavailable`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/companions/{id}/plan": {
+      "post": {
+        "tags": [
+          "companions"
+        ],
+        "summary": "The settings Lodestar would change, by name. Signs in to qBittorrent\nwith the temporary password, so at most one a minute.",
+        "operationId": "planCompanionConfiguration",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The catalogue id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanionPlan"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_companion`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`no_target`, `no_temporary_password`, `handover_later`, `installed`, `busy`, `sign_in_refused` (three refused sign-ins in a row), `target_changed`, or the companion's own refusal code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: not JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`, with `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`companions_unavailable`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1671,6 +2173,126 @@
           },
           "503": {
             "description": "`companions_unavailable`: companions are off in this process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/companions/{id}/target": {
+      "post": {
+        "tags": [
+          "companions"
+        ],
+        "summary": "Adds the companion at `target`, once detection confirms it answers\nthere as itself.",
+        "operationId": "setCompanionTarget",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The catalogue id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanionTarget"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectedCompanion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`bad_template_input` with `field`: a port or address that can't be used.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_companion`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`not_detected`, `address_refused`, `handover_later`, `installed`, `already_added`, `generated_pending`, `busy`, or the companion's own refusal code (`companion_unreachable`, `companion_unauthorized`, `companion_protocol`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: not JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`bad_body`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`companions_unavailable`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7264,7 +7886,7 @@
         "tags": [
           "settings"
         ],
-        "summary": "Restarts Lodestar: a graceful shutdown (the queue, DHT state and last\ncommit are saved), then the same program again. It answers first;\npoll `/healthz` until it's back. `409 restart_unavailable` where it\ncan't restart itself, with how to restart instead.",
+        "summary": "Restarts Lodestar: a graceful shutdown (the queue, DHT state and last\ncommit are saved), then the same program again. It answers first;\npoll `/healthz` until it's back. `409 restart_unavailable` where it\ncan't restart itself, with how to restart instead; `409\nrestart_failed` when it couldn't get ready to (the portable build\ncouldn't start its new copy), and it keeps running.",
         "operationId": "restartSystem",
         "responses": {
           "202": {
@@ -7278,7 +7900,7 @@
             }
           },
           "409": {
-            "description": "`restart_unavailable`: restart it the way it was started (the message says how).",
+            "description": "`restart_unavailable`: restart it the way it was started (the message says how). `restart_failed`: it couldn't get ready to restart (the portable build couldn't start its new copy), so it's still running.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12024,6 +12646,59 @@
           }
         }
       },
+      "CompanionConfirmRequest": {
+        "type": "object",
+        "description": "`POST /companions/{id}/confirm`: the plan's settings, echoed exactly.",
+        "required": [
+          "settings"
+        ],
+        "properties": {
+          "settings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "CompanionForgetRequest": {
+        "type": "object",
+        "description": "`POST /companions/{id}/guided/forget`: `confirm` is the companion's id.",
+        "required": [
+          "confirm"
+        ],
+        "properties": {
+          "confirm": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CompanionForgotten": {
+        "type": "object",
+        "description": "What forgetting a companion you added deleted: Lodestar's record of it\nand its stored credential, by `settings` key. The download client entry\nin Integrations stays.",
+        "required": [
+          "credential_in_use",
+          "deleted",
+          "id"
+        ],
+        "properties": {
+          "credential_in_use": {
+            "type": "boolean",
+            "description": "The deleted credential was one Lodestar generated, which is, or may\nbe, the password qBittorrent uses now. Reveal it before forgetting\nif you'll need to sign in to qBittorrent yourself."
+          },
+          "deleted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string"
+          }
+        }
+      },
       "CompanionInstallRequest": {
         "type": "object",
         "description": "`POST /companions/{id}/install`: the offer's version and SHA-256,\nechoed. Anything else is `409 confirmation_mismatch`.",
@@ -12074,6 +12749,104 @@
             "description": "Oldest first."
           }
         }
+      },
+      "CompanionPasteRequest": {
+        "type": "object",
+        "description": "`POST /companions/{id}/paste`: qBittorrent's temporary WebUI password\n(Q19), sealed at once and never shown again.",
+        "required": [
+          "value"
+        ],
+        "properties": {
+          "value": {
+            "type": "string",
+            "example": "(pasted from qBittorrent's log)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CompanionPlan": {
+        "type": "object",
+        "description": "The settings a configuration changes, by name (never a value), shown\nbefore you confirm.",
+        "required": [
+          "id",
+          "settings"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "settings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Setting names, such as `webui.password` or `downloads.save_path`."
+          }
+        }
+      },
+      "CompanionTarget": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "port",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "loopback"
+                ]
+              },
+              "port": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Its catalogue container name, on Docker's network (only when\nLodestar runs in a container).",
+            "required": [
+              "port",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "container"
+                ]
+              },
+              "port": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "url",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "url"
+                ]
+              },
+              "url": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Where a companion is: loopback or Docker's network on one of its\ncatalogue ports, or an address you typed (`http`/`https`, no user name\nor password, query or fragment)."
       },
       "CompanionTemplate": {
         "type": "object",
@@ -13047,6 +13820,44 @@
               "tarball",
               "unknown"
             ]
+          }
+        }
+      },
+      "DetectedCompanion": {
+        "type": "object",
+        "description": "A companion detection found.",
+        "required": [
+          "id",
+          "target",
+          "version"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/CompanionTarget"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The version it reports, when it reports one."
+          }
+        }
+      },
+      "DetectedCompanions": {
+        "type": "object",
+        "required": [
+          "found"
+        ],
+        "properties": {
+          "found": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DetectedCompanion"
+            }
           }
         }
       },

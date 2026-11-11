@@ -26,11 +26,14 @@
 //!   SCM's recovery action starts it again after 60 s. It's offered only
 //!   while Lodestar's own count of recoveries used in the last 24 h is 0
 //!   ([`Restart::refuse`] otherwise), so a crash always has one left.
-//! - **Windows portable: `relaunch`.** The request first starts a new copy
-//!   of the same program with the same arguments, which waits until this
-//!   process hands over and exits ([`crate::windows::relaunch`]). If that
-//!   copy can't be started, the request is dropped and this run keeps
-//!   serving. After the graceful shutdown, [`reexec`] hands over and exits.
+//! - **Windows portable: `relaunch`.** A new copy of the same program with
+//!   the same arguments is started first, which waits until this process
+//!   hands over and exits ([`crate::windows::relaunch`]). `POST
+//!   /system/restart` starts it before answering ([`Restart::prepare`]), so
+//!   a copy that can't be started is a `409 restart_failed` and this run
+//!   keeps serving; any other request (the address timer) starts it in
+//!   [`Restart::request`] and drops the request if it can't. After the
+//!   graceful shutdown, [`reexec`] hands over and exits.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -62,6 +65,13 @@ pub struct Restart {
     /// successor there); an error drops the request and this run keeps
     /// serving.
     prepare: Mutex<Option<Prepare>>,
+    /// The step has run for the coming request ([`Restart::prepare`]), so
+    /// [`Restart::request`] doesn't run it again.
+    prepared: AtomicBool,
+    /// This process is a copy started by Restart now, as its environment
+    /// said when this was made: `main` makes it first thing, before
+    /// anything else runs, so a later change can't hide it.
+    relaunched: bool,
 }
 
 impl std::fmt::Debug for Restart {
@@ -97,7 +107,15 @@ impl Restart {
             service: AtomicBool::new(false),
             paused: Mutex::new(None),
             prepare: Mutex::new(None),
+            prepared: AtomicBool::new(false),
+            relaunched: relaunched_here(),
         }
+    }
+
+    /// This process is a copy started by Restart now (the portable build's
+    /// relaunch), as recorded when it started.
+    pub fn relaunched(&self) -> bool {
+        self.relaunched
     }
 
     /// Not offered until Unix time `until`, with `why` as the hint
@@ -177,6 +195,13 @@ impl Restart {
         }
     }
 
+    /// Whether this run got as far as listening ([`Restart::listening`]):
+    /// a failure after that isn't a failure at start.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn has_listened(&self) -> bool {
+        self.start_secs.load(Ordering::Relaxed) > 0
+    }
+
     /// Unix seconds `serve` began; now if it hasn't.
     pub fn started_at(&self) -> u64 {
         self.started
@@ -241,11 +266,39 @@ impl Restart {
         }
     }
 
+    /// Readies a request before it's made, so a caller can refuse instead of
+    /// promising a restart that won't come (`POST /system/restart` answers
+    /// `409 restart_failed`). For [`RestartMethod::Relaunch`] it runs the
+    /// [`Restart::set_prepare`] step (the portable build starts its new
+    /// copy), once: later calls, and the [`Restart::request`] that follows,
+    /// don't run it again. An error is logged (`app.restart_failed`) and
+    /// returned, and nothing stops. Elsewhere there's nothing to ready.
+    pub fn prepare(&self) -> std::io::Result<()> {
+        let mut prepare = self.prepare.lock().unwrap_or_else(|e| e.into_inner());
+        if self.method() != RestartMethod::Relaunch
+            || self.was_requested()
+            || self.prepared.load(Ordering::SeqCst)
+        {
+            return Ok(());
+        }
+        if let Some(step) = prepare.as_mut()
+            && let Err(e) = step()
+        {
+            lodestar_log::log_event!(
+                crate::logging::events::APP_RESTART_FAILED,
+                error = lodestar_log::Error::io(&e)
+            );
+            return Err(e);
+        }
+        self.prepared.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
     /// Asks for a restart; [`Restart::requested`] resolves. Asking twice is
     /// asking once. For [`RestartMethod::Relaunch`], a
-    /// [`Restart::set_prepare`] step runs first, under a lock so two
-    /// requests can't both run it; if it fails the request is dropped and
-    /// this run keeps serving.
+    /// [`Restart::set_prepare`] step runs first unless [`Restart::prepare`]
+    /// already ran it, under a lock so two requests can't both run it; if
+    /// it fails the request is dropped and this run keeps serving.
     pub fn request(&self) {
         {
             let mut prepare = self.prepare.lock().unwrap_or_else(|e| e.into_inner());
@@ -265,6 +318,7 @@ impl Restart {
                 return;
             }
             if self.method() == RestartMethod::Relaunch
+                && !self.prepared.load(Ordering::SeqCst)
                 && let Some(step) = prepare.as_mut()
                 && let Err(e) = step()
             {
@@ -299,6 +353,20 @@ impl Restart {
             }
             notified.await;
         }
+    }
+}
+
+/// Whether this process was started by Restart now: its environment holds
+/// the relaunch token. Off Windows there's no relaunch.
+fn relaunched_here() -> bool {
+    #[cfg(windows)]
+    {
+        // As `wait_if_successor`: an empty token isn't one.
+        std::env::var(crate::windows::relaunch::MARKER).is_ok_and(|t| !t.is_empty())
+    }
+    #[cfg(not(windows))]
+    {
+        false
     }
 }
 
@@ -350,16 +418,130 @@ pub(crate) fn program(
 
 /// Windows portable ([`RestartMethod::Relaunch`]): this process has shut
 /// down gracefully, so the copy started at the request takes over, and
-/// this process exits. Returns only if no copy could take over; `serve`
-/// then fails and the process exits non-zero.
+/// this process exits with [`EXIT_RELAUNCHED`], so `Start Lodestar.cmd`
+/// can tell a restart from a stop and say the new copy runs on in its
+/// window.
+/// Returns only if no copy could take over; `serve` then fails and the
+/// process exits non-zero.
 #[cfg(windows)]
 pub fn reexec() -> std::io::Error {
     match crate::windows::relaunch::hand_over() {
         // Like `exec`, nothing after this runs: the services have stopped
         // and logs are written as they happen.
-        Ok(()) => std::process::exit(0),
+        Ok(()) => std::process::exit(EXIT_RELAUNCHED),
         Err(e) => e,
     }
+}
+
+/// The portable build's exit code once a new copy has taken over: 80, as
+/// the Unix supervisor's `EXIT_RESTART` and the service's code, so "80"
+/// means a restart on every platform. `Start Lodestar.cmd` reads it.
+/// Defined everywhere (that module is Unix-only, this code Windows-only)
+/// so a Unix test pins the two equal.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub const EXIT_RELAUNCHED: i32 = 80;
+
+/// Set to `1` by `Start Lodestar.cmd`, which runs in a window someone can
+/// see; `lodestar.exe` and the copy Restart now starts inherit it. A run
+/// started any other way (Task Scheduler, a service wrapper, a hidden
+/// console) doesn't have it, so a failure there never waits (#651's
+/// review).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub const WINDOW_ENV: &str = "LODESTAR_PORTABLE_WINDOW";
+
+/// The longest a failed relaunch waits for Enter, so it can never hang.
+#[cfg_attr(not(windows), allow(dead_code))]
+const HOLD_LIMIT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// For `main`, around everything it runs: a copy started by Restart now
+/// (`relaunched`, read by `main` before anything else runs, so a config
+/// that fails early still counts: [`Restart::relaunched`]) that fails at
+/// start (before it was listening) in `Start Lodestar.cmd`'s window
+/// ([`WINDOW_ENV`]) says where the error and the log are and waits for
+/// Enter, for at most [`HOLD_LIMIT`], before the process exits. The
+/// launcher has already ended after the hand-over (exit 80), so without
+/// this the window would close before anyone read why (#649's review).
+/// Anything else (a success, a failure after it was serving, a run not
+/// started by Restart now or not in the launcher's window, no console)
+/// returns at once.
+pub fn hold_if_relaunch_failed(
+    relaunched: bool,
+    code: std::process::ExitCode,
+) -> std::process::ExitCode {
+    #[cfg(windows)]
+    {
+        let window = std::env::var(WINDOW_ENV).is_ok_and(|v| v == "1");
+        if should_hold(
+            relaunched,
+            code == std::process::ExitCode::SUCCESS,
+            Restart::global().has_listened(),
+            window,
+        ) && let Ok(console) = std::fs::File::open("CONIN$")
+        {
+            let logs = log_folder();
+            prompt(logs.as_deref(), &mut std::io::stderr());
+            let _ = wait_line_for(std::io::BufReader::new(console), HOLD_LIMIT);
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = relaunched;
+    code
+}
+
+/// The log folder: the one the log file opened in this run (a folder moved
+/// in the app is honoured), or else the config's default, `<data>\logs`,
+/// from the same `--config`; `None` if neither is known.
+#[cfg(windows)]
+fn log_folder() -> Option<std::path::PathBuf> {
+    if let Some(opened) = crate::logging::runtime().and_then(|rt| rt.opened_folder()) {
+        return Some(opened);
+    }
+    let path = crate::windows::service::service_command(std::env::args_os())?;
+    let config = crate::config::Config::load(path.as_deref(), |k| std::env::var(k).ok()).ok()?;
+    let logs = config.data_dir.join("logs");
+    Some(std::path::absolute(&logs).unwrap_or(logs))
+}
+
+/// Whether [`hold_if_relaunch_failed`] waits: a relaunched copy that
+/// failed at start, in the launcher's window.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn should_hold(relaunched: bool, succeeded: bool, listened: bool, window: bool) -> bool {
+    relaunched && !succeeded && !listened && window
+}
+
+/// Says where to look.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn prompt(logs: Option<&std::path::Path>, out: &mut impl std::io::Write) {
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "Lodestar couldn't start again after Restart now. The error is above."
+    );
+    if let Some(logs) = logs {
+        let _ = writeln!(out, "The log is in {}.", logs.display());
+    }
+    let _ = write!(out, "Press Enter to close this window.");
+    let _ = out.flush();
+}
+
+/// Reads one line from `input` (an end of file or an error counts) on a
+/// thread of its own, waiting at most `limit`: whether it came in time. A
+/// read still blocked at the deadline is left behind; the process is about
+/// to exit.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn wait_line_for(
+    mut input: impl std::io::BufRead + Send + 'static,
+    limit: std::time::Duration,
+) -> bool {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new()
+        .name("relaunch-hold".into())
+        .spawn(move || {
+            let mut line = String::new();
+            let _ = input.read_line(&mut line);
+            let _ = tx.send(());
+        });
+    spawned.is_ok() && rx.recv_timeout(limit).is_ok()
 }
 
 /// Elsewhere it can't ([`RestartMethod::Manual`]): the request is refused
@@ -504,6 +686,47 @@ mod tests {
         assert!(s.was_requested());
     }
 
+    /// X-win-restart-followups: `POST /system/restart` readies a relaunch
+    /// before answering. A copy that can't be started is an error and
+    /// nothing is requested; once one has started, neither a second
+    /// `prepare` nor the request starts another. Other methods have
+    /// nothing to ready.
+    #[test]
+    fn a_relaunch_starts_its_copy_before_the_answer() {
+        use std::sync::atomic::AtomicUsize;
+        let r = Restart::new(RestartMethod::Relaunch);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let fail = Arc::new(AtomicBool::new(true));
+        r.set_prepare(Box::new({
+            let (calls, fail) = (calls.clone(), fail.clone());
+            move || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                if fail.load(Ordering::SeqCst) {
+                    Err(std::io::Error::other("spawn failed"))
+                } else {
+                    Ok(())
+                }
+            }
+        }));
+        assert!(r.prepare().is_err());
+        assert!(!r.was_requested(), "a failed copy requests nothing");
+        fail.store(false, Ordering::SeqCst);
+        assert!(r.prepare().is_ok());
+        assert!(r.prepare().is_ok());
+        r.request();
+        assert!(r.was_requested());
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "one failure, one copy");
+        for method in [RestartMethod::Reexec, RestartMethod::Manual] {
+            let other = Restart::new(method);
+            other.set_prepare(Box::new(|| Err(std::io::Error::other("unused"))));
+            assert!(other.prepare().is_ok());
+        }
+        let service = Restart::new(RestartMethod::Relaunch);
+        service.set_service();
+        service.set_prepare(Box::new(|| Err(std::io::Error::other("unused"))));
+        assert!(service.prepare().is_ok());
+    }
+
     #[cfg(unix)]
     #[test]
     fn an_upgraded_binary_is_run_from_its_path() {
@@ -516,6 +739,83 @@ mod tests {
         assert_eq!(installed, Path::new("/usr/bin/lodestar"));
         let gone = program(PathBuf::from("/opt/lodestar (deleted)"), |_| false);
         assert_eq!(gone, Path::new("/proc/self/exe"));
+    }
+
+    /// #649's and #651's reviews: only a relaunched copy that failed at
+    /// start (before listening), in the launcher's window, waits.
+    #[test]
+    fn only_a_failed_relaunch_at_start_in_the_window_holds() {
+        assert!(should_hold(true, false, false, true));
+        for (relaunched, succeeded, listened, window) in [
+            (true, true, false, true),
+            (false, false, false, true),
+            (true, false, true, true),
+            (true, false, false, false),
+        ] {
+            assert!(!should_hold(relaunched, succeeded, listened, window));
+        }
+        let mut out = Vec::new();
+        prompt(
+            Some(std::path::Path::new("D:/Lodestar/data/logs")),
+            &mut out,
+        );
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.contains("couldn't start again after Restart now"),
+            "{text}"
+        );
+        assert!(
+            text.contains("The log is in D:/Lodestar/data/logs."),
+            "{text}"
+        );
+        assert!(
+            text.ends_with("Press Enter to close this window."),
+            "{text}"
+        );
+        // Off Windows the wrapper is the identity. (On Windows it would
+        // wait on a developer's console; `windows_service.rs` tests it.)
+        #[cfg(not(windows))]
+        {
+            assert!(!Restart::new(RestartMethod::Relaunch).relaunched());
+            let code = hold_if_relaunch_failed(true, std::process::ExitCode::FAILURE);
+            assert_eq!(code, std::process::ExitCode::FAILURE);
+        }
+    }
+
+    /// The wait ends with a line or an end of file, and at the deadline
+    /// when nothing comes: it can never hang (#651's review).
+    #[test]
+    fn the_hold_has_a_deadline() {
+        use std::io::Cursor;
+        let limit = Duration::from_secs(10);
+        assert!(wait_line_for(Cursor::new(b"\n".to_vec()), limit));
+        assert!(wait_line_for(Cursor::new(Vec::new()), limit));
+        // A pipe whose writer stays open: nothing ever comes.
+        let (reader, _writer) = std::io::pipe().unwrap();
+        let started = std::time::Instant::now();
+        assert!(!wait_line_for(
+            std::io::BufReader::new(reader),
+            Duration::from_millis(200)
+        ));
+        assert!(started.elapsed() >= Duration::from_millis(200));
+        assert!(started.elapsed() < limit);
+    }
+
+    #[test]
+    fn listening_marks_the_start_done() {
+        let r = Restart::new(RestartMethod::Relaunch);
+        assert!(!r.has_listened());
+        r.started();
+        r.listening();
+        assert!(r.has_listened());
+    }
+
+    /// "80" means a restart everywhere: the portable build's code is the
+    /// supervisor's (#649's review).
+    #[cfg(unix)]
+    #[test]
+    fn the_relaunch_exit_code_is_the_restart_code() {
+        assert_eq!(EXIT_RELAUNCHED, crate::update::control::EXIT_RESTART);
     }
 
     #[test]

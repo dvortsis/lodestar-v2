@@ -4,7 +4,7 @@
 
 | File | What it does |
 |---|---|
-| `fleet.py` | Entry point: `gate`, `refuse`, `act`, `reap`, `dispatch-down` |
+| `fleet.py` | Entry point: `gate`, `refuse`, `act`, `reap`, `dispatch-down`, and `pia-fence` and `pia-release` around `deliver-pia` (OP-2b; `infra/pia-bridge/`) |
 | `command.py` | The strict `/fleet` parser |
 | `gates.py` | Channel PR, `created` only, the bot's numeric ID, `OPERATOR_STOP` (not for `down`) |
 | `reader.py` | The operator's thread reader: unedited comments from allowed author IDs only |
@@ -17,6 +17,8 @@
 | `apply.py` | Live mode: the Terraform entry point (S3 backend, pinned per fleet, never `force-unlock`), host keys, and the live backend (tombstoned `fleet.json`, spend ledger, mismatch flag) |
 | `linode.py` | A standard-library Linode client limited to `lodestar`-tagged resources in the fleet's account |
 | `audit.py` | Job SSH rules, the stale-rule sweep and the hourly firewall audit |
+| `steps/remote.py`, `steps/run.py` | Live `run <step> <vm>` (OP-3a): the target from `fleet.json`, the step files at the fleet's pinned commit, the job's own `/32`, one pinned SSH session under the VM's lock, and an output grammar that drops everything else |
+| `steps/vm/` | The VM side: `compose.yaml` (gluetun by digest, Lodestar in its namespace), `vm-status.sh` and `leak-test.sh` |
 
 Live mode installs `requirements-live.txt` (boto3, pinned by hash) only when `FLEET_LIVE=true`.
 

@@ -72,16 +72,16 @@ class MemoryStore:
 class S3Store:  # pragma: no cover - live only; nothing constructs it in CI
     """Live store. Errors carry no bucket name or key beyond the fixed prefix."""
 
-    def __init__(self, bucket: str, live: bool, client=None):
+    def __init__(self, bucket: str, live: bool, client):
         if not live:
             raise RuntimeError("S3Store is live-only (FLEET_LIVE=true, OP-2)")
-        import boto3  # noqa: PLC0415 - only on the live path
-        from botocore.exceptions import ClientError  # noqa: PLC0415
+        # Only ever the owner-checked client apply.live_context builds (P8): never a
+        # bare boto3 client that would skip ExpectedBucketOwner.
+        if client is None:
+            raise RuntimeError("S3Store needs the owner-checked S3 client")
+        from botocore.exceptions import ClientError  # noqa: PLC0415 - only on the live path
 
-        try:
-            self._s3 = client if client is not None else boto3.client("s3")
-        except Exception:
-            raise RuntimeError("S3 client setup failed") from None
+        self._s3 = client
         self._bucket, self._err = bucket, ClientError
 
     def _cond(self, fn, **kw) -> bool:
@@ -152,7 +152,7 @@ class FleetLock:
             return ACQUIRED
         cur = self.store.get(LOCK_KEY)
         if cur is None:  # released between the two calls; one more try
-            return ACQUIRED if self.store.put_if_absent(LOCK_KEY, body) else BUSY
+            return ACQUIRED if self.store.put_if_absent(LOCK_KEY, body) or self._ours(run_id) else BUSY
         holder = _decode(cur[0])
         if holder is None:  # unreadable: fail closed; the reaper can pre-empt it
             return BUSY
@@ -162,13 +162,31 @@ class FleetLock:
                 # 412): it's ours, so don't strand it for the lease.
                 return ACQUIRED
             return REAPING if holder.kind == "reaping" else BUSY
-        return ACQUIRED if self.store.put_if_match(LOCK_KEY, body, cur[1]) else BUSY
+        return ACQUIRED if self.store.put_if_match(LOCK_KEY, body, cur[1]) or self._ours(run_id) else BUSY
+
+    def _ours(self, run_id: str) -> bool:
+        """After a conditional put that answered no: read once more. A live
+        `run` holder with our ID means the put landed and only its answer was
+        lost, so the lock is ours; anything else isn't. A failed read raises,
+        as any lock read does, and the caller fails closed."""
+        cur = self.store.get(LOCK_KEY)
+        holder = _decode(cur[0]) if cur else None
+        return holder is not None and holder.kind == "run" and holder.run_id == run_id \
+            and holder.expires_at > self.clock()
 
     def holds(self, run_id: str) -> bool:
         """This run holds the lock and its own lease hasn't expired."""
         cur = self.store.get(LOCK_KEY)
         holder = _decode(cur[0]) if cur else None
         return holder is not None and holder.run_id == run_id and holder.expires_at > self.clock()
+
+    def expires_at(self, run_id: str):
+        """This run's lease end while it holds the lock; otherwise LockLost."""
+        cur = self.store.get(LOCK_KEY)
+        holder = _decode(cur[0]) if cur else None
+        if holder is None or holder.run_id != run_id or holder.expires_at <= self.clock():
+            raise LockLost("fleet lock lost")
+        return holder.expires_at
 
     def fence(self, run_id: str) -> None:
         if not self.holds(run_id):
