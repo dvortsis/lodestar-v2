@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T12:16:21Z",
+  "updated_at": "2026-11-11T12:19:17Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6766,8 +6766,9 @@
     "owner \u00a72.19 flag sent? PK-guide-1 omitted Q12 2nd sentence (safe restart unreleased in v0.5.1) -> include in next owner FYI",
     "next runner PR: add X-cmp-handover-followups (Opus, core; deps [X-cmp-native-handover]; owns per briefs/X-cmp-handover-followups.md) to slices.yaml",
     "user docs (CMP guide slice): Restart re-adds a managed qBittorrent entry the user deleted on purpose",
-    "next runner PR also: X-win-upd-window owns (check.rs, portable.rs, main.rs serve::stopped, PK-win-portable-upd decisions, its own) and X-cmp-handover-followups; PK-smoke #683 leftovers: packaging/windows/README.md python note; package-linux stale step name",
-    "next runner PR: X-win-upd-window owns += web/src/lib/features/settings/updates/messages/{en,zh}.json, updates/updates.test.ts, crates/api notice-code doc comment, web/src/lib/api/openapi.json + schema.d.ts (regenerated) \u2014 runner approved option (a) 2026-11-11"
+    "next runner PR: X-win-upd-window owns += web/src/lib/features/settings/updates/messages/{en,zh}.json, updates/updates.test.ts, crates/api notice-code doc comment, web/src/lib/api/openapi.json + schema.d.ts (regenerated) \u2014 runner approved option (a) 2026-11-11",
+    "next runner PR: X-smoke-polish entry (Sonnet helper; deps [PK-smoke]; owns per briefs/X-smoke-polish.md); X-win-upd-window, X-win-upd-reoffer, X-cmp-handover-followups, X-e2e-baseline-refresh entries/owns",
+    "owner FYI pending: PK-smoke \u00a72.19 calls (MSI smoke runs installed exe on a temp data dir, not via the service; DHT on in every smoke) + PK-guide-1 omitted Q12 second sentence"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7500,7 +7501,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T12:16:21Z",
+    "updated": "2026-11-11T12:19:17Z",
     "items": [
       {
         "slot": 1,
@@ -7552,11 +7553,11 @@
       },
       {
         "slot": 7,
-        "slice": "PK-smoke",
+        "slice": "X-smoke-polish",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCVGtYWSJVrREyne22: M6 exit smoke setup->crawl->import->search on Docker/tarball/MSI/zip (Sonnet, /security-review on release.yml), same session after #682 merged 49468a1b",
-        "since": "2026-11-11T11:42:59Z"
+        "doing": "session_01MMjhnCVGtYWSJVrREyne22: PK-smoke review nits (password wording, state cleanup, no proxy, Windows redaction) (Sonnet), same session after #683 merged 503a1575",
+        "since": "2026-11-11T12:19:17Z"
       },
       {
         "slot": 8,
