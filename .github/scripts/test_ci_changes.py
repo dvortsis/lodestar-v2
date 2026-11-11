@@ -44,11 +44,13 @@ class Infra(unittest.TestCase):
     def test_only_infra_paths_match(self):
         for f in ["infra/aws/expiration-guard/deployed/index.py", "infra/akamai/terraform/main.tf",
                   "infra/akamai/terraform/scripts/Deploy.ps1", ".github/workflows/fleet.yml",
-                  ".github/workflows/operator-wake.yml", ".github/workflows/operator-injection.yml"]:
+                  ".github/workflows/operator-wake.yml", ".github/workflows/operator-injection.yml",
+                  ".github/workflows/operator-apply.yml", ".github/workflows/operator-tripwire.yml",
+                  ".github/workflows/operator-tripwire-sweep.yml"]:
             self.assertTrue(ci_changes.INFRA.match(f), f)
         for f in ["docs/operations/lodestar-cloud-assets.md", ".agents/skills/lodestar-fleet/SKILL.md",
                   "crates/infra/src/lib.rs", "web/src/infra.ts", ".github/workflows/fleet.yml.bak",
-                  ".github/workflows/operator-apply.yml"]:
+                  ".github/workflows/operator-other.yml", ".github/workflows/operator-tripwire.yml.bak"]:
             self.assertFalse(ci_changes.INFRA.match(f), f)
 
 

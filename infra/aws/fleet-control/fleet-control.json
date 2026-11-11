@@ -654,7 +654,7 @@
               "Version": "2012-10-17",
               "Statement": [
                 {
-                  "Sid": "OperatorLocks",
+                  "Sid": "OperatorLock",
                   "Effect": "Allow",
                   "Action": [
                     "s3:GetObject",
@@ -663,7 +663,7 @@
                   ],
                   "Resource": {
                     "Fn::Sub": [
-                      "arn:${AWS::Partition}:s3:::${B}/locks/operator*",
+                      "arn:${AWS::Partition}:s3:::${B}/locks/operator.json",
                       {
                         "B": {
                           "Ref": "ControlBucket"
@@ -705,9 +705,9 @@
                     ]
                   },
                   "Condition": {
-                    "StringLike": {
+                    "StringEquals": {
                       "s3:prefix": [
-                        "locks/operator*",
+                        "locks/operator.json",
                         "operator/claude-lock.json"
                       ]
                     }
