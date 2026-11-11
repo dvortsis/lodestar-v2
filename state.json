@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T23:13:20Z",
+  "updated_at": "2026-11-11T23:19:37Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6969,6 +6969,10 @@
     {
       "at": "2026-11-11T23:13:20Z",
       "note": "#710 CMP-13 merged (48166c60) after delta self-check (rv-710 I1/I2 + nits fixed; 45+89 tests OK). Slot 4 -> X-cmp13-installer-pins same session (brief), after #711. Owner FYI CMP-13 sent."
+    },
+    {
+      "at": "2026-11-11T23:19:37Z",
+      "note": "#711 CMP-11b merged (b98e18a9). Slot 1 -> X-event-log-followups same session (brief). #709 blocked: ruleset sees stuck queued ci-ok 130782590251 of run 43089754858 despite dispatched green; rerun_workflow_run 43089754858 accepted (attempt 2), watch bjltiyv5x, then merge f820eeba. companion-pins dry runs dispatched: prowlarr 43118372884, gluetun 43118382222; qbittorrent 43118377594 cancelled by concurrency (re-dispatch after). SourceForge 5.3.0 has .asc for both installers."
     }
   ],
   "main_health": [
@@ -7702,15 +7706,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T23:13:20Z",
+    "updated": "2026-11-11T23:19:37Z",
     "items": [
       {
         "slot": 1,
-        "slice": "CMP-11b",
+        "slice": "X-event-log-followups",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAaZaaUjzMSyGVFdTA: Windows gate option D + CMP-8b test constructor",
-        "since": "2026-11-11T20:05:00Z",
+        "doing": "session_01MMjhnAaZaaUjzMSyGVFdTA: Event Log follow-ups after #702 (Opus, /security-review)",
+        "since": "2026-11-11T23:19:37Z",
         "status": "active"
       },
       {
@@ -7866,7 +7870,7 @@
     }
   ],
   "heartbeat": "2026-11-11T21:38:36Z",
-  "updated": "2026-11-11T23:13:20Z",
+  "updated": "2026-11-11T23:19:37Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
