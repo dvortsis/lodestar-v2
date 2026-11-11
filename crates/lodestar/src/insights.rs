@@ -212,7 +212,7 @@ impl InsightsSource for Insights {
 /// mount table is cheap to read but not free, and `netsh` is a process.
 pub const HOST_RECHECK_S: i64 = 3600;
 /// ... or this soon when a check couldn't see everything yet (the port
-/// check before the start's `ports::check` has run).
+/// check before `services` has set the socket count).
 pub const HOST_RETRY_S: i64 = 60;
 
 /// What a host check finds at a time: the exceptions, `since` that time,
@@ -323,7 +323,7 @@ impl Drop for Claim<'_> {
 
 /// The host exceptions at `now`: the data folder's filesystem (every OS)
 /// and the port range (Windows; `None` elsewhere). Incomplete until the
-/// start's port check has run, which can take a few seconds after start.
+/// socket count is set (`ports::ready`), which `services` does at start.
 fn probe_host(data_dir: &Path, now: i64) -> HostFound {
     use crate::windows::ports;
     let complete = ports::ready();

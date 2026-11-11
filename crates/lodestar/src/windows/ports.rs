@@ -4,8 +4,8 @@
 //! narrow for the configured fetch sockets, fetches fail with "address in
 //! use" and other programs on the PC can lose network access. The check
 //! runs once at start and logs the problem with its fix; Insights asks
-//! [`pressure`] again at most hourly and lists it as an exception
-//! (PK-exc).
+//! [`pressure`] again at most hourly, for the socket count the fetch pool
+//! runs with ([`set_max_sockets`]), and lists it as an exception (PK-exc).
 //!
 //! The parsing and the threshold are plain functions, tested on every OS;
 //! only [`query`] runs `netsh`.
@@ -203,23 +203,37 @@ pub fn worst(
         })
 }
 
-/// The `max_sockets` [`check`] ran with at start; 0 until it has (and
-/// always off Windows).
-static MAX_SOCKETS: AtomicUsize = AtomicUsize::new(0);
+/// No socket count set yet.
+const UNSET: usize = usize::MAX;
 
-/// Whether [`pressure`] can answer: off Windows always, on Windows once
-/// the start's [`check`] has recorded `max_sockets` (its thread waits up
-/// to 5 s for logging first). Before then a caller should ask again soon.
-pub fn ready() -> bool {
-    cfg!(not(windows)) || MAX_SOCKETS.load(Ordering::Acquire) > 0
+/// The fetch pool's `max_sockets`, from the effective config (saved
+/// Settings over the file), as [`set_max_sockets`] last set it.
+static MAX_SOCKETS: AtomicUsize = AtomicUsize::new(UNSET);
+
+/// Records the socket count the fetch pool runs with (0: no pool), for
+/// [`pressure`]. `services` calls it at start with the effective config;
+/// the pool's size changes only at a restart.
+pub fn set_max_sockets(n: usize) {
+    MAX_SOCKETS.store(n.min(UNSET - 1), Ordering::Release);
 }
 
-/// Reads both families' ranges now and returns [`worst`]'s answer for
-/// the `max_sockets` the start's [`check`] used. It runs `netsh`, so
-/// callers cache it (Insights re-checks at most hourly). `None` off
-/// Windows, before the start's check, or when `netsh` can't be read.
+/// What [`set_max_sockets`] last set; `None` before it's called.
+pub fn max_sockets() -> Option<usize> {
+    Some(MAX_SOCKETS.load(Ordering::Acquire)).filter(|&n| n != UNSET)
+}
+
+/// Whether [`pressure`] can answer: off Windows always, on Windows once
+/// the socket count is set. Before then a caller should ask again soon.
+pub fn ready() -> bool {
+    cfg!(not(windows)) || max_sockets().is_some()
+}
+
+/// Reads both families' ranges now and returns [`worst`]'s answer for the
+/// socket count [`set_max_sockets`] set. It runs `netsh`, so callers cache
+/// it (Insights re-checks at most hourly). `None` off Windows, without a
+/// fetch pool, or when `netsh` can't be read.
 pub fn pressure() -> Option<Warning> {
-    let max_sockets = MAX_SOCKETS.load(Ordering::Acquire);
+    let max_sockets = max_sockets().unwrap_or(0);
     #[cfg(windows)]
     {
         if max_sockets == 0 {
@@ -355,7 +369,6 @@ fn netsh(args: &[&str]) -> Option<String> {
 /// Checks both families and logs a warning for each narrow one.
 #[cfg(windows)]
 pub fn check(max_sockets: usize) {
-    MAX_SOCKETS.store(max_sockets, Ordering::Release);
     for family in [Family::V4, Family::V6] {
         use crate::logging::events::{
             WINDOWS_PORTS_LOW, WINDOWS_PORTS_OK, WINDOWS_PORTS_UNREADABLE,
@@ -551,12 +564,28 @@ mod tests {
         assert_eq!((d.fix_start, d.fix_count), (None, None));
     }
 
-    #[cfg(not(windows))]
+    /// The only test that touches the process-wide count, so parallel
+    /// tests can't race on it.
     #[test]
-    fn pressure_is_never_reported_off_windows() {
+    fn pressure_uses_the_count_set_last() {
+        set_max_sockets(1000);
+        set_max_sockets(400);
+        assert_eq!(max_sockets(), Some(400));
         assert!(ready());
-        MAX_SOCKETS.store(400, Ordering::Release);
-        assert_eq!(pressure(), None);
+        set_max_sockets(0);
+        assert_eq!(max_sockets(), Some(0), "no fetch pool is a known answer");
+        assert!(ready());
+        // The sentinel can't be set by accident.
+        set_max_sockets(usize::MAX);
+        assert_eq!(max_sockets(), Some(usize::MAX - 1));
+        set_max_sockets(0);
+        // Off Windows there's no range to read, whatever the count.
+        #[cfg(not(windows))]
+        {
+            set_max_sockets(40_000);
+            assert_eq!(pressure(), None);
+            set_max_sockets(0);
+        }
     }
 
     #[test]

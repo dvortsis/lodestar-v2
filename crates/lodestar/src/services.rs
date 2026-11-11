@@ -116,6 +116,10 @@ impl Services {
             .await??
         };
         let config = &settings.effective_config(config);
+        // PK-exc: Insights' port check uses the pool's real socket count.
+        crate::windows::ports::set_max_sockets(
+            config.pipeline_config().map_or(0, |p| p.pool.max_sockets),
+        );
         // The crawler's pause (B14) outlives a restart: everything starts
         // paused, so nothing is harvested or fetched before it applies.
         let crawl_settings = settings
