@@ -341,6 +341,23 @@ jobs:
       - run: cargo clippy --release -p lodestar-bench --features dhat-heap --test mmap_retention -- -D warnings
       - run: cargo test --release -p lodestar-bench --features dhat-heap --test mmap_retention -- --test-threads=1
 
+  # PK-win-soak-ci: merges and segment GC while readers hold mmaps. Only
+  # Windows refuses to delete a mapped file, so only there does tantivy's
+  # collection fail and retry; the workspace run covers the logic on Linux.
+  # It reuses mmap_retention's applicability (the search crate or anything
+  # it builds), docs/decisions/2026-11-11-PK-win-soak-ci.md.
+  windows-gc-stress:
+    name: windows GC stress (PK-win-soak-ci)
+    needs: changes
+    if: needs.changes.outputs.mmap_retention == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --release -p lodestar-search --test windows_gc_stress -- --test-threads=1 --nocapture
+
   importer:
     name: bitmagnet importer (PostgreSQL)
     needs: changes
@@ -577,7 +594,7 @@ jobs:
 
   ci-ok:
     name: ci-ok
-    needs: [changes, lint, openapi, test, size-budget, relevance, importer, fuzz, log-bench, mmap-retention, soak-tools, soak-collector-windows, update-manifest, infra]
+    needs: [changes, lint, openapi, test, size-budget, relevance, importer, fuzz, log-bench, mmap-retention, windows-gc-stress, soak-tools, soak-collector-windows, update-manifest, infra]
     if: always()
     runs-on: ubuntu-latest
     steps:
