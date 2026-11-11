@@ -7541,7 +7541,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T15:03Z",
+    "updated": "2026-11-11T15:08Z",
     "items": [
       {
         "slot": 1,
@@ -7564,7 +7564,7 @@
         "slice": "WK-11",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn97qDUZKniFoSzjMNE: worker spool, on-disk format (Opus, /security-review); fresh session after #689 merged 48b10984 (old session archived)",
+        "doing": "#699 open at f685f526, CI running; await ready -> fresh Opus + /security-review (format, replay, requeue_back WK-9 refinement)",
         "since": "2026-11-11T14:05:33Z"
       },
       {
