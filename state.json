@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T05:08Z",
+  "updated_at": "2026-11-11T05:17Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6702,6 +6702,11 @@
       "at": "2026-11-11T05:08Z",
       "id": "X-collector-host-snapshots",
       "item": "CR-COL: collect.py docker mode reads host-written snapshots and the stop moves host-side (arm switch), so the fleet collector needs no Docker API at all; re-validate analyzer clean_stop (OP-3b option c)"
+    },
+    {
+      "at": "2026-11-11T05:17Z",
+      "id": "X-flake-portable-restart",
+      "item": "windows_service.rs a_portable_restart_serves_again_on_the_same_port: relaunched copy started 10 ms after app.relaunch and hit sqlite disk I/O error (old process still held the store). Runner Opus subagent building the fix on slice/X-flake-portable-restart; seen on #655 ca0fbf6d job 130326742759. Add slices.yaml entry in next runner PR."
     }
   ],
   "main_health": [
