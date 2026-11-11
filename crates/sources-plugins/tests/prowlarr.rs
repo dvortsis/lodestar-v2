@@ -359,6 +359,237 @@ fn nothing_prints_the_key() {
     assert!(!format!("{p:?}").contains("topsecretkey"));
 }
 
+// ---- Editable settings and the start-time key (X-prowlarr-settings) ----
+
+const CANON: &str = r#"{"agents":3,"manager":"jackett","url":"http://p.example:9117/sub"}"#;
+
+#[test]
+fn settings_save_in_one_form_that_reads_back_the_same() {
+    let p = Prowlarr::unconfigured(key());
+    assert!(p.config_editable());
+    assert_eq!(p.config_json(), None, "nothing to compare before setup");
+    let saved = p
+        .check_config(r#"{"url":" http://p.example:9117/sub/ ","manager":"jackett","agents":3}"#)
+        .unwrap();
+    assert_eq!(saved, CANON);
+    // Saving the saved form again changes nothing.
+    assert_eq!(p.check_config(&saved).unwrap(), saved);
+    let c = Config::from_json(&saved).unwrap();
+    assert_eq!(c.to_json(), saved);
+    assert_eq!(
+        Prowlarr::new(c, key()).config_json().as_deref(),
+        Some(CANON)
+    );
+    // Agents default to 2 and are saved explicitly.
+    let d = p
+        .check_config(r#"{"url":"http://p.example","manager":"prowlarr"}"#)
+        .unwrap();
+    assert_eq!(
+        d,
+        r#"{"agents":2,"manager":"prowlarr","url":"http://p.example"}"#
+    );
+    let n = p
+        .check_config(r#"{"url":"http://p.example","manager":"prowlarr","agents":null}"#)
+        .unwrap();
+    assert_eq!(n, d);
+}
+
+#[test]
+fn hostile_settings_are_refused_without_echoing_them() {
+    let p = Prowlarr::unconfigured(key());
+    let url = |u: &str| format!(r#"{{"url":"{u}","manager":"prowlarr"}}"#);
+    let long_url = format!("http://p.example/{}", "a".repeat(prowlarr::MAX_URL));
+    let long_json = format!(
+        r#"{{"url":"http://p.example","manager":"prowlarr","pad":"{}"}}"#,
+        "a".repeat(prowlarr::MAX_CONFIG_BYTES)
+    );
+    let cases: Vec<(String, &str)> = vec![
+        (
+            url("http://user:SECRETPW@p.example/"),
+            "user name or password",
+        ),
+        (url("http://SECRETPW@p.example/"), "user name or password"),
+        (
+            url("http://p.example/?apikey=SECRETPW"),
+            "query or fragment",
+        ),
+        (url("http://p.example/#SECRETPW"), "query or fragment"),
+        (url("ftp://p.example/SECRETPW"), "may reach"),
+        (url("file:///etc/SECRETPW"), "may reach"),
+        (url("javascript:SECRETPW"), "may reach"),
+        (url("data:text/plain,SECRETPW"), "may reach"),
+        (url("http://169.254.169.254/SECRETPW"), "may reach"),
+        (url("http://169.254.1.1/SECRETPW"), "may reach"),
+        (url("http://[fe80::1]/SECRETPW"), "may reach"),
+        (url("http://[fd00:ec2::254]/SECRETPW"), "may reach"),
+        (url("http://0.0.0.0:9696/SECRETPW"), "may reach"),
+        (url("http://[::]:9696/SECRETPW"), "may reach"),
+        (url("SECRETPW"), "isn't a valid URL"),
+        (url(&long_url), "too long"),
+        (long_json, "too long"),
+        (
+            r#"{"url":"http://p.example","manager":"prowlarr","api_key":"SECRETPW"}"#.into(),
+            "don't match the form",
+        ),
+        (
+            r#"{"url":"http://p.example","manager":"SECRETPW"}"#.into(),
+            "don't match the form",
+        ),
+        (
+            r#"{"url":"http://p.example","manager":"prowlarr","agents":300}"#.into(),
+            "don't match the form",
+        ),
+        (
+            r#"{"url":"http://p.example","manager":"prowlarr","agents":0}"#.into(),
+            "agents must be 1 to 8",
+        ),
+        (
+            r#"{"url":"http://p.example","manager":"prowlarr","agents":9}"#.into(),
+            "agents must be 1 to 8",
+        ),
+        (r#"{"manager":"prowlarr"}"#.into(), "don't match the form"),
+        (r#"["SECRETPW"]"#.into(), "don't match the form"),
+        ("SECRETPW".into(), "don't match the form"),
+    ];
+    for (json, why) in cases {
+        let e = p.check_config(&json).unwrap_err();
+        assert!(e.0.contains(why), "{json}: {e}");
+        assert!(
+            !e.0.contains("SECRETPW") && !e.0.contains("p.example"),
+            "{e}"
+        );
+    }
+    // What the download-client policy allows: LAN, loopback, a name.
+    for ok in [
+        "http://127.0.0.1:9696",
+        "http://[::1]:9696",
+        "http://10.0.0.2:9696",
+        "http://192.168.1.5:9696/prowlarr",
+        "https://prowlarr:9696",
+    ] {
+        assert!(p.check_config(&url(ok)).is_ok(), "{ok}");
+    }
+}
+
+/// A credential store whose key can be changed while the plugin runs.
+#[derive(Default)]
+struct Changing(
+    std::sync::Mutex<Option<&'static str>>,
+    std::sync::atomic::AtomicBool,
+);
+
+impl Changing {
+    fn set(&self, key: Option<&'static str>) {
+        *self.0.lock().unwrap() = key;
+    }
+}
+
+impl Credentials for Changing {
+    fn get<'a>(
+        &'a self,
+        _: &'a str,
+        name: &'a str,
+    ) -> lodestar_sources::BoxFuture<
+        'a,
+        Result<
+            Option<lodestar_integrations::secret::Secret>,
+            lodestar_sources::egress::CredentialError,
+        >,
+    > {
+        assert_eq!(name, prowlarr::API_KEY);
+        let r = if self.1.load(std::sync::atomic::Ordering::SeqCst) {
+            Err(lodestar_sources::egress::CredentialError)
+        } else {
+            Ok(self
+                .0
+                .lock()
+                .unwrap()
+                .map(lodestar_integrations::secret::Secret::new))
+        };
+        Box::pin(async move { r })
+    }
+}
+
+const SAVED: &str = r#"{"url":"http://prowlarr.example:9696/","manager":"prowlarr","agents":2}"#;
+
+#[tokio::test(start_paused = true)]
+async fn at_start_builds_from_the_saved_settings() {
+    let p = Prowlarr::at_start(Some(SAVED), key()).await;
+    assert_eq!(
+        p.config_json().as_deref(),
+        Some(r#"{"agents":2,"manager":"prowlarr","url":"http://prowlarr.example:9696"}"#)
+    );
+    assert!(p.endpoints().is_some());
+    // The trait's endpoints are the configured host's, not the manifest's
+    // empty list.
+    let e = SourcePlugin::endpoints(&p).unwrap();
+    assert!(e.permits("http://prowlarr.example:9696/api/v1/indexer"));
+    assert!(!e.permits("http://other.example:9696/api/v1/indexer"));
+    // Missing or refused settings leave it unconfigured: nothing reachable.
+    for saved in [
+        None,
+        Some("{}"),
+        Some(r#"{"url":"http://169.254.169.254","manager":"prowlarr"}"#),
+    ] {
+        let p = Arc::new(Prowlarr::at_start(saved, key()).await);
+        assert_eq!(p.config_json(), None, "{saved:?}");
+        assert!(p.endpoints().is_none() && SourcePlugin::endpoints(&*p).is_none());
+        assert!(ends_with_error(p, None).await.starts_with("needs setup"));
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_key_stored_at_start_is_the_only_one_used() {
+    // The same key as at the start: it runs and polls.
+    let same = Arc::new(Changing::default());
+    same.set(Some("REDACTED"));
+    let p = Arc::new(Prowlarr::at_start(Some(SAVED), same.clone()).await);
+    replay(&p, "prowlarr_rss", 6, 5).await;
+
+    // A key saved since (a companion hand-over writes the key before the
+    // address), a key added since, or one that couldn't be read at the
+    // start: it stops before any request, until Lodestar restarts.
+    for (at_start, now, unreadable) in [
+        (Some("REDACTED"), Some("companionkey"), false),
+        (None, Some("REDACTED"), false),
+        (Some("REDACTED"), Some("REDACTED"), true),
+    ] {
+        let c = Arc::new(Changing::default());
+        c.set(at_start);
+        c.1.store(unreadable, std::sync::atomic::Ordering::SeqCst);
+        let p = Arc::new(Prowlarr::at_start(Some(SAVED), c.clone()).await);
+        c.1.store(false, std::sync::atomic::Ordering::SeqCst);
+        c.set(now);
+        // `NoEgress` fails any request, so reaching the list would end
+        // differently.
+        let e = ends_with_error(p, None).await;
+        assert_eq!(e, prowlarr::KEY_CHANGED, "{at_start:?} -> {now:?}");
+        assert!(!e.contains("companionkey") && !e.contains("REDACTED"));
+    }
+
+    // A key removed since: there's none to send.
+    let c = Arc::new(Changing::default());
+    c.set(Some("REDACTED"));
+    let p = Arc::new(Prowlarr::at_start(Some(SAVED), c.clone()).await);
+    c.set(None);
+    assert!(ends_with_error(p, None).await.contains("no API key"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn no_output_holds_the_key() {
+    let c = Arc::new(StaticCredentials::new([("api_key", "topsecretkey")]));
+    let p = Prowlarr::at_start(Some(SAVED), c).await;
+    let saved = p.check_config(SAVED).unwrap();
+    for out in [
+        format!("{p:?}"),
+        p.config_json().unwrap(),
+        saved,
+        p.policy().config_schema.to_owned(),
+    ] {
+        assert!(!out.contains("topsecretkey"), "{out}");
+    }
+}
+
 // ---- Indexer lists ----
 
 #[test]

@@ -335,6 +335,28 @@ impl Services {
         let reenrich = pipeline_config.reenrich.clone();
         let quarantine_secs = pipeline_config.quarantine.as_secs() as i64;
         let control = Arc::new(Mutex::new(control));
+        // Prowlarr / Jackett (SRC-7, X-prowlarr-settings): off until you
+        // enable it, which the consent gate allows only once its API key
+        // is stored (Account, SRC-4). Its saved address and its key are
+        // read here, once, so both apply together at the next start.
+        let prowlarr = {
+            use lodestar_sources_plugins::prowlarr::{ID, Prowlarr};
+            let store = control.clone();
+            let saved = tokio::task::spawn_blocking(move || {
+                let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                store
+                    .source_setting(ID, lodestar_store::SourceSetting::Config)
+                    .ok()
+                    .flatten()
+            })
+            .await?;
+            let credentials = Arc::new(lodestar_sources::consent::SourceCredentials::new(
+                control.clone(),
+                config.data_dir.clone(),
+            ));
+            Prowlarr::at_start(saved.as_deref(), credentials).await
+        };
+        plugins.push(Arc::new(prowlarr));
         // Companion recovery runs before anything could start one (CMP-5).
         let companions = if crate::fixture::active() {
             None
