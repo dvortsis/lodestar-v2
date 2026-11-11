@@ -574,7 +574,7 @@ describe('the Updates screen', () => {
 	});
 
 	it.each([
-		['fixture', 'demo copy'],
+		['fixture', 'sample data'],
 		['network', "couldn't start its updater"],
 		['windows_helper', "isn't available on this platform"],
 		['brand_new', 'no update engine']
@@ -591,6 +591,8 @@ describe('the Updates screen', () => {
 		['bad_signature', "signature didn't check out"],
 		['revoked_key', "signature didn't check out"],
 		['redirect_refused', "somewhere it doesn't trust"],
+		['bin_unavailable', "can't write update files"],
+		['newer_format', 'needs a newer version of Lodestar'],
 		['brand_new_code', "check didn't complete"]
 	])('words a failed check (%s) without the code', async (code, words) => {
 		status.status = { ...status.status, state: 'failed', error: code };
@@ -602,8 +604,9 @@ describe('the Updates screen', () => {
 
 	it.each([
 		['selftest', 'failed its health check'],
+		['failed', 'kept failing to start'],
 		['no_space', 'free disk space'],
-		['brand_new_code', '']
+		['brand_new_code', null]
 	])('words a history reason (%s) and never shows the code', async (reason, words) => {
 		status.history = [
 			{
@@ -628,7 +631,8 @@ describe('the Updates screen', () => {
 		render(UpdatesScreen);
 		const rows = await screen.findAllByTestId('updates-history-row');
 		const t = rows.map((r) => r.textContent ?? '').join('|');
-		expect(t).toContain(words);
+		if (words) expect(t).toContain(words);
+		else expect(rows[0]?.textContent).not.toContain(':');
 		expect(t).not.toContain(reason);
 		expect(t).not.toContain('odd_result');
 	});
@@ -821,7 +825,7 @@ describe('the Updates screen', () => {
 			['no_previous_version', 'no previous version'],
 			['snapshot_missing', 'snapshot of your data'],
 			['not_built_yet', "Rolling back isn't built"],
-			['something_new', "can't roll back right now"]
+			['something_new', "reason this version of Lodestar doesn't describe"]
 		])('shows the refusal %s in words', async (reason, words) => {
 			offer();
 			asked.answer = 'rollback';

@@ -31,7 +31,8 @@ const checkWhy: Record<string, () => string> = {
 	redirect_refused: m.settings_updates_check_why_redirect_refused,
 	blocked: m.settings_updates_check_why_blocked,
 	http_status: m.settings_updates_check_why_http_status,
-	too_large: m.settings_updates_check_why_too_large
+	too_large: m.settings_updates_check_why_too_large,
+	newer_format: m.settings_updates_check_why_newer_format
 };
 const SIGNATURE_CODES = [
 	'bad_key',
@@ -51,14 +52,13 @@ const SIGNATURE_CODES = [
 export const checkFailedWords = (code: string | null): string =>
 	(code && SIGNATURE_CODES.includes(code)
 		? m.settings_updates_check_why_signature()
-		: code && checkWhy[code]?.()) || m.settings_updates_check_why_other();
+		: code && (checkWhy[code] ?? failedWords[code])?.()) || m.settings_updates_check_why_other();
 
 /** A history entry's or rollback's reason in words, or null for a code this screen doesn't know. */
 const historyWhy: Record<string, () => string> = {
 	failed: m.settings_updates_history_reason_failed,
 	selftest: m.settings_updates_history_reason_selftest,
-	manual: m.settings_updates_history_reason_manual,
-	user: m.settings_updates_history_reason_user
+	manual: m.settings_updates_history_reason_manual
 };
 export const historyReasonWords = (code: string | null): string | null =>
 	(code && (historyWhy[code] ?? failedWords[code])?.()) || null;
