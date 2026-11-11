@@ -497,9 +497,10 @@ pub fn resume(
                 let _ = sys.set_start(journal.start_before.unwrap_or(Start::Auto));
                 sys.start_service();
                 sys.event_log(&format!(
-                    "Lodestar's update helper didn't install {}: its copy refused ({why}). \
+                    "Lodestar's update helper didn't install {}: its copy refused ({}). \
                      Nothing was changed.",
-                    journal.to
+                    shown_version(&journal.to, "the new version"),
+                    shown_code(&why),
                 ));
                 return Ok(Some(Outcome::CopyRefused { why }));
             }
@@ -528,7 +529,9 @@ pub fn resume(
                     sys.event_log(&format!(
                         "Lodestar's update helper: Windows restarted {} times and {} still \
                          isn't in place, so its install didn't take effect. {} keeps running.",
-                        journal.restarts, journal.to, journal.from
+                        journal.restarts,
+                        shown_version(&journal.to, "the new version"),
+                        shown_version(&journal.from, "The installed version"),
                     ));
                     return Ok(Some(Outcome::InstallInterrupted {
                         version: journal.to.clone(),
@@ -637,8 +640,13 @@ fn halt(
     // A journal without the field (an earlier build) counts any rollback
     // state as touched, as before the field existed.
     let touched = j.touched || matches!(j.state, State::RollingBack { .. });
-    let recovery = recovery(ctx, &j, if touched { done.max(1) } else { 0 }, &why, cause);
-    sys.event_log(&recovery);
+    let step = if touched { done.max(1) } else { 0 };
+    let recovery = recovery(ctx, &j, step, &why, cause);
+    // The Event Log gets the same steps with fixed text: every local user
+    // can read it, so no reason text and no folder path (a configured data
+    // folder can sit in a user profile). The full text, paths and reason
+    // included, is in the journal and `result.json`.
+    sys.event_log(&recovery_event(&j, step, cause));
     eprintln!("lodestar update-helper: {recovery}");
     if touched {
         // Neither version runs: whatever Windows Installer's own rollback
@@ -661,18 +669,9 @@ fn halt(
 /// to bring Lodestar back. Neither the marker nor the journal starts
 /// anything by itself; removing them is the administrator's step, once
 /// the store is one the installed version reads.
-pub fn recovery(ctx: &Context, j: &Journal, done: u8, why: &str, cause: Cause) -> String {
-    let (from, to) = (&j.from, &j.to);
-    let journal = ctx.staging.dir.join(JOURNAL);
-    if done == 0 {
-        return format!(
-            "Lodestar {to} failed its health check, and the rollback to {from} couldn't start: \
-             {why}. Nothing was changed: {to} keeps running. To go back to {from}, an \
-             administrator installs the {from} MSI by hand."
-        );
-    }
-    let marker = ctx.data_dir.join("bin").join(MARKER);
-    let store = if cause == Cause::Journal {
+/// What the store holds after a halt at `done`.
+fn store_state(j: &Journal, done: u8, cause: Cause) -> &'static str {
+    if cause == Cause::Journal {
         if done < 3 {
             "The rollback's journal couldn't be saved, so it stopped there; the store may be \
              half restored."
@@ -687,7 +686,68 @@ pub fn recovery(ctx: &Context, j: &Journal, done: u8, why: &str, cause: Cause) -
          it in place at a restart: the replacement waiting for a restart didn't take effect."
     } else {
         "The store was restored, but reinstalling the previous version didn't finish."
-    };
+    }
+}
+
+/// A version from the journal's own text, for the Event Log: shown only
+/// as a version (semver holds `0-9 A-Z a-z . - +` alone), else as
+/// `otherwise` (X-event-log-followups).
+pub(super) fn shown_version(s: &str, otherwise: &str) -> String {
+    Version::parse(s).map_or_else(|_| otherwise.to_owned(), |v| v.to_string())
+}
+
+/// The copy's refusal, read back from its result file: a code (`a-z` and
+/// `_`, as `msi::Refusal::code` writes) or fixed words.
+pub(super) fn shown_code(s: &str) -> &str {
+    let code =
+        !s.is_empty() && s.len() <= 40 && s.bytes().all(|b| b.is_ascii_lowercase() || b == b'_');
+    if code { s } else { "an unexpected reason" }
+}
+
+/// [`recovery`]'s steps for the Event Log, which every local user can
+/// read: fixed text and parsed versions alone, the folders by role and the
+/// files by name, and no reason text. The reason and the full paths are
+/// in the journal and `result.json` ([`recovery`]).
+pub fn recovery_event(j: &Journal, done: u8, cause: Cause) -> String {
+    let from = shown_version(&j.from, "the previous version");
+    let to = shown_version(&j.to, "the new version");
+    let journal = format!("{JOURNAL} in Lodestar's update staging folder");
+    if done == 0 {
+        return format!(
+            "Lodestar {to} failed its health check, and the rollback to {from} couldn't start. \
+             Nothing was changed: {to} keeps running. The reason is in {journal}. To go back \
+             to {from}, an administrator installs the {from} MSI by hand."
+        );
+    }
+    let marker = format!("bin\\{MARKER} in Lodestar's data folder");
+    format!(
+        "Lodestar {to} failed its health check, and the rollback to {from} stopped after step \
+         {done} of 5. The Lodestar service is stopped and disabled, so neither version opens \
+         the store. {store} {marker} stays until the rollback finishes, so every store opener \
+         refuses while it exists. To recover, an administrator: 1. reads {journal} (it has the \
+         reason) and the msiexec logs beside it; 2. installs the {from} MSI by hand (the service \
+         it starts stays idle while the marker exists, so the install completes), or restores \
+         a backup of Lodestar's data folder; 3. once the store is one the installed version \
+         reads, deletes {marker} and {journal}, then runs: sc config Lodestar start= \
+         delayed-auto, and: sc start Lodestar. Installing a version other than {from} or {to} \
+         clears both files at the next restart (the helper's run at boot). Neither file starts \
+         anything.",
+        store = store_state(j, done, cause),
+    )
+}
+
+pub fn recovery(ctx: &Context, j: &Journal, done: u8, why: &str, cause: Cause) -> String {
+    let (from, to) = (&j.from, &j.to);
+    let journal = ctx.staging.dir.join(JOURNAL);
+    if done == 0 {
+        return format!(
+            "Lodestar {to} failed its health check, and the rollback to {from} couldn't start: \
+             {why}. Nothing was changed: {to} keeps running. To go back to {from}, an \
+             administrator installs the {from} MSI by hand."
+        );
+    }
+    let marker = ctx.data_dir.join("bin").join(MARKER);
+    let store = store_state(j, done, cause);
     let store = format!(
         "{store} {} stays until the rollback finishes, so every store opener refuses while it \
          exists.",
