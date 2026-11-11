@@ -328,6 +328,11 @@ fn run_with(config: &Config, args: WorkerArgs, env: &dyn Fn(&str) -> Option<Stri
             state_path: Some(layout.data.join("dht-state.bin")),
             ..config.dht_config()
         });
+        // The spool (WK-11): `<data>/spool`, sealed with the worker's key.
+        runtime_config.spool = Some(
+            crate::worker::spool::SpoolConfig::for_layout(&layout)
+                .map_err(failed("opening the spool"))?,
+        );
         let runtime = crate::worker::runtime::Runtime::start(runtime_config);
         let worker = Worker {
             layout,

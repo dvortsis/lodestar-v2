@@ -11,7 +11,7 @@
 //!   at half-life, and stopping on a drain, a revocation or an expired
 //!   certificate.
 //! - **The secrets-key rotation** ([`rotate_key`]): rotate, reseal the
-//!   credentials, retire (V6-cluster2).
+//!   credentials and the spool, retire (V6-cluster2, WK-11).
 //!
 //! The runtime is idle in WK-2: the worker connects and stays up but runs
 //! no DHT or fetch work. Later slices add one `mod` line each here:
@@ -29,6 +29,7 @@ pub mod dht;
 pub mod have;
 pub mod runtime;
 pub mod session;
+pub mod spool;
 
 use std::fs;
 use std::io::Write;
@@ -337,11 +338,21 @@ pub fn rotate_key(layout: &Layout) -> Result<bool, ClusterError> {
     secrets.rotate()?;
     let dir = layout.cluster();
     let resealed = Credentials::reseal(&dir, &secrets)?;
+    let mut worker = None;
     if resealed {
-        let opens = Credentials::load(&dir, &secrets)?.is_some();
-        if !opens || sealed_with(&dir)? != secrets.primary_key_id() {
+        let creds = Credentials::load(&dir, &secrets)?;
+        if creds.is_none() || sealed_with(&dir)? != secrets.primary_key_id() {
             return Err(ClusterError::Corrupt("the re-sealed credentials"));
         }
+        worker = creds.map(|c| c.worker().0);
+    }
+    // The spool too (WK-11), before the old key goes: a segment still
+    // sealed with it would no longer open.
+    spool::reseal(layout, worker)?;
+    if let Some(w) = worker
+        && spool::needs_reseal(&layout.data, w, &secrets)?
+    {
+        return Err(ClusterError::Corrupt("the re-sealed spool"));
     }
     secrets.retire_old_keys()?;
     Ok(resealed)

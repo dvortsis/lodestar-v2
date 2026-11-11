@@ -14,7 +14,7 @@ The sources of truth, in order:
 ## 1. Checks before every push
 **Rust (any crate touched):**
 - `cargo fmt --check`
-- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo clippy --workspace --all-targets -- -D warnings`, on the same stable as CI (`dtolnay/rust-toolchain@stable`). A container's stable can lag CI's and miss new lints, so run `rustup toolchain install <CI's stable>` and `cargo +<version> clippy …` when they differ (runner, 2026-11-11: 1.97 against CI's 1.99 missed `result_large_err`)
 - `cargo test --workspace`
 - any bench gate the brief names (`size-report --gate`, `search-bench --gate`)
 

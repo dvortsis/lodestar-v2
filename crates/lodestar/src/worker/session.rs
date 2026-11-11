@@ -91,6 +91,15 @@ pub trait Work: Send {
     /// outcomes to report. Leases left out go back to the coordinator with
     /// `Drained`, which re-grants them.
     fn drain(&mut self) -> impl Future<Output = Vec<OutcomeItem>> + Send;
+    /// The worker's own lease count, when it wants it compared with the
+    /// coordinator's (a spool replay has finished, WK-11); the session
+    /// asks for a heartbeat and passes the answer to
+    /// [`reconciled`](Self::reconciled).
+    fn reconcile(&mut self) -> Option<u32> {
+        None
+    }
+    /// The coordinator's lease count for this worker.
+    fn reconciled(&mut self, _worker: u32, _coordinator: u32) {}
 }
 
 /// The idle runtime: connected, doing no work. The binary runs WK-10's
@@ -406,7 +415,7 @@ impl<C: Connect> Worker<C> {
                     Some(other) => work.event(other),
                 },
                 _ = upkeep.tick() => {
-                    if let Some(end) = self.upkeep(&session, renewing, &mut renew_now).await {
+                    if let Some(end) = self.upkeep(&session, work, renewing, &mut renew_now).await {
                         return end;
                     }
                 }
@@ -415,15 +424,22 @@ impl<C: Connect> Worker<C> {
     }
 
     /// The periodic check: expiry, a pending save, and renewal.
-    async fn upkeep(
+    async fn upkeep<W: Work>(
         &mut self,
         session: &WorkerSession,
+        work: &mut W,
         renewing: &mut Renewing,
         renew_now: &mut bool,
     ) -> Option<Ended> {
         let now = self.clock.now_secs();
         if self.expired() {
             return Some(Ended::Exit(Exit::Expired));
+        }
+        // Lease counts after a replay (WK-11).
+        if let Some(mine) = work.reconcile()
+            && let Ok(ack) = session.heartbeat().await
+        {
+            work.reconciled(mine, ack.leases);
         }
         if renewing.unsaved {
             self.persist(renewing);
