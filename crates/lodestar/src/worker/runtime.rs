@@ -734,9 +734,9 @@ impl Work for Runtime {
         // and dictionary snapshots over by itself (WK-10a).
         let _ = self.shared.acks.try_send(self.shared.have.reconnected());
         self.shared.fresh_session.store(true, Ordering::Release);
-        // Before the session itself: the session task reads the
-        // generation first, so a new session is never seen as the old
-        // generation (and reset again a moment later).
+        // Before the session itself: the session task reads the session,
+        // then the generation, so once it sees this session it sees this
+        // bump too, and resets once for it, never again a moment later.
         self.shared.generation.fetch_add(1, Ordering::AcqRel);
         self.shared.session.send_replace(Some(session));
         want_dht(&self.shared);
@@ -2029,6 +2029,10 @@ async fn send_results(
     }
     let mut seen = s.generation.load(Ordering::Acquire);
     loop {
+        // The session first, then the generation: a connect bumps the
+        // generation before it replaces the session, so a new session is
+        // never seen with the old generation (and reset again after).
+        let session = sessions.borrow_and_update().clone();
         // A session change, even one missed while busy below: whatever
         // wasn't accepted goes again (a batch id is idempotent, §19.2).
         // Replayed batches are dropped here and read again from the
@@ -2042,8 +2046,6 @@ async fn send_results(
                 f.sent = false;
             }
         }
-        // Send whatever is due on the current session.
-        let session = sessions.borrow_and_update().clone();
         if let Some(sp) = &s.spool {
             // No session: batches go to disk. A session: the spool is
             // replayed, a segment at a time (WK-11).
