@@ -282,9 +282,8 @@ class Run:
         return self.mono() - self.start >= minutes * 60
 
     def one(self, spend: Spend, body: dict, item: dict) -> tuple[str, list[str]]:
-        """('pass' | 'fail' | 'not run' | 'incomplete', codes)."""
-        if self.past(START_MINUTES):
-            return "not run", ["time"]
+        """('pass' | 'fail' | 'not run' | 'incomplete', codes). The start-time
+        check is the caller's, before the fixture is uploaded."""
         if not spend.reserve():
             return "not run", ["cap"]
         sid, spent = None, None
