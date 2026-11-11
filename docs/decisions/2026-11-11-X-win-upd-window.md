@@ -46,7 +46,7 @@ Follow-ups from the reviews of #659 (PK-win-portable-upd, `reviews/rv-659-c48421
   - the epoch bump;
   - the watcher's withdrawal;
   - the watcher's starting mode (starting it as not Off fails the real-watcher test);
-  - the watcher's last look at a stop;
   - `install_blocked_off` only while Off;
   - `install_blocked` only while its request is pending;
   - `Verdict`'s two phase checks.
+- Not separable by a test, kept as defence in depth: the watcher's last look at a stop, and the check task waiting for the watcher rather than aborting it. With the select biased to a waiting change, a change sent before the stop is always handled first. And work already on the blocking pool runs to the end even when its task is aborted. So removing either one leaves every test green; forcing the order they guard would need a test-only gate in the removal.
