@@ -368,6 +368,7 @@ placement:
   - X-unraid-validate-all
   - X-prowlarr-settings
   - X-restart-required-creds
+  - X-event-log-notice
   - X-prowlarr-register
   - X-flake-portable-restart
   - X-flake-portable-restart-2
@@ -1450,11 +1451,6 @@ owner_queue:
   action: Approve the Legal Notice version 5 wording that lists Prowlarr or Jackett as a built Account source (draft sent through the dashboard session, 2026-11-11)
   unblocks: Registering the Prowlarr/Jackett source (X-prowlarr-register)
   when: Any time
-- n: 12
-  type: decision
-  action: 'Legal Notice: may Lodestar write to the Windows Application event log (readable by every local user)? The Windows update helper on main already writes update failures and recovery steps there; runner recommends yes, as a fifth exception in section 5, folded into version 5 (draft: runner-state briefs/X-event-log-notice-draft.md)'
-  unblocks: A correct Legal Notice before the Windows updater ships; the service writing its real start-refusal reason
-  when: Before the release that ships the Windows updater
 gates:
 - id: G-v05
   name: v0.5 MVP exit

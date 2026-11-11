@@ -621,6 +621,18 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **Resume, 2026-11-11T03:57Z:** "We reset credit. Continue with up to 8 sessions in one time,". The runner resumed at 04:05Z and re-enabled both scheduled tasks.
     - **At most eight slices at a time in total,** Opus, helper and docs slices alike, replacing §2.42's four. `runner/slices.yaml` `limits.phase_total` is 8. Filling every slot isn't required, and the other §2.42 rules (no overlapping `owns`, the ladder decides) are unchanged. The runner still runs at most three reviewers at once.
 
+55. **The Windows Event Log goes into the Legal Notice; the OP-5 test cap stays** (owner, 2026-11-11T14:41Z, relayed by the dashboard session):
+    - **Event Log, option A:** "I'm good with your recommendation for Option "A"."
+      - **The fifth exception:** Legal Notice section 5 gains a fifth exception, worded as the runner's draft (runner-state `briefs/X-event-log-notice-draft.md`): "on Windows, when an update can't be installed or has to be undone, or the service refuses to start, Lodestar writes what happened and how to fix it (version numbers, the step that stopped and folder paths only) to the Windows Application event log, which every user of the computer can read". "Four exceptions" becomes "five exceptions".
+      - **Why:** the Windows update helper (#644) already writes there on `main`. No released version does.
+      - **NOTICE_VERSION 5 covers both changes:** this fifth exception and §2's Prowlarr/Jackett change (owner item 11, still unanswered).
+    - **What may be written there:** refusals and update failures only, with no data values. That covers the service's start refusal reason (the question X-win-refusal-ux deferred on 2026-11-07) and the update helper's failures and recovery steps. The `event_log_errors` setting for general errors stays hidden.
+    - **OP-5's test cap:** "OP-5 Cap is fine." The $50 cap stays unchanged.
+    - **Runner (§2.19):**
+      - **The slice:** X-event-log-notice carries the notice text, NOTICE_VERSION 4 → 5, a positive `legal_facts.rs` check, the MSI event source and the service refusal write.
+      - **Order:** it lands before X-prowlarr-register, which then adds its section 2 text under the same version 5.
+      - **No release in between:** no release is cut between the two. If one has to be, X-prowlarr-register moves to version 6.
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.
