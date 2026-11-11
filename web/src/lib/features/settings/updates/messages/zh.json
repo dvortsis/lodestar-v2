@@ -180,6 +180,7 @@
 	"settings_updates_error_rollback_updates_unavailable": "此安装没有更新引擎，因此无法回滚。",
 	"settings_updates_rollback_reason_busy": "正在检查或安装更新，请在完成后重试。",
 	"settings_updates_rollback_reason_no_previous_version": "没有可回到的上一个版本。",
+	"settings_updates_rollback_reason_not_built_yet": "此版本尚未内置回滚功能。",
 	"settings_updates_rollback_reason_snapshot_missing": "更新前的数据快照已不存在。",
 	"settings_updates_failed_download_mismatch": "下载内容与签名不符，已丢弃。",
 	"settings_updates_failed_download_too_large": "下载内容比预期大，已停止。",

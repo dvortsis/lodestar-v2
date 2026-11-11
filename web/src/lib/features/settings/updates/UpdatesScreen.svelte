@@ -188,7 +188,8 @@
 		image_mode: m.settings_updates_cannot_image_mode,
 		busy: m.settings_updates_rollback_reason_busy,
 		no_previous_version: m.settings_updates_rollback_reason_no_previous_version,
-		snapshot_missing: m.settings_updates_rollback_reason_snapshot_missing
+		snapshot_missing: m.settings_updates_rollback_reason_snapshot_missing,
+		not_built_yet: m.settings_updates_rollback_reason_not_built_yet
 	};
 	/** A plain sentence per stable install-failure code; never the code's own text, never a URL. */
 	const failedWords: Record<string, () => string> = {

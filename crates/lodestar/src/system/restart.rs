@@ -441,6 +441,116 @@ pub fn reexec() -> std::io::Error {
 #[cfg_attr(not(windows), allow(dead_code))]
 pub const EXIT_RELAUNCHED: i32 = 80;
 
+/// How long a copy started by Restart now waits, once handed over, for the
+/// process it replaces to have exited ([`await_predecessor`]) before it
+/// refuses to start.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub const PREDECESSOR_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+/// How often it looks.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub const PREDECESSOR_POLL: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// What the watch on the process a relaunched copy replaces says
+/// (X-flake-portable-restart).
+///
+/// The end of file on the hand-over pipe isn't that process's exit:
+/// Windows closes a dying process's handles (the pipe's write end among
+/// them) before it removes its memory, so the old process's views of
+/// SQLite's `-shm` file (and of the index files) are still mapped then.
+/// A store opened in that gap fails: SQLite truncates the `-shm` file as
+/// its first opener, and Windows refuses to truncate a mapped file
+/// ("disk I/O error"). Only the process object's signal comes after all
+/// of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub enum Predecessor {
+    /// It has exited, and Windows has released everything it held.
+    Exited,
+    /// It's still running.
+    Running,
+    /// Nothing to wait on: the token names no process (a hand-made one),
+    /// or the watch couldn't start or failed. The copy goes ahead, as it
+    /// did before the watch existed.
+    Unknown,
+}
+
+/// Asks `probe` every `poll` until it says anything but
+/// [`Predecessor::Running`], or `wait` has passed since the first call:
+/// what it said last. `Running` then means it's still there, and the copy
+/// refuses ([`predecessor_refusal`]). The clock and the sleep are passed
+/// in, so the loop is tested on every platform without waiting.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn await_predecessor(
+    mut probe: impl FnMut() -> Predecessor,
+    wait: std::time::Duration,
+    poll: std::time::Duration,
+    now: impl Fn() -> Instant,
+    mut sleep: impl FnMut(std::time::Duration),
+) -> Predecessor {
+    let start = now();
+    loop {
+        match probe() {
+            Predecessor::Running if now().saturating_duration_since(start) < wait => sleep(poll),
+            other => return other,
+        }
+    }
+}
+
+/// What the watch's state means: `None` with no watch; else its
+/// `try_wait`, with `Some(success)` once it has ended. Only a watch that
+/// ended well says the process has exited.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn watch_says(state: Option<std::io::Result<Option<bool>>>) -> Predecessor {
+    match state {
+        Some(Ok(None)) => Predecessor::Running,
+        Some(Ok(Some(true))) => Predecessor::Exited,
+        _ => Predecessor::Unknown,
+    }
+}
+
+/// The id of the process a relaunched copy replaces, from its hand-over
+/// token ([`crate::windows::relaunch::token`]: `lodestar-<pid>-<nanos>`,
+/// made by that process). `None` for any other token.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn predecessor_pid(token: &str) -> Option<u32> {
+    let (pid, nanos) = token.strip_prefix("lodestar-")?.split_once('-')?;
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if !digits(pid) || !digits(nanos) {
+        return None;
+    }
+    pid.parse().ok().filter(|&pid| pid != 0)
+}
+
+/// The Windows PowerShell the copy (`me`) runs to watch process `old`: it
+/// waits on the process itself, so it ends with 0 only once `old` has
+/// exited (or isn't running). A process with that id that started after
+/// this copy (which `old` started) took the id later, so it isn't waited
+/// on. Any error ends it non-zero ([`Predecessor::Unknown`]).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn predecessor_script(old: u32, me: u32) -> String {
+    format!(
+        "$ErrorActionPreference = 'Stop'; \
+         $me = (Get-Process -Id {me}).StartTime; \
+         if (-not $me) {{ exit 2 }}; \
+         $old = Get-Process -Id {old} -ErrorAction SilentlyContinue; \
+         if ($old -and -not ($old.StartTime -gt $me)) {{ $old.WaitForExit() }}; \
+         exit 0"
+    )
+}
+
+/// What a relaunched copy says when the process it replaces is still
+/// running after `waited`: it ends before opening anything in the data
+/// folder.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn predecessor_refusal(waited: std::time::Duration) -> String {
+    format!(
+        "Lodestar didn't start again after Restart now: the copy it replaces was still \
+         running {} s after it shut down, so this one stopped before opening the data \
+         folder. Close Lodestar and start it again.",
+        waited.as_secs()
+    )
+}
+
 /// Set to `1` by `Start Lodestar.cmd`, which runs in a window someone can
 /// see; `lodestar.exe` and the copy Restart now starts inherit it. A run
 /// started any other way (Task Scheduler, a service wrapper, a hidden
@@ -816,6 +926,97 @@ mod tests {
     #[test]
     fn the_relaunch_exit_code_is_the_restart_code() {
         assert_eq!(EXIT_RELAUNCHED, crate::update::control::EXIT_RESTART);
+    }
+
+    /// X-flake-portable-restart: the wait for the process being replaced,
+    /// on a fake clock that each sleep moves on. Returns the outcome and
+    /// the probes made.
+    fn awaited(answers: Vec<Predecessor>, wait: Duration) -> (Predecessor, usize) {
+        use std::cell::Cell;
+        let start = Instant::now();
+        let elapsed = Cell::new(Duration::ZERO);
+        let mut answers = answers.into_iter();
+        let probes = Cell::new(0usize);
+        let got = await_predecessor(
+            || {
+                probes.set(probes.get() + 1);
+                answers.next().unwrap_or(Predecessor::Running)
+            },
+            wait,
+            PREDECESSOR_POLL,
+            || start + elapsed.get(),
+            |d| elapsed.set(elapsed.get() + d),
+        );
+        (got, probes.get())
+    }
+
+    /// The #655 flake: the hand-over's end of file came while the old
+    /// process still held the store. The copy goes on only once the
+    /// process itself has exited.
+    #[test]
+    fn a_relaunched_copy_waits_until_the_old_process_has_exited() {
+        use Predecessor::*;
+        let (got, probes) = awaited(vec![Running, Running, Exited], PREDECESSOR_WAIT);
+        assert_eq!((got, probes), (Exited, 3));
+        // Nothing to wait on: at once.
+        assert_eq!(awaited(vec![Unknown], PREDECESSOR_WAIT), (Unknown, 1));
+        // A watch that stops answering mid-way isn't a reason to wait on.
+        assert_eq!(
+            awaited(vec![Running, Unknown], PREDECESSOR_WAIT),
+            (Unknown, 2)
+        );
+    }
+
+    #[test]
+    fn a_process_still_running_past_the_wait_is_refused() {
+        // Probed at 0, 50, …, 1,000 ms: at the deadline it's given up.
+        let (got, probes) = awaited(Vec::new(), Duration::from_secs(1));
+        assert_eq!((got, probes), (Predecessor::Running, 21));
+        let (got, probes) = awaited(Vec::new(), Duration::ZERO);
+        assert_eq!((got, probes), (Predecessor::Running, 1));
+        // The brief's floor: at least 10 s before a refusal.
+        assert!(PREDECESSOR_WAIT >= Duration::from_secs(10));
+        let refusal = predecessor_refusal(PREDECESSOR_WAIT);
+        assert!(refusal.contains("still running 30 s"), "{refusal}");
+        assert!(refusal.contains("Close Lodestar and start it again."));
+    }
+
+    #[test]
+    fn only_a_watch_that_ended_well_says_exited() {
+        use Predecessor::*;
+        assert_eq!(watch_says(Some(Ok(None))), Running);
+        assert_eq!(watch_says(Some(Ok(Some(true)))), Exited);
+        assert_eq!(watch_says(Some(Ok(Some(false)))), Unknown);
+        assert_eq!(watch_says(Some(Err(std::io::Error::other("x")))), Unknown);
+        assert_eq!(watch_says(None), Unknown);
+    }
+
+    /// The old process's id comes from its own token, so the hand-over
+    /// needs nothing new.
+    #[test]
+    fn the_token_names_the_process_it_came_from() {
+        let token = crate::windows::relaunch::token();
+        assert_eq!(predecessor_pid(&token), Some(std::process::id()));
+        assert_eq!(predecessor_pid("lodestar-4242-17"), Some(4242));
+        for other in [
+            "",
+            "lodestar-test-token",
+            "lodestar-4242",
+            "lodestar--17",
+            "lodestar-4242-",
+            "lodestar-+42-17",
+            "lodestar-0-17",
+            "lodestar-99999999999-17",
+            "other-4242-17",
+            "lodestar-42-17-x",
+        ] {
+            assert_eq!(predecessor_pid(other), None, "{other:?}");
+        }
+        let script = predecessor_script(4242, 77);
+        assert!(script.contains("Get-Process -Id 77"), "{script}");
+        assert!(script.contains("Get-Process -Id 4242"), "{script}");
+        assert!(script.contains("$old.WaitForExit()"), "{script}");
+        assert!(script.ends_with("exit 0"), "{script}");
     }
 
     #[test]

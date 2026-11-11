@@ -12,22 +12,25 @@
 #      and only gluetun's firewall stands between them and eth0.
 # A gluetun with its firewall off passes A but fails B.
 #
-# Run as root by the step bootstrap: step.sh <workdir>; <workdir> holds the
-# committed compose.yaml. Output is fixed names only (`ok|fail <name>`,
+# Run as root by the step bootstrap: step.sh <workdir> [stack] [pia-run] [block]
+# (tests and start-block pass the last three); <workdir> holds the committed
+# compose.yaml and block-lib.sh. Output is fixed names only (`ok|fail <name>`,
 # `count <name> <int>`); the control side drops anything else. Exit 0 only when
 # every check passed.
 set -uo pipefail
 work=${1:?workdir}
 STACK=${2:-/home/lodestar/lodestar}  # tests pass a temporary stack; the bootstrap never does
 PIA_RUN=${3:-/run/lodestar-pia}
+BLOCK=${4:-/var/lib/lodestar-block}
 CONF=$STACK/secrets/wg0.conf
 IPV4='^([0-9]{1,3}\.){3}[0-9]{1,3}$'
 ECHO_URL=http://checkip.amazonaws.com
 V6_URL='http://[2606:4700:4700::1111]/'
 # The probes run from a throwaway container in gluetun's namespace (plan 0d), so
-# they never depend on the kill switch's own image. netshoot v0.16, by its
-# multi-arch index digest (docs/decisions/2026-11-09-OP-3a.md).
-PROBE_IMAGE=nicolaka/netshoot@sha256:b09d9b21381f47a79b3cbcb30da25266dc17186ea00ae65e99fdc51396f48e70
+# they never depend on the kill switch's own image: PROBE_IMAGE, netshoot v0.16
+# by its multi-arch index digest, from block-lib.sh with the block marker.
+# shellcheck source=block-lib.sh
+. "$work/block-lib.sh"
 NOT_RUN=222  # a probe whose container never ran its command: never counts as blocked
 fails=0
 block=""
@@ -80,7 +83,7 @@ wait_healthy() {
 }
 echo_ip() { probe curl -4 -s -m "$1" "$ECHO_URL" 2>/dev/null | tr -d '\r\n' | head -c 64; }
 tunnel_up() {  # recreate gluetun alone from the committed compose file and the current wg0.conf
-  LODESTAR_IMAGE=unused docker compose -f "$STACK/compose.yaml" --project-directory "$STACK" \
+  LODESTAR_IMAGE=unused DOCKER_GID=unused docker compose -f "$STACK/compose.yaml" --project-directory "$STACK" \
     up -d --force-recreate gluetun >/dev/null 2>&1
 }
 start_capture() {  # $1: phase
@@ -126,10 +129,17 @@ fi
 ep_port=$((10#$ep_port))
 pass endpoint_valid
 
-# Never mid-block, and fail closed: if Docker can't say what's running, a block
-# may be running.
-if ! names=$(docker ps --format '{{.Names}}' 2>/dev/null); then bad block_check; finish; fi
-if printf '%s\n' "$names" | grep -Eq '^(lodestar|lodestar-collector.*)$'; then bad block_running; finish; fi
+# Never mid-block, and fail closed: a block is recorded (the marker, which
+# also covers a block stopped between segments) or running; if either can't
+# be read, a block may be running.
+case $(block_state) in
+  none) ;;
+  block) bad block_running; finish ;;
+  *) bad block_check; finish ;;
+esac
+block_procs; rc=$?
+if ((rc == 2)); then bad block_check; finish; fi
+if ((rc == 0)); then bad block_running; finish; fi
 
 # The tunnel.
 install -m 0644 -- "$work/compose.yaml" "$STACK/compose.yaml" || { bad compose_installed; finish; }
@@ -188,6 +198,14 @@ if tunnel_up && wait_healthy && [[ -n $exit_ip && $(echo_ip 15) == "$exit_ip" ]]
 else
   bad tunnel_recovers
 fi
+
+# The host's own IPv6 (0d's separate check): the host doesn't route IPv6, the
+# stack's Docker network has none, and gluetun's namespace holds no global
+# IPv6 address. With these, the public IPv6 every Linode has can't carry
+# Lodestar's traffic around the tunnel.
+check host_ipv6_not_forwarded grep -qx 0 "${IPV6_FORWARDING:-/proc/sys/net/ipv6/conf/all/forwarding}"
+check bridge_ipv6_off test "$(docker network inspect -f '{{.EnableIPv6}}' lodestar_default 2>/dev/null)" = false
+refute namespace_no_global_ipv6 probe sh -c 'ip -6 -o addr show scope global | grep -q .'
 
 # PIA delivery's work directory is gone (this step holds the VM's lock).
 check run_clean test ! -e "$PIA_RUN"

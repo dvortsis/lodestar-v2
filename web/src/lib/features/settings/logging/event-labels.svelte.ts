@@ -1,6 +1,7 @@
 // The event list's names (lazy, with it): components, the data kinds' short badge names, and each
 // event's plain name and help.
 import { m } from '$lib/paraglide/messages.js';
+import { CHUNKS, type EventNames } from './event-names';
 import type { DataKind, LogEvent } from './rules';
 
 const COMPONENTS: Record<string, () => string> = {
@@ -35,16 +36,31 @@ const SHORT: Record<DataKind, () => string> = {
 };
 export const kindShort = (k: string) => SHORT[k as DataKind]?.() ?? k;
 
-// Each event's plain name and help are their own chunk (`event-names.ts`), loaded after the event
-// list shows; until then, and for an event the client doesn't know, the name is the stable id.
-let names = $state.raw<typeof import('./event-names').NAMES>();
-let loading: Promise<void> | undefined;
-/** Loads the event names once; the labels below update when they arrive. */
-export const loadEventNames = () =>
-	(loading ??= import('./event-names').then(
-		(mod) => void (names = mod.NAMES),
-		() => void (loading = undefined)
-	));
+// Each event's plain name and help are an on-demand chunk per component (`event-names/<component>.ts`,
+// listed in `event-names.ts`), loaded when an event of that component is first shown; until then,
+// and for an event the client doesn't know, the name is the stable id.
+type Shown = Pick<LogEvent, 'id' | 'component'>;
+let names = $state.raw<Record<string, EventNames>>({});
+const loading: Record<string, Promise<void> | undefined> = Object.create(null);
+/** Loads one component's event names once; the labels below update when they arrive. */
+export function loadEventNames(component: string): Promise<void> {
+	const chunk = Object.hasOwn(CHUNKS, component) ? CHUNKS[component] : undefined;
+	if (!chunk) return Promise.resolve();
+	let p = loading[component];
+	if (!p) {
+		p = chunk().then(
+			(mod) => void (names = { ...names, [component]: mod.NAMES }),
+			() => void (loading[component] = undefined)
+		);
+		loading[component] = p;
+	}
+	return p;
+}
 
-export const eventLabel = (e: Pick<LogEvent, 'id'>) => names?.[e.id]?.[0]() ?? e.id;
-export const eventHelp = (e: Pick<LogEvent, 'id'>) => names?.[e.id]?.[1]();
+function entry(e: Shown) {
+	void loadEventNames(e.component);
+	const chunk = Object.hasOwn(names, e.component) ? names[e.component] : undefined;
+	return chunk && Object.hasOwn(chunk, e.id) ? chunk[e.id] : undefined;
+}
+export const eventLabel = (e: Shown) => entry(e)?.[0]() ?? e.id;
+export const eventHelp = (e: Shown) => entry(e)?.[1]();

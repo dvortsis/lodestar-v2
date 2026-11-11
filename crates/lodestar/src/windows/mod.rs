@@ -124,12 +124,18 @@ fn powershell_command() -> Option<std::process::Command> {
 /// - **The new copy waits** ([`wait_if_successor`], first thing in
 ///   [`hook`]) for the token on stdin, which this process writes only once
 ///   its graceful shutdown is done ([`hand_over`]), then for end of file,
-///   which comes when this process exits and Windows has released its
-///   port, data lock and files. A stop instead of a restart (Ctrl+C, a
-///   crash) closes the pipe without the token, and the new copy ends
-///   quietly. Both waits have deadlines: [`GO_LIMIT`] for the shutdown and
-///   [`EXIT_LIMIT`] for the exit, after which it goes ahead and a port
-///   still held fails its start as any taken port would.
+///   which comes as this process exits. A stop instead of a restart
+///   (Ctrl+C, a crash) closes the pipe without the token, and the new copy
+///   ends quietly. Both waits have deadlines: [`GO_LIMIT`] for the
+///   shutdown and [`EXIT_LIMIT`] for the end of file.
+/// - **Then it waits for this process itself to have exited**
+///   (X-flake-portable-restart): the end of file comes when Windows closes
+///   this process's handles, before it has unmapped its files (SQLite's
+///   `-shm`, the index), so a store opened then can fail. A watch started
+///   first thing ([`crate::system::restart::predecessor_script`]) waits on
+///   the process named in the token; past
+///   [`crate::system::restart::PREDECESSOR_WAIT`] the new copy refuses to
+///   start, before opening anything in the data folder.
 /// - **It shares this process's console** and output, so the window it
 ///   was started in shows the new copy, and Ctrl+C there stops it.
 pub mod relaunch {
@@ -272,6 +278,7 @@ pub mod relaunch {
         use std::sync::Mutex;
 
         use super::{EXIT_LIMIT, GO_LIMIT, Handover, MARKER};
+        use crate::system::restart::{self, Predecessor};
 
         /// The copy waiting to take over, and its token.
         static SUCCESSOR: Mutex<Option<(Child, String)>> = Mutex::new(None);
@@ -287,10 +294,55 @@ pub mod relaunch {
             if std::io::stdin().is_terminal() {
                 return None;
             }
-            match super::await_handover(std::io::stdin(), &token, GO_LIMIT, EXIT_LIMIT) {
-                Handover::Go => None,
-                Handover::Abandoned => Some(ExitCode::SUCCESS),
+            // Started first, so its start overlaps the old one's shutdown.
+            let mut watch = watch_predecessor(&token);
+            let handed = super::await_handover(std::io::stdin(), &token, GO_LIMIT, EXIT_LIMIT);
+            let gone = match handed {
+                Handover::Go => restart::await_predecessor(
+                    || {
+                        restart::watch_says(
+                            watch
+                                .as_mut()
+                                .map(|w| w.try_wait().map(|s| s.map(|s| s.success()))),
+                        )
+                    },
+                    restart::PREDECESSOR_WAIT,
+                    restart::PREDECESSOR_POLL,
+                    std::time::Instant::now,
+                    std::thread::sleep,
+                ),
+                Handover::Abandoned => Predecessor::Unknown,
+            };
+            if let Some(mut w) = watch {
+                // Ended already unless the old process is still there.
+                let _ = w.kill();
+                let _ = w.wait();
             }
+            match (handed, gone) {
+                (Handover::Abandoned, _) => Some(ExitCode::SUCCESS),
+                (Handover::Go, Predecessor::Running) => {
+                    eprintln!(
+                        "{}",
+                        restart::predecessor_refusal(restart::PREDECESSOR_WAIT)
+                    );
+                    Some(ExitCode::FAILURE)
+                }
+                (Handover::Go, _) => None,
+            }
+        }
+
+        /// The watch on the process this copy replaces, named in its token:
+        /// a Windows PowerShell with no window that ends once that process
+        /// has exited. `None` if the token names none or it can't start.
+        fn watch_predecessor(token: &str) -> Option<Child> {
+            let old = restart::predecessor_pid(token)?;
+            let mut cmd = super::super::powershell_command()?;
+            cmd.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"])
+                .arg(restart::predecessor_script(old, std::process::id()))
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            cmd.spawn().ok()
         }
 
         fn spawn() -> std::io::Result<(Child, String)> {

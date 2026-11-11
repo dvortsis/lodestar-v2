@@ -1,0 +1,41 @@
+# Creates or updates the operator's agent, environment and vault (OP-4; plan
+# owner setup step 3.4). The owner runs it from the Actions tab, on main.
+# Decisions: docs/decisions/2026-11-11-OP-4.md. Rules as in operator-wake.yml;
+# infra/operator/tests/test_workflows.py checks them.
+name: operator-apply
+
+on:
+  workflow_dispatch: # no inputs, by design
+
+permissions: {}
+
+jobs:
+  apply:
+    if: >-
+      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.run_attempt == 1
+      && vars.OWNER_USER_ID != '' && github.actor_id == vars.OWNER_USER_ID
+      && vars.OPERATOR_STOP == 'false'
+    environment: cloud-operator
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write # assumes LodestarOperatorBridge by OIDC, in-process
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 -m pip install --quiet --no-deps --require-hashes --target "$RUNNER_TEMP/fleet-deps" -r infra/fleet/requirements-live.txt
+      - env:
+          OWNER_USER_ID: ${{ vars.OWNER_USER_ID }}
+          OPERATOR_STOP: ${{ vars.OPERATOR_STOP }}
+          OPERATOR_MODEL_ROUTINE: ${{ vars.OPERATOR_MODEL_ROUTINE }}
+          RUNNER_USER_ID: ${{ vars.RUNNER_USER_ID }}
+          OPERATOR_BOT_USER_ID: ${{ vars.OPERATOR_BOT_USER_ID }}
+          CHANNEL_PR: ${{ vars.CHANNEL_PR }}
+          PYTHONPATH: ${{ runner.temp }}/fleet-deps
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AWS_BRIDGE_ROLE_ARN: ${{ secrets.AWS_BRIDGE_ROLE_ARN }}
+          CONTROL_BUCKET: ${{ secrets.CONTROL_BUCKET }}
+          FLEET_BUCKET_OWNER: ${{ secrets.FLEET_BUCKET_OWNER }}
+        run: python3 infra/operator/agent_apply.py apply
