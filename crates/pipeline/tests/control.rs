@@ -1629,6 +1629,12 @@ async fn a_pinned_credential_saved_since_the_start_waits_for_a_restart() {
     // longer has). The fresh reader still never does.
     let (pipeline, control, creds) = start().await;
     assert!(!pending(&control, "pinning"));
+    // Another source's write leaves it alone.
+    assert!(!set_key(&control, &creds, "fresh", Some("other-key")).await);
+    assert!(
+        !pending(&control, "pinning"),
+        "only its own credentials count"
+    );
     assert!(set_key(&control, &creds, "pinning", None).await);
     assert!(!set_key(&control, &creds, "fresh", None).await);
     pipeline.shutdown().await.unwrap();
