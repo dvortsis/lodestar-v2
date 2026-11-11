@@ -2,7 +2,6 @@
 
 Terms used in this guide, A to Z. Each chapter links a term here the first time it uses it.
 
-
 ## Cache pool
 
 A group of SSDs or NVMe drives in Unraid, used for fast storage. A path starting `/mnt/cache` is on it.
