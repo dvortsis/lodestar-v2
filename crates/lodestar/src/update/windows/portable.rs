@@ -1135,6 +1135,9 @@ mod tests {
         fault: Cell<Option<Point>>,
         /// Rewrites `next.exe` at this point instead of failing.
         tamper: Cell<Option<Point>>,
+        /// Whether that rewrite got through (Windows refuses it while the
+        /// file is held).
+        tampered: Cell<bool>,
     }
 
     impl Fake {
@@ -1150,6 +1153,7 @@ mod tests {
                 private: Cell::new(true),
                 fault: Cell::new(None),
                 tamper: Cell::new(None),
+                tampered: Cell::new(false),
             }
         }
         fn data(&self) -> PathBuf {
@@ -1229,7 +1233,8 @@ mod tests {
         }
         fn fault(&self, point: Point) -> io::Result<()> {
             if self.tamper.get() == Some(point) {
-                std::fs::write(self.data().join("bin").join(NEXT), b"swapped in").unwrap();
+                let wrote = std::fs::write(self.data().join("bin").join(NEXT), b"swapped in");
+                self.tampered.set(wrote.is_ok());
             }
             if self.fault.get() == Some(point) {
                 Err(io::Error::other("injected"))
@@ -1358,6 +1363,7 @@ mod tests {
         let f = Fake::new();
         f.tamper.set(Some(Point::Aside));
         assert_eq!(f.install(), Err("swap_failed"));
+        assert!(f.tampered.get());
         f.untouched();
     }
 
@@ -1648,12 +1654,23 @@ mod tests {
         assert_eq!(f.program_bytes().as_deref(), Some(OLD));
     }
 
+    /// Between the check and the move: on Windows the held handle
+    /// refuses the write, so the checked program is the one moved; where
+    /// the write gets through, the check after the move takes it out again.
     #[test]
     fn a_program_swapped_in_after_the_check_is_taken_out_again() {
         let f = Fake::new();
         f.tamper.set(Some(Point::Between));
-        assert_eq!(f.install(), Err("swap_failed"));
-        f.untouched();
+        let result = f.install();
+        if f.tampered.get() {
+            assert!(!cfg!(windows), "the held handle let a writer in");
+            assert_eq!(result, Err("swap_failed"));
+            f.untouched();
+        } else {
+            assert!(cfg!(windows), "the write should have got through here");
+            assert_eq!(result, Ok(()));
+            assert_eq!(f.program_bytes().as_deref(), Some(NEW));
+        }
     }
 
     #[test]
