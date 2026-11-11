@@ -4,14 +4,17 @@ Follow-ups from the reviews of #659 (PK-win-portable-upd, `reviews/rv-659-c48421
 
 ## Install now respects Off and a pause (#677's flag, sent to the owner under §2.19)
 - **When updates are switched Off, or a pause starts, the request waiting for the update helper goes** (`<data>\updates\request.json`). The helper's boot retry needs that file, so it can't replay Install now afterwards (owner §2.13: updates wait for their window). The helper isn't changed; X-win-upd-reoffer owns it.
-  - **Switched Off:** the notifier's settings loop sees the change. Only the switch counts: a change to another setting, or Off staying Off, leaves the request.
+  - **Switched Off:** a watcher task of its own sees the change at once (self-review I1). The check loop can't, because it can wait for the check lock for a whole download. Only the switch counts: a change to another setting, or Off staying Off, leaves the request. The watcher reads the starting mode when it's created, not when it first runs, so a switch made in between isn't mistaken for the start.
   - **A pause starting:** after it's saved. A resume (0 days) leaves the request.
-  - **At the notifier's start, with updates Off or paused:** a request left from when the service wasn't running goes too.
+  - **Not at the notifier's start** (self-review I2): a request waiting then stays, whether updates are Off or paused. Otherwise an Install now made while Off would lose its retry at the first restart, and the notice's "tries again" would be wrong. Settings change while the service is stopped only when someone edits the file by hand.
+  - **Off and then On again before the watcher runs** can coalesce into one change and withdraw nothing (self-review P6). Updates are On again by then, so the request stands, as it would have with no switch.
+  - **The removal** is retried for about a second, as the renames are, for antivirus or the indexer holding the file. The folder is then flushed, and the removal runs off the async runtime (self-review P2, P3). If it still fails, that's logged (`update.state_unsaved`) and the request stays.
 - **Install now asked for while updates are already Off or paused still goes ahead** (it's the user's explicit action). Only a switch to Off, or a pause starting, takes a waiting request back.
-- **The ordering against an install under way:** a withdrawal bumps an epoch, then removes the file. The install reads the epoch when it starts and again after it writes its request. If the epoch moved, the install takes its own request back and answers `withdrawn`, and the helper isn't started. With both sides sequentially consistent, either the install sees the bump, or the removal comes after its write. Removing one file is atomic. A request the helper has already taken is past recall, as before.
+- **The ordering against an install under way:** a withdrawal bumps an epoch, then removes the file. The install reads the epoch when Install now is accepted (self-review P1) and again after it writes its request. If the epoch moved, the install takes its own request back and answers `withdrawn`, and the helper isn't started. With both sides sequentially consistent, either the install sees the bump, or the removal comes after its write. Removing one file is atomic. A request the helper has already taken is past recall, as before.
 
 ## The install_blocked notice (runner, approving the web files)
 - **`install_blocked` gets its own notice** in place of `install_failed`'s, which says the installer's log is worth reading. The helper answers `install_blocked` only while a retry remains: once retries are spent, it skips the version and answers `install_failed`, which keeps that notice.
+- **Only while the retry's request is still there,** with the same id as the answer (self-review I2). The retry needs that request. Once Off or a pause has taken it back, or another request has replaced it, the notice is `install_failed`'s instead, so "tries again" is never shown when no retry is coming.
 - **The wording**, checked against the helper: "The update is waiting. Windows wouldn't start the Lodestar service at the end of the install, so the update wasn't installed. Nothing changed. Lodestar tries again the next time Windows starts, unless you switch updates off or pause them first." The last clause is true because of the section above: the retry needs the request, and switching Off or pausing removes it. zh says the same.
 - The API's notice list and the generated `openapi.json` and `schema.d.ts` name the new code.
 
@@ -20,7 +23,9 @@ Follow-ups from the reviews of #659 (PK-win-portable-upd, `reviews/rv-659-c48421
 - Both now go through `portable::Verdict`, one lock and a state: whichever comes first runs whole, and the other then does nothing.
   - **A stop that comes first** gives its attempt back. The self-test's later result is ignored, because a stop isn't a failure.
   - **A verdict that comes first** stands. A later stop gives nothing back.
-  - A test forces the interleave: inside the verdict, the lock is held and a stop started from another thread waits for it, then does nothing. No sleeps.
+  - The verdict is marked decided before it runs (self-review P4), so one that panics part way never lets a stop give an attempt back over it.
+  - The stop runs off the async runtime, since it may wait for a rollback running on the blocking pool (P3).
+  - A test pins that the lock is held for the whole verdict (`try_lock` fails inside it), and that a stop started from another thread meanwhile does nothing, whenever it gets to run (P5's wording). No sleeps.
 
 ## #659 nits
 - N1: `at_start` is test-only (`#[cfg(test)]`); `serve` uses `begin`. So the Windows build has no unused function.
@@ -34,5 +39,6 @@ Follow-ups from the reviews of #659 (PK-win-portable-upd, `reviews/rv-659-c48421
   - the switch-to-Off condition, both halves;
   - the install's epoch recheck;
   - the epoch bump;
-  - the withdrawal at start;
+  - the watcher's withdrawal;
+  - `install_blocked` only while its request is pending;
   - `Verdict`'s two phase checks.

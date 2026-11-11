@@ -721,9 +721,10 @@ impl Verdict {
         if *phase != Phase::Open {
             return None;
         }
-        let done = f();
+        // Decided before it runs: a verdict that panics part way never
+        // lets a stop give an attempt back over it.
         *phase = Phase::Decided;
-        Some(done)
+        Some(f())
     }
 
     /// Runs the stop's give-back `f` unless the verdict came first.
@@ -1232,8 +1233,13 @@ pub mod serve {
     }
 
     /// The run ended before the self-test decided: a graceful stop.
-    pub fn stopped(data: &Path, verdict: &super::Verdict) {
-        verdict.stop(|| super::stopped(&System, data));
+    /// Off the async runtime: the stop may wait for a verdict (a
+    /// rollback) running on the blocking pool.
+    pub async fn stopped(data: PathBuf, verdict: super::Verdict) {
+        let _ = tokio::task::spawn_blocking(move || {
+            verdict.stop(|| super::stopped(&System, &data));
+        })
+        .await;
     }
 }
 
@@ -2123,9 +2129,10 @@ mod tests {
         assert_eq!(f.at(PREVIOUS).as_deref(), Some(OLD));
     }
 
-    /// N4, the interleave forced: a stop arriving while the verdict runs
-    /// waits for it whole, then does nothing; it never writes `Swapped`
-    /// back over the journal `passed` just cleared.
+    /// N4: the lock is held for the whole verdict (a stop can't get in
+    /// part way, pinned by `try_lock`), and a stop started meanwhile from
+    /// another thread, whenever it runs, then does nothing: it never
+    /// writes `Swapped` back over the journal `passed` just cleared.
     #[test]
     fn a_stop_during_the_verdict_waits_and_then_does_nothing() {
         use std::sync::atomic::{AtomicBool, Ordering};

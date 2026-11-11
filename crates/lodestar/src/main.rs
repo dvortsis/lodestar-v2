@@ -324,8 +324,8 @@ async fn serve_as(
     // A graceful stop before the self-test decided gives its attempt
     // back; the verdict and this never run at once (`portable::Verdict`).
     #[cfg(windows)]
-    if let Some(v) = &verdict {
-        update::windows::portable::serve::stopped(&config.data_dir, v);
+    if let Some(v) = verdict {
+        update::windows::portable::serve::stopped(config.data_dir.clone(), v).await;
     }
     let _ = (on_probation, probation);
     #[cfg(unix)]
