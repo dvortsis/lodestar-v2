@@ -512,13 +512,14 @@ async fn the_gate_adds_no_sign_in_of_its_own() {
     assert_eq!(version_reads, 2, "checked in the plan and the apply");
 }
 
-/// The gate is what `configure::configurator` hands out on Windows; with
-/// the compiled-in catalogue awaiting its pin, that refuses.
-#[cfg(windows)]
+/// The configurator CMP-11b registers for Windows is the gate: with the
+/// compiled-in catalogue awaiting its pin, it refuses before sending
+/// anything. Not registered yet, so `configure::configurator` is still
+/// CMP-8b's adapter on every platform.
 #[tokio::test]
-async fn windows_registers_the_gate() {
+async fn the_windows_configurator_is_the_gate() {
     let id = CompanionId::parse("qbittorrent").unwrap();
-    let c = configure::configurator(&id).unwrap();
+    let c = lodestar_companions::windows_qbittorrent::configurator(&id).unwrap();
     let creds = Creds(GENERATED);
     let t = loopback();
     let http = fake("5.0.3");

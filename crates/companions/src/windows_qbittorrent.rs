@@ -318,8 +318,9 @@ impl Guide {
 /// CMP-8b's qBittorrent adapter with the Windows version gate. Signed in,
 /// on the adapter's own session (so it costs no sign-in of its own), a
 /// version outside the pin's range is refused before anything is read or
-/// written, in the plan and again in the apply. Registered for qBittorrent
-/// on Windows ([`crate::configure::configurator`]).
+/// written, in the plan and again in the apply. Not registered yet: CMP-11b
+/// makes [`configurator`] what `configure::configurator` hands out for
+/// qBittorrent on Windows, with CMP-5g's guided tests updated for it.
 pub struct WindowsQBittorrent {
     id: CompanionId,
     /// `None` only if the compiled-in catalogue couldn't be read: then
@@ -444,7 +445,8 @@ impl Configure for WindowsQBittorrent {
 
 /// The Windows configurator for qBittorrent, from the compiled-in
 /// catalogue. Always one: without the catalogue it refuses every call.
-pub(crate) fn configurator(id: &CompanionId) -> Option<Box<dyn Configure>> {
+/// CMP-11b registers it in `configure::configurator` under `cfg(windows)`.
+pub fn configurator(id: &CompanionId) -> Option<Box<dyn Configure>> {
     let entry = crate::builtin().ok().and_then(|c| c.get(id.as_str()));
     Some(Box::new(WindowsQBittorrent::with(id.clone(), entry)))
 }
