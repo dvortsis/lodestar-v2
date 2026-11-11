@@ -300,7 +300,7 @@ the `hot/` folder is a subfolder of it, not a separate place.
   `seal.key` and `auth.json` in a new `backups/lodestar-backup-<time>` folder
   inside the data folder (or `--to <folder>`). It's safe while Lodestar runs.
   The search index isn't copied: Lodestar rebuilds it from the store.
-- **Update notices** inside the app are planned. Lodestar sends no telemetry.
+- **Update checks** are off until you turn them on in the app's update settings. When on, Lodestar makes one signed check of the project's release page. Lodestar sends no telemetry.
 
 ### Importing from Magnetico or Bitmagnet
 
@@ -420,9 +420,9 @@ below. Behind a TLS reverse proxy, set `http.secure_cookies = true` in
 `config.toml`.
 
 **Slow disk, or SQLite "database is locked".** Check the data path. If it is
-under `/mnt/user` on Unraid, move it to a pool path (§5). The app is meant to
-warn when it finds data on a FUSE or network filesystem; **that warning is
-planned and not in the binary yet**, so check the path yourself.
+under `/mnt/user` on Unraid, move it to a pool path (§5). Lodestar warns at
+start when it finds data on a FUSE or network filesystem; `lodestar stats`
+shows it too.
 
 **The router or network gets slow.** See §4.5; lower `LODESTAR_INTENSITY`.
 
