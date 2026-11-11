@@ -6798,7 +6798,9 @@
     "2026-11-11T14:16Z: disk full on runner container; freed ~12G (own target, stale review targets tgt-rv639/640, tgt630, xfpr-target, plan-target, plan-wt worktree, node-compile-cache). Reviewers must rm their target dirs when done",
     "2026-11-11T14:26Z: #687 PK-exc fresh Opus MERGE at dc488d45 (rv-687-dc488d45); one round requested: Important Windows flake (probe_host reads process-wide socket count in parallel) + 9p wording + netsh 20 s deadline + PR body size; runner self-checks delta then merges. digest.rs alert() arms approved retroactively; next runner PR: PK-exc owns += crates/api/src/digest.rs",
     "2026-11-11T14:30Z: ci.yml 'update manifest round trip' red 3x (apt-get update fails resolving security.ubuntu.com, before job steps); fix ported in #694 (install first, tolerant update with Acquire::Retries=5); other PRs running that job red on it may cite \u00a72.18 until #694 merges",
-    "2026-11-11T14:30Z: queue: freshness.yml:80 same apt-get update && install minisign jq pattern; apply the #694 tolerant-update line in a small X-ci slice (not in ci-ok)"
+    "2026-11-11T14:30Z: queue: freshness.yml:80 same apt-get update && install minisign jq pattern; apply the #694 tolerant-update line in a small X-ci slice (not in ci-ok)",
+    "2026-11-11T14:34Z: WK-11 approved shared edit crates/lodestar/src/cli/worker.rs (one runtime_config.spool line); PK-cli told; next runner PR: WK-11 owns += cli/worker.rs, session.rs, runtime.rs, secret.rs, remote.rs",
+    "2026-11-11T14:34Z: owner flag (\u00a72.26, WK-11): offline the worker pool stays paused (WK-10c/WK-5 per-IP politeness), spool holds in-flight work only; full spool pauses fetching until replay brings it under half the cap; refinement of \u00a719.6 'keeps harvesting and processing'"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
