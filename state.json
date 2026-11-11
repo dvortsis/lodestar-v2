@@ -7714,9 +7714,7 @@
       "relayed": "2026-11-11 via dashboard session"
     }
   ],
-  "review_queue": [
-    "#701 bc90ad54 (PK-ui, web, ready 17:12Z)"
-  ],
+  "review_queue": [],
   "merged": [
     {
       "pr": 685,
