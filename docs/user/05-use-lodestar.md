@@ -66,7 +66,7 @@ When the pill says **Stalled**, open **Insights**. A banner there says the crawl
 *Figure 5.5: The status pill in its normal and stalled states. (Screenshot pending; see [`images/SHOTLIST.md`](images/SHOTLIST.md).)*
 
 > [!NOTE]
-> After a start, sampling waits 6 hours, so the pill and the counts move slowly at first. The index grows over days.
+> After a start, sampling waits 6 hours, so the pill and the counts move slowly at first. Full speed starts after those 6 hours. The index grows over days.
 
 > [!TIP]
 > **Key takeaways**

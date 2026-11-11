@@ -85,11 +85,8 @@ pub struct Handles {
     torrent_cache: Option<(watch::Sender<bool>, JoinHandle<()>)>,
     /// The cluster port (WK-1), stopped before the pipeline.
     cluster: crate::cluster::Cluster,
-    /// The companion manager and its snapshot (CMP-5); none in a fixture.
-    #[allow(
-        dead_code,
-        reason = "CMP-5g starts companions and hands the snapshot on"
-    )]
+    /// The companion manager, its snapshot and the supervisor (CMP-5,
+    /// CMP-5g-3); none in a fixture.
     companions: Option<crate::companions::Companions>,
     /// The companion gate's feed and the watch (CMP-5g-1), stopped when
     /// dropped.
@@ -900,7 +897,13 @@ impl Handles {
         }
         // No remote session outlives the pipeline's save.
         self.cluster.shutdown().await;
-        let mut store = self.pipeline.shutdown().await?;
+        let pipeline = self.pipeline.shutdown().await;
+        // After the plugins that use them, even if the pipeline's stop
+        // failed; each companion's stop is bounded.
+        if let Some(c) = self.companions {
+            c.shutdown().await;
+        }
+        let mut store = pipeline?;
         // A failed snapshot only costs a rebuild from SQLite at the next
         // start; the indexer still gets to stop cleanly.
         let (hot, hot_dir) = (self.hot, self.hot_dir);

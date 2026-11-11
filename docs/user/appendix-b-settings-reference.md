@@ -8,8 +8,6 @@ Every field in the Lodestar Unraid template in one table. The recommended value 
 | DHT / peers (UDP) | Port for DHT traffic (`6881/udp`) | `6881` | Forwarding is optional and shows your IP to DHT peers. |
 | Peers (TCP) | Reserved for incoming peers (planned) | `6881` | Nothing listens yet. Don't forward it. |
 | Data | Index, database and settings (`/data`) | `/mnt/cache/appdata/lodestar` | Use a pool path, not `/mnt/user`. |
-| Hot path (optional) | Planned, not used yet | empty | Needs SSD or NVMe if used later. |
-| Cold path (optional) | Planned, not used yet | empty | Keep on the cache pool if used later. |
 | PUID | User ID Lodestar runs as; it makes Data this user's on start | `99` | Never `0` (root). |
 | PGID | Group ID Lodestar runs as | `100` | Never `0` (root group). |
 | TZ | Time zone | `Etc/UTC` | Log timestamps are UTC today. |

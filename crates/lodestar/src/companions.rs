@@ -9,12 +9,18 @@
 //!   anything else touches them, and the snapshot channel CMP-10 reads,
 //!   with whether any download client is set up.
 //!
-//! Starting installed companions at serve, behind their own route (Q18's
-//! `companions.<id>.egress`), is CMP-5g's wiring; until then [`Unwired`]
-//! refuses every start, so nothing runs on a route nobody chose.
+//! - [`Wiring`]: at serve, CMP-4a's supervisor in CMP-4b's sandbox
+//!   ([`Supervised`]) and CMP-8b's configuration ([`Api`]), handed to the
+//!   manager once it holds the companion lock; every installed companion
+//!   is then started (CMP-5g-3). The CLI's manager and a container's stay
+//!   [`Unwired`], which refuses every start.
+//! - [`CompanionRoutes`]: each companion's route (Q18), from its
+//!   `companions.<id>.egress` setting, set from the plugin that needs it
+//!   when it's first started, so nothing runs on a route nobody chose.
 
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use lodestar_api::companions::{CompanionsApi, CompanionsError, Revealed};
 use lodestar_api::dto::companions::{
@@ -26,19 +32,26 @@ use lodestar_companions::catalogue::{Sha256, TemplateId};
 use lodestar_companions::compose::{
     self, DataFolder, DataFolders, MountRole, Paths, ServiceInput, TemplateError,
 };
-use lodestar_companions::configure::InstallReceipt;
+use lodestar_companions::configure::{self, InstallReceipt, Socks5Proxy};
 use lodestar_companions::credentials::{self, CredentialKey, Field, SealedRow};
+use lodestar_companions::detect::CompanionHttp;
 use lodestar_companions::fetch::{self, Guarded};
 use lodestar_companions::inputs::{ContainerName, HostPath, NetworkName, Pgid, Puid};
 use lodestar_companions::log_events::INSTALL_FAILED;
 use lodestar_companions::manager::{
-    ApiConfigure, Downloader, Health, Host, InstallToken, Launch, Manager, ManagerError, Parts,
-    Refusal, RowError, Rows, Run, Snapshot, field_of,
+    Api, ApiConfigure, Downloader, Health, Host, InstallToken, Launch, Manager, ManagerError,
+    Parts, Prelaunch, Refusal, Routes, RowError, Rows, Run, Snapshot, Supervised, field_of,
+    monitored,
 };
 use lodestar_companions::supervise::logs::Redactor;
+use lodestar_companions::supervise::{Launcher, Limits, Sandbox, Status, Supervisor, Timings};
 use lodestar_companions::{Catalogue, CompanionId, Entry, Version, unraid};
 use lodestar_integrations::net::Route;
 use lodestar_integrations::secret::{SealedSecret, Secret, SecretStore};
+use lodestar_pipeline::control::{EgressSetting, SavedEgress, Unreadable};
+use lodestar_sources::egress::{
+    DownReason, Egress, EgressFactory, Endpoints, NoCredentials, RouteKind,
+};
 use lodestar_store::Store;
 use tokio::sync::watch;
 
@@ -102,8 +115,9 @@ fn in_container(read: impl Fn(&str) -> Option<Vec<u8>>) -> bool {
     has("/.dockerenv") || has("/run/.containerenv") || cgroup || env
 }
 
-/// Refuses every start until CMP-5g hands in the supervisor and each
-/// companion's route. Stopping is a no-op: nothing was started.
+/// Refuses every start: the CLI's manager, a container's, and serve's
+/// when the supervisor couldn't be built. Stopping is a no-op: nothing
+/// was started.
 #[derive(Debug)]
 pub struct Unwired;
 
@@ -134,10 +148,10 @@ impl ApiConfigure for Unwired {
     }
 }
 
-/// The manager over this data folder and store. Downloads go direct, as
-/// the updater's do (CMP-1's decision); nothing is started ([`Unwired`]).
-/// Blocking (the store, the secrets file, the lock): async callers use
-/// `spawn_blocking`.
+/// The manager over this data folder and store, for the CLI. Downloads go
+/// direct, as the updater's do (CMP-1's decision); nothing is started
+/// ([`Unwired`]). Blocking (the store, the secrets file, the lock): async
+/// callers use `spawn_blocking`.
 pub fn manager(
     data: PathBuf,
     store: Arc<Mutex<Store>>,
@@ -152,7 +166,8 @@ fn manager_on(
     catalogue: &'static Catalogue,
     host: Host,
 ) -> Result<Manager, OpenError> {
-    manager_with(data, store, catalogue, host).map(|(m, _)| m)
+    let unwired = Arc::new(Unwired);
+    manager_with(data, store, catalogue, host, unwired.clone(), unwired).map(|(m, _)| m)
 }
 
 /// [`manager_on`], with the secrets file the manager seals with, for the
@@ -162,6 +177,8 @@ fn manager_with(
     store: Arc<Mutex<Store>>,
     catalogue: &'static Catalogue,
     host: Host,
+    run: Arc<dyn Run>,
+    api: Arc<dyn ApiConfigure>,
 ) -> Result<(Manager, Arc<SecretStore>), OpenError> {
     let fail = |code: &'static str, message: String| OpenError { code, message };
     let secrets =
@@ -177,8 +194,8 @@ fn manager_with(
         downloader,
         secrets: secrets.clone(),
         rows: Arc::new(StoreRows(store)),
-        run: Arc::new(Unwired),
-        api: Arc::new(Unwired),
+        run,
+        api,
     })
     .map_err(|e| match e {
         lodestar_companions::manager::ManagerError::Refused(_) => fail(
@@ -198,29 +215,46 @@ pub struct OpenError {
     pub message: String,
 }
 
-/// What serve keeps: the manager, and the snapshot channel.
+/// What serve keeps: the manager, the snapshot channel, and what runs
+/// the companions.
 #[derive(Debug)]
-#[allow(
-    dead_code,
-    reason = "CMP-5g starts companions and hands the snapshot on"
-)]
 pub struct Companions {
-    pub manager: Arc<Manager>,
     /// `/companions` (CMP-6), layered over the API.
     pub api: Arc<Service>,
     /// The installed companions, which `companion_wiring` folds into the
     /// pipeline's companion gate (CMP-5g-1).
     pub snapshot: watch::Receiver<Snapshot>,
+    wiring: Arc<Wiring>,
+    /// Following `integrations.clients`, and starting the installed
+    /// companions: both stopped at shutdown.
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+}
+
+impl Companions {
+    /// Hands the sink a native install is handed over to (X-cmp-native-
+    /// handover); until then an install or removal of qBittorrent is
+    /// refused at its hand-over (`not_wired`).
+    pub(crate) fn wire_sink(&self, sink: Arc<dyn ManagedSink>) {
+        let _ = self.wiring.sink.set(sink);
+    }
+
+    /// Serve's shutdown (#619 N3): stops following the integrations and
+    /// starting companions, then stops every companion, each bounded.
+    pub async fn shutdown(self) {
+        for t in &self.tasks {
+            t.abort();
+        }
+        if let Some(s) = self.wiring.supervised.get() {
+            s.shutdown().await;
+        }
+    }
 }
 
 /// At serve: recovers what a crash interrupted, publishes the installed
-/// companions, and follows whether any download client is set up. A bad
-/// catalogue turns companions off for the run (CMP-0); a failed recovery
-/// is logged by code and leaves that companion as it is.
-///
-/// TODO(CMP-5g): the task following `integrations.clients` isn't stopped
-/// at shutdown; its stop signal belongs in `Handles::shutdown` with the
-/// rest of CMP-5g's wiring.
+/// companions, starts each one Lodestar installed, and follows whether any
+/// download client is set up. A bad catalogue turns companions off for the
+/// run (CMP-0); a failed recovery is logged by code and leaves that
+/// companion as it is.
 pub async fn start(
     data: PathBuf,
     store: Arc<Mutex<Store>>,
@@ -239,14 +273,18 @@ async fn start_with(
 ) -> Option<Companions> {
     let rows = StoreRows(store.clone());
     let folder = data.clone();
-    let opened = tokio::task::spawn_blocking(move || manager_with(data, store, catalogue, host))
-        .await
-        .unwrap_or_else(|_| {
-            Err(OpenError {
-                code: "panicked",
-                message: String::new(),
-            })
-        });
+    let wiring = Arc::new(Wiring::default());
+    let routes = Arc::new(CompanionRoutes::new(store.clone()));
+    let (run, api) = (wiring.clone(), wiring.clone());
+    let opened =
+        tokio::task::spawn_blocking(move || manager_with(data, store, catalogue, host, run, api))
+            .await
+            .unwrap_or_else(|_| {
+                Err(OpenError {
+                    code: "panicked",
+                    message: String::new(),
+                })
+            });
     let (manager, secrets) = match opened {
         Ok((m, secrets)) => (Arc::new(m), secrets),
         Err(e) => {
@@ -261,29 +299,67 @@ async fn start_with(
             return None;
         }
     };
-    for (id, r) in manager.recover().await {
-        if let Err(e) = r {
-            let companion = catalogue
-                .get(id.as_str())
-                .map_or("unknown", |e| e.id.as_str());
-            lodestar_log::log_event!(
+    // Only once this process holds the companion lock: the supervisor
+    // kills companions an earlier run left behind. Nothing is native in a
+    // container (Q17).
+    if !host.in_container {
+        match supervise(&folder, routes).await {
+            Ok((supervised, api)) => wiring.wire(supervised, api),
+            Err(code) => lodestar_log::log_event!(
                 INSTALL_FAILED,
-                companion = companion,
+                companion = "all",
                 version = "",
-                step = "recover",
-                reason = e.code()
-            );
+                step = "supervise",
+                reason = code
+            ),
         }
+    }
+    let mut started = Vec::new();
+    for (id, r) in manager.recover().await {
+        match r {
+            Ok(Some(_)) => started.push(id),
+            Ok(None) => {}
+            Err(e) => {
+                let companion = catalogue
+                    .get(id.as_str())
+                    .map_or("unknown", |e| e.id.as_str());
+                lodestar_log::log_event!(
+                    INSTALL_FAILED,
+                    companion = companion,
+                    version = "",
+                    step = "recover",
+                    reason = e.code()
+                );
+            }
+        }
+    }
+    let mut tasks = Vec::new();
+    if wiring.supervised.get().is_some() {
+        // One at a time, in the background: each waits for its health.
+        // A failure is logged by the manager (step `start`).
+        let m = manager.clone();
+        tasks.push(tokio::spawn(async move {
+            for id in started {
+                let _ = m.start(&id).await;
+            }
+        }));
     }
     let m = manager.clone();
     m.set_download_clients(!integrations.borrow_and_update().clients.is_empty());
-    tokio::spawn(async move {
+    tasks.push(tokio::spawn(async move {
         while integrations.changed().await.is_ok() {
             let any = !integrations.borrow_and_update().clients.is_empty();
             m.set_download_clients(any);
         }
-    });
+    }));
     let snapshot = manager.snapshot();
+    let live: Arc<dyn Live> = match wiring.supervised.get() {
+        Some(s) => Arc::new(Supervision {
+            manager: manager.clone(),
+            supervised: s.clone(),
+        }),
+        None => Arc::new(Unwired),
+    };
     let api = Arc::new(Service {
         manager: manager.clone(),
         catalogue,
@@ -291,49 +367,389 @@ async fn start_with(
         data: folder,
         secrets,
         rows,
-        live: Arc::new(Unwired),
+        live,
     });
     Some(Companions {
-        manager,
         api,
         snapshot,
+        wiring,
+        tasks,
     })
 }
 
-/// What only a running supervisor can do (CMP-5g hands one in): restart,
-/// recent output and regenerating a credential, which rewrites the
-/// companion's own config and restarts it. It answers `not_installed` for
-/// a companion it doesn't run. [`Unwired`] refuses each with `not_wired`.
+/// The supervisor in its sandbox, with the guarded client, and CMP-8b's
+/// configuration on each companion's route. A failure's code otherwise.
+async fn supervise(
+    data: &Path,
+    routes: Arc<CompanionRoutes>,
+) -> Result<(Arc<Supervised>, Api), &'static str> {
+    let launcher = Launcher::lodestar().map_err(|e| e.code())?;
+    let sandbox = Sandbox::new(Limits::default(), launcher).map_err(|e| e.code())?;
+    let supervisor = Supervisor::new(data.to_path_buf(), sandbox.hook(), Timings::default())
+        .await
+        .map_err(|e| e.code())?;
+    let http: Arc<dyn lodestar_companions::adapter::GuardedHttp> =
+        Arc::new(CompanionHttp::new().map_err(|_| "companion_http")?);
+    let api = Api {
+        http: http.clone(),
+        route: Arc::new({
+            let routes = routes.clone();
+            move |id: &CompanionId| routes.configured(id)
+        }),
+    };
+    let supervised = Supervised::new(data.to_path_buf(), supervisor, sandbox, http, routes, None);
+    Ok((Arc::new(supervised), api))
+}
+
+/// What the manager starts and configures with at serve: [`Supervised`]
+/// and [`Api`], once [`supervise`] has built them; until then, or if it
+/// couldn't, it refuses as [`Unwired`] does.
+#[derive(Default)]
+struct Wiring {
+    supervised: OnceLock<Arc<Supervised>>,
+    api: OnceLock<Api>,
+    /// Where a companion Lodestar installed is handed over to: CMP-5g-1's
+    /// `Sink`, the guided path's own, set once `companion_wiring` has
+    /// built it.
+    sink: OnceLock<Arc<dyn ManagedSink>>,
+}
+
+/// CMP-8b's `ConfigSink`, and taking its managed download client out
+/// again (`companion_wiring::Sink`).
+pub(crate) trait ManagedSink: lodestar_companions::configure::ConfigSink {
+    /// Whether a [`crate::companion_wiring::MANAGED_CLIENT`] entry is
+    /// saved. A read that can't be made answers yes: it fails closed.
+    fn has_download_client(&self) -> BoxFuture<'_, bool>;
+    /// Removes the [`crate::companion_wiring::MANAGED_CLIENT`] entry from
+    /// `integrations.clients`, keeping every other one. Nothing when
+    /// there's none.
+    fn forget_download_client(
+        &self,
+    ) -> BoxFuture<'_, Result<(), lodestar_companions::configure::SinkError>>;
+}
+
+impl std::fmt::Debug for Wiring {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Wiring")
+            .field("wired", &self.supervised.get().is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Wiring {
+    fn wire(&self, supervised: Arc<Supervised>, api: Api) {
+        // Configuration first: nothing starts until both are set.
+        let _ = self.api.set(api);
+        let _ = self.supervised.set(supervised);
+    }
+}
+
+impl Run for Wiring {
+    fn ready(&self) -> Result<(), &'static str> {
+        match (self.supervised.get(), self.api.get()) {
+            (Some(s), Some(_)) => s.ready(),
+            _ => Err("not_wired"),
+        }
+    }
+    fn start(&self, l: Launch) -> BoxFuture<'_, Result<(), &'static str>> {
+        match self.supervised.get() {
+            Some(s) => s.start(l),
+            None => Box::pin(async { Err("not_wired") }),
+        }
+    }
+    fn healthy<'a>(&'a self, id: &'a CompanionId, t: &'a Target) -> BoxFuture<'a, bool> {
+        match self.supervised.get() {
+            Some(s) => s.healthy(id, t),
+            None => Box::pin(async { false }),
+        }
+    }
+    fn stop<'a>(&'a self, id: &'a CompanionId) -> BoxFuture<'a, ()> {
+        match self.supervised.get() {
+            Some(s) => s.stop(id),
+            None => Box::pin(async {}),
+        }
+    }
+    fn status(&self, id: &CompanionId) -> Option<watch::Receiver<Status>> {
+        self.supervised.get().and_then(|s| s.status(id))
+    }
+}
+
+impl ApiConfigure for Wiring {
+    fn configure<'a>(
+        &'a self,
+        id: &'a CompanionId,
+        target: &'a Target,
+        receipt: InstallReceipt,
+        credentials: &'a dyn Credentials,
+    ) -> BoxFuture<'a, Result<(), AdapterError>> {
+        match self.api.get() {
+            Some(a) => a.configure(id, target, receipt, credentials),
+            None => Box::pin(async { Err(AdapterError::Refused("not_wired")) }),
+        }
+    }
+
+    /// qBittorrent becomes the managed download client, through CMP-8b's
+    /// `hand_over` and the guided path's sink, on the receipt the manager
+    /// minted for this install. Prowlarr isn't handed over here: its
+    /// source isn't registered yet (X-prowlarr-register).
+    fn hand_over<'a>(
+        &'a self,
+        id: &'a CompanionId,
+        target: &'a Target,
+        receipt: InstallReceipt,
+        credentials: &'a dyn Credentials,
+    ) -> BoxFuture<'a, Result<(), AdapterError>> {
+        Box::pin(async move {
+            if id.as_str() != configure::qbittorrent::ID {
+                return Ok(());
+            }
+            let sink = self.sink.get().ok_or(AdapterError::Refused("not_wired"))?;
+            let input =
+                lodestar_companions::adapter::ConfigureInput::new(credentials).installed(receipt);
+            configure::hand_over(sink.as_ref(), id, target, &input).await
+        })
+    }
+
+    /// A first install refuses an entry already there: it's one you added
+    /// (a guided qBittorrent you forgot keeps its entry, CMP-5g-2's L3, and
+    /// it's then your own working client) or one a crash left. Neither is
+    /// this install's to overwrite, nor its removal's to delete. You
+    /// remove it in Integrations first (#674's self-review B1).
+    fn can_hand_over<'a>(
+        &'a self,
+        id: &'a CompanionId,
+        fresh: bool,
+    ) -> BoxFuture<'a, Result<(), AdapterError>> {
+        Box::pin(async move {
+            if id.as_str() != configure::qbittorrent::ID {
+                return Ok(());
+            }
+            let sink = self.sink.get().ok_or(AdapterError::Refused("not_wired"))?;
+            if fresh && sink.has_download_client().await {
+                return Err(AdapterError::Refused("managed_client_in_use"));
+            }
+            Ok(())
+        })
+    }
+
+    fn release<'a>(&'a self, id: &'a CompanionId) -> BoxFuture<'a, Result<(), AdapterError>> {
+        Box::pin(async move {
+            if id.as_str() != configure::qbittorrent::ID {
+                return Ok(());
+            }
+            let sink = self.sink.get().ok_or(AdapterError::Refused("not_wired"))?;
+            sink.forget_download_client()
+                .await
+                .map_err(|_| AdapterError::Refused(configure::SINK_REFUSED))
+        })
+    }
+}
+
+/// The `settings` row of a companion's route (Q18): the same text as a
+/// source's `sources.egress.<plugin>` ([`EgressSetting::encode`]):
+/// `direct`, or `socks5 <host> <port> <auto|proxy|local>`. Not a
+/// registry setting, so a settings import can't write it (only registry
+/// sections are imported).
+pub fn egress_key(id: &CompanionId) -> String {
+    format!(
+        "{}{id}.egress",
+        lodestar_companions::credentials::ROW_PREFIX
+    )
+}
+
+/// The source plugin a companion serves, whose egress it's set from at
+/// its first start (Q18): the download-client source for qBittorrent,
+/// the Prowlarr plugin for Prowlarr and FlareSolverr. The ids are
+/// CMP-10's (`lodestar_companions::requires`).
+fn plugin_for(id: &CompanionId) -> Option<&'static str> {
+    match id.as_str() {
+        "qbittorrent" => Some("download_clients"),
+        "prowlarr" | "flaresolverr" => Some("prowlarr"),
+        _ => None,
+    }
+}
+
+/// `id`'s saved route. With no row yet, the route of the plugin it serves
+/// is saved as its own and used (Q18: "set at install to the egress of
+/// the plugin that needs it"); an unreadable one of the plugin's is used
+/// but not saved, so it's read again next time. A row that doesn't decode
+/// is [`Unreadable`]: the route stays down, never direct. `None` when the
+/// store can't be read or written, or it serves no plugin: it isn't
+/// started. Blocking.
+fn egress_setting(store: &Mutex<Store>, id: &CompanionId) -> Option<SavedEgress> {
+    let key = egress_key(id);
+    let mut s = store.lock().ok()?;
+    if let Some(text) = s.setting_text(&key).ok()? {
+        return Some(EgressSetting::decode(&text).ok_or(Unreadable));
+    }
+    let plugin = plugin_for(id)?;
+    let saved = lodestar_pipeline::control::saved_settings(&s, plugin, false)
+        .ok()?
+        .egress;
+    if let Ok(e) = &saved {
+        s.update_settings_text(&[(&key, &e.encode())], &[]).ok()?;
+    }
+    Some(saved)
+}
+
+/// Each companion's route (Q18), built for every start from its saved
+/// setting ([`egress_setting`]) through its own [`EgressFactory`], and
+/// kept fresh by [`monitored`] (CMP-5's #608 follow-up). The route a
+/// companion is configured for (its bind or proxy setting, CMP-8b) is the
+/// one its last start was built with.
+pub struct CompanionRoutes {
+    store: Arc<Mutex<Store>>,
+    /// No SOCKS5 credentials: a companion's own proxy setting has none
+    /// (CMP-8b's `Socks5Proxy` is an address), and the probe only connects.
+    factory: EgressFactory,
+    configured: Mutex<HashMap<CompanionId, configure::Route>>,
+}
+
+impl std::fmt::Debug for CompanionRoutes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompanionRoutes").finish_non_exhaustive()
+    }
+}
+
+impl CompanionRoutes {
+    pub fn new(store: Arc<Mutex<Store>>) -> CompanionRoutes {
+        CompanionRoutes {
+            store,
+            factory: EgressFactory::new(Arc::new(NoCredentials)),
+            configured: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// CMP-8b's form of the route `id` was last started on. `None` when it
+    /// was built from an unreadable setting or a proxy that didn't
+    /// resolve: that route is down for good, so the companion never runs.
+    fn configured(&self, id: &CompanionId) -> Option<configure::Route> {
+        self.configured
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+            .cloned()
+    }
+}
+
+impl Routes for CompanionRoutes {
+    fn route<'a>(&'a self, id: &'a CompanionId) -> BoxFuture<'a, Option<Prelaunch>> {
+        Box::pin(async move {
+            let (store, cid) = (self.store.clone(), id.clone());
+            let saved = tokio::task::spawn_blocking(move || egress_setting(&store, &cid))
+                .await
+                .ok()??;
+            let label = format!("companion.{id}");
+            // The probe is all that's used: the companion makes its own
+            // connections, and this client may reach nothing.
+            let none = || Endpoints::manifest(&[]);
+            let (egress, config) = match &saved {
+                Ok(EgressSetting::Direct) => (
+                    self.factory.build(&label, &Egress::Direct, none()).await,
+                    Some(configure::Route::Direct),
+                ),
+                Ok(EgressSetting::Socks5(spec)) => {
+                    let (e, built) = self.factory.build_socks5(&label, spec, none()).await;
+                    let config = match built {
+                        Some(Egress::Socks5 { proxy, .. }) => {
+                            Socks5Proxy::new(proxy).ok().map(configure::Route::Socks5)
+                        }
+                        _ => None,
+                    };
+                    (e, config)
+                }
+                Err(Unreadable) => (
+                    self.factory.unavailable(
+                        &label,
+                        RouteKind::Socks5,
+                        DownReason::SettingUnreadable,
+                        none(),
+                    ),
+                    None,
+                ),
+            };
+            let proxy = match &config {
+                Some(configure::Route::Socks5(p)) => Some(*p),
+                _ => None,
+            };
+            {
+                let mut c = self.configured.lock().unwrap_or_else(|e| e.into_inner());
+                match config {
+                    Some(r) => c.insert(id.clone(), r),
+                    None => c.remove(id),
+                };
+            }
+            // The relay stops once the gate and the supervisor's copy of
+            // this route are dropped, at the companion's stop.
+            let (route, _relay) =
+                monitored(Arc::new(egress), lodestar_pipeline::EGRESS_PROBE_EVERY);
+            // Launched on the same proxy it's configured for
+            // (X-cmp-egress-prelaunch).
+            Some(Prelaunch { route, proxy })
+        })
+    }
+}
+
+/// [`Live`] over the manager and the supervisor.
+struct Supervision {
+    manager: Arc<Manager>,
+    supervised: Arc<Supervised>,
+}
+
+impl Live for Supervision {
+    fn restart<'a>(&'a self, id: &'a CompanionId) -> BoxFuture<'a, Result<(), CompanionsError>> {
+        Box::pin(async move { self.manager.restart(id).await.map(drop).map_err(refused) })
+    }
+    fn logs(&self, id: &CompanionId) -> Result<Vec<String>, CompanionsError> {
+        Ok(self.supervised.logs(id).unwrap_or_default())
+    }
+    fn regenerate<'a>(
+        &'a self,
+        id: &'a CompanionId,
+        _: Field,
+    ) -> BoxFuture<'a, Result<(), CompanionsError>> {
+        Box::pin(async move { self.manager.regenerate(id).await.map(drop).map_err(refused) })
+    }
+}
+
+/// What only a running supervisor can do ([`Supervision`] at serve):
+/// restart, recent output and regenerating a credential, which rewrites
+/// the companion's own config and restarts it. Restart and regenerate
+/// answer once they've begun (the API's `202`); the manager refuses
+/// `busy` while another operation on it runs. [`Service`] calls them only
+/// for a companion Lodestar installed. [`Unwired`] refuses each with
+/// `not_wired`.
 pub trait Live: Send + Sync {
-    fn restart<'a>(&'a self, id: &'a CompanionId) -> BoxFuture<'a, Result<(), &'static str>>;
+    fn restart<'a>(&'a self, id: &'a CompanionId) -> BoxFuture<'a, Result<(), CompanionsError>>;
     /// Its recent output, as the supervisor's ring holds it (redacted
-    /// once there; [`Service`] redacts it again).
-    fn logs(&self, id: &CompanionId) -> Result<Vec<String>, &'static str>;
+    /// once there; [`Service`] redacts it again). Empty when it hasn't
+    /// been started in this run of Lodestar.
+    fn logs(&self, id: &CompanionId) -> Result<Vec<String>, CompanionsError>;
     fn regenerate<'a>(
         &'a self,
         id: &'a CompanionId,
         field: Field,
-    ) -> BoxFuture<'a, Result<(), &'static str>>;
+    ) -> BoxFuture<'a, Result<(), CompanionsError>>;
 }
 
 impl Live for Unwired {
-    fn restart<'a>(&'a self, _: &'a CompanionId) -> BoxFuture<'a, Result<(), &'static str>> {
-        Box::pin(async { Err("not_wired") })
+    fn restart<'a>(&'a self, _: &'a CompanionId) -> BoxFuture<'a, Result<(), CompanionsError>> {
+        Box::pin(async { Err(CompanionsError::Refused("not_wired")) })
     }
-    fn logs(&self, _: &CompanionId) -> Result<Vec<String>, &'static str> {
-        Err("not_wired")
+    fn logs(&self, _: &CompanionId) -> Result<Vec<String>, CompanionsError> {
+        Err(CompanionsError::Refused("not_wired"))
     }
     fn regenerate<'a>(
         &'a self,
         _: &'a CompanionId,
         _: Field,
-    ) -> BoxFuture<'a, Result<(), &'static str>> {
-        Box::pin(async { Err("not_wired") })
+    ) -> BoxFuture<'a, Result<(), CompanionsError>> {
+        Box::pin(async { Err(CompanionsError::Refused("not_wired")) })
     }
 }
 
-/// `/companions` over the manager (CMP-6). CMP-5g swaps `live` (and the
-/// manager's `Run`) for the supervisor; nothing here changes.
+/// `/companions` over the manager (CMP-6), with `live` the supervisor at
+/// serve.
 pub struct Service {
     manager: Arc<Manager>,
     catalogue: &'static Catalogue,
@@ -360,6 +776,13 @@ fn refused(e: ManagerError) -> CompanionsError {
         ManagerError::Step {
             code: "not_wired", ..
         } => CompanionsError::Refused("not_wired"),
+        // The hand-over to Integrations, or taking it out again, refused:
+        // nothing was installed or removed, and the code says why
+        // (`managed_client_in_use`, `sink_refused`, `timed_out`, …).
+        ManagerError::Step {
+            step: "handover" | "release",
+            code,
+        } => CompanionsError::Refused(code),
         e => CompanionsError::Internal(e.code()),
     }
 }
@@ -585,6 +1008,19 @@ impl Service {
         }
     }
 
+    /// Whether you added `id` and confirmed it (CMP-5g-2's `origin` row).
+    /// Blocking.
+    fn added(&self, id: &CompanionId) -> Result<bool, CompanionsError> {
+        let key = lodestar_companions::guided::origin_key(id);
+        self.rows
+            .0
+            .lock()
+            .map_err(|_| CompanionsError::Internal("store"))?
+            .setting_text(&key)
+            .map(|v| v.is_some())
+            .map_err(|_| CompanionsError::Internal("store"))
+    }
+
     /// The host's container detection, for detection's runtime.
     pub(crate) fn in_container(&self) -> bool {
         self.host.in_container
@@ -610,17 +1046,14 @@ impl Service {
         }
     }
 
-    /// Whether `id`'s credential `field` is one Lodestar generated (Q5:
-    /// only that is ever revealed): the companion is one Lodestar
-    /// installed (its journal), or one you added whose credential's
-    /// provenance row says `generated` (a guided qBittorrent's replaced
-    /// password, CMP-5g-2). A pasted one is never. Blocking.
-    fn generated(&self, id: &CompanionId, field: Field) -> Result<bool, CompanionsError> {
-        if self.installed(id)? {
-            return Ok(true);
+    /// `not_installed` unless Lodestar installed it: only then does its
+    /// supervisor run it, and only then is its credential Lodestar's alone.
+    async fn ours(&self, e: &'static Entry) -> Result<(), CompanionsError> {
+        if self.off(move |s| s.installed(&e.id)).await? {
+            Ok(())
+        } else {
+            Err(CompanionsError::Refused("not_installed"))
         }
-        let rows = self.companion_rows()?;
-        Ok(Self::generated_in(&rows, id, field))
     }
 
     /// Every companion row, read in one query: a provenance and the
@@ -644,7 +1077,11 @@ impl Service {
             == Some(lodestar_companions::guided::Provenance::Generated)
     }
 
-    /// The credential, when [`Service::generated`] allows it. For a
+    /// The credential, when it's one Lodestar generated (Q5: only that is
+    /// ever revealed): the companion is one Lodestar installed (its
+    /// journal), or one you added whose credential's provenance row says
+    /// `generated` (a guided qBittorrent's replaced password, CMP-5g-2). A
+    /// pasted one never is. For a
     /// companion you added, the provenance and the sealed row come from
     /// the same read, so a paste landing in between can't be shown.
     /// Blocking.
@@ -765,6 +1202,12 @@ impl CompanionsApi for Service {
                 version: Version::parse(&version).map_err(|_| CompanionsError::Mismatch)?,
                 sha256: Sha256::parse_hex(&sha256).map_err(|_| CompanionsError::Mismatch)?,
             };
+            // One you added and confirmed is yours: an install would take
+            // over its Integrations entry (#674's self-review B1). Forget
+            // it first, as the guided steps refuse one Lodestar installed.
+            if self.off(move |s| s.added(&e.id)).await? {
+                return Err(CompanionsError::Refused("already_added"));
+            }
             self.manager.install(&token).await.map_err(refused)?;
             self.off(move |s| s.row(e)).await
         })
@@ -797,10 +1240,8 @@ impl CompanionsApi for Service {
     fn restart(&self, id: String) -> lodestar_api::ops::BoxFuture<'_, Result<(), CompanionsError>> {
         Box::pin(async move {
             let e = self.entry(&id)?;
-            self.live
-                .restart(&e.id)
-                .await
-                .map_err(CompanionsError::Refused)
+            self.ours(e).await?;
+            self.live.restart(&e.id).await
         })
     }
 
@@ -811,7 +1252,10 @@ impl CompanionsApi for Service {
         Box::pin(async move {
             let e = self.entry(&id)?;
             self.off(move |s| {
-                let lines = s.live.logs(&e.id).map_err(CompanionsError::Refused)?;
+                if !s.installed(&e.id)? {
+                    return Err(CompanionsError::Refused("not_installed"));
+                }
+                let lines = s.live.logs(&e.id)?;
                 // Redacted again with its own credentials, whatever the
                 // ring did (plan CMP-6).
                 let mut secrets = Vec::new();
@@ -907,17 +1351,19 @@ impl CompanionsApi for Service {
         Box::pin(async move {
             let e = self.entry(&id)?;
             let f = field(&name)?;
-            let reachable = field_of(&e.id) == Some(f)
-                && self
-                    .off(move |s| Ok(s.generated(&e.id, f)? && s.stored(&e.id)?.contains(&f)))
-                    .await?;
-            if !reachable {
+            if field_of(&e.id) != Some(f) {
                 return Err(CompanionsError::NoCredential);
             }
-            self.live
-                .regenerate(&e.id, f)
-                .await
-                .map_err(CompanionsError::Refused)
+            // #653's L4: a credential of a companion you added (even one
+            // Lodestar generated, a guided qBittorrent's) is never rotated
+            // here. Rotating it without setting it on the companion and
+            // saving it in Integrations in the same step would leave the
+            // stored password matching neither.
+            self.ours(e).await?;
+            if !self.off(move |s| s.stored(&e.id)).await?.contains(&f) {
+                return Err(CompanionsError::NoCredential);
+            }
+            self.live.regenerate(&e.id, f).await
         })
     }
 }
@@ -956,7 +1402,16 @@ pub(crate) fn test_service(
         )),
         in_container,
     };
-    let (m, secrets) = manager_with(dir.to_path_buf(), store.clone(), catalogue, host).unwrap();
+    let unwired = Arc::new(Unwired);
+    let (m, secrets) = manager_with(
+        dir.to_path_buf(),
+        store.clone(),
+        catalogue,
+        host,
+        unwired.clone(),
+        unwired,
+    )
+    .unwrap();
     Arc::new(Service {
         manager: Arc::new(m),
         catalogue,
@@ -1141,10 +1596,10 @@ mod tests {
     struct Ring(String);
 
     impl Live for Ring {
-        fn restart<'a>(&'a self, _: &'a CompanionId) -> BoxFuture<'a, Result<(), &'static str>> {
+        fn restart<'a>(&'a self, _: &'a CompanionId) -> BoxFuture<'a, Result<(), CompanionsError>> {
             Box::pin(async { Ok(()) })
         }
-        fn logs(&self, _: &CompanionId) -> Result<Vec<String>, &'static str> {
+        fn logs(&self, _: &CompanionId) -> Result<Vec<String>, CompanionsError> {
             Ok(vec![format!(
                 "WebUI: signed in with {} from 127.0.0.1",
                 self.0
@@ -1154,7 +1609,7 @@ mod tests {
             &'a self,
             _: &'a CompanionId,
             _: Field,
-        ) -> BoxFuture<'a, Result<(), &'static str>> {
+        ) -> BoxFuture<'a, Result<(), CompanionsError>> {
             Box::pin(async { Ok(()) })
         }
     }
@@ -1166,7 +1621,16 @@ mod tests {
         live: Arc<dyn Live>,
     ) -> Service {
         let store = store(dir);
-        let (m, secrets) = manager_with(dir.to_path_buf(), store.clone(), catalogue, host).unwrap();
+        let unwired = Arc::new(Unwired);
+        let (m, secrets) = manager_with(
+            dir.to_path_buf(),
+            store.clone(),
+            catalogue,
+            host,
+            unwired.clone(),
+            unwired,
+        )
+        .unwrap();
         Service {
             manager: Arc::new(m),
             catalogue,
@@ -1423,7 +1887,7 @@ mod tests {
             );
             assert_eq!(
                 s.regenerate(id.into(), f.into()).await,
-                Err(CompanionsError::NoCredential)
+                Err(CompanionsError::Refused("not_installed"))
             );
         }
     }
@@ -1472,17 +1936,19 @@ mod tests {
         assert_eq!(again.value, password);
     }
 
+    /// Restart and logs are for a companion Lodestar installed, and need
+    /// the supervisor.
     #[tokio::test]
     async fn restart_and_logs_need_the_supervisor() {
         let dir = tempfile::tempdir().unwrap();
         let s = service(dir.path(), pinned(), NATIVE, Arc::new(Unwired));
         assert_eq!(
             s.restart("qbittorrent".into()).await,
-            Err(CompanionsError::Refused("not_wired"))
+            Err(CompanionsError::Refused("not_installed"))
         );
         assert_eq!(
             s.logs("qbittorrent".into()).await,
-            Err(CompanionsError::Refused("not_wired"))
+            Err(CompanionsError::Refused("not_installed"))
         );
         assert_eq!(
             s.removal("qbittorrent".into()).await,
@@ -1492,6 +1958,15 @@ mod tests {
             s.remove("qbittorrent".into()).await,
             Err(CompanionsError::Refused("not_installed"))
         );
+        installed(&s, dir.path(), "qbittorrent").await;
+        assert_eq!(
+            s.restart("qbittorrent".into()).await,
+            Err(CompanionsError::Refused("not_wired"))
+        );
+        assert_eq!(
+            s.logs("qbittorrent".into()).await,
+            Err(CompanionsError::Refused("not_wired"))
+        );
     }
 
     /// The supervisor's lines are redacted again with the companion's own
@@ -1500,6 +1975,7 @@ mod tests {
     async fn logs_are_redacted_again() {
         let dir = tempfile::tempdir().unwrap();
         let s = service(dir.path(), pinned(), NATIVE, Arc::new(Unwired));
+        installed(&s, dir.path(), "qbittorrent").await;
         let password = stored(&s, "qbittorrent", Field::WebUiPassword);
         let s = Service {
             live: Arc::new(Ring(password.clone())),
@@ -1665,5 +2141,374 @@ mod tests {
                 .await
                 .is_ok()
         );
+    }
+
+    /// Counts the supervisor's calls.
+    #[derive(Default)]
+    struct Calls(std::sync::atomic::AtomicUsize);
+
+    impl Calls {
+        fn n(&self) -> usize {
+            self.0.load(std::sync::atomic::Ordering::SeqCst)
+        }
+        fn hit(&self) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    impl Live for Calls {
+        fn restart<'a>(&'a self, _: &'a CompanionId) -> BoxFuture<'a, Result<(), CompanionsError>> {
+            self.hit();
+            Box::pin(async { Ok(()) })
+        }
+        fn logs(&self, _: &CompanionId) -> Result<Vec<String>, CompanionsError> {
+            self.hit();
+            Ok(Vec::new())
+        }
+        fn regenerate<'a>(
+            &'a self,
+            _: &'a CompanionId,
+            _: Field,
+        ) -> BoxFuture<'a, Result<(), CompanionsError>> {
+            self.hit();
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    /// #653's L4: a guided qBittorrent's generated password, the one it
+    /// uses now, is never rotated (nor restarted or read from a ring) by
+    /// the supervisor: it's refused before the supervisor is asked, and the
+    /// stored password stays the one you can reveal. A companion Lodestar
+    /// installed reaches it.
+    #[tokio::test]
+    async fn a_guided_companions_credential_is_never_rotated() {
+        use lodestar_companions::guided::{Provenance, provenance_key};
+        let dir = tempfile::tempdir().unwrap();
+        let calls = Arc::new(Calls::default());
+        let s = service(dir.path(), pinned(), NATIVE, calls.clone());
+        let password = stored(&s, "qbittorrent", Field::WebUiPassword);
+        let qbt = CompanionId::parse("qbittorrent").unwrap();
+        let key = provenance_key(&qbt, Field::WebUiPassword).unwrap();
+        s.rows
+            .0
+            .lock()
+            .unwrap()
+            .set_settings_text(&[(&key, Provenance::Generated.as_str())])
+            .unwrap();
+        let row = CredentialKey::new(qbt.clone(), Field::WebUiPassword).row_key();
+        let before = s.rows.get(&row).unwrap();
+        let no = CompanionsError::Refused("not_installed");
+        let not = Err(no.clone());
+        assert_eq!(
+            s.regenerate("qbittorrent".into(), "webui_password".into())
+                .await,
+            not
+        );
+        assert_eq!(s.restart("qbittorrent".into()).await, not);
+        assert_eq!(s.logs("qbittorrent".into()).await, Err(no));
+        assert_eq!(calls.n(), 0);
+        assert_eq!(s.rows.get(&row).unwrap(), before);
+        let r = s
+            .reveal("qbittorrent".into(), "webui_password".into())
+            .await
+            .unwrap();
+        assert_eq!(r.value, password);
+        // Installed by Lodestar: each reaches the supervisor.
+        installed(&s, dir.path(), "qbittorrent").await;
+        s.regenerate("qbittorrent".into(), "webui_password".into())
+            .await
+            .unwrap();
+        s.restart("qbittorrent".into()).await.unwrap();
+        s.logs("qbittorrent".into()).await.unwrap();
+        assert_eq!(calls.n(), 3);
+    }
+
+    fn egress_row(st: &Mutex<Store>, key: &str) -> Option<String> {
+        st.lock().unwrap().setting_text(key).unwrap()
+    }
+
+    fn set_row(st: &Mutex<Store>, key: &str, value: &str) {
+        st.lock()
+            .unwrap()
+            .set_settings_text(&[(key, value)])
+            .unwrap();
+    }
+
+    /// Q18: a companion's route is set from the plugin it serves the first
+    /// time it's needed, then kept as its own: the plugin's later changes
+    /// don't move it, and its own row wins.
+    #[test]
+    fn a_companions_route_is_set_once_from_its_plugin() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = store(dir.path());
+        let qbt = CompanionId::parse("qbittorrent").unwrap();
+        let prowlarr = CompanionId::parse("prowlarr").unwrap();
+        // The download-client source has none saved: direct.
+        assert_eq!(egress_setting(&st, &qbt), Some(Ok(EgressSetting::Direct)));
+        assert_eq!(
+            egress_row(&st, "companions.qbittorrent.egress").as_deref(),
+            Some("direct")
+        );
+        // Prowlarr's plugin has a proxy: Prowlarr gets it.
+        set_row(&st, "sources.egress.prowlarr", "socks5 10.8.0.1 1080 auto");
+        set_row(
+            &st,
+            "sources.egress.download_clients",
+            "socks5 10.8.0.1 1080 auto",
+        );
+        let want = EgressSetting::decode("socks5 10.8.0.1 1080 auto").unwrap();
+        assert_eq!(egress_setting(&st, &prowlarr), Some(Ok(want.clone())));
+        assert_eq!(
+            egress_row(&st, "companions.prowlarr.egress").as_deref(),
+            Some("socks5 10.8.0.1 1080 auto")
+        );
+        // qBittorrent's was saved already: the plugin's change doesn't
+        // reach it.
+        assert_eq!(egress_setting(&st, &qbt), Some(Ok(EgressSetting::Direct)));
+        // Its own row, set on its screen, wins.
+        set_row(
+            &st,
+            "companions.qbittorrent.egress",
+            "socks5 10.8.0.2 1080 local",
+        );
+        assert!(matches!(
+            egress_setting(&st, &qbt),
+            Some(Ok(EgressSetting::Socks5(_)))
+        ));
+    }
+
+    /// An unreadable route is never read as direct, and an unreadable
+    /// plugin route isn't saved as the companion's. A companion that
+    /// serves no plugin has none.
+    #[test]
+    fn an_unreadable_route_fails_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = store(dir.path());
+        let qbt = CompanionId::parse("qbittorrent").unwrap();
+        set_row(&st, "companions.qbittorrent.egress", "interface tun0");
+        assert_eq!(egress_setting(&st, &qbt), Some(Err(Unreadable)));
+        let prowlarr = CompanionId::parse("prowlarr").unwrap();
+        set_row(&st, "sources.egress.prowlarr", "socks5 nope");
+        assert_eq!(egress_setting(&st, &prowlarr), Some(Err(Unreadable)));
+        assert_eq!(egress_row(&st, "companions.prowlarr.egress"), None);
+        let gluetun = CompanionId::parse("gluetun").unwrap();
+        assert_eq!(egress_setting(&st, &gluetun), None);
+        assert_eq!(egress_row(&st, "companions.gluetun.egress"), None);
+    }
+
+    /// Each start's route follows the saved setting: its kind, its live
+    /// state, and the form CMP-8b configures the companion for.
+    #[tokio::test]
+    async fn routes_are_built_from_the_saved_setting() {
+        use lodestar_sources::egress::RouteState;
+        let dir = tempfile::tempdir().unwrap();
+        let st = store(dir.path());
+        let routes = CompanionRoutes::new(st.clone());
+        let prowlarr = CompanionId::parse("prowlarr").unwrap();
+        let direct = routes.route(&prowlarr).await.unwrap();
+        assert_eq!(direct.route.kind, RouteKind::Direct);
+        assert_eq!(direct.proxy, None);
+        assert_eq!(routes.configured(&prowlarr), Some(configure::Route::Direct));
+        set_row(&st, "companions.prowlarr.egress", "socks5 127.0.0.1 9 auto");
+        let socks = routes.route(&prowlarr).await.unwrap();
+        assert_eq!(socks.route.kind, RouteKind::Socks5);
+        let proxy = Socks5Proxy::new("127.0.0.1:9".parse().unwrap()).unwrap();
+        // Launched on the proxy it's configured for.
+        assert_eq!(socks.proxy, Some(proxy));
+        assert_eq!(
+            routes.configured(&prowlarr),
+            Some(configure::Route::Socks5(proxy))
+        );
+        set_row(&st, "companions.prowlarr.egress", "socks5");
+        let down = routes.route(&prowlarr).await.unwrap();
+        assert_eq!(down.route.kind, RouteKind::Socks5);
+        // No proxy to launch it on: it isn't started at all.
+        assert_eq!(down.proxy, None);
+        let mut down = down.route;
+        let deadline = std::time::Duration::from_secs(10);
+        let state = tokio::time::timeout(
+            deadline,
+            down.state
+                .wait_for(|s| *s == RouteState::Down(DownReason::SettingUnreadable)),
+        )
+        .await
+        .expect("the unreadable route never went down");
+        assert!(state.is_ok());
+        assert_eq!(routes.configured(&prowlarr), None);
+        let gluetun = CompanionId::parse("gluetun").unwrap();
+        assert!(routes.route(&gluetun).await.is_none());
+    }
+
+    /// At serve, a native run hands the manager a supervisor, and shutdown
+    /// stops it: nothing can start after.
+    #[tokio::test]
+    async fn serve_wires_the_supervisor_and_shuts_it_down() {
+        let dir = tempfile::tempdir().unwrap();
+        let cat = lodestar_companions::builtin().unwrap();
+        let tx = integrations();
+        let c = start_with(
+            dir.path().to_path_buf(),
+            store(dir.path()),
+            tx.subscribe(),
+            cat,
+            NATIVE,
+        )
+        .await
+        .unwrap();
+        assert!(c.wiring.supervised.get().is_some());
+        assert!(c.wiring.ready().is_ok());
+        let wiring = c.wiring.clone();
+        c.shutdown().await;
+        let qbt = CompanionId::parse("qbittorrent").unwrap();
+        // A program in an installed version's folder, so the start gets as
+        // far as the supervisor's lock.
+        let install = dir.path().join("companions/qbittorrent/5.1.2");
+        std::fs::create_dir_all(&install).unwrap();
+        let executable = install.join("qbittorrent");
+        std::fs::write(&executable, b"never run").unwrap();
+        let launch = Launch {
+            id: qbt.clone(),
+            executable,
+            install,
+            args: Vec::new(),
+            target: Target::Loopback(lodestar_companions::inputs::PortNumber::new(8080).unwrap()),
+            secrets: Vec::new(),
+        };
+        assert_eq!(wiring.start(launch).await, Err("shutting_down"));
+        // Inside a container nothing is native: unwired.
+        let dir = tempfile::tempdir().unwrap();
+        let docker = Host {
+            in_container: true,
+            ..NATIVE
+        };
+        let c = start_with(
+            dir.path().to_path_buf(),
+            store(dir.path()),
+            tx.subscribe(),
+            cat,
+            docker,
+        )
+        .await
+        .unwrap();
+        assert_eq!(c.wiring.ready(), Err("not_wired"));
+    }
+
+    /// A sink that records what the hand-over side asks of it.
+    #[derive(Default)]
+    struct FakeSink {
+        has: std::sync::atomic::AtomicBool,
+        forgot: std::sync::atomic::AtomicUsize,
+    }
+
+    impl lodestar_companions::configure::ConfigSink for FakeSink {
+        fn download_client<'a>(
+            &'a self,
+            _: lodestar_companions::configure::DownloadClientEntry,
+        ) -> BoxFuture<'a, Result<(), lodestar_companions::configure::SinkError>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn indexer_manager<'a>(
+            &'a self,
+            _: lodestar_companions::configure::IndexerManagerEntry,
+        ) -> BoxFuture<'a, Result<(), lodestar_companions::configure::SinkError>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    impl ManagedSink for FakeSink {
+        fn has_download_client(&self) -> BoxFuture<'_, bool> {
+            let has = self.has.load(std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async move { has })
+        }
+        fn forget_download_client(
+            &self,
+        ) -> BoxFuture<'_, Result<(), lodestar_companions::configure::SinkError>> {
+            self.forgot
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    /// X-cmp-native-handover: qBittorrent's hand-over needs the guided
+    /// path's sink (`not_wired` without it, before anything is
+    /// downloaded), and a first install refuses an entry already there
+    /// (`managed_client_in_use`: one you added, or a crash left); an
+    /// update doesn't. A release takes the managed entry out through the
+    /// sink. Prowlarr's are nothing yet. (`hand_over` itself takes a
+    /// receipt only the manager can mint; its tests drive it.)
+    #[tokio::test]
+    async fn the_hand_over_side_needs_the_sink_and_spares_your_entry() {
+        let w = Wiring::default();
+        let qbt = CompanionId::parse("qbittorrent").unwrap();
+        let prowlarr = CompanionId::parse("prowlarr").unwrap();
+        let refused = |r: Result<(), AdapterError>| match r {
+            Err(AdapterError::Refused(code)) => code,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(refused(w.can_hand_over(&qbt, true).await), "not_wired");
+        assert_eq!(refused(w.release(&qbt).await), "not_wired");
+        assert!(w.can_hand_over(&prowlarr, true).await.is_ok());
+        assert!(w.release(&prowlarr).await.is_ok());
+        let sink = Arc::new(FakeSink::default());
+        let _ = w.sink.set(sink.clone());
+        assert!(w.can_hand_over(&qbt, true).await.is_ok());
+        sink.has.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            refused(w.can_hand_over(&qbt, true).await),
+            "managed_client_in_use"
+        );
+        assert!(w.can_hand_over(&qbt, false).await.is_ok());
+        w.release(&qbt).await.unwrap();
+        assert_eq!(sink.forgot.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// #674's self-review B1: a companion you added and confirmed isn't
+    /// installed over (`already_added`), so its Integrations entry is
+    /// never taken over; without the record the install goes on to the
+    /// manager.
+    #[tokio::test]
+    async fn an_added_companion_is_not_installed_over() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = service(dir.path(), pinned(), NATIVE, Arc::new(Unwired));
+        let install = || s.install("qbittorrent".into(), "5.1.2".into(), "ab".repeat(32));
+        assert_eq!(
+            install().await,
+            Err(CompanionsError::Refused("awaiting_pin"))
+        );
+        let qbt = CompanionId::parse("qbittorrent").unwrap();
+        s.rows
+            .0
+            .lock()
+            .unwrap()
+            .set_settings_text(&[(&lodestar_companions::guided::origin_key(&qbt), "confirmed")])
+            .unwrap();
+        assert_eq!(
+            install().await,
+            Err(CompanionsError::Refused("already_added"))
+        );
+    }
+
+    /// The brief's item 6: the stored password is in no reply. A row of an
+    /// installed companion names its credential's field, never its value,
+    /// and a failed hand-over or release answers with a code.
+    #[tokio::test]
+    async fn no_reply_carries_the_password() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = service(dir.path(), pinned(), NATIVE, Arc::new(Unwired));
+        installed(&s, dir.path(), "qbittorrent").await;
+        let password = stored(&s, "qbittorrent", Field::WebUiPassword);
+        let row = s.get("qbittorrent".into()).await.unwrap();
+        let text = serde_json::to_string(&row).unwrap();
+        assert!(text.contains("webui_password"), "{text}");
+        assert!(!text.contains(&password), "{text}");
+        for step in ["handover", "release"] {
+            let e = refused(ManagerError::Step {
+                step,
+                code: "sink_refused",
+            });
+            assert_eq!(e, CompanionsError::Refused("sink_refused"));
+            let body = lodestar_api::error::ApiError::from(e).body().to_string();
+            assert!(!body.contains(&password), "{body}");
+        }
     }
 }

@@ -37,7 +37,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lodestar_integrations::secret::{SealedSecret, Secret, SecretStore};
-use lodestar_sources::egress::{DownReason, PluginEgress, RouteState};
+use lodestar_sources::egress::{DownReason, PluginEgress, RouteKind, RouteState};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -54,7 +54,9 @@ use crate::layout::{Install, LayoutError};
 use crate::log_events::{INSTALL_FAILED, INSTALLED, RECOVERED, REMOVED, ROLLED_BACK};
 use crate::state::{self, Op, OpKind, Record, StateError, Step};
 use crate::supervise::egress::{self, Follows, Gated, Route};
-use crate::supervise::{Companion, Confinement, Probe, Sandbox, SpawnSpec, Supervisor};
+use crate::supervise::{
+    Companion, Confinement, EnvName, LogRing, Probe, Sandbox, SpawnSpec, State, Status, Supervisor,
+};
 use crate::verify;
 
 /// A test's fault point (`Fault::$f`); nothing in other builds.
@@ -309,6 +311,11 @@ pub trait Run: Send + Sync {
     fn healthy<'a>(&'a self, id: &'a CompanionId, target: &'a Target) -> BoxFuture<'a, bool>;
     /// Stops it, bounded; nothing if it isn't running.
     fn stop<'a>(&'a self, id: &'a CompanionId) -> BoxFuture<'a, ()>;
+    /// Its live state while it's supervised, which the manager follows
+    /// into the snapshot after each start it makes. `None`: not followed.
+    fn status(&self, _id: &CompanionId) -> Option<watch::Receiver<Status>> {
+        None
+    }
 }
 
 /// Configuring an installed companion through its API (CMP-8b); [`Api`]
@@ -322,6 +329,40 @@ pub trait ApiConfigure: Send + Sync {
         receipt: InstallReceipt,
         credentials: &'a dyn Credentials,
     ) -> BoxFuture<'a, Result<(), AdapterError>>;
+
+    /// Hands a companion Lodestar installed to Lodestar's own settings
+    /// (CMP-8b's `hand_over`: qBittorrent as the managed download client)
+    /// with its stored credential (X-cmp-native-handover). The manager
+    /// calls it within an install, before its commit point, and within
+    /// every restart and regenerate. Nothing to hand over by default.
+    fn hand_over<'a>(
+        &'a self,
+        _id: &'a CompanionId,
+        _target: &'a Target,
+        _receipt: InstallReceipt,
+        _credentials: &'a dyn Credentials,
+    ) -> BoxFuture<'a, Result<(), AdapterError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    /// Whether an install of `id` (`fresh`: nothing installed yet) can be
+    /// handed over, asked before anything is downloaded: the settings it
+    /// goes to must be there, and a first install must not take over an
+    /// entry that isn't Lodestar's. Yes by default.
+    fn can_hand_over<'a>(
+        &'a self,
+        _id: &'a CompanionId,
+        _fresh: bool,
+    ) -> BoxFuture<'a, Result<(), AdapterError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    /// Takes what [`ApiConfigure::hand_over`] saved out of Lodestar's
+    /// settings again: before a removal, and after a first install that
+    /// was rolled back. Nothing by default.
+    fn release<'a>(&'a self, _id: &'a CompanionId) -> BoxFuture<'a, Result<(), AdapterError>> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 /// Where downloads come from: the guarded client in shipped builds.
@@ -390,6 +431,11 @@ struct Inner {
     _lock: std::fs::File,
     busy: Mutex<Vec<CompanionId>>,
     snapshot: watch::Sender<Snapshot>,
+    /// Each companion's run, counted up on every start and stop the
+    /// manager makes: a follower publishes only for the run it follows.
+    runs: Mutex<HashMap<CompanionId, u64>>,
+    /// [`LIVE_DEADLINE`]; shorter only in tests.
+    deadline: Mutex<Duration>,
     #[cfg(any(test, feature = "testing"))]
     fault: Mutex<Option<Fault>>,
 }
@@ -593,6 +639,48 @@ impl Inner {
         });
     }
 
+    /// A new run of `id`: any follower of an earlier one stops publishing.
+    fn next_run(&self, id: &CompanionId) -> u64 {
+        let mut runs = self.runs.lock().unwrap_or_else(|e| e.into_inner());
+        let n = runs.entry(id.clone()).or_default();
+        *n += 1;
+        *n
+    }
+
+    /// Publishes `health` for run `run` of `id`, unless a later start or
+    /// stop has superseded it. Checked and published under one lock, so
+    /// nothing a stop publishes is overwritten by an older run.
+    fn publish_run(&self, id: &CompanionId, run: u64, version: &Version, health: Health) -> bool {
+        let runs = self.runs.lock().unwrap_or_else(|e| e.into_inner());
+        if runs.get(id) != Some(&run) {
+            return false;
+        }
+        self.publish(id, Some((Some(version.clone()), health)));
+        true
+    }
+
+    fn is_run(&self, id: &CompanionId, run: u64) -> bool {
+        self.runs.lock().unwrap_or_else(|e| e.into_inner()).get(id) == Some(&run)
+    }
+
+    /// Ends run `run` of `id` if it's still the current one, as a stop
+    /// does: `false` when a later run began meanwhile, which then owns it.
+    fn end_run(&self, id: &CompanionId, run: u64) -> bool {
+        let mut runs = self.runs.lock().unwrap_or_else(|e| e.into_inner());
+        match runs.get_mut(id) {
+            Some(n) if *n == run => {
+                *n += 1;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// How long a start, restart, regenerate or configuration may take.
+    fn deadline(&self) -> Duration {
+        *self.deadline.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn claim(self: &Arc<Self>, id: &CompanionId) -> Result<Slot, Refusal> {
         let mut b = self.busy.lock().unwrap_or_else(|e| e.into_inner());
         if b.contains(id) {
@@ -794,7 +882,6 @@ impl Inner {
         rec: &mut Record,
     ) -> Result<Secret, ManagerError> {
         let field = field_of(id).ok_or(Refusal::NoProfile)?;
-        let home = crate::supervise::process::home_dir(&self.p.data, id);
         fault!(self, Before(Step::Credentials));
         let issued = credentials::generate(&self.p.secrets, &CredentialKey::new(id.clone(), field))
             .map_err(|_| failed("credentials")("generate"))?;
@@ -806,19 +893,70 @@ impl Inner {
         *rec = self.save(id, rec, Step::Credentials)?;
 
         fault!(self, Before(Step::Files));
+        self.write_credential(id, field, &issued.secret)?;
+        fault!(self, After(Step::Files));
+        *rec = self.save(id, rec, Step::Files)?;
+        Ok(issued.secret)
+    }
+
+    /// Writes `secret` into the companion's own config file, keeping
+    /// everything else in it (CMP-3's writers). The companion is stopped.
+    fn write_credential(
+        &self,
+        id: &CompanionId,
+        field: Field,
+        secret: &Secret,
+    ) -> Result<(), ManagerError> {
+        let home = crate::supervise::process::home_dir(&self.p.data, id);
         let prof = profile(id, &home, 0).ok_or(Refusal::NoProfile)?;
         let dir = config_dir(&home, prof.config.0)?;
         let path = dir.join(prof.config.1);
         let written = match field {
             Field::WebUiPassword => {
-                config_files::write_qbittorrent(&path, &Username::default(), &issued.secret)
+                config_files::write_qbittorrent(&path, &Username::default(), secret)
             }
-            Field::ApiKey => config_files::write_prowlarr(&path, &issued.secret),
+            Field::ApiKey => config_files::write_prowlarr(&path, secret),
         };
-        written.map_err(|_| failed("files")("write"))?;
-        fault!(self, After(Step::Files));
-        *rec = self.save(id, rec, Step::Files)?;
-        Ok(issued.secret)
+        written.map_err(|_| failed("files")("write"))
+    }
+
+    /// Regenerate's rotation (CMP-6): a new credential, never reading the
+    /// old one's value. The row is stored first, then the file, as at
+    /// install (#611): a crash between them leaves Lodestar holding the
+    /// new value, and regenerating again writes both. A failed file write
+    /// puts the old sealed row back, so the row and the file agree. The
+    /// companion is stopped.
+    fn rotate(&self, id: &CompanionId) -> Result<(), ManagerError> {
+        let field = field_of(id).ok_or(Refusal::NoProfile)?;
+        let key = CredentialKey::new(id.clone(), field);
+        let store = failed("credentials");
+        let old = self
+            .p
+            .rows
+            .get(&key.row_key())
+            .map_err(|_| store("store"))?;
+        let issued = credentials::generate(&self.p.secrets, &key).map_err(|_| store("generate"))?;
+        self.p.rows.put(&issued.row).map_err(|_| store("store"))?;
+        let Err(e) = self.write_credential(id, field, &issued.secret) else {
+            return Ok(());
+        };
+        let restored = match old {
+            Some(value) => self.p.rows.put(&SealedRow {
+                key: key.row_key(),
+                value,
+            }),
+            None => self.p.rows.forget(id),
+        };
+        if restored.is_err() {
+            lodestar_log::log_event!(
+                INSTALL_FAILED,
+                companion = self.label(id),
+                version = "",
+                step = "regenerate",
+                reason = "rollback_failed"
+            );
+        }
+        Err(e)
     }
 
     /// Points `current` at the staged version, keeping the old one.
@@ -1047,6 +1185,8 @@ impl Manager {
             _lock: lock,
             busy: Mutex::new(Vec::new()),
             snapshot: watch::channel(Snapshot::default()).0,
+            runs: Mutex::new(HashMap::new()),
+            deadline: Mutex::new(LIVE_DEADLINE),
             #[cfg(any(test, feature = "testing"))]
             fault: Mutex::new(None),
         })))
@@ -1062,6 +1202,12 @@ impl Manager {
         tokio::task::spawn_blocking(move || f(&inner))
             .await
             .map_err(|_| failed("blocking")("panicked"))?
+    }
+
+    /// Shortens [`LIVE_DEADLINE`], so its expiry can be tested.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn set_live_deadline(&self, d: Duration) {
+        *self.0.deadline.lock().unwrap_or_else(|e| e.into_inner()) = d;
     }
 
     /// Stops the next operation at `fault`, as a crash would.
@@ -1115,8 +1261,23 @@ impl Manager {
         let id = &entry.id;
         m.p.run.ready().map_err(failed("start"))?;
         let _slot = m.claim(id)?;
+        // Before anything is downloaded: a hand-over that can't happen
+        // (no settings to go to, or an entry that isn't Lodestar's)
+        // refuses now, rather than after the whole install.
+        let fresh = self
+            .off(move |m| m.record(id))
+            .await?
+            .is_none_or(|r| r.installed.is_none());
+        m.p.api
+            .can_hand_over(id, fresh)
+            .await
+            .map_err(|e| failed("handover")(configure::code(&e)))?;
         let mut rec = self.off(move |m| m.begin(entry, pin)).await?;
-        match self.steps(entry, artifact, pin, &mut rec).await {
+        let mut handed = false;
+        match self
+            .steps(entry, artifact, pin, &mut rec, &mut handed)
+            .await
+        {
             Ok(()) => {
                 lodestar_log::log_event!(
                     INSTALLED,
@@ -1138,6 +1299,7 @@ impl Manager {
                     reason = e.code()
                 );
                 m.publish(id, Some((Some(pin.version.clone()), Health::Healthy)));
+                self.follow(id, &pin.version);
                 Ok(pin.version.clone())
             }
             Err(e) => {
@@ -1152,7 +1314,7 @@ impl Manager {
                     step = step,
                     reason = code
                 );
-                self.undo(entry, rec).await;
+                self.undo(entry, rec, handed).await;
                 Err(e)
             }
         }
@@ -1164,6 +1326,7 @@ impl Manager {
         artifact: &'static Artifact,
         pin: &'static Pin,
         rec: &mut Record,
+        handed: &mut bool,
     ) -> Result<(), ManagerError> {
         let m = &self.0;
         let id = &entry.id;
@@ -1207,7 +1370,7 @@ impl Manager {
 
         // Commit: the old version stops first; the pointer keeps it as
         // `previous`.
-        m.p.run.stop(id).await;
+        self.halt(id).await;
         let (x, r) = (exe.clone(), rec.clone());
         *rec = self
             .off(move |m| {
@@ -1236,6 +1399,15 @@ impl Manager {
             .configure(id, &target, InstallReceipt::new(target.clone()), &opened)
             .await
             .map_err(|e| failed("configure")(configure::code(&e)))?;
+        // Handed over before the commit point: a failed hand-over fails
+        // the install, which is undone, so it's never "installed" without
+        // being the download client (X-cmp-native-handover).
+        // Counted before it's tried: one that saved and then failed (a
+        // timeout after the save) is undone too. A first install found no
+        // entry before it began (`can_hand_over`), so whatever is there
+        // now is this install's.
+        *handed = true;
+        self.hand_over_now(id, &target).await?;
         fault!(m, After(Step::Configured));
         let mut next = rec.clone();
         next.installed = Some(v.clone());
@@ -1253,6 +1425,7 @@ impl Manager {
             })
             .await?;
         m.publish(id, Some((Some(v.clone()), Health::Healthy)));
+        self.follow(id, v);
         Ok(())
     }
 
@@ -1293,13 +1466,16 @@ impl Manager {
 
     /// A live failure: rolls back as recovery would, then starts the
     /// previous version again after a failed update.
-    async fn undo(&self, entry: &'static Entry, rec: Record) {
+    /// `handed`: this install's hand-over saved, so a first install undone
+    /// takes its entry out again; one that never got that far leaves the
+    /// settings as they are (an entry there isn't this install's).
+    async fn undo(&self, entry: &'static Entry, rec: Record, handed: bool) {
         let m = &self.0;
         let id = &entry.id;
         // Before `staged` the running version was never stopped.
         let touched = rec.op.as_ref().is_some_and(|o| o.step >= Step::Staged);
         if touched {
-            m.p.run.stop(id).await;
+            self.halt(id).await;
         }
         let rolled = self
             .off(move |m| {
@@ -1317,9 +1493,23 @@ impl Manager {
                 } else {
                     Health::Unhealthy
                 };
-                m.publish(id, Some((Some(prev), health)));
+                m.publish(id, Some((Some(prev.clone()), health)));
+                self.follow_from(entry, &prev, health);
             }
-            Ok(None) => m.publish(id, None),
+            Ok(None) => {
+                // A first install undone: what its hand-over saved goes
+                // too, so no managed entry points at nothing.
+                if handed && self.release_now(id).await.is_err() {
+                    lodestar_log::log_event!(
+                        INSTALL_FAILED,
+                        companion = m.label(id),
+                        version = "",
+                        step = "release",
+                        reason = "rollback_failed"
+                    );
+                }
+                m.publish(id, None)
+            }
             Err(e) => lodestar_log::log_event!(
                 INSTALL_FAILED,
                 companion = m.label(id),
@@ -1345,17 +1535,43 @@ impl Manager {
             .ok_or(Refusal::NotAvailable(NotAvailable::NoPlatform))?;
         let exe = executable(id, a)?;
         let target = Inner::target(entry)?;
-        let secrets = self.off(move |m| m.secret(id)).await?;
+        // The stored credential goes into its own file again first, so a
+        // crash between a regenerate's row and its file heals at the next
+        // start (the writers keep every other line). It's stopped.
+        let secrets = self
+            .off(move |m| {
+                let secret = m.secret(id)?;
+                if let (Some(s), Some(f)) = (&secret, field_of(id)) {
+                    m.write_credential(id, f, s)?;
+                }
+                Ok(secret)
+            })
+            .await?;
         self.launch(entry, version, &exe, &target, secrets.into_iter().collect())
             .await?;
+        self.configure_now(id, &target).await
+    }
+
+    /// CMP-8b's configuration of a running companion, with its stored
+    /// credential: the bind and the proxy for its route, re-asserted.
+    async fn configure_now(
+        &self,
+        id: &'static CompanionId,
+        target: &Target,
+    ) -> Result<(), ManagerError> {
         let secret = self.off(move |m| m.secret(id)).await?;
         let opened = Opened {
             field: field_name(id),
             secret,
         };
-        m.p.api
-            .configure(id, &target, InstallReceipt::new(target.clone()), &opened)
+        let configured =
+            self.0
+                .p
+                .api
+                .configure(id, target, InstallReceipt::new(target.clone()), &opened);
+        tokio::time::timeout(self.0.deadline(), configured)
             .await
+            .map_err(|_| failed("configure")("timed_out"))?
             .map_err(|e| failed("configure")(configure::code(&e)))
     }
 
@@ -1374,16 +1590,31 @@ impl Manager {
         let entry = m.entry(id)?;
         let id = &entry.id;
         let _slot = m.claim(id)?;
+        // Only a companion Lodestar installed (`not_installed` otherwise)
+        // has its managed entry taken out, and that first: a failure
+        // leaves everything as it was, to try again.
+        self.off(move |m| m.removal(id)).await?;
+        // An install or update a crash left in its journal is recovery's:
+        // refused before anything is released. A removal it left is taken
+        // up again (its entry went before it began).
+        if self
+            .off(move |m| m.record(id))
+            .await?
+            .and_then(|r| r.op)
+            .is_some_and(|o| o.kind != OpKind::Remove)
+        {
+            return Err(Refusal::Busy.into());
+        }
+        self.release_now(id).await?;
         let (what, rec) = self.off(move |m| m.begin_remove(id)).await?;
         self.finish_remove(entry, rec).await?;
         Ok(what)
     }
 
     async fn finish_remove(&self, entry: &'static Entry, rec: Record) -> Result<(), ManagerError> {
-        let m = &self.0;
         let id = &entry.id;
-        fault!(m, Before(Step::Stopped));
-        m.p.run.stop(id).await;
+        fault!(self.0, Before(Step::Stopped));
+        self.halt(id).await;
         self.off(move |m| m.end_remove(id, &rec)).await
     }
 
@@ -1420,6 +1651,344 @@ impl Manager {
                 Ok(None)
             }
         }
+    }
+}
+
+/// What the manager does to a companion it installed, once installed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiveOp {
+    /// Serve's start of an installed companion.
+    Start,
+    /// Stop, then start and configure again, on the route as set now.
+    Restart,
+    /// Stop, rotate its credential, start and configure again.
+    Regenerate,
+}
+
+impl LiveOp {
+    fn step(self) -> &'static str {
+        match self {
+            LiveOp::Start => "start",
+            LiveOp::Restart => "restart",
+            LiveOp::Regenerate => "regenerate",
+        }
+    }
+}
+
+/// How long a start, restart or regenerate may take to start the
+/// companion and configure it: the health wait ([`HEALTH_DEADLINE`]) and
+/// the configuration's requests, with room to spare. The stop before it
+/// is bounded by the supervisor.
+pub const LIVE_DEADLINE: Duration = Duration::from_secs(5 * 60);
+
+/// How often a follower that has to configure its companion looks for the
+/// slot while an operation holds it.
+const SLOT_POLL: Duration = Duration::from_millis(250);
+
+/// A restart or regenerate under way, in a task of its own that holds the
+/// companion's slot until it's done (as [`Manager::install`]). Dropping it
+/// leaves the operation running.
+#[derive(Debug)]
+pub struct Pending(JoinHandle<Result<(), ManagerError>>);
+
+impl Pending {
+    /// Waits for the operation to end.
+    pub async fn finished(self) -> Result<(), ManagerError> {
+        self.0.await.map_err(|_| failed("live")("panicked"))?
+    }
+}
+
+impl Manager {
+    /// Starts a companion Lodestar installed and configures it (serve,
+    /// after recovery). Refused while another operation on it runs
+    /// ([`Refusal::Busy`]), and for one it didn't install.
+    pub async fn start(&self, id: &CompanionId) -> Result<(), ManagerError> {
+        self.begin(id, LiveOp::Start).await?.finished().await
+    }
+
+    /// Restarts it: stops it, then starts and configures it again on its
+    /// route as set now. Refused during an install or any other operation
+    /// on it (`busy`), and for one Lodestar didn't install.
+    pub async fn restart(&self, id: &CompanionId) -> Result<Pending, ManagerError> {
+        self.begin(id, LiveOp::Restart).await
+    }
+
+    /// Replaces its credential with a new random one: stops it, writes the
+    /// new one into its row and its own config file ([`Inner::rotate`]),
+    /// then starts and configures it. Only for a companion Lodestar
+    /// installed: one you added isn't Lodestar's to rotate.
+    pub async fn regenerate(&self, id: &CompanionId) -> Result<Pending, ManagerError> {
+        self.begin(id, LiveOp::Regenerate).await
+    }
+
+    /// Claims the slot and checks the journal, then runs `op` in a task
+    /// of its own that keeps the slot.
+    async fn begin(&self, id: &CompanionId, op: LiveOp) -> Result<Pending, ManagerError> {
+        let m = &self.0;
+        let entry = m.entry(id)?;
+        if m.p.host.in_container {
+            return Err(Refusal::NotInstalled.into());
+        }
+        let id = &entry.id;
+        let slot = m.claim(id)?;
+        let version = match self.off(move |m| m.record(id)).await? {
+            Some(Record { op: Some(_), .. }) => return Err(Refusal::Busy.into()),
+            Some(Record {
+                installed: Some(v), ..
+            }) => v,
+            _ => return Err(Refusal::NotInstalled.into()),
+        };
+        let me = Manager(self.0.clone());
+        Ok(Pending(tokio::spawn(async move {
+            let _slot = slot;
+            me.live(entry, &version, op).await
+        })))
+    }
+
+    async fn live(
+        &self,
+        entry: &'static Entry,
+        version: &Version,
+        op: LiveOp,
+    ) -> Result<(), ManagerError> {
+        let m = &self.0;
+        let id = &entry.id;
+        match op {
+            // Already running (an operation started it meanwhile): left
+            // as it is, with its follower.
+            LiveOp::Start if m.p.run.status(id).is_some() => return Ok(()),
+            LiveOp::Start => {}
+            _ => self.halt(id).await,
+        }
+        let rotated = match op {
+            LiveOp::Regenerate => self.off(move |m| m.rotate(id)).await,
+            _ => Ok(()),
+        };
+        // A restart or regenerate hands it over again with the credential
+        // stored now, whether or not it then starts: Integrations and the
+        // companion's own file always hold the same one. A restart is the
+        // retry for a hand-over that failed.
+        let handed = match op {
+            LiveOp::Start => Ok(()),
+            _ => match Inner::target(entry) {
+                Ok(t) => self.hand_over_now(id, &t).await,
+                Err(e) => Err(e),
+            },
+        };
+        // Started again whatever the rotation did: a failed one put the
+        // old credential back.
+        let started = tokio::time::timeout(self.0.deadline(), self.start_installed(entry, version))
+            .await
+            .unwrap_or_else(|_| Err(failed(op.step())("timed_out")));
+        // Its health is the start's: a failed rotation still started it,
+        // on the old credential.
+        let health = if started.is_ok() {
+            Health::Healthy
+        } else {
+            Health::Unhealthy
+        };
+        let result = rotated.and(handed).and(started);
+        m.publish(id, Some((Some(version.clone()), health)));
+        // Followed even after a failed health check: a companion held for
+        // its route is still supervised, and starts when the route is up.
+        self.follow_from(entry, version, health);
+        if let Err(e) = &result
+            && e.code() != "shutting_down"
+        {
+            lodestar_log::log_event!(
+                INSTALL_FAILED,
+                companion = m.label(id),
+                version = "",
+                step = op.step(),
+                reason = e.code()
+            );
+        }
+        result
+    }
+
+    /// [`ApiConfigure::release`], bounded like every settings write.
+    async fn release_now(&self, id: &CompanionId) -> Result<(), ManagerError> {
+        tokio::time::timeout(self.0.deadline(), self.0.p.api.release(id))
+            .await
+            .map_err(|_| failed("release")("timed_out"))?
+            .map_err(|e| failed("release")(configure::code(&e)))
+    }
+
+    /// [`ApiConfigure::hand_over`] with the credential stored now.
+    async fn hand_over_now(
+        &self,
+        id: &'static CompanionId,
+        target: &Target,
+    ) -> Result<(), ManagerError> {
+        let secret = self.off(move |m| m.secret(id)).await?;
+        let opened = Opened {
+            field: field_name(id),
+            secret,
+        };
+        let handed =
+            self.0
+                .p
+                .api
+                .hand_over(id, target, InstallReceipt::new(target.clone()), &opened);
+        tokio::time::timeout(self.0.deadline(), handed)
+            .await
+            .map_err(|_| failed("handover")("timed_out"))?
+            .map_err(|e| failed("handover")(configure::code(&e)))
+    }
+
+    /// Stops `id`, ending the run any follower publishes for.
+    async fn halt(&self, id: &CompanionId) {
+        self.0.next_run(id);
+        self.0.p.run.stop(id).await;
+    }
+
+    /// [`Manager::follow_from`] a healthy start.
+    fn follow(&self, id: &CompanionId, version: &Version) {
+        if let Ok(entry) = self.0.entry(id) {
+            self.follow_from(entry, version, Health::Healthy);
+        }
+    }
+
+    /// Follows the supervisor's state for `id` into the snapshot, for this
+    /// run only, from `now` (what was just published). Backing off, held
+    /// for its route, needing attention or stopped is unhealthy. Running
+    /// again after any of those is healthy once it passes a health check
+    /// ([`Run::healthy`]): the supervisor says running as soon as it has
+    /// started it. A start, or failed checks the supervisor hasn't acted
+    /// on yet, change nothing: it restarts a companion after Q7's three,
+    /// which then shows. It ends when the companion stops being supervised
+    /// or a later run begins.
+    fn follow_from(&self, entry: &'static Entry, version: &Version, now: Health) {
+        let m = &self.0;
+        let id = &entry.id;
+        let run = m.next_run(id);
+        let Some(mut status) = m.p.run.status(id) else {
+            return;
+        };
+        let Ok(target) = Inner::target(entry) else {
+            return;
+        };
+        let weak = Arc::downgrade(&self.0);
+        let check = m.p.run.clone();
+        let version = version.clone();
+        tokio::spawn(async move {
+            let mut last = now;
+            // A start that passed health was configured; one that didn't
+            // (held for its route, say) is configured once it runs.
+            let mut configured = now == Health::Healthy;
+            loop {
+                let state = status.borrow_and_update().state;
+                let next = match state {
+                    State::Running if last != Health::Healthy => {
+                        if !check.healthy(id, &target).await {
+                            Some(Health::Unhealthy)
+                        } else if configured {
+                            Some(Health::Healthy)
+                        } else {
+                            // Under the slot, and only for the current
+                            // run (#660's L1): an operation that holds the
+                            // slot is waited for, never left to leave it
+                            // running unconfigured. One that starts a new
+                            // run takes it over; past the deadline it's
+                            // stopped. The slot is kept until any stop.
+                            let (me, slot, outcome) = match slot_for(&weak, id, run).await {
+                                Ok(Some((m, slot))) => (Manager(m), Some(slot), Ok(())),
+                                Ok(None) => return,
+                                Err(e) => match weak.upgrade() {
+                                    Some(m) => (Manager(m), None, Err(e)),
+                                    None => return,
+                                },
+                            };
+                            // It may have stopped running while it waited
+                            // (held for its route): then it's configured
+                            // when it runs again, never while it's down.
+                            let outcome = match outcome {
+                                Ok(()) if status.borrow().state != State::Running => None,
+                                Ok(()) => Some(me.configure_now(id, &target).await),
+                                Err(e) => Some(Err(e)),
+                            };
+                            match outcome {
+                                None => None,
+                                Some(Ok(())) => {
+                                    configured = true;
+                                    Some(Health::Healthy)
+                                }
+                                Some(Err(e)) => {
+                                    // Q8: never left running unconfigured,
+                                    // where its bind or proxy may have
+                                    // drifted.
+                                    me.0.publish_run(id, run, &version, Health::Unhealthy);
+                                    lodestar_log::log_event!(
+                                        INSTALL_FAILED,
+                                        companion = me.0.label(id),
+                                        version = "",
+                                        step = "configure",
+                                        reason = e.code()
+                                    );
+                                    // Only this run: one an operation
+                                    // began meanwhile is left alone.
+                                    if me.0.end_run(id, run) {
+                                        me.0.p.run.stop(id).await;
+                                    }
+                                    drop(slot);
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    State::Running | State::Starting | State::Unhealthy { .. } => None,
+                    State::BackingOff { .. }
+                    | State::NeedsAttention(_)
+                    | State::Held
+                    | State::Stopped => Some(Health::Unhealthy),
+                };
+                if let Some(h) = next.filter(|h| *h != last) {
+                    let Some(m) = weak.upgrade() else {
+                        return;
+                    };
+                    if !m.publish_run(id, run, &version, h) {
+                        return;
+                    }
+                    last = h;
+                }
+                if status.changed().await.is_err() {
+                    return;
+                }
+            }
+        });
+    }
+}
+
+/// The companion's slot for run `run`, waited for while an operation
+/// holds it, with the manager it belongs to. `None` once a later run has
+/// begun (that operation owns the companion now) or the manager is gone;
+/// `busy` if it's still held after the deadline. Holds the manager only
+/// for each look, never while it waits.
+async fn slot_for(
+    weak: &std::sync::Weak<Inner>,
+    id: &CompanionId,
+    run: u64,
+) -> Result<Option<(Arc<Inner>, Slot)>, ManagerError> {
+    let Some(deadline) = weak.upgrade().map(|m| m.deadline()) else {
+        return Ok(None);
+    };
+    let give_up = tokio::time::Instant::now() + deadline;
+    loop {
+        let Some(m) = weak.upgrade() else {
+            return Ok(None);
+        };
+        if !m.is_run(id, run) {
+            return Ok(None);
+        }
+        if let Ok(slot) = m.claim(id) {
+            // Checked again under the slot: nothing can begin a run now.
+            return Ok(m.is_run(id, run).then_some((m, slot)));
+        }
+        if tokio::time::Instant::now() >= give_up {
+            return Err(Refusal::Busy.into());
+        }
+        drop(m);
+        tokio::time::sleep(SLOT_POLL).await;
     }
 }
 
@@ -1465,6 +2034,151 @@ impl ApiConfigure for Api {
 /// How long [`Supervised::healthy`] waits for a first healthy answer.
 pub const HEALTH_DEADLINE: Duration = Duration::from_secs(120);
 
+/// Each companion's route (Q18), built afresh for every start from its
+/// `companions.<id>.egress` setting, with [`monitored`] (`crates/lodestar`
+/// implements it). `None`: there's no route it may follow, and it isn't
+/// started (Q8: never on a route nobody chose).
+pub trait Routes: Send + Sync {
+    fn route<'a>(&'a self, id: &'a CompanionId) -> BoxFuture<'a, Option<Prelaunch>>;
+}
+
+/// A start's route: its live state for the gate, and what the companion
+/// is launched with so it follows the route from its first instruction
+/// (X-cmp-egress-prelaunch), before CMP-8b configures it.
+#[derive(Debug, Clone)]
+pub struct Prelaunch {
+    pub route: Route,
+    /// The SOCKS5 proxy of a SOCKS5 route, when its address is known.
+    pub proxy: Option<configure::Socks5Proxy>,
+}
+
+/// The proxy variables every HTTP stack a companion uses reads at start
+/// (.NET's `HttpClient.DefaultProxy`, which Prowlarr's clients use while
+/// its own proxy setting is empty, on Linux and Windows alike), each set to
+/// the same value. Upper case is read everywhere; on Unix the lower case
+/// too, which .NET's Unix reader checks first, so the result doesn't
+/// depend on the order (runner, 2026-11-11). Windows' names aren't case
+/// sensitive, so one of each.
+#[cfg(unix)]
+const PROXY_VARS: [&str; 6] = [
+    "ALL_PROXY",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "all_proxy",
+    "http_proxy",
+    "https_proxy",
+];
+#[cfg(not(unix))]
+const PROXY_VARS: [&str; 3] = ["ALL_PROXY", "HTTP_PROXY", "HTTPS_PROXY"];
+
+/// The bypass variable's names, as [`PROXY_VARS`].
+#[cfg(unix)]
+const NO_PROXY_VARS: [&str; 2] = ["NO_PROXY", "no_proxy"];
+#[cfg(not(unix))]
+const NO_PROXY_VARS: [&str; 1] = ["NO_PROXY"];
+
+/// The oldest .NET whose `DefaultProxy` takes `socks5://` from the
+/// variables: .NET 6 and 7 read only `http://` there, so a `socks5://`
+/// value doesn't parse and everything goes direct (dotnet/runtime
+/// `release/6.0`, `release/7.0` and `release/8.0`,
+/// `HttpEnvironmentProxy.GetUriFromString`).
+const DOTNET_SOCKS_ENV: u64 = 8;
+
+/// The largest `runtimeconfig.json` read.
+const RUNTIMECONFIG_MAX: u64 = 64 * 1024;
+
+/// Whether the program reads [`launch_env`]'s proxy variables: it's a
+/// .NET program whose `<name>.runtimeconfig.json`, beside it, names .NET
+/// [`DOTNET_SOCKS_ENV`] or later (`runtimeOptions.tfm`, and every
+/// `Microsoft.NETCore.App` framework it lists or includes, as a
+/// self-contained build does). Anything else, unreadable or missing
+/// included, doesn't, so its SOCKS5 route can't be launched on.
+pub fn reads_proxy_env(executable: &Path) -> bool {
+    let stem = match executable.extension() {
+        Some(e) if e.eq_ignore_ascii_case("exe") => executable.with_extension(""),
+        _ => executable.to_path_buf(),
+    };
+    let mut name = stem.into_os_string();
+    name.push(".runtimeconfig.json");
+    let path = PathBuf::from(name);
+    // Opened once, then checked and read through the same handle, so what
+    // is read is what was checked; never more than the cap (#672's review).
+    let Ok(file) = std::fs::File::open(&path) else {
+        return false;
+    };
+    let Ok(meta) = file.metadata() else {
+        return false;
+    };
+    if !meta.is_file() || meta.len() > RUNTIMECONFIG_MAX {
+        return false;
+    }
+    let mut text = String::new();
+    let read = std::io::Read::read_to_string(
+        &mut std::io::Read::take(file, RUNTIMECONFIG_MAX + 1),
+        &mut text,
+    );
+    if read.is_err() || text.len() as u64 > RUNTIMECONFIG_MAX {
+        return false;
+    }
+    runtime_reads_proxy_env(&text)
+}
+
+/// [`reads_proxy_env`]'s check of the file's text.
+fn runtime_reads_proxy_env(text: &str) -> bool {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
+        return false;
+    };
+    let opts = &v["runtimeOptions"];
+    let major = |s: &str| -> Option<u64> { s.split('.').next()?.parse().ok() };
+    let tfm = opts["tfm"]
+        .as_str()
+        .and_then(|t| t.strip_prefix("net"))
+        .and_then(major);
+    let mut frameworks = Vec::new();
+    for key in ["framework", "frameworks", "includedFrameworks"] {
+        match &opts[key] {
+            serde_json::Value::Array(a) => frameworks.extend(a.iter()),
+            f @ serde_json::Value::Object(_) => frameworks.push(f),
+            _ => {}
+        }
+    }
+    let core: Vec<Option<u64>> = frameworks
+        .iter()
+        .filter(|f| f["name"] == "Microsoft.NETCore.App")
+        .map(|f| f["version"].as_str().and_then(major))
+        .collect();
+    let new_enough = |m: Option<u64>| m.is_some_and(|m| m >= DOTNET_SOCKS_ENV);
+    new_enough(tfm) && !core.is_empty() && core.into_iter().all(new_enough)
+}
+
+/// Loopback only, which never leaves the machine: a companion's own WebUI
+/// and other companions on this machine.
+/// `[::1]` as well as `::1`: .NET 8 compares entries with the URL's host,
+/// which keeps IPv6 brackets.
+const NO_PROXY: &str = "localhost,127.0.0.1,::1,[::1]";
+
+/// The route in the companion's launch environment, or `None` when it
+/// can't be expressed there, and the companion mustn't start: Q8's "never
+/// direct, then fixed". Direct needs nothing. A SOCKS5 route is the proxy
+/// variables (`socks5://`, so names are resolved by the proxy). Interface
+/// and bind-address routes have no launch form yet: no companion setting
+/// can choose them (sources offer direct and SOCKS5 only).
+pub fn launch_env(p: &Prelaunch) -> Option<Vec<(EnvName, OsString)>> {
+    match (p.route.kind, &p.proxy) {
+        (RouteKind::Direct, _) => Some(Vec::new()),
+        (RouteKind::Socks5, Some(proxy)) => {
+            let url = OsString::from(format!("socks5://{}", proxy.get()));
+            let proxies = PROXY_VARS.iter().map(|v| (*v, url.clone()));
+            let bypass = NO_PROXY_VARS.iter().map(|v| (*v, OsString::from(NO_PROXY)));
+            proxies
+                .chain(bypass)
+                .map(|(k, v)| Some((EnvName::parse(k).ok()?, v)))
+                .collect()
+        }
+        _ => None,
+    }
+}
+
 /// The real [`Run`]: CMP-4a's supervisor inside CMP-4b's sandbox, each
 /// companion behind its route's gate.
 pub struct Supervised {
@@ -1472,11 +2186,28 @@ pub struct Supervised {
     pub supervisor: tokio::sync::Mutex<Supervisor>,
     pub sandbox: Sandbox,
     pub http: Arc<dyn GuardedHttp>,
-    /// The companion's route (Q18), from [`monitored`].
-    pub route: Arc<dyn Fn(&CompanionId) -> Route + Send + Sync>,
+    /// Each companion's route (Q18).
+    pub routes: Arc<dyn Routes>,
     /// Where qBittorrent saves, if set.
     pub downloads: Option<PathBuf>,
-    gates: Mutex<HashMap<CompanionId, Gated>>,
+    live: Mutex<HashMap<CompanionId, Running>>,
+    /// Set by [`Supervised::shutdown`]: nothing starts after it.
+    closed: std::sync::atomic::AtomicBool,
+}
+
+/// What [`Supervised`] keeps for a companion it started.
+struct Running {
+    /// Dropped before the companion is removed, which holds it first.
+    gate: Option<Gated>,
+    /// Dropped at its stop, so `monitored`'s relay stops probing.
+    route: Option<watch::Receiver<RouteState>>,
+    status: Option<watch::Receiver<Status>>,
+    /// Its output, kept after it stops until it's started again.
+    logs: Option<LogRing>,
+    /// The route variables it was launched with ([`launch_env`]), read
+    /// back by tests ([`Supervised::launched_env`]).
+    #[cfg_attr(not(any(test, feature = "testing")), allow(dead_code))]
+    env: Vec<(EnvName, OsString)>,
 }
 
 impl Supervised {
@@ -1485,7 +2216,7 @@ impl Supervised {
         supervisor: Supervisor,
         sandbox: Sandbox,
         http: Arc<dyn GuardedHttp>,
-        route: Arc<dyn Fn(&CompanionId) -> Route + Send + Sync>,
+        routes: Arc<dyn Routes>,
         downloads: Option<PathBuf>,
     ) -> Supervised {
         Supervised {
@@ -1493,9 +2224,53 @@ impl Supervised {
             supervisor: tokio::sync::Mutex::new(supervisor),
             sandbox,
             http,
-            route,
+            routes,
             downloads,
-            gates: Mutex::new(HashMap::new()),
+            live: Mutex::new(HashMap::new()),
+            closed: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    fn running(&self) -> std::sync::MutexGuard<'_, HashMap<CompanionId, Running>> {
+        self.live.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Its recent output, as the ring holds it (redacted with its
+    /// credentials before each line went in). `None`: it was never started
+    /// in this run of Lodestar.
+    pub fn logs(&self, id: &CompanionId) -> Option<Vec<String>> {
+        self.running()
+            .get(id)
+            .and_then(|r| r.logs.as_ref())
+            .map(LogRing::lines)
+    }
+
+    /// The route variables it was last launched with: none on a direct
+    /// route, the proxy on a SOCKS5 one. No secret is among them. For tests.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn launched_env(&self, id: &CompanionId) -> Option<Vec<(String, OsString)>> {
+        self.running().get(id).map(|r| {
+            r.env
+                .iter()
+                .map(|(k, v)| (k.as_str().to_owned(), v.clone()))
+                .collect()
+        })
+    }
+
+    /// Stops every companion, each bounded as [`Run::stop`], and starts
+    /// nothing after. For serve's shutdown.
+    pub async fn shutdown(&self) {
+        let mut sup = self.supervisor.lock().await;
+        self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+        let ids: Vec<CompanionId> = self.running().keys().cloned().collect();
+        for id in ids {
+            let gate = self.running().get_mut(&id).and_then(|r| {
+                r.status = None;
+                r.route = None;
+                r.gate.take()
+            });
+            drop(gate);
+            sup.remove(&id).await;
         }
     }
 }
@@ -1504,11 +2279,30 @@ impl Run for Supervised {
     fn start(&self, l: Launch) -> BoxFuture<'_, Result<(), &'static str>> {
         Box::pin(async move {
             let health = crate::detect::health(&l.id).ok_or("no_health")?;
+            let pre = self.routes.route(&l.id).await.ok_or("no_route")?;
+            // A route it can't follow at all is refused as before; one it
+            // could follow but can't be launched on, likewise.
+            egress::decide(Follows::of(&l.id), pre.route.kind).map_err(|e| e.code())?;
+            let env = launch_env(&pre).ok_or("route_not_expressible")?;
+            // Only a .NET that parses `socks5://` reads the variables:
+            // an older one ignores them and goes direct.
+            if !env.is_empty() {
+                // A file read: off the async runtime. A failed task fails
+                // closed like any other unreadable file.
+                let exe = l.executable.clone();
+                let reads = tokio::task::spawn_blocking(move || reads_proxy_env(&exe))
+                    .await
+                    .unwrap_or(false);
+                if !reads {
+                    return Err("route_not_expressible");
+                }
+            }
+            let route = pre.route;
             let spec = SpawnSpec {
                 id: l.id.clone(),
                 executable: l.executable,
                 args: l.args,
-                env: Vec::new(),
+                env,
                 data_dir: self.data.clone(),
                 allow_privileged: false,
             };
@@ -1517,6 +2311,15 @@ impl Run for Supervised {
                 downloads: self.downloads.clone(),
             };
             let (spec, _report) = self.sandbox.prepare(spec, &conf).map_err(|e| e.code())?;
+            // What it's really launched with, as the sandbox passes it on.
+            let env: Vec<(EnvName, OsString)> = spec
+                .env
+                .iter()
+                .filter(|(k, _)| {
+                    PROXY_VARS.contains(&k.as_str()) || NO_PROXY_VARS.contains(&k.as_str())
+                })
+                .cloned()
+                .collect();
             let c = Companion {
                 spawn: spec,
                 depends_on: Vec::new(),
@@ -1529,23 +2332,42 @@ impl Run for Supervised {
                 stop: None,
             };
             let mut sup = self.supervisor.lock().await;
-            let gated = egress::add(&mut sup, c, Follows::of(&l.id), (self.route)(&l.id))
-                .map_err(|e| e.code())?;
-            self.gates
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(l.id, gated);
+            // Under the lock shutdown holds.
+            if self.closed.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err("shutting_down");
+            }
+            let state = route.state.clone();
+            let gated =
+                egress::add(&mut sup, c, Follows::of(&l.id), route).map_err(|e| e.code())?;
+            let running = Running {
+                gate: Some(gated),
+                route: Some(state),
+                status: sup.status(&l.id),
+                logs: sup.logs(&l.id),
+                env,
+            };
+            self.running().insert(l.id, running);
             Ok(())
         })
     }
 
+    /// Fails fast while its route is down (#621 N3): a held companion
+    /// isn't running, so waiting the whole deadline tells nothing. A route
+    /// not checked yet is waited for.
     fn healthy<'a>(&'a self, id: &'a CompanionId, target: &'a Target) -> BoxFuture<'a, bool> {
         Box::pin(async move {
             let Some(h) = crate::detect::health(id) else {
                 return false;
             };
+            let route = self.running().get(id).and_then(|r| r.route.clone());
             let deadline = tokio::time::Instant::now() + HEALTH_DEADLINE;
             while tokio::time::Instant::now() < deadline {
+                if route
+                    .as_ref()
+                    .is_some_and(|r| matches!(*r.borrow(), RouteState::Down(_)))
+                {
+                    return false;
+                }
                 if h.check(&*self.http, target).await == HealthStatus::Healthy {
                     return true;
                 }
@@ -1558,15 +2380,19 @@ impl Run for Supervised {
     fn stop<'a>(&'a self, id: &'a CompanionId) -> BoxFuture<'a, ()> {
         Box::pin(async move {
             // Dropping the gate holds it first, so it can't be released
-            // while it's removed.
-            drop(
-                self.gates
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .remove(id),
-            );
+            // while it's removed. Its logs stay until it starts again.
+            let gate = self.running().get_mut(id).and_then(|r| {
+                r.status = None;
+                r.route = None;
+                r.gate.take()
+            });
+            drop(gate);
             self.supervisor.lock().await.remove(id).await;
         })
+    }
+
+    fn status(&self, id: &CompanionId) -> Option<watch::Receiver<Status>> {
+        self.running().get(id).and_then(|r| r.status.clone())
     }
 }
 
@@ -1688,5 +2514,43 @@ mod tests {
         );
         assert!(matches!(got, Err(TryLockError::Error(_))));
         assert_eq!(attempts, 1);
+    }
+}
+
+#[cfg(test)]
+mod runtime_tests {
+    use super::runtime_reads_proxy_env as reads;
+
+    #[test]
+    fn only_dotnet_8_or_later_reads_the_proxy_variables() {
+        let framework_dependent = |tfm: &str, v: &str| {
+            format!(
+                r#"{{"runtimeOptions":{{"tfm":"{tfm}","framework":{{"name":"Microsoft.NETCore.App","version":"{v}"}}}}}}"#
+            )
+        };
+        let self_contained = |tfm: &str, v: &str| {
+            format!(
+                r#"{{"runtimeOptions":{{"tfm":"{tfm}","includedFrameworks":[{{"name":"Microsoft.NETCore.App","version":"{v}"}},{{"name":"Microsoft.AspNetCore.App","version":"{v}"}}]}}}}"#
+            )
+        };
+        for ok in [
+            framework_dependent("net8.0", "8.0.11"),
+            self_contained("net8.0", "8.0.11"),
+            self_contained("net10.0", "10.0.0"),
+        ] {
+            assert!(reads(&ok), "{ok}");
+        }
+        for bad in [
+            framework_dependent("net6.0", "6.0.36"),
+            self_contained("net7.0", "7.0.20"),
+            // A framework older than its tfm says, or no runtime named.
+            self_contained("net8.0", "6.0.36"),
+            r#"{"runtimeOptions":{"tfm":"net8.0"}}"#.to_owned(),
+            r#"{"runtimeOptions":{"tfm":"netcoreapp3.1"}}"#.to_owned(),
+            r#"{"runtimeOptions":{}}"#.to_owned(),
+            "not json".to_owned(),
+        ] {
+            assert!(!reads(&bad), "{bad}");
+        }
     }
 }

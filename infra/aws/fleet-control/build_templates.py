@@ -37,7 +37,7 @@ SPEND_LEDGER_KEY = "fleet/spend-ledger.json"   # OP-2: the monthly fleet-compute
 MISMATCH_KEY = "locks/fleet-mismatch.json"     # OP-2: the recorded audit mismatch
 TF_STATE_KEY = "terraform/lodestar.tfstate"
 TF_LOCK_KEY = TF_STATE_KEY + ".tflock"  # Terraform >= 1.10 use_lockfile
-OPERATOR_LOCK_PREFIX = "locks/operator"  # OP-4 names the exact keys beneath it
+OPERATOR_LOCK_KEY = "locks/operator.json"  # OP-4: one operator session at a time
 CLAUDE_LOCK_KEY = "operator/claude-lock.json"
 
 
@@ -206,12 +206,11 @@ def fleet_control() -> dict:
         "operator-wake, operator-apply and operator-injection in the cloud-operator environment at refs/heads/main.",
         [sub("cloud-operator", w) for w in ("operator-wake.yml", "operator-apply.yml", "operator-injection.yml")],
         [
-            {"Sid": "OperatorLocks", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-             "Resource": obj(control, OPERATOR_LOCK_PREFIX + "*")},
+            {"Sid": "OperatorLock", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+             "Resource": obj(control, OPERATOR_LOCK_KEY)},
             {"Sid": "ClaudeLock", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject"],
              "Resource": obj(control, CLAUDE_LOCK_KEY)},
-            {"Sid": "ListOperatorKeys", "Effect": "Allow", "Action": "s3:ListBucket", "Resource": bucket_arn(control),
-             "Condition": {"StringLike": {"s3:prefix": [OPERATOR_LOCK_PREFIX + "*", CLAUDE_LOCK_KEY]}}},
+            {"Sid": "ListOperatorKeys", **list_prefixes(control, [OPERATOR_LOCK_KEY, CLAUDE_LOCK_KEY])},
             {"Sid": "ReadFleetJsonOnly", "Effect": "Allow", "Action": "s3:GetObject",
              "Resource": obj(state, FLEET_JSON_KEY)},
         ],
