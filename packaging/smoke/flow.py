@@ -9,7 +9,7 @@ subcommand talks to a Lodestar on `--url` (default http://127.0.0.1:8090).
   flow.py crawler  --state DIR [--dht]       wait until the crawler has left the setup hold
   flow.py search   --state DIR               wait until the fixture is searchable
 
-Nothing here fetches anything outside the Lodestar under test. The setup token is
+Nothing here fetches anything outside the Lodestar under test (the Lodestar itself may reach the public DHT when DHT is on). The setup token is
 read from the server's own log and is only ever printed redacted; the password is
 random, kept in `--state` (a temp folder the caller deletes) and never printed.
 Every wait is a loop on a condition with a deadline of at least 10 s: no fixed sleeps.
@@ -155,7 +155,11 @@ def cmd_setup(args):
         ) as r:
             raw = r.headers.get("Set-Cookie", "")
     except urllib.error.HTTPError as e:
-        fail(f"POST /setup answered {e.code}")
+        try:
+            code = json.load(e).get("error", {}).get("code", "")
+        except (ValueError, OSError):
+            code = ""
+        fail(f"POST /setup answered {e.code} {code}".rstrip())
     m = re.match(r"([^=;\s]+=[^;\s]+)", raw)
     if not m:
         fail("setup answered without a session cookie")
@@ -189,6 +193,24 @@ def cmd_crawler(args):
 
         wait_for("the DHT source to be up (socket bound)", CRAWLER_WAIT, bound)
         print('crawler: lodestar_source_up{source="dht"} = 1')
+        # Warn-only (plan Q1): whether the public DHT routing table grew above 0 nodes. A runner
+        # may have no route to the DHT, so this never fails the smoke.
+        nodes = 0
+        end = time.monotonic() + 20
+        while time.monotonic() < end:
+            try:
+                with request(args.url, "/metrics") as r:
+                    m = re.search(r"^lodestar_dht_routing_nodes\s+(\d+)", r.read().decode("utf-8", "replace"), re.M)
+                nodes = int(m.group(1)) if m else 0
+            except (urllib.error.URLError, OSError, ValueError):
+                nodes = 0
+            if nodes > 0:
+                break
+            time.sleep(1)
+        if nodes > 0:
+            print(f"crawler: the DHT routing table has {nodes} nodes")
+        else:
+            print("::warning::the DHT routing table is still empty (no route to the public DHT from here?)")
 
 
 def cmd_search(args):
@@ -196,7 +218,8 @@ def cmd_search(args):
 
     def found():
         r = get_json(args.url, API + f"/search?q={WORD}&limit=20", cookie)
-        return r["hits"] if len(r["hits"]) >= len(NAMES) else None
+        names = {h.get("name") for h in r["hits"]}
+        return r["hits"] if all(n in names for n in NAMES) else None
 
     hits = wait_for(f"a search for {WORD!r} to find all {len(NAMES)} fixture torrents", SEARCH_WAIT, found)
     print(f"search: {len(hits)} hits for {WORD!r}")

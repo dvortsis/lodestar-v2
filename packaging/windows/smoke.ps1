@@ -81,7 +81,8 @@ function Test-Serve([string]$exe, [string]$dataDir) {
 # Setup by token, the crawler out of its setup hold, an imported fixture found by a search:
 # the steps in packaging/smoke/flow.py, around a lodestar.exe run directly (no service) with
 # its own data folder. The server is stopped hard (Windows has no SIGTERM) before the import,
-# which needs the store to itself. DHT stays off so the runner's network is left alone.
+# which needs the store to itself. DHT is on, on a port of its own, so "crawling" includes the
+# DHT socket being bound (plan Q1); the server itself may reach the public DHT.
 function Test-Flow([string]$exe, [string]$dataDir) {
   $flow = Join-Path $PSScriptRoot '..\smoke\flow.py'
   $py = (Get-Command python -ErrorAction SilentlyContinue)
@@ -92,7 +93,7 @@ function Test-Flow([string]$exe, [string]$dataDir) {
   New-Item -ItemType Directory -Force $dataDir | Out-Null
   $env:LODESTAR_DATA_DIR = $dataDir
   $env:LODESTAR_HTTP_BIND = "127.0.0.1:$Port"
-  $env:LODESTAR_DHT_ENABLED = 'false'
+  $env:LODESTAR_DHT_PORT = '16881'
   $procs = @()
   try {
     foreach ($run in 1, 2) {
@@ -110,7 +111,7 @@ function Test-Flow([string]$exe, [string]$dataDir) {
       if ($run -eq 1) {
         & $py.Source -I $flow setup --url $url --log $log --log "$log.err" --state $state
         Assert ($LASTEXITCODE -eq 0) 'setup by token failed'
-        & $py.Source -I $flow crawler --url $url --state $state
+        & $py.Source -I $flow crawler --url $url --state $state --dht
         Assert ($LASTEXITCODE -eq 0) 'the crawler did not leave the setup hold'
         # The import needs the store to itself, so the server stops first.
         Stop-Process -Id $p.Id -Force
@@ -126,9 +127,16 @@ function Test-Flow([string]$exe, [string]$dataDir) {
         Assert ($LASTEXITCODE -eq 0) 'the imported fixture was not found by a search'
       }
     }
+  } catch {
+    # The server's own log, with the setup token redacted, then the failure.
+    foreach ($f in Get-ChildItem $dataDir -Filter 'flow*.log*' -ErrorAction SilentlyContinue) {
+      Write-Host "--- $($f.Name) (tail, redacted)"
+      Get-Content $f.FullName -Tail 40 | ForEach-Object { $_ -replace 'setup token \S+', 'setup token [redacted]' }
+    }
+    throw
   } finally {
     foreach ($p in $procs) { if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force; $p.WaitForExit(15000) | Out-Null } }
-    Remove-Item Env:LODESTAR_DATA_DIR, Env:LODESTAR_HTTP_BIND, Env:LODESTAR_DHT_ENABLED -ErrorAction SilentlyContinue
+    Remove-Item Env:LODESTAR_DATA_DIR, Env:LODESTAR_HTTP_BIND, Env:LODESTAR_DHT_PORT -ErrorAction SilentlyContinue
   }
 }
 

@@ -15,8 +15,16 @@ port=${2:-18090}
 work=$(mktemp -d)
 chmod 755 "$work"   # the server may drop to another user (PUID) and must reach the data folder
 pid=
+# The first-run setup token is only ever printed redacted.
+redact() { sed -E 's/(setup token )[0-9A-Fa-f]{4}(-[0-9A-Fa-f]{4}){3}/\1XXXX-XXXX-XXXX-XXXX/'; }
 cleanup() {
+  status=$?
   [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true
+  if [ "$status" -ne 0 ]; then
+    for log in "$work/log.txt" "$work/log2.txt"; do
+      [ -f "$log" ] && { echo "--- $(basename "$log") (tail, redacted)"; tail -n 60 "$log" | redact; }
+    done
+  fi
   rm -rf "$work"
 }
 trap cleanup EXIT
@@ -63,11 +71,11 @@ start_server() {
   ok=
   for _ in $(seq 1 60); do
     if curl --fail --silent --max-time 2 "$url/healthz" >/dev/null; then ok=1; break; fi
-    kill -0 "$pid" 2>/dev/null || { echo "::error::lodestar exited early" >&2; cat "$1"; exit 1; }
+    kill -0 "$pid" 2>/dev/null || { echo "::error::lodestar exited early" >&2; exit 1; }
     sleep 1
   done
   if [ -z "$ok" ]; then
-    echo "::error::/healthz never answered" >&2; cat "$1"; exit 1
+    echo "::error::/healthz never answered" >&2; exit 1
   fi
 }
 
@@ -78,7 +86,7 @@ stop_server() {
   wait "$pid" || code=$?
   pid=
   if [ "$code" != 0 ]; then
-    echo "::error::lodestar exited with $code after SIGTERM" >&2; cat "$1"; exit 1
+    echo "::error::lodestar exited with $code after SIGTERM" >&2; exit 1
   fi
 }
 
@@ -95,8 +103,8 @@ if [ "${SMOKE_ALLOW_STUB:-0}" != 1 ]; then
 fi
 
 # Setup by token (the wizard's own API), then the crawler leaves the setup hold and the DHT
-# socket is bound. Nothing leaves the machine on purpose: the smoke asks the server only
-# about itself. The token is printed redacted, and the password stays in $work/state.
+# socket is bound. The smoke asks the server only about itself (the server itself may reach the
+# public DHT). The token is printed redacted, and the password stays in $work/state.
 py=python3
 command -v "$py" >/dev/null 2>&1 || py=python
 "$py" -I "$flow" setup --url "$url" --log "$work/log.txt" --state "$work/state"
@@ -105,6 +113,7 @@ stop_server "$work/log.txt"
 
 # Import a tiny Magnetico database. `lodestar import` needs the server stopped.
 "$py" -I "$flow" fixture "$work/fixture.sqlite3"
+chmod 644 "$work/fixture.sqlite3"
 LODESTAR_DATA_DIR="$work/data" "$dir/lodestar" import start --source magnetico --path "$work/fixture.sqlite3" \
   >"$work/import.txt" 2>&1 || { cat "$work/import.txt" >&2; echo "::error::lodestar import failed" >&2; exit 1; }
 tail -n 3 "$work/import.txt"
