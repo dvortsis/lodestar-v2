@@ -94,11 +94,11 @@ fn peer_ttl_matches_the_thirty_minute_sentence() {
 fn registered_sources_and_consent_classes_match_section_2() {
     let n = read(NOTICE);
     let s2 = "2 (What Lodestar does on your network)";
-    // Services::start registers exactly these three plugins.
+    // Services::start registers exactly these four plugins.
     let services = read("crates/lodestar/src/services.rs");
     assert_eq!(
         services.matches("plugins.push(").count(),
-        3,
+        4,
         "Services::start registers a different set of source plugins; update {s2}'s \
          \"This version has:\" inventory and the built/planned class list"
     );
@@ -106,6 +106,7 @@ fn registered_sources_and_consent_classes_match_section_2() {
         ("DHT crawler", "plugins.push(dht)"),
         ("torrent cache", "plugins.push(cache.plugin.clone())"),
         ("Sonarr and Radarr webhooks", "plugins.push(arr)"),
+        ("Prowlarr or Jackett", "plugins.push(Arc::new(prowlarr))"),
     ] {
         assert!(
             services.contains(needle),
@@ -200,14 +201,71 @@ fn registered_sources_and_consent_classes_match_section_2() {
         "turned on through the API",
         "the consent gate refuses to enable it through the API too",
     );
-    // No Account, Restricted or Overlay source is registered.
+    // Prowlarr / Jackett is the one Account source, registered off and
+    // kept off by the same gate (X-prowlarr-register).
+    // Its manifest is crate-private: read from the source, as the DHT's.
+    let prowlarr = read("crates/sources-plugins/src/prowlarr.rs");
+    let manifest = item(&prowlarr, "pub(crate) const MANIFEST: Manifest");
+    let manifest = &manifest[..manifest.find("\n};").unwrap_or(manifest.len())];
+    assert!(
+        manifest.contains("enabled_by_default: false,"),
+        "Legal Notice section 2: Prowlarr is now on by default"
+    );
+    assert!(
+        manifest.contains("consent: Consent::Account,"),
+        "Legal Notice section 2: Prowlarr's consent class changed"
+    );
+    assert!(
+        manifest.contains("finds_private: true,"),
+        "Legal Notice section 2: Prowlarr's finds are no longer marked private"
+    );
+    assert!(
+        !lodestar_pipeline::control::consent_text_approved(Consent::Account),
+        "Legal Notice section 2 says Prowlarr or Jackett can't be turned on in this version, but \
+         the consent gate now lets the Account class through"
+    );
+    for phrase in [
+        "one Account source, **Prowlarr or Jackett**, which asks the indexer manager you run",
+        "Prowlarr or Jackett can't be turned on in this version either.",
+        "after you accept what an Account source does and enter its API key",
+        "Built: **Prowlarr or Jackett**, the indexer manager you run yourself.",
+        "Lodestar contacts only the address you give it",
+    ] {
+        require(
+            &n,
+            s2,
+            phrase,
+            "Prowlarr is registered, Consent::Account, gated off",
+        );
+    }
+    // The address is the user's, under the download-client policy, and
+    // its API key is a sealed credential.
+    assert!(
+        prowlarr.contains(
+            "Endpoints::user_entered(NetPolicy::download_client()).only_origins(&[&c.base])"
+        ),
+        "Legal Notice section 2: Prowlarr no longer contacts only the address you give it"
+    );
+    require(
+        &n,
+        s2,
+        "Lodestar never downloads a `.torrent` file from any indexer",
+        "Prowlarr reads indexers' listings only",
+    );
+    require(
+        &n,
+        s2,
+        "What private indexers report is marked private",
+        "Prowlarr marks private indexers' finds private",
+    );
+    // No Restricted or Overlay source is registered.
     for class in ["Account", "Restricted", "Overlay"] {
         require(&n, s2, &format!("- **{class}** sources"), "class list");
     }
     assert_eq!(
         n.matches("None is built yet.").count(),
-        3,
-        "Legal Notice section 2: Account, Restricted and Overlay are each \"None is built yet.\" in section 2"
+        2,
+        "Legal Notice section 2: Restricted and Overlay are each \"None is built yet.\" in section 2"
     );
 }
 

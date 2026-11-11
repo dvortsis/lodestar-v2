@@ -336,6 +336,29 @@ impl Services {
         let reenrich = pipeline_config.reenrich.clone();
         let quarantine_secs = pipeline_config.quarantine.as_secs() as i64;
         let control = Arc::new(Mutex::new(control));
+        // Prowlarr / Jackett (SRC-7, X-prowlarr-register): an Account
+        // source, registered off. The consent gate keeps it off in this
+        // build (`consent_text_approved` refuses every class but None, as
+        // for the torrent cache), and the Legal Notice says so (section 2).
+        // Its saved address and its API key are read here, once, so both
+        // apply together at the next start. A store that can't be read
+        // fails the start rather than registering it unconfigured.
+        let prowlarr = {
+            use lodestar_sources_plugins::prowlarr::{ID, Prowlarr};
+            let store = control.clone();
+            let saved = tokio::task::spawn_blocking(move || {
+                let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                store.source_setting(ID, lodestar_store::SourceSetting::Config)
+            })
+            .await?
+            .map_err(|e| format!("reading the Prowlarr source's settings: {e}"))?;
+            let credentials = Arc::new(lodestar_sources::consent::SourceCredentials::new(
+                control.clone(),
+                config.data_dir.clone(),
+            ));
+            Prowlarr::at_start(saved.as_deref(), credentials).await
+        };
+        plugins.push(Arc::new(prowlarr));
         // Companion recovery runs before anything could start one (CMP-5).
         let companions = if crate::fixture::active() {
             None

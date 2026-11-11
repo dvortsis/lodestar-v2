@@ -14,11 +14,14 @@
 |---|---|---|
 | (both copies) | the two files are byte-identical | `docs/legal/legal-notice.md` and `crates/api/src/legal/notice.md` |
 | 2 | `an announcement expires 30 minutes after its most recent refresh` | `lodestar_dht::PEER_TTL` (the minute count is taken from it) |
-| 2 | `**This version has:** the DHT crawler`, `the **torrent cache**`, `**Sonarr and Radarr webhooks**` | `Services::start` registers exactly three plugins: the DHT, the torrent cache, the webhooks |
+| 2 | `**This version has:** the DHT crawler`, `the **torrent cache**`, `**Sonarr and Radarr webhooks**` | `Services::start` registers exactly four plugins: the DHT, the torrent cache, the webhooks, Prowlarr or Jackett |
 | 2 | `one External source, the **torrent cache**`, `Built: the torrent cache.`, `after you accept the websites it contacts` | torrent cache manifest is `Consent::External` |
 | 2 | `In this version the torrent cache can't be turned on.`; must **not** contain `turned on through the API` | `lodestar_pipeline::control::consent_text_approved` refuses `Consent::External` (the consent gate) |
 | 2 | `The Sonarr and Radarr webhooks contact nothing and turn on with their switch` | webhooks manifest is `Consent::None` with no endpoints |
-| 2 | `- **External** sources contact named public websites`, `- **Account** sources`, `- **Restricted** sources`, `- **Overlay** sources`, and `None is built yet.` three times | no registered plugin is Account, Restricted or Overlay |
+| 2 | `one Account source, **Prowlarr or Jackett**, which asks the indexer manager you run`, `Built: **Prowlarr or Jackett**, the indexer manager you run yourself.`, `What private indexers report is marked private`, ``Lodestar never downloads a `.torrent` file from any indexer`` | Prowlarr's manifest (read from `sources-plugins/src/prowlarr.rs`) is `Consent::Account`, off by default, with `finds_private: true` |
+| 2 | `Prowlarr or Jackett can't be turned on in this version either.`, `after you accept what an Account source does and enter its API key` | `consent_text_approved` refuses `Consent::Account` |
+| 2 | `Lodestar contacts only the address you give it` | Prowlarr's endpoints are the configured origin only, under the download-client policy |
+| 2 | `- **External** sources contact named public websites`, `- **Account** sources`, `- **Restricted** sources`, `- **Overlay** sources`, and `None is built yet.` twice | no registered plugin is Restricted or Overlay |
 | 2 | `marked private for as long as only private sources have reported it`; `If a public source such as the DHT later reports the same torrent, Lodestar treats it as public from then on` | store test: a private then a public sighting clears `flags::PRIVATE_SOURCE` |
 | 5 | ``contains the database, the configuration file, the admin password hash with the sign-in sessions and API keys, and the key that unseals quarantined names (`seal.key`)``; ``It does not contain `secrets.key` `` | `BACKUP_FILES` in `crates/lodestar/src/cli/backup.rs`, and `services.rs` still opens `seal.key` in the data folder |
 | 5 | ``a key file (`secrets.key`) stored separately from the database`` | `SecretStore::KEY_FILE` |
@@ -27,9 +30,9 @@
 | 5 | `keeps its restart record in a folder outside the data folder` | `default_witness_dir` in `config.rs` doesn't use the data folder |
 | 5 | `` `%SystemRoot%\Temp\lodestar-service.log` `` | `NAME` in `windows/temp_log.rs` |
 | 5 | `in your data folder, with five exceptions:` | the count of section 5's list |
-| 5 | `to the Windows Application event log, which every user of the computer can read`, `(version numbers, the step that stopped and folder paths only)` | the only Event Log writers (`eventcreate`, `ReportEvent`, `RegisterEventSource`, `EvtReport`, `Write-EventLog`, `New-EventLog` in `crates/*/src` and `packaging/**/*.ps1`) are `update/windows/helper.rs` and `windows/service.rs`; the only `event_log(` callers are those two and `update/windows/rollback.rs`; no Event Log crate; `windows/service.rs` builds its message with `event_log_text`; `packaging/windows/main.wxs` registers both sources ("Lodestar", "Lodestar update helper") and removes them on uninstall |
+| 5 | `to the Windows Application event log, which every user of the computer can read`, `(version numbers, the step that stopped and folder paths only)` | the only Event Log writers (`eventcreate`, `ReportEvent`, `RegisterEventSource`, `EvtReport`, `Write-EventLog`, `New-EventLog`, .NET's `Diagnostics.EventLog` and `WriteEntry`, ignoring case, in `crates/*/src` and `packaging/**/*.ps1`) are `update/windows/helper.rs` and `windows/service.rs`; the only `event_log(` callers are those two and `update/windows/rollback.rs`; no Event Log crate; `windows/service.rs` builds its message with `event_log_text`; `packaging/windows/main.wxs` registers both sources ("Lodestar", "Lodestar update helper") and removes them on uninstall |
 
-`lodestar` is a binary crate, so facts in its own modules (`config.rs`, `services.rs`, `settings/logging.rs`, `windows/temp_log.rs`, `windows/service.rs`, `update/windows/helper.rs`, `cli/backup.rs`) are read from the source text. Moving or renaming one of those items fails the test with a message naming it; update the test to follow.
+`lodestar` is a binary crate, so facts in its own modules (`config.rs`, `services.rs`, `settings/logging.rs`, `windows/temp_log.rs`, `windows/service.rs`, `update/windows/helper.rs`, `cli/backup.rs`), and the Prowlarr plugin's crate-private manifest, are read from the source text. Moving or renaming one of those items fails the test with a message naming it; update the test to follow.
 
 ### When the test fails
 
