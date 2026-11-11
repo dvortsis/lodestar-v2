@@ -6745,7 +6745,8 @@
     "2026-11-11: OP-5 calls: 4a keep injection sessions in wake rate counts (no exemption); 4b keep $50 cap, owner flag (raising = owner money). Owner setup on merge: STATE_BUCKET var, one-time fleet.json tombstone",
     "2026-11-11: #671 X-tripwire-reviews-lookback merged (e6f76145) after runner check of round 4; owner flags: budget 60 pages (714 req/h max), 360 s deadline, failed-wake sweeps unbounded (cron covers), edit-to-old-bot-review gap, window-only detection after API errors; slot 6 -> X-flake-portable-restart-2",
     "2026-11-11: X-flake-portable-restart-2 approved shared edit: crates/lodestar/src/windows/mod.rs (watch_predecessor, wait_if_successor only); add to owns in next runner PR; #659 also edits that file (other hunks)",
-    "2026-11-11: #663 X-win-upd-bounds merged (a2450849), fresh Opus MERGE; non-blocking items folded into X-win-upd-1920 (slot 2); next runner PR: X-win-upd-1920 owns += helper.rs, cli/update_helper.rs"
+    "2026-11-11: #663 X-win-upd-bounds merged (a2450849), fresh Opus MERGE; non-blocking items folded into X-win-upd-1920 (slot 2); next runner PR: X-win-upd-1920 owns += helper.rs, cli/update_helper.rs",
+    "2026-11-11: PK-win-portable-upd approved shared edit packaging/windows/portable/Start Lodestar.cmd (guarded previous.exe fallback); add to owns in next runner PR; PK-guide-3 gets the user-guide sentence"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
