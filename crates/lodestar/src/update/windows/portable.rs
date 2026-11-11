@@ -1662,14 +1662,14 @@ mod tests {
         let f = Fake::new();
         f.tamper.set(Some(Point::Between));
         let result = f.install();
-        if f.tampered.get() {
-            assert!(!cfg!(windows), "the held handle let a writer in");
-            assert_eq!(result, Err("swap_failed"));
-            f.untouched();
-        } else {
-            assert!(cfg!(windows), "the write should have got through here");
+        if cfg!(windows) {
+            assert!(!f.tampered.get(), "the held handle let a writer in");
             assert_eq!(result, Ok(()));
             assert_eq!(f.program_bytes().as_deref(), Some(NEW));
+        } else {
+            assert!(f.tampered.get(), "the write should have got through here");
+            assert_eq!(result, Err("swap_failed"));
+            f.untouched();
         }
     }
 
