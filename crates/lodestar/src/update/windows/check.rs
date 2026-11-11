@@ -593,12 +593,14 @@ impl Notifier {
                 }
             })
         };
+        // Made before the task, which owns it from the start: aborted with
+        // this task, even one aborted before its first poll; otherwise
+        // waited for. The service's shutdown gives this task
+        // `UPDATES_STOP_WAIT` after the stop before it aborts it, so the
+        // watcher's last look finishes unless it overruns that.
+        let watcher = AbortOnDrop(watcher);
         tokio::spawn(async move {
-            // Aborted if this task is; otherwise waited for. The service's
-            // shutdown aborts this task right after the stop, so the
-            // watcher's last look is best effort: a removal already on the
-            // blocking pool finishes, one not yet started may not.
-            let mut watcher = AbortOnDrop(watcher);
+            let mut watcher = watcher;
             let checks = async {
                 loop {
                     let wait = n.until_scheduled();
@@ -2578,6 +2580,23 @@ mod tests {
         // The task waits for the watcher's last look.
         task.await.unwrap();
         assert!(!request(&e).exists(), "Off just before the stop was lost");
+    }
+
+    /// The same through the service's own stop (`services::stop_updates`):
+    /// Off, then the stop straight away, and the request is gone when the
+    /// stop returns. Aborting first, as the stop once did, lost it in most
+    /// runs, so this runs several times.
+    #[tokio::test]
+    async fn the_service_stop_waits_for_the_last_look() {
+        for _ in 0..20 {
+            let e = Env::installing();
+            handed_over(&e).await;
+            let (stop, stopped) = watch::channel(false);
+            let task = e.n().spawn(stopped);
+            e.settings.send_modify(|s| s.mode = Mode::Off);
+            crate::services::stop_updates(stop, task, Duration::from_secs(20)).await;
+            assert!(!request(&e).exists(), "the stop cut off Off's withdrawal");
+        }
     }
 
     /// A switch to Off is acted on while a check or an install holds the
