@@ -276,7 +276,60 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: npm ci
-      - run: npm run e2e:all-themes
+      # The html reporter keeps `open: never` only when the config's reporter list is used, so the
+      # command-line list says it again; the json reporter feeds the run summary below.
+      - run: npm run e2e:all-themes -- --reporter=list,html,json
+        env:
+          PLAYWRIGHT_HTML_OPEN: never
+          PLAYWRIGHT_JSON_OUTPUT_NAME: playwright-json/results.json
+      # Every run, pass or fail: counts and the failing spec titles, to the run page and as a
+      # small artifact that `all-themes-issue` reads. This job runs npm code, so it holds no
+      # write token; the titles come from the test code and are cleaned before anyone prints them.
+      - name: Run summary
+        if: always()
+        run: |
+          node <<'JS'
+          const fs = require('fs');
+          const out = 'all-themes-summary';
+          fs.mkdirSync(out, { recursive: true });
+          const clean = (t) =>
+            String(t).replace(/[^\x20-\x7e]/g, ' ').replace(/[`@<>|]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+          const s = { available: false, passed: 0, failed: 0, flaky: 0, skipped: 0, failing: [], more: 0 };
+          try {
+            const r = JSON.parse(fs.readFileSync('playwright-json/results.json', 'utf8'));
+            const st = r.stats || {};
+            Object.assign(s, { available: true, passed: st.expected | 0, failed: st.unexpected | 0, flaky: st.flaky | 0, skipped: st.skipped | 0 });
+            const all = [];
+            const walk = (suite, trail) => {
+              const t = suite.title ? trail.concat(suite.title) : trail;
+              for (const spec of suite.specs || []) if (!spec.ok) all.push(clean(t.concat(spec.title).join(' / ')));
+              for (const c of suite.suites || []) walk(c, t);
+            };
+            for (const su of r.suites || []) walk(su, []);
+            s.failing = all.slice(0, 25);
+            s.more = Math.max(0, all.length - s.failing.length);
+          } catch (e) {
+            // No report: the run stopped before the tests produced one.
+          }
+          const md = s.available
+            ? [`**All themes:** ${s.passed} passed, ${s.failed} failed, ${s.flaky} flaky, ${s.skipped} skipped.`]
+            : ['**All themes:** no test report was produced (the run stopped before the tests finished).'];
+          if (s.failing.length) {
+            md.push('', 'Failing specs:', ...s.failing.map((t) => `- ${t}`));
+            if (s.more) md.push(`- and ${s.more} more`);
+          }
+          fs.writeFileSync(`${out}/summary.json`, JSON.stringify(s));
+          fs.writeFileSync(`${out}/summary.md`, md.join('\n') + '\n');
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, md.join('\n') + '\n');
+          JS
+      - name: Upload run summary
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: all-themes-summary
+          path: web/all-themes-summary
+          if-no-files-found: warn
+          retention-days: 30
       - name: Upload report
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -286,6 +339,102 @@ jobs:
             web/playwright-report
             web/test-results
           retention-days: 14
+
+  # One tracking issue for the nightly all-themes run (spec §10.17). It is its own job so the job
+  # that runs npm code (`all-themes`) never holds a write token: this one has `issues: write` and
+  # runs no npm code and no checkout. The summary artifact is data from that job, so it is read
+  # with jq, cleaned again, and written to a file for `gh --body-file`; nothing from it reaches a
+  # shell command line or a `${{ }}` expression. Not a pull-request job and not part of `ci-ok`.
+  all-themes-issue:
+    name: all-themes tracking issue
+    needs: all-themes
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write
+      contents: read
+    # One at a time, so two runs can't both create the issue.
+    concurrency:
+      group: all-themes-issue
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - name: Download the run summary
+        if: needs.all-themes.result == 'failure' || needs.all-themes.result == 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: all-themes-summary
+          path: ${{ runner.temp }}/summary
+      - name: Open, update or close the tracking issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RESULT: ${{ needs.all-themes.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SUMMARY_DIR: ${{ runner.temp }}/summary
+          WORK_DIR: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          label=nightly-all-themes
+          case "$RESULT" in
+            failure|success) ;;
+            *) echo "all-themes result is '$RESULT': nothing to do."; exit 0 ;;
+          esac
+          # The label may already exist.
+          gh label create "$label" --color D93F0B \
+            --description "The nightly all-themes run failed" >/dev/null 2>&1 || true
+          # The lowest-numbered open issue with the label, if any: never more than one is used.
+          existing=$(gh issue list --label "$label" --state open --limit 100 --json number \
+            --jq 'sort_by(.number) | .[0].number // empty')
+          body="$WORK_DIR/issue-body.md"
+          today=$(date -u +%Y-%m-%d)
+          # The summary is untrusted: only numbers and printable ASCII titles, no backticks, at-signs
+          # or angle brackets, at most 25 titles of 200 characters.
+          if [ -f "$SUMMARY_DIR/summary.json" ] && jq -e . "$SUMMARY_DIR/summary.json" >/dev/null 2>&1; then
+            jq -r '
+              def num: if type == "number" then (floor | tostring) else "?" end;
+              def clean: tostring | gsub("[^\\x20-\\x7e]"; " ") | gsub("[`@<>|]"; " ") | .[0:200];
+              if .available == true then
+                "\(.passed | num) passed, \(.failed | num) failed, \(.flaky | num) flaky, \(.skipped | num) skipped."
+              else "No test report was produced: the run stopped before the tests finished." end,
+              (if ((.failing // []) | length) > 0 then
+                 "", "Failing specs:", ((.failing // [])[:25][] | "- " + clean),
+                 (if ((.more // 0) | type) == "number" and .more > 0 then "- and \(.more | num) more" else empty end)
+               else empty end)
+            ' "$SUMMARY_DIR/summary.json" > "$WORK_DIR/summary-text.md"
+          else
+            echo "No run summary was available." > "$WORK_DIR/summary-text.md"
+          fi
+          if [ "$RESULT" = failure ]; then
+            {
+              echo "The nightly all-themes run failed on $today (UTC)."
+              echo
+              echo "Run: $RUN_URL"
+              echo
+              cat "$WORK_DIR/summary-text.md"
+            } > "$body"
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --body-file "$body"
+            else
+              gh issue create --label "$label" \
+                --title "Nightly all-themes run is failing" --body-file "$body"
+            fi
+          elif [ -n "$existing" ]; then
+            {
+              echo "The all-themes run passed on $today (UTC): $RUN_URL"
+              echo
+              cat "$WORK_DIR/summary-text.md"
+            } > "$body"
+            gh issue comment "$existing" --body-file "$body"
+            gh issue close "$existing" --reason completed
+          else
+            echo "The run passed and no tracking issue is open."
+          fi
 
   # Nightly / manual: the fixture specs against a real `lodestar serve --fixture` server.
   # The binary is built outside the Playwright container (no Rust toolchain there) and passed as
