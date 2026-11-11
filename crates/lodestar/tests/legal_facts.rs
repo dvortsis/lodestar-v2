@@ -203,26 +203,36 @@ fn registered_sources_and_consent_classes_match_section_2() {
     );
     // Prowlarr / Jackett is the one Account source, registered off and
     // kept off by the same gate (X-prowlarr-register).
-    // Its manifest is crate-private: read from the source, as the DHT's.
-    let prowlarr = read("crates/sources-plugins/src/prowlarr.rs");
-    let manifest = item(&prowlarr, "pub(crate) const MANIFEST: Manifest");
-    let manifest = &manifest[..manifest.find("\n};").unwrap_or(manifest.len())];
-    assert!(
-        manifest.contains("enabled_by_default: false,"),
-        "Legal Notice section 2: Prowlarr is now on by default"
-    );
-    assert!(
-        manifest.contains("consent: Consent::Account,"),
+    // Built as Lodestar builds it, unconfigured: its manifest and its
+    // endpoints are the plugin's own.
+    let creds = std::sync::Arc::new(lodestar_sources_plugins::StaticCredentials::default());
+    let unset = lodestar_sources_plugins::prowlarr::Prowlarr::unconfigured(creds);
+    let m = unset.manifest();
+    assert_eq!(
+        m.consent,
+        Consent::Account,
         "Legal Notice section 2: Prowlarr's consent class changed"
     );
     assert!(
-        manifest.contains("finds_private: true,"),
+        !m.enabled_by_default,
+        "Legal Notice section 2: Prowlarr is now on by default"
+    );
+    assert!(
+        m.finds_private,
         "Legal Notice section 2: Prowlarr's finds are no longer marked private"
     );
     assert!(
-        !lodestar_pipeline::control::consent_text_approved(Consent::Account),
+        m.endpoints.is_empty(),
+        "Legal Notice section 2: Prowlarr now has built-in hosts besides the address you give it"
+    );
+    assert!(
+        unset.endpoints().is_none(),
+        "Legal Notice section 2: an unconfigured Prowlarr may reach something"
+    );
+    assert!(
+        !lodestar_pipeline::control::consent_text_approved(m.consent),
         "Legal Notice section 2 says Prowlarr or Jackett can't be turned on in this version, but \
-         the consent gate now lets the Account class through"
+         the consent gate now lets its class through"
     );
     for phrase in [
         "one Account source, **Prowlarr or Jackett**, which asks the indexer manager you run",
@@ -238,11 +248,17 @@ fn registered_sources_and_consent_classes_match_section_2() {
             "Prowlarr is registered, Consent::Account, gated off",
         );
     }
-    // The address is the user's, under the download-client policy, and
-    // its API key is a sealed credential.
+    // Configured, it reaches the address you give it alone, under the
+    // download-client policy (the endpoints are built only from it).
+    let prowlarr = read("crates/sources-plugins/src/prowlarr.rs");
+    let endpoints = item(&prowlarr, "    pub fn endpoints(&self)");
+    let end = endpoints
+        .find("\n    }\n")
+        .expect("Prowlarr::endpoints' body; update tests/legal_facts.rs");
+    let endpoints = &endpoints[..end];
     assert!(
-        prowlarr.contains(
-            "Endpoints::user_entered(NetPolicy::download_client()).only_origins(&[&c.base])"
+        endpoints.contains(
+            "Some(Endpoints::user_entered(NetPolicy::download_client()).only_origins(&[&c.base]))"
         ),
         "Legal Notice section 2: Prowlarr no longer contacts only the address you give it"
     );

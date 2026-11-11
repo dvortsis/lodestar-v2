@@ -308,7 +308,7 @@ fn a_source_that_needs_consent_cant_be_turned_on_and_one_that_doesnt_can() {
     assert!(!log.contains(PASSWORD), "the password is never logged");
 }
 
-/// Prowlarr / Jackett (X-prowlarr-settings): registered, off, and kept
+/// Prowlarr / Jackett (X-prowlarr-settings, restored by X-prowlarr-register): registered, off, and kept
 /// off by the gate however it's asked, even with its address and API key
 /// saved. Its settings are saved through the plugin's rules, apply at the
 /// next start, and its key is never echoed or logged.
