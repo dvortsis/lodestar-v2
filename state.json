@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T06:43:06Z",
+  "updated_at": "2026-11-11T06:47:49Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6719,7 +6719,8 @@
     "X-flake-portable-restart-2 (Opus, small, after #662): from rv-662: Wait-Process instead of WaitForExit (works under Constrained Language Mode); a started marker so slow PowerShell start doesn't eat the 30 s; a stderr line when the wait is skipped; decisions-file note that the Windows test adds ~30 s",
     "X-fleet-polish (small, later): from rv-661 delta: policy() asserts len(words)==6 for query/path ACLs (a second pattern would be ORed by HAProxy); decisions-file wording 'removes it at once' holds only after Lodestar starts",
     "2026-11-11: #662 X-flake-portable-restart merged (2542fe5c); PK-win-portable-upd and OP-4 told; owner FYI sent",
-    "2026-11-11: X-restart-required-creds approved shared edit: pins_credentials field on SourceStatus (crates/pipeline/src/lib.rs); add to its owns in next runner PR"
+    "2026-11-11: X-restart-required-creds approved shared edit: pins_credentials field on SourceStatus (crates/pipeline/src/lib.rs); add to its owns in next runner PR",
+    "2026-11-11: #660 CMP-5g-3 merged (6039cb32); slot 4 continues with X-cmp-egress-prelaunch; CMP-9a ready (egress editor after prelaunch); CMP-11/CMP-12 still need owner answers"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7452,7 +7453,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T06:43:06Z",
+    "updated": "2026-11-11T06:47:49Z",
     "items": [
       {
         "slot": 1,
@@ -7480,11 +7481,11 @@
       },
       {
         "slot": 4,
-        "slice": "CMP-5g-3",
+        "slice": "X-cmp-egress-prelaunch",
         "role": "build",
         "agent": "claude",
         "doing": "session_01MMjhnCL9xrv5oTMJ9KBcEc",
-        "since": "2026-11-11T04:06Z"
+        "since": "2026-11-11T06:47:49Z"
       },
       {
         "slot": 5,
