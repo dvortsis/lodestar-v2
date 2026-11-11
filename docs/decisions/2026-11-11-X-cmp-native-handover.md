@@ -38,7 +38,7 @@ Only the guided path (`Guided::finish`) called CMP-8b's `configure::hand_over`. 
 - **Without the sink,** a qBittorrent install, restart, regenerate or removal is refused at the hand-over or the release (`not_wired`): it never counts as done without being the download client. The sink is wired first in `companion_wiring::serve`, before the guarded client or the watch can fail, so it's missing only when companions are off (self-review I3).
 
 ## Saving the list (self-review I1, I4)
-- **Every write of `integrations.clients`** (the hand-over's and the release's) reads the section's revision, then the list, and saves with `if_revision`. A save of yours in between makes it stale, and it's made again from the list as it is then, at most three times. The revision is read first because the registry bumps it before it publishes the new list. So the window left is the instant between those two steps inside one save, not the whole read-then-save. The guided path's hand-over gets the same protection.
+- **Every write of `integrations.clients`** (the hand-over's and the release's; **superseded by X-cmp-handover-followups**, which reads both in one read) reads the section's revision, then the list, and saves with `if_revision`. A save of yours in between makes it stale, and it's made again from the list as it is then, at most three times. The revision is read first because the registry bumps it before it publishes the new list. So the window left is the instant between those two steps inside one save, not the whole read-then-save. The guided path's hand-over gets the same protection.
 - **A restart's hand-over keeps what you changed on the managed entry,** its name and category, unless the hand-over sets its own category. It replaces only the address, the user name and the password.
 - **Not shared:** a restart's hand-over and its start each have their own `LIVE_DEADLINE`, so one restart can take up to twice that (self-review P2).
 
@@ -90,7 +90,7 @@ No route or response shape changes. The wizard can tell the hand-over happened f
   - the removal's release and its journal check before it;
   - the regenerate and restart hand-over;
   - the undone install's release, and its "was it tried" condition;
-  - the removal's journal-operation check;
+  - the removal's journal-operation check: **corrected by X-cmp-handover-followups**. #679's review found that this one survived, since no test asserted that nothing was released. That test now does (`2026-11-11-X-cmp-handover-followups.md`);
   - `if_revision`;
   - keeping your name;
   - the existing-entry refusal;
