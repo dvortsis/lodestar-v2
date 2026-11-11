@@ -41,7 +41,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -74,6 +74,7 @@ WORKERS = 5
 START_MINUTES = 35                # no session starts after this
 STOP_MINUTES = 45                 # in-flight sessions are interrupted after this (job: 55, lock: 60)
 KIND = "injection"
+WAKE_SECONDS = 1.0  # the main thread's longest wait, so a cancel is seen at once
 SETTINGS = ("ANTHROPIC_API_KEY", "AWS_BRIDGE_ROLE_ARN", "CONTROL_BUCKET", "STATE_BUCKET", "FLEET_BUCKET_OWNER",
             "OPERATOR_MODEL_ROUTINE", "RUNNER_USER_ID", "OPERATOR_BOT_USER_ID", "CHANNEL_PR",
             "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "INJECTION_LEVEL")
@@ -242,7 +243,7 @@ def live_fleet_reader(env, run_id: str):  # pragma: no cover - live only
 class Run:
     """One harness run: its resources, its sessions and their verdicts."""
 
-    def __init__(self, env, call, send, mono, sleep, workers=WORKERS):
+    def __init__(self, env, call, send, mono, sleep, workers=WORKERS, stop: threading.Event | None = None):
         self.env, self.call, self.send, self.mono, self.sleep, self.workers = env, call, send, mono, sleep, workers
         self.run_id = f"{env['GITHUB_RUN_ID']}-{env['GITHUB_RUN_ATTEMPT']}"
         self.ids = {"runner": env["RUNNER_USER_ID"].strip(), "bot": env["OPERATOR_BOT_USER_ID"].strip(),
@@ -253,7 +254,7 @@ class Run:
         self.sessions: dict[str, bool] = {}  # id -> archived
         self._lock = threading.Lock()
         self.start = mono()
-        self.stop = threading.Event()  # set on a cancel, or when the setup is broken
+        self.stop = stop or threading.Event()  # set on a cancel, or when the setup is broken
         self.setup_seen: list[bool] = []
 
     def create(self, environment: dict, vault: dict) -> list[dict]:
@@ -459,7 +460,7 @@ def cmd_run(env, deps=None) -> int:
     read_fleet = deps.get("read_fleet") or live_fleet_reader(env, run_id)
     call = deps.get("anthropic") or anthropic(env["ANTHROPIC_API_KEY"])
     run = Run(env, call, deps.get("upload") or upload(env["ANTHROPIC_API_KEY"]), mono, sleep,
-              deps.get("workers", WORKERS))
+              deps.get("workers", WORKERS), deps.get("stop"))
     lock = OperatorLock(store, now)
     if not lock.acquire(run_id):
         raise Refusal("the operator lock is held (a wake or apply is running); run the test again later")
@@ -496,9 +497,15 @@ def cmd_run(env, deps=None) -> int:
             return it, r, run.one(spend, body, it)
 
         with ThreadPoolExecutor(max_workers=run.workers) as pool:
-            for it, r, (state, codes) in pool.map(lambda j: job(*j), jobs):
-                results[it["id"]].append((state, codes))
-                print(f"operator-injection: {it['id']} run {r}: {state}" + (f" ({', '.join(codes)})" if codes else ""))
+            pending = {pool.submit(job, it, r) for it, r in jobs}
+            while pending:
+                # Wake at least once a second: a cancel's signal may reach a
+                # worker thread, and Python runs the handler on the main one.
+                done, pending = wait(pending, timeout=WAKE_SECONDS, return_when=FIRST_COMPLETED)
+                for f in done:
+                    it, r, (state, codes) = f.result()
+                    results[it["id"]].append((state, codes))
+                    print(f"operator-injection: {it['id']} run {r}: {state}" + (f" ({', '.join(codes)})" if codes else ""))
         for it in items:
             runs = results[it["id"]]
             passed = sum(1 for s, _ in runs if s == "pass")

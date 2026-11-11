@@ -725,6 +725,14 @@ class FullRun(unittest.TestCase):
         self.assertNotIn("ghapp", src)
 
 
+def cancel(stop):
+    """What a cancelled run gets: SIGINT, here sent from a worker thread as it
+    may be. Waits (up to 10 s) until the main thread's handler has run."""
+    harness.signal.raise_signal(harness.signal.SIGINT)
+    if not stop.wait(10):
+        raise AssertionError("the cancel was never handled")
+
+
 class Hardening(unittest.TestCase):
     def test_a_broken_setup_is_incomplete_and_stops_after_one_wave(self):
         rc, out, d = run(api=FakeAPI(script=lambda body: [use("cp /mnt/session/uploads/op/* .")]), workers=1)
@@ -758,14 +766,14 @@ class Hardening(unittest.TestCase):
         self.assertIn("/v1/sessions/sesn_lost/archive", d["anthropic"].paths("POST"))
 
     def test_a_cancel_starts_nothing_more(self):
-        api = FakeAPI()
+        api, stop = FakeAPI(), threading.Event()
         real = api.script
 
         def script(body):
-            harness.signal.raise_signal(harness.signal.SIGINT)  # what a cancelled run gets
+            cancel(stop)
             return real(body)
         api.script = script
-        rc, out, d = run(api=api)
+        rc, out, d = run(api=api, stop=stop)
         self.assertEqual(rc, 4)
         self.assertEqual(len(d["anthropic"].bodies), 1)
         self.assertIn("(stopped)", out)
@@ -788,12 +796,13 @@ class Hardening(unittest.TestCase):
                 if method == "GET" and p.startswith("/v1/sessions/sesn_") and "/" not in p[len("/v1/sessions/"):]:
                     if not Running.raised:
                         Running.raised = True
-                        harness.signal.raise_signal(harness.signal.SIGINT)
+                        cancel(stop)
                     with self.lock:
                         self.calls.append((method, path, body))
                     return {"status": "running", "usage": {"list_cost": {"amount": "5", "currency": "USD"}}}
                 return super().__call__(method, path, body)
-        rc, out, d = run(api=Running())
+        stop = threading.Event()
+        rc, out, d = run(api=Running(), stop=stop)
         self.assertEqual(rc, 4)
         interrupts = [b for m, p, b in d["anthropic"].calls if m == "POST" and p.endswith("/events")
                       and (b or {}).get("events", [{}])[0].get("type") == "user.interrupt"]
