@@ -5845,7 +5845,7 @@
         "tags": [
           "search"
         ],
-        "summary": "Parses a query: the AST and its canonical text, or a `query_syntax`\nerror whose `start`/`end` span the UI highlights. With\n`natural=true`, also the query `q` means as natural phrasing\n(`natural_too_long` past 512 bytes or 32 words).",
+        "summary": "Parses a query: the AST and its canonical text, or a `query_syntax`\nerror whose `start`/`end` span the UI highlights. With\n`natural=true`, also the query `q` means as natural phrasing\n(`natural_too_long` past 512 bytes or 32 tokens: words and symbols,\nwhere each bracket and each lone minus sign counts as one).",
         "operationId": "parseQuery",
         "parameters": [
           {

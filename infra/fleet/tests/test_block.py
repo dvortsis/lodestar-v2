@@ -961,9 +961,11 @@ def policy(cfg):
             if fetch == "method":
                 acls.setdefault(name, []).append(lambda m, p, q, v=words[3]: m == v)
             elif fetch == "path":
+                # One pattern only: HAProxy ORs any further patterns on the line, which this wouldn't model.
+                assert len(words) == 6 and words[3:5] == ["-m", "reg"], line
                 acls.setdefault(name, []).append(lambda m, p, q, r=re.compile(words[5]): bool(r.search(p)))
             elif fetch == "query":  # the raw query string, matched whole
-                assert words[3:5] == ["-m", "str"], line
+                assert len(words) == 6 and words[3:5] == ["-m", "str"], line
                 acls.setdefault(name, []).append(lambda m, p, q, v=words[5]: q == v)
             else:
                 raise AssertionError(line)
@@ -979,6 +981,16 @@ def policy(cfg):
 
 
 class DockerProxy(unittest.TestCase):
+    def test_a_second_pattern_on_an_acl_line_fails_the_model(self):
+        """HAProxy ORs every pattern on an ACL line; the model reads one, so it
+        refuses any other shape rather than miss an allowed path."""
+        cfg = render_proxy()
+        for fetch in ("path", "query"):
+            line = next(ln for ln in cfg.splitlines() if ln.split()[:1] == ["acl"] and ln.split()[2] == fetch)
+            for extra in (" ^/containers/", " -i"):
+                with self.subTest(fetch=fetch, extra=extra), self.assertRaises(AssertionError):
+                    policy(cfg.replace(line, line + extra, 1))
+
     def test_the_rendered_policy(self):
         allowed = policy(render_proxy())
         for method, url in ALLOWED:

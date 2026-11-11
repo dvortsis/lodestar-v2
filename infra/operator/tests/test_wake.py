@@ -222,6 +222,65 @@ class Wake(unittest.TestCase):
         self.assertEqual(self.post.bodies(), [])
         self.assert_clean(out + "".join(self.post.bodies()), marks)
 
+    def outputs(self, env, api):
+        import os
+        import tempfile
+        fd, path = tempfile.mkstemp()
+        os.close(fd)
+        self.addCleanup(os.unlink, path)
+        rc, _ = self.go(dict(env, GITHUB_OUTPUT=path), api)
+        with open(path) as f:
+            return rc, f.read()
+
+    def test_a_started_session_says_so_for_the_sweep(self):
+        env, _ = wake_env()
+        rc, out = self.outputs(env, FakeAnthropic())
+        self.assertEqual((rc, out), (0, "started=true\n"))
+
+    def test_refusals_exit_0_and_start_no_sweep(self):
+        # rate limit, duplicate id, $ cap, held lock, not applied: the wake's own refusals
+        cases = {
+            "rate": lambda: FakeAnthropic(sessions=[session("0", T0 - timedelta(minutes=5))] * 6),
+            "duplicate": lambda: FakeAnthropic(sessions=[session(instruction_id="ping-1")]),
+            "cap": lambda: FakeAnthropic(sessions=[session("19800")]),
+        }
+        for name, api in cases.items():
+            with self.subTest(name):
+                self.post.calls.clear()
+                self.assertEqual(self.outputs(wake_env()[0], api()), (0, ""))
+                self.assertIn("no session started", self.post.bodies()[0])
+        self.store.put(LOCK_KEY, json.dumps({"run_id": "9-1", "expires_at": "2026-11-11T12:30:00Z"}).encode())
+        self.assertEqual(self.outputs(wake_env()[0], FakeAnthropic()), (0, ""))
+        del self.store.objects[LOCK_KEY]
+        del self.store.objects[CLAUDE_LOCK_KEY]
+        self.assertEqual(self.outputs(wake_env()[0], FakeAnthropic()), (0, ""))
+
+    def test_a_create_without_an_id_still_says_started(self):
+        # The session may exist server-side even if the reply was lost or malformed.
+        env, _ = wake_env()
+
+        class Api(FakeAnthropic):
+            def __call__(self, method, path, body):
+                if method == "POST" and path == "/v1/sessions":
+                    self.calls.append((method, path, body))
+                    return {}
+                return super().__call__(method, path, body)
+        rc, out = self.outputs(env, Api())
+        self.assertIsInstance(rc, SystemExit)
+        self.assertEqual(out, "started=true\n")
+
+    def test_a_failure_after_the_start_has_already_said_started(self):
+        env, _ = wake_env()
+
+        class Api(FakeAnthropic):
+            def __call__(self, method, path, body):
+                if method == "GET" and path == "/v1/sessions/sesn_FAKE":
+                    raise RuntimeError("poll failed")
+                return super().__call__(method, path, body)
+        rc, out = self.outputs(env, Api())
+        self.assertIsInstance(rc, RuntimeError)
+        self.assertEqual(out, "started=true\n")
+
     def test_triage_overrides_the_model_with_high_effort_and_15_dollars(self):
         env, _ = wake_env(COMMENT_BODY=INSTRUCTION.replace("kind: query", "kind: run\nmode: triage"))
         api = FakeAnthropic()
@@ -369,6 +428,54 @@ class Wake(unittest.TestCase):
         interrupt = posts.index(("/v1/sessions/sesn_FAKE/events", {"events": [{"type": "user.interrupt"}]}))
         self.assertLess(interrupt, paths.index("/v1/sessions/sesn_FAKE/archive"))
         self.assertIn("the bridge failed (RuntimeError)", self.post.bodies()[-1])
+        self.assertNotIn(LOCK_KEY, self.store.objects)
+
+    def test_a_refusal_after_the_lock_is_answered_and_releases(self):
+        # Refusal is a SystemExit: the post-lock handler must catch it too.
+        self.store.put(CLAUDE_LOCK_KEY, b'{"agent_id": "a"}')
+        env, _ = wake_env()
+        api = FakeAnthropic()
+        rc, _ = self.go(env, api)
+        self.assertIsInstance(rc, SystemExit)
+        self.assertIn("the bridge failed (Refusal)", self.post.bodies()[0])
+        self.assertEqual(api.calls, [])
+        self.assertNotIn(LOCK_KEY, self.store.objects)
+
+    def test_no_session_id_is_a_refusal_that_is_answered(self):
+        env, _ = wake_env()
+
+        class Api(FakeAnthropic):
+            def __call__(self, method, path, body):
+                if method == "POST" and path == "/v1/sessions":
+                    self.calls.append((method, path, body))
+                    return {}
+                return super().__call__(method, path, body)
+        api = Api()
+        rc, _ = self.go(env, api)
+        self.assertIsInstance(rc, SystemExit)
+        self.assertIn("the bridge failed (Refusal)", self.post.bodies()[-1])
+        self.assertIn(("DELETE", "/installation/token", None, "ghs_LEAKMARKTOKEN"), self.gh.calls)
+        creds = [b["auth"]["secret_value"] for m, p, b in api.calls if p.endswith("/credentials/cred_C")]
+        self.assertEqual(creds[-1], "revoked")
+        self.assertNotIn(LOCK_KEY, self.store.objects)
+
+    def test_a_failed_interrupt_still_escalates_and_archives(self):
+        env, _ = wake_env()
+
+        class Api(FakeAnthropic):
+            def __call__(self, method, path, body):
+                if method == "GET" and path == "/v1/sessions/sesn_FAKE":
+                    self.calls.append((method, path, body))
+                    raise RuntimeError("poll failed")
+                if body == {"events": [{"type": "user.interrupt"}]}:
+                    self.calls.append((method, path, body))
+                    raise RuntimeError("interrupt refused")
+                return super().__call__(method, path, body)
+        api = Api()
+        rc, _ = self.go(env, api)
+        self.assertIsInstance(rc, RuntimeError)
+        self.assertIn("the bridge failed (RuntimeError)", self.post.bodies()[-1])
+        self.assertIn("/v1/sessions/sesn_FAKE/archive", api.paths("POST"))
         self.assertNotIn(LOCK_KEY, self.store.objects)
 
     def test_gated_events_touch_nothing(self):

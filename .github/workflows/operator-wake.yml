@@ -86,6 +86,8 @@ jobs:
     environment: cloud-operator
     runs-on: ubuntu-latest
     timeout-minutes: 45 # the session's 30 minutes, the setup and the cleanup; under the lock's 60
+    outputs:
+      started: ${{ steps.wake.outputs.started }} # "true" once a session may exist
     permissions:
       contents: read
       pull-requests: write
@@ -116,14 +118,18 @@ jobs:
           AWS_BRIDGE_ROLE_ARN: ${{ secrets.AWS_BRIDGE_ROLE_ARN }}
           CONTROL_BUCKET: ${{ secrets.CONTROL_BUCKET }}
           FLEET_BUCKET_OWNER: ${{ secrets.FLEET_BUCKET_OWNER }}
+        id: wake
         run: python3 infra/operator/wake.py wake
 
-  # The end-of-session tripwire sweep (plan "Loosenings"): no secrets.
+  # The end-of-session tripwire sweep (plan "Loosenings"): no secrets. Only once a
+  # session may exist, or the wake job failed or was cancelled: a refusal (rate
+  # limit, duplicate id, $ cap, busy lock) exits 0 and costs no sweep.
   sweep:
     needs: [gate, wake]
     if: >-
       github.event_name == 'issue_comment' && always()
       && needs.gate.outputs.allowed == 'true' && github.ref == 'refs/heads/main'
+      && (needs.wake.outputs.started == 'true' || needs.wake.result == 'failure' || needs.wake.result == 'cancelled')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

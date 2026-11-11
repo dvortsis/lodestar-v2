@@ -247,6 +247,8 @@ impl Run for FakeRun {
 struct FakeApi {
     calls: AtomicUsize,
     fail: AtomicBool,
+    /// Never answers.
+    hang: AtomicBool,
 }
 
 impl ApiConfigure for FakeApi {
@@ -262,7 +264,11 @@ impl ApiConfigure for FakeApi {
         assert_eq!(pw.expose().len(), 43);
         self.calls.fetch_add(1, Ordering::SeqCst);
         let fail = self.fail.load(Ordering::SeqCst);
+        let hang = self.hang.load(Ordering::SeqCst);
         Box::pin(async move {
+            if hang {
+                std::future::pending::<()>().await;
+            }
             if fail {
                 Err(AdapterError::Refused("test"))
             } else {
@@ -1468,4 +1474,131 @@ async fn a_start_writes_the_stored_credential_into_the_file_again() {
     m.restart(&qbt()).await.unwrap().finished().await.unwrap();
     let now = std::fs::read_to_string(conf(&w)).unwrap();
     assert_ne!(line(&now), line(&stale));
+}
+
+/// Parks every download until released, then refuses it.
+#[derive(Default)]
+struct Gate {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
+impl Source for Gate {
+    fn open<'a>(&'a self, _: &'a Url) -> BoxFuture<'a, Result<Opened, FetchError>> {
+        Box::pin(async move {
+            self.entered.notify_one();
+            self.release.notified().await;
+            Ok(Opened {
+                status: 500,
+                location: None,
+                body: Box::new(Once(None)),
+            })
+        })
+    }
+}
+
+/// #660's L1: a companion that has to be configured once it runs, while
+/// an operation holds its slot (an update still downloading), waits for
+/// the slot instead of giving up and running unconfigured. Here the
+/// update fails before it touches the companion, which then is
+/// configured and shows healthy.
+#[tokio::test]
+async fn a_companion_waiting_for_the_slot_is_configured_when_it_frees() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let first = w.manager(catalogue("5.0.3"), LINUX);
+    first.install(&token("5.0.3")).await.unwrap();
+    drop(first);
+    // A fresh serve, with an update pinned.
+    w.run.status.lock().unwrap().take();
+    let gate = Arc::new(Gate::default());
+    let mut parts = w.parts(catalogue("5.0.4"), LINUX);
+    parts.downloader = Downloader::any(gate.clone());
+    let m = Arc::new(Manager::open(parts).unwrap());
+    w.run.sick.store(true, Ordering::SeqCst);
+    assert!(m.start(&qbt()).await.is_err());
+    let calls = w.api.calls.load(Ordering::SeqCst);
+    let update = tokio::spawn({
+        let m = m.clone();
+        async move { m.install(&token("5.0.4")).await }
+    });
+    tokio::time::timeout(WAIT, gate.entered.notified())
+        .await
+        .expect("the update never began its download");
+    // It runs now, while the update holds the slot.
+    w.run.sick.store(false, Ordering::SeqCst);
+    w.run.run().send_replace(status(State::Running));
+    gate.release.notify_one();
+    let failed = tokio::time::timeout(WAIT, update).await.unwrap().unwrap();
+    assert!(failed.is_err(), "{failed:?}");
+    wait_health(&m, Health::Healthy).await;
+    assert_eq!(w.api.calls.load(Ordering::SeqCst), calls + 1);
+}
+
+/// #660's L1, past the deadline: a slot still held when it ends leaves
+/// the companion stopped and unhealthy (Q8), never running unconfigured.
+#[tokio::test]
+async fn a_slot_held_past_the_deadline_stops_the_companion() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let first = w.manager(catalogue("5.0.3"), LINUX);
+    first.install(&token("5.0.3")).await.unwrap();
+    drop(first);
+    w.run.status.lock().unwrap().take();
+    let gate = Arc::new(Gate::default());
+    let mut parts = w.parts(catalogue("5.0.4"), LINUX);
+    parts.downloader = Downloader::any(gate.clone());
+    let m = Arc::new(Manager::open(parts).unwrap());
+    m.set_live_deadline(std::time::Duration::from_secs(1));
+    w.run.sick.store(true, Ordering::SeqCst);
+    assert!(m.start(&qbt()).await.is_err());
+    let calls = w.api.calls.load(Ordering::SeqCst);
+    let update = tokio::spawn({
+        let m = m.clone();
+        async move { m.install(&token("5.0.4")).await }
+    });
+    tokio::time::timeout(WAIT, gate.entered.notified())
+        .await
+        .expect("the update never began its download");
+    let stops = w.run.stops.load(Ordering::SeqCst);
+    w.run.sick.store(false, Ordering::SeqCst);
+    w.run.run().send_replace(status(State::Running));
+    wait_count(&w.run.stops, stops + 1).await;
+    assert_eq!(health(&m), Some(Health::Unhealthy));
+    assert_eq!(w.api.calls.load(Ordering::SeqCst), calls);
+    gate.release.notify_one();
+    let _ = tokio::time::timeout(WAIT, update).await.unwrap();
+}
+
+/// A configuration that never answers is bounded by the deadline
+/// (`timed_out`), and the companion is stopped.
+#[tokio::test]
+async fn a_configuration_that_never_answers_times_out_and_stops_it() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let m = w.manager(catalogue("5.0.3"), LINUX);
+    m.install(&token("5.0.3")).await.unwrap();
+    m.set_live_deadline(std::time::Duration::from_secs(1));
+    w.api.hang.store(true, Ordering::SeqCst);
+    // The start's own bound (`restart`) and the configuration's are the
+    // same deadline here, so either may be the one that ends it.
+    let got = m.restart(&qbt()).await.unwrap().finished().await;
+    assert!(
+        matches!(
+            got,
+            Err(ManagerError::Step {
+                code: "timed_out",
+                ..
+            })
+        ),
+        "{got:?}"
+    );
+    assert_eq!(health(&m), Some(Health::Unhealthy));
+    // Its follower configures it once it runs, under the same bound.
+    let stops = w.run.stops.load(Ordering::SeqCst);
+    w.run.run().send_replace(status(State::Held));
+    wait_health(&m, Health::Unhealthy).await;
+    w.run.run().send_replace(status(State::Running));
+    wait_count(&w.run.stops, stops + 1).await;
+    assert!(w.run.status.lock().unwrap().is_none());
 }

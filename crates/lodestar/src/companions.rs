@@ -40,9 +40,9 @@ use lodestar_companions::inputs::{ContainerName, HostPath, NetworkName, Pgid, Pu
 use lodestar_companions::log_events::INSTALL_FAILED;
 use lodestar_companions::manager::{
     Api, ApiConfigure, Downloader, Health, Host, InstallToken, Launch, Manager, ManagerError,
-    Parts, Refusal, Routes, RowError, Rows, Run, Snapshot, Supervised, field_of, monitored,
+    Parts, Prelaunch, Refusal, Routes, RowError, Rows, Run, Snapshot, Supervised, field_of,
+    monitored,
 };
-use lodestar_companions::supervise::egress::Route as GateRoute;
 use lodestar_companions::supervise::logs::Redactor;
 use lodestar_companions::supervise::{Launcher, Limits, Sandbox, Status, Supervisor, Timings};
 use lodestar_companions::{Catalogue, CompanionId, Entry, Version, unraid};
@@ -552,7 +552,7 @@ impl CompanionRoutes {
 }
 
 impl Routes for CompanionRoutes {
-    fn route<'a>(&'a self, id: &'a CompanionId) -> BoxFuture<'a, Option<GateRoute>> {
+    fn route<'a>(&'a self, id: &'a CompanionId) -> BoxFuture<'a, Option<Prelaunch>> {
         Box::pin(async move {
             let (store, cid) = (self.store.clone(), id.clone());
             let saved = tokio::task::spawn_blocking(move || egress_setting(&store, &cid))
@@ -587,6 +587,10 @@ impl Routes for CompanionRoutes {
                     None,
                 ),
             };
+            let proxy = match &config {
+                Some(configure::Route::Socks5(p)) => Some(*p),
+                _ => None,
+            };
             {
                 let mut c = self.configured.lock().unwrap_or_else(|e| e.into_inner());
                 match config {
@@ -598,7 +602,9 @@ impl Routes for CompanionRoutes {
             // this route are dropped, at the companion's stop.
             let (route, _relay) =
                 monitored(Arc::new(egress), lodestar_pipeline::EGRESS_PROBE_EVERY);
-            Some(route)
+            // Launched on the same proxy it's configured for
+            // (X-cmp-egress-prelaunch).
+            Some(Prelaunch { route, proxy })
         })
     }
 }
@@ -2193,19 +2199,25 @@ mod tests {
         let routes = CompanionRoutes::new(st.clone());
         let prowlarr = CompanionId::parse("prowlarr").unwrap();
         let direct = routes.route(&prowlarr).await.unwrap();
-        assert_eq!(direct.kind, RouteKind::Direct);
+        assert_eq!(direct.route.kind, RouteKind::Direct);
+        assert_eq!(direct.proxy, None);
         assert_eq!(routes.configured(&prowlarr), Some(configure::Route::Direct));
         set_row(&st, "companions.prowlarr.egress", "socks5 127.0.0.1 9 auto");
         let socks = routes.route(&prowlarr).await.unwrap();
-        assert_eq!(socks.kind, RouteKind::Socks5);
+        assert_eq!(socks.route.kind, RouteKind::Socks5);
         let proxy = Socks5Proxy::new("127.0.0.1:9".parse().unwrap()).unwrap();
+        // Launched on the proxy it's configured for.
+        assert_eq!(socks.proxy, Some(proxy));
         assert_eq!(
             routes.configured(&prowlarr),
             Some(configure::Route::Socks5(proxy))
         );
         set_row(&st, "companions.prowlarr.egress", "socks5");
-        let mut down = routes.route(&prowlarr).await.unwrap();
-        assert_eq!(down.kind, RouteKind::Socks5);
+        let down = routes.route(&prowlarr).await.unwrap();
+        assert_eq!(down.route.kind, RouteKind::Socks5);
+        // No proxy to launch it on: it isn't started at all.
+        assert_eq!(down.proxy, None);
+        let mut down = down.route;
         let deadline = std::time::Duration::from_secs(10);
         let state = tokio::time::timeout(
             deadline,

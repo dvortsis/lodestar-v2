@@ -296,21 +296,26 @@ pub mod relaunch {
             }
             // Started first, so its start overlaps the old one's shutdown.
             let mut watch = watch_predecessor(&token);
+            let log = watch
+                .as_mut()
+                .and_then(|w| w.stdout.take())
+                .map(|out| restart::read_watch(out, std::time::Instant::now));
             let handed = super::await_handover(std::io::stdin(), &token, GO_LIMIT, EXIT_LIMIT);
             let gone = match handed {
-                Handover::Go => restart::await_predecessor(
-                    || {
-                        restart::watch_says(
-                            watch
-                                .as_mut()
-                                .map(|w| w.try_wait().map(|s| s.map(|s| s.success()))),
-                        )
-                    },
-                    restart::PREDECESSOR_WAIT,
-                    restart::PREDECESSOR_POLL,
-                    std::time::Instant::now,
-                    std::thread::sleep,
-                ),
+                Handover::Go => {
+                    let (gone, note) = restart::await_watch(
+                        watch.as_mut(),
+                        log.as_deref(),
+                        restart::PREDECESSOR_WAIT,
+                        restart::PREDECESSOR_POLL,
+                        std::time::Instant::now,
+                        std::thread::sleep,
+                    );
+                    if let Some(note) = note {
+                        eprintln!("{note}");
+                    }
+                    gone
+                }
                 Handover::Abandoned => Predecessor::Unknown,
             };
             if let Some(mut w) = watch {
@@ -333,16 +338,15 @@ pub mod relaunch {
 
         /// The watch on the process this copy replaces, named in its token:
         /// a Windows PowerShell with no window that ends once that process
-        /// has exited. `None` if the token names none or it can't start.
+        /// has exited, printing its status on a pipe
+        /// ([`restart::watch_command`]). `None` if the token names none or
+        /// it can't start.
         fn watch_predecessor(token: &str) -> Option<Child> {
             let old = restart::predecessor_pid(token)?;
-            let mut cmd = super::super::powershell_command()?;
-            cmd.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"])
-                .arg(restart::predecessor_script(old, std::process::id()))
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null());
-            cmd.spawn().ok()
+            let shell = super::super::powershell_command()?;
+            restart::watch_command(shell, old, std::process::id())
+                .spawn()
+                .ok()
         }
 
         fn spawn() -> std::io::Result<(Child, String)> {

@@ -150,10 +150,11 @@ pub const IDLE_POLL: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// While the rollback marker exists the service stays Running and idle:
 /// it never opens the store and serves nothing, until `stopped()` (exit
-/// 0) or the marker goes (on into the normal start). Exiting at once instead would fail an MSI's
-/// `ServiceControl Start="install" Wait="yes"` (error 1920, exit 1603):
-/// the reinstall of the previous version during a rollback, or an
-/// administrator's manual one, would fail on the marker.
+/// 0) or the marker goes (on into the normal start). Exiting at once
+/// instead would fail an MSI's `ServiceControl Start="install"
+/// Wait="yes"` (error 1920, exit 1603): the reinstall of the previous
+/// version during a rollback, or an administrator's manual one, would
+/// fail on the marker.
 pub fn idle_during_rollback(
     data_dir: &Path,
     stopped: &dyn Fn() -> bool,

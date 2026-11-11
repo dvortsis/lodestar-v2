@@ -442,10 +442,23 @@ pub fn reexec() -> std::io::Error {
 pub const EXIT_RELAUNCHED: i32 = 80;
 
 /// How long a copy started by Restart now waits, once handed over, for the
-/// process it replaces to have exited ([`await_predecessor`]) before it
+/// process it replaces to have exited ([`await_watch`]) before it
 /// refuses to start.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub const PREDECESSOR_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+/// The watch script's own bound on its `Wait-Process`. The watch starts
+/// before the old process's graceful shutdown, so this bound must outlast
+/// the whole hand-over ([`GO_LIMIT`](crate::windows::relaunch::GO_LIMIT),
+/// then [`EXIT_LIMIT`](crate::windows::relaunch::EXIT_LIMIT)) and then
+/// [`PREDECESSOR_WAIT`] twice over. Rust measures the 30 s from the
+/// hand-over ([`await_watch`]) and always ends first. A bare 30 s here would
+/// run out during a slow shutdown and refuse a restart without any wait.
+pub const WATCH_SCRIPT_LIMIT: std::time::Duration = std::time::Duration::from_secs(
+    crate::windows::relaunch::GO_LIMIT.as_secs()
+        + crate::windows::relaunch::EXIT_LIMIT.as_secs()
+        + 2 * PREDECESSOR_WAIT.as_secs(),
+);
+
 /// How often it looks.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub const PREDECESSOR_POLL: std::time::Duration = std::time::Duration::from_millis(50);
@@ -474,40 +487,6 @@ pub enum Predecessor {
     Unknown,
 }
 
-/// Asks `probe` every `poll` until it says anything but
-/// [`Predecessor::Running`], or `wait` has passed since the first call:
-/// what it said last. `Running` then means it's still there, and the copy
-/// refuses ([`predecessor_refusal`]). The clock and the sleep are passed
-/// in, so the loop is tested on every platform without waiting.
-#[cfg_attr(not(windows), allow(dead_code))]
-pub fn await_predecessor(
-    mut probe: impl FnMut() -> Predecessor,
-    wait: std::time::Duration,
-    poll: std::time::Duration,
-    now: impl Fn() -> Instant,
-    mut sleep: impl FnMut(std::time::Duration),
-) -> Predecessor {
-    let start = now();
-    loop {
-        match probe() {
-            Predecessor::Running if now().saturating_duration_since(start) < wait => sleep(poll),
-            other => return other,
-        }
-    }
-}
-
-/// What the watch's state means: `None` with no watch; else its
-/// `try_wait`, with `Some(success)` once it has ended. Only a watch that
-/// ended well says the process has exited.
-#[cfg_attr(not(windows), allow(dead_code))]
-pub fn watch_says(state: Option<std::io::Result<Option<bool>>>) -> Predecessor {
-    match state {
-        Some(Ok(None)) => Predecessor::Running,
-        Some(Ok(Some(true))) => Predecessor::Exited,
-        _ => Predecessor::Unknown,
-    }
-}
-
 /// The id of the process a relaunched copy replaces, from its hand-over
 /// token ([`crate::windows::relaunch::token`]: `lodestar-<pid>-<nanos>`,
 /// made by that process). `None` for any other token.
@@ -521,21 +500,216 @@ pub fn predecessor_pid(token: &str) -> Option<u32> {
     pid.parse().ok().filter(|&pid| pid != 0)
 }
 
-/// The Windows PowerShell the copy (`me`) runs to watch process `old`: it
-/// waits on the process itself, so it ends with 0 only once `old` has
-/// exited (or isn't running). A process with that id that started after
-/// this copy (which `old` started) took the id later, so it isn't waited
-/// on. Any error ends it non-zero ([`Predecessor::Unknown`]).
+/// The Windows PowerShell the copy (`me`) runs to watch process `old`
+/// (X-flake-portable-restart-2). It prints one status word a line:
+/// `started` first, before anything that can be slow, then `exited` once
+/// `old` has exited (or isn't running), or `timeout` if it's still running
+/// after [`WATCH_SCRIPT_LIMIT`], which outlasts the copy's own wait. A
+/// process with that id that started after this copy (which `old` started)
+/// took the id later, so it isn't waited on, before or after the wait. Any
+/// error ends it non-zero with no status ([`await_watch`] calls
+/// that skipped).
+///
+/// Only cmdlets and operators, no .NET method calls, so it runs under
+/// Constrained Language Mode, where `$old.WaitForExit()` is blocked.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn predecessor_script(old: u32, me: u32) -> String {
+    let secs = WATCH_SCRIPT_LIMIT.as_secs();
+    let timed_out = WATCH_EXIT_TIMED_OUT;
     format!(
         "$ErrorActionPreference = 'Stop'; \
-         $me = (Get-Process -Id {me}).StartTime; \
+         Write-Output 'started'; \
+         $me = Get-Process -Id {me} | Select-Object -ExpandProperty StartTime; \
          if (-not $me) {{ exit 2 }}; \
          $old = Get-Process -Id {old} -ErrorAction SilentlyContinue; \
-         if ($old -and -not ($old.StartTime -gt $me)) {{ $old.WaitForExit() }}; \
+         if ($old) {{ \
+           $since = $old | Select-Object -ExpandProperty StartTime; \
+           if (-not ($since -gt $me)) {{ \
+             Wait-Process -Id {old} -Timeout {secs} -ErrorAction SilentlyContinue; \
+             $still = Get-Process -Id {old} -ErrorAction SilentlyContinue; \
+             if ($still -and -not (($still | Select-Object -ExpandProperty StartTime) -gt $me)) {{ \
+               Write-Output 'timeout'; exit {timed_out} \
+             }} \
+           }} \
+         }}; \
+         Write-Output 'exited'; \
          exit 0"
     )
+}
+
+/// The watch's command: `shell` (Windows PowerShell) running
+/// [`predecessor_script`], with no input, its status lines on a pipe, its
+/// errors discarded, and never the hand-over token in its environment
+/// (PK-win-restart's review: the token goes to the new copy alone).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn watch_command(mut shell: std::process::Command, old: u32, me: u32) -> std::process::Command {
+    use std::process::Stdio;
+    shell
+        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"])
+        .arg(predecessor_script(old, me))
+        .env_remove(crate::windows::relaunch::MARKER)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    shell
+}
+
+/// The watch's exit code when the old process was still running at the
+/// end of its wait. The copy reads it as still running even if the
+/// `timeout` line was lost.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub const WATCH_EXIT_TIMED_OUT: i32 = 3;
+
+/// One status word from the watch ([`predecessor_script`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub enum WatchSays {
+    Started,
+    Exited,
+    Timeout,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn watch_line(line: &str) -> Option<WatchSays> {
+    // A byte-order mark, if the shell writes one, isn't part of the word.
+    match line
+        .trim_start_matches('\u{feff}')
+        .trim_end_matches(['\r', '\n'])
+    {
+        "started" => Some(WatchSays::Started),
+        "exited" => Some(WatchSays::Exited),
+        "timeout" => Some(WatchSays::Timeout),
+        _ => None,
+    }
+}
+
+/// What the watch has said so far, kept by [`read_watch`]'s thread.
+#[derive(Debug, Default)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub struct WatchLog {
+    /// When `started` arrived.
+    started: Option<Instant>,
+    /// The last status after it.
+    last: Option<WatchSays>,
+    /// The output has ended.
+    done: bool,
+}
+
+/// The longest status line read, and the most lines: anything past them
+/// is ignored, so a misbehaving shell can't grow memory.
+const WATCH_LINE: usize = 64;
+const WATCH_LINES: usize = 16;
+
+/// Reads the watch's status lines on a thread of its own, stamping
+/// `started` with `now()` as it arrives.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn read_watch(
+    out: impl std::io::Read + Send + 'static,
+    now: impl Fn() -> Instant + Send + 'static,
+) -> Arc<Mutex<WatchLog>> {
+    use std::io::{BufRead, Read};
+    let log = Arc::new(Mutex::new(WatchLog::default()));
+    let shared = log.clone();
+    let spawned = std::thread::Builder::new()
+        .name("restart-watch".into())
+        .spawn(move || {
+            let mut reader = std::io::BufReader::new(out);
+            for _ in 0..WATCH_LINES {
+                let mut line = Vec::new();
+                match (&mut reader)
+                    .take(WATCH_LINE as u64)
+                    .read_until(b'\n', &mut line)
+                {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                let said = std::str::from_utf8(&line).ok().and_then(watch_line);
+                let mut log = shared.lock().unwrap_or_else(|e| e.into_inner());
+                match said {
+                    Some(WatchSays::Started) if log.started.is_none() => log.started = Some(now()),
+                    Some(other) if log.started.is_some() => log.last = Some(other),
+                    _ => {}
+                }
+            }
+            shared.lock().unwrap_or_else(|e| e.into_inner()).done = true;
+        });
+    if spawned.is_err() {
+        log.lock().unwrap_or_else(|e| e.into_inner()).done = true;
+    }
+    log
+}
+
+/// The one stderr line when the wait couldn't run (no watch, or it failed
+/// or said nothing): the copy goes ahead, as before the watch existed. It
+/// never carries the token.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub const WATCH_SKIPPED: &str = "Lodestar couldn't check that the copy it replaces had exited, so \
+     it's starting without that check.";
+
+/// The one stderr line when the old process was still running at the end
+/// of the wait; the refusal ([`predecessor_refusal`]) follows.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub const WATCH_TIMED_OUT: &str = "Lodestar's wait for the copy it replaces to exit timed out.";
+
+/// How long a watch that has exited gets for its last line to be read.
+const WATCH_DRAIN: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// The wait on the watch, once the old process has handed over
+/// (X-flake-portable-restart-2): [`Predecessor::Exited`] only once the
+/// watch said `exited` and ended well. `wait` runs from `started`, or from
+/// the hand-over if that came later, so a slow PowerShell start doesn't
+/// eat into it; it's never longer than twice `wait` from the hand-over.
+/// The note is the stderr line to write, if any. The clock and the sleep
+/// are passed in, so it's tested on every platform without waiting.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn await_watch(
+    watch: Option<&mut std::process::Child>,
+    log: Option<&Mutex<WatchLog>>,
+    wait: std::time::Duration,
+    poll: std::time::Duration,
+    now: impl Fn() -> Instant,
+    mut sleep: impl FnMut(std::time::Duration),
+) -> (Predecessor, Option<&'static str>) {
+    let (Some(watch), Some(log)) = (watch, log) else {
+        return (Predecessor::Unknown, Some(WATCH_SKIPPED));
+    };
+    let read = |log: &Mutex<WatchLog>| {
+        let l = log.lock().unwrap_or_else(|e| e.into_inner());
+        (l.started, l.last, l.done)
+    };
+    let go = now();
+    loop {
+        let (started, last, _) = read(log);
+        if last == Some(WatchSays::Timeout) {
+            return (Predecessor::Running, Some(WATCH_TIMED_OUT));
+        }
+        match watch.try_wait() {
+            Ok(Some(status)) if status.code() == Some(WATCH_EXIT_TIMED_OUT) => {
+                return (Predecessor::Running, Some(WATCH_TIMED_OUT));
+            }
+            Ok(Some(status)) => {
+                // Its last line may still be in the pipe.
+                let drain = now();
+                while !read(log).2 && now().saturating_duration_since(drain) < WATCH_DRAIN {
+                    sleep(poll);
+                }
+                return match read(log).1 {
+                    Some(WatchSays::Exited) if status.success() => (Predecessor::Exited, None),
+                    Some(WatchSays::Timeout) => (Predecessor::Running, Some(WATCH_TIMED_OUT)),
+                    _ => (Predecessor::Unknown, Some(WATCH_SKIPPED)),
+                };
+            }
+            Ok(None) => {}
+            Err(_) => return (Predecessor::Unknown, Some(WATCH_SKIPPED)),
+        }
+        let from = started.map_or(go, |s| s.max(go));
+        let t = now();
+        if t.saturating_duration_since(from) >= wait || t.saturating_duration_since(go) >= wait * 2
+        {
+            return (Predecessor::Running, Some(WATCH_TIMED_OUT));
+        }
+        sleep(poll);
+    }
 }
 
 /// What a relaunched copy says when the process it replaces is still
@@ -928,67 +1102,441 @@ mod tests {
         assert_eq!(EXIT_RELAUNCHED, crate::update::control::EXIT_RESTART);
     }
 
-    /// X-flake-portable-restart: the wait for the process being replaced,
-    /// on a fake clock that each sleep moves on. Returns the outcome and
-    /// the probes made.
-    fn awaited(answers: Vec<Predecessor>, wait: Duration) -> (Predecessor, usize) {
-        use std::cell::Cell;
-        let start = Instant::now();
-        let elapsed = Cell::new(Duration::ZERO);
-        let mut answers = answers.into_iter();
-        let probes = Cell::new(0usize);
-        let got = await_predecessor(
-            || {
-                probes.set(probes.get() + 1);
-                answers.next().unwrap_or(Predecessor::Running)
-            },
-            wait,
+    /// A fake clock that each sleep moves on, from `start`.
+    #[cfg(unix)]
+    struct Fake {
+        start: Instant,
+        elapsed: std::cell::Cell<Duration>,
+    }
+
+    #[cfg(unix)]
+    impl Fake {
+        fn new() -> Fake {
+            Fake {
+                start: Instant::now(),
+                elapsed: std::cell::Cell::new(Duration::ZERO),
+            }
+        }
+        fn now(&self) -> Instant {
+            self.start + self.elapsed.get()
+        }
+        fn sleep(&self, d: Duration) {
+            self.elapsed.set(self.elapsed.get() + d);
+        }
+    }
+
+    #[cfg(unix)]
+    fn log(started: Option<Instant>, last: Option<WatchSays>, done: bool) -> Mutex<WatchLog> {
+        Mutex::new(WatchLog {
+            started,
+            last,
+            done,
+        })
+    }
+
+    /// A real child that ends with `code` at once, or runs until killed.
+    #[cfg(unix)]
+    fn child(script: &str) -> std::process::Child {
+        std::process::Command::new("sh")
+            .args(["-c", script])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    /// Waits (at most 10 s) for `c` to have exited, without reaping it.
+    #[cfg(unix)]
+    fn settled(c: &mut std::process::Child) -> std::process::ExitStatus {
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(s) = c.try_wait().unwrap() {
+                return s;
+            }
+            assert!(Instant::now() < end, "the child didn't exit");
+            std::thread::yield_now();
+        }
+    }
+
+    /// X-flake-portable-restart-2: the copy goes on only once the watch
+    /// said `exited` and ended well.
+    #[cfg(unix)]
+    #[test]
+    fn a_watch_that_says_exited_and_ends_well_is_exited() {
+        let f = Fake::new();
+        let mut c = child("exit 0");
+        settled(&mut c);
+        let l = log(Some(f.now()), Some(WatchSays::Exited), true);
+        let got = await_watch(
+            Some(&mut c),
+            Some(&l),
+            PREDECESSOR_WAIT,
             PREDECESSOR_POLL,
-            || start + elapsed.get(),
-            |d| elapsed.set(elapsed.get() + d),
+            || f.now(),
+            |d| f.sleep(d),
         );
-        (got, probes.get())
+        assert_eq!(got, (Predecessor::Exited, None));
     }
 
-    /// The #655 flake: the hand-over's end of file came while the old
-    /// process still held the store. The copy goes on only once the
-    /// process itself has exited.
+    /// The watch's last line can still be in the pipe when it has exited:
+    /// the copy waits a moment for the reader before deciding.
+    #[cfg(unix)]
     #[test]
-    fn a_relaunched_copy_waits_until_the_old_process_has_exited() {
-        use Predecessor::*;
-        let (got, probes) = awaited(vec![Running, Running, Exited], PREDECESSOR_WAIT);
-        assert_eq!((got, probes), (Exited, 3));
-        // Nothing to wait on: at once.
-        assert_eq!(awaited(vec![Unknown], PREDECESSOR_WAIT), (Unknown, 1));
-        // A watch that stops answering mid-way isn't a reason to wait on.
+    fn a_watch_that_exited_before_its_last_line_was_read_is_exited() {
+        let f = Fake::new();
+        let mut c = child("exit 0");
+        settled(&mut c);
+        let l = log(Some(f.now()), None, false);
+        let got = await_watch(
+            Some(&mut c),
+            Some(&l),
+            PREDECESSOR_WAIT,
+            PREDECESSOR_POLL,
+            || f.now(),
+            |d| {
+                f.sleep(d);
+                let mut w = l.lock().unwrap();
+                w.last = Some(WatchSays::Exited);
+                w.done = true;
+            },
+        );
+        assert_eq!(got, (Predecessor::Exited, None));
+        // A reader that never finishes is given up on after the drain.
+        let l = log(Some(f.now()), None, false);
+        let start = f.now();
+        let got = await_watch(
+            Some(&mut c),
+            Some(&l),
+            PREDECESSOR_WAIT,
+            PREDECESSOR_POLL,
+            || f.now(),
+            |d| f.sleep(d),
+        );
+        assert_eq!(got, (Predecessor::Unknown, Some(WATCH_SKIPPED)));
+        assert!(f.now().duration_since(start) >= WATCH_DRAIN);
+        assert!(f.now().duration_since(start) < WATCH_DRAIN + Duration::from_secs(1));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_watch_that_fails_or_says_nothing_is_skipped_with_a_line() {
+        for (code, last) in [
+            ("exit 2", None),
+            ("exit 0", None),
+            ("exit 1", Some(WatchSays::Exited)),
+        ] {
+            let f = Fake::new();
+            let mut c = child(code);
+            settled(&mut c);
+            let l = log(Some(f.now()), last, true);
+            let got = await_watch(
+                Some(&mut c),
+                Some(&l),
+                PREDECESSOR_WAIT,
+                PREDECESSOR_POLL,
+                || f.now(),
+                |d| f.sleep(d),
+            );
+            assert_eq!(
+                got,
+                (Predecessor::Unknown, Some(WATCH_SKIPPED)),
+                "{code} {last:?}"
+            );
+        }
+        // No watch at all (the token names no process, or PowerShell didn't start).
+        let f = Fake::new();
+        let got = await_watch(
+            None,
+            None,
+            PREDECESSOR_WAIT,
+            PREDECESSOR_POLL,
+            || f.now(),
+            |d| f.sleep(d),
+        );
+        assert_eq!(got, (Predecessor::Unknown, Some(WATCH_SKIPPED)));
+        assert!(!WATCH_SKIPPED.contains("lodestar-"), "never the token");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_watch_that_timed_out_is_still_running_with_a_line() {
+        let f = Fake::new();
+        let mut c = child("exit 3");
+        settled(&mut c);
+        let l = log(Some(f.now()), Some(WatchSays::Timeout), true);
+        let got = await_watch(
+            Some(&mut c),
+            Some(&l),
+            PREDECESSOR_WAIT,
+            PREDECESSOR_POLL,
+            || f.now(),
+            |d| f.sleep(d),
+        );
+        assert_eq!(got, (Predecessor::Running, Some(WATCH_TIMED_OUT)));
+        // Its exit code says the same even when no line was read.
+        for last in [None, Some(WatchSays::Exited)] {
+            let l = log(None, last, true);
+            let got = await_watch(
+                Some(&mut c),
+                Some(&l),
+                PREDECESSOR_WAIT,
+                PREDECESSOR_POLL,
+                || f.now(),
+                |d| f.sleep(d),
+            );
+            assert_eq!(
+                got,
+                (Predecessor::Running, Some(WATCH_TIMED_OUT)),
+                "{last:?}"
+            );
+        }
+    }
+
+    /// The wait runs from the watch's `started`, not from the hand-over, so
+    /// a slow PowerShell start doesn't eat into it; never past twice the
+    /// wait.
+    #[cfg(unix)]
+    #[test]
+    fn the_wait_runs_from_the_started_marker() {
+        // `Some(50)`, a marker later than the cap, exercises the cap's
+        // arithmetic only: the real watch says `started` within seconds.
+        for (marker, waited) in [(None, 30), (Some(0), 30), (Some(10), 40), (Some(50), 60)] {
+            let f = Fake::new();
+            let mut c = child("exec sleep 60");
+            let l = log(
+                marker.map(|s| f.now() + Duration::from_secs(s)),
+                None,
+                false,
+            );
+            let got = await_watch(
+                Some(&mut c),
+                Some(&l),
+                PREDECESSOR_WAIT,
+                PREDECESSOR_POLL,
+                || f.now(),
+                |d| f.sleep(d),
+            );
+            let _ = c.kill();
+            let _ = c.wait();
+            assert_eq!(
+                got,
+                (Predecessor::Running, Some(WATCH_TIMED_OUT)),
+                "{marker:?}"
+            );
+            assert_eq!(f.elapsed.get(), Duration::from_secs(waited), "{marker:?}");
+        }
+    }
+
+    #[test]
+    fn the_watch_log_reads_status_after_started_only() {
+        let got = |text: &'static str| {
+            let l = read_watch(std::io::Cursor::new(text.as_bytes()), Instant::now);
+            let end = Instant::now() + Duration::from_secs(10);
+            loop {
+                let w = l.lock().unwrap();
+                if w.done {
+                    return (w.started.is_some(), w.last);
+                }
+                drop(w);
+                assert!(Instant::now() < end, "the reader didn't finish");
+                std::thread::yield_now();
+            }
+        };
         assert_eq!(
-            awaited(vec![Running, Unknown], PREDECESSOR_WAIT),
-            (Unknown, 2)
+            got("started\r\nexited\r\n"),
+            (true, Some(WatchSays::Exited))
         );
+        assert_eq!(got("started\ntimeout\n"), (true, Some(WatchSays::Timeout)));
+        assert_eq!(
+            got("\u{feff}started\nexited\n"),
+            (true, Some(WatchSays::Exited))
+        );
+        assert_eq!(got("exited\n"), (false, None)); // a status before `started` doesn't count
+        assert_eq!(got("started\nnoise\n"), (true, None));
+        assert_eq!(got(""), (false, None));
+        // A long line or a flood is cut off, never read whole.
+        let long: &'static str =
+            Box::leak(format!("started\n{}\nexited\n", "x".repeat(10_000)).into_boxed_str());
+        assert!(got(long).0);
+        let flood: &'static str =
+            Box::leak(format!("started\n{}exited\n", "x\n".repeat(100)).into_boxed_str());
+        assert_eq!(got(flood), (true, None));
+        // Only the first `started` sets the clock: a later one can't move
+        // the start of the wait.
+        let calls = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let base = Instant::now();
+        let l = read_watch(std::io::Cursor::new(&b"started\nstarted\nexited\n"[..]), {
+            let calls = calls.clone();
+            move || {
+                let n = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                base + Duration::from_secs(10 * (n + 1))
+            }
+        });
+        let end = Instant::now() + Duration::from_secs(10);
+        while !l.lock().unwrap().done {
+            assert!(Instant::now() < end, "the reader didn't finish");
+            std::thread::yield_now();
+        }
+        let w = l.lock().unwrap();
+        assert_eq!(w.started, Some(base + Duration::from_secs(10)));
+        assert_eq!(w.last, Some(WatchSays::Exited));
+    }
+
+    /// Under Constrained Language Mode `$old.WaitForExit()` is blocked, so
+    /// the script uses cmdlets and operators only, and prints `started`
+    /// before anything that can be slow.
+    #[test]
+    fn the_script_is_safe_under_constrained_language_mode() {
+        let script = predecessor_script(4242, 77);
+        assert!(
+            script.contains(&format!(
+                "Wait-Process -Id 4242 -Timeout {} ",
+                WATCH_SCRIPT_LIMIT.as_secs()
+            )),
+            "{script}"
+        );
+        // The script's bound outlasts the whole hand-over and the copy's
+        // own wait after it, so only Rust's 30 s from the hand-over ends it.
+        assert!(
+            WATCH_SCRIPT_LIMIT
+                >= crate::windows::relaunch::GO_LIMIT
+                    + crate::windows::relaunch::EXIT_LIMIT
+                    + PREDECESSOR_WAIT * 2,
+            "{WATCH_SCRIPT_LIMIT:?}"
+        );
+        // Wait-Process takes at most 32767 s.
+        assert!(
+            WATCH_SCRIPT_LIMIT.as_secs() <= 32_767,
+            "{WATCH_SCRIPT_LIMIT:?}"
+        );
+        // A process with the old id but started after this copy is a
+        // reused id, not the old process, after the wait as well as before.
+        assert_eq!(script.matches("-gt $me").count(), 2, "{script}");
+        assert!(!script.contains(".WaitForExit("), "{script}");
+        assert!(!script.contains("::"), "no .NET static calls: {script}");
+        assert!(
+            !script.contains(").") && !script.contains("$old."),
+            "no .NET member access: {script}"
+        );
+        let first = script.find("Write-Output 'started'").expect("the marker");
+        assert!(
+            first < script.find("Get-Process").unwrap(),
+            "the marker comes first: {script}"
+        );
+        assert!(
+            script.contains("Write-Output 'timeout'; exit 3"),
+            "{script}"
+        );
+        assert!(script.trim_end().ends_with("exit 0"), "{script}");
+    }
+
+    /// The token goes to the new copy alone, never to the watch.
+    #[test]
+    fn the_watch_gets_no_token() {
+        let cmd = watch_command(std::process::Command::new("powershell.exe"), 4242, 77);
+        let removed = cmd
+            .get_envs()
+            .any(|(k, v)| k == crate::windows::relaunch::MARKER && v.is_none());
+        assert!(removed, "the token is removed from the watch's environment");
+        let args: Vec<_> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            &args[..4],
+            ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]
+        );
+        assert_eq!(args[4], predecessor_script(4242, 77));
+    }
+
+    /// The real script on Windows, under Constrained Language Mode: it
+    /// prints `started`, waits on the old process with `Wait-Process`, and
+    /// says `exited` once it has gone. The mode is checked to be in force.
+    #[cfg(windows)]
+    #[test]
+    fn the_script_runs_under_constrained_language_mode() {
+        use std::process::{Command, Stdio};
+        let ping = |n: &str| {
+            Command::new("ping")
+                .args(["-n", n, "127.0.0.1"])
+                .stdout(Stdio::null())
+                .spawn()
+                .unwrap()
+        };
+        // `old` runs until it's killed, so the script must be waiting on it
+        // when it has said `started`.
+        let mut old = ping("60");
+        let mut me = ping("60"); // started after `old`
+        let clm = "$ExecutionContext.SessionState.LanguageMode = 'ConstrainedLanguage'; ";
+        let shell = |script: String| {
+            let mut cmd = Command::new("powershell.exe");
+            cmd.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"])
+                .arg(format!("{clm}Invoke-Expression @'\n{script}\n'@"))
+                .stdin(Stdio::null())
+                .stderr(Stdio::null());
+            cmd
+        };
+        // The mode really is in force: a .NET static call fails under it.
+        let probe = shell(
+            "$ErrorActionPreference = 'Stop'; \
+             [System.Diagnostics.Process]::GetCurrentProcess() | Out-Null; exit 0"
+                .into(),
+        )
+        .stdout(Stdio::null())
+        .status()
+        .unwrap();
+        assert!(!probe.success(), "Constrained Language Mode isn't in force");
+        let mut watch = shell(predecessor_script(old.id(), me.id()))
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let (tx, lines) = std::sync::mpsc::channel();
+        let out = watch.stdout.take().unwrap();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(out).lines() {
+                let Ok(line) = line else { break };
+                if tx.send(watch_line(&line)).is_err() {
+                    break;
+                }
+            }
+        });
+        let first = lines.recv_timeout(Duration::from_secs(60));
+        let waiting = watch.try_wait().unwrap().is_none();
+        let _ = old.kill();
+        let _ = old.wait();
+        let next = lines.recv_timeout(Duration::from_secs(30));
+        let end = Instant::now() + Duration::from_secs(30);
+        let status = loop {
+            if let Some(s) = watch.try_wait().unwrap() {
+                break Some(s);
+            }
+            if Instant::now() >= end {
+                break None;
+            }
+            std::thread::yield_now();
+        };
+        if status.is_none() {
+            let _ = watch.kill();
+            let _ = watch.wait();
+        }
+        let _ = me.kill();
+        let _ = me.wait();
+        // `started` is streamed before the wait ends, and the script is
+        // still waiting on `old` then.
+        assert_eq!(first, Ok(Some(WatchSays::Started)));
+        assert!(waiting, "the script ended before `old` did");
+        assert_eq!(next, Ok(Some(WatchSays::Exited)));
+        let status = status.expect("the script didn't end once `old` had");
+        assert!(status.success(), "{status:?}");
     }
 
     #[test]
-    fn a_process_still_running_past_the_wait_is_refused() {
-        // Probed at 0, 50, …, 1,000 ms: at the deadline it's given up.
-        let (got, probes) = awaited(Vec::new(), Duration::from_secs(1));
-        assert_eq!((got, probes), (Predecessor::Running, 21));
-        let (got, probes) = awaited(Vec::new(), Duration::ZERO);
-        assert_eq!((got, probes), (Predecessor::Running, 1));
+    fn the_refusal_names_the_wait() {
         // The brief's floor: at least 10 s before a refusal.
         assert!(PREDECESSOR_WAIT >= Duration::from_secs(10));
         let refusal = predecessor_refusal(PREDECESSOR_WAIT);
         assert!(refusal.contains("still running 30 s"), "{refusal}");
         assert!(refusal.contains("Close Lodestar and start it again."));
-    }
-
-    #[test]
-    fn only_a_watch_that_ended_well_says_exited() {
-        use Predecessor::*;
-        assert_eq!(watch_says(Some(Ok(None))), Running);
-        assert_eq!(watch_says(Some(Ok(Some(true)))), Exited);
-        assert_eq!(watch_says(Some(Ok(Some(false)))), Unknown);
-        assert_eq!(watch_says(Some(Err(std::io::Error::other("x")))), Unknown);
-        assert_eq!(watch_says(None), Unknown);
     }
 
     /// The old process's id comes from its own token, so the hand-over
@@ -1012,11 +1560,6 @@ mod tests {
         ] {
             assert_eq!(predecessor_pid(other), None, "{other:?}");
         }
-        let script = predecessor_script(4242, 77);
-        assert!(script.contains("Get-Process -Id 77"), "{script}");
-        assert!(script.contains("Get-Process -Id 4242"), "{script}");
-        assert!(script.contains("$old.WaitForExit()"), "{script}");
-        assert!(script.ends_with("exit 0"), "{script}");
     }
 
     #[test]
