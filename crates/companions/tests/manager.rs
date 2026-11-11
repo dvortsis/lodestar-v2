@@ -58,6 +58,28 @@ fn sha(b: &[u8]) -> String {
 
 /// qBittorrent pinned to `v` on Linux, with its Windows installer; and
 /// Prowlarr, not pinned.
+/// The compiled-in catalogue's text with every pin and digest taken out.
+fn shipped_unpinned() -> &'static Catalogue {
+    let mut v: serde_json::Value =
+        serde_json::from_str(include_str!("../data/catalogue.json")).unwrap();
+    for e in v["entries"].as_array_mut().unwrap() {
+        // `get_mut`, not indexing: indexing a `null` would make it an object.
+        if let Some(arts) = e
+            .get_mut("native")
+            .and_then(|n| n.get_mut("artifacts"))
+            .and_then(|a| a.as_array_mut())
+        {
+            for a in arts {
+                a["pin"] = serde_json::Value::Null;
+            }
+        }
+        if e["container"].is_object() {
+            e["container"]["digest"] = serde_json::Value::Null;
+        }
+    }
+    Box::leak(Box::new(Catalogue::from_json(&v.to_string()).unwrap()))
+}
+
 fn catalogue(v: &str) -> &'static Catalogue {
     let b = body(v);
     let j = json!({
@@ -553,9 +575,10 @@ async fn refusals_are_typed_and_change_nothing() {
         w.manager(cat, windows).offer(&qbt()),
         refused(Refusal::GuidedOnly)
     );
-    // The shipped catalogue's Windows installer awaits its pin, and is
-    // still guided, never `awaiting_pin` (#705's review, I3).
-    let shipped = lodestar_companions::builtin().unwrap();
+    // The shipped catalogue with every pin taken out, whatever CMP-13
+    // pins later: its Windows installer is still guided, never
+    // `awaiting_pin` (#705's review, I3).
+    let shipped = shipped_unpinned();
     assert_eq!(
         w.manager(shipped, windows).offer(&qbt()),
         refused(Refusal::GuidedOnly)
@@ -565,7 +588,7 @@ async fn refusals_are_typed_and_change_nothing() {
         refused(Refusal::GuidedOnly)
     );
     // A build Lodestar installs still answers `awaiting_pin` while it
-    // waits: the shipped Linux binary isn't pinned yet.
+    // waits: here the Linux binary.
     assert_eq!(
         w.manager(shipped, LINUX).offer(&qbt()),
         refused(Refusal::NotAvailable(NotAvailable::AwaitingPin))

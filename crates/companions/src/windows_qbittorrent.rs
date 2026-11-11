@@ -105,8 +105,14 @@ impl<'a> Installer<'a> {
 /// 2026-11-11, CMP-11b option (D)).
 pub const CHECKED_RANGE: (&str, (u32, u32)) = ("4.6.0", (5, 3));
 
-/// The newest `major.minor` inside [`CHECKED_RANGE`], for messages.
-const CHECKED_UP_TO: &str = "5.2";
+/// The range [`CHECKED_RANGE`] names, for messages: `4.6.0 to 5.2.x`.
+fn checked_text() -> String {
+    let (min, (ma, mi)) = CHECKED_RANGE;
+    match mi.checked_sub(1) {
+        Some(prev) => format!("{min} to {ma}.{prev}.x"),
+        None => format!("{min} up to {ma}.{mi}"),
+    }
+}
 
 /// The versions the gate accepts: at least `min`, and a `major.minor`
 /// below `below`.
@@ -208,11 +214,12 @@ impl fmt::Display for Unsupported {
                  supports on Windows. Install {min} from qBittorrent's download page, then \
                  try again."
             ),
-            Unsupported::Older { found, min, .. } => write!(
+            Unsupported::Older { found, .. } => write!(
                 f,
-                "This qBittorrent is {found}, older than {min}, the oldest release Lodestar \
-                 supports on Windows. Install the current release from qBittorrent's \
-                 download page, then try again."
+                "This qBittorrent is {found}. On Windows, this release of Lodestar supports \
+                 qBittorrent {range}. Install a release in that range from qBittorrent's \
+                 official site, then try again.",
+                range = checked_text()
             ),
             Unsupported::Newer {
                 found,
@@ -225,10 +232,11 @@ impl fmt::Display for Unsupported {
             ),
             Unsupported::Newer { found, .. } => write!(
                 f,
-                "This qBittorrent is {found}, newer than the {CHECKED_UP_TO} releases \
-                 Lodestar has checked on Windows. Wait for a Lodestar update that supports \
-                 {found}, or install a {CHECKED_UP_TO} release from qBittorrent's download \
-                 page."
+                "This qBittorrent is {found}, newer than this release of Lodestar has checked \
+                 on Windows: it supports qBittorrent {range}. Wait for a Lodestar update that \
+                 supports {found}, or install a release in that range from qBittorrent's \
+                 official site.",
+                range = checked_text()
             ),
         }
     }
@@ -351,8 +359,11 @@ impl Guide {
                 None => format!(
                     "This release of Lodestar has no checked qBittorrent installer yet, so \
                      there's no checksum to compare. Open {page}, qBittorrent's official \
-                     download page, and download its 64-bit Windows installer from there. \
-                     Lodestar doesn't download or run it for you."
+                     download page, and download its 64-bit Windows installer for a release \
+                     from {range}: Lodestar can configure only those. If the newest release \
+                     there is later than that, wait for a Lodestar update. Lodestar doesn't \
+                     download or run it for you.",
+                    range = checked_text()
                 ),
             },
             Step::CheckSha256 => {
@@ -391,9 +402,9 @@ impl Guide {
 /// CMP-8b's qBittorrent adapter with the Windows version gate. Signed in,
 /// on the adapter's own session (so it costs no sign-in of its own), a
 /// version outside the pin's range is refused before anything is read or
-/// written, in the plan and again in the apply. Not registered yet: CMP-11b
-/// makes [`configurator`] what `configure::configurator` hands out for
-/// qBittorrent on Windows, with CMP-5g's guided tests updated for it.
+/// written, in the plan and again in the apply. [`configurator`] is what
+/// `configure::configurator` hands out for qBittorrent on Windows
+/// (CMP-11b).
 pub struct WindowsQBittorrent {
     id: CompanionId,
     /// `None` only if the compiled-in catalogue couldn't be read: then
@@ -528,7 +539,7 @@ pub fn supported_for(entry: &Entry) -> Option<Supported> {
 
 /// The Windows configurator for qBittorrent, from the compiled-in
 /// catalogue. Always one: without the catalogue it refuses every call.
-/// CMP-11b registers it in `configure::configurator` under `cfg(windows)`.
+/// `configure::configurator` hands it out under `cfg(windows)` (CMP-11b).
 pub fn configurator(id: &CompanionId) -> Option<Box<dyn Configure>> {
     if id.as_str() != qbittorrent::ID {
         return None;
@@ -771,11 +782,16 @@ fn host_name(s: &str) -> Result<(), InputError> {
     }
 }
 
-/// Whether a UNC server is this machine by a loopback name: `localhost`
-/// (and below it), or any all-numeric name, which Windows may read as an
-/// IPv4 address in a short or decimal form (`127.1`, `2130706433`), unless
-/// it's a full dotted address outside `127.0.0.0/8` and `0.0.0.0/8`. The
-/// machine's own name can't be known here (see [`WindowsPath`]).
+/// Whether a UNC server may be this machine by a loopback name or address:
+/// - `localhost`, names below it, and names ending in `.ipv6-literal.net`
+///   (Windows' name form for an IPv6 address);
+/// - any label in octal (`0177`, a digit string with a leading `0`) or hex
+///   (`0x7f`), which Windows' address parser reads in that base;
+/// - any all-numeric name, which Windows may read as an IPv4 address in a
+///   short or decimal form (`127.1`, `2130706433`), unless it's a full
+///   dotted address outside `127.0.0.0/8` and `0.0.0.0/8`.
+///
+/// The machine's own name can't be known here (see [`WindowsPath`]).
 fn loopback(server: &str) -> bool {
     let s = server.to_ascii_lowercase();
     if s == "localhost" || s.ends_with(".localhost") || s.ends_with(".ipv6-literal.net") {

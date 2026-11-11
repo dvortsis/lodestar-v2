@@ -134,7 +134,14 @@ impl std::fmt::Debug for QBittorrent {
 }
 
 impl QBittorrent {
-    pub(crate) fn new(id: CompanionId) -> QBittorrent {
+    /// **The ungated adapter.** Production code gets a configurator only
+    /// through [`super::configurator`], which applies the Windows version
+    /// gate (CMP-11b); it's what that hands out on every platform but
+    /// Windows. Only adapter tests construct this directly, so CMP-8b's
+    /// own tests exercise it on every platform.
+    /// `tests/windows_qbittorrent.rs` fails if `crates/lodestar/src` or
+    /// `crates/api/src` names it.
+    pub fn new(id: CompanionId) -> QBittorrent {
         QBittorrent { id, gate: None }
     }
 
