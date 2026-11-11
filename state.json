@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T20:15:00Z",
+  "updated_at": "2026-11-11T20:25:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6869,6 +6869,11 @@
       "for": "X-cmp-handover-followups-2 (or CMP-11b if it touches manager.rs)",
       "from": "rv-692-cfc09faa (2026-11-11)",
       "note": "I1 three of four double-log guards untested (manager.rs:1587, :1779, :1959): add count asserts. I2 decisions file: a restart/regenerate whose hand-over hangs leaves the companion stopped until the store answers (manager.rs:1923-1938). N: test N6 fake saved nothing. Also: windows-gnu -D warnings in lodestar-companions has 5 pre-existing errors (unused import, 4 unneeded mut) at c818b432; check whether CI covers it."
+    },
+    {
+      "for": "X-win-upd-history (or a small web follow-up)",
+      "from": "rv-708 I5 (2026-11-11)",
+      "note": "After an MSI rollback the Updates screen notice \"The last update did not install\" (web/src/lib/features/settings/updates/messages en.json:104) tells the user to download and run the new installer; the guide says not to reinstall the failed build. Reword the notice to match."
     }
   ],
   "main_health": [
@@ -7602,7 +7607,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T20:15:00Z",
+    "updated": "2026-11-11T20:25:00Z",
     "items": [
       {
         "slot": 1,
@@ -7631,12 +7636,11 @@
       },
       {
         "slot": 4,
-        "slice": null,
-        "role": "build",
-        "agent": null,
-        "doing": "idle: #692 merged; next by ladder",
-        "since": "2026-11-11T20:15:00Z",
-        "status": "idle"
+        "slice": "CMP-13",
+        "role": "slice",
+        "agent": "session_01MMjhn9asevZ2GAyojLHZJZ",
+        "doing": "Companion pin-refresh tool + workflow (Opus, /security-review); CMP-G path",
+        "since": "2026-11-11T20:25:00Z"
       },
       {
         "slot": 5,
@@ -7725,7 +7729,7 @@
     }
   ],
   "heartbeat": "2026-11-11T18:39:05Z",
-  "updated": "2026-11-11T20:15:00Z",
+  "updated": "2026-11-11T20:25:00Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -7761,7 +7765,7 @@
   ],
   "review_queue": [
     "#699 CHANGES @13397e42 relayed (B1 tests L4/L6, I1 link+secure_remove, Windows reparse); then fresh delta+sec review",
-    "#708 PK-guide-3 1443a549: fresh Opus review running"
+    "#708 PK-guide-3: CHANGES relayed (3 blocking, I1-I5, 13 nits); await fix push \u2192 delta review"
   ],
   "merged": [
     {
