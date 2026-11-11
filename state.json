@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T23:09:03Z",
+  "updated_at": "2026-11-11T23:13:20Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6965,6 +6965,10 @@
     {
       "at": "2026-11-11T23:09:03Z",
       "note": "#714 merged (cd2b7eb4) on rv-714-593ace9d MERGE; slot 5 -> X-win-upd-history same session (brief 4912ad10). rv-714 Important (install_stopped event) + nits folded into X-upd-stop-early. Runner PR #719 open (3a738a55): follow-up entries, WK-G notes, clippy note."
+    },
+    {
+      "at": "2026-11-11T23:13:20Z",
+      "note": "#710 CMP-13 merged (48166c60) after delta self-check (rv-710 I1/I2 + nits fixed; 45+89 tests OK). Slot 4 -> X-cmp13-installer-pins same session (brief), after #711. Owner FYI CMP-13 sent."
     }
   ],
   "main_health": [
@@ -7698,7 +7702,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T23:09:03Z",
+    "updated": "2026-11-11T23:13:20Z",
     "items": [
       {
         "slot": 1,
@@ -7729,11 +7733,11 @@
       },
       {
         "slot": 4,
-        "slice": "CMP-13",
+        "slice": "X-cmp13-installer-pins",
         "role": "slice",
         "agent": "session_01MMjhn9asevZ2GAyojLHZJZ",
-        "doing": "Companion pin-refresh tool + workflow (Opus, /security-review); CMP-G path",
-        "since": "2026-11-11T20:25:00Z",
+        "doing": "session_01MMjhn9asevZ2GAyojLHZJZ: installer pins (Opus, /security-review); waits for CMP-11b #711; dry-run inputs to runner",
+        "since": "2026-11-11T23:13:20Z",
         "status": "active"
       },
       {
@@ -7862,7 +7866,7 @@
     }
   ],
   "heartbeat": "2026-11-11T21:38:36Z",
-  "updated": "2026-11-11T23:09:03Z",
+  "updated": "2026-11-11T23:13:20Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
