@@ -51,6 +51,7 @@ jobs:
       mmap_retention: ${{ steps.c.outputs.mmap_retention }}
       fuzz: ${{ steps.c.outputs.fuzz }}
       soak_tools: ${{ steps.c.outputs.soak_tools }}
+      companion_pins: ${{ steps.c.outputs.companion_pins }}
       infra: ${{ steps.c.outputs.infra }}
       update_manifest: ${{ steps.c.outputs.update_manifest }}
     steps:
@@ -448,6 +449,8 @@ jobs:
   # gate like any other code. Standard library only.
   companion-pins:
     name: companion pin tool
+    needs: changes
+    if: needs.changes.outputs.companion_pins == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

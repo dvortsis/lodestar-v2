@@ -14,6 +14,7 @@ request gets:
   crate that job builds, following the workspace's path dependencies (the
   logging bench: `lodestar-log` or the binary's `logging/` runtime);
 - the soak tools' Python tests only if it touches `docs/soak/tools/`;
+- the companion pin tool's tests only if it touches `tools/companion-pins/`;
 - the cloud infrastructure checks (Lambda tests, template rebuilds, Terraform
   fmt/validate, PowerShell parse) only if it touches `infra/` or this workflow;
 - the update-manifest round trip only if it touches the manifest builder,
@@ -161,6 +162,7 @@ def main() -> None:
             log_bench="true",
             mmap_retention="true",
             soak_tools="true",
+            companion_pins="true",
             infra="true",
             update_manifest="true",
             web="true",
@@ -210,6 +212,7 @@ def main() -> None:
         )
     ).lower()
     out["soak_tools"] = str(everything or any(f.startswith("docs/soak/tools/") for f in changed)).lower()
+    out["companion_pins"] = str(everything or any(f.startswith("tools/companion-pins/") for f in changed)).lower()
     out["infra"] = str(everything or any(INFRA.match(f) for f in changed)).lower()
     out["update_manifest"] = str(everything or any(UPDATE_MANIFEST.match(f) for f in changed)).lower()
     # The mmap-cache retention test (X-mmap-cache-prune): the bench crate

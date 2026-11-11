@@ -111,6 +111,7 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("mmap_retention=true", out)
         self.assertIn("infra=true", out)
         self.assertIn("update_manifest=true", out)
+        self.assertIn("companion_pins=true", out)
 
 
 if __name__ == "__main__":
