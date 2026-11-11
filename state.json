@@ -6763,12 +6763,10 @@
     "next runner PR: add X-win-upd-reoffer (Opus, core, deps [X-win-upd-1920]; owns update/windows/helper.rs, msi.rs, rollback.rs, tests/update_windows_msi.rs, its decisions file) and X-win-upd-window (check.rs removes request.json on mode Off/pause; after #659) to slices.yaml",
     "Hot/cold leftovers after #680 (appendix B + revisions + heading are in PK-guide-1): docs/operations.md:182-184/:206 -> PK-ops brief; DataFolders hot/cold params dead API -> small companions cleanup slice; architecture.md ~1336/~1759/~2927 + slices.yaml CMP-7 note -> next runner PR; CI job for packaging/unraid validate.py + test_validate.py -> X-ci slice; next runner PR: PK-guide-1 owns += appendix-b-settings-reference.md, 2026-11-11-PK-unraid.md; PK-unraid title trim ('validator checks every Requires/Overview' not done -> split X-unraid-validate-all)",
     "PK-guide-2/3 nits from rv-682: PK-guide-1 decisions :10 stale sentence; appendix-b :3 'Every field' -> point to 2.2 note for v0.5.1's Hot/Cold; docs/user/README.md:93 Last updated date",
-    "owner \u00a72.19 flag sent? PK-guide-1 omitted Q12 2nd sentence (safe restart unreleased in v0.5.1) -> include in next owner FYI",
     "next runner PR: add X-cmp-handover-followups (Opus, core; deps [X-cmp-native-handover]; owns per briefs/X-cmp-handover-followups.md) to slices.yaml",
     "user docs (CMP guide slice): Restart re-adds a managed qBittorrent entry the user deleted on purpose",
     "next runner PR: X-win-upd-window owns += web/src/lib/features/settings/updates/messages/{en,zh}.json, updates/updates.test.ts, crates/api notice-code doc comment, web/src/lib/api/openapi.json + schema.d.ts (regenerated) \u2014 runner approved option (a) 2026-11-11",
-    "next runner PR: X-smoke-polish entry (Sonnet helper; deps [PK-smoke]; owns per briefs/X-smoke-polish.md); X-win-upd-window, X-win-upd-reoffer, X-cmp-handover-followups, X-e2e-baseline-refresh entries/owns",
-    "owner FYI pending: PK-smoke \u00a72.19 calls (MSI smoke runs installed exe on a temp data dir, not via the service; DHT on in every smoke) + PK-guide-1 omitted Q12 second sentence"
+    "next runner PR: X-smoke-polish entry (Sonnet helper; deps [PK-smoke]; owns per briefs/X-smoke-polish.md); X-win-upd-window, X-win-upd-reoffer, X-cmp-handover-followups, X-e2e-baseline-refresh entries/owns"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
