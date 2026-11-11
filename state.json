@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T20:51:41Z",
+  "updated_at": "2026-11-11T21:00:24Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6898,7 +6898,8 @@
     {
       "at": "2026-11-11T20:51:07Z",
       "slice": "X-cluster-tick-stall",
-      "note": "New Opus slice (from WK-20 finding b): a partitioned worker whose TCP connection hangs (no reset) stalls the coordinator tick ~30 s (tick 6->8 over 40 s); sightings and hint relays lost meanwhile. Cause in cluster server or serve, unconfirmed. Regression test from WK-20's decisions file. G-m6/WK-G related."
+      "note": "WITHDRAWN by WK-20 at 2026-11-11T21:00:24Z: tick measured normal (9 ticks/45 s); cause was WK-20 harness wait_leased counting cut-off worker's leases. Do not launch. Hints are best-effort (try_send_spare) by design. | was: New Opus slice (from WK-20 finding b): a partitioned worker whose TCP connection hangs (no reset) stalls the coordinator tick ~30 s (tick 6->8 over 40 s); sightings and hint relays lost meanwhile. Cause in cluster server or serve, unconfirmed. Regression test from WK-20's decisions file. G-m6/WK-G related.",
+      "withdrawn": "2026-11-11T21:00:24Z"
     },
     {
       "at": "2026-11-11T20:51:07Z",
@@ -7652,7 +7653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T20:51:41Z",
+    "updated": "2026-11-11T21:00:24Z",
     "items": [
       {
         "slot": 1,
@@ -7774,7 +7775,7 @@
     }
   ],
   "heartbeat": "2026-11-11T18:39:05Z",
-  "updated": "2026-11-11T20:51:41Z",
+  "updated": "2026-11-11T21:00:24Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
