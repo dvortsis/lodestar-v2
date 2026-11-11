@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T19:43:51Z",
+  "updated_at": "2026-11-11T19:47:09Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6889,6 +6889,11 @@
       "at": "2026-11-11T19:43:51Z",
       "slice": "CMP-11b",
       "note": "Runner call (\u00a72.26/\u00a72.33, flagged \u00a72.19 via dashboard session): option D. While installer unpinned, Windows version gate accepts CMP-8b's checked range 4.6.0<=v<5.3 (one constant); pin's range replaces it once pinned. Still refuses out-of-range/unreadable before any write. Guided screen shows no SHA-256 while unpinned. Supersedes CMP-11 'refused until pinned' and #705 owner flag 2."
+    },
+    {
+      "at": "2026-11-11T19:47:09Z",
+      "slice": "X-upd-stop-races",
+      "note": "New slice (Opus, small; from #706 self-review): (a) Unix engine.rs: check stop just before `switch` (abort doesn't stop a poll already running on multi-thread runtime); (b) Windows update/windows/check.rs Notifier::spawn loop: `biased;` select with stop first. Add to slices.yaml in next runner PR."
     }
   ],
   "main_health": [
@@ -7622,7 +7627,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T19:43:51Z",
+    "updated": "2026-11-11T19:47:09Z",
     "items": [
       {
         "slot": 1,
@@ -7744,7 +7749,7 @@
     }
   ],
   "heartbeat": "2026-11-11T18:39:05Z",
-  "updated": "2026-11-11T19:43:51Z",
+  "updated": "2026-11-11T19:47:09Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -7780,7 +7785,8 @@
   ],
   "review_queue": [
     "#699 CHANGES @13397e42 relayed (B1 tests L4/L6, I1 link+secure_remove, Windows reparse); then fresh delta+sec review",
-    "#708 PK-guide-3: CHANGES relayed (3 blocking, I1-I5, 13 nits); await fix push \u2192 delta review"
+    "#708 PK-guide-3: CHANGES relayed (3 blocking, I1-I5, 13 nits); await fix push \u2192 delta review",
+    "#706 X-win-upd-stop-wait 61147fc8: fresh Opus review running; revert of X-win-upd-window decisions edit requested"
   ],
   "merged": [
     {
