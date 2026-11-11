@@ -3,6 +3,7 @@
 // route chunks never count against the search route.
 import { existsSync, readFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
+import { componentIds } from './scripts/event-names.mjs';
 import { checkFirstLoad, modulesIn, preloadedJs } from './scripts/first-load.mjs';
 import { requireMeasuredJs, routeFiles } from './scripts/size-entries.mjs';
 
@@ -387,7 +388,9 @@ const settingsLoggingFiles = [
 	/features\/settings\/logging\/outputs\.ts$/
 ];
 // The events' plain names and help (S-logs-3): their own chunk, loaded after the event list shows.
-const settingsLoggingNames = [/features\/settings\/logging\/event-names\.ts$/];
+// One chunk per component (`logging/event-names/<component>.ts`, scripts/event-names.mjs), so a new
+// event grows one small chunk. The loader map `event-names.ts` is in the event list's own chunk.
+const settingsLoggingNames = [/features\/settings\/logging\/event-names\/[a-z_]+\.ts$/];
 const logsLater = [/features\/settings\/logging\/(privacy|catalog\.svelte)\.ts$/];
 // The registry's purpose lines and notices (`Screen.about`, X-settings-registry-slim): one small
 // module per registry file, loaded when a generated screen opens (so "Settings section" counts them)
@@ -445,9 +448,35 @@ const settingsLoggingLazy = requireMeasuredJs(
 			!onDemandOf('/settings/[section]', settingsLoggingNames).includes(f)
 	)
 );
-const settingsLoggingNamesLazy = requireMeasuredJs(
-	'Settings logging event names (on demand)',
-	onDemandOf('/settings/[section]', settingsLoggingNames)
+// Each component's chunk is gated on its own (the budgets are in `eventNamesLimits`, below).
+const eventNamesComponents = componentIds(
+	readFileSync('../crates/lodestar/src/settings/golden/logs_catalog.txt', 'utf8')
+);
+// Gzipped, measured + ~10% rounded up (X-event-names-split, 2026-11-11). A new component needs a line.
+const eventNamesLimits = {
+	system: '6230 B',
+	auth: '1460 B',
+	dht: '900 B',
+	filters: '1590 B',
+	search: '2140 B',
+	sources: '210 B',
+	workers: '3780 B',
+	api: '390 B',
+	companions: '950 B',
+	integrations: '840 B',
+	pipeline: '2480 B',
+	fetch: '340 B'
+};
+const settingsLoggingNamesLazy = Object.fromEntries(
+	eventNamesComponents.map((c) => [
+		c,
+		requireMeasuredJs(
+			`Settings logging event names, ${c} (on demand)`,
+			onDemandOf('/settings/[section]', [
+				new RegExp(`features/settings/logging/event-names/${c}\\.ts$`)
+			])
+		)
+	])
 );
 const settingsLoggingFilesLazy = requireMeasuredJs(
 	'Settings logging files and preview (on demand)',
@@ -1251,11 +1280,21 @@ export default [
 	// 0.70 KB; limit = measured + 10%.
 	entry('Settings logging output messages (on demand)', settingsLoggingOutputMap, '0.77 KB'),
 	// runner §2.26, 2026-11-01: CI measures +3 B over local (build variance); main red on 7ea22803 at 17,103 B
-	entry('Settings logging parts (on demand)', settingsLoggingLazy, '17.15 KB'),
-	// S-logs-3: every event's plain name and help, en and zh. Measured 15,056 B at X-wk-busy-retry
-	// (#637, with main's companion events); limit = measured + 10% (runner §2.26, 2026-11-08). It
-	// covers CMP-6's one event too; a split by component is the runner's follow-up.
-	entry('Settings logging event names (on demand)', settingsLoggingNamesLazy, '16.6 KB'),
+	// X-event-names-split: +0.26 KB for the loader map of the per-component name chunks (runner
+	// §2.26, 2026-11-11); measured 17.41 KB.
+	entry('Settings logging parts (on demand)', settingsLoggingLazy, '17.45 KB'),
+	// S-logs-3, X-event-names-split: every event's plain name and help, en and zh, one chunk per
+	// component (was one 16.6 KB chunk). A new event grows one chunk; a new component needs a budget
+	// here, or the build of this file fails. Limits = measured + ~10% (runner §2.26, 2026-11-11).
+	...eventNamesComponents.map((c) => {
+		const limit = eventNamesLimits[c];
+		if (!limit) throw new Error(`size-limit: no budget for the ${c} event names; add it`);
+		return entry(
+			`Settings logging event names, ${c} (on demand)`,
+			settingsLoggingNamesLazy[c],
+			limit
+		);
+	}),
 	// S-logs-2b: the outputs, the preview, the log files and the Danger zone, measured 9.81 KB.
 	entry('Settings logging files and preview (on demand)', settingsLoggingFilesLazy, '10.8 KB'),
 	// Each hand-built screen's first view (the route without the form, plus its body), against the
