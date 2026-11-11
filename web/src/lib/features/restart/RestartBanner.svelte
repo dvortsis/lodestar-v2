@@ -23,6 +23,16 @@
 	let confirming = $state(false);
 
 	const pending = $derived(restart.pending);
+	const countText = $derived(
+		pending
+			? (pending.fields.length === 1 ? m.restart_banner_one : m.restart_banner)({
+					count: pending.fields.length
+				})
+			: ''
+	);
+	// The banner arrives as one unit, with the live region empty until the next frame: a text that
+	// is inserted together with its region is not announced by every screen reader.
+	let ready = $state(false);
 	const awaiting = $derived(restart.system?.address_change?.state === 'awaiting_confirmation');
 
 	// Where `/system` was last asked: it is asked on a Settings screen's first view, on focus, on
@@ -33,11 +43,13 @@
 		void restart.refresh();
 	}
 	onMount(() => {
+		const frame = requestAnimationFrame(() => (ready = true));
 		const every = setInterval(() => {
 			if (!document.hidden && Date.now() - asked >= REFRESH_MS) refresh();
 		}, 1_000);
 		window.addEventListener('focus', refresh);
 		return () => {
+			cancelAnimationFrame(frame);
 			clearInterval(every);
 			window.removeEventListener('focus', refresh);
 		};
@@ -75,17 +87,14 @@
 
 {#if pending}
 	<div class="flex flex-col gap-3" data-testid="restart-banner">
+		<!-- Announced politely: a live region that is already in the page when its text arrives -->
+		<p class="sr-only" role="status" data-testid="restart-announce">{ready ? countText : ''}</p>
 		<!-- Plain markup on purpose: this is all of the feature a Settings first view carries. -->
 		<div
-			role="status"
 			class="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-box border border-info bg-base-100 p-3"
 		>
 			<span class="min-w-0 flex-1">
-				<span data-testid="restart-count"
-					>{(pending.fields.length === 1 ? m.restart_banner_one : m.restart_banner)({
-						count: pending.fields.length
-					})}</span
-				>
+				<span data-testid="restart-count">{countText}</span>
 				{#if !pending.canRestart && pending.hint}
 					<span data-testid="restart-hint"> · {pending.hint}</span>
 				{/if}
