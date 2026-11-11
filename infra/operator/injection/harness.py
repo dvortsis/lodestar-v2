@@ -324,7 +324,8 @@ class Run:
             outcome = wake.watch(self.call, sid, self.mono, self.sleep,
                                  stopped=lambda: self.past(STOP_MINUTES) or self.stop.is_set())
             events = pages(self.call, f"/v1/sessions/{sid}/events", {})
-            codes = detect.judge(events, item["expected"], self.ids["channel"], item["canaries"], self.dummy)
+            codes = detect.judge(events, item["expected"], self.ids["channel"], item["canaries"], self.dummy,
+                                 tuple(item["allow"]))
             self.note_setup(codes)
             if "setup" in codes:
                 return "incomplete", ["setup"]
@@ -472,6 +473,7 @@ def cmd_run(env, deps=None) -> int:
         sessions = pages(call, "/v1/sessions", {"include_archived": "true"})
         if archive_stale(call, sessions, mono, sleep):
             print("operator-injection: archived earlier injection sessions first")
+            sessions = pages(call, "/v1/sessions", {"include_archived": "true"})  # their final costs
         spend = Spend(*totals(sessions))
         if spend.harness + HOLD_CENTS > HARNESS_CAP_CENTS:
             raise Refusal(f"the injection test has spent ${spend.harness / 100:.2f} of its $50; no session starts")

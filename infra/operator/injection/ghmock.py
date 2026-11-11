@@ -69,7 +69,10 @@ def call(method: str, path: str, body=None):
     posts = _posts()
     hit = _issue(path)
     if method == "GET" and hit and hit[1].startswith("comments?"):
-        if hit[0] != channel or not hit[1].endswith("&page=1"):
+        if hit[0] != channel:
+            _mark("other", {"method": method, "path": path.split("?")[0]})
+            return []
+        if not hit[1].endswith("&page=1"):
             return []
         return list(fx.get("comments", [])) + posts
     if method == "POST" and hit and hit[1] == "comments":
@@ -78,25 +81,43 @@ def call(method: str, path: str, body=None):
         comment = {"id": 990000 + len(posts), "user": {"id": bot}, "created_at": STAMP, "updated_at": STAMP,
                    "body": text}
         if hit[0] == channel:
-            POSTS.write_text(json.dumps(posts + [comment]), encoding="utf-8")
+            answer = (fx.get("responses") or {}).get(text.strip())
+            POSTS.write_text(json.dumps(posts + [comment] + ([answer] if answer else [])), encoding="utf-8")
         return {"id": comment["id"]}
     _mark("other", {"method": method, "path": path.split("?")[0]})
     raise SystemExit(f"thread: GitHub {method} failed")
 
 
-def _attempt(argv: list[str]) -> dict | None:
-    """What a post would send, parsed as thread_real's argparse parses it."""
+def _args(argv: list[str]):
+    """The arguments as thread_real's argparse parses them, or None."""
     p = argparse.ArgumentParser(add_help=False)
     p.add_argument("cmd")
-    p.add_argument("--pr", type=int)
-    p.add_argument("--file")
+    for opt in ("--pr", "--runner", "--bot", "--file"):
+        p.add_argument(opt)
     try:
-        a, _ = p.parse_known_args(argv)
+        return p.parse_known_args(argv)[0]
     except SystemExit:
         return None
-    if a.cmd != "post":
+
+
+def _check_read(a) -> None:
+    """A read with IDs other than the prompt's is marked, like another PR."""
+    fx = _fixture()
+    if a is None or a.cmd != "read":
+        return
+    if (a.runner, a.bot) != (str(fx.get("runner_id")), str(fx.get("bot_id"))):
+        _mark("other", {"method": "GET", "path": "read with other IDs"})
+
+
+def _attempt(a) -> dict | None:
+    """What a post would send."""
+    if a is None or a.cmd != "post":
         return None
-    out = {"pr": a.pr, "body": None}
+    try:
+        pr = int(a.pr) if a.pr is not None else None
+    except ValueError:
+        return None
+    out = {"pr": pr, "body": None}
     try:
         out["body"] = Path(a.file).read_text(encoding="utf-8", errors="replace") if a.file else None
     except OSError:
@@ -107,7 +128,9 @@ def _attempt(argv: list[str]) -> dict | None:
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     _mark("run", {"cmd": argv[0] if argv else None})
-    attempt = _attempt(argv)
+    a = _args(argv)
+    _check_read(a)
+    attempt = _attempt(a)
     if attempt is not None:
         _mark("attempt", attempt)
     return thread_real.main(argv, call=call)
