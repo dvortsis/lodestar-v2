@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T19:52:00Z",
+  "updated_at": "2026-11-11T20:05:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6854,6 +6854,11 @@
       "for": "runner PR (slices.yaml)",
       "from": "PK-guide-3 #708 (2026-11-11)",
       "note": "New slices found by PK-guide-3, all checked on main: (1) X-restart-banner (sonnet, web): \u00a710.10.6 restart banner + Restart now dialog + Restarting\u2026 /healthz poll; none in web/src; G-m6 dep. (2) X-win-upd-history (opus): Windows install history (check.rs:1090 history: vec![]) and the rollback notice in Updates; G-m6 dep. (3) X-win-upd-manual-rollback (opus): manual Roll back is not_built_yet on Windows. (4) X-win-upd-first-rollback (opus, /security-review): no rollback for the first in-app update after a hand-installed MSI (rollback.rs:725, helper caches only MSIs it installed); accepted for G-m6 with backup guidance; owner \u00a72.19 flag. Each updates its PK-guide-3 \"planned\" marks in docs/user/04."
+    },
+    {
+      "for": "CMP-11b",
+      "from": "rv-705-3544233f (2026-11-11)",
+      "note": "Must-dos before registering the gate: I1 UNC loopback refusal misses octal (0177.), hex (0x7f, 0x7f000001) and .ipv6-literal.net spellings (windows_qbittorrent.rs:682-694); add to windows_paths_refuse_hostile_inputs and correct decisions I1. I2 tie SavePath kind to platform (gate refuses Host, ungated adapter refuses Windows). I3 manager refusal on Windows is awaiting_pin/guided_only, not no_platform: UI maps both to guided install. Nits: configurator(id) None for non-qbittorrent; Windows.old and Users\\Default; last_refusal shared across calls; I5 size; mm(found) twice at :139. Order: CMP-13 pin needed before Windows config works."
     }
   ],
   "main_health": [
@@ -7587,15 +7592,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T19:52:00Z",
+    "updated": "2026-11-11T20:05:00Z",
     "items": [
       {
         "slot": 1,
         "slice": "CMP-11",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAaZaaUjzMSyGVFdTA: #705 open @3544233f, fallback (b), CI running; CMP-11b logged",
-        "since": "2026-11-11T14:10:36Z"
+        "doing": "CMP-11 merged (#705); CMP-11b next in same session after #692",
+        "since": "2026-11-11T20:05:00Z"
       },
       {
         "slot": 2,
@@ -7709,7 +7714,7 @@
     }
   ],
   "heartbeat": "2026-11-11T18:39:05Z",
-  "updated": "2026-11-11T19:52:00Z",
+  "updated": "2026-11-11T20:05:00Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -7746,8 +7751,7 @@
   "review_queue": [
     "#699 CHANGES @13397e42 relayed (B1 tests L4/L6, I1 link+secure_remove, Windows reparse); then fresh delta+sec review",
     "#692 delta review running @cfc09faa",
-    "#708 PK-guide-3 1443a549: fresh Opus review running",
-    "#705 CMP-11 3544233f: fresh Opus review running"
+    "#708 PK-guide-3 1443a549: fresh Opus review running"
   ],
   "merged": [
     {
@@ -7869,6 +7873,12 @@
       "slice": "X-cmp9b-catch",
       "sha": "5cd5ed176639f5a4f21452c40893915643c99d1a",
       "at": "2026-11-11T19:40:00Z"
+    },
+    {
+      "pr": 705,
+      "slice": "CMP-11",
+      "sha": "47f9c300fba6a2c08f6b34fc86bfb96d04bd4f24",
+      "at": "2026-11-11T20:05:00Z"
     }
   ]
 }
