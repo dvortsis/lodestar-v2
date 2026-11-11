@@ -567,6 +567,9 @@ fn file_name(now: i64, ext: &str) -> String {
     )
 }
 
+/// 9999-12-31T23:59:59Z, the last time [`rfc3339`] writes in four digits.
+const MAX_RFC3339: i64 = 253_402_300_799;
+
 /// `YYYY-MM-DDTHH:MM:SSZ`, as Go's `time.Time` reads it.
 fn rfc3339(t: i64) -> String {
     let (y, m, d, secs) = civil(t);
@@ -957,7 +960,11 @@ fn bitmagnet_line(out: &mut Vec<u8>, row: &TorrentRow, e: Option<&Enriched>) -> 
         name,
         size: row.size,
         source: BITMAGNET_SOURCE,
-        published_at: (row.discovered_at > 0).then(|| rfc3339(row.discovered_at)),
+        // Go's RFC 3339 parser takes four-digit years only, and one bad
+        // line fails the whole import: outside them, no time.
+        published_at: (1..=MAX_RFC3339)
+            .contains(&row.discovered_at)
+            .then(|| rfc3339(row.discovered_at)),
         content_type: e
             .and_then(|e| lodestar_classify::ContentType::from_code(e.content_type))
             .and_then(bitmagnet_type),
@@ -1235,6 +1242,9 @@ mod tests {
         );
         // No plausible time: left out, so bitmagnet stores none.
         assert!(!line("Plain", 0).contains("publishedAt"));
+        assert!(!line("Plain", -1).contains("publishedAt"));
+        assert!(!line("Plain", MAX_RFC3339 + 1).contains("publishedAt"));
+        assert!(line("Plain", MAX_RFC3339).contains("\"9999-12-31T23:59:59Z\""));
     }
 
     #[test]
