@@ -6795,7 +6795,8 @@
     "2026-11-11T14:12Z: WK-11 split approved: WK-11b lease reconciliation (worker lists tokens on count mismatch, coordinator returns unlisted for re-grant, counts drift; Opus core, concurrency, deps [WK-11], owns crates/cluster/src/proto.rs, server.rs, leases.rs + worker hook + tests); WK-11 counts drift only (worker_lease_drift). Next runner PR: add WK-11b entry, WK-G deps += WK-11b",
     "2026-11-11T14:12Z: CMP-9b brief written (was missing); Set up opens CMP-9a InstallDialog in place (runner \u00a72.26 UX call); mount lines in SourceRow/SourcesScreen now (SRC-15b merged #552)",
     "2026-11-11T14:16Z: CMP-11 approved: (a) version gate registered cfg(windows), fail closed; companion_wiring_guided_tests.rs shared edit AFTER #692 merges (tell CMP-11 session_01MMjhnAaZaaUjzMSyGVFdTA when #692 merges); configure/qbittorrent.rs signed_in_version helper; catalogue installer pin null, no checksum claim. Next runner PR: CMP-11 owns += those; CMP-13 notes += per-artifact release folder for installers (qBittorrent Windows installer on SourceForge/FossHub, never a fetch host)",
-    "2026-11-11T14:16Z: disk full on runner container; freed ~12G (own target, stale review targets tgt-rv639/640, tgt630, xfpr-target, plan-target, plan-wt worktree, node-compile-cache). Reviewers must rm their target dirs when done"
+    "2026-11-11T14:16Z: disk full on runner container; freed ~12G (own target, stale review targets tgt-rv639/640, tgt630, xfpr-target, plan-target, plan-wt worktree, node-compile-cache). Reviewers must rm their target dirs when done",
+    "2026-11-11T14:26Z: #687 PK-exc fresh Opus MERGE at dc488d45 (rv-687-dc488d45); one round requested: Important Windows flake (probe_host reads process-wide socket count in parallel) + 9p wording + netsh 20 s deadline + PR body size; runner self-checks delta then merges. digest.rs alert() arms approved retroactively; next runner PR: PK-exc owns += crates/api/src/digest.rs"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7575,7 +7576,7 @@
         "slice": "PK-exc",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn9TG1nRjKEifmj8fmd: Insights exceptions data_filesystem + ephemeral_ports (Opus); after #675 merged 02c598a5",
+        "doing": "session_01MMjhn9TG1nRjKEifmj8fmd: #687 MERGE verdict; fixing Windows flake + nits, runner self-check then merge",
         "since": "2026-11-11T10:55:51Z"
       },
       {
