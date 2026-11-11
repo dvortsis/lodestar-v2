@@ -209,6 +209,15 @@ fn run() -> ExitCode {
                 };
             #[cfg(not(unix))]
             let supervised = None;
+            // The portable build's update (PK-win-portable-upd): any step
+            // left to finish, before anything opens the store.
+            #[cfg(windows)]
+            let probation = match update::windows::portable::serve::before(&config) {
+                Ok(p) => p,
+                Err(code) => return code,
+            };
+            #[cfg(not(windows))]
+            let probation = false;
             fsdetect::warn_at_start(&config.data_dir);
             let runtime = match tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -220,7 +229,7 @@ fn run() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            let served = runtime.block_on(serve_as(config, supervised));
+            let served = runtime.block_on(serve_as(config, supervised, probation));
             // A blocking task still running (a stuck read, a download's
             // reader) can't hold the exit.
             runtime.shutdown_timeout(services::RUNTIME_GRACE);
@@ -246,11 +255,16 @@ type Supervised = Option<std::convert::Infallible>;
 
 /// An unsupervised run (`serve --fixture`, Windows).
 async fn serve(config: Config) -> Result<(), BoxError> {
-    serve_as(config, None).await.map(|_| ())
+    serve_as(config, None, false).await.map(|_| ())
 }
 
 /// `Some(code)` to exit with a reserved code for the supervisor.
-async fn serve_as(config: Config, child: Supervised) -> Result<Option<u8>, BoxError> {
+/// `probation`: the Windows portable build's new version, on probation.
+async fn serve_as(
+    config: Config,
+    child: Supervised,
+    probation: bool,
+) -> Result<Option<u8>, BoxError> {
     // Stop on a signal, or restart when asked (`POST /system/restart`):
     // both take the same graceful shutdown. A signal wins, even during a
     // restart's shutdown.
@@ -267,12 +281,37 @@ async fn serve_as(config: Config, child: Supervised) -> Result<Option<u8>, BoxEr
             () = restart.requested() => {}
         }
     };
-    let services = Services::start(&config).await?;
+    let services = match Services::start(&config).await {
+        Ok(s) => s,
+        Err(e) => {
+            #[cfg(windows)]
+            if probation {
+                if let Some(code) = update::windows::portable::serve::start_failed(&config.data_dir)
+                {
+                    eprintln!("lodestar serve: {e}; the previous version is starting instead");
+                    return Ok(Some(code));
+                }
+            }
+            return Err(e);
+        }
+    };
     #[cfg(unix)]
     if let Some(c) = child {
         c.after_start(services.probe(), update::testing::limits().deadline);
     }
+    #[cfg(windows)]
+    if probation {
+        update::windows::portable::serve::after_start(
+            config.data_dir.clone(),
+            services.portable_probe(),
+        );
+    }
     services.run(stop).await?;
+    #[cfg(windows)]
+    if probation {
+        update::windows::portable::serve::stopped(&config.data_dir);
+    }
+    let _ = probation;
     #[cfg(unix)]
     if let Some(c) = child {
         c.record_stored();

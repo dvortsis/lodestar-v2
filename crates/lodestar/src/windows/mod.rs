@@ -31,6 +31,9 @@ use std::process::ExitCode;
 pub fn hook() -> Option<ExitCode> {
     #[cfg(windows)]
     {
+        // This program's path, before an update can rename the running
+        // file aside: the successor is always started from it.
+        relaunch::record_program(std::env::current_exe());
         // A copy started by Restart now waits for the old one to hand
         // over and exit, or ends here if it doesn't.
         if let Some(code) = relaunch::wait_if_successor() {
@@ -146,6 +149,37 @@ pub mod relaunch {
     /// The longest token line read.
     const MAX_LINE: usize = 128;
 
+    /// This program's path as it was when the process started
+    /// ([`record_program`], first thing in [`super::hook`]): the portable
+    /// update renames the running file aside and puts the new program at
+    /// this path, and the successor is started from the path, never from
+    /// wherever the running image now is.
+    static PROGRAM: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+
+    /// Records [`program`]; only the first call counts.
+    pub fn record_program(exe: std::io::Result<std::path::PathBuf>) {
+        record_in(&PROGRAM, exe);
+    }
+
+    pub(super) fn record_in(
+        cell: &std::sync::OnceLock<Option<std::path::PathBuf>>,
+        exe: std::io::Result<std::path::PathBuf>,
+    ) -> Option<std::path::PathBuf> {
+        cell.get_or_init(|| exe.ok()).clone()
+    }
+
+    /// The program the successor is started from: the recorded path, or
+    /// `current_exe` when nothing was recorded (a test).
+    pub fn program() -> std::io::Result<std::path::PathBuf> {
+        match PROGRAM.get() {
+            Some(Some(p)) => Ok(p.clone()),
+            Some(None) => Err(std::io::Error::other(
+                "this program's path couldn't be read",
+            )),
+            None => std::env::current_exe(),
+        }
+    }
+
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Handover {
         /// Handed over: start.
@@ -260,7 +294,7 @@ pub mod relaunch {
         }
 
         fn spawn() -> std::io::Result<(Child, String)> {
-            let exe = std::env::current_exe()?;
+            let exe = super::program()?;
             let token = super::token();
             let child = super::command(&exe, std::env::args_os().skip(1), &token).spawn()?;
             Ok((child, token))
@@ -391,6 +425,41 @@ mod tests {
         tx.send(Some(b"t\r\n".to_vec())).unwrap();
         tx.send(None).unwrap();
         assert_eq!(await_handover(input, "t", LONG, LONG), Handover::Go);
+    }
+
+    #[test]
+    fn the_successor_is_started_from_the_path_recorded_at_start() {
+        let cell = std::sync::OnceLock::new();
+        let started = std::path::PathBuf::from(r"C:\app\lodestar.exe");
+        assert_eq!(
+            super::relaunch::record_in(&cell, Ok(started.clone())),
+            Some(started.clone())
+        );
+        // The running file renamed aside afterwards changes nothing.
+        let renamed = std::path::PathBuf::from(r"C:\app\data\bin\previous.exe");
+        assert_eq!(
+            super::relaunch::record_in(&cell, Ok(renamed)),
+            Some(started)
+        );
+        // A path that couldn't be read is never guessed later.
+        let unread = std::sync::OnceLock::new();
+        assert_eq!(
+            super::relaunch::record_in(&unread, Err(std::io::Error::other("no"))),
+            None
+        );
+    }
+
+    /// Every tool the updater runs (the ACL checks' PowerShell, `whoami`)
+    /// is started without the relaunch token (PK-win-restart's review).
+    #[cfg(windows)]
+    #[test]
+    fn system_tools_never_get_the_relaunch_token() {
+        let removed = |cmd: std::process::Command| {
+            cmd.get_envs()
+                .any(|(k, v)| k == std::ffi::OsStr::new(MARKER) && v.is_none())
+        };
+        assert!(removed(super::system32_command("whoami.exe").unwrap()));
+        assert!(removed(super::powershell_command().unwrap()));
     }
 
     #[test]

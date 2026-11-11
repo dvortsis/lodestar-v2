@@ -17,10 +17,11 @@
 //!   an unknown kind takes none.
 //! - **Install** (the MSI, PK-win-upd-2): `POST /updates/install` with
 //!   `when: now` downloads the MSI and hands it to the update helper
-//!   ([`super::msi::hand_over`], [`super::helper`]). The portable build's
-//!   comes with PK-win-portable-upd, Roll back with PK-win-upd-3 (both
-//!   `not_built_yet`). Nothing installs automatically: the policy treats
-//!   `auto` as Check and notify.
+//!   ([`super::msi::hand_over`], [`super::helper`]). The portable build
+//!   downloads its zip and installs it itself, then restarts into the new
+//!   program ([`super::portable`]). Roll back comes with PK-win-upd-3
+//!   (`not_built_yet`). Nothing installs automatically: the policy
+//!   treats `auto` as Check and notify.
 //! - **The one writer:** the notifier holds `<data>\bin\.lock` for its
 //!   whole life. If another process holds it, nothing is fetched or
 //!   written (`bin_unavailable`).
@@ -333,7 +334,13 @@ pub struct Seams {
     pub keys: Keys,
     pub fault: Fault,
     pub installer: Option<super::msi::Installer>,
+    /// The portable build's own install (PK-win-portable-upd); `None`:
+    /// not offered.
+    pub portable: Option<Portable>,
 }
+
+/// The portable install's system side.
+pub type Portable = Arc<dyn super::portable::Sys + Send + Sync>;
 
 /// What the last check found.
 #[derive(Default)]
@@ -400,6 +407,7 @@ struct Inner {
     keys: Keys,
     fault: Fault,
     installer: Option<super::msi::Installer>,
+    portable: Option<Portable>,
     /// The version being downloaded for the helper.
     installing: Mutex<Option<Version>>,
 }
@@ -426,6 +434,7 @@ impl Notifier {
                 keys: Box::new(Embedded::builtin),
                 fault: Box::new(|_| Ok(())),
                 installer: installer(),
+                portable: portable(),
             },
         )
     }
@@ -441,6 +450,7 @@ impl Notifier {
             keys,
             fault,
             installer,
+            portable,
         }: Seams,
     ) -> Notifier {
         let n = Notifier {
@@ -459,6 +469,7 @@ impl Notifier {
                 keys,
                 fault,
                 installer,
+                portable,
                 installing: Mutex::new(None),
             }),
         };
@@ -741,8 +752,9 @@ impl Notifier {
     }
 
     /// Why Install isn't offered, or `None` when it is: the MSI, through
-    /// the update helper (PK-win-upd-2), from the checked data folder. The
-    /// portable build's comes with PK-win-portable-upd.
+    /// the update helper (PK-win-upd-2), from the checked data folder; the
+    /// portable build through its own steps, with a private `<data>\bin`
+    /// ([`super::portable::cannot_install`]).
     fn cannot_install(&self, skipped_ok: bool) -> Option<&'static str> {
         let ctx = &self.inner.ctx;
         match self.incapable(skipped_ok) {
@@ -752,7 +764,15 @@ impl Notifier {
         match ctx.kind {
             InstallKind::Msi => {}
             InstallKind::Unknown => return Some(NoArtifact::UnknownKind.code()),
-            InstallKind::Portable => return Some(NOT_BUILT_YET.code()),
+            InstallKind::Portable => {
+                let (Some(sys), Some(_)) = (&self.inner.portable, &self.inner.installer) else {
+                    return Some(NOT_BUILT_YET.code());
+                };
+                let Some(bin) = self.bin() else {
+                    return Some("bin_unavailable");
+                };
+                return super::portable::cannot_install(&**sys, &ctx.data_dir, &bin);
+            }
         }
         if !ctx.checked_data {
             return Some("data_folder_unchecked");
@@ -1009,7 +1029,11 @@ impl Notifier {
         let target = ctx.target.ok_or(UpdatesError::InstallUnavailable(
             NoArtifact::NoTarget.code(),
         ))?;
-        let pin = lodestar_update::install(c, v, target, ArtifactKind::Msi)
+        let kind = match ctx.kind {
+            InstallKind::Portable => ArtifactKind::Portable,
+            _ => ArtifactKind::Msi,
+        };
+        let pin = lodestar_update::install(c, v, target, kind)
             .map_err(|e| UpdatesError::InstallUnavailable(e.code()))?;
         Ok((pin, envelope.clone(), c.manifest.channel))
     }
@@ -1062,6 +1086,20 @@ impl Notifier {
         let part = crate::update::download::download(&*installer.source, &bin, pin, &mut |_| {})
             .await
             .map_err(crate::update::download::DownloadError::code)?;
+        if let (InstallKind::Portable, Some(sys)) = (self.inner.ctx.kind, &self.inner.portable) {
+            // The new program in place, then this run restarts into it
+            // (Restart now's relaunch), or the old one goes back.
+            let (sys, data, pin) = (sys.clone(), self.inner.ctx.data_dir.clone(), pin.clone());
+            return blocking(move || {
+                let db = data.join("lodestar.db");
+                super::portable::install(&*sys, &data, &db, &bin, &part, &pin)?;
+                sys.restart().map_err(|_| {
+                    super::portable::abandon(&*sys, &data);
+                    "restart_unavailable"
+                })
+            })
+            .await;
+        }
         let (data, w) = (self.inner.ctx.data_dir.clone(), v.clone());
         blocking(move || super::msi::hand_over(&data, &part, &envelope, &w, channel))
             .await
@@ -1133,6 +1171,17 @@ fn installer() -> Option<super::msi::Installer> {
 
 #[cfg(not(windows))]
 fn installer() -> Option<super::msi::Installer> {
+    None
+}
+
+/// The portable build's install on Windows (used only for that kind).
+#[cfg(windows)]
+fn portable() -> Option<Portable> {
+    Some(Arc::new(super::portable::System))
+}
+
+#[cfg(not(windows))]
+fn portable() -> Option<Portable> {
     None
 }
 
@@ -1489,6 +1538,10 @@ mod tests {
         installer: bool,
         downloads: Arc<crate::update::download::tests::Fake>,
         started: Arc<std::sync::atomic::AtomicUsize>,
+        /// The portable build's install, and its data folder when it
+        /// isn't `dir`.
+        portable: Option<Portable>,
+        data: Option<PathBuf>,
     }
 
     impl Env {
@@ -1507,6 +1560,8 @@ mod tests {
                 installer: false,
                 downloads: Arc::default(),
                 started: Arc::default(),
+                portable: None,
+                data: None,
                 n: None,
             };
             e.n = Some(e.open(kind));
@@ -1527,7 +1582,10 @@ mod tests {
             let fail = self.fail.clone();
             Notifier::with(
                 Context {
-                    data_dir: self.dir.path().to_path_buf(),
+                    data_dir: self
+                        .data
+                        .clone()
+                        .unwrap_or_else(|| self.dir.path().to_path_buf()),
                     running: Version::new(0, 5, 3),
                     repository: "https://github.com/dvortsis/lodestar-v2".into(),
                     dev: false,
@@ -1556,6 +1614,7 @@ mod tests {
                             }),
                         }
                     }),
+                    portable: self.portable.clone(),
                 },
             )
         }
@@ -2001,6 +2060,108 @@ mod tests {
         assert!(
             e.states()
                 .contains(&(UpdatesState::Installing, Some("0.5.4".into())))
+        );
+    }
+
+    /// The portable install's system side, for the notifier's tests.
+    struct PortableSys {
+        program: PathBuf,
+        private: std::sync::atomic::AtomicBool,
+        restarts: std::sync::atomic::AtomicUsize,
+    }
+
+    impl super::super::portable::Sys for PortableSys {
+        fn program(&self) -> PathBuf {
+            self.program.clone()
+        }
+        fn version(&self) -> String {
+            "0.5.3".into()
+        }
+        fn bin_private(&self, _: &Path) -> Result<(), String> {
+            if self.private.load(std::sync::atomic::Ordering::SeqCst) {
+                Ok(())
+            } else {
+                Err("shared".into())
+            }
+        }
+        fn create_bin(&self, dir: &Path) -> std::io::Result<()> {
+            std::fs::create_dir(dir)
+        }
+        fn restart(&self) -> std::io::Result<()> {
+            self.restarts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    /// The portable build: Install offered only with a private `bin`, the
+    /// zip downloaded and handed to its own steps, which refuse a zip that
+    /// isn't the release's; nothing restarts and the program stays.
+    #[tokio::test]
+    async fn the_portable_build_installs_through_its_own_steps() {
+        let mut e = Env::new(Mode::Notify, InstallKind::Portable);
+        let app = e.dir.path().join("app");
+        std::fs::create_dir_all(app.join("data")).unwrap();
+        std::fs::write(app.join("lodestar.exe"), b"old").unwrap();
+        let sys = Arc::new(PortableSys {
+            program: app.join("lodestar.exe"),
+            private: true.into(),
+            restarts: Default::default(),
+        });
+        e.installer = true;
+        e.portable = Some(sys.clone());
+        e.data = Some(app.join("data"));
+        e.n = None;
+        // While another process holds `<data>\bin\.lock`, it isn't offered.
+        {
+            let other = crate::update::layout::Bin::open(&app.join("data")).unwrap();
+            let held = other.lock().unwrap().unwrap();
+            let busy = e.open(InstallKind::Portable);
+            let reason =
+                serde_json::to_value(busy.status()).unwrap()["capability"]["reason"].clone();
+            assert_eq!(reason, "bin_unavailable");
+            drop(busy);
+            drop(held);
+        }
+        e.n = Some(e.open(InstallKind::Portable));
+        e.serve(Channel::Stable, vec![release_with("0.5.5", &["portable"])]);
+        let url = "https://github.com/dvortsis/lodestar-v2/releases/download/v0.5.5/lodestar.zip";
+        e.downloads.serve(url, 200, None, b"x");
+        let status = e.check().await;
+        assert_eq!(status["capability"]["reason"], Value::Null, "{status}");
+        sys.private
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(e.status()["capability"]["reason"], "bin_not_private");
+        let refused = e
+            .n()
+            .install_request("0.5.5".into(), InstallWhen::Now, false)
+            .await;
+        assert!(refused.is_err());
+        sys.private.store(true, std::sync::atomic::Ordering::SeqCst);
+        e.n()
+            .install_request("0.5.5".into(), InstallWhen::Now, false)
+            .await
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let failed = || {
+            lock(&e.events).iter().any(|ev| {
+                ev.state == UpdatesState::Failed && ev.error.as_deref() == Some("zip_refused")
+            })
+        };
+        while !failed() {
+            assert!(Instant::now() < deadline, "no failure: {:?}", e.states());
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(std::fs::read(app.join("lodestar.exe")).unwrap(), b"old");
+        assert!(!app.join("data").join("bin").join("portable.json").exists());
+        assert_eq!(sys.restarts.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(
+            e.downloads
+                .asked
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|u| u.contains("lodestar.zip"))
         );
     }
 
