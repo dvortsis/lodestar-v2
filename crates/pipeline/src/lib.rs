@@ -34,6 +34,7 @@ pub mod requires;
 mod rollups;
 mod setup_hold;
 pub mod source_adult;
+pub mod spool;
 pub mod stages;
 pub mod torrent_cache;
 pub mod unverified;

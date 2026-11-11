@@ -368,6 +368,7 @@ placement:
   - X-win-upd-window
   - X-win-upd-stop-wait
   - X-upd-stop-races
+  - X-upd-stop-early
   - X-restart-banner
   - X-win-upd-history
   - X-win-upd-manual-rollback
@@ -378,6 +379,8 @@ placement:
   - X-restart-required-creds
   - X-event-log-notice
   - X-prowlarr-register
+  - X-prowlarr-register-followups
+  - X-event-log-followups
   - X-flake-portable-restart
   - X-flake-portable-restart-2
   - X-fleet-polish
@@ -537,6 +540,7 @@ placement:
   - UN-4
   - OUT-1
   - OUT-3
+  - D-outputs-guide
   - IRC-2
   - IRC-3
 - ws: ws-m7-gates
@@ -580,6 +584,8 @@ placement:
   - D-companions-guide
   - X-cmp0-polish
   - X-cmp4b-mounts
+  - X-cmp9b-catch
+  - X-cmp13-installer-pins
   - X-macos-pidfile-fifo
 - ws: ws-m6
   match:
@@ -588,6 +594,7 @@ placement:
   - X-pack-static
   - PK-*
   - X-pk-manifest-hardening
+  - X-pk-ui-polish
   - X-updates-api-text
   - X-updates-raw-codes
   - G-m6
