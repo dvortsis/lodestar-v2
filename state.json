@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T20:05:00Z",
+  "updated_at": "2026-11-11T20:15:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6864,6 +6864,11 @@
       "for": "runner PR",
       "from": "X-prowlarr-register (2026-11-11)",
       "note": "docs/plan/2026-11-06-v052-feature-manifest.md G1 row (~559): note that on main the registered set grows with Prowlarr (off, gated) per \u00a72.55; v0.5.2 G1 stays pinned on release/v0.5.2. Test renamed in webhooks_e2e.rs by X-prowlarr-register."
+    },
+    {
+      "for": "X-cmp-handover-followups-2 (or CMP-11b if it touches manager.rs)",
+      "from": "rv-692-cfc09faa (2026-11-11)",
+      "note": "I1 three of four double-log guards untested (manager.rs:1587, :1779, :1959): add count asserts. I2 decisions file: a restart/regenerate whose hand-over hangs leaves the companion stopped until the store answers (manager.rs:1923-1938). N: test N6 fake saved nothing. Also: windows-gnu -D warnings in lodestar-companions has 5 pre-existing errors (unused import, 4 unneeded mut) at c818b432; check whether CI covers it."
     }
   ],
   "main_health": [
@@ -7597,7 +7602,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T20:05:00Z",
+    "updated": "2026-11-11T20:15:00Z",
     "items": [
       {
         "slot": 1,
@@ -7626,11 +7631,12 @@
       },
       {
         "slot": 4,
-        "slice": "X-cmp-handover-followups",
+        "slice": null,
         "role": "build",
-        "agent": "claude",
-        "doing": "#692 CHANGES round (B1 hands_over default+Wiring test, N1 lock after bound, N2/N3/N4/N6); then delta review",
-        "since": "2026-11-11T11:46:21Z"
+        "agent": null,
+        "doing": "idle: #692 merged; next by ladder",
+        "since": "2026-11-11T20:15:00Z",
+        "status": "idle"
       },
       {
         "slot": 5,
@@ -7719,7 +7725,7 @@
     }
   ],
   "heartbeat": "2026-11-11T18:39:05Z",
-  "updated": "2026-11-11T20:05:00Z",
+  "updated": "2026-11-11T20:15:00Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -7755,7 +7761,6 @@
   ],
   "review_queue": [
     "#699 CHANGES @13397e42 relayed (B1 tests L4/L6, I1 link+secure_remove, Windows reparse); then fresh delta+sec review",
-    "#692 delta review running @cfc09faa",
     "#708 PK-guide-3 1443a549: fresh Opus review running"
   ],
   "merged": [
@@ -7884,6 +7889,12 @@
       "slice": "CMP-11",
       "sha": "47f9c300fba6a2c08f6b34fc86bfb96d04bd4f24",
       "at": "2026-11-11T20:05:00Z"
+    },
+    {
+      "pr": 692,
+      "slice": "X-cmp-handover-followups",
+      "sha": "41158c5183a6c3f99169c2a29aa6f00d839c18c3",
+      "at": "2026-11-11T20:15:00Z"
     }
   ]
 }
