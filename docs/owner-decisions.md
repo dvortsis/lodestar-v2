@@ -634,6 +634,10 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
       - **Order:** it lands before X-prowlarr-register, which then adds its section 2 text under the same version 5.
       - **No release in between:** no release is cut between the two. If one has to be, X-prowlarr-register moves to version 6.
 
+56. **Up to twelve sessions at once** (owner, in the runner session, 2026-11-11T21:41Z): "Go up to 12 sessions".
+    - **At most twelve slices at a time in total,** Opus, helper and docs slices alike, replacing §2.54's eight. `runner/slices.yaml` `limits.phase_total` is 12.
+    - Unchanged: filling every slot isn't required, `owns` never overlap, the ladder decides, and the runner runs at most three reviewers at once.
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.
