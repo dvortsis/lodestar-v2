@@ -361,6 +361,7 @@ placement:
   - X-net-redirect-allowlist
   - X-win-refusal-ux
   - X-win-upd-bounds
+  - X-win-upd-1920
   - X-prowlarr-settings
   - X-restart-required-creds
   - X-prowlarr-register
@@ -388,6 +389,8 @@ placement:
   - P-cloud-test-plan
   - P-cloud-operator
   - OP-*
+  - X-op4-polish
+  - X-tripwire-reviews-lookback
 - ws: ws-cut
   match:
   - CR-COL
