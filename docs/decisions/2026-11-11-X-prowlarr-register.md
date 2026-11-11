@@ -17,4 +17,5 @@
 - **The binary test from 9e7285e5 is back** (`consent_gate.rs`, `prowlarr_is_registered_off_and_its_settings_save`), unchanged. It checks that the plugin is registered and off, that hostile addresses are refused without echoing them, and that the key is never echoed, logged or stored unsealed. It also checks that the gate refuses every enable, and that saved settings apply at the next start.
 - **Paths beyond the brief's list:**
   - `crates/lodestar/tests/consent_gate.rs`, which the brief's item 4 brings back.
+  - `crates/lodestar/tests/webhooks_e2e.rs` (the runner's call, a shared test-only edit). The v0.5.2 manifest's G1 test pinned the registered set to three. It's now `the_binary_registers_only_its_four_sources`: Prowlarr is added, off, Account class and still needing its key. G1 itself stays pinned on `release/v0.5.2`, and the runner notes this in the manifest document.
   - `docs/legal/README.md`'s Event Log row now names the .NET `Diagnostics.EventLog`/`WriteEntry` patterns, which the test has checked since #702 (the runner's rv-702 N4).
