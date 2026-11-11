@@ -350,12 +350,15 @@ struct Opts {
     /// No `TorznabAdult` extension at all.
     no_adult_extension: bool,
     unverified: Option<&'static str>,
+    /// The index is built without the torrents' flags and Adult
+    /// corrections, so only the stored rows say what's left out.
+    stale_index: bool,
 }
 
-fn fixture(ts: &[T], o: Opts) -> Fixture {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("t.db");
-    let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+/// Stores and classifies `ts` (ids 1, 2, … in order) in a database at
+/// `db`, with `unverified` as a feed's claim.
+fn build(db: &std::path::Path, ts: &[T], unverified: Option<&str>) -> (Store, Vec<String>) {
+    let mut store = Store::open(db, StoreConfig::default()).unwrap();
     let raws: Vec<Vec<u8>> = ts.iter().map(|t| metainfo(&t.name)).collect();
     let infos: Vec<Info> = raws.iter().map(|r| Info::parse(r).unwrap()).collect();
     let batch: Vec<NewTorrent<'_>> = infos
@@ -391,7 +394,7 @@ fn fixture(ts: &[T], o: Opts) -> Fixture {
         enriched.push((*id, e));
     }
     store.set_enrichments(&enriched).unwrap();
-    if let Some(name) = o.unverified {
+    if let Some(name) = unverified {
         let feed = store.register_source("nyaa", "1", 1_700_000_000).unwrap();
         let claims = Claims {
             name: Some(name.into()),
@@ -408,12 +411,6 @@ fn fixture(ts: &[T], o: Opts) -> Fixture {
             }])
             .unwrap();
     }
-    let index = SearchIndex::in_memory().unwrap();
-    {
-        let mut w = index.writer(15 << 20).unwrap();
-        w.catch_up(&mut store, 100_000).unwrap();
-        w.commit().unwrap();
-    }
     let hashes = infos
         .iter()
         .map(|i| {
@@ -424,7 +421,35 @@ fn fixture(ts: &[T], o: Opts) -> Fixture {
                 .collect()
         })
         .collect();
+    (store, hashes)
+}
+
+fn fixture(ts: &[T], o: Opts) -> Fixture {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let (mut store, hashes) = build(&db, ts, o.unverified);
+    // A stale index: built from the same torrents with no flags and no
+    // Adult correction, as an index that hasn't caught up yet would be.
+    let mut twin = o.stale_index.then(|| {
+        let plain: Vec<T> = ts
+            .iter()
+            .map(|t| T {
+                name: t.name.clone(),
+                adult: false,
+                flags: 0,
+            })
+            .collect();
+        build(&dir.path().join("twin.db"), &plain, o.unverified).0
+    });
+    let index = SearchIndex::in_memory().unwrap();
+    {
+        let mut w = index.writer(15 << 20).unwrap();
+        w.catch_up(twin.as_mut().unwrap_or(&mut store), 100_000)
+            .unwrap();
+        w.commit().unwrap();
+    }
     drop(store);
+    drop(twin);
     let mut auth = Auth::load(&dir.path().join("auth.json"), false).unwrap();
     if o.frozen {
         auth = auth.without_refill();
@@ -963,6 +988,7 @@ async fn hostile_names_are_well_formed_xml() {
         let title = &item.child("title").unwrap().text;
         assert!(title.starts_with("Hostile"), "{title:?}");
         assert!(!title.chars().any(char::is_control), "{title:?}");
+        assert!(!title.contains(['\u{202e}', '\u{feff}']), "{title:?}");
         // The magnet is one URL: its name percent-encoded.
         let link = &item.child("link").unwrap().text;
         assert!(link.bytes().all(|b| b.is_ascii_graphic()), "{link}");
@@ -1165,4 +1191,73 @@ async fn failed_checks_are_rate_limited_as_a_torznab_error() {
     assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(error_code(&r), "500");
     assert!(r.retry_after.is_some_and(|v| v.parse::<u64>().unwrap() > 0));
+}
+
+/// The index can lag the store (a filter rule just hid a torrent, an Is
+/// adult correction, a private source's find): the stored row decides,
+/// and a page is filled past the rows it leaves out.
+#[tokio::test]
+async fn stored_rows_decide_when_the_index_lags() {
+    let mut ts = vec![t("Lagging Visible Thing.txt")];
+    for (name, flag) in [
+        ("Lagging Private Source Thing.txt", flags::PRIVATE_SOURCE),
+        ("Lagging Hidden Thing.txt", flags::HIDDEN),
+        ("Lagging Bep27 Thing.txt", flags::PRIVATE),
+    ] {
+        let mut x = t(name);
+        x.flags = flag;
+        ts.push(x);
+    }
+    let mut adult = t("Lagging Adult Thing.txt");
+    adult.adult = true;
+    ts.push(adult);
+    let f = fixture(
+        &ts,
+        Opts {
+            stale_index: true,
+            ..Opts::default()
+        },
+    );
+    let key = f.torznab_key();
+    // The index finds all five; only the visible one is served.
+    let all = f.feed(&key, "t=search&q=lagging").await;
+    let titles: Vec<&str> = all
+        .all("item")
+        .map(|i| i.child("title").unwrap().text.as_str())
+        .collect();
+    assert_eq!(titles, ["Lagging Visible Thing.txt"]);
+    // Newest first, the four left out come before it: a one-item page
+    // reads on past them rather than coming back empty.
+    assert_eq!(
+        f.titles(&key, "t=search&limit=1").await,
+        ["Lagging Visible Thing.txt"]
+    );
+    // The stored Adult class follows torznab_adult.
+    f.torznab_adult.store(true, Ordering::SeqCst);
+    let mut on = f.titles(&key, "t=search&q=lagging").await;
+    on.sort();
+    assert_eq!(on, ["Lagging Adult Thing.txt", "Lagging Visible Thing.txt"]);
+}
+
+#[tokio::test]
+async fn each_key_has_its_own_request_limit() {
+    let f = fixture(
+        &[],
+        Opts {
+            frozen: true,
+            ..Opts::default()
+        },
+    );
+    let key = f.torznab_key();
+    let other = f.torznab_key();
+    for _ in 0..lodestar_api::auth::KEY_BURST as usize {
+        assert_eq!(f.api(&key, "t=caps").await.status, StatusCode::OK);
+    }
+    let r = f.api(&key, "t=caps").await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(error_code(&r), "500");
+    assert!(r.retry_after.is_some());
+    assert!(!r.body.contains(&key));
+    // Another key isn't held back by it.
+    assert_eq!(f.api(&other, "t=caps").await.body, CAPS);
 }

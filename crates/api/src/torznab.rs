@@ -41,8 +41,6 @@ pub mod categories;
 pub mod query;
 pub mod xml;
 
-use std::time::Instant;
-
 use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::{HeaderValue, StatusCode, Uri, header};
@@ -70,6 +68,9 @@ pub struct TorznabAdult(pub AdultVisibility);
 
 /// The server's name in caps and feeds.
 const TITLE: &str = "Lodestar";
+/// Further lease reads a page may take to fill itself, past rows the
+/// stored check left out: bounds the work one request does.
+const MAX_REFILLS: usize = 4;
 /// Bytes of a torrent's name a magnet link's `dn` carries, at most.
 const MAX_DN_BYTES: usize = 256;
 
@@ -268,7 +269,6 @@ async fn run(
     let cancel = CancelToken::new();
     let _guard = cancel.cancel_on_drop();
     let answer = tokio::task::spawn_blocking(move || {
-        let started = Instant::now();
         let lease = Lease::new_at(search.index(), &shown, crate::unix_now(), 0, sort, &cancel)
             .map_err(search::search_error)?;
         let total = lease.total().value;
@@ -277,42 +277,48 @@ async fn run(
         if limit == 0 {
             return Ok((total, Vec::new()));
         }
-        let page = lease
-            .page(Start::Offset(offset), limit, &cancel)
-            .map_err(search::search_error)?;
-        let store = reader.lock().expect("reader lock");
-        let mut items = Vec::with_capacity(page.hits.len());
-        for h in &page.hits {
-            // Deleted since indexing: it drops out of the page.
-            let Some(row) = store.torrent(h.id as i64).map_err(crate::error::internal)? else {
-                continue;
-            };
-            let e = store.enrichment(row.id).map_err(crate::error::internal)?;
-            if excluded(&row, e.as_ref(), adult) {
-                continue;
+        // A row the stored check leaves out isn't counted against the
+        // page: the lease is read on until the page is full, so a client
+        // that stops at a short page (Sonarr, Radarr) doesn't stop early.
+        let mut items = Vec::with_capacity(limit);
+        let mut start = Start::Offset(offset);
+        for _ in 0..=MAX_REFILLS {
+            let page = lease
+                .page(start, limit - items.len(), &cancel)
+                .map_err(search::search_error)?;
+            let store = reader.lock().expect("reader lock");
+            for h in &page.hits {
+                // Deleted since indexing: it drops out of the page.
+                let Some(row) = store.torrent(h.id as i64).map_err(crate::error::internal)? else {
+                    continue;
+                };
+                let e = store.enrichment(row.id).map_err(crate::error::internal)?;
+                if excluded(&row, e.as_ref(), adult) {
+                    continue;
+                }
+                let summary =
+                    swarm::summary(&store, hot.as_deref(), &row).map_err(crate::error::internal)?;
+                let record = e.as_ref().and_then(|e| Record::decode(&e.data).ok());
+                items.push(Item {
+                    hash: hex(&row.info_hash.0),
+                    hash_v2: row.info_hash_v2.map(|h| hex(&h.0)),
+                    v2_only: row.flags & flags::V2 != 0 && row.flags & flags::HYBRID == 0,
+                    size: row.size,
+                    files: row.file_count,
+                    discovered_at: row.discovered_at,
+                    cats: categories::of(record.as_ref()),
+                    seeders: summary.seeders,
+                    leechers: summary.leechers,
+                    completed: summary.completed,
+                    name: row.name,
+                });
             }
-            let summary =
-                swarm::summary(&store, hot.as_deref(), &row).map_err(crate::error::internal)?;
-            let record = e.as_ref().and_then(|e| Record::decode(&e.data).ok());
-            items.push(Item {
-                hash: hex(&row.info_hash.0),
-                hash_v2: row.info_hash_v2.map(|h| hex(&h.0)),
-                v2_only: row.flags & flags::V2 != 0 && row.flags & flags::HYBRID == 0,
-                size: row.size,
-                files: row.file_count,
-                discovered_at: row.discovered_at,
-                cats: categories::of(record.as_ref()),
-                seeders: summary.seeders,
-                leechers: summary.leechers,
-                completed: summary.completed,
-                name: row.name,
-            });
+            drop(store);
+            match page.next {
+                Some(next) if items.len() < limit => start = Start::After(next),
+                _ => break,
+            }
         }
-        drop(store);
-        tracing::debug!(
-            took_ms = started.elapsed().as_millis() as u64,
-            "torznab search"
-        );
         Ok::<_, crate::ApiError>((total, items))
     })
     .await;
@@ -341,6 +347,7 @@ fn hex(bytes: &[u8]) -> String {
 /// v2 hash too, and the name, percent-encoded and cut to
 /// [`MAX_DN_BYTES`]. No trackers: none are stored for DHT finds.
 fn magnet(item: &Item) -> String {
+    use std::fmt::Write;
     let mut out = String::from("magnet:?");
     if !item.v2_only || item.hash_v2.is_none() {
         out.push_str("xt=urn:btih:");
@@ -366,7 +373,7 @@ fn magnet(item: &Item) -> String {
         if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
             out.push(char::from(b));
         } else {
-            out.push_str(&format!("%{b:02X}"));
+            let _ = write!(out, "%{b:02X}");
         }
     }
     out

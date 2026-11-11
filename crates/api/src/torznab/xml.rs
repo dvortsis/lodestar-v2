@@ -7,7 +7,10 @@
 //!   so `]]>` and markup in a name stay text (no CDATA is written);
 //! - control characters (Unicode `Cc`, C0 and C1) are removed; tab, line
 //!   feed and carriage return become a space, so a title stays one line;
-//! - U+FFFE and U+FFFF, which XML 1.0 doesn't allow, are removed;
+//! - U+FFFE and U+FFFF, which XML 1.0 doesn't allow, are removed, and so
+//!   are the bidirectional overrides and isolates (U+202A–U+202E,
+//!   U+2066–U+2069) and the byte-order mark, so a name can't display
+//!   reversed or hide text in an *arr app;
 //! - names arrive as Rust strings, with invalid UTF-8 already replaced by
 //!   the store, so no other character XML forbids can reach here.
 //!
@@ -123,7 +126,8 @@ pub fn escape(out: &mut String, s: &str) {
             '\'' => out.push_str("&apos;"),
             '\t' | '\n' | '\r' => out.push(' '),
             c if c.is_control() => {}
-            '\u{FFFE}' | '\u{FFFF}' => {}
+            '\u{FFFE}' | '\u{FFFF}' | '\u{FEFF}' => {}
+            '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' => {}
             c => out.push(c),
         }
     }
@@ -183,6 +187,7 @@ mod tests {
         assert_eq!(esc("a\u{0}b\u{1b}[31mc\u{7f}\u{85}\u{9f}d"), "ab[31mcd");
         assert_eq!(esc("one\ttwo\nthree\r"), "one two three ");
         assert_eq!(esc("x\u{FFFE}\u{FFFF}y\u{FFFD}"), "xy\u{FFFD}");
+        assert_eq!(esc("a\u{202E}b\u{2066}c\u{2069}d\u{FEFF}e"), "abcde");
         // Other non-ASCII text is kept as it is.
         assert_eq!(esc("Ünïcödé 日本 🎬"), "Ünïcödé 日本 🎬");
     }
