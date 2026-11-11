@@ -44,6 +44,13 @@ class ValidateTemplates(unittest.TestCase):
             errors = self.check_text(name, put_back)
             self.assertTrue(any("not used yet" in e for e in errors), (name, errors))
 
+    def test_the_refusal_ignores_letter_case(self):
+        text = (HERE / "lodestar.xml").read_text(encoding="utf-8")
+        shouted = text.replace('Description="Web UI and API."', 'Description="Not Used Yet."', 1)
+        self.assertNotEqual(shouted, text)
+        errors = self.check_text("lodestar.xml", shouted)
+        self.assertTrue(any("not used yet" in e for e in errors), errors)
+
     def test_the_planned_peers_tcp_port_is_still_allowed(self):
         text = (HERE / "lodestar.xml").read_text(encoding="utf-8")
         self.assertIn("(planned)", text)
