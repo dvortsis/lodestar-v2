@@ -6840,7 +6840,7 @@
     },
     {
       "id": "X-pk-ui-polish",
-      "what": "rv-701 N1 decisions misquote+dup sentence+PR number; N3 IPv4 netsh test; N4 status banner announce (insert empty then fill); N5 Insights reuses settings_about_new_tab key; N7 wizard bundle 53.58/53.6 kB \u2014 next wizard change needs budget review"
+      "what": "rv-701 N1 decisions misquote+dup sentence+PR number; N3 IPv4 netsh test; N4 status banner announce (insert empty then fill); N5 Insights reuses settings_about_new_tab key; N7 wizard bundle 53.58/53.6 kB \u2014 next wizard change needs budget review; Exceptions.svelte: data_folder guide link -> ch4 \u00a74.6 (not ch2), windows_ports -> \u00a74.7 anchor (after #704 merges)"
     },
     {
       "id": "X-worker-settings-pointer (dropped)",
@@ -7737,7 +7737,8 @@
   ],
   "review_queue": [
     "RUNNING: #702 22effd40, #664 640d87ef; #699 starting",
-    "#699 13397e42 (WK-11 round 1; delta + security delta in one Opus reviewer; base 85d8d267)"
+    "#699 13397e42 (WK-11 round 1; delta + security delta in one Opus reviewer; base 85d8d267)",
+    "#704 ad9c5567 (PK-guide-2, docs, ready 18:16Z)"
   ],
   "merged": [
     {
