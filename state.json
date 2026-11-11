@@ -6811,7 +6811,8 @@
     "PK-cli #696 owner flags (\u00a72.19) owed: set refuses privacy fields whatever the value; secrets refused outright (no stdin); reset --all clears saved values an env var hides. Decisions file 2026-11-11-PK-cli.md.",
     "PK-ops notes: a CLI-set http_bind that can't bind makes serve fail at start (no UI-style revert); document 'lodestar settings reset network.http_bind' as the way out (rv-696 nit 4).",
     "CMP-9b owner flag (\u00a72.19/\u00a72.26): Sources first view 30.9->31.1 kB (+139 B lazy hook), new on-demand chunk 27 kB.",
-    "PK-exc polish: ports.rs test comment 'only test that sets or reads' is off since insights no_port_exception_off_windows reads probe() (count-independent off Windows)."
+    "PK-exc polish: ports.rs test comment 'only test that sets or reads' is off since insights no_port_exception_off_windows reads probe() (count-independent off Windows).",
+    "PK-exc wording: crates/lodestar/src/logging/events.rs start-up log still says 'network filesystem'; align with 'a network or shared-folder filesystem' (9p/WSL2/Docker Desktop). PK-ui uses same wording en+zh."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
