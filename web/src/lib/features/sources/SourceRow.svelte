@@ -137,6 +137,9 @@
 	{#if s.companion_need}
 		{#await import('../companions/NeedChip.svelte') then { default: NeedChip }}
 			<NeedChip need={s.companion_need} oninstalled={onrefresh} focusAfter={() => heading} />
+		{:catch}
+			<!-- The chip's code didn't load (a stale tab after an upgrade): a plain note, no button. -->
+			<p class="text-small" data-testid="{id}-need-fallback">{m.sources_status_needs_setup()}</p>
 		{/await}
 	{/if}
 	{#if showAddresses}
