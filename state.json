@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T12:54:24Z",
+  "updated_at": "2026-11-11T13:14:59Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6773,6 +6773,11 @@
       "what": "collect.py: refuse a missing checklist item, or excluded without --next-run, at launch (today the analyzer catches it hours later); from #688",
       "at": "2026-11-11T12:44:42Z",
       "status": "launched 2026-11-11T12:45:00Z"
+    },
+    {
+      "id": "runner-pr-stale",
+      "what": "next runner PR: mark X-soak-screen-polish done (both items landed in #595 X-soak-screen-fixes: assertion in test_screen_json_that_cant_be_written_never_ends_the_run, products not ** 2 at analyze_cr0.py:225 / collect.py:249); confirm PK-cli worker placeholder status from its decisions file",
+      "at": "2026-11-11T13:14:59Z"
     }
   ],
   "main_health": [
@@ -7506,7 +7511,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T12:54:24Z",
+    "updated": "2026-11-11T13:14:59Z",
     "items": [
       {
         "slot": 1,
@@ -7558,11 +7563,11 @@
       },
       {
         "slot": 7,
-        "slice": "M8-THEME",
+        "slice": "PK-cli",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCVGtYWSJVrREyne22: nightly all-themes tracking issue (separate issues:write job, no npm) + run summary (Sonnet, /security-review); same session after #685 X-smoke-polish merged 4b9e0e7a",
-        "since": "2026-11-11T12:43:58Z"
+        "doing": "session_01MMjhnBmKGR4mYZNGi1joQV: lodestar settings get/set/reset on the stopped store (Opus, /security-review); fresh session after #691 M8-THEME merged 35316810 (Sonnet session archived)",
+        "since": "2026-11-11T13:14:59Z"
       },
       {
         "slot": 8,
@@ -7683,6 +7688,12 @@
       "slice": "X-collect-checklist-launch-2",
       "sha": "c818b432967ef2389698b0b4b8290c4956afc081",
       "at": "2026-11-11T12:54:24Z"
+    },
+    {
+      "pr": 691,
+      "slice": "M8-THEME",
+      "sha": "35316810077dfd8b88e0bc86c4e8c50f29f64804",
+      "at": "2026-11-11T13:14:59Z"
     }
   ]
 }
