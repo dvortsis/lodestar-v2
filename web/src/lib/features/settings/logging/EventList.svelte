@@ -127,42 +127,48 @@
 					total: formatCount(g.all.length, currentLocale())
 				})}</summary
 			>
-			<ul class="flex flex-col gap-4 pb-4">
-				{#each g.shown as e (e.id)}
-					{@const Icon = ICONS[e.level]}
-					{@const on = eventOn(e, verbosity, components, overrides)}
-					<li class="flex flex-col gap-1" data-testid="log-event-{e.id}">
-						<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-							<Toggle
-								label={eventLabel(e)}
-								checked={on}
-								disabled={f.locked || e.required || e.opt_in !== null}
-								onchange={(ev) => set(e, ev.currentTarget.checked)}
-							/>
-							<span class="inline-flex items-center gap-1 text-small text-muted-text">
-								<Icon class="size-4" aria-hidden="true" />{levelLabel(e.level)}
-							</span>
-							<span class="text-small text-muted-text" data-testid="log-rate-{e.id}"
-								>{m.settings_logging_events_rate({
-									count: formatCount(e.rate_per_hour, currentLocale())
-								})}</span
-							>
-							{#each e.kinds as k (k)}<Badge>{kindShort(k)}</Badge>{/each}
-							{#if e.id in overrides}<Badge variant="accent"
-									>{m.settings_logging_events_changed_badge()}</Badge
-								>{/if}
-						</div>
-						{#if eventHelp(e)}<p class="text-small text-muted-text">{eventHelp(e)}</p>{/if}
-						{#if e.required}
-							<p class="inline-flex items-center gap-1 text-small text-muted-text">
-								<IconLock class="size-4" aria-hidden="true" />{m.settings_logging_events_required()}
-							</p>
-						{:else if e.opt_in}
-							<p class="text-small text-muted-text">{m.settings_logging_events_opt_in()}</p>
-						{/if}
-					</li>
-				{/each}
-			</ul>
+			<!-- Rows only for an open group: a closed group's names aren't fetched. -->
+			{#if open}
+				<ul class="flex flex-col gap-4 pb-4">
+					{#each g.shown as e (e.id)}
+						{@const Icon = ICONS[e.level]}
+						{@const on = eventOn(e, verbosity, components, overrides)}
+						<li class="flex flex-col gap-1" data-testid="log-event-{e.id}">
+							<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+								<Toggle
+									label={eventLabel(e)}
+									checked={on}
+									disabled={f.locked || e.required || e.opt_in !== null}
+									onchange={(ev) => set(e, ev.currentTarget.checked)}
+								/>
+								<span class="inline-flex items-center gap-1 text-small text-muted-text">
+									<Icon class="size-4" aria-hidden="true" />{levelLabel(e.level)}
+								</span>
+								<span class="text-small text-muted-text" data-testid="log-rate-{e.id}"
+									>{m.settings_logging_events_rate({
+										count: formatCount(e.rate_per_hour, currentLocale())
+									})}</span
+								>
+								{#each e.kinds as k (k)}<Badge>{kindShort(k)}</Badge>{/each}
+								{#if e.id in overrides}<Badge variant="accent"
+										>{m.settings_logging_events_changed_badge()}</Badge
+									>{/if}
+							</div>
+							{#if eventHelp(e)}<p class="text-small text-muted-text">{eventHelp(e)}</p>{/if}
+							{#if e.required}
+								<p class="inline-flex items-center gap-1 text-small text-muted-text">
+									<IconLock
+										class="size-4"
+										aria-hidden="true"
+									/>{m.settings_logging_events_required()}
+								</p>
+							{:else if e.opt_in}
+								<p class="text-small text-muted-text">{m.settings_logging_events_opt_in()}</p>
+							{/if}
+						</li>
+					{/each}
+				</ul>
+			{/if}
 		</details>
 	{/each}
 </div>

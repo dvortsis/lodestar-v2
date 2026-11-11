@@ -467,6 +467,10 @@ const eventNamesLimits = {
 	pipeline: '2480 B',
 	fetch: '340 B'
 };
+for (const c of Object.keys(eventNamesLimits)) {
+	if (!eventNamesComponents.includes(c))
+		throw new Error(`size-limit: a budget for the ${c} event names, which no event has any more`);
+}
 const settingsLoggingNamesLazy = Object.fromEntries(
 	eventNamesComponents.map((c) => [
 		c,
@@ -1280,9 +1284,9 @@ export default [
 	// 0.70 KB; limit = measured + 10%.
 	entry('Settings logging output messages (on demand)', settingsLoggingOutputMap, '0.77 KB'),
 	// runner §2.26, 2026-11-01: CI measures +3 B over local (build variance); main red on 7ea22803 at 17,103 B
-	// X-event-names-split: +0.26 KB for the loader map of the per-component name chunks (runner
-	// §2.26, 2026-11-11); measured 17.41 KB.
-	entry('Settings logging parts (on demand)', settingsLoggingLazy, '17.45 KB'),
+	// X-event-names-split: +0.31 KB for the loader map of the per-component name chunks, the lookups that skip inherited keys (runner
+	// §2.26, 2026-11-11); measured 17.46 KB.
+	entry('Settings logging parts (on demand)', settingsLoggingLazy, '17.55 KB'),
 	// S-logs-3, X-event-names-split: every event's plain name and help, en and zh, one chunk per
 	// component (was one 16.6 KB chunk). A new event grows one chunk; a new component needs a budget
 	// here, or the build of this file fails. Limits = measured + ~10% (runner §2.26, 2026-11-11).

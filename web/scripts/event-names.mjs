@@ -22,6 +22,9 @@ export function eventsByComponent(golden) {
 	const body = golden.slice(golden.indexOf('\n') + 1).split('\n')[0];
 	const groups = new Map();
 	for (const e of JSON.parse(body).events) {
+		// A component id is a file name, an object key and a size-limit pattern.
+		if (!/^[a-z][a-z_]*$/.test(e.component))
+			throw new Error(`event-names: component ${JSON.stringify(e.component)} must be [a-z][a-z_]*`);
 		if (!groups.has(e.component)) groups.set(e.component, []);
 		groups.get(e.component).push(e.id);
 	}

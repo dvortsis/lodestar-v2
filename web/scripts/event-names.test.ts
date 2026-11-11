@@ -6,7 +6,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { describe, expect, it } from 'vitest';
 // @ts-expect-error: a plain .mjs script with no type declarations
-import { CATALOG, DIR, OUTPUT, componentIds, render } from './event-names.mjs';
+import { CATALOG, DIR, OUTPUT, componentIds, eventsByComponent, render } from './event-names.mjs';
 
 type Render = (g: string) => Promise<Record<string, string>>;
 const golden = readFileSync(CATALOG, 'utf8');
@@ -36,5 +36,14 @@ describe('event-names generator', () => {
 			([f, t]) => f !== OUTPUT && t.includes("'app.start'")
 		);
 		expect(owner.map(([f]) => basename(f))).toEqual(['system.ts']);
+	});
+
+	it('refuses a component id that is not a plain file and key name', () => {
+		const golden = (c: string) =>
+			`200\n${JSON.stringify({ events: [{ id: 'a.b', component: c }] })}\n`;
+		const groups = eventsByComponent as (g: string) => Map<string, string[]>;
+		expect([...groups(golden('abc_d')).keys()]).toEqual(['abc_d']);
+		for (const bad of ['v2', 'a-b', 'a.b', '../x', '__proto__', 'A', ''])
+			expect(() => groups(golden(bad)), bad).toThrow(/must be/);
 	});
 });

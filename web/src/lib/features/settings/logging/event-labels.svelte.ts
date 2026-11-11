@@ -59,7 +59,8 @@ export function loadEventNames(component: string): Promise<void> {
 
 function entry(e: Shown) {
 	void loadEventNames(e.component);
-	return names[e.component]?.[e.id];
+	const chunk = Object.hasOwn(names, e.component) ? names[e.component] : undefined;
+	return chunk && Object.hasOwn(chunk, e.id) ? chunk[e.id] : undefined;
 }
 export const eventLabel = (e: Shown) => entry(e)?.[0]() ?? e.id;
 export const eventHelp = (e: Shown) => entry(e)?.[1]();

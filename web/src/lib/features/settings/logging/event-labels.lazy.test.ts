@@ -20,7 +20,7 @@ vi.mock('./event-names', async (original) => {
 	return { ...real, CHUNKS };
 });
 
-const { eventHelp, eventLabel } = await import('./event-labels.svelte');
+const { eventHelp, eventLabel, loadEventNames } = await import('./event-labels.svelte');
 const search = { id: 'alerts.search_unreadable', component: 'search' } as const;
 const workers = { id: 'cluster.listening', component: 'workers' } as const;
 
@@ -38,8 +38,8 @@ describe('event names, per component', { timeout: 20_000 }, () => {
 
 	it('keeps the id when a chunk fails, and tries again on the next use', async () => {
 		expect(eventLabel(workers)).toBe('cluster.listening');
-		await waitFor(() => expect(loaded).toEqual(['search', 'workers']), { timeout: 10_000 });
-		await Promise.resolve();
+		await loadEventNames('workers');
+		expect(loaded).toEqual(['search', 'workers']);
 		expect(eventLabel(workers)).toBe('cluster.listening');
 		failWorkers = false;
 		await waitFor(
