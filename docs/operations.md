@@ -84,7 +84,7 @@ Templates are in `packaging/unraid/`:
   a worker for an existing Lodestar. It asks for the main instance's address and
   a one-time join token. The main instance must have `[cluster] enabled = true`.
   A Settings screen for tokens is **(planned)**; today a token comes from the
-  API: `POST /api/v1/workers/tokens`, signed in as an admin or with an API key.
+  API: `POST /api/v1/workers/tokens` from a signed-in admin browser session (API keys are refused), with a JSON body holding the worker's `name` and your admin `password`.
   See `lodestar worker` in §10.
 
 The templates default to `latest`. Set **Repository** to a version tag such as
@@ -172,7 +172,7 @@ folder), tell the command where the data is and run it. The MSI:
 
 ```powershell
 $env:LODESTAR_DATA_DIR = 'C:\ProgramData\Lodestar'
-& 'C:\Program Files\Lodestar\lodestar.exe' settings get network.http_bind
+& 'C:\Program Files\Lodestar\lodestar.exe' stats
 ```
 
 For the portable ZIP, set `LODESTAR_DATA_DIR` to its `data` folder and run the
@@ -292,10 +292,10 @@ the `hot/` folder is a subfolder of it, not a separate place.
   Lodestar can also install updates itself. That is off until you turn it on in
   the app's update settings, and **Fixes only** is the recommended choice. A
   self-installed update that fails its health check rolls back on its own.
-  **Windows:** Lodestar checks and tells you. It installs only when you press
+  **Windows** **(newer than v0.5.1)**: Lodestar checks and tells you. It installs only when you press
   **Install now** (MSI or portable); updates that install by themselves, and the
-  app's **Roll back** button, are **(planned)**. A failed MSI update does roll
-  back by itself. Docker and Unraid don't self-install: you pull the new image
+  app's **Roll back** button, are **(planned)**. A failed update (MSI or portable) rolls
+  back by itself. On v0.5.1, Windows has no update engine: install the new MSI or ZIP by hand. Docker and Unraid don't self-install: you pull the new image
   tag.
 - **Snapshots before store upgrades.** When a new version has to change the
   database's layout (a schema migration), it first saves a copy beside it:
@@ -325,7 +325,7 @@ the `hot/` folder is a subfolder of it, not a separate place.
   `seal.key` and `auth.json` in a new `backups/lodestar-backup-<time>` folder
   inside the data folder (or `--to <folder>`). It's safe while Lodestar runs.
   The search index isn't copied: Lodestar rebuilds it from the store.
-- **Update checks** are off until you turn them on (see above). When on, Lodestar checks the project's signed release page every 6 hours, and when you ask. Lodestar sends no telemetry.
+- **Update checks** are off until you turn them on (see above). When on, Lodestar checks the project's signed release page every 6 hours, and when you ask (on Windows, **(newer than v0.5.1)**). Lodestar sends no telemetry.
 
 ### Importing from Magnetico or Bitmagnet
 
@@ -466,11 +466,11 @@ Try these in order. Each is safe, and nothing changes until a step says so.
    **Result:** it exits 0 when the instance answers. Otherwise it exits 1 and prints `unhealthy:` and a reason, such as `unhealthy: connecting to 127.0.0.1:8090: Connection refused (os error 111)`. It probes the address Lodestar is set to use, so a wrong saved address shows up here.
 2. If it fails, read the log (`docker logs <container name>`, `journalctl -u lodestar`, or the Windows log in §2).
    **Result:** the log says why it stopped, for example an address it can't bind.
-3. If it answers, check the address you open. `LODESTAR_HTTP_BIND` (default `0.0.0.0:8090`; `0.0.0.0` means every network interface on the machine) is the address *inside* the container or machine. In Docker you open the host port you mapped to it. Keep the web port on your home network and never forward it on your router. On Windows, the Start-menu shortcut always opens `http://localhost:8090/`, so it won't follow a changed port. A narrower address, such as your LAN address, is safer than `0.0.0.0`.
+3. If it answers, check the address you open. `LODESTAR_HTTP_BIND` (default `0.0.0.0:8090`; `0.0.0.0` means every network interface on the machine) is the address *inside* the container or machine. In Docker you open the host port you mapped to it. Keep the web port on your home network and never forward it on your router. On Windows, the Start-menu shortcut always opens `http://localhost:8090/`, so it won't follow a changed port. With host networking or a native Linux install, binding to your LAN address is narrower than `0.0.0.0`. In Docker or Unraid bridge mode (the default) leave it at `0.0.0.0`: the port mapping decides who can reach it. On Windows, binding off localhost also breaks the Start-menu shortcut, so keep the MSI's `WEB_FIREWALL` option off unless other PCs need the UI.
 
 **The web address is wrong, so Lodestar won't start.**
 
-The `lodestar settings` steps need a version newer than v0.5.1 **(newer than v0.5.1)**. On v0.5.1 (and `:latest` before the next release), set `LODESTAR_HTTP_BIND` or `bind` under `[http]` in `config.toml` instead.
+The `lodestar settings` steps need a version newer than v0.5.1 **(newer than v0.5.1)**. On v0.5.1 (and `:latest` before the next release), `LODESTAR_HTTP_BIND` always works; `bind` under `[http]` in `config.toml` works only when no address is saved in the app.
 
 If `serve` can't bind the address, it fails at start. There is no automatic revert for an address set from the command line, and the app has no screen for changing the address **(planned)**. Reset it:
 
@@ -487,10 +487,10 @@ If `serve` can't bind the address, it fails at start. There is no automatic reve
 
 **I changed several settings and now nothing works.** This needs `lodestar settings` **(newer than v0.5.1)**.
 
-`reset --all` also removes the passwords, API keys and notification addresses saved in the app. Enter them again afterwards. To undo it, restore the backup from step 1 ([Chapter 3, §3.7](user/03-keep-lodestar-safe.md#37-back-up-and-restore)).
+`reset --all` also removes the passwords, the Torznab API key and the notification addresses and tokens saved in the app. Lodestar's own API keys aren't touched. Enter them again afterwards. To undo it, restore the backup from step 1 ([Chapter 3, §3.7](user/03-keep-lodestar-safe.md#37-back-up-and-restore); outside Unraid, the backup folder's `README.txt` repeats the steps).
 
-1. Run `lodestar backup`. It works with the server running or stopped; on Docker, use the one-off container from §7.
-   **Result:** a new `lodestar-backup-<time>` folder holds the store, `config.toml`, `seal.key` and `auth.json`.
+1. Run `lodestar backup`. It works with the server running or stopped. On Docker, while the container runs, use `docker exec <container name> /lodestar backup`; once it's stopped, use the one-off container from §7 without the `/import` mapping, with `backup` after the image name.
+   **Result:** a new `lodestar-backup-<time>` folder holds the store, `config.toml` (if you have one), `seal.key` and `auth.json`.
 2. Stop Lodestar.
 3. Run `lodestar settings reset --all`.
    **Result:** every value saved in the app is removed, and settings return to `config.toml` and the defaults. `config.toml`, the `LODESTAR_*` variables, your torrents, filters and admin password aren't touched.
