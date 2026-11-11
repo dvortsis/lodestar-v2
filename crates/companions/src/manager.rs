@@ -54,7 +54,9 @@ use crate::layout::{Install, LayoutError};
 use crate::log_events::{INSTALL_FAILED, INSTALLED, RECOVERED, REMOVED, ROLLED_BACK};
 use crate::state::{self, Op, OpKind, Record, StateError, Step};
 use crate::supervise::egress::{self, Follows, Gated, Route};
-use crate::supervise::{Companion, Confinement, Probe, Sandbox, SpawnSpec, Supervisor};
+use crate::supervise::{
+    Companion, Confinement, LogRing, Probe, Sandbox, SpawnSpec, State, Status, Supervisor,
+};
 use crate::verify;
 
 /// A test's fault point (`Fault::$f`); nothing in other builds.
@@ -309,6 +311,11 @@ pub trait Run: Send + Sync {
     fn healthy<'a>(&'a self, id: &'a CompanionId, target: &'a Target) -> BoxFuture<'a, bool>;
     /// Stops it, bounded; nothing if it isn't running.
     fn stop<'a>(&'a self, id: &'a CompanionId) -> BoxFuture<'a, ()>;
+    /// Its live state while it's supervised, which the manager follows
+    /// into the snapshot after each start it makes. `None`: not followed.
+    fn status(&self, _id: &CompanionId) -> Option<watch::Receiver<Status>> {
+        None
+    }
 }
 
 /// Configuring an installed companion through its API (CMP-8b); [`Api`]
@@ -390,6 +397,9 @@ struct Inner {
     _lock: std::fs::File,
     busy: Mutex<Vec<CompanionId>>,
     snapshot: watch::Sender<Snapshot>,
+    /// Each companion's run, counted up on every start and stop the
+    /// manager makes: a follower publishes only for the run it follows.
+    runs: Mutex<HashMap<CompanionId, u64>>,
     #[cfg(any(test, feature = "testing"))]
     fault: Mutex<Option<Fault>>,
 }
@@ -593,6 +603,30 @@ impl Inner {
         });
     }
 
+    /// A new run of `id`: any follower of an earlier one stops publishing.
+    fn next_run(&self, id: &CompanionId) -> u64 {
+        let mut runs = self.runs.lock().unwrap_or_else(|e| e.into_inner());
+        let n = runs.entry(id.clone()).or_default();
+        *n += 1;
+        *n
+    }
+
+    /// Publishes `health` for run `run` of `id`, unless a later start or
+    /// stop has superseded it. Checked and published under one lock, so
+    /// nothing a stop publishes is overwritten by an older run.
+    fn publish_run(&self, id: &CompanionId, run: u64, version: &Version, health: Health) -> bool {
+        let runs = self.runs.lock().unwrap_or_else(|e| e.into_inner());
+        if runs.get(id) != Some(&run) {
+            return false;
+        }
+        self.publish(id, Some((Some(version.clone()), health)));
+        true
+    }
+
+    fn is_run(&self, id: &CompanionId, run: u64) -> bool {
+        self.runs.lock().unwrap_or_else(|e| e.into_inner()).get(id) == Some(&run)
+    }
+
     fn claim(self: &Arc<Self>, id: &CompanionId) -> Result<Slot, Refusal> {
         let mut b = self.busy.lock().unwrap_or_else(|e| e.into_inner());
         if b.contains(id) {
@@ -794,7 +828,6 @@ impl Inner {
         rec: &mut Record,
     ) -> Result<Secret, ManagerError> {
         let field = field_of(id).ok_or(Refusal::NoProfile)?;
-        let home = crate::supervise::process::home_dir(&self.p.data, id);
         fault!(self, Before(Step::Credentials));
         let issued = credentials::generate(&self.p.secrets, &CredentialKey::new(id.clone(), field))
             .map_err(|_| failed("credentials")("generate"))?;
@@ -806,19 +839,70 @@ impl Inner {
         *rec = self.save(id, rec, Step::Credentials)?;
 
         fault!(self, Before(Step::Files));
+        self.write_credential(id, field, &issued.secret)?;
+        fault!(self, After(Step::Files));
+        *rec = self.save(id, rec, Step::Files)?;
+        Ok(issued.secret)
+    }
+
+    /// Writes `secret` into the companion's own config file, keeping
+    /// everything else in it (CMP-3's writers). The companion is stopped.
+    fn write_credential(
+        &self,
+        id: &CompanionId,
+        field: Field,
+        secret: &Secret,
+    ) -> Result<(), ManagerError> {
+        let home = crate::supervise::process::home_dir(&self.p.data, id);
         let prof = profile(id, &home, 0).ok_or(Refusal::NoProfile)?;
         let dir = config_dir(&home, prof.config.0)?;
         let path = dir.join(prof.config.1);
         let written = match field {
             Field::WebUiPassword => {
-                config_files::write_qbittorrent(&path, &Username::default(), &issued.secret)
+                config_files::write_qbittorrent(&path, &Username::default(), secret)
             }
-            Field::ApiKey => config_files::write_prowlarr(&path, &issued.secret),
+            Field::ApiKey => config_files::write_prowlarr(&path, secret),
         };
-        written.map_err(|_| failed("files")("write"))?;
-        fault!(self, After(Step::Files));
-        *rec = self.save(id, rec, Step::Files)?;
-        Ok(issued.secret)
+        written.map_err(|_| failed("files")("write"))
+    }
+
+    /// Regenerate's rotation (CMP-6): a new credential, never reading the
+    /// old one's value. The row is stored first, then the file, as at
+    /// install (#611): a crash between them leaves Lodestar holding the
+    /// new value, and regenerating again writes both. A failed file write
+    /// puts the old sealed row back, so the row and the file agree. The
+    /// companion is stopped.
+    fn rotate(&self, id: &CompanionId) -> Result<(), ManagerError> {
+        let field = field_of(id).ok_or(Refusal::NoProfile)?;
+        let key = CredentialKey::new(id.clone(), field);
+        let store = failed("credentials");
+        let old = self
+            .p
+            .rows
+            .get(&key.row_key())
+            .map_err(|_| store("store"))?;
+        let issued = credentials::generate(&self.p.secrets, &key).map_err(|_| store("generate"))?;
+        self.p.rows.put(&issued.row).map_err(|_| store("store"))?;
+        let Err(e) = self.write_credential(id, field, &issued.secret) else {
+            return Ok(());
+        };
+        let restored = match old {
+            Some(value) => self.p.rows.put(&SealedRow {
+                key: key.row_key(),
+                value,
+            }),
+            None => self.p.rows.forget(id),
+        };
+        if restored.is_err() {
+            lodestar_log::log_event!(
+                INSTALL_FAILED,
+                companion = self.label(id),
+                version = "",
+                step = "regenerate",
+                reason = "rollback_failed"
+            );
+        }
+        Err(e)
     }
 
     /// Points `current` at the staged version, keeping the old one.
@@ -1047,6 +1131,7 @@ impl Manager {
             _lock: lock,
             busy: Mutex::new(Vec::new()),
             snapshot: watch::channel(Snapshot::default()).0,
+            runs: Mutex::new(HashMap::new()),
             #[cfg(any(test, feature = "testing"))]
             fault: Mutex::new(None),
         })))
@@ -1138,6 +1223,7 @@ impl Manager {
                     reason = e.code()
                 );
                 m.publish(id, Some((Some(pin.version.clone()), Health::Healthy)));
+                self.follow(id, &pin.version);
                 Ok(pin.version.clone())
             }
             Err(e) => {
@@ -1207,7 +1293,7 @@ impl Manager {
 
         // Commit: the old version stops first; the pointer keeps it as
         // `previous`.
-        m.p.run.stop(id).await;
+        self.halt(id).await;
         let (x, r) = (exe.clone(), rec.clone());
         *rec = self
             .off(move |m| {
@@ -1253,6 +1339,7 @@ impl Manager {
             })
             .await?;
         m.publish(id, Some((Some(v.clone()), Health::Healthy)));
+        self.follow(id, v);
         Ok(())
     }
 
@@ -1299,7 +1386,7 @@ impl Manager {
         // Before `staged` the running version was never stopped.
         let touched = rec.op.as_ref().is_some_and(|o| o.step >= Step::Staged);
         if touched {
-            m.p.run.stop(id).await;
+            self.halt(id).await;
         }
         let rolled = self
             .off(move |m| {
@@ -1317,7 +1404,8 @@ impl Manager {
                 } else {
                     Health::Unhealthy
                 };
-                m.publish(id, Some((Some(prev), health)));
+                m.publish(id, Some((Some(prev.clone()), health)));
+                self.follow_from(entry, &prev, health);
             }
             Ok(None) => m.publish(id, None),
             Err(e) => lodestar_log::log_event!(
@@ -1345,16 +1433,39 @@ impl Manager {
             .ok_or(Refusal::NotAvailable(NotAvailable::NoPlatform))?;
         let exe = executable(id, a)?;
         let target = Inner::target(entry)?;
-        let secrets = self.off(move |m| m.secret(id)).await?;
+        // The stored credential goes into its own file again first, so a
+        // crash between a regenerate's row and its file heals at the next
+        // start (the writers keep every other line). It's stopped.
+        let secrets = self
+            .off(move |m| {
+                let secret = m.secret(id)?;
+                if let (Some(s), Some(f)) = (&secret, field_of(id)) {
+                    m.write_credential(id, f, s)?;
+                }
+                Ok(secret)
+            })
+            .await?;
         self.launch(entry, version, &exe, &target, secrets.into_iter().collect())
             .await?;
+        self.configure_now(id, &target).await
+    }
+
+    /// CMP-8b's configuration of a running companion, with its stored
+    /// credential: the bind and the proxy for its route, re-asserted.
+    async fn configure_now(
+        &self,
+        id: &'static CompanionId,
+        target: &Target,
+    ) -> Result<(), ManagerError> {
         let secret = self.off(move |m| m.secret(id)).await?;
         let opened = Opened {
             field: field_name(id),
             secret,
         };
-        m.p.api
-            .configure(id, &target, InstallReceipt::new(target.clone()), &opened)
+        self.0
+            .p
+            .api
+            .configure(id, target, InstallReceipt::new(target.clone()), &opened)
             .await
             .map_err(|e| failed("configure")(configure::code(&e)))
     }
@@ -1380,10 +1491,9 @@ impl Manager {
     }
 
     async fn finish_remove(&self, entry: &'static Entry, rec: Record) -> Result<(), ManagerError> {
-        let m = &self.0;
         let id = &entry.id;
-        fault!(m, Before(Step::Stopped));
-        m.p.run.stop(id).await;
+        fault!(self.0, Before(Step::Stopped));
+        self.halt(id).await;
         self.off(move |m| m.end_remove(id, &rec)).await
     }
 
@@ -1420,6 +1530,245 @@ impl Manager {
                 Ok(None)
             }
         }
+    }
+}
+
+/// What the manager does to a companion it installed, once installed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiveOp {
+    /// Serve's start of an installed companion.
+    Start,
+    /// Stop, then start and configure again, on the route as set now.
+    Restart,
+    /// Stop, rotate its credential, start and configure again.
+    Regenerate,
+}
+
+impl LiveOp {
+    fn step(self) -> &'static str {
+        match self {
+            LiveOp::Start => "start",
+            LiveOp::Restart => "restart",
+            LiveOp::Regenerate => "regenerate",
+        }
+    }
+}
+
+/// How long a start, restart or regenerate may take to start the
+/// companion and configure it: the health wait ([`HEALTH_DEADLINE`]) and
+/// the configuration's requests, with room to spare. The stop before it
+/// is bounded by the supervisor.
+pub const LIVE_DEADLINE: Duration = Duration::from_secs(5 * 60);
+
+/// A restart or regenerate under way, in a task of its own that holds the
+/// companion's slot until it's done (as [`Manager::install`]). Dropping it
+/// leaves the operation running.
+#[derive(Debug)]
+pub struct Pending(JoinHandle<Result<(), ManagerError>>);
+
+impl Pending {
+    /// Waits for the operation to end.
+    pub async fn finished(self) -> Result<(), ManagerError> {
+        self.0.await.map_err(|_| failed("live")("panicked"))?
+    }
+}
+
+impl Manager {
+    /// Starts a companion Lodestar installed and configures it (serve,
+    /// after recovery). Refused while another operation on it runs
+    /// ([`Refusal::Busy`]), and for one it didn't install.
+    pub async fn start(&self, id: &CompanionId) -> Result<(), ManagerError> {
+        self.begin(id, LiveOp::Start).await?.finished().await
+    }
+
+    /// Restarts it: stops it, then starts and configures it again on its
+    /// route as set now. Refused during an install or any other operation
+    /// on it (`busy`), and for one Lodestar didn't install.
+    pub async fn restart(&self, id: &CompanionId) -> Result<Pending, ManagerError> {
+        self.begin(id, LiveOp::Restart).await
+    }
+
+    /// Replaces its credential with a new random one: stops it, writes the
+    /// new one into its row and its own config file ([`Inner::rotate`]),
+    /// then starts and configures it. Only for a companion Lodestar
+    /// installed: one you added isn't Lodestar's to rotate.
+    pub async fn regenerate(&self, id: &CompanionId) -> Result<Pending, ManagerError> {
+        self.begin(id, LiveOp::Regenerate).await
+    }
+
+    /// Claims the slot and checks the journal, then runs `op` in a task
+    /// of its own that keeps the slot.
+    async fn begin(&self, id: &CompanionId, op: LiveOp) -> Result<Pending, ManagerError> {
+        let m = &self.0;
+        let entry = m.entry(id)?;
+        if m.p.host.in_container {
+            return Err(Refusal::NotInstalled.into());
+        }
+        let id = &entry.id;
+        let slot = m.claim(id)?;
+        let version = match self.off(move |m| m.record(id)).await? {
+            Some(Record { op: Some(_), .. }) => return Err(Refusal::Busy.into()),
+            Some(Record {
+                installed: Some(v), ..
+            }) => v,
+            _ => return Err(Refusal::NotInstalled.into()),
+        };
+        let me = Manager(self.0.clone());
+        Ok(Pending(tokio::spawn(async move {
+            let _slot = slot;
+            me.live(entry, &version, op).await
+        })))
+    }
+
+    async fn live(
+        &self,
+        entry: &'static Entry,
+        version: &Version,
+        op: LiveOp,
+    ) -> Result<(), ManagerError> {
+        let m = &self.0;
+        let id = &entry.id;
+        match op {
+            // Already running (an operation started it meanwhile): left
+            // as it is, with its follower.
+            LiveOp::Start if m.p.run.status(id).is_some() => return Ok(()),
+            LiveOp::Start => {}
+            _ => self.halt(id).await,
+        }
+        let rotated = match op {
+            LiveOp::Regenerate => self.off(move |m| m.rotate(id)).await,
+            _ => Ok(()),
+        };
+        // Started again whatever the rotation did: a failed one put the
+        // old credential back.
+        let started = tokio::time::timeout(LIVE_DEADLINE, self.start_installed(entry, version))
+            .await
+            .unwrap_or_else(|_| Err(failed(op.step())("timed_out")));
+        // Its health is the start's: a failed rotation still started it,
+        // on the old credential.
+        let health = if started.is_ok() {
+            Health::Healthy
+        } else {
+            Health::Unhealthy
+        };
+        let result = rotated.and(started);
+        m.publish(id, Some((Some(version.clone()), health)));
+        // Followed even after a failed health check: a companion held for
+        // its route is still supervised, and starts when the route is up.
+        self.follow_from(entry, version, health);
+        if let Err(e) = &result
+            && e.code() != "shutting_down"
+        {
+            lodestar_log::log_event!(
+                INSTALL_FAILED,
+                companion = m.label(id),
+                version = "",
+                step = op.step(),
+                reason = e.code()
+            );
+        }
+        result
+    }
+
+    /// Stops `id`, ending the run any follower publishes for.
+    async fn halt(&self, id: &CompanionId) {
+        self.0.next_run(id);
+        self.0.p.run.stop(id).await;
+    }
+
+    /// [`Manager::follow_from`] a healthy start.
+    fn follow(&self, id: &CompanionId, version: &Version) {
+        if let Ok(entry) = self.0.entry(id) {
+            self.follow_from(entry, version, Health::Healthy);
+        }
+    }
+
+    /// Follows the supervisor's state for `id` into the snapshot, for this
+    /// run only, from `now` (what was just published). Backing off, held
+    /// for its route, needing attention or stopped is unhealthy. Running
+    /// again after any of those is healthy once it passes a health check
+    /// ([`Run::healthy`]): the supervisor says running as soon as it has
+    /// started it. A start, or failed checks the supervisor hasn't acted
+    /// on yet, change nothing: it restarts a companion after Q7's three,
+    /// which then shows. It ends when the companion stops being supervised
+    /// or a later run begins.
+    fn follow_from(&self, entry: &'static Entry, version: &Version, now: Health) {
+        let m = &self.0;
+        let id = &entry.id;
+        let run = m.next_run(id);
+        let Some(mut status) = m.p.run.status(id) else {
+            return;
+        };
+        let Ok(target) = Inner::target(entry) else {
+            return;
+        };
+        let weak = Arc::downgrade(&self.0);
+        let check = m.p.run.clone();
+        let version = version.clone();
+        tokio::spawn(async move {
+            let mut last = now;
+            // A start that passed health was configured; one that didn't
+            // (held for its route, say) is configured once it runs.
+            let mut configured = now == Health::Healthy;
+            loop {
+                let state = status.borrow_and_update().state;
+                let next = match state {
+                    State::Running if last != Health::Healthy => {
+                        if !check.healthy(id, &target).await {
+                            Some(Health::Unhealthy)
+                        } else if configured {
+                            Some(Health::Healthy)
+                        } else {
+                            let Some(m) = weak.upgrade() else {
+                                return;
+                            };
+                            // Under the slot, and only for the current
+                            // run: an operation under way owns it now.
+                            let Ok(_slot) = m.claim(id) else {
+                                return;
+                            };
+                            if !m.is_run(id, run) {
+                                return;
+                            }
+                            let me = Manager(m);
+                            if let Err(e) = me.configure_now(id, &target).await {
+                                // Q8: never left running unconfigured,
+                                // where its bind or proxy may have drifted.
+                                me.0.publish_run(id, run, &version, Health::Unhealthy);
+                                lodestar_log::log_event!(
+                                    INSTALL_FAILED,
+                                    companion = me.0.label(id),
+                                    version = "",
+                                    step = "configure",
+                                    reason = e.code()
+                                );
+                                me.halt(id).await;
+                                return;
+                            }
+                            configured = true;
+                            Some(Health::Healthy)
+                        }
+                    }
+                    State::Running | State::Starting | State::Unhealthy { .. } => None,
+                    State::BackingOff { .. }
+                    | State::NeedsAttention(_)
+                    | State::Held
+                    | State::Stopped => Some(Health::Unhealthy),
+                };
+                if let Some(h) = next.filter(|h| *h != last) {
+                    let Some(m) = weak.upgrade() else {
+                        return;
+                    };
+                    if !m.publish_run(id, run, &version, h) {
+                        return;
+                    }
+                    last = h;
+                }
+                if status.changed().await.is_err() {
+                    return;
+                }
+            }
+        });
     }
 }
 
@@ -1465,6 +1814,14 @@ impl ApiConfigure for Api {
 /// How long [`Supervised::healthy`] waits for a first healthy answer.
 pub const HEALTH_DEADLINE: Duration = Duration::from_secs(120);
 
+/// Each companion's route (Q18), built afresh for every start from its
+/// `companions.<id>.egress` setting, with [`monitored`] (`crates/lodestar`
+/// implements it). `None`: there's no route it may follow, and it isn't
+/// started (Q8: never on a route nobody chose).
+pub trait Routes: Send + Sync {
+    fn route<'a>(&'a self, id: &'a CompanionId) -> BoxFuture<'a, Option<Route>>;
+}
+
 /// The real [`Run`]: CMP-4a's supervisor inside CMP-4b's sandbox, each
 /// companion behind its route's gate.
 pub struct Supervised {
@@ -1472,11 +1829,24 @@ pub struct Supervised {
     pub supervisor: tokio::sync::Mutex<Supervisor>,
     pub sandbox: Sandbox,
     pub http: Arc<dyn GuardedHttp>,
-    /// The companion's route (Q18), from [`monitored`].
-    pub route: Arc<dyn Fn(&CompanionId) -> Route + Send + Sync>,
+    /// Each companion's route (Q18).
+    pub routes: Arc<dyn Routes>,
     /// Where qBittorrent saves, if set.
     pub downloads: Option<PathBuf>,
-    gates: Mutex<HashMap<CompanionId, Gated>>,
+    live: Mutex<HashMap<CompanionId, Running>>,
+    /// Set by [`Supervised::shutdown`]: nothing starts after it.
+    closed: std::sync::atomic::AtomicBool,
+}
+
+/// What [`Supervised`] keeps for a companion it started.
+struct Running {
+    /// Dropped before the companion is removed, which holds it first.
+    gate: Option<Gated>,
+    /// Dropped at its stop, so `monitored`'s relay stops probing.
+    route: Option<watch::Receiver<RouteState>>,
+    status: Option<watch::Receiver<Status>>,
+    /// Its output, kept after it stops until it's started again.
+    logs: Option<LogRing>,
 }
 
 impl Supervised {
@@ -1485,7 +1855,7 @@ impl Supervised {
         supervisor: Supervisor,
         sandbox: Sandbox,
         http: Arc<dyn GuardedHttp>,
-        route: Arc<dyn Fn(&CompanionId) -> Route + Send + Sync>,
+        routes: Arc<dyn Routes>,
         downloads: Option<PathBuf>,
     ) -> Supervised {
         Supervised {
@@ -1493,9 +1863,41 @@ impl Supervised {
             supervisor: tokio::sync::Mutex::new(supervisor),
             sandbox,
             http,
-            route,
+            routes,
             downloads,
-            gates: Mutex::new(HashMap::new()),
+            live: Mutex::new(HashMap::new()),
+            closed: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    fn running(&self) -> std::sync::MutexGuard<'_, HashMap<CompanionId, Running>> {
+        self.live.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Its recent output, as the ring holds it (redacted with its
+    /// credentials before each line went in). `None`: it was never started
+    /// in this run of Lodestar.
+    pub fn logs(&self, id: &CompanionId) -> Option<Vec<String>> {
+        self.running()
+            .get(id)
+            .and_then(|r| r.logs.as_ref())
+            .map(LogRing::lines)
+    }
+
+    /// Stops every companion, each bounded as [`Run::stop`], and starts
+    /// nothing after. For serve's shutdown.
+    pub async fn shutdown(&self) {
+        let mut sup = self.supervisor.lock().await;
+        self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+        let ids: Vec<CompanionId> = self.running().keys().cloned().collect();
+        for id in ids {
+            let gate = self.running().get_mut(&id).and_then(|r| {
+                r.status = None;
+                r.route = None;
+                r.gate.take()
+            });
+            drop(gate);
+            sup.remove(&id).await;
         }
     }
 }
@@ -1504,6 +1906,7 @@ impl Run for Supervised {
     fn start(&self, l: Launch) -> BoxFuture<'_, Result<(), &'static str>> {
         Box::pin(async move {
             let health = crate::detect::health(&l.id).ok_or("no_health")?;
+            let route = self.routes.route(&l.id).await.ok_or("no_route")?;
             let spec = SpawnSpec {
                 id: l.id.clone(),
                 executable: l.executable,
@@ -1529,23 +1932,41 @@ impl Run for Supervised {
                 stop: None,
             };
             let mut sup = self.supervisor.lock().await;
-            let gated = egress::add(&mut sup, c, Follows::of(&l.id), (self.route)(&l.id))
-                .map_err(|e| e.code())?;
-            self.gates
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(l.id, gated);
+            // Under the lock shutdown holds.
+            if self.closed.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err("shutting_down");
+            }
+            let state = route.state.clone();
+            let gated =
+                egress::add(&mut sup, c, Follows::of(&l.id), route).map_err(|e| e.code())?;
+            let running = Running {
+                gate: Some(gated),
+                route: Some(state),
+                status: sup.status(&l.id),
+                logs: sup.logs(&l.id),
+            };
+            self.running().insert(l.id, running);
             Ok(())
         })
     }
 
+    /// Fails fast while its route is down (#621 N3): a held companion
+    /// isn't running, so waiting the whole deadline tells nothing. A route
+    /// not checked yet is waited for.
     fn healthy<'a>(&'a self, id: &'a CompanionId, target: &'a Target) -> BoxFuture<'a, bool> {
         Box::pin(async move {
             let Some(h) = crate::detect::health(id) else {
                 return false;
             };
+            let route = self.running().get(id).and_then(|r| r.route.clone());
             let deadline = tokio::time::Instant::now() + HEALTH_DEADLINE;
             while tokio::time::Instant::now() < deadline {
+                if route
+                    .as_ref()
+                    .is_some_and(|r| matches!(*r.borrow(), RouteState::Down(_)))
+                {
+                    return false;
+                }
                 if h.check(&*self.http, target).await == HealthStatus::Healthy {
                     return true;
                 }
@@ -1558,15 +1979,19 @@ impl Run for Supervised {
     fn stop<'a>(&'a self, id: &'a CompanionId) -> BoxFuture<'a, ()> {
         Box::pin(async move {
             // Dropping the gate holds it first, so it can't be released
-            // while it's removed.
-            drop(
-                self.gates
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .remove(id),
-            );
+            // while it's removed. Its logs stay until it starts again.
+            let gate = self.running().get_mut(id).and_then(|r| {
+                r.status = None;
+                r.route = None;
+                r.gate.take()
+            });
+            drop(gate);
             self.supervisor.lock().await.remove(id).await;
         })
+    }
+
+    fn status(&self, id: &CompanionId) -> Option<watch::Receiver<Status>> {
+        self.running().get(id).and_then(|r| r.status.clone())
     }
 }
 
