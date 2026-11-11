@@ -7553,7 +7553,7 @@
         "slice": "CMP-11",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAaZaaUjzMSyGVFdTA: Windows qBittorrent guided install, detection, configuration (Opus, /security-review); fresh session after #681 CMP-9a merged 59c2d16d (Sonnet session archived)",
+        "doing": "holding for #692 merge; fallback (b) cut-off moved to 17:45Z (session_01MMjhnAaZaaUjzMSyGVFdTA)",
         "since": "2026-11-11T14:10:36Z"
       },
       {
@@ -7577,7 +7577,7 @@
         "slice": "X-cmp-handover-followups",
         "role": "build",
         "agent": "claude",
-        "doing": "#692 MERGE + one fix round (P1 spawn tail, bound 3x deadline, release_pending timed_out, nits); then fresh delta review",
+        "doing": "#692 ready at ead0d88d; fresh Opus delta review queued (3 reviewers busy); marker-before-hand_over kept (runner) (session_01MMjhnCL9xrv5oTMJ9KBcEc)",
         "since": "2026-11-11T11:46:21Z"
       },
       {
