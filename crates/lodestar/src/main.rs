@@ -314,17 +314,19 @@ async fn serve_as(
         c.after_start(services.probe(), update::testing::limits().deadline);
     }
     #[cfg(windows)]
-    if let Some(lock) = probation.take() {
+    let verdict = probation.take().map(|lock| {
         update::windows::portable::serve::after_start(
             config.data_dir.clone(),
             services.portable_probe(),
             lock,
-        );
-    }
+        )
+    });
     services.run(stop).await?;
+    // A graceful stop before the self-test decided gives its attempt
+    // back; the verdict and this never run at once (`portable::Verdict`).
     #[cfg(windows)]
-    if on_probation {
-        update::windows::portable::serve::stopped(&config.data_dir);
+    if let Some(v) = verdict {
+        update::windows::portable::serve::stopped(config.data_dir.clone(), v).await;
     }
     let _ = (on_probation, probation);
     #[cfg(unix)]
