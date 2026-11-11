@@ -6752,6 +6752,11 @@
       "to": "next runner PR",
       "what": "CMP-9a notes: residual warnings (email/MailKit, FlareSolverr, indexer proxies) while Prowlarr on SOCKS5; CMP-13 note: AspNetCore-only runtimeconfig refused; X-cmp-native-handover owns += crates/companions/tests/manager.rs",
       "at": "2026-11-11T09:06:53Z"
+    },
+    {
+      "pr": 673,
+      "merged": "d94800207d6cd25944ac22ed79a49be66a2adb5c",
+      "note": "OP-5 merged; owner told setup (STATE_BUCKET, tombstone) and flags (24 h wake pause, $50 cap, scope call); first live run at OP-G records per-session costs and judge residuals"
     }
   ],
   "main_health": [
@@ -7485,15 +7490,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T09:38:40Z",
+    "updated": "2026-11-11T09:59:21Z",
     "items": [
       {
         "slot": 1,
-        "slice": "OP-5",
+        "slice": "X-fleet-polish",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn9NvKRMZMg1baoPCau: operator prompt-injection harness (Opus, /security-review), same session after #668",
-        "since": "2026-11-11T07:06:31Z"
+        "doing": "session_01MMjhn9NvKRMZMg1baoPCau: fleet policy() six-word ACL assertion + OP-3b wording (Opus), same session after #673",
+        "since": "2026-11-11T09:59:21Z"
       },
       {
         "slot": 2,
