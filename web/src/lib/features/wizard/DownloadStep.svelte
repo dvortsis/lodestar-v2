@@ -1,7 +1,8 @@
 <script lang="ts">
 	// Step 7: a download client (§10.10.10, §9, §18.10). The same field, client widget and Test
 	// connection as Settings → Integrations, on the engine through `form/embed.ts`. qBittorrent is
-	// the recommended client. Skip sends nothing.
+	// the recommended client. Skip sends nothing. On native
+	// platforms the server also offers "Install qBittorrent for me" (CMP-9c).
 	import { onDestroy } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
@@ -9,15 +10,27 @@
 	import { loadSettingsIndex } from '../settings/form/schema';
 	import { registerWidget } from '../settings/form/widgets';
 	import FieldsStep from './FieldsStep.svelte';
+	import InstallQbittorrent from './companion/InstallQbittorrent.svelte';
 
 	const KEY = 'integrations.clients';
 	let specs = $state<FieldSpec[]>();
 	let failed = $state(false);
 	let step = $state<FieldsStep>();
+	// Bumped after an install: the server added the client, so the field is read again.
+	let generation = $state(0);
+	let install = $state<InstallQbittorrent>();
+	// Continue was pressed mid-install: say why nothing happened.
+	let waiting = $state(false);
 	let unregister: (() => void) | undefined;
 
 	/** True when the shell may move on. False while the setting isn't loaded: nothing was shown. */
-	export const save = async () => (step ? step.save() : false);
+	export const save = async () => {
+		if (install?.busy()) {
+			waiting = true;
+			return false;
+		}
+		return step ? step.save() : false;
+	};
 
 	onDestroy(() => unregister?.());
 	// The cards are Settings' own widget, imported the way Settings loads it (a dynamic import of
@@ -40,7 +53,18 @@
 	<p class="text-body">{m.wizard_download_lead()}</p>
 	<Banner kind="error">{m.wizard_download_load_failed()}</Banner>
 {:else if specs}
-	<FieldsStep bind:this={step} id="wizard.download" keys={specs} lead={m.wizard_download_lead()} />
+	{#key generation}
+		<FieldsStep
+			bind:this={step}
+			id="wizard.download"
+			keys={specs}
+			lead={m.wizard_download_lead()}
+		/>
+	{/key}
+	<InstallQbittorrent bind:this={install} oninstalled={() => generation++} />
+	{#if waiting && install?.busy()}
+		<Banner kind="warning">{m.wizard_cmp_wait()}</Banner>
+	{/if}
 {:else}
 	<p class="text-body">{m.wizard_download_lead()}</p>
 	<p class="text-muted-text" aria-busy="true">{m.wizard_loading()}</p>

@@ -81,7 +81,8 @@ uninstalls with `REMOVE_DATA=1`.
 - `main.wxs`: the installer (WiX 3). `cargo-wix` supplies the version and binary folder; `build-msi.ps1` adds the licence text and calls it with `--include main.wxs`, so `Cargo.toml` needs no `[package.metadata.wix]`.
 - `build-msi.ps1`, `build-portable.ps1`: the two packages.
 - `portable/`: files that go into the zip (`README.txt`, `Start Lodestar.cmd`).
-- `smoke.ps1`: install/run/uninstall checks. `sign.ps1`: code signing.
+- `smoke.ps1`: install/run/uninstall checks, and the setup, crawler, import and search flow
+  (`../smoke/flow.py`, so it needs Python on the PATH; Windows runners have it). `sign.ps1`: code signing.
 
 ## Signing
 

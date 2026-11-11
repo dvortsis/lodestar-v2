@@ -59,6 +59,8 @@ Import `test`/`expect` from `./support/test` (not `@playwright/test`) to get the
 
 Helpers: `expectNoA11yViolations(page, opts)` (`a11y.ts`, WCAG 2.2 AA, prints rule, targets and help URL) and `expectPageSnapshot(page, name)` (`snapshot.ts`, full page, fonts ready, animations frozen).
 
+**In any snapshot spec, call `freezeClock(page)` (`snapshot.ts`) before `go()`.** Relative times ("Seen 2 years ago", "last week") are computed from the clock, so with the real one a baseline goes stale as the calendar moves: on 2026-11-06 the Insights bar went from "last week" to "2 weeks ago" and the baselines failed with no code change.
+
 New routes: add an entry to `support/routes.ts` (flag `key` / `densityAware` per the snapshot policy; `mock` for the requests it makes on load); the smoke matrix then covers it everywhere. `coverage.test.ts` annotates any route under `src/routes` that is missing.
 
 ## The OpenAPI mock

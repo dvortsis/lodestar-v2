@@ -419,6 +419,78 @@ class SpecLaunchTests(SpecBase):
         self.assertIn("comparator", self.refused("comparator"))
         self.assertIn("https", self.refused("ab", "--ip-echo-url", "ftp://example.test/"))
 
+    def prepare_with_checklist(self, *checklist):
+        """Launches in docker mode with exactly this checklist (no default one)."""
+        write_cgroup(self.cgroup)
+        instance = collect.DockerInstance(SpecDocker(), "lodestar", self.cgroup, clock=self.clock.clock,
+                                          sleep=self.clock.sleep)
+        password = self.tmp / "password"
+        password.write_text(PASSWORD + "\n")
+        password.chmod(0o600)
+        argv = ["--run-kind", "ab", "--treatment", "utp", "--warmup-minutes", "2", "--baseline-hours", "2",
+                "--hour-seconds", "300", "--password-file", str(password), "--spec-commit", COMMIT,
+                "--ip-echo-url", "http://127.0.0.1:9/", *checklist]
+        args = args_for(self.root, "--url", self.lodestar.url, *argv)
+        collect.Collector(args, instance, clock=self.clock.clock, sleep=self.clock.sleep, now=self.clock.now,
+                          volumes=fixed_volumes()).prepare()
+
+    def test_docker_refuses_not_applicable_items_at_launch(self):
+        for item in collect.CHECKLIST_ITEMS:
+            other = next(i for i in collect.CHECKLIST_ITEMS if i != item)
+            with self.assertRaises(SystemExit) as caught:
+                self.prepare_with_checklist("--checklist", f"{item}=not_applicable", "--checklist",
+                                            f"{other}=excluded", "--next-run", f"{other}=2026-11-10T03:00:00Z")
+            message = str(caught.exception)
+            self.assertIn(f"{item}=not_applicable", message)
+            self.assertIn(f"{item}=excluded", message)
+            self.assertIn("--next-run", message)
+
+    def test_docker_accepts_excluded_items_with_a_next_run(self):
+        self.prepare_with_checklist(
+            "--checklist", "auto_update=excluded", "--next-run", "auto_update=2026-11-10T03:00:00Z",
+            "--checklist", "backup=excluded", "--next-run", "backup=2026-11-09T03:00:00Z")
+
+    def test_docker_refuses_a_missing_item_or_an_excluded_item_without_a_next_run(self):
+        full = ["--checklist", "backup=excluded", "--next-run", "backup=2026-11-09T03:00:00Z"]
+        with self.assertRaises(SystemExit) as caught:
+            self.prepare_with_checklist(*full)
+        self.assertIn("missing auto_update", str(caught.exception))
+        self.assertNotIn("not_applicable", str(caught.exception))
+        with self.assertRaises(SystemExit) as caught:
+            self.prepare_with_checklist()
+        self.assertIn("missing auto_update", str(caught.exception))
+        for item in collect.CHECKLIST_ITEMS:
+            other = next(i for i in collect.CHECKLIST_ITEMS if i != item)
+            with self.assertRaises(SystemExit) as caught:
+                self.prepare_with_checklist("--checklist", f"{item}=excluded", "--checklist", f"{other}=excluded",
+                                            "--next-run", f"{other}=2026-11-10T03:00:00Z")
+            self.assertIn(f"{item}=excluded needs --next-run", str(caught.exception))
+
+    def test_native_refuses_what_the_analyzer_requires_there_too(self):
+        # The analyzer's host_checklist wants every item stated, and an excluded one with a next run, in
+        # either mode; only not_applicable differs.
+        both = collect.parse_checklist(["auto_update=not_applicable", "backup=not_applicable"], [])
+        collect.check_checklist_complete("native", both)
+        missing = collect.parse_checklist(["backup=not_applicable"], [])
+        with self.assertRaises(SystemExit) as caught:
+            collect.check_checklist_complete("native", missing)
+        self.assertIn("missing auto_update", str(caught.exception))
+        self.assertIn("auto_update=not_applicable", str(caught.exception))
+        bare = collect.parse_checklist(["auto_update=excluded", "backup=not_applicable"], [])
+        with self.assertRaises(SystemExit) as caught:
+            collect.check_checklist_complete("native", bare)
+        self.assertIn("auto_update=excluded needs --next-run", str(caught.exception))
+        stamped = collect.parse_checklist(["auto_update=excluded", "backup=not_applicable"],
+                                          ["auto_update=2026-11-10T03:00:00Z"])
+        collect.check_checklist_complete("native", stamped)
+
+    def test_native_still_accepts_not_applicable(self):
+        checklist = collect.parse_checklist(["auto_update=not_applicable", "backup=not_applicable"], [])
+        collect.check_docker_checklist("native", checklist)
+        for item in collect.CHECKLIST_ITEMS:
+            with self.assertRaises(SystemExit):
+                collect.check_docker_checklist("docker", collect.parse_checklist([f"{item}=not_applicable"], []))
+
     def test_credentials_are_guarded(self):
         self.root = self.tmp / "public"
         self.assertIn("private", self.refused("ab", "--url", "http://8.8.8.8:8484"))
