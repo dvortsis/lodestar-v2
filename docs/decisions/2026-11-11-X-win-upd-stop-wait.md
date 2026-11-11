@@ -21,7 +21,8 @@ Follow-up to #693 (X-win-upd-window), from the runner's delta review at 5e260f33
 - **Residual:** the Windows check loop's selects aren't biased, so a stop arriving just as a scheduled check falls due can start that check. It's aborted at the 2 s wait, and harmless, since it writes by rename, but it costs the stop the full 2 s. Biasing those selects to the stop is outside this slice's owns, so it's left to the runner.
 
 ## Supersedes
-- In `2026-11-11-X-win-upd-window.md`, the runner had this slice update the "At a stop" bullet and the not-yet-polled residual. They now point here: the watcher's last look finishes unless it overruns the wait.
+- **`2026-11-11-X-win-upd-window.md`, the "At a stop" bullet:** its last look is no longer best effort. It finishes unless it overruns the stop's 2 s wait.
+- **The same file's residual "An abort before the watcher is first polled":** that window is closed. In its place, a last look that overruns the 2 s wait (the removal's retries, about a second, plus a slow disk) is aborted with the task. The request then stays, and the helper retries it at the next boot, as after a crash.
 
 ## Checks
 - **`the_service_stop_waits_for_the_last_look`** (check.rs) goes through `stop_updates`, the stop's own code: Off, then the stop at once, then the request must be gone. It runs 20 times. With the old abort-first order it failed 5 runs out of 5.
