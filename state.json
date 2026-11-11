@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T21:38:46Z",
+  "updated_at": "2026-11-11T21:46:53Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6920,6 +6920,11 @@
       "at": "2026-11-11T20:51:41Z",
       "slice": "WK-11/#699",
       "note": "Runner approved libc =0.2.191 Unix-only direct dep in crates/pipeline (O_NOFOLLOW|O_NONBLOCK; already in lock via tokio)."
+    },
+    {
+      "at": "2026-11-11T21:46:53Z",
+      "for": "runner PR",
+      "note": "Owner in runner session 2026-11-11T21:4xZ: 'Go up to 12 sessions'. Record as owner-decisions \u00a72.56; slices.yaml limits.phase_total 8->12; build-plan \u00a70.2 concurrency line; dashboard notes. Plus slices.yaml entries for X-restart-banner, X-upd-stop-races, X-wk-own-lease-lost and the other queued X- slices."
     }
   ],
   "main_health": [
@@ -7638,7 +7643,7 @@
     }
   ],
   "limits": {
-    "phase_total": 8,
+    "phase_total": 12,
     "note": "owner \u00a72.36 (2026-11-04): up to 12 slots; cut to 4 at 2026-11-06T00:00Z by trig_01RJzwL47gE81BrRv2vR2cx4 (running ones finish). \u00a72.33 auto-approve best-practice decisions. Owner 2026-11-05 ~01:20Z: memory/performance and soak r5 first; keep other slots busy with work that does not compete. The 2026-11-02 two-slot cut and launch pause are superseded. Owner 2026-11-05 ~02:45Z (\u00a72.41): until 2026-11-06T00:00Z, launch the next ready slice whenever a slot is free (critical path, then unlocks); a slot stays empty only for a recorded reason (status idle, reason in doing); hourly check from the dashboard session.",
     "source": "owner 2026-11-11 (replaces \u00a72.42 4)"
   },
@@ -7653,7 +7658,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T21:38:46Z",
+    "updated": "2026-11-11T21:46:53Z",
     "items": [
       {
         "slot": 1,
@@ -7726,6 +7731,42 @@
         "doing": "Chaos harness: coordinator + N workers in-process (Opus); v0.6 critical path",
         "since": "2026-11-11T19:52:00Z",
         "status": "active"
+      },
+      {
+        "slot": 9,
+        "slice": "X-restart-banner",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhn8jotRy9XX9TihNaWZ: restart banner, Restart now, restart flow (\u00a710.10.6; G-m6 dep), Sonnet",
+        "since": "2026-11-11T21:46:53Z",
+        "status": "active"
+      },
+      {
+        "slot": 10,
+        "slice": "RX-0",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhn8dQvKpaNcN6wp9PY6: regex parser and trigram plan, bounded and fuzzed",
+        "since": "2026-11-11T21:46:53Z",
+        "status": "active"
+      },
+      {
+        "slot": 11,
+        "slice": "TZ-0",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhnCR29cy7AsWtULXHBJ: Torznab server",
+        "since": "2026-11-11T21:46:53Z",
+        "status": "active"
+      },
+      {
+        "slot": 12,
+        "slice": "OUT-0",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhnCM61Vu5obDjZWTpeu: bitmagnet-format export",
+        "since": "2026-11-11T21:46:53Z",
+        "status": "active"
       }
     ]
   },
@@ -7781,7 +7822,7 @@
     }
   ],
   "heartbeat": "2026-11-11T21:38:36Z",
-  "updated": "2026-11-11T21:38:46Z",
+  "updated": "2026-11-11T21:46:53Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
