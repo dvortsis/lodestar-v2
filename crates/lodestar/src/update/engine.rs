@@ -1203,7 +1203,9 @@ impl Engine {
         confirm_manual: bool,
     ) -> Result<UpdatesStatus, UpdatesError> {
         let v = layout::parse_version(version).ok_or(UpdatesError::UnknownVersion)?;
-        if self.switching() {
+        // After the service's stop, an install could only end at the
+        // switch's look: refused before its download.
+        if self.switching() || self.stopping() {
             return Err(UpdatesError::InstallUnavailable("busy"));
         }
         self.may_install(&v, confirm_manual)?;
@@ -1367,10 +1369,12 @@ impl Engine {
             let _ = bin.remove_overlay(v);
             return Err(code);
         }
-        // The service's stop came first: no switch, or a stop would come
-        // back up on the new version. Nothing awaits from here to the
-        // switch, so only a stop sent during those few steps can still
-        // lose the race: a window of microseconds.
+        // The service's stop came first: no switch. (A supervisor also
+        // drops a switch that meets a forwarded stop; this keeps the
+        // version queued and the overlay gone either way.) Nothing awaits
+        // from here to the switch, but the stop is only sent once serving
+        // has drained, so an install can still reach the switch in that
+        // drain.
         if self.stopping() {
             let _ = bin.remove_overlay(v);
             return Err(STOPPING);
@@ -2330,6 +2334,18 @@ mod tests {
         let bin = Bin::open(e.dir.path()).unwrap();
         assert!(bin.overlays().unwrap().is_empty());
         assert!(lock(&e.engine.inner.failed).is_none());
+        // The lock is free and no switch is claimed; and an Install now
+        // after the stop is refused before it downloads anything.
+        assert!(e.engine.inner.checking.clone().try_lock_owned().is_ok());
+        assert!(!e.engine.switching());
+        let asked = e.downloads.asked.lock().unwrap().len();
+        assert!(matches!(
+            e.engine
+                .install_request("0.6.0", InstallWhen::Now, false)
+                .await,
+            Err(UpdatesError::InstallUnavailable("busy"))
+        ));
+        assert_eq!(e.downloads.asked.lock().unwrap().len(), asked);
         task.await.unwrap();
     }
 
