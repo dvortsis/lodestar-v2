@@ -594,8 +594,10 @@ impl Notifier {
             })
         };
         tokio::spawn(async move {
-            // Aborted if this task is; otherwise waited for, so its last
-            // look at the settings at a stop always finishes.
+            // Aborted if this task is; otherwise waited for. The service's
+            // shutdown aborts this task right after the stop, so the
+            // watcher's last look is best effort: a removal already on the
+            // blocking pool finishes, one not yet started may not.
             let mut watcher = AbortOnDrop(watcher);
             let checks = async {
                 loop {
