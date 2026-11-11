@@ -94,6 +94,26 @@ describe('pillState', () => {
 		);
 	});
 
+	it('says "restart needed" over the calm states, and keeps the torrent count', () => {
+		const live = { stream: 'live' as const, rebuild: null, restartNeeded: true };
+		for (const over of [{}, { paused: true }, { fetch_active: 0, fetch_pending: 0 }])
+			expect(pillState({ ...live, crawler: crawler(over) })).toMatchObject({
+				kind: 'restart',
+				torrents: 1_234_567
+			});
+	});
+
+	it('lets a stall, a rebuild or a lost connection win over "restart needed"', () => {
+		const base = { restartNeeded: true, crawler: crawler(), rebuild: null };
+		expect(
+			pillState({ ...base, stream: 'live', progress: { kind: 'stalled', reason: 'no_progress' } })
+				.kind
+		).toBe('stalled');
+		expect(pillState({ ...base, stream: 'live', rebuild: rebuild() }).kind).toBe('rebuilding');
+		expect(pillState({ ...base, stream: 'offline' }).kind).toBe('reconnecting');
+		expect(pillState({ ...base, stream: 'live', restartNeeded: false }).kind).toBe('crawling');
+	});
+
 	it('keeps the last state in a stopped (hidden or signed-out) tab', () => {
 		expect(pillState({ stream: 'stopped', crawler: crawler(), rebuild: null }).kind).toBe(
 			'crawling'

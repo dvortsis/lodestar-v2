@@ -66,5 +66,7 @@
 	"shell_return_insights": "前往洞察",
 	"shell_stale_text": "Lodestar 有新版本正在运行。请重新加载以更新。",
 	"shell_stale_unsaved": "请先保存或放弃你的更改。",
-	"shell_stale_reload": "重新加载"
+	"shell_stale_reload": "重新加载",
+	"shell_status_restart": "需要重启",
+	"shell_status_restart_help": "已保存的设置将在重启后生效。打开设置查看并重启。"
 }

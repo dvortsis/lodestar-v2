@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Snippet } from 'svelte';
+	import { onMount, type Component, type Snippet } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { m } from '$lib/paraglide/messages.js';
@@ -7,6 +7,15 @@
 	import NavIcon from './NavIcon.svelte';
 	import { aboutOf, groups, matchesScreen, screens, type About } from './screens';
 	let { children }: { children: Snippet } = $props();
+	// The restart banner (§10.10.6) loads after the screen shows: it is only needed when a change
+	// waits for a restart, and a Settings first view stays within budget without it.
+	let RestartBanner = $state<Component>();
+	onMount(() => {
+		void import('$lib/features/restart/RestartBanner.svelte').then(
+			(mod) => (RestartBanner = mod.default),
+			() => {}
+		);
+	});
 	let query = $state('');
 	// The purpose lines the filter also matches load the first time it's used (screens.ts `about`);
 	// until then, and for a screen whose chunk fails, it matches titles only.
@@ -65,6 +74,7 @@
 		{#if !overview}<a class="settings-back ls-focus text-primary underline" href={href('/settings')}
 				>{m.settings_shell_back()}</a
 			>{/if}
+		{#if RestartBanner}<RestartBanner />{/if}
 		{@render children()}
 	</div>
 </div>

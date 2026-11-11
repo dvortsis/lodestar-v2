@@ -12,6 +12,7 @@
 	import IconConnecting from '~icons/ph/circle-notch';
 	import IconStarting from '~icons/ph/hourglass-medium';
 	import IconStalled from '~icons/ph/warning-octagon';
+	import IconRestart from '~icons/ph/power';
 	import { resolve } from '$app/paths';
 	import { m } from '$lib/paraglide/messages.js';
 	import { formatCompact, formatCount } from '$lib/format';
@@ -36,7 +37,8 @@
 		rebuilding: IconRebuild,
 		failed: IconWarning,
 		starting: IconStarting,
-		stalled: IconStalled
+		stalled: IconStalled,
+		restart: IconRestart
 	};
 	const words: Record<PillKind, () => string> = {
 		unknown: () => m.shell_status_unknown(),
@@ -49,11 +51,13 @@
 		rebuilding: () => m.shell_status_rebuilding(),
 		failed: () => m.shell_status_failed(),
 		starting: () => m.shell_status_starting(),
-		stalled: () => m.shell_status_stalled()
+		stalled: () => m.shell_status_stalled(),
+		restart: () => m.shell_status_restart()
 	};
 	// States that carry an explanation: a tooltip on the link and a polite announcement (the
 	// words alone say "Stalled"; this says what it means and where to look).
 	const help: Partial<Record<PillKind, () => string>> = {
+		restart: () => m.shell_status_restart_help(),
 		starting: () =>
 			state.reason === 'restart_record'
 				? m.shell_status_record_help()
@@ -65,6 +69,7 @@
 	const locale = $derived(currentLocale());
 	const showsCount = $derived(
 		state.kind === 'crawling' ||
+			state.kind === 'restart' ||
 			state.kind === 'idle' ||
 			state.kind === 'paused' ||
 			state.kind === 'starting' ||
@@ -93,7 +98,7 @@
 {#snippet link(props: Record<string, unknown>)}
 	<a
 		{...props}
-		href={resolve(href as Route)}
+		href={resolve((state.kind === 'restart' ? '/settings' : href) as Route)}
 		data-testid="status-pill"
 		data-state={state.kind}
 		data-reason={state.reason}

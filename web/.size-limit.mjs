@@ -409,8 +409,15 @@ const settingsAbout = [/features\/settings\/screens2?\/about\.ts$/];
 // The generated screens' navigation icons (X-settings-registry-slim), loaded after the navigation
 // shows like the connection screens' (`Screen.iconLoad`); every first view stops at them.
 const settingsIcons = [/features\/settings\/screens\/icons\.ts$/];
+// The restart banner (X-restart-banner) is in the shell of every Settings route, so its first view
+// holds only nothing of it: the banner loads after the screen shows, and the confirmation dialog, Review's
+// list (it reads the form engine) and the Restarting page load on a press; "Restart flow (on demand)" gates them.
+const settingsRestart = [
+	/features\/restart\/(?:RestartBanner|RestartDialog|ReviewList|RestartingPage)\.svelte$/
+];
 const settingsFirstView = [
 	...settingsOnDemand,
+	...settingsRestart,
 	...settingsIcons,
 	...insightsDigest,
 	...settingsEdit,
@@ -1434,6 +1441,14 @@ export default [
 	// The registry's purpose lines and notices, and the generated screens' navigation icons
 	// (X-settings-registry-slim): measured 0.87 KB and 1.5 KB, limits = measured + 10%.
 	entry('Settings screen purposes (on demand)', settingsAboutLazy, '0.96 KB'),
+	entry(
+		'Restart flow (on demand)',
+		requireMeasuredJs(
+			'Restart flow (on demand)',
+			onDemandOf('/settings/[section]', settingsRestart)
+		),
+		'9 KB'
+	),
 	entry('Settings screen icons (on demand)', settingsIconsLazy, '1.66 KB'),
 	// The dialogs' on-demand code (Bits UI overlays, Dialog, both dialogs), still gated.
 	entry(
