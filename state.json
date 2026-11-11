@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T19:47:09Z",
+  "updated_at": "2026-11-11T20:51:07Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6894,6 +6894,21 @@
       "at": "2026-11-11T19:47:09Z",
       "slice": "X-upd-stop-races",
       "note": "New slice (Opus, small; from #706 self-review): (a) Unix engine.rs: check stop just before `switch` (abort doesn't stop a poll already running on multi-thread runtime); (b) Windows update/windows/check.rs Notifier::spawn loop: `biased;` select with stop first. Add to slices.yaml in next runner PR."
+    },
+    {
+      "at": "2026-11-11T20:51:07Z",
+      "slice": "X-cluster-tick-stall",
+      "note": "New Opus slice (from WK-20 finding b): a partitioned worker whose TCP connection hangs (no reset) stalls the coordinator tick ~30 s (tick 6->8 over 40 s); sightings and hint relays lost meanwhile. Cause in cluster server or serve, unconfirmed. Regression test from WK-20's decisions file. G-m6/WK-G related."
+    },
+    {
+      "at": "2026-11-11T20:51:07Z",
+      "slice": "WK-G",
+      "note": "WK-20 notes: (c) runtime seals/stamps by wall clock unix_now, pipeline epoch and restored leases wall-clock; (d) heartbeat, lease TTL, silent window not settable via Wiring; (e) after coordinator restart, earlier-epoch results for restored keys dropped as stale -> key fetched twice (Q7 as written)."
+    },
+    {
+      "at": "2026-11-11T20:51:07Z",
+      "slice": "WK-11/#699",
+      "note": "WK-20 finding (a): re-sighting a held key ends own lease as lost via Funnel::duplicate (worker/runtime.rs); asked WK-11 whether in #699's diff, else follow-up slice."
     }
   ],
   "main_health": [
@@ -7627,7 +7642,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T19:47:09Z",
+    "updated": "2026-11-11T20:51:07Z",
     "items": [
       {
         "slot": 1,
@@ -7749,7 +7764,7 @@
     }
   ],
   "heartbeat": "2026-11-11T18:39:05Z",
-  "updated": "2026-11-11T19:47:09Z",
+  "updated": "2026-11-11T20:51:07Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
