@@ -6833,6 +6833,15 @@
     {
       "id": "slices.yaml entries",
       "what": "Add placement + entries for X-cmp9b-catch, X-spool-damage-log, X-win-upd-stop-wait, X-worker-settings-pointer in next runner PR"
+    },
+    {
+      "id": "X-event-log-followups",
+      "what": "After #702: settings/logging.rs comments (nothing writes to Event Log -> now does); docs/user/06-troubleshooting.md 6.2 point to Application log; docs/legal/operator-guidance.md 'version 4' -> 5; confirm update helper interpolated reasons carry no account name/config value.",
+      "from": "#702 session"
+    },
+    {
+      "id": "owner-q-notice-applies-to",
+      "what": "Owner asked 17:5xZ via dashboard: Legal Notice 'Applies to Lodestar 0.5.2' line on main is stale (v0.5.2 ships v4; main v5). Recommended wording sent. Change nothing until owner answers."
     }
   ],
   "main_health": [
@@ -7614,7 +7623,7 @@
         "slice": "X-event-log-notice",
         "role": "Opus slice (then X-prowlarr-register)",
         "agent": "session_01MMjhnCHsnr3wRoSQhHd9kN",
-        "doing": "launched; Notice v5 (Event Log) then Prowlarr under same version",
+        "doing": "#702 under Opus review; X-prowlarr-register after merge",
         "since": "2026-11-11T15:23Z",
         "status": "active"
       },
