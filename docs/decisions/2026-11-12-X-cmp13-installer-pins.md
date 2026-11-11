@@ -20,15 +20,17 @@ Installer pins in the companion catalogue: qBittorrent's official Windows instal
 - **The choice:** the pin tool reads the installer and its `.asc` from SourceForge at pin time only, and pins it only if the signature verifies against qBittorrent's release key. **The signature is the trust anchor, not the host.** FossHub isn't used.
 - **The key: `D8F3DA77AAC6741053599C136E4A2D025B7CC9A2`** (sledgehammer999, qBittorrent's release manager).
   - Source 1: the issuer fingerprint of the OpenPGP signature on qBittorrent's `release-5.3.0` tag on GitHub, read here with `git cat-file` and `gpg --list-packets` (an RSA key, SHA-256 signature).
-  - Source 2: the pin run itself. The key file isn't committed in this PR: this session couldn't fetch the key (github.com, `keys.openpgp.org` and `keyserver.ubuntu.com` all return 403 here). So the tool fetches it at pin time from two places, `keyserver.ubuntu.com` and `github.com/sledgehammer999.gpg`, and each must serve that primary key.
-  - Only that key is used, minimally exported. The report carries it, to be committed as `keys/D8F3….asc` in the first pin PR. That run's report is the cross-check evidence (runner, 2026-11-11).
+  - The key file isn't committed in this PR: this session couldn't fetch it (github.com, `keys.openpgp.org` and `keyserver.ubuntu.com` all return 403 here). So the tool fetches it at pin time from `keyserver.ubuntu.com` and `github.com/sledgehammer999.gpg`, each of which must serve that primary key, and merges both copies so a revocation in either is kept. **That is availability, not a second source for the fingerprint** (self-review I2): a lookup by fingerprint can only return the key with that fingerprint. The fingerprint committed in `upstream.py` is the trust anchor.
+  - Only that key is used, minimally exported. The report carries it, to be committed as `keys/D8F3….asc` in the first pin PR (runner, 2026-11-11).
+  - **The fingerprint's sources, honestly:** both of today's are on GitHub (the tag signature's issuer, and sledgehammer999's key list). A source outside GitHub (Arch's `validpgpkeys`, Debian's `debian/upstream/signing-key.asc`, Fedora's spec) was asked of the runner; this session can't reach them. The first pin PR's reviewer confirms it against one.
   - Once committed, `keys/` wins and nothing is fetched.
 - **Threat model:**
-  - **A tampered SourceForge mirror, or a hostile redirect:** the bytes don't verify against the pinned key, so the pin is refused. SourceForge's mirrors (`<mirror>.dl.sourceforge.net`) are allowed as redirect hops for exactly that reason. Every hop still goes through `check_url`: `https`, no port or user information, one DNS label before `.dl.sourceforge.net`, at most 5 hops.
+  - **A tampered SourceForge mirror, or a hostile redirect, serving other bytes:** they don't verify against the pinned key, so the pin is refused. Every hop goes through `check_url`: `https`, no port or user information, `downloads.sourceforge.net`, `sourceforge.net` or one DNS label before `.dl.sourceforge.net`, at most 5 hops.
+  - **A mirror serving a different genuinely signed file** (an older installer, the `_lt12_` build, a source tarball) with its real `.asc`: **the signature alone doesn't catch this**, since it covers bytes, not a name or version (self-review B2). Binding the bytes to the version is pending the runner's decision; see "Open" below.
   - **A substituted key at a key source:** the tool uses only a key whose primary fingerprint is the pinned one, and a fingerprint can't be forged. Both sources must serve it, and a source that doesn't refuses the pin.
   - **A compromised release key, or a malicious upload signed by it:** not caught here. That's upstream's own trust, the same as every signed companion, and the pin is still the run-time gate: what's pinned is what you're told to check.
   - **SourceForge serving a different file under the same version:** `sha_changed` refuses a re-pin of one version as other bytes (CMP-13).
-  - **A wrong fingerprint in the policy:** two independent sources name it, the GitHub tag signature and the key servers' answer to a by-fingerprint lookup. The pin PR's reviewer checks the report's key against the tags.
+  - **A wrong fingerprint in the policy:** see the fingerprint's sources above.
   - **Not considered sufficient, so not built:**
     - two mirrors agreeing (SourceForge and FossHub, both uploads by the same maintainer);
     - a hash on a web page (qbittorrent.org publishes none).
@@ -50,12 +52,18 @@ Installer pins in the companion catalogue: qBittorrent's official Windows instal
   - an unsigned installer policy (`installer`).
 
 ## CMP-13's follow-ups
-- **The deadline holds during a read.** Before each read, the socket's timeout is cut to what's left of the 30 minutes, at most 60 s. A body that stalls or drips can't outlast the deadline, and a stall is refused as `timeout`. Tested against a real local server that stalls.
+- **The deadline holds during a read** (self-review B1, I1). Each read is one `recv` (`read1`), and before each the socket's timeout is cut to what's left of the 30 minutes, at most 60 s. A body that stalls or drips can't outlast the deadline (`timeout`); a socket already closed at the end of the body is ignored. Tested through `fetch()` against a real local server: complete length-delimited and chunked bodies, a stall and a drip. **Not covered:** a server that drips its response headers. That's bounded only by the 60 s socket timeout per recv and the workflow's 30-minute job limit.
 - **A single-platform manifest's platform is checked.** Its config blob is fetched by digest and checked against that digest. Its `os/architecture` must be `linux/amd64`, as an index's list must contain it. The blob may be redirected to the registry's blob host:
   - `pkg-containers.githubusercontent.com` for ghcr.io and lscr.io;
   - `production.cloudflare.docker.com` for Docker Hub.
 
   The registry token isn't sent there.
+
+## Open (runner)
+- **B2, binding the installer's bytes to its version.** Proposed:
+  - SourceForge's own folder feed, from `sourceforge.net` rather than a mirror, must state the downloaded size and MD5 for exactly that path;
+  - the signature's creation time must not be before the GitHub `release-<v>` tag's date.
+- Until the runner decides, the installer path stays as built, and the first pin PR mustn't include an installer pin.
 
 ## Not changed
 - `crates/companions/README.md`'s `native.release` row doesn't yet mention the installer folder. It's outside this slice's paths; the runner is told.
@@ -86,5 +94,6 @@ Installer pins in the companion catalogue: qBittorrent's official Windows instal
   - redirects to an unknown host, two labels, a look-alike suffix, `http`, GitHub or FossHub, and a signature redirected away;
   - the key fetched from two sources (one holding an extra key), a source without it, and a single source;
   - the mirror-host rule;
-  - the stalled body;
+  - complete bodies, a stall and a drip, through `fetch()` on a real socket;
+  - the loader's invariants and property tests, run over a catalogue with a pinned installer too;
   - a single-platform manifest's platform, another platform, and a config that isn't the one named.

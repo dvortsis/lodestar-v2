@@ -892,41 +892,105 @@ class InstallerPins(Case):
             pin.check_url("https://downloads.sourceforge.net/x", pin.DOWNLOAD_HOSTS + ("downloads.sourceforge.net",))
 
 
-class Deadline(unittest.TestCase):
-    """A body that stalls can't hold a download past its deadline."""
+class LocalServer:
+    """A real HTTP server on loopback, for the real transport's tests."""
 
-    def test_a_stalled_body_times_out(self):
+    def __init__(self, handler):
         import http.server
         import threading
-        import time
 
-        release = threading.Event()
+        self.release = threading.Event()
+        release = self.release
 
         class Handler(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
             def do_GET(self):
-                self.send_response(200)
-                self.send_header("Content-Length", "1000")
-                self.end_headers()
-                self.wfile.write(b"x" * 10)
-                self.wfile.flush()
-                release.wait(30)  # stalls until the test is done
+                handler(self, release)
 
             def log_message(self, *args):
                 pass
 
-        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        self.addCleanup(server.server_close)
-        self.addCleanup(server.shutdown)
-        self.addCleanup(release.set)
-        with mock.patch.dict(os.environ, {"NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"}):
-            r = pin.Transport().get(f"http://127.0.0.1:{server.server_port}/", {})
-        start = time.monotonic()
-        with self.assertRaises(TimeoutError):
-            for _ in r.chunks(size=10, deadline=start + 1):
-                pass
-        self.assertLess(time.monotonic() - start, 10)
-        r.close()
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.daemon_threads = True
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.server.server_port}/"
+
+    def close(self):
+        self.release.set()
+        self.server.shutdown()
+        self.server.server_close()
+
+
+class RealTransport(unittest.TestCase):
+    """fetch() over a real socket: complete bodies arrive, stalls and drips
+    can't outlast the deadline. Loopback is plain HTTP, so the https rule is
+    lifted for these tests only."""
+
+    def serve(self, handler):
+        srv = LocalServer(handler)
+        self.addCleanup(srv.close)
+        env = mock.patch.dict(os.environ, {"NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"})
+        env.start()
+        self.addCleanup(env.stop)
+        lifted = mock.patch.object(pin, "check_url", lambda url, hosts: None)
+        lifted.start()
+        self.addCleanup(lifted.stop)
+        return srv.url
+
+    def test_complete_bodies_arrive_length_delimited_and_chunked(self):
+        body = b"companion build " * 10000
+
+        def length(h, _):
+            h.send_response(200)
+            h.send_header("Content-Length", str(len(body)))
+            h.end_headers()
+            h.wfile.write(body)
+
+        def chunked(h, _):
+            h.send_response(200)
+            h.send_header("Transfer-Encoding", "chunked")
+            h.end_headers()
+            for i in range(0, len(body), 4096):
+                part = body[i : i + 4096]
+                h.wfile.write(b"%x\r\n%s\r\n" % (len(part), part))
+            h.wfile.write(b"0\r\n\r\n")
+
+        for handler in (length, chunked):
+            with self.subTest(handler.__name__):
+                url = self.serve(handler)
+                self.assertEqual(pin.fetch_bytes(pin.Transport(), url, (), len(body)), body)
+                with tempfile.TemporaryDirectory() as d:
+                    size, sha = pin.fetch_file(pin.Transport(), url, (), len(body), Path(d) / "f")
+                self.assertEqual((size, sha), (len(body), hashlib.sha256(body).hexdigest()))
+
+    def test_a_stall_or_a_drip_is_refused_at_the_deadline(self):
+        import time
+
+        def stall(h, release):
+            h.send_response(200)
+            h.send_header("Content-Length", "100000")
+            h.end_headers()
+            h.wfile.write(b"x" * 10)
+            h.wfile.flush()
+            release.wait(30)
+
+        def drip(h, release):
+            h.send_response(200)
+            h.send_header("Content-Length", "100000")
+            h.end_headers()
+            while not release.wait(0.05):  # one byte per tick, until the test ends
+                h.wfile.write(b"x")
+                h.wfile.flush()
+
+        for handler in (stall, drip):
+            with self.subTest(handler.__name__), mock.patch.object(pin, "OVERALL", 1):
+                url = self.serve(handler)
+                start = time.monotonic()
+                with self.assertRaises(pin.Refused) as e:
+                    pin.fetch_bytes(pin.Transport(), url, (), 100000)
+                self.assertEqual(e.exception.code, "timeout")
+                self.assertLess(time.monotonic() - start, 10)
 
 
 class SinglePlatform(Case):
@@ -946,10 +1010,46 @@ class SinglePlatform(Case):
         _, platforms = pin.resolve_digest(Fake(routes), "ghcr.io/qdm12/thing", "v1")
         self.assertEqual(platforms, ["linux/amd64"])
 
+    def test_the_token_reaches_the_registry_only(self):
+        cfg = json.dumps({"os": "linux", "architecture": "amd64"}).encode()
+        routes = self.manifest(cfg)
+        body = routes.pop(self.GHCR)[2]
+        routes[self.GHCR] = (401, {"WWW-Authenticate": 'Bearer realm="https://ghcr.io/token",service="ghcr.io"'}, b"")
+        routes["https://ghcr.io/token?service=ghcr.io&scope=repository%3Aqdm12%2Fthing%3Apull"] = ok(
+            b'{"token": "t0k"}'
+        )
+        fake = Fake(routes)
+        real_get = fake.get
+
+        def get(url, headers):
+            if url == self.GHCR and headers.get("Authorization") == "Bearer t0k":
+                fake.calls.append((url, dict(headers)))
+                return pin.Response(200, {}, io.BytesIO(body))
+            return real_get(url, headers)
+
+        fake.get = get
+        _, platforms = pin.resolve_digest(fake, "ghcr.io/qdm12/thing", "v1")
+        self.assertEqual(platforms, ["linux/amd64"])
+        blob = [h for u, h in fake.calls if "/blobs/" in u]
+        self.assertEqual([h.get("Authorization") for h in blob], ["Bearer t0k"])
+        store = [h for u, h in fake.calls if u.startswith("https://pkg-containers.githubusercontent.com/")]
+        self.assertEqual(store, [{}], "the blob host got credentials")
+
+    def test_a_manifest_without_a_config_or_a_config_without_a_platform(self):
+        no_cfg = {self.GHCR: ok(json.dumps({"mediaType": "application/vnd.oci.image.manifest.v1+json"}).encode())}
+        with self.assertRaises(pin.Refused) as e:
+            pin.resolve_digest(Fake(no_cfg), "ghcr.io/qdm12/thing", "v1")
+        self.assertEqual(e.exception.code, "registry")
+        no_os = self.manifest(json.dumps({"architecture": "amd64"}).encode())
+        with self.assertRaises(pin.Refused) as e:
+            pin.resolve_digest(Fake(no_os), "ghcr.io/qdm12/thing", "v1")
+        self.assertEqual(e.exception.code, "registry")
+
     def test_another_platform_or_a_wrong_config_is_refused(self):
         arm = self.manifest(json.dumps({"os": "linux", "architecture": "arm64"}).encode())
-        with self.assertRaises(pin.Refused):
+        with self.assertRaises(pin.Refused) as e:
             pin.resolve_digest(Fake(arm), "ghcr.io/qdm12/thing", "v1")
+        self.assertEqual(e.exception.code, "registry")
         bad = self.manifest(json.dumps({"os": "linux", "architecture": "amd64"}).encode())
         store = "https://pkg-containers.githubusercontent.com/b"
         bad[store] = ok(b'{"os": "linux", "architecture": "amd64", "x": 1}')

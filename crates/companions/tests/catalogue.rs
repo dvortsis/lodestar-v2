@@ -5,8 +5,9 @@
 //! validation into something weaker.
 
 use lodestar_companions::catalogue::{
-    Arch, ArchiveKind, Catalogue, DOWNLOAD_HOSTS, Exposure, MAX_ARTIFACT_SIZE, MAX_JSON, Need,
-    NotAvailable, Platform, Proto, REGISTRIES, Rule, SUPPORTED, TemplateId, UpstreamSig, builtin,
+    Arch, ArchiveKind, Catalogue, DOWNLOAD_HOSTS, Exposure, INSTALLER_SOURCES, MAX_ARTIFACT_SIZE,
+    MAX_JSON, Need, NotAvailable, Platform, Proto, REGISTRIES, Rule, SUPPORTED, TemplateId,
+    UpstreamSig, builtin,
 };
 use proptest::prelude::*;
 use serde_json::{Value, json};
@@ -868,8 +869,10 @@ proptest! {
     /// is refused, or (where the text happens to be valid for that field)
     /// leaves every safety invariant intact. Never a panic.
     #[test]
-    fn string_mutations_never_weaken_the_catalogue(pick in any::<prop::sample::Index>(), text in hostile()) {
-        let base = pinned();
+    fn string_mutations_never_weaken_the_catalogue(
+        pick in any::<prop::sample::Index>(), text in hostile(), installer in any::<bool>(),
+    ) {
+        let base = if installer { with_installer() } else { pinned() };
         let mut leaves = Vec::new();
         string_leaves(&base, &mut Vec::new(), &mut leaves);
         let path = &leaves[pick.index(leaves.len())];
@@ -895,8 +898,9 @@ proptest! {
             Just(0u64), Just(1), Just(80), Just(1023), Just(1024), Just(65535), Just(65536),
             Just(MAX_ARTIFACT_SIZE), Just(MAX_ARTIFACT_SIZE + 1), Just(u64::MAX), any::<u64>(),
         ],
+        installer in any::<bool>(),
     ) {
-        let base = pinned();
+        let base = if installer { with_installer() } else { pinned() };
         let mut leaves = Vec::new();
         number_leaves(&base, &mut Vec::new(), &mut leaves);
         let path = &leaves[pick.index(leaves.len())];
@@ -911,8 +915,8 @@ proptest! {
     /// unless the field is optional (`executable`, `pin`, `digest`,
     /// `health`, `native`, `container`, `fingerprint`).
     #[test]
-    fn dropping_a_required_field_is_refused(pick in any::<prop::sample::Index>()) {
-        let base = pinned();
+    fn dropping_a_required_field_is_refused(pick in any::<prop::sample::Index>(), installer in any::<bool>()) {
+        let base = if installer { with_installer() } else { pinned() };
         let mut objects = Vec::new();
         object_keys(&base, &mut Vec::new(), &mut objects);
         let (path, key) = &objects[pick.index(objects.len())];
@@ -990,9 +994,23 @@ fn assert_invariants(c: &Catalogue) {
                     );
                     assert!(!x.as_str().starts_with('/'));
                 }
+                // Only an installer has a folder of its own, on an installer
+                // source that is never a fetch host.
+                if let Some(r) = &a.release {
+                    assert_eq!(a.archive, ArchiveKind::Installer);
+                    let h = r.host();
+                    assert!(INSTALLER_SOURCES.contains(&h), "{h}");
+                    assert!(!DOWNLOAD_HOSTS.contains(&h) && !e.allows_host(h), "{h}");
+                }
                 if let Ok(p) = a.pin() {
                     assert!(p.url.as_str().starts_with("https://"));
-                    assert!(e.allows_host(p.url.host()));
+                    match &a.release {
+                        Some(r) => {
+                            assert_eq!(p.url.host(), r.host());
+                            assert!(p.url.as_str().starts_with(r.as_str()));
+                        }
+                        None => assert!(e.allows_host(p.url.host())),
+                    }
                     assert!(p.size > 0 && p.size <= MAX_ARTIFACT_SIZE);
                 }
             }
@@ -1092,8 +1110,27 @@ fn an_unpinned_installer_needs_no_folder_and_old_catalogues_load() {
 }
 
 #[test]
+fn a_folder_named_installer_may_await_its_pin_and_pins_never_name_a_mirror() {
+    let mut v = with_installer();
+    installer(&mut v)["pin"] = Value::Null;
+    let c = parse(&v).unwrap();
+    let a = c
+        .get("qbittorrent")
+        .unwrap()
+        .artifact(Platform::Windows, Arch::X86_64)
+        .unwrap();
+    assert!(a.release.is_some());
+    assert_eq!(a.pin().unwrap_err(), NotAvailable::AwaitingPin);
+    // A pin names the folder's own host, never a download mirror.
+    installer_refused(Rule::HostNotAllowed, |v| {
+        installer(v)["pin"]["url"] = json!(
+            "https://netix.dl.sourceforge.net/project/qbittorrent/qbittorrent-win32/qbittorrent-5.0.3/qbittorrent_5.0.3_x64_setup.exe"
+        );
+    });
+}
+
+#[test]
 fn installer_sources_are_never_fetch_hosts() {
-    use lodestar_companions::catalogue::{DOWNLOAD_HOSTS, INSTALLER_SOURCES};
     for h in INSTALLER_SOURCES {
         assert!(!DOWNLOAD_HOSTS.contains(h), "{h}");
     }
@@ -1129,7 +1166,8 @@ fn refuses_installer_folders_and_pins_out_of_place() {
             json!("https://sourceforge.net/project/qbittorrent/qbittorrent-win32/");
     });
     // The fetch-host list in the wrong place: an installer folder on a
-    // fetch host, or the installer source added to the entry's hosts.
+    // fetch host, or the installer source added to the entry's hosts (the
+    // entry's own DOWNLOAD_HOSTS rule refuses that first).
     installer_refused(Rule::HostNotAllowed, |v| {
         installer(v)["release"] =
             json!("https://github.com/project/qbittorrent/qbittorrent-win32/");

@@ -10,7 +10,9 @@
 //! **Untrusted structure all the same.** It's parsed strictly
 //! (`deny_unknown_fields`, no duplicate keys, closed enums) and every value
 //! is validated before anything can read it: `https` only, every download
-//! host in both the entry's allowlist and [`DOWNLOAD_HOSTS`], images only
+//! host in both the entry's allowlist and [`DOWNLOAD_HOSTS`] (an
+//! installer's own folder is on an [`INSTALLER_SOURCES`] host instead,
+//! which is never fetched), images only
 //! from [`REGISTRIES`], hash and size formats, versions, archive kinds that
 //! match the URL, executable paths that stay inside the archive, ports,
 //! and only the platforms v0.6 supports. A malformed catalogue fails this
@@ -1491,6 +1493,8 @@ fn validate_installer_release(
 ) -> Result<HttpsUrl, CatalogueError> {
     let url = field(HttpsUrl::parse(r), at)?;
     let host = url.host();
+    // The last two can't fail while entry hosts must be DOWNLOAD_HOSTS and
+    // the lists are disjoint (tested); they keep the rule if either changes.
     check(
         INSTALLER_SOURCES.contains(&host)
             && !DOWNLOAD_HOSTS.contains(&host)

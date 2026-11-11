@@ -106,17 +106,27 @@ class Response:
         self._body = body
 
     def chunks(self, size: int = 1 << 16, deadline: float | None = None):
-        # No read may block past the deadline: the socket's own timeout is
-        # cut to what's left before each read (a body with no socket, such
-        # as the tests', has nothing to cut).
-        sock = getattr(getattr(getattr(self._body, "fp", None), "raw", None), "_sock", None)
+        # No read may block past the deadline. `read1` makes at most one recv
+        # (a plain `read` loops over many, so a drip would outlast it), and
+        # the socket's own timeout is cut to what's left before each one. A
+        # body with no socket, as in the tests' fakes, has nothing to cut.
+        read = getattr(self._body, "read1", None) or self._body.read
         while True:
-            if deadline is not None and sock is not None:
-                sock.settimeout(max(0.01, min(60.0, deadline - time.monotonic())))
-            chunk = self._body.read(size)
+            if deadline is not None:
+                self._cut_timeout(deadline)
+            chunk = read(size)
             if not chunk:
                 return
             yield chunk
+
+    def _cut_timeout(self, deadline: float) -> None:
+        sock = getattr(getattr(getattr(self._body, "fp", None), "raw", None), "_sock", None)
+        if sock is None:
+            return
+        try:
+            sock.settimeout(max(0.01, min(60.0, deadline - time.monotonic())))
+        except OSError:
+            pass  # already closed: the body is complete, the next read returns b""
 
     def close(self):
         self._body.close()
@@ -289,7 +299,7 @@ def keys_for(t, gpg: str, policy, keys_dir: Path, work: Path) -> tuple[Path, lis
     fpr = policy.keys[0]
     if not FINGERPRINT.match(fpr):
         raise Refused("key_not_pinned", "the policy names no full fingerprint for this artifact")
-    exported = []
+    bodies = []
     for url, hosts in policy.key_sources:
         body = fetch_bytes(t, url, hosts, MAX_KEY)
         with tempfile.TemporaryDirectory(prefix="pins-keysrc-") as home:
@@ -299,10 +309,19 @@ def keys_for(t, gpg: str, policy, keys_dir: Path, work: Path) -> tuple[Path, lis
             gpg_run(gpg, home, ["--import", str(src)])
             if fpr not in primaries(gpg_run(gpg, home, ["--with-colons", "--list-keys"]).stdout):
                 raise Refused("unknown_key", f"{host_of(url)} doesn't serve the pinned key {fpr}")
-            out = gpg_run(gpg, home, ["--armor", "--export-options", "export-minimal", "--export", fpr])
-            if out.returncode != 0 or "BEGIN PGP PUBLIC KEY BLOCK" not in out.stdout:
-                raise Refused("unknown_key", f"the key from {host_of(url)} didn't export")
-            exported.append(out.stdout)
+        bodies.append(body)
+    # Both copies merged before the export, so a revocation or a newer
+    # self-signature present in either one is kept.
+    with tempfile.TemporaryDirectory(prefix="pins-keymerge-") as home:
+        os.chmod(home, 0o700)
+        for i, body in enumerate(bodies):
+            src = Path(home) / f"source{i}.asc"
+            src.write_bytes(body)
+            gpg_run(gpg, home, ["--import", str(src)])
+        out = gpg_run(gpg, home, ["--armor", "--export-options", "export-minimal", "--export", fpr])
+        if out.returncode != 0 or "BEGIN PGP PUBLIC KEY BLOCK" not in out.stdout:
+            raise Refused("unknown_key", "the pinned key didn't export")
+        exported = [out.stdout]
     fetched = work / "fetched-keys"
     fetched.mkdir(exist_ok=True)
     (fetched / f"{fpr}.asc").write_text(exported[0], encoding="ascii")
@@ -743,6 +762,9 @@ def make_pins(args, doc: dict, t: Transport, gpg: str, keys_dir: Path, recipes=N
                     folder_host = host_of(folder)
                     if folder_host not in INSTALLER_SOURCES or folder_host in entry["hosts"]:
                         raise Refused("host_not_allowed", f"{folder_host} isn't an installer source")
+                    # The loader's shape: `/project/<project>/<folder>/`.
+                    if not re.fullmatch(r"https://[a-z0-9.-]+/project/[A-Za-z0-9._~+-]+/[A-Za-z0-9._~+-]+/", folder):
+                        raise Refused("request", f"{safe(folder)} isn't an installer folder the catalogue accepts")
                     a_release, a_hosts, a_tag = folder, INSTALLER_HOSTS, fill(recipe.installer_dir or "")
                 else:
                     a_release, a_hosts, a_tag = release, hosts, tag
