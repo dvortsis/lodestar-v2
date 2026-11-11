@@ -2062,7 +2062,9 @@ struct Running {
     status: Option<watch::Receiver<Status>>,
     /// Its output, kept after it stops until it's started again.
     logs: Option<LogRing>,
-    /// The route variables it was launched with ([`launch_env`]).
+    /// The route variables it was launched with ([`launch_env`]), read
+    /// back by tests ([`Supervised::launched_env`]).
+    #[cfg_attr(not(any(test, feature = "testing")), allow(dead_code))]
     env: Vec<(EnvName, OsString)>,
 }
 
