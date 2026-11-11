@@ -161,3 +161,15 @@ class Disable(unittest.TestCase):
         with self.assertRaises(SystemExit) as cm:
             run(["trip"], env(), gh)
         self.assertEqual(cm.exception.code, 1)
+
+
+class Unconfigured(unittest.TestCase):
+    def test_an_unset_bot_id_escalates_then_fails_the_job(self):
+        gh = FakeGitHub()
+        with self.assertRaises(SystemExit) as cm:
+            run(["sweep"], env(OPERATOR_BOT_USER_ID=""), gh)
+        self.assertEqual(str(cm.exception), "tripwire: OPERATOR_BOT_USER_ID isn't set")
+        self.assertEqual(len(gh.bodies()), 1)
+        self.assertIn("OPERATOR_BOT_USER_ID isn't set", gh.bodies()[0])
+        self.assertNotIn(DISABLE, [c[:2] for c in gh.calls])
+        self.assertFalse([c for c in gh.calls if c[0] == "GET"])  # nothing listed without the ID

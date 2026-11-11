@@ -159,6 +159,10 @@ def sweep(env, transport, now: datetime) -> tuple[list[str], bool]:
 
 
 def cmd_sweep(env, transport, now) -> int:
+    if not _digits(env.get("OPERATOR_BOT_USER_ID")):
+        # Nothing can be attributed without the bot's ID: say so (best effort), then fail the job.
+        act(env, transport, ["OPERATOR_BOT_USER_ID isn't set; nothing was checked this run"], False)
+        raise SystemExit("tripwire: OPERATOR_BOT_USER_ID isn't set")
     try:
         findings, disable = sweep(env, transport, now)
     except Incomplete as e:

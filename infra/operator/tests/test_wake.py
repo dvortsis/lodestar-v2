@@ -371,6 +371,50 @@ class Wake(unittest.TestCase):
         self.assertIn("the bridge failed (RuntimeError)", self.post.bodies()[-1])
         self.assertNotIn(LOCK_KEY, self.store.objects)
 
+    def test_a_refusal_after_the_lock_is_answered_and_releases(self):
+        # Refusal is a SystemExit: the post-lock handler must catch it too.
+        self.store.put(CLAUDE_LOCK_KEY, b'{"agent_id": "a"}')
+        env, _ = wake_env()
+        api = FakeAnthropic()
+        rc, _ = self.go(env, api)
+        self.assertIsInstance(rc, SystemExit)
+        self.assertIn("the bridge failed (Refusal)", self.post.bodies()[0])
+        self.assertEqual(api.calls, [])
+        self.assertNotIn(LOCK_KEY, self.store.objects)
+
+    def test_no_session_id_is_a_refusal_that_is_answered(self):
+        env, _ = wake_env()
+
+        class Api(FakeAnthropic):
+            def __call__(self, method, path, body):
+                if method == "POST" and path == "/v1/sessions":
+                    self.calls.append((method, path, body))
+                    return {}
+                return super().__call__(method, path, body)
+        rc, _ = self.go(env, Api())
+        self.assertIsInstance(rc, SystemExit)
+        self.assertIn("the bridge failed (Refusal)", self.post.bodies()[-1])
+        self.assertIn(("DELETE", "/installation/token", None, "ghs_LEAKMARKTOKEN"), self.gh.calls)
+
+    def test_a_failed_interrupt_still_escalates_and_archives(self):
+        env, _ = wake_env()
+
+        class Api(FakeAnthropic):
+            def __call__(self, method, path, body):
+                if method == "GET" and path == "/v1/sessions/sesn_FAKE":
+                    self.calls.append((method, path, body))
+                    raise RuntimeError("poll failed")
+                if body == {"events": [{"type": "user.interrupt"}]}:
+                    self.calls.append((method, path, body))
+                    raise RuntimeError("interrupt refused")
+                return super().__call__(method, path, body)
+        api = Api()
+        rc, _ = self.go(env, api)
+        self.assertIsInstance(rc, RuntimeError)
+        self.assertIn("the bridge failed (RuntimeError)", self.post.bodies()[-1])
+        self.assertIn("/v1/sessions/sesn_FAKE/archive", api.paths("POST"))
+        self.assertNotIn(LOCK_KEY, self.store.objects)
+
     def test_gated_events_touch_nothing(self):
         for over in ({"AUTHOR_ID": "9"}, {"OPERATOR_STOP": "true"}, {"GITHUB_RUN_ATTEMPT": "2"},
                      {"COMMENT_BODY": "operator-instruction v1\nid: x"}, {"EVENT_ACTION": "edited"}):
