@@ -447,6 +447,9 @@ struct Inner {
     /// Settings changes the Off watcher has handled, for the tests.
     #[cfg(test)]
     handled: std::sync::atomic::AtomicU64,
+    /// Times the check loop has come to the check lock, for the tests.
+    #[cfg(test)]
+    at_lock: std::sync::atomic::AtomicU64,
     /// The version being downloaded for the helper.
     installing: Mutex<Option<Version>>,
 }
@@ -512,6 +515,8 @@ impl Notifier {
                 withdrawals: std::sync::atomic::AtomicU64::new(0),
                 #[cfg(test)]
                 handled: std::sync::atomic::AtomicU64::new(0),
+                #[cfg(test)]
+                at_lock: std::sync::atomic::AtomicU64::new(0),
                 installing: Mutex::new(None),
             }),
         };
@@ -604,7 +609,11 @@ impl Notifier {
             let checks = async {
                 loop {
                     let wait = n.until_scheduled();
+                    // The stop first, here and at the lock: a stop that
+                    // comes as a check falls due never starts the check,
+                    // which would cost the service's stop its whole wait.
                     tokio::select! {
+                        biased;
                         _ = stop.changed() => return,
                         r = settings.changed() => {
                             if r.is_err() { return; }
@@ -613,9 +622,14 @@ impl Notifier {
                         () = sleep(wait.map(|w| w.min(MAX_SLEEP))) => {}
                     }
                     if n.due() {
+                        #[cfg(test)]
+                        n.inner
+                            .at_lock
+                            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                         let one = tokio::select! {
-                            one = n.inner.checking.clone().lock_owned() => one,
+                            biased;
                             _ = stop.changed() => return,
+                            one = n.inner.checking.clone().lock_owned() => one,
                         };
                         // Still due once the lock is ours: a manual check may
                         // have run meanwhile.
@@ -2230,6 +2244,40 @@ mod tests {
         e.settings.send_modify(|s| s.mode = Mode::Off);
         assert_eq!(e.n().until_scheduled(), None);
         assert_eq!(e.status()["status"]["next_check_at"], Value::Null);
+    }
+
+    /// A stop and a due check together never start the check: the stop
+    /// wins at the check lock. The test holds the lock until the loop
+    /// waits for it, then sends the stop and lets it go, so both are ready
+    /// at once. Without the bias the select picks at random, so this runs
+    /// enough times for that to show.
+    #[tokio::test]
+    async fn a_stop_as_the_check_lock_comes_free_never_runs_the_check() {
+        for _ in 0..40 {
+            let e = Env::new(Mode::Notify, InstallKind::Msi);
+            let held = e.n().inner.checking.clone().lock_owned().await;
+            let (stop, stopped) = watch::channel(false);
+            let task = e.n().spawn(stopped);
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while e
+                .n()
+                .inner
+                .at_lock
+                .load(std::sync::atomic::Ordering::SeqCst)
+                == 0
+            {
+                assert!(Instant::now() < deadline, "the loop never came to the lock");
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            stop.send(true).unwrap();
+            drop(held);
+            task.await.unwrap();
+            let states = e.states();
+            assert!(
+                !states.iter().any(|(s, _)| *s == UpdatesState::Checking),
+                "{states:?}"
+            );
+        }
     }
 
     /// The same files as the Unix engine, both ways.
