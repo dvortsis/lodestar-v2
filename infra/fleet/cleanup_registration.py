@@ -32,8 +32,24 @@ def authorization(fleet, hosts, linode, account, now):
     for wall in doc["firewalls"]:
         if not contract.TAGS <= set(walls[str(wall["id"])].get("tags") or []):
             raise contract.Refused("firewall ownership tags incomplete")
-        for device in linode.firewall_devices(wall["id"]):
-            entity = device.get("entity", {})
-            if entity.get("type") != "linode" or entity.get("id") not in wall["linode_ids"]:
-                raise contract.Refused("firewall has an unapproved member")
+        devices = linode.firewall_devices(wall["id"])
+        if not isinstance(devices, list) or len(devices) != len(wall["linode_ids"]):
+            raise contract.Refused("firewall attachments do not match authorized members")
+        seen = set()
+        for device in devices:
+            entity = device.get("entity") if isinstance(device, dict) else None
+            if (not isinstance(entity, dict) or entity.get("type") != "linode"
+                    or type(entity.get("id")) is not int or entity["id"] not in wall["linode_ids"]
+                    or entity["id"] in seen):
+                raise contract.Refused("firewall attachments are malformed, foreign or duplicated")
+            seen.add(entity["id"])
+        if seen != set(wall["linode_ids"]):
+            raise contract.Refused("firewall attachments do not match authorized members")
+    # A complete forward list is not proof of the independent VM-side view.
+    # Every VM must report exactly its authorized firewall, including shared ones.
+    for wall in doc["firewalls"]:
+        for ident in wall["linode_ids"]:
+            reverse = linode.linode_firewalls(ident)
+            if not isinstance(reverse, list) or reverse != [str(wall["id"])]:
+                raise contract.Refused("Linode firewall association does not match authorization")
     return doc

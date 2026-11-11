@@ -95,13 +95,13 @@ class FakeLinodeAPI:
         if p == "/account":
             return {"euuid": "EUUID-FLEET"}
         if p == "/linode/instances":
-            return {"data": list(self.linodes.values()), "page": 1, "pages": 1}
+            return {"data": list(self.linodes.values()), "page": 1, "pages": 1, "results": len(self.linodes)}
         if p == "/networking/firewalls":
-            return {"data": list(self.firewalls.values()), "page": 1, "pages": 1}
+            return {"data": list(self.firewalls.values()), "page": 1, "pages": 1, "results": len(self.firewalls)}
         parts = p.strip("/").split("/")
         if parts[:2] == ["linode", "instances"] and len(parts) == 4 and parts[3] == "firewalls":
             fws = [fid for fid, devs in self.devices.items() if any(str(d["entity"]["id"]) == parts[2] for d in devs)]
-            return {"data": [{"id": int(f)} for f in fws], "page": 1, "pages": 1}
+            return {"data": [{"id": int(f)} for f in fws], "page": 1, "pages": 1, "results": len(fws)}
         if parts[:2] == ["linode", "instances"] and method == "DELETE":
             del self.linodes[parts[2]]
             for fid in self.devices:  # deleting a Linode detaches it from its firewall
@@ -118,7 +118,8 @@ class FakeLinodeAPI:
                     return {}
                 return self.rules[fid]
             if parts[3] == "devices":
-                return {"data": self.devices[fid], "page": 1, "pages": 1}
+                return {"data": [{"id": i + 1, **d} for i, d in enumerate(self.devices[fid])],
+                        "page": 1, "pages": 1, "results": len(self.devices[fid])}
         raise AssertionError(f"unexpected {method} {p}")
 
 
@@ -728,6 +729,77 @@ class LiveFlows(unittest.TestCase):
         self.assertNotIn("so run down", out)
         self.assertTrue(b.mismatch())
         self.assertNotIn(("state-b", "fleet/cleanup-authorization.json"), s3.objects)
+        self.assertNotIn("destroy", tf.calls)
+        self.assertFalse(any(method == "DELETE" for method, *_ in api.calls))
+
+    def test_registration_failures_do_not_publish_authorization_or_successful_fleet(self):
+        cases = (
+            ("firewall_devices", {"return_value": []}),
+            ("firewall_devices", {"return_value": [{"entity": {"type": "linode", "id": 11}}] * 2}),
+            ("firewall_devices", {"side_effect": LinodeError("LEAKMARK-forward-read")}),
+            ("linode_firewalls", {"return_value": ["22"]}),
+            ("linode_firewalls", {"side_effect": LinodeError("LEAKMARK-reverse-read")}),
+        )
+        for method, outcome in cases:
+            for previous in (None, b'{"previous":"authorization"}'):
+                with self.subTest(method=method, outcome=outcome, prior_authorization=previous is not None):
+                    b, s3, api, tf = backend(api=self.empty_account())
+                    auth_key = ("state-b", "fleet/cleanup-authorization.json")
+                    if previous is not None:
+                        s3.objects[auth_key] = previous
+                    state_key = ("state-b", apply.TF_STATE_KEY)
+                    s3.objects[state_key] = b"private-state-canary"
+                    self.assertIsNone(b.read_fleet())  # Establish the initial idle tombstone.
+                    before = sum(key == FLEET_KEY for _, key, _ in s3.puts)
+                    with mock.patch.object(b.linode, method, **outcome):
+                        rc, out = self.run_cli("act", "/fleet up screen", b)
+                    self.assertEqual(rc, 1)
+                    self.assertIn("owner recovery required; inspect cleanup registration and inventory", out)
+                    self.assertNotIn("LEAKMARK", out)
+                    self.assertTrue(b.mismatch())
+                    self.assertEqual(s3.objects.get(auth_key), previous)
+                    self.assertFalse(any(key == auth_key[1] for _, key, _ in s3.puts))
+                    intent = s3.doc("state-b", FLEET_KEY)
+                    self.assertTrue(all(slot["address"] is None for slot in intent["roles"].values()))
+                    self.assertEqual(sum(key == FLEET_KEY for _, key, _ in s3.puts), before + 1)
+                    self.assertEqual(s3.objects[state_key], b"private-state-canary")
+                    self.assertEqual(tf.calls, ["init", "apply", "output"])
+                    self.assertFalse(any(method == "DELETE" for method, *_ in api.calls))
+
+    def test_incomplete_attachment_pagination_never_publishes_registration(self):
+        for collection in ("/networking/firewalls/21/devices", "/linode/instances/11/firewalls"):
+            with self.subTest(collection=collection):
+                b, s3, api, tf = backend(api=self.empty_account())
+                original = b.linode._t
+                def incomplete(method, path, body):
+                    result = original(method, path, body)
+                    if path.startswith(collection + "?"):
+                        result.pop("pages")
+                    return result
+                with mock.patch.object(b.linode, "_t", side_effect=incomplete):
+                    rc, out = self.run_cli("act", "/fleet up screen", b)
+                self.assertEqual(rc, 1)
+                self.assertIn("owner recovery required; inspect cleanup registration and inventory", out)
+                self.assertTrue(b.mismatch())
+                self.assertNotIn(("state-b", "fleet/cleanup-authorization.json"), s3.objects)
+                self.assertTrue(all(slot["address"] is None for slot in s3.doc("state-b", FLEET_KEY)["roles"].values()))
+                self.assertNotIn("destroy", tf.calls)
+                self.assertFalse(any(method == "DELETE" for method, *_ in api.calls))
+
+    def test_registration_write_failure_requires_owner_recovery(self):
+        class AuthorizationWriteFails(FakeS3):
+            def put_object(self, Bucket, Key, Body, IfNoneMatch=None):
+                if Key == "fleet/cleanup-authorization.json":
+                    raise S3Error("LEAKMARK-write-failed")
+                return super().put_object(Bucket, Key, Body, IfNoneMatch)
+        b, s3, api, tf = backend(s3=AuthorizationWriteFails(), api=self.empty_account())
+        rc, out = self.run_cli("act", "/fleet up screen", b)
+        self.assertEqual(rc, 1)
+        self.assertIn("owner recovery required; inspect cleanup registration and inventory", out)
+        self.assertNotIn("LEAKMARK", out)
+        self.assertTrue(b.mismatch())
+        self.assertNotIn(("state-b", "fleet/cleanup-authorization.json"), s3.objects)
+        self.assertTrue(all(slot["address"] is None for slot in s3.doc("state-b", FLEET_KEY)["roles"].values()))
         self.assertNotIn("destroy", tf.calls)
         self.assertFalse(any(method == "DELETE" for method, *_ in api.calls))
 

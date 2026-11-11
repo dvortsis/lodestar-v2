@@ -357,9 +357,15 @@ class LiveBackend:
                 fleet["roles"][role] = {"address": h.get("address"), "host_key": pub, "fingerprint": fingerprint(pub),
                                         "firewall_id": h.get("firewall_id"), "admin_ipv4": h.get("admin_ipv4")}
         from cleanup_registration import authorization
-        approved = authorization(fleet, hosts, self.linode, self.env["FLEET_LINODE_ACCOUNT_EUUID"].strip(), self.clock())
+        try:
+            approved = authorization(fleet, hosts, self.linode, self.env["FLEET_LINODE_ACCOUNT_EUUID"].strip(), self.clock())
+        except Exception:
+            raise ApplyFailed("cleanup registration failed; owner recovery required") from None
         fence()
-        self._put(self.state_bucket, "fleet/cleanup-authorization.json", approved)
+        try:
+            self._put(self.state_bucket, "fleet/cleanup-authorization.json", approved)
+        except Exception:
+            raise ApplyFailed("cleanup registration could not be recorded; owner recovery required") from None
         self.write_fleet(fleet)
         return fleet
 

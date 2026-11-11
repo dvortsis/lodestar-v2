@@ -90,7 +90,7 @@ class FakeFirewalls:
     def __call__(self, method, path, body):
         p = path.split("?")[0]
         if p == "/networking/firewalls":
-            return {"data": list(self.firewalls.values()), "page": 1, "pages": 1}
+            return {"data": list(self.firewalls.values()), "page": 1, "pages": 1, "results": len(self.firewalls)}
         parts = p.strip("/").split("/")
         if parts[:2] == ["networking", "firewalls"] and parts[3] == "rules":
             if method == "PUT":
