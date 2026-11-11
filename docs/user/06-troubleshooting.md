@@ -30,6 +30,10 @@ This chapter lists common problems with fixes, then says how to get help.
 
 At every start the Lodestar service checks that `C:\ProgramData\Lodestar` is private: only SYSTEM, Administrators and `NT SERVICE\Lodestar` have permissions, nothing is inherited, and nothing inside is a link. If the check fails, the service refuses to start. Windows shows "service-specific error 536870915" (`0x20000003`). Event Viewer has event 7024 in the **System** log, which may show only the raw code, such as `%%536870915`. Older versions show "error 3" instead.
 
+**(Newer than v0.5.1)** Lodestar also writes a short note to the Application log. Open **Event Viewer**, then **Windows Logs → Application**, and look for an **Error** from the source **Lodestar**, event ID 3.
+
+It names the data folder and says to run the installer's **Repair** as an administrator. It holds only the folder's path and that fix, so anyone who can open Event Viewer can read it. The exact reason is still in the file below.
+
 Windows doesn't know why. Lodestar writes the reason to `C:\Windows\Temp\lodestar-service.log`, which only administrators can read. It names the folder and the extra account. When the one problem is a single extra user account, it also gives the exact command that removes it.
 
 > [!WARNING]
