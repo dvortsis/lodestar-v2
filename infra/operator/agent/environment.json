@@ -1,0 +1,12 @@
+{
+  "name": "lodestar-operator",
+  "config": {
+    "type": "cloud",
+    "networking": {
+      "type": "limited",
+      "allowed_hosts": ["api.github.com"],
+      "allow_package_managers": false,
+      "allow_mcp_servers": false
+    }
+  }
+}

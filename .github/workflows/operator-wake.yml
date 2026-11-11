@@ -1,0 +1,142 @@
+# The operator bridge (OP-4): one Managed Agents session per runner
+# instruction on the channel PR. Plan: docs/plan/2026-11-08-cloud-operator.md
+# §1-§2, §4; decisions: docs/decisions/2026-11-11-OP-4.md. Every change to this
+# file or infra/operator/** gets a fresh Opus review and a /security-review.
+#
+# Rules this file keeps (infra/operator/tests/test_workflows.py checks them):
+# - no workflow_call and no reusable workflow;
+# - comment text and every secret reach scripts only through env, never `run:`;
+# - every job sets minimal permissions; the job with an environment gates on a
+#   job-level `if:` placed before `environment:`, so no secret loads for a
+#   refused comment (the bridge role's trust accepts any event from main);
+# - one session at a time by the S3 operator lock, not `concurrency`, which
+#   would cancel a pending run and lose its instruction;
+# - no Actions artifacts.
+name: operator-wake
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+jobs:
+  # The filter: no secrets, no environment. Channel PR, created only, the
+  # runner's numeric ID; then the header and the soft stop, in code.
+  gate:
+    if: >-
+      github.event_name == 'issue_comment' && github.event.action == 'created'
+      && github.event.issue.pull_request
+      && vars.CHANNEL_PR != '' && format('{0}', github.event.issue.number) == vars.CHANNEL_PR
+      && vars.RUNNER_USER_ID != '' && format('{0}', github.event.comment.user.id) == vars.RUNNER_USER_ID
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      allowed: ${{ steps.gate.outputs.allowed }}
+      reason: ${{ steps.gate.outputs.reason }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          IS_PR: ${{ github.event.issue.pull_request != null }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          AUTHOR_ID: ${{ github.event.comment.user.id }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          CHANNEL_PR: ${{ vars.CHANNEL_PR }}
+          RUNNER_USER_ID: ${{ vars.RUNNER_USER_ID }}
+          OPERATOR_BOT_USER_ID: ${{ vars.OPERATOR_BOT_USER_ID }}
+          OPERATOR_STOP: ${{ vars.OPERATOR_STOP }}
+        run: python3 infra/operator/wake.py gate
+
+  # Answers a refused instruction from the runner with its fixed reason.
+  refuse:
+    needs: gate
+    if: github.event_name == 'issue_comment' && needs.gate.outputs.allowed == 'false' && needs.gate.outputs.reason != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - env:
+          REFUSAL_REASON: ${{ needs.gate.outputs.reason }}
+          CHANNEL_PR: ${{ vars.CHANNEL_PR }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 infra/operator/wake.py refuse
+
+  # One session. The script repeats every gate before it touches the lock.
+  wake:
+    needs: gate
+    if: >-
+      github.event_name == 'issue_comment' && github.event.action == 'created'
+      && github.event.issue.pull_request
+      && needs.gate.outputs.allowed == 'true' && github.ref == 'refs/heads/main' && github.run_attempt == 1
+      && vars.OPERATOR_STOP == 'false'
+      && vars.CHANNEL_PR != '' && format('{0}', github.event.issue.number) == vars.CHANNEL_PR
+      && vars.RUNNER_USER_ID != '' && format('{0}', github.event.comment.user.id) == vars.RUNNER_USER_ID
+    environment: cloud-operator
+    runs-on: ubuntu-latest
+    timeout-minutes: 45 # the session's 30 minutes, the setup and the cleanup; under the lock's 60
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write # assumes LodestarOperatorBridge by OIDC, in-process
+      actions: read # stops a live session once operator-wake.yml is disabled
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 -m pip install --quiet --no-deps --require-hashes --target "$RUNNER_TEMP/fleet-deps" -r infra/fleet/requirements-live.txt
+      - env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          IS_PR: ${{ github.event.issue.pull_request != null }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          AUTHOR_ID: ${{ github.event.comment.user.id }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          CHANNEL_PR: ${{ vars.CHANNEL_PR }}
+          RUNNER_USER_ID: ${{ vars.RUNNER_USER_ID }}
+          OPERATOR_BOT_USER_ID: ${{ vars.OPERATOR_BOT_USER_ID }}
+          OPERATOR_STOP: ${{ vars.OPERATOR_STOP }}
+          OPERATOR_MODEL_TRIAGE: ${{ vars.OPERATOR_MODEL_TRIAGE }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PYTHONPATH: ${{ runner.temp }}/fleet-deps
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPERATOR_APP_ID: ${{ secrets.OPERATOR_APP_ID }}
+          OPERATOR_APP_PRIVATE_KEY: ${{ secrets.OPERATOR_APP_PRIVATE_KEY }}
+          AWS_BRIDGE_ROLE_ARN: ${{ secrets.AWS_BRIDGE_ROLE_ARN }}
+          CONTROL_BUCKET: ${{ secrets.CONTROL_BUCKET }}
+          FLEET_BUCKET_OWNER: ${{ secrets.FLEET_BUCKET_OWNER }}
+        run: python3 infra/operator/wake.py wake
+
+  # The end-of-session tripwire sweep (plan "Loosenings"): no secrets.
+  sweep:
+    needs: [gate, wake]
+    if: >-
+      github.event_name == 'issue_comment' && always()
+      && needs.gate.outputs.allowed == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: write
+      actions: write # disables operator-wake.yml on a trip
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - env:
+          CHANNEL_PR: ${{ vars.CHANNEL_PR }}
+          OPERATOR_BOT_USER_ID: ${{ vars.OPERATOR_BOT_USER_ID }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 infra/operator/tripwire.py sweep

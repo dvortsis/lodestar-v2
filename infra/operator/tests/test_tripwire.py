@@ -1,0 +1,175 @@
+import io
+import unittest
+from contextlib import redirect_stdout
+from datetime import timedelta
+
+from tests.helpers import T0, FakeGitHub
+import tripwire
+
+BOT, NOW = 555, T0
+ISO = lambda d: (NOW - d).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+DISABLE = ("PUT", "/repos/o/r/actions/workflows/operator-wake.yml/disable")
+
+
+def env(**over):
+    e = {"GITHUB_REPOSITORY": "o/r", "CHANNEL_PR": "700", "OPERATOR_BOT_USER_ID": str(BOT), "SENDER_ID": str(BOT),
+         "EVENT_NAME": "pull_request_target", "EVENT_ACTION": "edited", "TARGET_NUMBER": "12",
+         "GITHUB_RUN_ID": "9", "GITHUB_RUN_ATTEMPT": "1"}
+    e.update(over)
+    return e
+
+
+def run(argv, e, gh):
+    with redirect_stdout(io.StringIO()):
+        return tripwire.main(argv, env=e, transport=gh, clock=lambda: NOW)
+
+
+class Trip(unittest.TestCase):
+    def test_bot_actions_trip_and_disable(self):
+        for over in ({}, {"EVENT_ACTION": "labeled"}, {"EVENT_NAME": "issue_comment", "EVENT_ACTION": "edited", "TARGET_NUMBER": "700"},
+                     {"EVENT_NAME": "issue_comment", "EVENT_ACTION": "deleted"},
+                     {"EVENT_NAME": "issue_comment", "EVENT_ACTION": "created", "TARGET_NUMBER": "12"},
+                     {"EVENT_ACTION": "closed", "TARGET_NUMBER": "700"}):
+            with self.subTest(**over):
+                gh = FakeGitHub()
+                run(["trip"], env(**over), gh)
+                self.assertIn(DISABLE, [c[:2] for c in gh.calls])
+                self.assertIn("operator-report v1", gh.bodies()[0])
+                self.assertIn("kind: escalation", gh.bodies()[0])
+
+    def test_allowed_or_other_senders_do_nothing(self):
+        for over in ({"EVENT_NAME": "issue_comment", "EVENT_ACTION": "created", "TARGET_NUMBER": "700"},
+                     {"SENDER_ID": "111"}, {"OPERATOR_BOT_USER_ID": ""}, {"SENDER_ID": ""}):
+            with self.subTest(**over):
+                gh = FakeGitHub()
+                run(["trip"], env(**over), gh)
+                self.assertEqual(gh.calls, [])
+
+    def test_no_repository_means_no_call(self):
+        gh = FakeGitHub()
+        with self.assertRaises(SystemExit):
+            run(["trip"], env(GITHUB_REPOSITORY=""), gh)
+        self.assertEqual(gh.calls, [])
+
+    def test_labels_never_echo_event_text(self):
+        gh = FakeGitHub()
+        run(["trip"], env(EVENT_ACTION="x; rm -rf /"), gh)
+        self.assertNotIn("rm -rf", gh.bodies()[0])
+
+
+class Sweep(unittest.TestCase):
+    def sweep(self, **lists):
+        prefixes = {"events": "/repos/o/r/issues/events", "pulls": "/repos/o/r/pulls?", "reviews": "/repos/o/r/pulls/12/reviews",
+                    "review_comments": "/repos/o/r/pulls/comments", "comments": "/repos/o/r/issues/comments"}
+        gh = FakeGitHub(lists={prefixes[k]: v for k, v in lists.items()})
+        run(["sweep"], env(), gh)
+        return gh
+
+    def test_clean(self):
+        gh = self.sweep(events=[{"actor": {"id": 1}, "event": "labeled", "created_at": ISO(timedelta(minutes=5)), "issue": {"number": 3}}],
+                        comments=[{"user": {"id": BOT}, "issue_url": "x/issues/700", "created_at": ISO(timedelta(minutes=1)),
+                                   "updated_at": ISO(timedelta(minutes=1))}])
+        self.assertEqual(gh.bodies(), [])
+
+    def test_bot_findings_disable(self):
+        recent = ISO(timedelta(minutes=5))
+        cases = {
+            "issue event": {"events": [{"actor": {"id": BOT}, "event": "renamed", "created_at": recent, "issue": {"number": 3}}]},
+            "opened PR": {"pulls": [{"user": {"id": BOT}, "number": 12, "updated_at": recent}]},
+            "review": {"pulls": [{"user": {"id": 1}, "number": 12, "updated_at": recent}],
+                       "reviews": [{"user": {"id": BOT}}]},
+            "review comment": {"review_comments": [{"user": {"id": BOT}, "pull_request_url": "x/pulls/12",
+                                                    "created_at": recent, "updated_at": recent}]},
+            "comment elsewhere": {"comments": [{"user": {"id": BOT}, "issue_url": "x/issues/12", "created_at": recent,
+                                                "updated_at": recent}]},
+            "edited own comment": {"comments": [{"user": {"id": BOT}, "issue_url": "x/issues/700", "created_at": ISO(timedelta(minutes=9)),
+                                                 "updated_at": recent}]},
+        }
+        for name, lists in cases.items():
+            with self.subTest(name):
+                gh = self.sweep(**lists)
+                self.assertIn(DISABLE, [c[:2] for c in gh.calls])
+                self.assertEqual(len(gh.bodies()), 1)
+
+    def test_unattributed_findings_escalate_without_disabling(self):
+        recent = ISO(timedelta(minutes=5))
+        for name, lists in {
+            "base changed": {"events": [{"actor": {"id": 1}, "event": "base_ref_changed", "created_at": recent, "issue": {"number": 3}}]},
+            "review comment edited": {"review_comments": [{"user": {"id": 1}, "pull_request_url": "x/pulls/4",
+                                                           "created_at": ISO(timedelta(minutes=30)), "updated_at": recent}]},
+        }.items():
+            with self.subTest(name):
+                gh = self.sweep(**lists)
+                self.assertNotIn(DISABLE, [c[:2] for c in gh.calls])
+                self.assertEqual(len(gh.bodies()), 1)
+
+    def test_old_activity_is_outside_the_lookback(self):
+        old = ISO(timedelta(minutes=tripwire.LOOKBACK_MINUTES + 5))
+        gh = self.sweep(events=[{"actor": {"id": BOT}, "event": "renamed", "created_at": old, "issue": {"number": 3}}],
+                        pulls=[{"user": {"id": BOT}, "number": 12, "updated_at": old}])
+        self.assertEqual(gh.bodies(), [])
+
+
+class Paging(unittest.TestCase):
+    def test_pages_until_the_lookback_then_stops(self):
+        recent, old = ISO(timedelta(minutes=5)), ISO(timedelta(minutes=tripwire.LOOKBACK_MINUTES + 5))
+        page1 = [{"actor": {"id": 1}, "event": "labeled", "created_at": recent, "issue": {"number": 3}}] * 100
+        page2 = [{"actor": {"id": BOT}, "event": "renamed", "created_at": recent, "issue": {"number": 4}}] + \
+                [{"actor": {"id": 1}, "event": "labeled", "created_at": old, "issue": {"number": 3}}] * 99
+        seen = []
+
+        def gh(method, path, body):
+            seen.append(path)
+            if path.startswith("/repos/o/r/issues/events"):
+                return page1 if path.endswith("&page=1") else page2 if path.endswith("&page=2") else []
+            return [] if method == "GET" else None
+        with redirect_stdout(io.StringIO()):
+            findings, disable = tripwire.sweep(env(), gh, NOW)
+        self.assertTrue(disable)  # the bot's event sat on page 2
+        self.assertEqual(sum(p.startswith("/repos/o/r/issues/events") for p in seen), 2)
+
+    def test_a_list_past_the_page_limit_is_a_finding(self):
+        recent = ISO(timedelta(minutes=5))
+        full = [{"actor": {"id": 1}, "event": "labeled", "created_at": recent, "issue": {"number": 3}}] * 100
+        gh = FakeGitHub()
+        gh_full = lambda m, p, b: (gh.calls.append((m, p, b, None)) or (full if p.startswith("/repos/o/r/issues/events") else []))  # noqa: E731
+        run(["sweep"], env(), gh_full)
+        self.assertIn("the sweep is incomplete: events ran past 10 pages", gh.bodies()[0])
+        self.assertIn(DISABLE, [c[:2] for c in gh.calls])  # fail closed: an unfinished sweep is a trip
+
+    def test_an_api_error_escalates_then_fails_the_job(self):
+        posts = []
+
+        def gh(method, path, body):
+            if method == "GET":
+                raise RuntimeError("GitHub API GET failed")
+            posts.append((method, path, body))
+        with self.assertRaises(SystemExit) as cm:
+            run(["sweep"], env(), gh)
+        self.assertEqual(str(cm.exception), "tripwire: the sweep failed")
+        self.assertEqual(len(posts), 1)
+        self.assertIn("the sweep failed (RuntimeError)", posts[0][2]["body"])
+        self.assertNotIn("disable", posts[0][1])
+
+
+class Disable(unittest.TestCase):
+    def test_a_failed_disable_fails_the_job(self):
+        def gh(method, path, body):
+            if method == "PUT":
+                raise RuntimeError("403")
+            return None
+        with self.assertRaises(SystemExit) as cm:
+            run(["trip"], env(), gh)
+        self.assertEqual(cm.exception.code, 1)
+
+
+class Unconfigured(unittest.TestCase):
+    def test_an_unset_bot_id_escalates_then_fails_the_job(self):
+        gh = FakeGitHub()
+        with self.assertRaises(SystemExit) as cm:
+            run(["sweep"], env(OPERATOR_BOT_USER_ID=""), gh)
+        self.assertEqual(str(cm.exception), "tripwire: OPERATOR_BOT_USER_ID isn't set")
+        self.assertEqual(len(gh.bodies()), 1)
+        self.assertIn("OPERATOR_BOT_USER_ID isn't set", gh.bodies()[0])
+        self.assertNotIn(DISABLE, [c[:2] for c in gh.calls])
+        self.assertFalse([c for c in gh.calls if c[0] == "GET"])  # nothing listed without the ID
