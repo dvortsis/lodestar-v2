@@ -9,9 +9,12 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use lodestar_companions::adapter::ConfigureInput;
 use lodestar_companions::adapter::{AdapterError, BoxFuture, Credentials, Target};
 use lodestar_companions::catalogue::{Arch, Catalogue, Platform, Sha256};
-use lodestar_companions::configure::InstallReceipt;
+use lodestar_companions::configure::{
+    self, ConfigSink, DownloadClientEntry, IndexerManagerEntry, InstallReceipt, SinkError,
+};
 use lodestar_companions::credentials::SealedRow;
 use lodestar_companions::fetch::{Chunks, FetchError, Opened, Source};
 use lodestar_companions::layout::Install;
@@ -249,6 +252,44 @@ struct FakeApi {
     fail: AtomicBool,
     /// Never answers.
     hang: AtomicBool,
+    /// What CMP-8b's hand-over saved, through [`Saved`].
+    sink: Saved,
+    /// Refuses the hand-over, or the release.
+    refuse_hand_over: AtomicBool,
+    refuse_release: AtomicBool,
+    releases: AtomicUsize,
+    /// Refuses the check before an install, as a first install over an
+    /// entry that isn't Lodestar's is.
+    refuse_pre_check: AtomicBool,
+    /// Each check's `fresh`.
+    asked: Mutex<Vec<bool>>,
+}
+
+/// Lodestar's settings, as the hand-over writes them: each password it
+/// saved for the managed download client.
+#[derive(Default)]
+struct Saved(Mutex<Vec<String>>);
+
+impl Saved {
+    fn passwords(&self) -> Vec<String> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+impl ConfigSink for Saved {
+    fn download_client<'a>(
+        &'a self,
+        e: DownloadClientEntry,
+    ) -> BoxFuture<'a, Result<(), SinkError>> {
+        self.0.lock().unwrap().push(e.password.expose().to_owned());
+        Box::pin(async { Ok(()) })
+    }
+    fn indexer_manager<'a>(
+        &'a self,
+        _: IndexerManagerEntry,
+    ) -> BoxFuture<'a, Result<(), SinkError>> {
+        Box::pin(async { Err(SinkError::Unavailable) })
+    }
 }
 
 impl ApiConfigure for FakeApi {
@@ -271,6 +312,51 @@ impl ApiConfigure for FakeApi {
             }
             if fail {
                 Err(AdapterError::Refused("test"))
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    /// CMP-8b's own hand-over, on the receipt the manager minted.
+    fn hand_over<'a>(
+        &'a self,
+        id: &'a CompanionId,
+        target: &'a Target,
+        receipt: InstallReceipt,
+        credentials: &'a dyn Credentials,
+    ) -> BoxFuture<'a, Result<(), AdapterError>> {
+        Box::pin(async move {
+            if self.refuse_hand_over.load(Ordering::SeqCst) {
+                return Err(AdapterError::Refused("sink_refused"));
+            }
+            let input = ConfigureInput::new(credentials).installed(receipt);
+            configure::hand_over(&self.sink, id, target, &input).await
+        })
+    }
+
+    fn can_hand_over<'a>(
+        &'a self,
+        _: &'a CompanionId,
+        fresh: bool,
+    ) -> BoxFuture<'a, Result<(), AdapterError>> {
+        self.asked.lock().unwrap().push(fresh);
+        let refuse = self.refuse_pre_check.load(Ordering::SeqCst);
+        Box::pin(async move {
+            if refuse {
+                Err(AdapterError::Refused("managed_client_in_use"))
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    fn release<'a>(&'a self, _: &'a CompanionId) -> BoxFuture<'a, Result<(), AdapterError>> {
+        self.releases.fetch_add(1, Ordering::SeqCst);
+        let refuse = self.refuse_release.load(Ordering::SeqCst);
+        Box::pin(async move {
+            if refuse {
+                Err(AdapterError::Refused("sink_refused"))
             } else {
                 Ok(())
             }
@@ -1549,9 +1635,11 @@ async fn a_slot_held_past_the_deadline_stops_the_companion() {
     let mut parts = w.parts(catalogue("5.0.4"), LINUX);
     parts.downloader = Downloader::any(gate.clone());
     let m = Arc::new(Manager::open(parts).unwrap());
-    m.set_live_deadline(std::time::Duration::from_secs(1));
     w.run.sick.store(true, Ordering::SeqCst);
     assert!(m.start(&qbt()).await.is_err());
+    // Shortened only now: the start writes the credential's hash, which
+    // can take longer than this on a slow runner (#672's review).
+    m.set_live_deadline(std::time::Duration::from_secs(1));
     let calls = w.api.calls.load(Ordering::SeqCst);
     let update = tokio::spawn({
         let m = m.clone();
@@ -1571,34 +1659,219 @@ async fn a_slot_held_past_the_deadline_stops_the_companion() {
 }
 
 /// A configuration that never answers is bounded by the deadline
-/// (`timed_out`), and the companion is stopped.
+/// (`timed_out`), and the companion is stopped: here the follower's, once
+/// a companion held at its restart runs.
 #[tokio::test]
 async fn a_configuration_that_never_answers_times_out_and_stops_it() {
     let _g = SERIAL.lock().await;
     let w = World::new();
     let m = w.manager(catalogue("5.0.3"), LINUX);
     m.install(&token("5.0.3")).await.unwrap();
+    // A restart that fails its health check (held, say), so it's left for
+    // its follower to configure once it runs. Under the full deadline: the
+    // start writes the credential's hash, which can take longer than the
+    // short one on a slow runner (#672's review).
+    w.run.sick.store(true, Ordering::SeqCst);
+    assert!(m.restart(&qbt()).await.unwrap().finished().await.is_err());
+    assert_eq!(health(&m), Some(Health::Unhealthy));
+    // Now only the configuration is bounded by the short deadline.
     m.set_live_deadline(std::time::Duration::from_secs(1));
     w.api.hang.store(true, Ordering::SeqCst);
-    // The start's own bound (`restart`) and the configuration's are the
-    // same deadline here, so either may be the one that ends it.
-    let got = m.restart(&qbt()).await.unwrap().finished().await;
+    w.run.sick.store(false, Ordering::SeqCst);
+    let stops = w.run.stops.load(Ordering::SeqCst);
+    w.run.run().send_replace(status(State::Running));
+    wait_count(&w.run.stops, stops + 1).await;
+    assert_eq!(health(&m), Some(Health::Unhealthy));
+    assert!(w.run.status.lock().unwrap().is_none());
+}
+
+/// The password the companion's row holds now, opened.
+fn stored_password(w: &World) -> String {
+    let key = lodestar_companions::credentials::CredentialKey::new(
+        qbt(),
+        lodestar_companions::credentials::Field::WebUiPassword,
+    );
+    let sealed = w.rows.get(&key.row_key()).unwrap().unwrap();
+    lodestar_companions::credentials::open(&w.secrets, &key, &sealed)
+        .unwrap()
+        .expose()
+        .to_owned()
+}
+
+/// X-cmp-native-handover: an install hands qBittorrent over as the
+/// managed download client, with the credential it generated and stored,
+/// before it counts as installed; a restart hands it over again.
+#[tokio::test]
+async fn an_install_hands_qbittorrent_over_with_its_stored_password() {
+    let _g = SERIAL.lock().await;
+    let lines = capture();
+    let w = World::new();
+    let m = w.manager(catalogue("5.0.3"), LINUX);
+    m.install(&token("5.0.3")).await.unwrap();
+    assert_eq!(w.api.sink.passwords(), [stored_password(&w)]);
+    m.restart(&qbt()).await.unwrap().finished().await.unwrap();
+    assert_eq!(w.api.sink.passwords().len(), 2);
+    assert_eq!(w.api.sink.passwords()[1], stored_password(&w));
+    // The hand-over is logged, by name only.
+    let lines = lines.0.lock().unwrap().clone();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("companions.config_handed_over")),
+        "{lines:?}"
+    );
+    for l in &lines {
+        assert!(!l.contains(&stored_password(&w)), "{l}");
+    }
+}
+
+struct Capture(Mutex<Vec<String>>);
+
+impl lodestar_log::Sink for Capture {
+    fn record(&self, record: &lodestar_log::Record<'_>) {
+        self.0.lock().unwrap().push(format!(
+            "{} {}",
+            record.event.id,
+            record.text(lodestar_log::Mask::NONE, None)
+        ));
+    }
+}
+
+/// Every companion event, as logged in this test binary.
+fn capture() -> &'static Capture {
+    static SINK: std::sync::OnceLock<Capture> = std::sync::OnceLock::new();
+    let sink = SINK.get_or_init(|| Capture(Mutex::new(Vec::new())));
+    let _ = lodestar_log::set_sink(sink);
+    for e in lodestar_companions::log_events::CATALOGUE.events {
+        e.set_on(true);
+    }
+    sink
+}
+
+/// A hand-over that fails fails the install, which is undone as any
+/// failed step is: nothing is installed, no credential row is left, and
+/// what a hand-over may have saved is released. It's never reported as
+/// installed.
+#[tokio::test]
+async fn a_failed_hand_over_fails_and_undoes_the_install() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let m = w.manager(catalogue("5.0.3"), LINUX);
+    w.api.refuse_hand_over.store(true, Ordering::SeqCst);
+    let got = m.install(&token("5.0.3")).await;
+    assert_eq!(
+        got,
+        Err(ManagerError::Step {
+            step: "handover",
+            code: "sink_refused"
+        })
+    );
+    assert_eq!(w.on_disk(), None);
+    assert!(w.rows.keys().is_empty());
+    assert_eq!(w.api.releases.load(Ordering::SeqCst), 1);
+    assert!(health(&m).is_none());
+    // Tried again once the settings take it: installed and handed over.
+    w.api.refuse_hand_over.store(false, Ordering::SeqCst);
+    m.install(&token("5.0.3")).await.unwrap();
+    assert_eq!(w.api.sink.passwords(), [stored_password(&w)]);
+}
+
+/// Regenerate hands the new credential over in the same step, so
+/// Integrations holds what the companion's file and row hold. One whose
+/// hand-over fails says so; a restart tries again.
+#[tokio::test]
+async fn regenerate_hands_the_new_credential_over() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let m = w.manager(catalogue("5.0.3"), LINUX);
+    m.install(&token("5.0.3")).await.unwrap();
+    let old = stored_password(&w);
+    m.regenerate(&qbt())
+        .await
+        .unwrap()
+        .finished()
+        .await
+        .unwrap();
+    let new = stored_password(&w);
+    assert_ne!(new, old);
+    assert_eq!(w.api.sink.passwords().last(), Some(&new));
+    w.api.refuse_hand_over.store(true, Ordering::SeqCst);
+    let got = m.regenerate(&qbt()).await.unwrap().finished().await;
     assert!(
         matches!(
             got,
             Err(ManagerError::Step {
-                code: "timed_out",
+                step: "handover",
                 ..
             })
         ),
         "{got:?}"
     );
-    assert_eq!(health(&m), Some(Health::Unhealthy));
-    // Its follower configures it once it runs, under the same bound.
-    let stops = w.run.stops.load(Ordering::SeqCst);
-    w.run.run().send_replace(status(State::Held));
-    wait_health(&m, Health::Unhealthy).await;
-    w.run.run().send_replace(status(State::Running));
-    wait_count(&w.run.stops, stops + 1).await;
-    assert!(w.run.status.lock().unwrap().is_none());
+    w.api.refuse_hand_over.store(false, Ordering::SeqCst);
+    m.restart(&qbt()).await.unwrap().finished().await.unwrap();
+    assert_eq!(w.api.sink.passwords().last(), Some(&stored_password(&w)));
+}
+
+/// A removal takes the managed entry out first; one the settings refuse
+/// leaves everything installed, to try again.
+#[tokio::test]
+async fn a_removal_releases_the_managed_entry_first() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let m = w.manager(catalogue("5.0.3"), LINUX);
+    // Nothing installed: nothing is released.
+    assert_eq!(m.remove(&qbt()).await, refused(Refusal::NotInstalled));
+    assert_eq!(w.api.releases.load(Ordering::SeqCst), 0);
+    m.install(&token("5.0.3")).await.unwrap();
+    w.api.refuse_release.store(true, Ordering::SeqCst);
+    let got = m.remove(&qbt()).await;
+    assert_eq!(
+        got,
+        Err(ManagerError::Step {
+            step: "release",
+            code: "sink_refused"
+        })
+    );
+    assert!(w.on_disk().is_some());
+    assert_eq!(w.rows.keys(), [ROW]);
+    w.api.refuse_release.store(false, Ordering::SeqCst);
+    m.remove(&qbt()).await.unwrap();
+    assert_eq!(w.on_disk(), None);
+    assert_eq!(w.api.releases.load(Ordering::SeqCst), 2);
+}
+
+/// A first install that fails before its hand-over leaves Lodestar's
+/// settings as they are: an entry there isn't this install's to take out.
+#[tokio::test]
+async fn an_install_that_fails_before_its_hand_over_releases_nothing() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let m = w.manager(catalogue("5.0.3"), LINUX);
+    w.api.fail.store(true, Ordering::SeqCst);
+    assert!(m.install(&token("5.0.3")).await.is_err());
+    assert_eq!(w.on_disk(), None);
+    assert_eq!(w.api.releases.load(Ordering::SeqCst), 0);
+    assert!(w.api.sink.passwords().is_empty());
+}
+
+/// An install whose hand-over can't happen is refused before anything is
+/// downloaded or started, and only a first install is asked about an
+/// entry already there.
+#[tokio::test]
+async fn an_install_that_cant_be_handed_over_is_refused_before_it_begins() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let m = w.manager(catalogue("5.0.3"), LINUX);
+    w.api.refuse_pre_check.store(true, Ordering::SeqCst);
+    let got = m.install(&token("5.0.3")).await;
+    assert_eq!(
+        got,
+        Err(ManagerError::Step {
+            step: "handover",
+            code: "managed_client_in_use"
+        })
+    );
+    assert!(!w.folder().exists());
+    assert!(w.run.started.lock().unwrap().is_empty());
+    assert_eq!(*w.api.asked.lock().unwrap(), [true]);
 }

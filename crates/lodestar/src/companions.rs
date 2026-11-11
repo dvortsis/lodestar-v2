@@ -231,6 +231,13 @@ pub struct Companions {
 }
 
 impl Companions {
+    /// Hands the sink a native install is handed over to (X-cmp-native-
+    /// handover); until then an install or removal of qBittorrent is
+    /// refused at its hand-over (`not_wired`).
+    pub(crate) fn wire_sink(&self, sink: Arc<dyn ManagedSink>) {
+        let _ = self.wiring.sink.set(sink);
+    }
+
     /// Serve's shutdown (#619 N3): stops following the integrations and
     /// starting companions, then stops every companion, each bounded.
     pub async fn shutdown(self) {
@@ -401,6 +408,24 @@ async fn supervise(
 struct Wiring {
     supervised: OnceLock<Arc<Supervised>>,
     api: OnceLock<Api>,
+    /// Where a companion Lodestar installed is handed over to: CMP-5g-1's
+    /// `Sink`, the guided path's own, set once `companion_wiring` has
+    /// built it.
+    sink: OnceLock<Arc<dyn ManagedSink>>,
+}
+
+/// CMP-8b's `ConfigSink`, and taking its managed download client out
+/// again (`companion_wiring::Sink`).
+pub(crate) trait ManagedSink: lodestar_companions::configure::ConfigSink {
+    /// Whether a [`crate::companion_wiring::MANAGED_CLIENT`] entry is
+    /// saved. A read that can't be made answers yes: it fails closed.
+    fn has_download_client(&self) -> BoxFuture<'_, bool>;
+    /// Removes the [`crate::companion_wiring::MANAGED_CLIENT`] entry from
+    /// `integrations.clients`, keeping every other one. Nothing when
+    /// there's none.
+    fn forget_download_client(
+        &self,
+    ) -> BoxFuture<'_, Result<(), lodestar_companions::configure::SinkError>>;
 }
 
 impl std::fmt::Debug for Wiring {
@@ -461,6 +486,62 @@ impl ApiConfigure for Wiring {
             Some(a) => a.configure(id, target, receipt, credentials),
             None => Box::pin(async { Err(AdapterError::Refused("not_wired")) }),
         }
+    }
+
+    /// qBittorrent becomes the managed download client, through CMP-8b's
+    /// `hand_over` and the guided path's sink, on the receipt the manager
+    /// minted for this install. Prowlarr isn't handed over here: its
+    /// source isn't registered yet (X-prowlarr-register).
+    fn hand_over<'a>(
+        &'a self,
+        id: &'a CompanionId,
+        target: &'a Target,
+        receipt: InstallReceipt,
+        credentials: &'a dyn Credentials,
+    ) -> BoxFuture<'a, Result<(), AdapterError>> {
+        Box::pin(async move {
+            if id.as_str() != configure::qbittorrent::ID {
+                return Ok(());
+            }
+            let sink = self.sink.get().ok_or(AdapterError::Refused("not_wired"))?;
+            let input =
+                lodestar_companions::adapter::ConfigureInput::new(credentials).installed(receipt);
+            configure::hand_over(sink.as_ref(), id, target, &input).await
+        })
+    }
+
+    /// A first install refuses an entry already there: it's one you added
+    /// (a guided qBittorrent you forgot keeps its entry, CMP-5g-2's L3, and
+    /// it's then your own working client) or one a crash left. Neither is
+    /// this install's to overwrite, nor its removal's to delete. You
+    /// remove it in Integrations first (#674's self-review B1).
+    fn can_hand_over<'a>(
+        &'a self,
+        id: &'a CompanionId,
+        fresh: bool,
+    ) -> BoxFuture<'a, Result<(), AdapterError>> {
+        Box::pin(async move {
+            if id.as_str() != configure::qbittorrent::ID {
+                return Ok(());
+            }
+            let sink = self.sink.get().ok_or(AdapterError::Refused("not_wired"))?;
+            if fresh && sink.has_download_client().await {
+                return Err(AdapterError::Refused("managed_client_in_use"));
+            }
+            Ok(())
+        })
+    }
+
+    fn release<'a>(&'a self, id: &'a CompanionId) -> BoxFuture<'a, Result<(), AdapterError>> {
+        Box::pin(async move {
+            if id.as_str() != configure::qbittorrent::ID {
+                return Ok(());
+            }
+            let sink = self.sink.get().ok_or(AdapterError::Refused("not_wired"))?;
+            sink.forget_download_client()
+                .await
+                .map_err(|_| AdapterError::Refused(configure::SINK_REFUSED))
+        })
     }
 }
 
@@ -695,6 +776,13 @@ fn refused(e: ManagerError) -> CompanionsError {
         ManagerError::Step {
             code: "not_wired", ..
         } => CompanionsError::Refused("not_wired"),
+        // The hand-over to Integrations, or taking it out again, refused:
+        // nothing was installed or removed, and the code says why
+        // (`managed_client_in_use`, `sink_refused`, `timed_out`, …).
+        ManagerError::Step {
+            step: "handover" | "release",
+            code,
+        } => CompanionsError::Refused(code),
         e => CompanionsError::Internal(e.code()),
     }
 }
@@ -920,6 +1008,19 @@ impl Service {
         }
     }
 
+    /// Whether you added `id` and confirmed it (CMP-5g-2's `origin` row).
+    /// Blocking.
+    fn added(&self, id: &CompanionId) -> Result<bool, CompanionsError> {
+        let key = lodestar_companions::guided::origin_key(id);
+        self.rows
+            .0
+            .lock()
+            .map_err(|_| CompanionsError::Internal("store"))?
+            .setting_text(&key)
+            .map(|v| v.is_some())
+            .map_err(|_| CompanionsError::Internal("store"))
+    }
+
     /// The host's container detection, for detection's runtime.
     pub(crate) fn in_container(&self) -> bool {
         self.host.in_container
@@ -1101,6 +1202,12 @@ impl CompanionsApi for Service {
                 version: Version::parse(&version).map_err(|_| CompanionsError::Mismatch)?,
                 sha256: Sha256::parse_hex(&sha256).map_err(|_| CompanionsError::Mismatch)?,
             };
+            // One you added and confirmed is yours: an install would take
+            // over its Integrations entry (#674's self-review B1). Forget
+            // it first, as the guided steps refuse one Lodestar installed.
+            if self.off(move |s| s.added(&e.id)).await? {
+                return Err(CompanionsError::Refused("already_added"));
+            }
             self.manager.install(&token).await.map_err(refused)?;
             self.off(move |s| s.row(e)).await
         })
@@ -2284,5 +2391,124 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(c.wiring.ready(), Err("not_wired"));
+    }
+
+    /// A sink that records what the hand-over side asks of it.
+    #[derive(Default)]
+    struct FakeSink {
+        has: std::sync::atomic::AtomicBool,
+        forgot: std::sync::atomic::AtomicUsize,
+    }
+
+    impl lodestar_companions::configure::ConfigSink for FakeSink {
+        fn download_client<'a>(
+            &'a self,
+            _: lodestar_companions::configure::DownloadClientEntry,
+        ) -> BoxFuture<'a, Result<(), lodestar_companions::configure::SinkError>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn indexer_manager<'a>(
+            &'a self,
+            _: lodestar_companions::configure::IndexerManagerEntry,
+        ) -> BoxFuture<'a, Result<(), lodestar_companions::configure::SinkError>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    impl ManagedSink for FakeSink {
+        fn has_download_client(&self) -> BoxFuture<'_, bool> {
+            let has = self.has.load(std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async move { has })
+        }
+        fn forget_download_client(
+            &self,
+        ) -> BoxFuture<'_, Result<(), lodestar_companions::configure::SinkError>> {
+            self.forgot
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    /// X-cmp-native-handover: qBittorrent's hand-over needs the guided
+    /// path's sink (`not_wired` without it, before anything is
+    /// downloaded), and a first install refuses an entry already there
+    /// (`managed_client_in_use`: one you added, or a crash left); an
+    /// update doesn't. A release takes the managed entry out through the
+    /// sink. Prowlarr's are nothing yet. (`hand_over` itself takes a
+    /// receipt only the manager can mint; its tests drive it.)
+    #[tokio::test]
+    async fn the_hand_over_side_needs_the_sink_and_spares_your_entry() {
+        let w = Wiring::default();
+        let qbt = CompanionId::parse("qbittorrent").unwrap();
+        let prowlarr = CompanionId::parse("prowlarr").unwrap();
+        let refused = |r: Result<(), AdapterError>| match r {
+            Err(AdapterError::Refused(code)) => code,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(refused(w.can_hand_over(&qbt, true).await), "not_wired");
+        assert_eq!(refused(w.release(&qbt).await), "not_wired");
+        assert!(w.can_hand_over(&prowlarr, true).await.is_ok());
+        assert!(w.release(&prowlarr).await.is_ok());
+        let sink = Arc::new(FakeSink::default());
+        let _ = w.sink.set(sink.clone());
+        assert!(w.can_hand_over(&qbt, true).await.is_ok());
+        sink.has.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            refused(w.can_hand_over(&qbt, true).await),
+            "managed_client_in_use"
+        );
+        assert!(w.can_hand_over(&qbt, false).await.is_ok());
+        w.release(&qbt).await.unwrap();
+        assert_eq!(sink.forgot.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// #674's self-review B1: a companion you added and confirmed isn't
+    /// installed over (`already_added`), so its Integrations entry is
+    /// never taken over; without the record the install goes on to the
+    /// manager.
+    #[tokio::test]
+    async fn an_added_companion_is_not_installed_over() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = service(dir.path(), pinned(), NATIVE, Arc::new(Unwired));
+        let install = || s.install("qbittorrent".into(), "5.1.2".into(), "ab".repeat(32));
+        assert_eq!(
+            install().await,
+            Err(CompanionsError::Refused("awaiting_pin"))
+        );
+        let qbt = CompanionId::parse("qbittorrent").unwrap();
+        s.rows
+            .0
+            .lock()
+            .unwrap()
+            .set_settings_text(&[(&lodestar_companions::guided::origin_key(&qbt), "confirmed")])
+            .unwrap();
+        assert_eq!(
+            install().await,
+            Err(CompanionsError::Refused("already_added"))
+        );
+    }
+
+    /// The brief's item 6: the stored password is in no reply. A row of an
+    /// installed companion names its credential's field, never its value,
+    /// and a failed hand-over or release answers with a code.
+    #[tokio::test]
+    async fn no_reply_carries_the_password() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = service(dir.path(), pinned(), NATIVE, Arc::new(Unwired));
+        installed(&s, dir.path(), "qbittorrent").await;
+        let password = stored(&s, "qbittorrent", Field::WebUiPassword);
+        let row = s.get("qbittorrent".into()).await.unwrap();
+        let text = serde_json::to_string(&row).unwrap();
+        assert!(text.contains("webui_password"), "{text}");
+        assert!(!text.contains(&password), "{text}");
+        for step in ["handover", "release"] {
+            let e = refused(ManagerError::Step {
+                step,
+                code: "sink_refused",
+            });
+            assert_eq!(e, CompanionsError::Refused("sink_refused"));
+            let body = lodestar_api::error::ApiError::from(e).body().to_string();
+            assert!(!body.contains(&password), "{body}");
+        }
     }
 }
