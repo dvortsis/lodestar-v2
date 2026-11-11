@@ -231,6 +231,13 @@ pub struct Companions {
 }
 
 impl Companions {
+    /// Hands the sink a native install is handed over to (X-cmp-native-
+    /// handover); until then an install or removal of qBittorrent is
+    /// refused at its hand-over (`not_wired`).
+    pub(crate) fn wire_sink(&self, sink: Arc<dyn ManagedSink>) {
+        let _ = self.wiring.sink.set(sink);
+    }
+
     /// Serve's shutdown (#619 N3): stops following the integrations and
     /// starting companions, then stops every companion, each bounded.
     pub async fn shutdown(self) {
@@ -401,6 +408,21 @@ async fn supervise(
 struct Wiring {
     supervised: OnceLock<Arc<Supervised>>,
     api: OnceLock<Api>,
+    /// Where a companion Lodestar installed is handed over to: CMP-5g-1's
+    /// `Sink`, the guided path's own, set once `companion_wiring` has
+    /// built it.
+    sink: OnceLock<Arc<dyn ManagedSink>>,
+}
+
+/// CMP-8b's `ConfigSink`, and taking its managed download client out
+/// again (`companion_wiring::Sink`).
+pub(crate) trait ManagedSink: lodestar_companions::configure::ConfigSink {
+    /// Removes the [`crate::companion_wiring::MANAGED_CLIENT`] entry from
+    /// `integrations.clients`, keeping every other one. Nothing when
+    /// there's none.
+    fn forget_download_client(
+        &self,
+    ) -> BoxFuture<'_, Result<(), lodestar_companions::configure::SinkError>>;
 }
 
 impl std::fmt::Debug for Wiring {
@@ -461,6 +483,40 @@ impl ApiConfigure for Wiring {
             Some(a) => a.configure(id, target, receipt, credentials),
             None => Box::pin(async { Err(AdapterError::Refused("not_wired")) }),
         }
+    }
+
+    /// qBittorrent becomes the managed download client, through CMP-8b's
+    /// `hand_over` and the guided path's sink, on the receipt the manager
+    /// minted for this install. Prowlarr isn't handed over here: its
+    /// source isn't registered yet (X-prowlarr-register).
+    fn hand_over<'a>(
+        &'a self,
+        id: &'a CompanionId,
+        target: &'a Target,
+        receipt: InstallReceipt,
+        credentials: &'a dyn Credentials,
+    ) -> BoxFuture<'a, Result<(), AdapterError>> {
+        Box::pin(async move {
+            if id.as_str() != configure::qbittorrent::ID {
+                return Ok(());
+            }
+            let sink = self.sink.get().ok_or(AdapterError::Refused("not_wired"))?;
+            let input =
+                lodestar_companions::adapter::ConfigureInput::new(credentials).installed(receipt);
+            configure::hand_over(sink.as_ref(), id, target, &input).await
+        })
+    }
+
+    fn release<'a>(&'a self, id: &'a CompanionId) -> BoxFuture<'a, Result<(), AdapterError>> {
+        Box::pin(async move {
+            if id.as_str() != configure::qbittorrent::ID {
+                return Ok(());
+            }
+            let sink = self.sink.get().ok_or(AdapterError::Refused("not_wired"))?;
+            sink.forget_download_client()
+                .await
+                .map_err(|_| AdapterError::Refused(configure::SINK_REFUSED))
+        })
     }
 }
 
@@ -2284,5 +2340,22 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(c.wiring.ready(), Err("not_wired"));
+    }
+
+    /// X-cmp-native-handover: only qBittorrent's managed entry is released
+    /// here (Prowlarr's source isn't registered yet), and never without the
+    /// guided path's sink: refused, so a removal stops before it deletes
+    /// anything. (`hand_over` takes the same sink; its receipt can be
+    /// minted only by the manager, whose tests drive it.)
+    #[tokio::test]
+    async fn the_release_needs_the_sink_and_is_qbittorrents_only() {
+        let w = Wiring::default();
+        let qbt = CompanionId::parse("qbittorrent").unwrap();
+        let prowlarr = CompanionId::parse("prowlarr").unwrap();
+        assert!(matches!(
+            w.release(&qbt).await,
+            Err(AdapterError::Refused("not_wired"))
+        ));
+        assert!(w.release(&prowlarr).await.is_ok());
     }
 }

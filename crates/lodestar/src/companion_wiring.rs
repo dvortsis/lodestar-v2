@@ -319,16 +319,20 @@ pub async fn serve(
             return None;
         }
     };
+    let sink = Arc::new(Sink {
+        settings,
+        ops,
+        store: store.clone(),
+    });
+    // A companion Lodestar installs is handed over through the same sink
+    // (X-cmp-native-handover).
+    companions.wire_sink(sink.clone());
     let guided = Arc::new(Guided::new(
         service.clone(),
-        store.clone(),
+        store,
         rt,
         http,
-        Arc::new(Sink {
-            settings,
-            ops,
-            store,
-        }),
+        sink,
         wired.added.clone(),
     ));
     Some((wired, guided))
@@ -484,6 +488,42 @@ fn save_client(
         .save(batch)
         .map(|_| ())
         .map_err(|_| SinkError::Rejected)
+}
+
+/// Takes [`MANAGED_CLIENT`] out of `integrations.clients`, reading the
+/// list right before the save, and saving the rest as they are (each
+/// without its password, which keeps the saved one). Nothing to save when
+/// it isn't there. Blocking.
+fn forget_client(settings: &crate::settings::Registry) -> Result<(), SinkError> {
+    let current = settings.subscribe::<Integrations>().borrow().clone();
+    if current.client(MANAGED_CLIENT).is_none() {
+        return Ok(());
+    }
+    let mut clients = Vec::new();
+    for c in current.clients.iter().filter(|c| c.id != MANAGED_CLIENT) {
+        let mut c = c.clone();
+        c.password = None;
+        clients.push(serde_json::to_value(c).map_err(|_| SinkError::Rejected)?);
+    }
+    let mut patch = serde_json::Map::new();
+    patch.insert("clients".into(), serde_json::Value::Array(clients));
+    let batch =
+        SettingsBatch(std::iter::once(("integrations".to_owned(), SettingsPatch(patch))).collect());
+    settings
+        .save(batch)
+        .map(|_| ())
+        .map_err(|_| SinkError::Rejected)
+}
+
+impl crate::companions::ManagedSink for Sink {
+    fn forget_download_client(&self) -> BoxFuture<'_, Result<(), SinkError>> {
+        Box::pin(async move {
+            let settings = self.settings.clone();
+            tokio::task::spawn_blocking(move || forget_client(&settings))
+                .await
+                .map_err(|_| SinkError::Unavailable)?
+        })
+    }
 }
 
 /// The Prowlarr source's new config: the companion's address, keeping any
@@ -1757,6 +1797,59 @@ mod tests {
         assert_eq!(
             managed.password.as_ref().map(|p| p.0.as_str()),
             Some("second-generated")
+        );
+    }
+
+    /// X-cmp-native-handover: a removal takes the managed client out of
+    /// `integrations.clients` through a real registry, and only that one:
+    /// yours stays, with its saved password. With none there, nothing is
+    /// saved.
+    #[test]
+    fn forgetting_the_managed_client_keeps_yours() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().to_string_lossy().into_owned();
+        let mut config =
+            crate::config::Config::load(None, |k| (k == "LODESTAR_DATA_DIR").then(|| data.clone()))
+                .unwrap();
+        config.data_dir = dir.path().to_path_buf();
+        let store = Arc::new(Mutex::new(
+            Store::open(dir.path().join("db"), Default::default()).unwrap(),
+        ));
+        let registry = Arc::new(crate::settings::Registry::load(&config, store.clone()).unwrap());
+        let mut home = serde_json::to_value(client("home")).unwrap();
+        home["password"] = "hunter2hunter2".into();
+        registry
+            .save(
+                serde_json::from_value(serde_json::json!({"integrations": {"clients": [home]}}))
+                    .unwrap(),
+            )
+            .unwrap();
+        // None managed yet: nothing changes.
+        forget_client(&registry).unwrap();
+        assert_eq!(
+            registry.subscribe::<Integrations>().borrow().clients.len(),
+            1
+        );
+        let managed = ManagedClient {
+            target: Target::Loopback(PortNumber::new(8080).unwrap()),
+            username: "admin".into(),
+            password: Secret::new(String::from("generated-by-lodestar")),
+            category: String::new(),
+        };
+        save_client(&registry, &managed).unwrap();
+        assert_eq!(
+            registry.subscribe::<Integrations>().borrow().clients.len(),
+            2
+        );
+        drop(store);
+        forget_client(&registry).unwrap();
+        let now = registry.subscribe::<Integrations>().borrow().clone();
+        assert_eq!(now.clients.len(), 1);
+        assert!(now.client(MANAGED_CLIENT).is_none());
+        let mine = now.client("home").unwrap();
+        assert_eq!(
+            mine.password.as_ref().map(|p| p.0.as_str()),
+            Some("hunter2hunter2")
         );
     }
 

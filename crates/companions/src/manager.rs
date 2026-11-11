@@ -329,6 +329,28 @@ pub trait ApiConfigure: Send + Sync {
         receipt: InstallReceipt,
         credentials: &'a dyn Credentials,
     ) -> BoxFuture<'a, Result<(), AdapterError>>;
+
+    /// Hands a companion Lodestar installed to Lodestar's own settings
+    /// (CMP-8b's `hand_over`: qBittorrent as the managed download client)
+    /// with its stored credential (X-cmp-native-handover). The manager
+    /// calls it within an install, before its commit point, and within
+    /// every restart and regenerate. Nothing to hand over by default.
+    fn hand_over<'a>(
+        &'a self,
+        _id: &'a CompanionId,
+        _target: &'a Target,
+        _receipt: InstallReceipt,
+        _credentials: &'a dyn Credentials,
+    ) -> BoxFuture<'a, Result<(), AdapterError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    /// Takes what [`ApiConfigure::hand_over`] saved out of Lodestar's
+    /// settings again: before a removal, and after a first install that
+    /// was rolled back. Nothing by default.
+    fn release<'a>(&'a self, _id: &'a CompanionId) -> BoxFuture<'a, Result<(), AdapterError>> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 /// Where downloads come from: the guarded client in shipped builds.
@@ -1349,6 +1371,10 @@ impl Manager {
             .configure(id, &target, InstallReceipt::new(target.clone()), &opened)
             .await
             .map_err(|e| failed("configure")(configure::code(&e)))?;
+        // Handed over before the commit point: a failed hand-over fails
+        // the install, which is undone, so it's never "installed" without
+        // being the download client (X-cmp-native-handover).
+        self.hand_over_now(id, &target).await?;
         fault!(m, After(Step::Configured));
         let mut next = rec.clone();
         next.installed = Some(v.clone());
@@ -1434,7 +1460,20 @@ impl Manager {
                 m.publish(id, Some((Some(prev.clone()), health)));
                 self.follow_from(entry, &prev, health);
             }
-            Ok(None) => m.publish(id, None),
+            Ok(None) => {
+                // A first install undone: what its hand-over saved goes
+                // too, so no managed entry points at nothing.
+                if m.p.api.release(id).await.is_err() {
+                    lodestar_log::log_event!(
+                        INSTALL_FAILED,
+                        companion = m.label(id),
+                        version = "",
+                        step = "release",
+                        reason = "rollback_failed"
+                    );
+                }
+                m.publish(id, None)
+            }
             Err(e) => lodestar_log::log_event!(
                 INSTALL_FAILED,
                 companion = m.label(id),
@@ -1515,6 +1554,14 @@ impl Manager {
         let entry = m.entry(id)?;
         let id = &entry.id;
         let _slot = m.claim(id)?;
+        // Only a companion Lodestar installed (`not_installed` otherwise)
+        // has its managed entry taken out, and that first: a failure
+        // leaves everything as it was, to try again.
+        self.off(move |m| m.removal(id)).await?;
+        m.p.api
+            .release(id)
+            .await
+            .map_err(|e| failed("release")(configure::code(&e)))?;
         let (what, rec) = self.off(move |m| m.begin_remove(id)).await?;
         self.finish_remove(entry, rec).await?;
         Ok(what)
@@ -1673,6 +1720,17 @@ impl Manager {
             LiveOp::Regenerate => self.off(move |m| m.rotate(id)).await,
             _ => Ok(()),
         };
+        // A restart or regenerate hands it over again with the credential
+        // stored now, whether or not it then starts: Integrations and the
+        // companion's own file always hold the same one. A restart is the
+        // retry for a hand-over that failed.
+        let handed = match op {
+            LiveOp::Start => Ok(()),
+            _ => match Inner::target(entry) {
+                Ok(t) => self.hand_over_now(id, &t).await,
+                Err(e) => Err(e),
+            },
+        };
         // Started again whatever the rotation did: a failed one put the
         // old credential back.
         let started = tokio::time::timeout(self.0.deadline(), self.start_installed(entry, version))
@@ -1685,7 +1743,7 @@ impl Manager {
         } else {
             Health::Unhealthy
         };
-        let result = rotated.and(started);
+        let result = rotated.and(handed).and(started);
         m.publish(id, Some((Some(version.clone()), health)));
         // Followed even after a failed health check: a companion held for
         // its route is still supervised, and starts when the route is up.
@@ -1702,6 +1760,28 @@ impl Manager {
             );
         }
         result
+    }
+
+    /// [`ApiConfigure::hand_over`] with the credential stored now.
+    async fn hand_over_now(
+        &self,
+        id: &'static CompanionId,
+        target: &Target,
+    ) -> Result<(), ManagerError> {
+        let secret = self.off(move |m| m.secret(id)).await?;
+        let opened = Opened {
+            field: field_name(id),
+            secret,
+        };
+        let handed =
+            self.0
+                .p
+                .api
+                .hand_over(id, target, InstallReceipt::new(target.clone()), &opened);
+        tokio::time::timeout(self.0.deadline(), handed)
+            .await
+            .map_err(|_| failed("handover")("timed_out"))?
+            .map_err(|e| failed("handover")(configure::code(&e)))
     }
 
     /// Stops `id`, ending the run any follower publishes for.
