@@ -6824,6 +6824,11 @@
       "id": "X-win-upd-stop-wait",
       "what": "services.rs Handles::shutdown: give the updates task a bounded wait (timeout 1-2 s) before abort, so the Off-just-before-stop last look completes deterministically; then tighten the X-win-upd-window decisions wording.",
       "from": "rv-693-5e260f33 I1"
+    },
+    {
+      "id": "X-worker-settings-pointer",
+      "what": "Worker template (packaging) and crates/lodestar/src/cli/worker.rs point users to a 'Settings -> Workers' screen that doesn't exist; point to POST /api/v1/workers/tokens (admin/API key) until the screen ships, or build the screen.",
+      "from": "rv-700-bc077b8b"
     }
   ],
   "main_health": [
@@ -7572,7 +7577,7 @@
         "slice": "PK-ops",
         "role": "docs",
         "agent": "claude",
-        "doing": "launched Sonnet docs (session_01MMjhn9kowVksy7cA8hdSsM)",
+        "doing": "#700 CHANGES round (B1-B5 + nits); then delta review",
         "since": "2026-11-11T16:36Z",
         "status": "active"
       },
