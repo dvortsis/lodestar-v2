@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T21:38:36Z",
+  "updated_at": "2026-11-11T21:38:46Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7653,15 +7653,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T21:38:36Z",
+    "updated": "2026-11-11T21:38:46Z",
     "items": [
       {
         "slot": 1,
-        "slice": "CMP-11",
+        "slice": "CMP-11b",
         "role": "build",
         "agent": "claude",
-        "doing": "CMP-11 merged (#705); CMP-11b next in same session after #692",
-        "since": "2026-11-11T20:05:00Z"
+        "doing": "session_01MMjhnAaZaaUjzMSyGVFdTA: Windows gate option D + CMP-8b test constructor",
+        "since": "2026-11-11T20:05:00Z",
+        "status": "active"
       },
       {
         "slot": 2,
@@ -7678,7 +7679,8 @@
         "role": "build",
         "agent": "claude",
         "doing": "session_01MMjhn97qDUZKniFoSzjMNE: #699 round 3 (rv-699-13397e42: B1 tests, I1 spool link stall, Windows reparse-point open)",
-        "since": "2026-11-11T14:05:33Z"
+        "since": "2026-11-11T14:05:33Z",
+        "status": "active"
       },
       {
         "slot": 4,
@@ -7686,7 +7688,8 @@
         "role": "slice",
         "agent": "session_01MMjhn9asevZ2GAyojLHZJZ",
         "doing": "Companion pin-refresh tool + workflow (Opus, /security-review); CMP-G path",
-        "since": "2026-11-11T20:25:00Z"
+        "since": "2026-11-11T20:25:00Z",
+        "status": "active"
       },
       {
         "slot": 5,
@@ -7712,7 +7715,8 @@
         "role": "slice",
         "agent": "session_01MMjhn9VBMRav8kboByPimR",
         "doing": "User guide: Windows updates, rollback, Restart now (Sonnet, docs); M6 critical path",
-        "since": "2026-11-11T19:15:00Z"
+        "since": "2026-11-11T19:15:00Z",
+        "status": "active"
       },
       {
         "slot": 8,
@@ -7720,7 +7724,8 @@
         "role": "slice",
         "agent": "session_01MMjhnCfcVrMUCDWwedtr7c",
         "doing": "Chaos harness: coordinator + N workers in-process (Opus); v0.6 critical path",
-        "since": "2026-11-11T19:52:00Z"
+        "since": "2026-11-11T19:52:00Z",
+        "status": "active"
       }
     ]
   },
@@ -7776,7 +7781,7 @@
     }
   ],
   "heartbeat": "2026-11-11T21:38:36Z",
-  "updated": "2026-11-11T21:38:36Z",
+  "updated": "2026-11-11T21:38:46Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
