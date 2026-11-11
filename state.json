@@ -6807,7 +6807,8 @@
     },
     "2026-11-11T14:5xZ owner \u00a72.55 (Event Log option A, OP-5 cap kept) recorded in #697 (0608080d). X-event-log-notice ready, brief briefs/X-event-log-notice.md; launch on next free slot (Opus). X-prowlarr-register deps += X-event-log-notice; still waits on owner item 11.",
     "2026-11-11T14:5xZ owner item 11 approved (Prowlarr/Jackett notice wording, changes 1-3 as drafted); \u00a72.55 + ext:owner-notice-v5 met in #697 (3fdd26cc). NEXT FREE SLOT: one Opus session runs X-event-log-notice (briefs/X-event-log-notice.md) then X-prowlarr-register (brief + briefs/X-prowlarr-register-notice-draft.md), one NOTICE_VERSION 5, no release cut between. Tell dashboard session when under way. CMP-9b: .size-limit.mjs shared edit approved (SourcesScreen 30.9->31.1 kB, new on-demand entry 27 kB); owner \u00a72.19 flag owed.",
-    "2026-11-11T14:5xZ 'update manifest round trip' red on main b7d3d366 (security.ubuntu.com unresolvable; image lists point minisign at the security pocket only). \u00a72.18 for open PRs. X-ci follow-up: apt fallback must not depend on one host (pin release pocket or vendor-verified minisign); also freshness.yml:80."
+    "2026-11-11T14:5xZ 'update manifest round trip' red on main b7d3d366 (security.ubuntu.com unresolvable; image lists point minisign at the security pocket only). \u00a72.18 for open PRs. X-ci follow-up: apt fallback must not depend on one host (pin release pocket or vendor-verified minisign); also freshness.yml:80.",
+    "PK-cli #696 owner flags (\u00a72.19) owed: set refuses privacy fields whatever the value; secrets refused outright (no stdin); reset --all clears saved values an env var hides. Decisions file 2026-11-11-PK-cli.md."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7540,7 +7541,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T14:56Z",
+    "updated": "2026-11-11T15:03Z",
     "items": [
       {
         "slot": 1,
@@ -7595,7 +7596,7 @@
         "slice": "PK-cli",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBmKGR4mYZNGi1joQV: lodestar settings get/set/reset on the stopped store (Opus, /security-review); fresh session after #691 M8-THEME merged 35316810 (Sonnet session archived)",
+        "doing": "#696 ready at d18d16b9; fresh Opus review running",
         "since": "2026-11-11T13:14:59Z"
       },
       {
