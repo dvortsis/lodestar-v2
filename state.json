@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T20:51:07Z",
+  "updated_at": "2026-11-11T20:51:41Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6909,6 +6909,16 @@
       "at": "2026-11-11T20:51:07Z",
       "slice": "WK-11/#699",
       "note": "WK-20 finding (a): re-sighting a held key ends own lease as lost via Funnel::duplicate (worker/runtime.rs); asked WK-11 whether in #699's diff, else follow-up slice."
+    },
+    {
+      "at": "2026-11-11T20:51:41Z",
+      "slice": "X-wk-own-lease-lost",
+      "note": "New Opus slice (WK-20 finding a; on main, outside #699): worker re-sighting a key it holds -> granted() pools own lease as new sighting -> pool rejects as recently fetched -> Funnel::duplicate ends lease as lost -> another worker refetches (harvested 6, stored 3, lost 3). worker/runtime.rs. Unit test: re-sighting a held key never ends own lease as lost. Use WK-20 harness scenario as regression."
+    },
+    {
+      "at": "2026-11-11T20:51:41Z",
+      "slice": "WK-11/#699",
+      "note": "Runner approved libc =0.2.191 Unix-only direct dep in crates/pipeline (O_NOFOLLOW|O_NONBLOCK; already in lock via tokio)."
     }
   ],
   "main_health": [
@@ -7642,7 +7652,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T20:51:07Z",
+    "updated": "2026-11-11T20:51:41Z",
     "items": [
       {
         "slot": 1,
@@ -7764,7 +7774,7 @@
     }
   ],
   "heartbeat": "2026-11-11T18:39:05Z",
-  "updated": "2026-11-11T20:51:07Z",
+  "updated": "2026-11-11T20:51:41Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
