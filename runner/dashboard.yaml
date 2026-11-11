@@ -307,6 +307,7 @@ placement:
   - X-wk-busy-metrics
   - X-wk-pause-text
   - X-lease-report-atomic
+  - X-lease-test-polish
 - ws: ws-web
   match:
   - W*
@@ -359,12 +360,15 @@ placement:
   - X-egress-state-watch
   - X-net-redirect-allowlist
   - X-win-refusal-ux
+  - X-win-upd-bounds
+  - X-prowlarr-settings
   - X-win-log-held-open
   - X-flake-states-clock
   - X-e2e-baseline-refresh
   - X-natural-strict-parity
   - X-natural-wording
   - X-win-restart-followups
+  - X-win-restart-followups-2
   - X-event-names-split
   - X-flake-email-bcc
   - X-flake-ops-pause
@@ -1634,7 +1638,7 @@ notes:
       controls and the Internet Archive reader are next. Your answers on terms of service, private sources, caches and
       the Sukebei feed are recorded, so the main plug-in can start once its foundations land.
   - label: Four slots
-    text: 'By your instruction at most four worker slots run at once from 2026-11-06T00:00Z, filled only when ready work fits the plan (owner-decisions §2.42). The slices launched in your no-limit window (§2.45) finish under it, and nothing new launches until fewer than four are running. The runner approves best-practice UX and performance decisions itself, listing them in the daily summary (§2.33). The runner keeps the current list in its state file, shown on the slots view.'
+    text: 'By your instruction at most eight worker slots run at once from 2026-11-11, filled only when ready work fits the plan (owner-decisions §2.54, replacing §2.42''s four). The runner paused on 2026-11-09 at your request and resumed on your command on 2026-11-11. The runner approves best-practice UX and performance decisions itself, listing them in the daily summary (§2.33). The runner keeps the current list in its state file, shown on the slots view.'
   you:
   - label: The comparator run
     text: bitmagnet's 24-hour run (25 hours with warm-up) on your Unraid box is booked from 2026-11-07T13:00Z, after a short rehearsal at 11:30Z. No Lodestar run until 12 hours after it ends.
