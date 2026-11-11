@@ -6800,7 +6800,11 @@
     "2026-11-11T14:30Z: ci.yml 'update manifest round trip' red 3x (apt-get update fails resolving security.ubuntu.com, before job steps); fix ported in #694 (install first, tolerant update with Acquire::Retries=5); other PRs running that job red on it may cite \u00a72.18 until #694 merges",
     "2026-11-11T14:30Z: queue: freshness.yml:80 same apt-get update && install minisign jq pattern; apply the #694 tolerant-update line in a small X-ci slice (not in ci-ok)",
     "2026-11-11T14:34Z: WK-11 approved shared edit crates/lodestar/src/cli/worker.rs (one runtime_config.spool line); PK-cli told; next runner PR: WK-11 owns += cli/worker.rs, session.rs, runtime.rs, secret.rs, remote.rs",
-    "2026-11-11T14:34Z: owner flag (\u00a72.26, WK-11): offline the worker pool stays paused (WK-10c/WK-5 per-IP politeness), spool holds in-flight work only; full spool pauses fetching until replay brings it under half the cap; refinement of \u00a719.6 'keeps harvesting and processing'"
+    "2026-11-11T14:34Z: owner flag (\u00a72.26, WK-11): offline the worker pool stays paused (WK-10c/WK-5 per-IP politeness), spool holds in-flight work only; full spool pauses fetching until replay brings it under half the cap; refinement of \u00a719.6 'keeps harvesting and processing'",
+    {
+      "added": "2026-11-11T14:41Z",
+      "note": "Runner PR #697 (7bce9814): approved owns for WK-11/PK-win-soak-ci/CMP-11/PK-exc, CMP-13 note, WK-11b + WK-G dep, owner_queue 12 (Event Log). Merge on ci-ok (runner-only yaml, self-checked). Event Log question answered to dashboard session 14:4xZ; draft briefs/X-event-log-notice-draft.md; LEGAL-3a legal_facts asserts notice doesn't name Event Log but update helper (#644) writes there on main: fix in the notice slice after owner answers."
+    }
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7533,7 +7537,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T14:10:36Z",
+    "updated": "2026-11-11T14:41Z",
     "items": [
       {
         "slot": 1,
@@ -7564,7 +7568,7 @@
         "slice": "X-cmp-handover-followups",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCL9xrv5oTMJ9KBcEc: guided/native lock, I2 marker, removal test, API messages, hardening (Opus, /security-review), same session after #679 merged 520ad918",
+        "doing": "#692 MERGE + one fix round (P1 spawn tail, bound 3x deadline, release_pending timed_out, nits); then fresh delta review",
         "since": "2026-11-11T11:46:21Z"
       },
       {
