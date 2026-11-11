@@ -123,7 +123,7 @@ You can also set the options from the command line, for an unattended install. T
 | Part | What it is |
 |---|---|
 | Service | **Lodestar**, running as its own unprivileged account, `NT SERVICE\Lodestar`. It starts a little after Windows boots (**Automatic (Delayed Start)**) and runs `lodestar.exe serve`. |
-| After a crash | Windows restarts it up to twice, 60 seconds apart. It then waits a day before it will restart it again, so check a service that stays stopped ([section 6.1](06-troubleshooting.md#61-common-problems)). |
+| After a crash | Windows restarts it up to twice, 60 seconds apart. After that it stays stopped, and the count starts again after a day, so check a service that stays stopped ([section 6.1](06-troubleshooting.md#61-common-problems)). |
 | Program | `C:\Program Files\Lodestar` |
 | Data | `C:\ProgramData\Lodestar`. Only SYSTEM, Administrators and the service can read it. Logs are in its `logs` folder. |
 | Firewall | `6881/udp` ([UDP](glossary.md#udp), for the [DHT](glossary.md#dht)) for the Lodestar program on private networks only. `8090/tcp` only if you ticked the web-page option. |
@@ -133,7 +133,7 @@ You can also set the options from the command line, for an unattended install. T
 *Figure 4.2: The Lodestar service as Windows Services shows it. Illustration, not a live screenshot.*
 
 > [!WARNING]
-> Do not open `C:\ProgramData\Lodestar` in File Explorer, and never select **Continue** on its permission prompt. Doing so adds your account permanently, and the service then refuses to start. Use [elevated PowerShell](glossary.md#elevated-powershell) instead. If this already happened, follow [the error 3 fix](06-troubleshooting.md#62-fix-windows-service-error-3).
+> Do not open `C:\ProgramData\Lodestar` in File Explorer, and never select **Continue** on its permission prompt. Doing so adds your account to the folder's permissions, and the service then refuses to start until you fix it. Use [elevated PowerShell](glossary.md#elevated-powershell) instead. If this already happened, follow [the error 3 fix](06-troubleshooting.md#62-fix-windows-service-error-3).
 
 PowerShell shows the service state at any time:
 
@@ -147,7 +147,7 @@ Get-Service Lodestar
 
 Open **Settings → Apps → Installed apps** (**Apps & features** on Windows 10), find **Lodestar**, and select **Uninstall**.
 
-**Result:** The service, program, firewall rules, Start-menu shortcut and any Defender exclusion the installer added are removed. **Your data stays** in `C:\ProgramData\Lodestar`: your library, password and keys. Reinstalling picks it up again.
+**Result:** The service, program, firewall rules, Start-menu shortcut and any Defender exclusion on the data folder are removed. **Your data stays** in `C:\ProgramData\Lodestar`: your library, password and keys. Reinstalling picks it up again. Small installer log folders named `C:\Windows\Temp\lodestar-secure-*` also stay. Only administrators can read them, and you can delete them.
 
 To delete the data as well, uninstall from an elevated PowerShell with `REMOVE_DATA=1`. Use the same MSI file you installed: Windows ties an uninstall to that exact build, so after an update use the newer file. First go to the folder that holds it:
 
@@ -232,7 +232,7 @@ Day to day:
 | Follow the log as it grows | `sudo journalctl -u lodestar -f` |
 | Restart or stop it | `sudo systemctl restart lodestar` or `sudo systemctl stop lodestar` |
 
-The service has a second private folder, `/var/lib/lodestar-witness`, for the restart record. Don't back it up together with the data folder.
+**(Newer than v0.5.1)** The service has a second private folder, `/var/lib/lodestar-witness`, for the restart record. It stays empty unless safe restart is on. Don't back it up together with the data folder.
 
 To try Linux without a service, open a terminal in the extracted folder and run `./lodestar serve` as your normal user. It stores data in `./data`. Stop with **Ctrl+C** and wait for shutdown.
 
@@ -244,7 +244,7 @@ sudo rm /etc/systemd/system/lodestar.service /usr/local/bin/lodestar
 sudo systemctl daemon-reload
 ```
 
-The service is gone. Your data stays in systemd's state folders, `/var/lib/lodestar` and `/var/lib/lodestar-witness`, so a reinstall picks it up. To delete it too, run `sudo rm -r /var/lib/private/lodestar /var/lib/private/lodestar-witness` after a [backup](03-keep-lodestar-safe.md#37-back-up-and-restore). This can't be undone.
+The service is gone. Your data stays in systemd's state folder, `/var/lib/lodestar`, so a reinstall picks it up. To delete it too, run `sudo rm -r /var/lib/private/lodestar` and `sudo rm /var/lib/lodestar` after a [backup](03-keep-lodestar-safe.md#37-back-up-and-restore). This can't be undone. Newer than v0.5.1 also leaves `/var/lib/private/lodestar-witness` and a link `/var/lib/lodestar-witness`: remove those the same way.
 
 | Mistake | What to do instead |
 |---|---|
@@ -277,6 +277,7 @@ To move a data folder you already use:
    - Portable ZIP: press **Ctrl+C** in its console.
    - Linux service: run `sudo systemctl stop lodestar`.
 2. Copy the whole data folder, or for the portable ZIP the whole extracted folder, to a local disk. Compare the size of the copy with the original.
+   On Unraid, Docker and Linux, use `cp -a` so the owner stays the same ([section 2.3](02-install-lodestar-on-unraid-and-docker.md#23-check-the-user-the-container-runs-as)).
 3. Point Lodestar at the new place. On Unraid, change the template's **Data** host path. On Docker, change the volume or bind mount. For the portable ZIP, start it from the new folder.
 4. Start Lodestar and check that the warning is gone and your library is there. Keep the old folder until you're sure.
    **Result:** The warning no longer appears and your library is unchanged.
@@ -291,7 +292,19 @@ The Linux service keeps its data under `/var/lib`, so it warns only if you mount
 
 Every connection Lodestar opens to a peer uses a temporary local port, taken from the [dynamic port range](glossary.md#dynamic-port-range) Windows sets aside. Hyper-V, WSL and Docker Desktop can reserve blocks inside that range.
 
-When too few ports are left, fetches fail and other programs on the PC can lose their network access. The Insights page lists this under **Needs attention** **(newer than v0.5.1)**. Lodestar also logs it at start, and on v0.5.1 the log is the only place, with the same command. It checks again about once an hour.
+When too few ports are left, fetches fail and other programs on the PC can lose their network access. The Insights page lists this under **Needs attention** **(newer than v0.5.1)**. Lodestar also logs it at start.
+
+On v0.5.1 the log is the only place, and it gives a template, not a finished command.
+
+In an elevated PowerShell, find the line (the portable ZIP prints it in its console):
+
+```powershell
+Get-Content -LiteralPath 'C:\ProgramData\Lodestar\logs\lodestar.log' | Select-String 'windows.ports_low'
+```
+
+It shows `family`, `fix_start` and `fix_count`. Put them into `netsh int <family> set dynamicport tcp start=<fix_start> num=<fix_count>`. If `fix_count` is 0, no range is large enough: lower the intensity instead, as at the end of this section.
+
+**(Newer than v0.5.1)** Lodestar checks again about once an hour. On v0.5.1 the warning goes away only after a restart.
 
 The sentence tells you how many ports are left and how many Lodestar and the rest of this PC need. It then gives one of two fixes.
 
