@@ -264,9 +264,9 @@ pub struct Prowlarr {
 enum KeyAtStart {
     /// Built by [`Prowlarr::new`]: each run uses the key stored then.
     Unpinned,
-    /// The key stored at the start, or `None` when there was none or it
-    /// couldn't be read.
-    Pinned(Option<Secret>),
+    /// The key stored at the start (`None` when there was none), or
+    /// `Err` when it couldn't be read then.
+    Pinned(Result<Option<Secret>, ()>),
 }
 
 impl std::fmt::Debug for Prowlarr {
@@ -293,7 +293,7 @@ impl Prowlarr {
     /// about either is logged.
     pub async fn at_start(saved: Option<&str>, credentials: Arc<dyn Credentials>) -> Prowlarr {
         let config = saved.and_then(|json| Config::from_json(json).ok());
-        let key = credentials.get(ID, API_KEY).await.ok().flatten();
+        let key = credentials.get(ID, API_KEY).await.map_err(|_| ());
         Prowlarr {
             config,
             credentials,
@@ -368,6 +368,9 @@ fn fail(msg: &str) -> PluginError {
 /// than knocking every 15 minutes.
 const REFUSED: &str = "the indexer manager refused the API key";
 /// The stored key isn't the one Lodestar started with ([`KeyAtStart`]).
+/// The stored key couldn't be read when Lodestar started.
+pub const KEY_UNREAD_AT_START: &str =
+    "the stored API key couldn't be read when Lodestar started; restart Lodestar";
 pub const KEY_CHANGED: &str =
     "needs setup: the API key changed since Lodestar started; restart Lodestar to use it";
 const REDIRECTED: &str = "needs setup: the indexer manager redirected the request; check the address (http or https, and any base path)";
@@ -393,10 +396,14 @@ impl Prowlarr {
         let key = key
             .map_err(|_| fail("the stored API key couldn't be read"))?
             .ok_or_else(|| fail("needs setup: no API key is stored"))?;
-        if let KeyAtStart::Pinned(at_start) = &self.key_at_start
-            && at_start.as_ref().map(Secret::expose) != Some(key.expose())
-        {
-            return Err(fail(KEY_CHANGED));
+        match &self.key_at_start {
+            KeyAtStart::Unpinned => {}
+            KeyAtStart::Pinned(Err(())) => return Err(fail(KEY_UNREAD_AT_START)),
+            KeyAtStart::Pinned(Ok(at_start)) => {
+                if at_start.as_ref().map(Secret::expose) != Some(key.expose()) {
+                    return Err(fail(KEY_CHANGED));
+                }
+            }
         }
         if !valid_key(key.expose()) {
             return Err(fail("the stored API key isn't a valid key"));

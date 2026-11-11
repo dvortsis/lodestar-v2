@@ -397,9 +397,14 @@ fn prowlarr_is_registered_off_and_its_settings_save() {
     assert_gated(&s.patch(id, r#"{"enabled":true}"#));
     let log = s.stop();
     assert!(!log.contains(KEY), "the key is never logged");
-    let db = std::fs::read(dir.path().join("lodestar.db")).unwrap();
-    assert!(
-        !db.windows(KEY.len()).any(|w| w == KEY.as_bytes()),
-        "the database holds the key sealed only"
-    );
+    // The database and its WAL, which may hold the row uncheckpointed.
+    for name in ["lodestar.db", "lodestar.db-wal"] {
+        let Ok(bytes) = std::fs::read(dir.path().join(name)) else {
+            continue;
+        };
+        assert!(
+            !bytes.windows(KEY.len()).any(|w| w == KEY.as_bytes()),
+            "{name} holds the key sealed only"
+        );
+    }
 }

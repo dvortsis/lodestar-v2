@@ -342,14 +342,15 @@ impl Services {
         let prowlarr = {
             use lodestar_sources_plugins::prowlarr::{ID, Prowlarr};
             let store = control.clone();
+            // A store that can't be read fails the start, as the other
+            // reads here do, rather than coming up silently unconfigured.
             let saved = tokio::task::spawn_blocking(move || {
-                let store = store.lock().unwrap_or_else(|e| e.into_inner());
                 store
+                    .lock()
+                    .expect("store lock")
                     .source_setting(ID, lodestar_store::SourceSetting::Config)
-                    .ok()
-                    .flatten()
             })
-            .await?;
+            .await??;
             let credentials = Arc::new(lodestar_sources::consent::SourceCredentials::new(
                 control.clone(),
                 config.data_dir.clone(),

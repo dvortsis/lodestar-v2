@@ -549,10 +549,20 @@ async fn the_key_stored_at_start_is_the_only_one_used() {
     // A key saved since (a companion hand-over writes the key before the
     // address), a key added since, or one that couldn't be read at the
     // start: it stops before any request, until Lodestar restarts.
-    for (at_start, now, unreadable) in [
-        (Some("REDACTED"), Some("companionkey"), false),
-        (None, Some("REDACTED"), false),
-        (Some("REDACTED"), Some("REDACTED"), true),
+    for (at_start, now, unreadable, want) in [
+        (
+            Some("REDACTED"),
+            Some("companionkey"),
+            false,
+            prowlarr::KEY_CHANGED,
+        ),
+        (None, Some("REDACTED"), false, prowlarr::KEY_CHANGED),
+        (
+            Some("REDACTED"),
+            Some("REDACTED"),
+            true,
+            prowlarr::KEY_UNREAD_AT_START,
+        ),
     ] {
         let c = Arc::new(Changing::default());
         c.set(at_start);
@@ -563,7 +573,7 @@ async fn the_key_stored_at_start_is_the_only_one_used() {
         // `NoEgress` fails any request, so reaching the list would end
         // differently.
         let e = ends_with_error(p, None).await;
-        assert_eq!(e, prowlarr::KEY_CHANGED, "{at_start:?} -> {now:?}");
+        assert_eq!(e, want, "{at_start:?} -> {now:?}");
         assert!(!e.contains("companionkey") && !e.contains("REDACTED"));
     }
 
