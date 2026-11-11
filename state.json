@@ -4276,6 +4276,12 @@
       "slice": "OP-3b",
       "flag": "start-block accepts the pinned Legal Notice version on test VMs on the owner's behalf (refuses on mismatch); collector image python:3.12.12-alpine3.22 pinned by digest",
       "send": "on merge"
+    },
+    {
+      "at": "2026-11-11T04:11Z",
+      "slice": "X-win-upd-bounds",
+      "flag": "the MSI copy no longer refuses when another process holds lodestar.exe; it waits (bounded) for its own parent helper, then relies on Windows Installer 3010 (sec-644 LOW-C)",
+      "send": "on merge"
     }
   ],
   "decisions_log": [
@@ -6674,6 +6680,11 @@
       "at": "2026-11-11T04:11Z",
       "for": "next runner PR",
       "item": "OP-4 owns += infra/fleet/tests/test_workflow.py, infra/aws/fleet-control/build_templates.py, infra/aws/fleet-control/fleet-control.json (+2 tests), .github/scripts/ci_changes.py, infra/fleet/run_tests.sh (runner approved 2026-11-11)"
+    },
+    {
+      "at": "2026-11-11T04:11Z",
+      "for": "next runner PR",
+      "item": "X-win-upd-bounds owns += crates/lodestar/src/cli/update_helper.rs (runner approved 2026-11-11)"
     }
   ],
   "main_health": [
