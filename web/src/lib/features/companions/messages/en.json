@@ -4,7 +4,7 @@
 	"companions_need_unhealthy": "{name} isn't responding",
 	"companions_need_unhealthy_hint": "Open Settings → Companions to restart it.",
 	"companions_need_setup": "Set up",
-	"companions_need_setup_name": "Set up {name}",
 	"companions_need_installed": "{name} is installed. Checking the source again.",
-	"companions_need_name_other": "a companion program"
+	"companions_need_name_other": "a companion program",
+	"companions_need_starting": "{name} is starting. Checking again."
 }

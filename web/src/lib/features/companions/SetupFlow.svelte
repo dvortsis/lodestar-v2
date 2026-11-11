@@ -10,14 +10,14 @@
 
 	interface Props {
 		companion: string;
-		/** The offer arrived or was refused: Set up stops showing it is working. */
-		onsettled: () => void;
-		/** The dialog is gone (cancelled, or installed). */
+		/** True while the offer is read or the install runs: Set up shows it is working until then. */
+		onworking: (working: boolean) => void;
+		/** The dialog is gone (cancelled, or installed). Never while an install is running. */
 		onclose: () => void;
 		/** The install succeeded: the screen reads the source again, so no stale "Needs X" stays. */
 		oninstalled: () => void | Promise<void>;
 	}
-	let { companion, onsettled, onclose, oninstalled }: Props = $props();
+	let { companion, onworking, onclose, oninstalled }: Props = $props();
 
 	const store = new CompanionsStore();
 	onDestroy(() => store.stop());
@@ -28,6 +28,8 @@
 	let dialogError = $state('');
 	/** The dialog was closed (Esc, Cancel) while its request was still running. */
 	let closedWhileBusy = false;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	onDestroy(() => clearTimeout(timer));
 
 	onMount(async () => {
 		try {
@@ -35,25 +37,34 @@
 		} catch (e) {
 			error = failureWords(e);
 		}
-		onsettled();
+		onworking(false);
 	});
 
 	async function confirm() {
 		if (!offer || busy) return;
 		busy = true;
+		onworking(true);
 		dialogError = '';
 		closedWhileBusy = false;
+		let installed = false;
 		try {
 			await store.install(offer);
+			installed = true;
+		} catch (e) {
+			dialogError = failureWords(e);
+			// A closed dialog shows nothing: this says it instead, and stays until the next attempt.
+			if (closedWhileBusy) {
+				error = dialogError;
+				offer = null;
+			}
+		} finally {
+			busy = false;
+			onworking(false);
+		}
+		if (installed) {
 			offer = null;
 			onclose();
 			await oninstalled();
-		} catch (e) {
-			dialogError = failureWords(e);
-			// A closed dialog shows nothing: the chip says it instead.
-			if (closedWhileBusy) error = dialogError;
-		} finally {
-			busy = false;
 		}
 	}
 </script>
@@ -68,9 +79,11 @@
 			onconfirm={() => void confirm()}
 			onclose={() => {
 				closedWhileBusy = busy;
+				// An install that is running keeps this mounted: its answer (or refusal) still has to
+				// be shown. Otherwise the dialog goes after its exit animation.
 				const was = offer;
-				setTimeout(() => {
-					if (was === offer) {
+				timer = setTimeout(() => {
+					if (was === offer && !busy) {
 						offer = null;
 						onclose();
 					}

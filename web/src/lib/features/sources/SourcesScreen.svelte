@@ -70,6 +70,12 @@
 		}
 	}
 
+	/** A companion a source waited for was installed: say so, then read the sources again. */
+	async function refreshed(note?: string) {
+		if (note) announce = note;
+		await load();
+	}
+
 	const mark = (id: number, on: boolean) =>
 		(busy = on ? [...busy, id] : busy.filter((x) => x !== id));
 
@@ -173,7 +179,7 @@
 								onsetup={() => show('consent', s)}
 								onpurge={() => show('purge', s)}
 								onsettings={() => show('config', s)}
-								onrefresh={load}
+								onrefresh={refreshed}
 							/>
 						{/each}
 					</ul>

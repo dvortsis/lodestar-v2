@@ -36,7 +36,7 @@
 		/** Opens the generated settings form. */
 		onsettings: () => void;
 		/** Reads the sources again (a companion this source waited for was installed). */
-		onrefresh?: () => void | Promise<void>;
+		onrefresh?: (announcement?: string) => void | Promise<void>;
 	}
 	let {
 		source: s,

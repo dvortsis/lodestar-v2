@@ -4,7 +4,7 @@
 	"companions_need_unhealthy": "{name} 没有响应",
 	"companions_need_unhealthy_hint": "请在“设置”→“配套组件”中重启它。",
 	"companions_need_setup": "设置",
-	"companions_need_setup_name": "设置 {name}",
 	"companions_need_installed": "{name} 已安装。正在重新检查此来源。",
-	"companions_need_name_other": "一个配套组件"
+	"companions_need_name_other": "一个配套组件",
+	"companions_need_starting": "{name} 正在启动。将再次检查。"
 }
