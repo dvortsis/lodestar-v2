@@ -74,7 +74,7 @@ Reserved for incoming peer connections **(planned)**. Lodestar only makes outbou
 
 ### Data
 
-The folder where Lodestar keeps its index, database and settings. It is the one folder that survives an update, because a container is rebuilt on every update. Lodestar needs no other folder mapped: everything lives here.
+The folder where Lodestar keeps its index, database and settings. It is the one folder that survives an update, because a container is rebuilt on every update. Lodestar needs no other folder mapped: everything lives here. The v0.5.1 template still shows **Hot path** and **Cold path** under **Advanced View**. Leave both empty, because Lodestar doesn't use them and a later template removes them.
 
 **Recommended:** `/mnt/cache/appdata/lodestar`. Use a pool path (`/mnt/cache/...` or `/mnt/<pool>/...`), not `/mnt/user/...`. The `/mnt/user` path goes through Unraid's [FUSE](glossary.md#fuse) layer, which is slow for this workload and risky for [SQLite](glossary.md#sqlite).
 
@@ -175,7 +175,7 @@ To install with the named volume:
     docker inspect --format '{{.State.Health.Status}}' lodestar
     ```
 
-   **Result:** The command prints `healthy` after about 30 seconds.
+   **Result:** The command prints `healthy` after about 30 seconds. `healthy` means only that the Lodestar process is alive. It doesn't mean Lodestar is finding torrents. The status pill on the **Search** screen and **Insights** show that ([section 5.3](05-use-lodestar.md#53-browse-discover-and-insights)).
 
 > [!WARNING]
 > Keep the data on local SSD or NVMe storage. Don't put the volume on a network share or a [FUSE](glossary.md#fuse) filesystem. The database is [SQLite](glossary.md#sqlite) and misbehaves there.
@@ -240,7 +240,7 @@ In v0.5.1, setup does not gate all crawler network activity. Claim the instance 
 > [!NOTE]
 > **What to expect in the first hours**
 > - Search works at once, but the index is small. It grows over days, not minutes.
-> - After every start, including restarts and updates, sampling waits 6 hours before it resumes. New discoveries ramp up over the first hours after each start.
+> - After every start, including restarts and updates, sampling waits 6 hours before it resumes. New discoveries ramp up over the first hours after each start. Full speed starts after those 6 hours.
 
 To read the notice again later, open **More** → **About**. The **Legal** section shows it.
 
