@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T06:47:49Z",
+  "updated_at": "2026-11-11T06:48:33Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6720,7 +6720,8 @@
     "X-fleet-polish (small, later): from rv-661 delta: policy() asserts len(words)==6 for query/path ACLs (a second pattern would be ORed by HAProxy); decisions-file wording 'removes it at once' holds only after Lodestar starts",
     "2026-11-11: #662 X-flake-portable-restart merged (2542fe5c); PK-win-portable-upd and OP-4 told; owner FYI sent",
     "2026-11-11: X-restart-required-creds approved shared edit: pins_credentials field on SourceStatus (crates/pipeline/src/lib.rs); add to its owns in next runner PR",
-    "2026-11-11: #660 CMP-5g-3 merged (6039cb32); slot 4 continues with X-cmp-egress-prelaunch; CMP-9a ready (egress editor after prelaunch); CMP-11/CMP-12 still need owner answers"
+    "2026-11-11: #660 CMP-5g-3 merged (6039cb32); slot 4 continues with X-cmp-egress-prelaunch; CMP-9a ready (egress editor after prelaunch); CMP-11/CMP-12 still need owner answers",
+    "2026-11-11: runner PR #667 merged (95bca825): follow-up slices, ext:owner-notice-v5, X-cmp-egress-prelaunch, owner queue 11"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
