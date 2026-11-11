@@ -251,23 +251,44 @@ pub const MAX_BLOCKED: u32 = 3;
 /// Windows Installer's byte-order mark or its NUL pattern, otherwise as
 /// lossy UTF-8. The pattern is fixed, and doesn't depend on Windows'
 /// language: on one line, the number 1920 followed by `.` and a space,
-/// right after a word, and then the service's name (`Error 1920. Service
-/// 'Lodestar' ...`; `Fehler 1920. Der Dienst "Lodestar" ...`).
+/// right after a word, and then the service's name as a whole word
+/// (`Error 1920. Service 'Lodestar' ...`; `Fehler 1920. Der Dienst
+/// "Lodestar" ...`).
 pub fn held_open(tail: &[u8], service: &str) -> bool {
     let text = decode_log(tail);
     text.lines().any(|line| error_1920(line, service))
 }
 
-/// `<letter> 1920. ` in `line`, with `service` after it.
+/// `<letter> 1920. ` in `line`, with `service` as a whole word after it.
+/// Linear in the line: the service's last whole-word place is found in one
+/// pass, then each `1920. ` is a constant-time check against it (an
+/// adversarial line of repeated `a 1920. ` isn't quadratic).
 fn error_1920(line: &str, service: &str) -> bool {
     const AT: &str = " 1920. ";
+    let Some(last) = last_word(line, service) else {
+        return false;
+    };
     line.match_indices(AT).any(|(at, _)| {
         let word = line[..at]
             .chars()
             .next_back()
             .is_some_and(char::is_alphabetic);
-        word && line[at + AT.len()..].contains(service)
+        word && last >= at + AT.len()
     })
+}
+
+/// Where `name` last appears in `line` as a whole word: neither the
+/// character before it nor the one after it is a letter, digit or `_`
+/// (`'Lodestar'`, `"Lodestar"`, `(Lodestar)`; not `Lodestar2`).
+fn last_word(line: &str, name: &str) -> Option<usize> {
+    let inner = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+    line.match_indices(name)
+        .filter(|(at, _)| {
+            !inner(line[..*at].chars().next_back())
+                && !inner(line[at + name.len()..].chars().next())
+        })
+        .map(|(at, _)| at)
+        .last()
 }
 
 /// A log's bytes as text: UTF-16LE (Windows Installer's own, with a BOM,
@@ -607,6 +628,43 @@ mod tests {
         assert!(held_open(LOG_1920.as_bytes(), "Lodestar"));
         let german = "MSI (s) (A8:B4) [10:15:53:456]: Produkt: Lodestar -- Fehler 1920. Der Dienst \"Lodestar\" (Lodestar) konnte nicht gestartet werden.";
         assert!(held_open(&utf16(german, true), "Lodestar"));
+    }
+
+    /// The service's name is matched as a whole word: another service
+    /// whose name starts or ends with it isn't this one.
+    #[test]
+    fn only_the_services_own_name_counts() {
+        for other in ["Lodestar2", "MyLodestar", "Lodestar_old"] {
+            let log =
+                format!("Product: X -- Error 1920. Service '{other}' ({other}) failed to start.");
+            assert!(!held_open(log.as_bytes(), "Lodestar"), "{other}");
+        }
+        let log = "Product: X -- Error 1920. Service 'Lodestar2' (Lodestar) failed to start.";
+        assert!(
+            held_open(log.as_bytes(), "Lodestar"),
+            "a whole word later on"
+        );
+    }
+
+    /// #677's review: a line of repeated `a 1920. ` is answered in linear
+    /// time, with the same answers as before: no name, the name at the
+    /// end, the name only before every 1920. The tail is at most 1 MiB;
+    /// the line here is 4 MiB so the deadline separates the two: the old
+    /// quadratic matcher took ~6 s at 1 MiB (~100 s at 4 MiB) in debug,
+    /// the linear one well under a second at 4 MiB.
+    #[test]
+    fn an_adversarial_line_is_linear() {
+        let flood = "a 1920. ".repeat(4 * LOG_TAIL as usize / 8);
+        let start = std::time::Instant::now();
+        assert!(!held_open(flood.as_bytes(), "Lodestar"));
+        assert!(held_open(format!("{flood}Lodestar").as_bytes(), "Lodestar"));
+        let begun = format!("Lodestar {flood}");
+        assert!(
+            !held_open(begun.as_bytes(), "Lodestar"),
+            "the name must come after"
+        );
+        let elapsed = start.elapsed();
+        assert!(elapsed < std::time::Duration::from_secs(10), "{elapsed:?}");
     }
 
     proptest::proptest! {

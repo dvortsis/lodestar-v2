@@ -822,11 +822,13 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
         // halt), so the count needs no reset.
         let blocked = helper::blocked_by_1920(ctx, code, &ctx.staging.dir.join(ROLLBACK_LOG));
         match msi::installed(code) {
-            msi::Installed::Failed(c) if blocked && j.blocked + 1 < msi::MAX_BLOCKED => {
+            msi::Installed::Failed(c)
+                if blocked && j.blocked.saturating_add(1) < msi::MAX_BLOCKED =>
+            {
                 // The service couldn't start at the reinstall's end (1920),
                 // as when lodestar.exe is held open: Windows Installer rolled
                 // it back. Kept disabled and stopped, tried again next run.
-                j.blocked += 1;
+                j.blocked = j.blocked.saturating_add(1);
                 save(j, &snapshot, done)?;
                 stopped(sys)?;
                 return Err(Stop::Retry(format!(
