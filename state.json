@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T06:50:52Z",
+  "updated_at": "2026-11-11T06:51:20Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6726,7 +6726,8 @@
       "id": "X-win-upd-1920",
       "added": "2026-11-11",
       "what": "MSI error 1920 then 1603 when a local user holds lodestar.exe open with share mode 0 before StartServices: forward install skips the version for good, rollback reinstall halts. Fix: tell 1920 apart in the msiexec log, or retry 1603 a bounded number of times. Opus, /security-review. From #663 residual; add a slices.yaml entry in the next runner PR."
-    }
+    },
+    "2026-11-11: next runner PR: CMP-13 notes += at pin time re-check Prowlarr ProxyEnabled default and .NET DefaultProxy env behaviour (X-cmp-egress-prelaunch launch-env route); add X-win-upd-1920 entry"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
