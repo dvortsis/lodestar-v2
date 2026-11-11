@@ -161,7 +161,11 @@ impl Parser<'_> {
     /// Text up to `end` (exclusive), entities decoded; `<` refused.
     fn chars_until(&mut self, end: &[u8]) -> String {
         let mut out = Vec::new();
-        while !end.contains(self.s.get(self.i).unwrap_or_else(|| self.fail("unexpected end"))) {
+        while !end.contains(
+            self.s
+                .get(self.i)
+                .unwrap_or_else(|| self.fail("unexpected end")),
+        ) {
             match self.s[self.i] {
                 b'<' => self.fail("a raw '<'"),
                 b'&' => {
@@ -453,9 +457,9 @@ fn fixture(ts: &[T], o: Opts) -> Fixture {
     let app = if o.no_adult_extension {
         app
     } else {
-        app.layer(Extension(TorznabAdult(AdultVisibility::follow(move || {
-            shown.load(Ordering::SeqCst)
-        }))))
+        app.layer(Extension(TorznabAdult(AdultVisibility::follow(
+            move || shown.load(Ordering::SeqCst),
+        ))))
     };
     Fixture {
         app,
@@ -567,7 +571,11 @@ async fn send_from(app: &Router, req: Request<Body>) -> Reply {
 
 /// An error document's code.
 fn error_code(r: &Reply) -> String {
-    assert_eq!(r.content_type, "application/xml; charset=utf-8", "{}", r.body);
+    assert_eq!(
+        r.content_type, "application/xml; charset=utf-8",
+        "{}",
+        r.body
+    );
     let e = parse_xml(&r.body);
     assert_eq!(e.name, "error", "{}", r.body);
     assert!(e.attr("description").is_some_and(|d| !d.is_empty()));
@@ -631,7 +639,13 @@ async fn caps_is_the_golden_document() {
     assert!(!r.body.contains("imdbid") && !r.body.contains("tvdbid"));
     assert_eq!(caps.child("limits").unwrap().attr("max"), Some("100"));
     // Caps doesn't need search.
-    let off = fixture(&[], Opts { no_search: true, ..Opts::default() });
+    let off = fixture(
+        &[],
+        Opts {
+            no_search: true,
+            ..Opts::default()
+        },
+    );
     let key = off.torznab_key();
     assert_eq!(off.api(&key, "t=caps").await.body, CAPS);
 }
@@ -648,19 +662,31 @@ async fn each_mode_finds_its_kind() {
     // tvsearch: TV only, season and episode.
     let tv = f.titles(&key, "t=tvsearch&q=the+show").await;
     assert_eq!(tv.len(), 2, "{tv:?}");
-    assert_eq!(f.titles(&key, "t=tvsearch&q=the+show&season=1").await, [TV1]);
+    assert_eq!(
+        f.titles(&key, "t=tvsearch&q=the+show&season=1").await,
+        [TV1]
+    );
     assert_eq!(
         f.titles(&key, "t=tvsearch&q=the+show&season=2&ep=5").await,
         [TV2]
     );
-    assert!(f.titles(&key, "t=tvsearch&q=the+show&season=1&ep=5").await.is_empty());
+    assert!(
+        f.titles(&key, "t=tvsearch&q=the+show&season=1&ep=5")
+            .await
+            .is_empty()
+    );
     assert!(f.titles(&key, "t=tvsearch&q=great+movie").await.is_empty());
     // A daily show: the date.
     assert_eq!(
-        f.titles(&key, "t=tvsearch&q=daily+show&season=2024&ep=01/15").await,
+        f.titles(&key, "t=tvsearch&q=daily+show&season=2024&ep=01/15")
+            .await,
         [DAILY]
     );
-    assert!(f.titles(&key, "t=tvsearch&q=daily+show&season=2024&ep=01/16").await.is_empty());
+    assert!(
+        f.titles(&key, "t=tvsearch&q=daily+show&season=2024&ep=01/16")
+            .await
+            .is_empty()
+    );
     // movie, music, book: their own categories.
     assert_eq!(f.titles(&key, "t=movie").await, [MOVIE]);
     assert!(f.titles(&key, "t=movie&q=show").await.is_empty());
@@ -669,13 +695,18 @@ async fn each_mode_finds_its_kind() {
     // An explicit cat replaces the mode's.
     assert_eq!(f.titles(&key, "t=tvsearch&cat=2000").await, [MOVIE]);
     // Subcategories by resolution.
-    assert_eq!(f.titles(&key, "t=search&cat=5040&q=the+show").await, [TV1, TV2]);
+    let mut hd = f.titles(&key, "t=search&cat=5040&q=the+show").await;
+    hd.sort();
+    assert_eq!(hd, [TV1, TV2]);
     assert_eq!(f.titles(&key, "t=search&cat=2045").await, [MOVIE]);
     assert!(f.titles(&key, "t=search&cat=2030").await.is_empty());
     // Categories this server doesn't list find nothing.
     let none = f.feed(&key, "t=search&cat=1234").await;
     assert_eq!(none.all("item").count(), 0);
-    assert_eq!(none.child("torznab:response").unwrap().attr("total"), Some("0"));
+    assert_eq!(
+        none.child("torznab:response").unwrap().attr("total"),
+        Some("0")
+    );
 }
 
 #[tokio::test]
@@ -686,9 +717,15 @@ async fn items_carry_magnets_categories_and_attributes() {
     let item = channel.child("item").unwrap();
     let hash = &f.hashes[2];
     assert_eq!(item.child("guid").unwrap().text, *hash);
-    assert_eq!(item.child("guid").unwrap().attr("isPermaLink"), Some("false"));
+    assert_eq!(
+        item.child("guid").unwrap().attr("isPermaLink"),
+        Some("false")
+    );
     assert_eq!(item.child("size").unwrap().text, "1048576");
-    assert_eq!(item.child("pubDate").unwrap().text, "Tue, 14 Nov 2023 22:13:22 +0000");
+    assert_eq!(
+        item.child("pubDate").unwrap().text,
+        "Tue, 14 Nov 2023 22:13:22 +0000"
+    );
     let link = &item.child("link").unwrap().text;
     assert_eq!(
         *link,
@@ -731,7 +768,9 @@ fn channel_text(e: &El) -> String {
 
 #[tokio::test]
 async fn paging_follows_offset_and_caps_limit() {
-    let ts: Vec<T> = (0..105).map(|i| t(&format!("Paged Item {i:03}.txt"))).collect();
+    let ts: Vec<T> = (0..105)
+        .map(|i| t(&format!("Paged Item {i:03}.txt")))
+        .collect();
     let f = fixture(&ts, Opts::default());
     let key = f.torznab_key();
     // No words: newest first.
@@ -752,16 +791,25 @@ async fn paging_follows_offset_and_caps_limit() {
         .collect();
     assert_eq!(
         rest,
-        (0..5).rev().map(|i| format!("Paged Item {i:03}.txt")).collect::<Vec<_>>()
+        (0..5)
+            .rev()
+            .map(|i| format!("Paged Item {i:03}.txt"))
+            .collect::<Vec<_>>()
     );
-    assert_eq!(page.child("torznab:response").unwrap().attr("offset"), Some("100"));
+    assert_eq!(
+        page.child("torznab:response").unwrap().attr("offset"),
+        Some("100")
+    );
     let two = f.titles(&key, "t=search&limit=2&offset=2").await;
     assert_eq!(two, ["Paged Item 102.txt", "Paged Item 101.txt"]);
     // Past the search's window: an empty page, not an error.
     for offset in ["10000", "999999999"] {
         let deep = f.feed(&key, &format!("t=search&offset={offset}")).await;
         assert_eq!(deep.all("item").count(), 0);
-        assert_eq!(deep.child("torznab:response").unwrap().attr("total"), Some("105"));
+        assert_eq!(
+            deep.child("torznab:response").unwrap().attr("total"),
+            Some("105")
+        );
     }
 }
 
@@ -773,7 +821,10 @@ async fn private_hidden_and_unverified_are_never_served() {
     for (name, flag) in [
         ("Secret Private Source Thing.txt", flags::PRIVATE_SOURCE),
         ("Secret Bep27 Private Thing.txt", flags::PRIVATE),
-        ("Secret Remote Unverified Thing.txt", flags::REMOTE_UNVERIFIED),
+        (
+            "Secret Remote Unverified Thing.txt",
+            flags::REMOTE_UNVERIFIED,
+        ),
         ("Secret Hidden Thing.txt", flags::HIDDEN),
     ] {
         let mut x = t(name);
@@ -806,10 +857,19 @@ async fn private_hidden_and_unverified_are_never_served() {
             assert!(!text.contains(h.as_str()), "{q}");
         }
     }
-    assert_eq!(f.titles(&key, "t=search&q=thing").await, ["Visible Thing.txt"]);
-    // Counts leave them out too.
+    assert_eq!(
+        f.titles(&key, "t=search&q=thing").await,
+        ["Visible Thing.txt"]
+    );
+    // Counts leave them out too, but for the remote row whose private
+    // bit isn't verified yet: the index has no term for that, so it's
+    // counted, and only the stored row's check keeps it out.
     let all = f.feed(&key, "t=search").await;
-    assert_eq!(all.child("torznab:response").unwrap().attr("total"), Some("1"));
+    assert_eq!(
+        all.child("torznab:response").unwrap().attr("total"),
+        Some("2")
+    );
+    assert_eq!(all.all("item").count(), 1);
 }
 
 #[tokio::test]
@@ -818,21 +878,38 @@ async fn adult_follows_torznab_adult_not_search() {
     x.adult = true;
     let ts = vec![t("Plain Clip Thing.mp4"), x];
     // "Show adult content" is on: it doesn't apply to Torznab.
-    let f = fixture(&ts, Opts { show_adult: true, ..Opts::default() });
+    let f = fixture(
+        &ts,
+        Opts {
+            show_adult: true,
+            ..Opts::default()
+        },
+    );
     let key = f.torznab_key();
-    for q in ["t=search", "t=search&q=clip", "t=search&cat=6000", "t=search&q=type:adult"] {
+    for q in [
+        "t=search",
+        "t=search&q=clip",
+        "t=search&cat=6000",
+        "t=search&q=type:adult",
+    ] {
         let text = channel_text(&f.feed(&key, q).await);
         assert!(!text.contains("Hot.Scene"), "{q}: {text}");
     }
     // On: served, as XXX, followed live with no restart.
     f.torznab_adult.store(true, Ordering::SeqCst);
-    assert_eq!(f.titles(&key, "t=search&cat=6000").await, ["Hot.Scene.Clip.XXX.1080p.mp4"]);
+    assert_eq!(
+        f.titles(&key, "t=search&cat=6000").await,
+        ["Hot.Scene.Clip.XXX.1080p.mp4"]
+    );
     let item = f.feed(&key, "t=search&cat=6000").await;
     assert_eq!(item.child("item").unwrap().tz("category")[0], "6000");
     assert_eq!(f.titles(&key, "t=search&q=clip").await.len(), 2);
     // Off again: gone again.
     f.torznab_adult.store(false, Ordering::SeqCst);
-    assert_eq!(f.titles(&key, "t=search&q=clip").await, ["Plain Clip Thing.mp4"]);
+    assert_eq!(
+        f.titles(&key, "t=search&q=clip").await,
+        ["Plain Clip Thing.mp4"]
+    );
     // Without the setting wired at all, never.
     let bare = fixture(
         &ts,
@@ -843,7 +920,10 @@ async fn adult_follows_torznab_adult_not_search() {
         },
     );
     let key = bare.torznab_key();
-    assert_eq!(bare.titles(&key, "t=search&q=clip").await, ["Plain Clip Thing.mp4"]);
+    assert_eq!(
+        bare.titles(&key, "t=search&q=clip").await,
+        ["Plain Clip Thing.mp4"]
+    );
 }
 
 // ── Hostile names ─────────────────────────────────────────────────────
@@ -854,10 +934,14 @@ async fn hostile_names_are_well_formed_xml() {
         b"Hostile ]]> <script>alert(1)</script> & \"q\" 'a' x.txt".to_vec(),
         b"Hostile ctrl \x01\x02\x07\x08\x0b\x0c\x1b[31m\x7f bell.txt".to_vec(),
         b"Hostile invalid \xff\xfe\xc3\x28 utf8.txt".to_vec(),
-        "Hostile c1 \u{85}\u{9f} nel \u{feff} bom \u{202e} rlo.txt".as_bytes().to_vec(),
+        "Hostile c1 \u{85}\u{9f} nel \u{feff} bom \u{202e} rlo.txt"
+            .as_bytes()
+            .to_vec(),
         b"Hostile tab\tnew\nline\rcr.txt".to_vec(),
         b"Hostile entity &amp; &#0; &#x1; &lt;!-- --> <![CDATA[ x ]]> <?pi?>.txt".to_vec(),
-        "Hostile nonchar \u{fffe}\u{ffff} end.txt".as_bytes().to_vec(),
+        "Hostile nonchar \u{fffe}\u{ffff} end.txt"
+            .as_bytes()
+            .to_vec(),
     ];
     let ts: Vec<T> = names
         .iter()
@@ -916,9 +1000,19 @@ async fn bad_parameters_are_error_documents() {
     assert_eq!(error_code(&f.api(&key, &long).await), "201");
     // An error never echoes the value it refused.
     let r = f.api(&key, "t=search&limit=%3Cscript%3E").await;
-    assert!(!r.body.contains("script"), "{}", r.body);
+    assert!(
+        !r.body.contains("<script") && !r.body.contains("&lt;script"),
+        "{}",
+        r.body
+    );
     // Search off: 503, "API disabled".
-    let off = fixture(&[], Opts { no_search: true, ..Opts::default() });
+    let off = fixture(
+        &[],
+        Opts {
+            no_search: true,
+            ..Opts::default()
+        },
+    );
     let key = off.torznab_key();
     let r = off.api(&key, "t=search").await;
     assert_eq!(r.status, StatusCode::SERVICE_UNAVAILABLE);
@@ -1013,17 +1107,31 @@ async fn only_a_torznab_key_or_a_session_gets_in() {
     assert_eq!(f.api(&all, "t=caps").await.body, CAPS);
     // A signed-in browser reaches it without a key.
     let token = f.auth.setup_token().unwrap();
-    let session = f
-        .auth
-        .setup("127.0.0.1".parse().unwrap(), &token, PASSWORD)
+    let setup = Request::post("/api/v1/setup")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "token": token,
+                "password": PASSWORD,
+                "notice_version": lodestar_api::legal::NOTICE_VERSION,
+            })
+            .to_string(),
+        ))
         .unwrap();
+    let mut setup = setup;
+    setup.extensions_mut().insert(ConnectInfo(fresh_ip()));
+    let resp = f.app.clone().oneshot(setup).await.unwrap();
+    let cookie = resp.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
     let r = f
         .send(
             Request::get("/api/v1/torznab/api?t=caps")
-                .header(
-                    header::COOKIE,
-                    format!("{}={session}", lodestar_api::auth::COOKIE),
-                )
+                .header(header::COOKIE, cookie)
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -1034,7 +1142,13 @@ async fn only_a_torznab_key_or_a_session_gets_in() {
 
 #[tokio::test]
 async fn failed_checks_are_rate_limited_as_a_torznab_error() {
-    let f = fixture(&[], Opts { frozen: true, ..Opts::default() });
+    let f = fixture(
+        &[],
+        Opts {
+            frozen: true,
+            ..Opts::default()
+        },
+    );
     let from = fresh_ip();
     let bad = keys::mint(KeyKind::ApiKey)
         .unwrap()

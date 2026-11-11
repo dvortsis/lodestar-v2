@@ -168,11 +168,7 @@ async fn api(
     };
     let mode = match req.function {
         Function::Caps => {
-            return document(
-                StatusCode::OK,
-                "application/xml; charset=utf-8",
-                caps(),
-            );
+            return document(StatusCode::OK, "application/xml; charset=utf-8", caps());
         }
         Function::Search(m) => m,
     };
@@ -200,10 +196,7 @@ pub fn caps() -> String {
         ("audio-search", "q"),
         ("book-search", "q"),
     ] {
-        x.empty(
-            name,
-            &[("available", "yes"), ("supportedParams", params)],
-        );
+        x.empty(name, &[("available", "yes"), ("supportedParams", params)]);
     }
     x.close();
     x.open("categories", &[]);
@@ -241,7 +234,12 @@ fn excluded(row: &TorrentRow, e: Option<&Enriched>, adult: bool) -> bool {
     discover::withheld(row, e, false, adult) || row.flags & flags::PRIVACY != 0
 }
 
-async fn run(s: ApiState, req: &query::Request, mode: Mode, adult: bool) -> Result<String, Response> {
+async fn run(
+    s: ApiState,
+    req: &query::Request,
+    mode: Mode,
+    adult: bool,
+) -> Result<String, Response> {
     let Some(search) = s.index.clone() else {
         return Err(error_document(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -311,7 +309,10 @@ async fn run(s: ApiState, req: &query::Request, mode: Mode, adult: bool) -> Resu
             });
         }
         drop(store);
-        tracing::debug!(took_ms = started.elapsed().as_millis() as u64, "torznab search");
+        tracing::debug!(
+            took_ms = started.elapsed().as_millis() as u64,
+            "torznab search"
+        );
         Ok::<_, crate::ApiError>((total, items))
     })
     .await;
@@ -386,7 +387,10 @@ fn feed(offset: usize, total: u64, items: &[Item]) -> String {
     x.text("description", &[], "Lodestar search results");
     x.empty(
         "torznab:response",
-        &[("offset", &offset.to_string()), ("total", &total.to_string())],
+        &[
+            ("offset", &offset.to_string()),
+            ("total", &total.to_string()),
+        ],
     );
     for item in items {
         write_item(&mut x, item);

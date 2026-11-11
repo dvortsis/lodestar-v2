@@ -95,7 +95,10 @@ impl Mode {
 pub enum Episode {
     Number(u32),
     /// A daily show's `MM/DD`; `season` is its year.
-    Daily { month: u32, day: u32 },
+    Daily {
+        month: u32,
+        day: u32,
+    },
 }
 
 /// A parsed request.
@@ -143,7 +146,10 @@ const ID_PARAMS: &[&str] = &[
 pub fn parse(query: Option<&str>) -> Result<Request, Refused> {
     let query = query.unwrap_or("");
     if query.len() > MAX_QUERY_STRING {
-        return Err(refused(INCORRECT, "Incorrect parameter: the query is too long"));
+        return Err(refused(
+            INCORRECT,
+            "Incorrect parameter: the query is too long",
+        ));
     }
     let mut t = None;
     let mut q = None;
@@ -156,7 +162,10 @@ pub fn parse(query: Option<&str>) -> Result<Request, Refused> {
     for (k, v) in form_urlencoded::parse(query.as_bytes()) {
         n += 1;
         if n > MAX_PARAMS {
-            return Err(refused(INCORRECT, "Incorrect parameter: too many parameters"));
+            return Err(refused(
+                INCORRECT,
+                "Incorrect parameter: too many parameters",
+            ));
         }
         let slot = match &*k {
             "t" => &mut t,
@@ -180,7 +189,10 @@ pub fn parse(query: Option<&str>) -> Result<Request, Refused> {
             _ => continue,
         };
         if slot.is_some() {
-            return Err(refused(INCORRECT, "Incorrect parameter: a parameter is repeated"));
+            return Err(refused(
+                INCORRECT,
+                "Incorrect parameter: a parameter is repeated",
+            ));
         }
         *slot = Some(v.into_owned());
     }
@@ -250,7 +262,10 @@ fn words(q: &str) -> Result<Vec<String>, Refused> {
         .collect();
     let words: Vec<String> = clean.split_whitespace().map(str::to_owned).collect();
     if words.len() > MAX_WORDS {
-        return Err(refused(INCORRECT, "Incorrect parameter: q has too many words"));
+        return Err(refused(
+            INCORRECT,
+            "Incorrect parameter: q has too many words",
+        ));
     }
     Ok(words)
 }
@@ -264,7 +279,10 @@ fn cats(cat: &str) -> Result<Option<Vec<u32>>, Refused> {
             continue;
         }
         if out.len() == MAX_CATS {
-            return Err(refused(INCORRECT, "Incorrect parameter: cat has too many categories"));
+            return Err(refused(
+                INCORRECT,
+                "Incorrect parameter: cat has too many categories",
+            ));
         }
         let id = number(part, 6).ok_or(refused(INCORRECT, "Incorrect parameter: cat"))?;
         if !out.contains(&id) {
@@ -408,19 +426,30 @@ mod tests {
             ok("t=search&q=The%20Show%09S01E02%00%1b").words,
             ["The", "Show", "S01E02"]
         );
-        assert_eq!(ok("t=search&q=verified:no+-flag:hidden").words, ["verified:no", "-flag:hidden"]);
+        assert_eq!(
+            ok("t=search&q=verified:no+-flag:hidden").words,
+            ["verified:no", "-flag:hidden"]
+        );
         // Invalid UTF-8 is replaced, not refused.
         assert_eq!(ok("t=search&q=%ff%fe").words, ["\u{FFFD}\u{FFFD}"]);
         let long = "a".repeat(MAX_Q_BYTES + 1);
         assert_eq!(code(&format!("t=search&q={long}")), INCORRECT);
         let many = vec!["w"; MAX_WORDS + 1].join("+");
         assert_eq!(code(&format!("t=search&q={many}")), INCORRECT);
-        assert_eq!(ok(&format!("t=search&q={}", vec!["w"; MAX_WORDS].join("+"))).words.len(), MAX_WORDS);
+        assert_eq!(
+            ok(&format!("t=search&q={}", vec!["w"; MAX_WORDS].join("+")))
+                .words
+                .len(),
+            MAX_WORDS
+        );
     }
 
     #[test]
     fn categories_parse() {
-        assert_eq!(ok("t=search&cat=5030,5040,,5030").cats, Some(vec![5030, 5040]));
+        assert_eq!(
+            ok("t=search&cat=5030,5040,,5030").cats,
+            Some(vec![5030, 5040])
+        );
         assert_eq!(ok("t=search&cat=").cats, None);
         assert_eq!(ok("t=search&cat=,").cats, None);
         assert_eq!(ok("t=search&cat=999999").cats, Some(vec![999_999]));
@@ -436,13 +465,7 @@ mod tests {
         let r = ok("t=tvsearch&season=1&ep=2");
         assert_eq!((r.season, r.ep), (Some(1), Some(Episode::Number(2))));
         let r = ok("t=tvsearch&season=2024&ep=01/15");
-        assert_eq!(
-            r.ep,
-            Some(Episode::Daily {
-                month: 1,
-                day: 15
-            })
-        );
+        assert_eq!(r.ep, Some(Episode::Daily { month: 1, day: 15 }));
         assert_eq!(ok("t=tvsearch&season=&ep=").season, None);
         for bad in [
             "season=x",
@@ -469,7 +492,10 @@ mod tests {
         // An empty ID, as some clients send, is no ID.
         assert_eq!(ok("t=movie&imdbid=&q=x").words, ["x"]);
         // Unknown parameters are ignored.
-        assert_eq!(ok("t=search&extended=1&o=xml&attrs=a&year=2020&apikey=k").limit, MAX_LIMIT);
+        assert_eq!(
+            ok("t=search&extended=1&o=xml&attrs=a&year=2020&apikey=k").limit,
+            MAX_LIMIT
+        );
         let params = vec!["x=1"; MAX_PARAMS].join("&");
         assert_eq!(code(&format!("t=search&{params}")), INCORRECT);
         let long = format!("t=search&pad={}", "a".repeat(MAX_QUERY_STRING));
@@ -538,7 +564,10 @@ mod tests {
         let Some(Node::And { of }) = ok("t=search&cat=2000,5000").ast(Mode::Search) else {
             panic!()
         };
-        assert!(of.iter().any(|n| matches!(n, Node::Or { of } if of.len() == 2)));
+        assert!(
+            of.iter()
+                .any(|n| matches!(n, Node::Or { of } if of.len() == 2))
+        );
         // A daily episode is a phrase of the date.
         let Some(Node::And { of }) = ok("t=tvsearch&season=2024&ep=1/5").ast(Mode::Tv) else {
             panic!()

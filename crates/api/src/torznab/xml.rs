@@ -191,7 +191,8 @@ mod tests {
     fn documents_close_what_they_open() {
         let mut x = Xml::new();
         x.open("rss", &[("version", "2.0")]).open("channel", &[]);
-        x.text("title", &[], "<t>").empty("torznab:attr", &[("name", "a&b")]);
+        x.text("title", &[], "<t>")
+            .empty("torznab:attr", &[("name", "a&b")]);
         let doc = x.finish();
         assert_eq!(
             doc,
@@ -214,6 +215,11 @@ mod tests {
         assert_eq!(rfc822(-1), "Wed, 31 Dec 1969 23:59:59 +0000");
     }
 
+    /// What escaped text must never hold.
+    fn forbidden(c: char) -> bool {
+        c.is_control() || c == '\u{FFFE}' || c == '\u{FFFF}'
+    }
+
     proptest! {
         /// Whatever the text, its escaped form holds only characters XML
         /// 1.0 allows, no markup and no control characters, and no `&`
@@ -222,8 +228,7 @@ mod tests {
         fn escaped_text_is_always_safe(s in any::<String>()) {
             let out = esc(&s);
             prop_assert!(!out.contains(['<', '>', '"', '\'']));
-            prop_assert!(!out.chars().any(|c| c.is_control()
-                || c == '\u{FFFE}' || c == '\u{FFFF}'));
+            prop_assert!(!out.chars().any(forbidden));
             for (i, _) in out.match_indices('&') {
                 let rest = &out[i..];
                 prop_assert!(["&amp;", "&lt;", "&gt;", "&quot;", "&apos;"]

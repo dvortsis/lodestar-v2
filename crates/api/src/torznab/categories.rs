@@ -41,7 +41,11 @@ pub struct Category {
 }
 
 const fn sub(id: u32, name: &'static str) -> Category {
-    Category { id, name, subs: &[] }
+    Category {
+        id,
+        name,
+        subs: &[],
+    }
 }
 
 /// Every category served, in caps order.
@@ -132,10 +136,7 @@ pub fn of(record: Option<&Record>) -> (u32, Option<u32>) {
 
 /// [`of`], from a class, its adult kind and its `res` values.
 pub fn of_parts(t: ContentType, kind: Option<AdultKind>, res: &[&str]) -> (u32, Option<u32>) {
-    let band = || {
-        res.iter()
-            .find_map(|v| band_of(&v.to_ascii_lowercase()))
-    };
+    let band = || res.iter().find_map(|v| band_of(&v.to_ascii_lowercase()));
     match t {
         ContentType::Movie => (MOVIES, band().map(|b| MOVIES + b)),
         ContentType::Tv => (TV, band().map(|b| TV + b)),
