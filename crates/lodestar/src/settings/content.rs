@@ -106,12 +106,6 @@ pub fn follow_export(rx: watch::Receiver<Content>) -> lodestar_api::export::Expo
     lodestar_api::export::ExportAdult(AdultVisibility::follow(move || rx.borrow().export_adult))
 }
 
-/// Torznab's own adult setting (`torznab_adult`, §20.9), followed live,
-/// for `/torznab/api`.
-pub fn follow_torznab(rx: watch::Receiver<Content>) -> lodestar_api::torznab::TorznabAdult {
-    lodestar_api::torznab::TorznabAdult(AdultVisibility::follow(move || rx.borrow().torznab_adult))
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -135,20 +129,6 @@ mod tests {
         );
         tx.send_modify(|c| c.export_adult = true);
         assert!(export.0.shown());
-    }
-
-    #[test]
-    fn torznab_follows_its_own_setting_live() {
-        let (tx, rx) = watch::channel(Content::default());
-        let torznab = follow_torznab(rx);
-        assert!(!torznab.0.shown());
-        tx.send_modify(|c| {
-            c.show_adult = true;
-            c.export_adult = true;
-        });
-        assert!(!torznab.0.shown(), "search's and export's don't apply");
-        tx.send_modify(|c| c.torznab_adult = true);
-        assert!(torznab.0.shown());
     }
 
     #[test]
