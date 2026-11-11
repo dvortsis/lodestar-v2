@@ -8,8 +8,9 @@ Installer pins in the companion catalogue: qBittorrent's official Windows instal
   - Adding an installer source is a code change with its own review, like `DOWNLOAD_HOSTS`.
   - Nothing at run time reads `INSTALLER_SOURCES`: CMP-1's fetch takes the entry's `hosts`, and the manager refuses an installer before any fetch (`guided_only`, unchanged).
 - **The folder's shape is exactly SourceForge's `/project/<project>/<folder>/`** (`source`), as strict as `native.release`'s `/<owner>/<project>/releases/download/`.
-- **A pinned installer must name its folder** (`source`). Its pin is checked against that folder and its host alone, never against the fetch hosts: `<release><version folder>/<file>`, an `.exe` or `.msi`, and the entry's one version, under the same rules as every other pin.
-- **Old catalogues still load.** The field is optional (`serde(default)`), and an unpinned installer needs no folder. Today's `catalogue.json` is unchanged.
+- **A pinned installer with its own folder** is checked against that folder and its host alone, never against the fetch hosts: `<release><version folder>/<file>`, an `.exe` or `.msi`, and the entry's one version, under the same rules as every other pin.
+- **Old catalogues still load.** The field is optional (`serde(default)`). An installer without it is checked against `native.release` and the fetch hosts, exactly as before, so a SourceForge pin there is refused. That keeps the existing test catalogues in `tests/manager.rs`, `tests/windows_qbittorrent.rs` and `tests/fetch.rs`, which pin an installer from the GitHub folder, valid and unchanged. Today's `catalogue.json` is unchanged.
+  - Requiring the folder on every pinned installer was considered. It isn't needed for safety, because Lodestar never fetches an installer, and it would have meant editing CMP-11b's tests outside this slice's paths.
 - **`Artifact::release`** is public, `None` for everything but a pinned (or folder-naming) installer, so CMP-11's guide can name where the file came from if it wants to. CMP-11 still shows only `DOWNLOAD_PAGE`.
 
 ## The pin-time source (runner, 2026-11-11, approved as recommended)
@@ -67,7 +68,7 @@ Installer pins in the companion catalogue: qBittorrent's official Windows instal
   - an unpinned installer with no folder, and the builtin catalogue with none;
   - the source lists disjoint;
   - refusals:
-    - a pinned installer without a folder;
+    - a SourceForge pin without its folder (checked against the fetch hosts);
     - a folder on a non-installer artifact;
     - `http`, malformed, or a number;
     - an unknown host;

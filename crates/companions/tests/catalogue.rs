@@ -1101,8 +1101,10 @@ fn installer_sources_are_never_fetch_hosts() {
 
 #[test]
 fn refuses_installer_folders_and_pins_out_of_place() {
-    // A pinned installer must name its folder.
-    installer_refused(Rule::Source, |v| {
+    // Without its own folder, an installer's pin is checked against the
+    // entry's release folder and fetch hosts, as before: SourceForge is
+    // then refused.
+    installer_refused(Rule::HostNotAllowed, |v| {
         installer(v).as_object_mut().unwrap().remove("release");
     });
     // Only an installer has a folder of its own.

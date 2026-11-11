@@ -766,7 +766,8 @@ pub struct Artifact {
     pub executable: Option<RelPath>,
     /// An installer's own release folder, on an [`INSTALLER_SOURCES`] host
     /// and never on a fetch host; `None` for every other kind, whose pins
-    /// come from [`Native::release`]. Required once an installer is pinned.
+    /// come from [`Native::release`]. An installer without one is pinned
+    /// from [`Native::release`] too.
     pub release: Option<HttpsUrl>,
     pin: Pinned<Pin>,
 }
@@ -1443,11 +1444,9 @@ fn validate_artifact(
         Some(r) => Some(validate_installer_release(&r, hosts, &at_r)?),
         None => None,
     };
+    // An installer without a folder of its own is checked against the
+    // entry's release folder, as before the field existed.
     let pin = match (a.pin, &own_release) {
-        // A pinned installer must say where it came from.
-        (Some(_), None) if a.archive == ArchiveKind::Installer => {
-            return Err(CatalogueError::new(Rule::Source, at_r));
-        }
         (Some(p), Some(own)) => {
             // Its pin is checked against its own folder and that folder's
             // host alone, never against the fetch hosts.
