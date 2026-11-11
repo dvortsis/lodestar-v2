@@ -901,10 +901,12 @@ impl Control {
         }
         // What a pinning plugin was built with: the start's credentials.
         // This relies on nothing writing a credential between the plugin's
-        // build and here. It holds because the API, the only writer
-        // (`update_credentials`), starts serving after `Control::start`.
-        // Keep that order: a write in between would leave the source
-        // running on an older key with `config_pending` false.
+        // build and here. That holds by construction: credentials are
+        // written only through `Control` (`update_credentials`, and a
+        // purge's `finish_purge`), and no `Control` exists until this
+        // returns. Keep it so: a writer outside `Control` that ran before
+        // this would leave the source running on an older key with
+        // `config_pending` false.
         let pinning: Vec<SourceStatus> = monitor
             .sources()
             .into_iter()
@@ -1195,7 +1197,8 @@ impl Control {
                         None
                     };
                     // A pinning plugin runs on the start's credentials, so
-                    // any saved since wait for the next start.
+                    // any saved since wait for the next start. (A source
+                    // stopped since, as a purge does, is left out below.)
                     let rekeyed = match self.inner.sealed_at_start.get(&s.id) {
                         Some(at_start) => sealed_credentials(&store, s)? != *at_start,
                         None => false,
@@ -1226,7 +1229,7 @@ impl Control {
                         Some(Ok(form)) => monitor.running_config(status.id) != Some(form),
                         _ => false,
                     }
-                }) || rekeyed;
+                }) || (rekeyed && !stopped.contains(&status.id));
                 let egress_warnings = egress_warnings(
                     &settings.egress,
                     status.egress.as_ref(),

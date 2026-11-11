@@ -1626,7 +1626,27 @@ async fn a_pinned_credential_saved_since_the_start_waits_for_a_restart() {
     drop(control);
 
     // Removed since the start: it waits too (it's running on a key it no
-    // longer has). The fresh reader still never does.
+    // longer has). The fresh reader still never does. The first write
+    // comes before any view is read, so the record is the start's, not
+    // taken at the first read.
+    let (pipeline, control, creds) = start().await;
+    let pinning_id = pipeline
+        .sources()
+        .into_iter()
+        .find(|s| s.plugin == "pinning")
+        .unwrap()
+        .id;
+    let view = control
+        .update_credentials(
+            pinning_id,
+            &creds,
+            vec![("api_key".into(), Some(Secret::new(PLANTED)))],
+        )
+        .await
+        .unwrap();
+    assert!(view.config_pending, "a write before the first read counts");
+    pipeline.shutdown().await.unwrap();
+    drop(control);
     let (pipeline, control, creds) = start().await;
     assert!(!pending(&control, "pinning"));
     // Another source's write leaves it alone.
@@ -1637,5 +1657,31 @@ async fn a_pinned_credential_saved_since_the_start_waits_for_a_restart() {
     );
     assert!(set_key(&control, &creds, "pinning", None).await);
     assert!(!set_key(&control, &creds, "fresh", None).await);
+    pipeline.shutdown().await.unwrap();
+    drop(control);
+
+    // Purged since the start: the purge stops it and drops its key with
+    // its settings, so nothing waits for a restart.
+    let (pipeline, control, creds) = start().await;
+    assert!(set_key(&control, &creds, "pinning", Some(PLANTED)).await);
+    pipeline.shutdown().await.unwrap();
+    drop(control);
+    let (pipeline, control, _creds) = start().await;
+    let id = id(&control, "pinning");
+    assert!(!pending(&control, "pinning"));
+    control.begin_purge(id, true).await.unwrap();
+    let mut cursor = Some(lodestar_store::unverified::PurgeCursor::START);
+    while let Some(from) = cursor {
+        cursor = control.purge_step(id, from).await.unwrap().next;
+    }
+    control.finish_purge(id).await.unwrap();
+    let view = control
+        .sources()
+        .unwrap()
+        .into_iter()
+        .find(|v| v.status.id == id)
+        .unwrap();
+    assert!(view.credentials.is_empty(), "the purge dropped its key");
+    assert!(!view.config_pending, "a purged source waits for nothing");
     pipeline.shutdown().await.unwrap();
 }
