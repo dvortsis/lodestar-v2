@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T21:46:53Z",
+  "updated_at": "2026-11-11T21:50:24Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6925,6 +6925,12 @@
       "at": "2026-11-11T21:46:53Z",
       "for": "runner PR",
       "note": "Owner in runner session 2026-11-11T21:4xZ: 'Go up to 12 sessions'. Record as owner-decisions \u00a72.56; slices.yaml limits.phase_total 8->12; build-plan \u00a70.2 concurrency line; dashboard notes. Plus slices.yaml entries for X-restart-banner, X-upd-stop-races, X-wk-own-lease-lost and the other queued X- slices."
+    },
+    {
+      "at": "2026-11-11T21:50:24Z",
+      "slice": "X-prowlarr-register-followups",
+      "from": "rv-709-f820eeba",
+      "note": "I: source-text check that crates/sources-plugins prowlarr.rs never fetches item.link (backs the notice's 'never downloads a .torrent from any indexer'). Nits: consent_gate.rs:311 rewrap; decisions heading (#709); services.rs:347 prowlarr::ID."
     }
   ],
   "main_health": [
@@ -7658,7 +7664,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T21:46:53Z",
+    "updated": "2026-11-11T21:50:24Z",
     "items": [
       {
         "slot": 1,
@@ -7822,7 +7828,7 @@
     }
   ],
   "heartbeat": "2026-11-11T21:38:36Z",
-  "updated": "2026-11-11T21:46:53Z",
+  "updated": "2026-11-11T21:50:24Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -7998,6 +8004,12 @@
       "slice": "X-win-upd-stop-wait",
       "sha": "4b63499cff54edc826c5875a1349c82e4258f80a",
       "at": "2026-11-11T21:04:31Z"
+    },
+    {
+      "pr": 713,
+      "slice": "runner",
+      "sha": "b0805b68466c645e56114b9c1547bbf40227a16d",
+      "at": "2026-11-11T21:50:24Z"
     }
   ]
 }
