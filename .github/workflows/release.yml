@@ -178,7 +178,8 @@ jobs:
       # Setup by token through the wizard's own API, then the crawler must leave the setup
       # hold with its DHT socket bound. The smoke asks the container only about itself (the
       # container may reach the public DHT); the token is printed redacted and only the
-      # session cookie is kept, in a temp folder that the Container logs step removes.
+      # session cookie and a copy of the container log are kept, in a temp folder that the
+      # Container logs step removes.
       - name: Setup by token, then the crawler is running
         run: |
           set -euo pipefail
