@@ -452,20 +452,21 @@ const settingsLoggingLazy = requireMeasuredJs(
 const eventNamesComponents = componentIds(
 	readFileSync('../crates/lodestar/src/settings/golden/logs_catalog.txt', 'utf8')
 );
-// Gzipped, measured + ~10% rounded up (X-event-names-split, 2026-11-11). A new component needs a line.
+// Gzipped: measured + max(10%, 300 B), rounded up (X-event-names-split, 2026-11-11), so about three
+// new events fit in any chunk. A new component needs a line.
 const eventNamesLimits = {
 	system: '6230 B',
-	auth: '1460 B',
-	dht: '900 B',
-	filters: '1590 B',
-	search: '2140 B',
-	sources: '210 B',
+	auth: '1630 B',
+	dht: '1120 B',
+	filters: '1740 B',
+	search: '2250 B',
+	sources: '490 B',
 	workers: '3780 B',
-	api: '390 B',
-	companions: '950 B',
-	integrations: '840 B',
-	pipeline: '2480 B',
-	fetch: '340 B'
+	api: '650 B',
+	companions: '1160 B',
+	integrations: '1060 B',
+	pipeline: '2560 B',
+	fetch: '610 B'
 };
 for (const c of Object.keys(eventNamesLimits)) {
 	if (!eventNamesComponents.includes(c))
@@ -1289,7 +1290,7 @@ export default [
 	entry('Settings logging parts (on demand)', settingsLoggingLazy, '17.55 KB'),
 	// S-logs-3, X-event-names-split: every event's plain name and help, en and zh, one chunk per
 	// component (was one 16.6 KB chunk). A new event grows one chunk; a new component needs a budget
-	// here, or the build of this file fails. Limits = measured + ~10% (runner §2.26, 2026-11-11).
+	// here, or the build of this file fails. Limits = measured + max(10%, 300 B) (runner §2.26, 2026-11-11).
 	...eventNamesComponents.map((c) => {
 		const limit = eventNamesLimits[c];
 		if (!limit) throw new Error(`size-limit: no budget for the ${c} event names; add it`);

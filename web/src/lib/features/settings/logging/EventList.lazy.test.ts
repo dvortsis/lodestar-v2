@@ -59,4 +59,17 @@ describe('event list names', () => {
 		expect(queryByTestId('log-event-cluster.listening')).not.toBeNull();
 		expect(queryByTestId('log-event-app.start')).toBeNull();
 	});
+
+	it('finds an event in a closed group by its plain name once the names arrive', async () => {
+		const { getByRole, getByTestId, queryByTestId } = render(EventList, {
+			props: { form, key: 'logging.events', controlProps: {} } as never,
+			context
+		});
+		await fireEvent.input(getByRole('searchbox'), { target: { value: 'Lodestar started' } });
+		// Until the names load, matching is on ids only; then the group opens with its row.
+		await waitFor(() => expect(getByTestId('log-event-app.start')).toBeTruthy(), {
+			timeout: 10_000
+		});
+		expect(queryByTestId('log-event-cluster.listening')).toBeNull();
+	});
 });
