@@ -445,7 +445,7 @@ describe('the Updates screen', () => {
 				from: '0.4.0',
 				level: 'fix',
 				lost_torrents: null,
-				reason: 'old reason',
+				reason: 'failed',
 				result: 'rolled_back',
 				version: '0.5.0'
 			},
@@ -454,7 +454,7 @@ describe('the Updates screen', () => {
 				from: '0.5.2',
 				level: 'fix',
 				lost_torrents: null,
-				reason: 'health check failed',
+				reason: 'selftest',
 				result: 'rolled_back',
 				version: '0.6.0'
 			}
@@ -462,8 +462,9 @@ describe('the Updates screen', () => {
 		render(UpdatesScreen);
 		const text = (await screen.findByTestId('updates-rolled-back')).textContent ?? '';
 		expect(text).toContain('0.6.0');
-		expect(text).toContain('health check failed');
-		expect(text).not.toContain('old reason');
+		expect(text).toContain('failed its health check');
+		expect(text).not.toContain("didn't install");
+		expect(text).not.toContain('selftest');
 	});
 
 	it('shows the saved security choice when the status can’t load', async () => {
@@ -538,12 +539,102 @@ describe('the Updates screen', () => {
 		);
 	});
 
-	it('shows a notice code it has no words for', async () => {
+	it("words a notice code it doesn't know without showing it", async () => {
 		status.notices = ['brand_new_code'];
 		render(UpdatesScreen);
 		expect((await screen.findByTestId('updates-notice-brand_new_code')).textContent).toContain(
 			'no explanation'
 		);
+		expect((await screen.findByTestId('updates-notices')).textContent).not.toContain(
+			'brand_new_code'
+		);
+	});
+
+	it.each([
+		['install_kind_unknown', "couldn't tell how it was installed"],
+		['data_folder_unchecked', 'default data folder under ProgramData'],
+		['brand_new_reason', "This installation can't update itself."]
+	])('words the capability reason %s and never shows the code', async (reason, words) => {
+		status.capability = { can_install: false, reason };
+		render(UpdatesScreen);
+		const t = (await screen.findByTestId('updates-cannot-auto')).textContent ?? '';
+		expect(t).toContain(words);
+		expect(t).not.toContain(reason);
+	});
+
+	it('words the install_failed notice and never shows its code', async () => {
+		status.notices = ['install_failed'];
+		render(UpdatesScreen);
+		await until(() => expect(screen.getByTestId('updates-notice-install_failed')).toBeTruthy());
+		const banner = screen.getByTestId('updates-notices');
+		expect(banner.textContent).toContain("The last update didn't install");
+		expect(banner.textContent).toContain('still on the old version');
+		expect(banner.textContent).toContain('msiexec.log');
+		expect(banner.textContent).not.toContain('install_failed');
+	});
+
+	it.each([
+		['fixture', 'sample data'],
+		['network', "couldn't start its updater"],
+		['windows_helper', "isn't available on this platform"],
+		['brand_new', 'no update engine']
+	])('words the no-engine banner for %s without the code', async (why, words) => {
+		status.unavailable = why as never;
+		render(UpdatesScreen);
+		const t = (await screen.findByTestId('updates-unavailable')).textContent ?? '';
+		expect(t).toContain(words);
+		expect(t).not.toContain(why);
+	});
+
+	it.each([
+		['network', "couldn't reach the update server"],
+		['bad_signature', "signature didn't check out"],
+		['revoked_key', "signature didn't check out"],
+		['redirect_refused', "somewhere it doesn't trust"],
+		['bin_unavailable', "can't write update files"],
+		['newer_format', 'needs a newer version of Lodestar'],
+		['brand_new_code', "check didn't complete"]
+	])('words a failed check (%s) without the code', async (code, words) => {
+		status.status = { ...status.status, state: 'failed', error: code };
+		render(UpdatesScreen);
+		const t = (await screen.findByTestId('updates-state')).textContent ?? '';
+		expect(t).toContain(words);
+		expect(t).not.toContain(code);
+	});
+
+	it.each([
+		['selftest', 'failed its health check'],
+		['failed', 'kept failing to start'],
+		['no_space', 'free disk space'],
+		['brand_new_code', null]
+	])('words a history reason (%s) and never shows the code', async (reason, words) => {
+		status.history = [
+			{
+				version: '0.5.1',
+				from: '0.5.0',
+				level: null,
+				at: 1_700_000_000,
+				result: 'rolled_back',
+				reason,
+				lost_torrents: null
+			},
+			{
+				version: '0.5.2',
+				from: '0.5.0',
+				level: null,
+				at: 1_700_000_100,
+				result: 'odd_result',
+				reason: null,
+				lost_torrents: null
+			}
+		];
+		render(UpdatesScreen);
+		const rows = await screen.findAllByTestId('updates-history-row');
+		const t = rows.map((r) => r.textContent ?? '').join('|');
+		if (words) expect(t).toContain(words);
+		else expect(rows[0]?.textContent).not.toContain(':');
+		expect(t).not.toContain(reason);
+		expect(t).not.toContain('odd_result');
 	});
 
 	describe('Roll back', () => {
@@ -734,7 +825,7 @@ describe('the Updates screen', () => {
 			['no_previous_version', 'no previous version'],
 			['snapshot_missing', 'snapshot of your data'],
 			['not_built_yet', "Rolling back isn't built"],
-			['something_new', 'gave no reason']
+			['something_new', "reason this version of Lodestar doesn't describe"]
 		])('shows the refusal %s in words', async (reason, words) => {
 			offer();
 			asked.answer = 'rollback';
