@@ -23,9 +23,9 @@ Answers to the questions at the end of each chapter, in the same order.
 ## Chapter 4: Install on Windows and Linux
 
 1. So the program and the scripts Windows runs as SYSTEM stay out of other users' reach. It always goes in `C:\Program Files\Lodestar`.
-2. Your data in `C:\ProgramData\Lodestar`: library, password and keys. To remove it too, uninstall from an elevated PowerShell with `msiexec /x lodestar-0.5.1-x86_64.msi REMOVE_DATA=1`, after a backup.
+2. Your data in `C:\ProgramData\Lodestar`: library, password and keys. To remove it too, run `msiexec /x <the MSI you installed> REMOVE_DATA=1` from an elevated PowerShell, after a backup.
 3. To a pool path such as `/mnt/cache/appdata/lodestar`. `/mnt/user` goes through Unraid's FUSE layer, which is slow for the index and risky for the database.
-4. Open **Settings → Crawler**, set **Crawl intensity** one step lower, then restart Lodestar. The change applies at the next start.
+4. Open **Settings → Crawler**, set **Crawl intensity** one step lower, then restart Lodestar with `Restart-Service Lodestar`, `sudo systemctl restart lodestar`, or by starting the portable ZIP again. The change applies at the next start.
 
 <!-- nav:start -->
 ---
