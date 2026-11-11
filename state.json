@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T12:09:58Z",
+  "updated_at": "2026-11-11T12:16:21Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6760,14 +6760,13 @@
     },
     "next runner PR: PK-win-portable-upd owns += .gitattributes (the one *.cmd eol=crlf line, rv-659-7f651d09 I2); update/mod.rs already in owns since #676; X-updates-raw-codes owns openapi.json/schema.d.ts already added in #676",
     "X-cmp-egress-api (Opus, core): Companion gains its route (egress) field + PUT /companions/{id}/egress that restarts the companion; then X-cmp-egress-ui (Sonnet): CMP-9a's editor, restart warning, live SOCKS5 warnings (email/MailKit, FlareSolverr, per-indexer proxies). From CMP-9a 2026-11-11: no route reads/writes egress today. Add both to slices.yaml in next runner PR; CMP-G deps should include them.",
-    "When install windows (\u00a72.13) reach Windows: the 1920 boot retry must honour mode Off and pause, not only the skip list (#677 flag)",
-    "#659 owner (check.rs): install_blocked currently shows the install_failed notice; give it its own plain wording after #677 merges",
     "next runner PR: add X-win-upd-reoffer (Opus, core, deps [X-win-upd-1920]; owns update/windows/helper.rs, msi.rs, rollback.rs, tests/update_windows_msi.rs, its decisions file) and X-win-upd-window (check.rs removes request.json on mode Off/pause; after #659) to slices.yaml",
     "Hot/cold leftovers after #680 (appendix B + revisions + heading are in PK-guide-1): docs/operations.md:182-184/:206 -> PK-ops brief; DataFolders hot/cold params dead API -> small companions cleanup slice; architecture.md ~1336/~1759/~2927 + slices.yaml CMP-7 note -> next runner PR; CI job for packaging/unraid validate.py + test_validate.py -> X-ci slice; next runner PR: PK-guide-1 owns += appendix-b-settings-reference.md, 2026-11-11-PK-unraid.md; PK-unraid title trim ('validator checks every Requires/Overview' not done -> split X-unraid-validate-all)",
     "PK-guide-2/3 nits from rv-682: PK-guide-1 decisions :10 stale sentence; appendix-b :3 'Every field' -> point to 2.2 note for v0.5.1's Hot/Cold; docs/user/README.md:93 Last updated date",
     "owner \u00a72.19 flag sent? PK-guide-1 omitted Q12 2nd sentence (safe restart unreleased in v0.5.1) -> include in next owner FYI",
     "next runner PR: add X-cmp-handover-followups (Opus, core; deps [X-cmp-native-handover]; owns per briefs/X-cmp-handover-followups.md) to slices.yaml",
-    "user docs (CMP guide slice): Restart re-adds a managed qBittorrent entry the user deleted on purpose"
+    "user docs (CMP guide slice): Restart re-adds a managed qBittorrent entry the user deleted on purpose",
+    "next runner PR also: X-win-upd-window owns (check.rs, portable.rs, main.rs serve::stopped, PK-win-portable-upd decisions, its own) and X-cmp-handover-followups; PK-smoke #683 leftovers: packaging/windows/README.md python note; package-linux stale step name"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7500,7 +7499,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T12:09:58Z",
+    "updated": "2026-11-11T12:16:21Z",
     "items": [
       {
         "slot": 1,
@@ -7536,11 +7535,11 @@
       },
       {
         "slot": 5,
-        "slice": "PK-win-portable-upd",
+        "slice": "X-win-upd-window",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAS5qWBVBGfPNAHPjt",
-        "since": "2026-11-11T04:06Z"
+        "doing": "session_01MMjhnAS5qWBVBGfPNAHPjt: Install now respects Off/pause (check.rs drops request.json), install_blocked wording, serve::stopped journal race, #659 nits (Opus, /security-review); same session after #659 merged bc717d45",
+        "since": "2026-11-11T12:16:21Z"
       },
       {
         "slot": 6,
