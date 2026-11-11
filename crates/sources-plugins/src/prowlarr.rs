@@ -367,10 +367,10 @@ fn fail(msg: &str) -> PluginError {
 /// The manager refused the API key: the plugin stops and says so, rather
 /// than knocking every 15 minutes.
 const REFUSED: &str = "the indexer manager refused the API key";
-/// The stored key isn't the one Lodestar started with ([`KeyAtStart`]).
 /// The stored key couldn't be read when Lodestar started.
 pub const KEY_UNREAD_AT_START: &str =
     "the stored API key couldn't be read when Lodestar started; restart Lodestar";
+/// The stored key isn't the one Lodestar started with ([`KeyAtStart`]).
 pub const KEY_CHANGED: &str =
     "needs setup: the API key changed since Lodestar started; restart Lodestar to use it";
 const REDIRECTED: &str = "needs setup: the indexer manager redirected the request; check the address (http or https, and any base path)";
