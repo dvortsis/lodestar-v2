@@ -6715,7 +6715,8 @@
     "OP-5 first-run check: the agent's helper fetch is unauthenticated (GitHub's 60/h limit from a shared egress IP); from rv-655 N4",
     "X-updates-raw-codes (Sonnet, later): Updates screen shows install_kind_unknown, data_folder_unchecked and the install_failed notice as raw codes; plus rv-657 nits: dto/updates.rs install_kind_unknown wording ('couldn't tell'), WindowsHelper doc 'kept for clients and other platforms'",
     "next runner PR: X-updates-api-text owns += UpdatesScreen.svelte + updates.test.ts (runner-approved on #657)",
-    "X-flake-portable-restart-2 (Opus, small, after #662): from rv-662: Wait-Process instead of WaitForExit (works under Constrained Language Mode); a started marker so slow PowerShell start doesn't eat the 30 s; a stderr line when the wait is skipped; decisions-file note that the Windows test adds ~30 s"
+    "X-flake-portable-restart-2 (Opus, small, after #662): from rv-662: Wait-Process instead of WaitForExit (works under Constrained Language Mode); a started marker so slow PowerShell start doesn't eat the 30 s; a stderr line when the wait is skipped; decisions-file note that the Windows test adds ~30 s",
+    "X-fleet-polish (small, later): from rv-661 delta: policy() asserts len(words)==6 for query/path ACLs (a second pattern would be ORed by HAProxy); decisions-file wording 'removes it at once' holds only after Lodestar starts"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7448,15 +7449,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T06:13Z",
+    "updated": "2026-11-11T06:42Z",
     "items": [
       {
         "slot": 1,
-        "slice": "OP-3b",
+        "slice": "OP-3c",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn9NvKRMZMg1baoPCau",
-        "since": "2026-11-11T04:06Z"
+        "doing": "Cloud fleet runbook, Stop everything page, gluetun-stop drill (same session after #661)",
+        "since": "2026-11-11T06:42Z"
       },
       {
         "slot": 2,
@@ -7568,7 +7569,7 @@
     }
   ],
   "heartbeat": "2026-11-11T04:06Z",
-  "updated": "2026-11-11T06:25Z",
+  "updated": "2026-11-11T06:42Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
