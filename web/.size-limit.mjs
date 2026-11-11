@@ -409,11 +409,13 @@ const settingsAbout = [/features\/settings\/screens2?\/about\.ts$/];
 // The generated screens' navigation icons (X-settings-registry-slim), loaded after the navigation
 // shows like the connection screens' (`Screen.iconLoad`); every first view stops at them.
 const settingsIcons = [/features\/settings\/screens\/icons\.ts$/];
-// The restart banner (X-restart-banner) is in the shell of every Settings route, so its first view
-// holds only nothing of it: the banner loads after the screen shows, and the confirmation dialog, Review's
-// list (it reads the form engine) and the Restarting page load on a press; "Restart flow (on demand)" gates them.
+// The restart banner (X-restart-banner) is in the shell of every Settings route, so the banner
+// itself counts in each first view. What it loads only when needed is on demand: the confirmation
+// dialog and the Restarting page (Restart now), Review's list (it reads the form engine; Review)
+// and "Keep this address?" (only while the server awaits confirmation). "Restart flow (on demand)"
+// gates them.
 const settingsRestart = [
-	/features\/restart\/(?:RestartBanner|RestartDialog|ReviewList|RestartingPage)\.svelte$/
+	/features\/restart\/(?:AddressPrompt|RestartDialog|ReviewList|RestartingPage)\.svelte$/
 ];
 const settingsFirstView = [
 	...settingsOnDemand,
@@ -436,6 +438,27 @@ const settingsFirstView = [
 	...settingsBodies,
 	...settingsExtras
 ];
+// The restart banner (X-restart-banner) counts in every Settings first view: measured +2.31 KB to
+// +3.05 KB across the screens (the Insights screen the most), so these entries move by the largest,
+// 3.1 KB. Screens that already had that much headroom (Appearance, About, Security, Updates,
+// Keyboard, the overview) keep their limits.
+const BANNER_KB = 3.1;
+const BANNER_SCREENS = new Set([
+	'BlocklistsScreen',
+	'FiltersScreen',
+	'JobsScreen',
+	'CompanionsScreen',
+	'LoggingScreen',
+	'InsightsScreen',
+	'IntegrationsScreen',
+	'LanguageScreen',
+	'NotificationsScreen',
+	'SourcesScreen'
+]);
+const withBanner = (limit, name = 'section') =>
+	name === 'section' || BANNER_SCREENS.has(name)
+		? `${+(Number.parseFloat(limit) + BANNER_KB).toFixed(2)} KB`
+		: limit;
 const settingsSectionView = own('/settings/[section]', { onDemand: settingsFirstView });
 const settingsShellView = own('/settings/[section]', {
 	onDemand: [...settingsFirstView, ...settingsFormChunk, ...settingsAbout]
@@ -1311,7 +1334,7 @@ export default [
 	// X-settings-trim: back at the §10.1 cap (44.95 kB measured) after the SRC-15a/LEGAL-1 raises.
 	// CMP-9a: the Companions registry entry adds ≈ 80 B here, which the 20 B of headroom couldn't take.
 	// Measured 45.06 kB, limit 45.1 KB: the runner decides this change to the §10.1 number (§2.26).
-	entry('Settings section (own JS + CSS)', settingsSectionView, '45.1 KB'),
+	entry('Settings section (own JS + CSS)', settingsSectionView, withBanner('45.1 KB')),
 	// The engine's on-demand code on a Settings screen, still gated: 34.34 KB with S-settings-1's
 	// screen (limit = measured + 10%). The production screen now uses it: missing chunks fail.
 	entry('Settings controls (on demand)', settingsLazy, '38 KB'),
@@ -1390,19 +1413,22 @@ export default [
 		entry(
 			`Settings ${name} (first view)`,
 			files,
-			name === 'FiltersScreen'
-				? '31.14 KB'
-				: name === 'JobsScreen'
-					? '28.5 KB'
-					: name === 'BlocklistsScreen'
-						? '30.4 KB'
-						: name === 'CompanionsScreen'
-							? '33 KB'
-							: name === 'SourcesScreen'
-								? '31.1 KB'
-								: name === 'NotificationsScreen'
-									? '45.2 KB'
-									: '45 KB'
+			withBanner(
+				name === 'FiltersScreen'
+					? '31.14 KB'
+					: name === 'JobsScreen'
+						? '28.5 KB'
+						: name === 'BlocklistsScreen'
+							? '30.4 KB'
+							: name === 'CompanionsScreen'
+								? '33 KB'
+								: name === 'SourcesScreen'
+									? '31.1 KB'
+									: name === 'NotificationsScreen'
+										? '45.2 KB'
+										: '45 KB',
+				name
+			)
 		)
 	),
 	// Appearance's theme picker and custom theme editor, each beyond the screen's first view.
@@ -1447,7 +1473,7 @@ export default [
 			'Restart flow (on demand)',
 			onDemandOf('/settings/[section]', settingsRestart)
 		),
-		'9 KB'
+		'7 KB'
 	),
 	entry('Settings screen icons (on demand)', settingsIconsLazy, '1.66 KB'),
 	// The dialogs' on-demand code (Bits UI overlays, Dialog, both dialogs), still gated.
