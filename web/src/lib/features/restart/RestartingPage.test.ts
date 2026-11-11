@@ -26,7 +26,7 @@ afterEach(() => {
 	restart.begin(null);
 });
 
-const fetchOk = () => vi.fn(async () => new Response('ok'));
+const fetchOk = () => vi.fn<typeof fetch>(async () => new Response('ok'));
 
 it('is a modal dialog with a live status line, and everything behind it inert', () => {
 	vi.stubGlobal(
