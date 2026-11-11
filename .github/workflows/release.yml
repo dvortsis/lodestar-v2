@@ -131,7 +131,7 @@ jobs:
             done
             if [ "$ok" != true ]; then
               echo "::error::$name did not become healthy"
-              docker logs "$name" || true
+              docker logs "$name" 2>&1 | sed -E 's/(setup token )[0-9A-Fa-f]{4}(-[0-9A-Fa-f]{4}){3}/\1XXXX-XXXX-XXXX-XXXX/' || true
               exit 1
             fi
           done
@@ -175,6 +175,21 @@ jobs:
           echo "checking /$asset"
           curl --fail --silent --show-error --max-time 10 --output /dev/null "http://127.0.0.1:8090/$asset"
 
+      # Setup by token through the wizard's own API, then the crawler must leave the setup
+      # hold with its DHT socket bound. The smoke asks the container only about itself (the
+      # container may reach the public DHT); the token is printed redacted and the password
+      # stays in a temp folder.
+      - name: Setup by token, then the crawler is running
+        run: |
+          set -euo pipefail
+          state=$(mktemp -d)
+          echo "SMOKE_STATE=$state" >> "$GITHUB_ENV"
+          docker logs lodestar-smoke > "$state/log.txt" 2>&1
+          python3 -I packaging/smoke/flow.py setup --url http://127.0.0.1:8090 \
+            --log "$state/log.txt" --state "$state"
+          python3 -I packaging/smoke/flow.py crawler --url http://127.0.0.1:8090 \
+            --state "$state" --dht
+
       - name: Compose file is valid
         run: docker compose -f docker-compose.yml config --quiet
 
@@ -186,17 +201,44 @@ jobs:
             echo "$name exit code: $code"
             if [ "$code" != 0 ]; then
               echo "::error::$name exited with $code after docker stop"
-              docker logs "$name" || true
+              docker logs "$name" 2>&1 | sed -E 's/(setup token )[0-9A-Fa-f]{4}(-[0-9A-Fa-f]{4}){3}/\1XXXX-XXXX-XXXX-XXXX/' || true
               exit 1
             fi
           done
 
+      # `lodestar import` needs the server stopped, so it runs after the clean stop above, as
+      # the same account, on the same data folder. Then the same container starts again and
+      # the imported fixture must be searchable.
+      - name: Import a fixture, start again and search
+        run: |
+          set -euo pipefail
+          fixture=$(mktemp -d)
+          python3 -I packaging/smoke/flow.py fixture "$fixture/database.sqlite3"
+          chmod 755 "$fixture"
+          chmod 644 "$fixture/database.sqlite3"
+          docker run --rm --network none --user 65532:65532 -v "$SMOKE_DATA:/data" -v "$fixture:/fixture:ro" \
+            lodestar:smoke import start --source magnetico --path /fixture/database.sqlite3
+          docker start lodestar-smoke
+          for i in $(seq 1 60); do
+            health=$(docker inspect --format '{{.State.Health.Status}}' lodestar-smoke)
+            echo "lodestar-smoke [$i] health=$health"
+            if [ "$health" = healthy ]; then break; fi
+            sleep 2
+          done
+          [ "$health" = healthy ] || { docker logs lodestar-smoke 2>&1 | tail -n 40 | sed -E 's/(setup token )[0-9A-Fa-f]{4}(-[0-9A-Fa-f]{4}){3}/\1XXXX-XXXX-XXXX-XXXX/' || true; exit 1; }
+          python3 -I packaging/smoke/flow.py search --url http://127.0.0.1:8090 --state "$SMOKE_STATE"
+          docker stop --time 60 lodestar-smoke
+          code=$(docker inspect --format '{{.State.ExitCode}}' lodestar-smoke)
+          [ "$code" = 0 ] || { echo "::error::lodestar-smoke exited with $code after the second stop"; exit 1; }
+
       - name: Container logs
         if: always()
         run: |
-          docker logs lodestar-smoke || true
-          docker logs lodestar-volume || true
-          docker logs lodestar-puid || true
+          # The first-run setup token is printed redacted, even though it stops working at setup.
+          redact() { sed -E 's/(setup token )[0-9A-Fa-f]{4}(-[0-9A-Fa-f]{4}){3}/\1XXXX-XXXX-XXXX-XXXX/'; }
+          for name in lodestar-smoke lodestar-volume lodestar-puid; do
+            docker logs "$name" 2>&1 | redact || true
+          done
 
   # Whether a pull request touches what the arm64 build depends on beyond the
   # Rust code (the smoke job already builds the same code for amd64).
