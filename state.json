@@ -7596,6 +7596,11 @@
       "at": "2026-11-11T04:53Z",
       "item": "Legal Notice \u00a72 wording for registering Prowlarr as an Account source (X-prowlarr-register); runner drafts the text, owner approves",
       "send": "with the X-prowlarr-settings merge FYI"
+    },
+    {
+      "id": "notice-v5-prowlarr",
+      "sent": "2026-11-11",
+      "ask": "Approve Legal Notice v5 \u00a72 wording for registering Prowlarr/Jackett (runner-state briefs/X-prowlarr-register-notice-draft.md); gates X-prowlarr-register"
     }
   ],
   "review_queue": []
