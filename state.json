@@ -6819,6 +6819,11 @@
       "id": "X-spool-damage-log",
       "what": "WK-11 follow-up: log spool damage by segment name only (brief asked counted+logged; #699 counts only). Add slices.yaml entry in next runner PR.",
       "from": "rv-699-85d8d267 I3"
+    },
+    {
+      "id": "X-win-upd-stop-wait",
+      "what": "services.rs Handles::shutdown: give the updates task a bounded wait (timeout 1-2 s) before abort, so the Off-just-before-stop last look completes deterministically; then tighten the X-win-upd-window decisions wording.",
+      "from": "rv-693-5e260f33 I1"
     }
   ],
   "main_health": [
@@ -7592,7 +7597,7 @@
         "slice": "X-win-upd-window",
         "role": "build",
         "agent": "claude",
-        "doing": "#693 ready at 5e260f33; fresh Opus delta review running; no test-only gate (runner) (session_01MMjhnAS5qWBVBGfPNAHPjt)",
+        "doing": "#693 MERGE; text-only reword round (decisions:8, check.rs:595, residual), then merge",
         "since": "2026-11-11T12:16:21Z"
       },
       {
