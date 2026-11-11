@@ -123,6 +123,89 @@ pub fn rollback_refusal(data_dir: &Path) -> Option<String> {
         .map(|e| e.to_string())
 }
 
+/// The Windows Application event log source the service writes under.
+/// The update helper writes as "Lodestar update helper"
+/// (`update/windows/helper.rs`). The MSI registers both as `eventcreate`
+/// sources (`packaging/windows/main.wxs`), so the messages show without
+/// "The description for Event ID … cannot be found", and the service's
+/// account, which may not create a source, can still write.
+pub const EVENT_SOURCE: &str = "Lodestar";
+
+/// Why the service didn't start normally, as the Event Log tells it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// The data folder isn't private, or its permissions couldn't be read
+    /// or set ([`super::acl::secure_dir`]): the start is refused.
+    NotPrivate,
+    /// An update rollback holds the store: the service waits, idle.
+    RollingBack,
+}
+
+impl Refusal {
+    /// `eventcreate`'s `/T` and `/ID`: within 1–1000, which its own
+    /// message file renders as the text alone. 3 is the refused start's
+    /// exit code (Windows service error 3).
+    pub const fn event(self) -> (&'static str, u16) {
+        match self {
+            Refusal::NotPrivate => ("ERROR", 3),
+            Refusal::RollingBack => ("WARNING", 4),
+        }
+    }
+}
+
+/// What the service writes to the Windows Application event log when it
+/// refuses to start, or waits for a rollback. Every local user can read
+/// that log, and the Legal Notice (section 5) allows only what happened,
+/// how to fix it, and folder paths. So this is a fixed sentence and the
+/// data folder `dir` alone: never [`super::acl`]'s own reason, which names
+/// accounts and SIDs, nor anything else from the config. The full reason,
+/// with the exact command, goes to `%SystemRoot%\Temp\lodestar-service.log`
+/// only.
+pub fn event_log_text(refusal: Refusal, dir: &Path) -> String {
+    // One line, no control or invisible characters: a folder name can't
+    // forge a second message.
+    let dir: String = dir
+        .display()
+        .to_string()
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .filter(|c| !invisible(*c))
+        .collect();
+    // A configured folder can be long; `eventcreate` takes a short line.
+    let dir = match dir.char_indices().nth(MAX_SHOWN) {
+        Some((at, _)) => format!("{}…", &dir[..at]),
+        None => dir,
+    };
+    let log = super::temp_log::NAME;
+    match refusal {
+        Refusal::NotPrivate => format!(
+            "Lodestar's service didn't start: its data folder, {dir}, isn't private, or it \
+             couldn't be checked or created, so Lodestar didn't use it. To fix it, \
+             run the Lodestar installer's Repair as an administrator. If Repair stops or the \
+             service still won't start, the exact reason and fix are in \
+             %SystemRoot%\\Temp\\{log}; see Fix Windows service error 3 in the user guide."
+        ),
+        Refusal::RollingBack => format!(
+            "Lodestar's service is waiting: an update is being undone in its data folder, {dir}, \
+             and nothing may open the store until that finishes. The service carries on by itself \
+             once it has. If it keeps waiting, the reason and what to do are in \
+             %SystemRoot%\\Temp\\{log}."
+        ),
+    }
+}
+
+/// The most of a folder's name the Event Log message shows, in characters.
+const MAX_SHOWN: usize = 260;
+
+/// The bidirectional controls and zero-width characters, which could make
+/// a folder name read as other text.
+fn invisible(c: char) -> bool {
+    matches!(
+        c,
+        '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}'
+    )
+}
+
 /// How the service's idle wait during a rollback ended.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Idle {
@@ -696,6 +779,10 @@ mod scm {
                 // installer's log; the exit code (3) says it was refused.
                 Err(why) => {
                     log_refusal(&why);
+                    event_log(
+                        super::Refusal::NotPrivate,
+                        &super::default_data_dir(std::env::var("ProgramData").ok()),
+                    );
                     REFUSED
                 }
                 // A rollback holds the store: neither version opens it until
@@ -705,6 +792,7 @@ mod scm {
                 // actions); once the marker goes, it starts normally.
                 Ok((_, data_dir, _)) if super::rollback_refusal(&data_dir).is_some() => {
                     log_refusal(&super::rollback_refusal(&data_dir).unwrap_or_default());
+                    event_log(super::Refusal::RollingBack, &data_dir);
                     let idle = super::idle_during_rollback(
                         &data_dir,
                         &|| *stop_rx.borrow(),
@@ -821,9 +909,40 @@ mod scm {
     /// ([`super::super::temp_log`]). Only [`acl::secure_dir`]'s refusals
     /// (paths, SIDs, account names and the fix) and the update helper's
     /// rollback marker come here; the SCM records the exit code ([`REFUSED`])
-    /// in the System event log.
+    /// in the System event log, and [`event_log`] a summary without the
+    /// accounts in the Application event log.
     fn log_refusal(why: &str) {
         let _ = crate::windows::temp_log::append("service refused to start", why);
+    }
+
+    /// Writes [`super::event_log_text`] to the Windows Application event
+    /// log as [`super::EVENT_SOURCE`], through `eventcreate` from
+    /// `System32` as the update helper does (the workspace forbids
+    /// `unsafe`, so no `ReportEventW`). Best effort: the temp log and the
+    /// exit code already say it, and a refusal never waits on this for
+    /// long. The Legal Notice's section 5 names this write.
+    fn event_log(refusal: super::Refusal, dir: &std::path::Path) {
+        use std::os::windows::process::CommandExt;
+        /// `CREATE_NO_WINDOW`.
+        const NO_WINDOW: u32 = 0x0800_0000;
+        let Some(root) = std::env::var_os("SystemRoot") else {
+            return;
+        };
+        let (kind, id) = refusal.event();
+        let id = id.to_string();
+        let _ = std::process::Command::new(
+            std::path::Path::new(&root)
+                .join("System32")
+                .join("eventcreate.exe"),
+        )
+        .creation_flags(NO_WINDOW)
+        .args(["/T", kind, "/ID", id.as_str(), "/L", "APPLICATION"])
+        .args(["/SO", super::EVENT_SOURCE, "/D"])
+        .arg(super::event_log_text(refusal, dir))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
     }
 
     /// Serialises status reports, so a progress tick never follows
@@ -1423,6 +1542,69 @@ mod tests {
         assert!(within(Path::new(r"C:\A"), Path::new(r"C:\a\")));
         assert!(!within(Path::new(r"C:\Ab"), Path::new(r"C:\A")));
         assert!(!within(Path::new(r"C:\A"), Path::new(r"C:\A\b")));
+    }
+
+    /// The Event Log gets a fixed sentence and the data folder alone: no
+    /// account, SID or command from the ACL check (every local user can
+    /// read that log), on one line, short enough for `eventcreate`.
+    #[test]
+    fn the_event_log_text_names_only_the_folder_and_the_fix() {
+        let dir = Path::new(r"C:\ProgramData\Lodestar");
+        for refusal in [Refusal::NotPrivate, Refusal::RollingBack] {
+            let text = event_log_text(refusal, dir);
+            assert!(text.contains(r"C:\ProgramData\Lodestar"), "{text}");
+            assert!(
+                text.contains(r"%SystemRoot%\Temp\lodestar-service.log"),
+                "{text}"
+            );
+            for word in [
+                "S-1-",
+                "icacls",
+                "NT SERVICE",
+                "BUILTIN",
+                "*S",
+                "token",
+                "password",
+            ] {
+                assert!(!text.contains(word), "{word} in {text}");
+            }
+            assert!(!text.chars().any(char::is_control), "{text}");
+            assert!(
+                !text.contains('"'),
+                "no quotes on eventcreate's line: {text}"
+            );
+            assert!(text.chars().count() < 1024, "{}", text.chars().count());
+            let (kind, id) = refusal.event();
+            assert!(matches!(kind, "ERROR" | "WARNING"));
+            assert!((1..=1000).contains(&id), "eventcreate's own message range");
+        }
+        assert!(event_log_text(Refusal::NotPrivate, dir).contains("Repair"));
+        assert_ne!(Refusal::NotPrivate.event(), Refusal::RollingBack.event());
+    }
+
+    /// A long configured folder is cut, so the message stays short.
+    #[test]
+    fn the_event_log_text_cuts_a_long_folder() {
+        let long = format!(r"D:\{}", "é".repeat(5000));
+        let text = event_log_text(Refusal::RollingBack, Path::new(&long));
+        assert!(text.chars().count() < 1024, "{}", text.chars().count());
+        assert!(text.contains("é…,"), "{text}");
+        let short = event_log_text(Refusal::RollingBack, Path::new(r"D:\data"));
+        assert!(!short.contains('…'));
+    }
+
+    /// A folder name can't forge a second line or hide text.
+    #[test]
+    fn the_event_log_text_flattens_the_folder_name() {
+        let dir = Path::new("D:\\data\nLodestar's service started\u{202e}x\u{200b}y");
+        let text = event_log_text(Refusal::RollingBack, dir);
+        assert!(text.contains("data Lodestar's service started"), "{text}");
+        assert!(text.contains("xy"), "{text}");
+        assert!(
+            !text
+                .chars()
+                .any(|c| c.is_control() || c == '\u{202e}' || c == '\u{200b}')
+        );
     }
 
     /// The update helper's rollback marker refuses the service's start.

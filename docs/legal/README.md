@@ -26,9 +26,10 @@
 | 5 | ``(by default the `logs` folder inside the data folder)`` | default `settings.logging.file_folder` in `settings/logging.rs` |
 | 5 | `keeps its restart record in a folder outside the data folder` | `default_witness_dir` in `config.rs` doesn't use the data folder |
 | 5 | `` `%SystemRoot%\Temp\lodestar-service.log` `` | `NAME` in `windows/temp_log.rs` |
-| 5 | must **not** contain `Event Log` | no code writes to the Windows Event Log |
+| 5 | `in your data folder, with five exceptions:` | the count of section 5's list |
+| 5 | `to the Windows Application event log, which every user of the computer can read`, `(version numbers, the step that stopped and folder paths only)` | the only Event Log writers (`eventcreate`, `ReportEvent`, `RegisterEventSource`, `EvtReport`, `Write-EventLog`, `New-EventLog` in `crates/*/src` and `packaging/**/*.ps1`) are `update/windows/helper.rs` and `windows/service.rs`; the only `event_log(` callers are those two and `update/windows/rollback.rs`; no Event Log crate; `windows/service.rs` builds its message with `event_log_text`; `packaging/windows/main.wxs` registers both sources ("Lodestar", "Lodestar update helper") and removes them on uninstall |
 
-`lodestar` is a binary crate, so facts in its own modules (`config.rs`, `services.rs`, `settings/logging.rs`, `windows/temp_log.rs`, `cli/backup.rs`) are read from the source text. Moving or renaming one of those items fails the test with a message naming it; update the test to follow.
+`lodestar` is a binary crate, so facts in its own modules (`config.rs`, `services.rs`, `settings/logging.rs`, `windows/temp_log.rs`, `windows/service.rs`, `update/windows/helper.rs`, `cli/backup.rs`) are read from the source text. Moving or renaming one of those items fails the test with a message naming it; update the test to follow.
 
 ### When the test fails
 
@@ -39,6 +40,6 @@
 5. Update the phrase here and in the test if the wording changed.
 
 ### Not checked yet
-- Section 5's installer log (`%SystemRoot%\Temp\lodestar-secure-<random>`) and its count of "four exceptions".
+- Section 5's installer log (`%SystemRoot%\Temp\lodestar-secure-<random>`). The count "five exceptions" is required as a phrase, but not counted against the list.
 - Section 2's "(an import doesn't clear the mark)".
 - Phrases are searched in the whole notice, not only in the section named.
