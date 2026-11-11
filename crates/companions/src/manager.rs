@@ -400,6 +400,8 @@ struct Inner {
     /// Each companion's run, counted up on every start and stop the
     /// manager makes: a follower publishes only for the run it follows.
     runs: Mutex<HashMap<CompanionId, u64>>,
+    /// [`LIVE_DEADLINE`]; shorter only in tests.
+    deadline: Mutex<Duration>,
     #[cfg(any(test, feature = "testing"))]
     fault: Mutex<Option<Fault>>,
 }
@@ -625,6 +627,24 @@ impl Inner {
 
     fn is_run(&self, id: &CompanionId, run: u64) -> bool {
         self.runs.lock().unwrap_or_else(|e| e.into_inner()).get(id) == Some(&run)
+    }
+
+    /// Ends run `run` of `id` if it's still the current one, as a stop
+    /// does: `false` when a later run began meanwhile, which then owns it.
+    fn end_run(&self, id: &CompanionId, run: u64) -> bool {
+        let mut runs = self.runs.lock().unwrap_or_else(|e| e.into_inner());
+        match runs.get_mut(id) {
+            Some(n) if *n == run => {
+                *n += 1;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// How long a start, restart, regenerate or configuration may take.
+    fn deadline(&self) -> Duration {
+        *self.deadline.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     fn claim(self: &Arc<Self>, id: &CompanionId) -> Result<Slot, Refusal> {
@@ -1132,6 +1152,7 @@ impl Manager {
             busy: Mutex::new(Vec::new()),
             snapshot: watch::channel(Snapshot::default()).0,
             runs: Mutex::new(HashMap::new()),
+            deadline: Mutex::new(LIVE_DEADLINE),
             #[cfg(any(test, feature = "testing"))]
             fault: Mutex::new(None),
         })))
@@ -1147,6 +1168,12 @@ impl Manager {
         tokio::task::spawn_blocking(move || f(&inner))
             .await
             .map_err(|_| failed("blocking")("panicked"))?
+    }
+
+    /// Shortens [`LIVE_DEADLINE`], so its expiry can be tested.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn set_live_deadline(&self, d: Duration) {
+        *self.0.deadline.lock().unwrap_or_else(|e| e.into_inner()) = d;
     }
 
     /// Stops the next operation at `fault`, as a crash would.
@@ -1467,7 +1494,7 @@ impl Manager {
                 .p
                 .api
                 .configure(id, target, InstallReceipt::new(target.clone()), &opened);
-        tokio::time::timeout(LIVE_DEADLINE, configured)
+        tokio::time::timeout(self.0.deadline(), configured)
             .await
             .map_err(|_| failed("configure")("timed_out"))?
             .map_err(|e| failed("configure")(configure::code(&e)))
@@ -1648,7 +1675,7 @@ impl Manager {
         };
         // Started again whatever the rotation did: a failed one put the
         // old credential back.
-        let started = tokio::time::timeout(LIVE_DEADLINE, self.start_installed(entry, version))
+        let started = tokio::time::timeout(self.0.deadline(), self.start_installed(entry, version))
             .await
             .unwrap_or_else(|_| Err(failed(op.step())("timed_out")));
         // Its health is the start's: a failed rotation still started it,
@@ -1675,26 +1702,6 @@ impl Manager {
             );
         }
         result
-    }
-
-    /// The companion's slot for run `run`, waited for while an operation
-    /// holds it: `None` once a later run has begun (that operation owns the
-    /// companion now), `busy` if it's still held after [`LIVE_DEADLINE`].
-    async fn slot_for(&self, id: &CompanionId, run: u64) -> Result<Option<Slot>, ManagerError> {
-        let give_up = tokio::time::Instant::now() + LIVE_DEADLINE;
-        loop {
-            if !self.0.is_run(id, run) {
-                return Ok(None);
-            }
-            if let Ok(slot) = self.0.claim(id) {
-                // Checked again under the slot: nothing can begin a run now.
-                return Ok(self.0.is_run(id, run).then_some(slot));
-            }
-            if tokio::time::Instant::now() >= give_up {
-                return Err(Refusal::Busy.into());
-            }
-            tokio::time::sleep(SLOT_POLL).await;
-        }
     }
 
     /// Stops `id`, ending the run any follower publishes for.
@@ -1746,41 +1753,55 @@ impl Manager {
                         } else if configured {
                             Some(Health::Healthy)
                         } else {
-                            let Some(m) = weak.upgrade() else {
-                                return;
-                            };
                             // Under the slot, and only for the current
                             // run (#660's L1): an operation that holds the
                             // slot is waited for, never left to leave it
                             // running unconfigured. One that starts a new
                             // run takes it over; past the deadline it's
-                            // stopped.
-                            let me = Manager(m);
-                            // The slot is kept until any stop below.
-                            let (_slot, outcome) = match me.slot_for(id, run).await {
-                                Ok(Some(slot)) => {
-                                    let r = me.configure_now(id, &target).await;
-                                    (Some(slot), r)
-                                }
+                            // stopped. The slot is kept until any stop.
+                            let (me, slot, outcome) = match slot_for(&weak, id, run).await {
+                                Ok(Some((m, slot))) => (Manager(m), Some(slot), Ok(())),
                                 Ok(None) => return,
-                                Err(e) => (None, Err(e)),
+                                Err(e) => match weak.upgrade() {
+                                    Some(m) => (Manager(m), None, Err(e)),
+                                    None => return,
+                                },
                             };
-                            if let Err(e) = outcome {
-                                // Q8: never left running unconfigured,
-                                // where its bind or proxy may have drifted.
-                                me.0.publish_run(id, run, &version, Health::Unhealthy);
-                                lodestar_log::log_event!(
-                                    INSTALL_FAILED,
-                                    companion = me.0.label(id),
-                                    version = "",
-                                    step = "configure",
-                                    reason = e.code()
-                                );
-                                me.halt(id).await;
-                                return;
+                            // It may have stopped running while it waited
+                            // (held for its route): then it's configured
+                            // when it runs again, never while it's down.
+                            let outcome = match outcome {
+                                Ok(()) if status.borrow().state != State::Running => None,
+                                Ok(()) => Some(me.configure_now(id, &target).await),
+                                Err(e) => Some(Err(e)),
+                            };
+                            match outcome {
+                                None => None,
+                                Some(Ok(())) => {
+                                    configured = true;
+                                    Some(Health::Healthy)
+                                }
+                                Some(Err(e)) => {
+                                    // Q8: never left running unconfigured,
+                                    // where its bind or proxy may have
+                                    // drifted.
+                                    me.0.publish_run(id, run, &version, Health::Unhealthy);
+                                    lodestar_log::log_event!(
+                                        INSTALL_FAILED,
+                                        companion = me.0.label(id),
+                                        version = "",
+                                        step = "configure",
+                                        reason = e.code()
+                                    );
+                                    // Only this run: one an operation
+                                    // began meanwhile is left alone.
+                                    if me.0.end_run(id, run) {
+                                        me.0.p.run.stop(id).await;
+                                    }
+                                    drop(slot);
+                                    return;
+                                }
                             }
-                            configured = true;
-                            Some(Health::Healthy)
                         }
                     }
                     State::Running | State::Starting | State::Unhealthy { .. } => None,
@@ -1803,6 +1824,39 @@ impl Manager {
                 }
             }
         });
+    }
+}
+
+/// The companion's slot for run `run`, waited for while an operation
+/// holds it, with the manager it belongs to. `None` once a later run has
+/// begun (that operation owns the companion now) or the manager is gone;
+/// `busy` if it's still held after the deadline. Holds the manager only
+/// for each look, never while it waits.
+async fn slot_for(
+    weak: &std::sync::Weak<Inner>,
+    id: &CompanionId,
+    run: u64,
+) -> Result<Option<(Arc<Inner>, Slot)>, ManagerError> {
+    let Some(deadline) = weak.upgrade().map(|m| m.deadline()) else {
+        return Ok(None);
+    };
+    let give_up = tokio::time::Instant::now() + deadline;
+    loop {
+        let Some(m) = weak.upgrade() else {
+            return Ok(None);
+        };
+        if !m.is_run(id, run) {
+            return Ok(None);
+        }
+        if let Ok(slot) = m.claim(id) {
+            // Checked again under the slot: nothing can begin a run now.
+            return Ok(m.is_run(id, run).then_some((m, slot)));
+        }
+        if tokio::time::Instant::now() >= give_up {
+            return Err(Refusal::Busy.into());
+        }
+        drop(m);
+        tokio::time::sleep(SLOT_POLL).await;
     }
 }
 
@@ -1891,9 +1945,75 @@ const NO_PROXY_VARS: [&str; 2] = ["NO_PROXY", "no_proxy"];
 #[cfg(not(unix))]
 const NO_PROXY_VARS: [&str; 1] = ["NO_PROXY"];
 
+/// The oldest .NET whose `DefaultProxy` takes `socks5://` from the
+/// variables: .NET 6 and 7 read only `http://` there, so a `socks5://`
+/// value doesn't parse and everything goes direct (dotnet/runtime
+/// `release/6.0`, `release/7.0` and `release/8.0`,
+/// `HttpEnvironmentProxy.GetUriFromString`).
+const DOTNET_SOCKS_ENV: u64 = 8;
+
+/// The largest `runtimeconfig.json` read.
+const RUNTIMECONFIG_MAX: u64 = 64 * 1024;
+
+/// Whether the program reads [`launch_env`]'s proxy variables: it's a
+/// .NET program whose `<name>.runtimeconfig.json`, beside it, names .NET
+/// [`DOTNET_SOCKS_ENV`] or later (`runtimeOptions.tfm`, and every
+/// `Microsoft.NETCore.App` framework it lists or includes, as a
+/// self-contained build does). Anything else, unreadable or missing
+/// included, doesn't, so its SOCKS5 route can't be launched on.
+pub fn reads_proxy_env(executable: &Path) -> bool {
+    let stem = match executable.extension() {
+        Some(e) if e.eq_ignore_ascii_case("exe") => executable.with_extension(""),
+        _ => executable.to_path_buf(),
+    };
+    let mut name = stem.into_os_string();
+    name.push(".runtimeconfig.json");
+    let path = PathBuf::from(name);
+    let Ok(meta) = std::fs::symlink_metadata(&path) else {
+        return false;
+    };
+    if !meta.is_file() || meta.len() > RUNTIMECONFIG_MAX {
+        return false;
+    }
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return false;
+    };
+    runtime_reads_proxy_env(&text)
+}
+
+/// [`reads_proxy_env`]'s check of the file's text.
+fn runtime_reads_proxy_env(text: &str) -> bool {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
+        return false;
+    };
+    let opts = &v["runtimeOptions"];
+    let major = |s: &str| -> Option<u64> { s.split('.').next()?.parse().ok() };
+    let tfm = opts["tfm"]
+        .as_str()
+        .and_then(|t| t.strip_prefix("net"))
+        .and_then(major);
+    let mut frameworks = Vec::new();
+    for key in ["framework", "frameworks", "includedFrameworks"] {
+        match &opts[key] {
+            serde_json::Value::Array(a) => frameworks.extend(a.iter()),
+            f @ serde_json::Value::Object(_) => frameworks.push(f),
+            _ => {}
+        }
+    }
+    let core: Vec<Option<u64>> = frameworks
+        .iter()
+        .filter(|f| f["name"] == "Microsoft.NETCore.App")
+        .map(|f| f["version"].as_str().and_then(major))
+        .collect();
+    let new_enough = |m: Option<u64>| m.is_some_and(|m| m >= DOTNET_SOCKS_ENV);
+    new_enough(tfm) && !core.is_empty() && core.into_iter().all(new_enough)
+}
+
 /// Loopback only, which never leaves the machine: a companion's own WebUI
 /// and other companions on this machine.
-const NO_PROXY: &str = "localhost,127.0.0.1,::1";
+/// `[::1]` as well as `::1`: .NET 8 compares entries with the URL's host,
+/// which keeps IPv6 brackets.
+const NO_PROXY: &str = "localhost,127.0.0.1,::1,[::1]";
 
 /// The route in the companion's launch environment, or `None` when it
 /// can't be expressed there, and the companion mustn't start: Q8's "never
@@ -1982,7 +2102,8 @@ impl Supervised {
     }
 
     /// The route variables it was last launched with: none on a direct
-    /// route, the proxy on a SOCKS5 one. No secret is among them.
+    /// route, the proxy on a SOCKS5 one. No secret is among them. For tests.
+    #[cfg(any(test, feature = "testing"))]
     pub fn launched_env(&self, id: &CompanionId) -> Option<Vec<(String, OsString)>> {
         self.running().get(id).map(|r| {
             r.env
@@ -2019,6 +2140,11 @@ impl Run for Supervised {
             // could follow but can't be launched on, likewise.
             egress::decide(Follows::of(&l.id), pre.route.kind).map_err(|e| e.code())?;
             let env = launch_env(&pre).ok_or("route_not_expressible")?;
+            // Only a .NET that parses `socks5://` reads the variables:
+            // an older one ignores them and goes direct.
+            if !env.is_empty() && !reads_proxy_env(&l.executable) {
+                return Err("route_not_expressible");
+            }
             let route = pre.route;
             let spec = SpawnSpec {
                 id: l.id.clone(),
@@ -2236,5 +2362,43 @@ mod tests {
         );
         assert!(matches!(got, Err(TryLockError::Error(_))));
         assert_eq!(attempts, 1);
+    }
+}
+
+#[cfg(test)]
+mod runtime_tests {
+    use super::runtime_reads_proxy_env as reads;
+
+    #[test]
+    fn only_dotnet_8_or_later_reads_the_proxy_variables() {
+        let framework_dependent = |tfm: &str, v: &str| {
+            format!(
+                r#"{{"runtimeOptions":{{"tfm":"{tfm}","framework":{{"name":"Microsoft.NETCore.App","version":"{v}"}}}}}}"#
+            )
+        };
+        let self_contained = |tfm: &str, v: &str| {
+            format!(
+                r#"{{"runtimeOptions":{{"tfm":"{tfm}","includedFrameworks":[{{"name":"Microsoft.NETCore.App","version":"{v}"}},{{"name":"Microsoft.AspNetCore.App","version":"{v}"}}]}}}}"#
+            )
+        };
+        for ok in [
+            framework_dependent("net8.0", "8.0.11"),
+            self_contained("net8.0", "8.0.11"),
+            self_contained("net10.0", "10.0.0"),
+        ] {
+            assert!(reads(&ok), "{ok}");
+        }
+        for bad in [
+            framework_dependent("net6.0", "6.0.36"),
+            self_contained("net7.0", "7.0.20"),
+            // A framework older than its tfm says, or no runtime named.
+            self_contained("net8.0", "6.0.36"),
+            r#"{"runtimeOptions":{"tfm":"net8.0"}}"#.to_owned(),
+            r#"{"runtimeOptions":{"tfm":"netcoreapp3.1"}}"#.to_owned(),
+            r#"{"runtimeOptions":{}}"#.to_owned(),
+            "not json".to_owned(),
+        ] {
+            assert!(!reads(&bad), "{bad}");
+        }
     }
 }

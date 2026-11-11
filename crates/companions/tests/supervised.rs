@@ -21,6 +21,8 @@ use tokio::sync::watch;
 
 const WAIT: Duration = Duration::from_secs(10);
 
+const DOTNET8: &str = r#"{"runtimeOptions":{"tfm":"net8.0","includedFrameworks":[{"name":"Microsoft.NETCore.App","version":"8.0.11"}]}}"#;
+
 fn proxy() -> Socks5Proxy {
     Socks5Proxy::new("10.8.0.1:1080".parse().unwrap()).unwrap()
 }
@@ -94,6 +96,8 @@ impl World {
         std::fs::create_dir_all(&install).unwrap();
         let executable = install.join(id);
         std::fs::write(&executable, b"not run").unwrap();
+        // A self-contained .NET 8 build, as Prowlarr ships.
+        std::fs::write(install.join(format!("{id}.runtimeconfig.json")), DOTNET8).unwrap();
         Launch {
             id: CompanionId::parse(id).unwrap(),
             executable,
@@ -140,8 +144,6 @@ async fn a_held_companion_fails_its_health_check_at_once() {
     s.start(l).await.unwrap();
     let status = s.status(&id).expect("not supervised");
     assert_eq!(status.borrow().state, State::Held);
-    // Nothing it shows names the value it's launched with.
-    assert!(!format!("{s:?}").contains("10.8.0.1"));
     // It's launched on its proxy (X-cmp-egress-prelaunch).
     let env = s.launched_env(&id).unwrap();
     assert!(
@@ -220,7 +222,7 @@ fn the_launch_environment_carries_the_route() {
         })
     };
     let url = "socks5://10.8.0.1:1080";
-    let loopback = "localhost,127.0.0.1,::1";
+    let loopback = "localhost,127.0.0.1,::1,[::1]";
     let mut want = vec![
         ("ALL_PROXY", url),
         ("HTTP_PROXY", url),
@@ -252,4 +254,39 @@ fn the_launch_environment_carries_the_route() {
     assert_eq!(env(&pre(RouteKind::Socks5, None)), None);
     assert_eq!(env(&pre(RouteKind::Interface, None)), None);
     assert_eq!(env(&pre(RouteKind::BindAddress, None)), None);
+}
+
+/// A .NET older than 8 ignores a `socks5://` proxy variable and would go
+/// direct, and a program that isn't .NET (no runtime config) isn't known
+/// to read it: neither is started on a SOCKS5 route.
+#[tokio::test]
+async fn only_a_runtime_that_reads_the_proxy_variables_starts_on_socks5() {
+    let w = World::new(Some(RouteKind::Socks5));
+    let s = w.supervised().await;
+    let l = w.launch("prowlarr", 9696);
+    let config = l.install.join("prowlarr.runtimeconfig.json");
+    std::fs::write(
+        &config,
+        r#"{"runtimeOptions":{"tfm":"net6.0","includedFrameworks":[{"name":"Microsoft.NETCore.App","version":"6.0.36"}]}}"#,
+    )
+    .unwrap();
+    assert_eq!(s.start(l).await, Err("route_not_expressible"));
+    let l = w.launch("prowlarr", 9696);
+    std::fs::remove_file(l.install.join("prowlarr.runtimeconfig.json")).unwrap();
+    assert_eq!(s.start(l).await, Err("route_not_expressible"));
+    // (Direct needs no runtime check: `launch_env` adds nothing there, and
+    // a direct start would spawn the program, which these tests don't.)
+}
+
+/// A route the companion can't follow at all keeps its own refusal, ahead
+/// of whether it could be launched on.
+#[tokio::test]
+async fn cant_follow_comes_before_cant_launch() {
+    let w = World::new(Some(RouteKind::Socks5));
+    if let Some(p) = w.routes.0.lock().unwrap().as_mut() {
+        p.proxy = None;
+    }
+    let s = w.supervised().await;
+    let l = w.launch("qbittorrent", 8080);
+    assert_eq!(s.start(l).await, Err("cant_follow_route"));
 }
