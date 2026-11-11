@@ -13,9 +13,11 @@ For the owner, who runs the cloud test fleet: two Linodes (Main and Worker) that
   - It reads `/fleet` commands from the operator's comments on one draft PR (the channel PR, repository variable `CHANNEL_PR`), checks them against hard limits in code, and runs them.
   - Its state lives in S3: `fleet/fleet.json` in the state bucket holds the fleet's pinned commit, expiry, addresses and host keys. It never reads state back from a comment.
   - It answers each command with a result comment, and keeps one status comment up to date: roles, ages, expiry and compute cost. No address, label or fingerprint ever appears in a comment or log.
-- **The operator** is an AI agent with no cloud or VPN credential. It holds only a short-lived token for the `lodestar-operator` GitHub App, and acts only by posting `/fleet` commands. The runner instructs it.
-  - Its workflows arrive with OP-4 (`operator-wake.yml`, `operator-apply.yml`, `operator-tripwire.yml`) and OP-5 (`operator-injection.yml`).
-  - **Until OP-4 merges, nobody can issue a `/fleet` command:** `fleet.yml` accepts them only from the App's bot account (`OPERATOR_BOT_USER_ID`).
+- **The operator** is an AI agent with no cloud or VPN credential. It holds only a short-lived token for the `lodestar-operator` GitHub App. The runner instructs it.
+  - It's meant to post only `/fleet` commands and `operator-report` comments on the channel PR. Its App can do more on any PR (Pull requests: write), which `operator-tripwire.yml` watches. That's why suspending the App is in [Stop everything](#4-stop-everything).
+  - Its workflows: `operator-wake.yml` (wakes it for each runner instruction), `operator-apply.yml` (creates the agent), `operator-tripwire.yml` (the detector), and `operator-injection.yml` (the injection test, after OP-5 merges).
+  - **`fleet.yml` accepts `/fleet` commands only from the App's bot account** (`OPERATOR_BOT_USER_ID`). Nothing can issue one until your setup is done: the App installed, `OPERATOR_BOT_USER_ID` and `RUNNER_USER_ID` set, and `operator-apply.yml` run.
+- **Words:** **PIA** is the VPN service each VM's traffic goes through. **gluetun** is the VPN container on each VM; Lodestar shares its network, and its firewall is the kill switch that keeps traffic inside the VPN.
 - **You:**
   - set the switches (the repository variables `FLEET_LIVE` and `OPERATOR_STOP`);
   - keep the secrets (`PIA_SERVERS` and the environment secrets);
@@ -24,7 +26,7 @@ For the owner, who runs the cloud test fleet: two Linodes (Main and Worker) that
   - can always take the fleet down yourself, without the operator ([Stop everything](#4-stop-everything), step 2).
 - **Live or dry-run.** With `FLEET_LIVE` anything but `true`, every command runs dry: it answers "would create", "would destroy" or "would run the step", and touches no cloud.
   - Set it to `true` only after the OP-G gate's dry cycle.
-  - **Never change it while a fleet exists.** A dry-run `down` or reaper touches nothing, so a live fleet would keep running and billing until the watchdog's 48 h.
+  - **Never change it while a fleet exists.** A dry-run `down` or reaper touches nothing, so a live fleet would keep running and billing until the watchdog's 48 h. If it's already off with a fleet up, set it back to `true`, then `down`.
 
 The runner instructs the operator, the operator posts `/fleet` commands, and `fleet.yml` acts on the Linodes and reports back, while you hold the switches and the consoles:
 ```mermaid
@@ -64,13 +66,13 @@ Before each session:
 3. **The rules commit.** The runner commits `infra/fleet/steps/screen-rules.json` for the screen and gives you the commit. It names:
    - the candidate image, by digest;
    - the treatment and the segment length;
-   - the Legal Notice version start-block may accept for you (4 on `main` today).
+   - the Legal Notice version start-block may accept for you (`NOTICE_VERSION` in `crates/api/src/legal.rs`).
    `start-block` refuses without it.
 4. **The watchdog.** The Akamai watchdog (`lodestar-akamai-watchdog`) deletes any fleet Linode at 48 h. It's the backstop only once the canary (test plan 0a) has proven it in the fleet's Akamai account. Prove it again if its code or deployment has changed since.
 5. **Book the times with the runner.** A block of 2 h segments runs about 18 h, and one of 3 h segments about 22 h. Book `up` early enough that both blocks, copy-off and `down` fit in 44 h.
 
 ## 3. A screen, step by step
-You don't type these commands. The runner tells the operator, which posts them on the channel PR (after OP-4 merges), and each result comes back as a comment.
+You don't type these commands. The runner tells the operator, which posts them on the channel PR, and each result comes back as a comment.
 
 A result line has a fixed shape: `run <step> <vm>: done; <n> ok`, or `failed (exit <code>); <n> ok; failed: <names>`, followed by any counters. **Names that passed aren't listed;** only the count of `ok` lines is.
 
@@ -172,7 +174,7 @@ In words: up → deliver-pia → (leak test) → start-block → four segments w
 - **`refused: this run's code is not main's head`:** `main` moved between the comment and the job, which happens often. Post the command again.
 - **`busy, retry`:** another command holds the fleet lock. **`busy: the fleet is being reaped; retry later`:** the reaper is taking the fleet down.
 - **`refused: OPERATOR_STOP is set: only down runs`:** the soft stop is on.
-- **`refused: fleet overdue or mismatched: only down runs`:** the fleet is past its expiry, or the hourly firewall audit found a mismatch. The reaper takes it down within the hour; nothing else runs.
+- **`refused: fleet overdue or mismatched: only down runs`:** the fleet is past its expiry, or the hourly firewall audit found a mismatch. The reaper takes it down at its next run after 15 minutes' grace, so within about 75 minutes; nothing else runs.
 - **`reaper: …; escalate`:** the hourly reaper (minute 17) couldn't do part of its job. Tell the runner.
 
 ## 4. Stop everything
@@ -182,20 +184,24 @@ Fastest first. Do as many steps as the situation needs; each says how to undo it
 
 1. **Set `OPERATOR_STOP` to `true`.**
    - **Where:** GitHub → the repository → Settings → Secrets and variables → Actions → Variables → `OPERATOR_STOP`.
-   - **Effect:** every fleet command except `down` is refused; the reaper still runs. The operator's workflows check it too (after OP-4 merges). The App can't change variables.
-   - **Residual:** a Claude session posting as you could set it back. For a firm stop, do step 2 as well.
+   - **Effect:** every fleet command except `down` is refused; the reaper still runs. `operator-wake.yml` and `operator-apply.yml` refuse to start unless it's exactly `false`. Any other value is a stop. The App can't change variables.
+   - **Residual:**
+     - The fleet, and its billing, keep running until `down`.
+     - It doesn't stop an operator session that's already running.
+     - A Claude session posting as you could set it back.
+     For a firm stop, do step 2 as well.
    - **Undo:** set it back to `false`.
 2. **Disable the operator's workflows, and take the fleet down.**
-   - **Where:** GitHub → Actions → each workflow → **Disable workflow**:
-     - `operator-wake.yml`, `operator-apply.yml` and `operator-tripwire.yml`, after OP-4 merges;
-     - `operator-injection.yml`, after OP-5 merges.
-     The plan gives the wake, apply and injection workflows the Anthropic key; confirm which do once they're on `main`.
-   - **Take the fleet down without the operator:** GitHub → Actions → `fleet` → **Run workflow**, on `main`.
+   - **Where:** GitHub → Actions → the workflow (by its name in the sidebar) → **Disable workflow**:
+     - **operator-wake** (`operator-wake.yml`) and **operator-apply** (`operator-apply.yml`). Both hold the Anthropic key through the `cloud-operator` environment. Disabling operator-wake also stops a running session at its next poll, within about 10 seconds;
+     - **operator-injection** (`operator-injection.yml`), after OP-5 merges.
+   - **Leave operator-tripwire (`operator-tripwire.yml`) on.** It holds no secrets. It's the detector, and it disables operator-wake itself on a trip.
+   - **Take the fleet down without the operator:** GitHub → Actions → **fleet** (`fleet.yml`) → **Run workflow**, on `main`.
      - It runs only `down`, only for your user ID (the `OWNER_USER_ID` variable), and takes no inputs. It answers `owner's down: destroy the fleet`.
      - If `OWNER_USER_ID` isn't set, or you aren't that user, the job is skipped without a word; use Cloud Manager (step 5).
    - **Disable `fleet.yml` only after the fleet is down.** It runs the hourly reaper; once it's disabled, the Akamai watchdog is the only lifetime backstop.
    - **Residual:** any session posting as you can dispatch `down` and end a screen mid-block. That costs a screen, nothing else.
-   - **Undo:** Actions → each workflow → **Enable workflow**.
+   - **Undo:** Actions → each workflow → **Enable workflow**. If the tripwire disabled operator-wake, re-enable it only after the runner has looked at why.
 3. **Suspend the GitHub App, and stop Anthropic spend.**
    - **GitHub:** the `lodestar-operator` App's installation on `dvortsis/lodestar-v2`: suspend it.
    - **Anthropic Console:** in the `lodestar-operator` workspace, revoke the API key (or set the workspace's spend limit to $0). Then interrupt or archive any running session: a revoked key may not stop a session already running.
@@ -220,7 +226,7 @@ Fastest first. Do as many steps as the situation needs; each says how to undo it
 **What doesn't depend on the repository:** the Akamai watchdog, the IAM roles' scopes, and the Anthropic workspace's spend limit. A bad merge to the control plane can't remove them.
 
 ## 5. Never run the manual scripts while a fleet exists
-`infra/akamai/terraform/scripts/Deploy.ps1` and `Destroy.ps1` use **the same Terraform state** as the fleet (`terraform/lodestar.tfstate`), **but not its lock**. So does a `terraform apply -refresh-only` run by hand. Run while a fleet exists, they can destroy it under a running block, or leave `fleet.json` describing Linodes that are gone.
+`infra/akamai/terraform/scripts/Deploy.ps1` and `Destroy.ps1` use **the same Terraform state** as the fleet (`terraform/lodestar.tfstate`), **but not its lock**. So does a `terraform apply -refresh-only` run by hand (the step `Lodestar-Fleet.ps1 reconcile` suggests). Run while a fleet exists, they can destroy it under a running block, or leave `fleet.json` describing Linodes that are gone.
 - **Before using them, check both:** the status comment says **No fleet**, and Cloud Manager shows no `lodestar-` Linode or firewall.
 - **If you deleted Linodes by hand,** clear the record first ([Stop everything](#4-stop-everything), step 5).
 
@@ -246,7 +252,7 @@ python3 -c 'import json; r = json.load(open("fleet.json"))["roles"]["main"]; pri
 ssh-keygen -lf known_hosts        # must show that role's "fingerprint" value in fleet.json
 ssh -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=yes lodestar@<vm address>
 ```
-Check the address against Cloud Manager too. Delete the folder when you're done.
+For Worker, use `"worker"` in place of `"main"`. Check the address against Cloud Manager too. Delete the folder when you're done.
 
 **The drill,** on the VM, during a segment (`run vm-status` shows `collectors_running 1`):
 1. **Note the segment:** `sudo cat /var/lib/lodestar-block/marker` (the `segment=` line).
@@ -259,10 +265,11 @@ Check the address against Cloud Manager too. Delete the folder when you're done.
        sh -c 'nc -z -w 5 1.1.1.1 443; echo "tcp rc=$?"; curl -6 -s -m 8 "http://[2606:4700:4700::1111]/"; echo "v6 rc=$?"; ip -o addr'
      ```
    - **What you should see:** both `rc` values non-zero, and no `eth0` in `ip -o addr`. Only `lo` is left; an old `wg0` can't send without `eth0`.
+   - **If either `rc` is 0, or `eth0` is listed, it's a stop.** Stop Lodestar at once (`sudo docker stop -t 60 lodestar`), log out, dispatch `down` ([Stop everything](#4-stop-everything), step 2), and tell the runner.
    - **Why this proves it:** Lodestar shares gluetun's namespace, so with gluetun gone it has no network at all. It's cut off, not leaking. The test uses an address, not a name, so a failure isn't just DNS.
    - **Why `container:lodestar`:** Docker refuses to join a stopped container's network (`container:gluetun`), but Lodestar's is still there.
 4. **Confirm the watcher recorded it:**
-   - `sudo cat /var/lib/lodestar-block/outages` gains one or more lines (the container's die and stop events each count);
+   - `sudo cat /var/lib/lodestar-block/outages` gains one or more lines (the container's kill, die and stop events each count);
    - `sudo cat /var/lib/lodestar-block/notes` gains a line with the segment number. That note went into the segment's evidence: one per 30-second burst.
 5. **End the segment and the block:** `sudo docker stop -t 120 lodestar-collector-<segment>`.
    - The collector finishes with reason `operator_stop`, and stops Lodestar first. That takes up to a minute; `-t 120` gives it the time, where Docker's default of 10 s would kill it part-way.
@@ -288,10 +295,18 @@ Don't restart gluetun by hand in a block: a gluetun restart needs a Lodestar res
   - `fleet/<run id>/copy-off-<vm>.json`: the scrubbed screen evidence.
   - `fleet/<run id>/<name>.log`: Terraform's output for that run.
   - **Nothing private goes to a comment, a log or an Actions artifact.**
-  - **How the results reach the runner isn't decided yet:** the runner has no AWS access. Fetch the copy-off file for it when it asks, within the 14 days.
+  - **Getting the results to the runner** (it has no AWS access). With your MFA admin session, using your real account ID:
+    ```bash
+    aws s3 ls s3://<evidence bucket>/fleet/ --recursive --expected-bucket-owner 111122223333 | grep copy-off
+    aws s3 cp s3://<evidence bucket>/fleet/<run id>/copy-off-<vm>.json . --expected-bucket-owner 111122223333
+    ```
+    - **You keep the file.** The runner asks, through the dashboard session, only for the summary lines it needs, and you paste those there.
+    - **Never** the raw file, logs or credentials, and never in a PR, issue or comment.
+    - Fetch it within the bucket's 14 days.
 
 ## 8. What never to do
 - **Never paste a credential into chat, an issue, a PR or a comment.** Values go only where they're named: GitHub environment secrets, Secrets Manager, the Console.
+- **Never give the Anthropic workspace API key to the runner or any agent.** Whoever holds it can start an operator session that bypasses the bridge.
 - **Never run a coding agent in the Windows session that holds your cached admin credentials** (#625's rule).
 - **Never stitch soak or screen runs together, or pool a screen with experiment-host segments.** A screen is fail-only and never gate evidence.
 - **Never widen an IAM role, a token's scope or a limit without deciding it yourself.** A change to `limits.yaml`, `fleet.yml` or the roles goes through a reviewed PR.
