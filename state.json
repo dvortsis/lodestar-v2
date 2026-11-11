@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T22:53:36Z",
+  "updated_at": "2026-11-11T23:09:03Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6961,6 +6961,10 @@
       "id": "brief-note-clippy-version",
       "note": "Container stable clippy 1.97 lags CI's 1.99 (TZ-0 hit result_large_err). Add to future briefs: run `rustup toolchain install 1.99.0` and `cargo +1.99.0 clippy --workspace --all-targets -- -D warnings` before pushing (or whatever CI's stable is). Consider a runner/standards.md or web/e2e README note in the next runner PR.",
       "at": "2026-11-11T22:53:36Z"
+    },
+    {
+      "at": "2026-11-11T23:09:03Z",
+      "note": "#714 merged (cd2b7eb4) on rv-714-593ace9d MERGE; slot 5 -> X-win-upd-history same session (brief 4912ad10). rv-714 Important (install_stopped event) + nits folded into X-upd-stop-early. Runner PR #719 open (3a738a55): follow-up entries, WK-G notes, clippy note."
     }
   ],
   "main_health": [
@@ -7694,7 +7698,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T22:53:36Z",
+    "updated": "2026-11-11T23:09:03Z",
     "items": [
       {
         "slot": 1,
@@ -7734,11 +7738,11 @@
       },
       {
         "slot": 5,
-        "slice": "X-upd-stop-races",
+        "slice": "X-win-upd-history",
         "role": "Opus",
         "agent": "claude",
-        "doing": "stop races: Unix check before switch; Windows biased select",
-        "since": "2026-11-11T21:04:31Z",
+        "doing": "session_01MMjhnAS5qWBVBGfPNAHPjt: Windows install history + rollback notice (Opus, /security-review); G-m6 path",
+        "since": "2026-11-11T23:09:03Z",
         "status": "active"
       },
       {
@@ -7858,7 +7862,7 @@
     }
   ],
   "heartbeat": "2026-11-11T21:38:36Z",
-  "updated": "2026-11-11T22:53:36Z",
+  "updated": "2026-11-11T23:09:03Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -8040,6 +8044,12 @@
       "slice": "runner",
       "sha": "b0805b68466c645e56114b9c1547bbf40227a16d",
       "at": "2026-11-11T21:50:24Z"
+    },
+    {
+      "pr": 714,
+      "slice": "X-upd-stop-races",
+      "sha": "cd2b7eb4026abc0368f5d6c2abfe34d55db4eb0c",
+      "at": "2026-11-11T23:09:03Z"
     }
   ]
 }
