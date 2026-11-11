@@ -675,7 +675,7 @@ conditions:
     who: you
     label: You confirm the frozen crawler measurement specification (CR-SPEC)
   owner-notice-v5:
-    met: false
+    met: true
     who: you
     label: You approve the Legal Notice version 5 wording that lists Prowlarr or Jackett as a built Account source
   owner-migrations-on-main:
@@ -1446,11 +1446,6 @@ owner_queue:
   action: 'PK-nightly-host: approve where nightly update manifests are published, signed with the nightly key (proposal in docs/decisions/2026-11-08-PK-manifest.md)'
   unblocks: Automatic updates on the Nightly channel
   when: Only if the Nightly channel is offered; pairs with item 3
-- n: 11
-  type: decision
-  action: Approve the Legal Notice version 5 wording that lists Prowlarr or Jackett as a built Account source (draft sent through the dashboard session, 2026-11-11)
-  unblocks: Registering the Prowlarr/Jackett source (X-prowlarr-register)
-  when: Any time
 gates:
 - id: G-v05
   name: v0.5 MVP exit

@@ -126,7 +126,7 @@ external:
     check: "The owner has answered plan 2026-11-06 (M8) OQ6 (recorded in docs/owner-decisions.md or a decisions file)"
   owner-operator-answers:  # plan 2026-11-08 cloud operator, Q1-Q6; answered 2026-11-08 (relayed by the dashboard session, recorded in docs/decisions/2026-11-08-P-cloud-operator.md): holds
     check: "The owner has answered the cloud operator plan's questions Q1-Q6 (recorded in docs/owner-decisions.md or a decisions file)"
-  owner-notice-v5:  # runner, 2026-11-11: Legal Notice wording is owner-approved; gates X-prowlarr-register
+  owner-notice-v5:  # runner, 2026-11-11: Legal Notice wording is owner-approved; gates X-prowlarr-register; approved 2026-11-11T14:42Z (docs/owner-decisions.md §2.55): holds
     check: "The owner has approved the Legal Notice version 5 section 2 wording for registering Prowlarr/Jackett (runner-state briefs/X-prowlarr-register-notice-draft.md), recorded in docs/owner-decisions.md or a decisions file"
   owner-operator-setup:  # plan 2026-11-08 cloud operator, "Owner setup"; gates OP-G
     check: "The owner reports the cloud operator plan's Owner setup steps 1-6 done (App installed, environments and variables set, the AWS stacks deployed, the Akamai tokens stored, the agent applied, the pia-delivery environment set), and the runner has seen the first-run test (§5) pass"
