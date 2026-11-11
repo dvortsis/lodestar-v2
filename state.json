@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T23:39:55Z",
+  "updated_at": "2026-11-11T23:50:05Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7482,6 +7482,11 @@
       "pr": 719,
       "sha": "1dc771193004fb9c11d7b36cd86d4f30fc9d29fa",
       "at": "2026-11-11T23:30:17Z"
+    },
+    {
+      "pr": 699,
+      "sha": "c1b411c1f89edd3145f99e5c3ce8cdc205114d9d",
+      "at": "2026-11-11T23:50:05Z"
     }
   ],
   "active_sessions": {
@@ -7716,7 +7721,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T23:39:55Z",
+    "updated": "2026-11-11T23:50:05Z",
     "items": [
       {
         "slot": 1,
@@ -7738,12 +7743,11 @@
       },
       {
         "slot": 3,
-        "slice": "WK-11",
-        "role": "build",
+        "slice": "X-spool-damage-log",
+        "role": "slice",
         "agent": "claude",
-        "doing": "session_01MMjhn97qDUZKniFoSzjMNE: #699 round 3 (rv-699-13397e42: B1 tests, I1 spool link stall, Windows reparse-point open)",
-        "since": "2026-11-11T14:05:33Z",
-        "status": "active"
+        "doing": "brief sent; #699 WK-11 merged as c1b411c1",
+        "since": "2026-11-11T23:50:05Z"
       },
       {
         "slot": 4,
@@ -7880,7 +7884,7 @@
     }
   ],
   "heartbeat": "2026-11-11T21:38:36Z",
-  "updated": "2026-11-11T23:39:55Z",
+  "updated": "2026-11-11T23:50:05Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
