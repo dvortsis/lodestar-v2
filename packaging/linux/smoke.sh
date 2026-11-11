@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Smoke-test a release tarball: verify its checksum, unpack it, run
 # `lodestar serve` with a temporary data directory, check /healthz and that
-# the web UI is embedded, then stop it with SIGTERM and expect exit code 0.
+# the web UI is embedded, then complete setup by token, see the crawler out of its setup
+# hold, import a tiny fixture and find it with a search, and stop it with SIGTERM
+# (exit code 0). The steps shared with the other smokes are in packaging/smoke/flow.py.
 #
 #   packaging/linux/smoke.sh dist/lodestar-0.5.0-x86_64-linux-musl.tar.gz [port]
 set -euo pipefail
@@ -46,21 +48,41 @@ if [ "$fixture_status" -ne 2 ] || ! printf '%s\n' "$fixture_out" | grep -qxF "$f
 fi
 
 mkdir "$work/data"
-LODESTAR_DATA_DIR="$work/data" \
-LODESTAR_HTTP_BIND="127.0.0.1:$port" \
-LODESTAR_DHT_ENABLED=false \
-  "$dir/lodestar" serve >"$work/log.txt" 2>&1 &
-pid=$!
-
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+flow="$here/../smoke/flow.py"
 url="http://127.0.0.1:$port"
-for _ in $(seq 1 60); do
-  if curl --fail --silent --max-time 2 "$url/healthz" >/dev/null; then ok=1; break; fi
-  kill -0 "$pid" 2>/dev/null || { echo "::error::lodestar exited early" >&2; cat "$work/log.txt"; exit 1; }
-  sleep 1
-done
-if [ -z "${ok:-}" ]; then
-  echo "::error::/healthz never answered" >&2; cat "$work/log.txt"; exit 1
-fi
+dht_port=${SMOKE_DHT_PORT:-16881}
+
+# Starts the server in the background (log: $1) and waits for /healthz.
+start_server() {
+  LODESTAR_DATA_DIR="$work/data" \
+  LODESTAR_HTTP_BIND="127.0.0.1:$port" \
+  LODESTAR_DHT_PORT="$dht_port" \
+    "$dir/lodestar" serve >"$1" 2>&1 &
+  pid=$!
+  ok=
+  for _ in $(seq 1 60); do
+    if curl --fail --silent --max-time 2 "$url/healthz" >/dev/null; then ok=1; break; fi
+    kill -0 "$pid" 2>/dev/null || { echo "::error::lodestar exited early" >&2; cat "$1"; exit 1; }
+    sleep 1
+  done
+  if [ -z "$ok" ]; then
+    echo "::error::/healthz never answered" >&2; cat "$1"; exit 1
+  fi
+}
+
+# SIGTERM, and a clean exit.
+stop_server() {
+  kill -TERM "$pid"
+  code=0
+  wait "$pid" || code=$?
+  pid=
+  if [ "$code" != 0 ]; then
+    echo "::error::lodestar exited with $code after SIGTERM" >&2; cat "$1"; exit 1
+  fi
+}
+
+start_server "$work/log.txt"
 echo "healthz: $(curl --fail --silent "$url/healthz")"
 
 # SMOKE_ALLOW_STUB=1 skips the UI check for a local build made without web/build.
@@ -72,11 +94,23 @@ if [ "${SMOKE_ALLOW_STUB:-0}" != 1 ]; then
   grep -q '_app/' "$work/index.html" || { echo "::error::/ is not the SvelteKit index.html" >&2; exit 1; }
 fi
 
-kill -TERM "$pid"
-code=0
-wait "$pid" || code=$?
-pid=
-if [ "$code" != 0 ]; then
-  echo "::error::lodestar exited with $code after SIGTERM" >&2; cat "$work/log.txt"; exit 1
-fi
+# Setup by token (the wizard's own API), then the crawler leaves the setup hold and the DHT
+# socket is bound. Nothing leaves the machine on purpose: the smoke asks the server only
+# about itself. The token is printed redacted, and the password stays in $work/state.
+py=python3
+command -v "$py" >/dev/null 2>&1 || py=python
+"$py" -I "$flow" setup --url "$url" --log "$work/log.txt" --state "$work/state"
+"$py" -I "$flow" crawler --url "$url" --state "$work/state" --dht
+stop_server "$work/log.txt"
+
+# Import a tiny Magnetico database. `lodestar import` needs the server stopped.
+"$py" -I "$flow" fixture "$work/fixture.sqlite3"
+LODESTAR_DATA_DIR="$work/data" "$dir/lodestar" import start --source magnetico --path "$work/fixture.sqlite3" \
+  >"$work/import.txt" 2>&1 || { cat "$work/import.txt" >&2; echo "::error::lodestar import failed" >&2; exit 1; }
+tail -n 3 "$work/import.txt"
+
+# Start again: the imported torrents become searchable.
+start_server "$work/log2.txt"
+"$py" -I "$flow" search --url "$url" --state "$work/state"
+stop_server "$work/log2.txt"
 echo "smoke ok: $tarball"

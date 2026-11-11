@@ -7,6 +7,9 @@
          stays), then install with the Defender box ticked, uninstall with
          REMOVE_DATA=1 (data goes).
   -Zip : unpack the portable zip, run it with a temporary data folder, check /healthz.
+  Both also run the M6 exit flow on the binary with its own temporary data folder: setup by
+  token, the crawler out of its setup hold, an imported fixture found by a search
+  (packaging/smoke/flow.py, which needs python).
 
   The installed service is started for real: Start-Service, /healthz on 8090, Restart now
   (the SCM starts it again after 60 s), Stop-Service.
@@ -75,6 +78,60 @@ function Test-Serve([string]$exe, [string]$dataDir) {
   }
 }
 
+# Setup by token, the crawler out of its setup hold, an imported fixture found by a search:
+# the steps in packaging/smoke/flow.py, around a lodestar.exe run directly (no service) with
+# its own data folder. The server is stopped hard (Windows has no SIGTERM) before the import,
+# which needs the store to itself. DHT stays off so the runner's network is left alone.
+function Test-Flow([string]$exe, [string]$dataDir) {
+  $flow = Join-Path $PSScriptRoot '..\smoke\flow.py'
+  $py = (Get-Command python -ErrorAction SilentlyContinue)
+  if ($null -eq $py) { $py = (Get-Command python3 -ErrorAction SilentlyContinue) }
+  Assert ($null -ne $py) 'python is needed for the setup, crawler and search steps (packaging/smoke/flow.py)'
+  $url = "http://127.0.0.1:$Port"
+  $state = Join-Path $dataDir 'smoke-state'
+  New-Item -ItemType Directory -Force $dataDir | Out-Null
+  $env:LODESTAR_DATA_DIR = $dataDir
+  $env:LODESTAR_HTTP_BIND = "127.0.0.1:$Port"
+  $env:LODESTAR_DHT_ENABLED = 'false'
+  $procs = @()
+  try {
+    foreach ($run in 1, 2) {
+      $log = Join-Path $dataDir "flow$run.log"
+      $p = Start-Process -FilePath $exe -ArgumentList 'serve' -PassThru -WindowStyle Hidden `
+            -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+      $procs += $p
+      $ok = $false
+      $deadline = (Get-Date).AddSeconds(60)
+      while (-not $ok -and (Get-Date) -lt $deadline) {
+        if ($p.HasExited) { throw "lodestar exited early ($($p.ExitCode)): $((Get-Content $log, "$log.err" -ErrorAction SilentlyContinue) -replace 'setup token \S+', 'setup token [redacted]')" }
+        try { $ok = ((Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 "$url/healthz").StatusCode -eq 200) } catch { Start-Sleep -Seconds 1 }
+      }
+      Assert $ok "/healthz never answered (run $run)"
+      if ($run -eq 1) {
+        & $py.Source -I $flow setup --url $url --log $log --log "$log.err" --state $state
+        Assert ($LASTEXITCODE -eq 0) 'setup by token failed'
+        & $py.Source -I $flow crawler --url $url --state $state
+        Assert ($LASTEXITCODE -eq 0) 'the crawler did not leave the setup hold'
+        # The import needs the store to itself, so the server stops first.
+        Stop-Process -Id $p.Id -Force
+        $p.WaitForExit(30000) | Out-Null
+        Assert $p.HasExited 'lodestar did not exit before the import'
+        $fixture = Join-Path $dataDir 'fixture.sqlite3'
+        & $py.Source -I $flow fixture $fixture
+        Assert ($LASTEXITCODE -eq 0) 'could not make the fixture database'
+        & $exe import start --source magnetico --path $fixture
+        Assert ($LASTEXITCODE -eq 0) "lodestar import failed (exit $LASTEXITCODE)"
+      } else {
+        & $py.Source -I $flow search --url $url --state $state
+        Assert ($LASTEXITCODE -eq 0) 'the imported fixture was not found by a search'
+      }
+    }
+  } finally {
+    foreach ($p in $procs) { if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force; $p.WaitForExit(15000) | Out-Null } }
+    Remove-Item Env:LODESTAR_DATA_DIR, Env:LODESTAR_HTTP_BIND, Env:LODESTAR_DHT_ENABLED -ErrorAction SilentlyContinue
+  }
+}
+
 function Invoke-Msiexec([string[]]$msiArgs, [string]$what) {
   $p = Start-Process msiexec.exe -ArgumentList $msiArgs -Wait -PassThru
   Assert ($p.ExitCode -eq 0 -or $p.ExitCode -eq 3010) "$what failed (msiexec exit $($p.ExitCode)); see the log"
@@ -88,6 +145,7 @@ if ($Zip) {
     Assert (Test-Path (Join-Path $dir $f)) "zip is missing $f"
   }
   Test-Serve (Join-Path $dir 'lodestar.exe') (Join-Path $work 'data')
+  Test-Flow (Join-Path $dir 'lodestar.exe') (Join-Path $work 'flow-data')
   Remove-Scratch $work
   Write-Host "portable zip ok: $Zip"
 }
@@ -210,6 +268,14 @@ if ($Msi) {
   $svc = Get-CimInstance Win32_Service -Filter "Name='Lodestar'"
   Assert ($svc.State -eq 'Stopped') "service is $($svc.State) after Stop-Service"
   Assert ($svc.ExitCode -eq 0) "service stopped with exit code $($svc.ExitCode)"
+
+  # --- setup by token, the crawler out of its setup hold, an import and a search, with the
+  # installed binary on its own temporary data folder (the service's folder and its ACL checks
+  # below stay as they are) ---
+  $flowData = Join-Path $logs 'flow-data-msi'
+  Test-Flow "$installDir\lodestar.exe" $flowData
+  Remove-Scratch $flowData
+  Write-Host 'setup, crawler, import and search on the installed binary ok'
 
   # --- owner 2.52: the admin's own Explorer entry is refused with the fix, and Repair fixes it ---
   # What Explorer's "Continue" does: an explicit Allow for the clicking administrator, on
