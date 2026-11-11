@@ -267,3 +267,10 @@ path = "fuzz_targets/companion_archive.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "regex_plan"
+path = "fuzz_targets/regex_plan.rs"
+test = false
+doc = false
+bench = false
