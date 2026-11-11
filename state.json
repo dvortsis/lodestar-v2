@@ -7746,6 +7746,13 @@
       "slice": "runner",
       "sha": "b7d3d366cebe1b8c1de0615063050fa13ba0195d",
       "at": "2026-11-11T14:11:14Z"
+    },
+    {
+      "pr": 697,
+      "slice": "runner",
+      "sha": "3d0b79d9dda90b3def339ff21f24839a0b8df378",
+      "when": "2026-11-11T14:52Z",
+      "note": "owns approvals, WK-11b, owner \u00a72.55 (Notice v5: Prowlarr + Event Log; OP-5 cap kept), X-event-log-notice"
     }
   ]
 }
