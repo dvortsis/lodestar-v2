@@ -6789,7 +6789,8 @@
     "2026-11-11T14:10:36Z: PK-win-soak-ci call (\u00a72.33, owner flag): option (a) fault-injection Directory wrapper test on all OSes + keep real Windows run with the retired-segment count printed; modern NTFS POSIX delete recorded; approved shared edit crates/search/src/index.rs test seam (cfg test/feature fault-injection on lodestar-search only) + crates/search/Cargo.toml; add to PK-win-soak-ci owns in next runner PR",
     "2026-11-11T14:10:36Z: WK-11 approved shared edit crates/integrations/src/secret.rs: additive seal_bytes/open_bytes, dedicated worker-spool/v1 context; add to WK-11 owns in next runner PR",
     "2026-11-11T14:10:36Z: CMP-11 approved shared edits per briefs/CMP-11.md (catalogue.json entry, companions lib.rs mod line, detect/configure registrations, CMP-8b Windows path check, README ~83); add to owns in next runner PR",
-    "2026-11-11T14:10:36Z: X-unraid-validate-all waits for #694 (both edit ci.yml)"
+    "2026-11-11T14:10:36Z: X-unraid-validate-all waits for #694 (both edit ci.yml)",
+    "2026-11-11T14:11:14Z: runner PR #695 merged (b7d3d366), runner self-check of a runner-only yaml delta; owner FYI + flags (#681 sizes, PK-win-soak-ci call) sent to dashboard session"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7642,7 +7643,7 @@
     }
   ],
   "heartbeat": "2026-11-11T12:39:14Z",
-  "updated": "2026-11-11T14:10:36Z",
+  "updated": "2026-11-11T14:11:14Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -7722,6 +7723,12 @@
       "slice": "CMP-9a",
       "sha": "59c2d16d07e6cd6e32940427767ee118d234438f",
       "at": "2026-11-11T14:10:36Z"
+    },
+    {
+      "pr": 695,
+      "slice": "runner",
+      "sha": "b7d3d366cebe1b8c1de0615063050fa13ba0195d",
+      "at": "2026-11-11T14:11:14Z"
     }
   ]
 }
