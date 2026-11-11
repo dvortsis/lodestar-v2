@@ -6843,7 +6843,8 @@
     },
     "slices.yaml next runner PR: add CMP-11b (register windows_qbittorrent::configurator under cfg(windows) + fix companion_wiring_guided_tests.rs; after #692 merges). CMP-11 is #705 @3544233f, fallback (b).",
     "#664 merged (source only, nothing deployed). Optional nits for a later fleet PR: rename 'reusable-only' test labels (test_policy_audit.py:226, test_deployment_policy.py:103); 'the runner' -> 'the fleet runner' in new doc sentences; compare against expected['workflow_ref'] at deployment_policy.py:127. Commissioning still owner-only (N6: verify STS exposes actor_id/ref/repository_id/environment condition keys).",
-    "PK-guide-2 (#704 merged): Event Viewer pointer in 06 waits for #702; same session does it as a small PR. Skipped rv-704 N7/N8 (v0.5.1 Settings labels, warning wording) for X-pk-guide-polish if anyone confirms the labels."
+    "PK-guide-2 (#704 merged): Event Viewer pointer in 06 waits for #702; same session does it as a small PR. Skipped rv-704 N7/N8 (v0.5.1 Settings labels, warning wording) for X-pk-guide-polish if anyone confirms the labels.",
+    "X-event-log-followups-2 (from rv-702): N1 smoke.ps1 Get-WinEvent check that the service account writes the event (PK-smoke owns smoke.ps1); N2 bound the eventcreate wait; N3 extend invisible-char filter (U+00AD, U+061C, U+2060-2064, U+206A-206F); N4 docs/legal/README.md table: add .NET EventLog/WriteEntry patterns; N5 decisions heading '(#702)'; N6 add version tests + OpenAPI example/regenerated files to X-event-log-notice owns in slices.yaml."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7576,7 +7577,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T18:39:05Z",
+    "updated": "2026-11-11T19:06Z",
     "items": [
       {
         "slot": 1,
@@ -7621,20 +7622,20 @@
       },
       {
         "slot": 6,
-        "slice": "X-event-log-notice",
+        "slice": "X-prowlarr-register",
         "role": "Opus slice (then X-prowlarr-register)",
         "agent": "session_01MMjhnCHsnr3wRoSQhHd9kN",
-        "doing": "#702 under Opus review; X-prowlarr-register after merge",
-        "since": "2026-11-11T15:23Z",
+        "doing": "session_01MMjhnCHsnr3wRoSQhHd9kN: starting after #702 merged",
+        "since": "2026-11-11T19:06Z",
         "status": "active"
       },
       {
         "slot": 7,
-        "slice": "PK-guide-2",
+        "slice": "PK-guide-2b",
         "role": "build",
         "agent": "claude",
-        "doing": "#704 merged; waiting on #702 for the Event Viewer pointer PR",
-        "since": "2026-11-11T18:38Z",
+        "doing": "session_01MMjhnC9y2v1HnPMiwDgCUR: Event Viewer pointer PR after #702",
+        "since": "2026-11-11T19:06Z",
         "status": "active"
       },
       {
@@ -7699,7 +7700,7 @@
     }
   ],
   "heartbeat": "2026-11-11T18:39:05Z",
-  "updated": "2026-11-11T18:39:05Z",
+  "updated": "2026-11-11T19:06Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -7735,7 +7736,6 @@
   ],
   "review_queue": [
     "#699 WK-11 delta+sec review running",
-    "#702 X-event-log-notice review running",
     "#703 MERGE @1666594d; asked for asyncUtilTimeout 10s in SourceRow/NeedChip chunk tests; self-check delta then merge"
   ],
   "merged": [
@@ -7846,6 +7846,12 @@
       "slice": "PK-guide-2",
       "sha": "8025dcc0711bcb49a97da4c3f622cae3471b1c57",
       "at": "2026-11-11T18:38Z"
+    },
+    {
+      "pr": 702,
+      "slice": "X-event-log-notice",
+      "sha": "0a88351a4abd84b3ad9adbe45202addaacac60d9",
+      "at": "2026-11-11T19:06Z"
     }
   ]
 }
