@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T12:44:42Z",
+  "updated_at": "2026-11-11T12:45:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6771,7 +6771,8 @@
     {
       "id": "X-collect-checklist-launch-2",
       "what": "collect.py: refuse a missing checklist item, or excluded without --next-run, at launch (today the analyzer catches it hours later); from #688",
-      "at": "2026-11-11T12:44:42Z"
+      "at": "2026-11-11T12:44:42Z",
+      "status": "launched 2026-11-11T12:45:00Z"
     }
   ],
   "main_health": [
@@ -7505,7 +7506,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T12:44:42Z",
+    "updated": "2026-11-11T12:45:00Z",
     "items": [
       {
         "slot": 1,
@@ -7565,12 +7566,11 @@
       },
       {
         "slot": 8,
-        "slice": "CMP-9b",
+        "slice": "X-collect-checklist-launch-2",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8mGSt1DA24S2gjPE6: waiting on #681 CMP-9a to merge before CMP-9b (deps); #688 X-collect-checklist-docker merged",
-        "since": "2026-11-11T12:44:42Z",
-        "status": "idle"
+        "doing": "session_01MMjhn8mGSt1DA24S2gjPE6: refuse a missing checklist item or excluded without --next-run at launch (Sonnet); then CMP-9b after #681 merges",
+        "since": "2026-11-11T12:45:00Z"
       }
     ]
   },
