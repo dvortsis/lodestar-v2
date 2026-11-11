@@ -1025,10 +1025,13 @@ impl Spool {
         if let Some(c) = self.closed.remove(&seq) {
             self.counted.remove(&seq);
             self.old.retain(|&(s, _)| s != seq);
+            // Written only under `&mut self`, so a load and a store can't
+            // lose an update; readers only load.
             let sub = |n: &AtomicU64, by: u64| {
-                let _ = n.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
-                    Some(v.saturating_sub(by))
-                });
+                n.store(
+                    n.load(Ordering::Relaxed).saturating_sub(by),
+                    Ordering::Relaxed,
+                );
             };
             sub(&self.stats.bytes, c.bytes);
             sub(&self.stats.records, c.frames);
