@@ -6841,7 +6841,8 @@
       "id": "X-worker-settings-pointer (dropped)",
       "what": "Not needed: WK-16 builds Settings -> Workers; workers need v0.6+, template already says so."
     },
-    "#664 owner PR: owner chose runner fixes + accepted listed widening (2026-11-11T18:31Z). Runner pushed c5d69402 (B1 job_workflow_ref equal-accept, B2 UTC, N12 tests); fresh Opus delta review running; then ready-for-review + merge. Deploy nothing."
+    "#664 owner PR: owner chose runner fixes + accepted listed widening (2026-11-11T18:31Z). Runner pushed c5d69402 (B1 job_workflow_ref equal-accept, B2 UTC, N12 tests); fresh Opus delta review running; then ready-for-review + merge. Deploy nothing.",
+    "slices.yaml next runner PR: add CMP-11b (register windows_qbittorrent::configurator under cfg(windows) + fix companion_wiring_guided_tests.rs; after #692 merges). CMP-11 is #705 @3544233f, fallback (b)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
