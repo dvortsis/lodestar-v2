@@ -9,15 +9,11 @@
 	import Button from '$lib/ui/controls/Button.svelte';
 	import { waitForServer } from './logic';
 
-	interface Props {
-		/** Where the UI will be when the HTTP address changed; null to stay on this address. */
-		target: string | null;
-		/** The run that is ending, so a still-answering old process isn't taken for the new one. */
-		startedAt: number | null;
-		estimateSeconds: number;
-	}
-	let { target, startedAt, estimateSeconds }: Props = $props();
+	import type { Waiting } from './logic';
+
+	let { target, startedAt, estimateSeconds }: Waiting = $props();
 	let phase = $state<'waiting' | 'timeout' | 'pending'>('waiting');
+	let root = $state<HTMLElement>();
 	let heading = $state<HTMLElement>();
 	let ctl: AbortController | undefined;
 
@@ -48,6 +44,7 @@
 					: async () => (await api.get('/system')).started_at !== startedAt,
 			now: Date.now,
 			sleep,
+			settleMs: estimateSeconds * 1000,
 			signal: mine.signal
 		});
 		if (result === 'aborted') return;
@@ -69,19 +66,31 @@
 	}
 
 	onMount(() => {
+		// A real modal: out of the page's <main> (no nested landmark), with everything behind it inert
+		// so Tab can't reach the Settings page that is going away.
+		const behind = [...document.body.children].filter((el) => el !== root);
+		document.body.append(root!);
+		for (const el of behind) el.setAttribute('inert', '');
 		heading?.focus();
 		void run();
-		return () => ctl?.abort();
+		return () => {
+			ctl?.abort();
+			for (const el of behind) el.removeAttribute('inert');
+		};
 	});
 </script>
 
-<main
+<div
+	bind:this={root}
+	role="dialog"
+	aria-modal="true"
+	aria-labelledby="restarting-title"
 	class="fixed inset-0 z-50 flex items-center justify-center bg-base-100 p-6"
 	data-testid="restarting-page"
 	data-phase={phase}
 >
 	<div class="flex max-w-md flex-col gap-4">
-		<h1 bind:this={heading} tabindex="-1" class="text-title font-semibold">
+		<h1 id="restarting-title" bind:this={heading} tabindex="-1" class="text-title font-semibold">
 			{m.restart_page_title()}
 		</h1>
 		<p role="status" data-testid="restarting-status">
@@ -103,4 +112,4 @@
 			<div><Button onclick={() => location.reload()}>{m.restart_page_reload()}</Button></div>
 		{/if}
 	</div>
-</main>
+</div>

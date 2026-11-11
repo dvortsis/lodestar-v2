@@ -2,13 +2,13 @@
 	// The confirmation dialog for Restart now (§10.10.6): the pause the server estimates and, for an
 	// HTTP address change, the exact new URL. A 409 shows its message and stops; a 202 hands over to
 	// the full-page Restarting state. Loaded when Restart now is pressed.
-	import type { Component } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { formatCount } from '$lib/format';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Dialog from '$lib/ui/overlays/Dialog.svelte';
 	import { failureOf, type Pending, type RestartFailure } from './logic';
+	import { restart } from './restart.svelte';
 
 	interface Props {
 		pending: Pending;
@@ -20,22 +20,16 @@
 	let open = $state(true);
 	let busy = $state(false);
 	let failure = $state<RestartFailure>();
-	let Restarting = $state<
-		Component<{
-			target: string | null;
-			startedAt: number | null;
-			estimateSeconds: number;
-		}>
-	>();
-	let wait = $state<{ estimateSeconds: number }>();
-
 	async function restartNow() {
 		busy = true;
 		failure = undefined;
 		try {
 			const accepted = await api.post('/system/restart');
-			Restarting = (await import('./RestartingPage.svelte')).default;
-			wait = { estimateSeconds: accepted.estimated_seconds };
+			restart.begin({
+				target: pending.newUrl,
+				startedAt,
+				estimateSeconds: accepted.estimated_seconds
+			});
 			open = false;
 		} catch (e) {
 			failure = failureOf(e);
@@ -50,7 +44,7 @@
 	title={m.restart_confirm_title()}
 	closeLabel={m.restart_close()}
 	onOpenChange={(o) => {
-		if (!o && !wait) onclose();
+		if (!o) onclose();
 	}}
 	initialFocus={() => document.querySelector<HTMLElement>('[data-restart-cancel]')}
 >
@@ -74,7 +68,3 @@
 		{/if}
 	{/snippet}
 </Dialog>
-
-{#if Restarting && wait}
-	<Restarting target={pending.newUrl} {startedAt} estimateSeconds={wait.estimateSeconds} />
-{/if}

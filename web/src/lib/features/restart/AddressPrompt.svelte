@@ -3,7 +3,7 @@
 	// address and reverts by itself at `deadline` unless it hears from here. Keep confirms; Go back
 	// reverts, and when the server restarts onto the old address the UI follows it there. Loaded
 	// only while a change awaits confirmation.
-	import { onMount, type Component } from 'svelte';
+	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
@@ -15,19 +15,24 @@
 	let now = $state(Date.now());
 	let busy = $state(false);
 	let failure = $state<RestartFailure>();
-	let Restarting = $state<
-		Component<{
-			target: string | null;
-			startedAt: number | null;
-			estimateSeconds: number;
-		}>
-	>();
-	let wait = $state<{ target: string; estimateSeconds: number }>();
-	const prompt = $derived(addressPromptOf(system, now));
+	const prompt = $derived(addressPromptOf(system, now, location.hostname));
 
 	onMount(() => {
 		const tick = setInterval(() => (now = Date.now()), 1_000);
 		return () => clearInterval(tick);
+	});
+
+	// Going back changes the address again: the UI returns to where it was.
+	function goBack(url: string) {
+		restart.begin({
+			target: url,
+			startedAt: null,
+			estimateSeconds: system.restart.estimated_seconds
+		});
+	}
+	// Nobody answered in time: the server reverts by itself and restarts onto the old address.
+	$effect(() => {
+		if (prompt && prompt.secondsLeft === 0 && !busy) goBack(prompt.previousUrl);
 	});
 
 	async function answer(kind: 'keep' | 'revert') {
@@ -39,9 +44,7 @@
 				kind === 'keep' ? '/system/address/keep' : '/system/address/revert'
 			);
 			if (outcome.restarting) {
-				Restarting = (await import('./RestartingPage.svelte')).default;
-				// Going back changes the address again: the UI returns to where it was.
-				wait = { target: prompt.previousUrl, estimateSeconds: system.restart.estimated_seconds };
+				goBack(prompt.previousUrl);
 			} else await restart.refresh();
 		} catch (e) {
 			failure = failureOf(e);
@@ -72,5 +75,3 @@
 		{/snippet}
 	</Banner>
 {/if}
-
-{#if Restarting && wait}<Restarting {...wait} startedAt={null} />{/if}

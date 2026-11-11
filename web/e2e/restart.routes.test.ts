@@ -81,6 +81,7 @@ test.describe('restart banner', () => {
 		await page.getByRole('dialog').getByRole('button', { name: 'Restart now' }).click();
 		await expect(page.getByTestId('restarting-page')).toBeVisible();
 		await expect(page.getByTestId('restarting-status')).toContainText('restarting');
+		await expectNoA11yViolations(page);
 		// Back: the page reloads onto Settings with no banner.
 		await expect(page.getByTestId('restarting-page')).toHaveCount(0, DEADLINE);
 		await expect(page.getByRole('heading', { name: 'Needs attention' })).toBeVisible(DEADLINE);
@@ -115,7 +116,7 @@ test.describe('restart banner', () => {
 		await expect
 			.poll(
 				async () => {
-					await page.clock.runFor(5_000);
+					await page.clock.runFor(15_000);
 					return page.getByTestId('restarting-page').getAttribute('data-phase');
 				},
 				{ timeout: 30_000 }

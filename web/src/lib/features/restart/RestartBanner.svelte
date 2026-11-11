@@ -9,7 +9,7 @@
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
-	import type { Pending, System } from './logic';
+	import type { Pending, System, Waiting } from './logic';
 	import { restart } from './restart.svelte';
 
 	const REFRESH_MS = 15_000;
@@ -18,6 +18,7 @@
 	let Dialog =
 		$state<Component<{ pending: Pending; startedAt: number | null; onclose: () => void }>>();
 	let Prompt = $state<Component<{ system: System }>>();
+	let Restarting = $state<Component<Waiting>>();
 	let confirming = $state(false);
 
 	const pending = $derived(restart.pending);
@@ -47,6 +48,12 @@
 	$effect(() => {
 		if (awaiting && !Prompt)
 			void import('./AddressPrompt.svelte').then((mod) => (Prompt = mod.default));
+	});
+
+	// The full-page state is the store's, so it outlives the dialog and the prompt that began it.
+	$effect(() => {
+		if (restart.waiting && !Restarting)
+			void import('./RestartingPage.svelte').then((mod) => (Restarting = mod.default));
 	});
 
 	async function review() {
@@ -94,3 +101,5 @@
 		onclose={() => (confirming = false)}
 	/>
 {/if}
+
+{#if Restarting && restart.waiting}<Restarting {...restart.waiting} />{/if}

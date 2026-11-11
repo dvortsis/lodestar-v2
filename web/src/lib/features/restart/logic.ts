@@ -20,8 +20,34 @@ export interface Pending {
 	newUrl: string | null;
 }
 
+/**
+ * The server can't name its own address when it binds to every interface: it sends a placeholder
+ * (`http://<this host's address>:9000/`) or `0.0.0.0`. The browser knows the host it reached it by.
+ */
+export function usableUrl(url: string, hostname: string): string {
+	if (!hostname) return url;
+	const named = url.replace(/<[^>]*>/, hostname.includes(':') ? `[${hostname}]` : hostname);
+	try {
+		const u = new URL(named);
+		if (u.hostname !== '0.0.0.0' && u.hostname !== '[::]') return named;
+		u.hostname = hostname.includes(':') ? `[${hostname}]` : hostname;
+		return u.href;
+	} catch {
+		return named;
+	}
+}
+
+/** What the full-page Restarting state waits for. */
+export interface Waiting {
+	/** Where the UI will be when the HTTP address changed; null to stay on this address. */
+	target: string | null;
+	/** The run that is ending (`GET /system` `started_at`); null when unknown. */
+	startedAt: number | null;
+	estimateSeconds: number;
+}
+
 /** What the banner shows: nothing, or the pending changes. */
-export function pendingOf(system: System | undefined): Pending | null {
+export function pendingOf(system: System | undefined, hostname = ''): Pending | null {
 	if (!system || system.restart_required.length === 0) return null;
 	const change = system.address_change;
 	return {
@@ -31,7 +57,7 @@ export function pendingOf(system: System | undefined): Pending | null {
 		estimateSeconds: system.restart.estimated_seconds,
 		newUrl:
 			system.restart_required.includes('network.http_bind') && change?.state === 'awaiting_restart'
-				? change.url
+				? usableUrl(change.url, hostname)
 				: null
 	};
 }
@@ -44,11 +70,19 @@ export interface AddressPrompt {
 }
 
 /** "Keep this address?": shown while the server serves the new address and waits to hear. */
-export function addressPromptOf(system: System | undefined, nowMs: number): AddressPrompt | null {
+export function addressPromptOf(
+	system: System | undefined,
+	nowMs: number,
+	hostname = ''
+): AddressPrompt | null {
 	const change = system?.address_change;
 	if (!change || change.state !== 'awaiting_confirmation') return null;
 	const left = change.deadline === null ? 0 : Math.ceil(change.deadline - nowMs / 1000);
-	return { url: change.url, previousUrl: change.previous_url, secondsLeft: Math.max(0, left) };
+	return {
+		url: usableUrl(change.url, hostname),
+		previousUrl: usableUrl(change.previous_url, hostname),
+		secondsLeft: Math.max(0, left)
+	};
 }
 
 export type RestartFailure =
@@ -84,6 +118,11 @@ export interface WaitOptions {
 	sleep: (ms: number) => Promise<void>;
 	signal?: AbortSignal;
 	giveUpMs?: number;
+	/**
+	 * With no `isNewRun`, an answer before the server was seen down only counts after this long: the
+	 * old process may still be shutting down on the same port.
+	 */
+	settleMs?: number;
 }
 
 /** Waits for the server to come back: `up`, `timeout`, or `aborted`. */
@@ -97,7 +136,10 @@ export async function waitForServer(o: WaitOptions): Promise<'up' | 'timeout' | 
 		if (await o.probe()) {
 			// Answering, but maybe the old process: it counts once we've seen it down, or when
 			// something says this is a new run.
-			if (sawDown || !o.isNewRun || (await o.isNewRun().catch(() => false))) return 'up';
+			if (sawDown) return 'up';
+			if (o.isNewRun) {
+				if (await o.isNewRun().catch(() => false)) return 'up';
+			} else if (o.now() - started >= (o.settleMs ?? 0)) return 'up';
 		} else sawDown = true;
 		if (o.now() - started >= limit) return 'timeout';
 		await o.sleep(backoffMs(attempt));

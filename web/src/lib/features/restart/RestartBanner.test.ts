@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { ApiError } from '$lib/api/client';
 import RestartBanner from './RestartBanner.svelte';
+import { restart } from './restart.svelte';
 import type { System } from './logic';
 
 const page = vi.hoisted(() => ({ url: new URL('http://x/settings') }));
@@ -29,6 +30,7 @@ const system = (over: Partial<System> = {}): System =>
 	}) as System;
 
 beforeEach(() => {
+	restart.begin(null);
 	api.get.mockReset();
 	api.post.mockReset();
 });

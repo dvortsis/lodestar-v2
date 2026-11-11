@@ -439,10 +439,10 @@ const settingsFirstView = [
 	...settingsExtras
 ];
 // The restart banner (X-restart-banner) counts in every Settings first view: measured +2.31 KB to
-// +3.05 KB across the screens (the Insights screen the most), so these entries move by the largest,
-// 3.1 KB. Screens that already had that much headroom (Appearance, About, Security, Updates,
+// +3.3 KB across the screens (the Insights screen the most), so these entries move by the largest,
+// 3.4 KB. Screens that already had that much headroom (Appearance, About, Security, Updates,
 // Keyboard, the overview) keep their limits.
-const BANNER_KB = 3.1;
+const BANNER_KB = 3.4;
 const BANNER_SCREENS = new Set([
 	'BlocklistsScreen',
 	'FiltersScreen',
@@ -1473,7 +1473,7 @@ export default [
 			'Restart flow (on demand)',
 			onDemandOf('/settings/[section]', settingsRestart)
 		),
-		'7 KB'
+		'6.6 KB'
 	),
 	entry('Settings screen icons (on demand)', settingsIconsLazy, '1.66 KB'),
 	// The dialogs' on-demand code (Bits UI overlays, Dialog, both dialogs), still gated.

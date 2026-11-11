@@ -6,6 +6,7 @@ import {
 	backoffMs,
 	failureOf,
 	pendingOf,
+	usableUrl,
 	waitForServer,
 	type System
 } from './logic';
@@ -173,5 +174,57 @@ describe('waitForServer', () => {
 		expect(await waitForServer({ ...c, probe: async () => true, signal: ctl.signal })).toBe(
 			'aborted'
 		);
+	});
+});
+
+describe('usableUrl', () => {
+	it("puts the host the browser used in place of the server's placeholder", () => {
+		expect(usableUrl("http://<this host's address>:9000/", 'nas.local')).toBe(
+			'http://nas.local:9000/'
+		);
+		expect(usableUrl('http://0.0.0.0:9000/', '192.168.1.5')).toBe('http://192.168.1.5:9000/');
+		expect(usableUrl("http://<this host's address>:9000/", '::1')).toBe('http://[::1]:9000/');
+	});
+	it('leaves a real address alone', () => {
+		expect(usableUrl('http://192.168.1.5:9000/', 'nas.local')).toBe('http://192.168.1.5:9000/');
+	});
+	it('is used for the dialog and the prompt', () => {
+		const s = system({
+			restart_required: ['network.http_bind'],
+			address_change: change({ url: "http://<this host's address>:9000/" })
+		});
+		expect(pendingOf(s, 'nas.local')?.newUrl).toBe('http://nas.local:9000/');
+		const w = system({
+			address_change: change({
+				state: 'awaiting_confirmation',
+				deadline: 10,
+				url: 'http://0.0.0.0:9000/',
+				previous_url: "http://<this host's address>:8090/"
+			})
+		});
+		expect(addressPromptOf(w, 0, 'nas.local')).toMatchObject({
+			url: 'http://nas.local:9000/',
+			previousUrl: 'http://nas.local:8090/'
+		});
+	});
+});
+
+describe('waitForServer with a new address', () => {
+	it('does not take an answer in the first seconds for the new server', async () => {
+		const c = clock();
+		const result = await waitForServer({ ...c, probe: async () => true, settleMs: 4_000 });
+		expect(result).toBe('up');
+		expect(c.now()).toBeGreaterThanOrEqual(4_000);
+	});
+	it('takes an answer at once once it was seen down', async () => {
+		const c = clock();
+		const answers = [false, true];
+		const result = await waitForServer({
+			...c,
+			probe: async () => answers.shift() ?? true,
+			settleMs: 60_000
+		});
+		expect(result).toBe('up');
+		expect(c.now()).toBeLessThan(10_000);
 	});
 });
