@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T22:21:06Z",
+  "updated_at": "2026-11-11T22:33:56Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6939,12 +6939,12 @@
     },
     {
       "id": "D-outputs-guide",
-      "note": "New docs slice for next runner PR: Sonnet, user-docs; deps TZ-0, OUT-0, OUT-2; 'Connect Prowlarr, Sonarr and Radarr' (torznab key scope, /api/v1/torznab/api, Sonarr 5000/5045 trap) + bitmagnet export. Facts in TZ-0's decisions file.",
+      "note": "New docs slice for next runner PR: Sonnet, user-docs; deps TZ-0, OUT-0, OUT-2; 'Connect Prowlarr, Sonarr and Radarr' (torznab key scope, /api/v1/torznab/api, Sonarr 5000/5045 trap) + bitmagnet export. Facts in TZ-0's decisions file. OUT-2 notes: show a capped export's job `truncated` (bitmagnet file has no trailer).",
       "at": "2026-11-11T22:21:06Z"
     },
     {
       "id": "owner-flags-pending-1111b",
-      "note": "Flag to owner (\u00a72.19): TZ-0 kept as one ~3,050-line PR (>half tests; runner call); X-restart-banner new size-limit entry 'Restart flow (on demand)' (measured +10%); X-restart-banner Review shows saved values (no running value in API); CI throughput is the bottleneck at 12 sessions.",
+      "note": "Flag to owner (\u00a72.19): TZ-0 kept as one ~3,050-line PR (>half tests; runner call); X-restart-banner new size-limit entry 'Restart flow (on demand)' (measured +10%); X-restart-banner Review shows saved values (no running value in API); CI throughput is the bottleneck at 12 sessions. OUT-0 (#716): bitmagnet export leaves out every flags::PRIVACY row (not only private_source) and refuses hidden=true (stricter only).",
       "at": "2026-11-11T22:21:06Z"
     }
   ],
@@ -7679,7 +7679,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T22:21:06Z",
+    "updated": "2026-11-11T22:33:56Z",
     "items": [
       {
         "slot": 1,
@@ -7843,7 +7843,7 @@
     }
   ],
   "heartbeat": "2026-11-11T21:38:36Z",
-  "updated": "2026-11-11T22:21:06Z",
+  "updated": "2026-11-11T22:33:56Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
