@@ -453,7 +453,6 @@ placement:
   - SRC-13b
   - SRC-13c
   - X-source-adult
-  - X-prowlarr-settings
 - ws: ws-src-ui
   match:
   - SRC-14
