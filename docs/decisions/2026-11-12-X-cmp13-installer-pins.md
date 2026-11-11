@@ -20,15 +20,16 @@ Installer pins in the companion catalogue: qBittorrent's official Windows instal
 - **The choice:** the pin tool reads the installer and its `.asc` from SourceForge at pin time only, and pins it only if all of these pass. FossHub isn't used.
   - The signature verifies against qBittorrent's release key.
   - **The bytes are tied to the version** (self-review B2, runner 2026-11-11): a signature covers bytes, not a file name or version, so a SourceForge mirror could otherwise serve any other genuinely signed qBittorrent file. These three checks are all required and all fail closed (`installer_mismatch`):
-    1. **The redirect chain:** the URL that finally answered must end in exactly `/qbittorrent-win32/qbittorrent-<v>/qbittorrent_<v>_x64_setup.exe`. That catches a lazy substitution before the hash does.
+    1. **The redirect chain:** the URL that finally answered must have exactly the path `/project/qbittorrent/qbittorrent-win32/qbittorrent-<v>/qbittorrent_<v>_x64_setup.exe`, which SourceForge's mirrors keep. That catches a lazy substitution before the hash does. A hostile mirror controls what it serves at that path, so this isn't the binding.
     2. **SourceForge's own folder feed:** `https://sourceforge.net/projects/qbittorrent/rss?path=/qbittorrent-win32/qbittorrent-<v>`, read from `sourceforge.net` only, with any redirect off that host refused.
        - Exactly one item must name exactly that path; zero or two are refused.
        - Its stated size and MD5 must equal the downloaded bytes' own size and MD5.
        - MD5 is enough here: matching it would need a second preimage of a fixed, genuinely signed file, not a collision.
-       - A feed with a document type is refused, so no entity expansion. It's at most 4 MiB.
+       - **This is the binding.** A hostile mirror can't change what SourceForge's origin states for the path.
+       - The feed must be strict UTF-8 with no NUL byte, and expat refuses any DOCTYPE or entity declaration before ElementTree reads it. So there's no entity expansion in any encoding. It's at most 4 MiB.
     3. **The release tag's date:** the signature's creation time must not be more than 2 days before the tagger date of qBittorrent's annotated `release-<v>` tag, read from `api.github.com`.
        - A lightweight tag has no tagger date, so it's refused rather than falling back to the commit date.
-       - This refuses an older signed file even if the feed were tampered with.
+       - This refuses an older signed file even if the feed were tampered with. It doesn't refuse a file signed at the same time or later.
   - **The report prints:**
     - the final URL;
     - the feed's size and MD5, and the download's;
@@ -49,11 +50,13 @@ Installer pins in the companion catalogue: qBittorrent's official Windows instal
     - Once it's committed, `keys/` wins and nothing is fetched.
 - **Threat model:**
   - **A tampered mirror, or a hostile redirect, serving other bytes:** they don't verify against the pinned key, so the pin is refused. Every hop goes through `check_url`: `https`, no port or user information, the hosts above, at most 5 hops.
-  - **A mirror serving a different genuinely signed file** with its real `.asc` (an older installer, the `_lt12_` build, a source tarball): the final URL, the feed's size and MD5 for the exact path, and the tag date each refuse it.
+  - **A mirror serving a different genuinely signed file** with its real `.asc` (an older installer, the `_lt12_` build, a source tarball), at the right path: **the feed refuses it**, because its size and MD5 for that path are the genuine file's. The tag date also refuses an older one. The final-URL check refuses only a lazy substitution at another path.
   - **A substituted key at a key source:** only a key whose primary fingerprint is the pinned one is used, and a fingerprint can't be forged. A source that doesn't serve it refuses the pin.
   - **A compromised release key, or a malicious upload signed by it:** not caught here. That's upstream's own trust, the same as every signed companion, and the pin is still the run-time gate.
   - **SourceForge changing a file after it's pinned:** `sha_changed` refuses a re-pin of one version as other bytes (CMP-13).
   - **Residual risk, accepted for a pin that a reviewer also checks by hand (runner, 2026-11-11):** a compromised SourceForge origin plus a same-version file signed after the tag.
+    - As the second review put it, with a compromised origin the gap is any genuinely signed file signed no earlier than the tag less 2 days. That includes the same version's `_lt12_` build and source tarball, and every later release's installer.
+    - An upper bound on the signature's time (for example, before the next `release-*` tag) would narrow it. That's the runner's call (asked, 2026-11-12) and isn't built here.
   - **Not considered sufficient, so not built:**
     - two mirrors agreeing (SourceForge and FossHub, both uploads by the same maintainer);
     - a hash on a web page (qbittorrent.org publishes none).
@@ -109,7 +112,7 @@ Installer pins in the companion catalogue: qBittorrent's official Windows instal
   - no `.asc`, a tampered installer, a signature by another key, a non-signature;
   - an unsigned policy;
   - redirects to an unknown host, two labels, a look-alike suffix, `http`, GitHub or FossHub, and a signature redirected away;
-  - the bytes tied to the version: the report's values; another signed file; a wrong size; no item, two items, or only another path's; an older signature; a lightweight tag; an unreadable date; a download ending at another file's path; a feed redirected to a mirror or elsewhere; a feed with a document type;
+  - the bytes tied to the version: the report's values; another signed file; a wrong size; a wrong MD5 at the same size; a same-size signed file; a tag date without a zone; the 2-day slack's boundary (a day inside passes, three days refuses); another project's path; no item, two items, or only another path's; an older signature; a lightweight tag; an unreadable date; a download ending at another file's path; a feed redirected to a mirror or elsewhere; a feed with a document type and a matching item, in UTF-8 and UTF-16;
   - the key fetched by fingerprint (one copy holding an extra key), a place that doesn't serve it, and nowhere to fetch it from;
   - the mirror-host rule;
   - complete bodies, a stall and a drip, through `fetch()` on a real socket;

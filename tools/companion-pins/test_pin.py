@@ -7,6 +7,7 @@ committed, and nothing touches the network.
 
 import contextlib
 import dataclasses
+import datetime
 import hashlib
 import io
 import json
@@ -834,6 +835,7 @@ class InstallerPins(Case):
         self.assertEqual(status, 1, err)
         self.assertIn(f"{code}:", err)
         self.assertFalse(self.out.exists())
+        self.assertFalse(self.report.exists())
         return err
 
     def test_pinned_from_its_own_folder_with_the_release_key(self):
@@ -867,10 +869,15 @@ class InstallerPins(Case):
         self.out.unlink()
         self.report.unlink()
         other = b"MZ another genuinely signed file" * 100
+        same = bytes(reversed(INSTALLER))  # same length, other bytes
         cases = {
             # A mirror serving another signed file: the feed's MD5 and size don't match.
             "other bytes": self.routes(sig=self.gpg.sign(self.a, other), body=other),
             "wrong size": self.routes(listed=[(FEED_PATH, len(INSTALLER) + 1, md5(INSTALLER))]),
+            # Same size, other MD5: the MD5 is the binding, not the size.
+            "wrong md5": self.routes(listed=[(FEED_PATH, len(INSTALLER), md5(b"x"))]),
+            "same-size signed file": self.routes(sig=self.gpg.sign(self.a, same), body=same),
+            "a time without a zone": self.routes(tag_date="2026-01-01T00:00:00"),
             "no item": self.routes(listed=[]),
             "two items": self.routes(listed=[(FEED_PATH, len(INSTALLER), md5(INSTALLER))] * 2),
             "another path only": self.routes(
@@ -884,6 +891,12 @@ class InstallerPins(Case):
         for name, routes in cases.items():
             with self.subTest(name):
                 self.refuse(Fake(routes), "installer_mismatch")
+        # The download ending at another project's copy of the path.
+        routes = self.routes()
+        elsewhere = MIRROR.replace("/project/qbittorrent/", "/project/other/")
+        routes[SF] = redirect(elsewhere)
+        routes[elsewhere] = ok(INSTALLER)
+        self.refuse(Fake(routes), "installer_mismatch")
         # The download ending at another file's path.
         routes = self.routes()
         lt12 = MIRROR.replace("_x64_", "_lt12_x64_")
@@ -897,10 +910,29 @@ class InstallerPins(Case):
                 routes[FEED] = redirect(to)
                 routes[to] = ok(feed([(FEED_PATH, len(INSTALLER), md5(INSTALLER))]))
                 self.refuse(Fake(routes), "host_not_allowed")
-        # A document type in the feed (entity expansion) is refused.
-        routes = self.routes()
-        routes[FEED] = ok(b'<?xml version="1.0"?><!DOCTYPE r [<!ENTITY a "aaaa">]><rss/>')
-        self.refuse(Fake(routes), "installer_mismatch")
+        # A document type in the feed (entity expansion) is refused, even with
+        # a matching item and in another encoding.
+        good = feed([(FEED_PATH, len(INSTALLER), md5(INSTALLER))]).decode()
+        doctype = good.replace("<rss ", '<!DOCTYPE rss [<!ENTITY a "aaaa">]><rss ', 1)
+        for name, body in (
+            ("utf-8", doctype.encode()),
+            ("utf-16", doctype.replace('encoding="utf-8"', 'encoding="utf-16"').encode("utf-16")),
+        ):
+            with self.subTest(name):
+                routes = self.routes()
+                routes[FEED] = ok(body)
+                err = self.refuse(Fake(routes), "installer_mismatch")
+                self.assertTrue("document type" in err or "isn't UTF-8" in err, err)
+
+    def test_the_two_days_of_slack(self):
+        shutil.copy(self.gpg.export(self.a), self.keys / f"{self.a}.asc")
+        now = datetime.datetime.now(datetime.UTC)
+        at = lambda d: (now + datetime.timedelta(days=d)).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+        status, err = self.pin(Fake(self.routes(tag_date=at(1))))
+        self.assertEqual(status, 0, err)  # signed a day before the tag: within the slack
+        self.out.unlink()
+        self.report.unlink()
+        self.refuse(Fake(self.routes(tag_date=at(3))), "installer_mismatch")
 
     def test_refusals(self):
         shutil.copy(self.gpg.export(self.a), self.keys / f"{self.a}.asc")

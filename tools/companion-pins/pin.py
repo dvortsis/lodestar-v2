@@ -359,7 +359,9 @@ def keys_for(t, gpg: str, policy, keys_dir: Path, work: Path) -> tuple[Path, lis
 
 def verify_openpgp(gpg: str, artifact: Path, sig: bytes, pinned: tuple[str, ...], keys_dir: Path) -> tuple[str, int]:
     """Checks a detached signature on `artifact` with only the pinned keys in a
-    fresh GNUPGHOME. Returns the signing key's primary fingerprint."""
+    fresh GNUPGHOME. Returns the signing key's primary fingerprint and the
+    signature's creation time (seconds since the epoch, the earliest if
+    several)."""
     if not pinned or not all(FINGERPRINT.match(k) for k in pinned):
         raise Refused("key_not_pinned", "the policy names no full fingerprint for this artifact")
     with tempfile.TemporaryDirectory(prefix="pins-gnupg-") as home:
@@ -738,9 +740,10 @@ def bind_installer(t, recipe, version, release, folder, name, path, size, final_
     required: the URL that answered is this version's file; SourceForge's own
     folder feed, from its origin, states this size and MD5 for exactly this
     path; and the signature isn't older than the release tag (less 2 days)."""
-    sub = urllib.parse.urlsplit(release).path.split("/")[3]  # /project/<p>/<sub>/
+    _, _, project, sub, _ = urllib.parse.urlsplit(release).path.split("/")  # /project/<p>/<sub>/
     tail = f"/{sub}/{folder}/{name}"
-    if not urllib.parse.urlsplit(final_url).path.endswith(tail):
+    # SourceForge's mirrors keep the path: `/project/<project>/<sub>/<folder>/<file>`.
+    if urllib.parse.urlsplit(final_url).path != f"/project/{project}{tail}":
         raise Refused("installer_mismatch", f"the download ended at {safe(final_url)}, not at …{safe(tail)}")
     md5 = hashlib.md5(usedforsecurity=False)
     with open(path, "rb") as f:
@@ -773,11 +776,29 @@ def feed_entry(t, feed_url: str, path: str) -> tuple[int, str]:
     """(size, MD5) that SourceForge's folder feed states for exactly `path`,
     read from `sourceforge.net` itself. Exactly one item must name it."""
     import xml.etree.ElementTree as ET
+    import xml.parsers.expat
 
     body = fetch_bytes(t, feed_url, FEED_HOSTS, MAX_FEED)
-    # No document type, so no entities to expand.
-    if b"<!DOCTYPE" in body or b"<!ENTITY" in body:
+    # No document type, so no entities to expand, whatever the encoding:
+    # strict UTF-8 with no NUL first, then expat itself refuses a DOCTYPE or
+    # entity declaration before ElementTree reads anything.
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        raise Refused("installer_mismatch", "SourceForge's feed isn't UTF-8") from None
+    if "\x00" in text or "<!DOCTYPE" in text or "<!ENTITY" in text:
         raise Refused("installer_mismatch", "SourceForge's feed declares a document type")
+
+    def no_doctype(*_):
+        raise Refused("installer_mismatch", "SourceForge's feed declares a document type")
+
+    pre = xml.parsers.expat.ParserCreate()
+    pre.StartDoctypeDeclHandler = no_doctype
+    pre.EntityDeclHandler = no_doctype
+    try:
+        pre.Parse(body, True)
+    except xml.parsers.expat.ExpatError:
+        raise Refused("installer_mismatch", "SourceForge's feed isn't XML") from None
     try:
         root = ET.fromstring(body)
     except ET.ParseError:
