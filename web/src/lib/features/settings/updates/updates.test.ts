@@ -573,6 +573,30 @@ describe('the Updates screen', () => {
 		expect(banner.textContent).not.toContain('install_failed');
 	});
 
+	it('words the install_blocked notice as its own, not as install_failed', async () => {
+		status.notices = ['install_blocked'];
+		render(UpdatesScreen);
+		await until(() => expect(screen.getByTestId('updates-notice-install_blocked')).toBeTruthy());
+		const banner = screen.getByTestId('updates-notices');
+		expect(banner.textContent).toContain('The update is waiting');
+		expect(banner.textContent).toContain("wouldn't start the Lodestar service");
+		expect(banner.textContent).toContain('Nothing changed');
+		expect(banner.textContent).toContain('unless you switch updates off or pause them first');
+		expect(banner.textContent).not.toContain("The last update didn't install");
+		expect(banner.textContent).not.toContain('msiexec.log');
+		expect(banner.textContent).not.toContain('install_blocked');
+		expect(screen.queryByTestId('updates-notice-install_failed')).toBeNull();
+	});
+
+	it('still shows a notice code it has no words for, in general words', async () => {
+		status.notices = ['some_future_notice'];
+		render(UpdatesScreen);
+		await until(() => expect(screen.getByTestId('updates-notice-some_future_notice')).toBeTruthy());
+		const banner = screen.getByTestId('updates-notices');
+		expect(banner.textContent).toContain('Update notice');
+		expect(banner.textContent).toContain('has no explanation for it');
+	});
+
 	it.each([
 		['fixture', 'sample data'],
 		['network', "couldn't start its updater"],

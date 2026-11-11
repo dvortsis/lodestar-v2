@@ -69,6 +69,9 @@ const MANUAL_EVERY: Duration = Duration::from_secs(60);
 const MAX_SLEEP: Duration = Duration::from_secs(15 * 60);
 pub const UPDATER_FILE: &str = "updater.json";
 pub const SKIPPED_FILE: &str = "skipped";
+/// The update helper's answer, and the notice, when Windows wouldn't start
+/// the service at the end of an install (error 1920) and a retry remains.
+pub const INSTALL_BLOCKED: &str = "install_blocked";
 /// Why Install and Roll back refuse until they're built on Windows (the
 /// one place to change).
 pub const NOT_BUILT_YET: Reason = Reason::NotBuiltYet;
@@ -411,6 +414,10 @@ struct Inner {
     fault: Fault,
     installer: Option<super::msi::Installer>,
     portable: Option<Portable>,
+    /// Bumped each time updates are switched Off or a pause starts
+    /// ([`Notifier::withdraw`]): an install that wrote its request across
+    /// a bump takes the request back.
+    withdrawals: std::sync::atomic::AtomicU64,
     /// The version being downloaded for the helper.
     installing: Mutex<Option<Version>>,
 }
@@ -473,6 +480,7 @@ impl Notifier {
                 fault,
                 installer,
                 portable,
+                withdrawals: std::sync::atomic::AtomicU64::new(0),
                 installing: Mutex::new(None),
             }),
         };
@@ -514,12 +522,19 @@ impl Notifier {
         let n = self.clone();
         let mut settings = self.inner.settings.clone();
         tokio::spawn(async move {
+            // A request left from before updates went Off or a pause began
+            // (this service wasn't running then) isn't replayed either.
+            let mut was_off = settings.borrow().mode == Mode::Off;
+            if was_off || n.paused() {
+                n.withdraw();
+            }
             loop {
                 let wait = n.until_scheduled();
                 tokio::select! {
                     _ = stop.changed() => return,
                     r = settings.changed() => {
                         if r.is_err() { return; }
+                        n.settings_changed(&mut was_off);
                         continue;
                     }
                     () = sleep(wait.map(|w| w.min(MAX_SLEEP))) => {}
@@ -556,6 +571,54 @@ impl Notifier {
 
     fn due(&self) -> bool {
         self.until_scheduled().is_some_and(|d| d.is_zero())
+    }
+
+    /// After a settings change: a switch to Off (not Off staying Off, nor
+    /// any other setting) withdraws.
+    fn settings_changed(&self, was_off: &mut bool) {
+        let off = self.inner.settings.borrow().mode == Mode::Off;
+        if off && !*was_off {
+            self.withdraw();
+        }
+        *was_off = off;
+    }
+
+    /// A pause is on now.
+    fn paused(&self) -> bool {
+        self.updater()
+            .paused_until
+            .is_some_and(|until| until > (self.inner.clock)())
+    }
+
+    /// Install now respects Off and a pause (owner §2.13; #677's flag):
+    /// when updates are switched Off or a pause starts, the request
+    /// waiting for the update helper goes, so the helper's boot retry
+    /// can't replay it. The epoch is bumped first; an install writing its
+    /// request meanwhile reads it after the write ([`Notifier::install_steps`]),
+    /// so either it sees the bump or this removal comes after its write.
+    /// One file's removal, so atomic. A request the helper has already
+    /// taken is past recall.
+    fn withdraw(&self) {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.inner.withdrawals.fetch_add(1, SeqCst);
+        self.remove_request();
+    }
+
+    fn remove_request(&self) {
+        let updates = self.inner.ctx.data_dir.join(super::msi::UPDATES);
+        let Ok(_pin) = crate::update::layout::pin_dir(&updates) else {
+            return;
+        };
+        match std::fs::remove_file(updates.join(super::msi::REQUEST)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                log_event!(
+                    UPDATE_STATE_UNSAVED,
+                    file = super::msi::REQUEST,
+                    error = lodestar_log::Error::io(&e)
+                );
+            }
+            _ => {}
+        }
     }
 
     fn updater(&self) -> Updater {
@@ -857,12 +920,18 @@ impl Notifier {
         }
         // The update helper's last answer, when it didn't install a newer
         // version (display only: this account can write that file too).
-        let missed = super::msi::answer(&ctx.data_dir).is_some_and(|a| {
+        // A blocked install (Windows wouldn't start the service; nothing
+        // changed, and the helper tries again) has its own words.
+        let missed = super::msi::answer(&ctx.data_dir).filter(|a| {
             a.outcome != "installed"
                 && crate::update::layout::parse_version(&a.version).is_some_and(|v| v > ctx.running)
         });
-        if missed {
-            notices.push("install_failed".into());
+        if let Some(a) = missed {
+            notices.push(if a.outcome == INSTALL_BLOCKED {
+                INSTALL_BLOCKED.into()
+            } else {
+                "install_failed".into()
+            });
         }
         notices.sort();
         notices.dedup();
@@ -1079,6 +1148,10 @@ impl Notifier {
     ) -> Result<(), &'static str> {
         let installer = self.inner.installer.as_ref().ok_or(NOT_BUILT_YET.code())?;
         let bin = self.bin().ok_or("bin_unavailable")?;
+        let epoch = self
+            .inner
+            .withdrawals
+            .load(std::sync::atomic::Ordering::SeqCst);
         (self.inner.publish)(UpdatesEvent {
             state: UpdatesState::Downloading,
             version: Some(v.to_string()),
@@ -1114,6 +1187,17 @@ impl Notifier {
                 );
                 "handover_failed"
             })?;
+        // Updates went Off or a pause started while this install ran: the
+        // request is taken back rather than left for the helper.
+        if self
+            .inner
+            .withdrawals
+            .load(std::sync::atomic::Ordering::SeqCst)
+            != epoch
+        {
+            self.remove_request();
+            return Err("withdrawn");
+        }
         (installer.start)().map_err(|_| "helper_unavailable")
     }
 
@@ -1161,6 +1245,9 @@ impl Notifier {
             self.write(bin.as_ref(), UPDATER_FILE, &u)?;
             state.durable = u;
             state.unreadable = false;
+        }
+        if days > 0 {
+            self.withdraw();
         }
         Ok(self.status())
     }
@@ -1545,6 +1632,28 @@ mod tests {
         /// isn't `dir`.
         portable: Option<Portable>,
         data: Option<PathBuf>,
+        /// Runs `withdraw` on this notifier when the download opens: a
+        /// switch to Off in the middle of an install.
+        mid_download: Option<Arc<std::sync::OnceLock<Notifier>>>,
+    }
+
+    /// A download source that withdraws when it's opened (see
+    /// `Env::mid_download`).
+    struct Hooked {
+        inner: Arc<crate::update::download::tests::Fake>,
+        notifier: Arc<std::sync::OnceLock<Notifier>>,
+    }
+
+    impl crate::update::download::Source for Hooked {
+        fn open<'a>(
+            &'a self,
+            url: &'a reqwest::Url,
+        ) -> BoxFuture<'a, Result<crate::update::download::Opened, CheckError>> {
+            if let Some(n) = self.notifier.get() {
+                n.withdraw();
+            }
+            self.inner.open(url)
+        }
     }
 
     impl Env {
@@ -1565,6 +1674,7 @@ mod tests {
                 started: Arc::default(),
                 portable: None,
                 data: None,
+                mid_download: None,
                 n: None,
             };
             e.n = Some(e.open(kind));
@@ -1614,8 +1724,16 @@ mod tests {
                     }),
                     installer: self.installer.then(|| {
                         let started = self.started.clone();
+                        let source: Arc<dyn crate::update::download::Source> =
+                            match &self.mid_download {
+                                Some(n) => Arc::new(Hooked {
+                                    inner: self.downloads.clone(),
+                                    notifier: n.clone(),
+                                }),
+                                None => self.downloads.clone(),
+                            };
                         super::super::msi::Installer {
-                            source: self.downloads.clone(),
+                            source,
                             start: Box::new(move || {
                                 started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                                 Ok(())
@@ -2171,6 +2289,199 @@ mod tests {
                 .iter()
                 .any(|u| u.contains("lodestar.zip"))
         );
+    }
+
+    /// The helper's last answer, for a newer version: a blocked install
+    /// has its own notice, any other miss `install_failed`, an install or
+    /// an older version none.
+    #[tokio::test]
+    async fn a_blocked_install_has_its_own_notice() {
+        let e = Env::installing();
+        let updates = e.dir.path().join(super::super::msi::UPDATES);
+        std::fs::create_dir_all(&updates).unwrap();
+        let answer = |outcome: &str, version: &str| {
+            let a = json!({"format": 1, "id": "ab".repeat(16), "version": version,
+                "outcome": outcome, "at": 1});
+            std::fs::write(updates.join(super::super::msi::RESULT), a.to_string()).unwrap();
+            Env::notices(&e.status())
+                .iter()
+                .map(|n| n.to_string())
+                .collect::<Vec<_>>()
+        };
+        let has = |n: &[String], c: &str| n.iter().any(|x| x == c);
+        let n = answer("install_blocked", "0.5.4");
+        assert!(
+            has(&n, "install_blocked") && !has(&n, "install_failed"),
+            "{n:?}"
+        );
+        let n = answer("install_failed", "0.5.4");
+        assert!(
+            has(&n, "install_failed") && !has(&n, "install_blocked"),
+            "{n:?}"
+        );
+        for (outcome, version) in [("installed", "0.5.4"), ("install_blocked", "0.5.3")] {
+            let n = answer(outcome, version);
+            assert!(
+                !has(&n, "install_blocked") && !has(&n, "install_failed"),
+                "{n:?}"
+            );
+        }
+    }
+
+    // ---- Install now respects Off and a pause (#677's flag) ----
+
+    const MSI_URL: &str =
+        "https://github.com/dvortsis/lodestar-v2/releases/download/v0.5.4/lodestar.msi";
+
+    fn request(e: &Env) -> PathBuf {
+        e.dir
+            .path()
+            .join(super::super::msi::UPDATES)
+            .join(super::super::msi::REQUEST)
+    }
+
+    /// Install now, handed to the helper: the request waits in `updates\`.
+    async fn handed_over(e: &Env) {
+        e.serve(Channel::Stable, vec![release_with("0.5.4", &["msi"])]);
+        e.downloads.serve(MSI_URL, 200, None, b"x");
+        e.check().await;
+        e.n()
+            .install_request("0.5.4".into(), InstallWhen::Now, false)
+            .await
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while e.started.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            assert!(Instant::now() < deadline, "the helper wasn't started");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(request(e).exists());
+    }
+
+    /// Updates switched Off: the waiting request goes, so the helper's
+    /// boot retry has nothing to replay.
+    #[tokio::test]
+    async fn switching_updates_off_takes_back_a_waiting_install() {
+        let e = Env::installing();
+        handed_over(&e).await;
+        let (stop, stopped) = watch::channel(false);
+        let task = e.n().spawn(stopped);
+        // Another setting changing leaves it.
+        e.settings.send_modify(|s| s.level = Level::All);
+        e.n().pause(0).unwrap();
+        e.settings.send_modify(|s| s.mode = Mode::Off);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while request(&e).exists() {
+            assert!(Instant::now() < deadline, "the request stayed after Off");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        stop.send(true).unwrap();
+        task.await.unwrap();
+    }
+
+    /// A setting other than the mode, Off staying Off, or a resume
+    /// leaves the request; only the switch to Off takes it.
+    #[tokio::test]
+    async fn only_a_switch_to_off_or_a_pause_takes_it_back() {
+        let e = Env::installing();
+        handed_over(&e).await;
+        let mut was_off = false;
+        e.settings.send_modify(|s| s.level = Level::All);
+        e.n().settings_changed(&mut was_off);
+        e.n().pause(0).unwrap();
+        assert!(request(&e).exists());
+        e.settings.send_modify(|s| s.mode = Mode::Off);
+        e.n().settings_changed(&mut was_off);
+        assert!(!request(&e).exists());
+        // Off staying Off: an Install now made meanwhile stays.
+        std::fs::write(request(&e), b"{}").unwrap();
+        e.settings.send_modify(|s| s.level = Level::Fixes);
+        e.n().settings_changed(&mut was_off);
+        assert!(request(&e).exists());
+    }
+
+    /// A pause starting takes it back at once.
+    #[tokio::test]
+    async fn a_pause_takes_back_a_waiting_install() {
+        let e = Env::installing();
+        handed_over(&e).await;
+        e.n().pause(7).unwrap();
+        assert!(!request(&e).exists());
+    }
+
+    /// A request left from before (this service wasn't running when
+    /// updates went Off or the pause began) goes when the notifier starts.
+    #[tokio::test]
+    async fn a_request_left_while_off_or_paused_goes_at_start() {
+        for paused in [false, true] {
+            let e = Env::installing();
+            handed_over(&e).await;
+            if paused {
+                e.n().pause(7).unwrap();
+                std::fs::write(request(&e), b"{}").unwrap();
+            } else {
+                e.settings.send_modify(|s| s.mode = Mode::Off);
+            }
+            let (stop, stopped) = watch::channel(false);
+            let task = e.n().spawn(stopped);
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while request(&e).exists() {
+                assert!(
+                    Instant::now() < deadline,
+                    "paused {paused}: the request stayed"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            stop.send(true).unwrap();
+            task.await.unwrap();
+        }
+    }
+
+    /// Off arriving while the install downloads: its request is taken
+    /// back after it's written, and the helper isn't started.
+    #[tokio::test]
+    async fn a_switch_off_during_the_download_takes_the_request_back() {
+        let mut e = Env::new(Mode::Notify, InstallKind::Msi);
+        e.installer = true;
+        let hook = Arc::new(std::sync::OnceLock::new());
+        e.mid_download = Some(hook.clone());
+        e.n = None;
+        e.n = Some(e.open(InstallKind::Msi));
+        hook.set(e.n().clone()).unwrap();
+        e.serve(Channel::Stable, vec![release_with("0.5.4", &["msi"])]);
+        e.downloads.serve(MSI_URL, 200, None, b"x");
+        e.check().await;
+        e.n()
+            .install_request("0.5.4".into(), InstallWhen::Now, false)
+            .await
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let withdrawn = || {
+            lock(&e.events).iter().any(|ev| {
+                ev.state == UpdatesState::Failed && ev.error.as_deref() == Some("withdrawn")
+            })
+        };
+        while !withdrawn() {
+            assert!(Instant::now() < deadline, "no withdrawal: {:?}", e.states());
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(!request(&e).exists());
+        assert_eq!(e.started.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// Install now asked for while updates are already Off still goes
+    /// ahead: only a switch to Off or a pause starting takes it back.
+    #[tokio::test]
+    async fn install_now_while_off_still_installs() {
+        let mut e = Env::new(Mode::Off, InstallKind::Msi);
+        e.installer = true;
+        e.n = None;
+        e.n = Some(e.open(InstallKind::Msi));
+        let (stop, stopped) = watch::channel(false);
+        let task = e.n().spawn(stopped);
+        handed_over(&e).await;
+        assert!(request(&e).exists());
+        stop.send(true).unwrap();
+        task.await.unwrap();
     }
 
     #[tokio::test]

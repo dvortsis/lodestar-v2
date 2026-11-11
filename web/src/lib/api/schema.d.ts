@@ -10506,7 +10506,11 @@ export interface components {
              *     read, so automatic updates are held; pausing or resuming saves a
              *     new state, which rewrites the file and ends the hold) and, on
              *     Windows, `install_failed` (the update helper's last answer, for a version
-             *     newer than the running one, wasn't `installed`; display only), …
+             *     newer than the running one, wasn't `installed`; display only) and
+             *     `install_blocked` (that answer was a blocked install: Windows
+             *     wouldn't start the service, nothing changed, and the helper tries
+             *     again at the next boot unless updates are switched off or paused
+             *     first; display only), …
              */
             notices: string[];
             pending: null | components["schemas"]["PendingInstall"];

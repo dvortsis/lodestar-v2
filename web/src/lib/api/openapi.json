@@ -25630,7 +25630,7 @@
             "items": {
               "type": "string"
             },
-            "description": "`revoked_key`, `clock_behind`, `clock_ahead`, `trust_damaged`,\n`pending_unwritable`, `bad_overlay`, `rolled_back`,\n`manifest_lapsed`, `channel_unavailable`, `check_not_saved` (the\nlast check's times couldn't be saved and won't survive a\nrestart), `updater_unreadable` (the saved update state couldn't be\nread, so automatic updates are held; pausing or resuming saves a\nnew state, which rewrites the file and ends the hold) and, on\nWindows, `install_failed` (the update helper's last answer, for a version\nnewer than the running one, wasn't `installed`; display only), …"
+            "description": "`revoked_key`, `clock_behind`, `clock_ahead`, `trust_damaged`,\n`pending_unwritable`, `bad_overlay`, `rolled_back`,\n`manifest_lapsed`, `channel_unavailable`, `check_not_saved` (the\nlast check's times couldn't be saved and won't survive a\nrestart), `updater_unreadable` (the saved update state couldn't be\nread, so automatic updates are held; pausing or resuming saves a\nnew state, which rewrites the file and ends the hold) and, on\nWindows, `install_failed` (the update helper's last answer, for a version\nnewer than the running one, wasn't `installed`; display only) and\n`install_blocked` (that answer was a blocked install: Windows\nwouldn't start the service, nothing changed, and the helper tries\nagain at the next boot unless updates are switched off or paused\nfirst; display only), …"
           },
           "pending": {
             "oneOf": [
