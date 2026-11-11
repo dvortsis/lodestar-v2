@@ -6714,7 +6714,8 @@
     "X-flake-portable-restart: PR #662 open (81fe7bb3), runner subagent; Opus review running; merge first, then PRs red only on a_portable_restart_* may use \u00a72.18. next runner PR: slices.yaml entry (owns system/restart.rs, windows/mod.rs [not spawn()], tests/windows_service.rs, its decisions file) + placement",
     "OP-5 first-run check: the agent's helper fetch is unauthenticated (GitHub's 60/h limit from a shared egress IP); from rv-655 N4",
     "X-updates-raw-codes (Sonnet, later): Updates screen shows install_kind_unknown, data_folder_unchecked and the install_failed notice as raw codes; plus rv-657 nits: dto/updates.rs install_kind_unknown wording ('couldn't tell'), WindowsHelper doc 'kept for clients and other platforms'",
-    "next runner PR: X-updates-api-text owns += UpdatesScreen.svelte + updates.test.ts (runner-approved on #657)"
+    "next runner PR: X-updates-api-text owns += UpdatesScreen.svelte + updates.test.ts (runner-approved on #657)",
+    "X-flake-portable-restart-2 (Opus, small, after #662): from rv-662: Wait-Process instead of WaitForExit (works under Constrained Language Mode); a started marker so slow PowerShell start doesn't eat the 30 s; a stderr line when the wait is skipped; decisions-file note that the Windows test adds ~30 s"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7567,7 +7568,7 @@
     }
   ],
   "heartbeat": "2026-11-11T04:06Z",
-  "updated": "2026-11-11T06:13Z",
+  "updated": "2026-11-11T06:25Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
