@@ -555,6 +555,7 @@ placement:
   - E-v06-companions
   - P-v06-companions
   - CMP-*
+  - X-cmp-egress-prelaunch
   - X-cmp0-polish
   - X-cmp4b-mounts
   - X-macos-pidfile-fifo
