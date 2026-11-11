@@ -37,7 +37,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lodestar_integrations::secret::{SealedSecret, Secret, SecretStore};
-use lodestar_sources::egress::{DownReason, PluginEgress, RouteState};
+use lodestar_sources::egress::{DownReason, PluginEgress, RouteKind, RouteState};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -55,7 +55,7 @@ use crate::log_events::{INSTALL_FAILED, INSTALLED, RECOVERED, REMOVED, ROLLED_BA
 use crate::state::{self, Op, OpKind, Record, StateError, Step};
 use crate::supervise::egress::{self, Follows, Gated, Route};
 use crate::supervise::{
-    Companion, Confinement, LogRing, Probe, Sandbox, SpawnSpec, State, Status, Supervisor,
+    Companion, Confinement, EnvName, LogRing, Probe, Sandbox, SpawnSpec, State, Status, Supervisor,
 };
 use crate::verify;
 
@@ -1462,11 +1462,14 @@ impl Manager {
             field: field_name(id),
             secret,
         };
-        self.0
-            .p
-            .api
-            .configure(id, target, InstallReceipt::new(target.clone()), &opened)
+        let configured =
+            self.0
+                .p
+                .api
+                .configure(id, target, InstallReceipt::new(target.clone()), &opened);
+        tokio::time::timeout(LIVE_DEADLINE, configured)
             .await
+            .map_err(|_| failed("configure")("timed_out"))?
             .map_err(|e| failed("configure")(configure::code(&e)))
     }
 
@@ -1559,6 +1562,10 @@ impl LiveOp {
 /// the configuration's requests, with room to spare. The stop before it
 /// is bounded by the supervisor.
 pub const LIVE_DEADLINE: Duration = Duration::from_secs(5 * 60);
+
+/// How often a follower that has to configure its companion looks for the
+/// slot while an operation holds it.
+const SLOT_POLL: Duration = Duration::from_millis(250);
 
 /// A restart or regenerate under way, in a task of its own that holds the
 /// companion's slot until it's done (as [`Manager::install`]). Dropping it
@@ -1670,6 +1677,26 @@ impl Manager {
         result
     }
 
+    /// The companion's slot for run `run`, waited for while an operation
+    /// holds it: `None` once a later run has begun (that operation owns the
+    /// companion now), `busy` if it's still held after [`LIVE_DEADLINE`].
+    async fn slot_for(&self, id: &CompanionId, run: u64) -> Result<Option<Slot>, ManagerError> {
+        let give_up = tokio::time::Instant::now() + LIVE_DEADLINE;
+        loop {
+            if !self.0.is_run(id, run) {
+                return Ok(None);
+            }
+            if let Ok(slot) = self.0.claim(id) {
+                // Checked again under the slot: nothing can begin a run now.
+                return Ok(self.0.is_run(id, run).then_some(slot));
+            }
+            if tokio::time::Instant::now() >= give_up {
+                return Err(Refusal::Busy.into());
+            }
+            tokio::time::sleep(SLOT_POLL).await;
+        }
+    }
+
     /// Stops `id`, ending the run any follower publishes for.
     async fn halt(&self, id: &CompanionId) {
         self.0.next_run(id);
@@ -1723,15 +1750,22 @@ impl Manager {
                                 return;
                             };
                             // Under the slot, and only for the current
-                            // run: an operation under way owns it now.
-                            let Ok(_slot) = m.claim(id) else {
-                                return;
-                            };
-                            if !m.is_run(id, run) {
-                                return;
-                            }
+                            // run (#660's L1): an operation that holds the
+                            // slot is waited for, never left to leave it
+                            // running unconfigured. One that starts a new
+                            // run takes it over; past the deadline it's
+                            // stopped.
                             let me = Manager(m);
-                            if let Err(e) = me.configure_now(id, &target).await {
+                            // The slot is kept until any stop below.
+                            let (_slot, outcome) = match me.slot_for(id, run).await {
+                                Ok(Some(slot)) => {
+                                    let r = me.configure_now(id, &target).await;
+                                    (Some(slot), r)
+                                }
+                                Ok(None) => return,
+                                Err(e) => (None, Err(e)),
+                            };
+                            if let Err(e) = outcome {
                                 // Q8: never left running unconfigured,
                                 // where its bind or proxy may have drifted.
                                 me.0.publish_run(id, run, &version, Health::Unhealthy);
@@ -1819,7 +1853,49 @@ pub const HEALTH_DEADLINE: Duration = Duration::from_secs(120);
 /// implements it). `None`: there's no route it may follow, and it isn't
 /// started (Q8: never on a route nobody chose).
 pub trait Routes: Send + Sync {
-    fn route<'a>(&'a self, id: &'a CompanionId) -> BoxFuture<'a, Option<Route>>;
+    fn route<'a>(&'a self, id: &'a CompanionId) -> BoxFuture<'a, Option<Prelaunch>>;
+}
+
+/// A start's route: its live state for the gate, and what the companion
+/// is launched with so it follows the route from its first instruction
+/// (X-cmp-egress-prelaunch), before CMP-8b configures it.
+#[derive(Debug, Clone)]
+pub struct Prelaunch {
+    pub route: Route,
+    /// The SOCKS5 proxy of a SOCKS5 route, when its address is known.
+    pub proxy: Option<configure::Socks5Proxy>,
+}
+
+/// The proxy variables every HTTP stack a companion uses reads at start
+/// (.NET's `HttpClient.DefaultProxy`, which Prowlarr's clients use while
+/// its own proxy setting is empty, on Linux and Windows alike). Upper case:
+/// .NET reads it on both.
+const PROXY_VARS: [&str; 3] = ["ALL_PROXY", "HTTP_PROXY", "HTTPS_PROXY"];
+
+/// Loopback only, which never leaves the machine: a companion's own WebUI
+/// and other companions on this machine.
+const NO_PROXY: &str = "localhost,127.0.0.1,::1";
+
+/// The route in the companion's launch environment, or `None` when it
+/// can't be expressed there, and the companion mustn't start: Q8's "never
+/// direct, then fixed". Direct needs nothing. A SOCKS5 route is the proxy
+/// variables (`socks5://`, so names are resolved by the proxy). Interface
+/// and bind-address routes have no launch form yet: no companion setting
+/// can choose them (sources offer direct and SOCKS5 only).
+pub fn launch_env(p: &Prelaunch) -> Option<Vec<(EnvName, OsString)>> {
+    match (p.route.kind, &p.proxy) {
+        (RouteKind::Direct, _) => Some(Vec::new()),
+        (RouteKind::Socks5, Some(proxy)) => {
+            let url = OsString::from(format!("socks5://{}", proxy.get()));
+            let mut env: Vec<(EnvName, OsString)> = PROXY_VARS
+                .iter()
+                .map(|v| Some((EnvName::parse(v).ok()?, url.clone())))
+                .collect::<Option<_>>()?;
+            env.push((EnvName::parse("NO_PROXY").ok()?, NO_PROXY.into()));
+            Some(env)
+        }
+        _ => None,
+    }
 }
 
 /// The real [`Run`]: CMP-4a's supervisor inside CMP-4b's sandbox, each
@@ -1847,6 +1923,8 @@ struct Running {
     status: Option<watch::Receiver<Status>>,
     /// Its output, kept after it stops until it's started again.
     logs: Option<LogRing>,
+    /// The route variables it was launched with ([`launch_env`]).
+    env: Vec<(EnvName, OsString)>,
 }
 
 impl Supervised {
@@ -1884,6 +1962,17 @@ impl Supervised {
             .map(LogRing::lines)
     }
 
+    /// The route variables it was last launched with: none on a direct
+    /// route, the proxy on a SOCKS5 one. No secret is among them.
+    pub fn launched_env(&self, id: &CompanionId) -> Option<Vec<(String, OsString)>> {
+        self.running().get(id).map(|r| {
+            r.env
+                .iter()
+                .map(|(k, v)| (k.as_str().to_owned(), v.clone()))
+                .collect()
+        })
+    }
+
     /// Stops every companion, each bounded as [`Run::stop`], and starts
     /// nothing after. For serve's shutdown.
     pub async fn shutdown(&self) {
@@ -1906,12 +1995,17 @@ impl Run for Supervised {
     fn start(&self, l: Launch) -> BoxFuture<'_, Result<(), &'static str>> {
         Box::pin(async move {
             let health = crate::detect::health(&l.id).ok_or("no_health")?;
-            let route = self.routes.route(&l.id).await.ok_or("no_route")?;
+            let pre = self.routes.route(&l.id).await.ok_or("no_route")?;
+            // A route it can't follow at all is refused as before; one it
+            // could follow but can't be launched on, likewise.
+            egress::decide(Follows::of(&l.id), pre.route.kind).map_err(|e| e.code())?;
+            let env = launch_env(&pre).ok_or("route_not_expressible")?;
+            let route = pre.route;
             let spec = SpawnSpec {
                 id: l.id.clone(),
                 executable: l.executable,
                 args: l.args,
-                env: Vec::new(),
+                env,
                 data_dir: self.data.clone(),
                 allow_privileged: false,
             };
@@ -1920,6 +2014,13 @@ impl Run for Supervised {
                 downloads: self.downloads.clone(),
             };
             let (spec, _report) = self.sandbox.prepare(spec, &conf).map_err(|e| e.code())?;
+            // What it's really launched with, as the sandbox passes it on.
+            let env: Vec<(EnvName, OsString)> = spec
+                .env
+                .iter()
+                .filter(|(k, _)| PROXY_VARS.contains(&k.as_str()) || k.as_str() == "NO_PROXY")
+                .cloned()
+                .collect();
             let c = Companion {
                 spawn: spec,
                 depends_on: Vec::new(),
@@ -1944,6 +2045,7 @@ impl Run for Supervised {
                 route: Some(state),
                 status: sup.status(&l.id),
                 logs: sup.logs(&l.id),
+                env,
             };
             self.running().insert(l.id, running);
             Ok(())

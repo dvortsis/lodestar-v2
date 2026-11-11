@@ -11,14 +11,19 @@ use std::time::Duration;
 use lodestar_companions::adapter::{
     AdapterError, BoxFuture, GuardedHttp, ProbeRequest, ProbeResponse, Target,
 };
+use lodestar_companions::configure::Socks5Proxy;
 use lodestar_companions::inputs::{CompanionId, PortNumber};
-use lodestar_companions::manager::{Launch, Routes, Run, Supervised};
+use lodestar_companions::manager::{Launch, Prelaunch, Routes, Run, Supervised, launch_env};
 use lodestar_companions::supervise::egress::Route;
 use lodestar_companions::supervise::{Launcher, Limits, Sandbox, State, Supervisor, Timings};
 use lodestar_sources::egress::{DownReason, RouteKind, RouteState};
 use tokio::sync::watch;
 
 const WAIT: Duration = Duration::from_secs(10);
+
+fn proxy() -> Socks5Proxy {
+    Socks5Proxy::new("10.8.0.1:1080".parse().unwrap()).unwrap()
+}
 
 /// Never reached: nothing here runs.
 struct NoHttp;
@@ -33,10 +38,10 @@ impl GuardedHttp for NoHttp {
 }
 
 /// One route for every companion, or none.
-struct Fixed(Mutex<Option<Route>>);
+struct Fixed(Mutex<Option<Prelaunch>>);
 
 impl Routes for Fixed {
-    fn route<'a>(&'a self, _: &'a CompanionId) -> BoxFuture<'a, Option<Route>> {
+    fn route<'a>(&'a self, _: &'a CompanionId) -> BoxFuture<'a, Option<Prelaunch>> {
         let r = self.0.lock().unwrap().clone();
         Box::pin(async move { r })
     }
@@ -52,7 +57,10 @@ struct World {
 impl World {
     fn new(kind: Option<RouteKind>) -> World {
         let (state, rx) = watch::channel(RouteState::Down(DownReason::ProxyUnreachable));
-        let route = kind.map(|kind| Route { kind, state: rx });
+        let route = kind.map(|kind| Prelaunch {
+            route: Route { kind, state: rx },
+            proxy: (kind == RouteKind::Socks5).then(proxy),
+        });
         World {
             data: tempfile::tempdir().unwrap(),
             routes: Arc::new(Fixed(Mutex::new(route))),
@@ -132,6 +140,13 @@ async fn a_held_companion_fails_its_health_check_at_once() {
     s.start(l).await.unwrap();
     let status = s.status(&id).expect("not supervised");
     assert_eq!(status.borrow().state, State::Held);
+    // It's launched on its proxy (X-cmp-egress-prelaunch).
+    let env = s.launched_env(&id).unwrap();
+    assert!(
+        env.iter()
+            .any(|(k, v)| k == "ALL_PROXY" && v.to_str() == Some("socks5://10.8.0.1:1080")),
+        "{env:?}"
+    );
     let healthy = tokio::time::timeout(WAIT, s.healthy(&id, &target)).await;
     assert_eq!(
         healthy,
@@ -164,4 +179,62 @@ async fn nothing_starts_after_shutdown() {
     let again = w.launch("prowlarr", 9696);
     assert_eq!(s.start(again).await, Err("shutting_down"));
     assert!(s.status(&id).is_none());
+}
+
+/// X-cmp-egress-prelaunch: a SOCKS5 route whose proxy isn't known can't be
+/// put into the companion's launch, so it isn't started at all: never
+/// "direct, then configured".
+#[tokio::test]
+async fn a_route_that_cant_be_launched_on_is_refused() {
+    let w = World::new(Some(RouteKind::Socks5));
+    if let Some(p) = w.routes.0.lock().unwrap().as_mut() {
+        p.proxy = None;
+    }
+    let s = w.supervised().await;
+    let l = w.launch("prowlarr", 9696);
+    let id = l.id.clone();
+    assert_eq!(s.start(l).await, Err("route_not_expressible"));
+    assert!(s.status(&id).is_none());
+}
+
+/// The launch environment carries the route: on SOCKS5, every proxy
+/// variable .NET reads, with the proxy resolving names, and only loopback
+/// bypassed; direct carries nothing; a kind with no launch form refuses.
+#[test]
+fn the_launch_environment_carries_the_route() {
+    let (_tx, rx) = watch::channel(RouteState::Up);
+    let pre = |kind, proxy| Prelaunch {
+        route: Route {
+            kind,
+            state: rx.clone(),
+        },
+        proxy,
+    };
+    let env = |p: &Prelaunch| {
+        launch_env(p).map(|e| {
+            e.into_iter()
+                .map(|(k, v)| (k.as_str().to_owned(), v.into_string().unwrap()))
+                .collect::<Vec<_>>()
+        })
+    };
+    let url = "socks5://10.8.0.1:1080".to_owned();
+    assert_eq!(
+        env(&pre(RouteKind::Socks5, Some(proxy()))),
+        Some(vec![
+            ("ALL_PROXY".to_owned(), url.clone()),
+            ("HTTP_PROXY".to_owned(), url.clone()),
+            ("HTTPS_PROXY".to_owned(), url),
+            ("NO_PROXY".to_owned(), "localhost,127.0.0.1,::1".to_owned()),
+        ])
+    );
+    let v6 = Socks5Proxy::new("[fd00::1]:1080".parse().unwrap()).unwrap();
+    let got = env(&pre(RouteKind::Socks5, Some(v6))).unwrap();
+    assert_eq!(got[0].1, "socks5://[fd00::1]:1080");
+    assert_eq!(
+        env(&pre(RouteKind::Direct, Some(proxy()))),
+        Some(Vec::new())
+    );
+    assert_eq!(env(&pre(RouteKind::Socks5, None)), None);
+    assert_eq!(env(&pre(RouteKind::Interface, None)), None);
+    assert_eq!(env(&pre(RouteKind::BindAddress, None)), None);
 }
