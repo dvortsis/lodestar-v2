@@ -6821,11 +6821,6 @@
       "from": "rv-699-85d8d267 I3"
     },
     {
-      "id": "X-win-upd-stop-wait",
-      "what": "services.rs Handles::shutdown: give the updates task a bounded wait (timeout 1-2 s) before abort, so the Off-just-before-stop last look completes deterministically; then tighten the X-win-upd-window decisions wording.",
-      "from": "rv-693-5e260f33 I1"
-    },
-    {
       "id": "slices.yaml entries",
       "what": "Add placement + entries for X-cmp9b-catch, X-spool-damage-log, X-win-upd-stop-wait, X-worker-settings-pointer in next runner PR"
     },
@@ -7615,11 +7610,11 @@
       },
       {
         "slot": 5,
-        "slice": "X-win-upd-window",
+        "slice": "X-win-upd-stop-wait",
         "role": "build",
         "agent": "claude",
-        "doing": "#693 MERGE; text-only reword round (decisions:8, check.rs:595, residual), then merge",
-        "since": "2026-11-11T12:16:21Z"
+        "doing": "Handles::shutdown bounded wait before abort + deterministic test",
+        "since": "2026-11-11T18:19Z"
       },
       {
         "slot": 6,
@@ -7830,6 +7825,12 @@
       "slice": "PK-ops",
       "sha": "912934ca95479f865d28e06c9e2df7a85dcf47f5",
       "at": "2026-11-11T18:07Z"
+    },
+    {
+      "pr": 693,
+      "slice": "X-win-upd-window",
+      "sha": "bc4577548e6d9615eb729a5aa69b4ce113f9194b",
+      "at": "2026-11-11T18:19Z"
     }
   ]
 }
