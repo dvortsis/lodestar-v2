@@ -37,10 +37,11 @@ use lodestar_store::{
 use utoipa::OpenApi;
 
 pub use crate::dto::insights::{
-    Annotation, Bucket, Conversion, EventsQuery, EventsResponse, Fix, FunnelCohort, FunnelStages,
-    FunnelTotal, Health, HealthState, ImportNote, InsightsException, InsightsRange, Kpi,
-    OverviewQuery, OverviewResponse, PausedSpan, PreviousKpi, PreviousPeriod, PreviousStages,
-    SegmentCount, SegmentMover, SegmentYield, Segments, Serve, Severity, Stages, Stale, TrendPoint,
+    Annotation, Bucket, Conversion, DataFilesystem, DataFsKind, EventsQuery, EventsResponse, Fix,
+    FunnelCohort, FunnelStages, FunnelTotal, Health, HealthState, ImportNote, InsightsException,
+    InsightsRange, Kpi, OverviewQuery, OverviewResponse, PausedSpan, PortFamily, PortPressure,
+    PreviousKpi, PreviousPeriod, PreviousStages, SegmentCount, SegmentMover, SegmentYield,
+    Segments, Serve, Severity, Stages, Stale, TrendPoint,
 };
 use crate::error::{ApiError, ApiResult, internal};
 
@@ -260,6 +261,64 @@ pub trait InsightsSource: Send + Sync + fmt::Debug {
     /// null by default.
     fn stage_snapshot(&self) -> StageSnapshot {
         StageSnapshot::default()
+    }
+    /// Exceptions about the machine the server runs on
+    /// ([`data_filesystem`], [`ephemeral_ports`]) at `now`. Called on a
+    /// blocking thread, outside the store's lock, for every overview: the
+    /// implementer caches its checks (the binary re-checks at most
+    /// hourly). None by default.
+    fn host_exceptions(&self, now: i64) -> Vec<InsightsException> {
+        let _ = now;
+        Vec::new()
+    }
+}
+
+/// `data_filesystem`: the data folder is on a filesystem that's slow or
+/// unsafe for the database and the index (architecture §11). An error on
+/// a network filesystem, whose locking can let the database be damaged; a
+/// warning on FUSE, which is slow. The fix is the guide's page on where
+/// to keep the data folder.
+pub fn data_filesystem(fs: DataFilesystem, since: i64) -> InsightsException {
+    InsightsException {
+        fix: Fix {
+            kind: "guide".into(),
+            target: "data_folder".into(),
+        },
+        kind: "data_filesystem".into(),
+        rows: Vec::new(),
+        counts: None,
+        severity: if fs.kind == DataFsKind::Network {
+            Severity::Error
+        } else {
+            Severity::Warning
+        },
+        filesystem: Some(fs),
+        ports: None,
+        since,
+        unit: None,
+        value: None,
+    }
+}
+
+/// `ephemeral_ports`: Windows has too few ports left for Lodestar's
+/// outgoing connections (architecture §11); `value` is the ports left.
+/// The fix is the `netsh` range in `ports`, with the guide's page on the
+/// port range.
+pub fn ephemeral_ports(p: PortPressure, since: i64) -> InsightsException {
+    InsightsException {
+        fix: Fix {
+            kind: "guide".into(),
+            target: "windows_ports".into(),
+        },
+        kind: "ephemeral_ports".into(),
+        rows: Vec::new(),
+        counts: None,
+        severity: Severity::Warning,
+        filesystem: None,
+        since,
+        unit: Some("ports".into()),
+        value: Some(f64::from(p.available)),
+        ports: Some(p),
     }
 }
 
@@ -1419,6 +1478,8 @@ fn stalled(rows: &NowRows, now_h: i64) -> Option<InsightsException> {
         kind: "cohort_stalled".into(),
         rows: Vec::new(),
         counts: None,
+        filesystem: None,
+        ports: None,
         severity: Severity::Warning,
         since: from * 3600,
         unit: Some("torrents".into()),
@@ -1469,6 +1530,8 @@ fn yield_below_baseline(rows: &[CohortCount], now_h: i64) -> Option<InsightsExce
         kind: "yield_below_baseline".into(),
         rows: Vec::new(),
         counts: None,
+        filesystem: None,
+        ports: None,
         severity: if recent_yield < base_yield * BASELINE_ERROR {
             Severity::Error
         } else {
@@ -1756,6 +1819,8 @@ fn apply_snapshot(r: &mut OverviewResponse, s: Snapshot) {
                 kind: "index_lag".into(),
                 rows: Vec::new(),
                 counts: None,
+                filesystem: None,
+                ports: None,
                 severity: if lag > INDEX_LAG_ERROR_S {
                     Severity::Error
                 } else {
@@ -1846,8 +1911,15 @@ pub(crate) async fn overview_response(
     };
     let adult = s.adult.shown();
     let reader = s.reader.clone();
-    type Read = (OverviewResponse, Option<crate::filters::Rejudged>);
-    let (mut response, rejudged) = tokio::task::spawn_blocking(move || -> ApiResult<Read> {
+    type Read = (
+        OverviewResponse,
+        Option<crate::filters::Rejudged>,
+        Vec<InsightsException>,
+    );
+    let (mut response, rejudged, host) = tokio::task::spawn_blocking(move || -> ApiResult<Read> {
+        // Before the store's lock: a due re-check reads the mount table or
+        // runs `netsh`.
+        let host = source.host_exceptions(now);
         let store = reader.lock().unwrap_or_else(PoisonError::into_inner);
         let rejudged = crate::filters::stand_in_notice(&store, now);
         // Before the snapshot begins, so sums read from it are never kept
@@ -1863,7 +1935,7 @@ pub(crate) async fn overview_response(
                 ))
             })
             .map_err(internal)??;
-        Ok((response, rejudged))
+        Ok((response, rejudged, host))
     })
     .await
     .map_err(internal)??;
@@ -1878,6 +1950,7 @@ pub(crate) async fn overview_response(
     if let Some(r) = rejudged {
         response.exceptions.push(stand_ins_rejudged(r));
     }
+    response.exceptions.extend(host);
     Ok(response)
 }
 
@@ -1899,6 +1972,8 @@ fn stand_ins_rejudged(r: crate::filters::Rejudged) -> InsightsException {
             dropped: r.dropped as u64,
             hidden: r.hidden as u64,
         }),
+        filesystem: None,
+        ports: None,
         severity: Severity::Warning,
         since: r.at,
         unit: Some("torrents".into()),
@@ -1930,6 +2005,8 @@ fn unreadable_rows(rows: &[lodestar_filter::load::Unreadable]) -> Option<Insight
         kind: "filter_rows_unreadable".into(),
         rows: labels,
         counts: None,
+        filesystem: None,
+        ports: None,
         severity: if rows.iter().any(|u| u.fails_closed) {
             Severity::Error
         } else {

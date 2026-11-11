@@ -11,8 +11,10 @@
 //! `\\server\share`, and a mapped drive letter canonicalises to the same
 //! `\\?\UNC\…` form.
 //!
-//! [`detect`] is public for `/stats` and the first-run wizard; the
-//! server only logs [`warn_at_start`] for now.
+//! [`detect`] is public for `/stats`, `/system` and the first-run
+//! wizard. The server logs [`warn_at_start`], and Insights lists a risky
+//! folder as a `data_filesystem` exception ([`FsReport::exception_detail`]),
+//! re-checked at most hourly.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -28,7 +30,9 @@ pub enum FsKind {
     UnraidUserShare,
     /// Another FUSE filesystem (mergerfs, rclone, sshfs, ntfs-3g, …).
     Fuse,
-    /// A network filesystem: NFS, SMB/CIFS, a Windows network drive, ….
+    /// A network or shared-folder filesystem: NFS, SMB/CIFS, a Windows
+    /// network drive, 9p (WSL2 or Docker Desktop sharing a Windows drive),
+    /// ….
     Network,
     /// The platform gives no answer (no mount table, say).
     Unknown,
@@ -55,6 +59,23 @@ impl FsReport {
         )
     }
 
+    /// The `data_filesystem` exception's detail for Insights; `None` when
+    /// the folder isn't [risky](FsReport::is_risky).
+    pub fn exception_detail(&self) -> Option<lodestar_api::insights::DataFilesystem> {
+        use lodestar_api::insights::DataFsKind;
+        let kind = match self.kind {
+            FsKind::UnraidUserShare => DataFsKind::UnraidUserShare,
+            FsKind::Fuse => DataFsKind::Fuse,
+            FsKind::Network => DataFsKind::Network,
+            FsKind::Local | FsKind::Unknown => return None,
+        };
+        Some(lodestar_api::insights::DataFilesystem {
+            kind,
+            path: self.path.display().to_string(),
+            fs_type: self.fs_type.clone(),
+        })
+    }
+
     /// What's wrong and the safe alternative, for the log, `/stats` and
     /// the wizard; `None` when nothing is.
     pub fn warning(&self) -> Option<String> {
@@ -77,9 +98,10 @@ impl FsReport {
                  on a local disk, ideally an SSD."
             ),
             FsKind::Network => format!(
-                "The data folder {path} is on a network filesystem{fs}. Its file locking isn't \
-                 reliable enough for the database, which can be damaged. Keep the data folder \
-                 on a local disk, ideally an SSD, and send only backups to the share."
+                "The data folder {path} is on a network or shared-folder filesystem{fs}. Its \
+                 file locking isn't reliable enough for the database, which can be damaged. Keep \
+                 the data folder on a local disk, ideally an SSD, and send only backups to the \
+                 share."
             ),
             FsKind::Local | FsKind::Unknown => return None,
         })
@@ -339,6 +361,36 @@ mod tests {
             from_mountinfo(Path::new("/mnt/user/appdata/lodestar"), exclusive).kind,
             FsKind::Local
         );
+    }
+
+    #[test]
+    fn risky_folders_become_an_insights_exception() {
+        use lodestar_api::insights::DataFsKind;
+        let detail = |path: &str| at(path).exception_detail();
+        let shfs = detail("/data").unwrap();
+        assert_eq!(
+            (shfs.kind, shfs.path.as_str(), shfs.fs_type.as_deref()),
+            (DataFsKind::UnraidUserShare, "/data", Some("fuse.shfs"))
+        );
+        let cifs = detail("/mnt/my share/lodestar").unwrap();
+        assert_eq!(
+            (cifs.kind, cifs.fs_type.as_deref()),
+            (DataFsKind::Network, Some("cifs"))
+        );
+        let nfs = detail("/srv/nfs/data").unwrap();
+        assert_eq!(
+            (nfs.kind, nfs.fs_type.as_deref()),
+            (DataFsKind::Network, Some("nfs4"))
+        );
+        let fuse = from_mountinfo(
+            Path::new("/pool/lodestar"),
+            "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n2 1 0:40 / /pool rw - fuse.mergerfs pool rw",
+        );
+        assert_eq!(fuse.exception_detail().unwrap().kind, DataFsKind::Fuse);
+        // A pool path under the share, the overlay root, and no answer at all: safe.
+        assert_eq!(detail("/data/hot/x"), None);
+        assert_eq!(detail("/var/lib/lodestar"), None);
+        assert_eq!(by_path("/a".into()).exception_detail(), None);
     }
 
     #[test]
