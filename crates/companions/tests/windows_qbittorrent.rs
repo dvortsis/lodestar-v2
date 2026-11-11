@@ -756,3 +756,29 @@ proptest::proptest! {
         }
     }
 }
+
+/// The gated plan signs in exactly once, and reads the version on that
+/// session: no sign-in of the gate's own.
+#[tokio::test]
+async fn the_gated_plan_signs_in_exactly_once() {
+    let gate = WindowsQBittorrent::new(pinned("5.0.3"));
+    let http = fake("5.0.3");
+    // CMP-5g's plan holds the pasted password as the credential too.
+    let creds = Creds(PASTED);
+    let t = loopback();
+    gate.plan(&http, &t, &input(&creds, &t)).await.unwrap();
+    let s = http.0.lock().unwrap();
+    let logins = s
+        .seen
+        .iter()
+        .filter(|r| r.path == "/api/v2/auth/login")
+        .count();
+    assert_eq!(logins, 1);
+    assert_eq!(s.failed_logins, 0);
+    let signed_in_version = s
+        .seen
+        .iter()
+        .filter(|r| r.path == "/api/v2/app/version" && r.headers.iter().any(|(n, _)| n == "cookie"))
+        .count();
+    assert_eq!(signed_in_version, 1);
+}
