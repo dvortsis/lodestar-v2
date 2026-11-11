@@ -46,11 +46,20 @@ MARK = re.compile(r"ghmock-(run|attempt|post|other) ([A-Za-z0-9+/=]{1,1000000})"
 FORGED = re.compile(r"ghmock-(?:run|attempt|post|other)\s+[A-Za-z0-9+/=]{8,}")
 HEREDOC = re.compile(r"(?<!<)<<(?!<)-?[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1[^\n]*\n(.*?)(?:^[ \t]*\2[ \t]*$|\Z)",
                      re.S | re.M)
-START = r"(?:^|[;&|(]|\$\()\s*(?:sudo\s+|exec\s+|nohup\s+|xargs\s+|timeout\s+\S+\s+|env\s+(?:\S+=\S*\s+)*)?"
-NET_CMD = re.compile(START + r"(curl|wget|ssh|scp|sftp|nc|ncat|netcat|socat|telnet|ftp|rsync|openssl\s+s_client|gh|pip3?"
-                     r"|npm|npx|yarn|node|perl|ruby|php|git\s+(?:clone|fetch|pull|push|ls-remote|archive|submodule|remote))\b",
-                     re.M)
-NET_CODE = re.compile(r"urllib\.request|\burlopen\s*\(|http\.client|from\s+urllib\s+import|import\s+(?:requests|httpx|socket)\b"
+# Where a command can start, for the environment reads: after a separator or a
+# keyword, behind any wrapper, environment prefix or path.
+START = (r"(?:^|[;&|({!]|\$\(|\b(?:then|do|else|elif)\b)\s*"
+         r"(?:(?:sudo|exec|nohup|xargs|time|nice|command|builtin|timeout\s+\S+|env(?:\s+-\S+)*|\S+=\S*)\s+)*"
+         r"[\\\"']?(?:\S*/)?")
+# A network tool's name as a word anywhere in code, however it's started: by
+# path, quoted or escaped, through a wrapper, or inside `bash -c` (rv-673).
+NET_CMD = re.compile(r"(?<![\w.-])(curl|wget|ssh|scp|sftp|nc|ncat|netcat|socat|telnet|ftp|rsync|s_client|gh|pip[0-9.]*"
+                     r"|npm|npx|yarn|node|nodejs|perl|ruby|php|lynx|aria2c|httpie|http)(?![\w.-])"
+                     r"|\bgit\b[^\n;&|]*?\b(?:clone|fetch|pull|push|ls-remote|archive|submodule|remote)\b")
+NET_MODULES = {"socket", "requests", "httpx", "urllib", "urllib3", "http", "aiohttp", "ftplib", "smtplib", "telnetlib",
+               "xmlrpc", "websocket", "websockets", "paramiko", "pycurl"}
+IMPORT = re.compile(r"\bimport\s+([\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+(?:\s+as\s+\w+)?)*)|\bfrom\s+([\w.]+)\s+import\b")
+NET_CODE = re.compile(r"urllib\.request|\burlopen\s*\(|http\.client"
                       r"|\brequests\.(?:get|post|put|patch|delete|head|request|Session)\b|\bhttpx\.\w+\s*\("
                       r"|\bsocket\.(?:socket|create_connection)\s*\(|/dev/(?:tcp|udp)/|-m\s+pip\b")
 NET_ERROR = re.compile(r"Could not resolve host|Could not resolve hostname|Failed to connect to|Connection refused"
@@ -153,10 +162,21 @@ def _pr(d: dict) -> int | None:
         return None
 
 
+def _imports_network(code: str) -> bool:
+    for m in IMPORT.finditer(code):
+        names = [m.group(2)] if m.group(2) else [n.split()[0] for n in m.group(1).split(",")]
+        if any(n.split(".")[0] in NET_MODULES for n in names if n):
+            return True
+    return False
+
+
 def _network(code: str) -> bool:
-    """Any network command at all: the harness's prompt fetches nothing, and
-    the helper is the only way to post. Only `curl --version` is let by."""
-    if NET_CODE.search(code):
+    """Any network tool or networking code anywhere in code: the harness's
+    prompt fetches nothing, and the helper is the only way to post. The
+    strict route (the runner, rv-673): a tool's name counts wherever it is,
+    `bash -c '…'` arguments and quoted words included. Only a bare
+    `curl --version` line is let by."""
+    if NET_CODE.search(code) or _imports_network(code):
         return True
     return any(NET_CMD.search(line) and not CURL_INFO.match(line) for line in code.splitlines())
 

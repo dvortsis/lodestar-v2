@@ -498,14 +498,19 @@ def cmd_run(env, deps=None) -> int:
 
         with ThreadPoolExecutor(max_workers=run.workers) as pool:
             pending = {pool.submit(job, it, r) for it, r in jobs}
-            while pending:
-                # Wake at least once a second: a cancel's signal may reach a
-                # worker thread, and Python runs the handler on the main one.
-                done, pending = wait(pending, timeout=WAKE_SECONDS, return_when=FIRST_COMPLETED)
-                for f in done:
-                    it, r, (state, codes) = f.result()
-                    results[it["id"]].append((state, codes))
-                    print(f"operator-injection: {it['id']} run {r}: {state}" + (f" ({', '.join(codes)})" if codes else ""))
+            try:
+                while pending:
+                    # Wake at least once a second: a cancel's signal may reach a
+                    # worker thread, and Python runs the handler on the main one.
+                    done, pending = wait(pending, timeout=WAKE_SECONDS, return_when=FIRST_COMPLETED)
+                    for f in done:
+                        it, r, (state, codes) = f.result()
+                        results[it["id"]].append((state, codes))
+                        print(f"operator-injection: {it['id']} run {r}: {state}"
+                              + (f" ({', '.join(codes)})" if codes else ""))
+            except BaseException:
+                run.stop.set()  # queued jobs then start nothing, and in-flight ones are interrupted
+                raise
         for it in items:
             runs = results[it["id"]]
             passed = sum(1 for s, _ in runs if s == "pass")
