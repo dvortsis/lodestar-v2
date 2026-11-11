@@ -12,18 +12,23 @@ How to install, run and look after Lodestar. It follows `docs/architecture.md`
 not built yet; don't rely on it. Unmarked statements describe the code on
 `main` today.
 
-**Published release: v0.5.1.** Use the [release setup guide](user/README.md) for verified installation and everyday-use instructions. This reference also describes development features. Safe restart, newer source controls and newer store migrations are not part of v0.5.1.
+**Published release: v0.5.1.** The [release setup guide](user/README.md) covers it step by step. This page also describes what's on `main`, which is ahead of that release. Where a feature needs a newer version than v0.5.1, the text says **(newer than v0.5.1)**. On `:latest` or a v0.5.1 install, a command marked that way is "unrecognized".
 
 ## 1. What Exists Today
 
-| Area | Today | Planned |
-|---|---|---|
-| Binary | `lodestar serve` (default), `lodestar healthcheck`, `lodestar import-bitmagnet`, `backup`, `rollback`, `vacuum`, `reindex`, `rollup`, `stats`, `lists`, `--version`, `--help` in v0.5.1 | The newer `import` job commands below are development features; worker mode is later work |
-| Settings | `config.toml` and the `LODESTAR_*` variables below | Editing settings in the UI (milestone B2) |
-| Packaging | v0.5.1 Docker image, Compose file, Unraid templates, Linux archives with systemd unit, Windows MSI and portable ZIP | Community Applications listing |
-| Workers | — | Worker mode (`LODESTAR_JOIN`, `LODESTAR_TOKEN`, cluster port 8091), Lodestar v0.6+ |
+Everything below is built on `main`. Anything still missing is marked **(planned)**.
 
-Environment variables the binary reads today:
+| Area | What you get |
+|---|---|
+| Binary | One `lodestar` program with the web UI inside. Its commands are in [§10](#10-the-command-line). |
+| Docker | An image for `amd64` and `arm64`, a Compose file and three Unraid templates (§2). |
+| Linux | Tarballs for `x86_64` and `aarch64`, with a systemd unit (§2). |
+| Windows | An `x86_64` MSI that installs a service, and a portable ZIP (§2). |
+| Settings | The app's **Settings** pages, `config.toml`, the `LODESTAR_*` variables below, and `lodestar settings` for when the app can't be reached **(newer than v0.5.1)** (§8, §10). |
+| Workers **(newer than v0.5.1)** | `lodestar worker` and the Unraid worker template (it says it requires Lodestar v0.6 or later). The main Lodestar accepts workers only when `[cluster] enabled = true` is set in `config.toml`; it is off by default, and then nothing listens on `8091/tcp`. |
+| Not built yet | **(planned)**: a Community Applications listing; incoming peer connections on `6881/tcp`; a Settings screen for the web address; a Settings screen for worker join tokens; and updates that install by themselves on Windows (§7). |
+
+Common environment variables (the update settings have their own `LODESTAR_UPDATES*` family; `lodestar --help` lists the main ones):
 
 | Variable | Meaning | Default |
 |---|---|---|
@@ -33,6 +38,7 @@ Environment variables the binary reads today:
 | `LODESTAR_DHT_ENABLED` | `true` or `false` | `true` |
 | `LODESTAR_INTENSITY` | `low`, `balanced` or `aggressive` | `balanced` |
 | `LODESTAR_SCRAPE_ENABLED` | Tracker and DHT scrapes (§9): `true` or `false` | `true` |
+| `LODESTAR_SECURE_COOKIES` | `true` when Lodestar sits behind a TLS reverse proxy (same as `http.secure_cookies`) | `false` |
 | `LODESTAR_LOG` | `error`, `warn`, `info`, `debug` or a `tracing` filter. While it's set, **Settings → Logging** is read-only; leave it unset to change logging in the app | `info` |
 | `LODESTAR_DHT_SAFE_RESTART` | Development only; unavailable in v0.5.1. `true` lets a clean restart skip the six-hour sampling wait (`[dht] safe_restart`, CR-0d) | `false` |
 | `LODESTAR_DHT_WITNESS_DIR` | Development only; unavailable in v0.5.1. The restart record folder, outside the data directory and never backed up with it. The Docker image and the systemd unit set `/var/lib/lodestar-witness`; the Windows service uses `%ProgramData%\Lodestar-witness` | Native: `$XDG_STATE_HOME/lodestar` (or `~/.local/state/lodestar`) on Linux, `%LOCALAPPDATA%\Lodestar\witness` on Windows |
@@ -51,21 +57,39 @@ timestamps are UTC today. Details: `packaging/docker/README.md`.
 
 ### Docker
 
-The v0.5.1 image is `ghcr.io/dvortsis/lodestar-v2:0.5.1`, for `amd64` and `arm64`.
-It uses `/data` as a volume, `8090/tcp` for the web UI and `6881/udp` for the DHT.
-The `6881/tcp` mapping is reserved; metadata fetches are outbound.
-Follow [Chapter 2](user/02-install-lodestar-on-unraid-and-docker.md) for the release Compose file and first-run setup.
+The image is `ghcr.io/dvortsis/lodestar-v2`, for `amd64` and `arm64`. Pin a
+version tag such as `:0.5.1` so an update happens when you choose; `:latest`
+follows each stable release and `:nightly` is built daily from `main` and isn't
+tested between releases.
+
+- **Volume:** `/data` holds everything Lodestar saves (§6). Map it to local
+  disk (an SSD if you have one), not a network share.
+- **Ports:** `8090/tcp` for the web UI and `6881/udp` for the DHT. The
+  `6881/tcp` mapping is reserved; metadata fetches are outbound.
+- **Compose file:** `docker-compose.yml` in the repository root. Run
+  `docker compose up -d`, then `docker compose logs lodestar` for the setup
+  token (§3). The container's own health check runs `lodestar healthcheck`.
+- **Stopping:** give the container 60 seconds to stop (`stop_grace_period: 60s`
+  in Compose). Lodestar saves its index and database on the way out.
+
+Follow [Chapter 2](user/02-install-lodestar-on-unraid-and-docker.md) for the
+step-by-step setup, and `packaging/docker/README.md` for every tag and option.
 
 ### Unraid
 Templates are in `packaging/unraid/`:
 
 - `lodestar.xml`: the standard container.
 - `lodestar-gluetun.xml`: runs through a gluetun VPN container (§4.3).
-- `lodestar-worker.xml`: a worker for an existing Lodestar. **(planned;
-  requires Lodestar v0.6+.)**
+- `lodestar-worker.xml` **(newer than v0.5.1; requires Lodestar v0.6 or later)**:
+  a worker for an existing Lodestar. It asks for the main instance's address and
+  a one-time join token. The main instance must have `[cluster] enabled = true`.
+  A Settings screen for tokens is **(planned)**; today a token comes from the
+  API: `POST /api/v1/workers/tokens` from a signed-in admin browser session (API keys are refused), with a JSON body holding the worker's `name` and your admin `password`.
+  See `lodestar worker` in §10.
 
-The templates default to `latest`. Set **Repository** to `ghcr.io/dvortsis/lodestar-v2:0.5.1` to stay on this release.
-Until Community Applications lists Lodestar, copy the XML file to
+The templates default to `latest`. Set **Repository** to a version tag such as
+`ghcr.io/dvortsis/lodestar-v2:0.5.1` to stay on that version.
+Until Community Applications lists Lodestar **(planned)**, copy the XML file to
 `/boot/config/plugins/dockerMan/templates-user/` on the server, then add the
 container from **Docker → Add Container → Template**.
 
@@ -98,10 +122,65 @@ Rebuild the frontend and then the binary to include the full UI.
 
 ### Windows
 
-v0.5.1 publishes an `x86_64` MSI and portable ZIP with signed checksums.
-The MSI installs the Windows service and stores data in `%ProgramData%\Lodestar`.
-The executable and installer are not Authenticode-signed.
-Follow [Chapter 4](user/04-install-on-windows-and-linux.md) for verification, permissions and installation.
+Two downloads, both `x86_64`. Check each against the `SHA256SUMS` file on the
+release page before you run it (`Get-FileHash <file> -Algorithm SHA256`).
+
+| Download | Choose it when |
+|---|---|
+| `lodestar-<version>-x86_64.msi` | You want Lodestar to run like any other app. **Recommended.** |
+| `lodestar-<version>-x86_64-windows-portable.zip` | You want to try it, or run it from a folder. Delete the folder to remove it. |
+
+The **MSI**:
+
+- installs `lodestar.exe` in `C:\Program Files\Lodestar` and keeps data in
+  `C:\ProgramData\Lodestar`;
+- registers a Windows service named **Lodestar**. It runs as its own account,
+  `NT SERVICE\Lodestar`, starts a little after Windows boots, and restarts if
+  it fails;
+- limits the data folder to SYSTEM, Administrators and that account;
+- allows `6881/udp` through the firewall on **private networks only**;
+- adds a Start-menu shortcut to `http://localhost:8090/`;
+- has two options, both **off** by default: `WEB_FIREWALL=1` lets other PCs on
+  your network open the web UI (`8090/tcp`), and `DEFENDER_EXCLUSION=1` stops
+  Windows Defender scanning the data folder. The exclusion makes Lodestar
+  faster but nothing in that folder is scanned, so leave it off if you share
+  the PC or aren't sure;
+- keeps your data when you uninstall, unless you pass `REMOVE_DATA=1`.
+
+The setup token is in `C:\ProgramData\Lodestar\logs\lodestar.log`; only
+Administrators can read it. The installer and `lodestar.exe` aren't
+Authenticode-signed, so SmartScreen may warn: if the checksum matches, choose
+**More info → Run anyway**.
+
+Silent install and uninstall, in an administrator PowerShell window:
+
+```powershell
+msiexec /i lodestar-<version>-x86_64.msi /qn            # defaults: both options off
+msiexec /x lodestar-<version>-x86_64.msi /qn            # uninstall, keep data
+msiexec /x lodestar-<version>-x86_64.msi /qn REMOVE_DATA=1   # uninstall and delete data
+```
+
+The **portable ZIP** runs from a folder as the user who unpacked it: no
+service, no firewall rules, no helper. Unpack it under your own user folder
+(not the top of a drive, a shared drive or OneDrive) and start
+`Start Lodestar.cmd`, which keeps the data in the `data` folder beside it.
+
+**Commands from §10 on Windows.** Stop the service first
+(`Stop-Service Lodestar`) for any command marked "server stopped". Then, in an
+administrator PowerShell window (only Administrators can read the data
+folder), tell the command where the data is and run it. The MSI:
+
+```powershell
+$env:LODESTAR_DATA_DIR = 'C:\ProgramData\Lodestar'
+& 'C:\Program Files\Lodestar\lodestar.exe' stats
+```
+
+For the portable ZIP, set `LODESTAR_DATA_DIR` to its `data` folder and run the
+`lodestar.exe` beside `Start Lodestar.cmd`. Without the variable the command
+looks for a `data` folder in the folder you're in, and stops with "no store".
+
+Follow [Chapter 4](user/04-install-on-windows-and-linux.md) for the guided
+steps, and `packaging/windows/README.md` for every option.
 
 ## 3. First Run
 
@@ -130,7 +209,7 @@ Search remains available. The development behavior that waits for setup before s
 | `8090/tcp` | Web UI, API, `/metrics`, `/healthz`. Keep it on your LAN. |
 | `6881/udp` | DHT. Forward it on your router for the best reach. |
 | `6881/tcp` | Reserved for incoming peer connections **(planned)**. Fetches are outbound only today, so there's nothing to forward yet. |
-| `8091/tcp` | Cluster port for workers **(planned)** |
+| `8091/tcp` | Cluster port for workers. Closed unless `[cluster] enabled = true`. Keep it on your LAN. |
 
 Change the DHT port with `LODESTAR_DHT_PORT`. The web address comes from
 `LODESTAR_HTTP_BIND`.
@@ -179,13 +258,13 @@ this on the home side because the tunnel carries the load.
 - **Why not `/mnt/user`:** it goes through Unraid's FUSE layer (`shfs`),
   which is slow for memory-mapped files and risky for SQLite's write-ahead
   log.
-- **Split paths (optional).** `/data/hot` (indexes and hot columns) must be on
-  SSD/NVMe. `/data/cold` (file-tree blobs, optional raw archive) is written
-  continuously as torrents arrive, so on the parity array it keeps disks
-  spinning and slows writes. The recommended layout is both on the cache pool,
-  with only backups going to the array. **(Split storage is planned; today
-  everything lives under `/data` and the two optional mappings are not used
-  yet.)**
+- **One folder.** Everything Lodestar saves lives under `/data`. Map that
+  one folder to the pool path above; there are no separate hot and cold
+  mappings. To keep a backup on the array, run `lodestar backup` (it writes
+  into the data folder), then copy that folder to a private share with
+  `cp -a`. A backup holds `seal.key` and `auth.json`, so keep it private. See
+  [Chapter 3, §3.7](user/03-keep-lodestar-safe.md#37-back-up-and-restore). `--to` only works for a
+  path the container can see, which needs its own path mapping.
 
 ## 6. Data Directory
 
@@ -203,14 +282,21 @@ Today, under `LODESTAR_DATA_DIR`:
 
 Swarm-statistics hot columns are plain in-memory atomics. A clean shutdown
 snapshots them to `hot/*.col`; after a crash they're rebuilt from the
-database at the next start (§9). `cold.db` and the `data/hot`/`data/cold`
-split are **planned**.
+database at the next start (§9). Everything stays inside the one data folder;
+the `hot/` folder is a subfolder of it, not a separate place.
 
 ## 7. Upgrades and Backups
 
-- **Upgrade today:** stop Lodestar, replace the binary (or pull the new image
-  tag), start it. Before upgrading, copy the whole data
-  directory while the service is stopped. That is your rollback.
+- **Upgrading by hand:** stop Lodestar, replace the binary (or pull the new
+  image tag), start it. Before upgrading, run `lodestar backup`. On Linux,
+  Lodestar can also install updates itself. That is off until you turn it on in
+  the app's update settings, and **Fixes only** is the recommended choice. A
+  self-installed update that fails its health check rolls back on its own.
+  **Windows** **(newer than v0.5.1)**: Lodestar checks and tells you. It installs only when you press
+  **Install now** (MSI or portable); updates that install by themselves, and the
+  app's **Roll back** button, are **(planned)**. A failed update (MSI or portable) rolls
+  back by itself. On v0.5.1, Windows has no update engine: install the new MSI or ZIP by hand. Docker and Unraid don't self-install: you pull the new image
+  tag.
 - **Snapshots before store upgrades.** When a new version has to change the
   database's layout (a schema migration), it first saves a copy beside it:
   `lodestar.pre-v<N>.db`. To go back, stop Lodestar and run
@@ -239,7 +325,7 @@ split are **planned**.
   `seal.key` and `auth.json` in a new `backups/lodestar-backup-<time>` folder
   inside the data folder (or `--to <folder>`). It's safe while Lodestar runs.
   The search index isn't copied: Lodestar rebuilds it from the store.
-- **Update notices** inside the app are planned. Lodestar sends no telemetry.
+- **Update checks** are off until you turn them on (see above). When on, Lodestar checks the project's signed release page every 6 hours, and when you ask (on Windows, **(newer than v0.5.1)**). Lodestar sends no telemetry.
 
 ### Importing from Magnetico or Bitmagnet
 
@@ -354,14 +440,14 @@ answers `/healthz`, and 1 with a reason otherwise (for example
    traffic the crawler still works, but slowly.
 4. Under a VPN, see §4.3.
 
-**The web UI doesn't load.** Check `LODESTAR_HTTP_BIND`, the port mapping, and
-that nothing else uses 8090. Behind a TLS reverse proxy, set
-`http.secure_cookies = true` in `config.toml`.
+**The web UI doesn't load.** Work through [I can't reach the UI](#i-cant-reach-the-ui)
+below. Behind a TLS reverse proxy, set `LODESTAR_SECURE_COOKIES=true` (or
+`http.secure_cookies = true` in `config.toml`).
 
 **Slow disk, or SQLite "database is locked".** Check the data path. If it is
-under `/mnt/user` on Unraid, move it to a pool path (§5). The app is meant to
-warn when it finds data on a FUSE or network filesystem; **that warning is
-planned and not in the binary yet**, so check the path yourself.
+under `/mnt/user` on Unraid, move it to a pool path (§5). Lodestar warns at
+start when it finds data on a FUSE or network filesystem; `lodestar stats`
+shows it too.
 
 **The router or network gets slow.** See §4.5; lower `LODESTAR_INTENSITY`.
 
@@ -370,6 +456,47 @@ planned and not in the binary yet**, so check the path yourself.
 
 **Lost the setup token.** While no admin exists, every start prints a new
 token, so restart the service and read the log again.
+
+### I can't reach the UI
+
+Try these in order. Each is safe, and nothing changes until a step says so.
+
+**Is Lodestar running?**
+1. Run `lodestar healthcheck` (Docker: `docker exec <container name> /lodestar healthcheck`).
+   **Result:** it exits 0 when the instance answers. Otherwise it exits 1 and prints `unhealthy:` and a reason, such as `unhealthy: connecting to 127.0.0.1:8090: Connection refused (os error 111)`. It probes the address Lodestar is set to use, so a wrong saved address shows up here.
+2. If it fails, read the log (`docker logs <container name>`, `journalctl -u lodestar`, or the Windows log in §2).
+   **Result:** the log says why it stopped, for example an address it can't bind.
+3. If it answers, check the address you open. `LODESTAR_HTTP_BIND` (default `0.0.0.0:8090`; `0.0.0.0` means every network interface on the machine) is the address *inside* the container or machine. In Docker you open the host port you mapped to it. Keep the web port on your home network and never forward it on your router. On Windows, the Start-menu shortcut always opens `http://localhost:8090/`, so it won't follow a changed port. With host networking or a native Linux install, binding to your LAN address is narrower than `0.0.0.0`. In Docker or Unraid bridge mode (the default) leave it at `0.0.0.0`: the port mapping decides who can reach it. On Windows, binding off localhost also breaks the Start-menu shortcut, so keep the MSI's `WEB_FIREWALL` option off unless other PCs need the UI.
+
+**The web address is wrong, so Lodestar won't start.**
+
+The `lodestar settings` steps need a version newer than v0.5.1 **(newer than v0.5.1)**. On v0.5.1 (and `:latest` before the next release), `LODESTAR_HTTP_BIND` always works; `bind` under `[http]` in `config.toml` works only when no address is saved in the app.
+
+If `serve` can't bind the address, it fails at start. There is no automatic revert for an address set from the command line, and the app has no screen for changing the address **(planned)**. Reset it:
+
+1. Stop Lodestar, and run the commands as §10 describes for your install. In **Docker and Unraid** the image itself sets `LODESTAR_HTTP_BIND=0.0.0.0:8090`, so the address comes from the environment and `settings` can't change it: if you added your own `LODESTAR_HTTP_BIND`, correct or remove that variable, or change the port mapping. Otherwise continue.
+2. Run `lodestar settings get network.http_bind`.
+   **Result:** it shows the value and its source: `default`, `config.toml`, `saved` or the environment.
+3. Act on the source.
+   - **`saved`:** run `lodestar settings reset network.http_bind`.
+     **Result:** the saved value is removed and `config.toml`'s value or the default (`0.0.0.0:8090`) applies again.
+   - **`config.toml`:** edit or remove `bind` under `[http]` in that file. A saved value beats `config.toml`, so this only helps when the source says `config.toml`.
+   - **environment:** correct or remove the variable. A variable always wins over a saved value.
+4. Start Lodestar and open the web UI.
+   **Result:** the sign-in page loads.
+
+**I changed several settings and now nothing works.** This needs `lodestar settings` **(newer than v0.5.1)**.
+
+`reset --all` also removes the passwords, the Torznab API key and the notification addresses and tokens saved in the app. Lodestar's own API keys aren't touched. Enter them again afterwards. To undo it, restore the backup from step 1 ([Chapter 3, §3.7](user/03-keep-lodestar-safe.md#37-back-up-and-restore); outside Unraid, the backup folder's `README.txt` repeats the steps).
+
+1. Run `lodestar backup`. It works with the server running or stopped. On Docker, while the container runs, use `docker exec <container name> /lodestar backup`; once it's stopped, use the one-off container from §7 without the `/import` mapping, with `backup` after the image name.
+   **Result:** a new `lodestar-backup-<time>` folder holds the store, `config.toml` (if you have one), `seal.key` and `auth.json`.
+2. Stop Lodestar.
+3. Run `lodestar settings reset --all`.
+   **Result:** every value saved in the app is removed, and settings return to `config.toml` and the defaults. `config.toml`, the `LODESTAR_*` variables, your torrents, filters and admin password aren't touched.
+4. Start Lodestar and open the web UI.
+
+`reset --all` also clears a web-address change still waiting to be confirmed.
 
 ## 9. Swarm Health
 
@@ -510,3 +637,59 @@ Some trackers inflate their counts. Lodestar checks swarms against each other:
 
 - The status page has a "Swarm health" section: scraped, alive and suspect counts and a table of trackers with their state, counts and last answer. It's hidden when scraping is off.
 - Prometheus metrics cover scrape requests by tracker and outcome and the DHT scrape counters. Their names arrive with the binary wiring, so check `/metrics` on your build.
+
+## 10. The Command Line
+
+`lodestar` is one program. Run `lodestar --help`, or `lodestar <command> --help`, for the full list of options.
+
+**Exit status:** 0 done, 1 failed, 2 bad arguments, 3 refused for safety (nothing was changed).
+
+**Where to run it.**
+- Linux with systemd: the service runs as its own account with data in `/var/lib/lodestar`. Don't run store commands (`settings`, `rollback`, `vacuum`) as root: systemd makes `/var/lib/lodestar` a link, and Lodestar refuses to drop privileges on a linked data folder, so the command stops with an error. To recover a wrong address, edit `/var/lib/lodestar/config.toml` only if no address is saved; a saved address beats it, and only an `Environment=LODESTAR_HTTP_BIND=` line in the unit overrides that. A tested way to run `lodestar settings` under the service account is **(planned)**.
+- Windows: see §2.
+- Docker (server running): `docker exec lodestar /lodestar <command>`. On Unraid the container is named `Lodestar`.
+- Docker, "server stopped" commands: a stopped container can't run commands. Start a one-off container from the same image with the same `/data` folder, as shown in §7.
+- `--config <path>` on any command picks a `config.toml`. Without it, Lodestar uses `$LODESTAR_DATA_DIR/config.toml`.
+
+"Server stopped" below means the command refuses and changes nothing while Lodestar runs. That protects your data, so stop Lodestar rather than looking for a way round it.
+
+| Command | What it does | Safe use |
+|---|---|---|
+| `serve` | Runs the crawler, search, web UI, status page and metrics. It's the default when you give no command. `--fixture [<dir>]` serves built-in test data offline instead. | Use `--fixture` to try the UI without crawling. |
+| `healthcheck` | Exits 0 if the local instance answers `/healthz`, 1 with a reason otherwise. | Safe any time. |
+| `stats` | Counts, sizes and the search index's state. `--json` prints JSON. | Safe while the server runs. |
+| `backup` | Copies the store, `config.toml`, `seal.key` and `auth.json` into a new `lodestar-backup-<time>` folder in `<data>/backups`, or in `--to <folder>`. | Safe while the server runs. Copy the folder off the machine and keep it private: it holds `seal.key` and `auth.json`. |
+| `rollback` | With no argument, lists the snapshots taken before each store upgrade. `rollback <name or vN>` restores one. `--update` rolls a self-installed update back to the version before it (Linux only today; on Windows a failed update rolls back by itself, or you reinstall the previous MSI). `--yes` skips the question. | Server stopped. List first, then restore; the replaced store is kept (§7). |
+| `vacuum` | Compacts the store and prints its size before and after. | Server stopped. Back up first. |
+| `reindex` | Rebuilds the search index from the store at the next start. | Server stopped. Search is slow while it rebuilds. |
+| `rollup --repair` | Recounts the Insights totals from the stored torrents. `--since <N>d` sets how far back (default 30 days). | Server stopped. It only raises totals. |
+| `lists` | Shows the blocklist catalog. | Safe any time. |
+| `import …` **(newer than v0.5.1)** | Imports a Magnetico or Bitmagnet database: `inspect`, `start`, `status`, `pause`, `resume`, `cancel`, `remove`. | Back up first. See §7. |
+| `import-bitmagnet` | The old name for `import start --source bitmagnet`. | Prefer `import`. |
+| `companion …` **(newer than v0.5.1)** | Lists, installs or removes a companion, or prints a compose service for it (`list`, `install`, `remove`, `compose`). Without `--sha256`, `install` only shows what it would install; without `--yes`, `remove` only shows what it would delete. | `install` and `remove` need the server stopped. Install only what you recognise, and confirm with the SHA-256 `install` showed. |
+| `worker` **(newer than v0.5.1)** | Runs this install as a worker for a main Lodestar: `--join <https://host:port>` with `--token-file <file>` (or `-` for stdin) joins once; afterwards it runs from the saved credentials. `--rotate-key` re-seals them under a new key. | Give the worker a data folder of its own. The token is never taken from the command line, because other users can see command lines. |
+| `settings …` **(newer than v0.5.1)** | Reads and changes the settings saved in the app, with the server stopped. See below. | Use it to recover; change everyday settings in the app. |
+
+### Settings from the command line **(newer than v0.5.1)**
+
+Use these when the app can't be reached. They check each value exactly as the app does.
+
+- `lodestar settings get [<section>[.<field>]]` shows a value and where it comes from: the default, `config.toml`, a saved value or an environment variable. With a section, or nothing, it lists every field. A secret shows only as `(set)` or `(not set)`.
+- `lodestar settings set <section>.<field> <value>` saves a value (server stopped). Give it as JSON (`true`, `30`, `"text"`); anything that isn't JSON is taken as text, so `0.0.0.0:8080` needs no quotes.
+- `lodestar settings reset <section>.<field>` removes a saved value, so `config.toml`'s value or the default applies again.
+- `lodestar settings reset --all` removes every saved value. `config.toml`, the `LODESTAR_*` variables and your filters, floor, packs and subscriptions stay as they are.
+
+A `LODESTAR_*` variable always wins over a saved value, so `set` and `reset` refuse a field a variable sets (exit 2).
+
+**What `set` refuses (exit 3, nothing changed), and why.**
+- **Secrets**, such as passwords, API keys and notification URLs and tokens. They're refused before the value is read, so a secret is never echoed or logged, and it never needs to be a recovery step. Set them in the app.
+- **Privacy opt-ins**, such as detailed logging and query logging, whatever the value. `reset` turns each back off.
+- **Security-tagged fields**, which in the app ask for your password again. None exist today. Any other danger tag a later version adds is refused too.
+- **Turning on adult content.** The app asks for a confirmation the command can't give. Turning it off is allowed.
+- Any other change the app refuses is refused with the app's own message (exit 2).
+
+`set` and `reset` also refuse while an update rollback is in progress. After changing `network.http_bind`, a web-address change still waiting to be confirmed is cleared, because you are at the machine and have confirmed the address by running the command.
+
+### The Windows update helper **(newer than v0.5.1)**
+
+`lodestar update-helper` belongs to the MSI. Windows runs it, as SYSTEM, from a scheduled task called **Lodestar update helper**, which the installer adds and the uninstaller removes. You never run it yourself. When you press **Install now**, the helper installs the update; if it fails its health check, the helper puts the old version back by itself. To go back by hand, reinstall the previous MSI.
