@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T19:15:00Z",
+  "updated_at": "2026-11-11T19:40:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7577,7 +7577,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T19:15:00Z",
+    "updated": "2026-11-11T19:40:00Z",
     "items": [
       {
         "slot": 1,
@@ -7639,11 +7639,12 @@
       },
       {
         "slot": 8,
-        "slice": "X-cmp9b-catch",
+        "slice": null,
         "role": "build",
-        "agent": "claude",
-        "doing": "session_01MMjhn8mGSt1DA24S2gjPE6: #703 @1666594d green, under fresh Opus review",
-        "since": "2026-11-11T17:52Z"
+        "agent": null,
+        "doing": "idle: X-cmp9b-catch merged (#703); next by ladder",
+        "since": "2026-11-11T19:40:00Z",
+        "status": "idle"
       }
     ]
   },
@@ -7699,7 +7700,7 @@
     }
   ],
   "heartbeat": "2026-11-11T18:39:05Z",
-  "updated": "2026-11-11T19:15:00Z",
+  "updated": "2026-11-11T19:40:00Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -7734,7 +7735,6 @@
     }
   ],
   "review_queue": [
-    "#703 MERGE @1666594d; asked for asyncUtilTimeout 10s in SourceRow/NeedChip chunk tests; self-check delta then merge",
     "#699 CHANGES @13397e42 relayed (B1 tests L4/L6, I1 link+secure_remove, Windows reparse); then fresh delta+sec review",
     "#692 delta review running @cfc09faa"
   ],
@@ -7852,6 +7852,12 @@
       "slice": "X-event-log-notice",
       "sha": "0a88351a4abd84b3ad9adbe45202addaacac60d9",
       "at": "2026-11-11T19:06Z"
+    },
+    {
+      "pr": 703,
+      "slice": "X-cmp9b-catch",
+      "sha": "5cd5ed176639f5a4f21452c40893915643c99d1a",
+      "at": "2026-11-11T19:40:00Z"
     }
   ]
 }
