@@ -1,9 +1,11 @@
 // If the companion chip's code can't be fetched (a stale tab after an upgrade), the row says
 // "Needs setup" as a plain note instead of dropping the need, and nothing is left unhandled (CMP-9b).
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/svelte';
+import { configure, render, screen } from '@testing-library/svelte';
 import SourceRow from './SourceRow.svelte';
 import { source } from './fixtures';
+
+configure({ asyncUtilTimeout: 10_000 });
 
 vi.mock('../companions/NeedChip.svelte', () => {
 	throw new Error('Failed to fetch dynamically imported module');

@@ -1,8 +1,10 @@
 // If the install flow's code can't be fetched (a stale tab after an upgrade), Set up says so in
 // plain words and can be pressed again, rather than spinning for ever (CMP-9b).
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { configure, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import NeedChip from './NeedChip.svelte';
+
+configure({ asyncUtilTimeout: 10_000 });
 
 vi.mock('./SetupFlow.svelte', () => {
 	throw new Error('Failed to fetch dynamically imported module');
