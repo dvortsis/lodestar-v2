@@ -11,6 +11,7 @@
 	import { FOCUS_RING } from '$lib/ui/classes';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { whenOf } from './time';
+	import { checkFailedWords, failedWords, historyReasonWords, noEngineWords } from './reasons';
 	import IconWarn from '~icons/ph/warning';
 	import { formatCount } from '$lib/format';
 	import { ask } from '../form/dialogs';
@@ -197,26 +198,6 @@
 		snapshot_missing: m.settings_updates_rollback_reason_snapshot_missing,
 		not_built_yet: m.settings_updates_rollback_reason_not_built_yet
 	};
-	/** A plain sentence per stable install-failure code; never the code's own text, never a URL. */
-	const failedWords: Record<string, () => string> = {
-		download_mismatch: m.settings_updates_failed_download_mismatch,
-		download_too_large: m.settings_updates_failed_download_too_large,
-		download_io: m.settings_updates_failed_download_io,
-		no_artifact: m.settings_updates_failed_no_artifact,
-		redirect_refused: m.settings_updates_failed_redirect_refused,
-		stage_failed: m.settings_updates_failed_stage_failed,
-		no_space: m.settings_updates_failed_no_space,
-		bad_overlay: m.settings_updates_failed_bad_overlay,
-		timeout: m.settings_updates_failed_timeout,
-		network: m.settings_updates_failed_network,
-		blocked: m.settings_updates_failed_blocked,
-		http_status: m.settings_updates_failed_http_status,
-		too_large: m.settings_updates_failed_too_large,
-		bin_unavailable: m.settings_updates_failed_bin_unavailable,
-		rebuild_running: m.settings_updates_failed_rebuild_running,
-		trust_damaged: m.settings_updates_failed_trust_damaged,
-		not_current: m.settings_updates_failed_not_current
-	};
 	const installReasons: Record<string, () => string> = {
 		busy: m.settings_updates_install_reason_busy,
 		not_candidate: m.settings_updates_install_reason_not_candidate,
@@ -233,9 +214,9 @@
 				})
 			: kind === 'rollback_unavailable'
 				? m.settings_updates_error_rollback_unavailable({
-						reason:
-							(store.reason && rollbackReasons[store.reason]?.()) ||
-							m.settings_updates_install_reason_unknown()
+						reason: store.reason
+							? (rollbackReasons[store.reason]?.() ?? m.settings_updates_rollback_reason_other())
+							: m.settings_updates_install_reason_unknown()
 					})
 				: kind === 'install_failed'
 					? m.settings_updates_error_install_failed({
@@ -406,7 +387,7 @@
 	<Skeleton lines={4} />
 {:else if status === undefined && settings === undefined}
 	<Banner kind="error">
-		{store.unavailable ? m.settings_updates_unavailable() : m.settings_updates_load_failed()}
+		{store.unavailable ? noEngineWords(null) : m.settings_updates_load_failed()}
 		{#snippet action()}
 			<Button onclick={() => store.load()}>{m.settings_updates_reload()}</Button>
 		{/snippet}
@@ -419,7 +400,7 @@
 		{/if}
 		{#if noEngine}
 			<Banner kind="info"
-				><span data-testid="updates-unavailable">{m.settings_updates_unavailable()}</span></Banner
+				><span data-testid="updates-unavailable">{noEngineWords(status?.unavailable)}</span></Banner
 			>
 		{/if}
 
@@ -478,7 +459,7 @@
 					<p data-testid="updates-state">
 						{m.settings_updates_check_failed({
 							version: status.running.version,
-							code: status.status.error ?? '—'
+							why: checkFailedWords(status.status.error)
 						})}
 					</p>
 				{:else if status.status.state === 'ok' && status.status.checked_at}
@@ -501,7 +482,7 @@
 								? m.settings_updates_rolled_back_manual({ version: status.running.version })
 								: m.settings_updates_rolled_back({
 										version: rolledBack.version,
-										reason: rolledBack.reason ?? ''
+										reason: historyReasonWords(rolledBack.reason) ?? ''
 									})}
 							{m.settings_updates_rolled_back_next()}
 						</span>
