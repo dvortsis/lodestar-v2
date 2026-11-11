@@ -112,9 +112,11 @@ fn install() -> ExitCode {
 
 /// The helper's copy (`update-helper --run-msi`): refused unless it's a
 /// `run-<hex>.exe` in `%ProgramFiles%\Lodestar\updates`. It waits for the
-/// program in Program Files to end (so Windows Installer can replace it),
-/// runs the journal's pending `msiexec` and nothing else, then starts the
-/// task again so the helper finishes from its answer.
+/// helper run that started it to end ([`helper::parent_gone`]), then a
+/// moment, never refusing, for the program in Program Files to be free
+/// (anyone may run it; Windows Installer replaces a file in use at the
+/// next restart), runs the journal's pending `msiexec` and nothing else,
+/// then starts the task again so the helper finishes from its answer.
 #[cfg(windows)]
 fn copy() -> ExitCode {
     let refused = |why: &dyn std::fmt::Display| {
@@ -153,7 +155,15 @@ fn copy() -> ExitCode {
         .parent()
         .and_then(Path::parent)
         .map(|d| d.join("lodestar.exe"));
-    let wait = || installed.as_deref().is_some_and(wait_free);
+    let wait = || {
+        let gone = exe
+            .parent()
+            .is_some_and(|staging| helper::parent_gone(staging, &name, helper::FREE_WAIT));
+        if gone && let Some(p) = installed.as_deref() {
+            let _ = wait_free(p, helper::IMAGE_WAIT);
+        }
+        gone
+    };
     let code = match helper::run_copy(&ctx, &helper::Windows, &name, &wait) {
         Ok(_) => ExitCode::SUCCESS,
         Err(r) => refused(&r),
@@ -163,11 +173,11 @@ fn copy() -> ExitCode {
     code
 }
 
-/// Waits (up to [`helper::FREE_WAIT`]) until `exe` is no longer running:
-/// opening a running image for writing fails. Nothing is written.
+/// Waits (up to `wait`) until `exe` is no longer running: opening a
+/// running image for writing fails. Nothing is written.
 #[cfg(windows)]
-fn wait_free(exe: &Path) -> bool {
-    let deadline = std::time::Instant::now() + helper::FREE_WAIT;
+fn wait_free(exe: &Path, wait: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + wait;
     loop {
         if std::fs::OpenOptions::new().write(true).open(exe).is_ok() {
             return true;

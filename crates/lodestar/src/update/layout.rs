@@ -243,6 +243,23 @@ impl Bin {
         }
     }
 
+    /// [`Bin::lock`], with a busy lock tried again for up to
+    /// [`BUSY_WAIT`] on Windows (X-win-upd-bounds), for the previous
+    /// holder's lock after a quick restart or a stop. Windows releases the
+    /// lock of a closed file, or of a process that ended, "depending upon
+    /// available system resources" (`LockFileEx`). On Unix a closed file's
+    /// lock is gone at once, so it's one attempt there. An I/O error comes
+    /// back at once. Blocking: never from async code.
+    pub fn lock_retrying(&self) -> io::Result<Option<Lock>> {
+        retry_busy(
+            || self.lock(),
+            BUSY_WAIT,
+            BUSY_POLL,
+            std::time::Instant::now,
+            std::thread::sleep,
+        )
+    }
+
     /// Reads and parses a state file, `None` if it doesn't exist.
     pub fn read<T: DeserializeOwned>(&self, name: &str) -> io::Result<Option<T>> {
         read_json(&self.path(name))
@@ -621,6 +638,35 @@ fn retry(
     }
 }
 
+/// How long [`Bin::lock_retrying`] tries a busy lock again: 10 s at
+/// 100 ms on Windows (as `lodestar-search`'s index lock and the companion
+/// lock), none elsewhere.
+#[cfg(windows)]
+pub const BUSY_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+#[cfg(not(windows))]
+pub const BUSY_WAIT: std::time::Duration = std::time::Duration::ZERO;
+const BUSY_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Calls `attempt` until it gives anything but `Ok(None)` (busy), or `wait`
+/// has passed since the first call, sleeping `poll` between calls. An error
+/// comes back at once. The clock and the sleep are passed in, so it's
+/// tested without waiting. A `wait` of zero is one attempt.
+fn retry_busy<T>(
+    mut attempt: impl FnMut() -> io::Result<Option<T>>,
+    wait: std::time::Duration,
+    poll: std::time::Duration,
+    now: impl Fn() -> std::time::Instant,
+    mut sleep: impl FnMut(std::time::Duration),
+) -> io::Result<Option<T>> {
+    let start = now();
+    loop {
+        match attempt() {
+            Ok(None) if now().saturating_duration_since(start) < wait => sleep(poll),
+            other => return other,
+        }
+    }
+}
+
 /// A new file (never an existing one, and never through a link): 0600 on
 /// Unix; on Windows it inherits the folder's ACL.
 #[cfg(unix)]
@@ -987,6 +1033,7 @@ mod windows_tests {
 #[cfg(test)]
 mod retry_tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn a_retry_is_bounded_and_returns_the_last_error() {
@@ -1009,5 +1056,78 @@ mod retry_tests {
             },
         );
         assert_eq!(n, 1, "anything else comes back at once");
+    }
+
+    /// [`retry_busy`] on a fake clock that each sleep moves on: the result
+    /// and the attempts made.
+    fn busy(
+        answers: Vec<io::Result<Option<u8>>>,
+        wait: Duration,
+    ) -> (io::Result<Option<u8>>, usize) {
+        let start = std::time::Instant::now();
+        let elapsed = std::cell::Cell::new(Duration::ZERO);
+        let attempts = std::cell::Cell::new(0usize);
+        let mut answers = answers.into_iter();
+        let got = retry_busy(
+            || {
+                attempts.set(attempts.get() + 1);
+                answers.next().unwrap_or(Ok(None))
+            },
+            wait,
+            BUSY_POLL,
+            || start + elapsed.get(),
+            |d| elapsed.set(elapsed.get() + d),
+        );
+        (got, attempts.get())
+    }
+
+    #[test]
+    fn a_busy_lock_that_frees_is_taken() {
+        let (got, n) = busy(
+            vec![Ok(None), Ok(None), Ok(Some(7))],
+            Duration::from_secs(10),
+        );
+        assert_eq!((got.unwrap(), n), (Some(7), 3));
+    }
+
+    #[test]
+    fn a_lock_busy_past_the_wait_is_given_up() {
+        // Tried at 0, 100, ..., 1,000 ms: at the deadline it's busy.
+        let (got, n) = busy(Vec::new(), Duration::from_secs(1));
+        assert_eq!((got.unwrap(), n), (None, 11));
+        // No wait (Unix): one attempt.
+        let (got, n) = busy(Vec::new(), Duration::ZERO);
+        assert_eq!((got.unwrap(), n), (None, 1));
+    }
+
+    #[test]
+    fn a_lock_error_is_never_retried() {
+        let (got, n) = busy(
+            vec![Err(io::Error::from(io::ErrorKind::PermissionDenied))],
+            Duration::from_secs(10),
+        );
+        assert_eq!(
+            (got.unwrap_err().kind(), n),
+            (io::ErrorKind::PermissionDenied, 1)
+        );
+    }
+
+    #[test]
+    fn the_busy_wait_is_ten_seconds_on_windows_only() {
+        let want = if cfg!(windows) {
+            Duration::from_secs(10)
+        } else {
+            Duration::ZERO
+        };
+        assert_eq!(BUSY_WAIT, want);
+        // The real lock goes through it: free, then held elsewhere. (Not
+        // taken again after the drop: a test elsewhere that forks at that
+        // moment keeps a Unix lock until its child execs.)
+        let data = tempfile::tempdir().unwrap();
+        let bin = Bin::open(data.path()).unwrap();
+        let _held = bin.lock_retrying().unwrap().unwrap();
+        if !cfg!(windows) {
+            assert!(bin.lock_retrying().unwrap().is_none());
+        }
     }
 }

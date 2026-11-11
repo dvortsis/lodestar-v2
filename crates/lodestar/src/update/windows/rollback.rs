@@ -48,7 +48,8 @@
 //!      before it runs (rule 4's one exception: the journal's rollback
 //!      target with SYSTEM-held pins);
 //!   5. after a reinstall that needs a restart, waiting (disabled and
-//!      stopped on every pass) until the program on disk is `from`; then
+//!      stopped on every pass) until the program on disk is `from`, for
+//!      at most [`MAX_RESTARTS`] boots (then it halts); then
 //!      the marker removed, the start type back to what it was before the install (recorded
 //!      before its stop, since the MSI resets it to delayed automatic;
 //!      delayed automatic when none was recorded), the service started, the
@@ -133,6 +134,15 @@ pub struct Journal {
     /// 1641): step 5 waits until the program on disk is `from`.
     #[serde(default)]
     pub reinstall_restart: bool,
+    /// While step 5 waits: the boot (Windows' boot time, Unix seconds) it
+    /// last saw `to` still on disk in. A later boot that still sees it is
+    /// a restart that didn't put `from` back ([`MAX_RESTARTS`]). An older
+    /// helper ignores it and waits as before.
+    #[serde(default)]
+    pub reinstall_boot: Option<u64>,
+    /// Restarts that didn't put `from` back.
+    #[serde(default)]
+    pub restarts: u32,
     pub state: State,
 }
 
@@ -163,6 +173,17 @@ pub struct MsiRun {
 
 /// Fresh copies a rollback's reinstall may be handed to before it halts.
 pub const MAX_COPIES: u32 = 3;
+/// Restarts after a reinstall's 3010 that still find `to` on disk before
+/// the rollback halts (LOW-B): the pending replacement was cancelled or
+/// failed. Two, so one boot misread (a clock change) doesn't halt it.
+pub const MAX_RESTARTS: u32 = 2;
+/// Two boot times further apart than this are two boots: the boot time is
+/// read to the second, and moves only with a change of the clock.
+pub const BOOT_SLACK: u64 = 60;
+/// How long [`copy_running`] tries to remove a copy whose lock is free:
+/// the copy starts the task again right before it ends, so the run that
+/// follows can find its image still mapped for a moment (P-4).
+pub const COPY_EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// In staging: the copy's answer, `msiexec`'s exit code.
 pub const MSI_RESULT: &str = "msiexec-result.json";
@@ -246,8 +267,34 @@ pub fn msi_lock(ctx: &Context, create: bool) -> std::io::Result<Option<std::fs::
 
 /// Whether a copy may be running: its lock is held, the lock can't be
 /// read, or this run's copy is still there (a starting copy that hasn't
-/// taken the lock yet can't be removed: its image is running).
+/// taken the lock yet can't be removed: its image is running). A copy
+/// that can't be removed is tried again for up to [`COPY_EXIT_WAIT`]: one
+/// that has just started this run is still ending.
 pub fn copy_running(ctx: &Context, j: Option<&Journal>) -> bool {
+    copy_running_with(
+        ctx,
+        j,
+        &|p| std::fs::remove_file(p),
+        COPY_EXIT_WAIT,
+        std::time::Instant::now,
+        std::thread::sleep,
+    )
+}
+
+/// How often [`copy_running`] tries the removal again.
+const COPY_EXIT_POLL: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// [`copy_running`], with the removal, the clock and the sleep passed in.
+/// The lock is looked at once, first: looking again while the copy starts
+/// could take it from under the copy.
+pub(super) fn copy_running_with(
+    ctx: &Context,
+    j: Option<&Journal>,
+    remove: &dyn Fn(&Path) -> std::io::Result<()>,
+    wait: std::time::Duration,
+    now: impl Fn() -> std::time::Instant,
+    mut sleep: impl FnMut(std::time::Duration),
+) -> bool {
     match msi_lock(ctx, false) {
         Ok(Some(_)) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -260,7 +307,16 @@ pub fn copy_running(ctx: &Context, j: Option<&Journal>) -> bool {
         return false;
     }
     let path = ctx.staging.dir.join(copy);
-    std::fs::symlink_metadata(&path).is_ok() && std::fs::remove_file(&path).is_err()
+    let start = now();
+    loop {
+        if std::fs::symlink_metadata(&path).is_err() || remove(&path).is_ok() {
+            return false;
+        }
+        if now().saturating_duration_since(start) >= wait {
+            return true;
+        }
+        sleep(COPY_EXIT_POLL);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -355,6 +411,8 @@ pub fn installing(
         answer: None,
         copies: 0,
         reinstall_restart: false,
+        reinstall_boot: None,
+        restarts: 0,
         touched: false,
         state: State::Installing,
     })
@@ -723,6 +781,7 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
         {
             // On every pass: whatever started it meanwhile is stopped again.
             stopped(sys)?;
+            restarted(ctx, sys, j, &snapshot, done)?;
             return Err(Stop::Retry(format!(
                 "waiting for Windows to restart, which puts {} back in place",
                 j.from
@@ -743,6 +802,41 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
         save(j, &snapshot, done)?;
     }
     Ok(())
+}
+
+/// Step 5's wait for a restart, bounded (LOW-B): a boot other than the
+/// one it last saw `to` in, with `to` still on disk, is a restart that
+/// didn't put `from` back; [`MAX_RESTARTS`] of them halt. Each new boot is
+/// saved. A boot time that can't be read counts nothing (the wait goes on,
+/// as before the bound).
+fn restarted(
+    ctx: &Context,
+    sys: &dyn System,
+    j: &mut Journal,
+    snapshot: &Option<SnapshotRef>,
+    done: u8,
+) -> Result<(), Stop> {
+    let Ok(boot) = sys.boot_time() else {
+        return Ok(());
+    };
+    match j.reinstall_boot {
+        Some(seen) if boot.abs_diff(seen) <= BOOT_SLACK => return Ok(()),
+        Some(_) => j.restarts += 1,
+        None => {}
+    }
+    j.reinstall_boot = Some(boot);
+    if j.restarts >= MAX_RESTARTS {
+        return Err(Stop::Halt(format!(
+            "Windows restarted {} times since the reinstall of {} asked for a restart, and {} \
+             is still the program on disk: the replacement didn't take effect",
+            j.restarts, j.from, j.to
+        )));
+    }
+    j.state = State::RollingBack {
+        snapshot: snapshot.clone(),
+        done,
+    };
+    write(ctx, j).map_err(|e| Stop::Halt(e.to_string()))
 }
 
 /// The service disabled and stopped, and nothing left running as its
@@ -770,11 +864,13 @@ pub fn no_service_processes(sys: &dyn System) -> Result<(), String> {
 }
 
 /// Under `.lock`: the marker goes at step 5, right before the service is
-/// started (or when the journal is dropped). Whether it's gone.
+/// started (or when the journal is dropped). Whether it's gone. The lock is
+/// tried again for a moment ([`Bin::lock_retrying`]): the service that just
+/// stopped may not have let go of it yet.
 fn remove_marker(ctx: &Context) -> bool {
     let marker = ctx.data_dir.join("bin").join(MARKER);
     if let Ok(Some(bin)) = Bin::existing(&ctx.data_dir)
-        && let Ok(Some(_lock)) = bin.lock()
+        && let Ok(Some(_lock)) = bin.lock_retrying()
     {
         let _ = bin.remove(MARKER);
     }
