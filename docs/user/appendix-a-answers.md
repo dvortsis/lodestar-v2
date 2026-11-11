@@ -20,6 +20,13 @@ Answers to the questions at the end of each chapter, in the same order.
 2. It shows your public IP address to DHT peers.
 3. The backup holds `seal.key` and `auth.json`, so a public share would expose secrets. A restore also brings back the sessions valid at backup time, which last up to 30 days. Changing the password ends them, once the app offers that **(planned)**.
 
+## Chapter 4: Install on Windows and Linux
+
+1. So the program and the scripts Windows runs as SYSTEM stay out of other users' reach. It always goes in `C:\Program Files\Lodestar`.
+2. Your data in `C:\ProgramData\Lodestar`: library, password and keys. To remove it too, uninstall from an elevated PowerShell with `msiexec /x lodestar-0.5.1-x86_64.msi REMOVE_DATA=1`, after a backup.
+3. To a pool path such as `/mnt/cache/appdata/lodestar`. `/mnt/user` goes through Unraid's FUSE layer, which is slow for the index and risky for the database.
+4. Open **Settings → Crawler**, set **Crawl intensity** one step lower, then restart Lodestar. The change applies at the next start.
+
 <!-- nav:start -->
 ---
 

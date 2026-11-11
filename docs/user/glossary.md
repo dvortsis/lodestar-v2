@@ -22,6 +22,10 @@ Distributed hash table: the way BitTorrent nodes find torrents and each other wi
 
 A router setting that sends all unrequested internet traffic to one device. Never use it for Lodestar.
 
+## Dynamic port range
+
+The block of temporary local ports Windows hands out to outgoing connections. Lodestar needs enough of them left for its peer connections.
+
 ## Elevated PowerShell
 
 A PowerShell window opened with **Run as administrator**. Windows asks you to confirm. Only an elevated window can read Lodestar's private Windows data folder.
@@ -37,6 +41,10 @@ The description a torrent publishes about itself: name, file list, sizes and dat
 ## Named volume and bind mount
 
 A named volume is a data folder Docker manages for you. A bind mount is a folder you pick on the host.
+
+## Network or shared-folder filesystem
+
+NFS, SMB, a Windows network drive, or a shared folder such as the ones WSL2 and Docker Desktop mount from a Windows drive. Its file locking isn't reliable enough for Lodestar's database.
 
 ## Port forwarding
 

@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="236" viewBox="0 0 720 236" role="img" aria-label="The Lodestar service in Windows Services — Illustration, not a live screenshot">
+  <title>The Lodestar service in Windows Services (Illustration, not a live screenshot)</title>
+  <rect x="1" y="1" width="718" height="234" rx="8" fill="#FFFFFF" stroke="#DFDFDF" stroke-width="1.5"/>
+  <path d="M1 9 Q1 1 9 1 L711 1 Q719 1 719 9 L719 46 L1 46 Z" fill="#263C44"/>
+  <text x="18" y="29" fill="#FFFFFF" font-family="&#x27;Atkinson Hyperlegible Next&#x27;, -apple-system, BlinkMacSystemFont, &#x27;Segoe UI&#x27;, sans-serif" font-size="14" font-weight="700">Lodestar service properties</text>
+  <rect x="492" y="11" width="214" height="24" rx="12" fill="#FFFFFF" fill-opacity="0.16" stroke="#FFFFFF" stroke-opacity="0.45"/>
+  <text x="599" y="27" text-anchor="middle" fill="#FFFFFF" font-family="&#x27;Atkinson Hyperlegible Next&#x27;, -apple-system, BlinkMacSystemFont, &#x27;Segoe UI&#x27;, sans-serif" font-size="11" font-weight="600">Illustration, not a live screenshot</text>
+  <text x="20" y="74" fill="#6B6B6B" font-family="&#x27;Atkinson Hyperlegible Next&#x27;, -apple-system, BlinkMacSystemFont, &#x27;Segoe UI&#x27;, sans-serif" font-size="12">Name</text>
+  <text x="190" y="74" fill="#243C44" font-family="&#x27;Atkinson Hyperlegible Mono&#x27;, Consolas, monospace" font-size="13">Lodestar</text>
+  <line x1="16" y1="85" x2="704" y2="85" stroke="#DFDFDF" stroke-width="1"/>
+  <text x="20" y="101" fill="#6B6B6B" font-family="&#x27;Atkinson Hyperlegible Next&#x27;, -apple-system, BlinkMacSystemFont, &#x27;Segoe UI&#x27;, sans-serif" font-size="12">Description</text>
+  <text x="190" y="101" fill="#243C44" font-family="&#x27;Atkinson Hyperlegible Mono&#x27;, Consolas, monospace" font-size="13">Lodestar DHT crawler and torrent search</text>
+  <line x1="16" y1="112" x2="704" y2="112" stroke="#DFDFDF" stroke-width="1"/>
+  <text x="20" y="128" fill="#6B6B6B" font-family="&#x27;Atkinson Hyperlegible Next&#x27;, -apple-system, BlinkMacSystemFont, &#x27;Segoe UI&#x27;, sans-serif" font-size="12">Status</text>
+  <text x="190" y="128" fill="#243C44" font-family="&#x27;Atkinson Hyperlegible Mono&#x27;, Consolas, monospace" font-size="13">Running</text>
+  <line x1="16" y1="139" x2="704" y2="139" stroke="#DFDFDF" stroke-width="1"/>
+  <text x="20" y="155" fill="#6B6B6B" font-family="&#x27;Atkinson Hyperlegible Next&#x27;, -apple-system, BlinkMacSystemFont, &#x27;Segoe UI&#x27;, sans-serif" font-size="12">Startup type</text>
+  <text x="190" y="155" fill="#243C44" font-family="&#x27;Atkinson Hyperlegible Mono&#x27;, Consolas, monospace" font-size="13">Automatic (Delayed Start)</text>
+  <line x1="16" y1="166" x2="704" y2="166" stroke="#DFDFDF" stroke-width="1"/>
+  <text x="20" y="182" fill="#6B6B6B" font-family="&#x27;Atkinson Hyperlegible Next&#x27;, -apple-system, BlinkMacSystemFont, &#x27;Segoe UI&#x27;, sans-serif" font-size="12">Log on as</text>
+  <text x="190" y="182" fill="#243C44" font-family="&#x27;Atkinson Hyperlegible Mono&#x27;, Consolas, monospace" font-size="13">NT SERVICE\Lodestar</text>
+  <line x1="16" y1="193" x2="704" y2="193" stroke="#DFDFDF" stroke-width="1"/>
+  <path d="M1 192 L719 192 L719 227 Q719 235 711 235 L9 235 Q1 235 1 227 Z" fill="#E0E7E2"/>
+  <line x1="1" y1="192" x2="719" y2="192" stroke="#DFDFDF" stroke-width="1"/>
+  <text x="18" y="219" fill="#6B6B6B" font-family="&#x27;Atkinson Hyperlegible Next&#x27;, -apple-system, BlinkMacSystemFont, &#x27;Segoe UI&#x27;, sans-serif" font-size="11">Illustration, not a live screenshot · Source: packaging/windows/main.wxs</text>
+</svg>
