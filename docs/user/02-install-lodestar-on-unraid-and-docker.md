@@ -240,7 +240,7 @@ In v0.5.1, setup does not gate all crawler network activity. Claim the instance 
 > [!NOTE]
 > **What to expect in the first hours**
 > - Search works at once, but the index is small. It grows over days, not minutes.
-> - After every start, including restarts and updates, sampling waits 6 hours before it resumes. New discoveries ramp up over the first hours after each start.
+> - After every start, including restarts and updates, sampling waits 6 hours before it resumes. New discoveries ramp up over the first hours after each start. Full speed starts after those 6 hours.
 
 To read the notice again later, open **More** → **About**. The **Legal** section shows it.
 

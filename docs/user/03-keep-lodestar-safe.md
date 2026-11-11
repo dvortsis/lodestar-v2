@@ -118,7 +118,7 @@ To update by hand:
    **Result:** Compose starts the selected image with the existing data volume. A pinned `0.5.1` tag stays on v0.5.1 until you change it.
 
 > [!NOTE]
-> After every start, sampling waits 6 hours before it resumes, so new discoveries slow down after an update or restart. Search still works. The index grows over days.
+> After every start, sampling waits 6 hours before it resumes, so new discoveries slow down after an update or restart. Full speed starts after those 6 hours. Search still works. The index grows over days.
 
 > [!WARNING]
 > v0.5.1 uses schema V12 and can upgrade older compatible data. Back up first. A newer nightly can create a store v0.5.1 cannot read. Restore a compatible backup or choose a fresh data folder when returning from newer development builds.
