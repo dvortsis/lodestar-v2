@@ -30,9 +30,23 @@
 	let busy = $state(false);
 	let error = $state('');
 	let note = $state('');
-	let copied = $state(false);
+	/** What the Copy button last did, for the value shown now: reset whenever that value changes. */
+	let copied = $state<'idle' | 'copied' | 'manual'>('idle');
+	let codeEl = $state<HTMLElement>();
+	function setRevealed(v: { field: string; value: string } | null) {
+		revealed = v;
+		copied = 'idle';
+	}
+	async function copy(value: string) {
+		const r = await copyText(value);
+		copied = r;
+		if (r === 'manual' && codeEl) {
+			// Nothing could copy it: select the text so Ctrl+C does.
+			getSelection()?.selectAllChildren(codeEl);
+		}
+	}
 	// The reveal is dropped when this panel goes away.
-	onDestroy(() => (revealed = null));
+	onDestroy(() => setRevealed(null));
 
 	const label = (f: string) =>
 		f === 'webui_password'
@@ -48,7 +62,7 @@
 		const typed = password;
 		password = '';
 		try {
-			revealed = { field, value: await store.reveal(id, field, typed) };
+			setRevealed({ field, value: await store.reveal(id, field, typed) });
 			asking = null;
 		} catch (x) {
 			error = failureWords(x);
@@ -72,7 +86,7 @@
 		if (a !== 'go') return;
 		error = '';
 		note = '';
-		revealed = null;
+		setRevealed(null);
 		try {
 			await store.regenerate(id, field);
 			note = m.settings_companions_regen_done();
@@ -105,7 +119,7 @@
 			<div class="flex flex-wrap items-center gap-2">
 				<span class="text-small font-medium">{label(f)}</span>
 				{#if revealed?.field === f}
-					<Button dense onclick={() => (revealed = null)}
+					<Button dense onclick={() => setRevealed(null)}
 						>{m.settings_companions_cred_hide()}</Button
 					>
 				{:else}
@@ -119,15 +133,16 @@
 			</div>
 			{#if revealed?.field === f}
 				<p class="text-small text-muted-text">{m.settings_companions_cred_once()}</p>
-				<Button
-					dense
-					onclick={async () => {
-						copied = revealed ? (await copyText(revealed.value)) === 'copied' : false;
-					}}
-				>
-					{copied ? m.settings_companions_cred_copied() : m.settings_companions_cred_copy()}
+				<Button dense onclick={() => revealed && copy(revealed.value)}>
+					{copied === 'copied'
+						? m.settings_companions_cred_copied()
+						: m.settings_companions_cred_copy()}
 				</Button>
+				{#if copied === 'manual'}
+					<span class="text-small text-muted-text">{m.settings_companions_cred_manual()}</span>
+				{/if}
 				<code
+					bind:this={codeEl}
 					class="break-all rounded-selector border border-field-border px-2 py-1 font-mono text-small"
 					data-revealed>{revealed.value}</code
 				>

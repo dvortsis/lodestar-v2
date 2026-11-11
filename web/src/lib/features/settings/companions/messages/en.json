@@ -133,5 +133,6 @@
 	"settings_companions_code_timed_out": "That took too long. Try again in a minute.",
 	"settings_companions_detect_found_version": "Found {id} {version}",
 	"settings_companions_cred_copy": "Copy",
-	"settings_companions_cred_copied": "Copied"
+	"settings_companions_cred_copied": "Copied",
+	"settings_companions_cred_manual": "Couldn't copy it. The text is selected: press Ctrl+C."
 }

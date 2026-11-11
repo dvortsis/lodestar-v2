@@ -8,6 +8,16 @@ import { initLocale } from '$lib/i18n/locale.svelte';
 import CompanionsScreen from './CompanionsScreen.svelte';
 import { wordsFor } from './logic';
 
+const clip = vi.hoisted(() => ({
+	result: 'copied' as 'copied' | 'manual',
+	calls: [] as string[]
+}));
+vi.mock('$lib/util/clipboard', () => ({
+	copyText: async (text: string) => {
+		clip.calls.push(text);
+		return clip.result;
+	}
+}));
 vi.setConfig({ testTimeout: 30_000 });
 const until = (check: () => void) => waitFor(check, { timeout: 10_000 });
 
@@ -40,6 +50,8 @@ const fail = (code: number, c: string) =>
 
 beforeEach(() => {
 	initLocale('en');
+	clip.result = 'copied';
+	clip.calls = [];
 	sent = [];
 	answers = {};
 	bodies = {};
@@ -402,6 +414,7 @@ describe('busy guards, focus and a late error', () => {
 		await fireEvent.click(go);
 		expect(posts()).toHaveLength(1);
 		release();
+		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
 	});
 	it('a second press of Remove while the removal runs sends nothing more', async () => {
 		const { gate, release } = hold();
@@ -423,6 +436,7 @@ describe('busy guards, focus and a late error', () => {
 		await fireEvent.click(go);
 		expect(posts()).toHaveLength(1);
 		release();
+		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
 	});
 	it('after an install the row name has focus', async () => {
 		await open();
@@ -475,7 +489,7 @@ describe('words and copy', () => {
 	it('an unexpected failure does not claim nothing changed', () => {
 		expect(wordsFor('internal')).not.toMatch(/Nothing was changed/);
 	});
-	it('a revealed value has a Copy button', async () => {
+	it('a revealed value has a Copy button (old test)', async () => {
 		answers['POST /companions/qbittorrent/credentials/webui_password/reveal'] = () =>
 			reply(200, { field: 'webui_password', id: 'qbittorrent', value: 'S3cret-value' });
 		await open();
@@ -501,5 +515,57 @@ describe('words and copy', () => {
 		expect(document.querySelector('[data-detected] li span')?.textContent).toBe(
 			'Found qBittorrent'
 		);
+	});
+});
+
+describe('the Copy button', () => {
+	const reveal = async (value = 'S3cret-value') => {
+		answers['POST /companions/qbittorrent/credentials/webui_password/reveal'] = () =>
+			reply(200, { field: 'webui_password', id: 'qbittorrent', value });
+		await fireEvent.click(await screen.findByRole('button', { name: 'Show' }, { timeout: 10_000 }));
+		await fireEvent.input(screen.getByLabelText(/Your Lodestar password/), {
+			target: { value: 'pw' }
+		});
+		await fireEvent.click(screen.getByRole('button', { name: 'Show it' }));
+		await until(() => expect(document.querySelector('[data-revealed]')).toBeTruthy());
+	};
+	const openPanel = async () => {
+		await open();
+		await fireEvent.click(screen.getAllByRole('button', { name: 'Passwords and keys' })[0]!);
+	};
+	it('copies the revealed value once, says Copied, and says Copy again after Hide and a new reveal', async () => {
+		await openPanel();
+		await reveal();
+		await fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+		await until(() => expect(screen.getByRole('button', { name: 'Copied' })).toBeTruthy());
+		expect(clip.calls).toEqual(['S3cret-value']);
+		await fireEvent.click(screen.getByRole('button', { name: 'Hide' }));
+		await reveal('Another-value');
+		expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy();
+		expect(screen.queryByRole('button', { name: 'Copied' })).toBeNull();
+		expect(clip.calls).toEqual(['S3cret-value']);
+	});
+	it('after a regenerate the label is back to Copy', async () => {
+		answers['POST /companions/qbittorrent/credentials/webui_password/regenerate'] = () =>
+			reply(202, { id: 'qbittorrent' });
+		await openPanel();
+		await reveal();
+		await fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+		await until(() => expect(screen.getByRole('button', { name: 'Copied' })).toBeTruthy());
+		await fireEvent.click(screen.getByRole('button', { name: 'Make a new one' }));
+		const dialog = await screen.findByRole('dialog', {}, { timeout: 10_000 });
+		await fireEvent.click(within(dialog).getByRole('button', { name: 'Make a new one' }));
+		await until(() => expect(document.querySelector('[data-revealed]')).toBeNull());
+		await reveal('Fresh-value');
+		expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy();
+	});
+	it('when nothing could copy it, says so and selects the text', async () => {
+		clip.result = 'manual';
+		await openPanel();
+		await reveal();
+		await fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+		await until(() => expect(screen.getByText(/press Ctrl\+C/)).toBeTruthy());
+		expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy();
+		expect(getSelection()?.toString()).toBe('S3cret-value');
 	});
 });

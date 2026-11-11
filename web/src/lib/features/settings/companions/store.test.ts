@@ -26,10 +26,12 @@ const row = (health: string) => ({
 
 let health: string;
 let gets: number;
+let hold: Promise<void> | null;
 beforeEach(() => {
 	vi.useFakeTimers();
 	health = 'unhealthy';
 	gets = 0;
+	hold = null;
 	vi.stubGlobal(
 		'fetch',
 		vi.fn(async (url: string, init: RequestInit = {}) => {
@@ -37,6 +39,9 @@ beforeEach(() => {
 			if ((init.method ?? 'GET') === 'POST') return reply(202, { id: 'qbittorrent' });
 			if (path === '/companions/qbittorrent') {
 				gets++;
+				const wait = hold;
+				hold = null;
+				if (wait) await wait;
 				return reply(200, row(health));
 			}
 			return reply(200, { companions: [row(health)] });
@@ -94,6 +99,22 @@ describe('the restart watch', () => {
 		await store.restart('qbittorrent');
 		await store.restart('qbittorrent');
 		expect(vi.getTimerCount()).toBe(1);
+		store.stop();
+	});
+});
+
+describe('a look still running from an old watch', () => {
+	it('does not re-arm over a newer, full-length watch', async () => {
+		const store = await started();
+		await store.restart('qbittorrent');
+		let release: () => void = () => {};
+		hold = new Promise<void>((r) => (release = r));
+		await vi.advanceTimersByTimeAsync(3000); // the old watch looks, and waits
+		await store.restart('qbittorrent'); // a newer watch, 20 looks
+		const before = gets;
+		release();
+		await vi.advanceTimersByTimeAsync(3000 * 40);
+		expect(gets - before).toBe(20);
 		store.stop();
 	});
 });

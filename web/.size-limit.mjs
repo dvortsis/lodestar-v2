@@ -1322,7 +1322,7 @@ export default [
 	entry('Settings updates parts (on demand)', settingsUpdatesPartsLazy, '3.2 KB'),
 	entry('Settings updates advanced (on demand)', settingsUpdatesAdvancedLazy, '4.65 KB'),
 	entry('Settings updates icon and purpose (on demand)', settingsUpdatesModulesLazy, '0.8 KB'),
-	entry('Settings companions parts (on demand)', settingsCompanionsPartsLazy, '28.7 KB'),
+	entry('Settings companions parts (on demand)', settingsCompanionsPartsLazy, '29 KB'),
 	entry('Settings companions icon and purpose (on demand)', settingsCompanionsModulesLazy, '1 KB'),
 	// Logging (S-logs-2): its server labels, and the event list, data kinds and privacy dialogs.
 	// Measured 0.78 KB and 15.48 KB at first (limits = measured + 10%); 16.48 KB after the review
@@ -1386,7 +1386,7 @@ export default [
 							: name === 'SourcesScreen'
 								? '30.9 KB'
 								: name === 'NotificationsScreen'
-									? '45.1 KB'
+									? '45.2 KB'
 									: '45 KB'
 		)
 	),

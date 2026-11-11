@@ -34,6 +34,8 @@ export class CompanionsStore {
 		const t = setTimeout(async () => {
 			delete this.timers[id];
 			await this.refresh(id);
+			// A newer restart armed its own watch while this look ran: leave it alone.
+			if (this.timers[id] !== undefined) return;
 			if (this.items.find((x) => x.id === id)?.health !== 'healthy') this.watch(id, left - 1);
 		}, 3000);
 		this.timers[id] = t;
