@@ -6,9 +6,14 @@ These are follow-ups from the #662 review (X-flake-portable-restart) to the port
   - **Before:** the script waited with `$old.WaitForExit()`. Under Constrained Language Mode, which AppLocker or WDAC policies impose, that .NET method call is blocked. The script then failed, and the copy went ahead without waiting, which is the flake #662 fixed.
   - **Now:** the script uses only cmdlets and operators:
     - it reads start times through `Get-Process | Select-Object -ExpandProperty StartTime`;
-    - it waits with `Wait-Process -Id <old> -Timeout 30`, the same `PREDECESSOR_WAIT`, so the wait is bounded.
+    - it waits with `Wait-Process -Id <old> -Timeout <n>`, so the wait is bounded.
+  - **The script's bound isn't 30 s,** although the brief asked for that; it's `WATCH_SCRIPT_LIMIT`, 720 s (`GO_LIMIT` + `EXIT_LIMIT` + twice `PREDECESSOR_WAIT`).
+    - **Why:** the watch starts before the old process's graceful shutdown, which may take up to `GO_LIMIT` (600 s). A 30 s bound inside the script could run out during a slow shutdown. The copy would then refuse the restart the moment the hand-over came, with no wait at all. The fresh review before the PR found this.
+    - **The 30 s is unchanged:** Rust still measures `PREDECESSOR_WAIT` from the hand-over (`await_watch`), refuses after it, and ends the watch. The script's bound only keeps a forgotten watch from running forever.
+    - A unit test checks that the bound is at least that sum.
+  - **A reused id is checked after the wait too.** If the old process exits just as the wait ends and its id is taken at once, the new holder started after this copy, so it doesn't count as the old process still running.
   - A unit test checks that the script has no `.WaitForExit(`, no `::` static call and no member access on `$old`.
-  - A Windows-only test runs the real script under Constrained Language Mode, after first checking that the mode is in force (a .NET static call must fail). It must print `started`, then `exited`, once the old process ends.
+  - A Windows-only test runs the real script under Constrained Language Mode, after first checking that the mode is in force (a .NET static call must fail, with `$ErrorActionPreference = 'Stop'` so the error ends the probe). It must print `started`, then `exited`, once the old process ends.
 - **The 30 s runs from the watch's start, not from the hand-over.**
   - The script prints `started` first, before anything that can be slow.
   - The copy reads the watch's status lines on a thread (`read_watch`) and measures `PREDECESSOR_WAIT` from that marker, or from the hand-over if the marker came earlier (`await_watch`).
@@ -26,12 +31,13 @@ These are follow-ups from the #662 review (X-flake-portable-restart) to the port
   - the Constrained Language Mode test waits about 2 s for its old process;
   - the skip-line test is a quick start-and-fail run;
   - the existing 30 s wait test only gains an assertion.
-- **Mutation-checked:** 14 mutations of `restart.rs`, each made to fail a test:
+- **Mutation-checked:** 16 mutations of `restart.rs`, each made to fail a test:
   - the `started` marker, `WaitForExit` restored, and `-Timeout` removed;
   - the token kept in the watch's environment;
   - a status taken before `started`, a later `started` moving the clock, and the 16-line cap;
   - each skip line and the timeout line dropped;
   - the exit status ignored;
-  - the marker ignored, the 2× cap, and the drain for a last line still in the pipe.
+  - the marker ignored, the 2× cap, and the drain for a last line still in the pipe;
+  - after the review: the script's bound back to `PREDECESSOR_WAIT`, and the reused-id check after the wait removed.
 
   The first run left two survivors, a second `started` and the drain; a test was added for each.

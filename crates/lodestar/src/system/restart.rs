@@ -446,6 +446,19 @@ pub const EXIT_RELAUNCHED: i32 = 80;
 /// refuses to start.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub const PREDECESSOR_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+/// The watch script's own bound on its `Wait-Process`. The watch starts
+/// before the old process's graceful shutdown, so this bound must outlast
+/// the whole hand-over ([`GO_LIMIT`](crate::windows::relaunch::GO_LIMIT),
+/// then [`EXIT_LIMIT`](crate::windows::relaunch::EXIT_LIMIT)) and then
+/// [`PREDECESSOR_WAIT`] twice over. Rust measures the 30 s from the
+/// hand-over ([`await_watch`]) and always ends first. A bare 30 s here would
+/// run out during a slow shutdown and refuse a restart without any wait.
+pub const WATCH_SCRIPT_LIMIT: std::time::Duration = std::time::Duration::from_secs(
+    crate::windows::relaunch::GO_LIMIT.as_secs()
+        + crate::windows::relaunch::EXIT_LIMIT.as_secs()
+        + 2 * PREDECESSOR_WAIT.as_secs(),
+);
+
 /// How often it looks.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub const PREDECESSOR_POLL: std::time::Duration = std::time::Duration::from_millis(50);
@@ -491,16 +504,17 @@ pub fn predecessor_pid(token: &str) -> Option<u32> {
 /// (X-flake-portable-restart-2). It prints one status word a line:
 /// `started` first, before anything that can be slow, then `exited` once
 /// `old` has exited (or isn't running), or `timeout` if it's still running
-/// after [`PREDECESSOR_WAIT`]. A process with that id that started after
-/// this copy (which `old` started) took the id later, so it isn't waited
-/// on. Any error ends it non-zero with no status ([`await_watch`] calls
+/// after [`WATCH_SCRIPT_LIMIT`], which outlasts the copy's own wait. A
+/// process with that id that started after this copy (which `old` started)
+/// took the id later, so it isn't waited on, before or after the wait. Any
+/// error ends it non-zero with no status ([`await_watch`] calls
 /// that skipped).
 ///
 /// Only cmdlets and operators, no .NET method calls, so it runs under
 /// Constrained Language Mode, where `$old.WaitForExit()` is blocked.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn predecessor_script(old: u32, me: u32) -> String {
-    let secs = PREDECESSOR_WAIT.as_secs();
+    let secs = WATCH_SCRIPT_LIMIT.as_secs();
     format!(
         "$ErrorActionPreference = 'Stop'; \
          Write-Output 'started'; \
@@ -511,7 +525,10 @@ pub fn predecessor_script(old: u32, me: u32) -> String {
            $since = $old | Select-Object -ExpandProperty StartTime; \
            if (-not ($since -gt $me)) {{ \
              Wait-Process -Id {old} -Timeout {secs} -ErrorAction SilentlyContinue; \
-             if (Get-Process -Id {old} -ErrorAction SilentlyContinue) {{ Write-Output 'timeout'; exit 3 }} \
+             $still = Get-Process -Id {old} -ErrorAction SilentlyContinue; \
+             if ($still -and -not (($still | Select-Object -ExpandProperty StartTime) -gt $me)) {{ \
+               Write-Output 'timeout'; exit 3 \
+             }} \
            }} \
          }}; \
          Write-Output 'exited'; \
@@ -1334,9 +1351,24 @@ mod tests {
     fn the_script_is_safe_under_constrained_language_mode() {
         let script = predecessor_script(4242, 77);
         assert!(
-            script.contains("Wait-Process -Id 4242 -Timeout 30"),
+            script.contains(&format!(
+                "Wait-Process -Id 4242 -Timeout {} ",
+                WATCH_SCRIPT_LIMIT.as_secs()
+            )),
             "{script}"
         );
+        // The script's bound outlasts the whole hand-over and the copy's
+        // own wait after it, so only Rust's 30 s from the hand-over ends it.
+        assert!(
+            WATCH_SCRIPT_LIMIT
+                >= crate::windows::relaunch::GO_LIMIT
+                    + crate::windows::relaunch::EXIT_LIMIT
+                    + PREDECESSOR_WAIT * 2,
+            "{WATCH_SCRIPT_LIMIT:?}"
+        );
+        // A process with the old id but started after this copy is a
+        // reused id, not the old process, after the wait as well as before.
+        assert_eq!(script.matches("-gt $me").count(), 2, "{script}");
         assert!(!script.contains(".WaitForExit("), "{script}");
         assert!(!script.contains("::"), "no .NET static calls: {script}");
         assert!(
@@ -1400,7 +1432,7 @@ mod tests {
         };
         // The mode really is in force: a .NET static call fails under it.
         let probe =
-            run("[System.Diagnostics.Process]::GetCurrentProcess() | Out-Null; exit 0".into());
+            run("$ErrorActionPreference = 'Stop'; [System.Diagnostics.Process]::GetCurrentProcess() | Out-Null; exit 0".into());
         assert!(
             !probe.status.success(),
             "Constrained Language Mode isn't in force"
