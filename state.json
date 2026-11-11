@@ -6709,7 +6709,8 @@
       "item": "windows_service.rs a_portable_restart_serves_again_on_the_same_port: relaunched copy started 10 ms after app.relaunch and hit sqlite disk I/O error (old process still held the store). Runner Opus subagent building the fix on slice/X-flake-portable-restart; seen on #655 ca0fbf6d job 130326742759. Add slices.yaml entry in next runner PR."
     },
     "next runner PR: PK-win-portable-upd owns += crates/lodestar/src/cli/util.rs (runner approved 2026-11-11T05:2xZ; refuse_during_update_rollback also refuses on portable.json rolling_back or unreadable)",
-    "X-prowlarr-settings #658 (54982496): option 2 done; Windows portable-restart red is \u00a72.18 once X-flake-portable-restart PR opens"
+    "X-prowlarr-settings #658 (54982496): option 2 done; Windows portable-restart red is \u00a72.18 once X-flake-portable-restart PR opens",
+    "next runner PR: CMP-9c owns += web/src/lib/features/wizard/messages/{en,zh}.json (keys only, runner 2026-11-11)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7202,6 +7203,12 @@
       "slice": "CMP-6",
       "sha": "e1df499596c5a126975ee895201c3ba7c3c7d621",
       "at": "2026-11-09T00:20Z"
+    },
+    {
+      "pr": 656,
+      "slice": "X-event-names-split",
+      "sha": "6126495e",
+      "at": "2026-11-11T05:37Z"
     }
   ],
   "active_sessions": {
@@ -7436,7 +7443,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T04:06Z",
+    "updated": "2026-11-11T05:39Z",
     "items": [
       {
         "slot": 1,
@@ -7496,11 +7503,11 @@
       },
       {
         "slot": 8,
-        "slice": "X-event-names-split",
+        "slice": "CMP-9c",
         "role": "build",
-        "agent": "claude",
-        "doing": "session_01MMjhn9hN5eQzNrbjqS337K",
-        "since": "2026-11-11T04:06Z"
+        "agent": "session_01MMjhn8mGSt1DA24S2gjPE6",
+        "doing": "Wizard Install qBittorrent option (Sonnet, /security-review)",
+        "since": "2026-11-11T05:39Z"
       }
     ]
   },
@@ -7556,7 +7563,7 @@
     }
   ],
   "heartbeat": "2026-11-11T04:06Z",
-  "updated": "2026-11-11T05:34Z",
+  "updated": "2026-11-11T05:39Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
