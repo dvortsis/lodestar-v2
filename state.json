@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T07:39:51Z",
+  "updated_at": "2026-11-11T07:48:37Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6740,7 +6740,8 @@
       "what": "#665 B1: native install never hands qBittorrent to integrations.clients; core Opus slice, brief briefs/X-cmp-native-handover.md; runs in the X-cmp-egress-prelaunch session after it merges; CMP-9c merge held on it. Add slices.yaml entry (and CMP-9c deps += it) in next runner PR."
     },
     "2026-11-11: #666 X-natural-wording merged (33c58e14), fresh Opus MERGE; nits (hard-coded 512/32 in natural_too_long, unreachable! Syntax arm) optional, not queued; slot 7 -> X-updates-raw-codes",
-    "2026-11-11: #671 round 2 (94e349e9): budget 90, 360 s deadline, fail-closed on unreadable pages; delta security review running. Owner flag on merge: 200->90 page budget, deadline, two accepted residuals"
+    "2026-11-11: #671 round 2 (94e349e9): budget 90, 360 s deadline, fail-closed on unreadable pages; delta security review running. Owner flag on merge: 200->90 page budget, deadline, two accepted residuals",
+    "2026-11-11: #671 round 3 (75a526f1) runner-checked: option (a), budget 60 (714/h), plain escalation text; one ask: write started=true before POST /v1/sessions. Next runner PR: X-tripwire-reviews-lookback owns += .github/workflows/operator-wake.yml, infra/operator/wake.py, tests/test_wake.py, tests/test_workflows.py, X-op4-polish decisions line; X-natural-wording owns += crates/api/tests/suggest.rs"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7629,7 +7630,8 @@
   ],
   "review_queue": [
     "#663 X-win-upd-bounds",
-    "#671 X-tripwire-reviews-lookback (delta)"
+    "#659 PK-win-portable-upd",
+    "#665 CMP-9c (delta; merge held on X-cmp-native-handover)"
   ],
   "merged": []
 }
