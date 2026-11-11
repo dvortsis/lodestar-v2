@@ -162,8 +162,12 @@ def cmd_sweep(env, transport, now) -> int:
     try:
         findings, disable = sweep(env, transport, now)
     except Incomplete as e:
+        # Fail closed (the runner, 2026-11-11): a sweep we can't finish counts as a trip.
         what = str(e) if str(e).replace("_", "").isalpha() else "a list"
-        findings, disable = [f"the sweep is incomplete: {what} ran past {MAX_PAGES} pages; check by hand"], False
+        findings, disable = [f"the sweep is incomplete: {what} ran past {MAX_PAGES} pages; check by hand"], True
+    except Exception as e:  # noqa: BLE001 - an API error: say so (best effort), then fail the job
+        act(env, transport, [f"the sweep failed ({type(e).__name__}); nothing was checked this run"], False)
+        raise SystemExit("tripwire: the sweep failed") from None
     if findings:
         act(env, transport, findings, disable)
     else:

@@ -338,7 +338,7 @@ def cmd_wake(env, deps=None) -> int:
         gh = deps.get("github") or github()
         lock = OperatorLock(store, now)
         acquired = lock.acquire(run_id)
-    except (Exception, Refusal) as e:
+    except (Exception, SystemExit) as e:  # SystemExit too: OIDC and STS failures in apply.oidc_session exit
         escalate(env, msg.id, f"the bridge failed before the lock ({type(e).__name__}); no session runs", gh_post)
         raise
     if not acquired:
@@ -378,7 +378,9 @@ def cmd_wake(env, deps=None) -> int:
         if outcome != "done":
             escalate(env, msg.id, outcome, gh_post)
         return 0
-    except (Exception, Refusal) as e:
+    except (Exception, SystemExit) as e:
+        if sid:  # never leave a session spending its budget after a crash: stop it, then the archive below
+            _interrupt(call, sid, mono, sleep)
         escalate(env, msg.id, f"the bridge failed ({type(e).__name__}); the session, if any, is archived", gh_post)
         raise
     finally:

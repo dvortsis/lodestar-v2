@@ -331,6 +331,46 @@ class Wake(unittest.TestCase):
         self.assertIsInstance(rc, Exception)
         self.assertIn("the bridge failed before the lock (RuntimeError)", self.post.bodies()[0])
 
+    def test_an_oidc_exit_before_the_lock_is_answered(self):
+        # apply.oidc_session raises a bare SystemExit when the role can't be assumed.
+        env, marks = wake_env()
+        self.store = None
+        import bridge
+        real = bridge.connect_store
+
+        def boom(env_, run_id):
+            raise SystemExit("fleet: couldn't assume the role")
+        bridge.connect_store = boom
+        self.addCleanup(setattr, bridge, "connect_store", real)
+        out = io.StringIO()
+        deps = {"anthropic": FakeAnthropic(), "github": self.gh, "channel_transport": self.post, "clock": Clock()}
+        with redirect_stdout(out), self.assertRaises(SystemExit):
+            wake.main(["wake"], env=env, deps=deps)
+        self.assertIn("the bridge failed before the lock (SystemExit)", self.post.bodies()[0])
+        self.assert_clean(out.getvalue() + "".join(self.post.bodies()), marks)
+
+    def test_a_crash_mid_session_interrupts_before_the_archive(self):
+        env, _ = wake_env()
+
+        class Api(FakeAnthropic):
+            def __call__(self, method, path, body):
+                if method == "GET" and path == "/v1/sessions/sesn_FAKE":
+                    if not any(b == {"events": [{"type": "user.interrupt"}]} for _, _, b in self.calls):
+                        self.calls.append((method, path, body))
+                        raise RuntimeError("poll failed")
+                    self.calls.append((method, path, body))
+                    return {"status": "idle"}
+                return super().__call__(method, path, body)
+        api = Api()
+        rc, _ = self.go(env, api)
+        self.assertIsInstance(rc, Exception)
+        posts = [(p, b) for m, p, b in api.calls if m == "POST"]
+        paths = [p for p, _ in posts]
+        interrupt = posts.index(("/v1/sessions/sesn_FAKE/events", {"events": [{"type": "user.interrupt"}]}))
+        self.assertLess(interrupt, paths.index("/v1/sessions/sesn_FAKE/archive"))
+        self.assertIn("the bridge failed (RuntimeError)", self.post.bodies()[-1])
+        self.assertNotIn(LOCK_KEY, self.store.objects)
+
     def test_gated_events_touch_nothing(self):
         for over in ({"AUTHOR_ID": "9"}, {"OPERATOR_STOP": "true"}, {"GITHUB_RUN_ATTEMPT": "2"},
                      {"COMMENT_BODY": "operator-instruction v1\nid: x"}, {"EVENT_ACTION": "edited"}):

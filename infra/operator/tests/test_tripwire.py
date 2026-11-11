@@ -135,6 +135,21 @@ class Paging(unittest.TestCase):
         gh_full = lambda m, p, b: (gh.calls.append((m, p, b, None)) or (full if p.startswith("/repos/o/r/issues/events") else []))  # noqa: E731
         run(["sweep"], env(), gh_full)
         self.assertIn("the sweep is incomplete: events ran past 10 pages", gh.bodies()[0])
+        self.assertIn(DISABLE, [c[:2] for c in gh.calls])  # fail closed: an unfinished sweep is a trip
+
+    def test_an_api_error_escalates_then_fails_the_job(self):
+        posts = []
+
+        def gh(method, path, body):
+            if method == "GET":
+                raise RuntimeError("GitHub API GET failed")
+            posts.append((method, path, body))
+        with self.assertRaises(SystemExit) as cm:
+            run(["sweep"], env(), gh)
+        self.assertEqual(str(cm.exception), "tripwire: the sweep failed")
+        self.assertEqual(len(posts), 1)
+        self.assertIn("the sweep failed (RuntimeError)", posts[0][2]["body"])
+        self.assertNotIn("disable", posts[0][1])
 
 
 class Disable(unittest.TestCase):
