@@ -28,6 +28,8 @@ test.describe('first-run wizard', () => {
 	test.beforeEach(async ({ mock }) => {
 		backend = new SettingsBackend(WIZARD_INDEX, wizardValues()).attach(mock);
 		mock.on('getAuthStatus', { logged_in: true, notice_required: false, setup_required: false });
+		// The download step asks which companions this build can install; none here (CMP-9c).
+		mock.on('listCompanions', { companions: [] });
 		// The filters API the pack step drives: packs start on, as on a fresh data directory
 		// (RP-DEF); turning one off previews as weakening and applies only with the password.
 		for (const id of PACKS) packs.set(id, true);
