@@ -1,0 +1,92 @@
+name: Companion pins
+
+# CMP-13's pin run (docs/decisions/2026-11-11-CMP-13.md): downloads one
+# companion's builds from its catalogue hosts, checks upstream OpenPGP
+# signatures against keys pinned by fingerprint in tools/companion-pins, and
+# proposes a catalogue.json. It only reads: it never pushes, commits or opens a
+# pull request. A person opens the pin PR from the uploaded artifact, and the
+# runner reviews it. Any write permission or secret here needs the owner.
+
+on:
+  workflow_dispatch:
+    inputs:
+      companion:
+        description: Companion to pin
+        type: choice
+        options: [qbittorrent, prowlarr, gluetun]
+      version:
+        description: Upstream version (1.28.2.4885, 5.0.3)
+        required: true
+      tag:
+        description: Release tag, if not the tool's default (qBittorrent's userdocs builds need it, e.g. release-5.0.3_v2.0.11)
+        required: false
+      image_tag:
+        description: Container tag, if not the tool's default
+        required: false
+      artifacts:
+        description: Comma-separated platform-arch to pin (default every one but installers)
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  pin:
+    name: pin ${{ inputs.companion }} ${{ inputs.version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 -c 'import sys; assert sys.version_info >= (3, 12), sys.version' && gpg --version | head -1
+      # Inputs reach the tool as environment variables, never inside the script.
+      - name: pin
+        env:
+          COMPANION: ${{ inputs.companion }}
+          VERSION: ${{ inputs.version }}
+          TAG: ${{ inputs.tag }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          ARTIFACTS: ${{ inputs.artifacts }}
+        run: |
+          set -o pipefail
+          out="$RUNNER_TEMP/companion-pins"
+          mkdir -p "$out"
+          args=(--catalogue crates/companions/data/catalogue.json --out "$out/catalogue.json"
+                --report "$out/report.md" --companion "$COMPANION" --version "$VERSION")
+          [ -n "$TAG" ] && args+=(--tag "$TAG")
+          [ -n "$IMAGE_TAG" ] && args+=(--image-tag "$IMAGE_TAG")
+          [ -n "$ARTIFACTS" ] && args+=(--artifacts "$ARTIFACTS")
+          python3 tools/companion-pins/pin.py "${args[@]}" 2> >(tee "$out/refused.txt" >&2)
+          git diff --no-index -- crates/companions/data/catalogue.json "$out/catalogue.json" > "$out/catalogue.diff" || true
+      - name: job summary
+        if: always()
+        run: |
+          out="$RUNNER_TEMP/companion-pins"
+          if [ -s "$out/report.md" ]; then
+            cat "$out/report.md" >> "$GITHUB_STEP_SUMMARY"
+            printf '\n### Proposed change to catalogue.json\n\n```diff\n' >> "$GITHUB_STEP_SUMMARY"
+            cat "$out/catalogue.diff" >> "$GITHUB_STEP_SUMMARY"
+            printf '```\n\nNothing was committed. Open the pin PR from the `companion-pins` artifact.\n' >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '### Companion pins: refused\n\nNo catalogue was written.\n\n```\n' >> "$GITHUB_STEP_SUMMARY"
+            cat "$out/refused.txt" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "The tool didn't run: see the step log." >> "$GITHUB_STEP_SUMMARY"
+            printf '```\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: success()
+        with:
+          name: companion-pins
+          path: |
+            ${{ runner.temp }}/companion-pins/catalogue.json
+            ${{ runner.temp }}/companion-pins/report.md
+            ${{ runner.temp }}/companion-pins/catalogue.diff
+          if-no-files-found: error
+          retention-days: 30
