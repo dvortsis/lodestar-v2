@@ -180,6 +180,7 @@
 	"settings_updates_error_rollback_updates_unavailable": "This installation has no update engine, so it can't roll back.",
 	"settings_updates_rollback_reason_busy": "An update check or install is running. Try again when it finishes.",
 	"settings_updates_rollback_reason_no_previous_version": "There is no previous version to go back to.",
+	"settings_updates_rollback_reason_not_built_yet": "Rolling back isn't built into this version yet.",
 	"settings_updates_rollback_reason_snapshot_missing": "The snapshot of your data from before the update is gone.",
 	"settings_updates_failed_download_mismatch": "The download didn't match what was signed, so it was thrown away.",
 	"settings_updates_failed_download_too_large": "The download was larger than expected, so it was stopped.",

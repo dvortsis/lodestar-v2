@@ -733,6 +733,7 @@ describe('the Updates screen', () => {
 			['busy', 'check or install is running'],
 			['no_previous_version', 'no previous version'],
 			['snapshot_missing', 'snapshot of your data'],
+			['not_built_yet', "Rolling back isn't built"],
 			['something_new', 'gave no reason']
 		])('shows the refusal %s in words', async (reason, words) => {
 			offer();

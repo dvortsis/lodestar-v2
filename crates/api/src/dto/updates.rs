@@ -20,6 +20,9 @@ pub enum UpdatesUnavailable {
     Network,
     /// Windows: checking and installing come with the Windows helper
     /// (E-M6), so the screen says that instead of offering updates.
+    /// Kept for clients; the Windows engine now checks and notifies, and
+    /// reports what it can't do yet as `capability.reason`
+    /// `not_built_yet` rather than as this.
     WindowsHelper,
 }
 
@@ -88,10 +91,15 @@ pub struct Capability {
     pub can_install: bool,
     /// Why not: `not_supervised`, `dev_build`, `noexec`, `not_writable`,
     /// `package_managed`, `image_mode`, `trust_damaged`,
-    /// `skipped_unreadable`, `noexec_unknown` or `channel_unavailable`;
-    /// or, when `unavailable`
-    /// is set, the same reason (`windows_helper`, …). Install
-    /// automatically then behaves as Check and notify.
+    /// `skipped_unreadable`, `noexec_unknown`, `channel_unavailable` or
+    /// `not_built_yet` (Windows: this install path isn't built yet, e.g.
+    /// the portable build, or no installer wired in); on Windows also
+    /// `install_kind_unknown` (the build is neither the MSI service nor
+    /// the portable zip, so no artifact is chosen) and
+    /// `data_folder_unchecked` (the data folder's permissions weren't
+    /// checked, so nothing installs from it); or, when `unavailable` is
+    /// set, the same reason (`fixture`, `network`, `windows_helper`).
+    /// Install automatically then behaves as Check and notify.
     #[schema(required = true)]
     pub reason: Option<String>,
 }
@@ -184,8 +192,9 @@ pub struct RollbackInfo {
     /// `POST /updates/rollback` would start a rollback now.
     pub available: bool,
     /// Why not, when `available` is false: `not_supervised`,
-    /// `image_mode`, `busy`, `no_previous_version` or `snapshot_missing`
-    /// (or the `unavailable` reason). Always sent; not `required` in the
+    /// `image_mode`, `busy`, `no_previous_version`, `snapshot_missing` or
+    /// `not_built_yet` (Windows: Roll back isn't built for this install
+    /// yet), or the `unavailable` reason. Always sent; not `required` in the
     /// schema yet, so clients built before it still type-check.
     #[serde(default)]
     pub reason: Option<String>,
@@ -239,7 +248,9 @@ pub struct UpdatesStatus {
     #[schema(required = true)]
     pub pending: Option<PendingInstall>,
     /// An install under way (`now`), or one asked for at the next window
-    /// (`window`); null otherwise. Progress is on the `updates` topic.
+    /// (`window`); null otherwise. It is set as soon as the install
+    /// starts, so it covers the download and verification, not only the
+    /// final install step. Progress is on the `updates` topic.
     /// Always sent; not `required` in the schema yet, so clients built
     /// before it (the Updates screen's fixtures) still type-check.
     pub installing: Option<Installing>,
@@ -250,7 +261,9 @@ pub struct UpdatesStatus {
     /// last check's times couldn't be saved and won't survive a
     /// restart), `updater_unreadable` (the saved update state couldn't be
     /// read, so automatic updates are held; pausing or resuming saves a
-    /// new state, which rewrites the file and ends the hold), …
+    /// new state, which rewrites the file and ends the hold) and, on
+    /// Windows, `install_failed` (the update helper's last answer was not
+    /// a successful install of a newer version; display only), …
     pub notices: Vec<String>,
     pub history: Vec<HistoryEntry>,
 }
