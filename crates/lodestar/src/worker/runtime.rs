@@ -1104,7 +1104,8 @@ fn want_dht(s: &Shared) {
             return Desired::Stop;
         };
         let up = s.session.borrow().as_ref().is_some_and(|h| !h.is_closed());
-        if !up || s.fresh_session.load(Ordering::Acquire) {
+        // A full spool keeps only the routing too (WK-11).
+        if !up || s.fresh_session.load(Ordering::Acquire) || s.spool_full() {
             return Desired::Pause;
         }
         Desired::Run(Want {
@@ -1306,6 +1307,18 @@ fn release(s: &Shared, reports: &Arc<dyn Reports>, key: InfoHash, token: Token) 
 }
 
 impl Shared {
+    /// Whether the spool is full (WK-11): fetching pauses, nothing new is
+    /// claimed and the DHT keeps only its routing, session or not.
+    fn spool_full(&self) -> bool {
+        self.spool.as_ref().is_some_and(|sp| sp.is_full())
+    }
+
+    /// Pauses the pool, and the DHT with it while the spool is full.
+    fn refresh_spool_pause(&self) {
+        self.refresh_pause();
+        want_dht(self);
+    }
+
     /// Pauses the pool while a result waits for a sealable key or no
     /// session is up, and resumes it otherwise. Worked out from the state
     /// now, under the watch's write lock, so calls in any order leave it
@@ -1324,7 +1337,7 @@ impl Shared {
             let fresh = self.fresh_session.load(Ordering::Acquire);
             // A full spool pauses it too (WK-11), session or not, until a
             // replay makes room.
-            let full = self.spool.as_ref().is_some_and(|sp| sp.is_full());
+            let full = self.spool_full();
             let pause = self.waiting.load(Ordering::Acquire) > 0
                 || !up
                 || full
@@ -1711,7 +1724,7 @@ async fn claim(s: Arc<Shared>, found: mpsc::Receiver<Found>) {
         // would drop them now (#599's review). The DHT finds them again.
         // Nor while the assignment turns fetching off, as `sift` holds
         // back new finds then: a retried key gets the same checks.
-        if s.sealing_down(unix_now()) || !s.fetching() {
+        if s.sealing_down(unix_now()) || !s.fetching() || s.spool_full() {
             s.counts
                 .held_back
                 .fetch_add(batch.len() as u64, Ordering::Relaxed);
@@ -1830,8 +1843,9 @@ fn sift(
     bump(&s.counts.found);
     // Nothing is claimed while sealing is down: it couldn't be sent, and
     // its lease would only wait (#599's review). Nor while the assignment
-    // turns fetching off.
-    if s.sealing_down(unix_now()) || !s.fetching() {
+    // turns fetching off, or the spool is full (WK-11: the pool is paused,
+    // so a lease would only wait).
+    if s.sealing_down(unix_now()) || !s.fetching() || s.spool_full() {
         bump(&s.counts.held_back);
         return None;
     }
@@ -1912,6 +1926,10 @@ struct InFlight {
     kind: Kind,
     /// Where in the spool it was read from, for a replayed batch.
     from: Option<Origin>,
+    /// When the batch was made, just after its records were sealed: a
+    /// spooled one's age runs from this, not from when it was spooled, so
+    /// the 24 h cap stays inside the wire key's two days (WK-11).
+    at: i64,
 }
 
 /// Puts records into batches (`encode`) in flight. A record that can't be
@@ -1948,6 +1966,7 @@ fn batch_up(
                 counted: false,
                 kind: Kind::Results,
                 from: None,
+                at: unix_now(),
             },
         );
     }
@@ -2043,12 +2062,13 @@ async fn send_results(
                             counted: true,
                             kind: r.kind,
                             from: Some(r.from),
+                            at: 0,
                         },
                     );
                     next_batch += 1;
                 }
                 // A segment removed on the way may have cleared "full".
-                s.refresh_pause();
+                s.refresh_spool_pause();
             }
         }
         send_due(&s, session, &mut flight, false).await;
@@ -2092,7 +2112,7 @@ async fn send_results(
                             && let Some(seq) = replay.accepted(from)
                         {
                             sp.remove(seq).await;
-                            s.refresh_pause();
+                            s.refresh_spool_pause();
                         }
                     }
                 } else if let Some(f) = flight.get_mut(&batch) {
@@ -2136,10 +2156,10 @@ async fn spool_live(s: &Shared, sp: &WorkerSpool, flight: &mut BTreeMap<u64, InF
             break;
         }
         if !sp
-            .put(f.kind, batch, f.leases.clone(), f.payload.clone())
+            .put(f.kind, batch, f.at, f.leases.clone(), f.payload.clone())
             .await
         {
-            s.refresh_pause();
+            s.refresh_spool_pause();
             break;
         }
         wrote = true;
@@ -2206,6 +2226,17 @@ impl Runtime {
     }
     pub(crate) fn test_grant(&self, key: InfoHash, token: Token, peers: Vec<std::net::SocketAddr>) {
         granted(&self.shared, key, token, peers, unix_now());
+    }
+    /// Re-checks the pauses, then whether the DHT is told to run.
+    pub(crate) fn test_dht_runs(&self) -> bool {
+        self.shared.refresh_spool_pause();
+        lock(&self.shared.dht_want)
+            .as_ref()
+            .is_some_and(|w| matches!(*w.borrow(), super::dht::Desired::Run(_)))
+    }
+    /// Whether a fresh find would be claimed now.
+    pub(crate) fn test_would_claim(&self, key: InfoHash) -> bool {
+        sift(&self.shared, Found::key(key, 0), true, false).is_some()
     }
 }
 
@@ -2388,7 +2419,11 @@ pub(crate) mod tests {
         }
     }
 
-    fn assign_dht(revision: u64, shard: Option<ShardSpec>, intensity: Intensity) -> Assign {
+    pub(crate) fn assign_dht(
+        revision: u64,
+        shard: Option<ShardSpec>,
+        intensity: Intensity,
+    ) -> Assign {
         Assignment {
             revision,
             dht: shard,

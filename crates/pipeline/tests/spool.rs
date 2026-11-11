@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use lodestar_integrations::SecretStore;
 use lodestar_pipeline::spool::{
-    Caps, FRAME_HEAD, HEADER_LEN, Header, Kind, MAX_LEASES, Record, SEGMENT_SPAN_SECS, Sealer,
-    Spool, SpoolError, Tail, decode_segment, encode_frame,
+    Caps, FRAME_HEAD, HEADER_LEN, Header, Kind, MAX_FUTURE_SECS, MAX_LEASES, Record,
+    SEGMENT_SPAN_SECS, Sealer, Spool, SpoolError, Tail, decode_segment, encode_frame,
 };
 use proptest::prelude::*;
 
@@ -368,6 +368,160 @@ fn leases_over_the_cap_are_refused_at_encode() {
     assert!(r.encode().is_ok());
     r.batch = 0;
     assert!(r.encode().is_err());
+}
+
+/// The security review's L1: a link planted in the folder is unlinked,
+/// never followed, so its target isn't zeroed; nor is a temp-file link
+/// written through.
+#[cfg(unix)]
+#[test]
+fn planted_links_are_never_followed() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let victim = outside.path().join("victim");
+    fs::write(&victim, b"precious").unwrap();
+    let spool_dir = dir.path().join("spool");
+    fs::create_dir_all(&spool_dir).unwrap();
+    std::os::unix::fs::symlink(&victim, spool_dir.join("0000000000000001.tmp")).unwrap();
+    std::os::unix::fs::symlink(&victim, spool_dir.join("0000000000000002.lsp")).unwrap();
+    let mut s = spool(&spool_dir, Caps::default());
+    assert_eq!(fs::read(&victim).unwrap(), b"precious");
+    assert!(fs::symlink_metadata(spool_dir.join("0000000000000001.tmp")).is_err());
+    assert!(fs::symlink_metadata(spool_dir.join("0000000000000002.lsp")).is_err());
+    // A link planted where the next temp file will be is removed, not
+    // written through.
+    std::os::unix::fs::symlink(&victim, spool_dir.join("0000000000000003.tmp")).unwrap();
+    s.append(&record(1, NOW, 10), NOW).unwrap();
+    s.close_active().unwrap();
+    assert_eq!(fs::read(&victim).unwrap(), b"precious");
+    assert_eq!(s.segments(), vec![3]);
+    // Removal itself never follows one either.
+    let seg = spool_dir.join("0000000000000003.lsp");
+    fs::remove_file(&seg).unwrap();
+    std::os::unix::fs::symlink(&victim, &seg).unwrap();
+    s.remove(3).unwrap();
+    assert_eq!(fs::read(&victim).unwrap(), b"precious");
+}
+
+/// L2: the folder is 0700 and its files 0600, whatever the umask.
+#[cfg(unix)]
+#[test]
+fn the_folder_and_its_files_are_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let spool_dir = dir.path().join("spool");
+    fs::create_dir_all(&spool_dir).unwrap();
+    fs::set_permissions(&spool_dir, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut s = spool(&spool_dir, Caps::default());
+    s.append(&record(1, NOW, 10), NOW).unwrap();
+    s.close_active().unwrap();
+    let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&spool_dir), 0o700);
+    assert_eq!(mode(&only_segment(&spool_dir)), 0o600);
+}
+
+/// L3: only the spool's own names number it, the number never wraps, and
+/// a new segment never replaces a file of its name.
+#[test]
+fn the_sequence_never_wraps_or_overwrites() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("ffffffffffffffff.x"), b"not ours").unwrap();
+    let mut s = spool(dir.path(), Caps::default());
+    s.append(&record(1, NOW, 10), NOW).unwrap();
+    s.close_active().unwrap();
+    assert_eq!(s.segments(), vec![1], "a foreign name doesn't number it");
+    drop(s);
+
+    // A segment at the last number: the next is refused, not wrapped.
+    let dir = tempfile::tempdir().unwrap();
+    let last = Header {
+        worker: W,
+        seq: u64::MAX,
+        created: NOW,
+    };
+    fs::write(dir.path().join("ffffffffffffffff.lsp"), last.encode()).unwrap();
+    let mut s = spool(dir.path(), Caps::default());
+    assert!(s.append(&record(1, NOW, 10), NOW).is_err());
+    assert_eq!(s.segments(), vec![u64::MAX]);
+    drop(s);
+
+    // A file already at the next name is never replaced.
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = spool(dir.path(), Caps::default());
+    fs::write(dir.path().join("0000000000000001.lsp"), b"someone else's").unwrap();
+    assert!(s.append(&record(1, NOW, 10), NOW).is_err());
+    assert_eq!(
+        fs::read(dir.path().join("0000000000000001.lsp")).unwrap(),
+        b"someone else's"
+    );
+}
+
+/// N1: a length damaged mid-segment to point past the end reads as
+/// damage, not a torn write; a genuinely torn last frame still reads torn.
+#[test]
+fn a_length_past_the_end_mid_segment_is_damage() {
+    let mut bytes = Header {
+        worker: W,
+        seq: 1,
+        created: NOW,
+    }
+    .encode()
+    .to_vec();
+    let first = bytes.len();
+    for b in [&[1u8; 50][..], &[2u8; 60][..], &[3u8; 70][..]] {
+        bytes.extend(encode_frame(b).unwrap());
+    }
+    let mut damaged = bytes.clone();
+    damaged[first..first + 4].copy_from_slice(&100_000u32.to_le_bytes());
+    assert_eq!(decode_segment(&damaged).unwrap().tail, Tail::Corrupt);
+    let torn = &bytes[..bytes.len() - 5];
+    let d = decode_segment(torn).unwrap();
+    assert_eq!((d.tail, d.frames.len()), (Tail::Torn, 2));
+}
+
+/// I4: a record stamped further ahead than a clock may be off (the clock
+/// was set back) is dropped as past its cap, not kept for longer.
+#[test]
+fn a_record_from_the_future_is_dropped_as_expired() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = spool(dir.path(), Caps::default());
+    s.append(&record(1, NOW + 2 * MAX_FUTURE_SECS, 10), NOW)
+        .unwrap();
+    s.append(&record(2, NOW + MAX_FUTURE_SECS / 2, 10), NOW)
+        .unwrap();
+    s.close_active().unwrap();
+    assert_eq!(
+        all_records(&mut s, NOW),
+        vec![record(2, NOW + MAX_FUTURE_SECS / 2, 10)]
+    );
+    assert_eq!(
+        s.stats()
+            .dropped_old
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+    // A segment created in the future is past its cap by its header.
+    assert!(s.is_expired(1, NOW - 2 * MAX_FUTURE_SECS));
+}
+
+/// N6: a leftover that can't be removed is skipped and counted; the spool
+/// still opens.
+#[test]
+fn a_leftover_that_cant_be_removed_doesnt_stop_the_spool() {
+    let dir = tempfile::tempdir().unwrap();
+    let stuck = dir.path().join("0000000000000005.tmp");
+    fs::create_dir(&stuck).unwrap();
+    fs::write(stuck.join("inside"), b"x").unwrap();
+    let mut s = spool(dir.path(), Caps::default());
+    assert_eq!(
+        s.stats()
+            .leftovers
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+    s.append(&record(1, NOW, 10), NOW).unwrap();
+    s.close_active().unwrap();
+    assert_eq!(s.segments(), vec![6], "numbered past the leftover");
 }
 
 /// The coordinator's side of a replay (WK-9's intake), with spooled

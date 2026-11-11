@@ -63,7 +63,7 @@ impl SpoolConfig {
     /// with its message instead of leaving it without a spool.
     pub fn for_layout(layout: &Layout) -> Result<SpoolConfig, ClusterError> {
         let dir = layout.data.join(SPOOL_DIR);
-        std::fs::create_dir_all(&dir)
+        lodestar_pipeline::spool::create_private_dir(&dir)
             .map_err(|e| ClusterError::Io("create the spool folder", e.kind()))?;
         Ok(SpoolConfig {
             dir,
@@ -231,23 +231,25 @@ impl WorkerSpool {
             .flatten()
     }
 
-    /// Writes one batch. `false` if it wasn't (full, no spool, or the disk
+    /// Writes one batch, made at `at` (its age runs from then). `false` if
+    /// it wasn't (full, no spool, or the disk
     /// failed): the batch stays in memory and is sent once a session is up.
     pub async fn put(
         &self,
         kind: Kind,
         batch: u64,
+        at: i64,
         leases: Vec<([u8; 20], u64)>,
         payload: Vec<u8>,
     ) -> bool {
         let record = Record {
             kind,
             batch,
-            at: unix_now(),
+            at,
             leases,
             payload,
         };
-        match self.blocking(move |s| s.append(&record, record.at)).await {
+        match self.blocking(move |s| s.append(&record, unix_now())).await {
             Some(Ok(())) => true,
             Some(Err(SpoolError::Full)) => {
                 self.full.store(true, Ordering::Release);
@@ -481,8 +483,8 @@ mod tests {
 
     use super::*;
     use crate::worker::runtime::tests::{
-        DEADLINE, MapFetch, W, assignment, config, filter_chunks, info, key_of, next_results,
-        sealed, session_pair, until,
+        DEADLINE, MapFetch, W, assign_dht, assignment, config, filter_chunks, info, key_of,
+        next_results, sealed, session_pair, until,
     };
     use crate::worker::runtime::{Config, Runtime};
     use crate::worker::session::Work;
@@ -564,6 +566,9 @@ mod tests {
         accept(&mut coord, &mut session, &mut rt, again.batch, false).await;
         let retried = next_results(&mut coord).await;
         assert_eq!(retried.batch, again.batch);
+        // Refused for now isn't accepted: the segment is still on disk.
+        assert!(sp.bytes() > 0, "kept after a refusal");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
         accept(&mut coord, &mut session, &mut rt, retried.batch, true).await;
         until("removed", || (sp.bytes() == 0, sp.bytes())).await;
         assert_eq!(c.committed.load(Ordering::Relaxed), 2, "each once");
@@ -701,6 +706,49 @@ mod tests {
         rt.shutdown().await;
     }
 
+    /// A full spool with a session up (a reconnect at the cap): nothing new
+    /// is claimed and the DHT keeps only its routing, until a replay makes
+    /// room (the runner's review, B1).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_full_spool_with_a_session_up_claims_nothing_and_pauses_the_dht() {
+        use lodestar_cluster::assign::{Intensity, ShardSpec};
+        let dir = tempfile::tempdir().unwrap();
+        let mut rt = Runtime::start(spooled(dir.path(), Caps::default()));
+        let (_coord, session) = session_pair().await;
+        rt.connected(session.handle());
+        let shard = ShardSpec::new(64..128, 0xff).unwrap();
+        rt.event(WorkerEvent::Assign(assign_dht(
+            1,
+            Some(shard),
+            Intensity::Balanced,
+        )));
+        let (_, chunks) = filter_chunks().await;
+        for c in chunks {
+            rt.event(WorkerEvent::Snapshot(c));
+        }
+        until("started", || (rt.is_started(), ())).await;
+        let sp = rt.spool().unwrap();
+        until("opened", || (sp.stats().is_some(), ())).await;
+        let key = lodestar_metainfo::InfoHash([7; 20]);
+        assert!(rt.test_dht_runs(), "a session: the DHT samples");
+        assert!(rt.test_would_claim(key));
+        assert!(!rt.test_pool_paused());
+
+        sp.full.store(true, Ordering::Release);
+        assert!(!rt.test_dht_runs(), "full: routing only");
+        let held = rt.counts().held_back.load(Ordering::Relaxed);
+        assert!(!rt.test_would_claim(key), "full: nothing claimed");
+        assert_eq!(rt.counts().held_back.load(Ordering::Relaxed), held + 1);
+        assert!(rt.test_pool_paused());
+
+        // Room again: all three resume.
+        sp.full.store(false, Ordering::Release);
+        assert!(rt.test_dht_runs());
+        assert!(rt.test_would_claim(key));
+        assert!(!rt.test_pool_paused());
+        rt.shutdown().await;
+    }
+
     /// A torrent fetched from a known peer and spooled: no form of the
     /// peer's address is in the segment, sealed or opened.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -810,8 +858,14 @@ mod tests {
         let sp = WorkerSpool::new(config, worker);
         assert!(sp.start().await);
         assert!(
-            sp.put(Kind::Results, 1, vec![([1; 20], 2)], b"payload".to_vec())
-                .await
+            sp.put(
+                Kind::Results,
+                1,
+                unix_now(),
+                vec![([1; 20], 2)],
+                b"payload".to_vec()
+            )
+            .await
         );
         drop(sp);
         let old = layout.secrets().unwrap().primary_key_id();

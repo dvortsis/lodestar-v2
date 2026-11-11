@@ -95,6 +95,11 @@ pub const SEGMENT_BYTES: u64 = 8 << 20;
 /// A segment is closed once it is this old, so an old one can be dropped
 /// whole by its age.
 pub const SEGMENT_SPAN_SECS: i64 = 3600;
+/// A record or segment stamped this far past now is treated as past the
+/// age cap: the coordinator flags a clock more than 60 s off (§19.3), so a
+/// stamp further ahead means this clock was set back, and keeping it would
+/// keep it past 24 h.
+pub const MAX_FUTURE_SECS: i64 = 60;
 /// Appends are synced at most this far apart.
 pub const SYNC_EVERY: Duration = Duration::from_secs(1);
 
@@ -385,8 +390,14 @@ pub fn decode_segment(bytes: &[u8]) -> Result<Decoded<'_>, FormatError> {
             break Tail::Corrupt;
         }
         if rest.len() - FRAME_HEAD < len {
-            // Runs past the end: the last write didn't finish.
-            break Tail::Torn;
+            // Runs past the end: the last write didn't finish, unless a
+            // whole good frame follows, which a torn write can't leave
+            // (a damaged length, mid-segment).
+            break if good_frame_within(&rest[FRAME_HEAD..]) {
+                Tail::Corrupt
+            } else {
+                Tail::Torn
+            };
         }
         let want = u64::from_le_bytes(rest[4..12].try_into().expect("8 bytes"));
         let body = &rest[FRAME_HEAD..FRAME_HEAD + len];
@@ -406,6 +417,29 @@ pub fn decode_segment(bytes: &[u8]) -> Result<Decoded<'_>, FormatError> {
         frames,
         tail,
     })
+}
+
+/// Whether a whole frame with a good sum starts anywhere in `bytes`. The
+/// sums computed are capped at twice the bytes; past that, it answers yes
+/// (damage), which only misnames a crafted tail.
+fn good_frame_within(bytes: &[u8]) -> bool {
+    let mut budget = bytes.len().saturating_mul(2);
+    for p in 0..bytes.len().saturating_sub(FRAME_HEAD) {
+        let len_bytes: [u8; 4] = bytes[p..p + 4].try_into().expect("4 bytes");
+        let len = u32::from_le_bytes(len_bytes) as usize;
+        if len == 0 || len > MAX_FRAME || bytes.len() - p - FRAME_HEAD < len {
+            continue;
+        }
+        if budget < len {
+            return true;
+        }
+        budget -= len;
+        let want = u64::from_le_bytes(bytes[p + 4..p + 12].try_into().expect("8 bytes"));
+        if sum(&[&len_bytes, &bytes[p + FRAME_HEAD..p + FRAME_HEAD + len]]) == want {
+            return true;
+        }
+    }
+    false
 }
 
 /// Seals and opens spool records with the worker's own key (owner wkq1).
@@ -513,6 +547,12 @@ pub struct SpoolStats {
     pub dropped_corrupt: AtomicU64,
     /// Segments removed once acknowledged or dropped.
     pub removed: AtomicU64,
+    /// Leftover or foreign files that couldn't be removed at open (tried
+    /// again at the next start).
+    pub leftovers: AtomicU64,
+    /// Syncs that failed: the segment is closed at once, so nothing more is
+    /// appended to a file whose writes may not have landed.
+    pub sync_failures: AtomicU64,
 }
 
 fn get(n: &AtomicU64) -> u64 {
@@ -645,27 +685,40 @@ fn sync_dir(dir: &Path) -> Result<(), SpoolError> {
 }
 
 /// Overwrites `path` with zeros, syncs it, closes it, then removes it
-/// (owner §2.17). A file that is already gone is fine.
+/// (owner §2.17). A file that is already gone is fine. **Links are never
+/// followed:** a symbolic link, or anything else that isn't a regular file,
+/// is unlinked without being opened, and on Unix the file opened is checked
+/// to be the one looked at (device and inode), so a link planted in the
+/// folder can't have its target zeroed.
 pub fn secure_remove(path: &Path) -> Result<(), SpoolError> {
-    let mut file = match OpenOptions::new().write(true).open(path) {
-        Ok(f) => f,
+    let meta = match fs::symlink_metadata(path) {
+        Ok(m) => m,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(SpoolError::Io("overwrite a segment of", e.kind())),
     };
-    let len = file
-        .metadata()
-        .map_err(io_err("overwrite a segment of"))?
-        .len();
-    let zeros = vec![0u8; 64 << 10];
-    let mut left = len;
-    while left > 0 {
-        let n = left.min(zeros.len() as u64) as usize;
-        file.write_all(&zeros[..n])
+    if meta.file_type().is_file() {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .open(path)
             .map_err(io_err("overwrite a segment of"))?;
-        left -= n as u64;
+        let opened = file.metadata().map_err(io_err("overwrite a segment of"))?;
+        if !same_file(&meta, &opened) {
+            // Swapped for something else between the look and the open.
+            return Err(SpoolError::Io(
+                "overwrite a segment of",
+                io::ErrorKind::InvalidInput,
+            ));
+        }
+        let zeros = vec![0u8; 64 << 10];
+        let mut left = opened.len();
+        while left > 0 {
+            let n = left.min(zeros.len() as u64) as usize;
+            file.write_all(&zeros[..n])
+                .map_err(io_err("overwrite a segment of"))?;
+            left -= n as u64;
+        }
+        file.sync_all().map_err(io_err("overwrite a segment of"))?;
     }
-    file.sync_all().map_err(io_err("overwrite a segment of"))?;
-    drop(file);
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -673,22 +726,82 @@ pub fn secure_remove(path: &Path) -> Result<(), SpoolError> {
     }
 }
 
-/// Writes `bytes` as `<dir>/<seq>.lsp` atomically: a temp file, synced,
-/// renamed into place, the folder synced. Never renames over an open file.
-fn write_atomic(dir: &Path, seq: u64, bytes: &[u8]) -> Result<(), SpoolError> {
+#[cfg(unix)]
+fn same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+/// Windows: the data folder is checked for reparse points at start, and the
+/// look itself refused a link; the file's identity isn't on stable Rust.
+#[cfg(not(unix))]
+fn same_file(_: &fs::Metadata, b: &fs::Metadata) -> bool {
+    b.is_file()
+}
+
+/// Opens a new file for writing, never one that exists (so never through a
+/// planted link), private to the worker's user on Unix (0600).
+fn create_private(path: &Path) -> io::Result<File> {
+    let mut o = OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
+    }
+    o.open(path)
+}
+
+/// Creates the spool folder, private to the worker's user on Unix (0700),
+/// and narrows one that exists to the same.
+pub fn create_private_dir(dir: &Path) -> io::Result<()> {
+    let mut b = fs::DirBuilder::new();
+    b.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        b.mode(0o700);
+        b.create(dir)?;
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
+    }
+    #[cfg(not(unix))]
+    b.create(dir)?;
+    Ok(())
+}
+
+/// How [`write_atomic`] puts the file in place.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Place {
+    /// A new segment: refused if one of that name exists.
+    New,
+    /// A reseal: replaces the segment of that name.
+    Replace,
+}
+
+/// Writes `bytes` as `<dir>/<seq>.lsp` atomically: any stale temp file is
+/// removed, a new temp file is written (never opened through a link),
+/// synced, put in place, and the folder synced. Never renames over an open
+/// file. A new segment is linked into place, which fails if the name is
+/// taken, so a live segment is never overwritten.
+fn write_atomic(dir: &Path, seq: u64, bytes: &[u8], place: Place) -> Result<(), SpoolError> {
     let tmp = dir.join(segment_name(seq, TEMP_EXT));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&tmp)
-        .map_err(io_err("create a segment in"))?;
-    file.write_all(bytes)
-        .and_then(|()| file.sync_all())
-        .map_err(io_err("write a segment in"))?;
+    let target = dir.join(segment_name(seq, SEGMENT_EXT));
+    secure_remove(&tmp)?;
+    let mut file = create_private(&tmp).map_err(io_err("create a segment in"))?;
+    let written = file.write_all(bytes).and_then(|()| file.sync_all());
     drop(file);
-    fs::rename(&tmp, dir.join(segment_name(seq, SEGMENT_EXT)))
-        .map_err(io_err("rename a segment in"))?;
+    if let Err(e) = written {
+        let _ = fs::remove_file(&tmp);
+        return Err(SpoolError::Io("write a segment in", e.kind()));
+    }
+    let placed = match place {
+        Place::Replace => fs::rename(&tmp, &target),
+        Place::New => fs::hard_link(&tmp, &target).and_then(|()| fs::remove_file(&tmp)),
+    };
+    if let Err(e) = placed {
+        let _ = fs::remove_file(&tmp);
+        return Err(SpoolError::Io("place a segment in", e.kind()));
+    }
     sync_dir(dir)
 }
 
@@ -704,7 +817,7 @@ impl Spool {
         caps: Caps,
         sealer: Arc<dyn Sealer>,
     ) -> Result<Spool, SpoolError> {
-        fs::create_dir_all(dir).map_err(io_err("create the folder of"))?;
+        create_private_dir(dir).map_err(io_err("create the folder of"))?;
         let stats = Arc::new(SpoolStats::default());
         let mut closed = BTreeMap::new();
         let mut next_seq = 1;
@@ -715,9 +828,19 @@ impl Spool {
                 continue;
             };
             let path = entry.path();
-            next_seq = next_seq.max(seq.saturating_add(1));
+            // Only the spool's own names number it; past the last seq, the
+            // spool refuses to go on (`start_segment`).
+            if ext == TEMP_EXT || ext == SEGMENT_EXT {
+                next_seq = next_seq.max(seq.saturating_add(1));
+            }
             match ext {
-                TEMP_EXT => secure_remove(&path)?,
+                // One that can't be removed now (another program holds it)
+                // is skipped and counted; the next start tries again.
+                TEMP_EXT => {
+                    if secure_remove(&path).is_err() {
+                        bump(&stats.leftovers);
+                    }
+                }
                 SEGMENT_EXT => {
                     let mut head = [0u8; HEADER_LEN];
                     let read = File::open(&path).and_then(|mut f| f.read_exact(&mut head));
@@ -727,10 +850,11 @@ impl Spool {
                         let len = entry.metadata().map_err(io_err("list"))?.len();
                         let frames = count_frames(&path).unwrap_or(0);
                         closed.insert(seq, Closed { bytes: len, frames });
-                    } else {
-                        secure_remove(&path)?;
+                    } else if secure_remove(&path).is_ok() {
                         bump(&stats.dropped_corrupt);
                         bump(&stats.removed);
+                    } else {
+                        bump(&stats.leftovers);
                     }
                 }
                 _ => {}
@@ -843,20 +967,27 @@ impl Spool {
         bump(&self.stats.records);
         bump(&self.stats.appended);
         if active.synced.elapsed() >= SYNC_EVERY {
-            self.sync()?;
+            // The frame is written either way: a failed sync is counted and
+            // closes the segment, and the record isn't refused (refusing it
+            // would spool it a second time).
+            let _ = self.sync();
         }
         Ok(())
     }
 
     fn start_segment(&mut self, now: i64) -> Result<(), SpoolError> {
         let seq = self.next_seq;
+        let Some(next) = seq.checked_add(1) else {
+            // Numbered out: refused rather than wrapped onto live segments.
+            return Err(SpoolError::Io("number a segment of", io::ErrorKind::Other));
+        };
         let header = Header {
             worker: self.worker,
             seq,
             created: now,
         };
-        write_atomic(&self.dir, seq, &header.encode())?;
-        self.next_seq += 1;
+        write_atomic(&self.dir, seq, &header.encode(), Place::New)?;
+        self.next_seq = next;
         let file = OpenOptions::new()
             .append(true)
             .open(self.dir.join(segment_name(seq, SEGMENT_EXT)))
@@ -877,13 +1008,34 @@ impl Spool {
     }
 
     /// Syncs what has been appended.
+    /// A failure is counted and closes the segment: nothing more is
+    /// appended to a file whose writes may not have reached the disk.
     pub fn sync(&mut self) -> Result<(), SpoolError> {
-        if let Some(a) = &mut self.active
-            && a.dirty
-        {
-            a.file.sync_data().map_err(io_err("sync"))?;
-            a.dirty = false;
-            a.synced = Instant::now();
+        let failed = match &mut self.active {
+            Some(a) if a.dirty => match a.file.sync_data() {
+                Ok(()) => {
+                    a.dirty = false;
+                    a.synced = Instant::now();
+                    None
+                }
+                Err(e) => Some(e.kind()),
+            },
+            _ => None,
+        };
+        if let Some(kind) = failed {
+            {
+                bump(&self.stats.sync_failures);
+                if let Some(a) = self.active.take() {
+                    self.closed.insert(
+                        a.seq,
+                        Closed {
+                            bytes: a.bytes,
+                            frames: a.frames,
+                        },
+                    );
+                }
+                return Err(SpoolError::Io("sync", kind));
+            }
         }
         Ok(())
     }
@@ -891,6 +1043,7 @@ impl Spool {
     /// Syncs and closes the segment being appended to, so it can be read
     /// and removed.
     pub fn close_active(&mut self) -> Result<(), SpoolError> {
+        // A failed sync has closed it already.
         self.sync()?;
         if let Some(a) = self.active.take() {
             self.closed.insert(
@@ -947,7 +1100,9 @@ impl Spool {
                 continue;
             };
             match Record::decode(&plain[..]) {
-                Ok(r) if r.at < oldest => {
+                // Too old, or stamped further ahead than a clock may be
+                // off: a clock set back mustn't keep a record past its cap.
+                Ok(r) if r.at < oldest || r.at > now.saturating_add(MAX_FUTURE_SECS) => {
                     // Once per record, even one that turned old between
                     // two reads.
                     if self.old.insert((seq, i)) {
@@ -985,6 +1140,7 @@ impl Spool {
         };
         Header::decode(&head).is_ok_and(|h| {
             h.created.saturating_add(SEGMENT_SPAN_SECS) < now.saturating_sub(self.caps.max_age_secs)
+                || h.created > now.saturating_add(MAX_FUTURE_SECS)
         })
     }
 
@@ -1073,7 +1229,7 @@ impl Spool {
             }
             // Renamed over the old file, whose blocks aren't zeroed: what
             // they hold is sealed under the key about to be retired.
-            write_atomic(&self.dir, seq, &out)?;
+            write_atomic(&self.dir, seq, &out, Place::Replace)?;
             self.forget(seq);
             self.closed.insert(
                 seq,
