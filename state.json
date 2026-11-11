@@ -6826,11 +6826,6 @@
       "from": "rv-693-5e260f33 I1"
     },
     {
-      "id": "X-worker-settings-pointer",
-      "what": "Worker template (packaging) and crates/lodestar/src/cli/worker.rs point users to a 'Settings -> Workers' screen that doesn't exist; point to POST /api/v1/workers/tokens (admin/API key) until the screen ships, or build the screen.",
-      "from": "rv-700-bc077b8b"
-    },
-    {
       "id": "slices.yaml entries",
       "what": "Add placement + entries for X-cmp9b-catch, X-spool-damage-log, X-win-upd-stop-wait, X-worker-settings-pointer in next runner PR"
     },
@@ -6846,6 +6841,10 @@
     {
       "id": "X-pk-ui-polish",
       "what": "rv-701 N1 decisions misquote+dup sentence+PR number; N3 IPv4 netsh test; N4 status banner announce (insert empty then fill); N5 Insights reuses settings_about_new_tab key; N7 wizard bundle 53.58/53.6 kB \u2014 next wizard change needs budget review"
+    },
+    {
+      "id": "X-worker-settings-pointer (dropped)",
+      "what": "Not needed: WK-16 builds Settings -> Workers; workers need v0.6+, template already says so."
     }
   ],
   "main_health": [
@@ -7591,11 +7590,11 @@
       },
       {
         "slot": 2,
-        "slice": "PK-ops",
+        "slice": "CMP-D",
         "role": "docs",
         "agent": "claude",
-        "doing": "#700 CHANGES round (B1-B5 + nits); then delta review",
-        "since": "2026-11-11T16:36Z",
+        "doing": "User guide: companions per platform",
+        "since": "2026-11-11T18:07Z",
         "status": "active"
       },
       {
@@ -7824,6 +7823,12 @@
       "slice": "PK-ui",
       "sha": "9d664250851764abeeb24939c437aca7e6759ed3",
       "at": "2026-11-11T18:02Z"
+    },
+    {
+      "pr": 700,
+      "slice": "PK-ops",
+      "sha": "912934ca95479f865d28e06c9e2df7a85dcf47f5",
+      "at": "2026-11-11T18:07Z"
     }
   ]
 }
