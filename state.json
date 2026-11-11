@@ -7732,7 +7732,10 @@
       "relayed": "2026-11-11 via dashboard session"
     }
   ],
-  "review_queue": [],
+  "review_queue": [
+    "RUNNING: #701 bc90ad54, #702 22effd40, #664 640d87ef (owner asked source merge 17:5xZ)",
+    "#699 13397e42 (WK-11 round 1; delta + security delta in one Opus reviewer; base 85d8d267)"
+  ],
   "merged": [
     {
       "pr": 685,
