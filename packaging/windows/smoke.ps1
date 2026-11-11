@@ -38,6 +38,9 @@ function Remove-Scratch([string]$path) {
   Write-Host "::warning::could not remove $path"
 }
 
+# The first-run setup token is only ever printed redacted.
+function Hide-Token($lines) { $lines -replace 'setup token \S+', 'setup token [redacted]' }
+
 function Test-Serve([string]$exe, [string]$dataDir) {
   # Releases are built without the `fixture` feature (`serve --fixture` test data).
   # The flag always exists; a build without the feature refuses it with exactly
@@ -60,7 +63,7 @@ function Test-Serve([string]$exe, [string]$dataDir) {
   try {
     $ok = $false
     for ($i = 0; $i -lt 60 -and -not $ok; $i++) {
-      if ($p.HasExited) { throw "lodestar exited early ($($p.ExitCode)): $(Get-Content $log, "$log.err" -Raw)" }
+      if ($p.HasExited) { throw "lodestar exited early ($($p.ExitCode)): $(Hide-Token (Get-Content $log, "$log.err" -Raw))" }
       try {
         $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 "http://127.0.0.1:$Port/healthz"
         $ok = ($r.StatusCode -eq 200)
@@ -93,6 +96,7 @@ function Test-Flow([string]$exe, [string]$dataDir) {
   New-Item -ItemType Directory -Force $dataDir | Out-Null
   $env:LODESTAR_DATA_DIR = $dataDir
   $env:LODESTAR_HTTP_BIND = "127.0.0.1:$Port"
+  $env:LODESTAR_DHT_ENABLED = 'true'
   $env:LODESTAR_DHT_PORT = '16881'
   $procs = @()
   try {
@@ -104,7 +108,7 @@ function Test-Flow([string]$exe, [string]$dataDir) {
       $ok = $false
       $deadline = (Get-Date).AddSeconds(60)
       while (-not $ok -and (Get-Date) -lt $deadline) {
-        if ($p.HasExited) { throw "lodestar exited early ($($p.ExitCode)): $((Get-Content $log, "$log.err" -ErrorAction SilentlyContinue) -replace 'setup token \S+', 'setup token [redacted]')" }
+        if ($p.HasExited) { throw "lodestar exited early ($($p.ExitCode)): $(Hide-Token (Get-Content $log, "$log.err" -ErrorAction SilentlyContinue))" }
         try { $ok = ((Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 "$url/healthz").StatusCode -eq 200) } catch { Start-Sleep -Seconds 1 }
       }
       Assert $ok "/healthz never answered (run $run)"
@@ -131,12 +135,12 @@ function Test-Flow([string]$exe, [string]$dataDir) {
     # The server's own log, with the setup token redacted, then the failure.
     foreach ($f in Get-ChildItem $dataDir -Filter 'flow*.log*' -ErrorAction SilentlyContinue) {
       Write-Host "--- $($f.Name) (tail, redacted)"
-      Get-Content $f.FullName -Tail 40 | ForEach-Object { $_ -replace 'setup token \S+', 'setup token [redacted]' }
+      Hide-Token (Get-Content $f.FullName -Tail 40)
     }
     throw
   } finally {
     foreach ($p in $procs) { if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force; $p.WaitForExit(15000) | Out-Null } }
-    Remove-Item Env:LODESTAR_DATA_DIR, Env:LODESTAR_HTTP_BIND, Env:LODESTAR_DHT_PORT -ErrorAction SilentlyContinue
+    Remove-Item Env:LODESTAR_DATA_DIR, Env:LODESTAR_HTTP_BIND, Env:LODESTAR_DHT_ENABLED, Env:LODESTAR_DHT_PORT -ErrorAction SilentlyContinue
   }
 }
 
@@ -226,7 +230,7 @@ if ($Msi) {
   }
   if (-not $up) {
     Write-Host '--- service log'
-    Get-ChildItem "$dataDir\logs" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.FullName; Get-Content $_.FullName -Tail 60 }
+    Get-ChildItem "$dataDir\logs" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.FullName; Hide-Token (Get-Content $_.FullName -Tail 60) }
     Write-Host '--- sc query'; sc.exe query Lodestar
     Write-Host '--- event log'; Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Service Control Manager' } -MaxEvents 8 -ErrorAction SilentlyContinue | Format-List TimeCreated, Message
   }

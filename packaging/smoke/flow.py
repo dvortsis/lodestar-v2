@@ -10,8 +10,9 @@ subcommand talks to a Lodestar on `--url` (default http://127.0.0.1:8090).
   flow.py search   --state DIR               wait until the fixture is searchable
 
 Nothing here fetches anything outside the Lodestar under test (the Lodestar itself may reach the public DHT when DHT is on). The setup token is
-read from the server's own log and is only ever printed redacted; the password is
-random, kept in `--state` (a temp folder the caller deletes) and never printed.
+read from the server's own log and is only ever printed redacted. The password is random,
+never printed and never kept; only the session cookie is kept, in `--state` (a temp folder
+the caller deletes). Requests never follow HTTP_PROXY: they only go to the Lodestar under test.
 Every wait is a loop on a condition with a deadline of at least 10 s: no fixed sleeps.
 """
 import argparse
@@ -69,7 +70,8 @@ def request(url, path, *, body=None, cookie=None, timeout=15):
         req.add_header("Content-Type", "application/json")
     if cookie:
         req.add_header("Cookie", cookie)
-    return urllib.request.urlopen(req, timeout=timeout)
+    # An empty ProxyHandler: the smoke talks to localhost only, whatever HTTP_PROXY says.
+    return urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=timeout)
 
 
 def get_json(url, path, cookie=None):

@@ -104,12 +104,12 @@ fi
 
 # Setup by token (the wizard's own API), then the crawler leaves the setup hold and the DHT
 # socket is bound. The smoke asks the server only about itself (the server itself may reach the
-# public DHT). The token is printed redacted, and the password stays in $work/state.
+# public DHT). The token is printed redacted, and only the session cookie is kept in $work/state.
 py=python3
 command -v "$py" >/dev/null 2>&1 || py=python
 "$py" -I "$flow" setup --url "$url" --log "$work/log.txt" --state "$work/state"
 "$py" -I "$flow" crawler --url "$url" --state "$work/state" --dht
-stop_server "$work/log.txt"
+stop_server
 
 # Import a tiny Magnetico database. `lodestar import` needs the server stopped.
 "$py" -I "$flow" fixture "$work/fixture.sqlite3"
@@ -121,5 +121,5 @@ tail -n 3 "$work/import.txt"
 # Start again: the imported torrents become searchable.
 start_server "$work/log2.txt"
 "$py" -I "$flow" search --url "$url" --state "$work/state"
-stop_server "$work/log2.txt"
+stop_server
 echo "smoke ok: $tarball"

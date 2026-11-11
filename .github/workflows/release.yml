@@ -177,8 +177,8 @@ jobs:
 
       # Setup by token through the wizard's own API, then the crawler must leave the setup
       # hold with its DHT socket bound. The smoke asks the container only about itself (the
-      # container may reach the public DHT); the token is printed redacted and the password
-      # stays in a temp folder.
+      # container may reach the public DHT); the token is printed redacted and only the
+      # session cookie is kept, in a temp folder that the Container logs step removes.
       - name: Setup by token, then the crawler is running
         run: |
           set -euo pipefail
@@ -213,6 +213,7 @@ jobs:
         run: |
           set -euo pipefail
           fixture=$(mktemp -d)
+          echo "SMOKE_FIXTURE=$fixture" >> "$GITHUB_ENV"
           python3 -I packaging/smoke/flow.py fixture "$fixture/database.sqlite3"
           chmod 755 "$fixture"
           chmod 644 "$fixture/database.sqlite3"
@@ -239,6 +240,9 @@ jobs:
           for name in lodestar-smoke lodestar-volume lodestar-puid; do
             docker logs "$name" 2>&1 | redact || true
           done
+          # The state folder's log.txt holds the raw first-run token, and the fixture folder is
+          # scratch: remove both, whatever happened before.
+          rm -rf "${SMOKE_STATE:-}" "${SMOKE_FIXTURE:-}"
 
   # Whether a pull request touches what the arm64 build depends on beyond the
   # Rust code (the smoke job already builds the same code for amd64).
@@ -569,7 +573,7 @@ jobs:
             { echo "::error::the binary doesn't carry LODESTAR_VERSION=$VERSION"; exit 1; }
           (cd dist && sha256sum "$name" >"$name.sha256" && cat "$name.sha256")
 
-      - name: Smoke (unpack, serve, /healthz, stop)
+      - name: Smoke (unpack, serve, setup, crawler, import, search, stop)
         if: matrix.smoke
         run: packaging/linux/smoke.sh dist/lodestar-$VERSION-${{ matrix.arch }}-linux-musl.tar.gz
 
