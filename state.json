@@ -7706,7 +7706,13 @@
   ],
   "review_queue": [
     "#692 ead0d88d (delta, concurrency)",
-    "#698 c997044d (delta)"
+    "#698 c997044d (delta)",
+    {
+      "pr": 700,
+      "slice": "PK-ops",
+      "sha": "bc077b8bd2ce2d22ef65afb3a938d136a15d4ae1",
+      "note": "docs-only; ready 16:53Z"
+    }
   ],
   "merged": [
     {
