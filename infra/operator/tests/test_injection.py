@@ -4,6 +4,7 @@ sandbox's GitHub are fakes, and the mock's subprocess runs with sockets
 disabled."""
 
 import base64
+import ast
 import contextlib
 import io
 import json
@@ -1058,6 +1059,18 @@ class Hardening(unittest.TestCase):
         names = [name for name, _ in d["upload"].files]
         self.assertNotIn("comments.json", names)
 
+    def test_mock_upload_accepts_windows_and_linux_checkouts_without_changing_code(self):
+        source = harness.HELPERS["thread.py"].read_text(encoding="utf-8")
+        expected = ast.dump(ast.Module(body=ast.parse(source).body[1:], type_ignores=[]))
+        for newline in ("\n", "\r\n"):
+            with self.subTest(newline=repr(newline)):
+                result = harness.neutral("thread.py", source.replace("\n", newline).encode())
+                parsed = ast.parse(result)
+                self.assertEqual(ast.get_docstring(parsed), "Local GitHub transport for thread_real.py.")
+                self.assertEqual(ast.dump(ast.Module(body=parsed.body[1:], type_ignores=[])), expected)
+                with self.assertRaises(Refusal):
+                    harness.neutral("thread.py", b"import json" + newline.encode())
+
 
 # ---- the workflow ----
 
@@ -1113,7 +1126,7 @@ class Workflow(unittest.TestCase):
     def test_the_bridge_role_trusts_this_workflow(self):
         tmpl = json.loads((ROOT / "infra" / "aws" / "fleet-control" / "fleet-control.json").read_text())
         text = json.dumps(tmpl)
-        self.assertIn("environment:cloud-operator:job_workflow_ref:dvortsis/lodestar-v2/.github/workflows/"
+        self.assertIn("repo:dvortsis@83323977/lodestar-v2@1427502271:environment:cloud-operator:workflow_ref:dvortsis/lodestar-v2/.github/workflows/"
                       "operator-injection.yml@refs/heads/main", text)
         bridge_role = next(r for r in tmpl["Resources"].values()
                            if r.get("Properties", {}).get("RoleName") == "LodestarOperatorBridge")

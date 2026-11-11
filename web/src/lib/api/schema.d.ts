@@ -4480,6 +4480,24 @@ export interface components {
                 [key: string]: string | null;
             };
         };
+        /**
+         * @description A `data_filesystem` exception's detail: the data folder sits on a
+         *     filesystem that's slow or unsafe for the database and the index
+         *     (architecture §11).
+         */
+        DataFilesystem: {
+            /**
+             * @description The mount table's name for the filesystem (`fuse.shfs`, `nfs4`,
+             *     …), when it's known; a detail, not for the sentence.
+             */
+            fs_type: string | null;
+            kind: components["schemas"]["DataFsKind"];
+            /**
+             * @description The data folder, as the server sees it (inside a container, the
+             *     container's path).
+             */
+            path: string;
+        };
         /** @description The data formats a bug report needs, and why an upgrade might reindex. */
         DataFormats: {
             /** @description The search index's version, `v{schema}-t{tokenizer}`. */
@@ -4492,6 +4510,11 @@ export interface components {
              */
             store_schema: number | null;
         };
+        /**
+         * @description What holds a risky data folder, and so the fix.
+         * @enum {string}
+         */
+        DataFsKind: "unraid_user_share" | "fuse" | "network";
         /** @description The data directory and what it holds. */
         DataInfo: {
             /**
@@ -5466,9 +5489,16 @@ export interface components {
         };
         /** @description Where an exception's fix is: a settings section or a stage page. */
         Fix: {
-            /** @description `settings` or `stage`. */
+            /**
+             * @description `settings`, `stage` or `guide` (a page of the user guide). A
+             *     client offers no link for a kind it doesn't know.
+             */
             kind: string;
-            /** @description The section or stage (`index`, `fetch`, …). */
+            /**
+             * @description The section or stage (`index`, `fetch`, …), or the guide's topic:
+             *     `data_folder` (where to keep the data folder) or `windows_ports`
+             *     (the port range on Windows).
+             */
             target: string;
         };
         FixtureCounts: {
@@ -6015,6 +6045,7 @@ export interface components {
         /** @description An exception (§10.9.2 level 5): text + icon + a fix action. */
         InsightsException: {
             counts?: null | components["schemas"]["StandInCounts"];
+            filesystem?: null | components["schemas"]["DataFilesystem"];
             fix: components["schemas"]["Fix"];
             /**
              * @description `index_lag` (the index more than 30 s behind), `cohort_stalled`
@@ -6024,9 +6055,15 @@ export interface components {
              *     for them until they're fixed in Filters & Safety), or
              *     `filter_stand_ins_rejudged` (for a week after such rows read
              *     again: `value` torrents their stand-ins held were released, and
-             *     `counts` has the rest).
+             *     `counts` has the rest), `data_filesystem` (the data folder is on
+             *     Unraid's user share, another FUSE filesystem or a network share;
+             *     `filesystem` says which), or `ephemeral_ports` (Windows has too
+             *     few ports left for outgoing connections; `value` ports are left
+             *     and `ports` has the fix). The last two are checked at most hourly.
+             *     A client shows a kind it doesn't know generically.
              */
             kind: string;
+            ports?: null | components["schemas"]["PortPressure"];
             /**
              * @description The rows an exception is about, as the Filters & Safety screens
              *     name them (`U-3`, `C-2`, …); empty for the other kinds.
@@ -6038,7 +6075,10 @@ export interface components {
              * @description Unix seconds.
              */
             since: number;
-            /** @description `s`, `torrents`, `ratio` or `rows`. */
+            /**
+             * @description `s`, `torrents`, `ratio`, `rows` or `ports`; null when the kind
+             *     has no number (`data_filesystem`).
+             */
             unit: string | null;
             /** Format: double */
             value: number | null;
@@ -6384,8 +6424,8 @@ export interface components {
         /**
          * @description `GET /legal/notice`: the Legal Notice this build shows.
          * @example {
-         *       "text": "# Lodestar Legal Notice and Network Risks\n\n**Version 4 · 2026-11-06**\n\nLodestar shows this notice before first use.\n\n## 1. Who publishes Lodestar\n- The **AGPL** lets you run, study, change and share it.\n- Open an issue at https://github.com/dvortsis/lodestar-v2.",
-         *       "version": 4
+         *       "text": "# Lodestar Legal Notice and Network Risks\n\n**Version 5 · 2026-11-11**\n\nLodestar shows this notice before first use.\n\n## 1. Who publishes Lodestar\n- The **AGPL** lets you run, study, change and share it.\n- Open an issue at https://github.com/dvortsis/lodestar-v2.",
+         *       "version": 5
          *     }
          */
         LegalNotice: {
@@ -7320,6 +7360,54 @@ export interface components {
              *     found on the host.
              */
             window_zone: string;
+        };
+        /**
+         * @description The IP family of a port range, as `netsh int <family>` names it.
+         * @enum {string}
+         */
+        PortFamily: "ipv4" | "ipv6";
+        /**
+         * @description An `ephemeral_ports` exception's detail (architecture §11): Windows'
+         *     dynamic port range for one IP family, and the range to set instead.
+         *     The fix is `netsh int <family> set dynamicport tcp start=<fix_start>
+         *     num=<fix_count>`, run in a Command Prompt opened as administrator.
+         */
+        PortPressure: {
+            /**
+             * Format: int32
+             * @description Ports left for outgoing connections (`value`).
+             */
+            available: number;
+            /** Format: int32 */
+            end: number;
+            family: components["schemas"]["PortFamily"];
+            /** Format: int32 */
+            fix_count: number | null;
+            /**
+             * Format: int32
+             * @description The range to set: its first port and how many. Null when no range
+             *     is large enough; then lowering the crawler's intensity is the fix.
+             */
+            fix_start: number | null;
+            /** Format: int64 */
+            max_sockets: number;
+            /**
+             * Format: int32
+             * @description About what Lodestar's `max_sockets` fetches and the rest of the PC
+             *     need (2,048 ports are kept for other programs).
+             */
+            needed: number;
+            /**
+             * Format: int32
+             * @description Ports inside it that other software reserved (Hyper-V, WSL,
+             *     Docker Desktop).
+             */
+            reserved: number;
+            /**
+             * Format: int32
+             * @description The dynamic range now: its first and last port.
+             */
+            start: number;
         };
         /**
          * @description What a change would do (§20.10). Counts come from the review queue,
@@ -10506,7 +10594,13 @@ export interface components {
              *     read, so automatic updates are held; pausing or resuming saves a
              *     new state, which rewrites the file and ends the hold) and, on
              *     Windows, `install_failed` (the update helper's last answer, for a version
-             *     newer than the running one, wasn't `installed`; display only), …
+             *     newer than the running one, wasn't `installed`; display only) and
+             *     `install_blocked` (that answer was a blocked install: Windows
+             *     wouldn't start the service, nothing changed, and the helper tries
+             *     again at the next boot unless updates are switched off or paused
+             *     first; display only) and `install_blocked_off` (the same, while
+             *     updates are already Off: switching to another mode and back to Off
+             *     cancels the retry; display only), …
              */
             notices: string[];
             pending: null | components["schemas"]["PendingInstall"];

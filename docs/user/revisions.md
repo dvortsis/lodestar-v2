@@ -2,6 +2,7 @@
 
 | Version | Date | Change |
 |---|---|---|
+| 2.8 | 2026-11-11T18:30:00Z | Chapter 4: the MSI options, service, uninstall and `REMOVE_DATA`; the portable ZIP and how it differs; the Linux service and `journalctl`; new sections 4.6 on the data folder warning and 4.7 on the Windows port warning, both marked newer than v0.5.1 where they are, and 4.8 with questions. Section 6.1: install-time rows for a stopped service, a taken port and a refused data folder. |
 | 2.7 | 2026-11-11T11:35:00Z | Section 2.2: leave the v0.5.1 template's unused Hot path and Cold path fields empty. Section 2.4: `healthy` means only that the process is alive. Full speed starts after the 6-hour sampling wait: added to sections 2.5, 3.5 and 5.3 and to a row in section 6.1. Appendix B no longer lists the Hot path and Cold path fields. |
 | 2.6 | 2026-11-11T11:26:11Z | Section 2.2: the unused Hot path and Cold path fields are gone from the Unraid templates, so the guide no longer describes them; Data holds everything and no other folder is needed. |
 | 2.5 | 2026-11-07T23:59:00Z | Section 6.2: the new service code 536870915, the reason in Lodestar's own log, Repair for your own administrator account, and `icacls` for an administrator through a domain group or a work or school account. Section 6.1: a row on the Windows Public network profile, and the expected accounts on the `logs` folder. |

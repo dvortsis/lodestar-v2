@@ -403,7 +403,12 @@ pub struct InsightsException {
     /// for them until they're fixed in Filters & Safety), or
     /// `filter_stand_ins_rejudged` (for a week after such rows read
     /// again: `value` torrents their stand-ins held were released, and
-    /// `counts` has the rest).
+    /// `counts` has the rest), `data_filesystem` (the data folder is on
+    /// Unraid's user share, another FUSE filesystem or a network share;
+    /// `filesystem` says which), or `ephemeral_ports` (Windows has too
+    /// few ports left for outgoing connections; `value` ports are left
+    /// and `ports` has the fix). The last two are checked at most hourly.
+    /// A client shows a kind it doesn't know generically.
     pub kind: String,
     /// The rows an exception is about, as the Filters & Safety screens
     /// name them (`U-3`, `C-2`, …); empty for the other kinds.
@@ -413,10 +418,17 @@ pub struct InsightsException {
     /// made while the rows couldn't be read and is left for you to review.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub counts: Option<StandInCounts>,
+    /// `data_filesystem` only: what holds the data folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filesystem: Option<DataFilesystem>,
+    /// `ephemeral_ports` only: the port range and the fix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ports: Option<PortPressure>,
     pub severity: Severity,
     /// Unix seconds.
     pub since: i64,
-    /// `s`, `torrents`, `ratio` or `rows`.
+    /// `s`, `torrents`, `ratio`, `rows` or `ports`; null when the kind
+    /// has no number (`data_filesystem`).
     #[schema(required = true)]
     pub unit: Option<String>,
     #[schema(required = true)]
@@ -446,12 +458,80 @@ pub struct StandInCounts {
     pub hidden: u64,
 }
 
+/// A `data_filesystem` exception's detail: the data folder sits on a
+/// filesystem that's slow or unsafe for the database and the index
+/// (architecture §11).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DataFilesystem {
+    pub kind: DataFsKind,
+    /// The data folder, as the server sees it (inside a container, the
+    /// container's path).
+    pub path: String,
+    /// The mount table's name for the filesystem (`fuse.shfs`, `nfs4`,
+    /// …), when it's known; a detail, not for the sentence.
+    #[schema(required = true)]
+    pub fs_type: Option<String>,
+}
+
+/// What holds a risky data folder, and so the fix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DataFsKind {
+    /// Unraid's user share (`/mnt/user`, FUSE shfs): move the data folder
+    /// to a pool path such as `/mnt/cache/appdata/lodestar`.
+    UnraidUserShare,
+    /// Another FUSE filesystem (mergerfs, ntfs-3g, …): slow; keep the
+    /// data folder on a local disk.
+    Fuse,
+    /// NFS, SMB/CIFS or a Windows network drive: its locking can let the
+    /// database be damaged; keep the data folder on a local disk.
+    Network,
+}
+
+/// An `ephemeral_ports` exception's detail (architecture §11): Windows'
+/// dynamic port range for one IP family, and the range to set instead.
+/// The fix is `netsh int <family> set dynamicport tcp start=<fix_start>
+/// num=<fix_count>`, run in a Command Prompt opened as administrator.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct PortPressure {
+    pub family: PortFamily,
+    /// The dynamic range now: its first and last port.
+    pub start: u32,
+    pub end: u32,
+    /// Ports inside it that other software reserved (Hyper-V, WSL,
+    /// Docker Desktop).
+    pub reserved: u32,
+    /// Ports left for outgoing connections (`value`).
+    pub available: u32,
+    /// About what Lodestar's `max_sockets` fetches and the rest of the PC
+    /// need (2,048 ports are kept for other programs).
+    pub needed: u32,
+    pub max_sockets: u64,
+    /// The range to set: its first port and how many. Null when no range
+    /// is large enough; then lowering the crawler's intensity is the fix.
+    #[schema(required = true)]
+    pub fix_start: Option<u32>,
+    #[schema(required = true)]
+    pub fix_count: Option<u32>,
+}
+
+/// The IP family of a port range, as `netsh int <family>` names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum PortFamily {
+    Ipv4,
+    Ipv6,
+}
+
 /// Where an exception's fix is: a settings section or a stage page.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Fix {
-    /// `settings` or `stage`.
+    /// `settings`, `stage` or `guide` (a page of the user guide). A
+    /// client offers no link for a kind it doesn't know.
     pub kind: String,
-    /// The section or stage (`index`, `fetch`, …).
+    /// The section or stage (`index`, `fetch`, …), or the guide's topic:
+    /// `data_folder` (where to keep the data folder) or `windows_ports`
+    /// (the port range on Windows).
     pub target: String,
 }
 

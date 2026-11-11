@@ -1,0 +1,484 @@
+{
+"AWSTemplateFormatVersion": "2010-09-09",
+"Description": "Independently authorized expiration and owner-emergency cleanup; no Terraform or Linode credentials in GitHub.",
+"Metadata": {
+"AWSToolsMetrics": {
+"AWSAgentToolkit": "aws-cloudformation@3"
+},
+"com.aws.cloudformation.Context": {
+"ref": [
+{
+"at": "docs/operations/fleet-control-cleanup.md"
+}
+]
+}
+},
+"Parameters": {
+"StateBucketName": {
+"Type": "String",
+"AllowedPattern": "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$"
+},
+"ControlBucketName": {
+"Type": "String",
+"AllowedPattern": "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$"
+},
+"LinodeAccountEuuid": {
+"Type": "String",
+"AllowedPattern": "^[A-Za-z0-9-]{1,128}$"
+},
+"MinCreatedUtc": {
+"Type": "String",
+"AllowedPattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+},
+"NotificationTopicName": {
+"Type": "String",
+"AllowedPattern": "^[A-Za-z0-9_-]{1,256}$"
+},
+"EnableExpiration": {
+"Type": "String",
+"Default": "false",
+"AllowedValues": [
+"false",
+"true"
+],
+"Description": "Owner enables only after credential, scope, dry-run, alerts and canary verification."
+}
+},
+"Conditions": {
+"ExpirationEnabled": {
+"Fn::Equals": [
+{
+"Ref": "EnableExpiration"
+},
+"true"
+]
+}
+},
+"Resources": {
+"CleanupToken": {
+"Type": "AWS::SecretsManager::Secret",
+"DeletionPolicy": "Retain",
+"UpdateReplacePolicy": "Retain",
+"Properties": {
+"Name": "lodestar/akamai-cleanup-token",
+"Description": "Owner-installed dedicated cleanup credential; never delivered to GitHub. Empty shell."
+}
+},
+"Executor": {
+"Type": "AWS::IAM::Role",
+"Properties": {
+"AssumeRolePolicyDocument": {
+"Version": "2012-10-17",
+"Statement": [
+{
+"Effect": "Allow",
+"Principal": {
+"Service": "lambda.amazonaws.com"
+},
+"Action": "sts:AssumeRole"
+}
+]
+},
+"Policies": [
+{
+"PolicyName": "ScopedCleanup",
+"PolicyDocument": {
+"Version": "2012-10-17",
+"Statement": [
+{
+"Effect": "Allow",
+"Action": "s3:GetObject",
+"Resource": {
+"Fn::Sub": [
+"arn:${AWS::Partition}:s3:::${B}/fleet/cleanup-authorization.json",
+{
+"B": {
+"Ref": "StateBucketName"
+}
+}
+]
+},
+"Condition": {
+"StringEquals": {
+"s3:ResourceAccount": {
+"Ref": "AWS::AccountId"
+}
+}
+}
+},
+{
+"Effect": "Allow",
+"Action": "s3:PutObject",
+"Resource": {
+"Fn::Sub": [
+"arn:${AWS::Partition}:s3:::${B}/locks/fleet-mismatch.json",
+{
+"B": {
+"Ref": "ControlBucketName"
+}
+}
+]
+},
+"Condition": {
+"StringEquals": {
+"s3:ResourceAccount": {
+"Ref": "AWS::AccountId"
+}
+}
+}
+},
+{
+"Effect": "Allow",
+"Action": "secretsmanager:GetSecretValue",
+"Resource": {
+"Ref": "CleanupToken"
+}
+},
+{
+"Effect": "Allow",
+"Action": [
+"logs:CreateLogStream",
+"logs:PutLogEvents"
+],
+"Resource": [
+{
+"Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-expiration:*"
+},
+{
+"Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-emergency:*"
+}
+]
+}
+]
+}
+}
+]
+}
+},
+"ExpirationLog": {
+"Type": "AWS::Logs::LogGroup",
+"DeletionPolicy": "Retain",
+"UpdateReplacePolicy": "Retain",
+"Properties": {
+"LogGroupName": {
+"Fn::Sub": "/aws/lambda/${AWS::StackName}-expiration"
+},
+"RetentionInDays": 14
+}
+},
+"Expiration": {
+"Type": "AWS::Lambda::Function",
+"DependsOn": "ExpirationLog",
+"Properties": {
+"FunctionName": {
+"Fn::Sub": "${AWS::StackName}-expiration"
+},
+"Runtime": "python3.13",
+"Handler": "index.handler",
+"Role": {
+"Fn::GetAtt": [
+"Executor",
+"Arn"
+]
+},
+"Timeout": 300,
+"MemorySize": 256,
+"ReservedConcurrentExecutions": 1,
+"Code": {
+"ZipFile": "from __future__ import annotations\nimport ipaddress\nimport re\nfrom datetime import datetime, timedelta\nfrom typing import Callable, Iterable\nJOB_LABEL = re.compile(r\"^job-([0-9]{1,20})-([0-9]{1,4})$\")\nADMIN_LABEL = \"ssh-admin-only\"\nCHAIN = timedelta(minutes=90)\nLIVE_STATUSES = {\"queued\", \"in_progress\", \"waiting\", \"requested\", \"pending\"}\nFLEET_WORKFLOW = \".github/workflows/fleet.yml\"\ndef actions_ranges(meta: dict) -> list[ipaddress.IPv4Network]:\n    nets = []\n    for cidr in meta.get(\"actions\") or []:\n        try:\n            net = ipaddress.ip_network(cidr, strict=False)\n        except ValueError:\n            continue\n        if isinstance(net, ipaddress.IPv4Network):\n            nets.append(net)\n    if not nets:\n        raise ValueError(\"no Actions IPv4 ranges in /meta\")\n    return nets\ndef _v4_v6(rule: dict) -> tuple[list, list]:\n    a = rule.get(\"addresses\") or {}\n    return list(a.get(\"ipv4\") or []), list(a.get(\"ipv6\") or [])\ndef _is_ssh(rule: dict) -> bool:\n    return rule.get(\"action\") == \"ACCEPT\" and rule.get(\"protocol\") == \"TCP\" and str(rule.get(\"ports\")) == \"22\"\ndef in_ranges(cidr: str, ranges: Iterable[ipaddress.IPv4Network]) -> bool:\n    try:\n        net = ipaddress.ip_network(cidr, strict=True)\n    except ValueError:\n        return False\n    return isinstance(net, ipaddress.IPv4Network) and net.prefixlen == 32 and any(net.subnet_of(r) for r in ranges)\ndef job_rule_ok(rule: dict, ranges) -> bool:\n    v4, v6 = _v4_v6(rule)\n    return bool(JOB_LABEL.match(str(rule.get(\"label\", \"\")))) and _is_ssh(rule) and not v6 \\\n        and len(v4) == 1 and in_ranges(v4[0], ranges)\ndef admin_rule_ok(rule: dict, admin: list[str]) -> bool:\n    v4, v6 = _v4_v6(rule)\n    return rule.get(\"label\") == ADMIN_LABEL and _is_ssh(rule) and not v6 and sorted(v4) == sorted(admin)\ndef run_is_live(run: dict | None, attempt: str, now: datetime) -> bool:\n    if not run or run.get(\"status\") not in LIVE_STATUSES:\n        return False\n    path = str(run.get(\"path\", \"\"))\n    if (path != FLEET_WORKFLOW and not path.startswith(FLEET_WORKFLOW + \"@\")) or str(run.get(\"run_attempt\")) != str(attempt):\n        return False\n    try:\n        started = datetime.fromisoformat(str(run.get(\"run_started_at\")).replace(\"Z\", \"+00:00\"))\n    except ValueError:\n        return False\n    return now - started <= CHAIN\ndef audit_firewall(firewall: dict, rules: dict, devices: list[dict], admin: list[str] | None,\n                   ranges, fleet_linode_ids: set[str]) -> list[str]:\n    problems = []\n    if admin is None:\n        problems.append(\"a tagged firewall isn't recorded in fleet.json\")\n        admin = []\n    if firewall.get(\"status\") != \"enabled\":\n        problems.append(\"a fleet firewall isn't enabled\")\n    if rules.get(\"inbound_policy\") != \"DROP\":\n        problems.append(\"a fleet firewall's inbound policy isn't DROP\")\n    if not devices:\n        problems.append(\"a fleet firewall isn't attached\")\n    for d in devices:\n        e = d.get(\"entity\") or {}\n        if e.get(\"type\") != \"linode\" or str(e.get(\"id\")) not in fleet_linode_ids:\n            problems.append(\"a fleet firewall is attached to something outside the fleet\")\n    inbound = rules.get(\"inbound\") or []\n    if sum(1 for r in inbound if admin_rule_ok(r, admin)) != 1:\n        problems.append(\"a fleet firewall's admin rule isn't exactly the recorded one\")\n    runs = []\n    for r in inbound:\n        if admin_rule_ok(r, admin):\n            continue\n        if not job_rule_ok(r, ranges):\n            problems.append(\"a fleet firewall has a rule outside the allowed shapes\")\n        else:\n            runs.append(JOB_LABEL.match(r[\"label\"]).group(1))\n    if len(runs) != len(set(runs)):\n        problems.append(\"a fleet firewall has more than one job rule for a run\")\n    return problems\nimport json\nimport logging\nimport os\nimport re\nimport time\nimport urllib.error\nimport urllib.request\nimport ipaddress\nfrom datetime import datetime, timedelta, timezone\nAUTH_KEY = \"fleet/cleanup-authorization.json\"\nFLAG_KEY = \"locks/fleet-mismatch.json\"\nTAGS = {\"lodestar\", \"test\", \"managed-terraform\"}\nTYPES = {\"main\": \"g6-standard-4\", \"worker\": \"g6-nanode-1\"}\nMAX_NODES = 2\nLOG = logging.getLogger(__name__)\nLOG.setLevel(logging.INFO)\nclass Refused(RuntimeError):\n    pass\ndef timestamp(value, api=False):\n    if not isinstance(value, str):\n        raise Refused(\"timestamp missing\")\n    try:\n        stamp = datetime.fromisoformat(value.replace(\"Z\", \"+00:00\"))\n        if stamp.tzinfo is None:\n            if not api:\n                raise ValueError\n            stamp = stamp.replace(tzinfo=timezone.utc)\n        return stamp.astimezone(timezone.utc)\n    except ValueError:\n        raise Refused(\"timestamp invalid\") from None\ndef positive_id(value):\n    if type(value) is not int or value <= 0:\n        raise Refused(\"resource ID invalid\")\n    return value\ndef validate_authorization(doc, account, activation, now):\n    if (not isinstance(doc, dict) or doc.get(\"version\") != 1 or doc.get(\"account_euuid\") != account\n            or doc.get(\"region\") != \"us-east\" or doc.get(\"deployment_id\") != \"fleet\"):\n        raise Refused(\"authorization account, region or ownership invalid\")\n    start, end = timestamp(doc.get(\"created_at\")), timestamp(doc.get(\"expires_at\"))\n    if not activation <= start <= now or not start < end <= start + timedelta(hours=44):\n        raise Refused(\"authorization lifetime outside approved bounds\")\n    nodes, walls = doc.get(\"linodes\"), doc.get(\"firewalls\")\n    if not isinstance(nodes, list) or not 1 <= len(nodes) <= MAX_NODES or not isinstance(walls, list) or not 1 <= len(walls) <= MAX_NODES:\n        raise Refused(\"authorization resource count invalid\")\n    ids, fids, roles = set(), set(), set()\n    for node in nodes:\n        if not isinstance(node, dict):\n            raise Refused(\"authorization resource invalid\")\n        ident = positive_id(node.get(\"id\"))\n        if ident in ids or node.get(\"role\") not in TYPES or node[\"role\"] in roles:\n            raise Refused(\"duplicate resource or unsupported role\")\n        ids.add(ident)\n        roles.add(node[\"role\"])\n        role = node[\"role\"]\n        label = \"lodestar-main-fleet\" if role == \"main\" else \"lodestar-worker-01-fleet\"\n        made = timestamp(node.get(\"created\"), api=True)\n        if node.get(\"label\") != label or node.get(\"type\") != TYPES[role] or not start <= made <= min(now, start + timedelta(hours=1)) or made >= end:\n            raise Refused(\"resource ownership or creation boundary invalid\")\n    for wall in walls:\n        if not isinstance(wall, dict):\n            raise Refused(\"firewall authorization invalid\")\n        ident = positive_id(wall.get(\"id\"))\n        members = wall.get(\"linode_ids\")\n        if ident in fids or not isinstance(members, list) or not members or any(type(n) is not int for n in members) or not set(members) <= ids:\n            raise Refused(\"firewall ownership invalid\")\n        fids.add(ident)\n        if wall.get(\"label\") not in (\"lodestar-main-fw-fleet\", \"lodestar-worker-fw-fleet\"):\n            raise Refused(\"firewall label invalid\")\n        made = timestamp(wall.get(\"created\"), api=True)\n        if not start <= made <= min(now, start + timedelta(hours=1)):\n            raise Refused(\"firewall creation boundary invalid\")\n        admin = wall.get(\"admin_ipv4\")\n        if not isinstance(admin, list) or not admin:\n            raise Refused(\"firewall admin authorization missing\")\n        try:\n            if any(ipaddress.IPv4Network(cidr).prefixlen != 32 for cidr in admin):\n                raise ValueError\n        except (ValueError, TypeError):\n            raise Refused(\"firewall admin authorization invalid\") from None\n    members = [n for wall in walls for n in wall[\"linode_ids\"]]\n    if len(members) != len(ids) or set(members) != ids:\n        raise Refused(\"firewall membership incomplete\")\n    return end\ndef check_node(actual, expected, activation):\n    if actual is None:\n        return\n    if (actual.get(\"id\") != expected[\"id\"] or actual.get(\"region\") != \"us-east\"\n            or actual.get(\"type\") != expected[\"type\"] or actual.get(\"label\") != expected[\"label\"]\n            or not TAGS <= set(actual.get(\"tags\") or [])\n            or timestamp(actual.get(\"created\"), api=True) != timestamp(expected[\"created\"], api=True)\n            or timestamp(actual.get(\"created\"), api=True) < activation):\n        raise Refused(\"Linode identity, region, tags or creation changed\")\ndef devices(api, fid):\n    result = api(\"GET\", f\"/networking/firewalls/{fid}/devices?page=1&page_size=100\")\n    if (not isinstance(result, dict) or type(result.get(\"pages\")) is not int or result[\"pages\"] != 1\n            or result.get(\"page\") != 1 or not isinstance(result.get(\"data\"), list) or len(result[\"data\"]) > MAX_NODES):\n        raise Refused(\"firewall device inventory incomplete or outside bounds\")\n    return result[\"data\"]\ndef check_wall(api, expected, activation):\n    actual = api(\"GET\", f\"/networking/firewalls/{expected['id']}\")\n    if actual is None:\n        return None\n    if (actual.get(\"id\") != expected[\"id\"] or actual.get(\"label\") != expected[\"label\"]\n            or not TAGS <= set(actual.get(\"tags\") or [])\n            or timestamp(actual.get(\"created\"), api=True) != timestamp(expected[\"created\"], api=True)\n            or timestamp(actual.get(\"created\"), api=True) < activation):\n        raise Refused(\"firewall ownership or creation changed\")\n    for device in devices(api, expected[\"id\"]):\n        entity = device.get(\"entity\", {})\n        if entity.get(\"type\") != \"linode\" or type(entity.get(\"id\")) is not int or entity[\"id\"] not in expected[\"linode_ids\"]:\n            raise Refused(\"firewall has an unapproved attached resource\")\n    return actual\ndef firewall_drift(api, wall, now, github):\n    actual = api(\"GET\", f\"/networking/firewalls/{wall['id']}\")\n    if actual is None:\n        return True\n    rules = api(\"GET\", f\"/networking/firewalls/{wall['id']}/rules\")\n    if not isinstance(rules, dict) or not isinstance(rules.get(\"inbound\"), list):\n        raise Refused(\"firewall rules unreadable\")\n    jobs = [r for r in rules[\"inbound\"] if JOB_LABEL.fullmatch(str(r.get(\"label\", \"\")))]\n    ranges = actions_ranges(github(\"/meta\")) if jobs else []\n    problems = audit_firewall(actual, rules, devices(api, wall[\"id\"]), wall[\"admin_ipv4\"], ranges, set(map(str, wall[\"linode_ids\"])))\n    for rule in jobs:\n        run_id, attempt = JOB_LABEL.fullmatch(rule[\"label\"]).groups()\n        if not run_is_live(github(f\"/repos/dvortsis/lodestar-v2/actions/runs/{run_id}\"), attempt, now):\n            problems.append(\"stale job ingress\")\n    return bool(problems)\ndef cleanup(doc, account, activation, mode, now, api, unchanged, mark, pause=time.sleep, dry_run=False, remaining=lambda: float(\"inf\"), github=None):\n    if mode not in (\"expiration\", \"emergency\") or not account:\n        raise Refused(\"cleanup mode or account missing\")\n    if api(\"GET\", \"/account\").get(\"euuid\") != account:\n        raise Refused(\"Linode account mismatch\")\n    end = validate_authorization(doc, account, activation, now)\n    present = False\n    for node in doc[\"linodes\"]:\n        current = api(\"GET\", f\"/linode/instances/{node['id']}\")\n        check_node(current, node, activation)\n        present = present or current is not None\n    for wall in doc[\"firewalls\"]:\n        current = check_wall(api, wall, activation)\n        present = present or current is not None\n    unchanged()\n    if mode == \"expiration\" and now < end:\n        try:\n            cache = {}\n            def lookup(path):\n                if path not in cache:\n                    cache[path] = github(path)\n                return cache[path]\n            drift = any(firewall_drift(api, wall, now, lookup) for wall in doc[\"firewalls\"])\n        except Exception:\n            if not dry_run:\n                mark()\n            raise Refused(\"firewall audit unavailable; owner escalation required\") from None\n        if not drift:\n            return {\"status\": \"not_expired\", \"linodes\": 0, \"firewalls\": 0}\n        LOG.warning('{\"event\":\"cleanup_security_tripwire\"}')\n    if dry_run:\n        return {\"status\": \"dry_run\", \"linodes\": 0, \"firewalls\": 0}\n    if not present:\n        return {\"status\": \"complete\", \"linodes\": 0, \"firewalls\": 0}\n    if remaining() < 45:\n        raise Refused(\"cleanup deadline too near\")\n    mark()\n    count = {\"status\": \"complete\", \"linodes\": 0, \"firewalls\": 0}\n    for node in doc[\"linodes\"]:\n        unchanged()\n        if api(\"GET\", \"/account\").get(\"euuid\") != account:\n            raise Refused(\"Linode account changed\")\n        current = api(\"GET\", f\"/linode/instances/{node['id']}\")\n        check_node(current, node, activation)\n        for wall in doc[\"firewalls\"]:\n            check_wall(api, wall, activation)\n        if current is not None:\n            if remaining() < 40:\n                raise Refused(\"cleanup deadline too near for confirmed deletion\")\n            api(\"DELETE\", f\"/linode/instances/{node['id']}\")\n            for attempt in range(4):\n                if api(\"GET\", f\"/linode/instances/{node['id']}\") is None:\n                    break\n                if attempt == 3:\n                    raise Refused(\"Linode deletion unconfirmed\")\n                pause(1)\n            count[\"linodes\"] += 1\n            LOG.info(json.dumps({\"event\": \"cleanup_delete_confirmed\", \"kind\": \"linode\", \"id\": node[\"id\"]}))\n    count[\"retained_firewalls\"] = len(doc[\"firewalls\"])\n    return count\nclass NoRedirect(urllib.request.HTTPRedirectHandler):\n    def redirect_request(self, *args, **kwargs):\n        return None\ndef transport(token):\n    opener = urllib.request.build_opener(NoRedirect())\n    allowed = re.compile(r\"^/(account|linode/instances/[1-9][0-9]*|networking/firewalls/[1-9][0-9]*(/devices\\?page=[1-5]&page_size=100|/rules)?)$\")\n    def call(method, path):\n        if (method not in (\"GET\", \"DELETE\") or not allowed.fullmatch(path)\n                or method == \"DELETE\" and not re.fullmatch(r\"/linode/instances/[1-9][0-9]*\", path)):\n            raise Refused(\"unsupported cleanup API operation\")\n        request = urllib.request.Request(\"https://api.linode.com/v4\" + path, method=method,\n                                         headers={\"Authorization\": \"Bearer \" + token, \"Accept\": \"application/json\"})\n        try:\n            with opener.open(request, timeout=5) as response:\n                raw = response.read(1000001)\n                if len(raw) > 1000000:\n                    raise Refused(\"Linode response too large\")\n                return json.loads(raw) if raw else {}\n        except urllib.error.HTTPError as exc:\n            if exc.code == 404:\n                return None\n            raise Refused(\"Linode request failed\") from None\n        except Exception:\n            raise Refused(\"Linode request failed\") from None\n    return call\ndef github_get(path):\n    if not re.fullmatch(r\"/meta|/repos/dvortsis/lodestar-v2/actions/runs/[1-9][0-9]*\", path):\n        raise Refused(\"unsupported GitHub audit path\")\n    request = urllib.request.Request(\"https://api.github.com\" + path, headers={\"User-Agent\": \"lodestar-cleanup\", \"Accept\": \"application/vnd.github+json\"})\n    try:\n        with urllib.request.build_opener(NoRedirect()).open(request, timeout=5) as response:\n            raw = response.read(1000001)\n            if len(raw) > 1000000:\n                raise Refused(\"GitHub audit response too large\")\n            return json.loads(raw)\n    except Exception:\n        raise Refused(\"GitHub audit unavailable\") from None\ndef handler(event, context):\n    import boto3\n    from botocore.config import Config\n    report = {\"status\": \"failed\", \"event\": \"cleanup_failed\"}\n    stage = \"execution_identity\"\n    try:\n        account, region = os.environ[\"AWS_ACCOUNT_ID\"], os.environ[\"AWS_REGION\"]\n        if region != \"us-east-1\" or not re.fullmatch(r\"[0-9]{12}\", account):\n            raise Refused(\"AWS account/region configuration invalid\")\n        cfg = Config(connect_timeout=5, read_timeout=10, retries={\"max_attempts\": 1})\n        session = boto3.Session(region_name=region)\n        if session.client(\"sts\", config=cfg).get_caller_identity()[\"Account\"] != account:\n            raise Refused(\"AWS execution account mismatch\")\n        s3 = session.client(\"s3\", config=cfg)\n        stage = \"authorization\"\n        bucket = os.environ[\"STATE_BUCKET\"]\n        result = s3.get_object(Bucket=bucket, Key=AUTH_KEY, ExpectedBucketOwner=account)\n        etag = result[\"ETag\"]\n        raw = result[\"Body\"].read(65537)\n        if len(raw) > 65536:\n            raise Refused(\"authorization too large\")\n        doc = json.loads(raw)\n        read_only = isinstance(event, dict) and event.get(\"dry_run\") is True\n        if os.environ[\"CLEANUP_MODE\"] == \"emergency\" and not read_only:\n            request = event if isinstance(event, dict) else {}\n            requested = timestamp(request.get(\"requested_at\"))\n            now = datetime.now(timezone.utc)\n            validate_authorization(doc, os.environ[\"LINODE_ACCOUNT_EUUID\"], timestamp(os.environ[\"MIN_CREATED_UTC\"]), now)\n            if (not now - timedelta(minutes=10) <= requested <= now or timestamp(doc[\"created_at\"]) > requested\n                    or any(timestamp(n[\"created\"], api=True) > requested for n in doc[\"linodes\"])):\n                raise Refused(\"emergency request is stale or predates this fleet\")\n            if request.get(\"operation\") == \"prepare\":\n                return {\"status\": \"prepared\", \"authorization_version\": etag}\n            if request.get(\"authorization_version\") != etag:\n                raise Refused(\"emergency authorization version changed\")\n        def unchanged():\n            s3.get_object(Bucket=bucket, Key=AUTH_KEY, ExpectedBucketOwner=account, IfMatch=etag)[\"Body\"].close()\n        def mark():\n            s3.put_object(Bucket=os.environ[\"CONTROL_BUCKET\"], Key=FLAG_KEY, ExpectedBucketOwner=account,\n                          Body=json.dumps({\"mismatch\": True, \"reasons\": [\"independent cleanup; owner reconciliation required\"]}).encode())\n        stage = \"cleanup_credential\"\n        secret = session.client(\"secretsmanager\", config=cfg).get_secret_value(SecretId=os.environ[\"CLEANUP_SECRET_ARN\"])[\"SecretString\"]\n        token = json.loads(secret)[\"token\"] if secret.startswith(\"{\") else secret\n        if not isinstance(token, str) or not 20 <= len(token) <= 512 or any(c.isspace() for c in token):\n            raise Refused(\"cleanup credential invalid\")\n        stage = \"scoped_cleanup\"\n        report = cleanup(doc, os.environ[\"LINODE_ACCOUNT_EUUID\"], timestamp(os.environ[\"MIN_CREATED_UTC\"]),\n                         os.environ[\"CLEANUP_MODE\"], datetime.now(timezone.utc), transport(token), unchanged, mark,\n                         dry_run=read_only, remaining=lambda: context.get_remaining_time_in_millis() / 1000, github=github_get)\n        report[\"event\"] = \"cleanup_read_only\" if read_only else \"cleanup_complete\"\n        LOG.info(json.dumps(report))\n        return report\n    except Exception as exc:\n        report.update(status=\"failed\", event=\"cleanup_failed\", stage=stage, reason=str(exc) if isinstance(exc, Refused) else \"dependency unavailable or malformed data\")\n        LOG.error(json.dumps(report))\n        raise RuntimeError(\"cleanup failed; inspect scoped inventory and authorization; no empty-fleet assumption\") from None\n"
+},
+"Environment": {
+"Variables": {
+"AWS_ACCOUNT_ID": {
+"Ref": "AWS::AccountId"
+},
+"STATE_BUCKET": {
+"Ref": "StateBucketName"
+},
+"CONTROL_BUCKET": {
+"Ref": "ControlBucketName"
+},
+"CLEANUP_SECRET_ARN": {
+"Ref": "CleanupToken"
+},
+"LINODE_ACCOUNT_EUUID": {
+"Ref": "LinodeAccountEuuid"
+},
+"MIN_CREATED_UTC": {
+"Ref": "MinCreatedUtc"
+},
+"CLEANUP_MODE": "expiration"
+}
+}
+}
+},
+"ExpirationErrors": {
+"Type": "AWS::CloudWatch::Alarm",
+"Properties": {
+"Namespace": "AWS/Lambda",
+"MetricName": "Errors",
+"Dimensions": [
+{
+"Name": "FunctionName",
+"Value": {
+"Ref": "Expiration"
+}
+}
+],
+"Statistic": "Sum",
+"Period": 300,
+"EvaluationPeriods": 1,
+"Threshold": 1,
+"ComparisonOperator": "GreaterThanOrEqualToThreshold",
+"TreatMissingData": "notBreaching",
+"AlarmActions": [
+{
+"Fn::Sub": "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${NotificationTopicName}"
+}
+]
+}
+},
+"EmergencyLog": {
+"Type": "AWS::Logs::LogGroup",
+"DeletionPolicy": "Retain",
+"UpdateReplacePolicy": "Retain",
+"Properties": {
+"LogGroupName": {
+"Fn::Sub": "/aws/lambda/${AWS::StackName}-emergency"
+},
+"RetentionInDays": 14
+}
+},
+"Emergency": {
+"Type": "AWS::Lambda::Function",
+"DependsOn": "EmergencyLog",
+"Properties": {
+"FunctionName": {
+"Fn::Sub": "${AWS::StackName}-emergency"
+},
+"Runtime": "python3.13",
+"Handler": "index.handler",
+"Role": {
+"Fn::GetAtt": [
+"Executor",
+"Arn"
+]
+},
+"Timeout": 300,
+"MemorySize": 256,
+"ReservedConcurrentExecutions": 1,
+"Code": {
+"ZipFile": "from __future__ import annotations\nimport ipaddress\nimport re\nfrom datetime import datetime, timedelta\nfrom typing import Callable, Iterable\nJOB_LABEL = re.compile(r\"^job-([0-9]{1,20})-([0-9]{1,4})$\")\nADMIN_LABEL = \"ssh-admin-only\"\nCHAIN = timedelta(minutes=90)\nLIVE_STATUSES = {\"queued\", \"in_progress\", \"waiting\", \"requested\", \"pending\"}\nFLEET_WORKFLOW = \".github/workflows/fleet.yml\"\ndef actions_ranges(meta: dict) -> list[ipaddress.IPv4Network]:\n    nets = []\n    for cidr in meta.get(\"actions\") or []:\n        try:\n            net = ipaddress.ip_network(cidr, strict=False)\n        except ValueError:\n            continue\n        if isinstance(net, ipaddress.IPv4Network):\n            nets.append(net)\n    if not nets:\n        raise ValueError(\"no Actions IPv4 ranges in /meta\")\n    return nets\ndef _v4_v6(rule: dict) -> tuple[list, list]:\n    a = rule.get(\"addresses\") or {}\n    return list(a.get(\"ipv4\") or []), list(a.get(\"ipv6\") or [])\ndef _is_ssh(rule: dict) -> bool:\n    return rule.get(\"action\") == \"ACCEPT\" and rule.get(\"protocol\") == \"TCP\" and str(rule.get(\"ports\")) == \"22\"\ndef in_ranges(cidr: str, ranges: Iterable[ipaddress.IPv4Network]) -> bool:\n    try:\n        net = ipaddress.ip_network(cidr, strict=True)\n    except ValueError:\n        return False\n    return isinstance(net, ipaddress.IPv4Network) and net.prefixlen == 32 and any(net.subnet_of(r) for r in ranges)\ndef job_rule_ok(rule: dict, ranges) -> bool:\n    v4, v6 = _v4_v6(rule)\n    return bool(JOB_LABEL.match(str(rule.get(\"label\", \"\")))) and _is_ssh(rule) and not v6 \\\n        and len(v4) == 1 and in_ranges(v4[0], ranges)\ndef admin_rule_ok(rule: dict, admin: list[str]) -> bool:\n    v4, v6 = _v4_v6(rule)\n    return rule.get(\"label\") == ADMIN_LABEL and _is_ssh(rule) and not v6 and sorted(v4) == sorted(admin)\ndef run_is_live(run: dict | None, attempt: str, now: datetime) -> bool:\n    if not run or run.get(\"status\") not in LIVE_STATUSES:\n        return False\n    path = str(run.get(\"path\", \"\"))\n    if (path != FLEET_WORKFLOW and not path.startswith(FLEET_WORKFLOW + \"@\")) or str(run.get(\"run_attempt\")) != str(attempt):\n        return False\n    try:\n        started = datetime.fromisoformat(str(run.get(\"run_started_at\")).replace(\"Z\", \"+00:00\"))\n    except ValueError:\n        return False\n    return now - started <= CHAIN\ndef audit_firewall(firewall: dict, rules: dict, devices: list[dict], admin: list[str] | None,\n                   ranges, fleet_linode_ids: set[str]) -> list[str]:\n    problems = []\n    if admin is None:\n        problems.append(\"a tagged firewall isn't recorded in fleet.json\")\n        admin = []\n    if firewall.get(\"status\") != \"enabled\":\n        problems.append(\"a fleet firewall isn't enabled\")\n    if rules.get(\"inbound_policy\") != \"DROP\":\n        problems.append(\"a fleet firewall's inbound policy isn't DROP\")\n    if not devices:\n        problems.append(\"a fleet firewall isn't attached\")\n    for d in devices:\n        e = d.get(\"entity\") or {}\n        if e.get(\"type\") != \"linode\" or str(e.get(\"id\")) not in fleet_linode_ids:\n            problems.append(\"a fleet firewall is attached to something outside the fleet\")\n    inbound = rules.get(\"inbound\") or []\n    if sum(1 for r in inbound if admin_rule_ok(r, admin)) != 1:\n        problems.append(\"a fleet firewall's admin rule isn't exactly the recorded one\")\n    runs = []\n    for r in inbound:\n        if admin_rule_ok(r, admin):\n            continue\n        if not job_rule_ok(r, ranges):\n            problems.append(\"a fleet firewall has a rule outside the allowed shapes\")\n        else:\n            runs.append(JOB_LABEL.match(r[\"label\"]).group(1))\n    if len(runs) != len(set(runs)):\n        problems.append(\"a fleet firewall has more than one job rule for a run\")\n    return problems\nimport json\nimport logging\nimport os\nimport re\nimport time\nimport urllib.error\nimport urllib.request\nimport ipaddress\nfrom datetime import datetime, timedelta, timezone\nAUTH_KEY = \"fleet/cleanup-authorization.json\"\nFLAG_KEY = \"locks/fleet-mismatch.json\"\nTAGS = {\"lodestar\", \"test\", \"managed-terraform\"}\nTYPES = {\"main\": \"g6-standard-4\", \"worker\": \"g6-nanode-1\"}\nMAX_NODES = 2\nLOG = logging.getLogger(__name__)\nLOG.setLevel(logging.INFO)\nclass Refused(RuntimeError):\n    pass\ndef timestamp(value, api=False):\n    if not isinstance(value, str):\n        raise Refused(\"timestamp missing\")\n    try:\n        stamp = datetime.fromisoformat(value.replace(\"Z\", \"+00:00\"))\n        if stamp.tzinfo is None:\n            if not api:\n                raise ValueError\n            stamp = stamp.replace(tzinfo=timezone.utc)\n        return stamp.astimezone(timezone.utc)\n    except ValueError:\n        raise Refused(\"timestamp invalid\") from None\ndef positive_id(value):\n    if type(value) is not int or value <= 0:\n        raise Refused(\"resource ID invalid\")\n    return value\ndef validate_authorization(doc, account, activation, now):\n    if (not isinstance(doc, dict) or doc.get(\"version\") != 1 or doc.get(\"account_euuid\") != account\n            or doc.get(\"region\") != \"us-east\" or doc.get(\"deployment_id\") != \"fleet\"):\n        raise Refused(\"authorization account, region or ownership invalid\")\n    start, end = timestamp(doc.get(\"created_at\")), timestamp(doc.get(\"expires_at\"))\n    if not activation <= start <= now or not start < end <= start + timedelta(hours=44):\n        raise Refused(\"authorization lifetime outside approved bounds\")\n    nodes, walls = doc.get(\"linodes\"), doc.get(\"firewalls\")\n    if not isinstance(nodes, list) or not 1 <= len(nodes) <= MAX_NODES or not isinstance(walls, list) or not 1 <= len(walls) <= MAX_NODES:\n        raise Refused(\"authorization resource count invalid\")\n    ids, fids, roles = set(), set(), set()\n    for node in nodes:\n        if not isinstance(node, dict):\n            raise Refused(\"authorization resource invalid\")\n        ident = positive_id(node.get(\"id\"))\n        if ident in ids or node.get(\"role\") not in TYPES or node[\"role\"] in roles:\n            raise Refused(\"duplicate resource or unsupported role\")\n        ids.add(ident)\n        roles.add(node[\"role\"])\n        role = node[\"role\"]\n        label = \"lodestar-main-fleet\" if role == \"main\" else \"lodestar-worker-01-fleet\"\n        made = timestamp(node.get(\"created\"), api=True)\n        if node.get(\"label\") != label or node.get(\"type\") != TYPES[role] or not start <= made <= min(now, start + timedelta(hours=1)) or made >= end:\n            raise Refused(\"resource ownership or creation boundary invalid\")\n    for wall in walls:\n        if not isinstance(wall, dict):\n            raise Refused(\"firewall authorization invalid\")\n        ident = positive_id(wall.get(\"id\"))\n        members = wall.get(\"linode_ids\")\n        if ident in fids or not isinstance(members, list) or not members or any(type(n) is not int for n in members) or not set(members) <= ids:\n            raise Refused(\"firewall ownership invalid\")\n        fids.add(ident)\n        if wall.get(\"label\") not in (\"lodestar-main-fw-fleet\", \"lodestar-worker-fw-fleet\"):\n            raise Refused(\"firewall label invalid\")\n        made = timestamp(wall.get(\"created\"), api=True)\n        if not start <= made <= min(now, start + timedelta(hours=1)):\n            raise Refused(\"firewall creation boundary invalid\")\n        admin = wall.get(\"admin_ipv4\")\n        if not isinstance(admin, list) or not admin:\n            raise Refused(\"firewall admin authorization missing\")\n        try:\n            if any(ipaddress.IPv4Network(cidr).prefixlen != 32 for cidr in admin):\n                raise ValueError\n        except (ValueError, TypeError):\n            raise Refused(\"firewall admin authorization invalid\") from None\n    members = [n for wall in walls for n in wall[\"linode_ids\"]]\n    if len(members) != len(ids) or set(members) != ids:\n        raise Refused(\"firewall membership incomplete\")\n    return end\ndef check_node(actual, expected, activation):\n    if actual is None:\n        return\n    if (actual.get(\"id\") != expected[\"id\"] or actual.get(\"region\") != \"us-east\"\n            or actual.get(\"type\") != expected[\"type\"] or actual.get(\"label\") != expected[\"label\"]\n            or not TAGS <= set(actual.get(\"tags\") or [])\n            or timestamp(actual.get(\"created\"), api=True) != timestamp(expected[\"created\"], api=True)\n            or timestamp(actual.get(\"created\"), api=True) < activation):\n        raise Refused(\"Linode identity, region, tags or creation changed\")\ndef devices(api, fid):\n    result = api(\"GET\", f\"/networking/firewalls/{fid}/devices?page=1&page_size=100\")\n    if (not isinstance(result, dict) or type(result.get(\"pages\")) is not int or result[\"pages\"] != 1\n            or result.get(\"page\") != 1 or not isinstance(result.get(\"data\"), list) or len(result[\"data\"]) > MAX_NODES):\n        raise Refused(\"firewall device inventory incomplete or outside bounds\")\n    return result[\"data\"]\ndef check_wall(api, expected, activation):\n    actual = api(\"GET\", f\"/networking/firewalls/{expected['id']}\")\n    if actual is None:\n        return None\n    if (actual.get(\"id\") != expected[\"id\"] or actual.get(\"label\") != expected[\"label\"]\n            or not TAGS <= set(actual.get(\"tags\") or [])\n            or timestamp(actual.get(\"created\"), api=True) != timestamp(expected[\"created\"], api=True)\n            or timestamp(actual.get(\"created\"), api=True) < activation):\n        raise Refused(\"firewall ownership or creation changed\")\n    for device in devices(api, expected[\"id\"]):\n        entity = device.get(\"entity\", {})\n        if entity.get(\"type\") != \"linode\" or type(entity.get(\"id\")) is not int or entity[\"id\"] not in expected[\"linode_ids\"]:\n            raise Refused(\"firewall has an unapproved attached resource\")\n    return actual\ndef firewall_drift(api, wall, now, github):\n    actual = api(\"GET\", f\"/networking/firewalls/{wall['id']}\")\n    if actual is None:\n        return True\n    rules = api(\"GET\", f\"/networking/firewalls/{wall['id']}/rules\")\n    if not isinstance(rules, dict) or not isinstance(rules.get(\"inbound\"), list):\n        raise Refused(\"firewall rules unreadable\")\n    jobs = [r for r in rules[\"inbound\"] if JOB_LABEL.fullmatch(str(r.get(\"label\", \"\")))]\n    ranges = actions_ranges(github(\"/meta\")) if jobs else []\n    problems = audit_firewall(actual, rules, devices(api, wall[\"id\"]), wall[\"admin_ipv4\"], ranges, set(map(str, wall[\"linode_ids\"])))\n    for rule in jobs:\n        run_id, attempt = JOB_LABEL.fullmatch(rule[\"label\"]).groups()\n        if not run_is_live(github(f\"/repos/dvortsis/lodestar-v2/actions/runs/{run_id}\"), attempt, now):\n            problems.append(\"stale job ingress\")\n    return bool(problems)\ndef cleanup(doc, account, activation, mode, now, api, unchanged, mark, pause=time.sleep, dry_run=False, remaining=lambda: float(\"inf\"), github=None):\n    if mode not in (\"expiration\", \"emergency\") or not account:\n        raise Refused(\"cleanup mode or account missing\")\n    if api(\"GET\", \"/account\").get(\"euuid\") != account:\n        raise Refused(\"Linode account mismatch\")\n    end = validate_authorization(doc, account, activation, now)\n    present = False\n    for node in doc[\"linodes\"]:\n        current = api(\"GET\", f\"/linode/instances/{node['id']}\")\n        check_node(current, node, activation)\n        present = present or current is not None\n    for wall in doc[\"firewalls\"]:\n        current = check_wall(api, wall, activation)\n        present = present or current is not None\n    unchanged()\n    if mode == \"expiration\" and now < end:\n        try:\n            cache = {}\n            def lookup(path):\n                if path not in cache:\n                    cache[path] = github(path)\n                return cache[path]\n            drift = any(firewall_drift(api, wall, now, lookup) for wall in doc[\"firewalls\"])\n        except Exception:\n            if not dry_run:\n                mark()\n            raise Refused(\"firewall audit unavailable; owner escalation required\") from None\n        if not drift:\n            return {\"status\": \"not_expired\", \"linodes\": 0, \"firewalls\": 0}\n        LOG.warning('{\"event\":\"cleanup_security_tripwire\"}')\n    if dry_run:\n        return {\"status\": \"dry_run\", \"linodes\": 0, \"firewalls\": 0}\n    if not present:\n        return {\"status\": \"complete\", \"linodes\": 0, \"firewalls\": 0}\n    if remaining() < 45:\n        raise Refused(\"cleanup deadline too near\")\n    mark()\n    count = {\"status\": \"complete\", \"linodes\": 0, \"firewalls\": 0}\n    for node in doc[\"linodes\"]:\n        unchanged()\n        if api(\"GET\", \"/account\").get(\"euuid\") != account:\n            raise Refused(\"Linode account changed\")\n        current = api(\"GET\", f\"/linode/instances/{node['id']}\")\n        check_node(current, node, activation)\n        for wall in doc[\"firewalls\"]:\n            check_wall(api, wall, activation)\n        if current is not None:\n            if remaining() < 40:\n                raise Refused(\"cleanup deadline too near for confirmed deletion\")\n            api(\"DELETE\", f\"/linode/instances/{node['id']}\")\n            for attempt in range(4):\n                if api(\"GET\", f\"/linode/instances/{node['id']}\") is None:\n                    break\n                if attempt == 3:\n                    raise Refused(\"Linode deletion unconfirmed\")\n                pause(1)\n            count[\"linodes\"] += 1\n            LOG.info(json.dumps({\"event\": \"cleanup_delete_confirmed\", \"kind\": \"linode\", \"id\": node[\"id\"]}))\n    count[\"retained_firewalls\"] = len(doc[\"firewalls\"])\n    return count\nclass NoRedirect(urllib.request.HTTPRedirectHandler):\n    def redirect_request(self, *args, **kwargs):\n        return None\ndef transport(token):\n    opener = urllib.request.build_opener(NoRedirect())\n    allowed = re.compile(r\"^/(account|linode/instances/[1-9][0-9]*|networking/firewalls/[1-9][0-9]*(/devices\\?page=[1-5]&page_size=100|/rules)?)$\")\n    def call(method, path):\n        if (method not in (\"GET\", \"DELETE\") or not allowed.fullmatch(path)\n                or method == \"DELETE\" and not re.fullmatch(r\"/linode/instances/[1-9][0-9]*\", path)):\n            raise Refused(\"unsupported cleanup API operation\")\n        request = urllib.request.Request(\"https://api.linode.com/v4\" + path, method=method,\n                                         headers={\"Authorization\": \"Bearer \" + token, \"Accept\": \"application/json\"})\n        try:\n            with opener.open(request, timeout=5) as response:\n                raw = response.read(1000001)\n                if len(raw) > 1000000:\n                    raise Refused(\"Linode response too large\")\n                return json.loads(raw) if raw else {}\n        except urllib.error.HTTPError as exc:\n            if exc.code == 404:\n                return None\n            raise Refused(\"Linode request failed\") from None\n        except Exception:\n            raise Refused(\"Linode request failed\") from None\n    return call\ndef github_get(path):\n    if not re.fullmatch(r\"/meta|/repos/dvortsis/lodestar-v2/actions/runs/[1-9][0-9]*\", path):\n        raise Refused(\"unsupported GitHub audit path\")\n    request = urllib.request.Request(\"https://api.github.com\" + path, headers={\"User-Agent\": \"lodestar-cleanup\", \"Accept\": \"application/vnd.github+json\"})\n    try:\n        with urllib.request.build_opener(NoRedirect()).open(request, timeout=5) as response:\n            raw = response.read(1000001)\n            if len(raw) > 1000000:\n                raise Refused(\"GitHub audit response too large\")\n            return json.loads(raw)\n    except Exception:\n        raise Refused(\"GitHub audit unavailable\") from None\ndef handler(event, context):\n    import boto3\n    from botocore.config import Config\n    report = {\"status\": \"failed\", \"event\": \"cleanup_failed\"}\n    stage = \"execution_identity\"\n    try:\n        account, region = os.environ[\"AWS_ACCOUNT_ID\"], os.environ[\"AWS_REGION\"]\n        if region != \"us-east-1\" or not re.fullmatch(r\"[0-9]{12}\", account):\n            raise Refused(\"AWS account/region configuration invalid\")\n        cfg = Config(connect_timeout=5, read_timeout=10, retries={\"max_attempts\": 1})\n        session = boto3.Session(region_name=region)\n        if session.client(\"sts\", config=cfg).get_caller_identity()[\"Account\"] != account:\n            raise Refused(\"AWS execution account mismatch\")\n        s3 = session.client(\"s3\", config=cfg)\n        stage = \"authorization\"\n        bucket = os.environ[\"STATE_BUCKET\"]\n        result = s3.get_object(Bucket=bucket, Key=AUTH_KEY, ExpectedBucketOwner=account)\n        etag = result[\"ETag\"]\n        raw = result[\"Body\"].read(65537)\n        if len(raw) > 65536:\n            raise Refused(\"authorization too large\")\n        doc = json.loads(raw)\n        read_only = isinstance(event, dict) and event.get(\"dry_run\") is True\n        if os.environ[\"CLEANUP_MODE\"] == \"emergency\" and not read_only:\n            request = event if isinstance(event, dict) else {}\n            requested = timestamp(request.get(\"requested_at\"))\n            now = datetime.now(timezone.utc)\n            validate_authorization(doc, os.environ[\"LINODE_ACCOUNT_EUUID\"], timestamp(os.environ[\"MIN_CREATED_UTC\"]), now)\n            if (not now - timedelta(minutes=10) <= requested <= now or timestamp(doc[\"created_at\"]) > requested\n                    or any(timestamp(n[\"created\"], api=True) > requested for n in doc[\"linodes\"])):\n                raise Refused(\"emergency request is stale or predates this fleet\")\n            if request.get(\"operation\") == \"prepare\":\n                return {\"status\": \"prepared\", \"authorization_version\": etag}\n            if request.get(\"authorization_version\") != etag:\n                raise Refused(\"emergency authorization version changed\")\n        def unchanged():\n            s3.get_object(Bucket=bucket, Key=AUTH_KEY, ExpectedBucketOwner=account, IfMatch=etag)[\"Body\"].close()\n        def mark():\n            s3.put_object(Bucket=os.environ[\"CONTROL_BUCKET\"], Key=FLAG_KEY, ExpectedBucketOwner=account,\n                          Body=json.dumps({\"mismatch\": True, \"reasons\": [\"independent cleanup; owner reconciliation required\"]}).encode())\n        stage = \"cleanup_credential\"\n        secret = session.client(\"secretsmanager\", config=cfg).get_secret_value(SecretId=os.environ[\"CLEANUP_SECRET_ARN\"])[\"SecretString\"]\n        token = json.loads(secret)[\"token\"] if secret.startswith(\"{\") else secret\n        if not isinstance(token, str) or not 20 <= len(token) <= 512 or any(c.isspace() for c in token):\n            raise Refused(\"cleanup credential invalid\")\n        stage = \"scoped_cleanup\"\n        report = cleanup(doc, os.environ[\"LINODE_ACCOUNT_EUUID\"], timestamp(os.environ[\"MIN_CREATED_UTC\"]),\n                         os.environ[\"CLEANUP_MODE\"], datetime.now(timezone.utc), transport(token), unchanged, mark,\n                         dry_run=read_only, remaining=lambda: context.get_remaining_time_in_millis() / 1000, github=github_get)\n        report[\"event\"] = \"cleanup_read_only\" if read_only else \"cleanup_complete\"\n        LOG.info(json.dumps(report))\n        return report\n    except Exception as exc:\n        report.update(status=\"failed\", event=\"cleanup_failed\", stage=stage, reason=str(exc) if isinstance(exc, Refused) else \"dependency unavailable or malformed data\")\n        LOG.error(json.dumps(report))\n        raise RuntimeError(\"cleanup failed; inspect scoped inventory and authorization; no empty-fleet assumption\") from None\n"
+},
+"Environment": {
+"Variables": {
+"AWS_ACCOUNT_ID": {
+"Ref": "AWS::AccountId"
+},
+"STATE_BUCKET": {
+"Ref": "StateBucketName"
+},
+"CONTROL_BUCKET": {
+"Ref": "ControlBucketName"
+},
+"CLEANUP_SECRET_ARN": {
+"Ref": "CleanupToken"
+},
+"LINODE_ACCOUNT_EUUID": {
+"Ref": "LinodeAccountEuuid"
+},
+"MIN_CREATED_UTC": {
+"Ref": "MinCreatedUtc"
+},
+"CLEANUP_MODE": "emergency"
+}
+}
+}
+},
+"EmergencyErrors": {
+"Type": "AWS::CloudWatch::Alarm",
+"Properties": {
+"Namespace": "AWS/Lambda",
+"MetricName": "Errors",
+"Dimensions": [
+{
+"Name": "FunctionName",
+"Value": {
+"Ref": "Emergency"
+}
+}
+],
+"Statistic": "Sum",
+"Period": 300,
+"EvaluationPeriods": 1,
+"Threshold": 1,
+"ComparisonOperator": "GreaterThanOrEqualToThreshold",
+"TreatMissingData": "notBreaching",
+"AlarmActions": [
+{
+"Fn::Sub": "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${NotificationTopicName}"
+}
+]
+}
+},
+"ExpirationSchedule": {
+"Type": "AWS::Events::Rule",
+"Properties": {
+"ScheduleExpression": "rate(15 minutes)",
+"State": {
+"Fn::If": [
+"ExpirationEnabled",
+"ENABLED",
+"DISABLED"
+]
+},
+"Targets": [
+{
+"Arn": {
+"Fn::GetAtt": [
+"Expiration",
+"Arn"
+]
+},
+"Id": "expiration",
+"RetryPolicy": {
+"MaximumEventAgeInSeconds": 900,
+"MaximumRetryAttempts": 1
+}
+}
+]
+}
+},
+"SchedulePermission": {
+"Type": "AWS::Lambda::Permission",
+"Properties": {
+"Action": "lambda:InvokeFunction",
+"FunctionName": {
+"Ref": "Expiration"
+},
+"Principal": "events.amazonaws.com",
+"SourceAccount": {
+"Ref": "AWS::AccountId"
+},
+"SourceArn": {
+"Fn::GetAtt": [
+"ExpirationSchedule",
+"Arn"
+]
+}
+}
+},
+"LodestarFleetCleanupInvoker": {
+"Type": "AWS::IAM::Role",
+"Properties": {
+"RoleName": "LodestarFleetCleanupInvoker",
+"MaxSessionDuration": 3600,
+"AssumeRolePolicyDocument": {
+"Version": "2012-10-17",
+"Statement": [
+{
+"Effect": "Allow",
+"Action": "sts:AssumeRoleWithWebIdentity",
+"Principal": {
+"Federated": {
+"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+}
+},
+"Condition": {
+"StringEquals": {
+"token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+"token.actions.githubusercontent.com:sub": "repo:dvortsis@83323977/lodestar-v2@1427502271:environment:fleet-cleanup:workflow_ref:dvortsis/lodestar-v2/.github/workflows/fleet-emergency-down.yml@refs/heads/main",
+"token.actions.githubusercontent.com:actor_id": "83323977",
+"token.actions.githubusercontent.com:ref": "refs/heads/main",
+"token.actions.githubusercontent.com:repository_id": "1427502271",
+"token.actions.githubusercontent.com:environment": "fleet-cleanup"
+}
+}
+}
+]
+},
+"Policies": [
+{
+"PolicyName": "InvokeEmergencyOnly",
+"PolicyDocument": {
+"Version": "2012-10-17",
+"Statement": [
+{
+"Effect": "Allow",
+"Action": "lambda:InvokeFunction",
+"Resource": {
+"Fn::GetAtt": [
+"Emergency",
+"Arn"
+]
+}
+}
+]
+}
+}
+]
+}
+},
+"HeartbeatMetric": {
+"Type": "AWS::Logs::MetricFilter",
+"Properties": {
+"LogGroupName": {
+"Ref": "ExpirationLog"
+},
+"FilterPattern": "{ $.event = \"cleanup_complete\" }",
+"MetricTransformations": [
+{
+"MetricNamespace": "LodestarCleanup",
+"MetricName": {
+"Fn::Sub": "${AWS::StackName}-heartbeat"
+},
+"MetricValue": "1"
+}
+]
+}
+},
+"HeartbeatAlarm": {
+"Type": "AWS::CloudWatch::Alarm",
+"Properties": {
+"Namespace": "LodestarCleanup",
+"MetricName": {
+"Fn::Sub": "${AWS::StackName}-heartbeat"
+},
+"Statistic": "Sum",
+"Period": 3600,
+"EvaluationPeriods": 1,
+"Threshold": 1,
+"ComparisonOperator": "LessThanThreshold",
+"TreatMissingData": "breaching",
+"AlarmActions": [
+{
+"Fn::Sub": "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${NotificationTopicName}"
+}
+]
+}
+}
+},
+"Outputs": {
+"CleanupRoleArn": {
+"Value": {
+"Fn::GetAtt": [
+"LodestarFleetCleanupInvoker",
+"Arn"
+]
+}
+},
+"EmergencyFunctionArn": {
+"Value": {
+"Fn::GetAtt": [
+"Emergency",
+"Arn"
+]
+}
+},
+"CleanupSecretArn": {
+"Value": {
+"Ref": "CleanupToken"
+}
+}
+}
+}

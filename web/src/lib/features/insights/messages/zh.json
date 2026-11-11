@@ -323,5 +323,16 @@
 	"insights_overview_funnel_conversion_none": "还没有转化数据",
 	"insights_overview_intensity_locked": "抓取器强度：{level}。由 {variable} 设置。",
 	"insights_overview_chunk_failed": "页面的这一部分无法加载。请检查网络连接，然后重试。",
-	"insights_overview_palette_section": "洞察"
+	"insights_overview_palette_section": "洞察",
+	"insights_overview_exc_fs_unraid_user_share": "数据文件夹位于 Unraid 的用户共享（/mnt/user）上，这会拖慢搜索索引，也会让数据库面临风险。请把它移到存储池路径：在容器模板中，把数据文件夹的主机路径设为类似 /mnt/cache/appdata/lodestar 的路径。",
+	"insights_overview_exc_fs_fuse": "数据文件夹位于 FUSE 文件系统上，这会拖慢搜索索引。请把它放在本地磁盘上，最好是 SSD。",
+	"insights_overview_exc_fs_network": "数据文件夹位于网络或共享文件夹文件系统上，其文件锁定对数据库来说不够可靠。请把它放在本地磁盘上，最好是 SSD，并且只把备份发送到共享位置。",
+	"insights_overview_exc_fs_unknown": "数据文件夹所在的文件系统较慢，或对数据库不安全。请把它放在本地磁盘上，最好是 SSD。",
+	"insights_overview_exc_fs_type": "文件系统类型：{type}",
+	"insights_overview_exc_ports_left": "Windows 只剩 {available} 个可用于对外连接的端口；Lodestar 和这台电脑的其他程序大约需要 {needed} 个。",
+	"insights_overview_exc_ports_fix": "要修复此问题，请在以管理员身份打开的命令提示符中运行：",
+	"insights_overview_exc_ports_lower": "没有足够大的端口范围：请在设置中降低抓取器的强度，然后重启 Lodestar。",
+	"insights_overview_exc_ports_bare": "Windows 可用于对外连接的端口太少。请在设置中降低抓取器的强度，然后重启 Lodestar。",
+	"insights_overview_exc_ports_clears": "此提示会在一小时内消失。",
+	"insights_overview_exc_fix_guide": "打开指南"
 }

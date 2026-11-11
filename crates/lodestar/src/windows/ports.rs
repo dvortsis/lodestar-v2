@@ -3,12 +3,15 @@
 //! WSL or Docker Desktop can reserve blocks inside it. When what's left is
 //! narrow for the configured fetch sockets, fetches fail with "address in
 //! use" and other programs on the PC can lose network access. The check
-//! runs once at start and logs the problem with its fix.
+//! runs once at start and logs the problem with its fix; Insights asks
+//! [`pressure`] again at most hourly, for the socket count the fetch pool
+//! runs with ([`set_max_sockets`]), and lists it as an exception (PK-exc).
 //!
 //! The parsing and the threshold are plain functions, tested on every OS;
 //! only [`query`] runs `netsh`.
 
 use std::fmt;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// One protocol's dynamic port range, minus reserved ports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +92,11 @@ pub fn assess(family: Family, range: Range, max_sockets: usize) -> Option<Warnin
 }
 
 impl Warning {
+    /// Ports short of [`Warning::needed`].
+    pub fn shortfall(&self) -> u32 {
+        self.needed.saturating_sub(self.range.available())
+    }
+
     /// The range to set: Windows' default when that's enough, else the
     /// needed size (plus the reserved ports) rounded up to 1,024, ending
     /// at 65535. `None` when no range can hold it.
@@ -104,6 +112,25 @@ impl Warning {
             .saturating_mul(1024)
             .min(largest);
         Some((65536 - count, count))
+    }
+
+    /// The `ephemeral_ports` exception's detail for Insights.
+    pub fn detail(&self) -> lodestar_api::insights::PortPressure {
+        let fix = self.fix();
+        lodestar_api::insights::PortPressure {
+            family: match self.family {
+                Family::V4 => lodestar_api::insights::PortFamily::Ipv4,
+                Family::V6 => lodestar_api::insights::PortFamily::Ipv6,
+            },
+            start: self.range.start,
+            end: self.range.end(),
+            reserved: self.range.excluded,
+            available: self.range.available(),
+            needed: self.needed,
+            max_sockets: u64::try_from(self.max_sockets).unwrap_or(u64::MAX),
+            fix_start: fix.map(|(start, _)| start),
+            fix_count: fix.map(|(_, count)| count),
+        }
     }
 
     /// The command that sets [`Warning::fix`].
@@ -157,6 +184,81 @@ impl fmt::Display for Warning {
     }
 }
 
+/// The warning for the family that's shortest of ports, or `None` when
+/// every range that could be read has enough. A tie goes to the family
+/// listed first. `max_sockets` 0 (no fetch pool) never warns.
+pub fn worst(
+    ranges: impl IntoIterator<Item = (Family, Option<Range>)>,
+    max_sockets: usize,
+) -> Option<Warning> {
+    if max_sockets == 0 {
+        return None;
+    }
+    ranges
+        .into_iter()
+        .filter_map(|(family, range)| assess(family, range?, max_sockets))
+        .fold(None, |best: Option<Warning>, w| match best {
+            Some(b) if b.shortfall() >= w.shortfall() => Some(b),
+            _ => Some(w),
+        })
+}
+
+/// No socket count set yet.
+const UNSET: usize = usize::MAX;
+
+/// The fetch pool's `max_sockets`, from the effective config (saved
+/// Settings over the file), as [`set_max_sockets`] last set it.
+static MAX_SOCKETS: AtomicUsize = AtomicUsize::new(UNSET);
+
+/// Records the socket count the fetch pool runs with (0: no pool), for
+/// [`pressure`]. `services` calls it at start with the effective config;
+/// the pool's size changes only at a restart.
+pub fn set_max_sockets(n: usize) {
+    MAX_SOCKETS.store(n.min(UNSET - 1), Ordering::Release);
+}
+
+/// What [`set_max_sockets`] last set; `None` before it's called.
+pub fn max_sockets() -> Option<usize> {
+    Some(MAX_SOCKETS.load(Ordering::Acquire)).filter(|&n| n != UNSET)
+}
+
+/// Whether [`pressure`] can answer: off Windows always, on Windows once
+/// the socket count is set. Before then a caller should ask again soon.
+pub fn ready() -> bool {
+    cfg!(not(windows)) || max_sockets().is_some()
+}
+
+/// Reads both families' ranges now and returns [`worst`]'s answer for the
+/// socket count [`set_max_sockets`] set. It runs `netsh` four times within
+/// one 10 s budget (`NETSH_BUDGET`), so callers cache it (Insights
+/// re-checks at most hourly). `None` off Windows, without a fetch pool, or
+/// when `netsh` can't be read in time.
+pub fn pressure() -> Option<Warning> {
+    let max_sockets = max_sockets().unwrap_or(0);
+    #[cfg(windows)]
+    {
+        if max_sockets == 0 {
+            return None;
+        }
+        let deadline = std::time::Instant::now() + NETSH_BUDGET;
+        worst(
+            [Family::V4, Family::V6].map(|f| (f, query(f, deadline))),
+            max_sockets,
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = max_sockets;
+        None
+    }
+}
+
+/// Insights' port probe: whether [`pressure`] can answer yet ([`ready`]),
+/// and its answer.
+pub fn probe() -> (bool, Option<Warning>) {
+    (ready(), pressure())
+}
+
 /// `netsh int ipv4 show dynamicport tcp`: the start port and the number
 /// of ports. The labels are translated on non-English Windows, so this
 /// takes the numbers after the colons, in order.
@@ -207,18 +309,25 @@ pub fn overlap(start: u32, count: u32, excluded: &[(u32, u32)]) -> u32 {
     total
 }
 
-/// The range for `family` from `netsh`, or `None` when it can't be read.
+/// The range for `family` from `netsh`, or `None` when it can't be read
+/// by `deadline`.
 #[cfg(windows)]
-pub fn query(family: Family) -> Option<Range> {
-    let dynamic = netsh(&["int", family.netsh(), "show", "dynamicport", "tcp"])?;
+pub fn query(family: Family, deadline: std::time::Instant) -> Option<Range> {
+    let dynamic = netsh(
+        &["int", family.netsh(), "show", "dynamicport", "tcp"],
+        deadline,
+    )?;
     let (start, count) = parse_dynamic(&dynamic)?;
-    let excluded = netsh(&[
-        "int",
-        family.netsh(),
-        "show",
-        "excludedportrange",
-        "protocol=tcp",
-    ])
+    let excluded = netsh(
+        &[
+            "int",
+            family.netsh(),
+            "show",
+            "excludedportrange",
+            "protocol=tcp",
+        ],
+        deadline,
+    )
     .map(|t| overlap(start, count, &parse_excluded(&t)))
     .unwrap_or(0);
     Some(Range {
@@ -228,27 +337,62 @@ pub fn query(family: Family) -> Option<Range> {
     })
 }
 
-/// Runs `netsh` from System32 (never from the search path) without a
-/// console window.
+/// How long all the `netsh` calls of one check may take together. Past
+/// it the call running is killed and the rest count as unreadable:
+/// Insights' check runs on a request's thread.
 #[cfg(windows)]
-fn netsh(args: &[&str]) -> Option<String> {
-    let out = super::system32_command("netsh.exe")?
+const NETSH_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Runs `netsh` from System32 (never from the search path) without a
+/// console window, killing it at `deadline`.
+#[cfg(windows)]
+fn netsh(args: &[&str], deadline: std::time::Instant) -> Option<String> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut child = super::system32_command("netsh.exe")?
         .args(args)
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
         .ok()?;
-    out.status
+    // Read on a thread of its own, so a full pipe can't stall the wait.
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut out = Vec::new();
+        let _ = stdout.read_to_end(&mut out);
+        out
+    });
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            _ => {
+                // Killing it closes the pipe, which ends the reader.
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader.join();
+                return None;
+            }
+        }
+    };
+    let out = reader.join().ok()?;
+    status
         .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+        .then(|| String::from_utf8_lossy(&out).into_owned())
 }
 
 /// Checks both families and logs a warning for each narrow one.
 #[cfg(windows)]
 pub fn check(max_sockets: usize) {
+    let deadline = std::time::Instant::now() + NETSH_BUDGET;
     for family in [Family::V4, Family::V6] {
         use crate::logging::events::{
             WINDOWS_PORTS_LOW, WINDOWS_PORTS_OK, WINDOWS_PORTS_UNREADABLE,
         };
-        match query(family) {
+        match query(family, deadline) {
             Some(range) => match assess(family, range, max_sockets) {
                 Some(w) => {
                     let (fix_start, fix_count) = w.fix().unwrap_or((0, 0));
@@ -374,6 +518,94 @@ mod tests {
         let w = assess(Family::V4, range(49152, 16384, 0), 31_232).unwrap();
         assert_eq!(w.needed, 64_512);
         assert_eq!(w.fix(), None);
+    }
+
+    #[test]
+    fn the_shortest_family_is_the_one_reported() {
+        let v4 = (Family::V4, Some(range(49152, 16384, 15000))); // 1384 left
+        let v6 = (Family::V6, Some(range(49152, 16384, 15500))); // 884 left
+        let fine = (Family::V6, Some(range(49152, 16384, 0)));
+        assert_eq!(worst([v4, v6], 400).unwrap().family, Family::V6);
+        assert_eq!(worst([v6, v4], 400).unwrap().family, Family::V6);
+        assert_eq!(worst([v4, fine], 400).unwrap().family, Family::V4);
+        assert_eq!(worst([fine, v4], 400).unwrap().family, Family::V4);
+        // A tie goes to the family listed first.
+        let v6_same = (Family::V6, Some(range(49152, 16384, 15000)));
+        assert_eq!(worst([v4, v6_same], 400).unwrap().family, Family::V4);
+        assert_eq!(worst([v6_same, v4], 400).unwrap().family, Family::V6);
+        // An unreadable family is skipped, not counted as narrow.
+        assert_eq!(worst([(Family::V4, None), fine], 400), None);
+        assert_eq!(
+            worst([(Family::V4, None), v4], 400).unwrap().shortfall(),
+            2848 - 1384
+        );
+        // No fetch pool, nothing to warn about.
+        assert_eq!(worst([v4, v6], 0), None);
+        assert_eq!(worst([], 400), None);
+    }
+
+    #[test]
+    fn worst_trips_at_the_boundary() {
+        // needed(400) = 2848: exactly that many left is enough, one fewer isn't.
+        let at = |left: u32| (Family::V4, Some(range(49152, 16384, 16384 - left)));
+        assert_eq!(worst([at(2848)], 400), None);
+        let w = worst([at(2847)], 400).unwrap();
+        assert_eq!(
+            (w.shortfall(), w.needed, w.range.available()),
+            (1, 2848, 2847)
+        );
+    }
+
+    #[test]
+    fn the_insights_detail_carries_the_fix() {
+        let d = assess(Family::V6, range(49152, 16384, 15000), 400)
+            .unwrap()
+            .detail();
+        assert_eq!(
+            d,
+            lodestar_api::insights::PortPressure {
+                family: lodestar_api::insights::PortFamily::Ipv6,
+                start: 49152,
+                end: 65535,
+                reserved: 15000,
+                available: 1384,
+                needed: 2848,
+                max_sockets: 400,
+                fix_start: Some(47104),
+                fix_count: Some(18432),
+            }
+        );
+        // No range is large enough: no range to set, so the fix is fewer sockets.
+        let d = assess(Family::V4, range(49152, 16384, 0), 40_000)
+            .unwrap()
+            .detail();
+        assert_eq!(d.family, lodestar_api::insights::PortFamily::Ipv4);
+        assert_eq!((d.fix_start, d.fix_count), (None, None));
+    }
+
+    /// The only test that sets or reads the process-wide count, so parallel
+    /// tests can't race on it: Insights' tests inject their port probe.
+    /// Keep it that way.
+    #[test]
+    fn pressure_uses_the_count_set_last() {
+        set_max_sockets(1000);
+        set_max_sockets(400);
+        assert_eq!(max_sockets(), Some(400));
+        assert!(ready());
+        set_max_sockets(0);
+        assert_eq!(max_sockets(), Some(0), "no fetch pool is a known answer");
+        assert!(ready());
+        // The sentinel can't be set by accident.
+        set_max_sockets(usize::MAX);
+        assert_eq!(max_sockets(), Some(usize::MAX - 1));
+        set_max_sockets(0);
+        // Off Windows there's no range to read, whatever the count.
+        #[cfg(not(windows))]
+        {
+            set_max_sockets(40_000);
+            assert_eq!(pressure(), None);
+            set_max_sockets(0);
+        }
     }
 
     #[test]

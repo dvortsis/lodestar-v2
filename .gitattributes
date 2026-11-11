@@ -6,6 +6,9 @@
 crates/metainfo/tests/golden/** -text
 fuzz/seeds/** -text
 docs/operations/imports/bitmagnet-restore/** text eol=lf
+/infra/**/*.sh text eol=lf
+# PIA delivery verifies the exact bytes of its committed certificate.
+/infra/pia-bridge/vm/pia-ca.rsa.4096.crt text eol=lf
 # Windows batch files run with CRLF line endings: cmd can miss labels and
 # misparse lines in a file with Unix ones (#651).
 /packaging/windows/**/*.cmd text eol=crlf

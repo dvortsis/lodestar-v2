@@ -76,11 +76,11 @@ class FakeLinodeAPI:
     """The Linode API as a transport. Two tagged Linodes, one untagged, three firewalls."""
 
     def __init__(self):
-        self.linodes = {"11": {"id": 11, "tags": ["lodestar", "main"], "created": "2026-11-08T19:00:00"},
-                        "12": {"id": 12, "tags": ["lodestar", "worker"], "created": "2026-11-08T19:00:00"},
+        self.linodes = {"11": {"id": 11, "tags": ["lodestar", "test", "managed-terraform", "main"], "label": "lodestar-main-fleet", "type": "g6-standard-4", "region": "us-east", "ipv4": ["203.0.113.11"], "created": "2026-11-08T20:00:00"},
+                        "12": {"id": 12, "tags": ["lodestar", "test", "managed-terraform", "worker"], "label": "lodestar-worker-01-fleet", "type": "g6-nanode-1", "region": "us-east", "ipv4": ["203.0.113.12"], "created": "2026-11-08T20:00:00"},
                         "99": {"id": 99, "tags": ["soak"], "created": "2026-11-01T00:00:00"}}
-        self.firewalls = {"21": {"id": 21, "tags": ["lodestar"], "status": "enabled"},
-                          "22": {"id": 22, "tags": ["lodestar"], "status": "enabled"},
+        self.firewalls = {"21": {"id": 21, "tags": ["lodestar", "test", "managed-terraform"], "label": "lodestar-main-fw-fleet", "created": "2026-11-08T20:00:00Z", "status": "enabled"},
+                          "22": {"id": 22, "tags": ["lodestar", "test", "managed-terraform"], "label": "lodestar-worker-fw-fleet", "created": "2026-11-08T20:00:00Z", "status": "enabled"},
                           "98": {"id": 98, "tags": [], "status": "enabled"}}
         self.rules = {"21": fw_rules(), "22": fw_rules(), "98": fw_rules()}
         self.devices = {"21": [{"entity": {"type": "linode", "id": 11}}], "22": [{"entity": {"type": "linode", "id": 12}}],
@@ -95,13 +95,13 @@ class FakeLinodeAPI:
         if p == "/account":
             return {"euuid": "EUUID-FLEET"}
         if p == "/linode/instances":
-            return {"data": list(self.linodes.values()), "page": 1, "pages": 1}
+            return {"data": list(self.linodes.values()), "page": 1, "pages": 1, "results": len(self.linodes)}
         if p == "/networking/firewalls":
-            return {"data": list(self.firewalls.values()), "page": 1, "pages": 1}
+            return {"data": list(self.firewalls.values()), "page": 1, "pages": 1, "results": len(self.firewalls)}
         parts = p.strip("/").split("/")
         if parts[:2] == ["linode", "instances"] and len(parts) == 4 and parts[3] == "firewalls":
             fws = [fid for fid, devs in self.devices.items() if any(str(d["entity"]["id"]) == parts[2] for d in devs)]
-            return {"data": [{"id": int(f)} for f in fws], "page": 1, "pages": 1}
+            return {"data": [{"id": int(f)} for f in fws], "page": 1, "pages": 1, "results": len(fws)}
         if parts[:2] == ["linode", "instances"] and method == "DELETE":
             del self.linodes[parts[2]]
             for fid in self.devices:  # deleting a Linode detaches it from its firewall
@@ -118,7 +118,8 @@ class FakeLinodeAPI:
                     return {}
                 return self.rules[fid]
             if parts[3] == "devices":
-                return {"data": self.devices[fid], "page": 1, "pages": 1}
+                return {"data": [{"id": i + 1, **d} for i, d in enumerate(self.devices[fid])],
+                        "page": 1, "pages": 1, "results": len(self.devices[fid])}
         raise AssertionError(f"unexpected {method} {p}")
 
 
@@ -142,6 +143,14 @@ class FakeTerraform:
             if a.startswith("-var-file="):
                 self.varfiles.append(json.loads(Path(a.split("=", 1)[1]).read_text()))
         out, rc = f"{verb} ok", 0
+        if verb == "apply":
+            defaults = FakeLinodeAPI()
+            for ident in ("11", "12"):
+                self.api.linodes.setdefault(ident, defaults.linodes[ident])
+            for ident in ("21", "22"):
+                self.api.firewalls.setdefault(ident, defaults.firewalls[ident])
+                self.api.devices.setdefault(ident, defaults.devices[ident])
+
         if verb in ("apply", "destroy") and self.lock_held:
             self.lock_held -= 1
             out, rc = "Error: Error acquiring the state lock", 1
@@ -149,8 +158,8 @@ class FakeTerraform:
             out, rc = f"{verb} failed", 1
         if verb == "output":
             out = json.dumps({"fleet_hosts": {"sensitive": True, "value": {
-                "main": {"address": "203.0.113.11", "firewall_id": "21", "admin_ipv4": [ADMIN]},
-                "worker-01": {"address": "203.0.113.12", "firewall_id": "22", "admin_ipv4": [ADMIN]}}}})
+                "main": {"linode_id": "11", "address": "203.0.113.11", "firewall_id": "21", "admin_ipv4": [ADMIN]},
+                "worker-01": {"linode_id": "12", "address": "203.0.113.12", "firewall_id": "22", "admin_ipv4": [ADMIN]}}}})
         return mock.Mock(returncode=rc, stdout=out, stderr="")
 
 
@@ -168,6 +177,7 @@ def backend(s3=None, api=None, tf=None, runs=None, clock=None):
     unpins = []
     tf_runner = apply.Terraform(Path("/nonexistent"), {}, apply.Evidence(s3, "evidence-b", "7-1"), run=tf,
                                 pin=lambda c: pins.append(c) or Path("/pinned"), unpin=unpins.append)
+    tf.api = api
     tf.pins, tf.unpins = pins, unpins
     b = apply.LiveBackend(s3, Linode(api), tf_runner,
                           ENV, L, clock, lookup_run=lambda rid: runs.get(rid), meta=lambda: RANGES, keygen=keygen_fake)
@@ -354,14 +364,14 @@ class Backend(unittest.TestCase):
         self.assertNotIn("apply", tf.calls)
         self.assertIn(("state-b", FLEET_KEY), s3.objects)  # the expiry is recorded
 
-    def test_destroy_retries_a_held_lock_then_sweeps_through_the_api(self):
-        b, s3, api, tf = backend(tf=FakeTerraform(lock_held=5))
-        self.assertTrue(b.destroy(noop))
-        self.assertEqual(tf.pins, [None])  # nothing recorded: the current configuration
-        self.assertEqual(tf.calls.count("destroy"), apply.TF_ATTEMPTS)  # retried, never force-unlock
-        self.assertNotIn("force-unlock", tf.calls)
-        self.assertEqual(set(api.linodes), {"99"})  # tagged ones deleted, the untagged one untouched
-        self.assertEqual(set(api.firewalls), {"98"})
+    def test_legacy_deletion_is_disabled_before_any_api_or_terraform_call(self):
+        b, s3, api, tf = backend()
+        for call in (lambda: b.destroy(noop), lambda: b.delete_linodes([11])):
+            with self.assertRaisesRegex(apply.ApplyFailed, "legacy live deletion disabled"):
+                call()
+        self.assertEqual(api.calls, [])
+        self.assertEqual(tf.calls, [])
+
 
     def test_finish_down_books_spend_tombstones_and_clears_the_flag(self):
         clock = Clock(T0 + timedelta(hours=10))
@@ -460,8 +470,9 @@ class Backend(unittest.TestCase):
         b.create(new_fleet(L, "screen", "a" * 40, T0), noop)
         self.assertTrue(all(t == apply.TF_TIMEOUTS[v] for v, t in ftf.timeouts))
         self.assertEqual(ftf.unpins, [Path("/pinned")])  # the pinned worktree is removed after use
-        b.destroy(noop)
-        self.assertEqual(len(ftf.unpins), 2)
+        with self.assertRaises(apply.ApplyFailed):
+            b.destroy(noop)
+        self.assertEqual(len(ftf.unpins), 1)
 
     def test_outputs_parse_stdout_only(self):
         def run(argv, **kw):
@@ -541,134 +552,15 @@ class FailClosed(unittest.TestCase):
     def setUpClass(cls):
         cls.repo, cls.c = make_repo()
 
-    def overdue(self, api=None, minutes_past=60, **kw):
-        b, s3, api, tf = backend(api=api, **kw)
-        clock = Clock(T0)
-        b.clock = clock
-        f = new_fleet(L, "screen", self.c["head"], T0 - timedelta(hours=44, minutes=minutes_past))
-        b._clear_mismatch()  # as after any earlier tombstone
-        b.create(f, noop)
-        return b, s3, api, tf, clock
 
-    def reap(self, b, clock, store=None, gh=None):
-        out, store = io.StringIO(), store if store is not None else MemoryStore()
-        gh = gh if gh is not None else FakeGitHub()
-        with redirect_stdout(out), redirect_stderr(out), \
-                mock.patch.object(ancestry, "remote_main_head", return_value=self.c["head"]):
-            rc = fleet.main(["reap"], env=event_env(FLEET_LIVE="true", **ENV), backend=b, store=store,
-                            transport=gh, clock=clock, sleep=clock.sleep, repo=self.repo)
-        return rc, out.getvalue() + "\n".join(gh.bodies()), store
 
-    def test_enforcement_runs_while_every_post_fails(self):
-        class DownGitHub(FakeGitHub):
-            def __call__(self, method, path, body):
-                raise RuntimeError("GitHub API failed: HTTP 502")
 
-        def boom():
-            raise RuntimeError("GitHub API failed: HTTP 503")
-        # An emergency (an hour past expiry) with /meta failing too.
-        b, s3, api, _, clock = self.overdue(minutes_past=60)
-        b.meta = boom
-        rc, out, _ = self.reap(b, clock, gh=DownGitHub())
-        self.assertEqual(rc, 0)
-        self.assertIn("fleet: couldn't post to the channel", out)
-        self.assertFalse(api.linodes.keys() & {"11", "12"})
-        # Just expired (a plain down), with every run lookup failing as well.
-        b, s3, api, _, clock = self.overdue(minutes_past=5)
-        api.rules["21"]["inbound"].append(audit.job_rule("5", "1", "198.51.100.7/32"))
 
-        def lookup(rid):
-            raise RuntimeError("GitHub API failed: HTTP 502")
-        b.lookup_run = lookup
-        rc, out, _ = self.reap(b, clock, gh=DownGitHub())
-        self.assertEqual(rc, 0)
-        self.assertIn("reaper: down", out)
-        self.assertFalse(api.linodes.keys() & {"11", "12"})
-        self.assertIsNone(s3.doc("state-b", FLEET_KEY)["fleet"])
 
-    def test_a_fresh_mismatch_goes_down_even_if_the_flag_reread_fails(self):
-        b, s3, api, _, clock = self.overdue(minutes_past=-120)
-        api.rules["21"]["inbound_policy"] = "ACCEPT"
-        s3.fail_after[("control-b", MISMATCH_KEY)] = 1  # the first read works, the re-read doesn't
-        _, out, _ = self.reap(b, clock)
-        self.assertIn("reaper: emergency (firewall audit mismatch)", out)
-        self.assertFalse(api.linodes.keys() & {"11", "12"})
 
-    def test_audit_failure_never_stops_lifetime_enforcement(self):
-        def boom():
-            raise RuntimeError("GitHub API failed: HTTP 503")
-        for label, meta in (("meta raises", boom), ("meta empty", lambda: {})):
-            with self.subTest(label):
-                b, s3, api, _, clock = self.overdue()
-                b.meta = meta
-                rc, out, _ = self.reap(b, clock)
-                self.assertEqual(rc, 0)
-                self.assertIn("the firewall audit couldn't run; escalate", out)
-                self.assertNotIn("fleet.json is invalid", out)
-                self.assertIn("reaper: emergency", out)
-                self.assertFalse(api.linodes.keys() & {"11", "12"})  # the fleet still went down
-                self.assertNotIn("PUT", [m for m, _ in api.calls])
 
-    def test_a_failed_run_lookup_sweeps_its_rule_and_escalates(self):
-        b, s3, api, _, clock = self.overdue(minutes_past=-120)  # within lifetime: only the audit runs
-        for fid in ("21", "22"):
-            api.rules[fid]["inbound"].append(audit.job_rule("5", "1", "198.51.100.7/32"))
 
-        def lookup(rid):
-            raise RuntimeError("GitHub API failed: HTTP 403")
-        b.lookup_run = lookup
-        _, out, _ = self.reap(b, clock)
-        self.assertNotIn("couldn't run", out)  # only a /meta failure stops the audit
-        self.assertIn("reaper: 2 job-rule lookups failed, so those rules were swept; escalate", out)
-        self.assertEqual(len(api.rules["21"]["inbound"]), 1)  # fail closed: swept
-        self.assertEqual(len(api.rules["22"]["inbound"]), 1)
-        self.assertTrue({"11", "12"} <= set(api.linodes))  # and the fleet is untouched
-        self.assertIs(s3.doc("control-b", MISMATCH_KEY)["mismatch"], False)
 
-    def test_transient_fleet_json_error_inside_the_audit_never_destroys(self):
-        b, s3, api, _, clock = self.overdue(minutes_past=-120)
-        # Readable for the reaper's first look, unreadable once the audit reads it.
-        s3.fail_after[("state-b", FLEET_KEY)] = 1
-        _, out, store = self.reap(b, clock)
-        self.assertIn("the firewall audit couldn't run; escalate", out)
-        self.assertTrue({"11", "12"} <= set(api.linodes))
-        self.assertIs(s3.doc("control-b", MISMATCH_KEY)["mismatch"], False)
-
-    def test_unreadable_fleet_json_still_sweeps_but_never_audits(self):
-        b, s3, api, _, clock = self.overdue(minutes_past=-120)
-        api.rules["21"]["inbound"].append(audit.job_rule("5", "1", "198.51.100.7/32"))  # run 5 is unknown: stale
-        s3.deny.add(("state-b", FLEET_KEY))
-        _, out, _ = self.reap(b, clock)
-        self.assertIn("fleet.json unreadable; firewall audit skipped; escalate", out)
-        self.assertEqual(len(api.rules["21"]["inbound"]), 1)  # swept
-        self.assertTrue({"11", "12"} <= set(api.linodes))
-        # A failed lookup is reported on this path too.
-        api.rules["21"]["inbound"].append(audit.job_rule("6", "1", "198.51.100.8/32"))
-
-        def lookup(rid):
-            raise RuntimeError("GitHub API failed: HTTP 403")
-        b.lookup_run = lookup
-        _, out, _ = self.reap(b, clock)
-        self.assertIn("reaper: 1 job-rule lookups failed, so those rules were swept; escalate", out)
-        self.assertEqual(len(api.rules["21"]["inbound"]), 1)
-
-    def test_unreadable_flag_escalates_but_never_destroys(self):
-        b, s3, api, _, clock = self.overdue(minutes_past=-120)
-        s3.objects[("control-b", MISMATCH_KEY)] = b"junk"
-        _, out, _ = self.reap(b, clock)
-        self.assertIn("the mismatch flag is unreadable; commands are down-only; escalate", out)
-        self.assertTrue({"11", "12"} <= set(api.linodes))
-        self.assertTrue(b.mismatch())  # commands stay down-only
-
-    def test_stale_flag_with_nothing_left_is_cleared(self):
-        b, s3, api, _ = backend()
-        api.linodes, api.firewalls = {"99": api.linodes["99"]}, {"98": api.firewalls["98"]}
-        b.read_fleet()  # first tombstone
-        b.set_mismatch(["old"])
-        clock = Clock(T0)
-        _, out, _ = self.reap(b, clock)
-        self.assertIs(s3.doc("control-b", MISMATCH_KEY)["mismatch"], False)
-        self.assertIn("99", api.linodes)  # untagged: untouched
 
     def test_recorded_firewall_deleted_untagged_or_detached(self):
         def case(mutate):
@@ -696,100 +588,13 @@ class FailClosed(unittest.TestCase):
             api.devices["98"].append({"entity": {"type": "linode", "id": 11}})
         self.assertIn("a fleet Linode isn't behind exactly one firewall", case(second_firewall))
 
-    def test_destroy_sweeps_whatever_failed_before(self):
-        b, s3, api, tf = backend()
-        b.create(new_fleet(L, "screen", self.c["head"], T0), noop)
 
-        def bad_pin(c):
-            raise __import__("subprocess").CalledProcessError(128, ["git"])
-        b.tf.pin = bad_pin
-        b.tf.evidence.s3 = None  # the evidence bucket is unreachable too
-        self.assertTrue(b.destroy(noop))
-        self.assertEqual(set(api.linodes), {"99"})
 
-    def test_marker_holds_while_resources_remain(self):
-        b, s3, api, _, clock = self.overdue(minutes_past=30)  # >15 min past expiry: pre-empt
-        api.fail_deletes = True
-        rc, out, store = self.reap(b, clock)
-        self.assertIn("tagged resources remain; escalate", out)
-        holder = json.loads(store.objects[LOCK_KEY][0])
-        self.assertEqual(holder["kind"], "reaping")  # kept until its own expiry
-        self.assertIsNotNone(s3.doc("state-b", FLEET_KEY)["roles"])  # no tombstone
-        # The marker's own expiry: after 90 minutes a normal run can take the lock again.
-        clock.sleep(91 * 60)
-        self.assertEqual(FleetLock(store, 90, clock).acquire("8-1"), "acquired")
 
-    def test_mismatch_flag_kept_when_down_leaves_resources(self):
-        b, s3, api, _, clock = self.overdue(minutes_past=-120)
-        api.rules["21"]["inbound_policy"] = "ACCEPT"
-        api.fail_deletes = True
-        _, out, store = self.reap(b, clock)
-        self.assertIn("reaper: emergency (firewall audit mismatch)", out)
-        self.assertIs(s3.doc("control-b", MISMATCH_KEY)["mismatch"], True)
-        self.assertIn(LOCK_KEY, store.objects)
 
-    def test_age_reap_takes_orphan_firewalls_and_up_refuses_while_one_exists(self):
-        b, s3, api, _ = backend()
-        b.delete_linodes(["11"])
-        self.assertNotIn("21", api.firewalls)  # its Linode gone, no device left: deleted too
-        self.assertIn("22", api.firewalls)  # still attached to Linode 12: kept
-        api.linodes = {"99": api.linodes["99"]}
-        self.assertEqual(limits.check_up(L, "screen", b, T0), "a Lodestar firewall exists")
 
-    def test_down_keeps_the_firewall_of_a_linode_it_couldnt_delete(self):
-        b, s3, api, _ = backend()
-        b._clear_mismatch()
-        real = api.__call__
 
-        def flaky(method, path, body):
-            if method == "DELETE" and path == "/linode/instances/12":
-                raise LinodeError("Linode API DELETE failed: HTTP 500")
-            return real(method, path, body)
-        b.linode._t = flaky
-        self.assertFalse(b.destroy(noop))
-        self.assertIn("12", api.linodes)
-        self.assertIn("21", api.firewalls)  # no firewall goes while a tagged Linode remains
-        self.assertIn("22", api.firewalls)
-        self.assertIs(s3.doc("control-b", MISMATCH_KEY)["mismatch"], True)  # down-only, and the reaper retries
 
-    def test_destroy_fences_before_the_api_sweep(self):
-        b, s3, api, _ = backend()
-        calls = []
-
-        def fence():
-            calls.append(1)
-            if len(calls) == 2:
-                raise LockLost("lost")
-        with self.assertRaises(LockLost):
-            b.destroy(fence)
-        self.assertTrue({"11", "12"} <= set(api.linodes))  # nothing deleted after the lost fence
-
-    def test_marker_stays_on_an_unexpected_error(self):
-        b, s3, api, _, clock = self.overdue(minutes_past=30)
-
-        def boom(fence):
-            raise RuntimeError("unexpected")
-        b.destroy = boom
-        rc, out, store = self.reap(b, clock)
-        self.assertEqual(rc, 1)
-        self.assertIn("unexpected error (RuntimeError); escalate", out)
-        self.assertEqual(json.loads(store.objects[LOCK_KEY][0])["kind"], "reaping")
-
-    def test_owner_down_keeps_the_marker_while_resources_remain(self):
-        b, s3, api, _, clock = self.overdue(minutes_past=-120)
-        api.fail_deletes = True
-        store, out = MemoryStore(), io.StringIO()
-        with redirect_stdout(out), redirect_stderr(out), \
-                mock.patch.object(ancestry, "remote_main_head", return_value=self.c["head"]):
-            fleet.main(["dispatch-down"], env=event_env(FLEET_LIVE="true", **ENV), backend=b, store=store,
-                       transport=FakeGitHub(), clock=clock, sleep=clock.sleep, repo=self.repo)
-        self.assertIn("tagged resources remain after destroy; escalate", out.getvalue())
-        self.assertEqual(json.loads(store.objects[LOCK_KEY][0])["kind"], "reaping")
-        api.fail_deletes = False
-        with redirect_stdout(io.StringIO()), mock.patch.object(ancestry, "remote_main_head", return_value=self.c["head"]):
-            fleet.main(["dispatch-down"], env=event_env(FLEET_LIVE="true", **ENV), backend=b, store=store,
-                       transport=FakeGitHub(), clock=clock, sleep=clock.sleep, repo=self.repo)
-        self.assertNotIn(LOCK_KEY, store.objects)  # released once the inventory is empty
 
     def test_unreadable_ledger_never_strands_the_tombstone(self):
         b, s3, *_ = backend()
@@ -807,138 +612,14 @@ class FailClosed(unittest.TestCase):
         self.posted = gh.bodies()
         return rc, out.getvalue()
 
-    def test_kill_paths_run_when_main_has_moved_on(self):
-        # A reaper or owner's down whose checkout is behind main still enforces lifetime.
-        b, s3, api, _, clock = self.overdue(minutes_past=30)
-        out, store = io.StringIO(), MemoryStore()
-        with redirect_stdout(out), redirect_stderr(out), \
-                mock.patch.object(ancestry, "remote_main_head", return_value="e" * 40):
-            fleet.main(["reap"], env=event_env(FLEET_LIVE="true", **ENV), backend=b, store=store,
-                       transport=FakeGitHub(), clock=clock, sleep=clock.sleep, repo=self.repo)
-        self.assertIn("reaper: emergency", out.getvalue())
-        self.assertFalse(api.linodes.keys() & {"11", "12"})
-        b, s3, api, _, clock = self.overdue(minutes_past=-120)
-        _, out = self.dispatch_down(b, clock, MemoryStore(), head="e" * 40)
-        self.assertIn("owner's down: destroy the fleet", out)
-        self.assertFalse(api.linodes.keys() & {"11", "12"})
 
-    def test_kill_paths_refuse_a_rerun_before_any_credential(self):
-        for sub in ("reap", "dispatch-down"):
-            with self.subTest(sub=sub), mock.patch.object(apply, "live_context", side_effect=AssertionError("minted")):
-                out, gh = io.StringIO(), FakeGitHub()
-                env = dict(event_env(FLEET_LIVE="true", **ENV), GITHUB_RUN_ATTEMPT="2")
-                with redirect_stdout(out), redirect_stderr(out):
-                    rc = fleet.main([sub], env=env, transport=gh, repo=self.repo)
-                self.assertEqual(rc, 0)
-                self.assertIn("refused, a re-run; escalate", out.getvalue())
-                self.assertTrue(any("refused, a re-run; escalate" in x for x in gh.bodies()))  # reaches the channel
 
-    def test_a_failed_lock_read_never_stops_a_preempted_sweep(self):
-        class FlakyStore(MemoryStore):
-            fail = False
 
-            def get(self, key):
-                if self.fail:
-                    raise RuntimeError("S3 503")
-                return super().get(key)
 
-            def put(self, key, body):
-                super().put(key, body)
-                self.fail = True  # every lock read after the pre-emption fails
-        b, s3, api, _, clock = self.overdue(minutes_past=-120)
-        store = FlakyStore()
-        rc, _ = self.dispatch_down(b, clock, store)
-        self.assertEqual(rc, 0)
-        self.assertFalse(api.linodes.keys() & {"11", "12"})
-        self.assertIsNone(s3.doc("state-b", FLEET_KEY)["fleet"])
-        # The release's own read fails too, so the marker stays to its expiry (fail
-        # closed), and that is reported beside the outcome, not instead of it.
-        self.assertEqual(json.loads(store.objects[LOCK_KEY][0])["kind"], "reaping")
-        posted = "\n".join(self.posted)
-        self.assertIn("owner's down: couldn't release the fleet lock; it expires on its own; escalate", posted)
-        self.assertIn("owner's down: destroy the fleet", posted)
-        self.assertTrue(any(x.startswith(fleet.MARKER) for x in self.posted))  # the status too
-        b, s3, api, _, clock = self.overdue(minutes_past=30)  # the reaper's emergency
-        self.reap(b, clock, store=FlakyStore())
-        self.assertFalse(api.linodes.keys() & {"11", "12"})
 
-    def test_a_lost_lock_stops_a_preempted_sweep(self):
-        class TakenStore(MemoryStore):
-            def put(self, key, body):  # another run takes the lock right after our pre-emption
-                super().put(key, FleetLock(MemoryStore(), 90, Clock(T0))._body("run", "other-1"))
-        b, s3, api, _, clock = self.overdue(minutes_past=-120)
-        before = len([c for c in api.calls if c[0] == "DELETE"])
-        rc, out = self.dispatch_down(b, clock, TakenStore())
-        self.assertEqual(rc, 1)
-        self.assertIn("the fleet lock was lost", out)
-        self.assertEqual(len([c for c in api.calls if c[0] == "DELETE"]), before)  # nothing deleted after it
-        self.assertTrue({"11", "12"} <= set(api.linodes))
 
-    def test_a_tagged_firewall_on_an_untagged_linode_survives_down(self):
-        b, s3, api, _ = backend()
-        b._clear_mismatch()
-        api.linodes = {"99": api.linodes["99"]}
-        api.firewalls["23"] = {"id": 23, "tags": ["lodestar"], "status": "enabled"}
-        api.rules["23"], api.devices["23"] = fw_rules(), [{"entity": {"type": "linode", "id": 99}}]
-        self.assertFalse(b.destroy(noop))
-        self.assertIn("23", api.firewalls)  # still attached: never deleted
-        self.assertIn("99", api.linodes)
-        self.assertIs(s3.doc("control-b", MISMATCH_KEY)["mismatch"], True)
 
-    def test_meta_failing_within_lifetime_never_destroys(self):
-        b, s3, api, _, clock = self.overdue(minutes_past=-120)
 
-        def boom():
-            raise RuntimeError("GitHub API failed: HTTP 503")
-        b.meta = boom
-        _, out, store = self.reap(b, clock)
-        self.assertIn("the firewall audit couldn't run; escalate", out)
-        self.assertTrue({"11", "12"} <= set(api.linodes))
-        self.assertIs(s3.doc("control-b", MISMATCH_KEY)["mismatch"], False)
-        self.assertNotIn(LOCK_KEY, store.objects)
-
-    def test_a_firewall_only_mismatch_sweeps_even_if_the_flag_reread_fails(self):
-        # No fleet recorded, an orphan tagged firewall (no device, no tagged Linode):
-        # the audit's fresh problem drives the sweep even with the flag unreadable.
-        b, s3, api, _ = backend()
-        api.linodes = {"99": api.linodes["99"]}
-        api.firewalls = {"98": api.firewalls["98"]}
-        b.read_fleet()  # first tombstone, flag false
-        api.firewalls["23"] = {"id": 23, "tags": ["lodestar"], "status": "enabled"}
-        api.rules["23"], api.devices["23"] = fw_rules(), []
-        s3.fail_after[("control-b", MISMATCH_KEY)] = 1  # the first read works, the re-read doesn't
-        _, out, store = self.reap(b, Clock(T0))
-        self.assertNotIn("23", api.firewalls)
-        self.assertIn("98", api.firewalls)
-
-    def test_unreadable_flag_leaves_no_marker_and_never_sweeps_leftovers(self):
-        b, s3, api, _, clock = self.overdue(minutes_past=-120)
-        s3.objects[("control-b", MISMATCH_KEY)] = b"junk"
-        _, out, store = self.reap(b, clock)
-        self.assertNotIn(LOCK_KEY, store.objects)  # within lifetime: released, never left "reaping"
-        # No fleet recorded, a tagged leftover, an unreadable flag and an audit that
-        # can't run: the stale-flag branch (a readable true or fresh problems only)
-        # stays out of it. (Had the audit run, the unattached Linode is a mismatch.)
-        b, s3, api, _ = backend()
-        api.linodes = {"99": api.linodes["99"]}
-        api.firewalls = {"98": api.firewalls["98"]}
-        b.read_fleet()  # first tombstone
-        api.linodes["13"] = {"id": 13, "tags": ["lodestar"], "created": fmt(T0 - timedelta(hours=1))}
-        s3.objects[("control-b", MISMATCH_KEY)] = b"junk"
-        b.meta = lambda: {}
-        _, out, store = self.reap(b, Clock(T0))
-        self.assertIn("the mismatch flag is unreadable", out)
-        self.assertIn("13", api.linodes)
-        self.assertNotIn(LOCK_KEY, store.objects)
-
-    def test_unreadable_ledger_after_down_releases_the_marker(self):
-        b, s3, api, _, clock = self.overdue(minutes_past=30)
-        s3.objects[("state-b", LEDGER_KEY)] = b'["not", "a", "ledger"]'
-        rc, out, store = self.reap(b, clock)
-        self.assertEqual(rc, 0)
-        self.assertIn("fleet down and tombstoned, but the spend ledger is unreadable; escalate", out)
-        self.assertFalse(api.linodes.keys() & {"11", "12"})
-        self.assertNotIn(LOCK_KEY, store.objects)  # the inventory is empty: the marker goes
 
     def test_up_failing_with_any_error_sets_the_flag(self):
         class SecondWriteFails(FakeS3):  # the slot write (not ApplyFailed) fails
@@ -988,6 +669,12 @@ class FailClosed(unittest.TestCase):
 
 
 class Pin(unittest.TestCase):
+    def setUp(self):
+        repo, _ = make_repo()
+        patch = mock.patch.object(apply, "TF_DIR", Path(repo) / "infra/akamai/terraform")
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def test_pinned_tf_dir(self):
         self.assertEqual(apply.pinned_tf_dir(None), apply.TF_DIR)
         head = ancestry.head_of("HEAD", str(apply.TF_DIR.parents[2]))
@@ -1034,6 +721,88 @@ class LiveFlows(unittest.TestCase):
         api.linodes, api.firewalls = {"99": api.linodes["99"]}, {"98": api.firewalls["98"]}
         return api
 
+    def test_partial_apply_requires_owner_recovery_without_claiming_cleanup_registration(self):
+        b, s3, api, tf = backend(api=self.empty_account(), tf=FakeTerraform(fail=("apply",)))
+        rc, out = self.run_cli("act", "/fleet up screen", b)
+        self.assertEqual(rc, 1)
+        self.assertIn("owner recovery required; inspect cleanup registration and inventory", out)
+        self.assertNotIn("so run down", out)
+        self.assertTrue(b.mismatch())
+        self.assertNotIn(("state-b", "fleet/cleanup-authorization.json"), s3.objects)
+        self.assertNotIn("destroy", tf.calls)
+        self.assertFalse(any(method == "DELETE" for method, *_ in api.calls))
+
+    def test_registration_failures_do_not_publish_authorization_or_successful_fleet(self):
+        cases = (
+            ("firewall_devices", {"return_value": []}),
+            ("firewall_devices", {"return_value": [{"entity": {"type": "linode", "id": 11}}] * 2}),
+            ("firewall_devices", {"side_effect": LinodeError("LEAKMARK-forward-read")}),
+            ("linode_firewalls", {"return_value": ["22"]}),
+            ("linode_firewalls", {"side_effect": LinodeError("LEAKMARK-reverse-read")}),
+        )
+        for method, outcome in cases:
+            for previous in (None, b'{"previous":"authorization"}'):
+                with self.subTest(method=method, outcome=outcome, prior_authorization=previous is not None):
+                    b, s3, api, tf = backend(api=self.empty_account())
+                    auth_key = ("state-b", "fleet/cleanup-authorization.json")
+                    if previous is not None:
+                        s3.objects[auth_key] = previous
+                    state_key = ("state-b", apply.TF_STATE_KEY)
+                    s3.objects[state_key] = b"private-state-canary"
+                    self.assertIsNone(b.read_fleet())  # Establish the initial idle tombstone.
+                    before = sum(key == FLEET_KEY for _, key, _ in s3.puts)
+                    with mock.patch.object(b.linode, method, **outcome):
+                        rc, out = self.run_cli("act", "/fleet up screen", b)
+                    self.assertEqual(rc, 1)
+                    self.assertIn("owner recovery required; inspect cleanup registration and inventory", out)
+                    self.assertNotIn("LEAKMARK", out)
+                    self.assertTrue(b.mismatch())
+                    self.assertEqual(s3.objects.get(auth_key), previous)
+                    self.assertFalse(any(key == auth_key[1] for _, key, _ in s3.puts))
+                    intent = s3.doc("state-b", FLEET_KEY)
+                    self.assertTrue(all(slot["address"] is None for slot in intent["roles"].values()))
+                    self.assertEqual(sum(key == FLEET_KEY for _, key, _ in s3.puts), before + 1)
+                    self.assertEqual(s3.objects[state_key], b"private-state-canary")
+                    self.assertEqual(tf.calls, ["init", "apply", "output"])
+                    self.assertFalse(any(method == "DELETE" for method, *_ in api.calls))
+
+    def test_incomplete_attachment_pagination_never_publishes_registration(self):
+        for collection in ("/networking/firewalls/21/devices", "/linode/instances/11/firewalls"):
+            with self.subTest(collection=collection):
+                b, s3, api, tf = backend(api=self.empty_account())
+                original = b.linode._t
+                def incomplete(method, path, body):
+                    result = original(method, path, body)
+                    if path.startswith(collection + "?"):
+                        result.pop("pages")
+                    return result
+                with mock.patch.object(b.linode, "_t", side_effect=incomplete):
+                    rc, out = self.run_cli("act", "/fleet up screen", b)
+                self.assertEqual(rc, 1)
+                self.assertIn("owner recovery required; inspect cleanup registration and inventory", out)
+                self.assertTrue(b.mismatch())
+                self.assertNotIn(("state-b", "fleet/cleanup-authorization.json"), s3.objects)
+                self.assertTrue(all(slot["address"] is None for slot in s3.doc("state-b", FLEET_KEY)["roles"].values()))
+                self.assertNotIn("destroy", tf.calls)
+                self.assertFalse(any(method == "DELETE" for method, *_ in api.calls))
+
+    def test_registration_write_failure_requires_owner_recovery(self):
+        class AuthorizationWriteFails(FakeS3):
+            def put_object(self, Bucket, Key, Body, IfNoneMatch=None):
+                if Key == "fleet/cleanup-authorization.json":
+                    raise S3Error("LEAKMARK-write-failed")
+                return super().put_object(Bucket, Key, Body, IfNoneMatch)
+        b, s3, api, tf = backend(s3=AuthorizationWriteFails(), api=self.empty_account())
+        rc, out = self.run_cli("act", "/fleet up screen", b)
+        self.assertEqual(rc, 1)
+        self.assertIn("owner recovery required; inspect cleanup registration and inventory", out)
+        self.assertNotIn("LEAKMARK", out)
+        self.assertTrue(b.mismatch())
+        self.assertNotIn(("state-b", "fleet/cleanup-authorization.json"), s3.objects)
+        self.assertTrue(all(slot["address"] is None for slot in s3.doc("state-b", FLEET_KEY)["roles"].values()))
+        self.assertNotIn("destroy", tf.calls)
+        self.assertFalse(any(method == "DELETE" for method, *_ in api.calls))
+
     def test_up_run_down(self):
         api = self.empty_account()
         b, s3, _, tf = backend(api=api)
@@ -1044,8 +813,8 @@ class LiveFlows(unittest.TestCase):
         _, out = self.run_cli("act", "/fleet run arm-switch main", b)
         self.assertIn("refused: run arm-switch: live steps need FLEET_SSH_KEY", out)
         _, out = self.run_cli("act", "/fleet down", b)
-        self.assertIn("down: destroy the fleet", out)
-        self.assertIsNone(s3.doc("state-b", FLEET_KEY)["fleet"])
+        self.assertIn("independently authorized owner cleanup workflow", out)
+        self.assertIn("roles", s3.doc("state-b", FLEET_KEY))
 
     def test_delivery_chain_keeps_then_releases_the_lock(self):
         api = self.empty_account()
@@ -1088,7 +857,7 @@ class LiveFlows(unittest.TestCase):
         api = self.empty_account()
         b, *_ = backend(api=api)
         b.read_fleet()  # the first tombstone
-        api.linodes["13"] = {"id": 13, "tags": ["lodestar"], "created": "2026-11-08T19:00:00"}  # up refuses
+        api.linodes["13"] = {"id": 13, "tags": ["lodestar"], "created": "2026-11-08T20:00:00"}  # up refuses
         store = MemoryStore()
         _, out = self.run_cli("act", "/fleet up screen", b, store=store)
         self.assertIn("refused: up screen", out)
@@ -1154,20 +923,6 @@ class LiveFlows(unittest.TestCase):
         self.assertIn("fleet state unreadable: only down runs", out)
         self.assertIn("a fleet may exist", out)
 
-    def test_reaper_audit_mismatch_preempts_and_goes_down(self):
-        api = self.empty_account()
-        b, s3, _, _ = backend(api=api)
-        self.run_cli("act", "/fleet up screen", b)
-        api.linodes.update({"11": {"id": 11, "tags": ["lodestar"], "created": "2026-11-08T19:00:00"}})
-        api.firewalls["21"] = {"id": 21, "tags": ["lodestar"], "status": "enabled"}
-        api.rules["21"] = dict(fw_rules(), inbound_policy="ACCEPT")
-        api.devices["21"] = [{"entity": {"type": "linode", "id": 11}}]
-        store = MemoryStore()
-        _, out = self.run_cli("reap", "", b, store=store)
-        self.assertIn("reaper: emergency (firewall audit mismatch)", out)
-        self.assertIs(s3.doc("control-b", MISMATCH_KEY)["mismatch"], False)  # cleared once the inventory is empty
-        self.assertIsNone(s3.doc("state-b", FLEET_KEY)["fleet"])
-        self.assertNotIn(LOCK_KEY, store.objects)
 
     def test_no_private_value_reaches_logs_or_comments(self):
         api = self.empty_account()

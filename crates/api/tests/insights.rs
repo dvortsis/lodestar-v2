@@ -19,7 +19,10 @@ use axum::body::Body;
 use axum::extract::ConnectInfo;
 use axum::http::{Request, header};
 use lodestar_api::dto::insights::PrivacySummary;
-use lodestar_api::insights::{InsightsSource, OverviewCache};
+use lodestar_api::insights::{
+    self as api, DataFilesystem, DataFsKind, InsightsException, InsightsSource, OverviewCache,
+    PortFamily, PortPressure,
+};
 use lodestar_api::ops::{
     BoxFuture, CrawlerRuntime, ExternalAddress, FetchStatus, NetworkCheck, OpsApi, OpsError,
     PortMapping, ReachReason, Source, SourcePatch, StatsResponse,
@@ -156,9 +159,17 @@ struct FakeSource {
     recorded: AtomicI64,
     imported: Option<u64>,
     cache: OverviewCache,
+    /// What `host_exceptions` answers, and the `now` it was last asked at.
+    host: Mutex<Vec<InsightsException>>,
+    host_asked: Mutex<Option<i64>>,
 }
 
 impl InsightsSource for FakeSource {
+    fn host_exceptions(&self, now: i64) -> Vec<InsightsException> {
+        *self.host_asked.lock().unwrap() = Some(now);
+        self.host.lock().unwrap().clone()
+    }
+
     fn last_flush(&self) -> Option<i64> {
         *self.last_flush.lock().unwrap()
     }
@@ -212,6 +223,8 @@ fn fixture_with(insights: bool) -> Fixture {
         recorded: AtomicI64::new(0),
         imported: Some(40),
         cache: OverviewCache::default(),
+        host: Mutex::new(Vec::new()),
+        host_asked: Mutex::new(None),
     });
     let adult = Arc::new(AtomicBool::new(false));
     let shown = adult.clone();
@@ -1160,6 +1173,153 @@ async fn stale_health_and_exceptions() {
     assert_eq!(v["stale"], Value::Null, "exactly 2 minutes is fresh");
     assert_eq!(v["kpi"]["searchable"], Value::Null, "search is off");
     assert_eq!(v["stages"]["index"], Value::Null);
+}
+
+#[tokio::test]
+async fn host_exceptions_serialise_as_documented() {
+    let f = fixture();
+    let cookie = session(&f).await;
+    *f.source.host.lock().unwrap() = vec![
+        api::data_filesystem(
+            DataFilesystem {
+                kind: DataFsKind::UnraidUserShare,
+                path: "/data".into(),
+                fs_type: Some("fuse.shfs".into()),
+            },
+            NOW - 7200,
+        ),
+        api::ephemeral_ports(
+            PortPressure {
+                family: PortFamily::Ipv4,
+                start: 49152,
+                end: 65535,
+                reserved: 15000,
+                available: 1384,
+                needed: 2848,
+                max_sockets: 400,
+                fix_start: Some(47104),
+                fix_count: Some(18432),
+            },
+            NOW - 60,
+        ),
+    ];
+    let v = json_get(&f, &cookie, "/api/v1/insights/overview?range=24h").await;
+    assert_eq!(
+        *f.source.host_asked.lock().unwrap(),
+        Some(NOW),
+        "on the source's clock"
+    );
+    assert_eq!(
+        v["exceptions"],
+        json!([
+            {
+                "filesystem": { "fs_type": "fuse.shfs", "kind": "unraid_user_share", "path": "/data" },
+                "fix": { "kind": "guide", "target": "data_folder" },
+                "kind": "data_filesystem",
+                "severity": "warning",
+                "since": NOW - 7200,
+                "unit": null,
+                "value": null
+            },
+            {
+                "fix": { "kind": "guide", "target": "windows_ports" },
+                "kind": "ephemeral_ports",
+                "ports": {
+                    "available": 1384,
+                    "end": 65535,
+                    "family": "ipv4",
+                    "fix_count": 18432,
+                    "fix_start": 47104,
+                    "max_sockets": 400,
+                    "needed": 2848,
+                    "reserved": 15000,
+                    "start": 49152
+                },
+                "severity": "warning",
+                "since": NOW - 60,
+                "unit": "ports",
+                "value": 1384.0
+            }
+        ])
+    );
+    // An older client's view of an exception (the fields before PK-exc)
+    // still reads both: the new fields are only extra keys.
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[allow(dead_code)]
+    struct Old {
+        fix: Value,
+        kind: String,
+        #[serde(default)]
+        rows: Vec<String>,
+        #[serde(default)]
+        counts: Option<Value>,
+        severity: String,
+        since: i64,
+        unit: Option<String>,
+        value: Option<f64>,
+    }
+    #[derive(serde::Deserialize)]
+    #[allow(dead_code)]
+    struct Lenient {
+        fix: Value,
+        kind: String,
+        severity: String,
+        since: i64,
+        unit: Option<String>,
+        value: Option<f64>,
+    }
+    for e in v["exceptions"].as_array().unwrap() {
+        serde_json::from_value::<Lenient>(e.clone()).unwrap();
+        // Only the new keys are new.
+        let mut old = e.clone();
+        old.as_object_mut().unwrap().remove("filesystem");
+        old.as_object_mut().unwrap().remove("ports");
+        serde_json::from_value::<Old>(old).unwrap();
+    }
+    // On a network share it's an error: the database can be damaged. A
+    // fix with no range large enough has nulls, not missing keys.
+    let mut nfs = api::data_filesystem(
+        DataFilesystem {
+            kind: DataFsKind::Network,
+            path: "/srv/nfs/lodestar".into(),
+            fs_type: None,
+        },
+        NOW,
+    );
+    assert_eq!(nfs.severity, api::Severity::Error);
+    let mut ports = api::ephemeral_ports(
+        PortPressure {
+            family: PortFamily::Ipv6,
+            start: 49152,
+            end: 65535,
+            reserved: 0,
+            available: 16384,
+            needed: 82048,
+            max_sockets: 40_000,
+            fix_start: None,
+            fix_count: None,
+        },
+        NOW,
+    );
+    nfs.since = NOW - 1;
+    ports.since = NOW - 1;
+    *f.source.host.lock().unwrap() = vec![nfs, ports];
+    let v = json_get(&f, &cookie, "/api/v1/insights/overview?range=24h").await;
+    assert_eq!(v["exceptions"][0]["severity"], "error");
+    assert_eq!(v["exceptions"][0]["filesystem"]["fs_type"], Value::Null);
+    let p = &v["exceptions"][1]["ports"];
+    assert_eq!(p["family"], "ipv6");
+    for key in ["fix_start", "fix_count"] {
+        assert_eq!(p.get(key), Some(&Value::Null), "{key}");
+    }
+    // Other kinds carry neither new key.
+    *f.source.host.lock().unwrap() = Vec::new();
+    *f.ops.lag.lock().unwrap() = Some(42);
+    let v = json_get(&f, &cookie, "/api/v1/insights/overview?range=24h").await;
+    let e = v["exceptions"][0].as_object().unwrap();
+    assert_eq!(e["kind"], "index_lag");
+    assert!(!e.contains_key("filesystem") && !e.contains_key("ports"));
 }
 
 #[tokio::test]

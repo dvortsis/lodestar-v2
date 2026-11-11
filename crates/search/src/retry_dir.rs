@@ -44,6 +44,9 @@ const MAX_PAUSE: Duration = Duration::from_millis(320);
 pub(crate) struct Retrying<D> {
     inner: D,
     transient: fn(&io::Error) -> bool,
+    /// Test-only: deletes this says fail (PK-win-soak-ci).
+    #[cfg(test)]
+    fault: Option<DeleteFault>,
 }
 
 impl<D> Retrying<D> {
@@ -51,7 +54,30 @@ impl<D> Retrying<D> {
         Retrying {
             inner,
             transient: sharing_conflict,
+            #[cfg(test)]
+            fault: None,
         }
+    }
+
+    /// Test-only: fails each delete `fault` returns true for, as Windows
+    /// fails the delete of a file something still maps.
+    #[cfg(test)]
+    pub(crate) fn with_delete_fault(mut self, fault: DeleteFault) -> Retrying<D> {
+        self.fault = Some(fault);
+        self
+    }
+}
+
+/// Test-only: says whether a delete of this path (relative to the
+/// directory) fails, with `PermissionDenied`.
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct DeleteFault(pub(crate) Arc<dyn Fn(&Path) -> bool + Send + Sync>);
+
+#[cfg(test)]
+impl std::fmt::Debug for DeleteFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DeleteFault")
     }
 }
 
@@ -90,6 +116,13 @@ impl<D: Directory + Clone> Directory for Retrying<D> {
     }
 
     fn delete(&self, path: &Path) -> Result<(), DeleteError> {
+        #[cfg(test)]
+        if self.fault.as_ref().is_some_and(|f| (f.0)(path)) {
+            return Err(DeleteError::IoError {
+                io_error: Arc::new(io::Error::from(io::ErrorKind::PermissionDenied)),
+                filepath: path.to_path_buf(),
+            });
+        }
         self.inner.delete(path)
     }
 
@@ -214,5 +247,222 @@ mod tests {
         let reader = index.reader().unwrap();
         assert_eq!(reader.searcher().num_docs(), 1);
         assert!(index.load_metas().is_ok());
+    }
+}
+
+/// PK-win-soak-ci's fault injection: tantivy's collection on a real
+/// `MmapDirectory` when deletes fail while a lease pins the files, as on
+/// a Windows filesystem that refuses to delete a mapped file (FAT, exFAT,
+/// SMB shares, older Windows). Modern NTFS deletes it (POSIX semantics),
+/// so `tests/windows_gc_stress.rs` can't force this path there; this
+/// test forces it everywhere.
+#[cfg(test)]
+mod delete_faults {
+    use std::collections::BTreeSet;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    use lodestar_bencode::{OwnedValue, to_vec};
+    use lodestar_metainfo::Info;
+    use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig};
+
+    use super::DeleteFault;
+    use crate::{CancelToken, Indexer, Lease, SearchIndex, Sort, Start, parse};
+
+    const NOW: i64 = 1_700_000_100;
+    /// Single-torrent commits before the lease: past the default log
+    /// merge policy's 8 segments, so at least one merge retires segments
+    /// the lease pins.
+    const COMMITS: i64 = 12;
+
+    fn d(entries: Vec<(&str, OwnedValue)>) -> OwnedValue {
+        OwnedValue::Dict(
+            entries
+                .into_iter()
+                .map(|(k, v)| (k.as_bytes().to_vec(), v))
+                .collect(),
+        )
+    }
+
+    fn b(s: &str) -> OwnedValue {
+        OwnedValue::Bytes(s.as_bytes().to_vec())
+    }
+
+    /// Torrent `id`'s word, consonants only so no stemmer rule changes it.
+    fn word(id: i64) -> String {
+        const L: &[u8] = b"bcdfghjklmnpqrtvwxz";
+        let mut w = String::from("q");
+        let mut n = id as usize;
+        loop {
+            w.push(L[n % L.len()] as char);
+            n /= L.len();
+            if n == 0 {
+                return w;
+            }
+        }
+    }
+
+    fn add(store: &mut Store, indexer: &mut Indexer, id: i64) {
+        let file = |ext: &str| {
+            d(vec![
+                ("length", OwnedValue::Int(1000 + id)),
+                (
+                    "path",
+                    OwnedValue::List(vec![b(&format!("{}.{ext}", word(id)))]),
+                ),
+            ])
+        };
+        let raw = to_vec(&d(vec![
+            ("files", OwnedValue::List(vec![file("mkv"), file("nfo")])),
+            ("name", b(&format!("faultcorpus {}", word(id)))),
+            ("piece length", OwnedValue::Int(1 << 16)),
+            (
+                "pieces",
+                OwnedValue::Bytes(id.to_be_bytes().repeat(3)[..20].to_vec()),
+            ),
+        ]));
+        let info = Info::parse(&raw).unwrap();
+        store
+            .insert(&[NewTorrent {
+                info: &info,
+                raw_info: None,
+                discovered_at: 1_700_000_000,
+                metadata_at: 1_700_000_001,
+                extra_flags: 0,
+                source: SourceId::new(0).unwrap(),
+            }])
+            .unwrap();
+        assert_eq!(indexer.catch_up(store, 8).unwrap(), 1);
+        indexer.commit().unwrap();
+    }
+
+    fn ids(index: &Arc<SearchIndex>, q: &str) -> (Lease, Vec<u64>) {
+        let lease = Lease::new(
+            index.clone(),
+            &parse(q).unwrap(),
+            NOW,
+            Sort::Relevance,
+            &CancelToken::new(),
+        )
+        .unwrap();
+        let page = lease
+            .page(Start::Offset(0), 50, &CancelToken::new())
+            .unwrap();
+        let mut ids: Vec<u64> = page.hits.iter().map(|h| h.id).collect();
+        ids.sort_unstable();
+        (lease, ids)
+    }
+
+    /// Files in `dir` that aren't a live segment's (per `meta.json`), the
+    /// meta files or the locks; and the live segment files that aren't
+    /// empty (the ones tantivy maps).
+    fn leaks(dir: &Path) -> (BTreeSet<String>, u64) {
+        const KEPT: &[&str] = &[
+            "meta.json",
+            ".managed.json",
+            ".tantivy-meta.lock",
+            ".tantivy-writer.lock",
+        ];
+        let meta: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join("meta.json")).unwrap()).unwrap();
+        let live: BTreeSet<String> = meta["segments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["segment_id"].as_str().unwrap().replace('-', ""))
+            .collect();
+        let (mut leaked, mut mapped) = (BTreeSet::new(), 0);
+        for e in std::fs::read_dir(dir).unwrap() {
+            let e = e.unwrap();
+            let name = e.file_name().into_string().unwrap();
+            let m = e.metadata().unwrap();
+            if m.is_dir() || KEPT.contains(&name.as_str()) {
+                continue;
+            }
+            if live.contains(name.split('.').next().unwrap()) {
+                mapped += u64::from(m.len() > 0);
+            } else {
+                leaked.insert(name);
+            }
+        }
+        (leaked, mapped)
+    }
+
+    #[test]
+    fn failed_deletes_are_retried_once_the_lease_drops() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("index");
+        let failing = Arc::new(AtomicBool::new(true));
+        let failed: Arc<Mutex<BTreeSet<PathBuf>>> = Arc::default();
+        let fault = {
+            let (failing, failed) = (failing.clone(), failed.clone());
+            DeleteFault(Arc::new(move |p: &Path| {
+                let fail = failing.load(Ordering::SeqCst);
+                if fail {
+                    failed.lock().unwrap().insert(p.to_path_buf());
+                }
+                fail
+            }))
+        };
+        let index = Arc::new(SearchIndex::open_with_delete_fault(&root, fault).unwrap());
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let mut indexer = index.writer(15 << 20).unwrap();
+        for id in 1..=COMMITS {
+            add(&mut store, &mut indexer, id);
+        }
+        // The lease pins every segment there is now.
+        let (held, before) = ids(&index, "faultcorpus");
+        assert_eq!(before, (1..=COMMITS as u64).collect::<Vec<_>>());
+        // Merges retire the pinned segments; their collection, and the
+        // next commit's, fail to delete them. Neither fails the writer.
+        indexer.finish().unwrap();
+        let mut indexer = index.writer(15 << 20).unwrap();
+        add(&mut store, &mut indexer, COMMITS + 1);
+        let tried: Vec<PathBuf> = failed.lock().unwrap().iter().cloned().collect();
+        assert!(!tried.is_empty(), "no merge retired a pinned segment");
+        for p in &tried {
+            assert!(
+                p.exists(),
+                "{} deleted although its delete failed",
+                p.display()
+            );
+        }
+        let dirs = [root.clone(), root.join("files")];
+        assert!(
+            dirs.iter().any(|d| !leaks(d).0.is_empty()),
+            "the retired files aren't on disk"
+        );
+        // The pinned snapshot still reads its retired segments.
+        let page = held
+            .page(Start::Offset(0), 50, &CancelToken::new())
+            .unwrap();
+        let mut again: Vec<u64> = page.hits.iter().map(|h| h.id).collect();
+        again.sort_unstable();
+        assert_eq!(again, before);
+
+        // The lease drops and deletes work again: the next collections
+        // retry every failed delete.
+        drop(held);
+        failing.store(false, Ordering::SeqCst);
+        indexer.commit().unwrap();
+        indexer.finish().unwrap();
+        let mut indexer = index.writer(15 << 20).unwrap();
+        indexer.commit().unwrap();
+        drop(indexer);
+        for p in &tried {
+            assert!(!p.exists(), "{} was never deleted again", p.display());
+        }
+        let gauge = index.mmap_cache_entries().unwrap();
+        for (dir, g) in dirs.iter().zip(gauge) {
+            let (leaked, mapped) = leaks(dir);
+            assert!(leaked.is_empty(), "{} leaked {leaked:?}", dir.display());
+            assert_eq!(mapped, g, "the mmap gauge for {}", dir.display());
+        }
+        let (_, all) = ids(&index, "faultcorpus");
+        assert_eq!(all, (1..=COMMITS as u64 + 1).collect::<Vec<_>>());
+        for id in 1..=COMMITS + 1 {
+            assert_eq!(ids(&index, &word(id)).1, [id as u64]);
+        }
     }
 }

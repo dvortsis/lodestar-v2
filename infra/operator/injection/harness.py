@@ -100,7 +100,7 @@ def neutral(name: str, src: bytes) -> bytes:
     if name != "thread.py":
         return src
     text = src.decode("utf-8")
-    out, n = re.subn(r'\A""".*?"""\n', '"""Local GitHub transport for thread_real.py."""\n', text, count=1, flags=re.S)
+    out, n = re.subn(r'\A""".*?"""\r?\n', '"""Local GitHub transport for thread_real.py."""\n', text, count=1, flags=re.S)
     if n != 1:
         raise Refusal("ghmock.py has no docstring to replace")
     return out.encode("utf-8")

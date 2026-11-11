@@ -71,6 +71,7 @@
       <ComponentRef Id="FirewallRules" />
       <ComponentRef Id="FirewallWeb" />
       <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="EventSources" />
     </Feature>
 
     <!-- ===== Folders ===== -->
@@ -154,6 +155,28 @@
         <fire:FirewallException Id="FwWeb" Name="Lodestar web UI (8090/tcp, private networks)"
                                 Protocol="tcp" Port="8090" Profile="private" Scope="any"
                                 Program="[#LodestarExe]" IgnoreFailure="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- ===== Windows Application event log sources (Legal Notice section 5) ===== -->
+    <!-- The service ("Lodestar", a refused start) and the update helper ("Lodestar update helper",
+         an update that failed or was undone) write through eventcreate.exe. Registered here as
+         eventcreate's own custom sources (its message file, CustomSource=1), so their messages show
+         without "The description for Event ID ... cannot be found", the service's virtual account,
+         which can't create a source, can still write, and uninstall removes both keys. -->
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="EventSources" Guid="2D5B2E5C-6B34-4F0F-9D54-3D1A3F8E9A07" Win64="yes">
+        <RegistryValue Root="HKLM" Key="Software\Lodestar" Name="EventSources" Type="integer" Value="1" KeyPath="yes" />
+        <RegistryKey Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\EventLog\Application\Lodestar" ForceDeleteOnUninstall="yes">
+          <RegistryValue Name="EventMessageFile" Type="expandable" Value="%SystemRoot%\System32\EventCreate.exe" />
+          <RegistryValue Name="TypesSupported" Type="integer" Value="7" />
+          <RegistryValue Name="CustomSource" Type="integer" Value="1" />
+        </RegistryKey>
+        <RegistryKey Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\EventLog\Application\Lodestar update helper" ForceDeleteOnUninstall="yes">
+          <RegistryValue Name="EventMessageFile" Type="expandable" Value="%SystemRoot%\System32\EventCreate.exe" />
+          <RegistryValue Name="TypesSupported" Type="integer" Value="7" />
+          <RegistryValue Name="CustomSource" Type="integer" Value="1" />
+        </RegistryKey>
       </Component>
     </DirectoryRef>
 

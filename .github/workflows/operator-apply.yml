@@ -21,6 +21,7 @@ jobs:
     permissions:
       contents: read
       id-token: write # assumes LodestarOperatorBridge by OIDC, in-process
+      actions: read # GET-only OIDC/environment protection audit before requesting credentials
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -34,6 +35,7 @@ jobs:
           OPERATOR_BOT_USER_ID: ${{ vars.OPERATOR_BOT_USER_ID }}
           CHANNEL_PR: ${{ vars.CHANNEL_PR }}
           PYTHONPATH: ${{ runner.temp }}/fleet-deps
+          GITHUB_TOKEN: ${{ github.token }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           AWS_BRIDGE_ROLE_ARN: ${{ secrets.AWS_BRIDGE_ROLE_ARN }}
           CONTROL_BUCKET: ${{ secrets.CONTROL_BUCKET }}

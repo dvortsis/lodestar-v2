@@ -502,6 +502,60 @@ fn exception_value(e: &InsightsException) -> Option<String> {
     }
 }
 
+/// `data_filesystem`, by what holds the data folder (PK-exc).
+fn data_filesystem_alert(e: &InsightsException) -> String {
+    use crate::dto::insights::DataFsKind;
+    match e.filesystem.as_ref().map(|f| f.kind) {
+        Some(DataFsKind::UnraidUserShare) => "The data folder is on Unraid's user share \
+            (/mnt/user), which is slow for the search index and risky for the database. Move \
+            it to a pool path: in the container's template, set the data folder's host path to \
+            one such as /mnt/cache/appdata/lodestar."
+            .into(),
+        Some(DataFsKind::Fuse) => "The data folder is on a FUSE filesystem, which is slow for \
+            the search index. Keep it on a local disk, ideally an SSD."
+            .into(),
+        Some(DataFsKind::Network) => "The data folder is on a network or shared-folder \
+            filesystem, whose file locking isn't reliable enough for the database. Keep it on \
+            a local disk, ideally an SSD, and send only backups to the share."
+            .into(),
+        None => "The data folder is on a filesystem that's slow or unsafe for the database. \
+            Keep it on a local disk, ideally an SSD."
+            .into(),
+    }
+}
+
+/// `ephemeral_ports`: the ports left, and the `netsh` range to set, or
+/// fewer connections when no range is large enough (PK-exc).
+fn ephemeral_ports_alert(e: &InsightsException) -> String {
+    use crate::dto::insights::PortFamily;
+    let Some(p) = &e.ports else {
+        return "Windows has too few ports left for outgoing connections. Lower the crawler's \
+                intensity in Settings, then restart Lodestar."
+            .into();
+    };
+    let family = match p.family {
+        PortFamily::Ipv4 => "ipv4",
+        PortFamily::Ipv6 => "ipv6",
+    };
+    let left = format!(
+        "Windows has only {} ports left for outgoing connections; Lodestar and the rest of this \
+         PC need about {}.",
+        format_count(u64::from(p.available)),
+        format_count(u64::from(p.needed)),
+    );
+    match (p.fix_start, p.fix_count) {
+        (Some(start), Some(count)) => format!(
+            "{left} To fix it, run this in a Command Prompt opened as administrator: \
+             netsh int {family} set dynamicport tcp start={start} num={count}. This notice \
+             clears within an hour."
+        ),
+        _ => format!(
+            "{left} No port range is large enough: lower the crawler's intensity in Settings, \
+             then restart Lodestar."
+        ),
+    }
+}
+
 fn alert(e: &InsightsException) -> Alert {
     let value = exception_value(e);
     let message = match (e.kind.as_str(), value) {
@@ -541,6 +595,8 @@ fn alert(e: &InsightsException) -> Alert {
         ("yield_below_baseline", None) => {
             "Yield for the newest completed cohorts is below the 7 days before them.".into()
         }
+        ("data_filesystem", _) => data_filesystem_alert(e),
+        ("ephemeral_ports", _) => ephemeral_ports_alert(e),
         (kind, value) => {
             let kind = clean(kind);
             match value {
@@ -1218,10 +1274,82 @@ mod tests {
             kind: kind.into(),
             rows: Vec::new(),
             counts: None,
+            filesystem: None,
+            ports: None,
             severity: Severity::Warning,
             since: T - 600,
             unit: unit.map(Into::into),
             value,
+        }
+    }
+
+    #[test]
+    fn host_exceptions_are_worded_never_named() {
+        use crate::dto::insights::{DataFilesystem, DataFsKind, PortFamily, PortPressure};
+        let fs = |kind: Option<DataFsKind>| {
+            let mut e = exception("data_filesystem", None, None, fix("guide", "data_folder"));
+            e.filesystem = kind.map(|kind| DataFilesystem {
+                kind,
+                path: "/data".into(),
+                fs_type: Some("fuse.shfs".into()),
+            });
+            alert(&e).message
+        };
+        assert!(fs(Some(DataFsKind::UnraidUserShare)).contains("/mnt/cache/appdata/lodestar"));
+        assert!(fs(Some(DataFsKind::Fuse)).contains("FUSE filesystem"));
+        assert!(fs(Some(DataFsKind::Network)).contains("network or shared-folder filesystem"));
+        assert!(fs(None).contains("slow or unsafe"));
+        let ports = |range: Option<(u32, u32)>, family| {
+            let mut e = exception(
+                "ephemeral_ports",
+                Some("ports"),
+                Some(1384.0),
+                fix("guide", "windows_ports"),
+            );
+            e.ports = Some(PortPressure {
+                family,
+                start: 49152,
+                end: 65535,
+                reserved: 15000,
+                available: 1384,
+                needed: 2848,
+                max_sockets: 400,
+                fix_start: range.map(|f| f.0),
+                fix_count: range.map(|f| f.1),
+            });
+            alert(&e)
+        };
+        let a = ports(Some((47104, 18432)), PortFamily::Ipv6);
+        assert_eq!(
+            a.message,
+            "Windows has only 1,384 ports left for outgoing connections; Lodestar and the rest \
+             of this PC need about 2,848. To fix it, run this in a Command Prompt opened as \
+             administrator: netsh int ipv6 set dynamicport tcp start=47104 num=18432. This \
+             notice clears within an hour."
+        );
+        // A guide fix has no digest link yet: the UI's guide pages come later.
+        assert_eq!(a.link, None);
+        let none = ports(None, PortFamily::Ipv4).message;
+        assert!(none.ends_with(
+            "No port range is large enough: lower the crawler's intensity in Settings, then \
+             restart Lodestar."
+        ));
+        let mut bare = exception("ephemeral_ports", None, None, fix("guide", "windows_ports"));
+        bare.ports = None;
+        let bare = alert(&bare).message;
+        for m in [
+            fs(Some(DataFsKind::Network)),
+            fs(None),
+            ports(Some((1, 2)), PortFamily::Ipv4).message,
+            none,
+            bare,
+        ] {
+            assert!(
+                !m.contains("data_filesystem")
+                    && !m.contains("ephemeral_ports")
+                    && !m.contains("Needs attention"),
+                "{m}"
+            );
         }
     }
 

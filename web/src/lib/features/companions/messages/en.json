@@ -1,0 +1,11 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"companions_need_missing": "Needs {name}",
+	"companions_need_unhealthy": "{name} isn't responding",
+	"companions_need_unhealthy_hint": "Open Settings → Companions to restart it.",
+	"companions_need_setup": "Set up",
+	"companions_need_installed": "{name} is installed. Checking the source again.",
+	"companions_need_name_other": "a companion program",
+	"companions_need_starting": "{name} is starting. Checking again.",
+	"companions_need_load_failed": "Couldn't load. Reload the page and try again."
+}

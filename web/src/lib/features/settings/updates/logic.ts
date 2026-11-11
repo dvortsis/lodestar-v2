@@ -88,6 +88,8 @@ export const NOTICE_ORDER = [
 	'pending_unwritable',
 	'bad_overlay',
 	'install_failed',
+	'install_blocked',
+	'install_blocked_off',
 	'manifest_lapsed',
 	'channel_unavailable'
 ] as const;

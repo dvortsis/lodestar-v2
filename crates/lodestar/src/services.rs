@@ -116,6 +116,10 @@ impl Services {
             .await??
         };
         let config = &settings.effective_config(config);
+        // PK-exc: Insights' port check uses the pool's real socket count.
+        crate::windows::ports::set_max_sockets(
+            config.pipeline_config().map_or(0, |p| p.pool.max_sockets),
+        );
         // The crawler's pause (B14) outlives a restart: everything starts
         // paused, so nothing is harvested or fetched before it applies.
         let crawl_settings = settings
@@ -852,10 +856,42 @@ impl Services {
 /// signal fires (B-log1b, §2.19).
 pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 
+/// How long the stop waits for the updates task to end by itself before
+/// it's aborted: time for its last work at a stop. On Windows that's
+/// taking back a waiting install when updates were just switched Off
+/// (X-win-upd-stop-wait). With [`SHUTDOWN_GRACE`], the saves and
+/// [`RUNTIME_GRACE`], inside the SCM's 30 s stop hint.
+#[cfg(windows)]
+pub const UPDATES_STOP_WAIT: Duration = Duration::from_secs(2);
+/// None on Unix: the engine's task runs installs itself, and one let run
+/// on at a stop could reach its switch and turn the stop into a restart
+/// on the new version. It's aborted at once, as before (a poll already
+/// under way on another worker still runs on to its next await).
+#[cfg(not(windows))]
+pub const UPDATES_STOP_WAIT: Duration = Duration::ZERO;
+
+/// Stops the updates task: the stop is sent, the task gets `wait` to
+/// finish its last work, and only then is it aborted. A check under way
+/// may be mid-download and never see the stop; it's abandoned, which is
+/// safe, as it writes only after it's verified, by rename. With no wait,
+/// the task is aborted at once, with no wait for it to be polled.
+pub(crate) async fn stop_updates(
+    stop: watch::Sender<bool>,
+    mut task: JoinHandle<()>,
+    wait: Duration,
+) {
+    let _ = stop.send(true);
+    if wait.is_zero() || tokio::time::timeout(wait, &mut task).await.is_err() {
+        task.abort();
+        let _ = task.await;
+    }
+}
+
 /// How long the runtime waits, once serving has ended, for blocking tasks
 /// still running (a stuck read): the exit, and the Windows service's stop,
-/// never hang on one. With [`SHUTDOWN_GRACE`] and the saves, inside the
-/// update supervisor's and the SCM's 30 s.
+/// never hang on one. With [`SHUTDOWN_GRACE`], [`UPDATES_STOP_WAIT`] (2 s
+/// on Windows) and the saves, inside the update supervisor's and the
+/// SCM's 30 s.
 pub const RUNTIME_GRACE: Duration = Duration::from_secs(5);
 
 /// `serve`'s result, or `None` once `grace` has passed since `stopping`
@@ -898,12 +934,8 @@ impl Handles {
         let (stop, sampler) = self.storage;
         let _ = stop.send(true);
         let _ = sampler.await;
-        // A check under way is abandoned: it writes only after it's
-        // verified, by rename, so nothing is left half-written.
         if let Some((stop, task)) = self.updates {
-            let _ = stop.send(true);
-            task.abort();
-            let _ = task.await;
+            stop_updates(stop, task, UPDATES_STOP_WAIT).await;
         }
         let (stop, refresher) = self.subscriptions;
         let _ = stop.send(true);
@@ -1245,5 +1277,54 @@ mod bounded_tests {
         done.send("served").unwrap();
         let got = tokio::time::timeout(DEADLINE, race).await.unwrap().unwrap();
         assert_eq!(got, Some("served"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// No wait (Unix): a task not yet polled is aborted before it is, as
+    /// the stop did before the wait existed.
+    #[tokio::test]
+    async fn with_no_wait_an_unpolled_task_is_never_polled() {
+        let ran = Arc::new(AtomicBool::new(false));
+        let r = ran.clone();
+        let (stop, _stopped) = watch::channel(false);
+        let task = tokio::spawn(async move { r.store(true, Ordering::SeqCst) });
+        stop_updates(stop, task, Duration::ZERO).await;
+        assert!(!ran.load(Ordering::SeqCst));
+    }
+
+    /// A task that ignores the stop (a check mid-download) is aborted once
+    /// the wait is over, so the stop never hangs on it.
+    #[tokio::test]
+    async fn a_task_that_ignores_the_stop_is_aborted_after_the_wait() {
+        let (stop, _stopped) = watch::channel(false);
+        let task = tokio::spawn(std::future::pending::<()>());
+        let stopped = tokio::time::timeout(
+            Duration::from_secs(20),
+            stop_updates(stop, task, Duration::from_millis(50)),
+        )
+        .await;
+        assert!(stopped.is_ok(), "the stop hung on a task that ignores it");
+    }
+
+    /// A task that ends on the stop is waited for, not aborted: its last
+    /// work finishes.
+    #[tokio::test]
+    async fn a_task_that_ends_on_the_stop_finishes_its_last_work() {
+        let done = Arc::new(AtomicBool::new(false));
+        let d = done.clone();
+        let (stop, mut stopped) = watch::channel(false);
+        let task = tokio::spawn(async move {
+            let _ = stopped.changed().await;
+            tokio::task::yield_now().await;
+            d.store(true, Ordering::SeqCst);
+        });
+        stop_updates(stop, task, Duration::from_secs(20)).await;
+        assert!(done.load(Ordering::SeqCst));
     }
 }

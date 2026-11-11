@@ -13625,6 +13625,31 @@
           }
         }
       },
+      "DataFilesystem": {
+        "type": "object",
+        "description": "A `data_filesystem` exception's detail: the data folder sits on a\nfilesystem that's slow or unsafe for the database and the index\n(architecture §11).",
+        "required": [
+          "kind",
+          "path",
+          "fs_type"
+        ],
+        "properties": {
+          "fs_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The mount table's name for the filesystem (`fuse.shfs`, `nfs4`,\n…), when it's known; a detail, not for the sentence."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DataFsKind"
+          },
+          "path": {
+            "type": "string",
+            "description": "The data folder, as the server sees it (inside a container, the\ncontainer's path)."
+          }
+        }
+      },
       "DataFormats": {
         "type": "object",
         "description": "The data formats a bug report needs, and why an upgrade might reindex.",
@@ -13658,6 +13683,15 @@
             "description": "The store's schema version (the last migration applied); null if\nthe store couldn't be read."
           }
         }
+      },
+      "DataFsKind": {
+        "type": "string",
+        "description": "What holds a risky data folder, and so the fix.",
+        "enum": [
+          "unraid_user_share",
+          "fuse",
+          "network"
+        ]
       },
       "DataInfo": {
         "type": "object",
@@ -15742,11 +15776,11 @@
         "properties": {
           "kind": {
             "type": "string",
-            "description": "`settings` or `stage`."
+            "description": "`settings`, `stage` or `guide` (a page of the user guide). A\nclient offers no link for a kind it doesn't know."
           },
           "target": {
             "type": "string",
-            "description": "The section or stage (`index`, `fetch`, …)."
+            "description": "The section or stage (`index`, `fetch`, …), or the guide's topic:\n`data_folder` (where to keep the data folder) or `windows_ports`\n(the port range on Windows)."
           }
         }
       },
@@ -16962,12 +16996,34 @@
               }
             ]
           },
+          "filesystem": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DataFilesystem",
+                "description": "`data_filesystem` only: what holds the data folder."
+              }
+            ]
+          },
           "fix": {
             "$ref": "#/components/schemas/Fix"
           },
           "kind": {
             "type": "string",
-            "description": "`index_lag` (the index more than 30 s behind), `cohort_stalled`\n(hashes in progress, the crawler running, and nothing stored for\n2 full hours), `yield_below_baseline`, or `filter_rows_unreadable`\n(stored filter rows that no longer read; filtering fails closed\nfor them until they're fixed in Filters & Safety), or\n`filter_stand_ins_rejudged` (for a week after such rows read\nagain: `value` torrents their stand-ins held were released, and\n`counts` has the rest)."
+            "description": "`index_lag` (the index more than 30 s behind), `cohort_stalled`\n(hashes in progress, the crawler running, and nothing stored for\n2 full hours), `yield_below_baseline`, or `filter_rows_unreadable`\n(stored filter rows that no longer read; filtering fails closed\nfor them until they're fixed in Filters & Safety), or\n`filter_stand_ins_rejudged` (for a week after such rows read\nagain: `value` torrents their stand-ins held were released, and\n`counts` has the rest), `data_filesystem` (the data folder is on\nUnraid's user share, another FUSE filesystem or a network share;\n`filesystem` says which), or `ephemeral_ports` (Windows has too\nfew ports left for outgoing connections; `value` ports are left\nand `ports` has the fix). The last two are checked at most hourly.\nA client shows a kind it doesn't know generically."
+          },
+          "ports": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PortPressure",
+                "description": "`ephemeral_ports` only: the port range and the fix."
+              }
+            ]
           },
           "rows": {
             "type": "array",
@@ -16989,7 +17045,7 @@
               "string",
               "null"
             ],
-            "description": "`s`, `torrents`, `ratio` or `rows`."
+            "description": "`s`, `torrents`, `ratio`, `rows` or `ports`; null when the kind\nhas no number (`data_filesystem`)."
           },
           "value": {
             "type": [
@@ -17639,8 +17695,8 @@
           }
         },
         "example": {
-          "text": "# Lodestar Legal Notice and Network Risks\n\n**Version 4 · 2026-11-06**\n\nLodestar shows this notice before first use.\n\n## 1. Who publishes Lodestar\n- The **AGPL** lets you run, study, change and share it.\n- Open an issue at https://github.com/dvortsis/lodestar-v2.",
-          "version": 4
+          "text": "# Lodestar Legal Notice and Network Risks\n\n**Version 5 · 2026-11-11**\n\nLodestar shows this notice before first use.\n\n## 1. Who publishes Lodestar\n- The **AGPL** lets you run, study, change and share it.\n- Open an issue at https://github.com/dvortsis/lodestar-v2.",
+          "version": 5
         }
       },
       "LogCatalog": {
@@ -19680,6 +19736,85 @@
           "window_zone": {
             "type": "string",
             "description": "The zone the window is in: an IANA name, or `UTC` when none was\nfound on the host."
+          }
+        }
+      },
+      "PortFamily": {
+        "type": "string",
+        "description": "The IP family of a port range, as `netsh int <family>` names it.",
+        "enum": [
+          "ipv4",
+          "ipv6"
+        ]
+      },
+      "PortPressure": {
+        "type": "object",
+        "description": "An `ephemeral_ports` exception's detail (architecture §11): Windows'\ndynamic port range for one IP family, and the range to set instead.\nThe fix is `netsh int <family> set dynamicport tcp start=<fix_start>\nnum=<fix_count>`, run in a Command Prompt opened as administrator.",
+        "required": [
+          "family",
+          "start",
+          "end",
+          "reserved",
+          "available",
+          "needed",
+          "max_sockets",
+          "fix_start",
+          "fix_count"
+        ],
+        "properties": {
+          "available": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Ports left for outgoing connections (`value`).",
+            "minimum": 0
+          },
+          "end": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "family": {
+            "$ref": "#/components/schemas/PortFamily"
+          },
+          "fix_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "fix_start": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The range to set: its first port and how many. Null when no range\nis large enough; then lowering the crawler's intensity is the fix.",
+            "minimum": 0
+          },
+          "max_sockets": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "needed": {
+            "type": "integer",
+            "format": "int32",
+            "description": "About what Lodestar's `max_sockets` fetches and the rest of the PC\nneed (2,048 ports are kept for other programs).",
+            "minimum": 0
+          },
+          "reserved": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Ports inside it that other software reserved (Hyper-V, WSL,\nDocker Desktop).",
+            "minimum": 0
+          },
+          "start": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The dynamic range now: its first and last port.",
+            "minimum": 0
           }
         }
       },
@@ -25630,7 +25765,7 @@
             "items": {
               "type": "string"
             },
-            "description": "`revoked_key`, `clock_behind`, `clock_ahead`, `trust_damaged`,\n`pending_unwritable`, `bad_overlay`, `rolled_back`,\n`manifest_lapsed`, `channel_unavailable`, `check_not_saved` (the\nlast check's times couldn't be saved and won't survive a\nrestart), `updater_unreadable` (the saved update state couldn't be\nread, so automatic updates are held; pausing or resuming saves a\nnew state, which rewrites the file and ends the hold) and, on\nWindows, `install_failed` (the update helper's last answer, for a version\nnewer than the running one, wasn't `installed`; display only), …"
+            "description": "`revoked_key`, `clock_behind`, `clock_ahead`, `trust_damaged`,\n`pending_unwritable`, `bad_overlay`, `rolled_back`,\n`manifest_lapsed`, `channel_unavailable`, `check_not_saved` (the\nlast check's times couldn't be saved and won't survive a\nrestart), `updater_unreadable` (the saved update state couldn't be\nread, so automatic updates are held; pausing or resuming saves a\nnew state, which rewrites the file and ends the hold) and, on\nWindows, `install_failed` (the update helper's last answer, for a version\nnewer than the running one, wasn't `installed`; display only) and\n`install_blocked` (that answer was a blocked install: Windows\nwouldn't start the service, nothing changed, and the helper tries\nagain at the next boot unless updates are switched off or paused\nfirst; display only) and `install_blocked_off` (the same, while\nupdates are already Off: switching to another mode and back to Off\ncancels the retry; display only), …"
           },
           "pending": {
             "oneOf": [

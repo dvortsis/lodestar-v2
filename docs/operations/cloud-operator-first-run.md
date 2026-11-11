@@ -2,6 +2,8 @@
 
 For the runner and the owner, once the operator's setup is done. It turns the plan's first-run test (`docs/plan/2026-11-08-cloud-operator.md` §5) into steps against the committed code: what to do, what you see when it passes, and what to record. No VM is created.
 
+Before any live step, follow [the bootstrap approval/OIDC gates](fleet-control-bootstrap.md) and [independent cleanup commissioning](fleet-control-cleanup.md). Every secret-consuming operator job retains explicit owner approval. Live teardown belongs to the owner-only cleanup workflow, not the operator. This checklist does not authorize settings, state or resource changes. The injection harness retains no real GitHub token: its public-metadata protection audit uses anonymous GETs and refuses on missing, denied or rate-limited reads before requesting OIDC/STS credentials.
+
 - **Who does what:** the runner posts instructions and records results. The owner changes settings and runs the workflows that only the owner may run (`operator-apply.yml`, `operator-injection.yml`).
 - **Where results go:** one decisions file, in the format in `docs/decisions/2026-11-11-OP-5.md` ("The first-run results"). Never a token, an ID, an address or a model ID.
 - **Times are UTC.**
@@ -11,7 +13,7 @@ For the runner and the owner, once the operator's setup is done. It turns the pl
 ## Before you start
 - **The owner's setup is done:** steps 1–4 of the plan's "Owner setup", and `operator-apply.yml` has run once.
 - **One extra secret for the injection test:** in the `cloud-operator` environment, add `STATE_BUCKET` (the fleet-control stack's `StateBucketName` output). The test reads `fleet/fleet.json` from it to make sure no fleet exists.
-- **`fleet.json` must exist as a tombstone.** `fleet.yml` writes it the first time it reads `fleet.json` live: any live command, or the hourly reaper, once `FLEET_LIVE` is `true`. It keeps it after every `down`. Before that, it's missing, and the test refuses, because the bridge role can't tell a missing file from a denied read. Then the owner writes the tombstone by hand, once:
+- **`fleet.json` must be an owner-verified tombstone.** Missing/unreadable state is never an idle fleet. The independent cleanup broker does not write tombstones or clear state. The operator cannot initialize one. Only after separately approved authoritative account/state inventory and reconciliation may the owner prepare a tombstone. The example below is not permission to overwrite existing state:
   ```
   echo '{"version": 1, "fleet": null, "updated_at": "2026-11-11T12:00:00Z"}' > tombstone.json
   aws s3api put-object --bucket <state bucket> --key fleet/fleet.json --body tombstone.json \

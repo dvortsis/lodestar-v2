@@ -542,7 +542,10 @@ const sourcesLater = [
 ];
 // The generated settings form (SRC-15c) has its own chunk and entry: most sources never use it.
 const sourcesConfig = [/features\/sources\/ConfigDialog\.svelte$/];
-const sourcesAllLater = [...sourcesLater, ...sourcesConfig];
+// The companion chip (CMP-9b) loads only for a source that waits for a companion, and the install
+// flow behind its Set up only when it's pressed: neither is in the first view.
+const sourcesCompanion = [/features\/companions\/(?:NeedChip|SetupFlow)\.svelte$/];
+const sourcesAllLater = [...sourcesLater, ...sourcesConfig, ...sourcesCompanion];
 const sourcesBody = /features\/sources\/SourcesScreen\.svelte$/;
 const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
 	(chunk.imports ?? [])
@@ -863,7 +866,7 @@ const filtersPackPanelsLazy = filtersLazy({
 const sourcesDialogsLazy = filtersLazy({
 	name: 'Sources dialogs (on demand)',
 	keys: sourcesLater,
-	stop: sourcesConfig
+	stop: [...sourcesConfig, ...sourcesCompanion]
 });
 // What the settings form adds over the Consent and Purge dialogs: the shared field and dialog
 // modules are theirs (the one cost of opening either first), so only the rest is counted here.
@@ -872,9 +875,14 @@ const sourcesConfigLazy = (() => {
 	return filtersLazy({
 		name: 'Sources config dialog (on demand)',
 		keys: sourcesConfig,
-		stop: sourcesLater
+		stop: [...sourcesLater, ...sourcesCompanion]
 	}).filter((f) => !already.has(f));
 })();
+const sourcesCompanionLazy = filtersLazy({
+	name: 'Sources companion chip and setup (on demand)',
+	keys: sourcesCompanion,
+	stop: [...sourcesLater, ...sourcesConfig]
+});
 const filtersPackImpactLazy = filtersLazy({
 	name: 'Filters pack impact (on demand)',
 	keys: [filtersLater[4]],
@@ -1384,7 +1392,7 @@ export default [
 						: name === 'CompanionsScreen'
 							? '33 KB'
 							: name === 'SourcesScreen'
-								? '30.9 KB'
+								? '31.1 KB'
 								: name === 'NotificationsScreen'
 									? '45.2 KB'
 									: '45 KB'
@@ -1405,6 +1413,7 @@ export default [
 	entry('Filters pack impact (on demand)', filtersPackImpactLazy, '2.4 KB'),
 	entry('Sources dialogs (on demand)', sourcesDialogsLazy, '40 KB'),
 	entry('Sources config dialog (on demand)', sourcesConfigLazy, '6 KB'),
+	entry('Sources companion chip and setup (on demand)', sourcesCompanionLazy, '27 KB'),
 	// S-filters-2c: the flows' one door, `flows-door.ts`: the root's preload list (~0.5 KB), fetched
 	// before the flows on the first change from Filters, a result's menu, the drawer or /t, as Save
 	// search's loader is. Measured 0.53 KB; limit = measured + 10%.

@@ -276,6 +276,9 @@ def cmd_act(ctx: Ctx) -> int:
     except Refused as r:
         ctx.report(f"refused: {r.reason}")
         return 0
+    if ctx.live and cmd.verb == "down":
+        ctx.report("refused: live down uses the independently authorized owner cleanup workflow")
+        return 1
     # Paths that create or change the fleet run only main's current code. A down
     # never waits on that: slightly older main code is the safe direction for a kill.
     if cmd.verb in ("up", "run") and not _on_main_head(ctx.repo):
@@ -298,7 +301,7 @@ def cmd_act(ctx: Ctx) -> int:
         ctx.report("failed: the fleet lock was lost (pre-empted); stopped before its next fleet write")
         return 1
     except ApplyFailed:
-        ctx.report("failed: terraform didn't finish; the fleet is recorded, so run down (output is in the evidence bucket)")
+        ctx.report("failed: terraform didn't finish; owner recovery required; inspect cleanup registration and inventory (output is in the evidence bucket)")
         return 1
     except LedgerUnreadable:
         ctx.report("failed: the spend ledger is unreadable, so up is refused; escalate")
@@ -344,6 +347,9 @@ def _first_attempt(ctx: Ctx, who: str) -> bool:
 
 
 def cmd_reap(ctx: Ctx) -> int:
+    if ctx.live:
+        ctx.report("reaper: legacy live cleanup disabled; independent expiration broker required")
+        return 1
     if not _first_attempt(ctx, "reaper"):  # before any credential
         return 0
     run_id, b = ctx.run_id(), ctx.backend
@@ -437,6 +443,9 @@ def cmd_reap(ctx: Ctx) -> int:
 
 
 def cmd_dispatch_down(ctx: Ctx) -> int:
+    if ctx.live:
+        ctx.report("owner's down: legacy live cleanup disabled; use fleet-emergency-down.yml")
+        return 1
     if not _first_attempt(ctx, "owner's down"):  # before any credential
         return 0
     run_id = ctx.run_id()

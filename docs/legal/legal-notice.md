@@ -1,6 +1,6 @@
 # Lodestar Legal Notice and Network Risks
 
-**Version 4 · 2026-11-07**
+**Version 5 · 2026-11-11**
 
 *Applies to Lodestar 0.5.2 and the development builds that lead to it (the `main` branch). Where this notice says "this version", it means that software (a development build may report an earlier version number). The v0.5.1 release carries its own copy of this notice, version 3, written for what that build does.*
 
@@ -42,7 +42,7 @@ You run this copy of Lodestar on your own hardware. The makers don't run it for 
 - **The law where you and your server are is yours to know.** Laws on peer-to-peer networks, copyright, indexing, adult material and personal data differ by country and by state. Something lawful in one place may be unlawful in another. Taking part in these networks, and especially turning on sources that announce your address to other peers, can lead to notices from your internet provider, suspended accounts, civil claims or criminal investigation where you live. A VPN hides your address from peers; keeping it working is up to you.
 
 ## 5. Your data
-Lodestar sends nothing to its makers: no telemetry, no crash reports, no usage data. Everything it stores is on your server, in your data folder, with four exceptions: the structured log files go to the folder you set under Settings → Logging (by default the `logs` folder inside the data folder); on Windows, if the service can't start or can't write its logs, it notes why, paths and account names only, in `%SystemRoot%\Temp\lodestar-service.log`; the Windows installer, when it secures or removes the data folder, keeps a log of what it did (paths and account names only) in a new folder only Administrators can open, `%SystemRoot%\Temp\lodestar-secure-<random>`; and the optional safe-restart switch keeps its restart record in a folder outside the data folder (user guide, section 3.8). The console output is kept wherever your system keeps it: Docker's container log, on Unraid too, or the journal under systemd. It stores:
+Lodestar sends nothing to its makers: no telemetry, no crash reports, no usage data. Everything it stores is on your server, in your data folder, with five exceptions: the structured log files go to the folder you set under Settings → Logging (by default the `logs` folder inside the data folder); on Windows, if the service can't start or can't write its logs, it notes why, paths and account names only, in `%SystemRoot%\Temp\lodestar-service.log`; the Windows installer, when it secures or removes the data folder, keeps a log of what it did (paths and account names only) in a new folder only Administrators can open, `%SystemRoot%\Temp\lodestar-secure-<random>`; on Windows, when an update can't be installed or has to be undone, or the service refuses to start, Lodestar writes what happened and how to fix it (version numbers, the step that stopped and folder paths only) to the Windows Application event log, which every user of the computer can read; and the optional safe-restart switch keeps its restart record in a folder outside the data folder (user guide, section 3.8). The console output is kept wherever your system keeps it: Docker's container log, on Unraid too, or the journal under systemd. It stores:
 
 - the index of torrent metadata and swarm counts;
 - your settings, saved searches and alerts;

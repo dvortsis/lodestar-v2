@@ -32,7 +32,7 @@
 //!    `next.exe` into its place. If the second rename fails, the first is
 //!    undone.
 //! 3. **Swapped:** the caller relaunches (PK-win-restart). The new version
-//!    counts an attempt at each start ([`at_start`]) and must pass the
+//!    counts an attempt at each start ([`begin`]) and must pass the
 //!    self-test within [`PROBATION`] of its services starting
 //!    ([`self_test`]). Passed: `previous.exe` and the journal go.
 //! 4. **Rolling back** (the self-test failed or timed out, the start
@@ -206,7 +206,7 @@ pub trait Sys {
     }
 }
 
-/// What the caller does after [`at_start`].
+/// What the caller does after [`begin`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Start {
     /// Nothing to do: start as usual.
@@ -454,12 +454,16 @@ fn is(path: &Path, sha256: &str) -> bool {
 }
 
 /// At every start, before anything opens the store or `<data>\bin` is
-/// otherwise used: finishes whatever step the journal is at.
+/// otherwise used: finishes whatever step the journal is at. [`begin`]
+/// without its lock, for the tests.
+#[cfg(test)]
 pub fn at_start(sys: &dyn Sys, data_dir: &Path, db: &Path) -> Start {
     begin(sys, data_dir, db).0
 }
 
-/// [`at_start`], with `<data>\bin\.lock` kept for [`Start::Probation`]:
+/// At every start, before anything opens the store or `<data>\bin` is
+/// otherwise used: finishes whatever step the journal is at, with
+/// `<data>\bin\.lock` kept for [`Start::Probation`]:
 /// the caller holds it until the self-test decides ([`passed`] or
 /// [`failed`]), so no second copy can count an attempt or roll back
 /// meanwhile, even while this one is still starting (the notifier takes
@@ -689,6 +693,49 @@ pub fn abandon(sys: &dyn Sys, data_dir: &Path) {
     {
         let _ = std::fs::remove_file(bin.path(FAILED));
         clear(&bin);
+    }
+}
+
+/// Who has the last word on one probation: the self-test's verdict
+/// ([`passed`] or [`failed`]) or a graceful stop's give-back ([`stopped`]),
+/// never both, and never at once (each runs whole under one lock). Without
+/// it a stop could read the journal at `Swapped`, `passed` remove
+/// `previous.exe` and the journal, and the stop then write `Swapped` back
+/// with no old program behind it (#659 review, N4).
+#[derive(Debug, Clone, Default)]
+pub struct Verdict(std::sync::Arc<std::sync::Mutex<Phase>>);
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum Phase {
+    #[default]
+    Open,
+    Decided,
+    Stopped,
+}
+
+impl Verdict {
+    /// Runs the self-test's verdict `f` unless a stop came first. `None`
+    /// then.
+    pub fn decide<T>(&self, f: impl FnOnce() -> T) -> Option<T> {
+        let mut phase = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if *phase != Phase::Open {
+            return None;
+        }
+        // Decided before it runs: a verdict that panics part way never
+        // lets a stop give an attempt back over it.
+        *phase = Phase::Decided;
+        Some(f())
+    }
+
+    /// Runs the stop's give-back `f` unless the verdict came first.
+    pub fn stop(&self, f: impl FnOnce()) -> bool {
+        let mut phase = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if *phase != Phase::Open {
+            return false;
+        }
+        *phase = Phase::Stopped;
+        f();
+        true
     }
 }
 
@@ -1135,7 +1182,9 @@ pub mod serve {
     /// background. Passed, the update is kept; failed, the old program is
     /// put back and this run restarts into it (Restart now's relaunch,
     /// from `lodestar.exe`).
-    pub fn after_start(data: PathBuf, probe: super::Probe, lock: Lock) {
+    pub fn after_start(data: PathBuf, probe: super::Probe, lock: Lock) -> super::Verdict {
+        let verdict = super::Verdict::default();
+        let decide = verdict.clone();
         tokio::spawn(async move {
             let clock = super::Tokio(tokio::time::Instant::now());
             let check = || {
@@ -1143,14 +1192,18 @@ pub mod serve {
                 async move { super::check_once(&p).await }
             };
             let result = super::self_test(check, super::PROBATION, &clock).await;
-            let back = tokio::task::spawn_blocking(move || match result {
-                Ok(()) => {
-                    super::passed(&System, &data);
-                    false
-                }
-                Err(why) => super::failed(&System, &data, why),
+            let back = tokio::task::spawn_blocking(move || {
+                decide.decide(|| match result {
+                    Ok(()) => {
+                        super::passed(&System, &data);
+                        false
+                    }
+                    Err(why) => super::failed(&System, &data, why),
+                })
             })
             .await
+            .ok()
+            .flatten()
             .unwrap_or(false);
             // Decided: the notifier's next try takes the lock. Released
             // before a relaunch, so the old version's start can take it.
@@ -1164,6 +1217,7 @@ pub mod serve {
                 );
             }
         });
+        verdict
     }
 
     /// `Services::start` failed on probation: the old program goes back
@@ -1179,8 +1233,13 @@ pub mod serve {
     }
 
     /// The run ended before the self-test decided: a graceful stop.
-    pub fn stopped(data: &Path) {
-        super::stopped(&System, data);
+    /// Off the async runtime: the stop may wait for a verdict (a
+    /// rollback) running on the blocking pool.
+    pub async fn stopped(data: PathBuf, verdict: super::Verdict) {
+        let _ = tokio::task::spawn_blocking(move || {
+            verdict.stop(|| super::stopped(&System, &data));
+        })
+        .await;
     }
 }
 
@@ -1806,6 +1865,13 @@ mod tests {
         crashed(&f, State::Swapping, Some(OLD), None);
         assert_eq!(at_start(&f, &f.data(), &f.db()), Start::Normal);
         f.untouched();
+        // Swapping, interrupted between the renames and started some way
+        // other than the launcher: the old program is put back.
+        let f = Fake::new();
+        crashed(&f, State::Swapping, None, Some(OLD));
+        std::fs::write(f.data().join("bin").join(NEXT), NEW).unwrap();
+        assert_eq!(at_start(&f, &f.data(), &f.db()), Start::Normal);
+        f.untouched();
         // Swapping, interrupted between the renames, after the launcher
         // moved `previous.exe` back: the old program in place, `next.exe`
         // still staged.
@@ -2034,6 +2100,67 @@ mod tests {
         let (start, lock) = begin(&f, &f.data(), &f.db());
         assert_ne!(start, Start::Probation);
         assert!(lock.is_none());
+    }
+
+    /// N4: the self-test's verdict and a graceful stop's give-back never
+    /// both run, whichever order they come in.
+    #[test]
+    fn the_verdict_or_the_stop_has_the_last_word() {
+        // The verdict first: the stop gives nothing back afterwards.
+        let f = Fake::new();
+        f.install().unwrap();
+        f.run_as("0.5.5");
+        assert_eq!(at_start(&f, &f.data(), &f.db()), Start::Probation);
+        let v = Verdict::default();
+        assert_eq!(v.decide(|| passed(&f, &f.data())), Some(()));
+        assert!(!v.stop(|| stopped(&f, &f.data())));
+        assert!(f.journal().is_none() && f.at(PREVIOUS).is_none());
+        // The stop first: the verdict doesn't run, and the old program
+        // stays behind the attempt it gave back.
+        let f = Fake::new();
+        f.install().unwrap();
+        f.run_as("0.5.5");
+        assert_eq!(at_start(&f, &f.data(), &f.db()), Start::Probation);
+        let v = Verdict::default();
+        assert!(v.stop(|| stopped(&f, &f.data())));
+        assert_eq!(v.decide(|| passed(&f, &f.data())), None);
+        let j = f.journal().unwrap();
+        assert_eq!((j.state, j.attempts), (State::Swapped, 0));
+        assert_eq!(f.at(PREVIOUS).as_deref(), Some(OLD));
+    }
+
+    /// N4: the lock is held for the whole verdict (a stop can't get in
+    /// part way, pinned by `try_lock`), and a stop started meanwhile from
+    /// another thread, whenever it runs, then does nothing: it never
+    /// writes `Swapped` back over the journal `passed` just cleared.
+    #[test]
+    fn a_stop_during_the_verdict_waits_and_then_does_nothing() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let f = Fake::new();
+        f.install().unwrap();
+        f.run_as("0.5.5");
+        assert_eq!(at_start(&f, &f.data(), &f.db()), Start::Probation);
+        let v = Verdict::default();
+        let gave_back = std::sync::Arc::new(AtomicBool::new(false));
+        let mut stopper = None;
+        v.decide(|| {
+            // In the middle of the verdict: the lock is held, and a stop
+            // started now can't get in.
+            assert!(v.0.try_lock().is_err());
+            let (v2, g) = (v.clone(), gave_back.clone());
+            stopper = Some(std::thread::spawn(move || {
+                v2.stop(|| g.store(true, Ordering::SeqCst))
+            }));
+            passed(&f, &f.data());
+            assert!(!gave_back.load(Ordering::SeqCst));
+        })
+        .unwrap();
+        assert!(
+            !stopper.unwrap().join().unwrap(),
+            "the stop ran after the verdict"
+        );
+        assert!(!gave_back.load(Ordering::SeqCst));
+        assert!(f.journal().is_none());
     }
 
     #[test]

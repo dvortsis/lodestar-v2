@@ -11,12 +11,31 @@
 	import { resolve } from '$app/paths';
 	import type { Route } from './href';
 	import { fixHref, STAGES, type Stage } from './links';
+	import Mono from '$lib/ui/labels/Mono.svelte';
 	import { sortExceptions, type Exception } from './model';
 
 	let { exceptions }: { exceptions: Exception[] } = $props();
 
 	const locale = $derived(currentLocale());
 	const rows = $derived(sortExceptions(exceptions));
+
+	// `fix.kind: "guide"` targets (PK-exc): the user guide pages that cover them.
+	const GUIDE = 'https://github.com/dvortsis/lodestar-v2/blob/main/docs/user/';
+	const GUIDES: Record<string, string> = {
+		data_folder: '02-install-lodestar-on-unraid-and-docker.md',
+		windows_ports: '04-install-on-windows-and-linux.md'
+	};
+	const guideHref = (e: Exception) =>
+		e.fix.kind === 'guide' && Object.hasOwn(GUIDES, e.fix.target)
+			? GUIDE + GUIDES[e.fix.target]
+			: undefined;
+
+	/** The `netsh` command for `ports`, or undefined when no range is large enough. */
+	function netsh(e: Exception): string | undefined {
+		const p = e.ports;
+		if (!p || p.fix_start == null || p.fix_count == null) return undefined;
+		return `netsh int ${p.family === 'ipv6' ? 'ipv6' : 'ipv4'} set dynamicport tcp start=${p.fix_start} num=${p.fix_count}`;
+	}
 
 	function message(e: Exception): string {
 		if (e.kind === 'index_lag')
@@ -36,10 +55,29 @@
 				dropped: formatCount(e.counts?.dropped ?? null, locale),
 				hidden: formatCount(e.counts?.hidden ?? null, locale)
 			});
+		if (e.kind === 'data_filesystem') {
+			const k = e.filesystem?.kind;
+			if (k === 'unraid_user_share') return m.insights_overview_exc_fs_unraid_user_share();
+			if (k === 'fuse') return m.insights_overview_exc_fs_fuse();
+			if (k === 'network') return m.insights_overview_exc_fs_network();
+			return m.insights_overview_exc_fs_unknown();
+		}
+		if (e.kind === 'ephemeral_ports') {
+			const p = e.ports;
+			if (!p) return m.insights_overview_exc_ports_bare();
+			const left = m.insights_overview_exc_ports_left({
+				available: formatCount(p.available, locale),
+				needed: formatCount(p.needed, locale)
+			});
+			return netsh(e)
+				? `${left} ${m.insights_overview_exc_ports_fix()}`
+				: `${left} ${m.insights_overview_exc_ports_lower()}`;
+		}
 		return m.insights_overview_exc_unknown({ kind: e.kind });
 	}
 	function fixText(e: Exception): string {
 		if (e.fix.kind === 'settings') return m.insights_overview_exc_fix_settings();
+		if (e.fix.kind === 'guide') return m.insights_overview_exc_fix_guide();
 		const stage = STAGES.find((s) => s === e.fix.target);
 		return stage
 			? m.insights_overview_exc_fix_stage({ stage: stageName(stage) })
@@ -75,6 +113,17 @@
 							<strong>{e.severity === 'error' ? m.common_error() : m.common_warning()}:</strong>
 							{message(e)}
 						</p>
+						{#if netsh(e)}
+							<p data-testid="insights-exception-{e.kind}-netsh">
+								<Mono class="break-words">{netsh(e)}</Mono>
+							</p>
+							<p class="ins-muted">{m.insights_overview_exc_ports_clears()}</p>
+						{/if}
+						{#if e.filesystem?.fs_type}
+							<p class="ins-muted" data-testid="insights-exception-{e.kind}-fs-type">
+								{m.insights_overview_exc_fs_type({ type: e.filesystem.fs_type })}
+							</p>
+						{/if}
 						<p class="ins-muted">
 							{m.insights_overview_exc_since()}
 							<RelativeTime seconds={e.since} timeZone="UTC" />
@@ -85,6 +134,17 @@
 								href={resolve(href as Route)}
 								data-testid="insights-exception-{e.kind}-fix">{fixText(e)}</a
 							>
+						{:else if guideHref(e)}
+							<!-- eslint-disable svelte/no-navigation-without-resolve -- external https URL to the user guide, from the fixed GUIDES table -->
+							<a
+								class="ins-link target"
+								href={guideHref(e)}
+								target="_blank"
+								rel="noopener noreferrer"
+								data-testid="insights-exception-{e.kind}-fix"
+								>{fixText(e)}<span class="sr-only"> {m.settings_about_new_tab()}</span></a
+							>
+							<!-- eslint-enable svelte/no-navigation-without-resolve -->
 						{/if}
 					</div>
 				</div>

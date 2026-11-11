@@ -72,7 +72,7 @@ class Workflows(unittest.TestCase):
             ("operator-wake.yml", "refuse"): {"contents": "read", "pull-requests": "write"},
             ("operator-wake.yml", "wake"): {"contents": "read", "pull-requests": "write", "id-token": "write", "actions": "read"},
             ("operator-wake.yml", "sweep"): {"contents": "read", "issues": "read", "pull-requests": "write", "actions": "write"},
-            ("operator-apply.yml", "apply"): {"contents": "read", "id-token": "write"},
+            ("operator-apply.yml", "apply"): {"contents": "read", "id-token": "write", "actions": "read"},
             ("operator-tripwire.yml", "trip"): {"contents": "read", "pull-requests": "write", "actions": "write"},
             ("operator-tripwire.yml", "sweep"): {"contents": "read", "issues": "read", "pull-requests": "write", "actions": "write"},
         }
