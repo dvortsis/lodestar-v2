@@ -263,7 +263,7 @@ this on the home side because the tunnel carries the load.
   mappings. To keep a backup on the array, run `lodestar backup` (it writes
   into the data folder), then copy that folder to a private share with
   `cp -a`. A backup holds `seal.key` and `auth.json`, so keep it private. See
-  [Chapter 3, §3.7](user/03-keep-lodestar-safe.md). `--to` only works for a
+  [Chapter 3, §3.7](user/03-keep-lodestar-safe.md#37-back-up-and-restore). `--to` only works for a
   path the container can see, which needs its own path mapping.
 
 ## 6. Data Directory
@@ -487,7 +487,7 @@ If `serve` can't bind the address, it fails at start. There is no automatic reve
 
 **I changed several settings and now nothing works.** This needs `lodestar settings` **(newer than v0.5.1)**.
 
-`reset --all` also removes the passwords, API keys and notification addresses saved in the app. Enter them again afterwards. To undo it, restore the backup from step 1 ([Chapter 3, §3.7](user/03-keep-lodestar-safe.md)).
+`reset --all` also removes the passwords, API keys and notification addresses saved in the app. Enter them again afterwards. To undo it, restore the backup from step 1 ([Chapter 3, §3.7](user/03-keep-lodestar-safe.md#37-back-up-and-restore)).
 
 1. Run `lodestar backup`. It works with the server running or stopped; on Docker, use the one-off container from §7.
    **Result:** a new `lodestar-backup-<time>` folder holds the store, `config.toml`, `seal.key` and `auth.json`.
