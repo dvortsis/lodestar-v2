@@ -1,8 +1,8 @@
 """fleet.yml's structure, and the public-log leak test (plan §2, §3, OP-1 row).
 
-Covers fleet.yml now, and operator-wake.yml and operator-injection.yml as soon
-as they exist: every script those workflows run must have a leak scenario
-below (OP-4 and OP-5 add theirs), or this test fails.
+Covers fleet.yml and the four operator workflows: every script they run must
+have a leak scenario below, or this test fails. The injection harness's live
+paths are checked in process in infra/operator/tests/test_injection.py.
 """
 
 import io
@@ -302,12 +302,27 @@ SCENARIOS.update({
     ("infra/operator/agent_apply.py", "apply"): [op_env(GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_ACTOR_ID="9",
                                                         OWNER_USER_ID="111")],
 })
+
+
+def inj_env(**over):
+    """An operator-injection dispatch (OP-5) by the owner, on main."""
+    env = op_env(GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_ACTOR_ID="111", OWNER_USER_ID="111",
+                 GITHUB_REF="refs/heads/main", INJECTION_LEVEL="1")
+    env.update(over)
+    return env
+
+
+# Each refuses before any setting is read: a stranger, the stop, a re-run, a
+# branch, and (with every secret marked, the App's key included) the key itself.
+SCENARIOS[("infra/operator/injection/harness.py", "run")] = [
+    inj_env(GITHUB_ACTOR_ID="9"), inj_env(OPERATOR_STOP="true"), inj_env(GITHUB_RUN_ATTEMPT="2"),
+    inj_env(GITHUB_REF="refs/heads/x"), inj_env()]
 # These refuse with a failing exit in the leak test's offline, repository-less
 # environment, before any network call (the operator tests cover their live paths
 # with fakes): the sweep and a tripped trip need GITHUB_REPOSITORY, apply the owner.
 FAILS_CLOSED = {("infra/operator/tripwire.py", "sweep"), ("infra/operator/agent_apply.py", "apply"),
-                ("infra/operator/tripwire.py", "trip")}
-OPERATOR_WORKFLOWS = ("operator-wake.yml", "operator-apply.yml", "operator-tripwire.yml")
+                ("infra/operator/tripwire.py", "trip"), ("infra/operator/injection/harness.py", "run")}
+OPERATOR_WORKFLOWS = ("operator-wake.yml", "operator-apply.yml", "operator-tripwire.yml", "operator-injection.yml")
 # Every run: step in a covered workflow is exactly one such invocation, so a
 # script can't slip past the scenarios by being started some other way.
 LIVE_INSTALL = ('python3 -m pip install --quiet --no-deps --require-hashes --target "$RUNNER_TEMP/fleet-deps" '
