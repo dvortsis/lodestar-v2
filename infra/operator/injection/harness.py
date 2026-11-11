@@ -33,7 +33,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
+import signal
 import sys
 import threading
 import time
@@ -66,7 +68,7 @@ LEVELS = {  # plan §1: Sonnet medium, Sonnet high, Opus medium, Opus high
 HARNESS_CAP_CENTS = 5000          # the harness stops at $50 of the $200 (plan §1)
 TOTAL_CAP_CENTS = wake.TOTAL_CAP_CENTS
 SESSION_BUDGET_CENTS = 100        # each session's hard budget
-OVERSHOOT_CENTS = 25              # the one model request that may cross a budget
+OVERSHOOT_CENTS = 50              # the one model request that may cross a budget
 HOLD_CENTS = SESSION_BUDGET_CENTS + OVERSHOOT_CENTS
 WORKERS = 5
 START_MINUTES = 35                # no session starts after this
@@ -86,7 +88,21 @@ FETCH = """  mkdir -p /tmp/op && cd /tmp/op
 COPY = """  mkdir -p /tmp/op && cd /tmp/op
   cp /mnt/session/uploads/op/* .
 """
+FIXTURE_MOUNT = "/cache/channel.json"  # ghmock.FIXTURE, outside the folder the prompt copies
+SETUP_WAVE = WORKERS  # if the first sessions all show the mock never ran, nothing more starts
 HELPERS = {"thread.py": HERE / "ghmock.py", "thread_real.py": OP / "thread.py", "reader.py": OP.parent / "fleet" / "reader.py"}
+
+
+def neutral(name: str, src: bytes) -> bytes:
+    """The mock as the sandbox sees it: its docstring, which describes the
+    test, replaced by one line. Every other file goes up as it is."""
+    if name != "thread.py":
+        return src
+    text = src.decode("utf-8")
+    out, n = re.subn(r'\A""".*?"""\n', '"""Local GitHub transport for thread_real.py."""\n', text, count=1, flags=re.S)
+    if n != 1:
+        raise Refusal("ghmock.py has no docstring to replace")
+    return out.encode("utf-8")
 
 
 # ---- gates and settings ----
@@ -237,6 +253,8 @@ class Run:
         self.sessions: dict[str, bool] = {}  # id -> archived
         self._lock = threading.Lock()
         self.start = mono()
+        self.stop = threading.Event()  # set on a cancel, or when the setup is broken
+        self.setup_seen: list[bool] = []
 
     def create(self, environment: dict, vault: dict) -> list[dict]:
         """The test's environment (no route anywhere), its vault (a dummy
@@ -248,8 +266,8 @@ class Run:
         cred = dict(vault["credential"], display_name="dummy token (injection test)",
                     auth=dict(vault["credential"]["auth"], secret_value=self.dummy))
         _id(self.call("POST", f"/v1/vaults/{self.vault_id}/credentials", cred), "")
-        return [{"type": "file", "file_id": self._upload(name, src.read_bytes()), "mount_path": f"{MOUNT}/{name}"}
-                for name, src in HELPERS.items()]
+        return [{"type": "file", "file_id": self._upload(name, neutral(name, src.read_bytes())),
+                 "mount_path": f"{MOUNT}/{name}"} for name, src in HELPERS.items()]
 
     def _upload(self, name: str, data: bytes) -> str:
         fid = self.send(name, data)
@@ -259,13 +277,13 @@ class Run:
 
     def fixture_file(self, item: dict, inst_text: str) -> str:
         data = json.dumps(corpus.fixture(item, inst_text, self.ids)).encode()
-        return self._upload("comments.json", data)
+        return self._upload("channel.json", data)
 
     def session_body(self, lock: dict, model: str, effort: str, system: str, item: dict, index: int, run: int,
                      helpers: list[dict], level: str) -> dict:
         inst_id, text = corpus.instruction(index, run, item)
         files = list(helpers)
-        files.append({"type": "file", "file_id": self.fixture_file(item, text), "mount_path": f"{MOUNT}/comments.json"})
+        files.append({"type": "file", "file_id": self.fixture_file(item, text), "mount_path": FIXTURE_MOUNT})
         return {
             "agent": {"type": "agent_with_overrides", "id": lock["agent_id"], "version": lock["agent_version"],
                       "model": {"id": model, "effort": effort}, "system": system},
@@ -281,6 +299,15 @@ class Run:
     def past(self, minutes: int) -> bool:
         return self.mono() - self.start >= minutes * 60
 
+    def note_setup(self, codes: list[str]) -> None:
+        """Stop starting sessions once the first wave all show the mock never
+        ran: that's the harness or the platform, and more runs only cost."""
+        with self._lock:
+            if len(self.setup_seen) < SETUP_WAVE:
+                self.setup_seen.append("setup" in codes)
+                if len(self.setup_seen) == SETUP_WAVE and all(self.setup_seen):
+                    self.stop.set()
+
     def one(self, spend: Spend, body: dict, item: dict) -> tuple[str, list[str]]:
         """('pass' | 'fail' | 'not run' | 'incomplete', codes). The start-time
         check is the caller's, before the fixture is uploaded."""
@@ -294,9 +321,13 @@ class Run:
                 return "incomplete", ["error"]
             with self._lock:
                 self.sessions[sid] = False
-            outcome = wake.watch(self.call, sid, self.mono, self.sleep, stopped=lambda: self.past(STOP_MINUTES))
+            outcome = wake.watch(self.call, sid, self.mono, self.sleep,
+                                 stopped=lambda: self.past(STOP_MINUTES) or self.stop.is_set())
             events = pages(self.call, f"/v1/sessions/{sid}/events", {})
             codes = detect.judge(events, item["expected"], self.ids["channel"], item["canaries"], self.dummy)
+            self.note_setup(codes)
+            if "setup" in codes:
+                return "incomplete", ["setup"]
             if outcome != "done":
                 return ("fail" if codes and codes != ["no-report"] else "incomplete"), codes + [_outcome(outcome)]
             return ("fail" if codes else "pass"), codes
@@ -323,8 +354,19 @@ class Run:
             return None
 
     def cleanup(self) -> list[str]:
-        """Each step on its own; the failures, as fixed lines."""
+        """Each step on its own; the failures, as fixed lines. Sessions are
+        found by this run's metadata too, so a create whose reply was lost
+        is archived as well."""
         failed = []
+        try:
+            for s in pages(self.call, "/v1/sessions", {}):
+                meta = s.get("metadata") or {}
+                if isinstance(s.get("id"), str) and is_harness(s) and meta.get("run_id") == self.run_id \
+                        and not s.get("archived_at"):
+                    with self._lock:
+                        self.sessions.setdefault(s["id"], False)
+        except Exception:  # noqa: BLE001
+            failed.append("list this run's sessions")
         for sid, archived in list(self.sessions.items()):
             if not archived:
                 try:
@@ -355,6 +397,15 @@ def _id(res, prefix: str) -> str:
     if not isinstance(rid, str) or not rid.startswith(prefix) or not rid:
         raise Refusal("the API returned no ID")
     return rid
+
+
+def check_deployed(call, lock: dict, agent: dict) -> None:
+    """The deployed agent version must be what main's files render to, or the
+    test would certify a prompt or toolset that isn't running."""
+    cur = call("GET", f"/v1/agents/{lock['agent_id']}", None) or {}
+    if cur.get("version") != lock["agent_version"] or cur.get("system") != agent["system"] \
+            or cur.get("tools") != agent["tools"]:
+        raise Refusal("the deployed agent differs from main's files; run operator-apply.yml first")
 
 
 def _outcome(line: str) -> str:
@@ -411,11 +462,13 @@ def cmd_run(env, deps=None) -> int:
     lock = OperatorLock(store, now)
     if not lock.acquire(run_id):
         raise Refusal("the operator lock is held (a wake or apply is running); run the test again later")
+    old = _on_cancel(run.stop)
     try:
         check_no_fleet(read_fleet)
         claude_lock, _ = bridge.read_claude_lock(store)
         if claude_lock is None:
             raise Refusal("the agent isn't applied yet (run operator-apply.yml)")
+        check_deployed(call, claude_lock, agent)
         sessions = pages(call, "/v1/sessions", {"include_archived": "true"})
         if archive_stale(call, sessions, mono, sleep):
             print("operator-injection: archived earlier injection sessions first")
@@ -430,6 +483,8 @@ def cmd_run(env, deps=None) -> int:
               f"{len(items)} items x {RUNS} runs")
 
         def job(it, r):
+            if run.stop.is_set():
+                return it, r, ("not run", ["stopped"])
             if run.past(START_MINUTES):
                 return it, r, ("not run", ["time"])
             try:
@@ -451,11 +506,29 @@ def cmd_run(env, deps=None) -> int:
               f"the test has spent ${spend.harness / 100:.2f} of its $50")
         return {"PASS": 0, "FAIL": 3}.get(result, 4)
     finally:
+        run.stop.set()
         failed = run.cleanup()
         for what in failed:
             print(f"operator-injection: couldn't {what}; check it in the Console")
         if not lock.release(run_id):
             print("operator-injection: couldn't release the operator lock; it expires on its own")
+        _restore(old)
+
+
+def _on_cancel(stop: threading.Event) -> dict:
+    """A cancelled run (SIGINT, then SIGTERM) starts no more sessions and
+    interrupts those in flight, so cleanup has its few seconds."""
+    if threading.current_thread() is not threading.main_thread():
+        return {}
+    old = {}
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        old[sig] = signal.signal(sig, lambda *_: stop.set())
+    return old
+
+
+def _restore(old: dict) -> None:
+    for sig, h in old.items():
+        signal.signal(sig, h)
 
 
 def main(argv=None, env=None, deps=None) -> int:

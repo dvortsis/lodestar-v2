@@ -9,16 +9,18 @@ The harness mounts this file as `thread.py`, beside the real helper
 
 Both go through thread_real.main, so the real reader filter and the real post
 check run. Only the transport differs: GitHub is local. The thread comes from
-`comments.json`. Each post is recorded in `posts.json`, and later reads show
-it as the bot's comment. Nothing here opens a connection.
+the fixture (mounted outside the helper's folder). Each post is recorded, and
+later reads show it as the bot's comment. Nothing here opens a connection.
 
-Every post attempt, every accepted post and every other call prints a
-`ghmock-<kind> <base64 JSON>` line. The harness reads those lines from the
-session's tool results.
+Every run, post attempt, accepted post and other call prints a
+`ghmock-<kind> <base64 JSON>` line, which the harness reads from the
+session's tool results. The harness uploads this file with this docstring
+replaced by a one-line one (harness.neutral).
 """
 
 from __future__ import annotations
 
+import argparse
 import base64
 import json
 import sys
@@ -30,17 +32,26 @@ sys.path.insert(0, str(HERE))
 import thread_real  # noqa: E402
 
 STAMP = "2026-11-11T12:00:00Z"
+FIXTURE = "/mnt/session/uploads/cache/channel.json"
+POSTS = HERE / ".posts.json"
 
 
 def _mark(kind: str, data: dict) -> None:
     print(f"ghmock-{kind} " + base64.b64encode(json.dumps(data).encode()).decode(), flush=True)
 
 
-def _load(name: str, default):
+def _fixture() -> dict:
+    for p in (HERE / "channel.json", Path(FIXTURE)):  # beside it in tests, mounted in a session
+        if p.exists():
+            return json.loads(p.read_text(encoding="utf-8"))
+    return {}
+
+
+def _posts() -> list:
     try:
-        return json.loads((HERE / name).read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return default
+        return json.loads(POSTS.read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError):
+        return []
 
 
 def _issue(path: str) -> tuple[str, str] | None:
@@ -53,9 +64,9 @@ def _issue(path: str) -> tuple[str, str] | None:
 
 
 def call(method: str, path: str, body=None):
-    fx = _load("comments.json", {})
+    fx = _fixture()
     channel, bot = str(fx.get("channel_pr")), int(fx.get("bot_id", 0))
-    posts = _load("posts.json", [])
+    posts = _posts()
     hit = _issue(path)
     if method == "GET" and hit and hit[1].startswith("comments?"):
         if hit[0] != channel or not hit[1].endswith("&page=1"):
@@ -67,30 +78,37 @@ def call(method: str, path: str, body=None):
         comment = {"id": 990000 + len(posts), "user": {"id": bot}, "created_at": STAMP, "updated_at": STAMP,
                    "body": text}
         if hit[0] == channel:
-            (HERE / "posts.json").write_text(json.dumps(posts + [comment]), encoding="utf-8")
+            POSTS.write_text(json.dumps(posts + [comment]), encoding="utf-8")
         return {"id": comment["id"]}
     _mark("other", {"method": method, "path": path.split("?")[0]})
     raise SystemExit(f"thread: GitHub {method} failed")
 
 
-def _opt(argv: list[str], name: str) -> str | None:
-    for i, tok in enumerate(argv):
-        if tok == name and i + 1 < len(argv):
-            return argv[i + 1]
-        if tok.startswith(name + "="):
-            return tok.split("=", 1)[1]
-    return None
+def _attempt(argv: list[str]) -> dict | None:
+    """What a post would send, parsed as thread_real's argparse parses it."""
+    p = argparse.ArgumentParser(add_help=False)
+    p.add_argument("cmd")
+    p.add_argument("--pr", type=int)
+    p.add_argument("--file")
+    try:
+        a, _ = p.parse_known_args(argv)
+    except SystemExit:
+        return None
+    if a.cmd != "post":
+        return None
+    out = {"pr": a.pr, "body": None}
+    try:
+        out["body"] = Path(a.file).read_text(encoding="utf-8", errors="replace") if a.file else None
+    except OSError:
+        pass
+    return out
 
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
-    if argv[:1] == ["post"]:
-        attempt = {"pr": _opt(argv, "--pr"), "body": None}
-        f = _opt(argv, "--file")
-        try:
-            attempt["body"] = Path(f).read_text(encoding="utf-8", errors="replace") if f else None
-        except OSError:
-            pass
+    _mark("run", {"cmd": argv[0] if argv else None})
+    attempt = _attempt(argv)
+    if attempt is not None:
         _mark("attempt", attempt)
     return thread_real.main(argv, call=call)
 

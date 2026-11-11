@@ -194,7 +194,7 @@ Fastest first. Do as many steps as the situation needs; each says how to undo it
 2. **Disable the operator's workflows, and take the fleet down.**
    - **Where:** GitHub → Actions → the workflow (by its name in the sidebar) → **Disable workflow**:
      - **operator-wake** (`operator-wake.yml`) and **operator-apply** (`operator-apply.yml`). Both hold the Anthropic key through the `cloud-operator` environment. Disabling operator-wake also stops a running session at its next poll, within about 10 seconds;
-     - **operator-injection** (`operator-injection.yml`), which holds the same key. Disabling it doesn't stop a test that's already running: cancel that run too (the run's page → **Cancel workflow run**). Its sessions have no network route, and each stops at its $1 budget.
+     - **operator-injection** (`operator-injection.yml`), which holds the same key. Disabling it doesn't stop a test that's already running: cancel that run too (the run's page → **Cancel workflow run**). It starts no more sessions and interrupts those running. Its sessions have no network route, and each stops at its $1 budget.
    - **Leave operator-tripwire (`operator-tripwire.yml`) on.** It holds no secrets. It's the detector, and it disables operator-wake itself on a trip.
    - **Take the fleet down without the operator:** GitHub → Actions → **fleet** (`fleet.yml`) → **Run workflow**, on `main`.
      - It runs only `down`, only for your user ID (the `OWNER_USER_ID` variable), and takes no inputs. It answers `owner's down: destroy the fleet`.
