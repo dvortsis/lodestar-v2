@@ -253,7 +253,7 @@ fn registered_sources_and_consent_classes_match_section_2() {
     let prowlarr = read("crates/sources-plugins/src/prowlarr.rs");
     let endpoints = item(&prowlarr, "    pub fn endpoints(&self)");
     let end = endpoints
-        .find("\n    }\n")
+        .find("\n    }")
         .expect("Prowlarr::endpoints' body; update tests/legal_facts.rs");
     let endpoints = &endpoints[..end];
     assert!(
