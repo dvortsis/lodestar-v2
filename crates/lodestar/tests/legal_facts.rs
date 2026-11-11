@@ -413,11 +413,160 @@ fn data_folder_exceptions_match_section_5() {
         "`%SystemRoot%\\Temp\\lodestar-service.log`",
         "windows/temp_log.rs NAME",
     );
-    // No code writes to the Windows Event Log, so the notice doesn't name it.
-    forbid(
+    // The count of the list above, now five with the Event Log.
+    require(
         &n,
         s5,
-        "Event Log",
-        "no code writes to the Windows Event Log",
+        "in your data folder, with five exceptions:",
+        "section 5's list",
     );
+}
+
+/// The source files under `dir` (recursively) with the extension `ext`, as
+/// paths relative to the repository root with `/` separators.
+fn files(dir: &str, ext: &str) -> Vec<String> {
+    fn walk(at: &Path, ext: &str, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(at) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, ext, out);
+            } else if p.extension().is_some_and(|x| x == ext) {
+                out.push(p);
+            }
+        }
+    }
+    let base = root();
+    let mut out = Vec::new();
+    walk(&base.join(dir), ext, &mut out);
+    let mut rel: Vec<String> = out
+        .iter()
+        .map(|p| {
+            let r = p.strip_prefix(&base).unwrap_or(p);
+            r.to_string_lossy().replace('\\', "/")
+        })
+        .collect();
+    rel.sort();
+    rel
+}
+
+/// Whether `src` calls or defines a function named exactly `name`: `name(`
+/// not preceded by an identifier character (so `event_log_text(` and
+/// `my_event_log(` don't count).
+fn calls(src: &str, name: &str) -> bool {
+    let pat = format!("{name}(");
+    src.match_indices(&pat).any(|(at, _)| {
+        !src[..at]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_')
+    })
+}
+
+/// Section 5's fifth exception (owner §2.55): the notice names the Windows
+/// Application event log, and only the modules it covers write there: the
+/// update helper (an update that couldn't be installed or was undone, also
+/// from its rollback) and the service (a refused start). A new writer fails
+/// here, naming section 5, until a person updates the notice.
+#[test]
+fn event_log_writers_match_section_5() {
+    let n = read(NOTICE);
+    let s5 = "5 (Your data)";
+    require(
+        &n,
+        s5,
+        "to the Windows Application event log, which every user of the computer can read",
+        "the update helper and the service write there",
+    );
+    require(
+        &n,
+        s5,
+        "(version numbers, the step that stopped and folder paths only)",
+        "what the helper and the service write there",
+    );
+
+    // What writes: `eventcreate`, the Win32 calls, or PowerShell's cmdlets,
+    // in every crate's source and the Windows packaging scripts.
+    const WRITERS: [&str; 6] = [
+        "eventcreate",
+        "ReportEvent",
+        "RegisterEventSource",
+        "EvtReport",
+        "Write-EventLog",
+        "New-EventLog",
+    ];
+    let mut sources = files("crates", "rs");
+    sources.retain(|f| f.contains("/src/"));
+    sources.extend(files("packaging", "ps1"));
+    let writing: Vec<&String> = sources
+        .iter()
+        .filter(|f| {
+            let src = read(f);
+            WRITERS.iter().any(|w| src.contains(w))
+        })
+        .collect();
+    assert_eq!(
+        writing,
+        [
+            "crates/lodestar/src/update/windows/helper.rs",
+            "crates/lodestar/src/windows/service.rs",
+        ],
+        "these files write to the Windows Event Log ({WRITERS:?}). Legal Notice section {s5} \
+         names only the update helper and the service's start refusal there: update that \
+         section (a person decides whether the notice version rises, owner-decisions §2.33), \
+         then tests/legal_facts.rs and docs/legal/README.md"
+    );
+    // No Event Log crate either.
+    for manifest in files("crates", "toml") {
+        let toml = read(&manifest);
+        for dep in ["eventlog", "winlog", "win_etw", "tracing-etw"] {
+            assert!(
+                !toml.contains(dep),
+                "{manifest} names {dep}: an Event Log writer Legal Notice section {s5} doesn't \
+                 cover"
+            );
+        }
+    }
+
+    // Who calls the two writers (`System::event_log` in the helper, the
+    // service's own `event_log`).
+    let callers: Vec<&String> = sources
+        .iter()
+        .filter(|f| f.starts_with("crates/lodestar/src/") && calls(&read(f), "event_log"))
+        .collect();
+    assert_eq!(
+        callers,
+        [
+            "crates/lodestar/src/update/windows/helper.rs",
+            "crates/lodestar/src/update/windows/rollback.rs",
+            "crates/lodestar/src/windows/service.rs",
+        ],
+        "these files write to the Windows Event Log through event_log(). Legal Notice section \
+         {s5} names only an update that couldn't be installed or was undone, and the service's \
+         refused start: update that section, then tests/legal_facts.rs and docs/legal/README.md"
+    );
+
+    // The service's writes are the refusals alone, with the folder and
+    // the fix (`event_log_text`, unit-tested in windows/service.rs).
+    let service = read("crates/lodestar/src/windows/service.rs");
+    assert!(
+        service.contains("pub fn event_log_text(refusal: Refusal, dir: &Path) -> String"),
+        "the service's Event Log message builder changed; check it against section {s5}"
+    );
+    // The sources the MSI registers are the ones written.
+    assert!(service.contains("pub const EVENT_SOURCE: &str = \"Lodestar\";"));
+    let helper = read("crates/lodestar/src/update/windows/helper.rs");
+    assert!(helper.contains("\"Lodestar update helper\","));
+    let wxs = read("packaging/windows/main.wxs");
+    for source in ["Lodestar", "Lodestar update helper"] {
+        assert!(
+            wxs.contains(&format!(
+                "Key=\"SYSTEM\\CurrentControlSet\\Services\\EventLog\\Application\\{source}\" \
+                 ForceDeleteOnUninstall=\"yes\""
+            )),
+            "main.wxs must register the {source:?} Event Log source and remove it on uninstall"
+        );
+    }
 }
