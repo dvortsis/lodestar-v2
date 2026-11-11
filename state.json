@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T10:55:51Z",
+  "updated_at": "2026-11-11T10:57:25Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7495,7 +7495,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T10:55:51Z",
+    "updated": "2026-11-11T10:57:25Z",
     "items": [
       {
         "slot": 1,
@@ -7547,11 +7547,11 @@
       },
       {
         "slot": 7,
-        "slice": "X-updates-raw-codes",
+        "slice": "PK-unraid",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCVGtYWSJVrREyne22: Updates screen raw codes to plain text (Sonnet), same session after #666",
-        "since": "2026-11-11T07:39:51Z"
+        "doing": "session_01MMjhnCVGtYWSJVrREyne22: Unraid templates drop hot/cold fields (Sonnet), same session after #674 merged ae3848bf",
+        "since": "2026-11-11T10:57:25Z"
       },
       {
         "slot": 8,
