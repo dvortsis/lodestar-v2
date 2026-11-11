@@ -185,7 +185,13 @@ describe('Install qBittorrent for me', () => {
 		['awaiting_pin', 409, /doesn't have a checked qBittorrent download/],
 		['not_wired', 409, /isn't available yet/],
 		['confirmation_mismatch', 409, /no longer matches/],
-		['something_new', 500, /Something went wrong/]
+		['something_new', 500, /Something went wrong/],
+		['busy', 409, /Another install is already running/],
+		['unsupported_platform', 409, /can't be installed automatically/],
+		['no_build', 409, /no qBittorrent download for this system/],
+		['already_current', 409, /already installed and up to date/],
+		['companions_unavailable', 503, /turned off for this Lodestar/],
+		['no_launch_profile', 409, /can't run it from Lodestar/]
 	])('says a refused install (%s) in plain words, never the code', async (code, status, words) => {
 		post = () => refuse(status, code);
 		await open();
@@ -194,6 +200,9 @@ describe('Install qBittorrent for me', () => {
 		const banner = await screen.findByText(words);
 		expect(banner.textContent).not.toContain(code);
 		expect(screen.getByText("qBittorrent wasn't installed")).toBeTruthy();
+		// Only a refusal a fresh offer could change is worth retrying.
+		const retry = ['busy', 'confirmation_mismatch', 'something_new'].includes(code);
+		expect(!!screen.queryByRole('button', { name: 'Try again' })).toBe(retry);
 	});
 
 	it('says a refused offer in plain words', async () => {
@@ -252,15 +261,43 @@ describe('during and after the install', () => {
 		await waitFor(() => expect(document.activeElement?.contains(done)).toBe(true));
 	});
 
-	it('keeps the step in place while installing', async () => {
+	it('keeps the step in place while installing, and says why', async () => {
 		post = () => new Promise<Response>(() => {});
 		await open();
 		await fireEvent.click(await askButton());
 		await fireEvent.click(await screen.findByRole('button', { name: 'Confirm and install' }));
 		await screen.findByRole('button', { name: 'Installing qBittorrent…' });
 		await fireEvent.click(screen.getByRole('button', { name: /Continue|Save and continue/ }));
+		await screen.findByText(/still installing/);
 		expect(screen.getByRole('heading', { level: 2, name: 'Download client' })).toBeTruthy();
 		expect(progress().step).toBe('download');
+	});
+
+	it('sends one install however fast Confirm is pressed', async () => {
+		post = () => new Promise<Response>(() => {});
+		await open();
+		await fireEvent.click(await askButton());
+		const confirm = await screen.findByRole('button', { name: 'Confirm and install' });
+		void fireEvent.click(confirm);
+		void fireEvent.click(confirm);
+		await screen.findByRole('button', { name: 'Installing qBittorrent…' });
+		expect(installs()).toHaveLength(1);
+	});
+
+	it('keeps focus on the step after Not now and while installing', async () => {
+		post = () => new Promise<Response>(() => {});
+		await open();
+		await fireEvent.click(await askButton());
+		await screen.findByTestId('wizard-cmp-offer');
+		await fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+		const lead = await screen.findByText(/Lodestar can download qBittorrent/);
+		await waitFor(() => expect(document.activeElement).toBe(lead));
+		await fireEvent.click(await askButton());
+		await fireEvent.click(await screen.findByRole('button', { name: 'Confirm and install' }));
+		await screen.findByRole('button', { name: 'Installing qBittorrent…' });
+		await waitFor(() =>
+			expect(document.activeElement?.textContent).toContain('This downloads, checks and starts it')
+		);
 	});
 
 	it('counts a lost reply as done when the server finished the install', async () => {

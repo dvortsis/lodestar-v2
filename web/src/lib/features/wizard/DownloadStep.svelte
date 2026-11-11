@@ -19,10 +19,18 @@
 	// Bumped after an install: the server added the client, so the field is read again.
 	let generation = $state(0);
 	let install = $state<InstallQbittorrent>();
+	// Continue was pressed mid-install: say why nothing happened.
+	let waiting = $state(false);
 	let unregister: (() => void) | undefined;
 
 	/** True when the shell may move on. False while the setting isn't loaded: nothing was shown. */
-	export const save = async () => (install?.busy() ? false : step ? step.save() : false);
+	export const save = async () => {
+		if (install?.busy()) {
+			waiting = true;
+			return false;
+		}
+		return step ? step.save() : false;
+	};
 
 	onDestroy(() => unregister?.());
 	// The cards are Settings' own widget, imported the way Settings loads it (a dynamic import of
@@ -54,6 +62,9 @@
 		/>
 	{/key}
 	<InstallQbittorrent bind:this={install} oninstalled={() => generation++} />
+	{#if waiting && install?.busy()}
+		<Banner kind="warning">{m.wizard_cmp_wait()}</Banner>
+	{/if}
 {:else}
 	<p class="text-body">{m.wizard_download_lead()}</p>
 	<p class="text-muted-text" aria-busy="true">{m.wizard_loading()}</p>

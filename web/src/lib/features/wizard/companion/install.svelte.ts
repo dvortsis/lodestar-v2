@@ -30,7 +30,8 @@ export const KNOWN_CODES = [
 	'confirmation_mismatch',
 	'not_wired',
 	'busy',
-	'companions_unavailable'
+	'companions_unavailable',
+	'no_launch_profile'
 ] as const;
 export type KnownCode = (typeof KNOWN_CODES)[number];
 export type Failure = KnownCode | 'other';

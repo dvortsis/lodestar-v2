@@ -43,6 +43,7 @@
 		not_wired: () => m.wizard_cmp_err_not_wired(),
 		busy: () => m.wizard_cmp_err_busy(),
 		companions_unavailable: () => m.wizard_cmp_err_off(),
+		no_launch_profile: () => m.wizard_cmp_err_profile(),
 		other: () => m.wizard_cmp_err_other()
 	};
 	// Only a refusal that a fresh offer could change is worth retrying.
@@ -64,7 +65,7 @@
 		<h3 id="wizard-cmp-title" class="text-body-lg font-semibold">{m.wizard_cmp_title()}</h3>
 
 		{#if install.phase === 'ready' || install.phase === 'asking'}
-			<p class="text-body">{m.wizard_cmp_lead()}</p>
+			<p class="text-body" tabindex="-1" data-cmp-focus>{m.wizard_cmp_lead()}</p>
 			<div>
 				<Button onclick={() => void install.ask()} loading={install.phase === 'asking'}
 					>{m.wizard_cmp_install()}</Button
