@@ -752,6 +752,32 @@ SF_DIR = "https://downloads.sourceforge.net/project/qbittorrent/qbittorrent-win3
 SF = SF_DIR + "qbittorrent_5.0.3_x64_setup.exe"
 MIRROR = SF.replace("downloads.sourceforge.net", "netix.dl.sourceforge.net")
 INSTALLER = b"MZ an installer" * 200
+FEED = "https://sourceforge.net/projects/qbittorrent/rss?path=/qbittorrent-win32/qbittorrent-5.0.3"
+TAG_REF = "https://api.github.com/repos/qbittorrent/qBittorrent/git/ref/tags/release-5.0.3"
+TAG_SHA = "a" * 40
+TAG_OBJ = f"https://api.github.com/repos/qbittorrent/qBittorrent/git/tags/{TAG_SHA}"
+FEED_PATH = "/qbittorrent-win32/qbittorrent-5.0.3/qbittorrent_5.0.3_x64_setup.exe"
+
+
+def feed(items):
+    """SourceForge's folder feed, in its documented RSS and Media RSS shape."""
+    body = "".join(
+        f"<item><title><![CDATA[{path}]]></title>"
+        f"<link>https://sourceforge.net/projects/qbittorrent/files{path}/download</link>"
+        f'<media:content url="https://sourceforge.net/projects/qbittorrent/files{path}/download" '
+        f'type="application/x-msdownload; charset=binary" filesize="{size}">'
+        f'<media:hash algo="md5">{md5}</media:hash></media:content></item>'
+        for path, size, md5 in items
+    )
+    return (
+        '<?xml version="1.0" encoding="utf-8"?><rss xmlns:content="http://purl.org/rss/1.0/modules/content/" '
+        'xmlns:media="http://video.search.yahoo.com/mrss/" version="2.0"><channel><title>qBittorrent</title>'
+        f"{body}</channel></rss>"
+    ).encode()
+
+
+def md5(b):
+    return hashlib.md5(b, usedforsecurity=False).hexdigest()
 
 
 @unittest.skipUnless(GPG, "gpg is not installed")
@@ -776,13 +802,17 @@ class InstallerPins(Case):
         base = upstream.RECIPES["qbittorrent"]
         return dataclasses.replace(base, signature={**base.signature, "windows-x86_64": policy})
 
-    def routes(self, sig=None, body=INSTALLER):
+    def routes(self, sig=None, body=INSTALLER, listed=None, tag_date="2026-01-01T00:00:00Z", tag_type="tag"):
         sig = self.gpg.sign(self.a, INSTALLER) if sig is None else sig
+        listed = [(FEED_PATH, len(INSTALLER), md5(INSTALLER))] if listed is None else listed
         return {
             SF: redirect(MIRROR),
             MIRROR: ok(body),
             SF + ".asc": redirect(MIRROR + ".asc"),
             MIRROR + ".asc": ok(sig),
+            FEED: ok(feed(listed)),
+            TAG_REF: ok(json.dumps({"object": {"type": tag_type, "sha": TAG_SHA}}).encode()),
+            TAG_OBJ: ok(json.dumps({"tagger": {"date": tag_date}}).encode()),
         }
 
     def pin(self, fake, *extra, recipe=None):
@@ -826,6 +856,52 @@ class InstallerPins(Case):
         # The fetch hosts are untouched: SourceForge is never one.
         self.assertNotIn("downloads.sourceforge.net", self.entry("qbittorrent")["hosts"])
 
+    def test_the_bytes_are_tied_to_the_version(self):
+        shutil.copy(self.gpg.export(self.a), self.keys / f"{self.a}.asc")
+        status, err = self.pin(Fake(self.routes()))
+        self.assertEqual(status, 0, err)
+        report = self.report.read_text()
+        self.assertIn(f"MD5 `{md5(INSTALLER)}`", report)
+        self.assertIn("dated 2026-01-01T00:00:00Z", report)
+        self.assertIn("answered at `https://netix.dl.sourceforge.net/project/qbittorrent/", report)
+        self.out.unlink()
+        self.report.unlink()
+        other = b"MZ another genuinely signed file" * 100
+        cases = {
+            # A mirror serving another signed file: the feed's MD5 and size don't match.
+            "other bytes": self.routes(sig=self.gpg.sign(self.a, other), body=other),
+            "wrong size": self.routes(listed=[(FEED_PATH, len(INSTALLER) + 1, md5(INSTALLER))]),
+            "no item": self.routes(listed=[]),
+            "two items": self.routes(listed=[(FEED_PATH, len(INSTALLER), md5(INSTALLER))] * 2),
+            "another path only": self.routes(
+                listed=[(FEED_PATH.replace("_x64_", "_lt12_x64_"), len(INSTALLER), md5(INSTALLER))]
+            ),
+            # Signed before the release was tagged: an older file.
+            "older signature": self.routes(tag_date="2099-01-01T00:00:00Z"),
+            "lightweight tag": self.routes(tag_type="commit"),
+            "no tag date": self.routes(tag_date="soon"),
+        }
+        for name, routes in cases.items():
+            with self.subTest(name):
+                self.refuse(Fake(routes), "installer_mismatch")
+        # The download ending at another file's path.
+        routes = self.routes()
+        lt12 = MIRROR.replace("_x64_", "_lt12_x64_")
+        routes[SF] = redirect(lt12)
+        routes[lt12] = ok(INSTALLER)
+        self.refuse(Fake(routes), "installer_mismatch")
+        # The feed only from SourceForge's origin, never a mirror or elsewhere.
+        for to in ("https://netix.dl.sourceforge.net/rss", "https://evil.example/rss"):
+            with self.subTest(to):
+                routes = self.routes()
+                routes[FEED] = redirect(to)
+                routes[to] = ok(feed([(FEED_PATH, len(INSTALLER), md5(INSTALLER))]))
+                self.refuse(Fake(routes), "host_not_allowed")
+        # A document type in the feed (entity expansion) is refused.
+        routes = self.routes()
+        routes[FEED] = ok(b'<?xml version="1.0"?><!DOCTYPE r [<!ENTITY a "aaaa">]><rss/>')
+        self.refuse(Fake(routes), "installer_mismatch")
+
     def test_refusals(self):
         shutil.copy(self.gpg.export(self.a), self.keys / f"{self.a}.asc")
         no_sig = self.routes()
@@ -853,7 +929,7 @@ class InstallerPins(Case):
         routes[SF + ".asc"] = redirect("https://evil.example/sig.asc")
         self.refuse(Fake(routes), "host_not_allowed")
 
-    def test_the_key_is_fetched_from_two_sources_when_not_committed(self):
+    def test_the_key_is_fetched_by_fingerprint_when_not_committed(self):
         sources = (("https://keys.example/k", ("keys.example",)), ("https://github.com/u.gpg", ("github.com",)))
         policy = upstream.OpenPgp(".asc", (self.a,), key_sources=sources)
         routes = self.routes()
@@ -870,9 +946,9 @@ class InstallerPins(Case):
         self.report.unlink()
         routes["https://github.com/u.gpg"] = ok(self.gpg.run("--armor", "--export", self.b))
         self.refuse(Fake(routes), "unknown_key", recipe=self.recipe(policy))
-        # One source is not a cross-check.
-        one = upstream.OpenPgp(".asc", (self.a,), key_sources=sources[:1])
-        self.refuse(Fake(routes), "key_not_pinned", recipe=self.recipe(one))
+        # Nowhere to fetch it from, and no committed key: refused.
+        none = upstream.OpenPgp(".asc", (self.a,))
+        self.refuse(Fake(routes), "key_not_pinned", recipe=self.recipe(none))
 
     def test_mirror_hosts(self):
         hosts = pin.INSTALLER_HOSTS

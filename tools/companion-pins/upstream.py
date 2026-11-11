@@ -23,8 +23,10 @@ class OpenPgp:
     """A detached OpenPGP signature at `<artifact URL><suffix>`, by one of `keys`.
 
     `key_sources` are where a pin run may fetch the one pinned key while
-    `keys/<FINGERPRINT>.asc` isn't committed yet: (URL, hosts) pairs, at
-    least two, each of which must serve that primary key."""
+    `keys/<FINGERPRINT>.asc` isn't committed yet: (URL, hosts) pairs, each
+    of which must serve that primary key, checked by fingerprint after
+    import. They're for availability: the fingerprint here is the trust
+    anchor (docs/decisions/2026-11-12-X-cmp13-installer-pins.md)."""
 
     suffix: str
     keys: tuple[str, ...]
@@ -53,6 +55,12 @@ class Recipe:
     # host, read only at pin time) and its per-version folder in it.
     installer_release: str | None = None
     installer_dir: str | None = None
+    # What ties the signed bytes to the version: the host's own folder feed
+    # (size and MD5 per path) and the GitHub repository and annotated tag
+    # whose date the signature mustn't predate.
+    installer_feed: str | None = None
+    installer_tag_repo: str | None = None
+    installer_tag: str | None = None
 
 
 USERDOCS = Unsigned(
@@ -91,6 +99,9 @@ RECIPES: dict[str, Recipe] = {
         signature={"linux-x86_64": USERDOCS, "linux-aarch64": USERDOCS, "windows-x86_64": QBITTORRENT_INSTALLER},
         installer_release="https://downloads.sourceforge.net/project/qbittorrent/qbittorrent-win32/",
         installer_dir="qbittorrent-{version}",
+        installer_feed="https://sourceforge.net/projects/qbittorrent/rss?path=/qbittorrent-win32/qbittorrent-{version}",
+        installer_tag_repo="qbittorrent/qBittorrent",
+        installer_tag="release-{version}",
         image_tag="{version}",
         tag_pattern=r"release-{version}_v[0-9]+(\.[0-9]+){1,3}",
     ),

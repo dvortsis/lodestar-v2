@@ -15,6 +15,7 @@ Standard library only. Usage:
 """
 
 import argparse
+import datetime
 import hashlib
 import json
 import os
@@ -164,19 +165,30 @@ class PinTimeHosts:
     mirrors, `<mirror>.dl.sourceforge.net`). What's read there is trusted
     only through upstream's OpenPGP signature."""
 
-    def __init__(self, names, mirror_suffix: str):
+    def __init__(self, names, mirror_suffix: str | None = None):
         self.names = frozenset(names)
         self.mirror_suffix = mirror_suffix
 
     def allows(self, host: str) -> bool:
+        if host in self.names:
+            return True
+        if self.mirror_suffix is None:
+            return False
         label = host.removesuffix(self.mirror_suffix)
-        return host in self.names or (
+        return (
             host.endswith(self.mirror_suffix)
             and re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) is not None
         )
 
 
 INSTALLER_HOSTS = PinTimeHosts(("downloads.sourceforge.net", "sourceforge.net"), ".dl.sourceforge.net")
+# SourceForge's own folder feed: its origin only, never a mirror.
+FEED_HOSTS = PinTimeHosts(("sourceforge.net",))
+# The release tag's date: GitHub's API, read at pin time only, never by Lodestar.
+TAG_HOSTS = PinTimeHosts(("api.github.com",))
+TAG_SLACK = 2 * 24 * 3600
+MAX_FEED = 4 * 1024 * 1024
+MRSS = "{http://video.search.yahoo.com/mrss/}"
 
 
 def check_url(url: str, hosts) -> None:
@@ -194,7 +206,7 @@ def check_url(url: str, hosts) -> None:
         raise Refused("host_not_allowed", f"{u.scheme}://{host} is not on this fetch's allowlist")
 
 
-def fetch(t: Transport, url: str, hosts, cap: int, sink, headers=None, missing_ok=False, seen=None) -> bool:
+def fetch(t: Transport, url: str, hosts, cap: int, sink, headers=None, missing_ok=False, seen=None, final=None) -> bool:
     """GETs `url`, following at most MAX_HOPS redirects, each on `hosts`, into
     `sink`, refusing a body over `cap`. A 404 on the first URL is False when
     `missing_ok`. Headers go to the first URL's host only. The final
@@ -232,6 +244,8 @@ def fetch(t: Transport, url: str, hosts, cap: int, sink, headers=None, missing_o
                     sink(chunk)
             except TimeoutError:
                 raise Refused("timeout", f"{host_of(url)} took over {OVERALL} s, or stalled") from None
+            if final is not None:
+                final.append(url)
             return True
         finally:
             r.close()
@@ -244,8 +258,9 @@ def fetch_bytes(t, url, hosts, cap, headers=None, missing_ok=False) -> bytes | N
     return bytes(buf) if found else None
 
 
-def fetch_file(t, url, hosts, cap, path: Path) -> tuple[int, str]:
-    """Streams `url` to `path`, hashing as it goes: (size, sha256 hex)."""
+def fetch_file(t, url, hosts, cap, path: Path, final=None) -> tuple[int, str]:
+    """Streams `url` to `path`, hashing as it goes: (size, sha256 hex). The
+    URL that answered is appended to `final`."""
     h = hashlib.sha256()
     size = 0
     with open(path, "xb") as f:
@@ -256,7 +271,7 @@ def fetch_file(t, url, hosts, cap, path: Path) -> tuple[int, str]:
             size += len(chunk)
             f.write(chunk)
 
-        fetch(t, url, hosts, cap, sink)
+        fetch(t, url, hosts, cap, sink, final=final)
     return size, h.hexdigest()
 
 
@@ -287,15 +302,17 @@ def primaries(listing: str) -> list[str]:
 
 def keys_for(t, gpg: str, policy, keys_dir: Path, work: Path) -> tuple[Path, list[str]]:
     """The folder of pinned key files to verify with: `keys/` when it holds
-    every pinned key, else (for a policy that names its key sources) one
-    key fetched now from each source. Each source must serve the pinned
-    primary key; only that key, minimally exported, is used. The report
-    carries it for committing as `keys/<FINGERPRINT>.asc`."""
+    every pinned key, else (for a policy that names where to fetch it) the
+    key fetched now from each place. Each must serve the pinned primary key,
+    checked by fingerprint after import; the copies are merged, and only
+    that key, minimally exported, is used. This is availability, not a
+    source for the fingerprint, which is pinned in upstream.py. The report
+    carries the key for committing as `keys/<FINGERPRINT>.asc`."""
     missing = [k for k in policy.keys if not (keys_dir / f"{k}.asc").is_file()]
     if not missing:
         return keys_dir, []
-    if len(policy.keys) != 1 or len(policy.key_sources) < 2:
-        raise Refused("key_not_pinned", f"no keys/{missing[0]}.asc, and no two sources to fetch it from")
+    if len(policy.keys) != 1 or not policy.key_sources:
+        raise Refused("key_not_pinned", f"no keys/{missing[0]}.asc, and nowhere to fetch it from")
     fpr = policy.keys[0]
     if not FINGERPRINT.match(fpr):
         raise Refused("key_not_pinned", "the policy names no full fingerprint for this artifact")
@@ -329,7 +346,7 @@ def keys_for(t, gpg: str, policy, keys_dir: Path, work: Path) -> tuple[Path, lis
         "",
         f"Key `{fpr}` wasn't in `keys/`: fetched from "
         + " and ".join(f"`{host_of(u)}`" for u, _ in policy.key_sources)
-        + ", both serving that primary key. Commit it as `keys/"
+        + ", each checked by fingerprint after import. Commit it as `keys/"
         + fpr
         + ".asc` in the pin PR:",
         "",
@@ -340,7 +357,7 @@ def keys_for(t, gpg: str, policy, keys_dir: Path, work: Path) -> tuple[Path, lis
     return fetched, lines
 
 
-def verify_openpgp(gpg: str, artifact: Path, sig: bytes, pinned: tuple[str, ...], keys_dir: Path) -> str:
+def verify_openpgp(gpg: str, artifact: Path, sig: bytes, pinned: tuple[str, ...], keys_dir: Path) -> tuple[str, int]:
     """Checks a detached signature on `artifact` with only the pinned keys in a
     fresh GNUPGHOME. Returns the signing key's primary fingerprint."""
     if not pinned or not all(FINGERPRINT.match(k) for k in pinned):
@@ -397,7 +414,21 @@ def verify_openpgp(gpg: str, artifact: Path, sig: bytes, pinned: tuple[str, ...]
             signers.add(primary)
         if len(signers) != 1:
             raise Refused("bad_signature", "signed by more than one key")
-        return signers.pop()
+        # VALIDSIG's third field is the signature's creation time, in seconds
+        # since the epoch (or ISO 8601 basic form with --fixed-list-mode off).
+        created = []
+        for v in valid:
+            stamp = v[3]
+            if stamp.isdigit():
+                created.append(int(stamp))
+            else:
+                try:
+                    created.append(
+                        int(datetime.datetime.strptime(stamp, "%Y%m%dT%H%M%S").replace(tzinfo=datetime.UTC).timestamp())
+                    )
+                except ValueError:
+                    raise Refused("bad_signature", "the signature has no readable creation time") from None
+        return signers.pop(), min(created)
 
 
 # ─── Pin-time checks on a build ─────────────────────────────────────────────
@@ -700,6 +731,102 @@ def provenance() -> list[str]:
     return lines
 
 
+def bind_installer(t, recipe, version, release, folder, name, path, size, final_url, signed_at) -> list[str]:
+    """Ties a signed installer's bytes to its version and path
+    (X-cmp13-installer-pins, self-review B2). A signature covers bytes, not
+    a name, so a mirror could serve another signed file. Three checks, all
+    required: the URL that answered is this version's file; SourceForge's own
+    folder feed, from its origin, states this size and MD5 for exactly this
+    path; and the signature isn't older than the release tag (less 2 days)."""
+    sub = urllib.parse.urlsplit(release).path.split("/")[3]  # /project/<p>/<sub>/
+    tail = f"/{sub}/{folder}/{name}"
+    if not urllib.parse.urlsplit(final_url).path.endswith(tail):
+        raise Refused("installer_mismatch", f"the download ended at {safe(final_url)}, not at …{safe(tail)}")
+    md5 = hashlib.md5(usedforsecurity=False)
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            md5.update(block)
+    feed_size, feed_md5 = feed_entry(t, fill_version(recipe.installer_feed, version), tail)
+    if (feed_size, feed_md5) != (size, md5.hexdigest()):
+        raise Refused(
+            "installer_mismatch",
+            f"SourceForge lists {tail} as {feed_size} bytes, MD5 {safe(feed_md5)}; "
+            f"the download was {size} bytes, MD5 {md5.hexdigest()}",
+        )
+    tagged_at = tag_date(t, recipe.installer_tag_repo, fill_version(recipe.installer_tag, version))
+    if signed_at < tagged_at - TAG_SLACK:
+        raise Refused("installer_mismatch", "the installer was signed before its release was tagged: an older file")
+    iso = lambda ts: datetime.datetime.fromtimestamp(ts, datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+    return [
+        f"answered at `{safe(final_url.split('?')[0])}`",
+        f"SourceForge's feed: {feed_size} bytes, MD5 `{safe(feed_md5)}`",
+        f"the download: {size} bytes, MD5 `{md5.hexdigest()}`",
+        f"signed {iso(signed_at)}; tag `{fill_version(recipe.installer_tag, version)}` dated {iso(tagged_at)}",
+    ]
+
+
+def fill_version(template: str, version: str) -> str:
+    return template.replace("{version}", version)
+
+
+def feed_entry(t, feed_url: str, path: str) -> tuple[int, str]:
+    """(size, MD5) that SourceForge's folder feed states for exactly `path`,
+    read from `sourceforge.net` itself. Exactly one item must name it."""
+    import xml.etree.ElementTree as ET
+
+    body = fetch_bytes(t, feed_url, FEED_HOSTS, MAX_FEED)
+    # No document type, so no entities to expand.
+    if b"<!DOCTYPE" in body or b"<!ENTITY" in body:
+        raise Refused("installer_mismatch", "SourceForge's feed declares a document type")
+    try:
+        root = ET.fromstring(body)
+    except ET.ParseError:
+        raise Refused("installer_mismatch", "SourceForge's feed isn't XML") from None
+    items = [i for i in root.iter("item") if (i.findtext("title") or "").strip() == path]
+    if len(items) != 1:
+        raise Refused("installer_mismatch", f"SourceForge's feed has {len(items)} items for {safe(path)}, not one")
+    content = items[0].find(f"{MRSS}content")
+    hash_ = content.find(f"{MRSS}hash") if content is not None else None
+    size = content.get("filesize", "") if content is not None else ""
+    if hash_ is None or hash_.get("algo") != "md5" or not size.isdigit():
+        raise Refused("installer_mismatch", "SourceForge's feed item names no size and MD5")
+    digest = (hash_.text or "").strip()
+    if not re.fullmatch(r"[0-9a-f]{32}", digest):
+        raise Refused("installer_mismatch", "SourceForge's feed item's MD5 isn't one")
+    return int(size), digest
+
+
+def tag_date(t, repo: str, tag: str) -> int:
+    """The tagger date of an annotated tag on GitHub, from its API. A
+    lightweight tag has none and is refused, not read from the commit."""
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) or not URL_PART.match(tag):
+        raise Refused("request", "the recipe's tag repository or tag isn't URL-safe")
+    accept = {"Accept": "application/vnd.github+json"}
+
+    def get(url):
+        try:
+            return json.loads(fetch_bytes(t, url, TAG_HOSTS, MAX_TOKEN, accept))
+        except ValueError:
+            raise Refused("installer_mismatch", "GitHub's answer isn't JSON") from None
+
+    ref = get(f"https://api.github.com/repos/{repo}/git/ref/tags/{tag}")
+    obj = ref.get("object") if isinstance(ref, dict) else None
+    if not isinstance(obj, dict) or obj.get("type") != "tag":
+        raise Refused("installer_mismatch", f"{safe(tag)} isn't an annotated tag, so it has no tagger date")
+    sha = obj.get("sha", "")
+    if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", sha):
+        raise Refused("installer_mismatch", "GitHub's tag reference names no object")
+    tag_obj = get(f"https://api.github.com/repos/{repo}/git/tags/{sha}")
+    date = (tag_obj.get("tagger") or {}).get("date") if isinstance(tag_obj, dict) else None
+    try:
+        when = datetime.datetime.fromisoformat(str(date).replace("Z", "+00:00"))
+    except ValueError:
+        raise Refused("installer_mismatch", "the tag has no readable tagger date") from None
+    if when.tzinfo is None:
+        raise Refused("installer_mismatch", "the tag's date has no time zone")
+    return int(when.timestamp())
+
+
 def make_pins(args, doc: dict, t: Transport, gpg: str, keys_dir: Path, recipes=None) -> list[str]:
     """Pins `args.companion` in `doc` in place. Returns the report's lines."""
     recipes = upstream.RECIPES if recipes is None else recipes
@@ -758,6 +885,8 @@ def make_pins(args, doc: dict, t: Transport, gpg: str, keys_dir: Path, recipes=N
                     # proves nothing on its own.
                     if not isinstance(policy, upstream.OpenPgp):
                         raise Refused("installer", f"{key} is pinned only with upstream's OpenPGP signature")
+                    if not (recipe.installer_feed and recipe.installer_tag_repo and recipe.installer_tag):
+                        raise Refused("installer", f"{key} needs its feed and release tag to tie it to its version")
                     folder = recipe.installer_release
                     folder_host = host_of(folder)
                     if folder_host not in INSTALLER_SOURCES or folder_host in entry["hosts"]:
@@ -774,7 +903,8 @@ def make_pins(args, doc: dict, t: Transport, gpg: str, keys_dir: Path, recipes=N
                 if not loader_url_ok(url, a_release):
                     raise Refused("request", f"{safe(url)} isn't a URL the catalogue accepts")
                 path = work / key
-                size, sha = fetch_file(t, url, a_hosts, MAX_ARTIFACT_SIZE, path)
+                answered: list[str] = []
+                size, sha = fetch_file(t, url, a_hosts, MAX_ARTIFACT_SIZE, path, final=answered)
                 if size == 0:
                     raise Refused("check_failed", f"{key} is empty")
                 if isinstance(policy, upstream.OpenPgp):
@@ -785,9 +915,14 @@ def make_pins(args, doc: dict, t: Transport, gpg: str, keys_dir: Path, recipes=N
                         )
                     used_keys, key_lines = keys_for(t, gpg, policy, keys_dir, work)
                     report_keys += key_lines
-                    fpr = verify_openpgp(gpg, path, sig, policy.keys, used_keys)
+                    fpr, signed_at = verify_openpgp(gpg, path, sig, policy.keys, used_keys)
                     upstream_sig = {"kind": "verified_at_pin", "fingerprint": fpr}
                     sig_line = f"OpenPGP signature verified, key `{fpr}`"
+                    if installer:
+                        report_bind = bind_installer(
+                            t, recipe, args.version, a_release, a_tag, name, path, size, answered[0], signed_at
+                        )
+                        sig_line += "\n" + "\n".join(f"  - {b}" for b in report_bind)
                 else:
                     for suffix in (".asc", ".sig", ".gpg", ".minisig"):
                         if fetch_bytes(t, url + suffix, a_hosts, MAX_SIG, missing_ok=True) is not None:

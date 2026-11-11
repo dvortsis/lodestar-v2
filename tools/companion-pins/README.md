@@ -35,4 +35,4 @@ python3 tools/companion-pins/pin.py --catalogue crates/companions/data/catalogue
 On any refusal it exits 1, says why on stderr and writes nothing.
 
 ### qBittorrent's Windows installer
-It's pinned with the Linux builds, at the same version, from SourceForge (read only at pin time, never by Lodestar) and only with the release key's signature on it. Until `keys/D8F3DA77AAC6741053599C136E4A2D025B7CC9A2.asc` is committed, the run fetches that key from two sources and prints it in the report. Commit it in the pin PR.
+It's pinned with the Linux builds, at the same version, from SourceForge (read only at pin time, never by Lodestar) and only with the release key's signature on it. Until `keys/D8F3DA77AAC6741053599C136E4A2D025B7CC9A2.asc` is committed, the run fetches that key (checked by fingerprint after import) and prints it in the report. Commit it in the pin PR. The installer is also tied to its version: the final download URL, SourceForge's own feed (size and MD5 for that path) and the GitHub release tag's date must all agree.
