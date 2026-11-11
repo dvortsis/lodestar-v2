@@ -32,9 +32,13 @@ import message  # noqa: E402
 LOOKBACK_MINUTES = 130
 WAKE_WORKFLOW = "operator-wake.yml"
 MAX_PAGES = 10
-# A PR's reviews are read whole (see _recent_reviews): 5,000 before a PR's own
-# list counts as an incomplete sweep, so old reviews alone don't trip it.
+# A PR's reviews are read whole (see _recent_reviews): from 5,000 a PR's own list
+# counts as an incomplete sweep, so below 5,000 old reviews alone don't trip it.
 REVIEW_MAX_PAGES = 50
+# Review pages across the whole sweep: the job's token has a per-hour request
+# budget, so many PRs full of old reviews can't use it up and turn a trip into
+# an API error (which disables nothing). Past it, the sweep is incomplete: a trip.
+REVIEW_PAGE_BUDGET = 200
 
 
 def _digits(v) -> str | None:
@@ -98,7 +102,8 @@ def cmd_trip(env, transport) -> int:
 
 
 class Incomplete(Exception):
-    """A list ran past MAX_PAGES before the lookback: a finding, never a silent pass."""
+    """A list ran past its page limit (MAX_PAGES, or the reviews' own limits) before
+    the lookback: a finding, never a silent pass. args: (list name, page limit)."""
 
 
 def _list(transport, path: str, stop_before: datetime | None = None, key: str = "updated_at",
@@ -111,22 +116,33 @@ def _list(transport, path: str, stop_before: datetime | None = None, key: str = 
         out += items
         if len(items) < 100 or (stop_before and items and (_when(items[-1].get(key)) or stop_before) < stop_before):
             return out
-    raise Incomplete(path.split("?")[0].rsplit("/", 1)[-1])
+    raise Incomplete(path.split("?")[0].rsplit("/", 1)[-1], max_pages)
 
 
-def _recent_reviews(transport, repo: str, number: str, since: datetime) -> list[dict]:
+def _recent_reviews(transport, repo: str, number: str, since: datetime, budget: list[int]) -> list[dict]:
     """A PR's reviews submitted in the lookback.
 
     The reviews list runs in creation order and can't be sorted, and a review
     created pending is submitted later, so no page can be skipped by its
-    position: every page is read (up to REVIEW_MAX_PAGES, then a trip) and each
-    review is kept by its own `submitted_at`. A missing or unzoned time counts
-    as recent (fail closed)."""
+    position: every page is read and each review is kept by its own
+    `submitted_at`. A missing or unzoned time counts as recent (fail closed).
+    Trips (Incomplete): REVIEW_MAX_PAGES on one PR, more than MAX_PAGES * 100
+    reviews in the window, or the sweep's REVIEW_PAGE_BUDGET spent."""
+    pages = min(REVIEW_MAX_PAGES, budget[0])  # none left: _list reads nothing and raises, a budget trip
+    try:
+        items = _list(transport, f"/repos/{repo}/pulls/{number}/reviews", max_pages=pages)
+    except Incomplete:
+        if pages < REVIEW_MAX_PAGES:  # the sweep's budget ran out, not this PR's own limit
+            raise Incomplete("reviews", REVIEW_PAGE_BUDGET) from None
+        raise
+    budget[0] -= len(items) // 100 + 1
     out = []
-    for r in _list(transport, f"/repos/{repo}/pulls/{number}/reviews", max_pages=REVIEW_MAX_PAGES):
+    for r in items:
         when = _when(r.get("submitted_at"))
         if when is None or when >= since:
             out.append(r)
+    if len(out) > MAX_PAGES * 100:  # as for every other list: more than 1,000 in the window is a trip
+        raise Incomplete("reviews", MAX_PAGES)
     return out
 
 
@@ -151,6 +167,7 @@ def sweep(env, transport, now: datetime) -> tuple[list[str], bool]:
         elif kind == "base_ref_changed":
             other.append(f"base branch changed on #{n}")
 
+    review_budget = [REVIEW_PAGE_BUDGET]
     pulls = _list(transport, f"/repos/{repo}/pulls?state=all&sort=updated&direction=desc", since)
     for p in pulls:
         if not recent(p, "updated_at"):
@@ -158,7 +175,7 @@ def sweep(env, transport, now: datetime) -> tuple[list[str], bool]:
         n = _digits(p.get("number")) or "?"
         if _uid(p) == bot:
             bot_hits.append(f"the operator's bot opened #{n} (active in the lookback)")
-        for r in _recent_reviews(transport, repo, n, since) if n != "?" else []:
+        for r in _recent_reviews(transport, repo, n, since, review_budget) if n != "?" else []:
             if _uid(r) == bot:
                 bot_hits.append(f"the operator's bot reviewed #{n}")
 
@@ -189,8 +206,10 @@ def cmd_sweep(env, transport, now) -> int:
         findings, disable = sweep(env, transport, now)
     except Incomplete as e:
         # Fail closed (the runner, 2026-11-11): a sweep we can't finish counts as a trip.
-        what = str(e) if str(e).replace("_", "").isalpha() else "a list"
-        findings, disable = [f"the sweep is incomplete: {what} ran past {MAX_PAGES} pages; check by hand"], True
+        name = e.args[0] if e.args else ""
+        what = name if isinstance(name, str) and name.replace("_", "").isalpha() else "a list"
+        limit = e.args[1] if len(e.args) > 1 and isinstance(e.args[1], int) else MAX_PAGES
+        findings, disable = [f"the sweep is incomplete: {what} ran past {limit} pages; check by hand"], True
     except Exception as e:  # noqa: BLE001 - an API error: say so (best effort), then fail the job
         act(env, transport, [f"the sweep failed ({type(e).__name__}); nothing was checked this run"], False)
         raise SystemExit("tripwire: the sweep failed") from None

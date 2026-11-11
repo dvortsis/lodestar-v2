@@ -175,7 +175,6 @@ class Unconfigured(unittest.TestCase):
         self.assertFalse([c for c in gh.calls if c[0] == "GET"])  # nothing listed without the ID
 
 
-
 def review(uid, delta):
     return {"user": {"id": uid}, "submitted_at": None if delta is None else ISO(delta)}
 
@@ -245,14 +244,29 @@ class ReviewsLookback(unittest.TestCase):
         self.assertTrue(gh.disabled())
         self.assertEqual(gh.pages, [1, 2])
 
-    def test_a_pr_past_the_review_page_limit_is_a_trip(self):
-        gh = self.sweep([review(1, self.old)] * (tripwire.REVIEW_MAX_PAGES * 100))
-        self.assertIn("the sweep is incomplete: reviews ran past", gh.bodies()[0])
+    def test_a_pr_with_5000_reviews_is_a_trip(self):
+        self.assertEqual(tripwire.REVIEW_MAX_PAGES * 100, 5000)  # the number the decisions file names
+        gh = self.sweep([review(1, self.old)] * 5000)
+        self.assertIn("the sweep is incomplete: reviews ran past 50 pages", gh.bodies()[0])
         self.assertTrue(gh.disabled())
 
-    def test_just_under_the_limit_is_complete(self):
-        gh = self.sweep([review(1, self.old)] * (tripwire.REVIEW_MAX_PAGES * 100 - 1))
+    def test_4999_old_reviews_are_complete(self):
+        gh = self.sweep([review(1, self.old)] * 4999)
         self.assertEqual(gh.bodies(), [])
+
+    def test_more_than_1000_reviews_in_the_window_trip(self):
+        gh = self.sweep([review(1, self.old)] * 200 + [review(1, self.new)] * 1001)
+        self.assertIn("the sweep is incomplete: reviews ran past 10 pages", gh.bodies()[0])
+        self.assertTrue(gh.disabled())
+
+    def test_1000_reviews_in_the_window_are_complete(self):
+        gh = self.sweep([review(1, self.old)] * 200 + [review(1, self.new)] * 1000)
+        self.assertEqual(gh.bodies(), [])
+
+    def test_a_bot_review_behind_recent_reviews_trips(self):
+        gh = self.sweep([review(1, self.new)] * 150 + [review(BOT, self.new)] + [review(1, self.new)] * 20)
+        self.assertTrue(gh.disabled())
+        self.assertIn("the operator's bot reviewed #12", gh.bodies()[0])
 
     def test_undated_or_unzoned_reviews_count_as_recent(self):
         for r in (review(BOT, None), {"user": {"id": BOT}, "submitted_at": "2026-11-11T11:00:00"}):
@@ -261,11 +275,52 @@ class ReviewsLookback(unittest.TestCase):
                 self.assertTrue(gh.disabled())
 
 
+class ManyPRs(RestReviews):
+    """Many active PRs, each with a full list of old reviews."""
+
+    def __init__(self, prs, per_pr):
+        super().__init__([])
+        self.prs, self.per_pr = prs, per_pr
+
+    def __call__(self, method, path, body):
+        if method == "GET" and path.startswith("/repos/o/r/pulls?") and path.endswith("&page=1"):
+            return [{"user": {"id": 1}, "number": n, "updated_at": ISO(timedelta(minutes=5))} for n in range(1, self.prs + 1)]
+        if method == "GET" and "/reviews" in path:
+            self.pages.append(path)
+            page = int(path.rsplit("page=", 1)[1])
+            old = timedelta(minutes=tripwire.LOOKBACK_MINUTES + 60)
+            return [review(1, old)] * max(0, min(100, self.per_pr - (page - 1) * 100))
+        return super().__call__(method, path, body)
+
+
+class ReviewBudget(unittest.TestCase):
+    def test_many_prs_of_old_reviews_spend_the_budget_and_trip(self):
+        gh = ManyPRs(prs=10, per_pr=4000)  # 41 pages each, 410 in all, past the 200-page budget
+        run(["sweep"], env(), gh)
+        self.assertIn("the sweep is incomplete: reviews ran past 200 pages", gh.bodies()[0])
+        self.assertTrue(gh.disabled())
+        self.assertLessEqual(len(gh.pages), tripwire.REVIEW_PAGE_BUDGET)
+
+    def test_within_the_budget_is_complete(self):
+        gh = ManyPRs(prs=4, per_pr=4000)  # 164 pages
+        run(["sweep"], env(), gh)
+        self.assertEqual(gh.bodies(), [])
+        self.assertEqual(len(gh.pages), 164)
+
+
+class FullEvents(RestReviews):
+    """Every issue-events page full, its last item with no zone."""
+
+    def __call__(self, method, path, body):
+        if method == "GET" and path.startswith("/repos/o/r/issues/events"):
+            return [{"actor": {"id": 1}, "event": "labeled", "created_at": "2026-11-11T11:00:00", "issue": {"number": 3}}] * 100
+        return super().__call__(method, path, body)
+
+
 class UnzonedLists(unittest.TestCase):
     def test_an_unzoned_time_keeps_a_list_paging_and_fails_closed(self):
         # A full page whose last item has no zone can't stop the list early.
-        page = [{"actor": {"id": 1}, "event": "labeled", "created_at": "2026-11-11T11:00:00", "issue": {"number": 3}}] * 100
-        gh = FakeGitHub()
-        gh_full = lambda m, p, b: (gh.calls.append((m, p, b, None)) or (page if p.startswith("/repos/o/r/issues/events") else []))  # noqa: E731
-        run(["sweep"], env(), gh_full)
+        gh = FullEvents([])
+        run(["sweep"], env(), gh)
         self.assertIn("the sweep is incomplete: events ran past 10 pages", gh.bodies()[0])
+        self.assertTrue(gh.disabled())
