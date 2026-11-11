@@ -247,11 +247,14 @@ describe('storage step filesystem warning', () => {
 		writeProgress({ step, skipped: [], done: [] });
 		render(WizardPage);
 	};
+	let systemCalls = 0;
 	const withSystem = (warning: string | null | 'fail') => {
+		systemCalls = 0;
 		server = wizardServer();
 		const inner = server.fetch;
 		vi.stubGlobal('fetch', (url: string, init: RequestInit = {}) => {
-			if (String(url).endsWith('/system'))
+			if (String(url).endsWith('/system')) {
+				systemCalls++;
 				return warning === 'fail'
 					? Promise.resolve({
 							ok: false,
@@ -267,6 +270,7 @@ describe('storage step filesystem warning', () => {
 							headers: new Headers(),
 							json: async () => ({ data: { filesystem_warning: warning } })
 						});
+			}
 			return inner(url, init);
 		});
 	};
@@ -291,6 +295,9 @@ describe('storage step filesystem warning', () => {
 			show('storage');
 			await heading('Storage & retention');
 			await screen.findByRole('button', { name: 'Save and continue' });
+			await waitFor(() => expect(systemCalls).toBeGreaterThan(0));
+			// Let the settled /system promise run its handler before asserting absence.
+			await new Promise<void>((r) => queueMicrotask(r));
 			expect(screen.queryByTestId('wizard-storage-fs')).toBeNull();
 			cleanup();
 		}

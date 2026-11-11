@@ -144,5 +144,5 @@
 	"wizard_cmp_replaces": "替换 {version}",
 	"wizard_cmp_wait": "qBittorrent 仍在安装。请等它完成后再继续。",
 	"wizard_cmp_err_profile": "Lodestar 目前无法在此系统上运行 qBittorrent。请自行安装并在上方添加。",
-	"wizard_storage_fs_note": "你可以继续，稍后再移动该文件夹。"
+	"wizard_storage_fs_note": "你可以继续，但现在移动该文件夹比以后更容易。"
 }

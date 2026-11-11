@@ -221,6 +221,27 @@ describe('Exceptions', () => {
 		expect(fix.getAttribute('href')).toContain('docs/user/02-install-lodestar-on-unraid');
 	});
 
+	it('words the exceptions generically when their detail object is missing', () => {
+		const fs = { ...dataFsException('fuse'), filesystem: undefined };
+		const ports = { ...portsException(null), ports: undefined };
+		render(Exceptions, { exceptions: [fs, ports] });
+		expect(screen.getByTestId('insights-exception-data_filesystem').textContent).toContain(
+			"filesystem that's slow or unsafe for the database"
+		);
+		expect(screen.getByTestId('insights-exception-ephemeral_ports').textContent).toContain(
+			'too few ports left'
+		);
+		expect(document.body.textContent).not.toContain('Needs attention');
+	});
+
+	it('opens the guide in a new tab, safely, and says so', () => {
+		render(Exceptions, { exceptions: [dataFsException('fuse')] });
+		const a = screen.getByTestId('insights-exception-data_filesystem-fix');
+		expect(a.getAttribute('target')).toBe('_blank');
+		expect(a.getAttribute('rel')).toBe('noopener noreferrer');
+		expect(a.textContent).toContain('(opens in a new tab)');
+	});
+
 	it('shows no filesystem type line when the mount type is unknown', () => {
 		render(Exceptions, { exceptions: [dataFsException('network')] });
 		expect(screen.queryByTestId('insights-exception-data_filesystem-fs-type')).toBeNull();

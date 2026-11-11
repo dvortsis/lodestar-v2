@@ -114,7 +114,9 @@
 							{message(e)}
 						</p>
 						{#if netsh(e)}
-							<p data-testid="insights-exception-{e.kind}-netsh"><Mono wrap>{netsh(e)}</Mono></p>
+							<p data-testid="insights-exception-{e.kind}-netsh">
+								<Mono class="break-words">{netsh(e)}</Mono>
+							</p>
 							<p class="ins-muted">{m.insights_overview_exc_ports_clears()}</p>
 						{/if}
 						{#if e.filesystem?.fs_type}
@@ -139,7 +141,8 @@
 								href={guideHref(e)}
 								target="_blank"
 								rel="noopener noreferrer"
-								data-testid="insights-exception-{e.kind}-fix">{fixText(e)}</a
+								data-testid="insights-exception-{e.kind}-fix"
+								>{fixText(e)}<span class="sr-only"> {m.settings_about_new_tab()}</span></a
 							>
 							<!-- eslint-enable svelte/no-navigation-without-resolve -->
 						{/if}

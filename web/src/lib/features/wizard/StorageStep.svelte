@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api, isAbort } from '$lib/api/client';
+	import { api } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import FieldsStep from './FieldsStep.svelte';
@@ -17,7 +17,9 @@
 		let live = true;
 		api.get('/system').then(
 			(s) => live && (warning = s.data.filesystem_warning),
-			(e) => void (isAbort(e) || e)
+			() => {
+				// A failed read shows no warning; Continue is never held back.
+			}
 		);
 		return () => (live = false);
 	});
