@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T06:51:20Z",
+  "updated_at": "2026-11-11T06:55:17Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6727,7 +6727,8 @@
       "added": "2026-11-11",
       "what": "MSI error 1920 then 1603 when a local user holds lodestar.exe open with share mode 0 before StartServices: forward install skips the version for good, rollback reinstall halts. Fix: tell 1920 apart in the msiexec log, or retry 1603 a bounded number of times. Opus, /security-review. From #663 residual; add a slices.yaml entry in the next runner PR."
     },
-    "2026-11-11: next runner PR: CMP-13 notes += at pin time re-check Prowlarr ProxyEnabled default and .NET DefaultProxy env behaviour (X-cmp-egress-prelaunch launch-env route); add X-win-upd-1920 entry"
+    "2026-11-11: next runner PR: CMP-13 notes += at pin time re-check Prowlarr ProxyEnabled default and .NET DefaultProxy env behaviour (X-cmp-egress-prelaunch launch-env route); add X-win-upd-1920 entry",
+    "2026-11-11: #655 OP-4 merged (aa13e524); owner setup steps 2.6/3.4/4 + flags sent; slot 6 continues with X-op4-polish (owns infra/operator/wake.py, tripwire.py, tests/**, decisions file); add entry in next runner PR"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7460,7 +7461,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T06:47:49Z",
+    "updated": "2026-11-11T06:55:17Z",
     "items": [
       {
         "slot": 1,
@@ -7504,11 +7505,11 @@
       },
       {
         "slot": 6,
-        "slice": "OP-4",
+        "slice": "X-op4-polish",
         "role": "build",
         "agent": "claude",
         "doing": "session_01MMjhnAunU7rxhXrv1ZpJoC",
-        "since": "2026-11-11T04:06Z"
+        "since": "2026-11-11T06:55:17Z"
       },
       {
         "slot": 7,
@@ -7616,9 +7617,8 @@
   ],
   "review_queue": [
     "#665 CMP-9c",
-    "#655 OP-4 delta",
     "#663 X-win-upd-bounds",
-    "#668 OP-3c (waiting; head 75b323c4; 3 reviewers busy)"
+    "#668 OP-3c"
   ],
   "merged": []
 }
