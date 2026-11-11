@@ -7516,7 +7516,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T14:03:28Z",
+    "updated": "2026-11-11T14:05:33Z",
     "items": [
       {
         "slot": 1,
@@ -7536,12 +7536,11 @@
       },
       {
         "slot": 3,
-        "slice": null,
+        "slice": "WK-11",
         "role": "build",
         "agent": "claude",
-        "doing": "free after #689 X-restart-required-creds merged 48b10984; session_01MMjhn8tTJD1DZeuMq9kZKw kept for next slice",
-        "since": "2026-11-11T14:03:28Z",
-        "status": "idle"
+        "doing": "session_01MMjhn97qDUZKniFoSzjMNE: worker spool, on-disk format (Opus, /security-review); fresh session after #689 merged 48b10984 (old session archived)",
+        "since": "2026-11-11T14:05:33Z"
       },
       {
         "slot": 4,
@@ -7638,7 +7637,7 @@
     }
   ],
   "heartbeat": "2026-11-11T12:39:14Z",
-  "updated": "2026-11-11T14:03:28Z",
+  "updated": "2026-11-11T14:05:33Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
