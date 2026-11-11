@@ -42,8 +42,15 @@ services:
       - gluetun
     profiles:
       - block
+    # The arm comes from start-block and arm-switch (block-lib.sh). A bare name
+    # passes the caller's value through, and leaves the variable unset when the
+    # caller has none, so every other switch stays at its shipped default.
     environment:
-      TZ: Etc/UTC
+      - TZ=Etc/UTC
+      - LODESTAR_DHT_SAFE_RESTART
+      - LODESTAR_DHT_COORDINATED_ADMISSION
+      - LODESTAR_DHT_UTP
+      - LODESTAR_DHT_ROUTE_BACKOFF
     volumes:
       - ./data:/data
     # No raw sockets (NET_RAW could send frames past gluetun's firewall). Only

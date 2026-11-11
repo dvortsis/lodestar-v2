@@ -269,6 +269,10 @@ SCENARIOS = {
     ("infra/fleet/fleet.py", "refuse"): [{"REFUSAL_REASON": "unknown verb", "CHANNEL_PR": "700"}],
     ("infra/fleet/fleet.py", "act"): [event_env("/fleet status"), event_env("/fleet down"),
                                       event_env("/fleet run leak-test main"), event_env("/fleet run vm-status worker"),
+                                      # OP-3b's block steps
+                                      event_env("/fleet run start-block main " + "c" * 40),
+                                      event_env("/fleet run arm-switch worker"),
+                                      event_env("/fleet run outage-watcher main"), event_env("/fleet run copy-off main"),
                                       event_env("/fleet extend")],
     ("infra/fleet/fleet.py", "reap"): [event_env()],
     ("infra/fleet/fleet.py", "dispatch-down"): [event_env()],
@@ -355,6 +359,8 @@ class PublicLogLeak(unittest.TestCase):
         secret_env = dict(zip(SECRET_NAMES, marks(len(SECRET_NAMES))))
         old = [{"id": m[6], "created": fmt(T0 - timedelta(hours=50))}, {"id": m[7], "created": fmt(T0)}]
         runs = [("act", "/fleet status", 1), ("act", "/fleet run leak-test main", 1), ("act", "/fleet down", 1),
+                ("act", f"/fleet run start-block main {c['head']}", 1), ("act", "/fleet run arm-switch main", 1),
+                ("act", "/fleet run outage-watcher worker", 1), ("act", "/fleet run copy-off main", 1),
                 ("act", "/fleet up screen", 0), ("reap", "", 1), ("dispatch-down", "", 1), ("gate", "/fleet down", 1)]
         for sub, body, overdue in runs:
             with self.subTest(sub=sub, body=body):

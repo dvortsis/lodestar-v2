@@ -219,7 +219,9 @@ class RunStep(unittest.TestCase):
 
     def test_refusals(self):
         with self.assertRaises(remote.StepRefused):
-            self.go(step="arm-switch")
+            self.go(step="renew-vpn")  # deliver-pia's, never a step here
+        with self.assertRaisesRegex(remote.StepRefused, "needs a rules commit"):
+            self.go(step="start-block")
         with self.assertRaises(remote.StepRefused):
             self.go(FLEET_SSH_KEY=" ")
         for ip in ("", "198.51.100.7\n198.51.100.8", "2001:db8::1", "junk"):
@@ -279,11 +281,14 @@ class StepFiles(unittest.TestCase):
         d = Path(repo) / steps.STEPS_PATH
         d.mkdir(parents=True)
         (d / "vm-status.sh").write_text("echo pinned\n")
+        (d / "block-lib.sh").write_text("lib\n")
         subprocess.run(["git", "-C", repo, "add", "-A"], check=True)
         subprocess.run(["git", "-C", repo, "commit", "-qm", "steps"], check=True)
         pinned = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
         (d / "vm-status.sh").write_text("echo later\n")  # the checkout differs: the pinned commit wins
-        self.assertEqual(steps.step_files("vm-status", pinned, repo), {"step.sh": b"echo pinned\n"})
+        # The first file is the step; the rest keep their names.
+        self.assertEqual(steps.step_files("vm-status", pinned, repo), {"step.sh": b"echo pinned\n",
+                                                                       "block-lib.sh": b"lib\n"})
         with self.assertRaises(remote.StepRefused):  # pinned before the step existed
             steps.step_files("vm-status", c["head"], repo)
 
@@ -367,15 +372,22 @@ class Compose(unittest.TestCase):
         # capabilities the image needs to drop root.
         self.assertEqual(lod["cap_drop"], ["ALL"])
         self.assertEqual(lod["cap_add"], ["CHOWN", "SETGID", "SETUID"])
-        self.assertEqual(lod["environment"]["TZ"], "Etc/UTC")
+        # The arm's switches pass through by name; nothing else is set.
+        self.assertEqual(lod["environment"], ["TZ=Etc/UTC", "LODESTAR_DHT_SAFE_RESTART",
+                                              "LODESTAR_DHT_COORDINATED_ADMISSION", "LODESTAR_DHT_UTP",
+                                              "LODESTAR_DHT_ROUTE_BACKOFF"])
         self.assertIn("no-new-privileges:true", lod["security_opt"])
         self.assertEqual(set(self.svc), {"gluetun", "lodestar"})
 
     def test_the_probe_image_is_pinned_too(self):
-        text = (VM / "leak-test.sh").read_text()
+        text = (VM / "block-lib.sh").read_text()  # the leak test and the block steps share it
         pins = [ln for ln in text.splitlines() if ln.startswith("PROBE_IMAGE=")]
         self.assertEqual(len(pins), 1)
         self.assertRegex(pins[0], r"^PROBE_IMAGE=nicolaka/netshoot@sha256:[0-9a-f]{64}$")
+        pins = [ln for ln in text.splitlines() if ln.startswith("COLLECTOR_IMAGE=")]
+        self.assertEqual(len(pins), 1)
+        self.assertRegex(pins[0], r"^COLLECTOR_IMAGE=python@sha256:[0-9a-f]{64}$")
+        self.assertNotRegex((VM / "leak-test.sh").read_text(), r"(?m)^(PROBE|COLLECTOR)_IMAGE=")
 
 
 STUB_DOCKER = r"""#!/usr/bin/env bash
@@ -403,6 +415,8 @@ case "$1" in
     esac ;;
   pull) [ -n "$PULL_FAIL" ] && exit 1; exit 0 ;;
   exec) echo 7 ;;  # exec gluetun cat .../iflink
+  network) [ "$*" = "network inspect -f {{.EnableIPv6}} lodestar_default" ] || bad "$*"
+           [ -n "$BRIDGE_V6" ] && echo true || echo false ;;
   run)
     # Exactly: run --rm --network container:gluetun --cap-drop ALL [--cap-add NET_ADMIN]
     #          <pinned netshoot> sh -c '"$@"; printf "\nprobe_rc=%s\n" "$?"' probe <command...>
@@ -433,6 +447,7 @@ case "$1" in
         "sh -c ip -o link show up dev \"\$1\" | grep -q . iface ${VPN_IFACE-wg0}")
                       [ -e "$STUB/ifdown" ] && [ -z "$IFACE_BACK" ] && exit 1; exit 0 ;;
         "sh -c command"*) [ -n "$NO_TOOLS" ] && exit 1; exit 0 ;;
+        "sh -c ip -6 -o addr show scope global | grep -q .") [ -n "$NS_V6" ] || exit 1; exit 0 ;;
         "grep"*) [ -n "$DNS_REMOTE" ] && exit 1; exit 0 ;;
         "sh -c echo"*) exit 0 ;;
         "ip link set dev "*) [ -n "$IFDOWN_FAILS" ] && exit 2; : > "$STUB/ifdown"; exit 0 ;;
@@ -503,11 +518,15 @@ class VMScripts(unittest.TestCase):
         (self.stack / "secrets" / "wg0.conf").write_text("[Peer]\nEndpoint = 192.0.2.77:1337\n")
         self.work.mkdir()
         (self.work / "compose.yaml").write_text((VM / "compose.yaml").read_text())
+        (self.work / "block-lib.sh").write_text((VM / "block-lib.sh").read_text())
+        self.block = self.tmp / "lodestar-block"
+        (self.tmp / "v6fwd").write_text("0\n")
 
     def run_script(self, name, **flags):
         env = {"PATH": f"{self.stub / 'bin'}:/usr/bin:/bin", "STUB": str(self.stub),
-               **{k: str(v) for k, v in flags.items()}}
-        r = subprocess.run(["bash", str(VM / name), str(self.work), str(self.stack), str(self.tmp / "pia-run")],
+               "IPV6_FORWARDING": str(self.tmp / "v6fwd"), **{k: str(v) for k, v in flags.items()}}
+        r = subprocess.run(["bash", str(VM / name), str(self.work), str(self.stack), str(self.tmp / "pia-run"),
+                            str(self.block)],
                            env=env, capture_output=True, text=True, timeout=120)
         # Every docker and tcpdump call had exactly the arguments the guards need.
         bad = self.stub / "badargs"
@@ -536,7 +555,8 @@ class VMScripts(unittest.TestCase):
         self.assertEqual(rc, 0, raw)
         self.assertEqual(lines[-1], "ok leak_test")
         names = ["ipv4_through_tunnel", "tcp_literal_up", "ipv6_blocked_up", "dns_up", "dns_local", "probe_tools",
-                 "veth_found", "endpoint_blocked", "vpn_interface_down", "tunnel_recovers", "run_clean"]
+                 "veth_found", "endpoint_blocked", "vpn_interface_down", "tunnel_recovers", "run_clean",
+                 "host_ipv6_not_forwarded", "bridge_ipv6_off", "namespace_no_global_ipv6"]
         for phase in ("down", "ifdown"):  # the dead tunnel, then gluetun's firewall alone
             names += [f"{n}_{phase}" for n in ("ipv4_blocked", "tcp_literal_blocked", "ipv6_blocked", "dns_blocked",
                                                  "dns_direct_blocked", "capture_alive", "capture_read",
@@ -590,6 +610,9 @@ class VMScripts(unittest.TestCase):
             "the interface comes back up": ({"IFACE_BACK": 1}, "vpn_interface_stayed_down"),
             # The recovery's delete fails: the exit trap still lifts the block.
             "a failed delete": ({"FAIL_FIRST_DELETE": 1, "NO_RECOVER": 1}, "tunnel_recovers"),
+            # The host's own IPv6 (0d's separate check, OP-3b).
+            "the stack's network has IPv6": ({"BRIDGE_V6": 1}, "bridge_ipv6_off"),
+            "a global IPv6 address in gluetun's namespace": ({"NS_V6": 1}, "namespace_no_global_ipv6"),
         }
         for name, (flags, failed) in cases.items():
             with self.subTest(name):
@@ -681,7 +704,7 @@ class VMScripts(unittest.TestCase):
             for line in (VM / name).read_text().splitlines():
                 if "echo " in line and not line.lstrip().startswith("#") and "probe" not in line:
                     with self.subTest(script=name, line=line.strip()):
-                        self.assertRegex(line, r'echo "(ok|fail|count) |echo "\$|echo \'fail vm_busy\'')
+                        self.assertRegex(line, r'echo "(ok|fail|skip|count) |echo "\$|echo \'fail vm_busy\'')
 
 
 if __name__ == "__main__":

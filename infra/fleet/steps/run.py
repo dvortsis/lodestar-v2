@@ -18,25 +18,42 @@ The result is one report line of fixed words and grammar names.
 
 from __future__ import annotations
 
+import base64
+import binascii
+import importlib.util
 import ipaddress
+import json
 import os
+import re
 import subprocess
 import tempfile
 import time
 from pathlib import Path
 from typing import Callable
 
+from ancestry import is_ancestor
 from linode import LinodeError
 from lock import LockLost
-from steps import remote
+from steps import remote, rules as rules_mod
 
 STEPS_PATH = "infra/fleet/steps/vm"
-# The steps built so far (OP-3a). The rest of limits.yaml's allow-list refuses
-# in live mode until OP-3b adds them.
+# The steps built (OP-3a, OP-3b). The first file is the step itself; the rest
+# travel beside it. Every limits.yaml step but renew-vpn (deliver-pia's) is here.
 BUILT = {
-    "vm-status": {"files": ("vm-status.sh",), "timeout": 60},
-    "leak-test": {"files": ("leak-test.sh", "compose.yaml"), "timeout": 600},
+    "vm-status": {"files": ("vm-status.sh", "block-lib.sh"), "timeout": 60},
+    "leak-test": {"files": ("leak-test.sh", "block-lib.sh", "compose.yaml"), "timeout": 600},
+    # The leak test (600 s) runs inside it; then the pulls (300 + 120 s), Lodestar's
+    # start (240 s), the API wait (180 s), the setup token (90 s), and the rest.
+    "start-block": {"files": ("start-block.sh", "block-lib.sh", "leak-test.sh", "compose.yaml", "watcher.sh",
+                              "scrub.py"), "timeout": 1800},
+    # Up to 20 minutes' wait for the segment to end (WAIT_SECONDS), then the switch.
+    "arm-switch": {"files": ("arm-switch.sh", "block-lib.sh", "compose.yaml", "watcher.sh"), "timeout": 2100},
+    "outage-watcher": {"files": ("outage-watcher.sh", "block-lib.sh", "watcher.sh"), "timeout": 60},
+    "copy-off": {"files": ("copy-off.sh", "block-lib.sh", "scrub.py"), "timeout": 900},
 }
+# copy-off's scrubbed document comes back on one line of its own, outside the
+# report grammar; it goes only to the private evidence bucket.
+EVIDENCE_LINE = re.compile(rb"^evidence ([A-Za-z0-9+/]{1,262144}={0,2})$", re.M)
 SSH_ATTEMPTS_SECONDS = 120  # the firewall rule can take a little while to apply (deliver-pia's)
 SSH_RETRY_PAUSE = 5
 OUTCOMES = {255: "couldn't connect, or its host key didn't match the pin",
@@ -49,12 +66,49 @@ def step_files(step: str, commit: str, repo: str, run=subprocess.run) -> dict[st
     """The step's files at the fleet's pinned commit (already checked to be an
     ancestor of main). A fleet pinned before the step existed can't run it."""
     files = {}
-    for name in BUILT[step]["files"]:
+    for i, name in enumerate(BUILT[step]["files"]):
         r = run(["git", "-C", repo, "show", f"{commit}:{STEPS_PATH}/{name}"], capture_output=True, timeout=30)
         if r.returncode != 0:
             raise remote.StepRefused("the step isn't in the fleet's pinned commit")
-        files["step.sh" if name.endswith(".sh") else name] = r.stdout
+        files["step.sh" if i == 0 else name] = r.stdout
     return files
+
+
+def _scrubber():
+    """The control plane's copy of the scrubber (this checkout: main's head)."""
+    spec = importlib.util.spec_from_file_location("fleet_scrub", Path(__file__).resolve().parent / "vm" / "scrub.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def copied_off(out: bytes, put: Callable[[bytes], None] | None) -> str:
+    """copy-off's document: scrubbed again here, then put in the private evidence
+    bucket. Never printed; the report says only whether it was stored."""
+    found = EVIDENCE_LINE.findall(out)
+    if len(found) != 1:
+        return "no evidence came back"
+    try:
+        scrub = _scrubber()
+        body = scrub.dumps(scrub.scrub(json.loads(base64.b64decode(found[0], validate=True))))
+    except (binascii.Error, ValueError, UnicodeDecodeError, RecursionError):
+        return "the evidence didn't pass the scrubber"
+    if put is None:
+        return "the evidence couldn't be stored"
+    try:
+        put(body)
+    except Exception:  # noqa: BLE001 - the bucket's error isn't printed
+        return "the evidence couldn't be stored; it's still on the VM, so copy-off can run again"
+    return "evidence stored in the private bucket"
+
+
+def bucket_writer(backend, env: dict, run_id: str, vm: str) -> Callable[[bytes], None] | None:
+    """A put into the evidence bucket through the backend's owner-checked S3
+    client (apply.OwnedS3, so ExpectedBucketOwner is always sent)."""
+    s3, bucket = getattr(backend, "s3", None), (env.get("EVIDENCE_BUCKET") or "").strip()
+    if s3 is None or not bucket:
+        return None
+    return lambda body: s3.put_object(Bucket=bucket, Key=f"fleet/{run_id}/copy-off-{vm}.json", Body=body)
 
 
 def summary(rc: int, lines: list[str]) -> str:
@@ -79,10 +133,11 @@ def summary(rc: int, lines: list[str]) -> str:
 def run_step(env: dict, backend, fleet: dict, step: str, vm: str, run_id: str, fence: Callable[[], None], *,
              ssh: Callable, my_ip: Callable[[], str], emit: Callable[[str], None], repo: str,
              fingerprint: Callable[[str], str], close_fence: Callable[[], None] | None = None,
-             sleep: Callable[[float], None] = time.sleep, monotonic: Callable[[], float] = time.monotonic) -> str:
+             sleep: Callable[[float], None] = time.sleep, monotonic: Callable[[], float] = time.monotonic,
+             commit: str | None = None, evidence: Callable[[bytes], None] | None = None) -> str:
     """The step's report line. Raises remote.StepRefused with a fixed reason."""
     if step not in BUILT:
-        raise remote.StepRefused("step not built yet (OP-3b)")
+        raise remote.StepRefused("step not built")
     key_text = (env.get("FLEET_SSH_KEY") or "").strip()
     if not key_text:
         raise remote.StepRefused("live steps need FLEET_SSH_KEY")
@@ -91,8 +146,17 @@ def run_step(env: dict, backend, fleet: dict, step: str, vm: str, run_id: str, f
             emit("::add-mask::" + line.replace("%", "%25").replace("\r", "%0D"))
     slot = fleet["roles"][vm]
     remote.check_target(slot, fingerprint)
-    files = step_files(step, fleet["commit"], repo)
-    data = remote.payload(files, {})
+    files, args = step_files(step, fleet["commit"], repo), {}
+    if step == "start-block":  # at the rules commit, which act checked is an ancestor of main
+        if commit is None:
+            raise remote.StepRefused("start-block needs a rules commit")
+        rules, tools = rules_mod.read(commit, repo)
+        for c in (rules["lodestar_commit"], rules["spec_commit"]):
+            if not is_ancestor(c, "origin/main", repo):
+                raise remote.StepRefused("a commit in the screen rules is not an ancestor of main")
+        files.update(tools)
+        args = rules_mod.args(rules, commit, vm, run_id)
+    data = remote.payload(files, args)
     ip = my_ip().strip()
     try:
         cidr = str(ipaddress.IPv4Network(f"{ip}/32"))
@@ -136,7 +200,11 @@ def run_step(env: dict, backend, fleet: dict, step: str, vm: str, run_id: str, f
     unclosed = "" if closed else "; its firewall rule couldn't be closed; the next sweep removes it; escalate"
     if refused:
         raise remote.StepRefused(refused + unclosed)
-    return summary(rc, remote.parse(out)) + unclosed
+    # copy-off's evidence line is taken out before the grammar reads the rest.
+    line = summary(rc, remote.parse(EVIDENCE_LINE.sub(b"", out)))
+    if step == "copy-off" and rc == 0:
+        line += "; " + copied_off(out, evidence)
+    return line + unclosed
 
 
 def checkip() -> str:  # pragma: no cover - live only
