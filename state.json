@@ -7734,7 +7734,8 @@
   ],
   "review_queue": [
     "#704 PK-guide-2 CHANGES relayed 2026-11-11T18:31Z",
-    "#664 delta c5d69402 in review 2026-11-11T18:31Z"
+    "#664 delta c5d69402 in review 2026-11-11T18:31Z",
+    "#703 X-cmp9b-catch ready @1666594db4cf863e6f505a4446476bbec14c2198 (green) - next free reviewer slot"
   ],
   "merged": [
     {
