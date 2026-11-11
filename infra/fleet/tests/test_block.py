@@ -618,9 +618,12 @@ class OutageWatcher(Base):
 case "$1" in
   events) [ "$*" = "events --filter type=container --filter container=gluetun --format event {{.Action}}" ] \
             || echo "$*" >> "$STUB/badargs"
-          # The block ends once all three outages are counted (the watcher stops reading at its end).
+          # The block ends once all three outages are counted and their notes written
+          # (an outage is counted before its note, so both are waited for).
           if [ -e "$STUB/events_done" ]; then
-            [ "$(grep -c . "$STUB_BLOCK/outages" 2>/dev/null)" = 3 ] && rm -f "$STUB_BLOCK/marker"; exit 0
+            [ "$(grep -c . "$STUB_BLOCK/outages" 2>/dev/null)" = 3 ] \
+              && [ "$(grep -c . "$STUB/notes" 2>/dev/null || echo 0)" -ge "${EXPECT_NOTES:-1}" ] \
+              && rm -f "$STUB_BLOCK/marker"; exit 0
           fi
           : > "$STUB/events_done"; echo "event die"; echo "event start"; echo "event restart" ;;
   logs) [ "$*" = "logs -f --since 5s gluetun" ] || echo "$*" >> "$STUB/badargs"
@@ -674,7 +677,7 @@ esac
         self.assertGreater(len(self.lines("outages")), 0)
 
     def test_every_outage_noted_without_the_gap_and_bounded(self):
-        self.assertEqual(self.watch(GAP=0), 0)
+        self.assertEqual(self.watch(GAP=0, EXPECT_NOTES=3), 0)
         self.assertEqual(len(self.lines("notes")), 3)
         self.setUp()
         self.assertEqual(self.watch(GAP=0, MAX_NOTES=1), 0)
