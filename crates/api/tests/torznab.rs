@@ -81,6 +81,7 @@ fn xml_char(c: char) -> bool {
 /// predefined entities (and character references to allowed
 /// characters), only characters XML allows. Panics on anything else.
 fn parse_xml(doc: &str) -> El {
+    quick_xml_accepts(doc);
     for c in doc.chars() {
         assert!(xml_char(c), "character {c:?} isn't allowed in XML:\n{doc}");
     }
@@ -96,6 +97,26 @@ fn parse_xml(doc: &str) -> El {
     p.space();
     assert_eq!(p.i, p.s.len(), "content after the root:\n{doc}");
     root
+}
+
+/// A second, independent reader: quick-xml reads `doc` to its end
+/// without an error (end names checked).
+fn quick_xml_accepts(doc: &str) {
+    use quick_xml::events::Event;
+    let mut r = quick_xml::Reader::from_str(doc);
+    r.config_mut().check_end_names = true;
+    let mut depth = 0i64;
+    loop {
+        match r.read_event() {
+            Ok(Event::Eof) => break,
+            Ok(Event::Start(_)) => depth += 1,
+            Ok(Event::End(_)) => depth -= 1,
+            Ok(Event::CData(_)) => panic!("CDATA isn't written:\n{doc}"),
+            Ok(_) => {}
+            Err(e) => panic!("quick-xml: {e}:\n{doc}"),
+        }
+    }
+    assert_eq!(depth, 0, "unclosed elements:\n{doc}");
 }
 
 struct Parser<'a> {
