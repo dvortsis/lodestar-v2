@@ -209,9 +209,11 @@ pub trait System {
     fn healthy(&self) -> bool;
     /// The version of the program on disk in Program Files, when an install
     /// is judged. On Windows that's this process's own version: the run
-    /// that judges an install's answer is always a fresh run of that
-    /// program, started after `msiexec` ended. Tests, which run `msiexec`
-    /// in the same process, model what it put on disk.
+    /// that judges an install's answer is a run of that program that reads
+    /// the answer after `msiexec` ended (the copy's, the boot run or one
+    /// the service starts). A program still loaded while msiexec ran makes
+    /// its replacement wait for a restart (3010), never an exit 0. Tests,
+    /// which run `msiexec` in the same process, model what it put on disk.
     fn on_disk(&self, ctx: &Context) -> Option<String> {
         ctx.running.as_ref().map(ToString::to_string)
     }
@@ -2622,6 +2624,7 @@ mod tests {
         env.offer("0.7.0");
         let fake = Fake {
             stays: true,
+            start_before: Some(Start::Manual),
             ..Fake::default()
         };
         let out = env.run(&fake).unwrap();
@@ -2640,7 +2643,8 @@ mod tests {
         assert!(skipped(&env));
         assert_eq!(
             &fake.calls()[fake.calls().len() - 3..],
-            ["auto", "start", "event"]
+            ["manual", "start", "event"],
+            "the start type found goes back"
         );
         assert!(!env.ctx.staging.dir.join(rollback::JOURNAL).exists());
         assert!(!env.ctx.staging.current().exists(), "not kept as installed");
@@ -2653,7 +2657,11 @@ mod tests {
             ..Fake::default()
         };
         assert_eq!(env.run(&hand).unwrap(), Outcome::HandedOff);
-        assert_eq!(as_copy(&env, &Fake::default()).unwrap(), 0);
+        let copy = Fake {
+            stays: true,
+            ..Fake::default()
+        };
+        assert_eq!(as_copy(&env, &copy).unwrap(), 0);
         let next = Fake::default();
         assert_eq!(env.run(&next).unwrap().code(), "install_failed");
         assert!(skipped(&env));

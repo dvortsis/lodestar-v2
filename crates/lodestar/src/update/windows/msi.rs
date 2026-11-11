@@ -278,10 +278,11 @@ fn error_1920(line: &str, service: &str) -> bool {
 }
 
 /// Where `name` last appears in `line` as a whole word: neither the
-/// character before it nor the one after it is a letter, digit or `_`
-/// (`'Lodestar'`, `"Lodestar"`, `(Lodestar)`; not `Lodestar2`).
+/// character before it nor the one after it is a letter, digit, `_` or `-`
+/// (`'Lodestar'`, `"Lodestar"`, `(Lodestar)`, `Lodestar.`; not
+/// `Lodestar2` or `Lodestar-old`).
 fn last_word(line: &str, name: &str) -> Option<usize> {
-    let inner = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+    let inner = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '-');
     line.match_indices(name)
         .filter(|(at, _)| {
             !inner(line[..*at].chars().next_back())
@@ -634,7 +635,13 @@ mod tests {
     /// whose name starts or ends with it isn't this one.
     #[test]
     fn only_the_services_own_name_counts() {
-        for other in ["Lodestar2", "MyLodestar", "Lodestar_old"] {
+        for other in [
+            "Lodestar2",
+            "MyLodestar",
+            "Lodestar_old",
+            "Lodestar-old",
+            "old-Lodestar",
+        ] {
             let log =
                 format!("Product: X -- Error 1920. Service '{other}' ({other}) failed to start.");
             assert!(!held_open(log.as_bytes(), "Lodestar"), "{other}");
