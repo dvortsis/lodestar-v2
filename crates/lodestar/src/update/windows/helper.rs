@@ -224,6 +224,9 @@ pub trait System {
     /// Called once each copy into staging is written (tests change the
     /// data folder here).
     fn copied(&self, _name: &str) {}
+    /// Called at each pass [`take_lock`] finds `.lock` busy (tests let go
+    /// of a lock they hold here).
+    fn lock_busy(&self) {}
 }
 
 /// What [`System::run_msiexec`] did.
@@ -504,7 +507,7 @@ fn attempt(
     let locked = Bin::existing(&ctx.data_dir)
         .map_err(io_refusal("bin"))
         .and_then(|b| b.ok_or(Refusal::Busy("bin_missing")))
-        .and_then(|bin| take_lock(&bin, ctx.lock_wait).map(drop));
+        .and_then(|bin| take_lock(sys, &bin, ctx.lock_wait).map(drop));
     if let Err(e) = locked {
         sys.start_service();
         return Err(e);
@@ -576,7 +579,7 @@ pub(super) fn after_install(
         Installed::Failed(code) => {
             // Windows Installer rolled it back: nothing to roll back here.
             rollback::clear(ctx);
-            mark_failed(ctx, &version);
+            mark_failed(ctx, sys, &version);
             sys.start_service();
             Outcome::Failed { version, code }
         }
@@ -852,9 +855,12 @@ impl Started for std::process::Child {
     fn ended(&mut self) -> io::Result<Option<Option<i32>>> {
         Ok(self.try_wait()?.map(|s| s.code()))
     }
+    /// Reaped only once it's killed (an ended child counts as killed), so
+    /// a kill that fails never leaves this waiting.
     fn end(&mut self) {
-        let _ = self.kill();
-        let _ = self.wait();
+        if self.kill().is_ok() {
+            let _ = self.wait();
+        }
     }
 }
 
@@ -942,8 +948,10 @@ fn trust_floor(ctx: &Context, own: &lodestar_update::TrustState) -> lodestar_upd
 }
 
 /// Takes `.lock`, waiting up to `wait` for the stopped service's handle
-/// to go.
-pub(super) fn take_lock(bin: &Bin, wait: Duration) -> Result<Lock, Refusal> {
+/// to go: Windows releases a closed file's lock "depending upon available
+/// system resources" (`LockFileEx`). Blocking; only the helper's own
+/// process calls it, which runs no async runtime.
+pub(super) fn take_lock(sys: &dyn System, bin: &Bin, wait: Duration) -> Result<Lock, Refusal> {
     let deadline = Instant::now() + wait;
     loop {
         if let Some(l) = bin.lock().map_err(io_refusal(".lock"))? {
@@ -952,20 +960,21 @@ pub(super) fn take_lock(bin: &Bin, wait: Duration) -> Result<Lock, Refusal> {
         if Instant::now() >= deadline {
             return Err(Refusal::Busy("bin_busy"));
         }
+        sys.lock_busy();
         std::thread::sleep(Duration::from_millis(100));
     }
 }
 
 /// A failed install's version is never offered again: `skipped`, reason
-/// `failed`, written under `.lock` in the pinned `<data>\bin` (tried again
-/// for a moment, [`Bin::lock_retrying`]). Best effort: when the lock or the
-/// file isn't available the next check offers it again, and it fails the
-/// same way.
-fn mark_failed(ctx: &Context, version: &Version) {
+/// `failed`, written under `.lock` in the pinned `<data>\bin` (waited for
+/// up to `lock_wait`, [`take_lock`]: the service that just stopped may not
+/// have let go of it yet). Best effort: when the lock or the file isn't
+/// available the next check offers it again, and it fails the same way.
+fn mark_failed(ctx: &Context, sys: &dyn System, version: &Version) {
     let Ok(Some(bin)) = Bin::existing(&ctx.data_dir) else {
         return;
     };
-    let Ok(Some(_lock)) = bin.lock_retrying() else {
+    let Ok(_lock) = take_lock(sys, &bin, ctx.lock_wait) else {
         return;
     };
     let _ = win::add_skip(&bin, &version.to_string(), SKIP_FAILED);
@@ -1321,7 +1330,11 @@ impl System for Windows {
     /// ([`supervise`]) is `TimedOut` or `Interrupted`, never answered as a
     /// refusal ([`run_copy`]).
     fn msiexec(&self, args: &[OsString]) -> io::Result<i32> {
-        let mut child = Self::command("msiexec.exe")?.args(args).spawn()?;
+        // Classified by position (P-4): a failed spawn is never "started",
+        // whatever its error's kind.
+        let mut child = Self::command("msiexec.exe")
+            .and_then(|mut c| c.args(args).spawn())
+            .map_err(|e| io::Error::other(format!("starting msiexec: {e}")))?;
         supervise(
             &mut child,
             MSIEXEC_WAIT,
@@ -1481,6 +1494,9 @@ mod tests {
         installer_busy: bool,
         /// Called at `installer_idle`.
         on_idle: Option<Hook>,
+        /// Called at each busy pass of `take_lock`, and at each msiexec.
+        on_lock_busy: Option<Hook>,
+        at_msiexec: Option<Hook>,
         /// A source to overwrite once it's copied: (name, path, bytes).
         swap: Option<(String, PathBuf, Vec<u8>)>,
         calls: Mutex<Vec<String>>,
@@ -1556,6 +1572,9 @@ mod tests {
         }
         fn msiexec(&self, args: &[OsString]) -> io::Result<i32> {
             self.note("msiexec");
+            if let Some(act) = &self.at_msiexec {
+                act();
+            }
             let msi = std::fs::read(&args[1]).unwrap();
             if let Some(data) = &self.migrate {
                 let store = data.join("lodestar.db");
@@ -1614,6 +1633,11 @@ mod tests {
                 return Err(io::Error::other("no boot time"));
             }
             Ok(self.boot)
+        }
+        fn lock_busy(&self) {
+            if let Some(act) = &self.on_lock_busy {
+                act();
+            }
         }
         fn installer_idle(&self, _: Duration) -> bool {
             self.note("installer_idle");
@@ -2153,6 +2177,105 @@ mod tests {
         assert!(!env.ctx.staging.current().exists());
     }
 
+    /// `.lock` held by `held` until the first busy pass of `take_lock`, as a
+    /// service that just stopped holds it for a moment: what the hooks
+    /// that take it and let go of it are made from.
+    fn holder(bin: &Path) -> (Hook, Hook) {
+        let lock: std::sync::Arc<Mutex<Option<Lock>>> = std::sync::Arc::default();
+        let (take, free) = (lock.clone(), lock);
+        let bin = bin.to_path_buf();
+        (
+            Box::new(move || {
+                let b = Bin::existing(bin.parent().unwrap()).unwrap().unwrap();
+                *take.lock().unwrap() = Some(b.lock().unwrap().expect("free"));
+            }),
+            Box::new(move || drop(free.lock().unwrap().take())),
+        )
+    }
+
+    /// A failed install's skip waits for `.lock` (the busy-lock bound):
+    /// held when msiexec ends, let go of a moment later, the skip is still
+    /// written.
+    #[test]
+    fn a_failed_install_waits_for_the_lock_to_skip_it() {
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        let (take, free) = holder(&env.ctx.data_dir.join("bin"));
+        let fake = Fake {
+            code: 1603,
+            at_msiexec: Some(take),
+            on_lock_busy: Some(free),
+            ..Fake::default()
+        };
+        assert_eq!(env.run(&fake).unwrap().code(), "install_failed");
+        let skipped: Value = serde_json::from_slice(
+            &std::fs::read(env.ctx.data_dir.join("bin").join("skipped")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(skipped, json!([{"version": "0.7.0", "reason": "failed"}]));
+    }
+
+    /// Step 5's marker removal waits for `.lock` too: held from the
+    /// reinstall on, let go of a moment later, the rollback still finishes.
+    #[test]
+    fn a_rollback_waits_for_the_lock_to_remove_the_marker() {
+        let mut env = Env::new("0.6.0");
+        rollback_to_the_reinstall(&mut env);
+        let (take, free) = holder(&env.ctx.data_dir.join("bin"));
+        let copy = Fake {
+            at_msiexec: Some(take),
+            ..Fake::default()
+        };
+        assert_eq!(as_copy(&env, &copy).unwrap(), 0);
+        let next = Fake {
+            on_lock_busy: Some(free),
+            ..Fake::default()
+        };
+        assert_eq!(env.run(&next).unwrap().code(), "rolled_back");
+        assert!(!env.ctx.data_dir.join("bin").join(rollback::MARKER).exists());
+    }
+
+    /// LOW-B on the install: a 3010 whose restarts leave `from` on disk
+    /// (the replacement cancelled or failed) is an install that didn't
+    /// happen once [`rollback::MAX_RESTARTS`] boots have seen it: the
+    /// journal goes, the service runs, and later updates aren't held.
+    #[test]
+    fn an_install_restart_that_never_takes_effect_ends() {
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        let at = |t: u64| Fake {
+            boot: t,
+            ..Fake::default()
+        };
+        let first = Fake {
+            code: 3010,
+            boot: 1_000,
+            ..Fake::default()
+        };
+        assert_eq!(env.run(&first).unwrap().code(), "installed");
+        // The boot the 3010 came in is the one the restarts count from.
+        let j = rollback::read(&env.ctx).unwrap().unwrap();
+        assert_eq!((j.restart_boot, j.restarts), (Some(1_000), 0));
+        let journal = env.ctx.staging.dir.join(rollback::JOURNAL);
+        for t in [1_000 + BOOT, 5_000, 5_000] {
+            let run = at(t);
+            assert_eq!(env.run(&run).unwrap().code(), "installed", "boot {t}");
+            assert!(run.calls().is_empty() && journal.exists());
+        }
+        let j = rollback::read(&env.ctx).unwrap().unwrap();
+        assert_eq!((j.restart_boot, j.restarts), (Some(5_000), 1));
+        let last = at(9_000);
+        assert_eq!(
+            env.run(&last).unwrap(),
+            Outcome::InstallInterrupted {
+                version: "0.7.0".into()
+            }
+        );
+        assert!(!journal.exists());
+        assert_eq!(last.calls(), ["auto", "start", "event"]);
+        assert!(!env.ctx.data_dir.join("bin").join("skipped").exists());
+    }
+
     /// After exit 3010 probation waits for the restart: the journal
     /// stays, a run before the restart (the old program still on disk)
     /// judges nothing, and the first run after it (the new one) does.
@@ -2465,11 +2588,18 @@ mod tests {
         // the hand-installed version idles on it until it goes (R5-2).
         let marker = env.ctx.data_dir.join("bin").join(rollback::MARKER);
         std::fs::write(&marker, b"{}").unwrap();
+        // And a copy's parent lock left behind: swept with the journal.
+        let parent = parent_lock(
+            &env.ctx.staging.dir,
+            "run-0123456789abcdef0123456789abcdef.exe",
+        );
+        std::fs::write(&parent, b"").unwrap();
         env.ctx.running = Some(Version::new(0, 8, 0));
         let next = Fake::default();
         assert_eq!(env.run(&next).unwrap(), Outcome::Nothing);
         assert!(!env.ctx.staging.dir.join(rollback::JOURNAL).exists());
         assert!(!marker.exists(), "the marker goes with the journal");
+        assert!(!parent.exists(), "and the parent lock");
         assert!(next.calls().is_empty());
     }
 
@@ -2730,7 +2860,7 @@ mod tests {
                 answer: None,
                 copies: 0,
                 reinstall_restart: false,
-                reinstall_boot: None,
+                restart_boot: None,
                 restarts: 0,
                 touched: true,
                 state: rollback::State::RollingBack {
@@ -3050,7 +3180,7 @@ mod tests {
             assert!(pending(env.run(&boot(t)).unwrap()), "boot {t}");
         }
         let j = rollback::read(&env.ctx).unwrap().unwrap();
-        assert_eq!((j.reinstall_boot, j.restarts), (Some(1_000), 0));
+        assert_eq!((j.restart_boot, j.restarts), (Some(1_000), 0));
         // A boot time it can't read counts nothing.
         let blind = Fake {
             boot_fails: true,
@@ -3061,7 +3191,7 @@ mod tests {
         assert!(pending(env.run(&boot(5_000)).unwrap()));
         assert!(pending(env.run(&boot(5_000)).unwrap()));
         let j = rollback::read(&env.ctx).unwrap().unwrap();
-        assert_eq!((j.reinstall_boot, j.restarts), (Some(5_000), 1));
+        assert_eq!((j.restart_boot, j.restarts), (Some(5_000), 1));
         // The second: halted.
         let last = boot(9_000);
         let out = env.run(&last).unwrap();
@@ -3102,7 +3232,7 @@ mod tests {
             Outcome::RollbackPending { .. }
         ));
         assert_eq!(
-            rollback::read(&env.ctx).unwrap().unwrap().reinstall_boot,
+            rollback::read(&env.ctx).unwrap().unwrap().restart_boot,
             None
         );
         for (t, restarts) in [(7_000, 0), (8_000, 1)] {
@@ -3115,7 +3245,7 @@ mod tests {
                 Outcome::RollbackPending { .. }
             ));
             let j = rollback::read(&env.ctx).unwrap().unwrap();
-            assert_eq!((j.reinstall_boot, j.restarts), (Some(t), restarts));
+            assert_eq!((j.restart_boot, j.restarts), (Some(t), restarts));
         }
     }
 
