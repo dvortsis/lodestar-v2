@@ -320,6 +320,9 @@ pub struct Context {
     /// The data folder is the service's default, which the service checks
     /// at every start: the only one the update helper installs from.
     pub checked_data: bool,
+    /// The store (`Config::db_path`): the portable rollback's snapshots
+    /// are beside it.
+    pub db: PathBuf,
 }
 
 /// Where `updates` events go: the event hub, or a test's list.
@@ -1090,8 +1093,8 @@ impl Notifier {
             // The new program in place, then this run restarts into it
             // (Restart now's relaunch), or the old one goes back.
             let (sys, data, pin) = (sys.clone(), self.inner.ctx.data_dir.clone(), pin.clone());
+            let db = self.inner.ctx.db.clone();
             return blocking(move || {
-                let db = data.join("lodestar.db");
                 super::portable::install(&*sys, &data, &db, &bin, &part, &pin)?;
                 sys.restart().map_err(|_| {
                     super::portable::abandon(&*sys, &data);
@@ -1592,6 +1595,11 @@ mod tests {
                     kind,
                     target: WIN,
                     checked_data: true,
+                    db: self
+                        .data
+                        .clone()
+                        .unwrap_or_else(|| self.dir.path().to_path_buf())
+                        .join("lodestar.db"),
                 },
                 self.settings.subscribe(),
                 Arc::new(move |e| lock(&sink).push(e)),

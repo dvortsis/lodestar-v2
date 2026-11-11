@@ -20,7 +20,7 @@
 //! file and rename before and after each step, and parsed as untrusted
 //! input (capped, then checked against this program's own path, version
 //! and the files' SHA-256). Each step can be repeated, and every state
-//! leaves a runnable `lodestar.exe` in place:
+//! but one moment leaves a runnable `lodestar.exe` in place:
 //!
 //! 1. **Staged** ([`install`]): the downloaded zip is hashed and extracted
 //!    from one handle (so the bytes checked are the bytes unpacked), with
@@ -42,6 +42,13 @@
 //!    store, it restores the failed version's earliest pre-migration
 //!    snapshot (if it took one), marks the version `failed` in `skipped`,
 //!    and clears the journal.
+//!
+//! **The one gap:** between the two renames of a swap or a rollback there
+//! is no `lodestar.exe`. Everything slow comes first (the file that moves
+//! in is hashed and held open, unwritable, before anything moves), so the
+//! renames run back to back. A power cut in that moment leaves the program
+//! that's needed in `data\bin\previous.exe`; once it's back as
+//! `lodestar.exe`, the next start finishes the step by the hashes.
 //!
 //! Which program runs is never taken from the journal: each start
 //! compares its own version and the SHA-256 of what's at
@@ -369,20 +376,20 @@ fn swap(sys: &dyn Sys, bin: &Bin, j: &mut Journal) -> Result<(), &'static str> {
         undo(j);
         return Err("swap_failed");
     }
+    // Checked again before anything moves, through a handle that lets
+    // nobody write to it until both renames are done, so they run back to
+    // back: the only moment with no `lodestar.exe` is between two renames
+    // in the same folder tree (see the module's note on that gap).
+    let Some(held) = held_if(&next, &j.new_sha256) else {
+        undo(j);
+        return Err("swap_failed");
+    };
     let _ = std::fs::remove_file(&previous);
     if layout::rename_retrying(&program, &previous).is_err() {
+        drop(held);
         undo(j);
         return Err("swap_failed");
     }
-    // Checked again right before it's moved, through a handle that lets
-    // nobody write to it until the rename is done.
-    let held = match open_held(&next) {
-        Ok(f) if hash_from(&f).is_ok_and(|(s, _)| s.to_hex() == j.new_sha256) => f,
-        _ => {
-            undo(j);
-            return Err("swap_failed");
-        }
-    };
     if sys.fault(Point::Between).is_err() || layout::rename_retrying(&next, &program).is_err() {
         drop(held);
         undo(j);
@@ -414,15 +421,31 @@ fn put_back(sys: &dyn Sys, program: &Path, previous: &Path, old_sha256: &str) ->
         let _ = std::fs::remove_file(previous);
         return Ok(true);
     }
-    if !is(previous, old_sha256) {
-        return Ok(false);
-    }
     if std::fs::symlink_metadata(program).is_ok() {
         return Ok(false);
     }
+    // Checked through a handle nobody can write through until it's moved,
+    // and checked again once it's there, as `swap` does.
+    let Some(held) = held_if(previous, old_sha256) else {
+        return Ok(false);
+    };
     sys.fault(Point::PutBack)?;
-    layout::rename_retrying(previous, program)?;
+    let moved = layout::rename_retrying(previous, program);
+    drop(held);
+    moved?;
+    if !is(program, old_sha256) {
+        let _ = layout::rename_retrying(program, previous);
+        return Ok(false);
+    }
     Ok(true)
+}
+
+/// `path` opened with [`open_held`] when it has this SHA-256: while the
+/// handle lives, nobody can write to it (on Windows).
+fn held_if(path: &Path, sha256: &str) -> Option<File> {
+    open_held(path)
+        .ok()
+        .filter(|f| hash_from(f).is_ok_and(|(s, _)| s.to_hex() == sha256))
 }
 
 /// Whether `path` is a regular file with this SHA-256.
@@ -442,6 +465,13 @@ pub fn at_start(sys: &dyn Sys, data_dir: &Path, db: &Path) -> Start {
     if !bin.exists(JOURNAL) {
         return Start::Normal;
     }
+    // Another copy is running here (its notifier holds the lock for its
+    // whole life): this start judges nothing, so a second start during
+    // probation can't count an attempt or roll back a healthy update.
+    // Held to the end of this start, then the notifier takes it.
+    let Ok(Some(_lock)) = bin.lock() else {
+        return Start::Normal;
+    };
     // A journal in a folder others can write could have been planted:
     // nothing is moved or run on its say.
     if let Err(why) = sys.bin_private(&data_dir.join("bin")) {
@@ -536,24 +566,38 @@ fn roll_back(sys: &dyn Sys, bin: &Bin, mut j: Journal, why: &'static str) -> Sta
 fn files_back(sys: &dyn Sys, bin: &Bin, j: &Journal) -> io::Result<bool> {
     let program = sys.program();
     sys.fault(Point::Back)?;
-    let mut moved = false;
+    let (previous, failed) = (bin.path(PREVIOUS), bin.path(FAILED));
     if is(&program, &j.new_sha256) {
-        let _ = std::fs::remove_file(bin.path(FAILED));
-        layout::rename_retrying(&program, &bin.path(FAILED))?;
-        moved = true;
-    }
-    match put_back(sys, &program, &bin.path(PREVIOUS), &j.old_sha256) {
-        Ok(true) => Ok(moved),
-        other => {
+        // The old program is checked and held first, so the two renames
+        // run back to back and the new program never leaves without the
+        // old one ready to take its place.
+        let Some(held) = held_if(&previous, &j.old_sha256) else {
+            return Err(io::Error::other("the previous program isn't there"));
+        };
+        let _ = std::fs::remove_file(&failed);
+        layout::rename_retrying(&program, &failed)?;
+        let back = sys
+            .fault(Point::PutBack)
+            .and_then(|()| layout::rename_retrying(&previous, &program));
+        drop(held);
+        if let Err(e) = back {
             // Never leave `lodestar.exe` empty: the new program goes back
             // until the next start can try again.
-            if moved && std::fs::symlink_metadata(&program).is_err() {
-                let _ = layout::rename_retrying(&bin.path(FAILED), &program);
-            }
-            Err(other
-                .err()
-                .unwrap_or_else(|| io::Error::other("the previous program isn't there")))
+            let _ = layout::rename_retrying(&failed, &program);
+            return Err(e);
         }
+        if !is(&program, &j.old_sha256) {
+            let _ = layout::rename_retrying(&program, &previous);
+            let _ = layout::rename_retrying(&failed, &program);
+            return Err(io::Error::other("the previous program changed"));
+        }
+        return Ok(true);
+    }
+    // The new program isn't in place: put the old one back if it's not.
+    match put_back(sys, &program, &previous, &j.old_sha256) {
+        Ok(true) => Ok(false),
+        Ok(false) => Err(io::Error::other("the previous program isn't there")),
+        Err(e) => Err(e),
     }
 }
 
@@ -605,13 +649,8 @@ fn rolling_back(sys: &dyn Sys, bin: &Bin, db: &Path, j: Journal) -> Start {
         return Start::Refuse;
     }
     // A version that never started (the old one came back first) isn't
-    // marked failed. The notifier hasn't started yet, so the lock is free.
-    let skipped = j.attempts == 0
-        || bin
-            .lock()
-            .ok()
-            .flatten()
-            .is_some_and(|_lock| add_skip(bin, &j.to, SKIP_FAILED).is_ok());
+    // marked failed. `at_start` holds the lock (`skipped`'s one writer).
+    let skipped = j.attempts == 0 || add_skip(bin, &j.to, SKIP_FAILED).is_ok();
     if !skipped {
         log_event!(UPDATE_INSTALL_FAILED, error = "skip_unsaved");
     }
@@ -1004,11 +1043,19 @@ pub struct Probe {
 
 /// One pass of the self-test's checks; the failing one's name.
 pub async fn check_once(probe: &Probe) -> Result<(), &'static str> {
-    if let Some(search) = &probe.search {
-        let index = search.index();
-        let node = lodestar_search::query::parse("lodestar").map_err(|_| "the search index")?;
-        let compiled = index.query(&node, crate::unix_now());
-        index.search(&compiled, 1).map_err(|_| "the search index")?;
+    if let Some(search) = probe.search.clone() {
+        // A blocking read of the index: off the async runtime.
+        tokio::task::spawn_blocking(move || {
+            let index = search.index();
+            let node = lodestar_search::query::parse("lodestar").map_err(|_| "the search index")?;
+            let compiled = index.query(&node, crate::unix_now());
+            index
+                .search(&compiled, 1)
+                .map(drop)
+                .map_err(|_| "the search index")
+        })
+        .await
+        .map_err(|_| "the search index")??;
     }
     if probe.dht.as_ref().is_some_and(|bound| !bound()) {
         return Err("the DHT port");
@@ -1138,6 +1185,8 @@ mod tests {
         /// Whether that rewrite got through (Windows refuses it while the
         /// file is held).
         tampered: Cell<bool>,
+        /// The points reached, in order.
+        seen: RefCell<Vec<Point>>,
     }
 
     impl Fake {
@@ -1154,6 +1203,7 @@ mod tests {
                 fault: Cell::new(None),
                 tamper: Cell::new(None),
                 tampered: Cell::new(false),
+                seen: RefCell::new(Vec::new()),
             }
         }
         fn data(&self) -> PathBuf {
@@ -1232,6 +1282,7 @@ mod tests {
             Ok(())
         }
         fn fault(&self, point: Point) -> io::Result<()> {
+            self.seen.borrow_mut().push(point);
             if self.tamper.get() == Some(point) {
                 let wrote = std::fs::write(self.data().join("bin").join(NEXT), b"swapped in");
                 self.tampered.set(wrote.is_ok());
@@ -1365,6 +1416,8 @@ mod tests {
         assert_eq!(f.install(), Err("swap_failed"));
         assert!(f.tampered.get());
         f.untouched();
+        // Refused before the running program was moved at all.
+        assert!(!f.seen.borrow().contains(&Point::Between));
     }
 
     #[test]
@@ -1611,7 +1664,8 @@ mod tests {
     fn when_the_old_program_cant_go_back_the_new_one_stays() {
         // Installing: the new program can't move in, nor the old one back.
         let f = Fake::new();
-        // Between fails the first rename; PutBack then fails the undo.
+        // Between fails the new program's move into place; PutBack then
+        // fails the undo that would put the old one back.
         struct Both<'a>(&'a Fake);
         impl Sys for Both<'_> {
             fn program(&self) -> PathBuf {
@@ -1876,6 +1930,64 @@ mod tests {
             assert_eq!(at_start(&f, &f.data(), &f.db()), Start::Normal);
         }
         assert_eq!(f.program_bytes().as_deref(), Some(OLD));
+    }
+
+    /// A rollback checks the old program before it moves the new one
+    /// out: with a `previous.exe` that isn't the recorded one, the new
+    /// program stays where it is.
+    #[test]
+    fn a_rollback_never_moves_the_new_program_out_for_a_wrong_previous() {
+        let f = Fake::new();
+        f.install().unwrap();
+        f.run_as("0.5.5");
+        assert_eq!(at_start(&f, &f.data(), &f.db()), Start::Probation);
+        std::fs::write(f.data().join("bin").join(PREVIOUS), b"planted").unwrap();
+        f.seen.borrow_mut().clear();
+        assert!(!failed(&f, &f.data(), "/healthz"));
+        assert_eq!(f.program_bytes().as_deref(), Some(NEW));
+        assert!(f.at(FAILED).is_none());
+        // Refused before the new program was moved out at all.
+        assert!(!f.seen.borrow().contains(&Point::PutBack));
+    }
+
+    #[test]
+    fn a_second_copy_starting_during_probation_judges_nothing() {
+        let f = Fake::new();
+        f.install().unwrap();
+        f.run_as("0.5.5");
+        assert_eq!(at_start(&f, &f.data(), &f.db()), Start::Probation);
+        // The first copy's notifier holds `.lock`.
+        let held = f.bin().lock().unwrap().unwrap();
+        for _ in 0..5 {
+            assert_eq!(at_start(&f, &f.data(), &f.db()), Start::Normal);
+        }
+        let j = f.journal().unwrap();
+        assert_eq!((j.state, j.attempts), (State::Swapped, 1));
+        assert_eq!(f.program_bytes().as_deref(), Some(NEW));
+        drop(held);
+        assert_eq!(at_start(&f, &f.data(), &f.db()), Start::Probation);
+        assert_eq!(f.journal().unwrap().attempts, 2);
+    }
+
+    /// The launcher's way out of the one gap: with no `lodestar.exe` and a
+    /// `previous.exe`, it moves that back before it starts anything, and
+    /// never over an existing program. No labels: cmd can miss them in a
+    /// file with Unix line endings (#651).
+    #[test]
+    fn the_launcher_puts_the_previous_program_back_after_an_interrupted_update() {
+        let cmd = include_str!("../../../../../packaging/windows/portable/Start Lodestar.cmd");
+        let guard = r#"if not exist "%~dp0lodestar.exe" if exist "%~dp0data\bin\previous.exe" move "%~dp0data\bin\previous.exe" "%~dp0lodestar.exe""#;
+        let at = cmd.find(guard).expect("the fallback's guarded move");
+        let serve = cmd.find(r#""%~dp0lodestar.exe" serve"#).unwrap();
+        assert!(at < serve, "the fallback runs before the program starts");
+        assert!(
+            !cmd.lines().any(|l| l.trim_start().starts_with(':')),
+            "no labels"
+        );
+        for other in [NEXT, FAILED] {
+            assert!(!cmd.contains(other), "the launcher never touches {other}");
+        }
+        assert!(!cmd.contains('\r'), "the file keeps its line endings");
     }
 
     #[test]

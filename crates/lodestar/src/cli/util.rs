@@ -45,9 +45,19 @@ pub fn rollback_journal(data_dir: &Path) -> PathBuf {
 /// that open the store: [`refuse_during_helper_rollback`]'s marker, and
 /// the Windows portable build's journal while it's rolling back (its
 /// store is about to be replaced). A portable journal that can't be read
-/// refuses too (fail closed); a missing one doesn't.
+/// refuses too (fail closed); a missing one doesn't. The portable check
+/// is Windows-only: on Unix `<data>/bin` isn't touched here at all (its
+/// owner check would refuse or chmod a folder another user owns).
 pub fn refuse_during_update_rollback(data_dir: &Path) -> Outcome {
     refuse_during_helper_rollback(data_dir)?;
+    #[cfg(windows)]
+    refuse_during_portable_rollback(data_dir)?;
+    Ok(())
+}
+
+/// The portable build's half of [`refuse_during_update_rollback`].
+#[cfg_attr(not(windows), allow(dead_code))]
+fn refuse_during_portable_rollback(data_dir: &Path) -> Outcome {
     let journal = data_dir
         .join("bin")
         .join(crate::update::windows::portable::JOURNAL);
@@ -388,8 +398,31 @@ mod tests {
         path
     }
 
+    /// On Unix the portable journal isn't looked at, and `<data>/bin` is
+    /// never checked or chmodded: a folder another user owns (here, one
+    /// that isn't 0700, which the owner check would change) doesn't block
+    /// the CLI.
+    #[cfg(unix)]
+    #[test]
+    fn on_unix_the_cli_never_touches_bin_for_the_portable_journal() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        portable_journal(dir.path(), "rolling_back");
+        assert!(refuse_during_update_rollback(dir.path()).is_ok());
+        let mode = std::fs::metadata(&bin).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755);
+    }
+
+    /// The Windows check itself, on every OS (`serve` and the CLI use it
+    /// only on Windows).
     #[test]
     fn a_portable_rollback_refuses_the_store_and_fails_closed() {
+        let refuse_during_update_rollback = |d: &Path| {
+            refuse_during_helper_rollback(d).and_then(|()| refuse_during_portable_rollback(d))
+        };
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("bin")).unwrap();
         // Missing: allowed.
