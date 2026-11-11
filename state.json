@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T23:30:17Z",
+  "updated_at": "2026-11-11T23:35:46Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6975,7 +6975,9 @@
       "note": "#711 CMP-11b merged (b98e18a9). Slot 1 -> X-event-log-followups same session (brief). #709 blocked: ruleset sees stuck queued ci-ok 130782590251 of run 43089754858 despite dispatched green; rerun_workflow_run 43089754858 accepted (attempt 2), watch bjltiyv5x, then merge f820eeba. companion-pins dry runs dispatched: prowlarr 43118372884, gluetun 43118382222; qbittorrent 43118377594 cancelled by concurrency (re-dispatch after). SourceForge 5.3.0 has .asc for both installers."
     },
     "next runner PR: add crates/lodestar/src/update/windows/rollback.rs (Event Log text only) to X-event-log-followups owns",
-    "next runner PR: put the 2026-11-11T23:29Z nine \u00a72.19 FYIs (TZ-0 one PR, restart-banner on-demand, CI throughput, OUT-0, RX-0, WK-11, X-win-upd-history, X-cmp13 signature path, X-event-log-followups scope) in dashboard.yaml owner_queue/notes; dashboard session relayed them in chat"
+    "next runner PR: put the 2026-11-11T23:29Z nine \u00a72.19 FYIs (TZ-0 one PR, restart-banner on-demand, CI throughput, OUT-0, RX-0, WK-11, X-win-upd-history, X-cmp13 signature path, X-event-log-followups scope) in dashboard.yaml owner_queue/notes; dashboard session relayed them in chat",
+    "small fix: companion-pins.yml concurrency group keyed by companion (${{ github.workflow }}-${{ inputs.companion }}) so a pending run for one companion doesn't cancel another's (CMP-13 session suggestion, runner agreed)",
+    "prowlarr pin: 3.0.1.5752 is develop (refused, fail-closed by design); 2.7.0.5723 passed GitHub but lscr.io 404 on image tag; awaiting image_tag from CMP-13 session"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7713,7 +7715,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T23:30:17Z",
+    "updated": "2026-11-11T23:35:46Z",
     "items": [
       {
         "slot": 1,
@@ -7877,7 +7879,7 @@
     }
   ],
   "heartbeat": "2026-11-11T21:38:36Z",
-  "updated": "2026-11-11T23:30:17Z",
+  "updated": "2026-11-11T23:35:46Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
