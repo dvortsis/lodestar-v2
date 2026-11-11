@@ -546,7 +546,9 @@ jobs:
       - name: round trip
         run: |
           set -euo pipefail
-          sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+          # The image's lists usually carry minisign already; refresh only if
+          # needed, and don't let one failing mirror stop the refresh (#694).
+          sudo apt-get install -y -qq minisign || { sudo apt-get update -qq -o Acquire::Retries=5 || true; sudo apt-get install -y -qq -o Acquire::Retries=5 minisign; }
           cargo build -q -p lodestar-update --example verify_envelope
           work=$(mktemp -d "$RUNNER_TEMP/roundtrip.XXXXXX")
           umask 077
