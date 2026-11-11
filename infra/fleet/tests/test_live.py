@@ -1042,7 +1042,7 @@ class LiveFlows(unittest.TestCase):
         self.assertIn("up screen: create main, worker", out)
         self.assertIn("`fleet.yml` (live)", out)
         _, out = self.run_cli("act", "/fleet run arm-switch main", b)
-        self.assertIn("step not built yet (OP-3b)", out)
+        self.assertIn("refused: run arm-switch: live steps need FLEET_SSH_KEY", out)
         _, out = self.run_cli("act", "/fleet down", b)
         self.assertIn("down: destroy the fleet", out)
         self.assertIsNone(s3.doc("state-b", FLEET_KEY)["fleet"])

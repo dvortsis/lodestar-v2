@@ -499,7 +499,7 @@ class Deliver(unittest.TestCase):
         self.assertEqual((rc, self.reports), (0, ["deliver-pia: main: renewed; takes effect after the block; /run clean"]))
         rc = self.go("/fleet run renew-vpn main", ssh=FakeSSH(rcs=[deliver.DOCKER_UNKNOWN]))
         self.assertEqual(rc, 1)  # never read as mid-block: escalated
-        self.assertIn("Docker didn't answer, so the tunnel wasn't restarted; escalate", self.reports[-1])
+        self.assertIn("(Docker or the block marker), so the tunnel wasn't restarted; escalate", self.reports[-1])
         self.reports.clear()
         rc = self.go("/fleet run renew-vpn main", ssh=FakeSSH(rcs=[deliver.RESTART_FAILED]))
         self.assertEqual((rc, self.reports),
@@ -659,13 +659,15 @@ esac
         marker, lock = tmp / "boot-finished", tmp / "run" / "lodestar-pia.lock"
         marker.write_text("")
 
+        block = tmp / "lodestar-block"
+
         def boot(**flags):
             log = stub / "docker.log"
             if log.exists():
                 log.unlink()
             env = {"PATH": f"{stub / 'bin'}:/usr/bin:/bin", "STUB": str(stub), "STUB_MODE": "", "TOKEN": TOKEN,
                    "PRIV": PRIV, "PUB": PUB, **{k: "1" for k, v in flags.items() if v}}
-            r = subprocess.run(["bash", "-c", deliver.bootstrap(str(run_dir), str(out), str(marker), str(lock))],
+            r = subprocess.run(["bash", "-c", deliver.bootstrap(str(run_dir), str(out), str(marker), str(lock), str(block))],
                                input=deliver.payload(LOGIN, "ca_test"), env=env, capture_output=True, timeout=60)
             restarts = [ln for ln in (log.read_text().splitlines() if log.exists() else []) if ln.startswith("restart")]
             return r.returncode, restarts
@@ -676,6 +678,20 @@ esac
         # Fail closed: if Docker can't say what's running, a block may be running.
         self.assertEqual(boot(GLUETUN=True, LODESTAR=True, PS_FAIL=True), (deliver.DOCKER_UNKNOWN, []))
         self.assertEqual(boot(GLUETUN=True, FAIL_RESTART=True), (deliver.RESTART_FAILED, ["restart gluetun"]))
+        # OP-3b: the durable block marker. A block stopped between segments (no
+        # collector running) is still mid-block; a past block's directory isn't.
+        block.mkdir()
+        self.assertEqual(boot(GLUETUN=True, LODESTAR=True), (0, ["restart gluetun", "restart -t 60 lodestar"]))
+        (block / "marker").write_text("block=1-1\nsegment=2\n")
+        self.assertEqual(boot(GLUETUN=True), (deliver.MID_BLOCK, []))
+        # Fail closed: a block path that isn't a plain directory may hide a marker.
+        (block / "marker").unlink()
+        block.rmdir()
+        block.write_text("")
+        self.assertEqual(boot(GLUETUN=True), (deliver.DOCKER_UNKNOWN, []))
+        block.unlink()
+        block.symlink_to(tmp)
+        self.assertEqual(boot(GLUETUN=True), (deliver.DOCKER_UNKNOWN, []))
         self.assertFalse(run_dir.exists())  # the login is gone in every case
 
     def test_remote_command_is_fixed(self):

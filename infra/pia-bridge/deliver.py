@@ -66,6 +66,7 @@ SSH_USER = "lodestar"  # root login is off (cloud-init); the step runs under sud
 REGION_ID = re.compile(r"[a-z0-9_-]{1,64}\Z")
 BOOT_MARKER = "/var/lib/cloud/instance/boot-finished"
 RUN_LOCK = "/run/lodestar-pia.lock"  # holds nothing; one delivery at a time per VM
+BLOCK_DIR = "/var/lib/lodestar-block"  # OP-3b's durable block marker lives here
 CLOUD_INIT_WAIT = 480  # jq, wireguard-tools and the secrets directory arrive late in boot
 FLOCK_WAIT = 180  # a retry waits this long for an orphaned earlier session, then exits 21
 STEP_TIMEOUT = 150  # the VM step: three PIA calls of at most 30 s each, with room
@@ -108,7 +109,7 @@ class Refusal(Exception):
 
 
 def bootstrap(run_dir: str = RUN_DIR, out: str = WG_CONF, boot_marker: str = BOOT_MARKER,
-              lock: str = RUN_LOCK) -> str:
+              lock: str = RUN_LOCK, block: str = BLOCK_DIR) -> str:
     """The remote side, run as root.
     1. Take a per-VM lock first, so a retried session waits for an orphaned
        earlier one (in any stage) instead of sharing its directory; exit 21 if
@@ -119,7 +120,7 @@ def bootstrap(run_dir: str = RUN_DIR, out: str = WG_CONF, boot_marker: str = BOO
        (HUP, INT and TERM exit, so EXIT runs), and run the VM step under a hard
        timeout (exit 124). A dropped session doesn't signal the remote side
        (no PTY): the step then runs to that bound, and its traps clean up."""
-    d, o, q = shlex.quote(run_dir), shlex.quote(out), shlex.quote
+    d, o, q, b = shlex.quote(run_dir), shlex.quote(out), shlex.quote, shlex.quote(block)
     return "\n".join([
         "set -eu",
         "umask 077",
@@ -151,6 +152,15 @@ def bootstrap(run_dir: str = RUN_DIR, out: str = WG_CONF, boot_marker: str = BOO
         f"out=$(timeout {DOCKER_CALL} docker ps --filter 'name=^lodestar-collector' --format x 2>/dev/null)"
         f" || exit {DOCKER_UNKNOWN}",
         f'[ -z "$out" ] || exit {MID_BLOCK}',
+        # OP-3b: the durable block marker, so a block stopped between segments
+        # is mid-block too. Fail closed: a block directory that can't be listed
+        # may hold one.
+        f"b={b}",
+        'if [ -e "$b" ] || [ -L "$b" ]; then',
+        f'  {{ [ -d "$b" ] && [ ! -L "$b" ]; }} || exit {DOCKER_UNKNOWN}',
+        f'  l=$(ls -A -- "$b" 2>/dev/null) || exit {DOCKER_UNKNOWN}',
+        f"  if printf '%s\\n' \"$l\" | grep -qx marker; then exit {MID_BLOCK}; fi",
+        "fi",
         f"if [ \"$(timeout {DOCKER_CALL} docker inspect --type container -f '{{{{.State.Running}}}}' gluetun"
         " 2>/dev/null)\" = true ]; then",
         f"  timeout {GLUETUN_RESTART} docker restart gluetun >/dev/null 2>&1 || exit {RESTART_FAILED}",
@@ -408,7 +418,7 @@ class Delivery:
                 BUSY_VM: "another delivery is still running there",
                 STEP_TIMED_OUT: "the VM step timed out",
                 RESTART_FAILED: "delivered, but restarting the tunnel failed; escalate",
-                DOCKER_UNKNOWN: "delivered, but Docker didn't answer, so the tunnel wasn't restarted; escalate"}.get(
+                DOCKER_UNKNOWN: "delivered, but the VM couldn't say whether a block is running (Docker or the block marker), so the tunnel wasn't restarted; escalate"}.get(
                     rc, f"the VM step failed (exit {rc})")
         return f"{role}: {what}; /run " + self._clean(base, wait=lost)
 
