@@ -865,7 +865,8 @@ pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 pub const UPDATES_STOP_WAIT: Duration = Duration::from_secs(2);
 /// None on Unix: the engine's task runs installs itself, and one let run
 /// on at a stop could reach its switch and turn the stop into a restart
-/// on the new version. It's aborted at once, as before.
+/// on the new version. It's aborted at once, as before (a poll already
+/// under way on another worker still runs on to its next await).
 #[cfg(not(windows))]
 pub const UPDATES_STOP_WAIT: Duration = Duration::ZERO;
 
@@ -873,7 +874,7 @@ pub const UPDATES_STOP_WAIT: Duration = Duration::ZERO;
 /// finish its last work, and only then is it aborted. A check under way
 /// may be mid-download and never see the stop; it's abandoned, which is
 /// safe, as it writes only after it's verified, by rename. With no wait,
-/// the task is aborted without being run again.
+/// the task is aborted at once, with no wait for it to be polled.
 pub(crate) async fn stop_updates(
     stop: watch::Sender<bool>,
     mut task: JoinHandle<()>,
@@ -1284,10 +1285,10 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    /// No wait (Unix): the task is aborted without being run again, so
-    /// an install under way can't reach its switch during a stop.
+    /// No wait (Unix): a task not yet polled is aborted before it is, as
+    /// the stop did before the wait existed.
     #[tokio::test]
-    async fn with_no_wait_the_updates_task_never_runs_again() {
+    async fn with_no_wait_an_unpolled_task_is_never_polled() {
         let ran = Arc::new(AtomicBool::new(false));
         let r = ran.clone();
         let (stop, _stopped) = watch::channel(false);
