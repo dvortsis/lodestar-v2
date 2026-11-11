@@ -391,10 +391,14 @@ class Wake(unittest.TestCase):
                     self.calls.append((method, path, body))
                     return {}
                 return super().__call__(method, path, body)
-        rc, _ = self.go(env, Api())
+        api = Api()
+        rc, _ = self.go(env, api)
         self.assertIsInstance(rc, SystemExit)
         self.assertIn("the bridge failed (Refusal)", self.post.bodies()[-1])
         self.assertIn(("DELETE", "/installation/token", None, "ghs_LEAKMARKTOKEN"), self.gh.calls)
+        creds = [b["auth"]["secret_value"] for m, p, b in api.calls if p.endswith("/credentials/cred_C")]
+        self.assertEqual(creds[-1], "revoked")
+        self.assertNotIn(LOCK_KEY, self.store.objects)
 
     def test_a_failed_interrupt_still_escalates_and_archives(self):
         env, _ = wake_env()
