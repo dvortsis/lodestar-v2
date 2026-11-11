@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T21:00:24Z",
+  "updated_at": "2026-11-11T21:04:31Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7653,7 +7653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T21:00:24Z",
+    "updated": "2026-11-11T21:04:31Z",
     "items": [
       {
         "slot": 1,
@@ -7690,11 +7690,12 @@
       },
       {
         "slot": 5,
-        "slice": "X-win-upd-stop-wait",
-        "role": "build",
+        "slice": "X-upd-stop-races",
+        "role": "Opus",
         "agent": "claude",
-        "doing": "Handles::shutdown bounded wait before abort + deterministic test",
-        "since": "2026-11-11T18:19Z"
+        "doing": "stop races: Unix check before switch; Windows biased select",
+        "since": "2026-11-11T21:04:31Z",
+        "status": "active"
       },
       {
         "slot": 6,
@@ -7775,7 +7776,7 @@
     }
   ],
   "heartbeat": "2026-11-11T18:39:05Z",
-  "updated": "2026-11-11T21:00:24Z",
+  "updated": "2026-11-11T21:04:31Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -7811,8 +7812,7 @@
   ],
   "review_queue": [
     "#699 CHANGES @13397e42 relayed (B1 tests L4/L6, I1 link+secure_remove, Windows reparse); then fresh delta+sec review",
-    "#708 PK-guide-3: CHANGES relayed (3 blocking, I1-I5, 13 nits); await fix push \u2192 delta review",
-    "#706 X-win-upd-stop-wait 61147fc8: fresh Opus review running; revert of X-win-upd-window decisions edit requested"
+    "#708 PK-guide-3: CHANGES relayed (3 blocking, I1-I5, 13 nits); await fix push \u2192 delta review"
   ],
   "merged": [
     {
@@ -7946,6 +7946,12 @@
       "slice": "X-cmp-handover-followups",
       "sha": "41158c5183a6c3f99169c2a29aa6f00d839c18c3",
       "at": "2026-11-11T20:15:00Z"
+    },
+    {
+      "pr": 706,
+      "slice": "X-win-upd-stop-wait",
+      "sha": "4b63499cff54edc826c5875a1349c82e4258f80a",
+      "at": "2026-11-11T21:04:31Z"
     }
   ]
 }
