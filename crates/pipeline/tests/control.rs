@@ -1464,3 +1464,224 @@ async fn off_on_off_leaves_the_source_stopped() {
     assert_eq!(stored(&db, "nyaa"), SourceState::Disabled);
     pipeline.shutdown().await.unwrap();
 }
+
+/// Reads `api_key` and takes any settings; `pins` says whether it keeps
+/// the key it was built with (`SourcePlugin::pins_credentials`).
+struct Keyed {
+    manifest: Manifest,
+    pins: bool,
+}
+
+const KEYED_POLICY: lodestar_sources::Policy = lodestar_sources::Policy {
+    credentials: &[lodestar_sources::consent::CredentialSpec {
+        name: "api_key",
+        label: "API key",
+        kind: lodestar_sources::consent::CredentialKind::Secret,
+        required: true,
+    }],
+    ..lodestar_sources::Policy::STRICT
+};
+
+impl SourcePlugin for Keyed {
+    fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+
+    fn policy(&self) -> &lodestar_sources::Policy {
+        &KEYED_POLICY
+    }
+
+    fn config_editable(&self) -> bool {
+        true
+    }
+
+    fn config_json(&self) -> Option<String> {
+        Some("{}".into())
+    }
+
+    fn check_config(&self, json: &str) -> Result<String, lodestar_sources::ConfigRefusal> {
+        Ok(json.to_owned())
+    }
+
+    fn pins_credentials(&self) -> bool {
+        self.pins
+    }
+
+    fn run(&self, mut ctx: SourceCtx) -> BoxFuture<'_, Result<(), PluginError>> {
+        Box::pin(async move {
+            ctx.shutdown.requested().await;
+            Ok(())
+        })
+    }
+}
+
+/// X-restart-required-creds: a plugin that keeps the key it was built
+/// with shows a key saved since as waiting for the next start
+/// (`config_pending`, the API's `restart_required`), and the next start
+/// clears it. One that reads its key fresh never shows it.
+#[tokio::test]
+async fn a_pinned_credential_saved_since_the_start_waits_for_a_restart() {
+    const PLANTED: &str = "planted-fake-key-0123456789";
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let keys = Arc::new(SecretStore::from_key(&[7; 32]));
+    let keyed = |id: &'static str, pins: bool| -> Arc<dyn SourcePlugin> {
+        Arc::new(Keyed {
+            manifest: Manifest {
+                id,
+                ..probe(id, Consent::Account).0.manifest.clone()
+            },
+            pins,
+        })
+    };
+    let start = || async {
+        let pipeline = Pipeline::start_with(
+            PipelineConfig::default(),
+            Store::open(&db, StoreConfig::default()).unwrap(),
+            vec![keyed("pinning", true), keyed("fresh", false)],
+            Arc::new(NoFetch),
+        )
+        .await
+        .unwrap();
+        let store = Arc::new(Mutex::new(
+            Store::open(&db, StoreConfig::default()).unwrap(),
+        ));
+        let control = Control::start(
+            pipeline.monitor(),
+            None,
+            store.clone(),
+            false,
+            Intensity::Balanced,
+        )
+        .await
+        .unwrap();
+        let creds = SourceCredentials::with_keys(store, keys.clone());
+        (pipeline, control, creds)
+    };
+    let id = |control: &Control, plugin: &str| {
+        control
+            .sources()
+            .unwrap()
+            .into_iter()
+            .find(|v| v.status.plugin == plugin)
+            .unwrap()
+            .status
+            .id
+    };
+    let pending = |control: &Control, plugin: &str| {
+        let views = control.sources().unwrap();
+        assert!(!format!("{views:?}").contains(PLANTED), "{views:?}");
+        views
+            .into_iter()
+            .find(|v| v.status.plugin == plugin)
+            .unwrap()
+            .config_pending
+    };
+    let set_key =
+        |control: &Control, creds: &SourceCredentials, plugin: &str, key: Option<&str>| {
+            let (control, creds, id) = (control.clone(), creds.clone(), id(control, plugin));
+            let key = key.map(Secret::new);
+            async move {
+                let view = control
+                    .update_credentials(id, &creds, vec![("api_key".into(), key)])
+                    .await
+                    .unwrap();
+                assert!(!format!("{view:?}").contains(PLANTED), "{view:?}");
+                view.config_pending
+            }
+        };
+
+    // A first key, stored after the start: the pinning plugin waits for
+    // the next one; the fresh one reads it at its next run.
+    let (pipeline, control, creds) = start().await;
+    assert!(!pending(&control, "pinning") && !pending(&control, "fresh"));
+    assert!(set_key(&control, &creds, "pinning", Some(PLANTED)).await);
+    assert!(!set_key(&control, &creds, "fresh", Some(PLANTED)).await);
+    assert!(!pending(&control, "fresh"), "a fresh reader never waits");
+    assert!(!format!("{control:?}").contains(PLANTED));
+    pipeline.shutdown().await.unwrap();
+    drop(control);
+
+    // The next start runs on it: nothing waits.
+    let (pipeline, control, creds) = start().await;
+    assert!(!pending(&control, "pinning"), "cleared by the restart");
+    // A hand-over to the address it already has: the same settings saved
+    // again, and a new key. The settings alone don't wait; the key does.
+    let view = control
+        .update_source(
+            id(&control, "pinning"),
+            SourceChange {
+                config: Some("{}".into()),
+                ..SourceChange::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!view.config_pending, "the running settings, saved again");
+    assert!(set_key(&control, &creds, "pinning", Some("companion-key-abc")).await);
+    // Back to the start's value: it's another write, sealed afresh, so it
+    // still waits, as a revision counter would.
+    assert!(set_key(&control, &creds, "pinning", Some(PLANTED)).await);
+    pipeline.shutdown().await.unwrap();
+    drop(control);
+
+    // Removed since the start: it waits too (it's running on a key it no
+    // longer has). The fresh reader still never does. The first write
+    // comes before any view is read, so the record is the start's, not
+    // taken at the first read.
+    let (pipeline, control, creds) = start().await;
+    let pinning_id = pipeline
+        .sources()
+        .into_iter()
+        .find(|s| s.plugin == "pinning")
+        .unwrap()
+        .id;
+    let view = control
+        .update_credentials(
+            pinning_id,
+            &creds,
+            vec![("api_key".into(), Some(Secret::new(PLANTED)))],
+        )
+        .await
+        .unwrap();
+    assert!(view.config_pending, "a write before the first read counts");
+    pipeline.shutdown().await.unwrap();
+    drop(control);
+    let (pipeline, control, creds) = start().await;
+    assert!(!pending(&control, "pinning"));
+    // Another source's write leaves it alone.
+    assert!(!set_key(&control, &creds, "fresh", Some("other-key")).await);
+    assert!(
+        !pending(&control, "pinning"),
+        "only its own credentials count"
+    );
+    assert!(set_key(&control, &creds, "pinning", None).await);
+    assert!(!set_key(&control, &creds, "fresh", None).await);
+    pipeline.shutdown().await.unwrap();
+    drop(control);
+
+    // Purged since the start: the purge stops it and drops its key with
+    // its settings, so nothing waits for a restart.
+    let (pipeline, control, creds) = start().await;
+    assert!(set_key(&control, &creds, "pinning", Some(PLANTED)).await);
+    pipeline.shutdown().await.unwrap();
+    drop(control);
+    let (pipeline, control, _creds) = start().await;
+    let id = id(&control, "pinning");
+    assert!(!pending(&control, "pinning"));
+    control.begin_purge(id, true).await.unwrap();
+    let mut cursor = Some(lodestar_store::unverified::PurgeCursor::START);
+    while let Some(from) = cursor {
+        cursor = control.purge_step(id, from).await.unwrap().next;
+    }
+    control.finish_purge(id).await.unwrap();
+    let view = control
+        .sources()
+        .unwrap()
+        .into_iter()
+        .find(|v| v.status.id == id)
+        .unwrap();
+    assert!(view.credentials.is_empty(), "the purge dropped its key");
+    assert!(!view.config_pending, "a purged source waits for nothing");
+    pipeline.shutdown().await.unwrap();
+}

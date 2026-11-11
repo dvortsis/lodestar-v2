@@ -127,6 +127,14 @@ pub trait SourcePlugin: Send + Sync {
         Err(ConfigRefusal("this source has no settings to change"))
     }
 
+    /// Whether it reads its credentials once, when it's built, and keeps
+    /// using those until the next start. A credential saved since then
+    /// is shown as waiting for a restart (`restart_required`). Plugins
+    /// that read them fresh at each run don't say.
+    fn pins_credentials(&self) -> bool {
+        false
+    }
+
     fn run(&self, ctx: SourceCtx) -> BoxFuture<'_, Result<(), PluginError>>;
 }
 
