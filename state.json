@@ -7569,7 +7569,7 @@
         "slice": "WK-11",
         "role": "build",
         "agent": "claude",
-        "doing": "#699 open at f685f526, CI running; await ready -> fresh Opus + /security-review (format, replay, requeue_back WK-9 refinement)",
+        "doing": "#699 ready at 85d8d267; fresh Opus review + security review running (session_01MMjhn97qDUZKniFoSzjMNE)",
         "since": "2026-11-11T14:05:33Z"
       },
       {
@@ -7585,7 +7585,7 @@
         "slice": "X-win-upd-window",
         "role": "build",
         "agent": "claude",
-        "doing": "#693 CHANGES (B1 watcher start-mode test, I1 Off wording, I2 biased select + final check on stop, nits); then fresh delta review",
+        "doing": "#693 ready at 5e260f33; fresh Opus delta review running; no test-only gate (runner) (session_01MMjhnAS5qWBVBGfPNAHPjt)",
         "since": "2026-11-11T12:16:21Z"
       },
       {
