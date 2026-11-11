@@ -75,10 +75,12 @@ resource "linode_instance" "main" {
 
   metadata {
     user_data = base64encode(templatefile("${path.module}/cloud-init/ubuntu24.yaml.tftpl", {
-      ssh_public_keys  = local.ssh_authorized_keys
-      role_label       = "main"
-      host_key_private = try(var.host_keys["main"].private_key, "")
-      host_key_public  = try(var.host_keys["main"].public_key, "")
+      ssh_public_keys     = local.ssh_authorized_keys
+      role_label          = "main"
+      host_key_private    = try(var.host_keys["main"].private_key, "")
+      host_key_public     = try(var.host_keys["main"].public_key, "")
+      compose_vpn_content = file("${path.module}/pia-example/compose.vpn.yaml")
+      pia_ca_cert_content = file("${path.module}/pia-example/ca.rsa.4096.crt")
     }))
   }
 
@@ -107,10 +109,12 @@ resource "linode_instance" "workers" {
 
   metadata {
     user_data = base64encode(templatefile("${path.module}/cloud-init/ubuntu24.yaml.tftpl", {
-      ssh_public_keys  = local.ssh_authorized_keys
-      role_label       = "worker-${format("%02d", count.index + 1)}"
-      host_key_private = try(var.host_keys[format("worker-%02d", count.index + 1)].private_key, "")
-      host_key_public  = try(var.host_keys[format("worker-%02d", count.index + 1)].public_key, "")
+      ssh_public_keys     = local.ssh_authorized_keys
+      role_label          = "worker-${format("%02d", count.index + 1)}"
+      host_key_private    = try(var.host_keys[format("worker-%02d", count.index + 1)].private_key, "")
+      host_key_public     = try(var.host_keys[format("worker-%02d", count.index + 1)].public_key, "")
+      compose_vpn_content = file("${path.module}/pia-example/compose.vpn.yaml")
+      pia_ca_cert_content = file("${path.module}/pia-example/ca.rsa.4096.crt")
     }))
   }
 

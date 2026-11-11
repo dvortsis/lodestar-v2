@@ -1,22 +1,84 @@
-# VPN GATEWAY ONLY. This file deliberately does not run Lodestar.
-# Provide a real PIA-negotiated WireGuard configuration in ./secrets/wg0.conf
-# according to the official PIA manual-connections instructions.
+# Lodestar Secure PIA VPN Gateway Stack
+#
+# Credentials lifecycle:
+#   - Ephemeral wg0.conf is dynamically negotiated via AWS Secrets Manager -> PIA API
+#   - Installed to root-only /run tmpfs (/run/lodestar/vpn/wg0.conf, mode 0600)
+#   - Mounted read-only into Gluetun. Zero AWS or PIA master credentials stored in container.
+#   - Survives container restarts while VM remains active; cleared automatically on VM reboot.
+#
+# Security controls:
+#   - Immutable pinned container digest (qmcgaw/gluetun v3.40.0)
+#   - Strict kill switch: FIREWALL=on drops all non-VPN egress if tunnel drops
+#   - Minimal Linux capabilities (NET_ADMIN only, drops all others)
+#   - no-new-privileges:true prevents privilege escalation
+#   - No published host ports; remote access strictly via authenticated SSH tunnel
+#   - Crawler container shares Gluetun network namespace (network_mode: "service:gluetun")
+#   - Crawler starts ONLY after independent leak check succeeds
+
 services:
   gluetun:
-    # UNPINNED EXAMPLE: `latest` changes without notice. Before any real use,
-    # pull it, review it, and pin it by digest (image: qmcgaw/gluetun@sha256:<digest>).
-    image: qmcgaw/gluetun:latest
+    # Verified official image reference from Docker Hub registry-1.docker.io:
+    # Multi-platform index digest: sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00
+    # Linux AMD64 platform manifest digest: sha256:8ec31c4b83e1f3173d43728f78a4a7ad45237fef366a4b5461e5aee93f517fba
+    image: qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00
+    container_name: gluetun
+    cap_drop:
+      - ALL
     cap_add:
       - NET_ADMIN
     devices:
       - /dev/net/tun:/dev/net/tun
     security_opt:
       - no-new-privileges:true
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
+      - net.ipv6.conf.default.disable_ipv6=1
     environment:
-      VPN_SERVICE_PROVIDER: custom
-      VPN_TYPE: wireguard
-      TZ: Etc/UTC
+      - VPN_SERVICE_PROVIDER=custom
+      - VPN_TYPE=wireguard
+      # v3.40.0 supports kernelspace and rejects missing kernel support without userspace fallback.
+      - WIREGUARD_IMPLEMENTATION=kernelspace
+      - TZ=Etc/UTC
+      - FIREWALL=on
+      - FIREWALL_ENABLED_DISABLING_IT_SHOOTS_YOU_IN_YOUR_FOOT=on
+      - FIREWALL_VPN_INPUT_PORTS=
+      - FIREWALL_OUTBOUND_SUBNETS=
+      - WIREGUARD_PERSISTENT_KEEPALIVE_INTERVAL=25s
+      - PUBLICIP_ENABLED=on
+      - PUBLICIP_FILE=/tmp/gluetun/ip
+      - DOT=on
+      - BLOCK_MALICIOUS=on
     volumes:
-      - ./secrets/wg0.conf:/gluetun/wireguard/wg0.conf:ro
+      - /run/lodestar/vpn/wg0.conf:/gluetun/wireguard/wg0.conf:ro
     restart: unless-stopped
-    # No host ports published. Access the app later via a restricted SSH tunnel.
+    healthcheck:
+      test: ["CMD", "/gluetun-entrypoint", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - vpn_isolated
+
+  crawler:
+    # Crawler service is launched strictly AFTER independent leak verification succeeds.
+    # To start crawler: ./scripts/Lodestar-Fleet.ps1 vpn-crawler-start -Target <IP>
+    image: ghcr.io/dvortsis/lodestar:v0.5.1
+    container_name: lodestar_crawler
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 512m
+    restart: "no"
+    profiles:
+      - crawler
+
+networks:
+  vpn_isolated:
+    driver: bridge
+    internal: false

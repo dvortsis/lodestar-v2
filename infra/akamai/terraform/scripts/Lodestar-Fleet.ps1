@@ -9,14 +9,21 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('status', 'inspect', 'plan', 'cost', 'access', 'deploy', 'destroy', 'reconcile')]
+    [ValidateSet('status', 'inspect', 'plan', 'cost', 'access', 'deploy', 'destroy', 'reconcile',
+                 'vpn-verify', 'vpn-provision', 'vpn-status', 'vpn-crawler', 'vpn-cleanup')]
     [string]$Action,
 
     [Parameter(Mandatory = $false)]
     [string]$Target,
 
     [Parameter(Mandatory = $false)]
-    [int]$Hours = 48
+    [int]$Hours = 48,
+
+    [Parameter(Mandatory = $false)]
+    [string]$Region = 'us-east',
+
+    [Parameter(Mandatory = $false)]
+    [switch]$StartCrawler
 )
 
 Set-StrictMode -Version Latest
@@ -241,5 +248,83 @@ To synchronize Terraform state with live Akamai Cloud (dropping watchdog-deleted
                 }
             }
         }
+    }
+
+    'vpn-verify' {
+        Audit "=== Verifying AWS Secrets Manager Access for PIA VPN ==="
+        Push-Location $projectRoot
+        try {
+            $exe = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh' } else { 'powershell.exe' }
+            if ($IsLinux -or $IsMacOS) { $exe = 'pwsh' }
+            $psHost = Join-Path $PSHOME $exe
+            & $psHost -NoProfile -File (Join-Path $scriptDir 'Deploy-PiaVpn.ps1') -VerifyOnly
+            if ($LASTEXITCODE -ne 0) { throw "vpn-verify failed with exit code $LASTEXITCODE." }
+        } finally { Pop-Location }
+    }
+
+    'vpn-provision' {
+        Audit "=== Provisioning Secure PIA WireGuard VPN ==="
+        if (-not $Target) {
+            Audit "ERROR: -Target <Linode_IP> is required for vpn-provision."
+            throw "-Target <Linode_IP> is required for vpn-provision."
+        }
+        Push-Location $projectRoot
+        try {
+            $exe = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh' } else { 'powershell.exe' }
+            if ($IsLinux -or $IsMacOS) { $exe = 'pwsh' }
+            $psHost = Join-Path $PSHOME $exe
+            $params = @('-Target', $Target, '-Region', $Region)
+            if ($StartCrawler) { $params += '-StartCrawler' }
+            & $psHost -NoProfile -File (Join-Path $scriptDir 'Deploy-PiaVpn.ps1') @params
+            if ($LASTEXITCODE -ne 0) { throw "vpn-provision failed with exit code $LASTEXITCODE." }
+        } finally { Pop-Location }
+    }
+
+    'vpn-status' {
+        Audit "=== Checking Linode VPN Status and Leak Protection ==="
+        if (-not $Target) {
+            Audit "ERROR: -Target <Linode_IP> is required for vpn-status."
+            throw "-Target <Linode_IP> is required for vpn-status."
+        }
+        Push-Location $projectRoot
+        try {
+            $exe = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh' } else { 'powershell.exe' }
+            if ($IsLinux -or $IsMacOS) { $exe = 'pwsh' }
+            $psHost = Join-Path $PSHOME $exe
+            & $psHost -NoProfile -File (Join-Path $scriptDir 'Deploy-PiaVpn.ps1') -Target $Target -Action Health
+            if ($LASTEXITCODE -ne 0) { throw "vpn-status failed with exit code $LASTEXITCODE." }
+        } finally { Pop-Location }
+    }
+
+    'vpn-crawler' {
+        Audit "=== Starting Crawler Behind Verified PIA VPN ==="
+        if (-not $Target) {
+            Audit "ERROR: -Target <Linode_IP> is required for vpn-crawler."
+            throw "-Target <Linode_IP> is required for vpn-crawler."
+        }
+        Push-Location $projectRoot
+        try {
+            $exe = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh' } else { 'powershell.exe' }
+            if ($IsLinux -or $IsMacOS) { $exe = 'pwsh' }
+            $psHost = Join-Path $PSHOME $exe
+            & $psHost -NoProfile -File (Join-Path $scriptDir 'Deploy-PiaVpn.ps1') -Target $Target -Action StartCrawler
+            if ($LASTEXITCODE -ne 0) { throw "vpn-crawler failed with exit code $LASTEXITCODE." }
+        } finally { Pop-Location }
+    }
+
+    'vpn-cleanup' {
+        Audit "=== Cleaning Up PIA VPN Runtime Secrets and Containers ==="
+        if (-not $Target) {
+            Audit "ERROR: -Target <Linode_IP> is required for vpn-cleanup."
+            throw "-Target <Linode_IP> is required for vpn-cleanup."
+        }
+        Push-Location $projectRoot
+        try {
+            $exe = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh' } else { 'powershell.exe' }
+            if ($IsLinux -or $IsMacOS) { $exe = 'pwsh' }
+            $psHost = Join-Path $PSHOME $exe
+            & $psHost -NoProfile -File (Join-Path $scriptDir 'Deploy-PiaVpn.ps1') -Target $Target -Action Cleanup
+            if ($LASTEXITCODE -ne 0) { throw "vpn-cleanup failed with exit code $LASTEXITCODE." }
+        } finally { Pop-Location }
     }
 }

@@ -20,7 +20,7 @@ Akamai's published plan description is *SSD*. This is not an assurance of a part
 ## Security properties
 
 - Akamai Cloud Firewall is **attached at Linode creation** (`firewall_id`) using explicit `interface_generation="legacy_config"`, inbound DROP except SSH TCP/22 from **your single explicit `/32`** (`ssh_admin_ipv4_cidr`). The main VM alone may also allow up to four more `/32`s in `main_extra_admin_ipv4_cidrs`, for example the AWS Windows VM's public IPv4 so it can SSH-tunnel to the UI. Every entry is validated as an IPv4 `/32`, and there is no IPv6 ingress. No inbound 8090/tcp or 6881/udp is opened on the Akamai host.
-- Root login by SSH is disabled by cloud-init; `lodestar` has the supplied public key and passwordless sudo. Do not grant the crawler container or VPN credentials sudo access.
+- Root login by SSH is disabled by cloud-init; `lodestar` has the supplied public key and scoped non-interactive sudo limited strictly to the root deployment helper (`/usr/local/sbin/lodestar-vpn-helper`). Direct sudo access to `docker`, `rm`, `install`, or `systemctl` is eliminated to enforce a strict privilege boundary. Do not grant the crawler container or VPN credentials sudo access.
 - Region is fixed to `us-east` (Newark): the 48-hour watchdog only reaps Linodes there, so Terraform refuses any other region.
 - Linode API token is read through the **local** `LINODE_TOKEN` environment variable; never placed in Terraform configuration or metadata.
 - No PIA credentials, WireGuard keys or torrent metadata are stored in cloud-init, Terraform state, logs or this repository.
@@ -141,13 +141,40 @@ lsblk -o NAME,SIZE,TYPE,ROTA,TRAN,MOUNTPOINTS
 
 `lsblk` is evidence of the guest-visible device, **not proof of physical backing media**. Validate IOPS and latency on the real search-index path using a controlled benchmark before using it in production.
 
-### PIA WireGuard gateway
+### PIA WireGuard gateway and automated credential bridge
 
-The `pia-example/` directory contains **only a VPN gateway Compose skeleton**, not your crawler and not credentials. PIA's official native WireGuard setup involves obtaining credentials and negotiating a WireGuard configuration. Keep this local and use the official project: https://github.com/pia-foss/manual-connections.
+The `pia-example/` directory contains the VPN gateway Compose stack and the crawler service template. Credentials delivery is automated via the secure bridge (`scripts/Deploy-PiaVpn.ps1` and `scripts/lodestar_pia_bridge.py`):
 
-Gluetun's current PIA integration supports OpenVPN natively; PIA WireGuard requires using its **custom WireGuard** configuration. This file must be securely transferred directly to the host from your machine. Do not upload it to GitHub, Terraform, cloud-init, or any chat or AI tool. The corresponding Docker Compose example expects `pia-example/secrets/wg0.conf`, which is not in the repository (and is git-ignored).
+1. **Central AWS Credential Store**: `lodestar/pia-vpn` in AWS Secrets Manager (`us-east-1`), read exclusively via the restricted `LodestarPiaSecretReader` role by the trusted deployment host with MFA enforcement.
+2. **Zero Linode AWS Credentials**: No AWS keys, IAM profiles, session tokens, or Secrets Manager access on any Linode.
+3. **Verified Cryptography & Dynamic Discovery**: Ephemeral WireGuard keypair generated with verified X25519 (`cryptography` library, matching RFC 7748 test vectors). WireGuard endpoints dynamically discovered via PIA authoritative server list (`serverlist.piaservers.net/vpninfo/servers/v4`).
+4. **Ephemeral Runtime Storage in `/run` tmpfs**: Ephemeral `wg0.conf` is streamed directly to `/run/lodestar/vpn/wg0.conf` (root-only mode `0600` on RAM-backed `tmpfs`). No persistent plaintext credentials on disk.
+5. **Constrained Privilege Boundary via Root Deployment Helper**: Sudoers permissions (`/etc/sudoers.d/99-lodestar-automation`) permit non-interactive execution strictly of `/usr/local/sbin/lodestar-vpn-helper` (mode `0750 root:root`), with parameterized subcommands and input sanitization, eliminating direct sudo access to arbitrary binaries.
+6. **Root-Owned Static Compose Configuration**: The canonical Compose file lives in root-owned `/etc/lodestar/vpn/compose.yaml` (mode `0644 root:root`) pre-installed via cloud-init. Arbitrary container specifications, caller-supplied Compose overrides, and host directory bind mounts from unprivileged users are rejected. Crawler startup authorization is enforced directly within the privileged helper before container execution.
+7. **Pinned Immutable Gluetun Digest**: Gluetun pinned to verified multi-platform index digest `sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00` (Linux AMD64 manifest `sha256:8ec31c4b83e1f3173d43728f78a4a7ad45237fef366a4b5461e5aee93f517fba`) with IPv6 disabled and strict kill switch (`FIREWALL=on`).
+8. **Independent Leak Gate & Active Firewall Verification**: Pre-crawler verification validates active WireGuard handshake, public egress IP mismatch against host IP, non-Akamai ISP/ASN, internal DNS resolution via Gluetun's built-in DoT server (`127.0.0.1:53`), and strict firewall OUTPUT allowlist rules (verifying default `DROP`, loopback/WireGuard accept, local RFC1918 Docker bridge subnet, strictly constrained VPN endpoint connection, and rejecting broad physical interface rules or protocol bypasses). If any check fails, containers are shut down and crawler startup is blocked.
+9. **Zero Plaintext Secret Exposure**: Private keys, tokens, and passwords are strictly redacted from logs, stdout, and error traces. Local configuration export requires explicit destination path.
 
-Never start Lodestar until you verify a working PIA exit IP, Gluetun's kill switch, DNS, and IPv6 behavior. If the VPN container fails or stops, the crawler must not fall back to the host network. With `network_mode: "service:gluetun"`, Gluetun handles the crawler's network namespace when configured appropriately. Verify this at runtime and test by deliberately stopping the VPN tunnel **without** putting test packets on the public network.
+Kernel WireGuard is required. Bootstrap and helper `preflight` require host `wg` and `nsenter`, accept an existing `/sys/module/wireguard`, otherwise run host `modprobe wireguard`, and fail unless that directory exists afterward. A generic `/proc/modules` file is insufficient. If preflight fails, install WireGuard support for the running host kernel before retrying; no persistent module configuration is changed by these checks.
+
+The pinned Gluetun v3.40.0 uses `WIREGUARD_IMPLEMENTATION=kernelspace`. Its [configuration parser](https://github.com/qdm12/gluetun/blob/v3.40.0/internal/configuration/settings/wireguard.go) accepts this value, and its [WireGuard startup implementation](https://github.com/qdm12/gluetun/blob/v3.40.0/internal/wireguard/run.go) returns `ErrKernelSupport` when kernel support is absent instead of falling back to userspace. VPN startup therefore fails closed (the container may retry); the crawler remains blocked. `NET_ADMIN` remains the only added capability. Authoritative peer handshake, transfer, and endpoint inspection remains host `nsenter -t <gluetun-pid> -n wg show wg0 <query>` via kernel Netlink, without entering the container mount namespace. Actual host module loading and a live PIA tunnel still require a separately authorized disposable-Linode integration test.
+
+```powershell
+# Verify AWS access to PIA secret:
+.\scripts\Lodestar-Fleet.ps1 vpn-verify
+
+# Provision WireGuard and start VPN on a Linode:
+.\scripts\Lodestar-Fleet.ps1 vpn-provision -Target <LINODE_IP> -Region us-east
+
+# Verify tunnel health and leak protection:
+.\scripts\Lodestar-Fleet.ps1 vpn-status -Target <LINODE_IP>
+
+# Start crawler behind verified VPN:
+.\scripts\Lodestar-Fleet.ps1 vpn-crawler -Target <LINODE_IP>
+
+# Clean up runtime credentials and containers:
+.\scripts\Lodestar-Fleet.ps1 vpn-cleanup -Target <LINODE_IP>
+```
 
 **Networking reminder:** Cloud Firewalls only guard the host's network interface, **not traffic after it has entered the PIA tunnel**. A port such as UDP/6881 is only reachable through PIA if the particular exit permits/forwards it. Never expose the web UI on public TCP/8090. Use a restricted SSH tunnel to bind it locally after setting up the app.
 

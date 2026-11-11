@@ -174,6 +174,22 @@ Run-Test "IAM Security: lodestar-agent is explicitly DENIED sts:AssumeRole on Lo
     }
 }
 
+Run-Test "IAM Security: lodestar-agent is explicitly DENIED sts:AssumeRole on LodestarPiaSecretReader" {
+    $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try {
+        $expectedAccountId = $env:LODESTAR_AWS_ACCOUNT_ID
+        if ($expectedAccountId -cnotmatch '^[0-9]{12}$') { throw 'Set LODESTAR_AWS_ACCOUNT_ID to the approved AWS account ID before IAM testing.' }
+        $res = (& $awsCli sts assume-role --role-arn "arn:aws:iam::${expectedAccountId}:role/LodestarPiaSecretReader" --role-session-name test-pia-deny-check --profile lodestar-agent 2>&1) -join "`n"
+    } finally { $ErrorActionPreference = $eap }
+    if ($LASTEXITCODE -eq 0) {
+        $res = $null  # holds live LodestarPiaSecretReader credentials; never print it
+        throw "Security failure: lodestar-agent was able to assume LodestarPiaSecretReader. Revoke the session and fix the IAM trust policy."
+    }
+    if ($res -notmatch "AccessDenied") {
+        throw "Security failure: lodestar-agent was not denied assume-role for LodestarPiaSecretReader ($res)"
+    }
+}
+
 Run-Test "IAM Security: lodestar-agent CAN assume LodestarObserver" {
     $expectedAccountId = $env:LODESTAR_AWS_ACCOUNT_ID
     if ($expectedAccountId -cnotmatch '^[0-9]{12}$') { throw 'Set LODESTAR_AWS_ACCOUNT_ID to the approved AWS account ID before IAM testing.' }
@@ -203,9 +219,34 @@ Run-Test "AWS Deploy: Refuses execution when administrator provisioner session i
 Run-Test "Akamai Reconcile: terraform plan -refresh-only succeeds" {
     Push-Location $projectRoot
     try {
-        & terraform plan -refresh-only
+        $hasTfvars = Test-Path (Join-Path $projectRoot "terraform.tfvars")
+        $planArgs = @("plan", "-refresh-only", "-input=false")
+        if (-not $hasTfvars) {
+            $planArgs += @("-var", "ssh_admin_ipv4_cidr=192.0.2.1/32")
+        }
+        & terraform @planArgs
         if ($LASTEXITCODE -ne 0) { throw "terraform plan -refresh-only failed" }
     } finally { Pop-Location }
+}
+
+# -----------------------------------------------------------------------------
+# 7. Secure PIA VPN Bridge Automation Tests
+# -----------------------------------------------------------------------------
+Run-Test "PIA VPN: Automated unit test suite passes (all 26 security controls)" {
+    $testScript = Join-Path $projectRoot 'tests\test_pia_bridge.py'
+    $py = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $py) { $py = Get-Command py -ErrorAction SilentlyContinue }
+    if (-not $py) { throw "Python not found" }
+    $out = (& $py.Source $testScript 2>&1) -join "`n"
+    if ($LASTEXITCODE -ne 0) { throw "PIA bridge unit test suite failed: $out" }
+}
+
+Run-Test "PIA VPN Deploy: Dry-run simulation executes cleanly" {
+    $deployVpn = Join-Path $scriptsDir 'Deploy-PiaVpn.ps1'
+    $out = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $deployVpn -DryRun -Target '192.0.2.1' 2>&1) -join "`n"
+    if ($LASTEXITCODE -ne 0 -or $out -notmatch '\[DRY-RUN\] Dry run complete') {
+        throw "Deploy-PiaVpn.ps1 dry-run simulation failed: $out"
+    }
 }
 
 $resultColor = if ($failed -eq 0) { "Green" } else { "Red" }

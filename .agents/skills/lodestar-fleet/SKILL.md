@@ -135,6 +135,13 @@ Set-Location "$env:LODESTAR_REPO_ROOT\infra\akamai\terraform"
 .\scripts\Lodestar-Fleet.ps1 access -Target <INSTANCE_ID> # SSM session as LodestarProvisioner
 .\scripts\Lodestar-Fleet.ps1 access -Target <PUBLIC_IP>   # SSH to an Akamai VM
 .\scripts\Lodestar-Fleet.ps1 reconcile                    # can rewrite local state files
+
+# PIA VPN Credential Delivery & Egress Protection
+.\scripts\Lodestar-Fleet.ps1 vpn-verify                                              # verifies AWS Secrets Manager access
+.\scripts\Lodestar-Fleet.ps1 vpn-provision -Target <AKAMAI_IP> [-Region us-east]   # provisions wg0.conf to /run tmpfs
+.\scripts\Lodestar-Fleet.ps1 vpn-status -Target <AKAMAI_IP>                          # verifies tunnel and leak protection
+.\scripts\Lodestar-Fleet.ps1 vpn-crawler -Target <AKAMAI_IP>                         # launches crawler behind verified VPN
+.\scripts\Lodestar-Fleet.ps1 vpn-cleanup -Target <AKAMAI_IP>                         # removes runtime secrets and stops VPN
 ```
 
 ### Read-only AWS CLI (observer profile)
@@ -214,6 +221,24 @@ Asks the human to type `DESTROY LODESTAR`.
 ### 🔒 Reconcile state after watchdog deletions (human-run only)
 ```powershell
 terraform apply -refresh-only
+```
+
+### 🔒 Private Internet Access (PIA) VPN management (human-run only)
+```powershell
+# 1. Verify restricted AWS Secrets Manager access
+.\scripts\Lodestar-Fleet.ps1 vpn-verify
+
+# 2. Provision WireGuard VPN to target Linode (uses root helper /usr/local/sbin/lodestar-vpn-helper)
+.\scripts\Lodestar-Fleet.ps1 vpn-provision -Target <LINODE_IP> -Region us-east
+
+# 3. Check VPN health, WireGuard handshake, and independent leak protection
+.\scripts\Lodestar-Fleet.ps1 vpn-status -Target <LINODE_IP>
+
+# 4. Start crawler workload behind verified VPN
+.\scripts\Lodestar-Fleet.ps1 vpn-crawler -Target <LINODE_IP>
+
+# 5. Clean up runtime secrets and containers
+.\scripts\Lodestar-Fleet.ps1 vpn-cleanup -Target <LINODE_IP>
 ```
 
 ---

@@ -6,3 +6,4 @@
 crates/metainfo/tests/golden/** -text
 fuzz/seeds/** -text
 docs/operations/imports/bitmagnet-restore/** text eol=lf
+*.sh text eol=lf

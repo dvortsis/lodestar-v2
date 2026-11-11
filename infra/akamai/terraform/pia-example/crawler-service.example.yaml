@@ -1,19 +1,23 @@
-# Documentation-only service snippet to merge into compose.vpn.yaml
-# once the actual Lodestar container image and required mounts are known.
-# This file is NOT runnable and is deliberately not a full Compose definition.
+# Documentation-only service snippet for Lodestar crawler behind Gluetun.
 #
-#   crawler:
-#     image: REPLACE_WITH_YOUR_LODESTAR_IMAGE_AND_EXACT_TAG
-#     network_mode: "service:gluetun"
-#     depends_on:
-#       gluetun:
-#         condition: service_started
-#     security_opt:
-#       - no-new-privileges:true
-#     cap_drop:
-#       - ALL
-#     restart: "no"
+# Security rules:
+#   - Never set network_mode: bridge or host for the crawler.
+#   - Never mount /var/run/docker.sock into the crawler.
+#   - Keep depends_on condition: service_healthy (never service_started).
+#   - Apply no-new-privileges:true and cap_drop: ALL.
+#   - For worker Linodes (g6-nanode-1), ensure memory limit stays below 512m.
 #
-# Never set network_mode: bridge or host for the crawler.
-# Never mount /var/run/docker.sock into the crawler.
-# For worker deployments, confirm the crawler stays below 256 MiB under load.
+services:
+  crawler:
+    image: ghcr.io/dvortsis/lodestar:v0.5.1
+    container_name: lodestar_crawler
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 512m
+    restart: "no"
