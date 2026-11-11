@@ -6711,7 +6711,6 @@
       "item": "windows_service.rs a_portable_restart_serves_again_on_the_same_port: relaunched copy started 10 ms after app.relaunch and hit sqlite disk I/O error (old process still held the store). Runner Opus subagent building the fix on slice/X-flake-portable-restart; seen on #655 ca0fbf6d job 130326742759. Add slices.yaml entry in next runner PR."
     },
     "next runner PR: PK-win-portable-upd owns += crates/lodestar/src/cli/util.rs (runner approved 2026-11-11T05:2xZ; refuse_during_update_rollback also refuses on portable.json rolling_back or unreadable)",
-    "X-prowlarr-settings #658 (54982496): option 2 done; Windows portable-restart red is \u00a72.18 once X-flake-portable-restart PR opens",
     "next runner PR: CMP-9c owns += web/src/lib/features/wizard/messages/{en,zh}.json (keys only, runner 2026-11-11)",
     "X-flake-portable-restart: PR #662 open (81fe7bb3), runner subagent; Opus review running; merge first, then PRs red only on a_portable_restart_* may use \u00a72.18. next runner PR: slices.yaml entry (owns system/restart.rs, windows/mod.rs [not spawn()], tests/windows_service.rs, its decisions file) + placement",
     "OP-5 first-run check: the agent's helper fetch is unauthenticated (GitHub's 60/h limit from a shared egress IP); from rv-655 N4",
@@ -7451,7 +7450,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T06:42Z",
+    "updated": "2026-11-11T06:50Z",
     "items": [
       {
         "slot": 1,
@@ -7471,11 +7470,11 @@
       },
       {
         "slot": 3,
-        "slice": "X-prowlarr-settings",
+        "slice": "X-restart-required-creds",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8tTJD1DZeuMq9kZKw",
-        "since": "2026-11-11T04:06Z"
+        "doing": "restart_required covers a changed pinned credential (same session after #658)",
+        "since": "2026-11-11T06:50Z"
       },
       {
         "slot": 4,
@@ -7571,7 +7570,7 @@
     }
   ],
   "heartbeat": "2026-11-11T04:06Z",
-  "updated": "2026-11-11T06:43Z",
+  "updated": "2026-11-11T06:50Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
