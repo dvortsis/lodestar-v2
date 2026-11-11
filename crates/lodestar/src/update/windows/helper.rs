@@ -382,8 +382,16 @@ pub fn run(ctx: &Context, sys: &dyn System) -> Result<Outcome, Refusal> {
         .ok()
         .flatten();
     // Handled once, unless its install was blocked (1920) and is due again.
-    if handled.is_some_and(|h| h.id == request.id) && !blocked_retry(ctx, &request.id) {
-        return Ok(Outcome::Nothing);
+    if handled.is_some_and(|h| h.id == request.id) {
+        if !blocked_retry(ctx, &request.id, &version) {
+            return Ok(Outcome::Nothing);
+        }
+        // One retry per blocked attempt: the record keeps the count but no
+        // longer names the request, so a retry that ends any other way (a
+        // refusal, a busy Installer, a stale manifest) isn't repeated.
+        if !consume_retry(ctx) {
+            return Ok(Outcome::Nothing);
+        }
     }
     // Acted on once, whatever happens next.
     let bytes = serde_json::to_vec(&Handled {
@@ -463,9 +471,49 @@ fn read_blocked(ctx: &Context) -> Option<Blocked> {
         .flatten()
 }
 
-/// Whether request `id` was blocked last time and may be tried again.
-fn blocked_retry(ctx: &Context, id: &str) -> bool {
-    read_blocked(ctx).is_some_and(|b| b.id == id && b.attempts < msi::MAX_BLOCKED)
+/// Whether request `id` was blocked last time and may be tried again: not
+/// once the user has skipped the version since (`<data>\bin\skipped`; the
+/// service can write it, but it can only stop a retry, so it fails safe:
+/// a list that can't be read stops it too).
+fn blocked_retry(ctx: &Context, id: &str, version: &Version) -> bool {
+    let due = read_blocked(ctx).is_some_and(|b| {
+        b.id == id && b.version == version.to_string() && b.attempts < msi::MAX_BLOCKED
+    });
+    if !due {
+        return false;
+    }
+    if skipped_since(ctx, version) {
+        let _ = std::fs::remove_file(ctx.staging.dir.join(BLOCKED));
+        return false;
+    }
+    true
+}
+
+/// Whether `skipped` lists `version` (or can't be read).
+fn skipped_since(ctx: &Context, version: &Version) -> bool {
+    let Ok(Some(bin)) = Bin::existing(&ctx.data_dir) else {
+        return true;
+    };
+    match bin.read::<Vec<serde_json::Value>>(win::SKIPPED_FILE) {
+        Ok(None) => false,
+        Ok(Some(list)) => list
+            .iter()
+            .any(|e| e.get("version").and_then(|v| v.as_str()) == Some(&version.to_string())),
+        Err(_) => true,
+    }
+}
+
+/// Takes the one retry a blocked attempt allows: the record stays (its
+/// count) without its request. Whether it could be saved; without that
+/// there's no retry.
+fn consume_retry(ctx: &Context) -> bool {
+    let Some(mut b) = read_blocked(ctx) else {
+        return false;
+    };
+    b.id.clear();
+    serde_json::to_vec(&b)
+        .ok()
+        .is_some_and(|bytes| layout::write_atomic(&ctx.staging.dir, BLOCKED, &bytes).is_ok())
 }
 
 /// The tail of an `msiexec` log in staging, at most [`msi::LOG_TAIL`]
@@ -478,10 +526,18 @@ fn log_tail(ctx: &Context, log: &Path) -> Option<Vec<u8>> {
     }
     let mut f = layout::open_nofollow(log).ok()?;
     let len = f.metadata().ok()?.len();
+    // The file's own byte-order mark says how it's encoded, wherever the
+    // tail starts: kept in front of a tail that starts past it.
+    let mut head = [0u8; 2];
+    let bom = f.read_exact(&mut head).is_ok() && head == [0xFF, 0xFE];
     // An even offset, so UTF-16 stays aligned.
     let from = len.saturating_sub(msi::LOG_TAIL) & !1;
     f.seek(io::SeekFrom::Start(from)).ok()?;
-    let mut tail = Vec::new();
+    let mut tail = if bom && from > 0 {
+        vec![0xFF, 0xFE]
+    } else {
+        Vec::new()
+    };
     f.take(msi::LOG_TAIL).read_to_end(&mut tail).ok()?;
     Some(tail)
 }
@@ -588,6 +644,8 @@ fn attempt(
     }
     // Before msiexec: a crash from here on is finished by the next run.
     let args = msi::msiexec_args(&staged, &staging.log());
+    // The run's log is its own: an earlier one's 1920 is never read.
+    let _ = std::fs::remove_file(staging.log());
     let mut journal = match rollback::installing(ctx, &request.id, running, &version) {
         Ok(j) => j,
         Err(e) => {
@@ -678,8 +736,19 @@ pub(super) fn after_install(
                 id: journal.id.clone(),
                 attempts,
             };
-            if let Ok(bytes) = serde_json::to_vec(&record) {
-                let _ = layout::write_atomic(&ctx.staging.dir, BLOCKED, &bytes);
+            let saved = serde_json::to_vec(&record)
+                .ok()
+                .is_some_and(|b| layout::write_atomic(&ctx.staging.dir, BLOCKED, &b).is_ok());
+            if !saved {
+                // Without its count the bound couldn't hold: an ordinary
+                // failure, as before this retry existed.
+                mark_failed(ctx, sys, &version);
+                sys.start_service();
+                return Outcome::Failed {
+                    version,
+                    code,
+                    why: None,
+                };
             }
             sys.start_service();
             Outcome::InstallBlocked {
@@ -2363,6 +2432,127 @@ mod tests {
         assert!(after.calls().is_empty());
     }
 
+    /// The count is per version, not per request: a new request for the
+    /// same version can't reset it (a release whose service never starts
+    /// is still skipped), a busy Installer leaves it as it is, and another
+    /// version starts again at 1.
+    #[test]
+    fn the_count_is_per_version_across_requests() {
+        let env = Env::new("0.6.0");
+        // Each offer a later manifest, as the service's checks would fetch.
+        let ts = std::cell::Cell::new(NOW - 600);
+        let offer = |version: &str| {
+            ts.set(ts.get() + 10);
+            let envelope = env.envelope(Channel::Stable, ts.get(), version, MSI);
+            env.leave(version, Channel::Stable, &envelope, MSI);
+        };
+        let blocked = |env: &Env| match env.run(&held(1603)).unwrap() {
+            Outcome::InstallBlocked { attempts, .. } => attempts,
+            other => panic!("{other:?}"),
+        };
+        offer("0.7.0");
+        assert_eq!(blocked(&env), 1);
+        offer("0.7.0");
+        let busy = Fake {
+            code: 1618,
+            ..Fake::default()
+        };
+        assert_eq!(env.run(&busy).unwrap().code(), "installer_busy");
+        offer("0.7.0");
+        assert_eq!(blocked(&env), 2);
+        offer("0.8.0");
+        assert_eq!(blocked(&env), 1, "another version");
+        offer("0.7.0");
+        assert_eq!(blocked(&env), 1, "0.8.0 replaced 0.7.0's count");
+        offer("0.7.0");
+        assert_eq!(blocked(&env), 2);
+        offer("0.7.0");
+        assert_eq!(env.run(&held(1603)).unwrap().code(), "install_failed");
+        assert!(skipped(&env));
+    }
+
+    /// A blocked request is retried once per blocked attempt: one that then
+    /// ends any other way (here the service won't stop) isn't tried again
+    /// at every boot; and one the user skipped since isn't tried at all.
+    #[test]
+    fn a_retry_runs_once_and_never_after_a_skip() {
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        assert_eq!(env.run(&held(1603)).unwrap().code(), "install_blocked");
+        let stuck = Fake {
+            stop_fails: true,
+            ..Fake::default()
+        };
+        assert_eq!(refused(env.run(&stuck)), "service_running");
+        let next = Fake::default();
+        assert_eq!(env.run(&next).unwrap(), Outcome::Nothing);
+        assert!(next.calls().is_empty(), "{:?}", next.calls());
+        // The count stays for the version's next request.
+        env.offer("0.7.0");
+        assert_eq!(
+            env.run(&held(1603)).unwrap(),
+            Outcome::InstallBlocked {
+                version: Version::new(0, 7, 0),
+                code: 1603,
+                attempts: 2
+            }
+        );
+        // The user skips it: no retry, and the record goes.
+        std::fs::write(
+            env.ctx.data_dir.join("bin").join("skipped"),
+            br#"[{"version":"0.7.0","reason":"user"}]"#,
+        )
+        .unwrap();
+        let after = Fake::default();
+        assert_eq!(env.run(&after).unwrap(), Outcome::Nothing);
+        assert!(after.calls().is_empty(), "{:?}", after.calls());
+        assert!(!env.ctx.staging.dir.join(BLOCKED).exists());
+    }
+
+    /// The retry is the blocked request's own: the same id rewritten for
+    /// another version isn't retried.
+    #[test]
+    fn a_retry_is_for_the_blocked_version_only() {
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        assert_eq!(env.run(&held(1603)).unwrap().code(), "install_blocked");
+        let id = read_blocked(&env.ctx).unwrap().id;
+        let req = json!({"format": 1, "id": id, "version": "0.8.0", "channel": "stable"});
+        std::fs::write(env.updates(REQUEST), bytes(&req)).unwrap();
+        let next = Fake::default();
+        assert_eq!(env.run(&next).unwrap(), Outcome::Nothing);
+        assert!(next.calls().is_empty(), "{:?}", next.calls());
+    }
+
+    /// The rollback's reinstall too: a 1603 with no log of its own after a
+    /// blocked one is an ordinary failure, and halts.
+    #[test]
+    fn an_earlier_reinstalls_log_is_never_read() {
+        let mut env = Env::new("0.6.0");
+        rollback_to_the_reinstall(&mut env);
+        assert_eq!(as_copy(&env, &held(1603)).unwrap(), 1603);
+        assert_eq!(env.run(&held(1603)).unwrap().code(), "rollback_pending");
+        let silent = Fake {
+            code: 1603,
+            ..Fake::default()
+        };
+        assert_eq!(env.run(&silent).unwrap().code(), "rollback_halted");
+    }
+
+    /// A 1603 whose run wrote no log of its own never reads the last one's
+    /// 1920: the log goes before each run.
+    #[test]
+    fn an_earlier_runs_log_is_never_read() {
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        assert_eq!(env.run(&held(1603)).unwrap().code(), "install_blocked");
+        let silent = Fake {
+            code: 1603,
+            ..Fake::default()
+        };
+        assert_eq!(env.run(&silent).unwrap().code(), "install_failed");
+    }
+
     /// A blocked install that then installs ends the count, and a 1603
     /// whose log shows no 1920 is skipped at once, as before.
     #[test]
@@ -2448,6 +2638,15 @@ mod tests {
         std::fs::write(&log, utf8).unwrap();
         assert!(blocked_by_1920(&env.ctx, 1603, &log));
         assert!(!blocked_by_1920(&env.ctx, 1625, &log), "1603 only");
+        // A long UTF-16 log whose tail has no ASCII run at its start (a
+        // non-Latin language): the file's own mark decides.
+        let cyrillic: Vec<u8> = "Ошибка 1920. Служба 'Lodestar' не запущена. Журнал "
+            .repeat(msi::LOG_TAIL as usize / 40)
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        std::fs::write(&log, [&[0xFF, 0xFE][..], &cyrillic[..]].concat()).unwrap();
+        assert!(blocked_by_1920(&env.ctx, 1603, &log));
         // Outside staging: never read.
         let outside = env.ctx.data_dir.join("msiexec.log");
         std::fs::write(&outside, utf8).unwrap();

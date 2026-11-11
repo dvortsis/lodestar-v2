@@ -609,6 +609,27 @@ mod tests {
         assert!(held_open(&utf16(german, true), "Lodestar"));
     }
 
+    proptest::proptest! {
+        /// Any bytes at all: an answer, never a panic.
+        #[test]
+        fn any_log_bytes_are_safe(bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..4096)) {
+            let _ = held_open(&bytes, "Lodestar");
+        }
+
+        /// A 1920 line between any printable lines is found, in UTF-8 and in
+        /// UTF-16 with its mark.
+        #[test]
+        fn a_1920_line_is_found_among_any_others(
+            before in "[ -~\r\n]{0,512}",
+            after in "[ -~\r\n]{0,512}",
+        ) {
+            let line = "Product: Lodestar -- Error 1920. Service 'Lodestar' failed to start.";
+            let text = format!("{before}\n{line}\n{after}");
+            proptest::prop_assert!(held_open(text.as_bytes(), "Lodestar"));
+            proptest::prop_assert!(held_open(&utf16(&text, true), "Lodestar"));
+        }
+    }
+
     /// Anything else isn't: another error, 1920 for another service, the
     /// number inside another one or without its word, an empty or
     /// garbled log.

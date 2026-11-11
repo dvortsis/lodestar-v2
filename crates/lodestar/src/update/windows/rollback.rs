@@ -611,10 +611,6 @@ fn done_of(j: &Journal) -> u8 {
     }
 }
 
-/// A final stop. Neither version starts once the service was stopped
-/// (§12.2): it stays stopped and disabled, with the marker in place
-/// (it goes only at step 5). Before step 1 nothing was changed. The
-/// journal, the Event Log and `result.json` say how to recover.
 /// What made a rollback halt, for its recovery text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cause {
@@ -624,6 +620,10 @@ pub enum Cause {
     Journal,
 }
 
+/// A final stop. Neither version starts once the service was stopped
+/// (§12.2): it stays stopped and disabled, with the marker in place
+/// (it goes only at step 5). Before step 1 nothing was changed. The
+/// journal, the Event Log and `result.json` say how to recover.
 fn halt(
     ctx: &Context,
     sys: &dyn System,
@@ -793,6 +793,8 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
                 // Checked again right before it runs.
                 let (staged, pins) = halt_on(previous_msi(ctx, &j.from))?;
                 let log = ctx.staging.dir.join(ROLLBACK_LOG);
+                // The run's log is its own: an earlier one's 1920 is never read.
+                let _ = std::fs::remove_file(&log);
                 let copy = helper::copy_name().map_err(|e| Stop::Retry(e.to_string()))?;
                 j.msi = Some(MsiRun {
                     purpose: Purpose::Rollback,
