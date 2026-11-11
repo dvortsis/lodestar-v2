@@ -6841,8 +6841,8 @@
       "id": "X-worker-settings-pointer (dropped)",
       "what": "Not needed: WK-16 builds Settings -> Workers; workers need v0.6+, template already says so."
     },
-    "#664 owner PR: owner chose runner fixes + accepted listed widening (2026-11-11T18:31Z). Runner pushed c5d69402 (B1 job_workflow_ref equal-accept, B2 UTC, N12 tests); fresh Opus delta review running; then ready-for-review + merge. Deploy nothing.",
-    "slices.yaml next runner PR: add CMP-11b (register windows_qbittorrent::configurator under cfg(windows) + fix companion_wiring_guided_tests.rs; after #692 merges). CMP-11 is #705 @3544233f, fallback (b)."
+    "slices.yaml next runner PR: add CMP-11b (register windows_qbittorrent::configurator under cfg(windows) + fix companion_wiring_guided_tests.rs; after #692 merges). CMP-11 is #705 @3544233f, fallback (b).",
+    "#664 merged (source only, nothing deployed). Optional nits for a later fleet PR: rename 'reusable-only' test labels (test_policy_audit.py:226, test_deployment_policy.py:103); 'the runner' -> 'the fleet runner' in new doc sentences; compare against expected['workflow_ref'] at deployment_policy.py:127. Commissioning still owner-only (N6: verify STS exposes actor_id/ref/repository_id/environment condition keys)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7698,7 +7698,7 @@
     }
   ],
   "heartbeat": "2026-11-11T15:38:57Z",
-  "updated": "2026-11-11T18:31Z",
+  "updated": "2026-11-11T18:36Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -7734,7 +7734,6 @@
   ],
   "review_queue": [
     "#704 PK-guide-2 CHANGES relayed 2026-11-11T18:31Z",
-    "#664 delta c5d69402 in review 2026-11-11T18:31Z",
     "#703 X-cmp9b-catch ready @1666594db4cf863e6f505a4446476bbec14c2198 (green) - next free reviewer slot"
   ],
   "merged": [
@@ -7833,6 +7832,12 @@
       "slice": "X-win-upd-window",
       "sha": "bc4577548e6d9615eb729a5aa69b4ce113f9194b",
       "at": "2026-11-11T18:19Z"
+    },
+    {
+      "pr": 664,
+      "slice": "security/fleet-control-cleanup (owner)",
+      "sha": "35520415869de775682f72dd3eb0837a90b53849",
+      "at": "2026-11-11T18:36Z"
     }
   ]
 }
