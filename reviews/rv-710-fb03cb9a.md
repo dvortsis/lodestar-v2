@@ -1,0 +1,6 @@
+# rv-710 @fb03cb9a (CMP-13): MERGE (fix I1, I2 in PR)
+Fresh Opus review + security pass, 2026-11-11 (UTC). Blocking: none. Tests: companion-pins 43 OK (gpg 2.4.4), .github/scripts 87 OK.
+Workflow: dispatch only, contents: read, no secrets, persist-credentials false, SHA-pinned actions, inputs via env, exact ref check. Tool: fresh gpg homedir, full fingerprints, exact keyring, VALIDSIG parsed, no TOCTOU, check_url every hop, auth to first host only, byte cap, output after all checks.
+I1: main-only check overstated (decisions :82-83, README :141, workflow :47-48): a dispatch on another branch runs that branch's workflow/tool. Say it guards against mistakes only; pin-PR reviewer confirms with gh run view headBranch/headSha/event and tools/companion-pins at headSha == main.
+I2: COMPANION_PINS output (ci_changes.py:85-88) needs path tests incl. near-misses; assert false in docs-only e2e test (~:94).
+Nits: pin.py:727-733 writes outside try, catalogue replaced before report (stage both, then rename); :176-182 deadline only between reads; :488-496 single-platform manifest arch unchecked; :69 safe() passes @ (pings in PR text); :109-128 real Transport/_NoRedirect untested; workflow :77 bash doesn't wait for tee process substitution.
