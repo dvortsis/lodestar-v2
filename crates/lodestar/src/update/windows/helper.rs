@@ -207,6 +207,16 @@ pub trait System {
     /// Whether the service reaches Running within [`HEALTH_WAIT`] and
     /// stays there for [`HEALTH_HOLD`].
     fn healthy(&self) -> bool;
+    /// The version of the program on disk in Program Files, when an install
+    /// is judged. On Windows that's this process's own version: the run
+    /// that judges an install's answer is a run of that program that reads
+    /// the answer after `msiexec` ended (the copy's, the boot run or one
+    /// the service starts). A program still loaded while msiexec ran makes
+    /// its replacement wait for a restart (3010), never an exit 0. Tests,
+    /// which run `msiexec` in the same process, model what it put on disk.
+    fn on_disk(&self, ctx: &Context) -> Option<String> {
+        ctx.running.as_ref().map(ToString::to_string)
+    }
     /// Sets the service's start type.
     fn set_start(&self, start: Start) -> io::Result<()>;
     /// The service's start type now.
@@ -714,7 +724,7 @@ pub(super) fn after_install(
             let attempts = read_blocked(ctx)
                 .filter(|b| b.version == journal.to)
                 .map_or(0, |b| b.attempts)
-                + 1;
+                .saturating_add(1);
             if attempts >= msi::MAX_BLOCKED {
                 let _ = std::fs::remove_file(ctx.staging.dir.join(BLOCKED));
                 mark_failed(ctx, sys, &version);
@@ -773,6 +783,30 @@ pub(super) fn after_install(
             sys.start_service();
             Outcome::InstallerBusy { version, code }
         }
+        Installed::Done if sys.on_disk(ctx).as_deref() == Some(journal.from.as_str()) => {
+            // Exit 0, but `from` is still the program on disk: Windows
+            // Installer counts `to` installed without having replaced the
+            // program (a maintenance run of a package it already has, after a
+            // restart that never put it in place). Reporting it installed
+            // would offer it again at every check; skipped, with the reason.
+            rollback::clear(ctx);
+            mark_failed(ctx, sys, &version);
+            let _ = sys.set_start(journal.start_before.unwrap_or(Start::Auto));
+            sys.start_service();
+            let why = format!(
+                "Windows Installer reported {version} installed (exit 0), but the program in \
+                 Program Files is still {from}, so it wasn't. {version} is skipped. To install \
+                 it, an administrator repairs or removes Lodestar in Settings > Apps, then \
+                 installs the {version} MSI by hand.",
+                from = journal.from
+            );
+            sys.event_log(&format!("Lodestar's update helper: {why}"));
+            Outcome::Failed {
+                version,
+                code,
+                why: Some(why),
+            }
+        }
         done => {
             // Installed: a staging problem doesn't undo that, so it's
             // reported and probation still runs.
@@ -786,8 +820,7 @@ pub(super) fn after_install(
             // still `from`: the copy ran msiexec once the program had ended,
             // so `to` is usually in place and running, and judged now.
             let restart = done == Installed::RestartNeeded
-                && ctx.running.as_ref().map(|v| v.to_string()).as_deref()
-                    == Some(journal.from.as_str());
+                && sys.on_disk(ctx).as_deref() == Some(journal.from.as_str());
             // The restart flag and the cleared run in the same write.
             journal.restart = restart;
             journal.answer = None;
@@ -1682,6 +1715,15 @@ mod tests {
         at_msiexec: Option<Hook>,
         /// What msiexec writes to its log (`/l*v`, the argument after it).
         log: Option<Vec<u8>>,
+        /// The program on disk once this fake's msiexec has run: an exit 0
+        /// puts its MSI's version there (`lodestar-<v>.msi`), unless
+        /// `stays` (a maintenance run that replaces nothing); any other
+        /// exit leaves it. Unset (no msiexec here): the run's own version.
+        disk: Mutex<Option<String>>,
+        stays: bool,
+        /// The program on disk after this fake's msiexec whatever its exit
+        /// (a 3010 that replaced it anyway: the copy ran once it had ended).
+        disk_after: Option<String>,
         /// A source to overwrite once it's copied: (name, path, bytes).
         swap: Option<(String, PathBuf, Vec<u8>)>,
         calls: Mutex<Vec<String>>,
@@ -1763,6 +1805,15 @@ mod tests {
             if let Some(log) = &self.log {
                 std::fs::write(&args[5], log).unwrap();
             }
+            if let Some(v) = &self.disk_after {
+                *self.disk.lock().unwrap() = Some(v.clone());
+            } else if self.code == 0 && self.msi_error.is_none() && !self.stays {
+                let name = Path::new(&args[1]).file_name().unwrap().to_string_lossy();
+                let v = name
+                    .strip_prefix("lodestar-")
+                    .and_then(|n| n.strip_suffix(".msi"));
+                *self.disk.lock().unwrap() = v.map(str::to_string);
+            }
             let msi = std::fs::read(&args[1]).unwrap();
             if let Some(data) = &self.migrate {
                 let store = data.join("lodestar.db");
@@ -1821,6 +1872,13 @@ mod tests {
                 return Err(io::Error::other("no boot time"));
             }
             Ok(self.boot)
+        }
+        fn on_disk(&self, ctx: &Context) -> Option<String> {
+            self.disk
+                .lock()
+                .unwrap()
+                .clone()
+                .or_else(|| ctx.running.as_ref().map(ToString::to_string))
         }
         fn lock_busy(&self) {
             if let Some(act) = &self.on_lock_busy {
@@ -2319,6 +2377,9 @@ mod tests {
             fn installer_idle(&self, w: Duration) -> bool {
                 self.fake.installer_idle(w)
             }
+            fn on_disk(&self, c: &Context) -> Option<String> {
+                self.fake.on_disk(c)
+            }
             fn run_msiexec(&self, d: &Path, a: &[OsString], c: &str) -> Result<Ran, String> {
                 self.fake.run_msiexec(d, a, c)
             }
@@ -2551,6 +2612,101 @@ mod tests {
             ..Fake::default()
         };
         assert_eq!(env.run(&silent).unwrap().code(), "install_failed");
+    }
+
+    /// #663 item 2: exit 0 with `from` still the program on disk (Windows
+    /// Installer counts `to` installed without having replaced it) is
+    /// skipped with a plain reason, never reported installed, so it isn't
+    /// offered again at every check. Through the copy too.
+    #[test]
+    fn an_exit_0_that_left_the_old_program_is_skipped() {
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        let fake = Fake {
+            stays: true,
+            start_before: Some(Start::Manual),
+            ..Fake::default()
+        };
+        let out = env.run(&fake).unwrap();
+        let Outcome::Failed {
+            code: 0,
+            why: Some(why),
+            ..
+        } = &out
+        else {
+            panic!("{out:?}");
+        };
+        assert!(
+            why.contains("still 0.6.0") && why.contains("skipped"),
+            "{why}"
+        );
+        assert!(skipped(&env));
+        assert_eq!(
+            &fake.calls()[fake.calls().len() - 3..],
+            ["manual", "start", "event"],
+            "the start type found goes back"
+        );
+        assert!(!env.ctx.staging.dir.join(rollback::JOURNAL).exists());
+        assert!(!env.ctx.staging.current().exists(), "not kept as installed");
+        assert_eq!(env.answer().outcome, "install_failed");
+        // Handed off: the run after the copy is still 0.6.0.
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        let hand = Fake {
+            hand_off: true,
+            ..Fake::default()
+        };
+        assert_eq!(env.run(&hand).unwrap(), Outcome::HandedOff);
+        let copy = Fake {
+            stays: true,
+            ..Fake::default()
+        };
+        assert_eq!(as_copy(&env, &copy).unwrap(), 0);
+        let next = Fake::default();
+        assert_eq!(env.run(&next).unwrap().code(), "install_failed");
+        assert!(skipped(&env));
+    }
+
+    /// A 3010 waits for the restart only while the program on disk is
+    /// `from`: one that has `to` on disk already is judged now, whatever
+    /// version this run happens to be.
+    #[test]
+    fn a_3010_is_judged_by_the_program_on_disk() {
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        let fake = Fake {
+            code: 3010,
+            disk_after: Some("0.7.0".into()),
+            ..Fake::default()
+        };
+        assert_eq!(
+            env.run(&fake).unwrap(),
+            Outcome::Installed {
+                version: Version::new(0, 7, 0),
+                restart: false
+            }
+        );
+        assert!(!env.ctx.staging.dir.join(rollback::JOURNAL).exists());
+    }
+
+    /// A count of u32::MAX on disk (blocked.json, the journal's `blocked`)
+    /// saturates: an ordinary failure, no overflow.
+    #[test]
+    fn a_saturated_count_is_an_ordinary_failure() {
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        std::fs::create_dir_all(&env.ctx.staging.dir).unwrap();
+        let record = json!({"version": "0.7.0", "id": "", "attempts": u32::MAX});
+        std::fs::write(env.ctx.staging.dir.join(BLOCKED), bytes(&record)).unwrap();
+        assert_eq!(env.run(&held(1603)).unwrap().code(), "install_failed");
+        assert!(skipped(&env));
+        let mut env = Env::new("0.6.0");
+        rollback_to_the_reinstall(&mut env);
+        let mut j = rollback::read(&env.ctx).unwrap().unwrap();
+        j.blocked = u32::MAX;
+        rollback::write(&env.ctx, &j).unwrap();
+        assert_eq!(as_copy(&env, &held(1603)).unwrap(), 1603);
+        assert_eq!(env.run(&Fake::default()).unwrap().code(), "rollback_halted");
     }
 
     /// A blocked install that then installs ends the count, and a 1603
@@ -3423,7 +3579,7 @@ mod tests {
     /// runs that msiexec only, and the next run finishes from its answer.
     #[test]
     fn a_handed_off_install_is_finished_by_the_next_run() {
-        let env = Env::new("0.6.0");
+        let mut env = Env::new("0.6.0");
         env.offer("0.7.0");
         let fake = Fake {
             hand_off: true,
@@ -3444,7 +3600,8 @@ mod tests {
         assert_eq!(bytes, MSI);
         let staged = env.ctx.staging.incoming().join("lodestar-0.7.0.msi");
         assert_eq!(args, msi::msiexec_args(&staged, &env.ctx.staging.log()));
-        // The run the copy starts.
+        // The run the copy starts: the program it replaced.
+        env.ctx.running = Some(Version::new(0, 7, 0));
         let next = Fake::default();
         assert_eq!(
             env.run(&next).unwrap(),
@@ -3468,7 +3625,7 @@ mod tests {
     /// before the copy runs the old MSI.
     #[test]
     fn a_handed_off_rollback_restores_the_store_first() {
-        let env = Env::new("0.6.0");
+        let mut env = Env::new("0.6.0");
         with_previous(&env, OLD_MSI);
         env.offer("0.7.0");
         let hand = Fake {
@@ -3481,7 +3638,8 @@ mod tests {
             ..Fake::default()
         };
         as_copy(&env, &copy).unwrap();
-        // Probation fails; the reinstall is handed off in turn.
+        // 0.7.0 is on disk; probation fails; the reinstall is handed off.
+        env.ctx.running = Some(Version::new(0, 7, 0));
         let next = Fake {
             unhealthy: true,
             hand_off: true,
@@ -4430,7 +4588,7 @@ mod tests {
             }
         );
         // A rollback's reinstall: handed off again.
-        let env = Env::new("0.6.0");
+        let mut env = Env::new("0.6.0");
         with_previous(&env, OLD_MSI);
         env.offer("0.7.0");
         assert_eq!(
@@ -4453,6 +4611,7 @@ mod tests {
             },
         )
         .unwrap();
+        env.ctx.running = Some(Version::new(0, 7, 0));
         let next = Fake {
             unhealthy: true,
             hand_off: true,
@@ -4608,6 +4767,9 @@ mod tests {
             }
             fn installer_idle(&self, w: Duration) -> bool {
                 self.0.installer_idle(w)
+            }
+            fn on_disk(&self, c: &Context) -> Option<String> {
+                self.0.on_disk(c)
             }
         }
         let env = Env::new("0.6.0");
