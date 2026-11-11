@@ -6874,6 +6874,16 @@
       "for": "X-win-upd-history (or a small web follow-up)",
       "from": "rv-708 I5 (2026-11-11)",
       "note": "After an MSI rollback the Updates screen notice \"The last update did not install\" (web/src/lib/features/settings/updates/messages en.json:104) tells the user to download and run the new installer; the guide says not to reinstall the failed build. Reword the notice to match."
+    },
+    {
+      "for": "runner PR (slices.yaml) \u2192 X-cmp13-installer-pins",
+      "from": "CMP-13 (2026-11-11)",
+      "note": "Catalogue format: artifact-level release folder for installers (kept off hosts), loader in crates/companions/src/catalogue.rs (RawArtifact/validate_pin); pin tool learns installer pins. Decide the pin-time source and verification for the qBittorrent Windows installer (official only on SourceForge/FossHub; run-time never fetches from them). Deps: CMP-11b, CMP-13. Opus, /security-review. Also: first companion-pins dispatch after CMP-13 merges is the dry run; report goes with the first-pin PR."
+    },
+    {
+      "for": "CMP-11b owns (runner PR)",
+      "from": "runner 2026-11-11",
+      "note": "CMP-11b owns add crates/companions/src/manager.rs and tests/manager.rs (option a: Installer \u2192 guided_only before installable())."
     }
   ],
   "main_health": [
