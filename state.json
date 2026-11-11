@@ -7546,7 +7546,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T16:12Z",
+    "updated": "2026-11-11T16:37Z",
     "items": [
       {
         "slot": 1,
@@ -7558,11 +7558,12 @@
       },
       {
         "slot": 2,
-        "slice": "PK-win-soak-ci",
-        "role": "build",
+        "slice": "PK-ops",
+        "role": "docs",
         "agent": "claude",
-        "doing": "#694 MERGE at 2041de65 (retry_dir.rs ratified test-only); fix round: pinned minisign download (security.ubuntu.com DNS) + nits; self-check then merge",
-        "since": "2026-11-11T13:25:04Z"
+        "doing": "launched Sonnet docs (session_01MMjhn9kowVksy7cA8hdSsM)",
+        "since": "2026-11-11T16:36Z",
+        "status": "active"
       },
       {
         "slot": 3,
