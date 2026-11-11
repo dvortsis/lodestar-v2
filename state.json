@@ -6762,7 +6762,8 @@
     "X-cmp-egress-api (Opus, core): Companion gains its route (egress) field + PUT /companions/{id}/egress that restarts the companion; then X-cmp-egress-ui (Sonnet): CMP-9a's editor, restart warning, live SOCKS5 warnings (email/MailKit, FlareSolverr, per-indexer proxies). From CMP-9a 2026-11-11: no route reads/writes egress today. Add both to slices.yaml in next runner PR; CMP-G deps should include them.",
     "When install windows (\u00a72.13) reach Windows: the 1920 boot retry must honour mode Off and pause, not only the skip list (#677 flag)",
     "#659 owner (check.rs): install_blocked currently shows the install_failed notice; give it its own plain wording after #677 merges",
-    "next runner PR: add X-win-upd-reoffer (Opus, core, deps [X-win-upd-1920]; owns update/windows/helper.rs, msi.rs, rollback.rs, tests/update_windows_msi.rs, its decisions file) and X-win-upd-window (check.rs removes request.json on mode Off/pause; after #659) to slices.yaml"
+    "next runner PR: add X-win-upd-reoffer (Opus, core, deps [X-win-upd-1920]; owns update/windows/helper.rs, msi.rs, rollback.rs, tests/update_windows_msi.rs, its decisions file) and X-win-upd-window (check.rs removes request.json on mode Off/pause; after #659) to slices.yaml",
+    "PK-unraid leftovers (#680): Hot/Cold path still in docs/user/appendix-b-settings-reference.md:11-12, docs/operations.md:182-184/:206 (PK-ops), CMP-7 note in slices.yaml, companions DataFolders hot/cold params (dead API); validate.py not run in CI (workflow job); slices.yaml PK-unraid title over-promises 'validator checks every Requires/Overview' -> fix title or add slice"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
