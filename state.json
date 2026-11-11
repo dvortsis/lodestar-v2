@@ -7541,7 +7541,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T15:08Z",
+    "updated": "2026-11-11T15:22Z",
     "items": [
       {
         "slot": 1,
@@ -7556,7 +7556,7 @@
         "slice": "PK-win-soak-ci",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnD6gMrbMAMw2vKVwXQ: Windows merge/GC retry stress in CI (Opus, concurrency); fresh session after #686 X-win-upd-reoffer merged 369f5ec0 (old session archived)",
+        "doing": "#694 ready at 2041de65 (Windows stress green 46.5 s); fresh Opus review running; ci-ok red only on manifest round trip (security.ubuntu.com DNS, red on main) -> re-run failed job once after review (run 43039262237)",
         "since": "2026-11-11T13:25:04Z"
       },
       {
