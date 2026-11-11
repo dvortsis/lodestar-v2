@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T04:13Z",
+  "updated_at": "2026-11-11T04:27Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4281,6 +4281,12 @@
       "at": "2026-11-11T04:11Z",
       "slice": "X-win-upd-bounds",
       "flag": "the MSI copy no longer refuses when another process holds lodestar.exe; it waits (bounded) for its own parent helper, then relies on Windows Installer 3010 (sec-644 LOW-C)",
+      "send": "on merge"
+    },
+    {
+      "at": "2026-11-11T04:27Z",
+      "slice": "OP-4",
+      "flag": "operator-apply calls the Managed Agents API from Python instead of the downloaded ant binary (no unpinned binary beside the workspace key); ledger checks run in the cloud-operator job; every operator session is archived at its end; one PR of ~2,690 lines for a single security review",
       "send": "on merge"
     }
   ],
