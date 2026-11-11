@@ -174,10 +174,7 @@ async fn api(
         Function::Search(m) => m,
     };
     let adult = adult.is_some_and(|a| a.0.0.shown());
-    match run(s, &req, mode, adult).await {
-        Ok(body) => document(StatusCode::OK, "application/rss+xml; charset=utf-8", body),
-        Err(e) => e,
-    }
+    run(s, &req, mode, adult).await
 }
 
 /// The caps document: what this server searches and its categories.
@@ -235,23 +232,18 @@ fn excluded(row: &TorrentRow, e: Option<&Enriched>, adult: bool) -> bool {
     discover::withheld(row, e, false, adult) || row.flags & flags::PRIVACY != 0
 }
 
-async fn run(
-    s: ApiState,
-    req: &query::Request,
-    mode: Mode,
-    adult: bool,
-) -> Result<String, Response> {
+async fn run(s: ApiState, req: &query::Request, mode: Mode, adult: bool) -> Response {
     let Some(search) = s.index.clone() else {
-        return Err(error_document(
+        return error_document(
             StatusCode::SERVICE_UNAVAILABLE,
             code::DISABLED,
             "Search is turned off",
-        ));
+        );
     };
     let (offset, limit) = (req.offset, req.limit);
     let Some(ast) = req.ast(mode) else {
         // Only categories this server doesn't list: nothing matches.
-        return Ok(feed(offset, 0, &[]));
+        return results(feed(offset, 0, &[]));
     };
     let sort = if req.words.is_empty() {
         Sort::Discovered { desc: true }
@@ -323,10 +315,15 @@ async fn run(
     })
     .await;
     match answer {
-        Ok(Ok((total, items))) => Ok(feed(offset, total as u64, &items)),
-        Ok(Err(e)) => Err(failed(e.into_response().status())),
-        Err(e) => Err(failed(crate::error::internal(e).into_response().status())),
+        Ok(Ok((total, items))) => results(feed(offset, total as u64, &items)),
+        Ok(Err(e)) => failed(e.into_response().status()),
+        Err(e) => failed(crate::error::internal(e).into_response().status()),
     }
+}
+
+/// A page of results, as RSS.
+fn results(body: String) -> Response {
+    document(StatusCode::OK, "application/rss+xml; charset=utf-8", body)
 }
 
 /// A search that failed while running (already logged, if internal).
