@@ -74,7 +74,7 @@ Reserved for incoming peer connections **(planned)**. Lodestar only makes outbou
 
 ### Data
 
-The folder where Lodestar keeps its index, database and settings. It is the one folder that survives an update, because a container is rebuilt on every update. Lodestar needs no other folder mapped: everything lives here.
+The folder where Lodestar keeps its index, database and settings. It is the one folder that survives an update, because a container is rebuilt on every update. Lodestar needs no other folder mapped: everything lives here. The v0.5.1 template still shows **Hot path** and **Cold path** under **Advanced View**. Leave both empty, because Lodestar doesn't use them and a later template removes them.
 
 **Recommended:** `/mnt/cache/appdata/lodestar`. Use a pool path (`/mnt/cache/...` or `/mnt/<pool>/...`), not `/mnt/user/...`. The `/mnt/user` path goes through Unraid's [FUSE](glossary.md#fuse) layer, which is slow for this workload and risky for [SQLite](glossary.md#sqlite).
 
