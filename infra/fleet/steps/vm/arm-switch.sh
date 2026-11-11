@@ -20,7 +20,7 @@ WAIT_SECONDS=${WAIT_SECONDS:-900}  # the step's timeout leaves room for this and
 
 started=""
 fail() {
-  [[ -n $started ]] && { stop_lodestar || echo "fail lodestar_stopped"; }
+  [[ -n $started ]] && { stop_lodestar || echo "fail lodestar_stopped"; stop_proxy; }
   echo "fail $1"; echo "fail arm_switch"; exit 1
 }
 

@@ -26,7 +26,7 @@ BLOCK=${4:-/var/lib/lodestar-block}
 started=""
 # Once Lodestar has started, a failure stops it, so copy-off can end the block.
 fail() {
-  [[ -n $started ]] && { stop_lodestar || echo "fail lodestar_stopped"; }
+  [[ -n $started ]] && { stop_lodestar || echo "fail lodestar_stopped"; stop_proxy; }
   echo "fail $1"; echo "fail start_block"; exit 1
 }
 

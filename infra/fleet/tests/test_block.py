@@ -405,6 +405,7 @@ class StartBlock(Base):
         rc, lines, _ = self.run_script("start-block.sh", NOTICE=5)
         self.assertEqual((rc, lines[-2:]), (1, ["fail notice_version", "fail start_block"]))
         self.assertTrue((self.stub / "stopped").exists())  # nothing crawls after a stop
+        self.assertTrue((self.stub / "proxy_removed").exists())  # nor holds Docker's socket
         self.assertNotIn("lodestar", (self.stub / "running").read_text().split())
         (self.stub / "doc.json").write_text('{"version":1,"segments":[]}')
         rc, lines, _ = self.run_script("copy-off.sh")
@@ -531,6 +532,7 @@ class ArmSwitch(Base):
         rc, lines, _ = self.run_script("arm-switch.sh", API_DOWN=1, API_WAIT=0)
         self.assertEqual((rc, lines[-2:]), (1, ["fail api_up", "fail arm_switch"]))
         self.assertTrue((self.stub / "stopped").exists())
+        self.assertTrue((self.stub / "proxy_removed").exists())
         self.assertIn("segment=2", (self.block / "marker").read_text())  # still recorded, for copy-off
 
     def test_after_the_last_segment_the_block_ends(self):
@@ -930,6 +932,12 @@ DENIED = [("GET", "/_ping"), ("GET", "/version"), ("GET", "/info"), ("GET", "/co
           ("POST", f"/containers/{OTHER}/stop"), ("POST", f"/containers/{GLUETUN_ID}/stop"),
           ("POST", "/containers/lodestar/stop"), ("GET", f"/containers/{LODESTAR_ID}/stats"),
           ("GET", f"/containers/{LODESTAR_ID}/stats?stream=true"),
+          ("GET", f"/containers/{LODESTAR_ID}/stats?stream=true&stream=false"),
+          ("GET", f"/containers/{LODESTAR_ID}/stats?stream=false&stream=true"),
+          ("GET", f"/containers/{LODESTAR_ID}/stats?stream=false&one-shot=true&stream=true"),
+          ("GET", f"/containers/{LODESTAR_ID}/stats?one-shot=true&stream=false"),
+          ("GET", f"/containers/{LODESTAR_ID}/stats?stream=false&one-shot=true&x=1"),
+          ("GET", f"/containers/{LODESTAR_ID}/stats?stream=false"),
           ("GET", f"/containers/lodestar/json/../../{OTHER}/exec"), ("GET", f"/containers/x/../{LODESTAR_ID}/json"),
           ("GET", "/containers/lodestar%2F..%2Fexec/json"), ("GET", "/containers/LODESTAR/json"),
           ("GET", f"//containers/{LODESTAR_ID}/json"), ("GET", f"/v1.47/../containers/{OTHER}/json"),
@@ -942,7 +950,8 @@ DENIED = [("GET", "/_ping"), ("GET", "/version"), ("GET", "/info"), ("GET", "/co
 
 def policy(cfg):
     """The rendered frontend's rules, evaluated as HAProxy does (first allow
-    wins, else the final deny): `path` is the raw path, case-sensitive."""
+    wins, else the final deny): `path` is the raw path, case-sensitive;
+    `query` the raw query string. Any other fetch fails the test."""
     import re
     acls, allows = {}, []
     for line in cfg.splitlines():
@@ -953,11 +962,9 @@ def policy(cfg):
                 acls.setdefault(name, []).append(lambda m, p, q, v=words[3]: m == v)
             elif fetch == "path":
                 acls.setdefault(name, []).append(lambda m, p, q, r=re.compile(words[5]): bool(r.search(p)))
-            elif fetch.startswith("url_param("):
-                key = fetch[len("url_param("):-1]
-                acls.setdefault(name, []).append(
-                    lambda m, p, q, k=key, v=words[5]: next((x.split("=", 1)[1] for x in q.split("&")
-                                                            if x.split("=", 1)[0] == k and "=" in x), None) == v)
+            elif fetch == "query":  # the raw query string, matched whole
+                assert words[3:5] == ["-m", "str"], line
+                acls.setdefault(name, []).append(lambda m, p, q, v=words[5]: q == v)
             else:
                 raise AssertionError(line)
         elif words[:3] == ["http-request", "allow", "if"]:
