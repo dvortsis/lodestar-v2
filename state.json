@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T09:38:40Z",
+  "updated_at": "2026-11-11T10:08:39Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7490,15 +7490,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T09:59:21Z",
+    "updated": "2026-11-11T10:08:39Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-fleet-polish",
+        "slice": "CMP-9a",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn9NvKRMZMg1baoPCau: fleet policy() six-word ACL assertion + OP-3b wording (Opus), same session after #673",
-        "since": "2026-11-11T09:59:21Z"
+        "doing": "session_01MMjhn9isN5wNgNq37t1qRR: Settings Companions screen (Sonnet, /security-review); after #678 X-fleet-polish merged 7e4d5325",
+        "since": "2026-11-11T10:08:39Z"
       },
       {
         "slot": 2,
