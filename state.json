@@ -6810,7 +6810,8 @@
     "2026-11-11T14:5xZ 'update manifest round trip' red on main b7d3d366 (security.ubuntu.com unresolvable; image lists point minisign at the security pocket only). \u00a72.18 for open PRs. X-ci follow-up: apt fallback must not depend on one host (pin release pocket or vendor-verified minisign); also freshness.yml:80.",
     "PK-cli #696 owner flags (\u00a72.19) owed: set refuses privacy fields whatever the value; secrets refused outright (no stdin); reset --all clears saved values an env var hides. Decisions file 2026-11-11-PK-cli.md.",
     "PK-ops notes: a CLI-set http_bind that can't bind makes serve fail at start (no UI-style revert); document 'lodestar settings reset network.http_bind' as the way out (rv-696 nit 4).",
-    "CMP-9b owner flag (\u00a72.19/\u00a72.26): Sources first view 30.9->31.1 kB (+139 B lazy hook), new on-demand chunk 27 kB."
+    "CMP-9b owner flag (\u00a72.19/\u00a72.26): Sources first view 30.9->31.1 kB (+139 B lazy hook), new on-demand chunk 27 kB.",
+    "PK-exc polish: ports.rs test comment 'only test that sets or reads' is off since insights no_port_exception_off_windows reads probe() (count-independent off Windows)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7587,11 +7588,12 @@
       },
       {
         "slot": 6,
-        "slice": "PK-exc",
-        "role": "build",
-        "agent": "claude",
-        "doing": "session_01MMjhn9TG1nRjKEifmj8fmd: #687 MERGE verdict; fixing Windows flake + nits, runner self-check then merge",
-        "since": "2026-11-11T10:55:51Z"
+        "slice": "X-event-log-notice",
+        "role": "Opus slice (then X-prowlarr-register)",
+        "agent": "session_01MMjhnCHsnr3wRoSQhHd9kN",
+        "doing": "launched; Notice v5 (Event Log) then Prowlarr under same version",
+        "since": "2026-11-11T15:23Z",
+        "status": "active"
       },
       {
         "slot": 7,
@@ -7756,6 +7758,12 @@
       "sha": "3d0b79d9dda90b3def339ff21f24839a0b8df378",
       "when": "2026-11-11T14:52Z",
       "note": "owns approvals, WK-11b, owner \u00a72.55 (Notice v5: Prowlarr + Event Log; OP-5 cap kept), X-event-log-notice"
+    },
+    {
+      "pr": 687,
+      "slice": "PK-exc",
+      "sha": "71530a30773041d4834ac09f017f08d03baf822b",
+      "at": "2026-11-11T15:23Z"
     }
   ]
 }
