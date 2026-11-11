@@ -6813,7 +6813,8 @@
     "PK-exc polish: ports.rs test comment 'only test that sets or reads' is off since insights no_port_exception_off_windows reads probe() (count-independent off Windows).",
     "PK-exc wording: crates/lodestar/src/logging/events.rs start-up log still says 'network filesystem'; align with 'a network or shared-folder filesystem' (9p/WSL2/Docker Desktop). PK-ui uses same wording en+zh.",
     "Runner PR: add crates/search/src/retry_dir.rs to PK-win-soak-ci owns (ratified test-only, #694 review).",
-    "X-ci: update manifest round trip fixed on main by #694 (pinned minisign 0.12 from GitHub, sha256 9a599b48...); freshness.yml:80 still installs minisign via apt from the security pocket -> same fix in X-ci."
+    "X-ci: update manifest round trip fixed on main by #694 (pinned minisign 0.12 from GitHub, sha256 9a599b48...); freshness.yml:80 still installs minisign via apt from the security pocket -> same fix in X-ci.",
+    "API follow-up (from PK-ui): /system filesystem_warning is one server-written English string with no kind; add a kind (unraid_user_share|fuse|network) so the wizard can localise it (zh shows English today). Shared edit approved for PK-ui: web/e2e/wizard.keyboard.test.ts:119 assertion."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
