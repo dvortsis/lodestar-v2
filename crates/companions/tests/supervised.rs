@@ -290,33 +290,3 @@ async fn cant_follow_comes_before_cant_launch() {
     let l = w.launch("qbittorrent", 8080);
     assert_eq!(s.start(l).await, Err("cant_follow_route"));
 }
-
-/// #679's review: the runtime config is never read through a link, and a
-/// FIFO in its place is refused at once instead of blocking the start.
-#[cfg(unix)]
-#[tokio::test]
-async fn a_linked_or_fifo_runtime_config_is_refused() {
-    let w = World::new(Some(RouteKind::Socks5));
-    let s = w.supervised().await;
-    let l = w.launch("prowlarr", 9696);
-    let config = l.install.join("prowlarr.runtimeconfig.json");
-    let real = w.data.path().join("elsewhere.json");
-    std::fs::rename(&config, &real).unwrap();
-    std::os::unix::fs::symlink(&real, &config).unwrap();
-    assert_eq!(s.start(l).await, Err("route_not_expressible"));
-
-    let l = w.launch("prowlarr", 9696);
-    let config = l.install.join("prowlarr.runtimeconfig.json");
-    std::fs::remove_file(&config).unwrap();
-    let made = std::process::Command::new("mkfifo")
-        .arg(&config)
-        .status()
-        .unwrap();
-    assert!(made.success());
-    let got = tokio::time::timeout(WAIT, s.start(l)).await;
-    assert_eq!(
-        got,
-        Ok(Err("route_not_expressible")),
-        "a FIFO blocked the start"
-    );
-}

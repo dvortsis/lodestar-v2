@@ -1220,6 +1220,14 @@ impl Guided {
             .apply(self.http.as_ref(), target, &input, plan)
             .await
             .map_err(|err| CompanionsError::Refused(adapter_code(err)))?;
+        // Under the guided lock: anything a crashed native install left
+        // pending for it is no longer Lodestar's to release, now that this
+        // entry is yours (#679 follow-up's self-review B2).
+        let service = self.service.clone();
+        let cid = e.id.clone();
+        tokio::task::spawn_blocking(move || service.clear_handover(&cid))
+            .await
+            .map_err(|_| CompanionsError::Internal("panicked"))?;
         lodestar_companions::configure::hand_over(self.sink.as_ref(), &e.id, target, &input)
             .await
             .map_err(|err| CompanionsError::Refused(adapter_code(err)))?;

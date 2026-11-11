@@ -228,6 +228,8 @@ pub struct Companions {
     /// Following `integrations.clients`, and starting the installed
     /// companions: both stopped at shutdown.
     tasks: Vec<tokio::task::JoinHandle<()>>,
+    /// Releasing what crashes left handed over, once the sink is wired.
+    release: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl Companions {
@@ -237,15 +239,28 @@ impl Companions {
     pub(crate) fn wire_sink(&self, sink: Arc<dyn ManagedSink>) {
         let _ = self.wiring.sink.set(sink);
         // What a crash's undone first install had handed over goes now
-        // (#679's I2).
+        // (#679's I2), under the lock the guided steps share: none can
+        // write the managed entry while it's released. A guided
+        // confirmation clears the marker first, so this never takes out
+        // an entry you added since.
         let manager = self.api.manager.clone();
-        tokio::spawn(async move { manager.release_pending().await });
+        let changing = self.api.changes();
+        let task = tokio::spawn(async move {
+            let _one = changing.lock_owned().await;
+            manager.release_pending().await;
+        });
+        if let Ok(mut t) = self.release.lock() {
+            *t = Some(task);
+        }
     }
 
     /// Serve's shutdown (#619 N3): stops following the integrations and
     /// starting companions, then stops every companion, each bounded.
     pub async fn shutdown(self) {
         for t in &self.tasks {
+            t.abort();
+        }
+        if let Some(t) = self.release.lock().ok().and_then(|mut t| t.take()) {
             t.abort();
         }
         if let Some(s) = self.wiring.supervised.get() {
@@ -373,12 +388,15 @@ async fn start_with(
         rows,
         live,
         changing: Arc::default(),
+        #[cfg(test)]
+        park: None,
     });
     Some(Companions {
         api,
         snapshot,
         wiring,
         tasks,
+        release: Mutex::new(None),
     })
 }
 
@@ -769,6 +787,10 @@ pub struct Service {
     /// neither writes the managed entry while the other is deciding
     /// (#679's review, Important 1).
     changing: Arc<tokio::sync::Mutex<()>>,
+    /// A test's pause inside a native install, once it holds the lock:
+    /// says so on the first, waits for the second.
+    #[cfg(test)]
+    park: Option<Arc<(tokio::sync::Notify, tokio::sync::Notify)>>,
 }
 
 impl std::fmt::Debug for Service {
@@ -912,6 +934,8 @@ impl Service {
             rows: self.rows.clone(),
             live: self.live.clone(),
             changing: self.changing.clone(),
+            #[cfg(test)]
+            park: self.park.clone(),
         }
     }
 
@@ -1018,6 +1042,13 @@ impl Service {
             Ok(_) => Ok(None),
             Err(_) => Err(CompanionsError::Internal("journal")),
         }
+    }
+
+    /// A guided confirmation is about to hand `id` over: what a crash left
+    /// pending for it is no longer Lodestar's to release (#679 follow-up's
+    /// self-review B2). Blocking.
+    pub(crate) fn clear_handover(&self, id: &CompanionId) {
+        self.manager.clear_handover(id);
     }
 
     /// The lock a native install and the guided steps share.
@@ -1219,21 +1250,43 @@ impl CompanionsApi for Service {
                 version: Version::parse(&version).map_err(|_| CompanionsError::Mismatch)?,
                 sha256: Sha256::parse_hex(&sha256).map_err(|_| CompanionsError::Mismatch)?,
             };
-            // Held through the install, its hand-over and any undo, so no
-            // guided step runs meanwhile; and the checks below are made
-            // under it (#679's review, Important 1).
-            let _one = self
-                .changing
-                .clone()
-                .try_lock_owned()
-                .map_err(|_| CompanionsError::Refused("busy"))?;
+            // qBittorrent's only (the one a guided step hands over): held
+            // through the install, its hand-over and any undo, so no guided
+            // step runs meanwhile, and the check below is made under it
+            // (#679's review, Important 1). It's held by the task that runs
+            // the install, which a dropped request doesn't stop, so it's
+            // never let go while the install still runs.
+            let one = if e.id.as_str() == configure::qbittorrent::ID {
+                Some(
+                    self.changing
+                        .clone()
+                        .try_lock_owned()
+                        .map_err(|_| CompanionsError::Refused("busy"))?,
+                )
+            } else {
+                None
+            };
             // One you added and confirmed is yours: an install would take
             // over its Integrations entry (#674's self-review B1). Forget
             // it first, as the guided steps refuse one Lodestar installed.
             if self.off(move |s| s.added(&e.id)).await? {
                 return Err(CompanionsError::Refused("already_added"));
             }
-            self.manager.install(&token).await.map_err(refused)?;
+            let manager = self.manager.clone();
+            #[cfg(test)]
+            let park = self.park.clone();
+            let installed = tokio::spawn(async move {
+                let _one = one;
+                #[cfg(test)]
+                if let Some(p) = park {
+                    p.0.notify_one();
+                    p.1.notified().await;
+                }
+                manager.install(&token).await
+            })
+            .await
+            .map_err(|_| CompanionsError::Internal("panicked"))?;
+            installed.map_err(refused)?;
             self.off(move |s| s.row(e)).await
         })
     }
@@ -1446,6 +1499,20 @@ pub(crate) fn test_service(
         rows: StoreRows(store),
         live: Arc::new(Unwired),
         changing: Arc::default(),
+        park: None,
+    })
+}
+
+/// `service`, with a native install that pauses once it holds the lock:
+/// it says so on `park.0` and waits for `park.1`.
+#[cfg(test)]
+pub(crate) fn parked_service(
+    service: &Service,
+    park: Arc<(tokio::sync::Notify, tokio::sync::Notify)>,
+) -> Arc<Service> {
+    Arc::new(Service {
+        park: Some(park),
+        ..service.clone_parts()
     })
 }
 
@@ -1666,6 +1733,7 @@ mod tests {
             rows: StoreRows(store),
             live,
             changing: Arc::default(),
+            park: None,
         }
     }
 

@@ -1946,3 +1946,36 @@ async fn a_pending_release_spares_a_companion_installed_since() {
     assert_eq!(w.api.releases.load(Ordering::SeqCst), 0);
     assert!(w.on_disk().is_some());
 }
+
+/// A live undo removes the marker once it has released, and keeps it when
+/// the release fails, so the next start finishes it. A marker that can't
+/// be written fails the install before anything is handed over.
+#[tokio::test]
+async fn a_live_undo_keeps_the_marker_only_when_its_release_fails() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let marker = w.data.path().join("companions/.handed-over-qbittorrent");
+    let m = w.manager(catalogue("5.0.3"), LINUX);
+    w.api.refuse_hand_over.store(true, Ordering::SeqCst);
+    assert!(m.install(&token("5.0.3")).await.is_err());
+    assert_eq!(w.api.releases.load(Ordering::SeqCst), 1);
+    assert!(!marker.exists());
+    w.api.refuse_release.store(true, Ordering::SeqCst);
+    assert!(m.install(&token("5.0.3")).await.is_err());
+    assert!(marker.is_file(), "the next start couldn't release it");
+    w.api.refuse_release.store(false, Ordering::SeqCst);
+    std::fs::remove_file(&marker).unwrap();
+    // A marker that can't be written: nothing is handed over.
+    w.api.refuse_hand_over.store(false, Ordering::SeqCst);
+    std::fs::create_dir(&marker).unwrap();
+    let got = m.install(&token("5.0.3")).await;
+    assert_eq!(
+        got,
+        Err(ManagerError::Step {
+            step: "handover",
+            code: "marker"
+        })
+    );
+    assert!(w.api.sink.passwords().is_empty());
+    assert_eq!(w.on_disk(), None);
+}

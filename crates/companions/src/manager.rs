@@ -695,7 +695,15 @@ impl Inner {
     /// Writes the marker durably before the hand-over is tried.
     fn mark(&self, id: &CompanionId) -> Result<(), ManagerError> {
         let path = self.marker(id);
-        let f = std::fs::File::create(&path).map_err(|_| failed("handover")("marker"))?;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        // Never through a link planted at its path.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+        }
+        let f = opts.open(&path).map_err(|_| failed("handover")("marker"))?;
         f.sync_all().map_err(|_| failed("handover")("marker"))?;
         #[cfg(unix)]
         if let Some(dir) = path.parent() {
@@ -1455,7 +1463,15 @@ impl Manager {
             self.off(move |m| m.mark(id)).await?;
         }
         *handed = true;
-        self.hand_over_now(id, &target).await?;
+        if let Err(e) = self.hand_over_now(id, &target).await {
+            // One that never answered may still save: it isn't released
+            // now, and its marker stays, so the next start releases what
+            // it left once it can't land any more.
+            if e.code() == "timed_out" {
+                *handed = false;
+            }
+            return Err(e);
+        }
         fault!(m, After(Step::Configured));
         let mut next = rec.clone();
         next.installed = Some(v.clone());
@@ -1711,6 +1727,19 @@ impl Manager {
         out
     }
 
+    /// Forgets what a crash left pending for `id`, and its marker: a guided
+    /// confirmation is handing `id` over, so the entry is yours from now
+    /// on, and a release at the next start must never take it out.
+    /// Blocking.
+    pub fn clear_handover(&self, id: &CompanionId) {
+        self.0
+            .pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|p| p != id);
+        self.0.unmark(id);
+    }
+
     /// Releases what a crash's undone first installs had handed over
     /// (#679's I2), once the settings can be reached: serve calls it when
     /// the sink is wired. Each is released under its slot and only while
@@ -1789,6 +1818,10 @@ impl LiveOp {
 /// the configuration's requests, with room to spare. The stop before it
 /// is bounded by the supervisor.
 pub const LIVE_DEADLINE: Duration = Duration::from_secs(5 * 60);
+
+/// The hand-over's outer bound: three of [`LIVE_DEADLINE`], against a
+/// store that never answers.
+pub const HANDOVER_DEADLINE: Duration = Duration::from_secs(15 * 60);
 
 /// How often a follower that has to configure its companion looks for the
 /// slot while an operation holds it.
@@ -1934,14 +1967,18 @@ impl Manager {
             field: field_name(id),
             secret,
         };
-        // Not abandoned at a deadline: a save given up on could still land
-        // after an undo's release (#679's review). It's one local settings
-        // write, bounded by the store.
-        self.0
-            .p
-            .api
-            .hand_over(id, target, InstallReceipt::new(target.clone()), &opened)
+        // A generous bound: one local settings write takes far less. Past it
+        // the save may still land, so an install's undo doesn't release it
+        // (its marker stays for the next start), and a restart's or a
+        // regenerate's is retried by the next restart (#679's review).
+        let handed =
+            self.0
+                .p
+                .api
+                .hand_over(id, target, InstallReceipt::new(target.clone()), &opened);
+        tokio::time::timeout(HANDOVER_DEADLINE, handed)
             .await
+            .map_err(|_| failed("handover")("timed_out"))?
             .map_err(|e| failed("handover")(configure::code(&e)))
     }
 
@@ -2639,6 +2676,37 @@ mod tests {
 #[cfg(test)]
 mod runtime_tests {
     use super::runtime_reads_proxy_env as reads;
+
+    /// #679's review: the runtime config is never read through a link at
+    /// its own path, and a FIFO there is refused at once (it isn't a
+    /// regular file) instead of blocking.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_or_fifo_runtime_config_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("Prowlarr");
+        let config = dir.path().join("Prowlarr.runtimeconfig.json");
+        let good = r#"{"runtimeOptions":{"tfm":"net8.0","includedFrameworks":[{"name":"Microsoft.NETCore.App","version":"8.0.11"}]}}"#;
+        std::fs::write(&config, good).unwrap();
+        assert!(super::reads_proxy_env(&exe));
+        let real = dir.path().join("elsewhere.json");
+        std::fs::rename(&config, &real).unwrap();
+        std::os::unix::fs::symlink(&real, &config).unwrap();
+        assert!(!super::reads_proxy_env(&exe));
+        std::fs::remove_file(&config).unwrap();
+        let made = std::process::Command::new("mkfifo")
+            .arg(&config)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let exe2 = exe.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(super::reads_proxy_env(&exe2));
+        });
+        let got = rx.recv_timeout(std::time::Duration::from_secs(10));
+        assert_eq!(got, Ok(false), "a FIFO blocked the read");
+    }
 
     #[test]
     fn only_dotnet_8_or_later_reads_the_proxy_variables() {

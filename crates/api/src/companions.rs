@@ -171,15 +171,17 @@ fn refusal_message(code: &str) -> &'static str {
         "no_launch_profile" => "This version of Lodestar can't run it yet.",
         "no_template" => "It doesn't offer that template.",
         "managed_client_in_use" => {
-            "A download client named \"qBittorrent (Lodestar)\" is already set up in Integrations. Remove it there first, then install again."
+            "The download client Lodestar manages is already set up in Integrations, from a qBittorrent you added before. Remove it there first, then install again."
         }
         "already_added" => {
             "You added this companion yourself. Forget it on its screen first, then install it here."
         }
         "sink_refused" => {
-            "Lodestar couldn't save it as your download client in Integrations, so nothing was changed. Try again."
+            "Lodestar couldn't update its download client in Integrations. Check Integrations, then try again."
         }
-        "timed_out" => "This took too long, so it was stopped. Try again.",
+        "timed_out" => {
+            "This took too long, so Lodestar stopped waiting. Check the companion, then try again."
+        }
         _ => "The companion manager refused this; nothing was changed.",
     }
 }

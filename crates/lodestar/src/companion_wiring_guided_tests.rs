@@ -283,6 +283,24 @@ fn fixture_with(http: Arc<dyn GuardedHttp>) -> Fixture {
     }
 }
 
+/// [`fixture`], with a native install that pauses once it holds the lock.
+fn fixture_parked(park: Arc<(tokio::sync::Notify, tokio::sync::Notify)>) -> Fixture {
+    let mut f = fixture();
+    let parked = crate::companions::parked_service(&f.service, park);
+    let (tx, added) = channel::channel(Vec::new());
+    f.guided = Arc::new(Guided::new(
+        parked.clone(),
+        f.store.clone(),
+        Runtime::Native,
+        Arc::new(CompanionHttp::new().unwrap()),
+        f.sink.clone(),
+        tx,
+    ));
+    f.service = parked;
+    f.added = added;
+    f
+}
+
 fn fixture() -> Fixture {
     fixture_with(Arc::new(CompanionHttp::new().unwrap()))
 }
@@ -785,6 +803,14 @@ async fn a_native_install_and_the_guided_steps_exclude_each_other() {
     };
     let guided_step = g.changing.clone().try_lock_owned().unwrap();
     assert_eq!(install().await, Err(CompanionsError::Refused("busy")));
+    // Only qBittorrent's install takes it: another companion's isn't held
+    // up by a guided step (#679 follow-up's self-review I1).
+    assert_eq!(
+        f.service
+            .install("prowlarr".into(), "1.0.0".into(), "ab".repeat(32))
+            .await,
+        Err(CompanionsError::Refused("awaiting_pin"))
+    );
     drop(guided_step);
     // Free again: it goes on to the manager, which has no pin to install.
     assert_eq!(
@@ -808,6 +834,65 @@ async fn a_native_install_and_the_guided_steps_exclude_each_other() {
     assert!(texts(&f.store).unwrap().is_empty());
     assert!(f.sink.0.lock().unwrap().is_empty());
     drop(installing);
+}
+
+/// #679 follow-up's self-review B1: the lock is held by the install's own
+/// task, so a request dropped mid-install (a closed tab) doesn't let a
+/// guided step in while the install, its hand-over or its undo still runs.
+/// The install is parked, once it holds the lock, until the test lets it
+/// go: a condition, not a sleep.
+#[tokio::test]
+async fn a_dropped_install_request_keeps_the_guided_steps_out() {
+    use lodestar_api::companions::CompanionsApi;
+    let park = Arc::new((tokio::sync::Notify::new(), tokio::sync::Notify::new()));
+    let f = fixture_parked(park.clone());
+    let g = &f.guided;
+    let service = f.service.clone();
+    let request = tokio::spawn(async move {
+        service
+            .install("qbittorrent".into(), "5.1.2".into(), "ab".repeat(32))
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(10), park.0.notified())
+        .await
+        .expect("the install never took the lock");
+    // The request goes; the install it started doesn't.
+    request.abort();
+    assert!(request.await.unwrap_err().is_cancelled());
+    let t = CompanionTarget::Loopback { port: 8080 };
+    let e = g.set_target("qbittorrent".into(), t).await.unwrap_err();
+    assert_eq!(refused(e), "busy");
+    // Once it ends, the lock is free again.
+    park.1.notify_one();
+    let free = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Ok(held) = g.changing.clone().try_lock_owned() {
+                return held;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert!(free.is_ok(), "the install never let the lock go");
+}
+
+/// #679 follow-up's self-review B2: a guided confirmation clears what a
+/// crashed native install left pending, so the next start's release never
+/// takes out the entry you added since.
+#[tokio::test]
+async fn a_guided_confirmation_clears_a_pending_release() {
+    let (addr, _q) = qbittorrent(TEMPORARY).await;
+    let f = fixture();
+    let g = &f.guided;
+    let id = || "qbittorrent".to_owned();
+    let marker = f.dir.path().join("companions/.handed-over-qbittorrent");
+    std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+    std::fs::write(&marker, b"").unwrap();
+    g.set_target(id(), url(addr)).await.unwrap();
+    g.paste(id(), TEMPORARY.into()).await.unwrap();
+    let plan = g.plan(id()).await.unwrap();
+    g.confirm(id(), plan).await.unwrap();
+    assert!(!marker.exists(), "the marker would release your entry");
 }
 
 /// Once the apply has started the generated password stays, marked
