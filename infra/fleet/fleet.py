@@ -243,7 +243,8 @@ def _run_live_step(ctx: Ctx, cmd: Command, run_id: str, fleet: dict) -> str:
     try:
         line = steps.run_step(ctx.env, ctx.backend, fleet, cmd.step, cmd.vm, run_id, ctx.fence(run_id),
                               ssh=io["ssh"], my_ip=io["my_ip"], emit=print, repo=ctx.repo, fingerprint=fingerprint,
-                              close_fence=_tolerant(ctx, run_id))
+                              close_fence=_tolerant(ctx, run_id), commit=cmd.commit,
+                              evidence=steps.bucket_writer(ctx.backend, ctx.env, run_id, cmd.vm))
     except remote.StepRefused as e:
         return f"refused: run {cmd.step}: {e}"
     return f"run {cmd.step} {cmd.vm}: {line}"
@@ -300,7 +301,7 @@ def cmd_act(ctx: Ctx) -> int:
         ctx.report("failed: the fleet lock was lost (pre-empted); stopped before its next fleet write")
         return 1
     except ApplyFailed:
-        ctx.report("failed: terraform didn't finish; the fleet is recorded, so run down (output is in the evidence bucket)")
+        ctx.report("failed: terraform didn't finish; owner recovery required; inspect cleanup registration and inventory (output is in the evidence bucket)")
         return 1
     except LedgerUnreadable:
         ctx.report("failed: the spend ledger is unreadable, so up is refused; escalate")

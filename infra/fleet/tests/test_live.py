@@ -720,6 +720,17 @@ class LiveFlows(unittest.TestCase):
         api.linodes, api.firewalls = {"99": api.linodes["99"]}, {"98": api.firewalls["98"]}
         return api
 
+    def test_partial_apply_requires_owner_recovery_without_claiming_cleanup_registration(self):
+        b, s3, api, tf = backend(api=self.empty_account(), tf=FakeTerraform(fail=("apply",)))
+        rc, out = self.run_cli("act", "/fleet up screen", b)
+        self.assertEqual(rc, 1)
+        self.assertIn("owner recovery required; inspect cleanup registration and inventory", out)
+        self.assertNotIn("so run down", out)
+        self.assertTrue(b.mismatch())
+        self.assertNotIn(("state-b", "fleet/cleanup-authorization.json"), s3.objects)
+        self.assertNotIn("destroy", tf.calls)
+        self.assertFalse(any(method == "DELETE" for method, *_ in api.calls))
+
     def test_up_run_down(self):
         api = self.empty_account()
         b, s3, _, tf = backend(api=api)
@@ -728,7 +739,7 @@ class LiveFlows(unittest.TestCase):
         self.assertIn("up screen: create main, worker", out)
         self.assertIn("`fleet.yml` (live)", out)
         _, out = self.run_cli("act", "/fleet run arm-switch main", b)
-        self.assertIn("step not built yet (OP-3b)", out)
+        self.assertIn("refused: run arm-switch: live steps need FLEET_SSH_KEY", out)
         _, out = self.run_cli("act", "/fleet down", b)
         self.assertIn("independently authorized owner cleanup workflow", out)
         self.assertIn("roles", s3.doc("state-b", FLEET_KEY))

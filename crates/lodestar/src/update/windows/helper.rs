@@ -69,8 +69,19 @@ use crate::update::trust_file;
 pub const COPY_FLAG: &str = "--run-msi";
 /// The longest one `msiexec` may run.
 pub const MSIEXEC_WAIT: Duration = Duration::from_secs(90 * 60);
-/// How long the copy waits for the program in Program Files to end.
+/// How long the copy waits for its parent, the helper run that started
+/// it, to end ([`parent_gone`]).
 pub const FREE_WAIT: Duration = Duration::from_secs(120);
+/// How long the copy then waits, best effort, for the program in Program
+/// Files to be free. Anyone else may hold it (any local user can run it),
+/// so it never refuses: Windows Installer replaces a file in use at the
+/// next restart (3010), a path the helper handles.
+pub const IMAGE_WAIT: Duration = Duration::from_secs(30);
+/// How long the copy waits, after an `msiexec` that started and didn't
+/// finish with a code (its deadline's kill), for Windows Installer to be
+/// idle before it lets go of its lock, so no run judges the program on
+/// disk while the Installer may still be finishing.
+pub const INSTALLER_IDLE_WAIT: Duration = Duration::from_secs(30 * 60);
 
 /// How long the service may take to stop.
 pub const STOP_WAIT: Duration = Duration::from_secs(120);
@@ -196,6 +207,16 @@ pub trait System {
     /// Whether the service reaches Running within [`HEALTH_WAIT`] and
     /// stays there for [`HEALTH_HOLD`].
     fn healthy(&self) -> bool;
+    /// The version of the program on disk in Program Files, when an install
+    /// is judged. On Windows that's this process's own version: the run
+    /// that judges an install's answer is a run of that program that reads
+    /// the answer after `msiexec` ended (the copy's, the boot run or one
+    /// the service starts). A program still loaded while msiexec ran makes
+    /// its replacement wait for a restart (3010), never an exit 0. Tests,
+    /// which run `msiexec` in the same process, model what it put on disk.
+    fn on_disk(&self, ctx: &Context) -> Option<String> {
+        ctx.running.as_ref().map(ToString::to_string)
+    }
     /// Sets the service's start type.
     fn set_start(&self, start: Start) -> io::Result<()>;
     /// The service's start type now.
@@ -204,9 +225,18 @@ pub trait System {
     fn event_log(&self, message: &str);
     /// How many processes run as the service's account.
     fn service_processes(&self) -> io::Result<usize>;
+    /// When Windows last booted, in Unix seconds: the boot identity that
+    /// bounds a reinstall's wait for a restart.
+    fn boot_time(&self) -> io::Result<u64>;
+    /// Waits, up to `wait`, until Windows Installer runs no install (its
+    /// `Global\_MSIExecute` mutex is gone); whether it's idle.
+    fn installer_idle(&self, wait: Duration) -> bool;
     /// Called once each copy into staging is written (tests change the
     /// data folder here).
     fn copied(&self, _name: &str) {}
+    /// Called at each pass [`take_lock`] finds `.lock` busy (tests let go
+    /// of a lock they hold here).
+    fn lock_busy(&self) {}
 }
 
 /// What [`System::run_msiexec`] did.
@@ -242,8 +272,22 @@ pub enum Outcome {
     /// Installed and healthy; `restart` when Windows must restart to
     /// finish replacing an in-use file.
     Installed { version: Version, restart: bool },
-    /// `msiexec` failed and rolled back; the version is skipped.
-    Failed { version: Version, code: i32 },
+    /// `msiexec` failed and rolled back; the version is skipped. `why`, a
+    /// plain reason when there's more to say than the code.
+    Failed {
+        version: Version,
+        code: i32,
+        why: Option<String>,
+    },
+    /// `msiexec` failed because the service couldn't start (1920, as when
+    /// `lodestar.exe` is held open): rolled back, not skipped, and tried
+    /// again at the next run of the helper (`attempts` of
+    /// [`msi::MAX_BLOCKED`] so far).
+    InstallBlocked {
+        version: Version,
+        code: i32,
+        attempts: u32,
+    },
     /// Windows Installer was busy (another install); nothing changed and
     /// nothing is skipped.
     InstallerBusy { version: Version, code: i32 },
@@ -276,6 +320,7 @@ impl Outcome {
             Outcome::Nothing => "nothing",
             Outcome::Installed { .. } => "installed",
             Outcome::Failed { .. } => "install_failed",
+            Outcome::InstallBlocked { .. } => "install_blocked",
             Outcome::InstallerBusy { .. } => "installer_busy",
             Outcome::RolledBack { .. } => "rolled_back",
             Outcome::RollbackPending { .. } => "rollback_pending",
@@ -346,8 +391,17 @@ pub fn run(ctx: &Context, sys: &dyn System) -> Result<Outcome, Refusal> {
     let handled = layout::read_json::<Handled>(&staging.dir.join(msi::HANDLED))
         .ok()
         .flatten();
+    // Handled once, unless its install was blocked (1920) and is due again.
     if handled.is_some_and(|h| h.id == request.id) {
-        return Ok(Outcome::Nothing);
+        if !blocked_retry(ctx, &request.id, &version) {
+            return Ok(Outcome::Nothing);
+        }
+        // One retry per blocked attempt: the record keeps the count but no
+        // longer names the request, so a retry that ends any other way (a
+        // refusal, a busy Installer, a stale manifest) isn't repeated.
+        if !consume_retry(ctx) {
+            return Ok(Outcome::Nothing);
+        }
     }
     // Acted on once, whatever happens next.
     let bytes = serde_json::to_vec(&Handled {
@@ -380,15 +434,18 @@ fn answer(
             Err(_) => "refused".into(),
         },
         code: match result {
-            Ok(Outcome::Failed { code, .. } | Outcome::InstallerBusy { code, .. }) => {
-                Some(code.to_string())
-            }
+            Ok(
+                Outcome::Failed { code, .. }
+                | Outcome::InstallerBusy { code, .. }
+                | Outcome::InstallBlocked { code, .. },
+            ) => Some(code.to_string()),
             Ok(_) => None,
             Err(r) => Some(r.code().to_string()),
         },
         restart: matches!(result, Ok(Outcome::Installed { restart: true, .. })),
         detail: match result {
             Ok(Outcome::RollbackHalted { recovery, .. }) => Some(recovery.clone()),
+            Ok(Outcome::Failed { why, .. }) => why.clone(),
             _ => None,
         },
         at: ctx.now,
@@ -403,6 +460,103 @@ fn answer(
 #[serde(deny_unknown_fields)]
 struct Handled {
     id: String,
+}
+
+/// In staging: installs of one version that failed on 1920
+/// ([`msi::held_open`]) in a row, and the request that last tried. Only
+/// the helper writes it; it's bounded by [`msi::MAX_BLOCKED`].
+pub const BLOCKED: &str = "blocked.json";
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Blocked {
+    version: String,
+    id: String,
+    attempts: u32,
+}
+
+fn read_blocked(ctx: &Context) -> Option<Blocked> {
+    layout::read_json(&ctx.staging.dir.join(BLOCKED))
+        .ok()
+        .flatten()
+}
+
+/// Whether request `id` was blocked last time and may be tried again: not
+/// once the user has skipped the version since (`<data>\bin\skipped`; the
+/// service can write it, but it can only stop a retry, so it fails safe:
+/// a list that can't be read stops it too).
+fn blocked_retry(ctx: &Context, id: &str, version: &Version) -> bool {
+    let due = read_blocked(ctx).is_some_and(|b| {
+        b.id == id && b.version == version.to_string() && b.attempts < msi::MAX_BLOCKED
+    });
+    if !due {
+        return false;
+    }
+    if skipped_since(ctx, version) {
+        let _ = std::fs::remove_file(ctx.staging.dir.join(BLOCKED));
+        return false;
+    }
+    true
+}
+
+/// Whether `skipped` lists `version` (or can't be read).
+fn skipped_since(ctx: &Context, version: &Version) -> bool {
+    let Ok(Some(bin)) = Bin::existing(&ctx.data_dir) else {
+        return true;
+    };
+    match bin.read::<Vec<serde_json::Value>>(win::SKIPPED_FILE) {
+        Ok(None) => false,
+        Ok(Some(list)) => list
+            .iter()
+            .any(|e| e.get("version").and_then(|v| v.as_str()) == Some(&version.to_string())),
+        Err(_) => true,
+    }
+}
+
+/// Takes the one retry a blocked attempt allows: the record stays (its
+/// count) without its request. Whether it could be saved; without that
+/// there's no retry.
+fn consume_retry(ctx: &Context) -> bool {
+    let Some(mut b) = read_blocked(ctx) else {
+        return false;
+    };
+    b.id.clear();
+    serde_json::to_vec(&b)
+        .ok()
+        .is_some_and(|bytes| layout::write_atomic(&ctx.staging.dir, BLOCKED, &bytes).is_ok())
+}
+
+/// The tail of an `msiexec` log in staging, at most [`msi::LOG_TAIL`]
+/// bytes, opened as itself (never through a link). `None` when it can't
+/// be read, or isn't in staging.
+fn log_tail(ctx: &Context, log: &Path) -> Option<Vec<u8>> {
+    use std::io::Seek;
+    if !rollback::inside_staging(ctx, log) {
+        return None;
+    }
+    let mut f = layout::open_nofollow(log).ok()?;
+    let len = f.metadata().ok()?.len();
+    // The file's own byte-order mark says how it's encoded, wherever the
+    // tail starts: kept in front of a tail that starts past it.
+    let mut head = [0u8; 2];
+    let bom = f.read_exact(&mut head).is_ok() && head == [0xFF, 0xFE];
+    // An even offset, so UTF-16 stays aligned.
+    let from = len.saturating_sub(msi::LOG_TAIL) & !1;
+    f.seek(io::SeekFrom::Start(from)).ok()?;
+    let mut tail = if bom && from > 0 {
+        vec![0xFF, 0xFE]
+    } else {
+        Vec::new()
+    };
+    f.take(msi::LOG_TAIL).read_to_end(&mut tail).ok()?;
+    Some(tail)
+}
+
+/// Whether the `msiexec` run that logged to `log` failed on 1920 for the
+/// service ([`msi::held_open`]).
+pub(super) fn blocked_by_1920(ctx: &Context, code: i32, log: &Path) -> bool {
+    code == 1603
+        && log_tail(ctx, log).is_some_and(|t| msi::held_open(&t, crate::windows::service::NAME))
 }
 
 /// The steps after the request is parsed and recorded.
@@ -487,7 +641,7 @@ fn attempt(
     let locked = Bin::existing(&ctx.data_dir)
         .map_err(io_refusal("bin"))
         .and_then(|b| b.ok_or(Refusal::Busy("bin_missing")))
-        .and_then(|bin| take_lock(&bin, ctx.lock_wait).map(drop));
+        .and_then(|bin| take_lock(sys, &bin, ctx.lock_wait).map(drop));
     if let Err(e) = locked {
         sys.start_service();
         return Err(e);
@@ -500,6 +654,8 @@ fn attempt(
     }
     // Before msiexec: a crash from here on is finished by the next run.
     let args = msi::msiexec_args(&staged, &staging.log());
+    // The run's log is its own: an earlier one's 1920 is never read.
+    let _ = std::fs::remove_file(staging.log());
     let mut journal = match rollback::installing(ctx, &request.id, running, &version) {
         Ok(j) => j,
         Err(e) => {
@@ -555,18 +711,101 @@ pub(super) fn after_install(
         };
     };
     let version = Version::parse(&journal.to).unwrap_or_else(|_| Version::new(0, 0, 0));
+    let blocked = blocked_by_1920(ctx, code, Path::new(&run.log));
+    // Installed, or an ordinary failure: the count of blocked installs in
+    // a row ends. A busy Installer changes nothing.
+    if !blocked && !matches!(msi::installed(code), Installed::Busy(_)) {
+        let _ = std::fs::remove_file(ctx.staging.dir.join(BLOCKED));
+    }
     match msi::installed(code) {
+        Installed::Failed(code) if blocked => {
+            // Rolled back, as any failure; tried again (bounded), not skipped.
+            rollback::clear(ctx);
+            let attempts = read_blocked(ctx)
+                .filter(|b| b.version == journal.to)
+                .map_or(0, |b| b.attempts)
+                .saturating_add(1);
+            if attempts >= msi::MAX_BLOCKED {
+                let _ = std::fs::remove_file(ctx.staging.dir.join(BLOCKED));
+                mark_failed(ctx, sys, &version);
+                sys.start_service();
+                let why = format!(
+                    "Windows Installer couldn't start the Lodestar service at the end of the \
+                     install ({attempts} times in a row; error 1920): another program may hold \
+                     lodestar.exe open, or {version} doesn't start. {version} is skipped."
+                );
+                sys.event_log(&format!("Lodestar's update helper: {why}"));
+                return Outcome::Failed {
+                    version,
+                    code,
+                    why: Some(why),
+                };
+            }
+            let record = Blocked {
+                version: journal.to.clone(),
+                id: journal.id.clone(),
+                attempts,
+            };
+            let saved = serde_json::to_vec(&record)
+                .ok()
+                .is_some_and(|b| layout::write_atomic(&ctx.staging.dir, BLOCKED, &b).is_ok());
+            if !saved {
+                // Without its count the bound couldn't hold: an ordinary
+                // failure, as before this retry existed.
+                mark_failed(ctx, sys, &version);
+                sys.start_service();
+                return Outcome::Failed {
+                    version,
+                    code,
+                    why: None,
+                };
+            }
+            sys.start_service();
+            Outcome::InstallBlocked {
+                version,
+                code,
+                attempts,
+            }
+        }
         Installed::Failed(code) => {
             // Windows Installer rolled it back: nothing to roll back here.
             rollback::clear(ctx);
-            mark_failed(ctx, &version);
+            mark_failed(ctx, sys, &version);
             sys.start_service();
-            Outcome::Failed { version, code }
+            Outcome::Failed {
+                version,
+                code,
+                why: None,
+            }
         }
         Installed::Busy(code) => {
             rollback::clear(ctx);
             sys.start_service();
             Outcome::InstallerBusy { version, code }
+        }
+        Installed::Done if sys.on_disk(ctx).as_deref() == Some(journal.from.as_str()) => {
+            // Exit 0, but `from` is still the program on disk: Windows
+            // Installer counts `to` installed without having replaced the
+            // program (a maintenance run of a package it already has, after a
+            // restart that never put it in place). Reporting it installed
+            // would offer it again at every check; skipped, with the reason.
+            rollback::clear(ctx);
+            mark_failed(ctx, sys, &version);
+            let _ = sys.set_start(journal.start_before.unwrap_or(Start::Auto));
+            sys.start_service();
+            let why = format!(
+                "Windows Installer reported {version} installed (exit 0), but the program in \
+                 Program Files is still {from}, so it wasn't. {version} is skipped. To install \
+                 it, an administrator repairs or removes Lodestar in Settings > Apps, then \
+                 installs the {version} MSI by hand.",
+                from = journal.from
+            );
+            sys.event_log(&format!("Lodestar's update helper: {why}"));
+            Outcome::Failed {
+                version,
+                code,
+                why: Some(why),
+            }
         }
         done => {
             // Installed: a staging problem doesn't undo that, so it's
@@ -581,8 +820,7 @@ pub(super) fn after_install(
             // still `from`: the copy ran msiexec once the program had ended,
             // so `to` is usually in place and running, and judged now.
             let restart = done == Installed::RestartNeeded
-                && ctx.running.as_ref().map(|v| v.to_string()).as_deref()
-                    == Some(journal.from.as_str());
+                && sys.on_disk(ctx).as_deref() == Some(journal.from.as_str());
             // The restart flag and the cleared run in the same write.
             journal.restart = restart;
             journal.answer = None;
@@ -618,12 +856,15 @@ pub(super) fn copy_name() -> io::Result<String> {
 /// 1. staging checked again (private, not a link) and pinned;
 /// 2. its lock (created only now, so checks never create it), so no helper
 ///    run takes the journal from it;
-/// 3. `wait()`: the program in Program Files has ended;
+/// 3. `wait()`: its parent helper run has ended ([`parent_gone`]);
 /// 4. the pending run must name this copy, its MSI and log must be inside
 ///    staging, and the MSI must still match its pins;
 /// 5. the service stopped, nothing running as its account;
 /// 6. `msiexec`, then its exit code left for the next run. A refusal from
-///    step 3 on is left as the answer too, so it's reported, not lost.
+///    step 3 on is left as the answer too, so it's reported, not lost. An
+///    `msiexec` that started and didn't finish leaves no answer, and the
+///    lock is held until Windows Installer is idle (bounded by
+///    [`INSTALLER_IDLE_WAIT`]), so no run judges meanwhile.
 pub fn run_copy(
     ctx: &Context,
     sys: &dyn System,
@@ -658,7 +899,7 @@ pub fn run_copy(
     };
     let outcome = (|| {
         if !wait() {
-            return Err(Refusal::Busy("program_files_in_use"));
+            return Err(Refusal::Busy("helper_running"));
         }
         let (msi, log) = (PathBuf::from(&run.msi), PathBuf::from(&run.log));
         let inside = |p: &Path| {
@@ -686,8 +927,16 @@ pub fn run_copy(
     match &outcome {
         Ok(code) => answer(*code, None)?,
         // It started: Windows Installer may still finish. No answer, so the
-        // next run judges from the program on disk (or hands off again).
-        Err(Refusal::Busy(MSIEXEC_UNFINISHED)) => {}
+        // next run judges from the program on disk (or hands off again),
+        // once the Installer is idle: until then the lock stays held.
+        Err(Refusal::Busy(MSIEXEC_UNFINISHED)) => {
+            if !sys.installer_idle(INSTALLER_IDLE_WAIT) {
+                eprintln!(
+                    "lodestar update-helper: Windows Installer is still busy after the \
+                     interrupted msiexec; the next run judges from the program on disk"
+                );
+            }
+        }
         Err(r) => answer(-1, Some(r.code().to_string()))?,
     }
     drop(lock);
@@ -740,17 +989,153 @@ pub(crate) fn hold_read_only(path: &Path) -> io::Result<std::fs::File> {
     }
 }
 
-/// Removes earlier copies (`run-*.exe`) from staging; one still running
-/// can't be removed and stays until a later run.
+/// The lock the helper run that starts copy `copy` holds until it ends:
+/// `run-<hex>.parent` in staging (only SYSTEM and Administrators can
+/// open it). The copy waits for it alone ([`parent_gone`]), never for
+/// whoever else runs `lodestar.exe`.
+pub fn parent_lock(staging: &Path, copy: &str) -> PathBuf {
+    staging.join(copy).with_extension("parent")
+}
+
+/// Takes copy `copy`'s parent lock, for the helper run about to start it.
+/// It's released when the returned file closes, at the latest when the
+/// process ends.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn hold_parent(staging: &Path, copy: &str) -> io::Result<std::fs::File> {
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(parent_lock(staging, copy))?;
+    match f.try_lock() {
+        Ok(()) => Ok(f),
+        Err(std::fs::TryLockError::WouldBlock) => {
+            Err(io::Error::other("the copy's parent lock is held"))
+        }
+        Err(std::fs::TryLockError::Error(e)) => Err(e),
+    }
+}
+
+/// How often [`parent_gone`] looks.
+const PARENT_POLL: Duration = Duration::from_millis(200);
+
+/// Waits, up to `wait`, until the helper run that started copy `copy` has
+/// ended: its parent lock ([`hold_parent`]) is free, or was never there.
+/// Whether it has; a lock that can't be opened counts as held.
+pub fn parent_gone(staging: &Path, copy: &str, wait: Duration) -> bool {
+    parent_gone_with(staging, copy, wait, Instant::now, std::thread::sleep)
+}
+
+fn parent_gone_with(
+    staging: &Path,
+    copy: &str,
+    wait: Duration,
+    now: impl Fn() -> Instant,
+    mut sleep: impl FnMut(Duration),
+) -> bool {
+    let path = parent_lock(staging, copy);
+    let start = now();
+    loop {
+        let free = match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+        {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return true,
+            Err(_) => false,
+            Ok(f) => match f.try_lock() {
+                Ok(()) => true,
+                Err(std::fs::TryLockError::WouldBlock) => false,
+                Err(std::fs::TryLockError::Error(_)) => return false,
+            },
+        };
+        if free {
+            let _ = std::fs::remove_file(&path);
+            return true;
+        }
+        if now().saturating_duration_since(start) >= wait {
+            return false;
+        }
+        sleep(PARENT_POLL);
+    }
+}
+
+/// A started `msiexec`, as [`supervise`] sees it.
+pub(super) trait Started {
+    /// `Some(code)` once it has ended (`Some(None)`: with no exit code).
+    fn ended(&mut self) -> io::Result<Option<Option<i32>>>;
+    /// Ends it and reaps it.
+    fn end(&mut self);
+}
+
+impl Started for std::process::Child {
+    fn ended(&mut self) -> io::Result<Option<Option<i32>>> {
+        Ok(self.try_wait()?.map(|s| s.code()))
+    }
+    /// Reaped only once it's killed (an ended child counts as killed), so
+    /// a kill that fails never leaves this waiting.
+    fn end(&mut self) {
+        if self.kill().is_ok() {
+            let _ = self.wait();
+        }
+    }
+}
+
+/// Waits for a started `msiexec`, ending it at `deadline`. Every error
+/// comes after it started, so it's `TimedOut` (the deadline) or
+/// `Interrupted` (no exit code, or it couldn't be waited on), never one
+/// that [`run_copy`] answers as a refusal (P-4).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(super) fn supervise(
+    child: &mut dyn Started,
+    deadline: Duration,
+    poll: Duration,
+    now: &dyn Fn() -> Instant,
+    sleep: &mut dyn FnMut(Duration),
+) -> io::Result<i32> {
+    let start = now();
+    loop {
+        match child.ended() {
+            Ok(Some(Some(code))) => return Ok(code),
+            Ok(Some(None)) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "msiexec ended without a code",
+                ));
+            }
+            Err(e) => {
+                child.end();
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    format!("waiting for msiexec: {e}"),
+                ));
+            }
+            Ok(None) => {}
+        }
+        if now().saturating_duration_since(start) >= deadline {
+            child.end();
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "msiexec ran past its deadline",
+            ));
+        }
+        sleep(poll);
+    }
+}
+
+/// Removes earlier copies (`run-*.exe`) and their parent locks
+/// (`run-*.parent`) from staging; one still running can't be removed and
+/// stays until a later run.
 pub fn clean_copies(staging: &Path) {
     let Ok(entries) = std::fs::read_dir(staging) else {
         return;
     };
     for e in entries.flatten() {
         let name = e.file_name();
-        let copy = name
-            .to_str()
-            .is_some_and(|n| n.starts_with("run-") && n.ends_with(".exe"));
+        let copy = name.to_str().is_some_and(|n| {
+            n.starts_with("run-") && (n.ends_with(".exe") || n.ends_with(".parent"))
+        });
         if copy && e.file_type().is_ok_and(|t| t.is_file()) {
             let _ = std::fs::remove_file(e.path());
         }
@@ -781,8 +1166,10 @@ fn trust_floor(ctx: &Context, own: &lodestar_update::TrustState) -> lodestar_upd
 }
 
 /// Takes `.lock`, waiting up to `wait` for the stopped service's handle
-/// to go.
-pub(super) fn take_lock(bin: &Bin, wait: Duration) -> Result<Lock, Refusal> {
+/// to go: Windows releases a closed file's lock "depending upon available
+/// system resources" (`LockFileEx`). Blocking; only the helper's own
+/// process calls it, which runs no async runtime.
+pub(super) fn take_lock(sys: &dyn System, bin: &Bin, wait: Duration) -> Result<Lock, Refusal> {
     let deadline = Instant::now() + wait;
     loop {
         if let Some(l) = bin.lock().map_err(io_refusal(".lock"))? {
@@ -791,19 +1178,21 @@ pub(super) fn take_lock(bin: &Bin, wait: Duration) -> Result<Lock, Refusal> {
         if Instant::now() >= deadline {
             return Err(Refusal::Busy("bin_busy"));
         }
+        sys.lock_busy();
         std::thread::sleep(Duration::from_millis(100));
     }
 }
 
 /// A failed install's version is never offered again: `skipped`, reason
-/// `failed`, written under `.lock` in the pinned `<data>\bin`. Best
-/// effort: when the lock or the file isn't available the next check
-/// offers it again, and it fails the same way.
-fn mark_failed(ctx: &Context, version: &Version) {
+/// `failed`, written under `.lock` in the pinned `<data>\bin` (waited for
+/// up to `lock_wait`, [`take_lock`]: the service that just stopped may not
+/// have let go of it yet). Best effort: when the lock or the file isn't
+/// available the next check offers it again, and it fails the same way.
+fn mark_failed(ctx: &Context, sys: &dyn System, version: &Version) {
     let Ok(Some(bin)) = Bin::existing(&ctx.data_dir) else {
         return;
     };
-    let Ok(Some(_lock)) = bin.lock() else {
+    let Ok(_lock) = take_lock(sys, &bin, ctx.lock_wait) else {
         return;
     };
     let _ = win::add_skip(&bin, &version.to_string(), SKIP_FAILED);
@@ -902,6 +1291,33 @@ impl Windows {
         cmd.creation_flags(NO_WINDOW);
         clean_env(&mut cmd);
         Ok(cmd)
+    }
+
+    /// Windows PowerShell from `System32`, set to run the fixed `script`:
+    /// no profile, no module path from the environment, no window, no
+    /// `LODESTAR_*` variable ([`Self::command`]). Every script the helper
+    /// runs starts here.
+    fn powershell_command(script: &str) -> io::Result<std::process::Command> {
+        let mut cmd = Self::command(r"WindowsPowerShell\v1.0\powershell.exe")?;
+        cmd.env_remove("PSModulePath").args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ]);
+        Ok(cmd)
+    }
+
+    /// Runs a fixed PowerShell `script` (no input), its standard output.
+    fn powershell(script: &str) -> io::Result<String> {
+        let out = Self::powershell_command(script)?.output()?;
+        if !out.status.success() {
+            return Err(io::Error::other("powershell failed"));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
     fn sc(args: &[&str]) -> io::Result<String> {
@@ -1013,18 +1429,8 @@ impl System for Windows {
     }
 
     fn authenticode(&self, msi: &Path) -> Result<(), String> {
-        let out = Self::command(r"WindowsPowerShell\v1.0\powershell.exe")
+        let out = Self::powershell_command(AUTHENTICODE_SCRIPT)
             .map_err(|e| e.to_string())?
-            .env_remove("PSModulePath")
-            .args([
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                AUTHENTICODE_SCRIPT,
-            ])
             .env("LODESTAR_HELPER_MSI", msi)
             .output()
             .map_err(|e| e.to_string())?;
@@ -1107,6 +1513,9 @@ impl System for Windows {
         let own = std::env::current_exe().map_err(|e| e.to_string())?;
         let (path, held) =
             stage_copy(staging, &own, copy).map_err(|e| format!("copying the helper: {e}"))?;
+        // Held until this process ends: the copy waits for it alone.
+        let parent =
+            hold_parent(staging, copy).map_err(|e| format!("the copy's parent lock: {e}"))?;
         let start = |flags: u32| {
             let mut cmd = std::process::Command::new(&path);
             clean_env(&mut cmd);
@@ -1125,31 +1534,50 @@ impl System for Windows {
         // The copy holds its own image from here (read-only, and a running
         // image can't be written or deleted).
         drop(held);
+        // Never closed here: Windows releases it when this process ends,
+        // which is what the copy waits for.
+        std::mem::forget(parent);
         Ok(Ran::HandedOff)
     }
 
     /// Bounded by [`MSIEXEC_WAIT`]: a hung install is ended, never left
-    /// holding the copy's lock for good. That error (and one with no exit
-    /// code) comes after `msiexec` started, so it's `TimedOut` or
-    /// `Interrupted`, never answered as a refusal ([`run_copy`]).
+    /// holding the copy's lock for good. Every error after the spawn
+    /// ([`supervise`]) is `TimedOut` or `Interrupted`, never answered as a
+    /// refusal ([`run_copy`]).
     fn msiexec(&self, args: &[OsString]) -> io::Result<i32> {
-        let mut child = Self::command("msiexec.exe")?.args(args).spawn()?;
-        let deadline = Instant::now() + MSIEXEC_WAIT;
+        // Classified by position (P-4): a failed spawn is never "started",
+        // whatever its error's kind.
+        let mut child = Self::command("msiexec.exe")
+            .and_then(|mut c| c.args(args).spawn())
+            .map_err(|e| io::Error::other(format!("starting msiexec: {e}")))?;
+        supervise(
+            &mut child,
+            MSIEXEC_WAIT,
+            Duration::from_secs(1),
+            &Instant::now,
+            &mut std::thread::sleep,
+        )
+    }
+
+    /// `Win32_OperatingSystem.LastBootUpTime`, through PowerShell (the
+    /// workspace forbids `unsafe`).
+    fn boot_time(&self) -> io::Result<u64> {
+        let out = Self::powershell(BOOT_SCRIPT)?;
+        boot_time_of(&out).ok_or_else(|| io::Error::other("the boot time can't be read"))
+    }
+
+    /// Looks every 5 s; a look that fails counts as busy.
+    fn installer_idle(&self, wait: Duration) -> bool {
+        let deadline = Instant::now() + wait;
         loop {
-            if let Some(status) = child.try_wait()? {
-                return status.code().ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::Interrupted, "msiexec ended without a code")
-                });
+            if Self::powershell(INSTALLER_SCRIPT).is_ok_and(|o| installer_idle_of(&o) == Some(true))
+            {
+                return true;
             }
             if Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "msiexec ran past its deadline",
-                ));
+                return false;
             }
-            std::thread::sleep(Duration::from_secs(1));
+            std::thread::sleep(Duration::from_secs(5));
         }
     }
 
@@ -1170,6 +1598,33 @@ impl System for Windows {
             }
         }
         true
+    }
+}
+
+/// When Windows last booted, in Unix seconds. The CIM query gives up after
+/// 30 s (`-OperationTimeoutSec`), so a stuck WMI never holds a run.
+pub const BOOT_SCRIPT: &str = "$ErrorActionPreference = 'Stop'
+([DateTimeOffset](Get-CimInstance -ClassName Win32_OperatingSystem -OperationTimeoutSec 30).LastBootUpTime).ToUnixTimeSeconds()";
+
+/// `idle` while no install holds Windows Installer's `Global\_MSIExecute`
+/// mutex, `busy` otherwise (one that can't be opened counts as busy).
+pub const INSTALLER_SCRIPT: &str = "$ErrorActionPreference = 'Stop'
+$m = $null
+try {
+  if ([System.Threading.Mutex]::TryOpenExisting('Global\\_MSIExecute', [ref]$m)) { $m.Dispose(); 'busy' } else { 'idle' }
+} catch { 'busy' }";
+
+/// [`BOOT_SCRIPT`]'s answer.
+pub fn boot_time_of(text: &str) -> Option<u64> {
+    text.trim().parse().ok().filter(|t| *t > 0)
+}
+
+/// [`INSTALLER_SCRIPT`]'s answer: whether Windows Installer is idle.
+pub fn installer_idle_of(text: &str) -> Option<bool> {
+    match text.trim() {
+        "idle" => Some(true),
+        "busy" => Some(false),
+        _ => None,
     }
 }
 
@@ -1235,13 +1690,40 @@ mod tests {
         watch_marker: Option<PathBuf>,
         marker_at_start: Mutex<Vec<bool>>,
         /// The service's state, as the SCM would see it: msiexec starts it
-        /// when `msi_starts` (the MSI's StartServices, the process then
-        /// idling on the marker and going on once it's gone); a start of a
-        /// running service changes nothing.
+        /// when `msi_starts` (the MSI's StartServices). A start while
+        /// `watch_marker` exists idles, as the real service does
+        /// (`windows::service::idle_during_rollback`); once the marker goes
+        /// it ends or carries on as `Idle::MarkerGone.exit_code()` says,
+        /// noticed at the next health look (its poll comes after the
+        /// helper's start). A start of a running service changes nothing
+        /// (the SCM's 1056), so a start can't revive an idle one that's
+        /// about to end.
         msi_starts: bool,
         running: Mutex<bool>,
+        idling: Mutex<bool>,
         /// Called at a test hook (`copied`): (hook name, action).
         at_hook: Option<(&'static str, Hook)>,
+        /// When Windows booted (`boot_time`), or an error when `boot_fails`.
+        boot: u64,
+        boot_fails: bool,
+        /// Windows Installer stays busy through `installer_idle`'s wait.
+        installer_busy: bool,
+        /// Called at `installer_idle`.
+        on_idle: Option<Hook>,
+        /// Called at each busy pass of `take_lock`, and at each msiexec.
+        on_lock_busy: Option<Hook>,
+        at_msiexec: Option<Hook>,
+        /// What msiexec writes to its log (`/l*v`, the argument after it).
+        log: Option<Vec<u8>>,
+        /// The program on disk once this fake's msiexec has run: an exit 0
+        /// puts its MSI's version there (`lodestar-<v>.msi`), unless
+        /// `stays` (a maintenance run that replaces nothing); any other
+        /// exit leaves it. Unset (no msiexec here): the run's own version.
+        disk: Mutex<Option<String>>,
+        stays: bool,
+        /// The program on disk after this fake's msiexec whatever its exit
+        /// (a 3010 that replaced it anyway: the copy ran once it had ended).
+        disk_after: Option<String>,
         /// A source to overwrite once it's copied: (name, path, bytes).
         swap: Option<(String, PathBuf, Vec<u8>)>,
         calls: Mutex<Vec<String>>,
@@ -1252,6 +1734,25 @@ mod tests {
     impl Fake {
         fn calls(&self) -> Vec<String> {
             self.calls.lock().unwrap().clone()
+        }
+        /// A start of a stopped service: it idles while the marker exists.
+        fn started(&self) {
+            *self.running.lock().unwrap() = true;
+            *self.idling.lock().unwrap() = self.watch_marker.as_ref().is_some_and(|m| m.exists());
+        }
+        /// An idle service whose marker went ends or carries on, as the
+        /// real one decides.
+        fn settle(&self) {
+            let gone = self.watch_marker.as_ref().is_some_and(|m| !m.exists());
+            let mut idling = self.idling.lock().unwrap();
+            if *idling && gone {
+                *idling = false;
+                let carries_on = crate::windows::service::Idle::MarkerGone
+                    .exit_code()
+                    .is_none();
+                let mut running = self.running.lock().unwrap();
+                *running = *running && carries_on;
+            }
         }
         fn note(&self, s: &str) {
             let n = {
@@ -1291,11 +1792,28 @@ mod tests {
             if let Some(m) = &self.watch_marker {
                 self.marker_at_start.lock().unwrap().push(m.exists());
             }
-            *self.running.lock().unwrap() = true;
+            if !*self.running.lock().unwrap() {
+                self.started();
+            }
             self.note("start");
         }
         fn msiexec(&self, args: &[OsString]) -> io::Result<i32> {
             self.note("msiexec");
+            if let Some(act) = &self.at_msiexec {
+                act();
+            }
+            if let Some(log) = &self.log {
+                std::fs::write(&args[5], log).unwrap();
+            }
+            if let Some(v) = &self.disk_after {
+                *self.disk.lock().unwrap() = Some(v.clone());
+            } else if self.code == 0 && self.msi_error.is_none() && !self.stays {
+                let name = Path::new(&args[1]).file_name().unwrap().to_string_lossy();
+                let v = name
+                    .strip_prefix("lodestar-")
+                    .and_then(|n| n.strip_suffix(".msi"));
+                *self.disk.lock().unwrap() = v.map(str::to_string);
+            }
             let msi = std::fs::read(&args[1]).unwrap();
             if let Some(data) = &self.migrate {
                 let store = data.join("lodestar.db");
@@ -1310,8 +1828,8 @@ mod tests {
                 }
             }
             *self.ran.lock().unwrap() = Some((args.to_vec(), msi));
-            if self.msi_starts {
-                *self.running.lock().unwrap() = true;
+            if self.msi_starts && !*self.running.lock().unwrap() {
+                self.started();
             }
             if let Some(kind) = self.msi_error {
                 return Err(io::Error::new(kind, "msiexec didn't finish"));
@@ -1321,6 +1839,7 @@ mod tests {
         /// Unhealthy at the first look only (the failed version), healthy
         /// after (the old one, once rolled back).
         fn healthy(&self) -> bool {
+            self.settle();
             let mut n = self.health_looks.lock().unwrap();
             *n += 1;
             // A service that isn't running is never healthy, when tracked.
@@ -1347,6 +1866,31 @@ mod tests {
         }
         fn service_processes(&self) -> io::Result<usize> {
             Ok(self.processes)
+        }
+        fn boot_time(&self) -> io::Result<u64> {
+            if self.boot_fails {
+                return Err(io::Error::other("no boot time"));
+            }
+            Ok(self.boot)
+        }
+        fn on_disk(&self, ctx: &Context) -> Option<String> {
+            self.disk
+                .lock()
+                .unwrap()
+                .clone()
+                .or_else(|| ctx.running.as_ref().map(ToString::to_string))
+        }
+        fn lock_busy(&self) {
+            if let Some(act) = &self.on_lock_busy {
+                act();
+            }
+        }
+        fn installer_idle(&self, _: Duration) -> bool {
+            self.note("installer_idle");
+            if let Some(act) = &self.on_idle {
+                act();
+            }
+            !self.installer_busy
         }
         fn run_msiexec(&self, _: &Path, args: &[OsString], _: &str) -> Result<Ran, String> {
             if self.hand_off {
@@ -1827,6 +2371,15 @@ mod tests {
             fn service_processes(&self) -> io::Result<usize> {
                 self.fake.service_processes()
             }
+            fn boot_time(&self) -> io::Result<u64> {
+                self.fake.boot_time()
+            }
+            fn installer_idle(&self, w: Duration) -> bool {
+                self.fake.installer_idle(w)
+            }
+            fn on_disk(&self, c: &Context) -> Option<String> {
+                self.fake.on_disk(c)
+            }
             fn run_msiexec(&self, d: &Path, a: &[OsString], c: &str) -> Result<Ran, String> {
                 self.fake.run_msiexec(d, a, c)
             }
@@ -1861,7 +2414,8 @@ mod tests {
             env.run(&fake).unwrap(),
             Outcome::Failed {
                 version: Version::new(0, 7, 0),
-                code: 1603
+                code: 1603,
+                why: None
             }
         );
         assert_eq!(fake.calls().last().unwrap(), "start");
@@ -1871,6 +2425,549 @@ mod tests {
         .unwrap();
         assert_eq!(skipped, json!([{"version": "0.7.0", "reason": "failed"}]));
         assert!(!env.ctx.staging.current().exists());
+    }
+
+    /// The tail of a verbose log whose StartServices failed on 1920, in
+    /// Windows Installer's UTF-16.
+    fn log_1920() -> Vec<u8> {
+        let text = "MSI (s) (A8:B4) [10:15:53:456]: Product: Lodestar -- Error 1920. Service \
+                    'Lodestar' (Lodestar) failed to start. Verify that you have sufficient \
+                    privileges to start system services.\r\n\
+                    MSI (s) (A8:B4) [10:15:54:000]: Product: Lodestar -- Installation failed.\r\n";
+        let mut b = vec![0xFF, 0xFE];
+        for u in text.encode_utf16() {
+            b.extend_from_slice(&u.to_le_bytes());
+        }
+        b
+    }
+
+    fn held(code: i32) -> Fake {
+        Fake {
+            code,
+            log: Some(log_1920()),
+            ..Fake::default()
+        }
+    }
+
+    fn skipped(env: &Env) -> bool {
+        env.ctx.data_dir.join("bin").join("skipped").exists()
+    }
+
+    /// X-win-upd-1920: an install whose StartServices fails on 1920 (as
+    /// when lodestar.exe is held open with no sharing) is `install_blocked`,
+    /// not skipped: the same request is tried again at the next run, the
+    /// old service started meanwhile. The third in a row is an ordinary
+    /// failure, skipped with a plain reason, and the request is done.
+    #[test]
+    fn a_1920_install_is_retried_then_skipped() {
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        for attempts in 1..msi::MAX_BLOCKED {
+            let fake = held(1603);
+            assert_eq!(
+                env.run(&fake).unwrap(),
+                Outcome::InstallBlocked {
+                    version: Version::new(0, 7, 0),
+                    code: 1603,
+                    attempts
+                }
+            );
+            assert!(fake.calls().contains(&"msiexec".to_string()));
+            assert_eq!(fake.calls().last().unwrap(), "start");
+            assert!(!skipped(&env), "attempt {attempts}");
+            assert!(!env.ctx.staging.dir.join(rollback::JOURNAL).exists());
+            assert_eq!(env.answer().outcome, "install_blocked");
+        }
+        let last = held(1603);
+        let out = env.run(&last).unwrap();
+        let Outcome::Failed { why: Some(why), .. } = &out else {
+            panic!("{out:?}");
+        };
+        assert!(why.contains("1920") && why.contains("3 times"), "{why}");
+        assert!(skipped(&env));
+        assert_eq!(env.answer().detail.as_deref(), Some(why.as_str()));
+        assert!(!env.ctx.staging.dir.join(BLOCKED).exists());
+        // Done with: the same request isn't tried again.
+        let after = Fake::default();
+        assert_eq!(env.run(&after).unwrap(), Outcome::Nothing);
+        assert!(after.calls().is_empty());
+    }
+
+    /// The count is per version, not per request: a new request for the
+    /// same version can't reset it (a release whose service never starts
+    /// is still skipped), a busy Installer leaves it as it is, and another
+    /// version starts again at 1.
+    #[test]
+    fn the_count_is_per_version_across_requests() {
+        let env = Env::new("0.6.0");
+        // Each offer a later manifest, as the service's checks would fetch.
+        let ts = std::cell::Cell::new(NOW - 600);
+        let offer = |version: &str| {
+            ts.set(ts.get() + 10);
+            let envelope = env.envelope(Channel::Stable, ts.get(), version, MSI);
+            env.leave(version, Channel::Stable, &envelope, MSI);
+        };
+        let blocked = |env: &Env| match env.run(&held(1603)).unwrap() {
+            Outcome::InstallBlocked { attempts, .. } => attempts,
+            other => panic!("{other:?}"),
+        };
+        offer("0.7.0");
+        assert_eq!(blocked(&env), 1);
+        offer("0.7.0");
+        let busy = Fake {
+            code: 1618,
+            ..Fake::default()
+        };
+        assert_eq!(env.run(&busy).unwrap().code(), "installer_busy");
+        offer("0.7.0");
+        assert_eq!(blocked(&env), 2);
+        offer("0.8.0");
+        assert_eq!(blocked(&env), 1, "another version");
+        offer("0.7.0");
+        assert_eq!(blocked(&env), 1, "0.8.0 replaced 0.7.0's count");
+        offer("0.7.0");
+        assert_eq!(blocked(&env), 2);
+        offer("0.7.0");
+        assert_eq!(env.run(&held(1603)).unwrap().code(), "install_failed");
+        assert!(skipped(&env));
+    }
+
+    /// A blocked request is retried once per blocked attempt: one that then
+    /// ends any other way (here the service won't stop) isn't tried again
+    /// at every boot; and one the user skipped since isn't tried at all.
+    #[test]
+    fn a_retry_runs_once_and_never_after_a_skip() {
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        assert_eq!(env.run(&held(1603)).unwrap().code(), "install_blocked");
+        let stuck = Fake {
+            stop_fails: true,
+            ..Fake::default()
+        };
+        assert_eq!(refused(env.run(&stuck)), "service_running");
+        let next = Fake::default();
+        assert_eq!(env.run(&next).unwrap(), Outcome::Nothing);
+        assert!(next.calls().is_empty(), "{:?}", next.calls());
+        // The count stays for the version's next request.
+        env.offer("0.7.0");
+        assert_eq!(
+            env.run(&held(1603)).unwrap(),
+            Outcome::InstallBlocked {
+                version: Version::new(0, 7, 0),
+                code: 1603,
+                attempts: 2
+            }
+        );
+        // The user skips it: no retry, and the record goes.
+        std::fs::write(
+            env.ctx.data_dir.join("bin").join("skipped"),
+            br#"[{"version":"0.7.0","reason":"user"}]"#,
+        )
+        .unwrap();
+        let after = Fake::default();
+        assert_eq!(env.run(&after).unwrap(), Outcome::Nothing);
+        assert!(after.calls().is_empty(), "{:?}", after.calls());
+        assert!(!env.ctx.staging.dir.join(BLOCKED).exists());
+    }
+
+    /// The retry is the blocked request's own: the same id rewritten for
+    /// another version isn't retried.
+    #[test]
+    fn a_retry_is_for_the_blocked_version_only() {
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        assert_eq!(env.run(&held(1603)).unwrap().code(), "install_blocked");
+        let id = read_blocked(&env.ctx).unwrap().id;
+        let req = json!({"format": 1, "id": id, "version": "0.8.0", "channel": "stable"});
+        std::fs::write(env.updates(REQUEST), bytes(&req)).unwrap();
+        let next = Fake::default();
+        assert_eq!(env.run(&next).unwrap(), Outcome::Nothing);
+        assert!(next.calls().is_empty(), "{:?}", next.calls());
+    }
+
+    /// The rollback's reinstall too: a 1603 with no log of its own after a
+    /// blocked one is an ordinary failure, and halts.
+    #[test]
+    fn an_earlier_reinstalls_log_is_never_read() {
+        let mut env = Env::new("0.6.0");
+        rollback_to_the_reinstall(&mut env);
+        assert_eq!(as_copy(&env, &held(1603)).unwrap(), 1603);
+        assert_eq!(env.run(&held(1603)).unwrap().code(), "rollback_pending");
+        let silent = Fake {
+            code: 1603,
+            ..Fake::default()
+        };
+        assert_eq!(env.run(&silent).unwrap().code(), "rollback_halted");
+    }
+
+    /// A 1603 whose run wrote no log of its own never reads the last one's
+    /// 1920: the log goes before each run.
+    #[test]
+    fn an_earlier_runs_log_is_never_read() {
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        assert_eq!(env.run(&held(1603)).unwrap().code(), "install_blocked");
+        let silent = Fake {
+            code: 1603,
+            ..Fake::default()
+        };
+        assert_eq!(env.run(&silent).unwrap().code(), "install_failed");
+    }
+
+    /// #663 item 2: exit 0 with `from` still the program on disk (Windows
+    /// Installer counts `to` installed without having replaced it) is
+    /// skipped with a plain reason, never reported installed, so it isn't
+    /// offered again at every check. Through the copy too.
+    #[test]
+    fn an_exit_0_that_left_the_old_program_is_skipped() {
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        let fake = Fake {
+            stays: true,
+            start_before: Some(Start::Manual),
+            ..Fake::default()
+        };
+        let out = env.run(&fake).unwrap();
+        let Outcome::Failed {
+            code: 0,
+            why: Some(why),
+            ..
+        } = &out
+        else {
+            panic!("{out:?}");
+        };
+        assert!(
+            why.contains("still 0.6.0") && why.contains("skipped"),
+            "{why}"
+        );
+        assert!(skipped(&env));
+        assert_eq!(
+            &fake.calls()[fake.calls().len() - 3..],
+            ["manual", "start", "event"],
+            "the start type found goes back"
+        );
+        assert!(!env.ctx.staging.dir.join(rollback::JOURNAL).exists());
+        assert!(!env.ctx.staging.current().exists(), "not kept as installed");
+        assert_eq!(env.answer().outcome, "install_failed");
+        // Handed off: the run after the copy is still 0.6.0.
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        let hand = Fake {
+            hand_off: true,
+            ..Fake::default()
+        };
+        assert_eq!(env.run(&hand).unwrap(), Outcome::HandedOff);
+        let copy = Fake {
+            stays: true,
+            ..Fake::default()
+        };
+        assert_eq!(as_copy(&env, &copy).unwrap(), 0);
+        let next = Fake::default();
+        assert_eq!(env.run(&next).unwrap().code(), "install_failed");
+        assert!(skipped(&env));
+    }
+
+    /// A 3010 waits for the restart only while the program on disk is
+    /// `from`: one that has `to` on disk already is judged now, whatever
+    /// version this run happens to be.
+    #[test]
+    fn a_3010_is_judged_by_the_program_on_disk() {
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        let fake = Fake {
+            code: 3010,
+            disk_after: Some("0.7.0".into()),
+            ..Fake::default()
+        };
+        assert_eq!(
+            env.run(&fake).unwrap(),
+            Outcome::Installed {
+                version: Version::new(0, 7, 0),
+                restart: false
+            }
+        );
+        assert!(!env.ctx.staging.dir.join(rollback::JOURNAL).exists());
+    }
+
+    /// A count of u32::MAX on disk (blocked.json, the journal's `blocked`)
+    /// saturates: an ordinary failure, no overflow.
+    #[test]
+    fn a_saturated_count_is_an_ordinary_failure() {
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        std::fs::create_dir_all(&env.ctx.staging.dir).unwrap();
+        let record = json!({"version": "0.7.0", "id": "", "attempts": u32::MAX});
+        std::fs::write(env.ctx.staging.dir.join(BLOCKED), bytes(&record)).unwrap();
+        assert_eq!(env.run(&held(1603)).unwrap().code(), "install_failed");
+        assert!(skipped(&env));
+        let mut env = Env::new("0.6.0");
+        rollback_to_the_reinstall(&mut env);
+        let mut j = rollback::read(&env.ctx).unwrap().unwrap();
+        j.blocked = u32::MAX;
+        rollback::write(&env.ctx, &j).unwrap();
+        assert_eq!(as_copy(&env, &held(1603)).unwrap(), 1603);
+        assert_eq!(env.run(&Fake::default()).unwrap().code(), "rollback_halted");
+    }
+
+    /// A blocked install that then installs ends the count, and a 1603
+    /// whose log shows no 1920 is skipped at once, as before.
+    #[test]
+    fn only_a_1920_is_retried_and_an_install_ends_the_count() {
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        assert_eq!(env.run(&held(1603)).unwrap().code(), "install_blocked");
+        assert_eq!(env.run(&Fake::default()).unwrap().code(), "installed");
+        assert!(!env.ctx.staging.dir.join(BLOCKED).exists());
+        // Another failure code with the same log, or a 1603 with another
+        // log: ordinary failures.
+        for fake in [
+            held(1625),
+            Fake {
+                code: 1603,
+                log: Some(b"MSI (s): Product: Lodestar -- Error 1603.".to_vec()),
+                ..Fake::default()
+            },
+        ] {
+            let env = Env::new("0.6.0");
+            env.offer("0.7.0");
+            assert_eq!(env.run(&fake).unwrap().code(), "install_failed");
+            assert!(skipped(&env));
+        }
+    }
+
+    /// The rollback's reinstall failing on 1920 is retried at the next run
+    /// (the service kept disabled and stopped, the marker in place), then
+    /// halts on the third in a row; one that installs in between ends the
+    /// count.
+    #[test]
+    fn a_1920_reinstall_is_retried_then_halts() {
+        let mut env = Env::new("0.6.0");
+        rollback_to_the_reinstall(&mut env);
+        assert_eq!(as_copy(&env, &held(1603)).unwrap(), 1603);
+        let marker = env.ctx.data_dir.join("bin").join(rollback::MARKER);
+        for blocked in 1..msi::MAX_BLOCKED {
+            // The first takes the copy's answer; later ones run it here.
+            let next = held(1603);
+            let out = env.run(&next).unwrap();
+            assert!(
+                matches!(&out, Outcome::RollbackPending { why } if why.contains("1920")),
+                "{out:?}"
+            );
+            assert!(!started(&next), "{:?}", next.calls());
+            assert_eq!(next.calls()[next.calls().len() - 2..], ["disabled", "stop"]);
+            assert!(marker.exists());
+            let j = rollback::read(&env.ctx).unwrap().unwrap();
+            assert_eq!((j.blocked, done(&env)), (blocked, 3));
+        }
+        let last = held(1603);
+        let out = env.run(&last).unwrap();
+        assert!(
+            matches!(&out, Outcome::RollbackHalted { why, .. } if why.contains("3 times")),
+            "{out:?}"
+        );
+        assert!(!started(&last), "{:?}", last.calls());
+        // One that installs after a blocked one finishes the rollback.
+        let mut env = Env::new("0.6.0");
+        rollback_to_the_reinstall(&mut env);
+        assert_eq!(as_copy(&env, &held(1603)).unwrap(), 1603);
+        assert_eq!(env.run(&held(1603)).unwrap().code(), "rollback_pending");
+        assert_eq!(env.run(&Fake::default()).unwrap().code(), "rolled_back");
+    }
+
+    /// The log is read as untrusted input: its last [`msi::LOG_TAIL`] bytes
+    /// only, and only inside staging.
+    #[test]
+    fn only_the_logs_tail_in_staging_is_read() {
+        let env = Env::new("0.6.0");
+        std::fs::create_dir_all(&env.ctx.staging.dir).unwrap();
+        let log = env.ctx.staging.dir.join("msiexec.log");
+        let pad = vec![b'x'; msi::LOG_TAIL as usize];
+        // At the end of a long UTF-16 log: found (the tail starts mid-file,
+        // on an even byte). Before the tail: not read.
+        let wide_pad: Vec<u8> = pad.iter().flat_map(|b| [*b, 0]).collect();
+        let utf16 = [&[0xFF, 0xFE][..], &wide_pad[..], &log_1920()[2..]].concat();
+        std::fs::write(&log, utf16).unwrap();
+        assert!(blocked_by_1920(&env.ctx, 1603, &log));
+        let utf8 = "Product: Lodestar -- Error 1920. Service 'Lodestar' failed to start.\n";
+        std::fs::write(&log, [utf8.as_bytes(), &pad[..]].concat()).unwrap();
+        assert!(!blocked_by_1920(&env.ctx, 1603, &log));
+        std::fs::write(&log, utf8).unwrap();
+        assert!(blocked_by_1920(&env.ctx, 1603, &log));
+        assert!(!blocked_by_1920(&env.ctx, 1625, &log), "1603 only");
+        // A long UTF-16 log whose tail has no ASCII run at its start (a
+        // non-Latin language): the file's own mark decides.
+        let cyrillic: Vec<u8> = "Ошибка 1920. Служба 'Lodestar' не запущена. Журнал "
+            .repeat(msi::LOG_TAIL as usize / 40)
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        std::fs::write(&log, [&[0xFF, 0xFE][..], &cyrillic[..]].concat()).unwrap();
+        assert!(blocked_by_1920(&env.ctx, 1603, &log));
+        // Outside staging: never read.
+        let outside = env.ctx.data_dir.join("msiexec.log");
+        std::fs::write(&outside, utf8).unwrap();
+        assert!(!blocked_by_1920(&env.ctx, 1603, &outside));
+    }
+
+    /// A rollback that halts because its journal couldn't be saved says so
+    /// in its recovery text, not that the reinstall didn't finish (#663's
+    /// review, item 3).
+    #[test]
+    fn a_journal_that_cant_be_saved_is_named_in_the_recovery() {
+        let env = Env::new("0.6.0");
+        with_previous(&env, OLD_MSI);
+        env.offer("0.7.0");
+        let journal = env.ctx.staging.dir.join(rollback::JOURNAL);
+        let j = journal.clone();
+        let fake = Fake {
+            // After the restore, before step 3 is saved: a folder where the
+            // journal goes, so its rename fails.
+            at_hook: Some((
+                "sides_removed",
+                Box::new(move || {
+                    std::fs::remove_file(&j).unwrap();
+                    std::fs::create_dir(&j).unwrap();
+                }),
+            )),
+            ..failing(&env)
+        };
+        let out = env.run(&fake).unwrap();
+        let Outcome::RollbackHalted { recovery, .. } = &out else {
+            panic!("{out:?}");
+        };
+        assert!(recovery.contains("journal couldn't be saved"), "{recovery}");
+        assert!(
+            !recovery.contains("reinstalling the previous version"),
+            "{recovery}"
+        );
+        std::fs::remove_dir(&journal).unwrap();
+    }
+
+    /// The drop path takes no lock when there's no marker: a version
+    /// installed by hand may be serving, holding `.lock` for good, and the
+    /// run mustn't wait on it (#663's review, item 4).
+    #[test]
+    fn no_marker_means_no_wait_for_the_lock() {
+        let mut env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        env.run(&Fake {
+            code: 3010,
+            ..Fake::default()
+        })
+        .unwrap();
+        let bin = Bin::existing(&env.ctx.data_dir).unwrap().unwrap();
+        let _serving = bin.lock().unwrap().unwrap();
+        let busy = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let b = busy.clone();
+        let next = Fake {
+            on_lock_busy: Some(Box::new(move || {
+                b.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            })),
+            ..Fake::default()
+        };
+        env.ctx.running = Some(Version::new(0, 8, 0));
+        assert_eq!(env.run(&next).unwrap(), Outcome::Nothing);
+        assert_eq!(busy.load(std::sync::atomic::Ordering::Relaxed), 0);
+        assert!(!env.ctx.staging.dir.join(rollback::JOURNAL).exists());
+    }
+
+    /// `.lock` held by `held` until the first busy pass of `take_lock`, as a
+    /// service that just stopped holds it for a moment: what the hooks
+    /// that take it and let go of it are made from.
+    fn holder(bin: &Path) -> (Hook, Hook) {
+        let lock: std::sync::Arc<Mutex<Option<Lock>>> = std::sync::Arc::default();
+        let (take, free) = (lock.clone(), lock);
+        let bin = bin.to_path_buf();
+        (
+            Box::new(move || {
+                let b = Bin::existing(bin.parent().unwrap()).unwrap().unwrap();
+                *take.lock().unwrap() = Some(b.lock().unwrap().expect("free"));
+            }),
+            Box::new(move || drop(free.lock().unwrap().take())),
+        )
+    }
+
+    /// A failed install's skip waits for `.lock` (the busy-lock bound):
+    /// held when msiexec ends, let go of a moment later, the skip is still
+    /// written.
+    #[test]
+    fn a_failed_install_waits_for_the_lock_to_skip_it() {
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        let (take, free) = holder(&env.ctx.data_dir.join("bin"));
+        let fake = Fake {
+            code: 1603,
+            at_msiexec: Some(take),
+            on_lock_busy: Some(free),
+            ..Fake::default()
+        };
+        assert_eq!(env.run(&fake).unwrap().code(), "install_failed");
+        let skipped: Value = serde_json::from_slice(
+            &std::fs::read(env.ctx.data_dir.join("bin").join("skipped")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(skipped, json!([{"version": "0.7.0", "reason": "failed"}]));
+    }
+
+    /// Step 5's marker removal waits for `.lock` too: held from the
+    /// reinstall on, let go of a moment later, the rollback still finishes.
+    #[test]
+    fn a_rollback_waits_for_the_lock_to_remove_the_marker() {
+        let mut env = Env::new("0.6.0");
+        rollback_to_the_reinstall(&mut env);
+        let (take, free) = holder(&env.ctx.data_dir.join("bin"));
+        let copy = Fake {
+            at_msiexec: Some(take),
+            ..Fake::default()
+        };
+        assert_eq!(as_copy(&env, &copy).unwrap(), 0);
+        let next = Fake {
+            on_lock_busy: Some(free),
+            ..Fake::default()
+        };
+        assert_eq!(env.run(&next).unwrap().code(), "rolled_back");
+        assert!(!env.ctx.data_dir.join("bin").join(rollback::MARKER).exists());
+    }
+
+    /// LOW-B on the install: a 3010 whose restarts leave `from` on disk
+    /// (the replacement cancelled or failed) is an install that didn't
+    /// happen once [`rollback::MAX_RESTARTS`] boots have seen it: the
+    /// journal goes, the service runs, and later updates aren't held.
+    #[test]
+    fn an_install_restart_that_never_takes_effect_ends() {
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        let at = |t: u64| Fake {
+            boot: t,
+            ..Fake::default()
+        };
+        let first = Fake {
+            code: 3010,
+            boot: 1_000,
+            ..Fake::default()
+        };
+        assert_eq!(env.run(&first).unwrap().code(), "installed");
+        // The boot the 3010 came in is the one the restarts count from.
+        let j = rollback::read(&env.ctx).unwrap().unwrap();
+        assert_eq!((j.restart_boot, j.restarts), (Some(1_000), 0));
+        let journal = env.ctx.staging.dir.join(rollback::JOURNAL);
+        for t in [1_000 + BOOT, 5_000, 5_000] {
+            let run = at(t);
+            assert_eq!(env.run(&run).unwrap().code(), "installed", "boot {t}");
+            assert!(run.calls().is_empty() && journal.exists());
+        }
+        let j = rollback::read(&env.ctx).unwrap().unwrap();
+        assert_eq!((j.restart_boot, j.restarts), (Some(5_000), 1));
+        let last = at(9_000);
+        assert_eq!(
+            env.run(&last).unwrap(),
+            Outcome::InstallInterrupted {
+                version: "0.7.0".into()
+            }
+        );
+        assert!(!journal.exists());
+        assert_eq!(last.calls(), ["auto", "start", "event"]);
+        assert!(!env.ctx.data_dir.join("bin").join("skipped").exists());
     }
 
     /// After exit 3010 probation waits for the restart: the journal
@@ -1943,6 +3040,8 @@ mod tests {
     }
 
     const OLD_MSI: &[u8] = b"the 0.6.0 msi";
+    /// Within [`rollback::BOOT_SLACK`] of a boot: the same boot.
+    const BOOT: u64 = rollback::BOOT_SLACK;
 
     /// Every call of a whole rollback after a failed probation, in order.
     const ROLLBACK: [&str; 16] = [
@@ -2041,9 +3140,11 @@ mod tests {
     }
 
     /// The MSI starts the service itself (StartServices), so the old
-    /// service may already be running, idle on the marker, when step 5
-    /// starts it: after a rollback whose reinstall ends 0, it runs and is
-    /// healthy (the idle process goes on once the marker goes).
+    /// service is already running, idle on the marker, when step 5 starts
+    /// it, and that start changes nothing: after a rollback whose
+    /// reinstall ends 0, it runs and is healthy only because the idle
+    /// process goes on once the marker goes (R4-1: one that ended instead
+    /// left the service stopped).
     #[test]
     fn a_rollback_leaves_the_service_running_when_the_msi_started_it() {
         let env = Env::new("0.6.0");
@@ -2051,6 +3152,7 @@ mod tests {
         env.offer("0.7.0");
         let fake = Fake {
             msi_starts: true,
+            watch_marker: Some(env.ctx.data_dir.join("bin").join(rollback::MARKER)),
             ..failing(&env)
         };
         assert_eq!(
@@ -2176,10 +3278,22 @@ mod tests {
             ..Fake::default()
         })
         .unwrap();
+        // A rollback's marker, as one that stopped before step 5 leaves it:
+        // the hand-installed version idles on it until it goes (R5-2).
+        let marker = env.ctx.data_dir.join("bin").join(rollback::MARKER);
+        std::fs::write(&marker, b"{}").unwrap();
+        // And a copy's parent lock left behind: swept with the journal.
+        let parent = parent_lock(
+            &env.ctx.staging.dir,
+            "run-0123456789abcdef0123456789abcdef.exe",
+        );
+        std::fs::write(&parent, b"").unwrap();
         env.ctx.running = Some(Version::new(0, 8, 0));
         let next = Fake::default();
         assert_eq!(env.run(&next).unwrap(), Outcome::Nothing);
         assert!(!env.ctx.staging.dir.join(rollback::JOURNAL).exists());
+        assert!(!marker.exists(), "the marker goes with the journal");
+        assert!(!parent.exists(), "and the parent lock");
         assert!(next.calls().is_empty());
     }
 
@@ -2440,6 +3554,9 @@ mod tests {
                 answer: None,
                 copies: 0,
                 reinstall_restart: false,
+                restart_boot: None,
+                restarts: 0,
+                blocked: 0,
                 touched: true,
                 state: rollback::State::RollingBack {
                     snapshot: Some(rollback::SnapshotRef {
@@ -2462,7 +3579,7 @@ mod tests {
     /// runs that msiexec only, and the next run finishes from its answer.
     #[test]
     fn a_handed_off_install_is_finished_by_the_next_run() {
-        let env = Env::new("0.6.0");
+        let mut env = Env::new("0.6.0");
         env.offer("0.7.0");
         let fake = Fake {
             hand_off: true,
@@ -2483,7 +3600,8 @@ mod tests {
         assert_eq!(bytes, MSI);
         let staged = env.ctx.staging.incoming().join("lodestar-0.7.0.msi");
         assert_eq!(args, msi::msiexec_args(&staged, &env.ctx.staging.log()));
-        // The run the copy starts.
+        // The run the copy starts: the program it replaced.
+        env.ctx.running = Some(Version::new(0, 7, 0));
         let next = Fake::default();
         assert_eq!(
             env.run(&next).unwrap(),
@@ -2507,7 +3625,7 @@ mod tests {
     /// before the copy runs the old MSI.
     #[test]
     fn a_handed_off_rollback_restores_the_store_first() {
-        let env = Env::new("0.6.0");
+        let mut env = Env::new("0.6.0");
         with_previous(&env, OLD_MSI);
         env.offer("0.7.0");
         let hand = Fake {
@@ -2520,7 +3638,8 @@ mod tests {
             ..Fake::default()
         };
         as_copy(&env, &copy).unwrap();
-        // Probation fails; the reinstall is handed off in turn.
+        // 0.7.0 is on disk; probation fails; the reinstall is handed off.
+        env.ctx.running = Some(Version::new(0, 7, 0));
         let next = Fake {
             unhealthy: true,
             hand_off: true,
@@ -2729,6 +3848,141 @@ mod tests {
         assert!(boot.calls().contains(&"start".to_string()));
         assert!(!marker.exists());
         assert!(!env.ctx.staging.dir.join(rollback::JOURNAL).exists());
+    }
+
+    /// LOW-B / P-8: a restart that doesn't put `from` back (its pending
+    /// replacement cancelled or failed) is counted by Windows' boot time;
+    /// the second such boot halts with the recovery steps, the service
+    /// disabled and stopped. Runs in one boot (within the slack) count
+    /// nothing.
+    #[test]
+    fn a_reinstall_restart_that_never_takes_effect_halts() {
+        let mut env = Env::new("0.6.0");
+        rollback_to_the_reinstall(&mut env);
+        let boot = |t: u64| Fake {
+            boot: t,
+            ..Fake::default()
+        };
+        as_copy(
+            &env,
+            &Fake {
+                code: 3010,
+                ..Fake::default()
+            },
+        )
+        .unwrap();
+        let pending = |out: Outcome| matches!(out, Outcome::RollbackPending { .. });
+        // The answer's run, then two more in the same boot.
+        for t in [1_000, 1_000, 1_000 + BOOT] {
+            assert!(pending(env.run(&boot(t)).unwrap()), "boot {t}");
+        }
+        let j = rollback::read(&env.ctx).unwrap().unwrap();
+        assert_eq!((j.restart_boot, j.restarts), (Some(1_000), 0));
+        // A boot time it can't read counts nothing.
+        let blind = Fake {
+            boot_fails: true,
+            ..Fake::default()
+        };
+        assert!(pending(env.run(&blind).unwrap()));
+        // The first restart, still 0.7.0 on disk: counted, still waiting.
+        assert!(pending(env.run(&boot(5_000)).unwrap()));
+        assert!(pending(env.run(&boot(5_000)).unwrap()));
+        let j = rollback::read(&env.ctx).unwrap().unwrap();
+        assert_eq!((j.restart_boot, j.restarts), (Some(5_000), 1));
+        // The second: halted.
+        let last = boot(9_000);
+        let out = env.run(&last).unwrap();
+        let Outcome::RollbackHalted { why, recovery } = &out else {
+            panic!("{out:?}");
+        };
+        assert!(why.contains("restarted 2 times"), "{why}");
+        assert!(recovery.contains("step 4 of 5"), "{recovery}");
+        assert!(!started(&last), "{:?}", last.calls());
+        assert_eq!(last.calls().last().unwrap(), "stop");
+        assert!(env.ctx.data_dir.join("bin").join(rollback::MARKER).exists());
+        assert!(matches!(
+            rollback::read(&env.ctx).unwrap().unwrap().state,
+            rollback::State::Halted { .. }
+        ));
+    }
+
+    /// The bound starts at the boot the 3010 came in, when it was readable
+    /// then; one the journal doesn't have yet is taken from the next run.
+    #[test]
+    fn a_reinstall_restart_without_a_recorded_boot_takes_the_next() {
+        let mut env = Env::new("0.6.0");
+        rollback_to_the_reinstall(&mut env);
+        as_copy(
+            &env,
+            &Fake {
+                code: 3010,
+                ..Fake::default()
+            },
+        )
+        .unwrap();
+        let blind = Fake {
+            boot_fails: true,
+            ..Fake::default()
+        };
+        assert!(matches!(
+            env.run(&blind).unwrap(),
+            Outcome::RollbackPending { .. }
+        ));
+        assert_eq!(
+            rollback::read(&env.ctx).unwrap().unwrap().restart_boot,
+            None
+        );
+        for (t, restarts) in [(7_000, 0), (8_000, 1)] {
+            let run = Fake {
+                boot: t,
+                ..Fake::default()
+            };
+            assert!(matches!(
+                env.run(&run).unwrap(),
+                Outcome::RollbackPending { .. }
+            ));
+            let j = rollback::read(&env.ctx).unwrap().unwrap();
+            assert_eq!((j.restart_boot, j.restarts), (Some(t), restarts));
+        }
+    }
+
+    /// P-4: a copy whose lock is free but whose file can't be removed yet
+    /// (it started this run and is still ending) is tried again, bounded;
+    /// a held lock is a running copy, without touching the file.
+    #[test]
+    fn a_copy_still_ending_is_waited_for_a_moment() {
+        let mut env = Env::new("0.6.0");
+        rollback_to_the_reinstall(&mut env);
+        let j = rollback::read(&env.ctx).unwrap().unwrap();
+        let copy = env.ctx.staging.dir.join(&j.msi.as_ref().unwrap().copy);
+        std::fs::write(&copy, b"copy").unwrap();
+        let running = |fails: usize, wait: Duration| {
+            let tries = std::cell::Cell::new(0);
+            let start = Instant::now();
+            let elapsed = std::cell::Cell::new(Duration::ZERO);
+            let got = rollback::copy_running_with(
+                &env.ctx,
+                Some(&j),
+                &|_| {
+                    tries.set(tries.get() + 1);
+                    if tries.get() > fails {
+                        Ok(())
+                    } else {
+                        Err(io::Error::from(io::ErrorKind::PermissionDenied))
+                    }
+                },
+                wait,
+                || start + elapsed.get(),
+                |d| elapsed.set(elapsed.get() + d),
+            );
+            (got, tries.get())
+        };
+        assert_eq!(running(3, Duration::from_secs(15)), (false, 4), "it ended");
+        assert_eq!(running(usize::MAX, Duration::from_secs(1)), (true, 6));
+        // A held lock: running, the file left alone.
+        let _lock = eventually(|| rollback::msi_lock(&env.ctx, true).unwrap());
+        assert_eq!(running(0, Duration::from_secs(15)), (true, 0));
+        assert_eq!(rollback::COPY_EXIT_WAIT, Duration::from_secs(15));
     }
 
     /// The 3010 that takes the reinstall's answer with a stop that fails
@@ -2996,7 +4250,11 @@ mod tests {
     /// run judges from the program on disk.
     #[test]
     fn an_msiexec_that_started_then_failed_leaves_no_answer() {
-        for kind in [io::ErrorKind::TimedOut, io::ErrorKind::Interrupted] {
+        for (kind, busy) in [
+            (io::ErrorKind::TimedOut, false),
+            (io::ErrorKind::Interrupted, false),
+            (io::ErrorKind::TimedOut, true),
+        ] {
             let env = Env::new("0.6.0");
             env.offer("0.7.0");
             let hand = Fake {
@@ -3004,12 +4262,24 @@ mod tests {
                 ..Fake::default()
             };
             assert_eq!(env.run(&hand).unwrap(), Outcome::HandedOff);
+            // P-3: the copy waits for Windows Installer to be idle with its
+            // lock still held, so no run judges meanwhile.
+            let held = std::sync::Arc::new(Mutex::new(None));
+            let (ctx, h) = (env.ctx.clone(), held.clone());
             let copy = Fake {
                 msi_error: Some(kind),
+                installer_busy: busy,
+                on_idle: Some(Box::new(move || {
+                    let lock = rollback::msi_lock(&ctx, false).unwrap();
+                    *h.lock().unwrap() = Some(lock.is_none());
+                })),
                 ..Fake::default()
             };
             assert_eq!(as_copy(&env, &copy).unwrap_err().code(), MSIEXEC_UNFINISHED);
-            assert!(copy.calls().contains(&"msiexec".to_string()));
+            let calls = copy.calls();
+            let at = |c: &str| calls.iter().position(|x| x == c);
+            assert!(at("msiexec") < at("installer_idle"), "{calls:?}");
+            assert_eq!(*held.lock().unwrap(), Some(true), "waited under the lock");
             assert!(!env.ctx.staging.dir.join(rollback::MSI_RESULT).exists());
             // 0.6.0 still on disk: the install was interrupted, not refused.
             let next = Fake::default();
@@ -3020,6 +4290,179 @@ mod tests {
                 }
             );
         }
+    }
+
+    /// An answered msiexec doesn't wait for Windows Installer.
+    #[test]
+    fn an_answered_msiexec_waits_for_nothing() {
+        let env = Env::new("0.6.0");
+        env.offer("0.7.0");
+        let hand = Fake {
+            hand_off: true,
+            ..Fake::default()
+        };
+        assert_eq!(env.run(&hand).unwrap(), Outcome::HandedOff);
+        let copy = Fake::default();
+        assert_eq!(as_copy(&env, &copy).unwrap(), 0);
+        assert!(!copy.calls().contains(&"installer_idle".to_string()));
+    }
+
+    /// A child for [`supervise`]: its answers in order (then still running),
+    /// whether it was ended, and a clock each sleep moves on.
+    struct Child {
+        answers: std::collections::VecDeque<io::Result<Option<Option<i32>>>>,
+        ended: bool,
+    }
+
+    impl Started for Child {
+        fn ended(&mut self) -> io::Result<Option<Option<i32>>> {
+            self.answers.pop_front().unwrap_or(Ok(None))
+        }
+        fn end(&mut self) {
+            self.ended = true;
+        }
+    }
+
+    fn supervised(answers: Vec<io::Result<Option<Option<i32>>>>) -> (io::Result<i32>, bool) {
+        let mut child = Child {
+            answers: answers.into(),
+            ended: false,
+        };
+        let start = Instant::now();
+        let elapsed = std::cell::Cell::new(Duration::ZERO);
+        let got = supervise(
+            &mut child,
+            Duration::from_secs(10),
+            Duration::from_secs(1),
+            &|| start + elapsed.get(),
+            &mut |d| elapsed.set(elapsed.get() + d),
+        );
+        (got, child.ended)
+    }
+
+    /// P-4: once msiexec is spawned, nothing is answered as "not started":
+    /// an error waiting on it is `Interrupted` (and it's ended), the
+    /// deadline `TimedOut` (ended), no code `Interrupted`; a code is the
+    /// answer.
+    #[test]
+    fn a_started_msiexec_is_never_classed_as_not_started() {
+        let (got, ended) = supervised(vec![Ok(None), Ok(Some(Some(3010)))]);
+        assert_eq!((got.unwrap(), ended), (3010, false));
+        let (got, ended) = supervised(vec![
+            Ok(None),
+            Err(io::Error::from(io::ErrorKind::PermissionDenied)),
+        ]);
+        let e = got.unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::Interrupted);
+        assert!(started_then_failed(&e) && ended);
+        let (got, ended) = supervised(vec![Ok(Some(None))]);
+        assert_eq!(got.unwrap_err().kind(), io::ErrorKind::Interrupted);
+        assert!(!ended);
+        let (got, ended) = supervised(Vec::new());
+        let e = got.unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::TimedOut);
+        assert!(started_then_failed(&e) && ended);
+    }
+
+    /// `f`'s first `Some`, tried for up to 10 s: a lock just let go of can
+    /// stay held for a moment by a child another test forks meanwhile
+    /// (until it execs).
+    fn eventually<T>(mut f: impl FnMut() -> Option<T>) -> T {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(t) = f() {
+                return t;
+            }
+            assert!(Instant::now() < deadline, "not within 10 s");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// LOW-C: the copy waits for its own parent's lock alone. Free (or
+    /// never made) it goes on at once; held past the wait it doesn't; a
+    /// lock another copy's parent holds doesn't hold it up.
+    #[test]
+    fn the_copy_waits_only_for_its_own_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ours, theirs) = (
+            "run-0123456789abcdef0123456789abcdef.exe",
+            "run-fedcba9876543210fedcba9876543210.exe",
+        );
+        assert!(parent_gone(dir.path(), ours, Duration::ZERO), "never made");
+        let held = hold_parent(dir.path(), ours).unwrap();
+        assert!(hold_parent(dir.path(), ours).is_err(), "one holder");
+        let other = hold_parent(dir.path(), theirs).unwrap();
+        assert!(
+            !parent_gone(dir.path(), ours, Duration::ZERO),
+            "still running"
+        );
+        drop(held);
+        assert!(parent_gone(dir.path(), ours, Duration::from_secs(10)));
+        assert!(!parent_lock(dir.path(), ours).exists(), "and removed");
+        drop(other);
+        // Earlier copies' locks are swept with the copies.
+        drop(eventually(|| hold_parent(dir.path(), theirs).ok()));
+        clean_copies(dir.path());
+        assert!(!parent_lock(dir.path(), theirs).exists());
+    }
+
+    /// The wait is bounded: tried every 200 ms until the parent lets go, or
+    /// the wait has passed (a fake clock; once it's let go, the real one, as
+    /// a lock just let go of can linger in another test's forked child).
+    #[test]
+    fn the_wait_for_the_parent_is_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let copy = "run-0123456789abcdef0123456789abcdef.exe";
+        let held = Mutex::new(Some(hold_parent(dir.path(), copy).unwrap()));
+        let start = Instant::now();
+        let elapsed = std::cell::Cell::new(Duration::ZERO);
+        let sleeps = std::cell::Cell::new(0);
+        // 20 s: once it's let go, the real clock runs, and Windows may hold
+        // a lock it was just given back for seconds (#663's review: 9.4 s).
+        let got = parent_gone_with(
+            dir.path(),
+            copy,
+            Duration::from_secs(20),
+            || start + elapsed.get(),
+            |d| {
+                if held.lock().unwrap().is_none() {
+                    std::thread::sleep(d);
+                }
+                elapsed.set(elapsed.get() + d);
+                sleeps.set(sleeps.get() + 1);
+                if sleeps.get() == 3 {
+                    held.lock().unwrap().take();
+                }
+            },
+        );
+        assert!(got);
+        assert!(sleeps.get() >= 3);
+        let _held = eventually(|| hold_parent(dir.path(), copy).ok());
+        elapsed.set(Duration::ZERO);
+        sleeps.set(0);
+        let got = parent_gone_with(
+            dir.path(),
+            copy,
+            Duration::from_secs(1),
+            || start + elapsed.get(),
+            |d| {
+                elapsed.set(elapsed.get() + d);
+                sleeps.set(sleeps.get() + 1);
+            },
+        );
+        assert!(!got);
+        assert_eq!(sleeps.get(), 5, "0, 200, ..., 1,000 ms");
+    }
+
+    #[test]
+    fn reads_the_boot_time_and_the_installers_state() {
+        assert_eq!(boot_time_of("1794787200\r\n"), Some(1_794_787_200));
+        assert_eq!(boot_time_of("0"), None);
+        assert!(BOOT_SCRIPT.contains("-OperationTimeoutSec 30"), "bounded");
+        assert_eq!(boot_time_of("Get-CimInstance : Access denied"), None);
+        assert_eq!(installer_idle_of("idle\r\n"), Some(true));
+        assert_eq!(installer_idle_of("busy"), Some(false));
+        assert_eq!(installer_idle_of(""), None);
     }
 
     /// The copy runs only the journal's MSI, inside staging, matching its
@@ -3145,7 +4588,7 @@ mod tests {
             }
         );
         // A rollback's reinstall: handed off again.
-        let env = Env::new("0.6.0");
+        let mut env = Env::new("0.6.0");
         with_previous(&env, OLD_MSI);
         env.offer("0.7.0");
         assert_eq!(
@@ -3168,6 +4611,7 @@ mod tests {
             },
         )
         .unwrap();
+        env.ctx.running = Some(Version::new(0, 7, 0));
         let next = Fake {
             unhealthy: true,
             hand_off: true,
@@ -3209,7 +4653,8 @@ mod tests {
             env.run(&next).unwrap(),
             Outcome::Failed {
                 version: Version::new(0, 7, 0),
-                code: 1603
+                code: 1603,
+                why: None
             }
         );
         assert_eq!(next.calls().last().unwrap(), "start");
@@ -3244,13 +4689,13 @@ mod tests {
             run_copy(&env.ctx, &copy, &name, &|| false)
                 .unwrap_err()
                 .code(),
-            "program_files_in_use"
+            "helper_running"
         );
         assert!(copy.ran.lock().unwrap().is_none());
         let next = Fake::default();
         let out = env.run(&next).unwrap();
         assert!(
-            matches!(&out, Outcome::CopyRefused { why } if why == "program_files_in_use"),
+            matches!(&out, Outcome::CopyRefused { why } if why == "helper_running"),
             "{out:?}"
         );
         assert!(!env.ctx.data_dir.join("bin").join("skipped").exists());
@@ -3316,6 +4761,15 @@ mod tests {
             }
             fn service_processes(&self) -> io::Result<usize> {
                 self.0.service_processes()
+            }
+            fn boot_time(&self) -> io::Result<u64> {
+                self.0.boot_time()
+            }
+            fn installer_idle(&self, w: Duration) -> bool {
+                self.0.installer_idle(w)
+            }
+            fn on_disk(&self, c: &Context) -> Option<String> {
+                self.0.on_disk(c)
             }
         }
         let env = Env::new("0.6.0");
@@ -3604,6 +5058,35 @@ mod tests {
             Windows::processes_of("NT SERVICE\\LodestarNoSuchService").unwrap(),
             0
         );
+    }
+
+    /// The Windows-only calls for real (#663's review, item 5): the boot
+    /// time is a plausible past time and the same at a second look; the
+    /// Installer check answers within its wait; a parent lock held by this
+    /// process holds a copy's wait, and its end lets it go.
+    #[cfg(windows)]
+    #[test]
+    fn the_windows_calls_answer_for_real() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let boot = Windows.boot_time().unwrap();
+        assert!(boot > 1_500_000_000 && boot <= now, "{boot} vs {now}");
+        let again = Windows.boot_time().unwrap();
+        assert!(
+            again.abs_diff(boot) <= rollback::BOOT_SLACK,
+            "{boot} vs {again}"
+        );
+        let start = Instant::now();
+        let _ = Windows.installer_idle(Duration::ZERO);
+        assert!(start.elapsed() < Duration::from_secs(60));
+        let dir = tempfile::tempdir().unwrap();
+        let copy = "run-0123456789abcdef0123456789abcdef.exe";
+        let held = hold_parent(dir.path(), copy).unwrap();
+        assert!(!parent_gone(dir.path(), copy, Duration::ZERO));
+        drop(held);
+        assert!(parent_gone(dir.path(), copy, Duration::from_secs(20)));
     }
 
     /// The staging folder's ACL for real: created private to SYSTEM and

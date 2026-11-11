@@ -31,6 +31,9 @@ use std::process::ExitCode;
 pub fn hook() -> Option<ExitCode> {
     #[cfg(windows)]
     {
+        // This program's path, before an update can rename the running
+        // file aside: the successor is always started from it.
+        relaunch::record_program(std::env::current_exe());
         // A copy started by Restart now waits for the old one to hand
         // over and exit, or ends here if it doesn't.
         if let Some(code) = relaunch::wait_if_successor() {
@@ -121,12 +124,18 @@ fn powershell_command() -> Option<std::process::Command> {
 /// - **The new copy waits** ([`wait_if_successor`], first thing in
 ///   [`hook`]) for the token on stdin, which this process writes only once
 ///   its graceful shutdown is done ([`hand_over`]), then for end of file,
-///   which comes when this process exits and Windows has released its
-///   port, data lock and files. A stop instead of a restart (Ctrl+C, a
-///   crash) closes the pipe without the token, and the new copy ends
-///   quietly. Both waits have deadlines: [`GO_LIMIT`] for the shutdown and
-///   [`EXIT_LIMIT`] for the exit, after which it goes ahead and a port
-///   still held fails its start as any taken port would.
+///   which comes as this process exits. A stop instead of a restart
+///   (Ctrl+C, a crash) closes the pipe without the token, and the new copy
+///   ends quietly. Both waits have deadlines: [`GO_LIMIT`] for the
+///   shutdown and [`EXIT_LIMIT`] for the end of file.
+/// - **Then it waits for this process itself to have exited**
+///   (X-flake-portable-restart): the end of file comes when Windows closes
+///   this process's handles, before it has unmapped its files (SQLite's
+///   `-shm`, the index), so a store opened then can fail. A watch started
+///   first thing ([`crate::system::restart::predecessor_script`]) waits on
+///   the process named in the token; past
+///   [`crate::system::restart::PREDECESSOR_WAIT`] the new copy refuses to
+///   start, before opening anything in the data folder.
 /// - **It shares this process's console** and output, so the window it
 ///   was started in shows the new copy, and Ctrl+C there stops it.
 pub mod relaunch {
@@ -145,6 +154,37 @@ pub mod relaunch {
     pub const EXIT_LIMIT: Duration = Duration::from_secs(60);
     /// The longest token line read.
     const MAX_LINE: usize = 128;
+
+    /// This program's path as it was when the process started
+    /// ([`record_program`], first thing in [`super::hook`]): the portable
+    /// update renames the running file aside and puts the new program at
+    /// this path, and the successor is started from the path, never from
+    /// wherever the running image now is.
+    static PROGRAM: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+
+    /// Records [`program`]; only the first call counts.
+    pub fn record_program(exe: std::io::Result<std::path::PathBuf>) {
+        record_in(&PROGRAM, exe);
+    }
+
+    pub(super) fn record_in(
+        cell: &std::sync::OnceLock<Option<std::path::PathBuf>>,
+        exe: std::io::Result<std::path::PathBuf>,
+    ) -> Option<std::path::PathBuf> {
+        cell.get_or_init(|| exe.ok()).clone()
+    }
+
+    /// The program the successor is started from: the recorded path, or
+    /// `current_exe` when nothing was recorded (a test).
+    pub fn program() -> std::io::Result<std::path::PathBuf> {
+        match PROGRAM.get() {
+            Some(Some(p)) => Ok(p.clone()),
+            Some(None) => Err(std::io::Error::other(
+                "this program's path couldn't be read",
+            )),
+            None => std::env::current_exe(),
+        }
+    }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Handover {
@@ -238,6 +278,7 @@ pub mod relaunch {
         use std::sync::Mutex;
 
         use super::{EXIT_LIMIT, GO_LIMIT, Handover, MARKER};
+        use crate::system::restart::{self, Predecessor};
 
         /// The copy waiting to take over, and its token.
         static SUCCESSOR: Mutex<Option<(Child, String)>> = Mutex::new(None);
@@ -253,14 +294,63 @@ pub mod relaunch {
             if std::io::stdin().is_terminal() {
                 return None;
             }
-            match super::await_handover(std::io::stdin(), &token, GO_LIMIT, EXIT_LIMIT) {
-                Handover::Go => None,
-                Handover::Abandoned => Some(ExitCode::SUCCESS),
+            // Started first, so its start overlaps the old one's shutdown.
+            let mut watch = watch_predecessor(&token);
+            let log = watch
+                .as_mut()
+                .and_then(|w| w.stdout.take())
+                .map(|out| restart::read_watch(out, std::time::Instant::now));
+            let handed = super::await_handover(std::io::stdin(), &token, GO_LIMIT, EXIT_LIMIT);
+            let gone = match handed {
+                Handover::Go => {
+                    let (gone, note) = restart::await_watch(
+                        watch.as_mut(),
+                        log.as_deref(),
+                        restart::PREDECESSOR_WAIT,
+                        restart::PREDECESSOR_POLL,
+                        std::time::Instant::now,
+                        std::thread::sleep,
+                    );
+                    if let Some(note) = note {
+                        eprintln!("{note}");
+                    }
+                    gone
+                }
+                Handover::Abandoned => Predecessor::Unknown,
+            };
+            if let Some(mut w) = watch {
+                // Ended already unless the old process is still there.
+                let _ = w.kill();
+                let _ = w.wait();
+            }
+            match (handed, gone) {
+                (Handover::Abandoned, _) => Some(ExitCode::SUCCESS),
+                (Handover::Go, Predecessor::Running) => {
+                    eprintln!(
+                        "{}",
+                        restart::predecessor_refusal(restart::PREDECESSOR_WAIT)
+                    );
+                    Some(ExitCode::FAILURE)
+                }
+                (Handover::Go, _) => None,
             }
         }
 
+        /// The watch on the process this copy replaces, named in its token:
+        /// a Windows PowerShell with no window that ends once that process
+        /// has exited, printing its status on a pipe
+        /// ([`restart::watch_command`]). `None` if the token names none or
+        /// it can't start.
+        fn watch_predecessor(token: &str) -> Option<Child> {
+            let old = restart::predecessor_pid(token)?;
+            let shell = super::super::powershell_command()?;
+            restart::watch_command(shell, old, std::process::id())
+                .spawn()
+                .ok()
+        }
+
         fn spawn() -> std::io::Result<(Child, String)> {
-            let exe = std::env::current_exe()?;
+            let exe = super::program()?;
             let token = super::token();
             let child = super::command(&exe, std::env::args_os().skip(1), &token).spawn()?;
             Ok((child, token))
@@ -391,6 +481,41 @@ mod tests {
         tx.send(Some(b"t\r\n".to_vec())).unwrap();
         tx.send(None).unwrap();
         assert_eq!(await_handover(input, "t", LONG, LONG), Handover::Go);
+    }
+
+    #[test]
+    fn the_successor_is_started_from_the_path_recorded_at_start() {
+        let cell = std::sync::OnceLock::new();
+        let started = std::path::PathBuf::from(r"C:\app\lodestar.exe");
+        assert_eq!(
+            super::relaunch::record_in(&cell, Ok(started.clone())),
+            Some(started.clone())
+        );
+        // The running file renamed aside afterwards changes nothing.
+        let renamed = std::path::PathBuf::from(r"C:\app\data\bin\previous.exe");
+        assert_eq!(
+            super::relaunch::record_in(&cell, Ok(renamed)),
+            Some(started)
+        );
+        // A path that couldn't be read is never guessed later.
+        let unread = std::sync::OnceLock::new();
+        assert_eq!(
+            super::relaunch::record_in(&unread, Err(std::io::Error::other("no"))),
+            None
+        );
+    }
+
+    /// Every tool the updater runs (the ACL checks' PowerShell, `whoami`)
+    /// is started without the relaunch token (PK-win-restart's review).
+    #[cfg(windows)]
+    #[test]
+    fn system_tools_never_get_the_relaunch_token() {
+        let removed = |cmd: std::process::Command| {
+            cmd.get_envs()
+                .any(|(k, v)| k == std::ffi::OsStr::new(MARKER) && v.is_none())
+        };
+        assert!(removed(super::system32_command("whoami.exe").unwrap()));
+        assert!(removed(super::powershell_command().unwrap()));
     }
 
     #[test]

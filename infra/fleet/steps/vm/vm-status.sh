@@ -6,10 +6,10 @@
 set -uo pipefail
 STACK=${2:-/home/lodestar/lodestar}  # tests pass a temporary stack; the bootstrap never does
 PIA_RUN=${3:-/run/lodestar-pia}
+BLOCK=${4:-/var/lib/lodestar-block}
+# shellcheck source=block-lib.sh
+. "$1/block-lib.sh"
 
-running() {  # exactly that container name, running
-  [[ "$(docker inspect --type container -f '{{.State.Running}}' "$1" 2>/dev/null)" == "true" ]]
-}
 say() { if "$@" >/dev/null 2>&1; then echo "ok $NAME"; else echo "fail $NAME"; fi; }
 digits() { tr -dc '0-9' | head -c 15; }  # counters are bare integers, whatever a tool printed
 
@@ -20,6 +20,14 @@ NAME=lodestar_running; say running lodestar
 # PIA delivery's work directory is gone (this step holds the VM's lock, so no
 # delivery can be running now).
 NAME=run_clean; say test ! -e "$PIA_RUN"
+
+# The block marker (OP-3b): a recorded block, and its segment.
+case $(block_state) in
+  block) echo "ok block_recorded"; seg=$(marker_get segment | digits); echo "count block_segment ${seg:-0}" ;;
+  none) echo "skip block_recorded" ;;
+  *) echo "fail block_recorded" ;;
+esac
+NAME=outage_watcher_running; say watcher_active
 
 collectors=$(docker ps --filter 'name=^lodestar-collector' --format '{{.ID}}' 2>/dev/null | grep -c . | digits)
 echo "count collectors_running ${collectors:-0}"

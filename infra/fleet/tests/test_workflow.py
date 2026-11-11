@@ -1,8 +1,8 @@
 """fleet.yml's structure, and the public-log leak test (plan §2, §3, OP-1 row).
 
-Covers fleet.yml now, and operator-wake.yml and operator-injection.yml as soon
-as they exist: every script those workflows run must have a leak scenario
-below (OP-4 and OP-5 add theirs), or this test fails.
+Covers fleet.yml and the four operator workflows: every script they run must
+have a leak scenario below, or this test fails. The injection harness's live
+paths are checked in process in infra/operator/tests/test_injection.py.
 """
 
 import io
@@ -29,7 +29,7 @@ from timefmt import fmt
 
 ROOT = Path(__file__).resolve().parents[3]
 WORKFLOWS = ROOT / ".github" / "workflows"
-COVERED = ["fleet.yml", "fleet-emergency-down.yml", "operator-wake.yml", "operator-apply.yml", "operator-injection.yml"]
+COVERED = ["fleet.yml", "fleet-emergency-down.yml", "operator-wake.yml", "operator-apply.yml", "operator-tripwire.yml", "operator-injection.yml"]
 FLEET = WORKFLOWS / "fleet.yml"
 L = limits.load()
 
@@ -140,7 +140,20 @@ class FleetStructure(unittest.TestCase):
                     self.assertIn(path.name, POLICY["environments"][environment])
                     self.assertIn("github.ref == 'refs/heads/main'", job.get("if", ""))
                     self.assertLess(list(job).index("if"), list(job).index("environment"))
-                    self.assertEqual(job["permissions"].get("actions"), "read")
+                    injection = path.name == "operator-injection.yml"
+                    if injection:
+                        self.assertNotIn("actions", job["permissions"])
+                    else:
+                        self.assertEqual(job["permissions"].get("actions"), "read")
+                    credential_steps = [s for s in steps(job) if any(
+                        key in (s.get("env") or {}) for key in
+                        ("AWS_FLEET_ROLE_ARN", "AWS_PIA_ROLE_ARN", "AWS_BRIDGE_ROLE_ARN", "AWS_CLEANUP_ROLE_ARN"))]
+                    self.assertTrue(credential_steps, "deployment job must have an audited credential step")
+                    for step in credential_steps:
+                        if injection:
+                            self.assertNotIn("GITHUB_TOKEN", step["env"])  # public metadata audit; no real token in harness
+                        else:
+                            self.assertEqual(step["env"].get("GITHUB_TOKEN"), "${{ github.token }}")
 
     def test_filter_job_has_no_secrets_or_environment(self):
         gate = self.jobs["gate"]
@@ -280,6 +293,10 @@ SCENARIOS = {
     ("infra/fleet/fleet.py", "refuse"): [{"REFUSAL_REASON": "unknown verb", "CHANNEL_PR": "700"}],
     ("infra/fleet/fleet.py", "act"): [event_env("/fleet status"), event_env("/fleet down"),
                                       event_env("/fleet run leak-test main"), event_env("/fleet run vm-status worker"),
+                                      # OP-3b's block steps
+                                      event_env("/fleet run start-block main " + "c" * 40),
+                                      event_env("/fleet run arm-switch worker"),
+                                      event_env("/fleet run outage-watcher main"), event_env("/fleet run copy-off main"),
                                       event_env("/fleet extend")],
     ("infra/fleet/fleet.py", "reap"): [event_env()],
     ("infra/fleet/fleet.py", "dispatch-down"): [event_env()],
@@ -289,6 +306,47 @@ SCENARIOS = {
                                                  event_env("/fleet run renew-vpn main", OPERATOR_STOP="true"),
                                                  event_env("/fleet status"), event_env(AUTHOR_ID="1")],
 }
+
+def op_env(**over):
+    """An operator-wake event (OP-4): a runner instruction on the channel PR."""
+    env = event_env("operator-instruction v1\nid: ping-1\nkind: query\n\nping", AUTHOR_ID="111", RUNNER_USER_ID="111")
+    env.update(over)
+    return env
+
+
+SCENARIOS.update({
+    ("infra/operator/wake.py", "gate"): [op_env(), op_env(AUTHOR_ID="9"), op_env(OPERATOR_STOP="true"),
+                                         op_env(COMMENT_BODY="operator-instruction v1\nid: x")],
+    ("infra/operator/wake.py", "refuse"): [{"REFUSAL_REASON": "missing field", "CHANNEL_PR": "700"}],
+    # Gated before any setting is read: a stranger, the stop, a re-run, the bot.
+    ("infra/operator/wake.py", "wake"): [op_env(AUTHOR_ID="9"), op_env(OPERATOR_STOP="true"),
+                                         op_env(GITHUB_RUN_ATTEMPT="2"), op_env(AUTHOR_ID="555")],
+    ("infra/operator/tripwire.py", "trip"): [op_env(SENDER_ID="9"), op_env(SENDER_ID="555", EVENT_ACTION="edited")],
+    ("infra/operator/tripwire.py", "sweep"): [op_env()],
+    ("infra/operator/agent_apply.py", "apply"): [op_env(GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_ACTOR_ID="9",
+                                                        OWNER_USER_ID="111")],
+})
+
+
+def inj_env(**over):
+    """An operator-injection dispatch (OP-5) by the owner, on main."""
+    env = op_env(GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_ACTOR_ID="111", OWNER_USER_ID="111",
+                 GITHUB_REF="refs/heads/main", INJECTION_LEVEL="1")
+    env.update(over)
+    return env
+
+
+# Each refuses before any setting is read: a stranger, the stop, a re-run, a
+# branch, and (with every secret marked, the App's key included) the key itself.
+SCENARIOS[("infra/operator/injection/harness.py", "run")] = [
+    inj_env(GITHUB_ACTOR_ID="9"), inj_env(OPERATOR_STOP="true"), inj_env(GITHUB_RUN_ATTEMPT="2"),
+    inj_env(GITHUB_REF="refs/heads/x"), inj_env()]
+# These refuse with a failing exit in the leak test's offline, repository-less
+# environment, before any network call (the operator tests cover their live paths
+# with fakes): the sweep and a tripped trip need GITHUB_REPOSITORY, apply the owner.
+FAILS_CLOSED = {("infra/operator/tripwire.py", "sweep"), ("infra/operator/agent_apply.py", "apply"),
+                ("infra/operator/tripwire.py", "trip"), ("infra/operator/injection/harness.py", "run")}
+OPERATOR_WORKFLOWS = ("operator-wake.yml", "operator-apply.yml", "operator-tripwire.yml", "operator-injection.yml")
 # Every run: step in a covered workflow is exactly one such invocation, so a
 # script can't slip past the scenarios by being started some other way.
 LIVE_INSTALL = ('python3 -m pip install --quiet --no-deps --require-hashes --target "$RUNNER_TEMP/fleet-deps" '
@@ -306,6 +364,8 @@ class PublicLogLeak(unittest.TestCase):
                     if s["run"] == LIVE_INSTALL and (s.get("if") in ("vars.FLEET_LIVE == 'true'", "needs.act.outputs.live == 'true'") or
                             path.name == "fleet-emergency-down.yml" and s.get("if") == "vars.FLEET_CLEANUP_ENABLED == 'true'"):
                         continue  # the one other allowed step: pip from hash-pinned wheels, live only
+                    if s["run"] == LIVE_INSTALL and path.name in OPERATOR_WORKFLOWS and "environment" in job:
+                        continue  # the operator's jobs are always live (no dry-run): the same pinned wheels
                     m = INVOKE.fullmatch(s["run"].strip())
                     with self.subTest(workflow=path.name, job=name, run=s["run"][:60]):
                         self.assertIsNotNone(m, "a run: step must be one `python3 infra/<script>.py <sub>`")
@@ -325,7 +385,10 @@ class PublicLogLeak(unittest.TestCase):
                     # check closed without a network call; the rest run dry.
                     r = subprocess.run([sys.executable, str(ROOT / script), sub], cwd=self.outside, capture_output=True,
                                        text=True, env=scrub_env({**env, **secret_env}), timeout=60)
-                    self.assertEqual(r.returncode, 0, r.stderr[-400:])
+                    if (script, sub) in FAILS_CLOSED and env.get("SENDER_ID") != "9":
+                        self.assertNotEqual(r.returncode, 0)
+                    else:
+                        self.assertEqual(r.returncode, 0, r.stderr[-400:])
                     for v in values:
                         self.assertNotIn(v, r.stdout + r.stderr)
 
@@ -366,6 +429,8 @@ class PublicLogLeak(unittest.TestCase):
         secret_env = dict(zip(SECRET_NAMES, marks(len(SECRET_NAMES))))
         old = [{"id": m[6], "created": fmt(T0 - timedelta(hours=50))}, {"id": m[7], "created": fmt(T0)}]
         runs = [("act", "/fleet status", 1), ("act", "/fleet run leak-test main", 1), ("act", "/fleet down", 1),
+                ("act", f"/fleet run start-block main {c['head']}", 1), ("act", "/fleet run arm-switch main", 1),
+                ("act", "/fleet run outage-watcher worker", 1), ("act", "/fleet run copy-off main", 1),
                 ("act", "/fleet up screen", 0), ("reap", "", 1), ("dispatch-down", "", 1), ("gate", "/fleet down", 1)]
         for sub, body, overdue in runs:
             with self.subTest(sub=sub, body=body):

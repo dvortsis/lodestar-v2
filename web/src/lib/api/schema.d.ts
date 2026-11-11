@@ -1645,7 +1645,8 @@ export interface paths {
          * Parses a query: the AST and its canonical text, or a `query_syntax`
          *     error whose `start`/`end` span the UI highlights. With
          *     `natural=true`, also the query `q` means as natural phrasing
-         *     (`natural_too_long` past 512 bytes or 32 words).
+         *     (`natural_too_long` past 512 bytes or 32 tokens: words and symbols,
+         *     where each bracket and each lone minus sign counts as one).
          */
         get: operations["parseQuery"];
         put?: never;
@@ -3414,10 +3415,16 @@ export interface components {
             /**
              * @description Why not: `not_supervised`, `dev_build`, `noexec`, `not_writable`,
              *     `package_managed`, `image_mode`, `trust_damaged`,
-             *     `skipped_unreadable`, `noexec_unknown` or `channel_unavailable`;
-             *     or, when `unavailable`
-             *     is set, the same reason (`windows_helper`, …). Install
-             *     automatically then behaves as Check and notify.
+             *     `skipped_unreadable`, `noexec_unknown`, `channel_unavailable` or
+             *     `not_built_yet` (Windows: this install path isn't built yet, e.g.
+             *     the portable build, or no installer wired in); on Windows also
+             *     `install_kind_unknown` (Lodestar couldn't tell whether it's the MSI
+             *     service or the portable zip, so no artifact is chosen) and
+             *     `data_folder_unchecked` (the data folder isn't the default one
+             *     under ProgramData whose permissions the installer sets, so nothing
+             *     installs from it); or, when `unavailable` is
+             *     set, the same reason (`fixture`, `network`, `windows_helper`).
+             *     Install automatically then behaves as Check and notify.
              */
             reason: string | null;
         };
@@ -7916,8 +7923,9 @@ export interface components {
             lost_torrents: number | null;
             /**
              * @description Why not, when `available` is false: `not_supervised`,
-             *     `image_mode`, `busy`, `no_previous_version` or `snapshot_missing`
-             *     (or the `unavailable` reason). Always sent; not `required` in the
+             *     `image_mode`, `busy`, `no_previous_version`, `snapshot_missing` or
+             *     `not_built_yet` (Windows: Roll back isn't built for this install
+             *     yet), or the `unavailable` reason. Always sent; not `required` in the
              *     schema yet, so clients built before it still type-check.
              */
             reason?: string | null;
@@ -10496,7 +10504,9 @@ export interface components {
              *     last check's times couldn't be saved and won't survive a
              *     restart), `updater_unreadable` (the saved update state couldn't be
              *     read, so automatic updates are held; pausing or resuming saves a
-             *     new state, which rewrites the file and ends the hold), …
+             *     new state, which rewrites the file and ends the hold) and, on
+             *     Windows, `install_failed` (the update helper's last answer, for a version
+             *     newer than the running one, wasn't `installed`; display only), …
              */
             notices: string[];
             pending: null | components["schemas"]["PendingInstall"];
@@ -16137,7 +16147,7 @@ export interface operations {
                     "application/json": components["schemas"]["UpdatesStatus"];
                 };
             };
-            /** @description `updates_unavailable`: a fixture or Windows (see `GET /updates`). */
+            /** @description `updates_unavailable`: a fixture, or an update client that couldn't be built (see `GET /updates`). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -16184,7 +16194,7 @@ export interface operations {
                     "application/json": components["schemas"]["UpdatesStatus"];
                 };
             };
-            /** @description `updates_unavailable`: a fixture or Windows (see `GET /updates`). */
+            /** @description `updates_unavailable`: a fixture, or an update client that couldn't be built (see `GET /updates`). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -16245,7 +16255,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `version_skipped`; `install_unavailable` with the reason; or `updates_unavailable` (a fixture or Windows). */
+            /** @description `version_skipped`; `install_unavailable` with the reason; or `updates_unavailable` (a fixture, or an update client that couldn't be built). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -16305,7 +16315,7 @@ export interface operations {
                     "application/json": components["schemas"]["UpdatesStatus"];
                 };
             };
-            /** @description `updates_unavailable` (a fixture or Windows; see `GET /updates`), or `bin_unavailable` (the update files can't be written). */
+            /** @description `updates_unavailable` (a fixture, or an update client that couldn't be built; see `GET /updates`), or `bin_unavailable` (the update files can't be written). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -16366,7 +16376,7 @@ export interface operations {
                     "application/json": components["schemas"]["UpdatesStatus"];
                 };
             };
-            /** @description `rollback_unavailable`, with `error.reason` (`not_supervised`, `image_mode`, `busy`, `no_previous_version`, `snapshot_missing`); or `updates_unavailable` (a fixture or Windows). */
+            /** @description `rollback_unavailable`, with `error.reason` (`not_supervised`, `image_mode`, `busy`, `no_previous_version`, `snapshot_missing`, `not_built_yet` on Windows); or `updates_unavailable` (a fixture, or an update client that couldn't be built). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -16426,7 +16436,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `updates_unavailable` (a fixture or Windows; see `GET /updates`), or `bin_unavailable` (the update files can't be written). */
+            /** @description `updates_unavailable` (a fixture, or an update client that couldn't be built; see `GET /updates`), or `bin_unavailable` (the update files can't be written). */
             409: {
                 headers: {
                     [name: string]: unknown;

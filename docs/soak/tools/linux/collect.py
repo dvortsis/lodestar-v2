@@ -1408,6 +1408,33 @@ def parse_checklist(items, next_runs):
     return out
 
 
+def check_docker_checklist(kind, checklist):
+    """Rule 6.5, as the analyzer's host_checklist reads it: a Docker run states each
+    item as excluded (with its next run); only a native run may say not_applicable.
+    Refused here, at launch, so a Docker run can't start and fail review hours later."""
+    if kind != "docker":
+        return
+    for item in CHECKLIST_ITEMS:
+        if checklist.get(item, {}).get("state") == "not_applicable":
+            raise SystemExit(f"--checklist {item}=not_applicable isn't accepted in docker mode: "
+                             f"pass {item}=excluded with --next-run {item}=<UTC time of its next run>.")
+
+
+def check_checklist_complete(kind, checklist):
+    """Rule 6.5, as the analyzer's host_checklist reads it, in both modes: every item
+    is stated, and an excluded one carries its next run. Refused at launch so a run
+    can't start and fail review hours later."""
+    for item in CHECKLIST_ITEMS:
+        entry = checklist.get(item)
+        if entry is None:
+            fix = f"{item}=excluded with --next-run {item}=<UTC time of its next run>"
+            if kind != "docker":
+                fix += f", or {item}=not_applicable"
+            raise SystemExit(f"--checklist is missing {item}: pass {fix}.")
+        if entry["state"] == "excluded" and not entry.get("next_run_utc"):
+            raise SystemExit(f"--checklist {item}=excluded needs --next-run {item}=<UTC time of its next run>.")
+
+
 def note_command(argv, now=utc_now, clock=time.monotonic, boot_id_path="/proc/sys/kernel/random/boot_id"):
     """`collect.py note`: a host-activity entry (rule 6.11), stamped with UTC and
     the collector's own elapsed_seconds, appended to the run's private log."""
@@ -1568,6 +1595,8 @@ class Collector:
         if not a.spec_commit or not COMMIT.fullmatch(a.spec_commit):
             raise SystemExit("--spec-commit must name the commit whose CR-SPEC governs this run (rule 7.2).")
         self.checklist = parse_checklist(a.checklist, a.next_run)
+        check_docker_checklist(self.instance.kind, self.checklist)
+        check_checklist_complete(self.instance.kind, self.checklist)
         if not (read_text("/proc/sys/kernel/random/boot_id") or "").strip():
             raise SystemExit("Cannot read the boot ID; host-activity notes couldn't be placed (rule 6.11).")
 
@@ -2086,7 +2115,8 @@ def build_parser():
     p.add_argument("--password-file", help="Admin password for the settings and Insights checks (CR-SPEC kinds)")
     p.add_argument("--ip-echo-url", default=DEFAULT_IP_ECHO, help="Fixed IP-echo service for the public-IP check")
     p.add_argument("--checklist", action="append", default=[], metavar="ITEM=STATE",
-                   help="Host checklist: auto_update or backup = excluded or not_applicable (repeatable)")
+                   help="Host checklist: auto_update or backup = excluded or not_applicable (repeatable); "
+                        "docker mode takes only excluded, with --next-run")
     p.add_argument("--next-run", action="append", default=[], metavar="ITEM=UTC",
                    help="An excluded item's next scheduled run, in UTC (repeatable)")
     p.add_argument("--postgres-container", help="bitmagnet's Postgres container (--run-kind comparator)")

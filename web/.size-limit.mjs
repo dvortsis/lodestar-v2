@@ -3,6 +3,7 @@
 // route chunks never count against the search route.
 import { existsSync, readFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
+import { componentIds } from './scripts/event-names.mjs';
 import { checkFirstLoad, modulesIn, preloadedJs } from './scripts/first-load.mjs';
 import { requireMeasuredJs, routeFiles } from './scripts/size-entries.mjs';
 
@@ -223,7 +224,9 @@ const bodyMaps = {
 	// Blocklist subscriptions (S-blocklists) reads none either.
 	BlocklistsScreen: [],
 	// Sources (SRC-15a) reads none either.
-	SourcesScreen: []
+	SourcesScreen: [],
+	// Companions (CMP-9a) reads none either.
+	CompanionsScreen: []
 };
 // A generated screen can show any section no hand-built body names, so a new section's map joins the
 // worst case the moment it lands.
@@ -344,7 +347,7 @@ const settingsSecurity = [
 	/features\/settings\/security\/icon\.ts$/
 ];
 const securityLoader = [
-	/features\/(?:settings\/(?:security|logging|about|updates)|filters|jobs|blocklists|sources)\/body\.ts$/
+	/features\/(?:settings\/(?:security|logging|about|updates|companions)|filters|jobs|blocklists|sources)\/body\.ts$/
 ];
 // Security part 2 (M-security-settings-2): the key manager, the proxy section and the secret's
 // reveal dialog load after the first view; gated on their own below.
@@ -366,6 +369,12 @@ const settingsAboutParts = [
 // Updates' body.
 const settingsUpdatesModules = [/features\/settings\/updates\/(icon|about)\.ts$/];
 // Advanced loads when its section is opened, and is gated on its own below.
+// Companions (CMP-9a): the icon and the purpose line load after the first view, like Updates'.
+const settingsCompanionsModules = [/features\/settings\/companions\/icon\.ts$/];
+// Companions' dialogs and panels load on the first press that needs them; gated on their own below.
+const settingsCompanionsParts = [
+	/features\/settings\/companions\/(InstallDialog|RemoveDialog|Credentials|Logs|Templates)\.svelte$/
+];
 const settingsUpdatesAdvanced = [/features\/settings\/updates\/Advanced\.svelte$/];
 const settingsUpdatesParts = [
 	/features\/settings\/updates\/Releases\.svelte$/,
@@ -387,7 +396,9 @@ const settingsLoggingFiles = [
 	/features\/settings\/logging\/outputs\.ts$/
 ];
 // The events' plain names and help (S-logs-3): their own chunk, loaded after the event list shows.
-const settingsLoggingNames = [/features\/settings\/logging\/event-names\.ts$/];
+// One chunk per component (`logging/event-names/<component>.ts`, scripts/event-names.mjs), so a new
+// event grows one small chunk. The loader map `event-names.ts` is in the event list's own chunk.
+const settingsLoggingNames = [/features\/settings\/logging\/event-names\/[a-z_]+\.ts$/];
 const logsLater = [/features\/settings\/logging\/(privacy|catalog\.svelte)\.ts$/];
 // The registry's purpose lines and notices (`Screen.about`, X-settings-registry-slim): one small
 // module per registry file, loaded when a generated screen opens (so "Settings section" counts them)
@@ -408,6 +419,8 @@ const settingsFirstView = [
 	...settingsSecurityLater,
 	...settingsAboutParts,
 	...settingsUpdatesParts,
+	...settingsCompanionsModules,
+	...settingsCompanionsParts,
 	...securityLoader,
 	...settingsLogging,
 	...settingsLoggingFiles,
@@ -445,9 +458,40 @@ const settingsLoggingLazy = requireMeasuredJs(
 			!onDemandOf('/settings/[section]', settingsLoggingNames).includes(f)
 	)
 );
-const settingsLoggingNamesLazy = requireMeasuredJs(
-	'Settings logging event names (on demand)',
-	onDemandOf('/settings/[section]', settingsLoggingNames)
+// Each component's chunk is gated on its own (the budgets are in `eventNamesLimits`, below).
+const eventNamesComponents = componentIds(
+	readFileSync('../crates/lodestar/src/settings/golden/logs_catalog.txt', 'utf8')
+);
+// Gzipped: measured + max(10%, 300 B), rounded up (X-event-names-split, 2026-11-11), so about three
+// new events fit in any chunk. A new component needs a line.
+const eventNamesLimits = {
+	system: '6230 B',
+	auth: '1630 B',
+	dht: '1120 B',
+	filters: '1740 B',
+	search: '2250 B',
+	sources: '490 B',
+	workers: '3780 B',
+	api: '650 B',
+	companions: '1160 B',
+	integrations: '1060 B',
+	pipeline: '2560 B',
+	fetch: '610 B'
+};
+for (const c of Object.keys(eventNamesLimits)) {
+	if (!eventNamesComponents.includes(c))
+		throw new Error(`size-limit: a budget for the ${c} event names, which no event has any more`);
+}
+const settingsLoggingNamesLazy = Object.fromEntries(
+	eventNamesComponents.map((c) => [
+		c,
+		requireMeasuredJs(
+			`Settings logging event names, ${c} (on demand)`,
+			onDemandOf('/settings/[section]', [
+				new RegExp(`features/settings/logging/event-names/${c}\\.ts$`)
+			])
+		)
+	])
 );
 const settingsLoggingFilesLazy = requireMeasuredJs(
 	'Settings logging files and preview (on demand)',
@@ -512,6 +556,14 @@ const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
 		.filter((key) => !(settingsAboutParts.some((re) => re.test(from)) && aboutBody.test(key)))
 		// The same for Updates' parts: they load from its body, whose chunk holds what they share.
 		.filter((key) => !(settingsUpdatesParts.some((re) => re.test(from)) && updatesBody.test(key)))
+		// And Companions': its dialogs and panels load from its body, whose chunk holds what they share.
+		.filter(
+			(key) =>
+				!(
+					settingsCompanionsParts.some((re) => re.test(from)) &&
+					/settings\/companions\/CompanionsScreen\.svelte$/.test(key)
+				)
+		)
 		.filter((key) => !(filtersLater.some((re) => re.test(from)) && filtersBody.test(key)))
 		.filter((key) => !(sourcesAllLater.some((re) => re.test(from)) && sourcesBody.test(key)))
 		.map((key) => `${from} -> ${key}`)
@@ -574,6 +626,8 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 					...settingsSecurityLater,
 					...settingsAboutParts,
 					...settingsUpdatesParts,
+					...settingsCompanionsModules,
+					...settingsCompanionsParts,
 					...settingsLogging,
 					...settingsLoggingFiles,
 					...settingsLoggingNames,
@@ -699,6 +753,32 @@ const settingsUpdatesModulesLazy = requireMeasuredJs(
 		)
 	]
 );
+const settingsCompanionsModulesLazy = requireMeasuredJs(
+	'Settings companions icon and purpose (on demand)',
+	[
+		...new Set(
+			Object.keys(manifest)
+				.filter((key) => settingsCompanionsModules.some((re) => re.test(key)))
+				.flatMap((key) =>
+					ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, settingsShellView)
+				)
+		)
+	]
+);
+const companionsFirstView =
+	settingsHandBuilt.find(({ name }) => name === 'CompanionsScreen')?.files ?? [];
+const settingsCompanionsPartsLazy = requireMeasuredJs('Settings companions parts (on demand)', [
+	...new Set(
+		Object.keys(manifest)
+			.filter((key) => settingsCompanionsParts.some((re) => re.test(key)))
+			.flatMap((key) =>
+				ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, [
+					...settingsShellView,
+					...companionsFirstView
+				])
+			)
+	)
+]);
 const appearanceBody = bodyKeys.find((key) => key.startsWith(`${APPEARANCE}/`));
 const appearanceFirst = appearanceBody
 	? ownChunk(
@@ -1214,7 +1294,9 @@ export default [
 		'45 KB'
 	),
 	// X-settings-trim: back at the §10.1 cap (44.95 kB measured) after the SRC-15a/LEGAL-1 raises.
-	entry('Settings section (own JS + CSS)', settingsSectionView, '45 KB'),
+	// CMP-9a: the Companions registry entry adds ≈ 80 B here, which the 20 B of headroom couldn't take.
+	// Measured 45.06 kB, limit 45.1 KB: the runner decides this change to the §10.1 number (§2.26).
+	entry('Settings section (own JS + CSS)', settingsSectionView, '45.1 KB'),
 	// The engine's on-demand code on a Settings screen, still gated: 34.34 KB with S-settings-1's
 	// screen (limit = measured + 10%). The production screen now uses it: missing chunks fail.
 	entry('Settings controls (on demand)', settingsLazy, '38 KB'),
@@ -1240,6 +1322,8 @@ export default [
 	entry('Settings updates parts (on demand)', settingsUpdatesPartsLazy, '3.2 KB'),
 	entry('Settings updates advanced (on demand)', settingsUpdatesAdvancedLazy, '4.65 KB'),
 	entry('Settings updates icon and purpose (on demand)', settingsUpdatesModulesLazy, '0.8 KB'),
+	entry('Settings companions parts (on demand)', settingsCompanionsPartsLazy, '29 KB'),
+	entry('Settings companions icon and purpose (on demand)', settingsCompanionsModulesLazy, '1 KB'),
 	// Logging (S-logs-2): its server labels, and the event list, data kinds and privacy dialogs.
 	// Measured 0.78 KB and 15.48 KB at first (limits = measured + 10%); 16.48 KB after the review
 	// round (the unreadable-state banner, closing dialogs on leave).
@@ -1251,11 +1335,21 @@ export default [
 	// 0.70 KB; limit = measured + 10%.
 	entry('Settings logging output messages (on demand)', settingsLoggingOutputMap, '0.77 KB'),
 	// runner §2.26, 2026-11-01: CI measures +3 B over local (build variance); main red on 7ea22803 at 17,103 B
-	entry('Settings logging parts (on demand)', settingsLoggingLazy, '17.15 KB'),
-	// S-logs-3: every event's plain name and help, en and zh. Measured 15,056 B at X-wk-busy-retry
-	// (#637, with main's companion events); limit = measured + 10% (runner §2.26, 2026-11-08). It
-	// covers CMP-6's one event too; a split by component is the runner's follow-up.
-	entry('Settings logging event names (on demand)', settingsLoggingNamesLazy, '16.6 KB'),
+	// X-event-names-split: +0.31 KB for the loader map of the per-component name chunks, the lookups that skip inherited keys (runner
+	// §2.26, 2026-11-11); measured 17.46 KB.
+	entry('Settings logging parts (on demand)', settingsLoggingLazy, '17.55 KB'),
+	// S-logs-3, X-event-names-split: every event's plain name and help, en and zh, one chunk per
+	// component (was one 16.6 KB chunk). A new event grows one chunk; a new component needs a budget
+	// here, or the build of this file fails. Limits = measured + max(10%, 300 B) (runner §2.26, 2026-11-11).
+	...eventNamesComponents.map((c) => {
+		const limit = eventNamesLimits[c];
+		if (!limit) throw new Error(`size-limit: no budget for the ${c} event names; add it`);
+		return entry(
+			`Settings logging event names, ${c} (on demand)`,
+			settingsLoggingNamesLazy[c],
+			limit
+		);
+	}),
 	// S-logs-2b: the outputs, the preview, the log files and the Danger zone, measured 9.81 KB.
 	entry('Settings logging files and preview (on demand)', settingsLoggingFilesLazy, '10.8 KB'),
 	// Each hand-built screen's first view (the route without the form, plus its body), against the
@@ -1287,11 +1381,13 @@ export default [
 					? '28.5 KB'
 					: name === 'BlocklistsScreen'
 						? '30.4 KB'
-						: name === 'SourcesScreen'
-							? '30.9 KB'
-							: name === 'NotificationsScreen'
-								? '45.1 KB'
-								: '45 KB'
+						: name === 'CompanionsScreen'
+							? '33 KB'
+							: name === 'SourcesScreen'
+								? '30.9 KB'
+								: name === 'NotificationsScreen'
+									? '45.2 KB'
+									: '45 KB'
 		)
 	),
 	// Appearance's theme picker and custom theme editor, each beyond the screen's first view.

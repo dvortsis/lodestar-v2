@@ -97,7 +97,7 @@ fn message(code: &str) -> Option<&'static str> {
             "qBittorrent refused the password three times, and it bans an address after five. Restart qBittorrent for a new temporary password, then forget this companion and add it again."
         }
         "target_changed" => {
-            "The companion's address changed after Lodestar set its new password. Forget it and add it again."
+            "The companion's address changed after Lodestar set its new password. Reveal the password, then forget the companion and add it again."
         }
         "already_added" => "This companion is already added. Forget it first to add it again.",
         "no_target" => "Add the companion's address first.",

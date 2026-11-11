@@ -584,6 +584,14 @@ impl Monitor {
             .config_json()
     }
 
+    /// Whether source `id` keeps the credentials it was built with until
+    /// the next start (`SourcePlugin::pins_credentials`).
+    pub fn pins_credentials(&self, id: SourceId) -> bool {
+        self.sources
+            .iter()
+            .any(|s| s.id == id && s.plugin.pins_credentials())
+    }
+
     /// Source `id`'s settings checked by its plugin
     /// (`SourcePlugin::check_config`): the form to save, or why not.
     /// `None` for a source this build doesn't have.

@@ -2,7 +2,7 @@
 //! detection or by a URL, and confirmed or guided (plan
 //! 2026-11-06-v06-companions CMP-5g, Q12, Q19; architecture §18.10).
 //!
-//! **Where it's kept** (runner, 2026-11-09): three kinds of `settings`
+//! **Where it's kept** (runner, 2026-11-09): four kinds of `settings`
 //! rows, no migration, and nothing under `<data>/companions/<id>/`, which
 //! CMP-5's recovery treats as Lodestar's own:
 //!

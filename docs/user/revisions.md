@@ -2,6 +2,8 @@
 
 | Version | Date | Change |
 |---|---|---|
+| 2.7 | 2026-11-11T11:35:00Z | Section 2.2: leave the v0.5.1 template's unused Hot path and Cold path fields empty. Section 2.4: `healthy` means only that the process is alive. Full speed starts after the 6-hour sampling wait: added to sections 2.5, 3.5 and 5.3 and to a row in section 6.1. Appendix B no longer lists the Hot path and Cold path fields. |
+| 2.6 | 2026-11-11T11:26:11Z | Section 2.2: the unused Hot path and Cold path fields are gone from the Unraid templates, so the guide no longer describes them; Data holds everything and no other folder is needed. |
 | 2.5 | 2026-11-07T23:59:00Z | Section 6.2: the new service code 536870915, the reason in Lodestar's own log, Repair for your own administrator account, and `icacls` for an administrator through a domain group or a work or school account. Section 6.1: a row on the Windows Public network profile, and the expected accounts on the `logs` folder. |
 | 2.4 (v0.5.1) | 2026-11-07T03:35:37Z | Aligned the guide with the published tag and assets; corrected setup order, downloads, signatures, update guidance and feature availability. Earlier development entries below may describe later features. |
 | 2.3 | 2026-11-06 | Section 3.7: `seal.key` unseals held-back names; `secrets.key` is not in the backup, so integration, proxy and notification secrets are entered again after a restore to a new server. Section 5.5: a webhook find becomes public once a public source reports it. |

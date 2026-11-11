@@ -684,7 +684,8 @@ fn a_portable_restart_serves_again_on_the_same_port() {
 /// `CONIN$` opens, as in `Start Lodestar.cmd`'s window), its stderr kept.
 /// `relaunched`: started as Restart now starts a copy, with the token in
 /// its environment and the hand-over on stdin (the token, then end of
-/// file, as the old process gives once it has exited). `window`: in
+/// file, as the old process gives as it exits). The token names no
+/// process, so there's no old process to wait on. `window`: in
 /// `Start Lodestar.cmd`'s window (`LODESTAR_PORTABLE_WINDOW=1`).
 fn bad_config_run(
     dir: &Path,
@@ -694,10 +695,21 @@ fn bad_config_run(
     std::process::Child,
     std::sync::Arc<std::sync::Mutex<String>>,
 ) {
+    bad_config_run_with(dir, relaunched.then_some("lodestar-test-token"), window)
+}
+
+/// [`bad_config_run`] with the hand-over token `token`, if any.
+fn bad_config_run_with(
+    dir: &Path,
+    token: Option<&str>,
+    window: bool,
+) -> (
+    std::process::Child,
+    std::sync::Arc<std::sync::Mutex<String>>,
+) {
     use std::os::windows::process::CommandExt;
     /// `CREATE_NEW_CONSOLE`.
     const NEW_CONSOLE: u32 = 0x0000_0010;
-    const TOKEN: &str = "lodestar-test-token";
     let config = dir.join("config.toml");
     std::fs::write(&config, "this is not [ toml").unwrap();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_lodestar"));
@@ -709,8 +721,8 @@ fn bad_config_run(
         .creation_flags(NEW_CONSOLE)
         .env_remove("LODESTAR_RELAUNCH_TOKEN")
         .env_remove("LODESTAR_PORTABLE_WINDOW");
-    if relaunched {
-        cmd.env("LODESTAR_RELAUNCH_TOKEN", TOKEN);
+    if let Some(token) = token {
+        cmd.env("LODESTAR_RELAUNCH_TOKEN", token);
     }
     if window {
         cmd.env("LODESTAR_PORTABLE_WINDOW", "1");
@@ -718,8 +730,8 @@ fn bad_config_run(
     let mut child = cmd.spawn().unwrap();
     {
         let mut stdin = child.stdin.take().unwrap();
-        if relaunched {
-            writeln!(stdin, "{TOKEN}").unwrap();
+        if let Some(token) = token {
+            writeln!(stdin, "{token}").unwrap();
         }
         // Dropped: end of file.
     }
@@ -787,6 +799,83 @@ fn an_ordinary_run_that_fails_at_start_exits() {
 #[test]
 fn a_relaunch_outside_the_launchers_window_exits() {
     exits_without_a_prompt(true, false);
+}
+
+/// X-flake-portable-restart (#655's flake): a relaunched copy waits for
+/// the process it replaces to have exited, not only for the hand-over's
+/// end of file, before it opens anything. Here the token names this test
+/// process, which stays running: the copy refuses after its wait, before
+/// it reads its config.
+#[test]
+fn a_relaunched_copy_waits_for_the_process_it_replaces() {
+    let dir = tempfile::tempdir().unwrap();
+    let token = format!("lodestar-{}-1", std::process::id());
+    let started = Instant::now();
+    let (mut child, console) = bad_config_run_with(dir.path(), Some(&token), false);
+    let status = wait_for(Duration::from_secs(120), || child.try_wait().ok().flatten());
+    if status.is_none() {
+        let _ = child.kill();
+    }
+    let status = status.unwrap_or_else(|| {
+        panic!(
+            "it should refuse and exit; console:\n{}",
+            console.lock().unwrap_or_else(|e| e.into_inner())
+        )
+    });
+    assert!(!status.success(), "{status}");
+    // It waited the whole time: this process never exited.
+    assert!(
+        started.elapsed() >= Duration::from_secs(30),
+        "{:?}",
+        started.elapsed()
+    );
+    let shown = wait_for(Duration::from_secs(10), || {
+        let c = console.lock().unwrap().clone();
+        c.contains("still running 30 s").then_some(c)
+    })
+    .unwrap_or_else(|| {
+        panic!(
+            "no refusal; console:\n{}",
+            console.lock().unwrap_or_else(|e| e.into_inner())
+        )
+    });
+    assert!(!shown.contains("config:"), "{shown}");
+    // X-flake-portable-restart-2: the timed-out wait says so first, never
+    // with the token.
+    assert!(
+        shown.contains("wait for the copy it replaces to exit timed out"),
+        "{shown}"
+    );
+    assert!(!shown.contains(&token), "{shown}");
+}
+
+/// X-flake-portable-restart-2: a copy whose token names no process has
+/// nothing to watch, says so in one line (never the token) and goes on,
+/// here to its config error.
+#[test]
+fn a_relaunched_copy_with_nothing_to_watch_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut child, console) = bad_config_run(dir.path(), true, false);
+    let status = wait_for(Duration::from_secs(60), || child.try_wait().ok().flatten());
+    if status.is_none() {
+        let _ = child.kill();
+    }
+    assert!(!status.expect("it should exit").success());
+    let shown = wait_for(Duration::from_secs(10), || {
+        let c = console.lock().unwrap().clone();
+        c.contains("config:").then_some(c)
+    })
+    .unwrap_or_else(|| {
+        panic!(
+            "no config error; console:\n{}",
+            console.lock().unwrap_or_else(|e| e.into_inner())
+        )
+    });
+    assert!(
+        shown.contains("couldn't check that the copy it replaces had exited"),
+        "{shown}"
+    );
+    assert!(!shown.contains("lodestar-test-token"), "{shown}");
 }
 
 /// A run with a broken config, as `bad_config_run` starts it, that exits

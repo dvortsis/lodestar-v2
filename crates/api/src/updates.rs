@@ -241,7 +241,7 @@ pub(crate) async fn status(handle: Handle) -> ApiResult<Json<UpdatesStatus>> {
     responses(
         (status = 200, body = UpdatesStatus),
         (status = 429, description = "`rate_limited`, with `Retry-After`.", body = ErrorEnvelope),
-        (status = 409, description = "`updates_unavailable`: a fixture or Windows (see `GET /updates`).", body = ErrorEnvelope),
+        (status = 409, description = "`updates_unavailable`: a fixture, or an update client that couldn't be built (see `GET /updates`).", body = ErrorEnvelope),
         (status = 503, description = "`updates_unavailable`: this process serves no update engine.", body = ErrorEnvelope),
     )
 )]
@@ -262,7 +262,7 @@ pub(crate) async fn check(handle: Handle, headers: HeaderMap) -> ApiResult<Respo
     responses(
         (status = 202, description = "Started, or queued for the window.", body = UpdatesStatus),
         (status = 404, description = "`unknown_version`.", body = ErrorEnvelope),
-        (status = 409, description = "`version_skipped`; `install_unavailable` with the reason; or `updates_unavailable` (a fixture or Windows).", body = ErrorEnvelope),
+        (status = 409, description = "`version_skipped`; `install_unavailable` with the reason; or `updates_unavailable` (a fixture, or an update client that couldn't be built).", body = ErrorEnvelope),
         (status = 422, description = "`manual_confirmation_required`: the release has manual steps.", body = ErrorEnvelope),
         (status = 500, description = "`updates_not_saved`: `when: window` couldn't be saved, so nothing is queued.", body = ErrorEnvelope),
         (status = 503, description = "`updates_unavailable`: this process serves no update engine.", body = ErrorEnvelope),
@@ -294,7 +294,7 @@ pub(crate) async fn install(
     responses(
         (status = 200, body = UpdatesStatus),
         (status = 404, description = "`unknown_version`.", body = ErrorEnvelope),
-        (status = 409, description = "`updates_unavailable` (a fixture or Windows; see `GET /updates`), or `bin_unavailable` (the update files can't be written).", body = ErrorEnvelope),
+        (status = 409, description = "`updates_unavailable` (a fixture, or an update client that couldn't be built; see `GET /updates`), or `bin_unavailable` (the update files can't be written).", body = ErrorEnvelope),
         (status = 500, description = "`updates_not_saved`: the skip isn't acknowledged. It may not survive a restart (if only the final folder sync failed, it may already be in effect).", body = ErrorEnvelope),
         (status = 503, description = "`updates_unavailable`: this process serves no update engine.", body = ErrorEnvelope),
     )
@@ -322,7 +322,7 @@ pub(crate) async fn skip(
     responses(
         (status = 200, body = UpdatesStatus),
         (status = 422, description = "`invalid_value` for any other number of days.", body = ErrorEnvelope),
-        (status = 409, description = "`updates_unavailable` (a fixture or Windows; see `GET /updates`), or `bin_unavailable` (the update files can't be written).", body = ErrorEnvelope),
+        (status = 409, description = "`updates_unavailable` (a fixture, or an update client that couldn't be built; see `GET /updates`), or `bin_unavailable` (the update files can't be written).", body = ErrorEnvelope),
         (status = 500, description = "`updates_not_saved`: the change couldn't be saved and isn't acknowledged.", body = ErrorEnvelope),
         (status = 503, description = "`updates_unavailable`: this process serves no update engine.", body = ErrorEnvelope),
     )
@@ -356,7 +356,7 @@ pub(crate) async fn pause(
     request_body = RollbackRequest,
     responses(
         (status = 202, description = "Started: the restart follows; `rolled_back` is announced on the `updates` topic once the previous version runs.", body = UpdatesStatus),
-        (status = 409, description = "`rollback_unavailable`, with `error.reason` (`not_supervised`, `image_mode`, `busy`, `no_previous_version`, `snapshot_missing`); or `updates_unavailable` (a fixture or Windows).", body = ErrorEnvelope),
+        (status = 409, description = "`rollback_unavailable`, with `error.reason` (`not_supervised`, `image_mode`, `busy`, `no_previous_version`, `snapshot_missing`, `not_built_yet` on Windows); or `updates_unavailable` (a fixture, or an update client that couldn't be built).", body = ErrorEnvelope),
         (status = 428, description = "`confirmation_required`: `confirm` wasn't true.", body = ErrorEnvelope),
         (status = 503, description = "`updates_unavailable`: this process serves no update engine.", body = ErrorEnvelope),
     )
@@ -389,7 +389,7 @@ pub(crate) async fn rollback(
     tag = "settings",
     responses(
         (status = 200, body = UpdatesStatus),
-        (status = 409, description = "`updates_unavailable`: a fixture or Windows (see `GET /updates`).", body = ErrorEnvelope),
+        (status = 409, description = "`updates_unavailable`: a fixture, or an update client that couldn't be built (see `GET /updates`).", body = ErrorEnvelope),
         (status = 500, description = "`updates_not_saved`: the clear isn't acknowledged. It may not survive a restart (if only the final folder sync failed, the history may already be gone).", body = ErrorEnvelope),
         (status = 503, description = "`updates_unavailable`: this process serves no update engine.", body = ErrorEnvelope),
     )

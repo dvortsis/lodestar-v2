@@ -5845,7 +5845,7 @@
         "tags": [
           "search"
         ],
-        "summary": "Parses a query: the AST and its canonical text, or a `query_syntax`\nerror whose `start`/`end` span the UI highlights. With\n`natural=true`, also the query `q` means as natural phrasing\n(`natural_too_long` past 512 bytes or 32 words).",
+        "summary": "Parses a query: the AST and its canonical text, or a `query_syntax`\nerror whose `start`/`end` span the UI highlights. With\n`natural=true`, also the query `q` means as natural phrasing\n(`natural_too_long` past 512 bytes or 32 tokens: words and symbols,\nwhere each bracket and each lone minus sign counts as one).",
         "operationId": "parseQuery",
         "parameters": [
           {
@@ -8138,7 +8138,7 @@
             }
           },
           "409": {
-            "description": "`updates_unavailable`: a fixture or Windows (see `GET /updates`).",
+            "description": "`updates_unavailable`: a fixture, or an update client that couldn't be built (see `GET /updates`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8197,7 +8197,7 @@
             }
           },
           "409": {
-            "description": "`updates_unavailable`: a fixture or Windows (see `GET /updates`).",
+            "description": "`updates_unavailable`: a fixture, or an update client that couldn't be built (see `GET /updates`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8276,7 +8276,7 @@
             }
           },
           "409": {
-            "description": "`version_skipped`; `install_unavailable` with the reason; or `updates_unavailable` (a fixture or Windows).",
+            "description": "`version_skipped`; `install_unavailable` with the reason; or `updates_unavailable` (a fixture, or an update client that couldn't be built).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8355,7 +8355,7 @@
             }
           },
           "409": {
-            "description": "`updates_unavailable` (a fixture or Windows; see `GET /updates`), or `bin_unavailable` (the update files can't be written).",
+            "description": "`updates_unavailable` (a fixture, or an update client that couldn't be built; see `GET /updates`), or `bin_unavailable` (the update files can't be written).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8434,7 +8434,7 @@
             }
           },
           "409": {
-            "description": "`rollback_unavailable`, with `error.reason` (`not_supervised`, `image_mode`, `busy`, `no_previous_version`, `snapshot_missing`); or `updates_unavailable` (a fixture or Windows).",
+            "description": "`rollback_unavailable`, with `error.reason` (`not_supervised`, `image_mode`, `busy`, `no_previous_version`, `snapshot_missing`, `not_built_yet` on Windows); or `updates_unavailable` (a fixture, or an update client that couldn't be built).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8513,7 +8513,7 @@
             }
           },
           "409": {
-            "description": "`updates_unavailable` (a fixture or Windows; see `GET /updates`), or `bin_unavailable` (the update files can't be written).",
+            "description": "`updates_unavailable` (a fixture, or an update client that couldn't be built; see `GET /updates`), or `bin_unavailable` (the update files can't be written).",
             "content": {
               "application/json": {
                 "schema": {
@@ -11095,7 +11095,7 @@
               "string",
               "null"
             ],
-            "description": "Why not: `not_supervised`, `dev_build`, `noexec`, `not_writable`,\n`package_managed`, `image_mode`, `trust_damaged`,\n`skipped_unreadable`, `noexec_unknown` or `channel_unavailable`;\nor, when `unavailable`\nis set, the same reason (`windows_helper`, …). Install\nautomatically then behaves as Check and notify."
+            "description": "Why not: `not_supervised`, `dev_build`, `noexec`, `not_writable`,\n`package_managed`, `image_mode`, `trust_damaged`,\n`skipped_unreadable`, `noexec_unknown`, `channel_unavailable` or\n`not_built_yet` (Windows: this install path isn't built yet, e.g.\nthe portable build, or no installer wired in); on Windows also\n`install_kind_unknown` (Lodestar couldn't tell whether it's the MSI\nservice or the portable zip, so no artifact is chosen) and\n`data_folder_unchecked` (the data folder isn't the default one\nunder ProgramData whose permissions the installer sets, so nothing\ninstalls from it); or, when `unavailable` is\nset, the same reason (`fixture`, `network`, `windows_helper`).\nInstall automatically then behaves as Check and notify."
           }
         }
       },
@@ -20769,7 +20769,7 @@
               "string",
               "null"
             ],
-            "description": "Why not, when `available` is false: `not_supervised`,\n`image_mode`, `busy`, `no_previous_version` or `snapshot_missing`\n(or the `unavailable` reason). Always sent; not `required` in the\nschema yet, so clients built before it still type-check."
+            "description": "Why not, when `available` is false: `not_supervised`,\n`image_mode`, `busy`, `no_previous_version`, `snapshot_missing` or\n`not_built_yet` (Windows: Roll back isn't built for this install\nyet), or the `unavailable` reason. Always sent; not `required` in the\nschema yet, so clients built before it still type-check."
           },
           "restores_store": {
             "type": [
@@ -25621,7 +25621,7 @@
               },
               {
                 "$ref": "#/components/schemas/Installing",
-                "description": "An install under way (`now`), or one asked for at the next window\n(`window`); null otherwise. Progress is on the `updates` topic.\nAlways sent; not `required` in the schema yet, so clients built\nbefore it (the Updates screen's fixtures) still type-check."
+                "description": "An install under way (`now`), or one asked for at the next window\n(`window`); null otherwise. It is set as soon as the install\nstarts, so it covers the download and verification, not only the\nfinal install step. Progress is on the `updates` topic.\nAlways sent; not `required` in the schema yet, so clients built\nbefore it (the Updates screen's fixtures) still type-check."
               }
             ]
           },
@@ -25630,7 +25630,7 @@
             "items": {
               "type": "string"
             },
-            "description": "`revoked_key`, `clock_behind`, `clock_ahead`, `trust_damaged`,\n`pending_unwritable`, `bad_overlay`, `rolled_back`,\n`manifest_lapsed`, `channel_unavailable`, `check_not_saved` (the\nlast check's times couldn't be saved and won't survive a\nrestart), `updater_unreadable` (the saved update state couldn't be\nread, so automatic updates are held; pausing or resuming saves a\nnew state, which rewrites the file and ends the hold), …"
+            "description": "`revoked_key`, `clock_behind`, `clock_ahead`, `trust_damaged`,\n`pending_unwritable`, `bad_overlay`, `rolled_back`,\n`manifest_lapsed`, `channel_unavailable`, `check_not_saved` (the\nlast check's times couldn't be saved and won't survive a\nrestart), `updater_unreadable` (the saved update state couldn't be\nread, so automatic updates are held; pausing or resuming saves a\nnew state, which rewrites the file and ends the hold) and, on\nWindows, `install_failed` (the update helper's last answer, for a version\nnewer than the running one, wasn't `installed`; display only), …"
           },
           "pending": {
             "oneOf": [

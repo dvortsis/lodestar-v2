@@ -459,8 +459,10 @@ def linode_token(secret_string: str) -> str:
 def github_json(token: str, path: str) -> dict | None:  # pragma: no cover - network
     import urllib.error
     import urllib.request
-    req = urllib.request.Request("https://api.github.com" + path, headers={
-        "Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json", "User-Agent": "lodestar-fleet"})
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "lodestar-fleet"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request("https://api.github.com" + path, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.loads(r.read())
@@ -491,7 +493,11 @@ def oidc_session(env: dict, run_id: str, role_env: str = "AWS_FLEET_ROLE_ARN"): 
     from deployment_policy import DeploymentBlocked, require_for_run, require_token_claims
 
     try:
-        environment = require_for_run(env, role_env, lambda path: github_json(env["GITHUB_TOKEN"], path))
+        # The injection harness intentionally has no real GitHub token. These
+        # settings are public for this pinned public repository; anonymous GETs
+        # must pass the identical audit. Denied/partial/rate-limited reads refuse
+        # before requesting OIDC, with no authenticated-to-anonymous retry.
+        environment = require_for_run(env, role_env, lambda path: github_json(env.get("GITHUB_TOKEN", ""), path))
     except DeploymentBlocked as exc:
         raise SystemExit(str(exc)) from None
 

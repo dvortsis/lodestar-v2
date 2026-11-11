@@ -229,6 +229,93 @@ pub fn installed(code: i32) -> Installed {
     }
 }
 
+/// How much of the end of an `msiexec` log is read to tell why it failed
+/// ([`held_open`]): StartServices runs near the end, and a verbose log can
+/// run to megabytes.
+pub const LOG_TAIL: u64 = 1024 * 1024;
+
+/// Attempts in a row that may fail the way [`held_open`] recognises: the
+/// last of them counts as an ordinary failure (the install's version is
+/// skipped; the rollback's reinstall halts); each before it is tried again
+/// at the helper's next run.
+pub const MAX_BLOCKED: u32 = 3;
+
+/// Whether an `msiexec` log's tail shows error 1920 for this service: the
+/// MSI's StartServices couldn't start it. That's what a `lodestar.exe`
+/// held open with no sharing gives (the SCM can't open the image), and the
+/// install then fails 1603 and rolls back. It also covers a service that
+/// fails to start for any other reason, which [`MAX_BLOCKED`] bounds.
+///
+/// The log is untrusted input: only `tail` (at most [`LOG_TAIL`] bytes,
+/// the caller's read) is looked at, decoded as UTF-16LE when it has
+/// Windows Installer's byte-order mark or its NUL pattern, otherwise as
+/// lossy UTF-8. The pattern is fixed, and doesn't depend on Windows'
+/// language: on one line, the number 1920 followed by `.` and a space,
+/// right after a word, and then the service's name as a whole word
+/// (`Error 1920. Service 'Lodestar' ...`; `Fehler 1920. Der Dienst
+/// "Lodestar" ...`).
+pub fn held_open(tail: &[u8], service: &str) -> bool {
+    let text = decode_log(tail);
+    text.lines().any(|line| error_1920(line, service))
+}
+
+/// `<letter> 1920. ` in `line`, with `service` as a whole word after it.
+/// Linear in the line: the service's last whole-word place is found in one
+/// pass, then each `1920. ` is a constant-time check against it (an
+/// adversarial line of repeated `a 1920. ` isn't quadratic).
+fn error_1920(line: &str, service: &str) -> bool {
+    const AT: &str = " 1920. ";
+    let Some(last) = last_word(line, service) else {
+        return false;
+    };
+    line.match_indices(AT).any(|(at, _)| {
+        let word = line[..at]
+            .chars()
+            .next_back()
+            .is_some_and(char::is_alphabetic);
+        word && last >= at + AT.len()
+    })
+}
+
+/// Where `name` last appears in `line` as a whole word: neither the
+/// character before it nor the one after it is a letter, digit, `_` or `-`
+/// (`'Lodestar'`, `"Lodestar"`, `(Lodestar)`, `Lodestar.`; not
+/// `Lodestar2` or `Lodestar-old`).
+fn last_word(line: &str, name: &str) -> Option<usize> {
+    let inner = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '-');
+    line.match_indices(name)
+        .filter(|(at, _)| {
+            !inner(line[..*at].chars().next_back())
+                && !inner(line[at + name.len()..].chars().next())
+        })
+        .map(|(at, _)| at)
+        .last()
+}
+
+/// A log's bytes as text: UTF-16LE (Windows Installer's own, with a BOM,
+/// or every other byte NUL) or else UTF-8, lossily. A tail may start
+/// mid-character: an odd leading byte is dropped.
+fn decode_log(bytes: &[u8]) -> String {
+    let bom = bytes.starts_with(&[0xFF, 0xFE]);
+    let nuls = bytes.len() >= 4 && bytes.iter().skip(1).step_by(2).take(64).all(|b| *b == 0);
+    let odd_nuls = bytes.len() >= 4 && bytes.iter().step_by(2).take(64).all(|b| *b == 0);
+    if bom || nuls || odd_nuls {
+        let start = if bom {
+            2
+        } else if odd_nuls {
+            1
+        } else {
+            0
+        };
+        let units: Vec<u16> = bytes[start..]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        return String::from_utf16_lossy(&units);
+    }
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
 /// `%ProgramFiles%`, from the environment, else from the registry's
 /// `ProgramFilesDir` (a service's environment has it, but a missing one
 /// would refuse every MSI install, since the MSI is detected by its
@@ -515,6 +602,119 @@ $null = Register-ScheduledTask -TaskName $env:LODESTAR_TASK -Xml $x -Force";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn utf16(text: &str, bom: bool) -> Vec<u8> {
+        let mut b = if bom { vec![0xFF, 0xFE] } else { Vec::new() };
+        for u in text.encode_utf16() {
+            b.extend_from_slice(&u.to_le_bytes());
+        }
+        b
+    }
+
+    const LOG_1920: &str = "MSI (s) (A8:B4) [10:15:23:456]: Executing op: ServiceControl(,Name=Lodestar,Action=1,Wait=1,)\r\n\
+        MSI (s) (A8:B4) [10:15:53:456]: Product: Lodestar -- Error 1920. Service 'Lodestar' (Lodestar) failed to start. Verify that you have sufficient privileges to start system services.\r\n\
+        MSI (s) (A8:B4) [10:15:54:000]: Product: Lodestar -- Installation failed.\r\n";
+
+    /// Error 1920 for this service, in Windows Installer's UTF-16 (with or
+    /// without its byte-order mark, a tail starting on either byte), in
+    /// UTF-8, and in another language.
+    #[test]
+    fn a_1920_for_the_service_is_recognised() {
+        assert!(held_open(&utf16(LOG_1920, true), "Lodestar"));
+        assert!(held_open(&utf16(LOG_1920, false), "Lodestar"));
+        assert!(
+            held_open(&utf16(LOG_1920, false)[1..], "Lodestar"),
+            "odd start"
+        );
+        assert!(held_open(LOG_1920.as_bytes(), "Lodestar"));
+        let german = "MSI (s) (A8:B4) [10:15:53:456]: Produkt: Lodestar -- Fehler 1920. Der Dienst \"Lodestar\" (Lodestar) konnte nicht gestartet werden.";
+        assert!(held_open(&utf16(german, true), "Lodestar"));
+    }
+
+    /// The service's name is matched as a whole word: another service
+    /// whose name starts or ends with it isn't this one.
+    #[test]
+    fn only_the_services_own_name_counts() {
+        for other in [
+            "Lodestar2",
+            "MyLodestar",
+            "Lodestar_old",
+            "Lodestar-old",
+            "old-Lodestar",
+        ] {
+            let log =
+                format!("Product: X -- Error 1920. Service '{other}' ({other}) failed to start.");
+            assert!(!held_open(log.as_bytes(), "Lodestar"), "{other}");
+        }
+        let log = "Product: X -- Error 1920. Service 'Lodestar2' (Lodestar) failed to start.";
+        assert!(
+            held_open(log.as_bytes(), "Lodestar"),
+            "a whole word later on"
+        );
+    }
+
+    /// #677's review: a line of repeated `a 1920. ` is answered in linear
+    /// time, with the same answers as before: no name, the name at the
+    /// end, the name only before every 1920. The tail is at most 1 MiB;
+    /// the line here is 4 MiB so the deadline separates the two: the old
+    /// quadratic matcher took ~6 s at 1 MiB (~100 s at 4 MiB) in debug,
+    /// the linear one well under a second at 4 MiB.
+    #[test]
+    fn an_adversarial_line_is_linear() {
+        let flood = "a 1920. ".repeat(4 * LOG_TAIL as usize / 8);
+        let start = std::time::Instant::now();
+        assert!(!held_open(flood.as_bytes(), "Lodestar"));
+        assert!(held_open(format!("{flood}Lodestar").as_bytes(), "Lodestar"));
+        let begun = format!("Lodestar {flood}");
+        assert!(
+            !held_open(begun.as_bytes(), "Lodestar"),
+            "the name must come after"
+        );
+        let elapsed = start.elapsed();
+        assert!(elapsed < std::time::Duration::from_secs(10), "{elapsed:?}");
+    }
+
+    proptest::proptest! {
+        /// Any bytes at all: an answer, never a panic.
+        #[test]
+        fn any_log_bytes_are_safe(bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..4096)) {
+            let _ = held_open(&bytes, "Lodestar");
+        }
+
+        /// A 1920 line between any printable lines is found, in UTF-8 and in
+        /// UTF-16 with its mark.
+        #[test]
+        fn a_1920_line_is_found_among_any_others(
+            before in "[ -~\r\n]{0,512}",
+            after in "[ -~\r\n]{0,512}",
+        ) {
+            let line = "Product: Lodestar -- Error 1920. Service 'Lodestar' failed to start.";
+            let text = format!("{before}\n{line}\n{after}");
+            proptest::prop_assert!(held_open(text.as_bytes(), "Lodestar"));
+            proptest::prop_assert!(held_open(&utf16(&text, true), "Lodestar"));
+        }
+    }
+
+    /// Anything else isn't: another error, 1920 for another service, the
+    /// number inside another one or without its word, an empty or
+    /// garbled log.
+    #[test]
+    fn anything_else_is_an_ordinary_failure() {
+        for log in [
+            "MSI (s): Product: Lodestar -- Error 1603. A fatal error occurred during installation.",
+            "MSI (s): Product: Other -- Error 1920. Service 'Spooler' (Print Spooler) failed to start.",
+            "MSI (s): Lodestar [11:19:20:011] 11920. 1920. done",
+            "MSI (s): Lodestar: Note: 1: 2205 2: 3: Error 4: SELECT 1920. ",
+            "MSI (s): Note: 1: 2205 2: 1920. 3: ServiceControl Lodestar",
+            "MSI (s) [10:15:53]: Property(S): COUNT = 1920. Lodestar",
+            "",
+        ] {
+            assert!(!held_open(log.as_bytes(), "Lodestar"), "{log}");
+            assert!(!held_open(&utf16(log, true), "Lodestar"), "{log}");
+        }
+        assert!(!held_open(&[0xFF, 0xFE, 0x00], "Lodestar"));
+        assert!(!held_open(&[0xC3, 0x28, 0xFF], "Lodestar"));
+    }
 
     const SID: &str = "S-1-5-80-1-2-3-4-5";
 

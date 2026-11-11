@@ -16,9 +16,11 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / "infra" / "fleet"))
+sys.path.insert(0, str(ROOT / "infra" / "operator"))
 
 import build_templates as bt  # noqa: E402
 import lock as fleet_lock  # noqa: E402
+import oplock as operator_lock  # noqa: E402
 import state as fleet_state  # noqa: E402
 
 REPO = "dvortsis/lodestar-v2"
@@ -89,6 +91,8 @@ class Built(unittest.TestCase):
         self.assertEqual(bt.FLEET_JSON_KEY, fleet_state.FLEET_KEY)
         self.assertEqual(bt.SPEND_LEDGER_KEY, fleet_state.LEDGER_KEY)
         self.assertEqual(bt.MISMATCH_KEY, fleet_state.MISMATCH_KEY)
+        self.assertEqual(bt.OPERATOR_LOCK_KEY, operator_lock.LOCK_KEY)
+        self.assertEqual(bt.CLAUDE_LOCK_KEY, operator_lock.CLAUDE_LOCK_KEY)
 
     def test_bootstrap_guidance_preserves_existing_secrets(self):
         readme = (HERE / "README.md").read_text(encoding="utf-8")
@@ -188,12 +192,21 @@ class LeastPrivilege(unittest.TestCase):
     def test_bridge_grants(self):
         g = granted("LodestarOperatorBridge")
         self.assertEqual(g, {
-            ("ControlBucket", "locks/operator*"): {"s3:GetObject", "s3:PutObject", "s3:DeleteObject"},
+            ("ControlBucket", "locks/operator.json"): {"s3:GetObject", "s3:PutObject", "s3:DeleteObject"},
             ("ControlBucket", "operator/claude-lock.json"): {"s3:GetObject", "s3:PutObject"},
             ("StateBucket", "fleet/fleet.json"): {"s3:GetObject"},
         })
         actions = {a for s in allow_statements(roles()["LodestarOperatorBridge"]) for a in as_list(s["Action"])}
         self.assertFalse({a for a in actions if a.startswith("secretsmanager:")})
+
+    def test_bridge_names_exact_keys_and_no_wildcard(self):
+        # OP-4 narrowed the plan's `locks/operator*` to the two keys the bridge uses.
+        text = json.dumps(roles()["LodestarOperatorBridge"]["Properties"]["Policies"])
+        self.assertNotIn("*", text)
+        self.assertNotIn("?", text)
+        self.assertNotIn("StringLike", text)
+        keys = {k for _, k in granted("LodestarOperatorBridge")}
+        self.assertEqual(keys, {"locks/operator.json", "operator/claude-lock.json", "fleet/fleet.json"})
 
     def test_pia_delivery_is_two_named_secrets_and_fleet_json(self):
         stmts = allow_statements(roles()["LodestarPiaDelivery"])
@@ -228,7 +241,7 @@ class LeastPrivilege(unittest.TestCase):
             "ControlBucket": {"StringEquals": {"s3:prefix": ["locks/fleet.json"]}},
         })
         self.assertEqual(self.lists("LodestarOperatorBridge"), {
-            "ControlBucket": {"StringLike": {"s3:prefix": ["locks/operator*", "operator/claude-lock.json"]}},
+            "ControlBucket": {"StringEquals": {"s3:prefix": ["locks/operator.json", "operator/claude-lock.json"]}},
         })
         self.assertEqual(self.lists("LodestarPiaDelivery"), {})
 

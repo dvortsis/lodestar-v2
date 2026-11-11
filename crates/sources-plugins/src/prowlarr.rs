@@ -39,9 +39,9 @@ use lodestar_sources::claims::{ClaimedFile, Claims, Confidence, ExternalId, Prov
 use lodestar_sources::consent::{CredentialKind, CredentialSpec};
 use lodestar_sources::http::host_key;
 use lodestar_sources::{
-    Backoff, BoxFuture, Caps, Client, Consent, Distribution, Emitter, Endpoints, Found, HostRate,
-    HttpError, Kind, Manifest, Network, PluginError, Policy, Priority, Request, Risk, Schedule,
-    SourceCtx, SourcePlugin,
+    Backoff, BoxFuture, Caps, Client, ConfigRefusal, Consent, Distribution, Emitter, Endpoints,
+    Found, HostRate, HttpError, Kind, Manifest, Network, PluginError, Policy, Priority, Request,
+    Risk, Schedule, SourceCtx, SourcePlugin,
 };
 use lodestar_sources_feeds::torznab::{self, Item, LIMITS, Limits};
 use quick_xml::Reader;
@@ -78,6 +78,10 @@ pub const MIN_PUBLISHED: i64 = 994_032_000;
 pub const MAX_FUTURE: i64 = 24 * 3600;
 /// Bytes in an API key. Both managers issue 32 hex digits.
 pub const MAX_KEY: usize = 128;
+/// Bytes in the saved settings, checked before they're parsed.
+pub const MAX_CONFIG_BYTES: usize = 4096;
+/// Bytes in the address, checked before it's parsed.
+pub const MAX_URL: usize = 2048;
 
 /// The caps for one indexer page: SRC-6's, with fewer items. A page asks
 /// for [`PAGE_SIZE`]; an indexer that sends ten times that is cut off.
@@ -186,6 +190,9 @@ impl Config {
     /// SSRF guard's download-client policy (LAN and loopback allowed;
     /// link-local and metadata addresses never).
     pub fn new(url: &str, manager: Manager, agents: Option<u8>) -> Result<Config, ConfigError> {
+        if url.len() > MAX_URL {
+            return Err(ConfigError("the address is too long"));
+        }
         let parsed = url::Url::parse(url.trim())
             .map_err(|_| ConfigError("the address isn't a valid URL"))?;
         if !parsed.username().is_empty() || parsed.password().is_some() {
@@ -213,9 +220,23 @@ impl Config {
     /// The settings as the form saves them (see [`CONFIG_SCHEMA`]). An
     /// `api_key` here is refused: it belongs in the credential store.
     pub fn from_json(json: &str) -> Result<Config, ConfigError> {
+        if json.len() > MAX_CONFIG_BYTES {
+            return Err(ConfigError("the settings are too long"));
+        }
         let raw: RawConfig = serde_json::from_str(json)
             .map_err(|_| ConfigError("the settings don't match the form"))?;
         Config::new(&raw.url, raw.manager, raw.agents)
+    }
+
+    /// The settings in the form [`Config::from_json`] reads back as the
+    /// same [`Config`]: the checked address, the manager and the agent
+    /// count. Never holds a credential.
+    pub fn to_json(&self) -> String {
+        let manager = match self.manager {
+            Manager::Prowlarr => "prowlarr",
+            Manager::Jackett => "jackett",
+        };
+        serde_json::json!({"url": self.base, "manager": manager, "agents": self.agents}).to_string()
     }
 
     pub fn manager(&self) -> Manager {
@@ -231,6 +252,21 @@ impl Config {
 pub struct Prowlarr {
     config: Option<Config>,
     credentials: Arc<dyn Credentials>,
+    key_at_start: KeyAtStart,
+}
+
+/// The API key as it was stored when the plugin was built at Lodestar's
+/// start ([`Prowlarr::at_start`]), so the key and the address it's sent
+/// to always come from the same start. A run whose stored key differs
+/// from it stops with [`KEY_CHANGED`] until Lodestar restarts: a key
+/// saved for a new address (a companion hand-over writes the key, then
+/// the address) never goes to the old one (X-prowlarr-settings).
+enum KeyAtStart {
+    /// Built by [`Prowlarr::new`]: each run uses the key stored then.
+    Unpinned,
+    /// The key stored at the start (`None` when there was none), or
+    /// `Err` when it couldn't be read then.
+    Pinned(Result<Option<Secret>, ()>),
 }
 
 impl std::fmt::Debug for Prowlarr {
@@ -246,6 +282,22 @@ impl Prowlarr {
         Prowlarr {
             config: Some(config),
             credentials,
+            key_at_start: KeyAtStart::Unpinned,
+        }
+    }
+
+    /// The plugin as Lodestar builds it at its start: from its saved
+    /// settings (`None`, or settings [`Config::from_json`] refuses, leave
+    /// it unconfigured) and with the API key stored now, which every run
+    /// until the next start must still find (see [`KeyAtStart`]). Nothing
+    /// about either is logged.
+    pub async fn at_start(saved: Option<&str>, credentials: Arc<dyn Credentials>) -> Prowlarr {
+        let config = saved.and_then(|json| Config::from_json(json).ok());
+        let key = credentials.get(ID, API_KEY).await.map_err(|_| ());
+        Prowlarr {
+            config,
+            credentials,
+            key_at_start: KeyAtStart::Pinned(key),
         }
     }
 
@@ -255,6 +307,7 @@ impl Prowlarr {
         Prowlarr {
             config: None,
             credentials,
+            key_at_start: KeyAtStart::Unpinned,
         }
     }
 
@@ -276,6 +329,38 @@ impl SourcePlugin for Prowlarr {
         &POLICY
     }
 
+    /// The egress list is the configured host only (SRC-5), so the
+    /// pipeline must be given it: the trait's default would read the
+    /// manifest's empty list.
+    fn endpoints(&self) -> Option<Endpoints> {
+        Prowlarr::endpoints(self)
+    }
+
+    fn config_editable(&self) -> bool {
+        true
+    }
+
+    /// Built by [`Prowlarr::at_start`], it keeps the key stored then
+    /// ([`KeyAtStart`]).
+    fn pins_credentials(&self) -> bool {
+        matches!(self.key_at_start, KeyAtStart::Pinned(_))
+    }
+
+    /// `None` until it's set up: there's nothing to compare a saved form
+    /// with.
+    fn config_json(&self) -> Option<String> {
+        self.config.as_ref().map(Config::to_json)
+    }
+
+    /// [`Config::from_json`]'s rules (the address through the SSRF guard's
+    /// download-client policy); what's saved is [`Config::to_json`]. The
+    /// API key is refused here: it's a credential.
+    fn check_config(&self, json: &str) -> Result<String, ConfigRefusal> {
+        Config::from_json(json)
+            .map(|c| c.to_json())
+            .map_err(|e| ConfigRefusal(e.0))
+    }
+
     fn run(&self, ctx: SourceCtx) -> BoxFuture<'_, Result<(), PluginError>> {
         Box::pin(self.run_inner(ctx))
     }
@@ -288,6 +373,12 @@ fn fail(msg: &str) -> PluginError {
 /// The manager refused the API key: the plugin stops and says so, rather
 /// than knocking every 15 minutes.
 const REFUSED: &str = "the indexer manager refused the API key";
+/// The stored key couldn't be read when Lodestar started.
+pub const KEY_UNREAD_AT_START: &str =
+    "the stored API key couldn't be read when Lodestar started; restart Lodestar";
+/// The stored key isn't the one Lodestar started with ([`KeyAtStart`]).
+pub const KEY_CHANGED: &str =
+    "needs setup: the API key changed since Lodestar started; restart Lodestar to use it";
 const REDIRECTED: &str = "needs setup: the indexer manager redirected the request; check the address (http or https, and any base path)";
 const NOT_FOUND: &str = "needs setup: the address has no indexer list; check the address, any base path, and whether it's Prowlarr or Jackett";
 const NOT_A_LIST: &str = "needs setup: the address didn't answer with an indexer list; check the address and whether it's Prowlarr or Jackett";
@@ -311,6 +402,15 @@ impl Prowlarr {
         let key = key
             .map_err(|_| fail("the stored API key couldn't be read"))?
             .ok_or_else(|| fail("needs setup: no API key is stored"))?;
+        match &self.key_at_start {
+            KeyAtStart::Unpinned => {}
+            KeyAtStart::Pinned(Err(())) => return Err(fail(KEY_UNREAD_AT_START)),
+            KeyAtStart::Pinned(Ok(at_start)) => {
+                if at_start.as_ref().map(Secret::expose) != Some(key.expose()) {
+                    return Err(fail(KEY_CHANGED));
+                }
+            }
+        }
         if !valid_key(key.expose()) {
             return Err(fail("the stored API key isn't a valid key"));
         }

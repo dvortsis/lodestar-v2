@@ -179,6 +179,46 @@ class DeploymentBoundary(unittest.TestCase):
                 apply.oidc_session(env, "1-1")
         boto.client.assert_not_called()
 
+    def test_anonymous_metadata_request_carries_no_authorization(self):
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = b'{}'
+        for value in ("", "fake-read-token"):
+            with self.subTest(authenticated=bool(value)), mock.patch("urllib.request.urlopen", return_value=response) as http:
+                self.assertEqual(apply.github_json(value, f"/repos/{REPO}"), {})
+                request = http.call_args.args[0]
+                self.assertEqual(request.get_header("Authorization"), f"Bearer {value}" if value else None)
+
+    def test_tokenless_injection_audits_identically_before_oidc_and_sts(self):
+        env = {**job("operator-injection.yml"), "ACTIONS_ID_TOKEN_REQUEST_URL": "https://example.invalid/token?x=1",
+               "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "fake-oidc", "AWS_BRIDGE_ROLE_ARN": "fake-role"}
+        for state in ("protected", "missing-reviewer", "unreadable"):
+            with self.subTest(state=state):
+                data = settings()
+                if state == "missing-reviewer":
+                    data[f"/repos/{REPO}/environments/cloud-operator"]["protection_rules"] = []
+                def get(value, path):
+                    self.assertEqual(value, "")
+                    if state == "unreadable":
+                        raise RuntimeError("private HTTP body")
+                    return data[path]
+                response, boto = mock.MagicMock(), mock.Mock()
+                response.__enter__.return_value.read.return_value = json.dumps({
+                    "value": token(claims("cloud-operator", "operator-injection.yml"))}).encode()
+                boto.client.return_value.assume_role_with_web_identity.return_value = {"Credentials": {
+                    "AccessKeyId": "fake", "SecretAccessKey": "fake", "SessionToken": "fake"}}
+                with mock.patch.object(apply, "github_json", side_effect=get) as metadata, \
+                        mock.patch("urllib.request.urlopen", return_value=response) as http, \
+                        mock.patch.object(apply, "aws_config"), mock.patch.dict(sys.modules, {"boto3": boto}):
+                    if state == "protected":
+                        apply.oidc_session(env, "1-1", role_env="AWS_BRIDGE_ROLE_ARN")
+                        boto.client.return_value.assume_role_with_web_identity.assert_called_once()
+                    else:
+                        with self.assertRaises(SystemExit):
+                            apply.oidc_session(env, "1-1", role_env="AWS_BRIDGE_ROLE_ARN")
+                        http.assert_not_called()
+                        boto.client.assert_not_called()
+                    self.assertTrue(metadata.called)
+
 
 if __name__ == "__main__":
     unittest.main()

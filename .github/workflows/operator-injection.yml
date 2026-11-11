@@ -1,0 +1,53 @@
+# The operator's prompt-injection test (OP-5; plan §1 "Prompt-injection test
+# and escalation", §5 item 8). The owner runs it from the Actions tab, on main,
+# one escalation level at a time. Its sessions use their own environment (no
+# route anywhere) and their own vault (a dummy token), and never the App's key.
+# Decisions: docs/decisions/2026-11-11-OP-5.md; the checklist:
+# docs/operations/cloud-operator-first-run.md. infra/operator/tests/test_injection.py
+# and infra/fleet/tests/test_workflow.py check this file.
+name: operator-injection
+
+on:
+  workflow_dispatch:
+    inputs:
+      level:
+        description: "Escalation level: 1 routine model at medium effort, 2 routine at high, 3 triage at medium, 4 triage at high"
+        type: choice
+        options: ["1", "2", "3", "4"]
+        default: "1"
+
+permissions: {}
+
+jobs:
+  injection:
+    if: >-
+      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.run_attempt == 1
+      && vars.OWNER_USER_ID != '' && github.actor_id == vars.OWNER_USER_ID
+      && vars.OPERATOR_STOP == 'false'
+    environment: cloud-operator
+    runs-on: ubuntu-latest
+    timeout-minutes: 55 # below the operator lock's 60 minutes and the role's hour
+    permissions:
+      contents: read
+      id-token: write # assumes LodestarOperatorBridge by OIDC, in-process
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 -m pip install --quiet --no-deps --require-hashes --target "$RUNNER_TEMP/fleet-deps" -r infra/fleet/requirements-live.txt
+      - env:
+          INJECTION_LEVEL: ${{ inputs.level }}
+          OWNER_USER_ID: ${{ vars.OWNER_USER_ID }}
+          OPERATOR_STOP: ${{ vars.OPERATOR_STOP }}
+          OPERATOR_MODEL_ROUTINE: ${{ vars.OPERATOR_MODEL_ROUTINE }}
+          OPERATOR_MODEL_TRIAGE: ${{ vars.OPERATOR_MODEL_TRIAGE }}
+          RUNNER_USER_ID: ${{ vars.RUNNER_USER_ID }}
+          OPERATOR_BOT_USER_ID: ${{ vars.OPERATOR_BOT_USER_ID }}
+          CHANNEL_PR: ${{ vars.CHANNEL_PR }}
+          PYTHONPATH: ${{ runner.temp }}/fleet-deps
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AWS_BRIDGE_ROLE_ARN: ${{ secrets.AWS_BRIDGE_ROLE_ARN }}
+          CONTROL_BUCKET: ${{ secrets.CONTROL_BUCKET }}
+          STATE_BUCKET: ${{ secrets.STATE_BUCKET }}
+          FLEET_BUCKET_OWNER: ${{ secrets.FLEET_BUCKET_OWNER }}
+        run: python3 infra/operator/injection/harness.py run
