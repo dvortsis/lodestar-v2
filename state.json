@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T10:08:39Z",
+  "updated_at": "2026-11-11T10:55:51Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7495,7 +7495,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T10:08:39Z",
+    "updated": "2026-11-11T10:55:51Z",
     "items": [
       {
         "slot": 1,
@@ -7539,11 +7539,11 @@
       },
       {
         "slot": 6,
-        "slice": "X-flake-portable-restart-2",
+        "slice": "PK-exc",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAunU7rxhXrv1ZpJoC: portable restart wait robust under CLM (Opus), same session after #671",
-        "since": "2026-11-11T07:55:08Z"
+        "doing": "session_01MMjhn9TG1nRjKEifmj8fmd: Insights exceptions data_filesystem + ephemeral_ports (Opus); after #675 merged 02c598a5",
+        "since": "2026-11-11T10:55:51Z"
       },
       {
         "slot": 7,
