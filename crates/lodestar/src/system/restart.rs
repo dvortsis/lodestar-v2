@@ -515,6 +515,7 @@ pub fn predecessor_pid(token: &str) -> Option<u32> {
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn predecessor_script(old: u32, me: u32) -> String {
     let secs = WATCH_SCRIPT_LIMIT.as_secs();
+    let timed_out = WATCH_EXIT_TIMED_OUT;
     format!(
         "$ErrorActionPreference = 'Stop'; \
          Write-Output 'started'; \
@@ -527,7 +528,7 @@ pub fn predecessor_script(old: u32, me: u32) -> String {
              Wait-Process -Id {old} -Timeout {secs} -ErrorAction SilentlyContinue; \
              $still = Get-Process -Id {old} -ErrorAction SilentlyContinue; \
              if ($still -and -not (($still | Select-Object -ExpandProperty StartTime) -gt $me)) {{ \
-               Write-Output 'timeout'; exit 3 \
+               Write-Output 'timeout'; exit {timed_out} \
              }} \
            }} \
          }}; \
@@ -553,6 +554,12 @@ pub fn watch_command(mut shell: std::process::Command, old: u32, me: u32) -> std
     shell
 }
 
+/// The watch's exit code when the old process was still running at the
+/// end of its wait. The copy reads it as still running even if the
+/// `timeout` line was lost.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub const WATCH_EXIT_TIMED_OUT: i32 = 3;
+
 /// One status word from the watch ([`predecessor_script`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -564,7 +571,11 @@ pub enum WatchSays {
 
 #[cfg_attr(not(windows), allow(dead_code))]
 fn watch_line(line: &str) -> Option<WatchSays> {
-    match line.trim_end_matches(['\r', '\n']) {
+    // A byte-order mark, if the shell writes one, isn't part of the word.
+    match line
+        .trim_start_matches('\u{feff}')
+        .trim_end_matches(['\r', '\n'])
+    {
         "started" => Some(WatchSays::Started),
         "exited" => Some(WatchSays::Exited),
         "timeout" => Some(WatchSays::Timeout),
@@ -673,6 +684,9 @@ pub fn await_watch(
             return (Predecessor::Running, Some(WATCH_TIMED_OUT));
         }
         match watch.try_wait() {
+            Ok(Some(status)) if status.code() == Some(WATCH_EXIT_TIMED_OUT) => {
+                return (Predecessor::Running, Some(WATCH_TIMED_OUT));
+            }
             Ok(Some(status)) => {
                 // Its last line may still be in the pipe.
                 let drain = now();
@@ -1258,6 +1272,23 @@ mod tests {
             |d| f.sleep(d),
         );
         assert_eq!(got, (Predecessor::Running, Some(WATCH_TIMED_OUT)));
+        // Its exit code says the same even when no line was read.
+        for last in [None, Some(WatchSays::Exited)] {
+            let l = log(None, last, true);
+            let got = await_watch(
+                Some(&mut c),
+                Some(&l),
+                PREDECESSOR_WAIT,
+                PREDECESSOR_POLL,
+                || f.now(),
+                |d| f.sleep(d),
+            );
+            assert_eq!(
+                got,
+                (Predecessor::Running, Some(WATCH_TIMED_OUT)),
+                "{last:?}"
+            );
+        }
     }
 
     /// The wait runs from the watch's `started`, not from the hand-over, so
@@ -1266,6 +1297,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn the_wait_runs_from_the_started_marker() {
+        // `Some(50)`, a marker later than the cap, exercises the cap's
+        // arithmetic only: the real watch says `started` within seconds.
         for (marker, waited) in [(None, 30), (Some(0), 30), (Some(10), 40), (Some(50), 60)] {
             let f = Fake::new();
             let mut c = child("exec sleep 60");
@@ -1313,6 +1346,10 @@ mod tests {
             (true, Some(WatchSays::Exited))
         );
         assert_eq!(got("started\ntimeout\n"), (true, Some(WatchSays::Timeout)));
+        assert_eq!(
+            got("\u{feff}started\nexited\n"),
+            (true, Some(WatchSays::Exited))
+        );
         assert_eq!(got("exited\n"), (false, None)); // a status before `started` doesn't count
         assert_eq!(got("started\nnoise\n"), (true, None));
         assert_eq!(got(""), (false, None));
@@ -1364,6 +1401,11 @@ mod tests {
                 >= crate::windows::relaunch::GO_LIMIT
                     + crate::windows::relaunch::EXIT_LIMIT
                     + PREDECESSOR_WAIT * 2,
+            "{WATCH_SCRIPT_LIMIT:?}"
+        );
+        // Wait-Process takes at most 32767 s.
+        assert!(
+            WATCH_SCRIPT_LIMIT.as_secs() <= 32_767,
             "{WATCH_SCRIPT_LIMIT:?}"
         );
         // A process with the old id but started after this copy is a
@@ -1420,37 +1462,72 @@ mod tests {
                 .spawn()
                 .unwrap()
         };
-        let mut old = ping("3"); // about 2 s
+        // `old` runs until it's killed, so the script must be waiting on it
+        // when it has said `started`.
+        let mut old = ping("60");
         let mut me = ping("60"); // started after `old`
         let clm = "$ExecutionContext.SessionState.LanguageMode = 'ConstrainedLanguage'; ";
-        let run = |script: String| {
-            Command::new("powershell.exe")
-                .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"])
+        let shell = |script: String| {
+            let mut cmd = Command::new("powershell.exe");
+            cmd.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"])
                 .arg(format!("{clm}Invoke-Expression @'\n{script}\n'@"))
-                .output()
-                .unwrap()
+                .stdin(Stdio::null())
+                .stderr(Stdio::null());
+            cmd
         };
         // The mode really is in force: a .NET static call fails under it.
-        let probe =
-            run("$ErrorActionPreference = 'Stop'; [System.Diagnostics.Process]::GetCurrentProcess() | Out-Null; exit 0".into());
-        assert!(
-            !probe.status.success(),
-            "Constrained Language Mode isn't in force"
-        );
-        let started = Instant::now();
-        let out = run(predecessor_script(old.id(), me.id()));
-        let text = String::from_utf8_lossy(&out.stdout).replace("\r\n", "\n");
+        let probe = shell(
+            "$ErrorActionPreference = 'Stop'; \
+             [System.Diagnostics.Process]::GetCurrentProcess() | Out-Null; exit 0"
+                .into(),
+        )
+        .stdout(Stdio::null())
+        .status()
+        .unwrap();
+        assert!(!probe.success(), "Constrained Language Mode isn't in force");
+        let mut watch = shell(predecessor_script(old.id(), me.id()))
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let (tx, lines) = std::sync::mpsc::channel();
+        let out = watch.stdout.take().unwrap();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(out).lines() {
+                let Ok(line) = line else { break };
+                if tx.send(watch_line(&line)).is_err() {
+                    break;
+                }
+            }
+        });
+        let first = lines.recv_timeout(Duration::from_secs(60));
+        let waiting = watch.try_wait().unwrap().is_none();
+        let _ = old.kill();
+        let _ = old.wait();
+        let next = lines.recv_timeout(Duration::from_secs(30));
+        let end = Instant::now() + Duration::from_secs(30);
+        let status = loop {
+            if let Some(s) = watch.try_wait().unwrap() {
+                break Some(s);
+            }
+            if Instant::now() >= end {
+                break None;
+            }
+            std::thread::yield_now();
+        };
+        if status.is_none() {
+            let _ = watch.kill();
+            let _ = watch.wait();
+        }
         let _ = me.kill();
         let _ = me.wait();
-        let _ = old.wait();
-        assert!(out.status.success(), "{:?} {text}", out.status);
-        assert_eq!(text, "started\nexited\n");
-        // It waited for `old`, which ran about 2 s, well under the timeout.
-        assert!(
-            started.elapsed() < Duration::from_secs(25),
-            "{:?}",
-            started.elapsed()
-        );
+        // `started` is streamed before the wait ends, and the script is
+        // still waiting on `old` then.
+        assert_eq!(first, Ok(Some(WatchSays::Started)));
+        assert!(waiting, "the script ended before `old` did");
+        assert_eq!(next, Ok(Some(WatchSays::Exited)));
+        let status = status.expect("the script didn't end once `old` had");
+        assert!(status.success(), "{status:?}");
     }
 
     #[test]
