@@ -6804,7 +6804,8 @@
     {
       "added": "2026-11-11T14:41Z",
       "note": "Runner PR #697 (7bce9814): approved owns for WK-11/PK-win-soak-ci/CMP-11/PK-exc, CMP-13 note, WK-11b + WK-G dep, owner_queue 12 (Event Log). Merge on ci-ok (runner-only yaml, self-checked). Event Log question answered to dashboard session 14:4xZ; draft briefs/X-event-log-notice-draft.md; LEGAL-3a legal_facts asserts notice doesn't name Event Log but update helper (#644) writes there on main: fix in the notice slice after owner answers."
-    }
+    },
+    "2026-11-11T14:5xZ owner \u00a72.55 (Event Log option A, OP-5 cap kept) recorded in #697 (0608080d). X-event-log-notice ready, brief briefs/X-event-log-notice.md; launch on next free slot (Opus). X-prowlarr-register deps += X-event-log-notice; still waits on owner item 11."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
