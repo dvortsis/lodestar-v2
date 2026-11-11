@@ -12,7 +12,13 @@ import {
 } from '$lib/format';
 import Exceptions from './Exceptions.svelte';
 import Funnel from './Funnel.svelte';
-import { COMPARE_KPI, IMPORT_ANNOTATIONS, overviewFixture } from './fixtures';
+import {
+	COMPARE_KPI,
+	dataFsException,
+	IMPORT_ANNOTATIONS,
+	overviewFixture,
+	portsException
+} from './fixtures';
 import ImportMarkers from './ImportMarkers.svelte';
 import { importText } from './imports';
 import Movement from './Movement.svelte';
@@ -196,6 +202,50 @@ describe('Exceptions', () => {
 		expect(screen.getByTestId('insights-exception-cohort_stalled-fix').getAttribute('href')).toBe(
 			'/settings/crawler'
 		);
+	});
+
+	it.each([
+		['unraid_user_share', /Unraid's user share[\s\S]*\/mnt\/cache\/appdata\/lodestar/],
+		['fuse', /FUSE filesystem[\s\S]*local disk/],
+		['network', /network or shared-folder filesystem[\s\S]*local disk/]
+	] as const)('words a %s data folder by its kind, with the guide fix', (kind, text) => {
+		render(Exceptions, { exceptions: [dataFsException(kind, 'fuse.shfs')] });
+		const row = screen.getByTestId('insights-exception-data_filesystem');
+		expect(row.textContent).toMatch(text);
+		expect(row.textContent).not.toContain('Needs attention');
+		// The mount's type is a detail line, not part of the sentence.
+		expect(screen.getByTestId('insights-exception-data_filesystem-fs-type').textContent).toContain(
+			'fuse.shfs'
+		);
+		const fix = screen.getByTestId('insights-exception-data_filesystem-fix');
+		expect(fix.getAttribute('href')).toContain('docs/user/02-install-lodestar-on-unraid');
+	});
+
+	it('shows no filesystem type line when the mount type is unknown', () => {
+		render(Exceptions, { exceptions: [dataFsException('network')] });
+		expect(screen.queryByTestId('insights-exception-data_filesystem-fs-type')).toBeNull();
+	});
+
+	it('gives the netsh command for the ports exception, from its fix fields', () => {
+		render(Exceptions, { exceptions: [portsException({ start: 10000, count: 55000 }, 'ipv6')] });
+		const row = screen.getByTestId('insights-exception-ephemeral_ports');
+		expect(row.textContent).toContain('Lodestar and the rest of this PC need about 4,500');
+		expect(row.textContent).toContain('administrator');
+		expect(screen.getByTestId('insights-exception-ephemeral_ports-netsh').textContent).toBe(
+			'netsh int ipv6 set dynamicport tcp start=10000 num=55000'
+		);
+		expect(
+			screen.getByTestId('insights-exception-ephemeral_ports-fix').getAttribute('href')
+		).toContain('docs/user/04-install-on-windows-and-linux');
+	});
+
+	it('says to lower the intensity when no port range is large enough', () => {
+		render(Exceptions, { exceptions: [portsException(null)] });
+		const row = screen.getByTestId('insights-exception-ephemeral_ports');
+		expect(row.textContent).toContain(
+			"lower the crawler's intensity in Settings, then restart Lodestar"
+		);
+		expect(screen.queryByTestId('insights-exception-ephemeral_ports-netsh')).toBeNull();
 	});
 
 	it('names unreadable filter rows and links to Filters & Safety', () => {

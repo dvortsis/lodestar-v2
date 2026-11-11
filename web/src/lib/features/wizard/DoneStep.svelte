@@ -21,6 +21,7 @@
 </script>
 
 <p class="text-body">{m.wizard_done_lead()}</p>
+<p class="text-body" data-testid="wizard-done-wait">{m.wizard_how_cold()}</p>
 {#if progress.restart}
 	<p class="text-body" data-testid="wizard-restart">{m.wizard_done_restart()}</p>
 {/if}

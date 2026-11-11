@@ -53,7 +53,7 @@
 	"wizard_how_index_text": "What it learns goes into a local search index on this machine.",
 	"wizard_how_search": "Search",
 	"wizard_how_search_text": "You search your own index. Nothing about your searches leaves this machine unless you turn on a source that searches other sites.",
-	"wizard_how_cold": "The index grows over days and weeks, not hours. Expect little in Search at first; it fills as the crawler runs.",
+	"wizard_how_cold": "After every start, including restarts and updates, sampling waits 6 hours before it resumes. Full speed starts after those 6 hours. With safe restart on, later clean restarts skip the wait.",
 	"wizard_intensity_lead": "How hard should Lodestar crawl? Lower is gentler on your network and your router; higher finds torrents faster.",
 	"wizard_storage_lead": "How Lodestar stores what it finds. The defaults suit most machines.",
 	"wizard_updates_lead": "Lodestar can look for new versions.",
@@ -143,5 +143,6 @@
 	"wizard_cmp_err_other": "Something went wrong, and Lodestar couldn't confirm whether qBittorrent was installed. Try again; if it says it's already installed, add it above.",
 	"wizard_cmp_replaces": "replaces {version}",
 	"wizard_cmp_wait": "qBittorrent is still installing. Wait for it to finish, then continue.",
-	"wizard_cmp_err_profile": "Lodestar can't run qBittorrent on this system yet. Install it yourself and add it above."
+	"wizard_cmp_err_profile": "Lodestar can't run qBittorrent on this system yet. Install it yourself and add it above.",
+	"wizard_storage_fs_note": "You can continue and move the folder later."
 }

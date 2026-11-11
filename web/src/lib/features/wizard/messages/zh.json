@@ -53,7 +53,7 @@
 	"wizard_how_index_text": "获得的信息会写入这台机器上的本地搜索索引。",
 	"wizard_how_search": "搜索",
 	"wizard_how_search_text": "你搜索的是自己的索引。除非你开启了会搜索其他网站的来源，否则关于搜索的任何信息都不会离开这台机器。",
-	"wizard_how_cold": "索引需要数天乃至数周才能增长，而不是几小时。起初搜索结果很少；随着抓取器运行会逐渐增多。",
+	"wizard_how_cold": "每次启动后（包括重启和更新），采样都会等待 6 小时才恢复。这 6 小时之后才会全速运行。开启安全重启后，之后的正常重启会跳过等待。",
 	"wizard_intensity_lead": "Lodestar 应该抓取得多积极？较低对网络和路由器更温和；较高则更快发现种子。",
 	"wizard_storage_lead": "Lodestar 如何存储所发现的内容。默认值适合大多数机器。",
 	"wizard_updates_lead": "Lodestar 可以检查新版本。",
@@ -143,5 +143,6 @@
 	"wizard_cmp_err_other": "出了点问题，Lodestar 无法确认 qBittorrent 是否已安装。请重试；如果提示已安装，请在上方添加。",
 	"wizard_cmp_replaces": "替换 {version}",
 	"wizard_cmp_wait": "qBittorrent 仍在安装。请等它完成后再继续。",
-	"wizard_cmp_err_profile": "Lodestar 目前无法在此系统上运行 qBittorrent。请自行安装并在上方添加。"
+	"wizard_cmp_err_profile": "Lodestar 目前无法在此系统上运行 qBittorrent。请自行安装并在上方添加。",
+	"wizard_storage_fs_note": "你可以继续，稍后再移动该文件夹。"
 }

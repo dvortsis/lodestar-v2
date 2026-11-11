@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { configure, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
+import {
+	cleanup,
+	configure,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+	within
+} from '@testing-library/svelte';
 import { writeProgress, type StepId } from './steps';
 import { lockedUpdates, wizardValues } from './testing/fixtures';
 import { network, wizardServer } from './testing/server';
@@ -222,8 +230,80 @@ describe('how it works', () => {
 			expect.stringContaining('Index'),
 			expect.stringContaining('Search')
 		]);
-		expect(screen.getByTestId('wizard-how-cold').textContent).toMatch(/days and weeks/);
+		const cold = screen.getByTestId('wizard-how-cold').textContent;
+		expect(cold).toContain(
+			'After every start, including restarts and updates, sampling waits 6 hours before it resumes.'
+		);
+		expect(cold).toContain(
+			'Full speed starts after those 6 hours. With safe restart on, later clean restarts skip the wait.'
+		);
+		expect(cold).not.toMatch(/days and weeks/);
 		expect(document.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
+	});
+});
+
+describe('storage step filesystem warning', () => {
+	const show = (step: StepId) => {
+		writeProgress({ step, skipped: [], done: [] });
+		render(WizardPage);
+	};
+	const withSystem = (warning: string | null | 'fail') => {
+		server = wizardServer();
+		const inner = server.fetch;
+		vi.stubGlobal('fetch', (url: string, init: RequestInit = {}) => {
+			if (String(url).endsWith('/system'))
+				return warning === 'fail'
+					? Promise.resolve({
+							ok: false,
+							status: 500,
+							statusText: '',
+							headers: new Headers(),
+							json: async () => ({})
+						})
+					: Promise.resolve({
+							ok: true,
+							status: 200,
+							statusText: '',
+							headers: new Headers(),
+							json: async () => ({ data: { filesystem_warning: warning } })
+						});
+			return inner(url, init);
+		});
+	};
+
+	it('shows the warning with its safe alternative, and still lets you continue', async () => {
+		withSystem(
+			"The data folder /data is on Unraid's user share. Map the data folder to a pool path instead, such as /mnt/cache/appdata/lodestar."
+		);
+		show('storage');
+		await heading('Storage & retention');
+		const banner = await screen.findByTestId('wizard-storage-fs');
+		expect(banner.textContent).toContain('/mnt/cache/appdata/lodestar');
+		expect(banner.textContent).toContain('You can continue');
+		expect(
+			(await screen.findByRole('button', { name: 'Save and continue' })).hasAttribute('disabled')
+		).toBe(false);
+	});
+
+	it('shows nothing when the data folder is fine or the read fails', async () => {
+		for (const w of [null, 'fail'] as const) {
+			withSystem(w);
+			show('storage');
+			await heading('Storage & retention');
+			await screen.findByRole('button', { name: 'Save and continue' });
+			expect(screen.queryByTestId('wizard-storage-fs')).toBeNull();
+			cleanup();
+		}
+	});
+});
+
+describe('done step', () => {
+	it('repeats the six-hour wait and when full speed starts', async () => {
+		start('done');
+		await heading('Done');
+		expect((await screen.findByTestId('wizard-done-wait')).textContent).toContain(
+			'Full speed starts after those 6 hours. With safe restart on, later clean restarts skip the wait.'
+		);
 	});
 });
 

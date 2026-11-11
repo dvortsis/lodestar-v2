@@ -323,5 +323,16 @@
 	"insights_import_started": "Import started",
 	"insights_import_finished": "Import finished: {new} new, {merged} already known",
 	"insights_import_removed": "Import removed: {removed} deleted",
-	"insights_import_markers": "Imports"
+	"insights_import_markers": "Imports",
+	"insights_overview_exc_fs_unraid_user_share": "The data folder is on Unraid's user share (/mnt/user), which is slow for the search index and risky for the database. Move it to a pool path: in the container's template, set the data folder's host path to one such as /mnt/cache/appdata/lodestar.",
+	"insights_overview_exc_fs_fuse": "The data folder is on a FUSE filesystem, which is slow for the search index. Keep it on a local disk, ideally an SSD.",
+	"insights_overview_exc_fs_network": "The data folder is on a network or shared-folder filesystem, whose file locking isn't reliable enough for the database. Keep it on a local disk, ideally an SSD, and send only backups to the share.",
+	"insights_overview_exc_fs_unknown": "The data folder is on a filesystem that's slow or unsafe for the database. Keep it on a local disk, ideally an SSD.",
+	"insights_overview_exc_fs_type": "Filesystem type: {type}",
+	"insights_overview_exc_ports_left": "Windows has only {available} ports left for outgoing connections; Lodestar and the rest of this PC need about {needed}.",
+	"insights_overview_exc_ports_fix": "To fix it, run this in a Command Prompt opened as administrator:",
+	"insights_overview_exc_ports_lower": "No port range is large enough: lower the crawler's intensity in Settings, then restart Lodestar.",
+	"insights_overview_exc_ports_bare": "Windows has too few ports left for outgoing connections. Lower the crawler's intensity in Settings, then restart Lodestar.",
+	"insights_overview_exc_ports_clears": "This notice clears within an hour.",
+	"insights_overview_exc_fix_guide": "Open the guide"
 }
