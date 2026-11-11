@@ -34,6 +34,7 @@ const EN = [
 	'Network & VPN',
 	'Sources',
 	'Jobs',
+	'Companions',
 	'Storage & retention',
 	'Search & ranking',
 	'Trackers',
@@ -59,14 +60,7 @@ it('renders the titles in Chinese, in the same order', () => {
 	render(SettingsShell, { children });
 	const zh = links();
 	expect(zh).toHaveLength(EN.length);
-	expect(zh.slice(3, 9)).toEqual([
-		'爬虫',
-		'网络与 VPN',
-		'来源',
-		'任务',
-		'存储与保留',
-		'搜索与排序'
-	]);
+	expect(zh.slice(3, 9)).toEqual(['爬虫', '网络与 VPN', '来源', '任务', '配套组件', '存储与保留']);
 	expect(zh).toContain('语言和地区');
 });
 
