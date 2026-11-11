@@ -20,6 +20,46 @@ function trend(points: number, offset = 0): Trend[] {
 	}));
 }
 
+type Exception = Overview['exceptions'][number];
+
+/** A `data_filesystem` exception (PK-exc) for a kind of filesystem. */
+export const dataFsException = (
+	kind: 'unraid_user_share' | 'fuse' | 'network',
+	fs_type: string | null = null
+): Exception => ({
+	fix: { kind: 'guide', target: 'data_folder' },
+	filesystem: { kind, path: '/data', fs_type },
+	kind: 'data_filesystem',
+	severity: kind === 'network' ? 'error' : 'warning',
+	since: NOW - HOUR,
+	unit: null,
+	value: null
+});
+
+/** An `ephemeral_ports` exception; `fix` null when no range is large enough. */
+export const portsException = (
+	fix: { start: number; count: number } | null,
+	family: 'ipv4' | 'ipv6' = 'ipv4'
+): Exception => ({
+	fix: { kind: 'guide', target: 'windows_ports' },
+	kind: 'ephemeral_ports',
+	ports: {
+		available: 3100,
+		end: 65535,
+		family,
+		fix_count: fix?.count ?? null,
+		fix_start: fix?.start ?? null,
+		max_sockets: 2000,
+		needed: 4500,
+		reserved: 200,
+		start: 49152
+	},
+	severity: 'warning',
+	since: NOW - HOUR,
+	unit: 'ports',
+	value: 3100
+});
+
 export function overviewFixture(over: Partial<Overview> = {}): Overview {
 	return {
 		annotations: [

@@ -116,7 +116,9 @@ test.describe('first-run wizard', () => {
 		await kbd.tabTo(page.getByRole('button', { name: 'Continue' }));
 		await kbd.press('Enter');
 		await expect(h2(page, 'How it works')).toBeFocused();
-		await expect(page.getByTestId('wizard-how-cold')).toContainText('days and weeks');
+		await expect(page.getByTestId('wizard-how-cold')).toContainText(
+			'Full speed starts after those 6 hours'
+		);
 		await expectNoA11yViolations(page);
 
 		await kbd.tabTo(page.getByRole('button', { name: 'Continue' }));
