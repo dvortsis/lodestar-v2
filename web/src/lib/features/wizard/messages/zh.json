@@ -127,7 +127,7 @@
 	"wizard_cmp_installing": "正在安装 qBittorrent…",
 	"wizard_cmp_installing_note": "正在下载、校验并启动，可能需要一分钟。请留在此页。",
 	"wizard_cmp_done": "qBittorrent 已安装",
-	"wizard_cmp_done_note": "它已成为你的下载客户端。Lodestar 已完成设置并妥善保管登录信息，你无需输入。请用上方的“测试连接”检查。",
+	"wizard_cmp_done_note": "它已成为你的下载客户端。Lodestar 已完成设置并妥善保管登录信息，你无需输入。上方的客户端列表已重新加载，你在其中输入但尚未保存的内容已丢失。请用“测试连接”检查。",
 	"wizard_cmp_failed": "qBittorrent 未能安装",
 	"wizard_cmp_retry": "重试",
 	"wizard_cmp_err_container": "Lodestar 运行在容器中，无法自行安装程序。请把 qBittorrent 作为单独的容器添加。",
@@ -140,5 +140,6 @@
 	"wizard_cmp_err_not_wired": "此版本的 Lodestar 暂不支持安装。请自行安装 qBittorrent 并在上方添加。",
 	"wizard_cmp_err_busy": "已有另一个安装正在进行。请等它完成后再试。",
 	"wizard_cmp_err_off": "此 Lodestar 已关闭安装程序功能。请在上方自行添加 qBittorrent。",
-	"wizard_cmp_err_other": "出了点问题，没有留下半成品安装。请重试，或自行安装 qBittorrent 并在上方添加。"
+	"wizard_cmp_err_other": "出了点问题。Lodestar 已检查，qBittorrent 尚未安装。请重试，或自行安装 qBittorrent 并在上方添加。",
+	"wizard_cmp_replaces": "替换 {version}"
 }

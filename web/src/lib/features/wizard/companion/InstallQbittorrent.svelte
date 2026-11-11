@@ -2,7 +2,7 @@
 	// "Install qBittorrent for me" on the download-client step (§10.10.10, §18.10). Offered only
 	// when the server says this build can install it; the confirmation shows the server's own
 	// offer, and nothing is fetched until the user confirms it.
-	import { onDestroy, onMount } from 'svelte';
+	import { onDestroy, onMount, tick } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import { formatBytes } from '$lib/format';
 	import Button from '$lib/ui/controls/Button.svelte';
@@ -16,6 +16,19 @@
 	let { oninstalled }: Props = $props();
 
 	const install = createInstall(() => oninstalled());
+	/** True while the install runs: the step must not move on and lose its result. */
+	export const busy = () => install.phase === 'installing';
+	let root = $state<HTMLElement>();
+	let last = install.phase;
+	// Each click replaces the button that had focus: move focus to what replaced it (never on load).
+	$effect(() => {
+		const now = install.phase;
+		if (now === last) return;
+		const was = last;
+		last = now;
+		if (was === 'checking') return;
+		void tick().then(() => root?.querySelector<HTMLElement>('[data-cmp-focus]')?.focus());
+	});
 	onMount(() => void install.check());
 	onDestroy(() => install.destroy());
 
@@ -46,6 +59,7 @@
 		class="flex flex-col gap-3 rounded-lg border border-field-border p-4"
 		data-testid="wizard-cmp"
 		aria-labelledby="wizard-cmp-title"
+		bind:this={root}
 	>
 		<h3 id="wizard-cmp-title" class="text-body-lg font-semibold">{m.wizard_cmp_title()}</h3>
 
@@ -57,7 +71,7 @@
 				>
 			</div>
 		{:else if install.phase === 'confirm' && offer}
-			<p class="text-body">{m.wizard_cmp_confirm_lead()}</p>
+			<p class="text-body" tabindex="-1" data-cmp-focus>{m.wizard_cmp_confirm_lead()}</p>
 			<dl class="flex flex-col gap-2 text-body" data-testid="wizard-cmp-offer">
 				<div class="flex flex-col">
 					<dt class="text-muted-text">{m.wizard_cmp_program()}</dt>
@@ -65,7 +79,10 @@
 				</div>
 				<div class="flex flex-col">
 					<dt class="text-muted-text">{m.wizard_cmp_version()}</dt>
-					<dd>{offer.version}</dd>
+					<dd>
+						{offer.version}{#if offer.replaces}
+							({m.wizard_cmp_replaces({ version: offer.replaces })}){/if}
+					</dd>
 				</div>
 				<div class="flex flex-col">
 					<dt class="text-muted-text">{m.wizard_cmp_licence()}</dt>
@@ -97,9 +114,13 @@
 				<Button loading>{m.wizard_cmp_installing()}</Button>
 			</div>
 		{:else if install.phase === 'done'}
-			<Banner kind="success" title={m.wizard_cmp_done()}>{m.wizard_cmp_done_note()}</Banner>
+			<div tabindex="-1" data-cmp-focus>
+				<Banner kind="success" title={m.wizard_cmp_done()}>{m.wizard_cmp_done_note()}</Banner>
+			</div>
 		{:else if install.phase === 'failed' && install.failure}
-			<Banner kind="error" title={m.wizard_cmp_failed()}>{reasons[install.failure]()}</Banner>
+			<div tabindex="-1" data-cmp-focus>
+				<Banner kind="error" title={m.wizard_cmp_failed()}>{reasons[install.failure]()}</Banner>
+			</div>
 			{#if retryable}
 				<div>
 					<Button onclick={() => void install.ask()}>{m.wizard_cmp_retry()}</Button>

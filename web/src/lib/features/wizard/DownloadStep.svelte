@@ -18,10 +18,11 @@
 	let step = $state<FieldsStep>();
 	// Bumped after an install: the server added the client, so the field is read again.
 	let generation = $state(0);
+	let install = $state<InstallQbittorrent>();
 	let unregister: (() => void) | undefined;
 
 	/** True when the shell may move on. False while the setting isn't loaded: nothing was shown. */
-	export const save = async () => (step ? step.save() : false);
+	export const save = async () => (install?.busy() ? false : step ? step.save() : false);
 
 	onDestroy(() => unregister?.());
 	// The cards are Settings' own widget, imported the way Settings loads it (a dynamic import of
@@ -52,7 +53,7 @@
 			lead={m.wizard_download_lead()}
 		/>
 	{/key}
-	<InstallQbittorrent oninstalled={() => generation++} />
+	<InstallQbittorrent bind:this={install} oninstalled={() => generation++} />
 {:else}
 	<p class="text-body">{m.wizard_download_lead()}</p>
 	<p class="text-muted-text" aria-busy="true">{m.wizard_loading()}</p>

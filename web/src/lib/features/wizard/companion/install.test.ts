@@ -41,6 +41,7 @@ const row = (over: Record<string, unknown> = {}) => ({
 
 type Call = { method: string; path: string; body: unknown };
 let calls: Call[];
+let settingsGets = 0;
 let rows: unknown[];
 let post: (body: unknown) => Response | Promise<Response>;
 let offerReply: () => Response;
@@ -55,6 +56,7 @@ beforeEach(() => {
 	clearIndexCache();
 	wiz = wizardServer();
 	calls = [];
+	settingsGets = 0;
 	rows = [row()];
 	post = () => ok(row({ installed: '5.0.4', health: 'healthy', available: null }));
 	offerReply = () => ok(OFFER);
@@ -69,6 +71,7 @@ beforeEach(() => {
 			if (method === 'GET') return offerReply();
 			return post(body);
 		}
+		if (method === 'GET' && path === '/settings/integrations') settingsGets++;
 		return wiz.fetch(url, init);
 	});
 	writeProgress({ step: 'download', skipped: [], done: [] });
@@ -84,6 +87,7 @@ const open = async () => {
 	render(WizardPage);
 	await screen.findByRole('heading', { level: 2, name: 'Download client' });
 };
+const progress = () => JSON.parse(sessionStorage.getItem('lodestar.wizard')!);
 const askButton = () => screen.findByRole('button', { name: 'Install qBittorrent for me' });
 
 describe('Install qBittorrent for me', () => {
@@ -106,8 +110,15 @@ describe('Install qBittorrent for me', () => {
 		expect(screen.queryByText('Install qBittorrent for me')).toBeNull();
 	});
 
-	it('is not offered when companions are off, or it is already installed', async () => {
+	it('is not offered when companions are off', async () => {
 		rows = null as never;
+		await open();
+		await screen.findByRole('button', { name: 'Add a download client' });
+		expect(screen.queryByTestId('wizard-cmp')).toBeNull();
+	});
+
+	it('is not offered when the server has nothing to install', async () => {
+		rows = [row({ available: null })];
 		await open();
 		await screen.findByRole('button', { name: 'Add a download client' });
 		expect(screen.queryByTestId('wizard-cmp')).toBeNull();
@@ -137,8 +148,11 @@ describe('Install qBittorrent for me', () => {
 	it("sends the offer's own version and hash, once, and then reloads the client list", async () => {
 		await open();
 		await fireEvent.click(await askButton());
+		const before = settingsGets;
 		await fireEvent.click(await screen.findByRole('button', { name: 'Confirm and install' }));
 		await screen.findByText('qBittorrent is installed');
+		// The field was read again, so it shows what the server added.
+		await waitFor(() => expect(settingsGets).toBe(before + 1));
 		expect(installs()).toEqual([
 			{
 				method: 'POST',
@@ -224,5 +238,46 @@ describe('Install qBittorrent for me', () => {
 		await screen.findByText('qBittorrent is installed');
 		expect(document.body.textContent).not.toContain('hunter2-secret');
 		expect(calls.some((c) => c.path.includes('/reveal'))).toBe(false);
+	});
+});
+
+describe('during and after the install', () => {
+	it('moves focus to what replaced the button that was pressed', async () => {
+		await open();
+		await fireEvent.click(await askButton());
+		const lead = await screen.findByText(/Check this before anything is downloaded/);
+		await waitFor(() => expect(document.activeElement).toBe(lead));
+		await fireEvent.click(screen.getByRole('button', { name: 'Confirm and install' }));
+		const done = await screen.findByText('qBittorrent is installed');
+		await waitFor(() => expect(document.activeElement?.contains(done)).toBe(true));
+	});
+
+	it('keeps the step in place while installing', async () => {
+		post = () => new Promise<Response>(() => {});
+		await open();
+		await fireEvent.click(await askButton());
+		await fireEvent.click(await screen.findByRole('button', { name: 'Confirm and install' }));
+		await screen.findByRole('button', { name: 'Installing qBittorrent…' });
+		await fireEvent.click(screen.getByRole('button', { name: /Continue|Save and continue/ }));
+		expect(screen.getByRole('heading', { level: 2, name: 'Download client' })).toBeTruthy();
+		expect(progress().step).toBe('download');
+	});
+
+	it('counts a lost reply as done when the server finished the install', async () => {
+		post = () => refuse(504, 'http_504');
+		await open();
+		await fireEvent.click(await askButton());
+		const before = settingsGets;
+		rows = [row({ installed: '5.0.4', available: null })];
+		await fireEvent.click(await screen.findByRole('button', { name: 'Confirm and install' }));
+		await screen.findByText('qBittorrent is installed');
+		await waitFor(() => expect(settingsGets).toBe(before + 1));
+	});
+
+	it('shows a replaced version in the confirmation', async () => {
+		offerReply = () => ok({ ...OFFER, replaces: '5.0.3' });
+		await open();
+		await fireEvent.click(await askButton());
+		expect((await screen.findByTestId('wizard-cmp-offer')).textContent).toContain('replaces 5.0.3');
 	});
 });

@@ -60,11 +60,30 @@ export function createInstall(onInstalled: () => void) {
 		}
 	}
 
-	function fail(e: unknown, from: 'asking' | 'installing') {
-		failure = e instanceof ApiError ? known(e.code) : 'other';
+	/**
+	 * The install reply can be lost (a proxy timeout, a dropped connection) while the server
+	 * finishes. So after any failure the server is asked again, and an installed client counts as done.
+	 */
+	async function fail(e: unknown) {
+		const code = e instanceof ApiError ? known(e.code) : 'other';
+		failure = code;
+		offer = null;
 		phase = 'failed';
-		// A refused offer is a dead end; a refused install may be retried with a fresh offer.
-		if (from === 'asking' && failure !== 'busy' && failure !== 'other') offer = null;
+		if (code === 'confirmation_mismatch' || code === 'native_in_container') return;
+		try {
+			const { companions } = await api.get('/companions');
+			if (gone || phase !== 'failed') return;
+			if (companions.find((c) => c.id === COMPANION_ID)?.installed != null) finish();
+		} catch {
+			// Keep the failure on screen.
+		}
+	}
+
+	function finish() {
+		phase = 'done';
+		offer = null;
+		failure = null;
+		onInstalled();
 	}
 
 	/** Step 1: fetch what would be installed. Nothing is installed. */
@@ -79,7 +98,7 @@ export function createInstall(onInstalled: () => void) {
 			offer = next;
 			phase = 'confirm';
 		} catch (e) {
-			if (!gone && id === run) fail(e, 'asking');
+			if (!gone && id === run) await fail(e);
 		}
 	}
 
@@ -96,11 +115,9 @@ export function createInstall(onInstalled: () => void) {
 				body: { version, sha256 }
 			});
 			if (gone || id !== run) return;
-			phase = 'done';
-			offer = null;
-			onInstalled();
+			finish();
 		} catch (e) {
-			if (!gone && id === run) fail(e, 'installing');
+			if (!gone && id === run) await fail(e);
 		}
 	}
 

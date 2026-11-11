@@ -127,7 +127,7 @@
 	"wizard_cmp_installing": "Installing qBittorrent…",
 	"wizard_cmp_installing_note": "This downloads, checks and starts it. It can take a minute. Please wait here.",
 	"wizard_cmp_done": "qBittorrent is installed",
-	"wizard_cmp_done_note": "It's now your download client. Lodestar set it up and keeps its sign-in details safe; you don't need to enter any. Use Test connection above to check it.",
+	"wizard_cmp_done_note": "It's now your download client. Lodestar set it up and keeps its sign-in details safe; you don't need to enter any. The client list above was reloaded, so anything you typed there and hadn't saved is gone. Use Test connection to check it.",
 	"wizard_cmp_failed": "qBittorrent wasn't installed",
 	"wizard_cmp_retry": "Try again",
 	"wizard_cmp_err_container": "Lodestar is running in a container, so it can't install programs on its own. Add qBittorrent as its own container instead.",
@@ -140,5 +140,6 @@
 	"wizard_cmp_err_not_wired": "Installing isn't available yet in this version of Lodestar. Install qBittorrent yourself and add it above.",
 	"wizard_cmp_err_busy": "Another install is already running. Wait for it to finish, then try again.",
 	"wizard_cmp_err_off": "Installing programs is turned off for this Lodestar. Add qBittorrent yourself above.",
-	"wizard_cmp_err_other": "Something went wrong, and nothing was left half-installed. Try again, or install qBittorrent yourself and add it above."
+	"wizard_cmp_err_other": "Something went wrong. Lodestar checked and qBittorrent isn't installed yet. Try again, or install qBittorrent yourself and add it above.",
+	"wizard_cmp_replaces": "replaces {version}"
 }
