@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T23:50:05Z",
+  "updated_at": "2026-11-11T23:58:28Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6978,7 +6978,9 @@
     "next runner PR: put the 2026-11-11T23:29Z nine \u00a72.19 FYIs (TZ-0 one PR, restart-banner on-demand, CI throughput, OUT-0, RX-0, WK-11, X-win-upd-history, X-cmp13 signature path, X-event-log-followups scope) in dashboard.yaml owner_queue/notes; dashboard session relayed them in chat",
     "small fix: companion-pins.yml concurrency group keyed by companion (${{ github.workflow }}-${{ inputs.companion }}) so a pending run for one companion doesn't cancel another's (CMP-13 session suggestion, runner agreed)",
     "prowlarr pin: 3.0.1.5752 is develop (refused, fail-closed by design); 2.7.0.5723 passed GitHub but lscr.io 404 on image tag; awaiting image_tag from CMP-13 session",
-    "owner flag owed (\u00a72.19): X-cmp13-installer-pins B2 tightening \u2014 signature alone doesn't bind file to version; added SourceForge-origin RSS size+MD5 check, exact final path check, sig time >= annotated GitHub tag date - 2d; api.github.com pin-time-only host; residual (compromised SF origin + same-version file signed after tag) recorded; I2 fingerprint confirmed by two GitHub sources only (Arch/Debian blocked by proxy)"
+    "owner flag owed (\u00a72.19): X-cmp13-installer-pins B2 tightening \u2014 signature alone doesn't bind file to version; added SourceForge-origin RSS size+MD5 check, exact final path check, sig time >= annotated GitHub tag date - 2d; api.github.com pin-time-only host; residual (compromised SF origin + same-version file signed after tag) recorded; I2 fingerprint confirmed by two GitHub sources only (Arch/Debian blocked by proxy)",
+    "new slice candidate X-svc-eventcreate-bounded (rv-702 N2): windows/service.rs:918 eventcreate unbounded; move run_bounded to windows/mod.rs and use it in the service (~20 lines); also watch #721's smoke assumption that eventcreate records caller SID as UserId",
+    "X-win-upd-history P5 approved: UpdatesScreen.svelte one condition (_next hidden for manual rollback) + vitest; shared edit"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7721,7 +7723,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T23:50:05Z",
+    "updated": "2026-11-11T23:58:28Z",
     "items": [
       {
         "slot": 1,
@@ -7884,7 +7886,7 @@
     }
   ],
   "heartbeat": "2026-11-11T21:38:36Z",
-  "updated": "2026-11-11T23:50:05Z",
+  "updated": "2026-11-11T23:58:28Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
