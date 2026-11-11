@@ -7516,7 +7516,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T13:25:04Z",
+    "updated": "2026-11-11T14:03:28Z",
     "items": [
       {
         "slot": 1,
@@ -7536,11 +7536,12 @@
       },
       {
         "slot": 3,
-        "slice": "X-restart-required-creds",
+        "slice": null,
         "role": "build",
         "agent": "claude",
-        "doing": "restart_required covers a changed pinned credential (same session after #658)",
-        "since": "2026-11-11T06:50Z"
+        "doing": "free after #689 X-restart-required-creds merged 48b10984; session_01MMjhn8tTJD1DZeuMq9kZKw kept for next slice",
+        "since": "2026-11-11T14:03:28Z",
+        "status": "idle"
       },
       {
         "slot": 4,
@@ -7637,7 +7638,7 @@
     }
   ],
   "heartbeat": "2026-11-11T12:39:14Z",
-  "updated": "2026-11-11T06:50Z",
+  "updated": "2026-11-11T14:03:28Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -7705,6 +7706,12 @@
       "slice": "X-win-upd-reoffer",
       "sha": "369f5ec0a71fd835d3e0ec66f2bf4e430d96b83a",
       "at": "2026-11-11T13:24:41Z"
+    },
+    {
+      "pr": 689,
+      "slice": "X-restart-required-creds",
+      "sha": "48b1098409d1536337feba6758f648fcdedaff59",
+      "at": "2026-11-11T14:03:28Z"
     }
   ]
 }
