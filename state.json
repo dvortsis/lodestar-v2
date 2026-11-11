@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T08:23:53Z",
+  "updated_at": "2026-11-11T09:06:53Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6746,7 +6746,13 @@
     "2026-11-11: #671 X-tripwire-reviews-lookback merged (e6f76145) after runner check of round 4; owner flags: budget 60 pages (714 req/h max), 360 s deadline, failed-wake sweeps unbounded (cron covers), edit-to-old-bot-review gap, window-only detection after API errors; slot 6 -> X-flake-portable-restart-2",
     "2026-11-11: X-flake-portable-restart-2 approved shared edit: crates/lodestar/src/windows/mod.rs (watch_predecessor, wait_if_successor only); add to owns in next runner PR; #659 also edits that file (other hunks)",
     "2026-11-11: #663 X-win-upd-bounds merged (a2450849), fresh Opus MERGE; non-blocking items folded into X-win-upd-1920 (slot 2); next runner PR: X-win-upd-1920 owns += helper.rs, cli/update_helper.rs",
-    "2026-11-11: PK-win-portable-upd approved shared edit packaging/windows/portable/Start Lodestar.cmd (guarded previous.exe fallback); add to owns in next runner PR; PK-guide-3 gets the user-guide sentence"
+    "2026-11-11: PK-win-portable-upd approved shared edit packaging/windows/portable/Start Lodestar.cmd (guarded previous.exe fallback); add to owns in next runner PR; PK-guide-3 gets the user-guide sentence",
+    {
+      "from": "#672",
+      "to": "next runner PR",
+      "what": "CMP-9a notes: residual warnings (email/MailKit, FlareSolverr, indexer proxies) while Prowlarr on SOCKS5; CMP-13 note: AspNetCore-only runtimeconfig refused; X-cmp-native-handover owns += crates/companions/tests/manager.rs",
+      "at": "2026-11-11T09:06:53Z"
+    }
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7479,7 +7485,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T07:59:22Z",
+    "updated": "2026-11-11T09:06:53Z",
     "items": [
       {
         "slot": 1,
@@ -7507,11 +7513,11 @@
       },
       {
         "slot": 4,
-        "slice": "X-cmp-egress-prelaunch",
+        "slice": "X-cmp-native-handover",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCL9xrv5oTMJ9KBcEc",
-        "since": "2026-11-11T06:47:49Z"
+        "doing": "building (after #672 merged d2970f91)",
+        "since": "2026-11-11T09:06:53Z"
       },
       {
         "slot": 5,
