@@ -45,10 +45,12 @@ def _uid(item) -> str | None:
 
 
 def _when(s) -> datetime | None:
+    """A zoned time, or None (callers count None as recent: fail closed)."""
     try:
-        return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+        t = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
     except ValueError:
         return None
+    return t if t.tzinfo is not None else None
 
 
 def _channel(env, transport):
@@ -108,6 +110,49 @@ def _list(transport, path: str, stop_before: datetime | None = None, key: str = 
     raise Incomplete(path.split("?")[0].rsplit("/", 1)[-1])
 
 
+REVIEWS_QUERY = """query($owner: String!, $name: String!, $number: Int!, $before: String) {
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+    reviews(last: 100, before: $before) {
+      nodes { submittedAt createdAt author { ... on Bot { databaseId } ... on User { databaseId } } }
+      pageInfo { hasPreviousPage startCursor } } } } }"""
+
+
+def _recent_reviews(transport, repo: str, number: str, since: datetime) -> list[dict]:
+    """A PR's reviews from the lookback only, newest pages first.
+
+    The REST reviews list runs oldest first and can't be sorted, so a PR with
+    1,000 old reviews would read as an incomplete sweep forever. GraphQL's
+    `last`/`before` pages back from the newest and stops at the first page that
+    reaches past `since`. A page limit hit inside the window is still a trip.
+    Each review comes back REST-shaped: {"user": {"id"}, "submitted_at"}."""
+    owner, name = repo.split("/", 1)
+    out, before = [], None
+    for _ in range(MAX_PAGES):
+        res = transport("POST", "/graphql", {"query": REVIEWS_QUERY, "variables": {
+            "owner": owner, "name": name, "number": int(number), "before": before}}) or {}
+        try:
+            if res.get("errors"):
+                raise KeyError("errors")
+            reviews = res["data"]["repository"]["pullRequest"]["reviews"]
+            nodes, info = reviews["nodes"], reviews["pageInfo"]
+        except (KeyError, TypeError, AttributeError):
+            raise RuntimeError("GitHub GraphQL reviews query failed") from None
+        reached_past = False
+        for r in nodes or []:
+            if not isinstance(r, dict):
+                continue
+            when = _when(r.get("submittedAt") or r.get("createdAt"))
+            if when is not None and when < since:
+                reached_past = True  # pages run oldest first: this page reaches the window's start
+                continue
+            author = r.get("author") if isinstance(r.get("author"), dict) else {}
+            out.append({"user": {"id": author.get("databaseId")}, "submitted_at": r.get("submittedAt")})
+        if reached_past or not info.get("hasPreviousPage"):
+            return out
+        before = info.get("startCursor")
+    raise Incomplete("reviews")
+
+
 def sweep(env, transport, now: datetime) -> tuple[list[str], bool]:
     repo, bot = env["GITHUB_REPOSITORY"], _digits(env.get("OPERATOR_BOT_USER_ID"))
     if not bot:  # defence in depth: cmd_sweep escalates on this first; keep it for direct callers
@@ -136,7 +181,7 @@ def sweep(env, transport, now: datetime) -> tuple[list[str], bool]:
         n = _digits(p.get("number")) or "?"
         if _uid(p) == bot:
             bot_hits.append(f"the operator's bot opened #{n} (active in the lookback)")
-        for r in _list(transport, f"/repos/{repo}/pulls/{n}/reviews") if n != "?" else []:
+        for r in _recent_reviews(transport, repo, n, since) if n != "?" else []:
             if _uid(r) == bot:
                 bot_hits.append(f"the operator's bot reviewed #{n}")
 
