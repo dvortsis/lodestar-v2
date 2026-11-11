@@ -6743,7 +6743,8 @@
     "2026-11-11: #671 round 2 (94e349e9): budget 90, 360 s deadline, fail-closed on unreadable pages; delta security review running. Owner flag on merge: 200->90 page budget, deadline, two accepted residuals",
     "2026-11-11: #671 round 3 (75a526f1) runner-checked: option (a), budget 60 (714/h), plain escalation text; one ask: write started=true before POST /v1/sessions. Next runner PR: X-tripwire-reviews-lookback owns += .github/workflows/operator-wake.yml, infra/operator/wake.py, tests/test_wake.py, tests/test_workflows.py, X-op4-polish decisions line; X-natural-wording owns += crates/api/tests/suggest.rs",
     "2026-11-11: OP-5 calls: 4a keep injection sessions in wake rate counts (no exemption); 4b keep $50 cap, owner flag (raising = owner money). Owner setup on merge: STATE_BUCKET var, one-time fleet.json tombstone",
-    "2026-11-11: #671 X-tripwire-reviews-lookback merged (e6f76145) after runner check of round 4; owner flags: budget 60 pages (714 req/h max), 360 s deadline, failed-wake sweeps unbounded (cron covers), edit-to-old-bot-review gap, window-only detection after API errors; slot 6 -> X-flake-portable-restart-2"
+    "2026-11-11: #671 X-tripwire-reviews-lookback merged (e6f76145) after runner check of round 4; owner flags: budget 60 pages (714 req/h max), 360 s deadline, failed-wake sweeps unbounded (cron covers), edit-to-old-bot-review gap, window-only detection after API errors; slot 6 -> X-flake-portable-restart-2",
+    "2026-11-11: X-flake-portable-restart-2 approved shared edit: crates/lodestar/src/windows/mod.rs (watch_predecessor, wait_if_successor only); add to owns in next runner PR; #659 also edits that file (other hunks)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
