@@ -366,6 +366,9 @@ def cmd_wake(env, deps=None) -> int:
         token = ghapp.mint(gh, env["GITHUB_REPOSITORY"], jwt)
         cred = f"/v1/vaults/{ids['vault_id']}/credentials/{ids['credential_id']}"
         call("POST", cred, {"auth": {"type": "environment_variable", "secret_value": token}})
+        # From here a session may exist (a lost or malformed reply can hide one), so the
+        # end-of-session sweep must run. Still after the ledger, so PER_HOUR bounds it.
+        _out(env, started="true")
         res = call("POST", "/v1/sessions", body) or {}
         sid = res.get("id")
         if not isinstance(sid, str) or not sid:
