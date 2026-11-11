@@ -283,6 +283,16 @@ pub async fn serve(
     store: Arc<Mutex<Store>>,
     gate: channel::Sender<requires::Snapshot>,
 ) -> Option<(Wired, Arc<Guided>)> {
+    // A companion Lodestar installs is handed over through the guided
+    // path's own sink (X-cmp-native-handover). Wired first, before
+    // anything here can fail, so a removal is never refused for the run
+    // because the watch or the guarded client couldn't start.
+    let sink = Arc::new(Sink {
+        settings: settings.clone(),
+        ops: ops.clone(),
+        store: store.clone(),
+    });
+    companions.wire_sink(sink.clone());
     let service = companions.api.clone();
     let (catalogue, rt) = (service.catalogue(), runtime(service.in_container()));
     let read = store.clone();
@@ -319,14 +329,6 @@ pub async fn serve(
             return None;
         }
     };
-    let sink = Arc::new(Sink {
-        settings,
-        ops,
-        store: store.clone(),
-    });
-    // A companion Lodestar installs is handed over through the same sink
-    // (X-cmp-native-handover).
-    companions.wire_sink(sink.clone());
     let guided = Arc::new(Guided::new(
         service.clone(),
         store,
@@ -448,74 +450,128 @@ struct ManagedClient {
     category: String,
 }
 
-/// The `integrations` batch that makes `entry` the managed client: the
-/// list as it is, with [`MANAGED_CLIENT`] replaced or added. Other clients
-/// go without their passwords, which keeps the saved ones (the registry
-/// keeps a saved secret for an item of the same id, kind and address).
-fn client_batch(current: &Integrations, entry: &ManagedClient) -> Result<SettingsBatch, SinkError> {
-    let mut clients = Vec::new();
-    for c in current.clients.iter().filter(|c| c.id != MANAGED_CLIENT) {
-        let mut c = c.clone();
-        c.password = None;
-        clients.push(serde_json::to_value(c).map_err(|_| SinkError::Rejected)?);
-    }
+/// Every client but [`MANAGED_CLIENT`], each without its password, which
+/// keeps the saved one (the registry keeps a saved secret for an item of
+/// the same id, kind and address).
+fn other_clients(current: &Integrations) -> Result<Vec<serde_json::Value>, SinkError> {
+    current
+        .clients
+        .iter()
+        .filter(|c| c.id != MANAGED_CLIENT)
+        .map(|c| {
+            let mut c = c.clone();
+            c.password = None;
+            serde_json::to_value(c).map_err(|_| SinkError::Rejected)
+        })
+        .collect()
+}
+
+/// The `clients` list that makes `entry` the managed client: the list as it
+/// is, with [`MANAGED_CLIENT`] replaced or added. A name or category you
+/// gave the managed entry is kept unless the hand-over sets its own
+/// category, so a restart's hand-over doesn't wipe them.
+fn with_managed(
+    current: &Integrations,
+    entry: &ManagedClient,
+) -> Result<Vec<serde_json::Value>, SinkError> {
+    let mut clients = other_clients(current)?;
+    let kept = current.client(MANAGED_CLIENT);
+    let name = kept.map_or("qBittorrent (Lodestar)", |c| c.name.as_str());
+    let category = match (entry.category.as_str(), kept) {
+        ("", Some(c)) => c.category.clone(),
+        (own, _) => own.to_owned(),
+    };
     clients.push(serde_json::json!({
         "id": MANAGED_CLIENT,
-        "name": "qBittorrent (Lodestar)",
+        "name": name,
         "kind": "qbittorrent",
         "url": format!("{}/", target_url(&entry.target)),
         "username": entry.username,
         "password": entry.password.expose(),
-        "category": entry.category,
+        "category": category,
     }));
-    let mut patch = serde_json::Map::new();
-    patch.insert("clients".into(), serde_json::Value::Array(clients));
-    Ok(SettingsBatch(
-        std::iter::once(("integrations".to_owned(), SettingsPatch(patch))).collect(),
-    ))
+    Ok(clients)
 }
 
-/// Saves `managed` as the managed client, reading the list right before
-/// the save so a save you made meanwhile isn't overwritten with an old
-/// one. Blocking.
+/// How many times a save that lost to another one is tried again.
+const SAVE_TRIES: usize = 3;
+
+/// The `integrations` batch saving `clients`, refused over any save after
+/// `revision`.
+fn clients_batch(revision: u64, clients: Vec<serde_json::Value>) -> SettingsBatch {
+    let mut patch = serde_json::Map::new();
+    patch.insert("if_revision".into(), revision.into());
+    patch.insert("clients".into(), serde_json::Value::Array(clients));
+    SettingsBatch(std::iter::once(("integrations".to_owned(), SettingsPatch(patch))).collect())
+}
+
+/// Saves the `clients` list `edit` makes from the one saved now (`None`:
+/// nothing to save), never over a save made in between: the section's
+/// revision is read first and sent as `if_revision`, and a stale one is
+/// read and made again, at most [`SAVE_TRIES`] times. The revision is read
+/// before the list because the registry bumps it before it publishes the
+/// new list, so a save in between shows as stale. Blocking.
+fn save_clients(
+    settings: &crate::settings::Registry,
+    edit: impl Fn(&Integrations) -> Result<Option<Vec<serde_json::Value>>, SinkError>,
+) -> Result<(), SinkError> {
+    for _ in 0..SAVE_TRIES {
+        let revision = settings
+            .section("integrations")
+            .ok_or(SinkError::Unavailable)?
+            .revision;
+        let current = settings.subscribe::<Integrations>().borrow().clone();
+        let Some(clients) = edit(&current)? else {
+            return Ok(());
+        };
+        match settings.save(clients_batch(revision, clients)) {
+            Ok(_) => return Ok(()),
+            Err(f) if matches!(f.error, lodestar_api::settings::SettingsError::Stale(_)) => {}
+            Err(_) => return Err(SinkError::Rejected),
+        }
+    }
+    Err(SinkError::Unavailable)
+}
+
+/// Saves `managed` as the managed client. Blocking.
 fn save_client(
     settings: &crate::settings::Registry,
     managed: &ManagedClient,
 ) -> Result<(), SinkError> {
-    let current = settings.subscribe::<Integrations>().borrow().clone();
-    let batch = client_batch(&current, managed)?;
-    settings
-        .save(batch)
-        .map(|_| ())
-        .map_err(|_| SinkError::Rejected)
+    save_clients(settings, |current| with_managed(current, managed).map(Some))
 }
 
-/// Takes [`MANAGED_CLIENT`] out of `integrations.clients`, reading the
-/// list right before the save, and saving the rest as they are (each
-/// without its password, which keeps the saved one). Nothing to save when
-/// it isn't there. Blocking.
+/// Takes [`MANAGED_CLIENT`] out of `integrations.clients`, keeping every
+/// other one. Nothing to save when it isn't there. Blocking.
 fn forget_client(settings: &crate::settings::Registry) -> Result<(), SinkError> {
-    let current = settings.subscribe::<Integrations>().borrow().clone();
-    if current.client(MANAGED_CLIENT).is_none() {
-        return Ok(());
-    }
-    let mut clients = Vec::new();
-    for c in current.clients.iter().filter(|c| c.id != MANAGED_CLIENT) {
-        let mut c = c.clone();
-        c.password = None;
-        clients.push(serde_json::to_value(c).map_err(|_| SinkError::Rejected)?);
-    }
-    let mut patch = serde_json::Map::new();
-    patch.insert("clients".into(), serde_json::Value::Array(clients));
-    let batch =
-        SettingsBatch(std::iter::once(("integrations".to_owned(), SettingsPatch(patch))).collect());
+    save_clients(settings, |current| {
+        if current.client(MANAGED_CLIENT).is_none() {
+            return Ok(None);
+        }
+        other_clients(current).map(Some)
+    })
+}
+
+/// Whether a [`MANAGED_CLIENT`] entry is saved.
+fn has_managed_client(settings: &crate::settings::Registry) -> bool {
     settings
-        .save(batch)
-        .map(|_| ())
-        .map_err(|_| SinkError::Rejected)
+        .subscribe::<Integrations>()
+        .borrow()
+        .client(MANAGED_CLIENT)
+        .is_some()
 }
 
 impl crate::companions::ManagedSink for Sink {
+    fn has_download_client(&self) -> BoxFuture<'_, bool> {
+        Box::pin(async move {
+            let settings = self.settings.clone();
+            // An unanswered read counts as present: it fails closed.
+            tokio::task::spawn_blocking(move || has_managed_client(&settings))
+                .await
+                .unwrap_or(true)
+        })
+    }
+
     fn forget_download_client(&self) -> BoxFuture<'_, Result<(), SinkError>> {
         Box::pin(async move {
             let settings = self.settings.clone();
@@ -1853,6 +1909,89 @@ mod tests {
         );
     }
 
+    /// A save made between the list's read and the hand-over's own save
+    /// isn't overwritten: the hand-over's is refused as stale and made
+    /// again from the list as it is then, keeping both (#674's self-review
+    /// I1). A name or category you gave the managed entry is kept.
+    #[test]
+    fn a_save_in_between_is_kept_and_your_names_survive() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().to_string_lossy().into_owned();
+        let mut config =
+            crate::config::Config::load(None, |k| (k == "LODESTAR_DATA_DIR").then(|| data.clone()))
+                .unwrap();
+        config.data_dir = dir.path().to_path_buf();
+        let store = Arc::new(Mutex::new(
+            Store::open(dir.path().join("db"), Default::default()).unwrap(),
+        ));
+        let registry = Arc::new(crate::settings::Registry::load(&config, store.clone()).unwrap());
+        drop(store);
+        let managed = ManagedClient {
+            target: Target::Loopback(PortNumber::new(8080).unwrap()),
+            username: "admin".into(),
+            password: Secret::new(String::from("generated-by-lodestar")),
+            category: String::new(),
+        };
+        save_client(&registry, &managed).unwrap();
+        // You rename it and give it a category.
+        let mut mine = serde_json::to_value(
+            registry
+                .subscribe::<Integrations>()
+                .borrow()
+                .client(MANAGED_CLIENT)
+                .unwrap()
+                .clone(),
+        )
+        .unwrap();
+        mine["name"] = "My qBittorrent".into();
+        mine["category"] = "tv".into();
+        mine.as_object_mut().unwrap().remove("password");
+        registry
+            .save(
+                serde_json::from_value(serde_json::json!({"integrations": {"clients": [mine]}}))
+                    .unwrap(),
+            )
+            .unwrap();
+        // A hand-over whose first try loses to a save of yours.
+        let tries = std::sync::atomic::AtomicUsize::new(0);
+        save_clients(&registry, |current| {
+            if tries.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                let mut home = serde_json::to_value(client("home")).unwrap();
+                home["password"] = "hunter2hunter2".into();
+                let mut both = other_clients(current).unwrap();
+                both.push(serde_json::to_value(current.client(MANAGED_CLIENT).unwrap()).unwrap());
+                both.last_mut()
+                    .unwrap()
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("password");
+                both.push(home);
+                registry
+                    .save(
+                        serde_json::from_value(
+                            serde_json::json!({"integrations": {"clients": both}}),
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap();
+            }
+            with_managed(current, &managed).map(Some)
+        })
+        .unwrap();
+        assert_eq!(tries.load(std::sync::atomic::Ordering::SeqCst), 2);
+        let now = registry.subscribe::<Integrations>().borrow().clone();
+        assert!(now.client("home").is_some(), "the save in between was lost");
+        let kept = now.client(MANAGED_CLIENT).unwrap();
+        assert_eq!(
+            (kept.name.as_str(), kept.category.as_str()),
+            ("My qBittorrent", "tv")
+        );
+        assert_eq!(
+            kept.password.as_ref().map(|p| p.0.as_str()),
+            Some("generated-by-lodestar")
+        );
+    }
+
     /// The source on with an address, off, or with none saved; a read that
     /// fails is an error, never "not external".
     #[tokio::test]
@@ -2364,7 +2503,8 @@ mod tests {
             password: Secret::new(String::from("generated-password")),
             category: "lodestar".into(),
         };
-        let batch = client_batch(&current, &entry).unwrap();
+        let batch = clients_batch(4, with_managed(&current, &entry).unwrap());
+        assert_eq!(batch.0["integrations"].0["if_revision"], 4);
         let clients = batch.0["integrations"].0["clients"]
             .as_array()
             .unwrap()

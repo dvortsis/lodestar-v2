@@ -258,6 +258,11 @@ struct FakeApi {
     refuse_hand_over: AtomicBool,
     refuse_release: AtomicBool,
     releases: AtomicUsize,
+    /// Refuses the check before an install, as a first install over an
+    /// entry that isn't Lodestar's is.
+    refuse_pre_check: AtomicBool,
+    /// Each check's `fresh`.
+    asked: Mutex<Vec<bool>>,
 }
 
 /// Lodestar's settings, as the hand-over writes them: each password it
@@ -327,6 +332,22 @@ impl ApiConfigure for FakeApi {
             }
             let input = ConfigureInput::new(credentials).installed(receipt);
             configure::hand_over(&self.sink, id, target, &input).await
+        })
+    }
+
+    fn can_hand_over<'a>(
+        &'a self,
+        _: &'a CompanionId,
+        fresh: bool,
+    ) -> BoxFuture<'a, Result<(), AdapterError>> {
+        self.asked.lock().unwrap().push(fresh);
+        let refuse = self.refuse_pre_check.load(Ordering::SeqCst);
+        Box::pin(async move {
+            if refuse {
+                Err(AdapterError::Refused("managed_client_in_use"))
+            } else {
+                Ok(())
+            }
         })
     }
 
@@ -1614,9 +1635,11 @@ async fn a_slot_held_past_the_deadline_stops_the_companion() {
     let mut parts = w.parts(catalogue("5.0.4"), LINUX);
     parts.downloader = Downloader::any(gate.clone());
     let m = Arc::new(Manager::open(parts).unwrap());
-    m.set_live_deadline(std::time::Duration::from_secs(1));
     w.run.sick.store(true, Ordering::SeqCst);
     assert!(m.start(&qbt()).await.is_err());
+    // Shortened only now: the start writes the credential's hash, which
+    // can take longer than this on a slow runner (#672's review).
+    m.set_live_deadline(std::time::Duration::from_secs(1));
     let calls = w.api.calls.load(Ordering::SeqCst);
     let update = tokio::spawn({
         let m = m.clone();
@@ -1636,35 +1659,29 @@ async fn a_slot_held_past_the_deadline_stops_the_companion() {
 }
 
 /// A configuration that never answers is bounded by the deadline
-/// (`timed_out`), and the companion is stopped.
+/// (`timed_out`), and the companion is stopped: here the follower's, once
+/// a companion held at its restart runs.
 #[tokio::test]
 async fn a_configuration_that_never_answers_times_out_and_stops_it() {
     let _g = SERIAL.lock().await;
     let w = World::new();
     let m = w.manager(catalogue("5.0.3"), LINUX);
     m.install(&token("5.0.3")).await.unwrap();
+    // A restart that fails its health check (held, say), so it's left for
+    // its follower to configure once it runs. Under the full deadline: the
+    // start writes the credential's hash, which can take longer than the
+    // short one on a slow runner (#672's review).
+    w.run.sick.store(true, Ordering::SeqCst);
+    assert!(m.restart(&qbt()).await.unwrap().finished().await.is_err());
+    assert_eq!(health(&m), Some(Health::Unhealthy));
+    // Now only the configuration is bounded by the short deadline.
     m.set_live_deadline(std::time::Duration::from_secs(1));
     w.api.hang.store(true, Ordering::SeqCst);
-    // The start's own bound (`restart`) and the configuration's are the
-    // same deadline here, so either may be the one that ends it.
-    let got = m.restart(&qbt()).await.unwrap().finished().await;
-    assert!(
-        matches!(
-            got,
-            Err(ManagerError::Step {
-                code: "timed_out",
-                ..
-            })
-        ),
-        "{got:?}"
-    );
-    assert_eq!(health(&m), Some(Health::Unhealthy));
-    // Its follower configures it once it runs, under the same bound.
+    w.run.sick.store(false, Ordering::SeqCst);
     let stops = w.run.stops.load(Ordering::SeqCst);
-    w.run.run().send_replace(status(State::Held));
-    wait_health(&m, Health::Unhealthy).await;
     w.run.run().send_replace(status(State::Running));
     wait_count(&w.run.stops, stops + 1).await;
+    assert_eq!(health(&m), Some(Health::Unhealthy));
     assert!(w.run.status.lock().unwrap().is_none());
 }
 
@@ -1821,4 +1838,40 @@ async fn a_removal_releases_the_managed_entry_first() {
     m.remove(&qbt()).await.unwrap();
     assert_eq!(w.on_disk(), None);
     assert_eq!(w.api.releases.load(Ordering::SeqCst), 2);
+}
+
+/// A first install that fails before its hand-over leaves Lodestar's
+/// settings as they are: an entry there isn't this install's to take out.
+#[tokio::test]
+async fn an_install_that_fails_before_its_hand_over_releases_nothing() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let m = w.manager(catalogue("5.0.3"), LINUX);
+    w.api.fail.store(true, Ordering::SeqCst);
+    assert!(m.install(&token("5.0.3")).await.is_err());
+    assert_eq!(w.on_disk(), None);
+    assert_eq!(w.api.releases.load(Ordering::SeqCst), 0);
+    assert!(w.api.sink.passwords().is_empty());
+}
+
+/// An install whose hand-over can't happen is refused before anything is
+/// downloaded or started, and only a first install is asked about an
+/// entry already there.
+#[tokio::test]
+async fn an_install_that_cant_be_handed_over_is_refused_before_it_begins() {
+    let _g = SERIAL.lock().await;
+    let w = World::new();
+    let m = w.manager(catalogue("5.0.3"), LINUX);
+    w.api.refuse_pre_check.store(true, Ordering::SeqCst);
+    let got = m.install(&token("5.0.3")).await;
+    assert_eq!(
+        got,
+        Err(ManagerError::Step {
+            step: "handover",
+            code: "managed_client_in_use"
+        })
+    );
+    assert!(!w.folder().exists());
+    assert!(w.run.started.lock().unwrap().is_empty());
+    assert_eq!(*w.api.asked.lock().unwrap(), [true]);
 }

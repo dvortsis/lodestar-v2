@@ -345,6 +345,18 @@ pub trait ApiConfigure: Send + Sync {
         Box::pin(async { Ok(()) })
     }
 
+    /// Whether an install of `id` (`fresh`: nothing installed yet) can be
+    /// handed over, asked before anything is downloaded: the settings it
+    /// goes to must be there, and a first install must not take over an
+    /// entry that isn't Lodestar's. Yes by default.
+    fn can_hand_over<'a>(
+        &'a self,
+        _id: &'a CompanionId,
+        _fresh: bool,
+    ) -> BoxFuture<'a, Result<(), AdapterError>> {
+        Box::pin(async { Ok(()) })
+    }
+
     /// Takes what [`ApiConfigure::hand_over`] saved out of Lodestar's
     /// settings again: before a removal, and after a first install that
     /// was rolled back. Nothing by default.
@@ -1249,8 +1261,23 @@ impl Manager {
         let id = &entry.id;
         m.p.run.ready().map_err(failed("start"))?;
         let _slot = m.claim(id)?;
+        // Before anything is downloaded: a hand-over that can't happen
+        // (no settings to go to, or an entry that isn't Lodestar's)
+        // refuses now, rather than after the whole install.
+        let fresh = self
+            .off(move |m| m.record(id))
+            .await?
+            .is_none_or(|r| r.installed.is_none());
+        m.p.api
+            .can_hand_over(id, fresh)
+            .await
+            .map_err(|e| failed("handover")(configure::code(&e)))?;
         let mut rec = self.off(move |m| m.begin(entry, pin)).await?;
-        match self.steps(entry, artifact, pin, &mut rec).await {
+        let mut handed = false;
+        match self
+            .steps(entry, artifact, pin, &mut rec, &mut handed)
+            .await
+        {
             Ok(()) => {
                 lodestar_log::log_event!(
                     INSTALLED,
@@ -1287,7 +1314,7 @@ impl Manager {
                     step = step,
                     reason = code
                 );
-                self.undo(entry, rec).await;
+                self.undo(entry, rec, handed).await;
                 Err(e)
             }
         }
@@ -1299,6 +1326,7 @@ impl Manager {
         artifact: &'static Artifact,
         pin: &'static Pin,
         rec: &mut Record,
+        handed: &mut bool,
     ) -> Result<(), ManagerError> {
         let m = &self.0;
         let id = &entry.id;
@@ -1374,6 +1402,11 @@ impl Manager {
         // Handed over before the commit point: a failed hand-over fails
         // the install, which is undone, so it's never "installed" without
         // being the download client (X-cmp-native-handover).
+        // Counted before it's tried: one that saved and then failed (a
+        // timeout after the save) is undone too. A first install found no
+        // entry before it began (`can_hand_over`), so whatever is there
+        // now is this install's.
+        *handed = true;
         self.hand_over_now(id, &target).await?;
         fault!(m, After(Step::Configured));
         let mut next = rec.clone();
@@ -1433,7 +1466,10 @@ impl Manager {
 
     /// A live failure: rolls back as recovery would, then starts the
     /// previous version again after a failed update.
-    async fn undo(&self, entry: &'static Entry, rec: Record) {
+    /// `handed`: this install's hand-over saved, so a first install undone
+    /// takes its entry out again; one that never got that far leaves the
+    /// settings as they are (an entry there isn't this install's).
+    async fn undo(&self, entry: &'static Entry, rec: Record, handed: bool) {
         let m = &self.0;
         let id = &entry.id;
         // Before `staged` the running version was never stopped.
@@ -1463,7 +1499,7 @@ impl Manager {
             Ok(None) => {
                 // A first install undone: what its hand-over saved goes
                 // too, so no managed entry points at nothing.
-                if m.p.api.release(id).await.is_err() {
+                if handed && self.release_now(id).await.is_err() {
                     lodestar_log::log_event!(
                         INSTALL_FAILED,
                         companion = m.label(id),
@@ -1558,10 +1594,18 @@ impl Manager {
         // has its managed entry taken out, and that first: a failure
         // leaves everything as it was, to try again.
         self.off(move |m| m.removal(id)).await?;
-        m.p.api
-            .release(id)
-            .await
-            .map_err(|e| failed("release")(configure::code(&e)))?;
+        // An install or update a crash left in its journal is recovery's:
+        // refused before anything is released. A removal it left is taken
+        // up again (its entry went before it began).
+        if self
+            .off(move |m| m.record(id))
+            .await?
+            .and_then(|r| r.op)
+            .is_some_and(|o| o.kind != OpKind::Remove)
+        {
+            return Err(Refusal::Busy.into());
+        }
+        self.release_now(id).await?;
         let (what, rec) = self.off(move |m| m.begin_remove(id)).await?;
         self.finish_remove(entry, rec).await?;
         Ok(what)
@@ -1760,6 +1804,14 @@ impl Manager {
             );
         }
         result
+    }
+
+    /// [`ApiConfigure::release`], bounded like every settings write.
+    async fn release_now(&self, id: &CompanionId) -> Result<(), ManagerError> {
+        tokio::time::timeout(self.0.deadline(), self.0.p.api.release(id))
+            .await
+            .map_err(|_| failed("release")("timed_out"))?
+            .map_err(|e| failed("release")(configure::code(&e)))
     }
 
     /// [`ApiConfigure::hand_over`] with the credential stored now.
@@ -2049,15 +2101,25 @@ pub fn reads_proxy_env(executable: &Path) -> bool {
     let mut name = stem.into_os_string();
     name.push(".runtimeconfig.json");
     let path = PathBuf::from(name);
-    let Ok(meta) = std::fs::symlink_metadata(&path) else {
+    // Opened once, then checked and read through the same handle, so what
+    // is read is what was checked; never more than the cap (#672's review).
+    let Ok(file) = std::fs::File::open(&path) else {
+        return false;
+    };
+    let Ok(meta) = file.metadata() else {
         return false;
     };
     if !meta.is_file() || meta.len() > RUNTIMECONFIG_MAX {
         return false;
     }
-    let Ok(text) = std::fs::read_to_string(&path) else {
+    let mut text = String::new();
+    let read = std::io::Read::read_to_string(
+        &mut std::io::Read::take(file, RUNTIMECONFIG_MAX + 1),
+        &mut text,
+    );
+    if read.is_err() || text.len() as u64 > RUNTIMECONFIG_MAX {
         return false;
-    };
+    }
     runtime_reads_proxy_env(&text)
 }
 
@@ -2224,8 +2286,16 @@ impl Run for Supervised {
             let env = launch_env(&pre).ok_or("route_not_expressible")?;
             // Only a .NET that parses `socks5://` reads the variables:
             // an older one ignores them and goes direct.
-            if !env.is_empty() && !reads_proxy_env(&l.executable) {
-                return Err("route_not_expressible");
+            if !env.is_empty() {
+                // A file read: off the async runtime. A failed task fails
+                // closed like any other unreadable file.
+                let exe = l.executable.clone();
+                let reads = tokio::task::spawn_blocking(move || reads_proxy_env(&exe))
+                    .await
+                    .unwrap_or(false);
+                if !reads {
+                    return Err("route_not_expressible");
+                }
             }
             let route = pre.route;
             let spec = SpawnSpec {
