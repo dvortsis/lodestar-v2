@@ -66,7 +66,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
 use super::check::{SKIP_FAILED, add_skip};
-use crate::update::layout::{self, Bin};
+use crate::update::layout::{self, Bin, Lock};
 use crate::update::log_events::{
     UPDATE_INSTALL_FAILED, UPDATE_PROBATION_FAILED, UPDATE_PROBATION_PASSED, UPDATE_STATE_UNSAVED,
 };
@@ -456,30 +456,45 @@ fn is(path: &Path, sha256: &str) -> bool {
 /// At every start, before anything opens the store or `<data>\bin` is
 /// otherwise used: finishes whatever step the journal is at.
 pub fn at_start(sys: &dyn Sys, data_dir: &Path, db: &Path) -> Start {
+    begin(sys, data_dir, db).0
+}
+
+/// [`at_start`], with `<data>\bin\.lock` kept for [`Start::Probation`]:
+/// the caller holds it until the self-test decides ([`passed`] or
+/// [`failed`]), so no second copy can count an attempt or roll back
+/// meanwhile, even while this one is still starting (the notifier takes
+/// the lock only later, and retries once it's free).
+pub fn begin(sys: &dyn Sys, data_dir: &Path, db: &Path) -> (Start, Option<Lock>) {
     if !beside(sys, data_dir) {
-        return Start::Normal;
+        return (Start::Normal, None);
     }
     let Ok(Some(bin)) = Bin::existing(data_dir) else {
-        return Start::Normal;
+        return (Start::Normal, None);
     };
     if !bin.exists(JOURNAL) {
-        return Start::Normal;
+        return (Start::Normal, None);
     }
-    // Another copy is running here (its notifier holds the lock for its
-    // whole life): this start judges nothing, so a second start during
-    // probation can't count an attempt or roll back a healthy update.
-    // Held to the end of this start, then the notifier takes it.
-    let Ok(Some(_lock)) = bin.lock() else {
-        return Start::Normal;
+    // Another copy is running here (on probation, holding it from here to
+    // its self-test; or its notifier, holding it for its whole life): this
+    // start judges nothing, so a second start can't count an attempt or
+    // roll back a healthy update.
+    let Ok(Some(lock)) = bin.lock() else {
+        return (Start::Normal, None);
     };
+    let start = judge(sys, &bin, db, &data_dir.join("bin"));
+    let lock = (start == Start::Probation).then_some(lock);
+    (start, lock)
+}
+
+/// The journal's step, under the lock [`begin`] holds.
+fn judge(sys: &dyn Sys, bin: &Bin, db: &Path, bin_dir: &Path) -> Start {
     // A journal in a folder others can write could have been planted:
     // nothing is moved or run on its say.
-    if let Err(why) = sys.bin_private(&data_dir.join("bin")) {
+    if sys.bin_private(bin_dir).is_err() {
         log_event!(UPDATE_INSTALL_FAILED, error = "bin_not_private");
-        let _ = why;
         return Start::Normal;
     }
-    let mut j = match read(&bin) {
+    let mut j = match read(bin) {
         Ok(Some(j)) => j,
         Ok(None) => return Start::Normal,
         Err(e) => {
@@ -496,13 +511,13 @@ pub fn at_start(sys: &dyn Sys, data_dir: &Path, db: &Path) -> Start {
     match j.state {
         State::Staged => {
             let _ = std::fs::remove_file(bin.path(NEXT));
-            clear(&bin);
+            clear(bin);
             Start::Normal
         }
         State::Swapping => {
             if is(&program, &j.new_sha256) {
                 j.state = State::Swapped;
-                return swapped(sys, &bin, db, j);
+                return swapped(sys, bin, db, j);
             }
             // The program in place was the old one, or is again: the
             // install never finished. A start can only come from
@@ -510,12 +525,12 @@ pub fn at_start(sys: &dyn Sys, data_dir: &Path, db: &Path) -> Start {
             // and either way it carries on (never relaunching).
             if put_back(sys, &program, &bin.path(PREVIOUS), &j.old_sha256).is_ok_and(|b| b) {
                 let _ = std::fs::remove_file(bin.path(NEXT));
-                clear(&bin);
+                clear(bin);
             }
             Start::Normal
         }
-        State::Swapped => swapped(sys, &bin, db, j),
-        State::RollingBack => rolling_back(sys, &bin, db, j),
+        State::Swapped => swapped(sys, bin, db, j),
+        State::RollingBack => rolling_back(sys, bin, db, j),
     }
 }
 
@@ -1073,25 +1088,26 @@ pub mod serve {
     use std::path::{Path, PathBuf};
     use std::process::ExitCode;
 
-    use super::{Start, Sys, System};
+    use super::{Lock, Start, Sys, System};
     use crate::update::windows::check::{self, InstallKind};
 
-    /// After logging starts and before anything opens the store: `Ok(true)`
-    /// when this is the new version on probation; `Err` to exit with, after
-    /// relaunching the program now in place.
-    pub fn before(config: &crate::config::Config) -> Result<bool, ExitCode> {
+    /// After logging starts and before anything opens the store:
+    /// `Ok(Some(lock))` when this is the new version on probation, holding
+    /// `<data>\bin\.lock` until the self-test decides ([`after_start`]);
+    /// `Err` to exit with, after relaunching the program now in place.
+    pub fn before(config: &crate::config::Config) -> Result<Option<Lock>, ExitCode> {
         let data = &config.data_dir;
         if check::detect(&check::signals(data)) != InstallKind::Portable {
-            return Ok(false);
+            return Ok(None);
         }
         if let Err(e) = super::ensure_bin(&System, data) {
             eprintln!("lodestar serve: the update folder couldn't be created privately: {e}");
         }
-        match super::at_start(&System, data, &config.db_path()) {
-            Start::Normal => Ok(false),
-            Start::Probation => Ok(true),
-            Start::Relaunch => Err(relaunch().map_or(ExitCode::FAILURE, ExitCode::from)),
-            Start::Refuse => {
+        match super::begin(&System, data, &config.db_path()) {
+            (Start::Normal, _) => Ok(None),
+            (Start::Probation, lock) => Ok(lock),
+            (Start::Relaunch, _) => Err(relaunch().map_or(ExitCode::FAILURE, ExitCode::from)),
+            (Start::Refuse, _) => {
                 eprintln!(
                     "lodestar serve: an update's rollback couldn't restore the store; the \
                      snapshot is still in {}, and the reason is in the log. Neither version \
@@ -1119,7 +1135,7 @@ pub mod serve {
     /// background. Passed, the update is kept; failed, the old program is
     /// put back and this run restarts into it (Restart now's relaunch,
     /// from `lodestar.exe`).
-    pub fn after_start(data: PathBuf, probe: super::Probe) {
+    pub fn after_start(data: PathBuf, probe: super::Probe, lock: Lock) {
         tokio::spawn(async move {
             let clock = super::Tokio(tokio::time::Instant::now());
             let check = || {
@@ -1136,6 +1152,9 @@ pub mod serve {
             })
             .await
             .unwrap_or(false);
+            // Decided: the notifier's next try takes the lock. Released
+            // before a relaunch, so the old version's start can take it.
+            drop(lock);
             // Restart now's relaunch, from `lodestar.exe` (the old program
             // again); if it can't start, this run keeps serving and says so.
             if back && System.restart().is_err() {
@@ -1149,8 +1168,11 @@ pub mod serve {
 
     /// `Services::start` failed on probation: the old program goes back
     /// and starts now. `Some` exit code then.
-    pub fn start_failed(data: &Path) -> Option<u8> {
-        if !super::failed(&System, data, "start") {
+    pub fn start_failed(data: &Path, lock: Lock) -> Option<u8> {
+        let back = super::failed(&System, data, "start");
+        // Released before the relaunch: the old version's start takes it.
+        drop(lock);
+        if !back {
             return None;
         }
         relaunch()
@@ -1180,8 +1202,10 @@ mod tests {
         version: RefCell<String>,
         private: Cell<bool>,
         fault: Cell<Option<Point>>,
-        /// Rewrites `next.exe` at this point instead of failing.
+        /// Rewrites a file in `bin` (`next.exe` unless set) at this point
+        /// instead of failing.
         tamper: Cell<Option<Point>>,
+        tamper_file: Cell<&'static str>,
         /// Whether that rewrite got through (Windows refuses it while the
         /// file is held).
         tampered: Cell<bool>,
@@ -1202,6 +1226,7 @@ mod tests {
                 private: Cell::new(true),
                 fault: Cell::new(None),
                 tamper: Cell::new(None),
+                tamper_file: Cell::new(NEXT),
                 tampered: Cell::new(false),
                 seen: RefCell::new(Vec::new()),
             }
@@ -1284,7 +1309,10 @@ mod tests {
         fn fault(&self, point: Point) -> io::Result<()> {
             self.seen.borrow_mut().push(point);
             if self.tamper.get() == Some(point) {
-                let wrote = std::fs::write(self.data().join("bin").join(NEXT), b"swapped in");
+                let wrote = std::fs::write(
+                    self.data().join("bin").join(self.tamper_file.get()),
+                    b"swapped in",
+                );
                 self.tampered.set(wrote.is_ok());
             }
             if self.fault.get() == Some(point) {
@@ -1778,9 +1806,12 @@ mod tests {
         crashed(&f, State::Swapping, Some(OLD), None);
         assert_eq!(at_start(&f, &f.data(), &f.db()), Start::Normal);
         f.untouched();
-        // Swapping, between the renames: the old program back.
+        // Swapping, interrupted between the renames, after the launcher
+        // moved `previous.exe` back: the old program in place, `next.exe`
+        // still staged.
         let f = Fake::new();
-        crashed(&f, State::Swapping, None, Some(OLD));
+        crashed(&f, State::Swapping, Some(OLD), None);
+        std::fs::write(f.data().join("bin").join(NEXT), NEW).unwrap();
         assert_eq!(at_start(&f, &f.data(), &f.db()), Start::Normal);
         f.untouched();
         // Swapping, both renames done: the new version's probation.
@@ -1948,6 +1979,61 @@ mod tests {
         assert!(f.at(FAILED).is_none());
         // Refused before the new program was moved out at all.
         assert!(!f.seen.borrow().contains(&Point::PutBack));
+    }
+
+    /// After the old program is moved back, it's checked again: one that
+    /// changed under the move never stays at `lodestar.exe`. On Windows
+    /// the held handle refuses the change itself.
+    #[test]
+    fn an_old_program_changed_during_its_move_back_never_stays_in_place() {
+        // Put back at a start (a swap interrupted between its renames,
+        // started some way other than the launcher).
+        let f = Fake::new();
+        crashed(&f, State::Swapping, None, Some(OLD));
+        f.tamper_file.set(PREVIOUS);
+        f.tamper.set(Some(Point::PutBack));
+        at_start(&f, &f.data(), &f.db());
+        assert_ne!(f.program_bytes().as_deref(), Some(&b"swapped in"[..]));
+        assert_eq!(f.tampered.get(), !cfg!(windows));
+        // Rolled back from the new version.
+        let f = Fake::new();
+        f.install().unwrap();
+        f.run_as("0.5.5");
+        assert_eq!(at_start(&f, &f.data(), &f.db()), Start::Probation);
+        f.tamper_file.set(PREVIOUS);
+        f.tamper.set(Some(Point::PutBack));
+        let back = failed(&f, &f.data(), "/healthz");
+        assert_eq!(f.tampered.get(), !cfg!(windows));
+        assert_ne!(f.program_bytes().as_deref(), Some(&b"swapped in"[..]));
+        if !cfg!(windows) {
+            // The new program stays rather than an unchecked one.
+            assert!(!back);
+            assert_eq!(f.program_bytes().as_deref(), Some(NEW));
+        }
+    }
+
+    /// The lock is held from the probation copy's start, not only once
+    /// its notifier runs, so a second copy started while the first is
+    /// still starting judges nothing.
+    #[test]
+    fn the_probation_copy_holds_the_lock_from_its_start() {
+        let f = Fake::new();
+        f.install().unwrap();
+        f.run_as("0.5.5");
+        let (start, lock) = begin(&f, &f.data(), &f.db());
+        assert_eq!(start, Start::Probation);
+        assert!(lock.is_some());
+        // A second copy while the first is still starting.
+        assert_eq!(at_start(&f, &f.data(), &f.db()), Start::Normal);
+        assert_eq!(f.journal().unwrap().attempts, 1);
+        drop(lock);
+        assert_eq!(begin(&f, &f.data(), &f.db()).0, Start::Probation);
+        assert_eq!(f.journal().unwrap().attempts, 2);
+        // Only probation keeps it.
+        f.run_as("0.5.4");
+        let (start, lock) = begin(&f, &f.data(), &f.db());
+        assert_ne!(start, Start::Probation);
+        assert!(lock.is_none());
     }
 
     #[test]

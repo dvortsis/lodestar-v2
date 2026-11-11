@@ -219,7 +219,7 @@ fn run() -> ExitCode {
                 Err(code) => return code,
             };
             #[cfg(not(windows))]
-            let probation = false;
+            let probation: Probation = None;
             fsdetect::warn_at_start(&config.data_dir);
             let runtime = match tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -257,16 +257,26 @@ type Supervised = Option<std::convert::Infallible>;
 
 /// An unsupervised run (`serve --fixture`, Windows).
 async fn serve(config: Config) -> Result<(), BoxError> {
-    serve_as(config, None, false).await.map(|_| ())
+    serve_as(config, None, None).await.map(|_| ())
 }
 
 /// `Some(code)` to exit with a reserved code for the supervisor.
+/// The Windows portable build's new version on probation: `<data>\bin\.lock`,
+/// held until its self-test decides.
+#[cfg(windows)]
+type Probation = Option<update::layout::Lock>;
+#[cfg(not(windows))]
+type Probation = Option<std::convert::Infallible>;
+
 /// `probation`: the Windows portable build's new version, on probation.
 async fn serve_as(
     config: Config,
     child: Supervised,
-    probation: bool,
+    probation: Probation,
 ) -> Result<Option<u8>, BoxError> {
+    #[cfg(windows)]
+    let mut probation = probation;
+    let on_probation = probation.is_some();
     // Stop on a signal, or restart when asked (`POST /system/restart`):
     // both take the same graceful shutdown. A signal wins, even during a
     // restart's shutdown.
@@ -287,8 +297,9 @@ async fn serve_as(
         Ok(s) => s,
         Err(e) => {
             #[cfg(windows)]
-            if probation {
-                if let Some(code) = update::windows::portable::serve::start_failed(&config.data_dir)
+            if let Some(lock) = probation.take() {
+                if let Some(code) =
+                    update::windows::portable::serve::start_failed(&config.data_dir, lock)
                 {
                     eprintln!("lodestar serve: {e}; the previous version is starting instead");
                     return Ok(Some(code));
@@ -302,18 +313,19 @@ async fn serve_as(
         c.after_start(services.probe(), update::testing::limits().deadline);
     }
     #[cfg(windows)]
-    if probation {
+    if let Some(lock) = probation.take() {
         update::windows::portable::serve::after_start(
             config.data_dir.clone(),
             services.portable_probe(),
+            lock,
         );
     }
     services.run(stop).await?;
     #[cfg(windows)]
-    if probation {
+    if on_probation {
         update::windows::portable::serve::stopped(&config.data_dir);
     }
-    let _ = probation;
+    let _ = (on_probation, probation);
     #[cfg(unix)]
     if let Some(c) = child {
         c.record_stored();
