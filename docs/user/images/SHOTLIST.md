@@ -13,6 +13,9 @@ The setup illustration uses labels from `web/src/lib/features/auth/messages/en.j
 | 4.2 | Checksum and Minisign verification | Owner | Pending host capture |
 | 4.3 | SmartScreen More info and Run anyway | Owner | Pending host capture |
 | 4.4 | MSI Options with both boxes unchecked | Owner | Pending host capture; `windows-options-illustration.svg` |
+| 4.4 | Windows Services showing Lodestar: Automatic (Delayed Start), `NT SERVICE\Lodestar` | Owner | Pending host capture; `windows-service-illustration.svg` (source: `packaging/windows/main.wxs` `ServiceInstall`) |
+| 4.6 | Insights exception for a data folder on a FUSE or network filesystem | Fixture capture | Pending; needs a `data_filesystem` fixture in `web/e2e/docs/shots.docs.ts` |
+| 4.7 | Insights exception with the `netsh` command | Fixture capture | Pending; needs an `ephemeral_ports` fixture in `web/e2e/docs/shots.docs.ts` |
 | 5.1 | Search with facets and composition bars | Existing mock fixtures | Present; pending v0.5.1 verification (`search-light.png`, `search-dark.png`) |
 | 5.2 | Torrent detail drawer | Existing mock fixtures | Present; pending v0.5.1 verification (`detail-light.png`, `detail-dark.png`) |
 | 5.3 | Discover and Insights | Existing mock fixtures | Present; pending v0.5.1 verification (`discover-{light,dark}.png`, `insights-{light,dark}.png`) |
