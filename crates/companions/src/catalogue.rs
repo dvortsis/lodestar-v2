@@ -62,6 +62,15 @@ pub const DOWNLOAD_HOSTS: &[&str] = &[
     "release-assets.githubusercontent.com",
 ];
 
+/// Where a Windows installer's own release folder may be
+/// (X-cmp13-installer-pins): qBittorrent's official installers are only on
+/// SourceForge. These are **never fetch hosts**: Lodestar shows an
+/// installer for you to download and run (CMP-11) and never fetches it, so
+/// a host here can't be in an entry's `hosts` or in [`DOWNLOAD_HOSTS`]. The
+/// pin tool reads the installer there once, when the pin is made, and
+/// checks upstream's OpenPGP signature on it.
+pub const INSTALLER_SOURCES: &[&str] = &["downloads.sourceforge.net"];
+
 /// The registries a companion image may come from (owner §2.47, cq6:
 /// linuxserver.io's `lscr.io`, the projects' own `ghcr.io` and Docker Hub).
 pub const REGISTRIES: &[&str] = &["lscr.io", "ghcr.io", "docker.io"];
@@ -755,6 +764,10 @@ pub struct Artifact {
     /// The program inside a zip or tar.gz. `None` for a bare binary or an
     /// installer.
     pub executable: Option<RelPath>,
+    /// An installer's own release folder, on an [`INSTALLER_SOURCES`] host
+    /// and never on a fetch host; `None` for every other kind, whose pins
+    /// come from [`Native::release`]. Required once an installer is pinned.
+    pub release: Option<HttpsUrl>,
     pin: Pinned<Pin>,
 }
 
@@ -770,7 +783,8 @@ impl Artifact {
 #[non_exhaustive]
 pub struct Pin {
     pub version: Version,
-    /// On one of the entry's hosts.
+    /// In [`Native::release`] on one of the entry's hosts, or for an
+    /// installer in its own [`Artifact::release`] (never fetched).
     pub url: HttpsUrl,
     /// Exact size in bytes, at most [`MAX_ARTIFACT_SIZE`].
     pub size: u64,
@@ -1026,6 +1040,9 @@ struct RawArtifact {
     arch: Arch,
     archive: ArchiveKind,
     executable: Option<String>,
+    // Absent in catalogues before X-cmp13-installer-pins, which still load.
+    #[serde(default)]
+    release: Option<String>,
     pin: Option<RawPin>,
 }
 
@@ -1416,8 +1433,35 @@ fn validate_artifact(
         Rule::Archive,
         &format!("{at}.archive"),
     )?;
-    let pin = match a.pin {
-        Some(p) => Pinned::Pinned(validate_pin(
+    let at_r = format!("{at}.release");
+    let own_release = match a.release {
+        // Only an installer has its own folder; every other pin comes
+        // from the entry's release folder on its fetch hosts.
+        Some(_) if a.archive != ArchiveKind::Installer => {
+            return Err(CatalogueError::new(Rule::Source, at_r));
+        }
+        Some(r) => Some(validate_installer_release(&r, hosts, &at_r)?),
+        None => None,
+    };
+    let pin = match (a.pin, &own_release) {
+        // A pinned installer must say where it came from.
+        (Some(_), None) if a.archive == ArchiveKind::Installer => {
+            return Err(CatalogueError::new(Rule::Source, at_r));
+        }
+        (Some(p), Some(own)) => {
+            // Its pin is checked against its own folder and that folder's
+            // host alone, never against the fetch hosts.
+            let host = field(Hostname::parse(own.host()), &at_r)?;
+            Pinned::Pinned(validate_pin(
+                p,
+                a.platform,
+                a.archive,
+                std::slice::from_ref(&host),
+                own,
+                &format!("{at}.pin"),
+            )?)
+        }
+        (Some(p), None) => Pinned::Pinned(validate_pin(
             p,
             a.platform,
             a.archive,
@@ -1425,15 +1469,45 @@ fn validate_artifact(
             release,
             &format!("{at}.pin"),
         )?),
-        None => Pinned::AwaitingPin,
+        (None, _) => Pinned::AwaitingPin,
     };
     Ok(Artifact {
         platform: a.platform,
         arch: a.arch,
         archive: a.archive,
         executable,
+        release: own_release,
         pin,
     })
+}
+
+/// An installer's own release folder: `https`, on an [`INSTALLER_SOURCES`]
+/// host that is neither one of the entry's fetch hosts nor a
+/// [`DOWNLOAD_HOSTS`] one, in exactly SourceForge's
+/// `/project/<project>/<folder>/` shape.
+fn validate_installer_release(
+    r: &str,
+    hosts: &[Hostname],
+    at: &str,
+) -> Result<HttpsUrl, CatalogueError> {
+    let url = field(HttpsUrl::parse(r), at)?;
+    let host = url.host();
+    check(
+        INSTALLER_SOURCES.contains(&host)
+            && !DOWNLOAD_HOSTS.contains(&host)
+            && !hosts.iter().any(|h| h.as_str() == host),
+        Rule::HostNotAllowed,
+        at,
+    )?;
+    check(
+        matches!(
+            url.path().split('/').collect::<Vec<_>>()[..],
+            ["", "project", project, folder, ""] if !project.is_empty() && !folder.is_empty()
+        ),
+        Rule::Source,
+        at,
+    )?;
+    Ok(url)
 }
 
 fn validate_pin(

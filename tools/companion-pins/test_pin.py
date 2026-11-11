@@ -6,6 +6,7 @@ committed, and nothing touches the network.
 """
 
 import contextlib
+import dataclasses
 import hashlib
 import io
 import json
@@ -269,10 +270,25 @@ class Download(Case):
         for tag in ("release-5.1.0_v2.0.11", "release-5.0.3", "release-5.0.3_v2.0.11/x", "5.0.3"):
             with self.subTest(tag=tag):
                 self.refused(
-                    Fake(files), "request", "--tag", tag, "--skip-image", companion="qbittorrent", version="5.0.3"
+                    Fake(files),
+                    "request",
+                    "--tag",
+                    tag,
+                    "--skip-image",
+                    "--artifacts",
+                    "linux-x86_64",
+                    companion="qbittorrent",
+                    version="5.0.3",
                 )
         status, err = self.run_pin(
-            Fake(files), "--tag", "release-5.0.3_v2.0.11", "--skip-image", companion="qbittorrent", version="5.0.3"
+            Fake(files),
+            "--tag",
+            "release-5.0.3_v2.0.11",
+            "--skip-image",
+            "--artifacts",
+            "linux-x86_64,linux-aarch64",
+            companion="qbittorrent",
+            version="5.0.3",
         )
         self.assertEqual(status, 0, err)
         self.assertIn("image digest was not re-pinned", self.report.read_text())
@@ -353,6 +369,10 @@ class Drift(unittest.TestCase):
         self.assertEqual(pin.MAX_ARTIFACT_SIZE, 512 * 1024 * 1024)
         registries = re.search(r"pub const REGISTRIES: &\[&str\] = &\[(.*?)\];", cat, re.S).group(1)
         self.assertEqual(sorted(re.findall(r'"([^"]+)"', registries)), sorted(pin.REGISTRIES))
+        sources = re.search(r"pub const INSTALLER_SOURCES: &\[&str\] = &\[(.*?)\];", cat, re.S).group(1)
+        self.assertEqual(tuple(re.findall(r'"([^"]+)"', sources)), pin.INSTALLER_SOURCES)
+        recipe = upstream.RECIPES["qbittorrent"]
+        self.assertIn(pin.host_of(recipe.installer_release), pin.INSTALLER_SOURCES)
         check = (ROOT / "crates/lodestar/src/update/check.rs").read_text()
         self.assertIn(f"pub const MAX_HOPS: usize = {pin.MAX_HOPS};", check)
 
@@ -726,6 +746,216 @@ class Container(Case):
                 mutate(r)
                 with self.assertRaises(pin.Refused):
                     pin.resolve_digest(Fake(r), "lscr.io/linuxserver/prowlarr", tag)
+
+
+SF_DIR = "https://downloads.sourceforge.net/project/qbittorrent/qbittorrent-win32/qbittorrent-5.0.3/"
+SF = SF_DIR + "qbittorrent_5.0.3_x64_setup.exe"
+MIRROR = SF.replace("downloads.sourceforge.net", "netix.dl.sourceforge.net")
+INSTALLER = b"MZ an installer" * 200
+
+
+@unittest.skipUnless(GPG, "gpg is not installed")
+class InstallerPins(Case):
+    """qBittorrent's Windows installer: read from SourceForge at pin time only,
+    pinned only with the release key's signature (X-cmp13-installer-pins)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.root = Path(tempfile.mkdtemp(prefix="pins-gpg-"))
+        cls.gpg = Gpg(cls.root)
+        cls.a = cls.gpg.new_key("release")
+        cls.b = cls.gpg.new_key("intruder")
+
+    @classmethod
+    def tearDownClass(cls):
+        subprocess.run(["gpgconf", "--homedir", str(cls.gpg.home), "--kill", "all"], capture_output=True)
+        shutil.rmtree(cls.root, ignore_errors=True)
+
+    def recipe(self, policy=None):
+        policy = policy or upstream.OpenPgp(".asc", (self.a,))
+        base = upstream.RECIPES["qbittorrent"]
+        return dataclasses.replace(base, signature={**base.signature, "windows-x86_64": policy})
+
+    def routes(self, sig=None, body=INSTALLER):
+        sig = self.gpg.sign(self.a, INSTALLER) if sig is None else sig
+        return {
+            SF: redirect(MIRROR),
+            MIRROR: ok(body),
+            SF + ".asc": redirect(MIRROR + ".asc"),
+            MIRROR + ".asc": ok(sig),
+        }
+
+    def pin(self, fake, *extra, recipe=None):
+        return self.run_pin(
+            fake,
+            "--tag",
+            "release-5.0.3_v2.0.11",
+            "--skip-image",
+            "--artifacts",
+            "windows-x86_64",
+            *extra,
+            companion="qbittorrent",
+            version="5.0.3",
+            recipe=recipe or self.recipe(),
+        )
+
+    def refuse(self, fake, code, recipe=None):
+        status, err = self.pin(fake, recipe=recipe)
+        self.assertEqual(status, 1, err)
+        self.assertIn(f"{code}:", err)
+        self.assertFalse(self.out.exists())
+        return err
+
+    def test_pinned_from_its_own_folder_with_the_release_key(self):
+        shutil.copy(self.gpg.export(self.a), self.keys / f"{self.a}.asc")
+        status, err = self.pin(Fake(self.routes()))
+        self.assertEqual(status, 0, err)
+        a = self.entry("qbittorrent")["native"]["artifacts"][2]
+        self.assertEqual(list(a), ["platform", "arch", "archive", "executable", "release", "pin"])
+        self.assertEqual(a["release"], "https://downloads.sourceforge.net/project/qbittorrent/qbittorrent-win32/")
+        self.assertEqual(
+            a["pin"],
+            {
+                "version": "5.0.3",
+                "url": SF,
+                "size": len(INSTALLER),
+                "sha256": hashlib.sha256(INSTALLER).hexdigest(),
+                "upstream_sig": {"kind": "verified_at_pin", "fingerprint": self.a},
+            },
+        )
+        # The fetch hosts are untouched: SourceForge is never one.
+        self.assertNotIn("downloads.sourceforge.net", self.entry("qbittorrent")["hosts"])
+
+    def test_refusals(self):
+        shutil.copy(self.gpg.export(self.a), self.keys / f"{self.a}.asc")
+        no_sig = self.routes()
+        del no_sig[MIRROR + ".asc"]
+        del no_sig[SF + ".asc"]
+        self.refuse(Fake(no_sig), "signature_missing")
+        self.refuse(Fake(self.routes(body=INSTALLER + b"!")), "bad_signature")
+        self.refuse(Fake(self.routes(sig=self.gpg.sign(self.b, INSTALLER))), "bad_signature")
+        self.refuse(Fake(self.routes(sig=b"not a signature")), "bad_signature")
+        self.refuse(Fake(self.routes()), "installer", recipe=self.recipe(upstream.Unsigned("no")))
+        for to in (
+            "https://evil.example/x.exe",
+            "https://a.b.dl.sourceforge.net/x.exe",
+            "https://dl.sourceforge.net.evil.example/x.exe",
+            "http://netix.dl.sourceforge.net/x.exe",
+            "https://github.com/x.exe",
+            "https://www.fosshub.com/x.exe",
+        ):
+            with self.subTest(to=to):
+                routes = self.routes()
+                routes[SF] = redirect(to)
+                routes[to] = ok(INSTALLER)
+                self.refuse(Fake(routes), "host_not_allowed")
+        routes = self.routes()
+        routes[SF + ".asc"] = redirect("https://evil.example/sig.asc")
+        self.refuse(Fake(routes), "host_not_allowed")
+
+    def test_the_key_is_fetched_from_two_sources_when_not_committed(self):
+        sources = (("https://keys.example/k", ("keys.example",)), ("https://github.com/u.gpg", ("github.com",)))
+        policy = upstream.OpenPgp(".asc", (self.a,), key_sources=sources)
+        routes = self.routes()
+        routes["https://keys.example/k"] = ok(self.gpg.run("--armor", "--export", self.a))
+        # A user's key list may hold other keys too; only the pinned one is used.
+        routes["https://github.com/u.gpg"] = ok(self.gpg.run("--armor", "--export", self.b, self.a))
+        status, err = self.pin(Fake(routes), recipe=self.recipe(policy))
+        self.assertEqual(status, 0, err)
+        report = self.report.read_text()
+        self.assertIn(f"Commit it as `keys/{self.a}.asc`", report)
+        self.assertIn("BEGIN PGP PUBLIC KEY BLOCK", report)
+        # A source that doesn't serve the pinned key refuses the pin.
+        self.out.unlink()
+        self.report.unlink()
+        routes["https://github.com/u.gpg"] = ok(self.gpg.run("--armor", "--export", self.b))
+        self.refuse(Fake(routes), "unknown_key", recipe=self.recipe(policy))
+        # One source is not a cross-check.
+        one = upstream.OpenPgp(".asc", (self.a,), key_sources=sources[:1])
+        self.refuse(Fake(routes), "key_not_pinned", recipe=self.recipe(one))
+
+    def test_mirror_hosts(self):
+        hosts = pin.INSTALLER_HOSTS
+        for h in ("downloads.sourceforge.net", "sourceforge.net", "netix.dl.sourceforge.net", "a-1.dl.sourceforge.net"):
+            self.assertTrue(hosts.allows(h), h)
+        for h in (
+            "dl.sourceforge.net",
+            "a.b.dl.sourceforge.net",
+            "-a.dl.sourceforge.net",
+            "evil.example",
+            "sourceforge.net.evil.example",
+            "xdl.sourceforge.net",
+        ):
+            self.assertFalse(hosts.allows(h), h)
+        # SourceForge stays refused on every other fetch.
+        with self.assertRaises(pin.Refused):
+            pin.check_url("https://downloads.sourceforge.net/x", pin.DOWNLOAD_HOSTS + ("downloads.sourceforge.net",))
+
+
+class Deadline(unittest.TestCase):
+    """A body that stalls can't hold a download past its deadline."""
+
+    def test_a_stalled_body_times_out(self):
+        import http.server
+        import threading
+        import time
+
+        release = threading.Event()
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", "1000")
+                self.end_headers()
+                self.wfile.write(b"x" * 10)
+                self.wfile.flush()
+                release.wait(30)  # stalls until the test is done
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        self.addCleanup(release.set)
+        with mock.patch.dict(os.environ, {"NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"}):
+            r = pin.Transport().get(f"http://127.0.0.1:{server.server_port}/", {})
+        start = time.monotonic()
+        with self.assertRaises(TimeoutError):
+            for _ in r.chunks(size=10, deadline=start + 1):
+                pass
+        self.assertLess(time.monotonic() - start, 10)
+        r.close()
+
+
+class SinglePlatform(Case):
+    GHCR = "https://ghcr.io/v2/qdm12/thing/manifests/v1"
+
+    def manifest(self, cfg):
+        digest = "sha256:" + hashlib.sha256(cfg).hexdigest()
+        body = json.dumps(
+            {"mediaType": "application/vnd.oci.image.manifest.v1+json", "config": {"digest": digest}}
+        ).encode()
+        blob = f"https://ghcr.io/v2/qdm12/thing/blobs/{digest}"
+        store = "https://pkg-containers.githubusercontent.com/b"
+        return {self.GHCR: ok(body), blob: redirect(store), store: ok(cfg)}
+
+    def test_the_config_names_the_platform(self):
+        routes = self.manifest(json.dumps({"os": "linux", "architecture": "amd64"}).encode())
+        _, platforms = pin.resolve_digest(Fake(routes), "ghcr.io/qdm12/thing", "v1")
+        self.assertEqual(platforms, ["linux/amd64"])
+
+    def test_another_platform_or_a_wrong_config_is_refused(self):
+        arm = self.manifest(json.dumps({"os": "linux", "architecture": "arm64"}).encode())
+        with self.assertRaises(pin.Refused):
+            pin.resolve_digest(Fake(arm), "ghcr.io/qdm12/thing", "v1")
+        bad = self.manifest(json.dumps({"os": "linux", "architecture": "amd64"}).encode())
+        store = "https://pkg-containers.githubusercontent.com/b"
+        bad[store] = ok(b'{"os": "linux", "architecture": "amd64", "x": 1}')
+        with self.assertRaises(pin.Refused) as e:
+            pin.resolve_digest(Fake(bad), "ghcr.io/qdm12/thing", "v1")
+        self.assertEqual(e.exception.code, "digest_mismatch")
 
 
 class RealOpener(unittest.TestCase):

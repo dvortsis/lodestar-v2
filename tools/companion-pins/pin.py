@@ -47,6 +47,15 @@ REGISTRIES = {
     "docker.io": ("registry-1.docker.io", ("registry-1.docker.io", "auth.docker.io")),
 }
 SOURCE_HOSTS = ("codeload.github.com",)
+# Where a registry redirects a blob (an image's config); read without credentials.
+BLOB_HOSTS = {
+    "lscr.io": ("pkg-containers.githubusercontent.com",),
+    "ghcr.io": ("pkg-containers.githubusercontent.com",),
+    "docker.io": ("production.cloudflare.docker.com",),
+}
+# Mirrors catalogue.rs's INSTALLER_SOURCES: an installer folder's host, never a fetch host.
+INSTALLER_SOURCES = ("downloads.sourceforge.net",)
+MAX_KEY = 1024 * 1024
 MAX_SIG = 64 * 1024
 MAX_MANIFEST = 4 * 1024 * 1024
 MAX_TOKEN = 64 * 1024
@@ -96,8 +105,14 @@ class Response:
         self.headers = {k.lower(): v for k, v in headers.items()}
         self._body = body
 
-    def chunks(self, size: int = 1 << 16):
+    def chunks(self, size: int = 1 << 16, deadline: float | None = None):
+        # No read may block past the deadline: the socket's own timeout is
+        # cut to what's left before each read (a body with no socket, such
+        # as the tests', has nothing to cut).
+        sock = getattr(getattr(getattr(self._body, "fp", None), "raw", None), "_sock", None)
         while True:
+            if deadline is not None and sock is not None:
+                sock.settimeout(max(0.01, min(60.0, deadline - time.monotonic())))
             chunk = self._body.read(size)
             if not chunk:
                 return
@@ -133,16 +148,39 @@ def host_of(url: str) -> str:
     return urllib.parse.urlsplit(url).hostname or "?"
 
 
+class PinTimeHosts:
+    """Hosts read only when a pin is made, never by Lodestar: exact `names`,
+    and one DNS label in front of `mirror_suffix` (SourceForge's download
+    mirrors, `<mirror>.dl.sourceforge.net`). What's read there is trusted
+    only through upstream's OpenPGP signature."""
+
+    def __init__(self, names, mirror_suffix: str):
+        self.names = frozenset(names)
+        self.mirror_suffix = mirror_suffix
+
+    def allows(self, host: str) -> bool:
+        label = host.removesuffix(self.mirror_suffix)
+        return host in self.names or (
+            host.endswith(self.mirror_suffix)
+            and re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) is not None
+        )
+
+
+INSTALLER_HOSTS = PinTimeHosts(("downloads.sourceforge.net", "sourceforge.net"), ".dl.sourceforge.net")
+
+
 def check_url(url: str, hosts) -> None:
     u = urllib.parse.urlsplit(url)
     host = (u.hostname or "").lower()
-    if any(host == n or host.endswith("." + n) for n in NEVER_HOSTS):
+    pin_time = isinstance(hosts, PinTimeHosts)
+    if not pin_time and any(host == n or host.endswith("." + n) for n in NEVER_HOSTS):
         raise Refused("host_not_allowed", f"{host} is never a fetch host")
     try:
         port = u.port
     except ValueError:
         port = -1
-    if u.scheme != "https" or port is not None or u.username or u.password or host not in hosts:
+    allowed = hosts.allows(host) if pin_time else host in hosts
+    if u.scheme != "https" or port is not None or u.username or u.password or not allowed:
         raise Refused("host_not_allowed", f"{u.scheme}://{host} is not on this fetch's allowlist")
 
 
@@ -174,13 +212,16 @@ def fetch(t: Transport, url: str, hosts, cap: int, sink, headers=None, missing_o
             if length is not None and (not length.isdigit() or int(length) > cap):
                 raise Refused("too_large", f"{host_of(url)} sent a body over {cap} bytes")
             total = 0
-            for chunk in r.chunks():
-                total += len(chunk)
-                if total > cap:
-                    raise Refused("too_large", f"{host_of(url)} sent a body over {cap} bytes")
-                if time.monotonic() > deadline:
-                    raise Refused("timeout", f"{host_of(url)} took over {OVERALL} s")
-                sink(chunk)
+            try:
+                for chunk in r.chunks(deadline=deadline):
+                    total += len(chunk)
+                    if total > cap:
+                        raise Refused("too_large", f"{host_of(url)} sent a body over {cap} bytes")
+                    if time.monotonic() > deadline:
+                        raise Refused("timeout", f"{host_of(url)} took over {OVERALL} s")
+                    sink(chunk)
+            except TimeoutError:
+                raise Refused("timeout", f"{host_of(url)} took over {OVERALL} s, or stalled") from None
             return True
         finally:
             r.close()
@@ -232,6 +273,52 @@ def primaries(listing: str) -> list[str]:
         elif f[0] in ("sub", "ssb", "uid"):
             after_pub = False
     return out
+
+
+def keys_for(t, gpg: str, policy, keys_dir: Path, work: Path) -> tuple[Path, list[str]]:
+    """The folder of pinned key files to verify with: `keys/` when it holds
+    every pinned key, else (for a policy that names its key sources) one
+    key fetched now from each source. Each source must serve the pinned
+    primary key; only that key, minimally exported, is used. The report
+    carries it for committing as `keys/<FINGERPRINT>.asc`."""
+    missing = [k for k in policy.keys if not (keys_dir / f"{k}.asc").is_file()]
+    if not missing:
+        return keys_dir, []
+    if len(policy.keys) != 1 or len(policy.key_sources) < 2:
+        raise Refused("key_not_pinned", f"no keys/{missing[0]}.asc, and no two sources to fetch it from")
+    fpr = policy.keys[0]
+    if not FINGERPRINT.match(fpr):
+        raise Refused("key_not_pinned", "the policy names no full fingerprint for this artifact")
+    exported = []
+    for url, hosts in policy.key_sources:
+        body = fetch_bytes(t, url, hosts, MAX_KEY)
+        with tempfile.TemporaryDirectory(prefix="pins-keysrc-") as home:
+            os.chmod(home, 0o700)
+            src = Path(home) / "source.asc"
+            src.write_bytes(body)
+            gpg_run(gpg, home, ["--import", str(src)])
+            if fpr not in primaries(gpg_run(gpg, home, ["--with-colons", "--list-keys"]).stdout):
+                raise Refused("unknown_key", f"{host_of(url)} doesn't serve the pinned key {fpr}")
+            out = gpg_run(gpg, home, ["--armor", "--export-options", "export-minimal", "--export", fpr])
+            if out.returncode != 0 or "BEGIN PGP PUBLIC KEY BLOCK" not in out.stdout:
+                raise Refused("unknown_key", f"the key from {host_of(url)} didn't export")
+            exported.append(out.stdout)
+    fetched = work / "fetched-keys"
+    fetched.mkdir(exist_ok=True)
+    (fetched / f"{fpr}.asc").write_text(exported[0], encoding="ascii")
+    lines = [
+        "",
+        f"Key `{fpr}` wasn't in `keys/`: fetched from "
+        + " and ".join(f"`{host_of(u)}`" for u, _ in policy.key_sources)
+        + ", both serving that primary key. Commit it as `keys/"
+        + fpr
+        + ".asc` in the pin PR:",
+        "",
+        "```",
+        *exported[0].strip().splitlines(),
+        "```",
+    ]
+    return fetched, lines
 
 
 def verify_openpgp(gpg: str, artifact: Path, sig: bytes, pinned: tuple[str, ...], keys_dir: Path) -> str:
@@ -493,9 +580,33 @@ def resolve_digest(t: Transport, image: str, tag: str) -> tuple[str, list[str]]:
         for m in doc.get("manifests", [])
         if isinstance(m, dict) and isinstance(m.get("platform"), dict) and m["platform"].get("os") != "unknown"
     )
-    if "manifests" in doc and "linux/amd64" not in platforms:
+    if "manifests" not in doc:
+        platforms = [single_platform(t, url, repo, doc, hosts, registry, headers)]
+    if "linux/amd64" not in platforms:
         raise Refused("registry", f"the image has no linux/amd64 build ({safe(', '.join(platforms))})")
     return digest, platforms
+
+
+def single_platform(t, url: str, repo: str, doc: dict, hosts, registry: str, headers: dict) -> str:
+    """A plain manifest names no platform: its config blob does. The blob is
+    fetched by its digest (the registry may redirect it to its blob host)
+    and checked against that digest before it's read."""
+    config = doc.get("config")
+    digest = config.get("digest") if isinstance(config, dict) else None
+    if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        raise Refused("registry", "the manifest names no sha256 config")
+    blob = bytearray()
+    auth = {k: v for k, v in headers.items() if k == "Authorization"}
+    blob_url = f"https://{host_of(url)}/v2/{repo}/blobs/{digest}"
+    fetch(t, blob_url, (*hosts, *BLOB_HOSTS[registry]), MAX_MANIFEST, blob.extend, auth)
+    if "sha256:" + hashlib.sha256(blob).hexdigest() != digest:
+        raise Refused("digest_mismatch", "the image config isn't the one its manifest names")
+    try:
+        cfg = json.loads(blob)
+        os_, arch = cfg["os"], cfg["architecture"]
+    except (ValueError, KeyError, TypeError):
+        raise Refused("registry", "the image config names no platform") from None
+    return f"{safe(os_)}/{safe(arch)}"
 
 
 # ─── The catalogue ──────────────────────────────────────────────────────────
@@ -604,14 +715,14 @@ def make_pins(args, doc: dict, t: Transport, gpg: str, keys_dir: Path, recipes=N
             if w not in keys:
                 raise Refused("request", f"{args.companion} has no {w} artifact")
         report += [f"Release tag `{tag}`, from `{release}`.", ""]
+        report_keys: list[str] = []
         with tempfile.TemporaryDirectory(prefix="pins-") as work:
             work = Path(work)
             for a, key in zip(native["artifacts"], keys, strict=True):
-                if a["archive"] == "installer":
+                installer = a["archive"] == "installer"
+                if installer and not recipe.installer_release:
                     if wanted and key in wanted:
-                        raise Refused(
-                            "installer", f"{key} is an installer: the catalogue has no release folder for it yet"
-                        )
+                        raise Refused("installer", f"the tool has no installer source for {args.companion}")
                     report += [f"- **{key}** (installer): not pinned, awaiting its pin (CMP-11's guided install)."]
                     continue
                 if wanted and key not in wanted:
@@ -621,26 +732,43 @@ def make_pins(args, doc: dict, t: Transport, gpg: str, keys_dir: Path, recipes=N
                 name = fill(recipe.files[key])
                 if not URL_PART.match(name):
                     raise Refused("request", f"{name!r} isn't a URL-safe file name")
-                url = f"{release}{tag}/{name}"
-                if not loader_url_ok(url, release):
+                policy = recipe.signature[key]
+                if installer:
+                    # Its own folder, read only now (never by Lodestar), and
+                    # trusted only through upstream's signature: a mirror
+                    # proves nothing on its own.
+                    if not isinstance(policy, upstream.OpenPgp):
+                        raise Refused("installer", f"{key} is pinned only with upstream's OpenPGP signature")
+                    folder = recipe.installer_release
+                    folder_host = host_of(folder)
+                    if folder_host not in INSTALLER_SOURCES or folder_host in entry["hosts"]:
+                        raise Refused("host_not_allowed", f"{folder_host} isn't an installer source")
+                    a_release, a_hosts, a_tag = folder, INSTALLER_HOSTS, fill(recipe.installer_dir or "")
+                else:
+                    a_release, a_hosts, a_tag = release, hosts, tag
+                if not URL_PART.match(a_tag):
+                    raise Refused("request", f"{safe(a_tag)} isn't a URL-safe folder")
+                url = f"{a_release}{a_tag}/{name}"
+                if not loader_url_ok(url, a_release):
                     raise Refused("request", f"{safe(url)} isn't a URL the catalogue accepts")
                 path = work / key
-                size, sha = fetch_file(t, url, hosts, MAX_ARTIFACT_SIZE, path)
+                size, sha = fetch_file(t, url, a_hosts, MAX_ARTIFACT_SIZE, path)
                 if size == 0:
                     raise Refused("check_failed", f"{key} is empty")
-                policy = recipe.signature[key]
                 if isinstance(policy, upstream.OpenPgp):
-                    sig = fetch_bytes(t, url + policy.suffix, hosts, MAX_SIG, missing_ok=True)
+                    sig = fetch_bytes(t, url + policy.suffix, a_hosts, MAX_SIG, missing_ok=True)
                     if sig is None:
                         raise Refused(
                             "signature_missing", f"upstream signs {key}, but {name}{policy.suffix} isn't there"
                         )
-                    fpr = verify_openpgp(gpg, path, sig, policy.keys, keys_dir)
+                    used_keys, key_lines = keys_for(t, gpg, policy, keys_dir, work)
+                    report_keys += key_lines
+                    fpr = verify_openpgp(gpg, path, sig, policy.keys, used_keys)
                     upstream_sig = {"kind": "verified_at_pin", "fingerprint": fpr}
                     sig_line = f"OpenPGP signature verified, key `{fpr}`"
                 else:
                     for suffix in (".asc", ".sig", ".gpg", ".minisig"):
-                        if fetch_bytes(t, url + suffix, hosts, MAX_SIG, missing_ok=True) is not None:
+                        if fetch_bytes(t, url + suffix, a_hosts, MAX_SIG, missing_ok=True) is not None:
                             raise Refused(
                                 "signature_unexpected",
                                 f"upstream now publishes {name}{suffix}: pin its key in upstream.py",
@@ -665,12 +793,18 @@ def make_pins(args, doc: dict, t: Transport, gpg: str, keys_dir: Path, recipes=N
                     # Upstream replaced a published file, or a host served
                     # other bytes: never re-pin one version silently.
                     raise Refused("sha_changed", f"{key} {args.version} was pinned as other bytes or another file")
+                if installer:
+                    # The folder sits before the pin, in the catalogue's layout.
+                    pin_and_after = {k: a.pop(k) for k in list(a) if k in ("release", "pin")}
+                    a["release"] = a_release
+                    a["pin"] = pin_and_after.get("pin")
                 a["pin"] = new
                 report += [f"- **{key}** `{url}`", f"  - size {size}, SHA-256 `{sha}`", f"  - {sig_line}"]
                 report += [f"  - {c}" for c in checks]
             if "prowlarr_source" in recipe.checks:
                 report += ["", f"Prowlarr source at `{tag}`, outside its tests:"]
                 report += [f"- {line}" for line in check_prowlarr_source(t, parts[1], parts[2], tag, work)]
+        report += report_keys
         versions = {a["pin"]["version"] for a in native["artifacts"] if a.get("pin")}
         if len(versions) > 1:
             raise Refused(
@@ -711,7 +845,10 @@ def main(argv=None, transport=None, keys_dir=KEYS) -> int:
     p.add_argument("--version", required=True)
     p.add_argument("--tag")
     p.add_argument("--image-tag")
-    p.add_argument("--artifacts", help="comma-separated <platform>-<arch>; default: every one but installers")
+    p.add_argument(
+        "--artifacts",
+        help="comma-separated <platform>-<arch>; default: every one the recipe covers",
+    )
     p.add_argument("--skip-image", action="store_true", help="leave the container digest as it is")
     p.add_argument("--gpg", default="gpg")
     args = p.parse_args(argv)
