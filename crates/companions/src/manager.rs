@@ -357,10 +357,12 @@ pub trait ApiConfigure: Send + Sync {
         Box::pin(async { Ok(()) })
     }
 
-    /// Whether [`ApiConfigure::hand_over`] saves anything for `id`: only
-    /// then does a first install write its marker. No by default.
+    /// Whether [`ApiConfigure::hand_over`] may save anything for `id`: a
+    /// first install writes its marker only then. Yes by default, which
+    /// fails safe: a marker for a companion that saves nothing only makes
+    /// the next start release nothing (#692's review, B1).
     fn hands_over(&self, _id: &CompanionId) -> bool {
-        false
+        true
     }
 
     /// Takes what [`ApiConfigure::hand_over`] saved out of Lodestar's
@@ -1363,13 +1365,15 @@ impl Manager {
                     ManagerError::Step { step, code } => (*step, *code),
                     other => ("install", other.code()),
                 };
-                lodestar_log::log_event!(
-                    INSTALL_FAILED,
-                    companion = m.label(id),
-                    version = pin.version.as_str(),
-                    step = step,
-                    reason = code
-                );
+                if !logged_at_bound(&e) {
+                    lodestar_log::log_event!(
+                        INSTALL_FAILED,
+                        companion = m.label(id),
+                        version = pin.version.as_str(),
+                        step = step,
+                        reason = code
+                    );
+                }
                 self.undo(entry, rec, handed).await;
                 Err(e)
             }
@@ -1465,21 +1469,18 @@ impl Manager {
         // A first install marks it first (#679's I2): a crash before
         // `configured` is undone by recovery, which can't reach the
         // settings, so the marker says what to release once it can.
-        // Only one this build hands over (qBittorrent) can save anything.
+        // Not for one whose hand-over saves nothing (`hands_over`, yes
+        // unless an implementation says otherwise: a marker it didn't
+        // need only makes the next start release nothing).
         let marks = fresh && m.p.api.hands_over(id);
         if marks {
             self.off(move |m| m.mark(id)).await?;
         }
         *handed = true;
-        if let Err(e) = self.hand_over_now(id, &target).await {
-            // One that never answered may still save: it isn't released
-            // now, and its marker stays, so the next start releases what
-            // it left once it can't land any more.
-            if e.code() == "timed_out" {
-                *handed = false;
-            }
-            return Err(e);
-        }
+        // One past its bound has settled by the time it answers
+        // `timed_out` (`hand_over_now`), so the undo releases whatever it
+        // saved, as for any other failure.
+        self.hand_over_now(id, &target).await?;
         fault!(m, After(Step::Configured));
         let mut next = rec.clone();
         next.installed = Some(v.clone());
@@ -1579,17 +1580,18 @@ impl Manager {
                 // A first install undone: what its hand-over saved goes
                 // too, so no managed entry points at nothing.
                 if handed {
-                    if self.release_now(id).await.is_ok() {
-                        m.unmark(id);
-                    } else {
-                        // The marker stays: the next start releases it.
-                        lodestar_log::log_event!(
+                    match self.release_now(id).await {
+                        Ok(()) => m.unmark(id),
+                        // The marker stays: the next start releases it. One
+                        // past its deadline was logged there.
+                        Err(e) if logged_at_bound(&e) => {}
+                        Err(_) => lodestar_log::log_event!(
                             INSTALL_FAILED,
                             companion = m.label(id),
                             version = "",
                             step = "release",
                             reason = "rollback_failed"
-                        );
+                        ),
                     }
                 }
                 m.publish(id, None)
@@ -1773,8 +1775,8 @@ impl Manager {
             }
             match self.release_now(id).await {
                 Ok(()) => self.0.unmark(id),
-                // Logged already, once it settled.
-                Err(e) if e.code() == "timed_out" => {}
+                // Logged already, at the deadline.
+                Err(e) if logged_at_bound(&e) => {}
                 Err(e) => lodestar_log::log_event!(
                     INSTALL_FAILED,
                     companion = self.0.label(id),
@@ -1800,6 +1802,18 @@ impl Manager {
             }
         }
     }
+}
+
+/// A hand-over or release past its bound, which `hand_over_now` and
+/// `release_now` log there: their callers don't log it again.
+fn logged_at_bound(e: &ManagerError) -> bool {
+    matches!(
+        e,
+        ManagerError::Step {
+            step: "handover" | "release",
+            code: "timed_out"
+        }
+    )
 }
 
 /// What the manager does to a companion it installed, once installed.
@@ -1942,6 +1956,7 @@ impl Manager {
         self.follow_from(entry, version, health);
         if let Err(e) = &result
             && e.code() != "shutting_down"
+            && !logged_at_bound(e)
         {
             lodestar_log::log_event!(
                 INSTALL_FAILED,
@@ -1990,21 +2005,33 @@ impl Manager {
             field: field_name(id),
             secret,
         };
-        // A generous bound: one local settings write takes far less. Past it
-        // the save may still land, so an install's undo doesn't release it
-        // (its marker stays for the next start), and a restart's or a
-        // regenerate's is retried by the next restart (#679's review).
+        // A generous bound, three of the live deadline (15 min in shipped
+        // builds): one local settings write takes far less. One past it is
+        // logged and then waited for, as a release is (`release_now`): it
+        // may still save, and the caller holds the slot and, for an
+        // install, the guided lock, so no guided confirmation can save an
+        // entry that it then overwrites (#692's review, N1). It still
+        // answers `timed_out`, once it has settled.
         let handed =
             self.0
                 .p
                 .api
                 .hand_over(id, target, InstallReceipt::new(target.clone()), &opened);
-        // The outer bound: three of the live deadline (15 min in shipped
-        // builds), against a store that never answers.
-        tokio::time::timeout(3 * self.0.deadline(), handed)
-            .await
-            .map_err(|_| failed("handover")("timed_out"))?
-            .map_err(|e| failed("handover")(configure::code(&e)))
+        let mut handed = std::pin::pin!(handed);
+        match tokio::time::timeout(3 * self.0.deadline(), handed.as_mut()).await {
+            Ok(r) => r.map_err(|e| failed("handover")(configure::code(&e))),
+            Err(_) => {
+                lodestar_log::log_event!(
+                    INSTALL_FAILED,
+                    companion = self.0.label(id),
+                    version = "",
+                    step = "handover",
+                    reason = "timed_out"
+                );
+                let _ = handed.await;
+                Err(failed("handover")("timed_out"))
+            }
+        }
     }
 
     /// Stops `id`, ending the run any follower publishes for.

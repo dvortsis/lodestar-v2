@@ -1205,7 +1205,10 @@ impl Guided {
     /// writes its record: the confirmation's end, first try or retry. The
     /// hand-over and the record run in a task that owns the guided lock
     /// (`one`), so a dropped request can't let it go while their saves are
-    /// still in flight (#692's review, Important 1).
+    /// still in flight (#692's review, Important 1). It has no bound of
+    /// its own: a store that never answers keeps the guided steps and a
+    /// qBittorrent install `busy` until shutdown, as a release past its
+    /// deadline does.
     async fn finish(
         &self,
         one: tokio::sync::OwnedMutexGuard<()>,
@@ -1227,6 +1230,7 @@ impl Guided {
                 .map_err(|err| CompanionsError::Refused(adapter_code(err)))?;
         }
         let (service, sink, store) = (self.service.clone(), self.sink.clone(), self.store.clone());
+        let (added, cat, rt) = (self.added.clone(), self.catalogue, self.runtime);
         let target = target.clone();
         let tail = tokio::spawn(async move {
             let _one = one;
@@ -1246,20 +1250,24 @@ impl Guided {
                 .await
                 .map_err(|err| CompanionsError::Refused(adapter_code(err)))?;
             let origin = guided::origin_key(&e.id);
-            tokio::task::spawn_blocking(move || {
+            // The record, then the watch, sent from here so a dropped
+            // request still updates it (#692's review, N2).
+            let recorded = tokio::task::spawn_blocking(move || {
                 store
                     .lock()
                     .map_err(|_| ())?
                     .set_settings_text(&[(&origin, RecordOrigin::Confirmed.as_str())])
-                    .map_err(|_| ())
+                    .map_err(|_| ())?;
+                Ok::<_, ()>(records(&store, cat, rt))
             })
             .await
             .map_err(|_| CompanionsError::Internal("panicked"))?
-            .map_err(|()| CompanionsError::Internal("store"))
+            .map_err(|()| CompanionsError::Internal("store"))?;
+            added.send_replace(added_of(&recorded));
+            Ok::<(), CompanionsError>(())
         });
         tail.await
             .map_err(|_| CompanionsError::Internal("panicked"))??;
-        self.refresh().await;
         Ok(lodestar_api::companions::CompanionsApi::get(
             self.service.as_ref(),
             e.id.as_str().to_owned(),

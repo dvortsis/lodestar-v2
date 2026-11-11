@@ -263,8 +263,12 @@ struct FakeApi {
     refuse_pre_check: AtomicBool,
     /// Each check's `fresh`.
     asked: Mutex<Vec<bool>>,
-    /// The hand-over never answers.
+    /// The hand-over waits for `hand_over_gate`, as a slow store's save
+    /// does; `hand_over_dropped` says one was given up on before it
+    /// answered.
     hang_hand_over: AtomicBool,
+    hand_over_gate: tokio::sync::Notify,
+    hand_over_dropped: AtomicBool,
     /// Says nothing is handed over, as for a companion this build doesn't.
     no_hand_over: AtomicBool,
     /// The release waits for `release_gate`, as a slow store's save does;
@@ -350,8 +354,13 @@ impl ApiConfigure for FakeApi {
             if self.refuse_hand_over.load(Ordering::SeqCst) {
                 return Err(AdapterError::Refused("sink_refused"));
             }
+            if self.no_hand_over.load(Ordering::SeqCst) {
+                return Ok(());
+            }
             if self.hang_hand_over.load(Ordering::SeqCst) {
-                std::future::pending::<()>().await;
+                let mut settles = Settles(&self.hand_over_dropped, false);
+                self.hand_over_gate.notified().await;
+                settles.1 = true;
             }
             let input = ConfigureInput::new(credentials).installed(receipt);
             configure::hand_over(&self.sink, id, target, &input).await
@@ -2013,21 +2022,55 @@ async fn a_live_undo_keeps_the_marker_only_when_its_release_fails() {
     assert_eq!(w.on_disk(), None);
 }
 
-/// #692's review, Important 2: a hand-over that never answers is given up
-/// at its bound (three of the live deadline, shortened here). It may still
-/// save, so the undo releases nothing and the marker stays for the next
-/// start.
+/// #692's review, Important 2 and N1: a hand-over past its bound (three
+/// of the live deadline, shortened here) is logged there and then waited
+/// for, holding the slot, since it may still save. Once it has settled the
+/// install fails `timed_out` and its undo releases what it saved, so no
+/// marker is left and nothing lands later.
 #[tokio::test]
-async fn a_hung_hand_over_keeps_its_marker_and_isnt_released() {
+async fn a_hand_over_past_its_bound_is_waited_for_then_undone() {
     let _g = SERIAL.lock().await;
+    let lines = capture();
     let w = World::new();
     let marker = w.data.path().join("companions/.handed-over-qbittorrent");
-    let m = w.manager(catalogue("5.0.3"), LINUX);
-    m.set_live_deadline(std::time::Duration::from_secs(1));
+    let m = Arc::new(w.manager(catalogue("5.0.3"), LINUX));
+    m.set_live_deadline(std::time::Duration::from_millis(200));
     w.api.hang_hand_over.store(true, Ordering::SeqCst);
-    let got = tokio::time::timeout(WAIT, m.install(&token("5.0.3")))
-        .await
-        .expect("the hand-over wasn't bounded");
+    let timed_out = |l: &String| {
+        l.contains("companions.install_failed") && l.contains("handover") && l.contains("timed_out")
+    };
+    let seen = lines
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| timed_out(l))
+        .count();
+    let install = tokio::spawn({
+        let m = m.clone();
+        async move { m.install(&token("5.0.3")).await }
+    });
+    let logged = tokio::time::timeout(WAIT, async {
+        while lines
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|l| timed_out(l))
+            .count()
+            == seen
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert!(logged.is_ok(), "the hand-over never passed its bound");
+    assert!(!w.api.hand_over_dropped.load(Ordering::SeqCst));
+    assert!(!install.is_finished());
+    assert!(marker.is_file());
+    assert_eq!(w.api.releases.load(Ordering::SeqCst), 0);
+    w.api.hand_over_gate.notify_one();
+    let got = tokio::time::timeout(WAIT, install).await.unwrap().unwrap();
     assert_eq!(
         got,
         Err(ManagerError::Step {
@@ -2035,9 +2078,19 @@ async fn a_hung_hand_over_keeps_its_marker_and_isnt_released() {
             code: "timed_out"
         })
     );
-    assert_eq!(w.api.releases.load(Ordering::SeqCst), 0);
-    assert!(marker.is_file());
+    assert!(!w.api.hand_over_dropped.load(Ordering::SeqCst));
+    assert_eq!(w.api.releases.load(Ordering::SeqCst), 1);
+    assert!(!marker.exists());
     assert_eq!(w.on_disk(), None);
+    // Logged once, at the bound.
+    let n = lines
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| timed_out(l))
+        .count();
+    assert_eq!(n, seen + 1);
 }
 
 /// #692's review, Important 3: a pending release that passes its deadline

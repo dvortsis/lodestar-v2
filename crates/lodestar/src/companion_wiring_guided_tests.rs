@@ -942,6 +942,8 @@ async fn a_dropped_confirmation_keeps_the_lock_until_its_save_lands() {
     .await;
     assert!(landed.is_ok(), "the confirmation never let the lock go");
     assert_eq!(f.row(&origin).as_deref(), Some("confirmed"));
+    // And the watch says so, though nobody waited for the answer.
+    assert_eq!(f.added.borrow().len(), 1);
     drop(landed);
     // Its entry is there now, so a native install is refused.
     assert_eq!(

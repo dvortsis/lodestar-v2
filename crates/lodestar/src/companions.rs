@@ -555,11 +555,6 @@ impl ApiConfigure for Wiring {
         })
     }
 
-    /// Only qBittorrent's hand-over saves anything here.
-    fn hands_over(&self, id: &CompanionId) -> bool {
-        id.as_str() == configure::qbittorrent::ID
-    }
-
     fn release<'a>(&'a self, id: &'a CompanionId) -> BoxFuture<'a, Result<(), AdapterError>> {
         Box::pin(async move {
             if id.as_str() != configure::qbittorrent::ID {
@@ -1525,6 +1520,17 @@ pub(crate) fn parked_service(
 mod tests {
     use super::*;
     use lodestar_companions::credentials::generate;
+
+    /// #692's review, B1: the binary marks every first install it may
+    /// hand over (the trait's fail-safe yes), qBittorrent and the
+    /// companions that are handed over later alike.
+    #[test]
+    fn every_first_install_is_marked() {
+        let w = Wiring::default();
+        for id in ["qbittorrent", "prowlarr", "flaresolverr"] {
+            assert!(w.hands_over(&CompanionId::parse(id).unwrap()), "{id}");
+        }
+    }
 
     #[test]
     fn containers_are_recognised() {
