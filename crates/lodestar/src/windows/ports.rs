@@ -229,9 +229,10 @@ pub fn ready() -> bool {
 }
 
 /// Reads both families' ranges now and returns [`worst`]'s answer for the
-/// socket count [`set_max_sockets`] set. It runs `netsh`, so callers cache
-/// it (Insights re-checks at most hourly). `None` off Windows, without a
-/// fetch pool, or when `netsh` can't be read.
+/// socket count [`set_max_sockets`] set. It runs `netsh` four times within
+/// one 10 s budget (`NETSH_BUDGET`), so callers cache it (Insights
+/// re-checks at most hourly). `None` off Windows, without a fetch pool, or
+/// when `netsh` can't be read in time.
 pub fn pressure() -> Option<Warning> {
     let max_sockets = max_sockets().unwrap_or(0);
     #[cfg(windows)]
@@ -239,13 +240,23 @@ pub fn pressure() -> Option<Warning> {
         if max_sockets == 0 {
             return None;
         }
-        worst([Family::V4, Family::V6].map(|f| (f, query(f))), max_sockets)
+        let deadline = std::time::Instant::now() + NETSH_BUDGET;
+        worst(
+            [Family::V4, Family::V6].map(|f| (f, query(f, deadline))),
+            max_sockets,
+        )
     }
     #[cfg(not(windows))]
     {
         let _ = max_sockets;
         None
     }
+}
+
+/// Insights' port probe: whether [`pressure`] can answer yet ([`ready`]),
+/// and its answer.
+pub fn probe() -> (bool, Option<Warning>) {
+    (ready(), pressure())
 }
 
 /// `netsh int ipv4 show dynamicport tcp`: the start port and the number
@@ -298,18 +309,25 @@ pub fn overlap(start: u32, count: u32, excluded: &[(u32, u32)]) -> u32 {
     total
 }
 
-/// The range for `family` from `netsh`, or `None` when it can't be read.
+/// The range for `family` from `netsh`, or `None` when it can't be read
+/// by `deadline`.
 #[cfg(windows)]
-pub fn query(family: Family) -> Option<Range> {
-    let dynamic = netsh(&["int", family.netsh(), "show", "dynamicport", "tcp"])?;
+pub fn query(family: Family, deadline: std::time::Instant) -> Option<Range> {
+    let dynamic = netsh(
+        &["int", family.netsh(), "show", "dynamicport", "tcp"],
+        deadline,
+    )?;
     let (start, count) = parse_dynamic(&dynamic)?;
-    let excluded = netsh(&[
-        "int",
-        family.netsh(),
-        "show",
-        "excludedportrange",
-        "protocol=tcp",
-    ])
+    let excluded = netsh(
+        &[
+            "int",
+            family.netsh(),
+            "show",
+            "excludedportrange",
+            "protocol=tcp",
+        ],
+        deadline,
+    )
     .map(|t| overlap(start, count, &parse_excluded(&t)))
     .unwrap_or(0);
     Some(Range {
@@ -319,15 +337,16 @@ pub fn query(family: Family) -> Option<Range> {
     })
 }
 
-/// How long `netsh` may take before it's killed and its answer counted
-/// as unreadable: a check runs on a request's thread.
+/// How long all the `netsh` calls of one check may take together. Past
+/// it the call running is killed and the rest count as unreadable:
+/// Insights' check runs on a request's thread.
 #[cfg(windows)]
-const NETSH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+const NETSH_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Runs `netsh` from System32 (never from the search path) without a
-/// console window, for at most [`NETSH_DEADLINE`].
+/// console window, killing it at `deadline`.
 #[cfg(windows)]
-fn netsh(args: &[&str]) -> Option<String> {
+fn netsh(args: &[&str], deadline: std::time::Instant) -> Option<String> {
     use std::io::Read;
     use std::process::Stdio;
     let mut child = super::system32_command("netsh.exe")?
@@ -344,7 +363,6 @@ fn netsh(args: &[&str]) -> Option<String> {
         let _ = stdout.read_to_end(&mut out);
         out
     });
-    let deadline = std::time::Instant::now() + NETSH_DEADLINE;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -369,11 +387,12 @@ fn netsh(args: &[&str]) -> Option<String> {
 /// Checks both families and logs a warning for each narrow one.
 #[cfg(windows)]
 pub fn check(max_sockets: usize) {
+    let deadline = std::time::Instant::now() + NETSH_BUDGET;
     for family in [Family::V4, Family::V6] {
         use crate::logging::events::{
             WINDOWS_PORTS_LOW, WINDOWS_PORTS_OK, WINDOWS_PORTS_UNREADABLE,
         };
-        match query(family) {
+        match query(family, deadline) {
             Some(range) => match assess(family, range, max_sockets) {
                 Some(w) => {
                     let (fix_start, fix_count) = w.fix().unwrap_or((0, 0));
@@ -564,8 +583,9 @@ mod tests {
         assert_eq!((d.fix_start, d.fix_count), (None, None));
     }
 
-    /// The only test that touches the process-wide count, so parallel
-    /// tests can't race on it.
+    /// The only test that sets or reads the process-wide count, so parallel
+    /// tests can't race on it: Insights' tests inject their port probe.
+    /// Keep it that way.
     #[test]
     fn pressure_uses_the_count_set_last() {
         set_max_sockets(1000);

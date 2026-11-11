@@ -157,8 +157,14 @@ impl Insights {
     /// Checks `data_dir`'s filesystem and the port range for the
     /// overview's exceptions; set once.
     pub fn set_host_checks(&self, data_dir: PathBuf) {
+        self.set_host_probe(data_dir, crate::windows::ports::probe);
+    }
+
+    /// [`Insights::set_host_checks`] with the port probe given (a fake in
+    /// tests, since the real one reads a process-wide count).
+    fn set_host_probe(&self, data_dir: PathBuf, ports: PortProbe) {
         let _ = self.host.set(HostChecks::new(Box::new(move |now| {
-            probe_host(&data_dir, now)
+            probe_host(&data_dir, now, ports)
         })));
     }
 
@@ -321,16 +327,19 @@ impl Drop for Claim<'_> {
     }
 }
 
+/// `ports::probe`: whether the port check can answer yet, and its warning.
+type PortProbe = fn() -> (bool, Option<crate::windows::ports::Warning>);
+
 /// The host exceptions at `now`: the data folder's filesystem (every OS)
-/// and the port range (Windows; `None` elsewhere). Incomplete until the
-/// socket count is set (`ports::ready`), which `services` does at start.
-fn probe_host(data_dir: &Path, now: i64) -> HostFound {
-    use crate::windows::ports;
-    let complete = ports::ready();
+/// and the port range (`ports`: Windows; never elsewhere). Incomplete
+/// until the socket count is set (`ports::ready`), which `services` does
+/// at start.
+fn probe_host(data_dir: &Path, now: i64, ports: PortProbe) -> HostFound {
+    let (complete, pressure) = ports();
     let filesystem = crate::fsdetect::detect(data_dir)
         .exception_detail()
         .map(|fs| api::data_filesystem(fs, now));
-    let pressure = ports::pressure().map(|w| api::ephemeral_ports(w.detail(), now));
+    let pressure = pressure.map(|w| api::ephemeral_ports(w.detail(), now));
     HostFound {
         exceptions: filesystem.into_iter().chain(pressure).collect(),
         complete,
@@ -958,17 +967,40 @@ mod host_tests {
 
     #[test]
     fn the_source_lists_the_data_folders_filesystem() {
-        let insights = Insights::with_clock(Box::new(|| 0), T);
-        // Before `spawn` sets the checks: none.
-        assert_eq!(insights.host_exceptions(T), vec![]);
         let dir = tempfile::tempdir().unwrap();
-        insights.set_host_checks(dir.path().to_path_buf());
-        let expected: Vec<InsightsException> = crate::fsdetect::detect(dir.path())
+        let filesystem: Vec<InsightsException> = crate::fsdetect::detect(dir.path())
             .exception_detail()
             .map(|fs| api::data_filesystem(fs, T))
             .into_iter()
             .collect();
+        let insights = Insights::with_clock(Box::new(|| 0), T);
+        // Before `spawn` sets the checks: none.
+        assert_eq!(insights.host_exceptions(T), vec![]);
+        insights.set_host_probe(dir.path().to_path_buf(), || (true, None));
+        assert_eq!(insights.host_exceptions(T), filesystem);
+
+        // A narrow range comes after the filesystem, with its detail.
+        fn narrow() -> (bool, Option<crate::windows::ports::Warning>) {
+            use crate::windows::ports::{Family, Range, assess};
+            let range = Range {
+                start: 49152,
+                count: 16384,
+                excluded: 15000,
+            };
+            (true, assess(Family::V4, range, 400))
+        }
+        let insights = Insights::with_clock(Box::new(|| 0), T);
+        insights.set_host_probe(dir.path().to_path_buf(), narrow);
+        let mut expected = filesystem.clone();
+        expected.push(api::ephemeral_ports(narrow().1.unwrap().detail(), T));
         assert_eq!(insights.host_exceptions(T), expected);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn no_port_exception_off_windows() {
+        // Whatever count is set: there's no range to read.
+        assert_eq!(crate::windows::ports::probe(), (true, None));
     }
 }
 

@@ -30,7 +30,9 @@ pub enum FsKind {
     UnraidUserShare,
     /// Another FUSE filesystem (mergerfs, rclone, sshfs, ntfs-3g, …).
     Fuse,
-    /// A network filesystem: NFS, SMB/CIFS, a Windows network drive, ….
+    /// A network or shared-folder filesystem: NFS, SMB/CIFS, a Windows
+    /// network drive, 9p (WSL2 or Docker Desktop sharing a Windows drive),
+    /// ….
     Network,
     /// The platform gives no answer (no mount table, say).
     Unknown,
@@ -96,9 +98,10 @@ impl FsReport {
                  on a local disk, ideally an SSD."
             ),
             FsKind::Network => format!(
-                "The data folder {path} is on a network filesystem{fs}. Its file locking isn't \
-                 reliable enough for the database, which can be damaged. Keep the data folder \
-                 on a local disk, ideally an SSD, and send only backups to the share."
+                "The data folder {path} is on a network or shared-folder filesystem{fs}. Its \
+                 file locking isn't reliable enough for the database, which can be damaged. Keep \
+                 the data folder on a local disk, ideally an SSD, and send only backups to the \
+                 share."
             ),
             FsKind::Local | FsKind::Unknown => return None,
         })

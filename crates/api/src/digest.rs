@@ -514,9 +514,9 @@ fn data_filesystem_alert(e: &InsightsException) -> String {
         Some(DataFsKind::Fuse) => "The data folder is on a FUSE filesystem, which is slow for \
             the search index. Keep it on a local disk, ideally an SSD."
             .into(),
-        Some(DataFsKind::Network) => "The data folder is on a network share, whose file \
-            locking isn't reliable enough for the database. Keep it on a local disk, ideally \
-            an SSD, and send only backups to the share."
+        Some(DataFsKind::Network) => "The data folder is on a network or shared-folder \
+            filesystem, whose file locking isn't reliable enough for the database. Keep it on \
+            a local disk, ideally an SSD, and send only backups to the share."
             .into(),
         None => "The data folder is on a filesystem that's slow or unsafe for the database. \
             Keep it on a local disk, ideally an SSD."
@@ -1297,7 +1297,7 @@ mod tests {
         };
         assert!(fs(Some(DataFsKind::UnraidUserShare)).contains("/mnt/cache/appdata/lodestar"));
         assert!(fs(Some(DataFsKind::Fuse)).contains("FUSE filesystem"));
-        assert!(fs(Some(DataFsKind::Network)).contains("network share"));
+        assert!(fs(Some(DataFsKind::Network)).contains("network or shared-folder filesystem"));
         assert!(fs(None).contains("slow or unsafe"));
         let ports = |range: Option<(u32, u32)>, family| {
             let mut e = exception(
