@@ -29,7 +29,7 @@ from timefmt import fmt
 
 ROOT = Path(__file__).resolve().parents[3]
 WORKFLOWS = ROOT / ".github" / "workflows"
-COVERED = ["fleet.yml", "operator-wake.yml", "operator-injection.yml"]
+COVERED = ["fleet.yml", "operator-wake.yml", "operator-apply.yml", "operator-tripwire.yml", "operator-injection.yml"]
 FLEET = WORKFLOWS / "fleet.yml"
 L = limits.load()
 
@@ -278,6 +278,32 @@ SCENARIOS = {
                                                  event_env("/fleet run renew-vpn main", OPERATOR_STOP="true"),
                                                  event_env("/fleet status"), event_env(AUTHOR_ID="1")],
 }
+
+def op_env(**over):
+    """An operator-wake event (OP-4): a runner instruction on the channel PR."""
+    env = event_env("operator-instruction v1\nid: ping-1\nkind: query\n\nping", AUTHOR_ID="111", RUNNER_USER_ID="111")
+    env.update(over)
+    return env
+
+
+SCENARIOS.update({
+    ("infra/operator/wake.py", "gate"): [op_env(), op_env(AUTHOR_ID="9"), op_env(OPERATOR_STOP="true"),
+                                         op_env(COMMENT_BODY="operator-instruction v1\nid: x")],
+    ("infra/operator/wake.py", "refuse"): [{"REFUSAL_REASON": "missing field", "CHANNEL_PR": "700"}],
+    # Gated before any setting is read: a stranger, the stop, a re-run, the bot.
+    ("infra/operator/wake.py", "wake"): [op_env(AUTHOR_ID="9"), op_env(OPERATOR_STOP="true"),
+                                         op_env(GITHUB_RUN_ATTEMPT="2"), op_env(AUTHOR_ID="555")],
+    ("infra/operator/tripwire.py", "trip"): [op_env(SENDER_ID="9"), op_env(SENDER_ID="555", EVENT_ACTION="edited")],
+    ("infra/operator/tripwire.py", "sweep"): [op_env()],
+    ("infra/operator/agent_apply.py", "apply"): [op_env(GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_ACTOR_ID="9",
+                                                        OWNER_USER_ID="111")],
+})
+# These refuse with a failing exit in the leak test's offline, repository-less
+# environment, before any network call (the operator tests cover their live paths
+# with fakes): the sweep and a tripped trip need GITHUB_REPOSITORY, apply the owner.
+FAILS_CLOSED = {("infra/operator/tripwire.py", "sweep"), ("infra/operator/agent_apply.py", "apply"),
+                ("infra/operator/tripwire.py", "trip")}
+OPERATOR_WORKFLOWS = ("operator-wake.yml", "operator-apply.yml", "operator-tripwire.yml")
 # Every run: step in a covered workflow is exactly one such invocation, so a
 # script can't slip past the scenarios by being started some other way.
 LIVE_INSTALL = ('python3 -m pip install --quiet --no-deps --require-hashes --target "$RUNNER_TEMP/fleet-deps" '
@@ -295,6 +321,8 @@ class PublicLogLeak(unittest.TestCase):
                     if s["run"] == LIVE_INSTALL and s.get("if") in ("vars.FLEET_LIVE == 'true'",
                                                                      "needs.act.outputs.live == 'true'"):
                         continue  # the one other allowed step: pip from hash-pinned wheels, live only
+                    if s["run"] == LIVE_INSTALL and path.name in OPERATOR_WORKFLOWS and "environment" in job:
+                        continue  # the operator's jobs are always live (no dry-run): the same pinned wheels
                     m = INVOKE.fullmatch(s["run"].strip())
                     with self.subTest(workflow=path.name, job=name, run=s["run"][:60]):
                         self.assertIsNotNone(m, "a run: step must be one `python3 infra/<script>.py <sub>`")
@@ -314,7 +342,10 @@ class PublicLogLeak(unittest.TestCase):
                     # check closed without a network call; the rest run dry.
                     r = subprocess.run([sys.executable, str(ROOT / script), sub], cwd=self.outside, capture_output=True,
                                        text=True, env=scrub_env({**env, **secret_env}), timeout=60)
-                    self.assertEqual(r.returncode, 0, r.stderr[-400:])
+                    if (script, sub) in FAILS_CLOSED and env.get("SENDER_ID") != "9":
+                        self.assertNotEqual(r.returncode, 0)
+                    else:
+                        self.assertEqual(r.returncode, 0, r.stderr[-400:])
                     for v in values:
                         self.assertNotIn(v, r.stdout + r.stderr)
 
