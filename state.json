@@ -6711,7 +6711,8 @@
     "next runner PR: PK-win-portable-upd owns += crates/lodestar/src/cli/util.rs (runner approved 2026-11-11T05:2xZ; refuse_during_update_rollback also refuses on portable.json rolling_back or unreadable)",
     "X-prowlarr-settings #658 (54982496): option 2 done; Windows portable-restart red is \u00a72.18 once X-flake-portable-restart PR opens",
     "next runner PR: CMP-9c owns += web/src/lib/features/wizard/messages/{en,zh}.json (keys only, runner 2026-11-11)",
-    "X-flake-portable-restart: PR #662 open (81fe7bb3), runner subagent; Opus review running; merge first, then PRs red only on a_portable_restart_* may use \u00a72.18. next runner PR: slices.yaml entry (owns system/restart.rs, windows/mod.rs [not spawn()], tests/windows_service.rs, its decisions file) + placement"
+    "X-flake-portable-restart: PR #662 open (81fe7bb3), runner subagent; Opus review running; merge first, then PRs red only on a_portable_restart_* may use \u00a72.18. next runner PR: slices.yaml entry (owns system/restart.rs, windows/mod.rs [not spawn()], tests/windows_service.rs, its decisions file) + placement",
+    "OP-5 first-run check: the agent's helper fetch is unauthenticated (GitHub's 60/h limit from a shared egress IP); from rv-655 N4"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7564,7 +7565,7 @@
     }
   ],
   "heartbeat": "2026-11-11T04:06Z",
-  "updated": "2026-11-11T06:05Z",
+  "updated": "2026-11-11T06:10Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -7592,13 +7593,5 @@
       "send": "with the X-prowlarr-settings merge FYI"
     }
   ],
-  "review_queue": [
-    {
-      "pr": 661,
-      "slice": "OP-3b",
-      "head": "f75a21097800d59435755c409283b87e30139403",
-      "ready_at": "2026-11-11T06:04Z",
-      "needs": "Opus + /security-review"
-    }
-  ]
+  "review_queue": []
 }
