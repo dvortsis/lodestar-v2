@@ -873,6 +873,17 @@ class CopyOffControl(unittest.TestCase):
         for value in PRIVATE + ("us-east",):
             self.assertNotIn(value, stored)  # the control plane's pass drops what a VM let through
 
+    def test_a_large_evidence_line_never_hides_the_report(self):
+        """The evidence line is taken out before the grammar's 64 KiB cut."""
+        out = (b"ok scrubbed\nevidence " + base64.b64encode(json.dumps({"version": 1, "pad": "x" * 80000}).encode())
+               + b"\nok block_ended\nok copy_off\n")
+        with mock.patch.object(steps, "step_files", return_value={"step.sh": b"x"}):
+            line = steps.run_step({"FLEET_SSH_KEY": "K"}, FakeBackend(), {"commit": "a" * 40, "roles": {"main": slot(1)}},
+                                  "copy-off", "main", "42-1", lambda: None, ssh=lambda a, d, t: (0, out),
+                                  my_ip=lambda: "198.51.100.7", emit=lambda _: None, repo=".",
+                                  fingerprint=apply.fingerprint, evidence=lambda body: None)
+        self.assertTrue(line.startswith("done; 3 ok; evidence stored"), line)
+
     def test_bad_evidence(self):
         put = mock.Mock()
         cases = {b"ok copy_off\n": "no evidence came back",
