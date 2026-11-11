@@ -840,6 +840,42 @@ fn a_relaunched_copy_waits_for_the_process_it_replaces() {
         )
     });
     assert!(!shown.contains("config:"), "{shown}");
+    // X-flake-portable-restart-2: the timed-out wait says so first, never
+    // with the token.
+    assert!(
+        shown.contains("wait for the copy it replaces to exit timed out"),
+        "{shown}"
+    );
+    assert!(!shown.contains(&token), "{shown}");
+}
+
+/// X-flake-portable-restart-2: a copy whose token names no process has
+/// nothing to watch, says so in one line (never the token) and goes on,
+/// here to its config error.
+#[test]
+fn a_relaunched_copy_with_nothing_to_watch_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut child, console) = bad_config_run(dir.path(), true, false);
+    let status = wait_for(Duration::from_secs(60), || child.try_wait().ok().flatten());
+    if status.is_none() {
+        let _ = child.kill();
+    }
+    assert!(!status.expect("it should exit").success());
+    let shown = wait_for(Duration::from_secs(10), || {
+        let c = console.lock().unwrap().clone();
+        c.contains("config:").then_some(c)
+    })
+    .unwrap_or_else(|| {
+        panic!(
+            "no config error; console:\n{}",
+            console.lock().unwrap_or_else(|e| e.into_inner())
+        )
+    });
+    assert!(
+        shown.contains("couldn't check that the copy it replaces had exited"),
+        "{shown}"
+    );
+    assert!(!shown.contains("lodestar-test-token"), "{shown}");
 }
 
 /// A run with a broken config, as `bad_config_run` starts it, that exits
