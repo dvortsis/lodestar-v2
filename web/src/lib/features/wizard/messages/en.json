@@ -143,5 +143,5 @@
 	"wizard_cmp_err_other": "Something went wrong, and Lodestar couldn't confirm whether qBittorrent was installed. Try again; if it says it's already installed, add it above.",
 	"wizard_cmp_replaces": "replaces {version}",
 	"wizard_cmp_wait": "qBittorrent is still installing. Wait for it to finish, then continue.",
-	"wizard_cmp_err_profile": "qBittorrent was installed, but this system can't run it from Lodestar. Add it above once it's running."
+	"wizard_cmp_err_profile": "Lodestar can't run qBittorrent on this system yet. Install it yourself and add it above."
 }

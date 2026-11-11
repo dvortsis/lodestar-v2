@@ -27,7 +27,12 @@
 		const was = last;
 		last = now;
 		if (was === 'checking') return;
-		void tick().then(() => root?.querySelector<HTMLElement>('[data-cmp-focus]')?.focus());
+		void tick().then(() => {
+			// A button that stays (loading) keeps focus; only a lost focus is moved.
+			const at = document.activeElement;
+			if (at && at !== document.body && root?.contains(at)) return;
+			root?.querySelector<HTMLElement>('[data-cmp-focus]')?.focus();
+		});
 	});
 	onMount(() => void install.check());
 	onDestroy(() => install.destroy());
@@ -109,8 +114,11 @@
 				<Button variant="quiet" onclick={() => install.decline()}>{m.wizard_cmp_decline()}</Button>
 			</div>
 		{:else if install.phase === 'installing'}
-			<Banner kind="info" title={m.wizard_cmp_installing()}>{m.wizard_cmp_installing_note()}</Banner
-			>
+			<div tabindex="-1" data-cmp-focus>
+				<Banner kind="info" title={m.wizard_cmp_installing()}
+					>{m.wizard_cmp_installing_note()}</Banner
+				>
+			</div>
 			<div>
 				<Button loading>{m.wizard_cmp_installing()}</Button>
 			</div>

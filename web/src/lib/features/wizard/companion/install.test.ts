@@ -191,7 +191,7 @@ describe('Install qBittorrent for me', () => {
 		['no_build', 409, /no qBittorrent download for this system/],
 		['already_current', 409, /already installed and up to date/],
 		['companions_unavailable', 503, /turned off for this Lodestar/],
-		['no_launch_profile', 409, /can't run it from Lodestar/]
+		['no_launch_profile', 409, /can't run qBittorrent on this system yet/]
 	])('says a refused install (%s) in plain words, never the code', async (code, status, words) => {
 		post = () => refuse(status, code);
 		await open();
@@ -258,7 +258,31 @@ describe('during and after the install', () => {
 		await waitFor(() => expect(document.activeElement).toBe(lead));
 		await fireEvent.click(screen.getByRole('button', { name: 'Confirm and install' }));
 		const done = await screen.findByText('qBittorrent is installed');
-		await waitFor(() => expect(document.activeElement?.contains(done)).toBe(true));
+		const target = done.closest('[data-cmp-focus]');
+		expect(target).not.toBeNull();
+		await waitFor(() => expect(document.activeElement).toBe(target));
+		expect(document.activeElement).not.toBe(document.body);
+	});
+
+	it('moves focus to the failure, and to the wait banner while installing', async () => {
+		post = () => refuse(409, 'not_wired');
+		await open();
+		await fireEvent.click(await askButton());
+		await fireEvent.click(await screen.findByRole('button', { name: 'Confirm and install' }));
+		const failed = await screen.findByText("qBittorrent wasn't installed");
+		const target = failed.closest('[data-cmp-focus]');
+		expect(target).not.toBeNull();
+		await waitFor(() => expect(document.activeElement).toBe(target));
+	});
+
+	it('leaves focus on the button while the offer loads', async () => {
+		offerReply = () => new Promise<Response>(() => {}) as never;
+		await open();
+		const ask = await askButton();
+		ask.focus();
+		await fireEvent.click(ask);
+		await waitFor(() => expect(ask.getAttribute('aria-busy')).toBe('true'));
+		expect(document.activeElement).toBe(ask);
 	});
 
 	it('keeps the step in place while installing, and says why', async () => {
@@ -295,9 +319,11 @@ describe('during and after the install', () => {
 		await fireEvent.click(await askButton());
 		await fireEvent.click(await screen.findByRole('button', { name: 'Confirm and install' }));
 		await screen.findByRole('button', { name: 'Installing qBittorrent…' });
-		await waitFor(() =>
-			expect(document.activeElement?.textContent).toContain('This downloads, checks and starts it')
-		);
+		const note = await screen.findByText(/This downloads, checks and starts it/);
+		const target = note.closest('[data-cmp-focus]');
+		expect(target).not.toBeNull();
+		await waitFor(() => expect(document.activeElement).toBe(target));
+		expect(document.activeElement).not.toBe(document.body);
 	});
 
 	it('counts a lost reply as done when the server finished the install', async () => {
