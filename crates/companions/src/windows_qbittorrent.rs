@@ -639,7 +639,9 @@ const RESERVED_SHARES: &[&str] = &["pipe", "mailslot"];
 ///
 /// **What this can't see:** it checks the path as typed. These pass:
 /// - a junction or link you made yourself;
-/// - this machine reached by its own name or a LAN address;
+/// - this machine reached by its own name or a LAN address, or by a public
+///   DNS name that resolves to loopback (`127.0.0.1.nip.io`,
+///   `localtest.me`): the same class, since only the name is seen here;
 /// - a drive's root shared under another name than its folder's
 ///   (`\\nas\C\Windows`): the folders after a share are checked only as
 ///   if the share were named after the root folder.

@@ -56,8 +56,6 @@ fn sha(b: &[u8]) -> String {
         .collect()
 }
 
-/// qBittorrent pinned to `v` on Linux, with its Windows installer; and
-/// Prowlarr, not pinned.
 /// The compiled-in catalogue's text with every pin and digest taken out.
 fn shipped_unpinned() -> &'static Catalogue {
     let mut v: serde_json::Value =
@@ -80,6 +78,8 @@ fn shipped_unpinned() -> &'static Catalogue {
     Box::leak(Box::new(Catalogue::from_json(&v.to_string()).unwrap()))
 }
 
+/// qBittorrent pinned to `v` on Linux, with its Windows installer; and
+/// Prowlarr, not pinned.
 fn catalogue(v: &str) -> &'static Catalogue {
     let b = body(v);
     let j = json!({

@@ -561,8 +561,9 @@ async fn the_gate_adds_no_sign_in_of_its_own() {
 }
 
 /// The configurator registered for Windows is the gate: it refuses a
-/// version no range accepts. On Windows that's what `configure::configurator` hands
-/// out; elsewhere it's CMP-8b's adapter, which reads no version.
+/// version no range accepts. On Windows that's what
+/// `configure::configurator` hands out; elsewhere it's CMP-8b's adapter,
+/// which reads no version.
 #[tokio::test]
 async fn the_windows_configurator_is_the_gate() {
     let id = CompanionId::parse("qbittorrent").unwrap();
@@ -873,7 +874,7 @@ async fn a_save_path_of_the_wrong_platform_is_refused() {
     let plain: Box<dyn Configure> = Box::new(qbittorrent::QBittorrent::new(id.clone()));
     let http = fake("5.0.3");
     let err = plain
-        .plan(&http, &t, &input(&creds, &t).downloads(windows))
+        .plan(&http, &t, &input(&creds, &t).downloads(windows.clone()))
         .await
         .unwrap_err();
     assert_eq!(err, AdapterError::Refused(configure::SAVE_PATH_PLATFORM));
@@ -882,9 +883,44 @@ async fn a_save_path_of_the_wrong_platform_is_refused() {
     // The matching kinds still plan.
     let http = fake("5.0.3");
     plain
-        .plan(&http, &t, &input(&creds, &t).downloads(linux))
+        .plan(&http, &t, &input(&creds, &t).downloads(linux.clone()))
         .await
         .unwrap();
+
+    // The apply checks again: a plan made with the matching kind, applied
+    // with the wrong one, writes nothing. `check_plan` compares the listed
+    // keys, not their values, so this check is the only thing in the way
+    // (#711's review).
+    let gate: Box<dyn Configure> = Box::new(WindowsQBittorrent::new(pinned("5.0.3")));
+    let cases: [(&dyn Configure, &Downloads, &Downloads); 2] = [
+        (gate.as_ref(), &windows, &linux),
+        (plain.as_ref(), &linux, &windows),
+    ];
+    for (adapter, planned, applied) in cases {
+        let http = fake("5.0.3");
+        let plan = adapter
+            .plan(&http, &t, &input(&creds, &t).downloads(planned.clone()))
+            .await
+            .unwrap();
+        assert!(
+            plan.changes()
+                .iter()
+                .any(|k| k.as_str() == "downloads.save_path"),
+            "{plan:?}"
+        );
+        let err = adapter
+            .apply(
+                &http,
+                &t,
+                &input(&creds, &t).downloads(applied.clone()),
+                &plan,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err, AdapterError::Refused(configure::SAVE_PATH_PLATFORM));
+        assert!(http.writes().is_empty(), "{:?}", http.writes());
+        assert_eq!(http.0.lock().unwrap().password, PASTED);
+    }
 }
 
 #[test]
@@ -898,6 +934,11 @@ fn the_windows_configurator_is_only_qbittorrents() {
 /// The ungated adapter is for adapter tests only: production code gets a
 /// configurator through `configure::configurator`, which applies the
 /// Windows gate. Fails if the binary's or the API's sources name it.
+///
+/// The scan is line-based: a `use` that spreads `qbittorrent::QBittorrent`
+/// over several lines (`use …::{ qbittorrent::QBittorrent as Q }` broken
+/// across lines) gets past it. It catches the plain spellings, and review
+/// catches the rest.
 #[test]
 fn production_code_never_builds_the_ungated_adapter() {
     fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
