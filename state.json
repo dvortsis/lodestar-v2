@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T12:45:00Z",
+  "updated_at": "2026-11-11T12:54:24Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7506,7 +7506,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T12:45:00Z",
+    "updated": "2026-11-11T12:54:24Z",
     "items": [
       {
         "slot": 1,
@@ -7566,11 +7566,12 @@
       },
       {
         "slot": 8,
-        "slice": "X-collect-checklist-launch-2",
+        "slice": "CMP-9b",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8mGSt1DA24S2gjPE6: refuse a missing checklist item or excluded without --next-run at launch (Sonnet); then CMP-9b after #681 merges",
-        "since": "2026-11-11T12:45:00Z"
+        "doing": "session_01MMjhn8mGSt1DA24S2gjPE6: waiting on #681 CMP-9a (dep) before CMP-9b; #690 merged c818b432",
+        "since": "2026-11-11T12:54:24Z",
+        "status": "idle"
       }
     ]
   },
@@ -7676,6 +7677,12 @@
       "pr": 688,
       "slice": "X-collect-checklist-docker",
       "at": "2026-11-11T12:44:42Z"
+    },
+    {
+      "pr": 690,
+      "slice": "X-collect-checklist-launch-2",
+      "sha": "c818b432967ef2389698b0b4b8290c4956afc081",
+      "at": "2026-11-11T12:54:24Z"
     }
   ]
 }
