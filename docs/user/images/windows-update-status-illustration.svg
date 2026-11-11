@@ -13,5 +13,5 @@
   <text x="231" y="146" text-anchor="middle" fill="#243C44" font-family="&#x27;Atkinson Hyperlegible Next&#x27;, -apple-system, BlinkMacSystemFont, &#x27;Segoe UI&#x27;, sans-serif" font-size="13">Skip this version</text>
   <rect x="318" y="124" width="104" height="34" rx="6" fill="#FFFFFF" stroke="#DFDFDF" stroke-width="1.5"/>
   <text x="370" y="146" text-anchor="middle" fill="#243C44" font-family="&#x27;Atkinson Hyperlegible Next&#x27;, -apple-system, BlinkMacSystemFont, &#x27;Segoe UI&#x27;, sans-serif" font-size="13">Check now</text>
-  <text x="20" y="194" fill="#6B6B6B" font-family="&#x27;Atkinson Hyperlegible Next&#x27;, -apple-system, BlinkMacSystemFont, &#x27;Segoe UI&#x27;, sans-serif" font-size="12">Steps while it installs: Downloading → Verifying → Installing → Restarting → Checking health</text>
+  <text x="20" y="194" fill="#6B6B6B" font-family="&#x27;Atkinson Hyperlegible Next&#x27;, -apple-system, BlinkMacSystemFont, &#x27;Segoe UI&#x27;, sans-serif" font-size="12">While it installs the card shows: Downloading, then Installing</text>
 </svg>

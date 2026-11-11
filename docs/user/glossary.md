@@ -37,7 +37,7 @@ The layer behind Unraid's `/mnt/user` paths. It adds overhead that databases not
 
 ## Install window
 
-A daily time range, in the PC's local time, when automatic updates may install. On Windows nothing installs automatically, so **Install now** ignores it.
+A daily time range, in the PC's local time, when automatic updates may install. **Install now** ignores it. Windows installs nothing automatically.
 
 ## Metadata
 
@@ -61,7 +61,7 @@ A rule that connects a port on your server to the port an app listens on inside 
 
 ## Probation
 
-The check Lodestar runs on a new version right after an update: it must start, open your library, answer a search and stay healthy. If it fails, the update is rolled back.
+The check Lodestar runs on a new version right after an update. A service must keep running for a minute. A portable copy must also open your library and answer a search. If it fails, the update is rolled back.
 
 ## PUID and PGID
 
@@ -89,7 +89,7 @@ A network protocol without a connection setup, used for peer discovery. Firewall
 
 ## Update rollback
 
-Putting the previous version back after an update fails its probation, on its own. It also restores your library from the snapshot taken before the update.
+Putting the previous version back after an update fails its probation, on its own. It also restores your library from a snapshot taken before the update, if there was one, which drops torrents found since.
 
 ## VPN
 

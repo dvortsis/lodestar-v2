@@ -26,7 +26,6 @@ Answers to the questions at the end of each chapter, in the same order.
 2. Your data in `C:\ProgramData\Lodestar`: library, password and keys. To remove it too, run `msiexec /x <the MSI you installed> REMOVE_DATA=1` from an elevated PowerShell, after a backup.
 3. To a pool path such as `/mnt/cache/appdata/lodestar`. `/mnt/user` goes through Unraid's FUSE layer, which is slow for the index and risky for the database.
 4. Open **Settings → Crawler**, set **Crawl intensity** one step lower, then restart Lodestar with `Restart-Service Lodestar`, `sudo systemctl restart lodestar`, or by starting the portable ZIP again. The change applies at the next start.
-5. The new version must start, open your library, answer a search and stay healthy for a minute. If it doesn't, Lodestar puts the old version back by itself, and the Updates screen says why. You then read the reason and decide whether to try again. If the rollback itself fails, read `C:\Windows\Temp\lodestar-service.log` (service) or `data\logs\lodestar.log` (portable), and don't delete the data folder.
 
 <!-- nav:start -->
 ---
