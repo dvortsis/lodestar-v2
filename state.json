@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T22:50:16Z",
+  "updated_at": "2026-11-11T22:53:36Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6956,6 +6956,11 @@
       "id": "X-spool-damage-log+rv699r3",
       "note": "Fold rv-699-f0eaa328 into X-spool-damage-log (owns spool.rs): I1 set next_seq before write_atomic in start_segment (dir-sync failure or planted <next_seq>.lsp wedges the spool); I2 reword 'a planted link's target is never zeroed, on either platform' (Windows shared() always false: hard links still zeroed) in the secure_remove doc comment + a decisions note; N1 reject shared(&opened) in start_segment's post-open check; N2 optional claim() test for runtime.rs:1727 (runtime.rs is X-wk-own-lease-lost's; coordinate).",
       "at": "2026-11-11T22:50:16Z"
+    },
+    {
+      "id": "brief-note-clippy-version",
+      "note": "Container stable clippy 1.97 lags CI's 1.99 (TZ-0 hit result_large_err). Add to future briefs: run `rustup toolchain install 1.99.0` and `cargo +1.99.0 clippy --workspace --all-targets -- -D warnings` before pushing (or whatever CI's stable is). Consider a runner/standards.md or web/e2e README note in the next runner PR.",
+      "at": "2026-11-11T22:53:36Z"
     }
   ],
   "main_health": [
@@ -7689,7 +7694,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T22:50:16Z",
+    "updated": "2026-11-11T22:53:36Z",
     "items": [
       {
         "slot": 1,
@@ -7853,7 +7858,7 @@
     }
   ],
   "heartbeat": "2026-11-11T21:38:36Z",
-  "updated": "2026-11-11T22:50:16Z",
+  "updated": "2026-11-11T22:53:36Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
