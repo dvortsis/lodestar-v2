@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T12:43:58Z",
+  "updated_at": "2026-11-11T12:44:42Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6767,7 +6767,12 @@
     "user docs (CMP guide slice): Restart re-adds a managed qBittorrent entry the user deleted on purpose",
     "next runner PR: X-win-upd-window owns += web/src/lib/features/settings/updates/messages/{en,zh}.json, updates/updates.test.ts, crates/api notice-code doc comment, web/src/lib/api/openapi.json + schema.d.ts (regenerated) \u2014 runner approved option (a) 2026-11-11; also web/src/lib/features/settings/updates/logic.ts (NOTICE_ORDER) and UpdatesScreen.svelte (notices table)",
     "next runner PR: X-smoke-polish entry (Sonnet helper; deps [PK-smoke]; owns per briefs/X-smoke-polish.md); X-win-upd-window, X-win-upd-reoffer, X-cmp-handover-followups, X-e2e-baseline-refresh entries/owns",
-    "next runner PR: add D-companions-guide (Sonnet docs; user-docs skill; docs/user companions page: install/remove, credentials, logs, updates, egress note, Restart re-adds a deleted managed entry) after CMP-9a/9b; API field for companion 'where it runs' (CMP-9a #681 call 4)"
+    "next runner PR: add D-companions-guide (Sonnet docs; user-docs skill; docs/user companions page: install/remove, credentials, logs, updates, egress note, Restart re-adds a deleted managed entry) after CMP-9a/9b; API field for companion 'where it runs' (CMP-9a #681 call 4)",
+    {
+      "id": "X-collect-checklist-launch-2",
+      "what": "collect.py: refuse a missing checklist item, or excluded without --next-run, at launch (today the analyzer catches it hours later); from #688",
+      "at": "2026-11-11T12:44:42Z"
+    }
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7500,7 +7505,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T12:43:58Z",
+    "updated": "2026-11-11T12:44:42Z",
     "items": [
       {
         "slot": 1,
@@ -7560,11 +7565,12 @@
       },
       {
         "slot": 8,
-        "slice": "X-collect-checklist-docker",
+        "slice": "CMP-9b",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8mGSt1DA24S2gjPE6: refuse not_applicable backup/auto_update in docker mode (Sonnet); then CMP-9b after #681; same session after #684 merged 59e09ec6",
-        "since": "2026-11-11T12:33:47Z"
+        "doing": "session_01MMjhn8mGSt1DA24S2gjPE6: waiting on #681 CMP-9a to merge before CMP-9b (deps); #688 X-collect-checklist-docker merged",
+        "since": "2026-11-11T12:44:42Z",
+        "status": "idle"
       }
     ]
   },
@@ -7665,6 +7671,11 @@
       "slice": "X-smoke-polish",
       "sha": "4b9e0e7aa710f3a29d11745e8ce9d073b7780e9d",
       "at": "2026-11-11T12:43:58Z"
+    },
+    {
+      "pr": 688,
+      "slice": "X-collect-checklist-docker",
+      "at": "2026-11-11T12:44:42Z"
     }
   ]
 }
