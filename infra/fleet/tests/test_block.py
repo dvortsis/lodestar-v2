@@ -7,6 +7,7 @@ fakes in the step's work directory."""
 import base64
 import io
 import json
+import os
 import subprocess
 import tarfile
 import tempfile
@@ -28,6 +29,7 @@ VM = Path(steps.__file__).resolve().parent / "vm"
 scrub = steps._scrubber()
 DIGEST = "d" * 64
 LC, SC, RC = "1" * 40, "2" * 40, "3" * 40
+LODESTAR_ID, GLUETUN_ID, IMAGE_ID = "a1" * 32, "b2" * 32, "c3" * 32
 RULES = {"version": 1, "screen": "adm-1", "lodestar_image": f"ghcr.io/dvortsis/lodestar-v2@sha256:{DIGEST}",
          "lodestar_commit": LC, "spec_commit": SC, "treatment": "adm", "segment_hours": 2, "notice_version": 1}
 # Fake private values: none may survive the scrubber or reach a log.
@@ -44,14 +46,29 @@ case "$1" in
   inspect)
     case "$*" in
       "inspect --type container -f {{.State.Running}} "*) is_running "${@: -1}" && echo true || echo false ;;
-      "inspect --type container -f {{.Id}} gluetun") echo gid ;;
-      "inspect --type container -f {{.HostConfig.NetworkMode}} lodestar") echo "container:${PARENT:-gid}" ;;
+      "inspect --type container -f {{.Id}} gluetun") echo "$GLUETUN_ID" ;;
+      "inspect --type container -f {{.Id}} lodestar") echo "${LODESTAR_ID-$DEFAULT_LID}" ;;
+      "inspect --type container -f {{.Image}} lodestar") echo "sha256:$IMAGE_ID" ;;
+      "inspect --type container -f {{.HostConfig.NetworkMode}} lodestar") echo "container:${PARENT:-$GLUETUN_ID}" ;;
       *) bad "$*" ;;
     esac ;;
   pull) [ -n "$PULL_FAIL" ] && exit 1; exit 0 ;;
   compose)
-    # Lodestar alone, from the committed file, never before the marker exists.
-    case "$*" in *"--profile block up -d --no-deps lodestar") ;; *) bad "$*" ;; esac
+    [ -n "$DOCKER_GID" ] || bad "compose without DOCKER_GID"
+    case "$*" in
+      *"--profile block up -d --no-deps --force-recreate docker-proxy")
+        # Rendered before it starts, and never while a collector runs.
+        [ -s "$STUB_STACK/proxy/haproxy.cfg" ] || bad "proxy without its config"
+        grep -q '^lodestar-collector' "$STUB/running" 2>/dev/null && bad "proxy re-rendered mid-segment"
+        [ "$DOCKER_GID" = "$SOCK_GID" ] || bad "proxy without the socket's group"
+        n=$(grep -c . "$STUB/proxy.log" 2>/dev/null); cp "$STUB_STACK/proxy/haproxy.cfg" "$STUB/proxy-${n:-0}.cfg"
+        echo x >> "$STUB/proxy.log"
+        [ -n "$PROXY_FAIL" ] && exit 1
+        python3 -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$STUB_STACK/proxy-sock/docker.sock"
+        exit 0 ;;
+      *"--profile block up -d --no-deps lodestar") ;;
+      *) bad "$*" ;;
+    esac
     [ -e "$STUB_BLOCK/marker" ] || bad "compose before the marker"
     env | grep '^LODESTAR' | sort > "$STUB/arm.env"
     [ -n "$COMPOSE_FAIL" ] && exit 1
@@ -59,7 +76,7 @@ case "$1" in
   logs)
     [ "$*" = "logs lodestar" ] || bad "$*"
     echo "2026-11-11T00:00:00Z INFO auth First run: open Lodestar in a browser and enter setup token ${TOKEN-ABCD-0123-4567-89EF}" ;;
-  rm) exit 0 ;;
+  rm) [ "$*" = "rm -f lodestar-docker-proxy" ] && : > "$STUB/proxy_removed"; exit 0 ;;
   run)
     case "$*" in
       "run --rm -i --network container:gluetun --cap-drop ALL nicolaka/netshoot@sha256:"*" curl -s -m 20 "*)
@@ -124,7 +141,7 @@ class Base(unittest.TestCase):
         (self.stack / "data").mkdir(parents=True)
         (self.stack / "data" / "old.db").write_text("a past block's database")
         self.work.mkdir()
-        for name in ("block-lib.sh", "compose.yaml", "watcher.sh", "scrub.py"):
+        for name in ("block-lib.sh", "compose.yaml", "watcher.sh", "scrub.py", "docker-proxy.cfg"):
             (self.work / name).write_text((VM / name).read_text())
         (self.work / "leak-test.sh").write_text(FAKE_LEAK)
         (self.work / "collect.py").write_text("# the collector at the rules commit\n")
@@ -136,8 +153,14 @@ class Base(unittest.TestCase):
         (self.work / "args").write_text("".join(f"{k}={v}\n" for k, v in a.items()))
 
     def run_script(self, name, **flags):
+        sock = self.tmp / "docker.sock"
+        sock.write_text("")
+        if os.getuid() == 0:
+            os.chown(sock, 0, 4242)
         env = {"PATH": f"{self.stub / 'bin'}:/usr/bin:/bin", "STUB": str(self.stub), "STUB_BLOCK": str(self.block),
-               "HOME": str(self.tmp), **{k: str(v) for k, v in flags.items()}}
+               "STUB_STACK": str(self.stack), "HOME": str(self.tmp), "DOCKER_SOCK": str(sock),
+               "PROXY_UID": str(os.getuid()), "PROXY_WAIT": "0", "GLUETUN_ID": GLUETUN_ID, "IMAGE_ID": IMAGE_ID,
+               "DEFAULT_LID": LODESTAR_ID, "SOCK_GID": str(sock.stat().st_gid), **{k: str(v) for k, v in flags.items()}}
         r = subprocess.run(["bash", str(VM / name), str(self.work), str(self.stack), str(self.tmp / "pia-run"),
                             str(self.block)], env=env, capture_output=True, text=True, timeout=120)
         bad = self.stub / "badargs"
@@ -324,10 +347,18 @@ class StartBlock(Base):
                      "--checklist auto_update=excluded", "--checklist backup=excluded",
                      "--password-file /secrets/password"):
             self.assertIn(part, args)
-        # Read-only mounts, but for its own evidence folder and the Docker socket.
+        # Read-only mounts, but for its own evidence folder; Docker only through the proxy.
         mounts = args.split(" -v ")[1:]
         rw = [m.split(" ")[0] for m in mounts if not m.split(" ")[0].endswith(":ro")]
-        self.assertEqual(rw, ["/var/run/docker.sock:/var/run/docker.sock", f"{self.block}/evidence:/evidence"])
+        self.assertEqual(rw, [f"{self.block}/evidence:/evidence"])
+        self.assertNotIn("docker.sock:", args)
+        self.assertIn(f"{self.stack}/proxy-sock:/sock:ro", args)
+        self.assertIn("--docker-socket /sock/docker.sock", args)
+        # The proxy, rendered with the exact IDs read on the host, before the collector.
+        cfg = (self.stub / "proxy-0.cfg").read_text()
+        self.assertNotIn("@", cfg.split("bind")[1].split("default_backend")[0].replace("unix@", ""))
+        for value in (LODESTAR_ID, GLUETUN_ID, IMAGE_ID):
+            self.assertIn(value, cfg)
         self.assertIn(f"{self.block}/password:/secrets/password:ro", args)
         self.assertNotIn("--min-free-bytes", args)  # main keeps the collector's own guardrails
         self.assertIn("RuntimeMaxSec=44h", self.log())
@@ -390,7 +421,10 @@ class StartBlock(Base):
                  "the image won't pull": ({"PULL_FAIL": 1}, "lodestar_image"),
                  "Lodestar outside gluetun's namespace": ({"PARENT": "other"}, "network_parent"),
                  "the API never answers": ({"API_DOWN": 1, "API_WAIT": 0}, "api_up"),
-                 "the collector won't start": ({"COLLECTOR_FAIL": 1}, "collector_started")}
+                 "the collector won't start": ({"COLLECTOR_FAIL": 1}, "collector_started"),
+                 "the proxy won't start": ({"PROXY_FAIL": 1}, "docker_proxy"),
+                 "a hostile container ID": ({"LODESTAR_ID": "a1" * 31 + "/x"}, "docker_proxy"),
+                 "no container ID": ({"LODESTAR_ID": ""}, "docker_proxy")}
         for name, (flags, failed) in cases.items():
             with self.subTest(name):
                 self.setUp()
@@ -411,7 +445,7 @@ class ArmSwitch(Base):
         self.make_block(segment=1)
         self.finish_segment(1)
         self.running("gluetun")
-        rc, lines, raw = self.run_script("arm-switch.sh")
+        rc, lines, raw = self.run_script("arm-switch.sh", LODESTAR_ID="d4" * 32)
         self.assertEqual(rc, 0, raw)
         for n in ("segment_ended", "segment_complete", "lodestar_stopped", "lodestar_started", "collector_started",
                   "arm_switch"):
@@ -423,6 +457,8 @@ class ArmSwitch(Base):
         args = (self.stub / "collector-lodestar-collector-2.args").read_text()
         self.assertIn("--root /evidence/seg-2", args)
         self.assertIn("--no-deps lodestar", self.log())  # gluetun isn't recreated
+        # The new container's ID, rendered between the segments.
+        self.assertIn("d4" * 32, (self.stub / "proxy-0.cfg").read_text())
 
     def test_the_arms_are_abba(self):
         for seg, want in ((2, "true"), (3, "false")):  # 3 -> 4 is the second control
@@ -443,6 +479,7 @@ class ArmSwitch(Base):
         self.assertIn("ok block_ended", lines)
         self.assertFalse((self.block / "marker").exists())
         self.assertFalse((self.stub / "watcher_active").exists())
+        self.assertTrue((self.stub / "proxy_removed").exists())  # nothing left that reaches the socket
         self.assertNotIn("compose", self.log())
 
     def test_refusals(self):
@@ -451,6 +488,7 @@ class ArmSwitch(Base):
             "the block path isn't a directory": ("file", {}, "block_check"),
             "a hostile marker": ("hostile", {}, "marker_valid"),
             "a hostile block.env": ("env", {}, "block_env"),
+            "a hostile treatment alone": ("treatment", {}, "block_env"),
             "the window didn't complete": ("incomplete", {}, "segment_complete"),
             "the segment hasn't ended": ("running", {"WAIT_SECONDS": 0}, "segment_ended"),
             "Lodestar still running": ("lodestar", {}, "lodestar_stopped"),
@@ -461,7 +499,8 @@ class ArmSwitch(Base):
                 if setup == "file":
                     self.block.write_text("")
                 elif setup is not None:
-                    self.make_block(segment=1, **({"TREATMENT": "adm\nROLE=x;y"} if setup == "env" else {}))
+                    self.make_block(segment=1, **({"TREATMENT": "adm\nROLE=x;y"} if setup == "env" else
+                                                  {"TREATMENT": "adm;reboot"} if setup == "treatment" else {}))
                     self.finish_segment(1, reason="process_exited_1" if setup == "incomplete" else
                                         "baseline_window_complete")
                 if setup == "hostile":
@@ -565,6 +604,7 @@ class CopyOff(Base):
         self.assertEqual(json.loads(base64.b64decode(ev[0].split(" ", 1)[1])), self.doc)
         self.assertFalse((self.block / "marker").exists())
         self.assertFalse((self.stub / "watcher_active").exists())
+        self.assertTrue((self.stub / "proxy_removed").exists())
         # The scrubber sees only what it reads: never the password, never the network.
         args = (self.stub / "scrub.args").read_text()
         self.assertNotIn("password", args)
@@ -745,6 +785,152 @@ class CopyOffControl(unittest.TestCase):
         self.assertNotIn("evidence-b", line)
         self.assertIn("copy-off can run again", line)
         self.assertIsNone(steps.bucket_writer(object(), {"EVIDENCE_BUCKET": "x"}, "1-1", "main"))
+
+
+def render_proxy():
+    text = (VM / "docker-proxy.cfg").read_text()
+    return text.replace("@LODESTAR_ID@", LODESTAR_ID).replace("@IMAGE_ID@", IMAGE_ID).replace("@GLUETUN_ID@", GLUETUN_ID)
+
+
+ALLOWED = [("GET", "/containers/lodestar/json"), ("GET", f"/containers/{LODESTAR_ID}/json"),
+           ("GET", f"/v1.47/containers/{LODESTAR_ID}/json"), ("GET", f"/containers/{GLUETUN_ID}/json"),
+           ("GET", f"/images/sha256%3A{IMAGE_ID}/json"), ("GET", f"/images/sha256:{IMAGE_ID}/json"),
+           ("HEAD", f"/containers/{LODESTAR_ID}/archive?path=%2Fdata%2Fconfig.toml"),
+           ("GET", f"/containers/{LODESTAR_ID}/stats?stream=false&one-shot=true"),
+           ("POST", f"/containers/{LODESTAR_ID}/stop?t=60")]
+OTHER = "e5" * 32
+DENIED = [("GET", "/_ping"), ("GET", "/version"), ("GET", "/info"), ("GET", "/containers/json"),
+          ("POST", f"/containers/{LODESTAR_ID}/exec"), ("POST", "/containers/create"),
+          ("POST", f"/containers/{LODESTAR_ID}/attach"), ("GET", f"/containers/{LODESTAR_ID}/logs"),
+          ("GET", "/events"), ("PUT", f"/containers/{LODESTAR_ID}/archive?path=/"),
+          ("GET", f"/containers/{LODESTAR_ID}/archive?path=/data"), ("GET", f"/containers/{OTHER}/json"),
+          ("POST", f"/containers/{OTHER}/stop"), ("POST", f"/containers/{GLUETUN_ID}/stop"),
+          ("POST", "/containers/lodestar/stop"), ("GET", f"/containers/{LODESTAR_ID}/stats"),
+          ("GET", f"/containers/{LODESTAR_ID}/stats?stream=true"),
+          ("GET", f"/containers/lodestar/json/../../{OTHER}/exec"), ("GET", f"/containers/x/../{LODESTAR_ID}/json"),
+          ("GET", "/containers/lodestar%2F..%2Fexec/json"), ("GET", "/containers/LODESTAR/json"),
+          ("GET", f"//containers/{LODESTAR_ID}/json"), ("GET", f"/v1.47/../containers/{OTHER}/json"),
+          ("DELETE", f"/containers/{LODESTAR_ID}"), ("POST", f"/containers/{LODESTAR_ID}/json"),
+          ("GET", f"/images/sha256:{OTHER}/json"), ("POST", f"/containers/{LODESTAR_ID}/kill"),
+          ("POST", f"/containers/{LODESTAR_ID}/stop/../exec"), ("GET", f"/v1.47x/containers/{LODESTAR_ID}/json")]
+
+
+def policy(cfg):
+    """The rendered frontend's rules, evaluated as HAProxy does (first allow
+    wins, else the final deny): `path` is the raw path, case-sensitive."""
+    import re
+    acls, allows = {}, []
+    for line in cfg.splitlines():
+        words = line.split()
+        if words[:1] == ["acl"]:
+            name, fetch = words[1], words[2]
+            if fetch == "method":
+                acls.setdefault(name, []).append(lambda m, p, q, v=words[3]: m == v)
+            elif fetch == "path":
+                acls.setdefault(name, []).append(lambda m, p, q, r=re.compile(words[5]): bool(r.search(p)))
+            elif fetch.startswith("url_param("):
+                key = fetch[len("url_param("):-1]
+                acls.setdefault(name, []).append(
+                    lambda m, p, q, k=key, v=words[5]: next((x.split("=", 1)[1] for x in q.split("&")
+                                                            if x.split("=", 1)[0] == k and "=" in x), None) == v)
+            else:
+                raise AssertionError(line)
+        elif words[:3] == ["http-request", "allow", "if"]:
+            allows.append(words[3:])
+        elif words[:2] == ["http-request", "deny"]:
+            assert line.strip() == "http-request deny deny_status 403"
+
+    def allowed(method, url):
+        path, _, query = url.partition("?")
+        return any(all(any(f(method, path, query) for f in acls[a]) for a in rule) for rule in allows)
+    return allowed
+
+
+class DockerProxy(unittest.TestCase):
+    def test_the_rendered_policy(self):
+        allowed = policy(render_proxy())
+        for method, url in ALLOWED:
+            with self.subTest(allow=(method, url)):
+                self.assertTrue(allowed(method, url))
+        for method, url in DENIED:
+            with self.subTest(deny=(method, url)):
+                self.assertFalse(allowed(method, url))
+        self.assertNotIn("@", render_proxy().replace("unix@", ""))
+
+    def test_compose_gives_docker_to_the_proxy_alone(self):
+        import yaml
+        svc = yaml.safe_load((VM / "compose.yaml").read_text())["services"]
+        for name, s in svc.items():
+            socks = [v for v in s.get("volumes", []) if "docker.sock" in v]
+            with self.subTest(service=name):
+                self.assertEqual(socks, ["/var/run/docker.sock:/var/run/docker.sock:ro"] if name == "docker-proxy" else [])
+        p = svc["docker-proxy"]
+        self.assertRegex(p["image"], r"^haproxy@sha256:[0-9a-f]{64}$")
+        self.assertEqual(p["image"].split("=")[0], "haproxy@sha256:" + p["image"].rsplit(":", 1)[1])
+        self.assertEqual((p["network_mode"], p["cap_drop"], p["read_only"], p["profiles"]),
+                         ("none", ["ALL"], True, ["block"]))
+        self.assertIn("no-new-privileges:true", p["security_opt"])
+        self.assertNotIn("user", p)  # the image's own non-root haproxy user
+        self.assertNotIn("ports", p)
+        lib = (VM / "block-lib.sh").read_text()
+        self.assertIn("PROXY_IMAGE=" + p["image"] + " ", lib)  # start-block pulls the same pin
+        self.assertNotIn("/var/run/docker.sock:", lib)  # no other container gets the socket
+        for name in ("start-block.sh", "arm-switch.sh", "copy-off.sh", "outage-watcher.sh", "watcher.sh"):
+            self.assertNotIn("docker.sock:", (VM / name).read_text())
+
+    @unittest.skipUnless(subprocess.run(["sh", "-c", "command -v haproxy"], capture_output=True).returncode == 0,
+                         "haproxy isn't installed here (CI); the policy test above covers the rules")
+    def test_real_haproxy_enforces_it(self):
+        """The rendered config, checked and run by a real HAProxy against a fake Docker on a unix socket."""
+        import http.client
+        import socket
+        import socketserver
+        import threading
+        import time
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(tmp)])
+        seen = []
+
+        class Engine(socketserver.StreamRequestHandler):
+            def handle(self):
+                line = self.rfile.readline().decode()
+                while self.rfile.readline() not in (b"\r\n", b""):
+                    pass
+                seen.append(line.split(" ")[:2])
+                self.wfile.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+
+        engine = socketserver.UnixStreamServer(str(tmp / "engine.sock"), Engine)
+        threading.Thread(target=engine.serve_forever, daemon=True).start()
+        self.addCleanup(engine.shutdown)
+        cfg = render_proxy().replace("unix@/sock/docker.sock", f"unix@{tmp}/proxy.sock") \
+            .replace("server docker /var/run/docker.sock", f"server docker {tmp}/engine.sock")
+        (tmp / "haproxy.cfg").write_text(cfg)
+        check = subprocess.run(["haproxy", "-c", "-f", str(tmp / "haproxy.cfg")], capture_output=True, text=True)
+        self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
+        proc = subprocess.Popen(["haproxy", "-db", "-f", str(tmp / "haproxy.cfg")], stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+        self.addCleanup(proc.kill)
+        deadline = time.monotonic() + 15
+        while not (tmp / "proxy.sock").exists():
+            self.assertLess(time.monotonic(), deadline, "haproxy didn't open its socket")
+            time.sleep(0.05)  # polls for the socket, with a deadline
+
+        def ask(method, url):
+            conn = http.client.HTTPConnection("localhost", timeout=10)
+            conn.sock = socket.socket(socket.AF_UNIX)
+            conn.sock.connect(str(tmp / "proxy.sock"))
+            conn.request(method, url)
+            status = conn.getresponse().status
+            conn.close()
+            return status
+        for method, url in ALLOWED:
+            with self.subTest(allow=(method, url)):
+                self.assertEqual(ask(method, url), 200)
+        before = len(seen)
+        for method, url in DENIED:
+            with self.subTest(deny=(method, url)):
+                self.assertEqual(ask(method, url), 403)
+        self.assertEqual(len(seen), before)  # nothing denied reached the engine
 
 
 class LiveCopyOff(unittest.TestCase):

@@ -83,7 +83,7 @@ wait_healthy() {
 }
 echo_ip() { probe curl -4 -s -m "$1" "$ECHO_URL" 2>/dev/null | tr -d '\r\n' | head -c 64; }
 tunnel_up() {  # recreate gluetun alone from the committed compose file and the current wg0.conf
-  LODESTAR_IMAGE=unused docker compose -f "$STACK/compose.yaml" --project-directory "$STACK" \
+  LODESTAR_IMAGE=unused DOCKER_GID=unused docker compose -f "$STACK/compose.yaml" --project-directory "$STACK" \
     up -d --force-recreate gluetun >/dev/null 2>&1
 }
 start_capture() {  # $1: phase

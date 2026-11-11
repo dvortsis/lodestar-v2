@@ -49,6 +49,7 @@ timeout 60 docker rm "lodestar-collector-$seg" >/dev/null 2>&1 || true  # its ev
 # 2. The block's end, or the next arm.
 if ((seg == 4)); then
   stop_watcher
+  stop_proxy
   rm -f -- "$BLOCK/marker" && sync "$BLOCK" || fail block_ended
   echo "ok block_ended"
   echo "count block_segment 4"
@@ -59,6 +60,7 @@ next=$((seg + 1))
 printf 'block=%s\nsegment=%s\nstate=running\n' "$id" "$next" | marker_write || fail marker_written
 start_lodestar "$next" || fail lodestar_started
 network_parent_ok || fail network_parent
+start_proxy || fail docker_proxy  # the new container's ID; no collector runs yet
 wait_api || fail api_up
 echo "ok lodestar_started"
 start_collector "$next" || fail collector_started

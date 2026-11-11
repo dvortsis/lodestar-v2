@@ -45,6 +45,7 @@ echo "evidence $(printf '%s' "$doc" | base64 -w0)"
 
 if [[ $state == block ]]; then
   stop_watcher
+  stop_proxy
   rm -f -- "$BLOCK/marker" && sync "$BLOCK" || fail block_ended
   echo "ok block_ended"
 else

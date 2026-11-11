@@ -86,8 +86,10 @@ for n in 1 2 3 4; do timeout 60 docker rm "lodestar-collector-$n" >/dev/null 2>&
 rm -rf -- "$STACK/data" && mkdir -m 0700 -- "$STACK/data" || fail fresh_data
 timeout 300 docker pull "$LODESTAR_REPO@sha256:$IMAGE_DIGEST" >/dev/null 2>&1 || fail lodestar_image
 timeout 120 docker pull "$COLLECTOR_IMAGE" >/dev/null 2>&1 || fail collector_image
+timeout 120 docker pull "$PROXY_IMAGE" >/dev/null 2>&1 || fail proxy_image
 start_lodestar 1 || fail lodestar_started
 network_parent_ok || fail network_parent
+start_proxy || fail docker_proxy
 wait_api || fail api_up
 echo "ok lodestar_started"
 

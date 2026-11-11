@@ -45,9 +45,10 @@ BUILT = {
     # The leak test (600 s) runs inside it; then the pulls (300 + 120 s), Lodestar's
     # start (240 s), the API wait (180 s), the setup token (90 s), and the rest.
     "start-block": {"files": ("start-block.sh", "block-lib.sh", "leak-test.sh", "compose.yaml", "watcher.sh",
-                              "scrub.py"), "timeout": 1800},
+                              "scrub.py", "docker-proxy.cfg"), "timeout": 1800},
     # Up to 20 minutes' wait for the segment to end (WAIT_SECONDS), then the switch.
-    "arm-switch": {"files": ("arm-switch.sh", "block-lib.sh", "compose.yaml", "watcher.sh"), "timeout": 2100},
+    "arm-switch": {"files": ("arm-switch.sh", "block-lib.sh", "compose.yaml", "watcher.sh", "docker-proxy.cfg"),
+                   "timeout": 2100},
     "outage-watcher": {"files": ("outage-watcher.sh", "block-lib.sh", "watcher.sh"), "timeout": 60},
     "copy-off": {"files": ("copy-off.sh", "block-lib.sh", "scrub.py"), "timeout": 900},
 }

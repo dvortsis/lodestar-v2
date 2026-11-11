@@ -66,3 +66,27 @@ services:
       - no-new-privileges:true
     stop_grace_period: 60s
     restart: "no"
+  # The collector's only way to Docker (OP-3b, the runner's decision): HAProxy
+  # with the committed docker-proxy.cfg, rendered by block-lib.sh with the exact
+  # container and image IDs. Only this service mounts Docker's socket, read-only.
+  # No network, no capabilities, a read-only root; it runs as the image's own
+  # haproxy user, with the socket's group added. 3.2.25 LTS, by its multi-arch
+  # index digest (docs/decisions/2026-11-11-OP-3b.md).
+  docker-proxy:
+    image: haproxy@sha256:5d97434a423c2533cfeb42874d45cf6d69a840b60334582dfbfd5008e94c80be
+    container_name: lodestar-docker-proxy
+    network_mode: none
+    profiles:
+      - block
+    group_add:
+      - ${DOCKER_GID:?start-block sets it from the socket's group}
+    cap_drop:
+      - ALL
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./proxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ./proxy-sock:/sock
+    restart: "no"

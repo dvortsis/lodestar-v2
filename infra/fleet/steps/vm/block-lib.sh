@@ -10,10 +10,13 @@ BLOCK=${BLOCK:-/var/lib/lodestar-block}
 # Pinned by multi-arch index digest (docs/decisions/2026-11-09-OP-3a.md and
 # 2026-11-11-OP-3b.md); a change is a reviewed PR.
 PROBE_IMAGE=nicolaka/netshoot@sha256:b09d9b21381f47a79b3cbcb30da25266dc17186ea00ae65e99fdc51396f48e70
+PROXY_IMAGE=haproxy@sha256:5d97434a423c2533cfeb42874d45cf6d69a840b60334582dfbfd5008e94c80be  # also in compose.yaml
 COLLECTOR_IMAGE=python@sha256:848ba4413eb897e225159b8fc1b02094576cbae4aa73fc13142608ae2c8c0e32
 LODESTAR_REPO=ghcr.io/dvortsis/lodestar-v2
 WATCHER_UNIT=lodestar-outage-watcher
 API=http://127.0.0.1:8090  # Lodestar on gluetun's loopback, which the throwaway containers share
+DOCKER_SOCK=${DOCKER_SOCK:-/var/run/docker.sock}  # read for its group only; only the proxy mounts it
+HEX64='^[0-9a-f]{64}$'
 
 # none | block | unknown
 block_state() {
@@ -60,7 +63,7 @@ start_lodestar() {
   (
     unset LODESTAR_DHT_COORDINATED_ADMISSION LODESTAR_DHT_UTP LODESTAR_DHT_ROUTE_BACKOFF
     export LODESTAR_IMAGE="$LODESTAR_REPO@sha256:$IMAGE_DIGEST" LODESTAR_DHT_SAFE_RESTART=true \
-      "$TREATMENT_ENV=$value"
+      "$TREATMENT_ENV=$value" DOCKER_GID=unused
     timeout 240 docker compose -f "$STACK/compose.yaml" --project-directory "$STACK" \
       --profile block up -d --no-deps lodestar >/dev/null 2>&1
   )
@@ -72,11 +75,39 @@ network_parent_ok() {
   mode=$(timeout 30 docker inspect --type container -f '{{.HostConfig.NetworkMode}}' lodestar 2>/dev/null) || return 1
   [[ -n $id && $mode == "container:$id" ]]
 }
+# The collector's Docker proxy (docker-proxy.cfg), rendered with the IDs of the
+# Lodestar container just started, its image and gluetun, read here on the
+# host. It's rendered only while no collector runs: at start-block, and at each
+# arm switch, whose new Lodestar container has a new ID.
+start_proxy() {
+  local lid img gid sockgid
+  lid=$(timeout 30 docker inspect --type container -f '{{.Id}}' lodestar 2>/dev/null)
+  img=$(timeout 30 docker inspect --type container -f '{{.Image}}' lodestar 2>/dev/null)
+  img=${img#sha256:}
+  gid=$(timeout 30 docker inspect --type container -f '{{.Id}}' gluetun 2>/dev/null)
+  [[ $lid =~ $HEX64 && $img =~ $HEX64 && $gid =~ $HEX64 ]] || return 1
+  sockgid=$(stat -c %g -- "$DOCKER_SOCK" 2>/dev/null)
+  [[ $sockgid =~ ^[0-9]{1,10}$ ]] || return 1
+  mkdir -p -m 0755 -- "$STACK/proxy" || return 1
+  sed -e "s/@LODESTAR_ID@/$lid/g" -e "s/@IMAGE_ID@/$img/g" -e "s/@GLUETUN_ID@/$gid/g" \
+    "$work/docker-proxy.cfg" >"$STACK/proxy/haproxy.cfg" && chmod 0644 -- "$STACK/proxy/haproxy.cfg" || return 1
+  # The socket's folder: the proxy's user (the image's haproxy, uid 99) makes the
+  # socket; the collector can only pass through.
+  rm -rf -- "$STACK/proxy-sock" && install -d -o "${PROXY_UID:-99}" -m 0711 -- "$STACK/proxy-sock" || return 1
+  DOCKER_GID=$sockgid LODESTAR_IMAGE=unused timeout 120 docker compose -f "$STACK/compose.yaml" \
+    --project-directory "$STACK" --profile block up -d --no-deps --force-recreate docker-proxy >/dev/null 2>&1 \
+    || return 1
+  local until=$((SECONDS + ${PROXY_WAIT:-30}))
+  while [[ ! -S $STACK/proxy-sock/docker.sock ]]; do
+    ((SECONDS >= until)) && return 1
+    sleep 1
+  done
+}
 # Segment $1's collector, detached, in gluetun's namespace (CR-SPEC rehearsal
 # kind `ab`; plan Lane L and the cloud screen). It stops Lodestar when its
 # window ends (--stop). Raw evidence stays in $BLOCK/evidence on this VM. No
 # credentials but Lodestar's password; every mount is read-only except its own
-# evidence folder and the Docker socket (--mode docker reads Docker's API).
+# evidence folder. Docker's API only through the proxy's socket (start_proxy).
 start_collector() {
   local seg=$1 next guard=()
   next=$(date -u -d '+3 days' +%Y-%m-%dT%H:%M:%SZ)  # after any fleet's teardown (44 h at most)
@@ -85,10 +116,11 @@ start_collector() {
   mkdir -m 0700 -- "$BLOCK/evidence/seg-$seg" || return 1
   timeout 120 docker run -d --name "lodestar-collector-$seg" --network container:gluetun --restart no \
     --oom-score-adj -500 --cap-drop ALL --security-opt no-new-privileges:true --read-only --tmpfs /tmp \
-    -v /var/run/docker.sock:/var/run/docker.sock -v /proc:/host/proc:ro -v /sys/fs/cgroup:/sys/fs/cgroup:ro \
+    -v "$STACK/proxy-sock:/sock:ro" -v /proc:/host/proc:ro -v /sys/fs/cgroup:/sys/fs/cgroup:ro \
     -v "$BLOCK/tools:/tools:ro" -v "$BLOCK/password:/secrets/password:ro" -v "$BLOCK/evidence:/evidence" \
     -v "$STACK/data:/data:ro" -v "$BLOCK/witness:/witness:ro" \
-    "$COLLECTOR_IMAGE" python3 /tools/linux/collect.py --mode docker --container lodestar --url "$API" \
+    "$COLLECTOR_IMAGE" python3 /tools/linux/collect.py --mode docker --docker-socket /sock/docker.sock \
+    --container lodestar --url "$API" \
     --run-kind ab --treatment "$TREATMENT" --intensity balanced --stop --rehearsal \
     --baseline-hours "$SEGMENT_HOURS" --commit "$LODESTAR_COMMIT" --spec-commit "$SPEC_COMMIT" \
     --password-file /secrets/password --root "/evidence/seg-$seg" --proc-root /host/proc \
@@ -117,6 +149,7 @@ load_block_env() {
     adm) TREATMENT_ENV=LODESTAR_DHT_COORDINATED_ADMISSION ;;
     utp) TREATMENT_ENV=LODESTAR_DHT_UTP ;;
     route) TREATMENT_ENV=LODESTAR_DHT_ROUTE_BACKOFF ;;
+    *) return 1 ;;
   esac
 }
 watcher_active() { systemctl is-active --quiet "$WATCHER_UNIT" 2>/dev/null; }
@@ -127,4 +160,6 @@ start_watcher() {
   systemd-run --quiet --collect --unit="$WATCHER_UNIT" --property=RuntimeMaxSec=44h \
     bash "$BLOCK/tools/watcher.sh" "$BLOCK" >/dev/null 2>&1
 }
+# At the block's end: nothing is left that can reach Docker's socket.
+stop_proxy() { timeout 60 docker rm -f lodestar-docker-proxy >/dev/null 2>&1 || true; }
 stop_watcher() { systemctl stop "$WATCHER_UNIT" >/dev/null 2>&1 || true; }

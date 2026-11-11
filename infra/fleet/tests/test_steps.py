@@ -377,7 +377,7 @@ class Compose(unittest.TestCase):
                                               "LODESTAR_DHT_COORDINATED_ADMISSION", "LODESTAR_DHT_UTP",
                                               "LODESTAR_DHT_ROUTE_BACKOFF"])
         self.assertIn("no-new-privileges:true", lod["security_opt"])
-        self.assertEqual(set(self.svc), {"gluetun", "lodestar"})
+        self.assertEqual(set(self.svc), {"gluetun", "lodestar", "docker-proxy"})
 
     def test_the_probe_image_is_pinned_too(self):
         text = (VM / "block-lib.sh").read_text()  # the leak test and the block steps share it
