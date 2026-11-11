@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T20:25:00Z",
+  "updated_at": "2026-11-11T19:43:51Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6884,6 +6884,11 @@
       "for": "CMP-11b owns (runner PR)",
       "from": "runner 2026-11-11",
       "note": "CMP-11b owns add crates/companions/src/manager.rs and tests/manager.rs (option a: Installer \u2192 guided_only before installable())."
+    },
+    {
+      "at": "2026-11-11T19:43:51Z",
+      "slice": "CMP-11b",
+      "note": "Runner call (\u00a72.26/\u00a72.33, flagged \u00a72.19 via dashboard session): option D. While installer unpinned, Windows version gate accepts CMP-8b's checked range 4.6.0<=v<5.3 (one constant); pin's range replaces it once pinned. Still refuses out-of-range/unreadable before any write. Guided screen shows no SHA-256 while unpinned. Supersedes CMP-11 'refused until pinned' and #705 owner flag 2."
     }
   ],
   "main_health": [
@@ -7617,7 +7622,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T20:25:00Z",
+    "updated": "2026-11-11T19:43:51Z",
     "items": [
       {
         "slot": 1,
@@ -7739,7 +7744,7 @@
     }
   ],
   "heartbeat": "2026-11-11T18:39:05Z",
-  "updated": "2026-11-11T20:25:00Z",
+  "updated": "2026-11-11T19:43:51Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
