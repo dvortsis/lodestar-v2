@@ -33,6 +33,9 @@
 //!   managed companions, their redacted log rings, and orphan cleanup
 //!   (CMP-4a).
 //!
+//! - [`windows_qbittorrent`]: qBittorrent's guided install on Windows, its
+//!   pinned-version gate and Windows save paths (CMP-11, owner cq4).
+//!
 //! Later CMP slices add their modules here, one `mod` line each.
 
 pub mod adapter;
@@ -55,6 +58,7 @@ pub mod supervise;
 pub mod unraid;
 pub mod verify;
 pub mod watch;
+pub mod windows_qbittorrent;
 
 pub use catalogue::{Catalogue, CatalogueError, Entry, NotAvailable, builtin};
 pub use inputs::{CompanionId, Version};

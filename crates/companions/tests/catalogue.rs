@@ -126,13 +126,23 @@ fn builtin_validates() {
 fn builtin_entries_follow_the_owner_decisions() {
     let c = builtin().unwrap();
     let q = c.get("qbittorrent").unwrap();
-    // userdocs static qbittorrent-nox on Linux only; Windows is CMP-11's.
+    // userdocs static qbittorrent-nox on Linux; on Windows, upstream's
+    // installer, which Lodestar only shows (owner cq4, CMP-11).
     assert!(q.artifact(Platform::Linux, Arch::X86_64).is_some());
     assert!(q.artifact(Platform::Linux, Arch::Aarch64).is_some());
-    assert!(q.artifact(Platform::Windows, Arch::X86_64).is_none());
     for a in &q.native.as_ref().unwrap().artifacts {
-        assert_eq!(a.archive, ArchiveKind::Binary);
+        let want = match a.platform {
+            Platform::Linux => ArchiveKind::Binary,
+            Platform::Windows => ArchiveKind::Installer,
+        };
+        assert_eq!(a.archive, want);
     }
+    let w = q.artifact(Platform::Windows, Arch::X86_64).unwrap();
+    assert!(w.executable.is_none());
+    assert_eq!(
+        q.installable(Platform::Windows, Arch::X86_64).unwrap_err(),
+        NotAvailable::AwaitingPin
+    );
     // The image itself is readable only once pinned (the crate's own
     // unit test checks it's lscr.io/linuxserver/qbittorrent).
     assert!(q.container.is_some());

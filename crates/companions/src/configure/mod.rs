@@ -44,6 +44,7 @@ use crate::config_files::Username;
 use crate::credentials::Field;
 use crate::inputs::{CompanionId, HostPath, InputError};
 use crate::log_events::{CONFIG_FAILED, CONFIG_HANDED_OVER};
+pub use crate::windows_qbittorrent::WindowsPath;
 
 pub mod prowlarr;
 pub mod qbittorrent;
@@ -295,19 +296,62 @@ pub struct Category {
     pub save_path: Option<HostPath>,
 }
 
+/// A download client's save path: a Linux path (in its container, or
+/// a native Linux install) or, for CMP-11's qBittorrent on Windows, a
+/// [`WindowsPath`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SavePath {
+    Host(HostPath),
+    Windows(WindowsPath),
+}
+
+impl SavePath {
+    pub fn as_str(&self) -> &str {
+        match self {
+            SavePath::Host(p) => p.as_str(),
+            SavePath::Windows(p) => p.as_str(),
+        }
+    }
+}
+
+impl From<HostPath> for SavePath {
+    fn from(p: HostPath) -> SavePath {
+        SavePath::Host(p)
+    }
+}
+
+impl From<WindowsPath> for SavePath {
+    fn from(p: WindowsPath) -> SavePath {
+        SavePath::Windows(p)
+    }
+}
+
 /// The download client's save path and categories. Paths are as the
-/// companion sees them (`/downloads` inside its container).
+/// companion sees them (`/downloads` inside its container, `D:\Downloads`
+/// on Windows).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Downloads {
-    save_path: HostPath,
+    save_path: SavePath,
     categories: Vec<Category>,
 }
 
 impl Downloads {
-    /// At most [`CATEGORIES_MAX`] categories, each name once.
-    pub fn new(save_path: HostPath, categories: Vec<Category>) -> Result<Downloads, InputError> {
+    /// At most [`CATEGORIES_MAX`] categories, each name once. With a
+    /// Windows save path a category has no path of its own (a Linux one
+    /// would mean nothing there, [`InputError::NotAbsolute`]): qBittorrent
+    /// then saves it in a folder of its name under the save path.
+    pub fn new(
+        save_path: impl Into<SavePath>,
+        categories: Vec<Category>,
+    ) -> Result<Downloads, InputError> {
+        let save_path = save_path.into();
         if categories.len() > CATEGORIES_MAX {
             return Err(InputError::Length);
+        }
+        if matches!(save_path, SavePath::Windows(_))
+            && categories.iter().any(|c| c.save_path.is_some())
+        {
+            return Err(InputError::NotAbsolute);
         }
         for (i, c) in categories.iter().enumerate() {
             if categories[..i].iter().any(|d| d.name == c.name) {
@@ -320,7 +364,7 @@ impl Downloads {
         })
     }
 
-    pub fn save_path(&self) -> &HostPath {
+    pub fn save_path(&self) -> &SavePath {
         &self.save_path
     }
 

@@ -49,12 +49,13 @@ use crate::adapter::{
     SettingKey, Target,
 };
 use crate::credentials::Field;
-use crate::inputs::CompanionId;
+use crate::inputs::{CompanionId, Version};
 use crate::log_events::CONFIG_APPLIED;
 
 use super::{
-    BIND_UNSUITED, CONTENT_TYPE, Origin, PLAN_MISMATCH, ROUTE_UNSUPPORTED, Route, UNKNOWN_SETTING,
-    WOULD_LOOSEN, WebUiBind, consent, cookie, credential, failed, form, header, key, plain,
+    BIND_UNSUITED, CONTENT_TYPE, Origin, PLAN_MISMATCH, ROUTE_UNSUPPORTED, Route, SavePath,
+    UNKNOWN_SETTING, WOULD_LOOSEN, WebUiBind, consent, cookie, credential, failed, form, header,
+    key, plain,
 };
 
 /// Its catalogue id.
@@ -117,14 +118,33 @@ fn limits() -> Limits {
 }
 
 /// The qBittorrent configuration adapter.
-#[derive(Debug)]
 pub struct QBittorrent {
     id: CompanionId,
+    /// CMP-11's version gate on Windows; `None` elsewhere.
+    gate: Option<VersionGate>,
+}
+
+impl std::fmt::Debug for QBittorrent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QBittorrent")
+            .field("id", &self.id)
+            .field("gate", &self.gate.is_some())
+            .finish()
+    }
 }
 
 impl QBittorrent {
     pub(crate) fn new(id: CompanionId) -> QBittorrent {
-        QBittorrent { id }
+        QBittorrent { id, gate: None }
+    }
+
+    /// With CMP-11's version gate, checked right after each sign-in on the
+    /// same session, so it costs no sign-in of its own.
+    pub(crate) fn gated(id: CompanionId, gate: VersionGate) -> QBittorrent {
+        QBittorrent {
+            id,
+            gate: Some(gate),
+        }
     }
 }
 
@@ -298,6 +318,15 @@ fn same_path(a: &str, b: &str) -> bool {
     trim(a) == trim(b)
 }
 
+/// The save path qBittorrent has against the wanted one: a Windows path
+/// without case and with either separator (CMP-11), else [`same_path`].
+fn same_save_path(have: &str, want: &SavePath) -> bool {
+    match want {
+        SavePath::Host(p) => same_path(have, p.as_str()),
+        SavePath::Windows(p) => p.same(have),
+    }
+}
+
 /// Two bind addresses: both empty, or the same address however written.
 fn same_address(have: &str, want: &str) -> bool {
     match (have.trim(), want) {
@@ -409,6 +438,24 @@ async fn call(
     }
 }
 
+/// A check of the signed-in qBittorrent's version, run on the adapter's
+/// own session before anything is read or written (CMP-11's Windows gate).
+/// It sees only Lodestar's parsed [`Version`].
+pub(crate) type VersionGate = Box<dyn Fn(&Version) -> Result<(), AdapterError> + Send + Sync>;
+
+/// Reads the version on `session` and runs `gate` on it.
+async fn check_version(
+    http: &dyn GuardedHttp,
+    target: &Target,
+    session: &Session,
+    gate: &VersionGate,
+) -> Result<(), AdapterError> {
+    let r = call(http, target, session, VERSION, None).await?;
+    let v = crate::detect::qbittorrent::parse_version(r.body())
+        .ok_or(AdapterError::Protocol("version"))?;
+    gate(&v)
+}
+
 async fn read_prefs(
     http: &dyn GuardedHttp,
     target: &Target,
@@ -454,7 +501,7 @@ fn differing(input: &ConfigureInput<'_>, w: &Wanted, p: &Prefs) -> Vec<SettingKe
         out.push(LOCAL_AUTH);
     }
     if let Some(d) = &input.downloads
-        && !same_path(&p.save_path, d.save_path().as_str())
+        && !same_save_path(&p.save_path, d.save_path())
     {
         out.push(SAVE_PATH);
     }
@@ -568,6 +615,9 @@ impl QBittorrent {
         let guided = matches!(input.origin, Origin::Guided { .. });
         let bypassed = guided && auth_bypassed(http, target).await?;
         let (session, temporary) = sign_in(http, target, input, false).await?;
+        if let Some(g) = &self.gate {
+            check_version(http, target, &session, g).await?;
+        }
         let prefs = read_prefs(http, target, &session).await?;
         if loosens(&w, &prefs) {
             return Err(AdapterError::Refused(WOULD_LOOSEN));
@@ -606,6 +656,11 @@ impl QBittorrent {
         let (session, _) = sign_in(http, target, input, listed(&PASSWORD))
             .await
             .map_err(|e| failed(ID, "apply", e))?;
+        if let Some(g) = &self.gate {
+            check_version(http, target, &session, g)
+                .await
+                .map_err(|e| failed(ID, "version", e))?;
+        }
         let stored = credential(input, Field::WebUiPassword).map_err(|e| failed(ID, "apply", e))?;
 
         // The password first: qBittorrent printed the temporary one to its
