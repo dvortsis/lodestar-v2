@@ -357,6 +357,14 @@ pub trait ApiConfigure: Send + Sync {
         Box::pin(async { Ok(()) })
     }
 
+    /// Whether [`ApiConfigure::hand_over`] may save anything for `id`: a
+    /// first install writes its marker only then. Yes by default, which
+    /// fails safe: a marker for a companion that saves nothing only makes
+    /// the next start release nothing (#692's review, B1).
+    fn hands_over(&self, _id: &CompanionId) -> bool {
+        true
+    }
+
     /// Takes what [`ApiConfigure::hand_over`] saved out of Lodestar's
     /// settings again: before a removal, and after a first install that
     /// was rolled back. Nothing by default.
@@ -436,6 +444,10 @@ struct Inner {
     runs: Mutex<HashMap<CompanionId, u64>>,
     /// [`LIVE_DEADLINE`]; shorter only in tests.
     deadline: Mutex<Duration>,
+    /// Companions whose first install a crash undid after its hand-over
+    /// (their marker, [`Inner::marker`]): released once the settings can
+    /// be reached ([`Manager::release_pending`]).
+    pending: Mutex<Vec<CompanionId>>,
     #[cfg(any(test, feature = "testing"))]
     fault: Mutex<Option<Fault>>,
 }
@@ -674,6 +686,51 @@ impl Inner {
             }
             _ => false,
         }
+    }
+
+    /// The marker a first install's hand-over leaves while it may have
+    /// saved and the install isn't `configured` yet:
+    /// `<data>/companions/.handed-over-<id>`, beside the lock, outside the
+    /// companion's own folder (which a rollback deletes only if it holds
+    /// nothing else).
+    fn marker(&self, id: &CompanionId) -> PathBuf {
+        self.p
+            .data
+            .join("companions")
+            .join(format!(".handed-over-{id}"))
+    }
+
+    /// Writes the marker durably before the hand-over is tried.
+    fn mark(&self, id: &CompanionId) -> Result<(), ManagerError> {
+        let path = self.marker(id);
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        // Never through a link planted at its path.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+        }
+        let f = opts.open(&path).map_err(|_| failed("handover")("marker"))?;
+        f.sync_all().map_err(|_| failed("handover")("marker"))?;
+        #[cfg(unix)]
+        if let Some(dir) = path.parent() {
+            std::fs::File::open(dir)
+                .and_then(|d| d.sync_all())
+                .map_err(|_| failed("handover")("marker"))?;
+        }
+        Ok(())
+    }
+
+    /// Removes the marker: the install was configured, or what its
+    /// hand-over saved was released. A failure leaves it for the next start,
+    /// whose release finds nothing to take out.
+    fn unmark(&self, id: &CompanionId) {
+        let _ = std::fs::remove_file(self.marker(id));
+    }
+
+    fn marked(&self, id: &CompanionId) -> bool {
+        std::fs::symlink_metadata(self.marker(id)).is_ok_and(|m| m.is_file())
     }
 
     /// How long a start, restart, regenerate or configuration may take.
@@ -1187,6 +1244,7 @@ impl Manager {
             snapshot: watch::channel(Snapshot::default()).0,
             runs: Mutex::new(HashMap::new()),
             deadline: Mutex::new(LIVE_DEADLINE),
+            pending: Mutex::new(Vec::new()),
             #[cfg(any(test, feature = "testing"))]
             fault: Mutex::new(None),
         })))
@@ -1307,13 +1365,15 @@ impl Manager {
                     ManagerError::Step { step, code } => (*step, *code),
                     other => ("install", other.code()),
                 };
-                lodestar_log::log_event!(
-                    INSTALL_FAILED,
-                    companion = m.label(id),
-                    version = pin.version.as_str(),
-                    step = step,
-                    reason = code
-                );
+                if !logged_at_bound(&e) {
+                    lodestar_log::log_event!(
+                        INSTALL_FAILED,
+                        companion = m.label(id),
+                        version = pin.version.as_str(),
+                        step = step,
+                        reason = code
+                    );
+                }
                 self.undo(entry, rec, handed).await;
                 Err(e)
             }
@@ -1406,7 +1466,20 @@ impl Manager {
         // timeout after the save) is undone too. A first install found no
         // entry before it began (`can_hand_over`), so whatever is there
         // now is this install's.
+        // A first install marks it first (#679's I2): a crash before
+        // `configured` is undone by recovery, which can't reach the
+        // settings, so the marker says what to release once it can.
+        // Not for one whose hand-over saves nothing (`hands_over`, yes
+        // unless an implementation says otherwise: a marker it didn't
+        // need only makes the next start release nothing).
+        let marks = fresh && m.p.api.hands_over(id);
+        if marks {
+            self.off(move |m| m.mark(id)).await?;
+        }
         *handed = true;
+        // One past its bound has settled by the time it answers
+        // `timed_out` (`hand_over_now`), so the undo releases whatever it
+        // saved, as for any other failure.
         self.hand_over_now(id, &target).await?;
         fault!(m, After(Step::Configured));
         let mut next = rec.clone();
@@ -1414,6 +1487,13 @@ impl Manager {
         *rec = self
             .off(move |m| m.save(id, &next, Step::Configured))
             .await?;
+        if marks {
+            self.off(move |m| {
+                m.unmark(id);
+                Ok(())
+            })
+            .await?;
+        }
 
         // Done: the previous version goes.
         let r = rec.clone();
@@ -1499,14 +1579,20 @@ impl Manager {
             Ok(None) => {
                 // A first install undone: what its hand-over saved goes
                 // too, so no managed entry points at nothing.
-                if handed && self.release_now(id).await.is_err() {
-                    lodestar_log::log_event!(
-                        INSTALL_FAILED,
-                        companion = m.label(id),
-                        version = "",
-                        step = "release",
-                        reason = "rollback_failed"
-                    );
+                if handed {
+                    match self.release_now(id).await {
+                        Ok(()) => m.unmark(id),
+                        // The marker stays: the next start releases it. One
+                        // past its deadline was logged there.
+                        Err(e) if logged_at_bound(&e) => {}
+                        Err(_) => lodestar_log::log_event!(
+                            INSTALL_FAILED,
+                            companion = m.label(id),
+                            version = "",
+                            step = "release",
+                            reason = "rollback_failed"
+                        ),
+                    }
                 }
                 m.publish(id, None)
             }
@@ -1632,10 +1718,74 @@ impl Manager {
             let r = self.recover_one(entry).await;
             if let Ok(v) = &r {
                 m.publish(&entry.id, v.clone().map(|v| (Some(v), Health::Unknown)));
+                // A hand-over a crash interrupted: still installed, its
+                // entry is right; undone, it's released later.
+                let id = &entry.id;
+                if m.marked(id) {
+                    if v.is_some() {
+                        m.unmark(id);
+                    } else {
+                        m.pending
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .push(id.clone());
+                    }
+                }
             }
             out.push((entry.id.clone(), r));
         }
         out
+    }
+
+    /// Forgets what a crash left pending for `id`, and its marker: a guided
+    /// confirmation is handing `id` over, so the entry is yours from now
+    /// on, and a release at the next start must never take it out.
+    /// Blocking.
+    pub fn clear_handover(&self, id: &CompanionId) {
+        self.0
+            .pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|p| p != id);
+        self.0.unmark(id);
+    }
+
+    /// Releases what a crash's undone first installs had handed over
+    /// (#679's I2), once the settings can be reached: serve calls it when
+    /// the sink is wired. Each is released under its slot and only while
+    /// nothing is installed; one that fails keeps its marker, for the
+    /// next start.
+    pub async fn release_pending(&self) {
+        let pending =
+            std::mem::take(&mut *self.0.pending.lock().unwrap_or_else(|e| e.into_inner()));
+        for id in pending {
+            let Ok(entry) = self.0.entry(&id) else {
+                continue;
+            };
+            let id = &entry.id;
+            let Ok(_slot) = self.0.claim(id) else {
+                continue;
+            };
+            let installed = self
+                .off(move |m| m.record(id))
+                .await
+                .map(|r| r.is_some_and(|r| r.installed.is_some()));
+            if !matches!(installed, Ok(false)) {
+                continue;
+            }
+            match self.release_now(id).await {
+                Ok(()) => self.0.unmark(id),
+                // Logged already, at the deadline.
+                Err(e) if logged_at_bound(&e) => {}
+                Err(e) => lodestar_log::log_event!(
+                    INSTALL_FAILED,
+                    companion = self.0.label(id),
+                    version = "",
+                    step = "release",
+                    reason = e.code()
+                ),
+            }
+        }
     }
 
     async fn recover_one(&self, entry: &'static Entry) -> Result<Option<Version>, ManagerError> {
@@ -1652,6 +1802,18 @@ impl Manager {
             }
         }
     }
+}
+
+/// A hand-over or release past its bound, which `hand_over_now` and
+/// `release_now` log there: their callers don't log it again.
+fn logged_at_bound(e: &ManagerError) -> bool {
+    matches!(
+        e,
+        ManagerError::Step {
+            step: "handover" | "release",
+            code: "timed_out"
+        }
+    )
 }
 
 /// What the manager does to a companion it installed, once installed.
@@ -1794,6 +1956,7 @@ impl Manager {
         self.follow_from(entry, version, health);
         if let Err(e) = &result
             && e.code() != "shutting_down"
+            && !logged_at_bound(e)
         {
             lodestar_log::log_event!(
                 INSTALL_FAILED,
@@ -1806,12 +1969,29 @@ impl Manager {
         result
     }
 
-    /// [`ApiConfigure::release`], bounded like every settings write.
+    /// [`ApiConfigure::release`], bounded like every settings write. One
+    /// that passes the deadline is logged and then waited for: it may still
+    /// save, and whoever releases holds the slot and, for an install's undo
+    /// or a pending release, the guided lock, so no guided confirmation
+    /// can save an entry that it then takes out (#692's review,
+    /// Important 3). It still answers `timed_out`, so the marker stays and
+    /// the next start releases whatever is left.
     async fn release_now(&self, id: &CompanionId) -> Result<(), ManagerError> {
-        tokio::time::timeout(self.0.deadline(), self.0.p.api.release(id))
-            .await
-            .map_err(|_| failed("release")("timed_out"))?
-            .map_err(|e| failed("release")(configure::code(&e)))
+        let mut release = std::pin::pin!(self.0.p.api.release(id));
+        match tokio::time::timeout(self.0.deadline(), release.as_mut()).await {
+            Ok(r) => r.map_err(|e| failed("release")(configure::code(&e))),
+            Err(_) => {
+                lodestar_log::log_event!(
+                    INSTALL_FAILED,
+                    companion = self.0.label(id),
+                    version = "",
+                    step = "release",
+                    reason = "timed_out"
+                );
+                let _ = release.await;
+                Err(failed("release")("timed_out"))
+            }
+        }
     }
 
     /// [`ApiConfigure::hand_over`] with the credential stored now.
@@ -1825,15 +2005,33 @@ impl Manager {
             field: field_name(id),
             secret,
         };
+        // A generous bound, three of the live deadline (15 min in shipped
+        // builds): one local settings write takes far less. One past it is
+        // logged and then waited for, as a release is (`release_now`): it
+        // may still save, and the caller holds the slot and, for an
+        // install, the guided lock, so no guided confirmation can save an
+        // entry that it then overwrites (#692's review, N1). It still
+        // answers `timed_out`, once it has settled.
         let handed =
             self.0
                 .p
                 .api
                 .hand_over(id, target, InstallReceipt::new(target.clone()), &opened);
-        tokio::time::timeout(self.0.deadline(), handed)
-            .await
-            .map_err(|_| failed("handover")("timed_out"))?
-            .map_err(|e| failed("handover")(configure::code(&e)))
+        let mut handed = std::pin::pin!(handed);
+        match tokio::time::timeout(3 * self.0.deadline(), handed.as_mut()).await {
+            Ok(r) => r.map_err(|e| failed("handover")(configure::code(&e))),
+            Err(_) => {
+                lodestar_log::log_event!(
+                    INSTALL_FAILED,
+                    companion = self.0.label(id),
+                    version = "",
+                    step = "handover",
+                    reason = "timed_out"
+                );
+                let _ = handed.await;
+                Err(failed("handover")("timed_out"))
+            }
+        }
     }
 
     /// Stops `id`, ending the run any follower publishes for.
@@ -2103,12 +2301,39 @@ pub fn reads_proxy_env(executable: &Path) -> bool {
     let path = PathBuf::from(name);
     // Opened once, then checked and read through the same handle, so what
     // is read is what was checked; never more than the cap (#672's review).
-    let Ok(file) = std::fs::File::open(&path) else {
+    // Never through a link, and never waiting on a FIFO (#679's review).
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(
+            (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32,
+        );
+    }
+    // On Windows, the link itself is opened (`FILE_FLAG_OPEN_REPARSE_POINT`)
+    // and then refused by its attribute, as `O_NOFOLLOW` refuses it on Unix
+    // (#692's review).
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        opts.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let Ok(file) = opts.open(&path) else {
         return false;
     };
     let Ok(meta) = file.metadata() else {
         return false;
     };
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return false;
+        }
+    }
     if !meta.is_file() || meta.len() > RUNTIMECONFIG_MAX {
         return false;
     }
@@ -2520,6 +2745,37 @@ mod tests {
 #[cfg(test)]
 mod runtime_tests {
     use super::runtime_reads_proxy_env as reads;
+
+    /// #679's review: the runtime config is never read through a link at
+    /// its own path, and a FIFO there is refused at once (it isn't a
+    /// regular file) instead of blocking.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_or_fifo_runtime_config_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("Prowlarr");
+        let config = dir.path().join("Prowlarr.runtimeconfig.json");
+        let good = r#"{"runtimeOptions":{"tfm":"net8.0","includedFrameworks":[{"name":"Microsoft.NETCore.App","version":"8.0.11"}]}}"#;
+        std::fs::write(&config, good).unwrap();
+        assert!(super::reads_proxy_env(&exe));
+        let real = dir.path().join("elsewhere.json");
+        std::fs::rename(&config, &real).unwrap();
+        std::os::unix::fs::symlink(&real, &config).unwrap();
+        assert!(!super::reads_proxy_env(&exe));
+        std::fs::remove_file(&config).unwrap();
+        let made = std::process::Command::new("mkfifo")
+            .arg(&config)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let exe2 = exe.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(super::reads_proxy_env(&exe2));
+        });
+        let got = rx.recv_timeout(std::time::Duration::from_secs(10));
+        assert_eq!(got, Ok(false), "a FIFO blocked the read");
+    }
 
     #[test]
     fn only_dotnet_8_or_later_reads_the_proxy_variables() {

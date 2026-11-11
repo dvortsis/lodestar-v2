@@ -228,6 +228,8 @@ pub struct Companions {
     /// Following `integrations.clients`, and starting the installed
     /// companions: both stopped at shutdown.
     tasks: Vec<tokio::task::JoinHandle<()>>,
+    /// Releasing what crashes left handed over, once the sink is wired.
+    release: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl Companions {
@@ -236,12 +238,29 @@ impl Companions {
     /// refused at its hand-over (`not_wired`).
     pub(crate) fn wire_sink(&self, sink: Arc<dyn ManagedSink>) {
         let _ = self.wiring.sink.set(sink);
+        // What a crash's undone first install had handed over goes now
+        // (#679's I2), under the lock the guided steps share: none can
+        // write the managed entry while it's released. A guided
+        // confirmation clears the marker first, so this never takes out
+        // an entry you added since.
+        let manager = self.api.manager.clone();
+        let changing = self.api.changes();
+        let task = tokio::spawn(async move {
+            let _one = changing.lock_owned().await;
+            manager.release_pending().await;
+        });
+        if let Ok(mut t) = self.release.lock() {
+            *t = Some(task);
+        }
     }
 
     /// Serve's shutdown (#619 N3): stops following the integrations and
     /// starting companions, then stops every companion, each bounded.
     pub async fn shutdown(self) {
         for t in &self.tasks {
+            t.abort();
+        }
+        if let Some(t) = self.release.lock().ok().and_then(|mut t| t.take()) {
             t.abort();
         }
         if let Some(s) = self.wiring.supervised.get() {
@@ -368,12 +387,16 @@ async fn start_with(
         secrets,
         rows,
         live,
+        changing: Arc::default(),
+        #[cfg(test)]
+        park: None,
     });
     Some(Companions {
         api,
         snapshot,
         wiring,
         tasks,
+        release: Mutex::new(None),
     })
 }
 
@@ -759,6 +782,15 @@ pub struct Service {
     secrets: Arc<SecretStore>,
     rows: StoreRows,
     live: Arc<dyn Live>,
+    /// One change to a qBittorrent's hand-over at a time: a native install
+    /// (its checks, hand-over and undo) and every guided step take it, so
+    /// neither writes the managed entry while the other is deciding
+    /// (#679's review, Important 1).
+    changing: Arc<tokio::sync::Mutex<()>>,
+    /// A test's pause inside a native install, once it holds the lock:
+    /// says so on the first, waits for the second.
+    #[cfg(test)]
+    park: Option<Arc<(tokio::sync::Notify, tokio::sync::Notify)>>,
 }
 
 impl std::fmt::Debug for Service {
@@ -778,10 +810,11 @@ fn refused(e: ManagerError) -> CompanionsError {
         } => CompanionsError::Refused("not_wired"),
         // The hand-over to Integrations, or taking it out again, refused:
         // nothing was installed or removed, and the code says why
-        // (`managed_client_in_use`, `sink_refused`, `timed_out`, …).
+        // (`managed_client_in_use`, `sink_refused`, `timed_out`; `not_wired`
+        // above). Any other failure stays an internal one.
         ManagerError::Step {
             step: "handover" | "release",
-            code,
+            code: code @ ("managed_client_in_use" | "sink_refused" | "timed_out"),
         } => CompanionsError::Refused(code),
         e => CompanionsError::Internal(e.code()),
     }
@@ -900,6 +933,9 @@ impl Service {
             secrets: self.secrets.clone(),
             rows: self.rows.clone(),
             live: self.live.clone(),
+            changing: self.changing.clone(),
+            #[cfg(test)]
+            park: self.park.clone(),
         }
     }
 
@@ -1006,6 +1042,18 @@ impl Service {
             Ok(_) => Ok(None),
             Err(_) => Err(CompanionsError::Internal("journal")),
         }
+    }
+
+    /// A guided confirmation is about to hand `id` over: what a crash left
+    /// pending for it is no longer Lodestar's to release (#679 follow-up's
+    /// self-review B2). Blocking.
+    pub(crate) fn clear_handover(&self, id: &CompanionId) {
+        self.manager.clear_handover(id);
+    }
+
+    /// The lock a native install and the guided steps share.
+    pub(crate) fn changes(&self) -> Arc<tokio::sync::Mutex<()>> {
+        self.changing.clone()
     }
 
     /// Whether you added `id` and confirmed it (CMP-5g-2's `origin` row).
@@ -1202,13 +1250,43 @@ impl CompanionsApi for Service {
                 version: Version::parse(&version).map_err(|_| CompanionsError::Mismatch)?,
                 sha256: Sha256::parse_hex(&sha256).map_err(|_| CompanionsError::Mismatch)?,
             };
+            // qBittorrent's only (the one a guided step hands over): held
+            // through the install, its hand-over and any undo, so no guided
+            // step runs meanwhile, and the check below is made under it
+            // (#679's review, Important 1). It's held by the task that runs
+            // the install, which a dropped request doesn't stop, so it's
+            // never let go while the install still runs.
+            let one = if e.id.as_str() == configure::qbittorrent::ID {
+                Some(
+                    self.changing
+                        .clone()
+                        .try_lock_owned()
+                        .map_err(|_| CompanionsError::Refused("busy"))?,
+                )
+            } else {
+                None
+            };
             // One you added and confirmed is yours: an install would take
             // over its Integrations entry (#674's self-review B1). Forget
             // it first, as the guided steps refuse one Lodestar installed.
             if self.off(move |s| s.added(&e.id)).await? {
                 return Err(CompanionsError::Refused("already_added"));
             }
-            self.manager.install(&token).await.map_err(refused)?;
+            let manager = self.manager.clone();
+            #[cfg(test)]
+            let park = self.park.clone();
+            let installed = tokio::spawn(async move {
+                let _one = one;
+                #[cfg(test)]
+                if let Some(p) = park {
+                    p.0.notify_one();
+                    p.1.notified().await;
+                }
+                manager.install(&token).await
+            })
+            .await
+            .map_err(|_| CompanionsError::Internal("panicked"))?;
+            installed.map_err(refused)?;
             self.off(move |s| s.row(e)).await
         })
     }
@@ -1420,6 +1498,21 @@ pub(crate) fn test_service(
         secrets,
         rows: StoreRows(store),
         live: Arc::new(Unwired),
+        changing: Arc::default(),
+        park: None,
+    })
+}
+
+/// `service`, with a native install that pauses once it holds the lock:
+/// it says so on `park.0` and waits for `park.1`.
+#[cfg(test)]
+pub(crate) fn parked_service(
+    service: &Service,
+    park: Arc<(tokio::sync::Notify, tokio::sync::Notify)>,
+) -> Arc<Service> {
+    Arc::new(Service {
+        park: Some(park),
+        ..service.clone_parts()
     })
 }
 
@@ -1427,6 +1520,17 @@ pub(crate) fn test_service(
 mod tests {
     use super::*;
     use lodestar_companions::credentials::generate;
+
+    /// #692's review, B1: the binary marks every first install it may
+    /// hand over (the trait's fail-safe yes), qBittorrent and the
+    /// companions that are handed over later alike.
+    #[test]
+    fn every_first_install_is_marked() {
+        let w = Wiring::default();
+        for id in ["qbittorrent", "prowlarr", "flaresolverr"] {
+            assert!(w.hands_over(&CompanionId::parse(id).unwrap()), "{id}");
+        }
+    }
 
     #[test]
     fn containers_are_recognised() {
@@ -1639,6 +1743,8 @@ mod tests {
             secrets,
             rows: StoreRows(store),
             live,
+            changing: Arc::default(),
+            park: None,
         }
     }
 
@@ -2507,6 +2613,14 @@ mod tests {
                 code: "sink_refused",
             });
             assert_eq!(e, CompanionsError::Refused("sink_refused"));
+            // A failure that isn't a refusal stays one: no `409` for a
+            // credential that couldn't be read (#679's review).
+            for code in ["credentials", "unauthorized"] {
+                assert_eq!(
+                    refused(ManagerError::Step { step, code }),
+                    CompanionsError::Internal(code)
+                );
+            }
             let body = lodestar_api::error::ApiError::from(e).body().to_string();
             assert!(!body.contains(&password), "{body}");
         }
