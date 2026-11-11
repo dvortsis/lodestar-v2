@@ -6707,7 +6707,9 @@
       "at": "2026-11-11T05:17Z",
       "id": "X-flake-portable-restart",
       "item": "windows_service.rs a_portable_restart_serves_again_on_the_same_port: relaunched copy started 10 ms after app.relaunch and hit sqlite disk I/O error (old process still held the store). Runner Opus subagent building the fix on slice/X-flake-portable-restart; seen on #655 ca0fbf6d job 130326742759. Add slices.yaml entry in next runner PR."
-    }
+    },
+    "next runner PR: PK-win-portable-upd owns += crates/lodestar/src/cli/util.rs (runner approved 2026-11-11T05:2xZ; refuse_during_update_rollback also refuses on portable.json rolling_back or unreadable)",
+    "X-prowlarr-settings #658 (54982496): option 2 done; Windows portable-restart red is \u00a72.18 once X-flake-portable-restart PR opens"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7554,7 +7556,7 @@
     }
   ],
   "heartbeat": "2026-11-11T04:06Z",
-  "updated": "2026-11-09T00:22Z",
+  "updated": "2026-11-11T05:34Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
