@@ -405,6 +405,14 @@ fn the_address_timer_is_settled() {
         says(&out, "settled");
         assert_eq!(data.saved(key), None, "{args:?}");
     }
+    // Only the record changes: the output doesn't say nothing did.
+    assert_eq!(data.saved("settings.network.http_bind"), None);
+    data.put(key, record);
+    let out = data.run(&["reset", "network.http_bind"]);
+    status(&out, 0);
+    says(&out, "settled");
+    assert!(!text(&out).contains("nothing changed"), "{}", text(&out));
+    assert_eq!(data.saved(key), None);
     // A refused change leaves it.
     data.put(key, record);
     status(&data.run(&["set", "network.http_bind", "nowhere"]), 2);

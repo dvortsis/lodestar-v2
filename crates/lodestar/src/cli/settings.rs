@@ -501,6 +501,29 @@ fn base_value(config: &Config, m: &Meta) -> Done<SettingValue> {
         .expect("a listed field has a value"))
 }
 
+/// Why `set` refuses a field with this `x-danger` tag, if it does. Only
+/// an untagged field or a `disruptive` one (whose dialog only explains the
+/// effect) is set here; any other tag, a later one included, needs the
+/// app's own confirmation.
+fn danger_refusal(at: &str, danger: Option<&str>) -> Option<String> {
+    match danger {
+        None | Some("disruptive") => None,
+        Some("security") => Some(format!(
+            "{at} is a security setting: the app asks for your password before it changes. \
+             Change it in the app, or `lodestar settings reset {at}` to go back to the default."
+        )),
+        Some("privacy") => Some(format!(
+            "{at} records what identifies torrents or people: the app explains that and asks \
+             you to confirm before it changes. Change it in the app, or \
+             `lodestar settings reset {at}` to turn it back off."
+        )),
+        Some(other) => Some(format!(
+            "{at} needs the app's confirmation before it changes (it's marked {other}). \
+             Change it in the app, or `lodestar settings reset {at}` to go back to the default."
+        )),
+    }
+}
+
 /// The keep-or-revert records a change to `m` settles.
 fn settles(m: &Meta) -> Vec<&'static str> {
     KEEP_OR_REVERT
@@ -532,22 +555,8 @@ fn set(config: &Config, setting: &str, text: &str) -> Done {
             title(&m.section)
         )));
     }
-    match m.danger.as_deref() {
-        Some("security") => {
-            return Err(Stop::Refused(format!(
-                "{at} is a security setting: the app asks for your password before it changes. \
-                 Change it in the app, or `lodestar settings reset {at}` to go back to the \
-                 default."
-            )));
-        }
-        Some("privacy") => {
-            return Err(Stop::Refused(format!(
-                "{at} records what identifies torrents or people: the app explains that and \
-                 asks you to confirm before it changes. Change it in the app, or \
-                 `lodestar settings reset {at}` to turn it back off."
-            )));
-        }
-        _ => {}
+    if let Some(why) = danger_refusal(&at, m.danger.as_deref()) {
+        return Err(Stop::Refused(why));
     }
     let value = parse_value(text);
     if value.is_null() {
@@ -588,7 +597,11 @@ fn set(config: &Config, setting: &str, text: &str) -> Done {
         .collect();
     let settled = offline.finish(&settles(&m))?;
     if before.source == SettingSource::Db && before.value == after.value {
-        println!("{at} is already {}; nothing changed.", shown(&m, &after));
+        if settled.is_empty() {
+            println!("{at} is already {}; nothing changed.", shown(&m, &after));
+        } else {
+            println!("{at} is already {}.", shown(&m, &after));
+        }
     } else {
         println!("Saved {at} = {}.", shown(&m, &after));
     }
@@ -625,9 +638,14 @@ fn reset(config: &Config, setting: &str) -> Done {
             source_name(&after)
         );
     } else {
+        let unchanged = if settled.is_empty() {
+            "; nothing changed"
+        } else {
+            ""
+        };
         println!(
-            "{at} wasn't saved; nothing changed. (A saved value this build can't read is \
-             removed by `lodestar settings reset --all`.)"
+            "{at} wasn't saved{unchanged}. (A saved value this build can't read is removed \
+             by `lodestar settings reset --all`.)"
         );
     }
     report(&after, &settled);
@@ -697,8 +715,10 @@ fn reset_all(config: &Config) -> Done {
     };
     let settle: Vec<&'static str> = KEEP_OR_REVERT.iter().map(|(_, _, k)| *k).collect();
     let settled = offline.finish(&settle)?;
-    if count == 0 && hidden == 0 {
+    if count == 0 && hidden == 0 && settled.is_empty() {
         println!("Nothing was saved in the app; nothing changed.");
+    } else if count == 0 && hidden == 0 {
+        println!("Nothing was saved in the app.");
     } else {
         println!(
             "Reset {} saved value{} in {} section{}. config.toml and the environment are \
@@ -867,6 +887,42 @@ mod tests {
         );
         assert!(names(&|m| m.danger.as_deref() == Some("security")).is_empty());
         offline.lock.release().unwrap();
+    }
+
+    /// `set` takes only untagged and `disruptive` fields; every other
+    /// `Danger`, and any tag this build doesn't know, is refused. The
+    /// match is exhaustive, so a new variant has to be added here.
+    #[test]
+    fn only_disruptive_dangers_are_set_here() {
+        use crate::settings::Danger;
+        let tag = |d: Danger| match d {
+            Danger::Disruptive => "disruptive",
+            Danger::Privacy => "privacy",
+            Danger::Destructive => "destructive",
+            Danger::Security => "security",
+        };
+        assert_eq!(danger_refusal("a.b", None), None);
+        for d in [
+            Danger::Disruptive,
+            Danger::Privacy,
+            Danger::Destructive,
+            Danger::Security,
+        ] {
+            let refused = danger_refusal("a.b", Some(tag(d)));
+            assert_eq!(refused.is_none(), d == Danger::Disruptive, "{d:?}");
+            if let Some(why) = refused {
+                assert!(
+                    why.starts_with("a.b ") && why.contains("in the app"),
+                    "{why}"
+                );
+            }
+        }
+        assert!(
+            danger_refusal("a.b", Some("security"))
+                .unwrap()
+                .contains("password")
+        );
+        assert!(danger_refusal("a.b", Some("someday")).is_some());
     }
 
     #[test]
