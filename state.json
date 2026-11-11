@@ -6841,10 +6841,7 @@
       "id": "X-worker-settings-pointer (dropped)",
       "what": "Not needed: WK-16 builds Settings -> Workers; workers need v0.6+, template already says so."
     },
-    {
-      "id": "#664 owner PR",
-      "what": "rv-664-640d87ef CHANGES: B1 job_workflow_ref rejection refuses every real OIDC token (fix: claims.get('job_workflow_ref', workflow_ref)==workflow_ref + tests); B2 local zone in docs/operations/2026-11-10-fleet-backend-investigation.md:5. Owner-gated widening listed. Asked owner who fixes."
-    }
+    "#664 owner PR: owner chose runner fixes + accepted listed widening (2026-11-11T18:31Z). Runner pushed c5d69402 (B1 job_workflow_ref equal-accept, B2 UTC, N12 tests); fresh Opus delta review running; then ready-for-review + merge. Deploy nothing."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7700,7 +7697,7 @@
     }
   ],
   "heartbeat": "2026-11-11T15:38:57Z",
-  "updated": "2026-11-11T14:11:14Z",
+  "updated": "2026-11-11T18:31Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -7735,7 +7732,8 @@
     }
   ],
   "review_queue": [
-    "RUNNING: #699 13397e42, #702 22effd40, #704 ad9c5567"
+    "#704 PK-guide-2 CHANGES relayed 2026-11-11T18:31Z",
+    "#664 delta c5d69402 in review 2026-11-11T18:31Z"
   ],
   "merged": [
     {
