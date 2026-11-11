@@ -341,6 +341,28 @@ jobs:
       - run: cargo clippy --release -p lodestar-bench --features dhat-heap --test mmap_retention -- -D warnings
       - run: cargo test --release -p lodestar-bench --features dhat-heap --test mmap_retention -- --test-threads=1
 
+  # PK-win-soak-ci: merges and segment GC while readers hold mmaps, on a
+  # real Windows filesystem. windows-latest (NTFS) deletes a mapped file, so
+  # the failed-delete retry is forced by retry_dir's fault-injection test;
+  # this job holds the GC to its contract there (no errors, no leaks, exact
+  # mmap gauge). It reuses mmap_retention's applicability (the search crate
+  # or anything it builds), docs/decisions/2026-11-11-PK-win-soak-ci.md.
+  windows-gc-stress:
+    name: windows GC stress (PK-win-soak-ci)
+    needs: changes
+    if: needs.changes.outputs.mmap_retention == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      # As the workspace test job: line tables keep file:line backtraces.
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The test profile (opt-level 1): one cold build, no release build.
+      - run: cargo test -p lodestar-search --test windows_gc_stress -- --test-threads=1 --nocapture
+
   importer:
     name: bitmagnet importer (PostgreSQL)
     needs: changes
@@ -525,10 +547,25 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: python3 .github/scripts/test_update_manifest.py
+      # The pinned upstream minisign release, checked against its sha256: the
+      # Ubuntu package lives only in the security pocket, which a DNS outage
+      # took down for hours on 2026-11-11 (#694). A mismatch fails the job.
+      - name: install minisign 0.12
+        env:
+          URL: https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz
+          SHA256: 9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/minisign"
+          mkdir -p "$dir"
+          curl -fsSL --retry 5 -o "$dir/minisign.tar.gz" "$URL"
+          echo "$SHA256  $dir/minisign.tar.gz" | sha256sum -c -
+          tar -xzf "$dir/minisign.tar.gz" -C "$dir" --warning=no-unknown-keyword minisign-linux/x86_64/minisign
+          echo "$dir/minisign-linux/x86_64" >>"$GITHUB_PATH"
       - name: round trip
         run: |
           set -euo pipefail
-          sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+          minisign -v
           cargo build -q -p lodestar-update --example verify_envelope
           work=$(mktemp -d "$RUNNER_TEMP/roundtrip.XXXXXX")
           umask 077
@@ -577,7 +614,7 @@ jobs:
 
   ci-ok:
     name: ci-ok
-    needs: [changes, lint, openapi, test, size-budget, relevance, importer, fuzz, log-bench, mmap-retention, soak-tools, soak-collector-windows, update-manifest, infra]
+    needs: [changes, lint, openapi, test, size-budget, relevance, importer, fuzz, log-bench, mmap-retention, windows-gc-stress, soak-tools, soak-collector-windows, update-manifest, infra]
     if: always()
     runs-on: ubuntu-latest
     steps:

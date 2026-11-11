@@ -684,16 +684,42 @@ const SEARCH_THREADS: usize = 4;
 impl SearchIndex {
     /// Opens the index in `dir`, creating it if absent.
     pub fn open(dir: &Path) -> Result<SearchIndex> {
+        SearchIndex::open_wrapped(dir, |d, _| Retrying::new(d))
+    }
+
+    /// [`SearchIndex::open`], failing each delete that `fault` returns true
+    /// for; it's given the file's whole path (PK-win-soak-ci's
+    /// fault-injection test).
+    #[cfg(test)]
+    pub(crate) fn open_with_delete_fault(
+        dir: &Path,
+        fault: crate::retry_dir::DeleteFault,
+    ) -> Result<SearchIndex> {
+        SearchIndex::open_wrapped(dir, |d, root| {
+            let (f, root) = (fault.clone(), root.to_path_buf());
+            Retrying::new(d).with_delete_fault(crate::retry_dir::DeleteFault(Arc::new(move |p| {
+                (f.0)(&root.join(p))
+            })))
+        })
+    }
+
+    /// Opens the index in `dir`, each directory wrapped by `wrap` (given
+    /// its root). The prune keeps its own clones of the two
+    /// `MmapDirectory`s, which share their caches with the wrapped ones.
+    fn open_wrapped(
+        dir: &Path,
+        wrap: impl Fn(MmapDirectory, &Path) -> Retrying<MmapDirectory>,
+    ) -> Result<SearchIndex> {
         let files_dir = dir.join("files");
         std::fs::create_dir_all(&files_dir).map_err(Error::Io)?;
         let (schema, fields) = schema::build();
         let (main, file) = (MmapDirectory::open(dir)?, MmapDirectory::open(&files_dir)?);
-        let index = Index::open_or_create(Retrying::new(main.clone()), schema)?;
+        let index = Index::open_or_create(wrap(main.clone(), dir), schema)?;
         let (file_schema, file_fields) = files::schema();
         let file_index = Index::builder()
             .schema(file_schema)
             .settings(files::settings())
-            .open_or_create(Retrying::new(file.clone()))?;
+            .open_or_create(wrap(file.clone(), &files_dir))?;
         SearchIndex::wrap(index, fields, file_index, file_fields, vec![main, file])
     }
 
