@@ -6783,7 +6783,8 @@
       "id": "X-win-upd-helper-nits",
       "what": "from #686 review, for the next helper.rs change: on_disk doc (helper.rs:210-216) and decisions file say \"the run the copy starts (start_task)\" not \"the copy's\"; msi.rs:666 comment that the name-first case tells the matchers apart; mark_failed (helper.rs:1191) logs a warning when the lock or file is unavailable; result.json code \"0\" with install_failed (check.rs owner); rollback step 5 on_disk",
       "at": "2026-11-11T13:24:41Z"
-    }
+    },
+    "2026-11-11T14:07Z: runner PR #695 opened (f004ecf3): entries X-win-upd-reoffer, X-win-upd-window, X-cmp-handover-followups, X-cmp-egress-api/-ui, D-companions-guide, X-collect-checklist-launch-2, X-smoke-polish, X-unraid-validate-all; owns PK-exc services.rs, PK-guide-1, PK-win-portable-upd .gitattributes; CMP-G deps; X-soak-screen-polish done. Still queued: architecture.md hot/cold lines (~792/~2927), CMP-7 note, companions DataFolders hot/cold dead-API cleanup slice, PK-cli worker placeholder check"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
