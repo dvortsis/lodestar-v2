@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T12:19:17Z",
+  "updated_at": "2026-11-11T12:33:47Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7499,7 +7499,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T12:19:17Z",
+    "updated": "2026-11-11T12:33:47Z",
     "items": [
       {
         "slot": 1,
@@ -7559,11 +7559,11 @@
       },
       {
         "slot": 8,
-        "slice": "X-e2e-baseline-refresh",
+        "slice": "X-collect-checklist-docker",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8mGSt1DA24S2gjPE6: stale Insights e2e baselines via e2e.yml marker + freezeClock README line (Sonnet); then CMP-9b after #681; same session after #665 merged 61459e4d",
-        "since": "2026-11-11T12:09:58Z"
+        "doing": "session_01MMjhn8mGSt1DA24S2gjPE6: refuse not_applicable backup/auto_update in docker mode (Sonnet); then CMP-9b after #681; same session after #684 merged 59e09ec6",
+        "since": "2026-11-11T12:33:47Z"
       }
     ]
   },
