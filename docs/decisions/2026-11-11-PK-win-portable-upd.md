@@ -44,8 +44,11 @@ The portable build now installs its own updates (architecture §12.2 "Windows po
 ## Logging
 - Existing `update.*` events only: `update.install_failed` (codes `verify_failed`, `zip_refused`, `swap_failed`, `bin_not_private`, …, and `rolled_back`, `store_not_restored`, `skip_unsaved`), `update.probation_failed` (the failing check, `attempts`, `not_started`, `start`) and `update.probation_passed`. A dedicated `update.rolled_back` event would need `log_events.rs` and the catalogue docs; it's left for PK-guide-3's pass over the Windows update texts.
 
+## CLI commands during a rollback (self-review I1; runner, approving `cli/util.rs`)
+- **The commands that open the store** (`backup`, `vacuum`, `reindex`, `stats`) **refuse while `portable.json` is at `rolling_back`**, as they do for the MSI's `rollback.json`, which is checked unchanged. The journal is read with its own parser, capped, as untrusted input. One that exists but can't be read refuses too (fail closed), with a message that says to start Lodestar once and, if it stays, how to clear a damaged file. A missing one doesn't refuse.
+- **`serve` checks only the MSI's marker** (`refuse_during_helper_rollback`): it finishes the portable rollback itself, before it opens the store, so refusing there would leave the rollback unfinishable.
+
 ## Not done here
-- **CLI commands during a rollback** (self-review I1): `cli::util::refuse_during_update_rollback` checks the MSI's `rollback.json` only. On the portable build, the `rolling_back` state lasts from the new program's relaunch to the old one's start (moments), or while a restore keeps failing (when `serve` refuses). A `lodestar.exe <command>` run then could open a store about to be replaced. Extending the check to `portable.json` is in `cli/util.rs`, outside this slice; it's with the runner.
 - **`history.json` and the index folder** (§12.2's rollback steps): as on the MSI path (PK-win-upd-3), the portable rollback writes no history entry and doesn't touch the index folder. The Windows updater has no install history yet (`clear_history` is a no-op there).
 
 ## Tests

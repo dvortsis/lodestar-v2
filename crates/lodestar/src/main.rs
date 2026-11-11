@@ -186,7 +186,9 @@ fn run() -> ExitCode {
                 return ExitCode::from(2);
             }
             // Every store opener refuses while a rollback journal exists.
-            if let Err(e) = cli::util::refuse_during_update_rollback(&config.data_dir) {
+            // `serve` finishes a portable rollback itself (below), so it
+            // checks only the helper's and the supervisor's marker.
+            if let Err(e) = cli::util::refuse_during_helper_rollback(&config.data_dir) {
                 eprintln!("lodestar serve: {e}");
                 return ExitCode::from(3);
             }

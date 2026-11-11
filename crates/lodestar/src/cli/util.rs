@@ -41,11 +41,41 @@ pub fn rollback_journal(data_dir: &Path) -> PathBuf {
     data_dir.join("bin").join("rollback.json")
 }
 
-/// Refuses while an update rollback is in progress: while the marker
-/// exists, or when it can't be told whether it does (any error but "not
-/// found", so an unreadable folder fails closed). `symlink_metadata`, so a
-/// link counts as a marker whatever it points at.
+/// Refuses while an update rollback is in progress, for the commands
+/// that open the store: [`refuse_during_helper_rollback`]'s marker, and
+/// the Windows portable build's journal while it's rolling back (its
+/// store is about to be replaced). A portable journal that can't be read
+/// refuses too (fail closed); a missing one doesn't.
 pub fn refuse_during_update_rollback(data_dir: &Path) -> Outcome {
+    refuse_during_helper_rollback(data_dir)?;
+    let journal = data_dir
+        .join("bin")
+        .join(crate::update::windows::portable::JOURNAL);
+    match crate::update::windows::portable::rollback_under_way(data_dir) {
+        Ok(false) => Ok(()),
+        Ok(true) => Err(Failure::Refused(format!(
+            "an update rollback is in progress ({}). Nothing may open the store \
+             until it finishes. Start Lodestar once to let it finish.",
+            journal.display()
+        ))),
+        Err(e) => Err(Failure::Refused(format!(
+            "can't tell whether an update rollback is in progress ({}): {e}. \
+             Nothing may open the store until that's clear. Start Lodestar once \
+             so it can finish or clear the update; if this stays, the file is \
+             damaged: with Lodestar stopped, check that lodestar.exe is in its \
+             folder and delete the file.",
+            journal.display()
+        ))),
+    }
+}
+
+/// Refuses while the update helper's or the supervisor's rollback is in
+/// progress: while the marker exists, or when it can't be told whether it
+/// does (any error but "not found", so an unreadable folder fails
+/// closed). `symlink_metadata`, so a link counts as a marker whatever it
+/// points at. `serve` checks only this one: it finishes the portable
+/// build's rollback itself, before it opens the store.
+pub fn refuse_during_helper_rollback(data_dir: &Path) -> Outcome {
     let journal = rollback_journal(data_dir);
     match std::fs::symlink_metadata(&journal) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -342,6 +372,54 @@ pub fn file_stamp(secs: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The portable build's journal (PK-win-portable-upd) in `state`.
+    fn portable_journal(dir: &Path, state: &str) -> std::path::PathBuf {
+        let path = dir
+            .join("bin")
+            .join(crate::update::windows::portable::JOURNAL);
+        let sha = "a".repeat(63) + "b";
+        let j = serde_json::json!({
+            "format": 1, "from": "0.5.4", "to": "0.5.5",
+            "old_sha256": sha, "new_sha256": sha,
+            "snapshots_before": [], "attempts": 1, "state": state,
+        });
+        std::fs::write(&path, j.to_string()).unwrap();
+        path
+    }
+
+    #[test]
+    fn a_portable_rollback_refuses_the_store_and_fails_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("bin")).unwrap();
+        // Missing: allowed.
+        assert!(refuse_during_update_rollback(dir.path()).is_ok());
+        // Rolling back: refused.
+        let path = portable_journal(dir.path(), "rolling_back");
+        match refuse_during_update_rollback(dir.path()) {
+            Err(Failure::Refused(m)) => assert!(m.contains("Start Lodestar once"), "{m}"),
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+        // `serve` finishes it itself, so its own check lets it through.
+        assert!(refuse_during_helper_rollback(dir.path()).is_ok());
+        // Any other state: allowed.
+        for state in ["staged", "swapping", "swapped"] {
+            portable_journal(dir.path(), state);
+            assert!(refuse_during_update_rollback(dir.path()).is_ok(), "{state}");
+        }
+        // Corrupt or oversize: refused.
+        std::fs::write(&path, b"{not json").unwrap();
+        assert!(matches!(
+            refuse_during_update_rollback(dir.path()),
+            Err(Failure::Refused(_))
+        ));
+        let big = vec![b' '; crate::update::layout::MAX_STATE as usize + 1];
+        std::fs::write(&path, big).unwrap();
+        assert!(matches!(
+            refuse_during_update_rollback(dir.path()),
+            Err(Failure::Refused(_))
+        ));
+    }
 
     #[test]
     fn a_rollback_marker_refuses_and_fails_closed() {

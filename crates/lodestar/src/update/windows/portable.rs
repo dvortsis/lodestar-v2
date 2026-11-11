@@ -794,6 +794,17 @@ fn restore_store(sys: &dyn Sys, db: &Path, snap: &Snapshot) -> io::Result<()> {
     sys.fault(Point::Restored)
 }
 
+/// Whether a portable rollback is under way in `data_dir`: the journal
+/// at `rolling_back`. A journal that can't be read is an error (the
+/// commands that open the store refuse then: `cli::util`); none, or no
+/// `bin`, is `false`.
+pub fn rollback_under_way(data_dir: &Path) -> io::Result<bool> {
+    let Some(bin) = Bin::existing(data_dir)? else {
+        return Ok(false);
+    };
+    Ok(read(&bin)?.is_some_and(|j| j.state == State::RollingBack))
+}
+
 fn read(bin: &Bin) -> io::Result<Option<Journal>> {
     let j: Option<Journal> = bin.read(JOURNAL)?;
     match j {
