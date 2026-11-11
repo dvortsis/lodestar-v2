@@ -3419,8 +3419,9 @@ export interface components {
              *     the portable build, or no installer wired in); on Windows also
              *     `install_kind_unknown` (the build is neither the MSI service nor
              *     the portable zip, so no artifact is chosen) and
-             *     `data_folder_unchecked` (the data folder's permissions weren't
-             *     checked, so nothing installs from it); or, when `unavailable` is
+             *     `data_folder_unchecked` (the data folder isn't the default one
+             *     under ProgramData whose permissions the installer sets, so nothing
+             *     installs from it); or, when `unavailable` is
              *     set, the same reason (`fixture`, `network`, `windows_helper`).
              *     Install automatically then behaves as Check and notify.
              */
@@ -10503,8 +10504,8 @@ export interface components {
              *     restart), `updater_unreadable` (the saved update state couldn't be
              *     read, so automatic updates are held; pausing or resuming saves a
              *     new state, which rewrites the file and ends the hold) and, on
-             *     Windows, `install_failed` (the update helper's last answer was not
-             *     a successful install of a newer version; display only), …
+             *     Windows, `install_failed` (the update helper's last answer, for a version
+             *     newer than the running one, wasn't `installed`; display only), …
              */
             notices: string[];
             pending: null | components["schemas"]["PendingInstall"];
@@ -16145,7 +16146,7 @@ export interface operations {
                     "application/json": components["schemas"]["UpdatesStatus"];
                 };
             };
-            /** @description `updates_unavailable`: a fixture, or Windows where the engine can't serve it (see `GET /updates`). */
+            /** @description `updates_unavailable`: a fixture, or an update client that couldn't be built (see `GET /updates`). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -16192,7 +16193,7 @@ export interface operations {
                     "application/json": components["schemas"]["UpdatesStatus"];
                 };
             };
-            /** @description `updates_unavailable`: a fixture, or Windows where the engine can't serve it (see `GET /updates`). */
+            /** @description `updates_unavailable`: a fixture, or an update client that couldn't be built (see `GET /updates`). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -16253,7 +16254,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `version_skipped`; `install_unavailable` with the reason; or `updates_unavailable` (a fixture, or Windows where the engine can't serve it). */
+            /** @description `version_skipped`; `install_unavailable` with the reason; or `updates_unavailable` (a fixture, or an update client that couldn't be built). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -16313,7 +16314,7 @@ export interface operations {
                     "application/json": components["schemas"]["UpdatesStatus"];
                 };
             };
-            /** @description `updates_unavailable` (a fixture, or Windows where the engine can't serve it; see `GET /updates`), or `bin_unavailable` (the update files can't be written). */
+            /** @description `updates_unavailable` (a fixture, or an update client that couldn't be built; see `GET /updates`), or `bin_unavailable` (the update files can't be written). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -16374,7 +16375,7 @@ export interface operations {
                     "application/json": components["schemas"]["UpdatesStatus"];
                 };
             };
-            /** @description `rollback_unavailable`, with `error.reason` (`not_supervised`, `image_mode`, `busy`, `no_previous_version`, `snapshot_missing`); or `updates_unavailable` (a fixture, or Windows where the engine can't serve it). */
+            /** @description `rollback_unavailable`, with `error.reason` (`not_supervised`, `image_mode`, `busy`, `no_previous_version`, `snapshot_missing`, `not_built_yet` on Windows); or `updates_unavailable` (a fixture, or an update client that couldn't be built). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -16434,7 +16435,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `updates_unavailable` (a fixture, or Windows where the engine can't serve it; see `GET /updates`), or `bin_unavailable` (the update files can't be written). */
+            /** @description `updates_unavailable` (a fixture, or an update client that couldn't be built; see `GET /updates`), or `bin_unavailable` (the update files can't be written). */
             409: {
                 headers: {
                     [name: string]: unknown;

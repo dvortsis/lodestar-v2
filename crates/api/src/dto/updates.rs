@@ -96,8 +96,9 @@ pub struct Capability {
     /// the portable build, or no installer wired in); on Windows also
     /// `install_kind_unknown` (the build is neither the MSI service nor
     /// the portable zip, so no artifact is chosen) and
-    /// `data_folder_unchecked` (the data folder's permissions weren't
-    /// checked, so nothing installs from it); or, when `unavailable` is
+    /// `data_folder_unchecked` (the data folder isn't the default one
+    /// under ProgramData whose permissions the installer sets, so nothing
+    /// installs from it); or, when `unavailable` is
     /// set, the same reason (`fixture`, `network`, `windows_helper`).
     /// Install automatically then behaves as Check and notify.
     #[schema(required = true)]
@@ -262,8 +263,8 @@ pub struct UpdatesStatus {
     /// restart), `updater_unreadable` (the saved update state couldn't be
     /// read, so automatic updates are held; pausing or resuming saves a
     /// new state, which rewrites the file and ends the hold) and, on
-    /// Windows, `install_failed` (the update helper's last answer was not
-    /// a successful install of a newer version; display only), …
+    /// Windows, `install_failed` (the update helper's last answer, for a version
+    /// newer than the running one, wasn't `installed`; display only), …
     pub notices: Vec<String>,
     pub history: Vec<HistoryEntry>,
 }
