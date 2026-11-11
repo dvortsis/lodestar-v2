@@ -7601,7 +7601,7 @@
         "slice": "WK-11",
         "role": "build",
         "agent": "claude",
-        "doing": "#699 CHANGES round (B1 full-spool gates, sec L1-L3, I1/I2/I4, nits); then delta + security delta review",
+        "doing": "session_01MMjhn97qDUZKniFoSzjMNE: #699 round 3 (rv-699-13397e42: B1 tests, I1 spool link stall, Windows reparse-point open)",
         "since": "2026-11-11T14:05:33Z"
       },
       {
@@ -7735,8 +7735,9 @@
     }
   ],
   "review_queue": [
-    "#699 WK-11 delta+sec review running",
-    "#703 MERGE @1666594d; asked for asyncUtilTimeout 10s in SourceRow/NeedChip chunk tests; self-check delta then merge"
+    "#703 MERGE @1666594d; asked for asyncUtilTimeout 10s in SourceRow/NeedChip chunk tests; self-check delta then merge",
+    "#699 CHANGES @13397e42 relayed (B1 tests L4/L6, I1 link+secure_remove, Windows reparse); then fresh delta+sec review",
+    "#692 delta review running @cfc09faa"
   ],
   "merged": [
     {
