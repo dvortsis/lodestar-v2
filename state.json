@@ -7610,7 +7610,7 @@
         "slice": "CMP-9b",
         "role": "build",
         "agent": "claude",
-        "doing": "#698 ready at e687ae6c (all green); fresh Opus review running",
+        "doing": "#698 CHANGES at e687ae6c (B1 recheck-stop tests, I1 chunk {:catch}, nits); then fresh delta review (session_01MMjhn8mGSt1DA24S2gjPE6)",
         "since": "2026-11-11T14:10:36Z"
       }
     ]
