@@ -24,7 +24,8 @@
 //!   ([`super::helper::System::healthy`]). Passed, the journal goes. The
 //!   next run tells what happened from the helper's own version (the
 //!   program on disk, a SYSTEM-owned fact): still `from` means the install
-//!   never happened, or waits for a restart (exit 3010); `to` means judge
+//!   never happened, or waits for a restart (exit 3010; for at most
+//!   [`MAX_RESTARTS`] boots); `to` means judge
 //!   probation now; anything else means someone installed another version
 //!   by hand, and the journal is dropped.
 //! - **Rolling back** (a failed probation), each step idempotent:
@@ -48,7 +49,8 @@
 //!      before it runs (rule 4's one exception: the journal's rollback
 //!      target with SYSTEM-held pins);
 //!   5. after a reinstall that needs a restart, waiting (disabled and
-//!      stopped on every pass) until the program on disk is `from`; then
+//!      stopped on every pass) until the program on disk is `from`, for
+//!      at most [`MAX_RESTARTS`] boots (then it halts); then
 //!      the marker removed, the start type back to what it was before the install (recorded
 //!      before its stop, since the MSI resets it to delayed automatic;
 //!      delayed automatic when none was recorded), the service started, the
@@ -133,6 +135,17 @@ pub struct Journal {
     /// 1641): step 5 waits until the program on disk is `from`.
     #[serde(default)]
     pub reinstall_restart: bool,
+    /// While a 3010 waits for a restart (the install's, `from` still on
+    /// disk; or the rollback's reinstall at step 5, `to` still on disk):
+    /// the boot (Windows' boot time, Unix seconds) it last saw the old
+    /// program in. A later boot that still sees it is a restart that didn't
+    /// replace it ([`MAX_RESTARTS`]). An older helper ignores it and waits
+    /// as before.
+    #[serde(default)]
+    pub restart_boot: Option<u64>,
+    /// Restarts that didn't put `from` back.
+    #[serde(default)]
+    pub restarts: u32,
     pub state: State,
 }
 
@@ -163,6 +176,17 @@ pub struct MsiRun {
 
 /// Fresh copies a rollback's reinstall may be handed to before it halts.
 pub const MAX_COPIES: u32 = 3;
+/// Restarts after a reinstall's 3010 that still find `to` on disk before
+/// the rollback halts (LOW-B): the pending replacement was cancelled or
+/// failed. Two, so one boot misread (a clock change) doesn't halt it.
+pub const MAX_RESTARTS: u32 = 2;
+/// Two boot times further apart than this are two boots: the boot time is
+/// read to the second, and moves only with a change of the clock.
+pub const BOOT_SLACK: u64 = 60;
+/// How long [`copy_running`] tries to remove a copy whose lock is free:
+/// the copy starts the task again right before it ends, so the run that
+/// follows can find its image still mapped for a moment (P-4).
+pub const COPY_EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// In staging: the copy's answer, `msiexec`'s exit code.
 pub const MSI_RESULT: &str = "msiexec-result.json";
@@ -246,8 +270,34 @@ pub fn msi_lock(ctx: &Context, create: bool) -> std::io::Result<Option<std::fs::
 
 /// Whether a copy may be running: its lock is held, the lock can't be
 /// read, or this run's copy is still there (a starting copy that hasn't
-/// taken the lock yet can't be removed: its image is running).
+/// taken the lock yet can't be removed: its image is running). A copy
+/// that can't be removed is tried again for up to [`COPY_EXIT_WAIT`]: one
+/// that has just started this run is still ending.
 pub fn copy_running(ctx: &Context, j: Option<&Journal>) -> bool {
+    copy_running_with(
+        ctx,
+        j,
+        &|p| std::fs::remove_file(p),
+        COPY_EXIT_WAIT,
+        std::time::Instant::now,
+        std::thread::sleep,
+    )
+}
+
+/// How often [`copy_running`] tries the removal again.
+const COPY_EXIT_POLL: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// [`copy_running`], with the removal, the clock and the sleep passed in.
+/// The lock is looked at once, first: looking again while the copy starts
+/// could take it from under the copy.
+pub(super) fn copy_running_with(
+    ctx: &Context,
+    j: Option<&Journal>,
+    remove: &dyn Fn(&Path) -> std::io::Result<()>,
+    wait: std::time::Duration,
+    now: impl Fn() -> std::time::Instant,
+    mut sleep: impl FnMut(std::time::Duration),
+) -> bool {
     match msi_lock(ctx, false) {
         Ok(Some(_)) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -260,7 +310,16 @@ pub fn copy_running(ctx: &Context, j: Option<&Journal>) -> bool {
         return false;
     }
     let path = ctx.staging.dir.join(copy);
-    std::fs::symlink_metadata(&path).is_ok() && std::fs::remove_file(&path).is_err()
+    let start = now();
+    loop {
+        if std::fs::symlink_metadata(&path).is_err() || remove(&path).is_ok() {
+            return false;
+        }
+        if now().saturating_duration_since(start) >= wait {
+            return true;
+        }
+        sleep(COPY_EXIT_POLL);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -355,6 +414,8 @@ pub fn installing(
         answer: None,
         copies: 0,
         reinstall_restart: false,
+        restart_boot: None,
+        restarts: 0,
         touched: false,
         state: State::Installing,
     })
@@ -374,7 +435,9 @@ pub fn probation(ctx: &Context, sys: &dyn System, mut journal: Journal, restart:
     };
     if restart {
         // The old file may run until Windows restarts: judged after it.
+        // The boot it came in bounds the wait.
         journal.restart = true;
+        journal.restart_boot = sys.boot_time().ok();
         let _ = write(ctx, &journal);
         return Outcome::Installed {
             version: to,
@@ -411,7 +474,7 @@ pub fn resume(
     if !is(&journal.from) && !is(&journal.to) {
         // Installed by hand since: whatever this journal was about is over.
         clear(ctx);
-        let _ = remove_marker(ctx);
+        let _ = remove_marker(ctx, sys);
         return Ok(None);
     }
     // An install handed to the copy: its answer first, or it's still
@@ -448,7 +511,25 @@ pub fn resume(
         },
         State::RollingBack { .. } => roll_back(ctx, sys, journal),
         State::Installing if is(&journal.from) && journal.restart => {
-            // Windows hasn't restarted yet: nothing to judge.
+            // Windows hasn't restarted yet: nothing to judge. Bounded: after
+            // [`MAX_RESTARTS`] restarts that left `from` in place the
+            // replacement never took effect, so the install didn't happen.
+            if boot_seen(sys, &mut journal) {
+                if journal.restarts >= MAX_RESTARTS {
+                    clear(ctx);
+                    let _ = sys.set_start(journal.start_before.unwrap_or(Start::Auto));
+                    sys.start_service();
+                    sys.event_log(&format!(
+                        "Lodestar's update helper: Windows restarted {} times and {} still \
+                         isn't in place, so its install didn't take effect. {} keeps running.",
+                        journal.restarts, journal.to, journal.from
+                    ));
+                    return Ok(Some(Outcome::InstallInterrupted {
+                        version: journal.to.clone(),
+                    }));
+                }
+                let _ = write(ctx, &journal);
+            }
             Outcome::Installed {
                 version: Version::parse(&journal.to).unwrap_or_else(|_| running.clone()),
                 restart: true,
@@ -564,6 +645,9 @@ pub fn recovery(ctx: &Context, j: &Journal, done: u8, why: &str) -> String {
     let marker = ctx.data_dir.join("bin").join(MARKER);
     let store = if done < 3 {
         "The store may be half restored."
+    } else if j.reinstall_restart {
+        "The store was restored and the previous version reinstalled, but Windows didn't put \
+         it in place at a restart: the replacement waiting for a restart didn't take effect."
     } else {
         "The store was restored, but reinstalling the previous version didn't finish."
     };
@@ -620,7 +704,7 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
                 .and_then(|b| b.ok_or_else(|| "bin is missing".to_string())),
         )?;
         let lock =
-            helper::take_lock(&bin, ctx.lock_wait).map_err(|e| Stop::Retry(e.to_string()))?;
+            helper::take_lock(sys, &bin, ctx.lock_wait).map_err(|e| Stop::Retry(e.to_string()))?;
         halt_on(
             bin.write(MARKER, &serde_json::json!({ "windows_rollback": j.to }))
                 .map_err(|e| format!("the rollback marker: {e}")),
@@ -723,12 +807,13 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
         {
             // On every pass: whatever started it meanwhile is stopped again.
             stopped(sys)?;
+            restarted(ctx, sys, j, &snapshot, done)?;
             return Err(Stop::Retry(format!(
                 "waiting for Windows to restart, which puts {} back in place",
                 j.from
             )));
         }
-        if !remove_marker(ctx) {
+        if !remove_marker(ctx, sys) {
             return Err(Stop::Retry(
                 "the rollback marker couldn't be removed".into(),
             ));
@@ -743,6 +828,50 @@ fn steps(ctx: &Context, sys: &dyn System, j: &mut Journal) -> Result<(), Stop> {
         save(j, &snapshot, done)?;
     }
     Ok(())
+}
+
+/// A 3010's wait for a restart, bounded (LOW-B): a boot other than the
+/// one it last saw the old program in, with that program still on disk,
+/// is a restart that didn't replace it, counted in `restarts`. Whether the
+/// journal changed (it's the caller's to save). A boot time that can't be
+/// read counts nothing (the wait goes on, as before the bound).
+fn boot_seen(sys: &dyn System, j: &mut Journal) -> bool {
+    let Ok(boot) = sys.boot_time() else {
+        return false;
+    };
+    match j.restart_boot {
+        Some(seen) if boot.abs_diff(seen) <= BOOT_SLACK => return false,
+        Some(_) => j.restarts += 1,
+        None => {}
+    }
+    j.restart_boot = Some(boot);
+    true
+}
+
+/// Step 5's wait for a restart: [`MAX_RESTARTS`] boots that still find
+/// `to` on disk halt the rollback.
+fn restarted(
+    ctx: &Context,
+    sys: &dyn System,
+    j: &mut Journal,
+    snapshot: &Option<SnapshotRef>,
+    done: u8,
+) -> Result<(), Stop> {
+    if !boot_seen(sys, j) {
+        return Ok(());
+    }
+    if j.restarts >= MAX_RESTARTS {
+        return Err(Stop::Halt(format!(
+            "Windows restarted {} times since the reinstall of {} asked for a restart, and {} \
+             is still the program on disk: the replacement didn't take effect",
+            j.restarts, j.from, j.to
+        )));
+    }
+    j.state = State::RollingBack {
+        snapshot: snapshot.clone(),
+        done,
+    };
+    write(ctx, j).map_err(|e| Stop::Halt(e.to_string()))
 }
 
 /// The service disabled and stopped, and nothing left running as its
@@ -770,11 +899,17 @@ pub fn no_service_processes(sys: &dyn System) -> Result<(), String> {
 }
 
 /// Under `.lock`: the marker goes at step 5, right before the service is
-/// started (or when the journal is dropped). Whether it's gone.
-fn remove_marker(ctx: &Context) -> bool {
+/// started (or when the journal is dropped). Whether it's gone. The lock is
+/// waited for, up to `lock_wait` ([`helper::take_lock`]): the service that
+/// just stopped may not have let go of it yet. No marker, no lock: a
+/// version installed by hand may be serving, holding it for good.
+fn remove_marker(ctx: &Context, sys: &dyn System) -> bool {
     let marker = ctx.data_dir.join("bin").join(MARKER);
+    if std::fs::symlink_metadata(&marker).is_err() {
+        return true;
+    }
     if let Ok(Some(bin)) = Bin::existing(&ctx.data_dir)
-        && let Ok(Some(_lock)) = bin.lock()
+        && let Ok(_lock) = helper::take_lock(sys, &bin, ctx.lock_wait)
     {
         let _ = bin.remove(MARKER);
     }
