@@ -6812,7 +6812,8 @@
     "PK-ops notes: a CLI-set http_bind that can't bind makes serve fail at start (no UI-style revert); document 'lodestar settings reset network.http_bind' as the way out (rv-696 nit 4).",
     "CMP-9b owner flag (\u00a72.19/\u00a72.26): Sources first view 30.9->31.1 kB (+139 B lazy hook), new on-demand chunk 27 kB.",
     "PK-exc polish: ports.rs test comment 'only test that sets or reads' is off since insights no_port_exception_off_windows reads probe() (count-independent off Windows).",
-    "PK-exc wording: crates/lodestar/src/logging/events.rs start-up log still says 'network filesystem'; align with 'a network or shared-folder filesystem' (9p/WSL2/Docker Desktop). PK-ui uses same wording en+zh."
+    "PK-exc wording: crates/lodestar/src/logging/events.rs start-up log still says 'network filesystem'; align with 'a network or shared-folder filesystem' (9p/WSL2/Docker Desktop). PK-ui uses same wording en+zh.",
+    "Runner PR: add crates/search/src/retry_dir.rs to PK-win-soak-ci owns (ratified test-only, #694 review)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7560,7 +7561,7 @@
         "slice": "PK-win-soak-ci",
         "role": "build",
         "agent": "claude",
-        "doing": "#694 ready at 2041de65 (Windows stress green 46.5 s); fresh Opus review running; ci-ok red only on manifest round trip (security.ubuntu.com DNS, red on main) -> re-run failed job once after review (run 43039262237)",
+        "doing": "#694 MERGE at 2041de65 (retry_dir.rs ratified test-only); fix round: pinned minisign download (security.ubuntu.com DNS) + nits; self-check then merge",
         "since": "2026-11-11T13:25:04Z"
       },
       {
