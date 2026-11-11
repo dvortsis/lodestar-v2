@@ -476,7 +476,9 @@ fn names(plan: &ConfigPlan) -> Vec<&'static str> {
 }
 
 fn qbit() -> Box<dyn Configure> {
-    configure::configurator(&CompanionId::parse("qbittorrent").unwrap()).unwrap()
+    Box::new(qbittorrent::QBittorrent::new(
+        CompanionId::parse("qbittorrent").unwrap(),
+    ))
 }
 
 fn prowlarr_adapter() -> Box<dyn Configure> {

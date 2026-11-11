@@ -316,7 +316,13 @@ struct Inner {
     rollback_kept: super::rollback_cache::Cache,
     /// The keys checks verify with (the embedded ones, or tests').
     keys: Box<dyn Fn() -> Result<lodestar_update::Embedded, lodestar_update::Error> + Send + Sync>,
+    /// The service's stop, once `spawn` has it: an install under way
+    /// looks at it just before the switch (X-upd-stop-races).
+    stop: Mutex<Option<watch::Receiver<bool>>>,
 }
+
+/// An install's code when the service's stop came before its switch.
+const STOPPING: &str = "stopping";
 
 /// The one-check-or-install lock, held.
 type OneAtATime = tokio::sync::OwnedMutexGuard<()>;
@@ -413,12 +419,14 @@ impl Engine {
                 wake: tokio::sync::Notify::new(),
                 rollback_kept: Default::default(),
                 keys,
+                stop: Mutex::new(None),
             }),
         }
     }
 
     /// The scheduled checks and installs, until `stop` is set.
     pub fn spawn(&self, mut stop: watch::Receiver<bool>) -> tokio::task::JoinHandle<()> {
+        *lock(&self.inner.stop) = Some(stop.clone());
         let engine = self.clone();
         let mut settings = self.inner.settings.clone();
         tokio::spawn(async move {
@@ -473,6 +481,11 @@ impl Engine {
             one = self.inner.checking.clone().lock_owned() => Some(one),
             _ = stop.changed() => None,
         }
+    }
+
+    /// The service's stop has been sent.
+    fn stopping(&self) -> bool {
+        lock(&self.inner.stop).as_ref().is_some_and(|r| *r.borrow())
     }
 
     /// A switch was asked for: this process is on its way out.
@@ -1190,7 +1203,9 @@ impl Engine {
         confirm_manual: bool,
     ) -> Result<UpdatesStatus, UpdatesError> {
         let v = layout::parse_version(version).ok_or(UpdatesError::UnknownVersion)?;
-        if self.switching() {
+        // After the service's stop, an install could only end at the
+        // switch's look: refused before its download.
+        if self.switching() || self.stopping() {
             return Err(UpdatesError::InstallUnavailable("busy"));
         }
         self.may_install(&v, confirm_manual)?;
@@ -1262,6 +1277,15 @@ impl Engine {
     async fn run_install(&self, one: OneAtATime, v: Version) -> Result<(), &'static str> {
         *lock(&self.inner.installing) = Some(v.clone());
         let result = self.install_steps(&v).await;
+        if result == Err(STOPPING) {
+            // Not a failure of this version: it stays queued, and isn't
+            // held back, for the next start. The service is stopping, so
+            // nothing is published.
+            *lock(&self.inner.installing) = None;
+            drop(one);
+            log_event!(UPDATE_INSTALL_FAILED, error = STOPPING);
+            return result;
+        }
         if result.is_ok() {
             // The switch was asked for: keep the lock and `installing`
             // until the process exits.
@@ -1344,6 +1368,16 @@ impl Engine {
         if let Err(code) = again {
             let _ = bin.remove_overlay(v);
             return Err(code);
+        }
+        // The service's stop came first: no switch. (A supervisor also
+        // drops a switch that meets a forwarded stop; this keeps the
+        // version queued and the overlay gone either way.) Nothing awaits
+        // from here to the switch, but the stop is only sent once serving
+        // has drained, so an install can still reach the switch in that
+        // drain.
+        if self.stopping() {
+            let _ = bin.remove_overlay(v);
+            return Err(STOPPING);
         }
 
         self.publish(UpdatesState::Installing, Some(v.to_string()), None);
@@ -2260,6 +2294,59 @@ mod tests {
         let s = e.engine.status();
         assert_eq!(s.capability.reason.as_deref(), Some("skipped_unreadable"));
         assert!(!s.releases[0].eligible);
+    }
+
+    /// The service's stop sent once the overlay is staged (here, from the
+    /// supervisor's verification, just before the last reverify): no
+    /// switch is asked for, the staged folder goes, and the version isn't
+    /// held back for the next start.
+    #[tokio::test]
+    async fn a_stop_before_the_switch_switches_nothing() {
+        let e = env(Mode::Notify);
+        e.serve(NOW - 100, "0.6.0", None);
+        e.engine.run_check().await.unwrap();
+        let (stop, stopped) = watch::channel(false);
+        let task = e.engine.spawn(stopped);
+        let stop = Arc::new(stop);
+        let s = stop.clone();
+        let verified = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let v = verified.clone();
+        *lock(&e.on_verify) = Box::new(move || {
+            v.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = s.send(true);
+            None
+        });
+        e.engine
+            .install_request("0.6.0", InstallWhen::Now, false)
+            .await
+            .unwrap();
+        e.until("the install ended", |e| {
+            lock(&e.engine.inner.installing).is_none()
+        })
+        .await;
+        assert!(
+            verified.load(std::sync::atomic::Ordering::SeqCst),
+            "{:?}",
+            e.states()
+        );
+        assert!(e.switched().is_empty(), "{:?}", e.switched());
+        assert!(!e.states().contains(&UpdatesState::Installing));
+        let bin = Bin::open(e.dir.path()).unwrap();
+        assert!(bin.overlays().unwrap().is_empty());
+        assert!(lock(&e.engine.inner.failed).is_none());
+        // The lock is free and no switch is claimed; and an Install now
+        // after the stop is refused before it downloads anything.
+        assert!(e.engine.inner.checking.clone().try_lock_owned().is_ok());
+        assert!(!e.engine.switching());
+        let asked = e.downloads.asked.lock().unwrap().len();
+        assert!(matches!(
+            e.engine
+                .install_request("0.6.0", InstallWhen::Now, false)
+                .await,
+            Err(UpdatesError::InstallUnavailable("busy"))
+        ));
+        assert_eq!(e.downloads.asked.lock().unwrap().len(), asked);
+        task.await.unwrap();
     }
 
     /// Install now: downloaded, staged, verified as the supervisor will,

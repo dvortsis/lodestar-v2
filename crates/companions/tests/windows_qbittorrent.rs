@@ -18,7 +18,7 @@ use lodestar_companions::configure::{
 };
 use lodestar_companions::inputs::{HostPath, InputError, PortNumber, Version};
 use lodestar_companions::windows_qbittorrent::{
-    AWAITING_PIN, DOWNLOAD_PAGE, Guide, Installer, Step, VERSION_UNSUPPORTED, WindowsQBittorrent,
+    DOWNLOAD_PAGE, Guide, Installer, Step, VERSION_UNSUPPORTED, WindowsQBittorrent,
 };
 use lodestar_companions::{CompanionId, builtin};
 use lodestar_integrations::secret::Secret;
@@ -34,23 +34,37 @@ const GENERATED: &str = "GeneratedPw_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 /// at `version`, as CMP-13's tool would write it (test-only release
 /// folder).
 fn pinned(version: &str) -> &'static Entry {
+    with_windows_pin(Some(version))
+}
+
+/// The compiled-in catalogue with qBittorrent's Windows installer awaiting
+/// its pin, whatever CMP-13 later pins in the shipped file.
+fn unpinned() -> &'static Entry {
+    with_windows_pin(None)
+}
+
+fn with_windows_pin(version: Option<&str>) -> &'static Entry {
     let mut v: Value =
         serde_json::from_str(include_str!("../data/catalogue.json")).expect("catalogue json");
     let q = &mut v["entries"][0];
     assert_eq!(q["id"], "qbittorrent");
     q["native"]["release"] = json!("https://github.com/qbittorrent/qBittorrent/releases/download/");
     for a in q["native"]["artifacts"].as_array_mut().unwrap() {
-        if a["platform"] == "windows" {
-            a["pin"] = json!({
+        if a["platform"] != "windows" {
+            continue;
+        }
+        a["pin"] = match version {
+            None => Value::Null,
+            Some(version) => json!({
                 "version": version,
                 "url": format!("https://github.com/qbittorrent/qBittorrent/releases/download/release-{version}/qbittorrent_{version}_x64_setup.exe"),
                 "size": 36_000_000,
                 "sha256": SHA,
                 "upstream_sig": {"kind": "none"}
-            });
-        }
+            }),
+        };
     }
-    let cat = Catalogue::from_json(&v.to_string()).expect("pinned test catalogue");
+    let cat = Catalogue::from_json(&v.to_string()).expect("test catalogue");
     let cat: &'static Catalogue = Box::leak(Box::new(cat));
     cat.get("qbittorrent").unwrap()
 }
@@ -59,13 +73,18 @@ fn builtin_qbt() -> &'static Entry {
     builtin().unwrap().get("qbittorrent").unwrap()
 }
 
+/// The shipped Windows build is an installer, whether or not CMP-13 has
+/// pinned it yet.
 #[test]
-fn the_catalogue_offers_an_installer_awaiting_its_pin() {
+fn the_catalogue_offers_an_installer() {
     let q = builtin_qbt();
     let a = q.artifact(Platform::Windows, Arch::X86_64).unwrap();
     assert_eq!(a.archive, ArchiveKind::Installer);
     assert!(a.executable.is_none());
-    assert_eq!(Installer::of(q).unwrap_err(), NotAvailable::AwaitingPin);
+    assert_eq!(
+        Installer::of(unpinned()).unwrap_err(),
+        NotAvailable::AwaitingPin
+    );
     // Prowlarr's Windows build is a zip Lodestar installs; it has no guide.
     let p = builtin().unwrap().get("prowlarr").unwrap();
     assert_eq!(Installer::of(p).unwrap_err(), NotAvailable::NoPlatform);
@@ -76,15 +95,23 @@ fn the_catalogue_offers_an_installer_awaiting_its_pin() {
 /// claimed.
 #[test]
 fn an_unpinned_guide_claims_no_checksum() {
-    let g = Guide::of(builtin_qbt()).unwrap();
+    let g = Guide::of(unpinned()).unwrap();
     assert!(g.pinned.is_none());
     assert!(!g.steps().contains(&Step::CheckSha256));
     assert_eq!(g.text(Step::CheckSha256), None);
     let all: Vec<String> = g.steps().iter().filter_map(|s| g.text(*s)).collect();
     assert_eq!(all.len(), Step::ALL.len() - 1);
     assert!(all[0].contains(DOWNLOAD_PAGE) && all[0].contains("doesn't download or run"));
+    assert!(
+        all[0].contains("no checked qBittorrent installer yet"),
+        "{}",
+        all[0]
+    );
     for t in &all {
-        assert!(!t.contains("SHA") && !t.contains("hash"), "{t}");
+        assert!(
+            !t.contains("SHA") && !t.contains("hash") && !t.contains("Get-FileHash"),
+            "{t}"
+        );
     }
 }
 
@@ -440,22 +467,43 @@ async fn the_apply_checks_the_version_again() {
     assert_eq!(http.0.lock().unwrap().password, PASTED);
 }
 
+/// While the installer awaits its pin, the gate accepts exactly CMP-8b's
+/// checked range (4.6.0 to below 5.3): inside it, configured; below it,
+/// at 5.3 and past it, refused with nothing written (runner, option (D)).
 #[tokio::test]
-async fn an_unpinned_installer_or_an_unreadable_version_refuses() {
+async fn an_unpinned_installer_accepts_the_checked_range_only() {
     let creds = Creds(GENERATED);
     let t = loopback();
-    let gate = WindowsQBittorrent::new(builtin_qbt());
-    let http = fake("5.0.3");
-    let err = gate.plan(&http, &t, &input(&creds, &t)).await.unwrap_err();
-    assert_eq!(err, AdapterError::Refused(AWAITING_PIN));
-    // Refused before anything is sent: not even a sign-in.
-    assert!(http.0.lock().unwrap().seen.is_empty());
+    for ok in ["4.6.0", "5.0.3", "5.2.9"] {
+        let gate = WindowsQBittorrent::new(unpinned());
+        let http = fake(ok);
+        run(&gate, &http, &input(&creds, &t)).await.unwrap();
+        assert_eq!(http.0.lock().unwrap().password, GENERATED, "{ok}");
+    }
+    for refused in ["4.5.9", "5.3.0", "5.3", "6.0.0"] {
+        let gate = WindowsQBittorrent::new(unpinned());
+        let http = fake(refused);
+        let err = gate.plan(&http, &t, &input(&creds, &t)).await.unwrap_err();
+        assert_eq!(err, AdapterError::Refused(VERSION_UNSUPPORTED), "{refused}");
+        assert!(http.writes().is_empty(), "{refused}");
+        assert_eq!(http.0.lock().unwrap().password, PASTED);
+        assert!(gate.last_refusal().is_some());
+    }
+}
 
-    let gate = WindowsQBittorrent::new(pinned("5.0.3"));
-    let http = fake("5.0.3-beta");
-    let err = gate.plan(&http, &t, &input(&creds, &t)).await.unwrap_err();
-    assert_eq!(err, AdapterError::Protocol("version"));
-    assert!(http.writes().is_empty());
+#[tokio::test]
+async fn an_unreadable_version_refuses() {
+    let creds = Creds(GENERATED);
+    let t = loopback();
+    for gate in [
+        WindowsQBittorrent::new(unpinned()),
+        WindowsQBittorrent::new(pinned("5.0.3")),
+    ] {
+        let http = fake("5.0.3-beta");
+        let err = gate.plan(&http, &t, &input(&creds, &t)).await.unwrap_err();
+        assert_eq!(err, AdapterError::Protocol("version"));
+        assert!(http.writes().is_empty());
+    }
 }
 
 /// A wrong pasted password costs one refused sign-in, as without the gate.
@@ -512,19 +560,28 @@ async fn the_gate_adds_no_sign_in_of_its_own() {
     assert_eq!(version_reads, 2, "checked in the plan and the apply");
 }
 
-/// The configurator CMP-11b registers for Windows is the gate: with the
-/// compiled-in catalogue awaiting its pin, it refuses before sending
-/// anything. Not registered yet, so `configure::configurator` is still
-/// CMP-8b's adapter on every platform.
+/// The configurator registered for Windows is the gate: it refuses a
+/// version no range accepts. On Windows that's what
+/// `configure::configurator` hands out; elsewhere it's CMP-8b's adapter,
+/// which reads no version.
 #[tokio::test]
 async fn the_windows_configurator_is_the_gate() {
     let id = CompanionId::parse("qbittorrent").unwrap();
-    let c = lodestar_companions::windows_qbittorrent::configurator(&id).unwrap();
     let creds = Creds(GENERATED);
     let t = loopback();
-    let http = fake("5.0.3");
+    // A release no pin or checked range accepts, whatever CMP-13 pins.
+    let c = lodestar_companions::windows_qbittorrent::configurator(&id).unwrap();
+    let http = fake("99.0.0");
     let err = c.plan(&http, &t, &input(&creds, &t)).await.unwrap_err();
-    assert_eq!(err, AdapterError::Refused(AWAITING_PIN));
+    assert_eq!(err, AdapterError::Refused(VERSION_UNSUPPORTED));
+    let registered = configure::configurator(&id).unwrap();
+    let http = fake("99.0.0");
+    let got = registered.plan(&http, &t, &input(&creds, &t)).await;
+    if cfg!(windows) {
+        assert_eq!(got.unwrap_err(), AdapterError::Refused(VERSION_UNSUPPORTED));
+    } else {
+        assert!(got.is_ok(), "{got:?}");
+    }
 }
 
 // ─── Windows save paths ─────────────────────────────────────────────────
@@ -627,6 +684,14 @@ fn windows_paths_refuse_hostile_inputs() {
         (r"\\2130706433\downloads", Forbidden),
         (r"\\0.0.0.0\downloads", Forbidden),
         (r"\\a.localhost\downloads", Forbidden),
+        // Loopback in octal, hex and Windows' IPv6-literal names.
+        (r"\\0177.0.0.1\share\x", Forbidden),
+        (r"\\0x7f.0.0.1\share\x", Forbidden),
+        (r"\\0x7f000001\share\x", Forbidden),
+        (r"\\0--1.ipv6-literal.net\share\x", Forbidden),
+        (r"\\192.168.001.20\share", Forbidden),
+        (r"\\nas\Windows.old\x", Forbidden),
+        (r"C:\Windows.old\Users\me", Forbidden),
         (r"\\nas\pipe\x", Forbidden),
         (r"\\nas\MailSlot\x", Forbidden),
         (r"\\nas\Users\me\AppData", Forbidden),
@@ -782,4 +847,134 @@ async fn the_gated_plan_signs_in_exactly_once() {
         .filter(|r| r.path == "/api/v2/app/version" && r.headers.iter().any(|(n, _)| n == "cookie"))
         .count();
     assert_eq!(signed_in_version, 1);
+}
+
+/// A save path's kind must match the adapter: a Linux path never reaches
+/// Windows' qBittorrent, and a Windows path never reaches anyone else's.
+/// Both are refused before anything is sent.
+#[tokio::test]
+async fn a_save_path_of_the_wrong_platform_is_refused() {
+    let creds = Creds(PASTED);
+    let t = loopback();
+    let linux = Downloads::new(HostPath::parse("/downloads").unwrap(), Vec::new()).unwrap();
+    let windows = Downloads::new(WindowsPath::parse(r"D:\Downloads").unwrap(), Vec::new()).unwrap();
+
+    let gate = WindowsQBittorrent::new(pinned("5.0.3"));
+    let http = fake("5.0.3");
+    let err = gate
+        .plan(&http, &t, &input(&creds, &t).downloads(linux.clone()))
+        .await
+        .unwrap_err();
+    assert_eq!(err, AdapterError::Refused(configure::SAVE_PATH_PLATFORM));
+    assert!(http.0.lock().unwrap().seen.is_empty());
+
+    let id = CompanionId::parse("qbittorrent").unwrap();
+    // CMP-8b's adapter without the gate, as every platform but Windows
+    // gets it.
+    let plain: Box<dyn Configure> = Box::new(qbittorrent::QBittorrent::new(id.clone()));
+    let http = fake("5.0.3");
+    let err = plain
+        .plan(&http, &t, &input(&creds, &t).downloads(windows.clone()))
+        .await
+        .unwrap_err();
+    assert_eq!(err, AdapterError::Refused(configure::SAVE_PATH_PLATFORM));
+    assert!(http.0.lock().unwrap().seen.is_empty());
+
+    // The matching kinds still plan.
+    let http = fake("5.0.3");
+    plain
+        .plan(&http, &t, &input(&creds, &t).downloads(linux.clone()))
+        .await
+        .unwrap();
+
+    // The apply checks again: a plan made with the matching kind, applied
+    // with the wrong one, writes nothing. `check_plan` compares the listed
+    // keys, not their values, so this check is the only thing in the way
+    // (#711's review).
+    let gate: Box<dyn Configure> = Box::new(WindowsQBittorrent::new(pinned("5.0.3")));
+    let cases: [(&dyn Configure, &Downloads, &Downloads); 2] = [
+        (gate.as_ref(), &windows, &linux),
+        (plain.as_ref(), &linux, &windows),
+    ];
+    for (adapter, planned, applied) in cases {
+        let http = fake("5.0.3");
+        let plan = adapter
+            .plan(&http, &t, &input(&creds, &t).downloads(planned.clone()))
+            .await
+            .unwrap();
+        assert!(
+            plan.changes()
+                .iter()
+                .any(|k| k.as_str() == "downloads.save_path"),
+            "{plan:?}"
+        );
+        let err = adapter
+            .apply(
+                &http,
+                &t,
+                &input(&creds, &t).downloads(applied.clone()),
+                &plan,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err, AdapterError::Refused(configure::SAVE_PATH_PLATFORM));
+        assert!(http.writes().is_empty(), "{:?}", http.writes());
+        assert_eq!(http.0.lock().unwrap().password, PASTED);
+    }
+}
+
+#[test]
+fn the_windows_configurator_is_only_qbittorrents() {
+    for other in ["prowlarr", "gluetun"] {
+        let id = CompanionId::parse(other).unwrap();
+        assert!(lodestar_companions::windows_qbittorrent::configurator(&id).is_none());
+    }
+}
+
+/// The ungated adapter is for adapter tests only: production code gets a
+/// configurator through `configure::configurator`, which applies the
+/// Windows gate. Fails if the binary's or the API's sources name it.
+///
+/// The scan is line-based: a `use` that spreads `qbittorrent::QBittorrent`
+/// over several lines (`use …::{ qbittorrent::QBittorrent as Q }` broken
+/// across lines) gets past it. It catches the plain spellings, and review
+/// catches the rest.
+#[test]
+fn production_code_never_builds_the_ungated_adapter() {
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for e in std::fs::read_dir(dir).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push(p);
+            }
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut files = Vec::new();
+    for d in ["lodestar/src", "api/src"] {
+        walk(&root.join(d), &mut files);
+    }
+    assert!(
+        files.len() > 20,
+        "the scan found too few files: {}",
+        files.len()
+    );
+    let mut hits = Vec::new();
+    for f in &files {
+        let text = std::fs::read_to_string(f).unwrap();
+        for (n, line) in text.lines().enumerate() {
+            let names_it = line.contains("configure::qbittorrent::QBittorrent")
+                || line.contains("qbittorrent::QBittorrent::new")
+                || (line.contains("configure::qbittorrent::{") && line.contains("QBittorrent"));
+            if names_it {
+                hits.push(format!("{}:{}", f.display(), n + 1));
+            }
+        }
+    }
+    assert!(
+        hits.is_empty(),
+        "the ungated adapter is built outside tests: {hits:?}"
+    );
 }
