@@ -586,6 +586,19 @@ async fn the_key_stored_at_start_is_the_only_one_used() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn only_the_start_build_pins_its_key() {
+    // X-restart-required-creds: the control shows a key saved since the
+    // start as waiting for a restart only for a plugin that pins it.
+    assert!(
+        Prowlarr::at_start(Some(SAVED), key())
+            .await
+            .pins_credentials()
+    );
+    assert!(!plugin("http://prowlarr.example:9696", Manager::Prowlarr).pins_credentials());
+    assert!(!Prowlarr::unconfigured(key()).pins_credentials());
+}
+
+#[tokio::test(start_paused = true)]
 async fn no_output_holds_the_key() {
     let c = Arc::new(StaticCredentials::new([("api_key", "topsecretkey")]));
     let p = Prowlarr::at_start(Some(SAVED), c).await;

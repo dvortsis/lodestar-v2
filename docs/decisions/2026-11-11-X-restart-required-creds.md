@@ -20,4 +20,5 @@ Slice X-restart-required-creds, assigned by the runner on 2026-11-11 to close se
 
 ## For the runner
 - **`2026-11-09-CMP-5g.md`'s "after a hand-over the Prowlarr source shows `restart_required`"** isn't edited here. It becomes true once X-prowlarr-register registers the plugin through `at_start`. Until then the plugin isn't registered. The hand-over itself is tested here over a stand-in pinning plugin: the same settings saved again and a new key.
+- **Shared edit, test:** `crates/sources-plugins/tests/prowlarr.rs` gets `only_the_start_build_pins_its_key` (`at_start` pins; `new` and `unconfigured` don't). The runner approved it (2026-11-11).
 - **Shared edit:** `crates/pipeline/src/lib.rs` gets `Monitor::pins_credentials(id)`, beside `running_config`, so the control can ask a source's plugin. It isn't in the brief's owns; **the runner approved it** (2026-11-11). The runner suggested a `SourceStatus` field; the method in the same file is smaller. A field on `SourceStatus` instead would also have touched `crates/lodestar/src/metrics.rs`, whose test builds one; a `Policy` flag would have touched 66 policy literals.
