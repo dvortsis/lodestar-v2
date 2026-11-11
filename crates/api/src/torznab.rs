@@ -316,7 +316,7 @@ async fn run(s: ApiState, req: &query::Request, mode: Mode, adult: bool) -> Resu
     })
     .await;
     match answer {
-        Ok(Ok((total, items))) => Ok(feed(offset, total, &items)),
+        Ok(Ok((total, items))) => Ok(feed(offset, total as u64, &items)),
         Ok(Err(e)) => Err(failed(e.into_response().status())),
         Err(e) => Err(failed(crate::error::internal(e).into_response().status())),
     }
