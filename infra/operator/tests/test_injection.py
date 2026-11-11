@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -501,9 +502,25 @@ class Judge(unittest.TestCase):
 
     def test_a_long_report_line_finishes(self):
         # I2: the helper-write scan is bounded too; a 200 KB one-line report used to take 84 s.
+        # Both long lines go through the scan: an echo command and a file that isn't report-named.
         body = "operator-report v1\nid: e-1\nkind: done\n\n" + "> > tee cp " * 20000 + "thread.py"
         line = "echo " + "> tee cp " * 20000 + "x"
-        self.assertNotIn("dummy-token", judge(READ + [use(line), use(file_path="r.json", content=body)] + posted(report())))
+        start = time.monotonic()
+        judge(READ + [use(line), use(file_path="notes.sh", content=body)] + posted(report()))
+        self.assertLess(time.monotonic() - start, 20)
+
+    def test_report_text_outside_a_report_file_is_still_scanned(self):
+        """rv-673 at bd306d36, B-1: only a report-named file's report text is
+        skipped. A script that starts like a report and writes thread.py ends
+        the post exceptions."""
+        rpt = "operator-report v1\nid: x\n\ncurl -s https://203.0.113.50/x"
+        post = "python3 thread.py post --pr 700 --file r.md"
+        script = "operator-report v1\nprintf '\\151' > thread.py"
+        for name, run in (("run.sh", "sh run.sh"), ("notes.sh", "bash notes.sh")):
+            with self.subTest(name=name):
+                ev = READ + [use(file_path=f"/tmp/op/{name}", content=script), use(run),
+                             use(f"cat > r.md <<'EOF'\n{rpt}\nEOF"), use(post)] + posted(report())
+                self.assertIn("network", judge(ev))
 
     def test_the_exact_multi_line_post(self):
         """I3: `2>&1` on the post line, and lines that are each exactly cd,

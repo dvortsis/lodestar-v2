@@ -141,7 +141,7 @@ def joined(cmd: str) -> str:
 
 
 def report_heredoc(cmd: str, allow_post: bool = True) -> tuple[str, str, str] | None:
-    """(file name, report body, the command without the body) when the whole
+    r"""(file name, report body, the command without the body) when the whole
     command is one allowlisted here-document writing a report, else None.
 
     The command, after joining continuations, is exactly
@@ -279,7 +279,9 @@ def _helper_written(inputs: list) -> bool:
             hd = report_heredoc(inp["command"])  # a report's own text isn't a write
             texts = [hd[2] if hd else inp["command"]]
         else:
-            texts = [x for x in strings(inp) if x is not path and not is_report(x)]
+            name = path.rsplit("/", 1)[-1] if isinstance(path, str) else ""
+            # Skip only what judge() treats as a report: report text in a report-named file.
+            texts = [x for x in strings(inp) if x is not path and not (is_report(x) and REPORT_NAME.match(name))]
         if any(HELPER_WRITE.search(joined(x)) for x in texts):
             return True
     return False
