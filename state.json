@@ -6784,7 +6784,12 @@
       "what": "from #686 review, for the next helper.rs change: on_disk doc (helper.rs:210-216) and decisions file say \"the run the copy starts (start_task)\" not \"the copy's\"; msi.rs:666 comment that the name-first case tells the matchers apart; mark_failed (helper.rs:1191) logs a warning when the lock or file is unavailable; result.json code \"0\" with install_failed (check.rs owner); rollback step 5 on_disk",
       "at": "2026-11-11T13:24:41Z"
     },
-    "2026-11-11T14:07Z: runner PR #695 opened (f004ecf3): entries X-win-upd-reoffer, X-win-upd-window, X-cmp-handover-followups, X-cmp-egress-api/-ui, D-companions-guide, X-collect-checklist-launch-2, X-smoke-polish, X-unraid-validate-all; owns PK-exc services.rs, PK-guide-1, PK-win-portable-upd .gitattributes; CMP-G deps; X-soak-screen-polish done. Still queued: architecture.md hot/cold lines (~792/~2927), CMP-7 note, companions DataFolders hot/cold dead-API cleanup slice, PK-cli worker placeholder check"
+    "2026-11-11T14:07Z: runner PR #695 opened (f004ecf3): entries X-win-upd-reoffer, X-win-upd-window, X-cmp-handover-followups, X-cmp-egress-api/-ui, D-companions-guide, X-collect-checklist-launch-2, X-smoke-polish, X-unraid-validate-all; owns PK-exc services.rs, PK-guide-1, PK-win-portable-upd .gitattributes; CMP-G deps; X-soak-screen-polish done. Still queued: architecture.md hot/cold lines (~792/~2927), CMP-7 note, companions DataFolders hot/cold dead-API cleanup slice, PK-cli worker placeholder check",
+    "2026-11-11T14:10:36Z: #681 CMP-9a merged (59c2d16d) after runner self-check of the exact-fix delta 48008c88; \u00a72.26 size calls accepted, owner flag: notifications first view 45.1->45.2 KB (+5 B), companions parts 28.7->29 KB",
+    "2026-11-11T14:10:36Z: PK-win-soak-ci call (\u00a72.33, owner flag): option (a) fault-injection Directory wrapper test on all OSes + keep real Windows run with the retired-segment count printed; modern NTFS POSIX delete recorded; approved shared edit crates/search/src/index.rs test seam (cfg test/feature fault-injection on lodestar-search only) + crates/search/Cargo.toml; add to PK-win-soak-ci owns in next runner PR",
+    "2026-11-11T14:10:36Z: WK-11 approved shared edit crates/integrations/src/secret.rs: additive seal_bytes/open_bytes, dedicated worker-spool/v1 context; add to WK-11 owns in next runner PR",
+    "2026-11-11T14:10:36Z: CMP-11 approved shared edits per briefs/CMP-11.md (catalogue.json entry, companions lib.rs mod line, detect/configure registrations, CMP-8b Windows path check, README ~83); add to owns in next runner PR",
+    "2026-11-11T14:10:36Z: X-unraid-validate-all waits for #694 (both edit ci.yml)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7517,15 +7522,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T14:05:33Z",
+    "updated": "2026-11-11T14:10:36Z",
     "items": [
       {
         "slot": 1,
-        "slice": "CMP-9a",
+        "slice": "CMP-11",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn9isN5wNgNq37t1qRR: Settings Companions screen (Sonnet, /security-review); after #678 X-fleet-polish merged 7e4d5325",
-        "since": "2026-11-11T10:08:39Z"
+        "doing": "session_01MMjhnAaZaaUjzMSyGVFdTA: Windows qBittorrent guided install, detection, configuration (Opus, /security-review); fresh session after #681 CMP-9a merged 59c2d16d (Sonnet session archived)",
+        "since": "2026-11-11T14:10:36Z"
       },
       {
         "slot": 2,
@@ -7556,7 +7561,7 @@
         "slice": "X-win-upd-window",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAS5qWBVBGfPNAHPjt: Install now respects Off/pause (check.rs drops request.json), install_blocked wording, serve::stopped journal race, #659 nits (Opus, /security-review); same session after #659 merged bc717d45",
+        "doing": "session_01MMjhnAS5qWBVBGfPNAHPjt: #693 ready at 83b59238; fresh Opus review running",
         "since": "2026-11-11T12:16:21Z"
       },
       {
@@ -7580,9 +7585,8 @@
         "slice": "CMP-9b",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8mGSt1DA24S2gjPE6: waiting on #681 CMP-9a (dep) before CMP-9b; #690 merged c818b432",
-        "since": "2026-11-11T12:54:24Z",
-        "status": "idle"
+        "doing": "session_01MMjhn8mGSt1DA24S2gjPE6: companion dependency chip (Sonnet, /security-review); started after #681 merged 59c2d16d",
+        "since": "2026-11-11T14:10:36Z"
       }
     ]
   },
@@ -7638,7 +7642,7 @@
     }
   ],
   "heartbeat": "2026-11-11T12:39:14Z",
-  "updated": "2026-11-11T14:05:33Z",
+  "updated": "2026-11-11T14:10:36Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -7712,6 +7716,12 @@
       "slice": "X-restart-required-creds",
       "sha": "48b1098409d1536337feba6758f648fcdedaff59",
       "at": "2026-11-11T14:03:28Z"
+    },
+    {
+      "pr": 681,
+      "slice": "CMP-9a",
+      "sha": "59c2d16d07e6cd6e32940427767ee118d234438f",
+      "at": "2026-11-11T14:10:36Z"
     }
   ]
 }
