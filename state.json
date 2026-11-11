@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T04:06Z",
+  "updated_at": "2026-11-11T04:11Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4264,6 +4264,18 @@
       "at": "2026-11-08T02:07Z",
       "pr": 600,
       "flag": "CMP-2: 64 KiB ratio floor (no ratio refusal below 64 KiB out, per entry or total; 100:1 above), runner \u00a72.26 on a Q16 number; size ~2.6k kept as one PR"
+    },
+    {
+      "at": "2026-11-11T04:11Z",
+      "slice": "OP-4",
+      "flag": "bridge locks/operator* narrowed to locks/operator.json + operator/claude-lock.json; owner updates the deployed fleet-control stack",
+      "send": "on merge"
+    },
+    {
+      "at": "2026-11-11T04:11Z",
+      "slice": "OP-3b",
+      "flag": "start-block accepts the pinned Legal Notice version on test VMs on the owner's behalf (refuses on mismatch); collector image python:3.12.12-alpine3.22 pinned by digest",
+      "send": "on merge"
     }
   ],
   "decisions_log": [
@@ -6657,6 +6669,11 @@
       "id": "CMP-5g-3",
       "note": "from #653 final review nits: N7 target_changed message should say reveal before forget (companions_guided.rs:~99); N8 guided.rs:5 'three kinds' of rows; N9 decisions line ~137 says URL stored 'as you typed it' but it's normalised; CMP-9a forget screen must warn and offer reveal; L4 no rotate without apply + Sink save",
       "added": "2026-11-09T12:03:06Z"
+    },
+    {
+      "at": "2026-11-11T04:11Z",
+      "for": "next runner PR",
+      "item": "OP-4 owns += infra/fleet/tests/test_workflow.py, infra/aws/fleet-control/build_templates.py, infra/aws/fleet-control/fleet-control.json (+2 tests), .github/scripts/ci_changes.py, infra/fleet/run_tests.sh (runner approved 2026-11-11)"
     }
   ],
   "main_health": [
