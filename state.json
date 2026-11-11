@@ -7618,7 +7618,7 @@
   "review_queue": [
     "#665 CMP-9c",
     "#663 X-win-upd-bounds",
-    "#668 OP-3c"
+    "#668 OP-3c (CHANGES relayed; quick runner check of the delta)"
   ],
   "merged": []
 }
