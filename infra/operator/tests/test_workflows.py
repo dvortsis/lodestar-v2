@@ -106,6 +106,13 @@ class Workflows(unittest.TestCase):
         self.assertIn("needs.gate.outputs.allowed == 'true'", jobs["wake"]["if"])
         self.assertLess(jobs["wake"]["timeout-minutes"], 60)  # the operator lock's TTL and the role's hour
 
+    def test_the_wake_sweep_runs_only_after_a_started_session_or_a_failed_job(self):
+        jobs = self.wfs["operator-wake.yml"]["jobs"]
+        self.assertEqual(jobs["wake"]["outputs"], {"started": "${{ steps.wake.outputs.started }}"})
+        self.assertEqual([st.get("id") for st in jobs["wake"]["steps"] if "run" in st][-1], "wake")
+        self.assertIn("&& (needs.wake.outputs.started == 'true' || needs.wake.result == 'failure' "
+                      "|| needs.wake.result == 'cancelled')", jobs["sweep"]["if"])
+
     def test_apply_is_the_owners_alone(self):
         cond = self.wfs["operator-apply.yml"]["jobs"]["apply"]["if"]
         self.assertTrue(cond.startswith("github.event_name == 'workflow_dispatch'"))

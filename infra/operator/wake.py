@@ -371,6 +371,9 @@ def cmd_wake(env, deps=None) -> int:
         if not isinstance(sid, str) or not sid:
             raise Refusal("the API returned no session")
         print(f"operator-wake: session started ({msg.mode})")
+        # The end-of-session sweep runs only after a session really started (or the job
+        # failed): refusals cost no sweep, so the sweeps an hour stay bounded by PER_HOUR.
+        _out(env, started="true")
         if not bridge.record_session(store, ids, etag, sid):
             escalate(env, msg.id, "couldn't record the session in claude-lock.json; the next wake will refuse", gh_post)
         outcome = watch(call, sid, mono, sleep, wake_disabled(env, gh_post))

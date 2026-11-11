@@ -39,7 +39,7 @@ REVIEW_MAX_PAGES = 50
 # Review pages across the whole sweep: the job's token has a per-hour request
 # budget, so many PRs full of old reviews can't use it up and turn a trip into
 # an API error (which disables nothing). Past it, the sweep is incomplete: a trip.
-REVIEW_PAGE_BUDGET = 90  # 7 sweeps an hour x (90 + 42 other requests) = 924, under ~1,000 (decisions file)
+REVIEW_PAGE_BUDGET = 60  # 7 sweeps x (60 + 42 other requests) = 714, leaving ~250 of ~1,000 (decisions file)
 # The sweep's own deadline, under the jobs' 10-minute timeout: a job cancelled
 # for time can neither escalate nor disable, so the sweep stops itself first and
 # counts the unfinished run as a trip.
@@ -120,7 +120,7 @@ def _list(transport, path: str, stop_before: datetime | None = None, key: str = 
         if items is None:
             items = []
         if not isinstance(items, list):  # an unreadable page can't end a list as complete
-            raise Incomplete("unreadable_page")
+            raise Incomplete("unreadable", f"a page of {path.split('?')[0].rsplit('/', 1)[-1]} wasn't a list")
         items = [i for i in items if isinstance(i, dict)]
         out += items
         if len(items) < 100 or (stop_before and items and (_when(items[-1].get(key)) or stop_before) < stop_before):
@@ -185,7 +185,7 @@ def sweep(env, transport, now: datetime) -> tuple[list[str], bool]:
             continue
         n = _digits(p.get("number"))
         if n is None:  # its reviews can't be read: never skip them silently
-            raise Incomplete("unreadable_pr_number")
+            raise Incomplete("unreadable", "a PR in the pulls list had no readable number")
         if _uid(p) == bot:
             bot_hits.append(f"the operator's bot opened #{n} (active in the lookback)")
         for r in _recent_reviews(transport, repo, n, since, review_budget):
@@ -221,9 +221,15 @@ def with_deadline(transport, monotonic, seconds: int = SWEEP_DEADLINE_SECONDS):
     return call
 
 
+LISTS = ("events", "pulls", "reviews", "comments")
+UNREADABLE = tuple(f"a page of {n} wasn't a list" for n in LISTS) + ("a PR in the pulls list had no readable number",)
+
+
 def describe(e: Incomplete) -> str:
     name = e.args[0] if e.args else ""
     what = name if isinstance(name, str) and name.replace("_", "").isalpha() else "a list"
+    if what == "unreadable" and len(e.args) > 1 and e.args[1] in UNREADABLE:
+        return f"the sweep is incomplete: {e.args[1]}; check by hand"
     if what == "deadline":
         return f"the sweep is incomplete: it ran past its {SWEEP_DEADLINE_SECONDS // 60}-minute deadline; check by hand"
     if len(e.args) > 1 and isinstance(e.args[1], int):

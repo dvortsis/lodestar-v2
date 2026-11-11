@@ -296,25 +296,27 @@ class ManyPRs(RestReviews):
 
 
 class ReviewBudget(unittest.TestCase):
-    def test_the_budget_fits_seven_sweeps_an_hour(self):
-        # 6 wakes an hour (wake.PER_HOUR) plus the hourly cron share the token's ~1,000 requests:
-        # each sweep's other lists take at most 4 x 10 pages, plus a post and a disable.
+    def test_the_budget_leaves_room_for_the_other_workflows(self):
+        # Sweeps that started sessions (at most wake.PER_HOUR an hour) plus the hourly cron, each
+        # at most 4 x 10 pages of other lists, a post and a disable, stay within ~750 of the
+        # token's ~1,000 requests an hour. Sweeps after failed wake jobs aren't bounded by this
+        # (an accepted residual in the decisions file).
         import wake
-        self.assertEqual(tripwire.REVIEW_PAGE_BUDGET, 90)
-        self.assertLessEqual((wake.PER_HOUR + 1) * (tripwire.REVIEW_PAGE_BUDGET + 4 * tripwire.MAX_PAGES + 2), 950)
+        self.assertEqual(tripwire.REVIEW_PAGE_BUDGET, 60)
+        self.assertLessEqual((wake.PER_HOUR + 1) * (tripwire.REVIEW_PAGE_BUDGET + 4 * tripwire.MAX_PAGES + 2), 750)
 
     def test_exactly_the_budget_is_complete(self):
-        gh = ManyPRs([2900, 2900, 2900])  # 30 pages each (29 full, then an empty one): 90
+        gh = ManyPRs([2900, 2900])  # 30 pages each (29 full, then an empty one): 60
         run(["sweep"], env(), gh)
         self.assertEqual(gh.bodies(), [])
-        self.assertEqual(len(gh.pages), 90)
+        self.assertEqual(len(gh.pages), 60)
 
     def test_one_page_over_the_budget_trips(self):
-        gh = ManyPRs([2900, 2900, 3000])  # the last PR needs 31 pages
+        gh = ManyPRs([2900, 3000])  # the last PR needs 31 pages
         run(["sweep"], env(), gh)
-        self.assertIn("the sweep is incomplete: reviews ran past 90 pages", gh.bodies()[0])
+        self.assertIn("the sweep is incomplete: reviews ran past 60 pages", gh.bodies()[0])
         self.assertTrue(gh.disabled())
-        self.assertEqual(len(gh.pages), 90)
+        self.assertEqual(len(gh.pages), 60)
 
 
 class Deadline(unittest.TestCase):
@@ -324,7 +326,7 @@ class Deadline(unittest.TestCase):
         def mono():
             tick[0] += 7.0  # every request seems to take 7 s
             return tick[0]
-        gh = ManyPRs([4000] * 2)
+        gh = ManyPRs([2000] * 3)  # 63 pages: past 360 s before the 60-page budget
         with redirect_stdout(io.StringIO()):
             tripwire.main(["sweep"], env=env(), transport=gh, clock=lambda: NOW, monotonic=mono)
         self.assertIn("the sweep is incomplete: it ran past its 6-minute deadline", gh.bodies()[0])
@@ -343,7 +345,7 @@ class Unreadable(unittest.TestCase):
         gh = RestReviews([])
         bad = lambda m, p, b: {"message": "odd"} if p.startswith("/repos/o/r/issues/events") else gh(m, p, b)  # noqa: E731
         run(["sweep"], env(), bad)
-        self.assertIn("the sweep is incomplete: unreadable_page", gh.bodies()[0])
+        self.assertIn("the sweep is incomplete: a page of events wasn't a list; check by hand", gh.bodies()[0])
         self.assertTrue(gh.disabled())
 
     def test_a_pr_number_that_isnt_digits_trips(self):
@@ -354,7 +356,7 @@ class Unreadable(unittest.TestCase):
                 return [{"user": {"id": 1}, "number": "12; x", "updated_at": ISO(timedelta(minutes=5))}]
             return gh(m, p, b)
         run(["sweep"], env(), odd)
-        self.assertIn("the sweep is incomplete: unreadable_pr_number", gh.bodies()[0])
+        self.assertIn("the sweep is incomplete: a PR in the pulls list had no readable number", gh.bodies()[0])
         self.assertTrue(gh.disabled())
 
 
