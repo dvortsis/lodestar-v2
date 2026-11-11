@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T22:38:29Z",
+  "updated_at": "2026-11-11T22:39:16Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6944,7 +6944,7 @@
     },
     {
       "id": "owner-flags-pending-1111b",
-      "note": "Flag to owner (\u00a72.19): TZ-0 kept as one ~3,050-line PR (>half tests; runner call); X-restart-banner new size-limit entry 'Restart flow (on demand)' (measured +10%); X-restart-banner Review shows saved values (no running value in API); CI throughput is the bottleneck at 12 sessions. OUT-0 (#716): bitmagnet export leaves out every flags::PRIVACY row (not only private_source) and refuses hidden=true (stricter only).",
+      "note": "Flag to owner (\u00a72.19): TZ-0 kept as one ~3,050-line PR (>half tests; runner call); X-restart-banner new size-limit entry 'Restart flow (on demand)' (measured +10%); X-restart-banner Review shows saved values (no running value in API); CI throughput is the bottleneck at 12 sessions. OUT-0 (#716): bitmagnet export leaves out every flags::PRIVACY row (not only private_source) and refuses hidden=true (stricter only). RX-0 (#717): regex search case-insensitive by default; the limit values (see decisions file).",
       "at": "2026-11-11T22:21:06Z"
     },
     {
@@ -7684,7 +7684,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T22:38:29Z",
+    "updated": "2026-11-11T22:39:16Z",
     "items": [
       {
         "slot": 1,
@@ -7848,7 +7848,7 @@
     }
   ],
   "heartbeat": "2026-11-11T21:38:36Z",
-  "updated": "2026-11-11T22:38:29Z",
+  "updated": "2026-11-11T22:39:16Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
