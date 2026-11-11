@@ -63,6 +63,11 @@ pub const WOULD_LOOSEN: &str = "would_loosen_companion_setting";
 pub const PLAN_MISMATCH: &str = "plan_does_not_match_input";
 /// The refusal when a plan lists a setting the adapter doesn't know.
 pub const UNKNOWN_SETTING: &str = "unknown_setting";
+/// The refusal when a save path's kind doesn't match the companion's
+/// platform: a Windows path for a qBittorrent that isn't Windows', or a
+/// Linux path for Windows' (#705's review, I2). A Linux `/downloads` would
+/// otherwise land on the current drive's root folder.
+pub const SAVE_PATH_PLATFORM: &str = "save_path_wrong_platform";
 /// The refusal when Lodestar's own settings didn't take the entry.
 pub const SINK_REFUSED: &str = "sink_refused";
 
@@ -70,6 +75,9 @@ pub const SINK_REFUSED: &str = "sink_refused";
 /// gluetun has none, and FlareSolverr is CMP-12's (Q21).
 pub fn configurator(id: &CompanionId) -> Option<Box<dyn Configure>> {
     match id.as_str() {
+        // CMP-11b: on Windows, CMP-8b's adapter behind the pinned-version
+        // gate (owner cq4).
+        qbittorrent::ID if cfg!(windows) => crate::windows_qbittorrent::configurator(id),
         qbittorrent::ID => Some(Box::new(qbittorrent::QBittorrent::new(id.clone()))),
         prowlarr::ID => Some(Box::new(prowlarr::Prowlarr::new(id.clone()))),
         _ => None,

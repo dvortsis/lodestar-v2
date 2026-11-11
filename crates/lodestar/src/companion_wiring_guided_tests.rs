@@ -99,9 +99,6 @@ fn answer(
     cookie: Option<&str>,
     body: &[u8],
 ) -> (u16, Option<String>, String) {
-    if path == "/api/v2/app/version" {
-        return (403, None, "Forbidden".into());
-    }
     if method == "GET" && path == "/" {
         return (200, None, LOGIN_PAGE.into());
     }
@@ -126,10 +123,15 @@ fn answer(
     let authed = cookie
         .and_then(|c| c.strip_prefix("SID="))
         .is_some_and(|sid| s.sessions.iter().any(|x| x == sid));
+    // The version too answers only with a session, as qBittorrent's does
+    // when its localhost bypass is off; signed in, it's a release inside
+    // the Windows gate's checked range (CMP-11b), so these flows run
+    // through the real gate on Windows.
     if !authed {
         return (403, None, "Forbidden".into());
     }
     match (method, path) {
+        ("GET", "/api/v2/app/version") => (200, None, "v5.0.3".into()),
         ("GET", "/api/v2/app/preferences") => (200, None, PREFS.into()),
         ("GET", "/api/v2/torrents/categories") => (200, None, "{}".into()),
         ("POST", "/api/v2/app/setPreferences") if s.refuse_writes => (400, None, String::new()),
