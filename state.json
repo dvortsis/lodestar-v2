@@ -6829,6 +6829,10 @@
       "id": "X-worker-settings-pointer",
       "what": "Worker template (packaging) and crates/lodestar/src/cli/worker.rs point users to a 'Settings -> Workers' screen that doesn't exist; point to POST /api/v1/workers/tokens (admin/API key) until the screen ships, or build the screen.",
       "from": "rv-700-bc077b8b"
+    },
+    {
+      "id": "slices.yaml entries",
+      "what": "Add placement + entries for X-cmp9b-catch, X-spool-damage-log, X-win-upd-stop-wait, X-worker-settings-pointer in next runner PR"
     }
   ],
   "main_health": [
@@ -7625,11 +7629,11 @@
       },
       {
         "slot": 8,
-        "slice": "CMP-9b",
+        "slice": "X-cmp9b-catch",
         "role": "build",
         "agent": "claude",
-        "doing": "#698 ready at c997044d; fresh delta review queued after #692 (session_01MMjhn8mGSt1DA24S2gjPE6)",
-        "since": "2026-11-11T14:10:36Z"
+        "doing": "SourceRow {:catch} + reload wording (rv-698 N3/N4)",
+        "since": "2026-11-11T17:52Z"
       }
     ]
   },
@@ -7792,6 +7796,12 @@
       "slice": "PK-win-soak-ci",
       "sha": "ed3a789077f3fc8aaa2762103f3e0936be969703",
       "at": "2026-11-11T16:27Z"
+    },
+    {
+      "pr": 698,
+      "slice": "CMP-9b",
+      "sha": "3418a880e93b22d757df99c8d52b3e89835f7551",
+      "at": "2026-11-11T17:52Z"
     }
   ]
 }
