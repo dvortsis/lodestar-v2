@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T11:19:02Z",
+  "updated_at": "2026-11-11T11:27:14Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6763,7 +6763,7 @@
     "When install windows (\u00a72.13) reach Windows: the 1920 boot retry must honour mode Off and pause, not only the skip list (#677 flag)",
     "#659 owner (check.rs): install_blocked currently shows the install_failed notice; give it its own plain wording after #677 merges",
     "next runner PR: add X-win-upd-reoffer (Opus, core, deps [X-win-upd-1920]; owns update/windows/helper.rs, msi.rs, rollback.rs, tests/update_windows_msi.rs, its decisions file) and X-win-upd-window (check.rs removes request.json on mode Off/pause; after #659) to slices.yaml",
-    "PK-unraid leftovers (#680): Hot/Cold path still in docs/user/appendix-b-settings-reference.md:11-12, docs/operations.md:182-184/:206 (PK-ops), CMP-7 note in slices.yaml, companions DataFolders hot/cold params (dead API); validate.py not run in CI (workflow job); slices.yaml PK-unraid title over-promises 'validator checks every Requires/Overview' -> fix title or add slice"
+    "Hot/cold leftovers after #680 (appendix B + revisions + heading are in PK-guide-1): docs/operations.md:182-184/:206 -> PK-ops brief; DataFolders hot/cold params dead API -> small companions cleanup slice; architecture.md ~1336/~1759/~2927 + slices.yaml CMP-7 note -> next runner PR; CI job for packaging/unraid validate.py + test_validate.py -> X-ci slice; next runner PR: PK-guide-1 owns += appendix-b-settings-reference.md, 2026-11-11-PK-unraid.md; PK-unraid title trim ('validator checks every Requires/Overview' not done -> split X-unraid-validate-all)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7496,7 +7496,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T11:19:02Z",
+    "updated": "2026-11-11T11:27:14Z",
     "items": [
       {
         "slot": 1,
@@ -7548,11 +7548,11 @@
       },
       {
         "slot": 7,
-        "slice": "PK-unraid",
+        "slice": "PK-guide-1",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCVGtYWSJVrREyne22: Unraid templates drop hot/cold fields (Sonnet), same session after #674 merged ae3848bf",
-        "since": "2026-11-11T10:57:25Z"
+        "doing": "session_01MMjhnCVGtYWSJVrREyne22: port v0.5.1 guide gaps + hot/cold leftovers (appendix B, revisions, #680 heading) (Sonnet), same session after #680 merged 1fe44a29",
+        "since": "2026-11-11T11:27:14Z"
       },
       {
         "slot": 8,
