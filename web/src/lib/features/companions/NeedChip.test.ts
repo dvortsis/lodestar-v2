@@ -90,8 +90,8 @@ describe('the companion chip in Sources', () => {
 		await fireEvent.click(await setUp());
 		const dialog = await screen.findByRole('dialog');
 		const confirm = within(dialog).getByRole('button', { name: 'Install' });
-		// A double press before the dialog re-renders is still one request.
-		// Raw events, back to back with no render between them (fireEvent flushes after the first).
+		// Two presses back to back with no render between them are still one request. The shared
+		// Button already ignores a press while loading, so this proves the outcome, not the chip's own guard.
 		confirm.dispatchEvent(new MouseEvent('click', { bubbles: true }));
 		confirm.dispatchEvent(new MouseEvent('click', { bubbles: true }));
 		await waitFor(() => expect(screen.queryByTestId('companion-need')).toBeNull());
@@ -148,19 +148,22 @@ describe('the companion chip in Sources', () => {
 		expect(installs()).toEqual([]);
 	});
 
-	it('is a focusable button, and the dialog opens on Cancel', async () => {
+	it('is a focusable button; Escape alone closes the dialog and focus returns to it', async () => {
 		setup();
 		const button = await setUp();
 		expect(button.tabIndex).toBeGreaterThanOrEqual(0);
 		button.focus();
 		expect(document.activeElement).toBe(button);
-		await fireEvent.click(button); // Enter and Space on a real button are a click
+		await fireEvent.click(button); // jsdom has no Enter-to-click; a real button turns Enter and Space into this
 		const dialog = await screen.findByRole('dialog');
 		await waitFor(() =>
 			expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Cancel' }))
 		);
-		await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+		await fireEvent.keyDown(dialog, { key: 'Escape' });
 		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+		await waitFor(() =>
+			expect(document.activeElement).toBe(screen.getByTestId('companion-need-setup'))
+		);
 		expect(installs()).toEqual([]);
 	});
 
@@ -181,7 +184,6 @@ describe('the companion chip in Sources', () => {
 		await waitFor(() => expect(installs()).toHaveLength(1));
 		// Closed while the request runs: Set up still shows it is working and sends nothing.
 		await fireEvent.keyDown(dialog, { key: 'Escape' });
-		await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
 		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 		expect(screen.getByTestId('companion-need-setup').getAttribute('aria-busy')).toBe('true');
 		await fireEvent.click(screen.getByTestId('companion-need-setup'));
@@ -247,5 +249,39 @@ describe('the companion chip in Sources', () => {
 		const live = screen.getByTestId('sources-announce');
 		expect(live.getAttribute('role')).toBe('status');
 		expect(live.textContent).toBe('qBittorrent is installed. Checking the source again.');
+	});
+
+	it('leaves focus where the user went while an install, closed mid-way, finishes', async () => {
+		let finish!: () => void;
+		let reads = 0;
+		net = mockFetch();
+		net.on('GET /sources', () => ({
+			body: sourceList(
+				dht,
+				++reads === 1 ? waiting() : source({ ...waiting(), companion_need: null })
+			)
+		}));
+		net.on('GET /companions/qbittorrent/install', { body: OFFER });
+		net.on(
+			'POST /companions/qbittorrent/install',
+			() => new Promise((resolve) => (finish = () => resolve({ body: { id: 'qbittorrent' } })))
+		);
+		render(SourcesScreen);
+		const elsewhere = document.createElement('button');
+		document.body.append(elsewhere);
+		await fireEvent.click(await setUp());
+		const dialog = await screen.findByRole('dialog');
+		await fireEvent.click(within(dialog).getByRole('button', { name: 'Install' }));
+		await waitFor(() => expect(installs()).toHaveLength(1));
+		await fireEvent.keyDown(dialog, { key: 'Escape' });
+		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+		elsewhere.focus(); // the user has gone on to something else
+		finish();
+		await waitFor(() => expect(screen.queryByTestId('companion-need')).toBeNull());
+		// One turn of the event loop, so what follows the re-read has run (a condition can't show
+		// that something did not happen).
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		expect(document.activeElement).toBe(elsewhere);
+		elsewhere.remove();
 	});
 });

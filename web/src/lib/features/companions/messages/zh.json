@@ -6,5 +6,6 @@
 	"companions_need_setup": "设置",
 	"companions_need_installed": "{name} 已安装。正在重新检查此来源。",
 	"companions_need_name_other": "一个配套组件",
-	"companions_need_starting": "{name} 正在启动。将再次检查。"
+	"companions_need_starting": "{name} 正在启动。将再次检查。",
+	"companions_need_load_failed": "无法连接 Lodestar。未做任何更改。"
 }

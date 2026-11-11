@@ -6,10 +6,17 @@
 	// this builds no request of its own.
 	import { onDestroy, tick } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
+	import type { Component } from 'svelte';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Badge from '$lib/ui/labels/Badge.svelte';
 	import { companionName, type CompanionNeed } from './logic';
 
+	interface FlowProps {
+		companion: string;
+		onworking: (working: boolean) => void;
+		onclose: () => void;
+		oninstalled: () => void | Promise<void>;
+	}
 	interface Props {
 		need: CompanionNeed;
 		/** The install succeeded: the screen reads the source again, so no stale "Needs X" stays. */
@@ -27,6 +34,11 @@
 	let done = $state(false);
 	/** A new press starts the flow afresh, so a refused offer can be tried again. */
 	let attempt = $state(0);
+	/** The install flow's code, fetched on the first press. */
+	let Flow = $state.raw<Component<FlowProps> | null>(null);
+	/** The flow's code didn't load (a stale tab after an upgrade): say so, and Set up may be pressed again. */
+	let failed = $state(false);
+	let root = $state<HTMLElement>();
 
 	let gone = false;
 	let timer: ReturnType<typeof setTimeout> | undefined;
@@ -50,14 +62,21 @@
 		}, recheckMs);
 	}
 
-	function setUp() {
+	async function setUp() {
 		if (loading) return;
 		started = loading = true;
+		failed = false;
 		attempt++;
+		try {
+			Flow ??= (await import('./SetupFlow.svelte')).default;
+		} catch {
+			started = loading = false;
+			failed = true;
+		}
 	}
 </script>
 
-<div class="flex flex-col gap-2 text-small" data-testid="companion-need">
+<div class="flex flex-col gap-2 text-small" data-testid="companion-need" bind:this={root}>
 	<div class="flex flex-wrap items-center gap-2">
 		{#if done}
 			<Badge variant="info"
@@ -80,26 +99,28 @@
 			<span class="text-muted-text">{m.companions_need_unhealthy_hint()}</span>
 		{/if}
 	</div>
-	{#if started}
+	{#if failed}<p class="text-error" role="alert">{m.companions_need_load_failed()}</p>{/if}
+	{#if started && Flow}
 		{#key attempt}
-			{#await import('./SetupFlow.svelte') then { default: SetupFlow }}
-				<SetupFlow
-					companion={need.companion}
-					onworking={(working) => (loading = working)}
-					onclose={() => (started = false)}
-					oninstalled={async () => {
-						// The source is read again and this chip goes: take what's needed before it does.
-						const refresh = oninstalled;
-						const target = focusAfter;
-						const said = m.companions_need_installed({ name });
-						done = true;
-						await refresh?.(said);
-						if (!gone) recheck();
-						await tick();
-						target?.()?.focus();
-					}}
-				/>
-			{/await}
+			<Flow
+				companion={need.companion}
+				onworking={(working: boolean) => (loading = working)}
+				onclose={() => (started = false)}
+				oninstalled={async () => {
+					// The source is read again and this chip goes: take what's needed before it does.
+					const refresh = oninstalled;
+					const target = focusAfter;
+					const here = root;
+					const said = m.companions_need_installed({ name });
+					done = true;
+					await refresh?.(said);
+					if (!gone) recheck();
+					await tick();
+					// Focus follows only when it was left on the chip (or lost): not when the user has gone on.
+					const at = document.activeElement;
+					if (!at || at === document.body || here?.contains(at)) target?.()?.focus();
+				}}
+			/>
 		{/key}
 	{/if}
 </div>

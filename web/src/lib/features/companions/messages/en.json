@@ -6,5 +6,6 @@
 	"companions_need_setup": "Set up",
 	"companions_need_installed": "{name} is installed. Checking the source again.",
 	"companions_need_name_other": "a companion program",
-	"companions_need_starting": "{name} is starting. Checking again."
+	"companions_need_starting": "{name} is starting. Checking again.",
+	"companions_need_load_failed": "Couldn't reach Lodestar. Nothing was changed."
 }
