@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T19:40:00Z",
+  "updated_at": "2026-11-11T19:52:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7577,7 +7577,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T19:40:00Z",
+    "updated": "2026-11-11T19:52:00Z",
     "items": [
       {
         "slot": 1,
@@ -7639,12 +7639,11 @@
       },
       {
         "slot": 8,
-        "slice": null,
-        "role": "build",
-        "agent": null,
-        "doing": "idle: X-cmp9b-catch merged (#703); next by ladder",
-        "since": "2026-11-11T19:40:00Z",
-        "status": "idle"
+        "slice": "WK-20",
+        "role": "slice",
+        "agent": "session_01MMjhnCfcVrMUCDWwedtr7c",
+        "doing": "Chaos harness: coordinator + N workers in-process (Opus); v0.6 critical path",
+        "since": "2026-11-11T19:52:00Z"
       }
     ]
   },
@@ -7700,7 +7699,7 @@
     }
   ],
   "heartbeat": "2026-11-11T18:39:05Z",
-  "updated": "2026-11-11T19:40:00Z",
+  "updated": "2026-11-11T19:52:00Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
