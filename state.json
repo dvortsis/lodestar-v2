@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T04:53Z",
+  "updated_at": "2026-11-11T05:08Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4288,6 +4288,12 @@
       "slice": "OP-4",
       "flag": "operator-apply calls the Managed Agents API from Python instead of the downloaded ant binary (no unpinned binary beside the workspace key); ledger checks run in the cloud-operator job; every operator session is archived at its end; one PR of ~2,690 lines for a single security review",
       "send": "on merge"
+    },
+    {
+      "at": "2026-11-11T05:08Z",
+      "slice": "OP-3b",
+      "flag": "collector reaches Docker only through a pinned HAProxy allow-list rendered per block with the exact lodestar container/image IDs (inspect, image inspect, HEAD archive, one-shot stats, stop); real socket mounted only into the proxy",
+      "send": "on merge"
     }
   ],
   "decisions_log": [
@@ -6691,6 +6697,11 @@
       "at": "2026-11-11T04:53Z",
       "id": "X-restart-required-creds",
       "item": "crates/pipeline/src/control.rs: restart_required must also cover a changed credential (incl. a CMP-5g hand-over to the same address), not only saved settings (X-prowlarr-settings self-review I1)"
+    },
+    {
+      "at": "2026-11-11T05:08Z",
+      "id": "X-collector-host-snapshots",
+      "item": "CR-COL: collect.py docker mode reads host-written snapshots and the stop moves host-side (arm switch), so the fleet collector needs no Docker API at all; re-validate analyzer clean_stop (OP-3b option c)"
     }
   ],
   "main_health": [
