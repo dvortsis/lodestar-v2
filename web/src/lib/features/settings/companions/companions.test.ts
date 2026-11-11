@@ -381,3 +381,125 @@ describe('states', () => {
 		expect(screen.getByTestId('offer-field-3').textContent).toContain('12.0');
 	});
 });
+
+describe('busy guards, focus and a late error', () => {
+	const hold = () => {
+		let release: () => void = () => {};
+		const gate = new Promise<void>((r) => (release = r));
+		return { gate, release };
+	};
+	it('a second press of Update while the install runs sends nothing more', async () => {
+		const { gate, release } = hold();
+		answers['POST /companions/qbittorrent/install'] = (() =>
+			gate.then(() => reply(200, companions[0]))) as never;
+		await open();
+		await fireEvent.click(screen.getByRole('button', { name: 'Update' }));
+		const dialog = await screen.findByRole('dialog', {}, { timeout: 10_000 });
+		const go = within(dialog).getByRole('button', { name: 'Update' });
+		await fireEvent.click(go);
+		await until(() => expect(posts()).toHaveLength(1));
+		await fireEvent.click(go);
+		await fireEvent.click(go);
+		expect(posts()).toHaveLength(1);
+		release();
+	});
+	it('a second press of Remove while the removal runs sends nothing more', async () => {
+		const { gate, release } = hold();
+		answers['GET /companions/qbittorrent/remove'] = () =>
+			reply(200, {
+				id: 'qbittorrent',
+				removed: false,
+				deletes: [{ kind: 'folder', name: 'companions/qbittorrent' }]
+			});
+		answers['POST /companions/qbittorrent/remove'] = (() =>
+			gate.then(() => reply(200, { id: 'qbittorrent', removed: true, deletes: [] }))) as never;
+		await open();
+		await fireEvent.click(screen.getAllByRole('button', { name: 'Remove' })[0]!);
+		const dialog = await screen.findByRole('dialog', {}, { timeout: 10_000 });
+		const go = within(dialog).getByRole('button', { name: 'Remove' });
+		await fireEvent.click(go);
+		await until(() => expect(posts()).toHaveLength(1));
+		await fireEvent.click(go);
+		await fireEvent.click(go);
+		expect(posts()).toHaveLength(1);
+		release();
+	});
+	it('after an install the row name has focus', async () => {
+		await open();
+		await fireEvent.click(screen.getByRole('button', { name: 'Update' }));
+		const dialog = await screen.findByRole('dialog', {}, { timeout: 10_000 });
+		await fireEvent.click(within(dialog).getByRole('button', { name: 'Update' }));
+		await until(() =>
+			expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'qBittorrent' }))
+		);
+	});
+	it('after a removal the row name has focus', async () => {
+		answers['GET /companions/qbittorrent/remove'] = () =>
+			reply(200, {
+				id: 'qbittorrent',
+				removed: false,
+				deletes: [{ kind: 'folder', name: 'companions/qbittorrent' }]
+			});
+		answers['POST /companions/qbittorrent/remove'] = () =>
+			reply(200, { id: 'qbittorrent', removed: true, deletes: [] });
+		await open();
+		await fireEvent.click(screen.getAllByRole('button', { name: 'Remove' })[0]!);
+		const dialog = await screen.findByRole('dialog', {}, { timeout: 10_000 });
+		await fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+		await until(() =>
+			expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'qBittorrent' }))
+		);
+	});
+	it('an error that arrives after the dialog was closed shows in the row', async () => {
+		const { gate, release } = hold();
+		answers['POST /companions/qbittorrent/install'] = (() =>
+			gate.then(() => fail(409, 'busy'))) as never;
+		await open();
+		await fireEvent.click(screen.getByRole('button', { name: 'Update' }));
+		const dialog = await screen.findByRole('dialog', {}, { timeout: 10_000 });
+		await fireEvent.click(within(dialog).getByRole('button', { name: 'Update' }));
+		await until(() => expect(posts()).toHaveLength(1));
+		await fireEvent.keyDown(dialog, { key: 'Escape' });
+		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
+		release();
+		await until(() => expect(screen.getByText(/Something else is changing/)).toBeTruthy());
+	});
+});
+
+describe('words and copy', () => {
+	it('tells the user to remove their own download client first', () => {
+		expect(wordsFor('managed_client_in_use')).toMatch(/Remove it in Integrations first/);
+		expect(wordsFor('sink_refused')).toMatch(/download client refused/);
+		expect(wordsFor('timed_out')).toMatch(/too long/);
+	});
+	it('an unexpected failure does not claim nothing changed', () => {
+		expect(wordsFor('internal')).not.toMatch(/Nothing was changed/);
+	});
+	it('a revealed value has a Copy button', async () => {
+		answers['POST /companions/qbittorrent/credentials/webui_password/reveal'] = () =>
+			reply(200, { field: 'webui_password', id: 'qbittorrent', value: 'S3cret-value' });
+		await open();
+		await fireEvent.click(screen.getAllByRole('button', { name: 'Passwords and keys' })[0]!);
+		await fireEvent.click(await screen.findByRole('button', { name: 'Show' }, { timeout: 10_000 }));
+		await fireEvent.input(screen.getByLabelText(/Your Lodestar password/), {
+			target: { value: 'pw' }
+		});
+		await fireEvent.click(screen.getByRole('button', { name: 'Show it' }));
+		await until(() => expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy());
+	});
+	it('a detected companion with no version has no trailing space', async () => {
+		answers['POST /companions/detect'] = () =>
+			reply(200, {
+				found: [{ id: 'qbittorrent', version: null, target: { kind: 'loopback', port: 8080 } }]
+			});
+		await open();
+		await fireEvent.click(screen.getByRole('button', { name: 'Look for companions' }));
+		await until(() => expect(document.querySelector('[data-detected] li span')).toBeTruthy());
+		expect(document.querySelector('[data-detected] li span')?.textContent?.trim()).toBe(
+			'Found qBittorrent'
+		);
+		expect(document.querySelector('[data-detected] li span')?.textContent).toBe(
+			'Found qBittorrent'
+		);
+	});
+});

@@ -19,6 +19,8 @@
 	let busy = $state<string | null>(null);
 	let error = $state('');
 	let dialogError = $state('');
+	/** The dialog was closed (Esc, Cancel) while its request was still running. */
+	let closedWhileBusy = false;
 	let note = $state('');
 	let heading = $state<HTMLElement>();
 
@@ -48,6 +50,7 @@
 		if (!offer) return;
 		busy = 'install';
 		dialogError = '';
+		closedWhileBusy = false;
 		try {
 			await store.install(offer);
 			offer = null;
@@ -56,6 +59,8 @@
 			heading?.focus();
 		} catch (e) {
 			dialogError = failureWords(e);
+			// A closed dialog shows nothing: the row says it instead.
+			if (closedWhileBusy) error = dialogError;
 		} finally {
 			busy = null;
 		}
@@ -74,6 +79,7 @@
 	async function confirmRemove() {
 		busy = 'remove';
 		dialogError = '';
+		closedWhileBusy = false;
 		try {
 			await store.remove(c.id);
 			plan = null;
@@ -82,6 +88,8 @@
 			heading?.focus();
 		} catch (e) {
 			dialogError = failureWords(e);
+			// A closed dialog shows nothing: the row says it instead.
+			if (closedWhileBusy) error = dialogError;
 		} finally {
 			busy = null;
 		}
@@ -201,7 +209,10 @@
 				busy={busy === 'install'}
 				error={dialogError}
 				onconfirm={confirmInstall}
-				onclose={() => later(() => (offer = null), offer)}
+				onclose={() => {
+					closedWhileBusy = busy === 'install';
+					later(() => (offer = null), offer);
+				}}
 			/>
 		{/await}
 	{/if}
@@ -215,7 +226,10 @@
 				busy={busy === 'remove'}
 				error={dialogError}
 				onconfirm={confirmRemove}
-				onclose={() => later(() => (plan = null), plan)}
+				onclose={() => {
+					closedWhileBusy = busy === 'remove';
+					later(() => (plan = null), plan);
+				}}
 			/>
 		{/await}
 	{/if}

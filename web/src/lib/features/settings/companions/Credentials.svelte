@@ -8,6 +8,7 @@
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import Field from '$lib/ui/fields/Field.svelte';
 	import Input from '$lib/ui/fields/Input.svelte';
+	import { copyText } from '$lib/util/clipboard';
 	import { ask } from '../form/dialogs';
 	import { failureWords } from './logic';
 	import type { CompanionsStore } from './store.svelte';
@@ -29,6 +30,7 @@
 	let busy = $state(false);
 	let error = $state('');
 	let note = $state('');
+	let copied = $state(false);
 	// The reveal is dropped when this panel goes away.
 	onDestroy(() => (revealed = null));
 
@@ -117,6 +119,14 @@
 			</div>
 			{#if revealed?.field === f}
 				<p class="text-small text-muted-text">{m.settings_companions_cred_once()}</p>
+				<Button
+					dense
+					onclick={async () => {
+						copied = revealed ? (await copyText(revealed.value)) === 'copied' : false;
+					}}
+				>
+					{copied ? m.settings_companions_cred_copied() : m.settings_companions_cred_copy()}
+				</Button>
 				<code
 					class="break-all rounded-selector border border-field-border px-2 py-1 font-mono text-small"
 					data-revealed>{revealed.value}</code

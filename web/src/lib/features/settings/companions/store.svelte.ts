@@ -2,7 +2,6 @@
 // it. A failed or refused request leaves the list as it was; nothing here says "installed" or
 // "removed" without a response that does. The server decides every install: the request is built
 // only from the offer it sent.
-import { SvelteSet } from 'svelte/reactivity';
 import { api, ApiError } from '$lib/api/client';
 import type {
 	Companion,
@@ -24,17 +23,20 @@ export class CompanionsStore {
 	private ctl = new AbortController();
 	readonly signal = this.ctl.signal;
 	private live = true;
-	private timers = new SvelteSet<ReturnType<typeof setTimeout>>();
+	/** One health watch per companion, by id. Not reactive: nothing renders it. */
+	private timers: Record<string, ReturnType<typeof setTimeout>> = {};
 
 	/** After a restart, looks at the row every few seconds (up to a minute) so its health shows. */
 	private watch(id: string, left = 20) {
+		clearTimeout(this.timers[id]); // a newer restart replaces the watch, there is only ever one per companion
+		delete this.timers[id];
 		if (!this.live || left === 0) return;
 		const t = setTimeout(async () => {
-			this.timers.delete(t);
+			delete this.timers[id];
 			await this.refresh(id);
 			if (this.items.find((x) => x.id === id)?.health !== 'healthy') this.watch(id, left - 1);
 		}, 3000);
-		this.timers.add(t);
+		this.timers[id] = t;
 	}
 
 	start() {
@@ -44,8 +46,8 @@ export class CompanionsStore {
 	stop() {
 		this.live = false;
 		this.ctl.abort();
-		for (const t of this.timers) clearTimeout(t);
-		this.timers.clear();
+		for (const t of Object.values(this.timers)) clearTimeout(t);
+		this.timers = {};
 	}
 
 	async load() {

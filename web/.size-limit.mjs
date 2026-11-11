@@ -1294,8 +1294,8 @@ export default [
 		'45 KB'
 	),
 	// X-settings-trim: back at the §10.1 cap (44.95 kB measured) after the SRC-15a/LEGAL-1 raises.
-	// CMP-9a: the Companions registry entry adds ≈ 90 B here, which the 20 B of headroom couldn't take.
-	// Measured 45.07 kB, limit 45.1 KB: the runner decides this change to the §10.1 number (§2.26).
+	// CMP-9a: the Companions registry entry adds ≈ 80 B here, which the 20 B of headroom couldn't take.
+	// Measured 45.06 kB, limit 45.1 KB: the runner decides this change to the §10.1 number (§2.26).
 	entry('Settings section (own JS + CSS)', settingsSectionView, '45.1 KB'),
 	// The engine's on-demand code on a Settings screen, still gated: 34.34 KB with S-settings-1's
 	// screen (limit = measured + 10%). The production screen now uses it: missing chunks fail.
@@ -1322,7 +1322,7 @@ export default [
 	entry('Settings updates parts (on demand)', settingsUpdatesPartsLazy, '3.2 KB'),
 	entry('Settings updates advanced (on demand)', settingsUpdatesAdvancedLazy, '4.65 KB'),
 	entry('Settings updates icon and purpose (on demand)', settingsUpdatesModulesLazy, '0.8 KB'),
-	entry('Settings companions parts (on demand)', settingsCompanionsPartsLazy, '28 KB'),
+	entry('Settings companions parts (on demand)', settingsCompanionsPartsLazy, '28.7 KB'),
 	entry('Settings companions icon and purpose (on demand)', settingsCompanionsModulesLazy, '1 KB'),
 	// Logging (S-logs-2): its server labels, and the event list, data kinds and privacy dialogs.
 	// Measured 0.78 KB and 15.48 KB at first (limits = measured + 10%); 16.48 KB after the review

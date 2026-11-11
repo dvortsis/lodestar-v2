@@ -17,6 +17,8 @@
 	onMount(() => store.start());
 	onDestroy(() => store.stop());
 
+	const nameOf = (id: string) =>
+		store.items.find((c) => c.id === id)?.name ?? m.settings_companions_unknown_name();
 	async function retry() {
 		store.loading = true;
 		await store.load();
@@ -104,12 +106,12 @@
 						{#each store.detected as d (d.id)}
 							<li class="flex flex-wrap items-center gap-2">
 								<span>
-									{m.settings_companions_detect_found({
-										id:
-											store.items.find((c) => c.id === d.id)?.name ??
-											m.settings_companions_unknown_name(),
-										version: d.version ?? ''
-									})}
+									{d.version
+										? m.settings_companions_detect_found_version({
+												id: nameOf(d.id),
+												version: d.version
+											})
+										: m.settings_companions_detect_found({ id: nameOf(d.id) })}
 								</span>
 								<Button dense loading={busy} onclick={() => addFound(d)}>
 									{m.settings_companions_detect_add({
