@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T06:48:33Z",
+  "updated_at": "2026-11-11T06:50:52Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6721,7 +6721,12 @@
     "2026-11-11: #662 X-flake-portable-restart merged (2542fe5c); PK-win-portable-upd and OP-4 told; owner FYI sent",
     "2026-11-11: X-restart-required-creds approved shared edit: pins_credentials field on SourceStatus (crates/pipeline/src/lib.rs); add to its owns in next runner PR",
     "2026-11-11: #660 CMP-5g-3 merged (6039cb32); slot 4 continues with X-cmp-egress-prelaunch; CMP-9a ready (egress editor after prelaunch); CMP-11/CMP-12 still need owner answers",
-    "2026-11-11: runner PR #667 merged (95bca825): follow-up slices, ext:owner-notice-v5, X-cmp-egress-prelaunch, owner queue 11"
+    "2026-11-11: runner PR #667 merged (95bca825): follow-up slices, ext:owner-notice-v5, X-cmp-egress-prelaunch, owner queue 11",
+    {
+      "id": "X-win-upd-1920",
+      "added": "2026-11-11",
+      "what": "MSI error 1920 then 1603 when a local user holds lodestar.exe open with share mode 0 before StartServices: forward install skips the version for good, rollback reinstall halts. Fix: tell 1920 apart in the msiexec log, or retry 1603 a bounded number of times. Opus, /security-review. From #663 residual; add a slices.yaml entry in the next runner PR."
+    }
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7608,6 +7613,10 @@
       "relayed": "2026-11-11 via dashboard session"
     }
   ],
-  "review_queue": [],
+  "review_queue": [
+    "#665 CMP-9c",
+    "#655 OP-4 delta",
+    "#663 X-win-upd-bounds"
+  ],
   "merged": []
 }
