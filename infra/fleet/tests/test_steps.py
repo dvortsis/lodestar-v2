@@ -371,6 +371,8 @@ class Compose(unittest.TestCase):
         # No raw sockets past gluetun's firewall: everything dropped but the three
         # capabilities the image needs to drop root.
         self.assertEqual(lod["cap_drop"], ["ALL"])
+        # The restart witness on the host, outside the data folder (CR-SPEC 2.3; OP-3b).
+        self.assertEqual(lod["volumes"], ["./data:/data", "./witness:/var/lib/lodestar-witness"])
         self.assertEqual(lod["cap_add"], ["CHOWN", "SETGID", "SETUID"])
         # The arm's switches pass through by name; nothing else is set.
         self.assertEqual(lod["environment"], ["TZ=Etc/UTC", "LODESTAR_DHT_SAFE_RESTART",

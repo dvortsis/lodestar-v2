@@ -809,6 +809,10 @@ class Scrubber(unittest.TestCase):
         for v in (True, float("nan"), float("inf"), 10**16, "1"):
             self.assertFalse(scrub.num(v))
         self.assertFalse(scrub.time("2026-11-11 08:00:00Z"))
+        # Fixed vocabularies: a word-shaped server or region name never passes.
+        out = scrub.scrub({"version": 1, "role": "us_newjersey", "treatment": "nj_exit", "segments": [
+            {"segment": 1, "arm": "us_east", "report": {"kind": "ab", "verdict": "server_nj"}}]})
+        self.assertEqual(out, {"version": 1, "segments": [{"segment": 1, "report": {"kind": "ab"}}]})
         with self.assertRaises(ValueError):
             scrub.scrub(["not a doc"])
         with self.assertRaises(ValueError):
@@ -928,7 +932,9 @@ DENIED = [("GET", "/_ping"), ("GET", "/version"), ("GET", "/info"), ("GET", "/co
           ("GET", f"//containers/{LODESTAR_ID}/json"), ("GET", f"/v1.47/../containers/{OTHER}/json"),
           ("DELETE", f"/containers/{LODESTAR_ID}"), ("POST", f"/containers/{LODESTAR_ID}/json"),
           ("GET", f"/images/sha256:{OTHER}/json"), ("POST", f"/containers/{LODESTAR_ID}/kill"),
-          ("POST", f"/containers/{LODESTAR_ID}/stop/../exec"), ("GET", f"/v1.47x/containers/{LODESTAR_ID}/json")]
+          ("POST", f"/containers/{LODESTAR_ID}/stop/../exec"), ("GET", f"/containers/{LODESTAR_ID}/stop"),
+          ("PUT", f"/containers/{LODESTAR_ID}/stop"), ("HEAD", f"/containers/{LODESTAR_ID}/stop"),
+          ("POST", f"/containers/{LODESTAR_ID}/archive"), ("POST", f"/containers/{LODESTAR_ID}/stats"), ("GET", f"/v1.47x/containers/{LODESTAR_ID}/json")]
 
 
 def policy(cfg):
