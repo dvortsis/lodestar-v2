@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-11T15:38:57Z",
+  "updated_at": "2026-11-11T18:39:05Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4121,7 +4121,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 32,
-  "last_heartbeat": "2026-11-11T15:38:57Z",
+  "last_heartbeat": "2026-11-11T18:39:05Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -7576,14 +7576,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T16:37Z",
+    "updated": "2026-11-11T18:39:05Z",
     "items": [
       {
         "slot": 1,
         "slice": "CMP-11",
         "role": "build",
         "agent": "claude",
-        "doing": "fallback (b) go at 17:3xZ (#692 not merged); building PR",
+        "doing": "session_01MMjhnAaZaaUjzMSyGVFdTA: #705 open @3544233f, fallback (b), CI running; CMP-11b logged",
         "since": "2026-11-11T14:10:36Z"
       },
       {
@@ -7642,7 +7642,7 @@
         "slice": "X-cmp9b-catch",
         "role": "build",
         "agent": "claude",
-        "doing": "SourceRow {:catch} + reload wording (rv-698 N3/N4)",
+        "doing": "session_01MMjhn8mGSt1DA24S2gjPE6: #703 @1666594d green, under fresh Opus review",
         "since": "2026-11-11T17:52Z"
       }
     ]
@@ -7698,8 +7698,8 @@
       "answers": "runner recommendation on all items: X-refetch-private ships in v0.5.2; installer Repair may re-secure admin-ACE-only folder (X-win-refusal-ux); v0.5.1 release body replacement (notes/v051-release-body.md); web-ok+e2e-ok required; delete wip/CMP-0-catalogue; Q13 stands, Q14 at G-m6; import host = Unraid box; nightly key deferred; counsel advisory, no reminders; package installers after 1.0"
     }
   ],
-  "heartbeat": "2026-11-11T15:38:57Z",
-  "updated": "2026-11-11T18:38Z",
+  "heartbeat": "2026-11-11T18:39:05Z",
+  "updated": "2026-11-11T18:39:05Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -7734,7 +7734,9 @@
     }
   ],
   "review_queue": [
-    "#703 X-cmp9b-catch ready @1666594db4cf863e6f505a4446476bbec14c2198 (green) - next free reviewer slot"
+    "#699 WK-11 delta+sec review running",
+    "#702 X-event-log-notice review running",
+    "#703 X-cmp9b-catch review running"
   ],
   "merged": [
     {
