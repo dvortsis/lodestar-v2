@@ -53,6 +53,10 @@ case "$1" in
       *) bad "$*" ;;
     esac ;;
   pull) [ -n "$PULL_FAIL" ] && exit 1; exit 0 ;;
+  stop) [ "$*" = "stop -t 60 lodestar" ] || bad "$*"
+        [ -n "$STOP_FAIL" ] && exit 1
+        grep -vx lodestar "$STUB/running" > "$STUB/running.new" 2>/dev/null; mv "$STUB/running.new" "$STUB/running"
+        : > "$STUB/stopped" ;;
   compose)
     [ -n "$DOCKER_GID" ] || bad "compose without DOCKER_GID"
     case "$*" in
@@ -67,6 +71,7 @@ case "$1" in
         python3 -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$STUB_STACK/proxy-sock/docker.sock"
         exit 0 ;;
       *"--profile block up -d --no-deps lodestar") ;;
+      *"--profile block up -d --no-deps --force-recreate lodestar") echo fresh >> "$STUB/fresh" ;;
       *) bad "$*" ;;
     esac
     [ -e "$STUB_BLOCK/marker" ] || bad "compose before the marker"
@@ -91,6 +96,10 @@ case "$1" in
         [ -e "$STUB_BLOCK/marker" ] || bad "collector before the marker"
         printf '%s\n' "$*" > "$STUB/collector-$4.args"
         [ -n "$COLLECTOR_FAIL" ] && exit 1
+        [ -n "$COLLECTOR_REFUSES" ] && exit 0  # started, then exited at its preflight
+        seg=${4#lodestar-collector-}
+        printf '{\n  "network": {\n    "gluetun_network_parent": %s\n  }\n}' "${PARENT_SEEN:-true}" \
+          > "$STUB_BLOCK/evidence/seg-$seg/run.json"
         echo "$4" >> "$STUB/running" ;;
       "run --rm --network none --cap-drop ALL --security-opt no-new-privileges:true --read-only --tmpfs /tmp "*" python@sha256:"*" python3 /scrub.py collect /block /out")
         printf '%s\n' "$*" > "$STUB/scrub.args"
@@ -107,6 +116,7 @@ case "$*" in
   *) printf '%s\n' "$*" >> "$STUB/badargs"; exit 1 ;;
 esac
 [ -n "$WATCHER_FAIL" ] && exit 1
+[ -n "$WATCHER_NOACTIVE" ] && exit 0  # accepted, but the unit never becomes active
 : > "$STUB/watcher_active"
 """
 STUB_SYSTEMCTL = r"""#!/usr/bin/env bash
@@ -116,6 +126,12 @@ case "$*" in
   "stop lodestar-outage-watcher") rm -f "$STUB/watcher_active" ;;
   *) printf '%s\n' "$*" >> "$STUB/badargs"; exit 1 ;;
 esac
+"""
+# `ls` that fails its first $LS_FAILS listings (an unreadable block directory), then works.
+STUB_LS = r"""#!/usr/bin/env bash
+n=$(cat "$STUB/ls_calls" 2>/dev/null || echo 0); echo $((n + 1)) > "$STUB/ls_calls"
+[ "$n" -lt "${LS_FAILS:-0}" ] && exit 2
+exec /bin/ls "$@"
 """
 FAKE_LEAK = r"""#!/usr/bin/env bash
 case "$LEAK" in
@@ -135,6 +151,7 @@ class Base(unittest.TestCase):
         self.block = self.tmp / "lodestar-block"
         (self.stub / "bin").mkdir(parents=True)
         for name, body in (("docker", STUB_DOCKER), ("systemd-run", STUB_SYSTEMD_RUN), ("systemctl", STUB_SYSTEMCTL),
+                           ("ls", STUB_LS),
                            ("sleep", "#!/bin/sh\nexit 0\n")):
             (self.stub / "bin" / name).write_text(body)
             (self.stub / "bin" / name).chmod(0o755)
@@ -159,7 +176,7 @@ class Base(unittest.TestCase):
             os.chown(sock, 0, 4242)
         env = {"PATH": f"{self.stub / 'bin'}:/usr/bin:/bin", "STUB": str(self.stub), "STUB_BLOCK": str(self.block),
                "STUB_STACK": str(self.stack), "HOME": str(self.tmp), "DOCKER_SOCK": str(sock),
-               "PROXY_UID": str(os.getuid()), "PROXY_WAIT": "0", "GLUETUN_ID": GLUETUN_ID, "IMAGE_ID": IMAGE_ID,
+               "PROXY_UID": str(os.getuid()), "PROXY_WAIT": "0", "COLLECT_WAIT": "0", "GLUETUN_ID": GLUETUN_ID, "IMAGE_ID": IMAGE_ID,
                "DEFAULT_LID": LODESTAR_ID, "SOCK_GID": str(sock.stat().st_gid), **{k: str(v) for k, v in flags.items()}}
         r = subprocess.run(["bash", str(VM / name), str(self.work), str(self.stack), str(self.tmp / "pia-run"),
                             str(self.block)], env=env, capture_output=True, text=True, timeout=120)
@@ -312,7 +329,10 @@ class StartBlock(Base):
         old = self.block / "evidence" / "seg-1"
         old.mkdir(parents=True)
         (old / "result.json").write_text("{}")
-        rc, lines, raw = self.run_script("start-block.sh")
+        (self.block / "copied").write_text("")  # copy-off took it
+        (self.stack / "witness").mkdir()
+        (self.stack / "witness" / "old").write_text("a past block's witness")
+        rc, lines, raw = self.run_script("start-block.sh", LODESTAR_DHT_UTP="true")
         self.assertEqual(rc, 0, raw)
         self.assertEqual(lines[-1], "ok start_block")
         for n in ("args_valid", "no_block", "leak_test", "leak_test_passed", "marker_written", "lodestar_started",
@@ -325,10 +345,13 @@ class StartBlock(Base):
         self.assertEqual(len(kept), 1)
         self.assertTrue((kept[0] / "evidence" / "seg-1" / "result.json").exists())
         self.assertEqual(list((self.stack / "data").iterdir()), [])  # a fresh data directory
+        self.assertEqual(list((self.stack / "witness").iterdir()), [])  # and a fresh witness
+        self.assertTrue((self.stub / "fresh").exists())  # the first start recreates whatever compose kept
         self.assertEqual((self.block / "tools" / "linux" / "collect.py").read_text(),
                          "# the collector at the rules commit\n")
         self.assertEqual((self.block / "block.env").read_text().count("\n"), 7)
         # Segment 1 is the control arm; safe restart is on for the whole block.
+        # (LODESTAR_DHT_UTP=true in the caller's environment never reaches compose.)
         self.assertEqual((self.stub / "arm.env").read_text(),
                          "LODESTAR_DHT_COORDINATED_ADMISSION=false\nLODESTAR_DHT_SAFE_RESTART=true\n"
                          f"LODESTAR_IMAGE=ghcr.io/dvortsis/lodestar-v2@sha256:{DIGEST}\n")
@@ -342,6 +365,8 @@ class StartBlock(Base):
         self.assertNotIn("ABCD-0123-4567-89EF", raw + self.log())  # nor the setup token
         args = (self.stub / "collector-lodestar-collector-1.args").read_text()
         for part in ("--network container:gluetun", "--oom-score-adj -500", "--cap-drop ALL", "--read-only",
+                     "--security-opt no-new-privileges:true", f"{self.stack}/witness:/witness:ro",
+                     f"{self.block}/evidence/seg-1:/evidence/seg-1 ",
                      "--run-kind ab --treatment adm --intensity balanced --stop --rehearsal --baseline-hours 2",
                      f"--commit {LC} --spec-commit {SC}", "--root /evidence/seg-1",
                      "--checklist auto_update=excluded", "--checklist backup=excluded",
@@ -350,7 +375,7 @@ class StartBlock(Base):
         # Read-only mounts, but for its own evidence folder; Docker only through the proxy.
         mounts = args.split(" -v ")[1:]
         rw = [m.split(" ")[0] for m in mounts if not m.split(" ")[0].endswith(":ro")]
-        self.assertEqual(rw, [f"{self.block}/evidence:/evidence"])
+        self.assertEqual(rw, [f"{self.block}/evidence/seg-1:/evidence/seg-1"])  # its own segment only
         self.assertNotIn("docker.sock:", args)
         self.assertIn(f"{self.stack}/proxy-sock:/sock:ro", args)
         self.assertIn("--docker-socket /sock/docker.sock", args)
@@ -364,6 +389,36 @@ class StartBlock(Base):
         self.assertIn("RuntimeMaxSec=44h", self.log())
         log = self.log()
         self.assertLess(log.index("compose"), log.index("run -d --name lodestar-collector-1"))
+
+    def test_a_past_blocks_evidence_must_be_copied_off_first(self):
+        self.args()
+        self.make_block(segment=4)
+        (self.block / "marker").unlink()  # arm-switch ended it; copy-off hasn't run
+        self.finish_segment(4)
+        rc, lines, _ = self.run_script("start-block.sh")
+        self.assertEqual((rc, lines), (1, ["ok args_valid", "fail evidence_copied", "fail start_block"]))
+        self.assertTrue((self.block / "evidence" / "seg-4" / "result.json").exists())
+        self.assertEqual(self.log().count("compose"), 0)
+
+    def test_a_failed_start_stops_lodestar_and_copy_off_ends_the_block(self):
+        self.args()
+        rc, lines, _ = self.run_script("start-block.sh", NOTICE=5)
+        self.assertEqual((rc, lines[-2:]), (1, ["fail notice_version", "fail start_block"]))
+        self.assertTrue((self.stub / "stopped").exists())  # nothing crawls after a stop
+        self.assertNotIn("lodestar", (self.stub / "running").read_text().split())
+        (self.stub / "doc.json").write_text('{"version":1,"segments":[]}')
+        rc, lines, _ = self.run_script("copy-off.sh")
+        self.assertEqual((rc, lines[-2:]), (0, ["ok block_ended", "ok copy_off"]))
+        self.assertFalse((self.block / "marker").exists())
+
+    def test_a_collector_that_doesnt_really_start(self):
+        for flags in ({"COLLECTOR_REFUSES": 1}, {"PARENT_SEEN": "false"}):
+            with self.subTest(flags=flags):
+                self.setUp()
+                self.args()
+                rc, lines, _ = self.run_script("start-block.sh", **flags)
+                self.assertEqual((rc, lines[-2:]), (1, ["fail collector_started", "fail start_block"]))
+                self.assertTrue((self.stub / "stopped").exists())
 
     def test_worker_gets_the_small_disk_guardrails(self):
         self.args(ROLE="worker")
@@ -470,6 +525,14 @@ class ArmSwitch(Base):
                 self.assertEqual(rc, 0, raw)
                 self.assertIn(f"LODESTAR_DHT_COORDINATED_ADMISSION={want}\n", (self.stub / "arm.env").read_text())
 
+    def test_a_failed_switch_stops_lodestar(self):
+        self.make_block(segment=1)
+        self.finish_segment(1)
+        rc, lines, _ = self.run_script("arm-switch.sh", API_DOWN=1, API_WAIT=0)
+        self.assertEqual((rc, lines[-2:]), (1, ["fail api_up", "fail arm_switch"]))
+        self.assertTrue((self.stub / "stopped").exists())
+        self.assertIn("segment=2", (self.block / "marker").read_text())  # still recorded, for copy-off
+
     def test_after_the_last_segment_the_block_ends(self):
         self.make_block(segment=4)
         self.finish_segment(4)
@@ -534,8 +597,22 @@ class OutageWatcher(Base):
         rc, lines, _ = self.run_script("outage-watcher.sh")  # idempotent
         self.assertEqual(lines, ["skip outage_watcher_started", "count outages_seen 2", "ok outage_watcher"])
         self.assertEqual(self.log().count("systemd-run"), 1)
+        (self.stub / "watcher_active").unlink()
+        rc, lines, _ = self.run_script("outage-watcher.sh", WATCHER_NOACTIVE=1)  # started, never active
+        self.assertEqual((rc, lines), (1, ["fail outage_watcher_started"]))
 
-    def watch(self, **flags):
+    def test_an_unlistable_block_directory_is_a_block(self):
+        self.make_block(segment=2)
+        (self.block / "marker").unlink()
+        for script, failed in (("outage-watcher.sh", ["fail block_check"]),
+                               ("arm-switch.sh", ["fail block_check", "fail arm_switch"]),
+                               ("copy-off.sh", ["fail block_check", "fail copy_off"])):
+            with self.subTest(script=script):
+                (self.stub / "ls_calls").unlink(missing_ok=True)
+                rc, lines, _ = self.run_script(script, LS_FAILS=1)
+                self.assertEqual((rc, lines), (1, failed))
+
+    def watch_stub(self):
         """watcher.sh against a docker stub whose gluetun drops once, then the block ends."""
         docker = r"""#!/usr/bin/env bash
 case "$1" in
@@ -557,6 +634,9 @@ case "$1" in
 esac
 """
         (self.stub / "bin" / "docker").write_text(docker)
+
+    def watch(self, **flags):
+        self.watch_stub()
         self.make_block(segment=2)
         env = {"PATH": f"{self.stub / 'bin'}:/usr/bin:/bin", "STUB": str(self.stub), "STUB_BLOCK": str(self.block),
                **{k: str(v) for k, v in flags.items()}}
@@ -575,6 +655,23 @@ esac
         self.assertEqual(self.watch(), 0)  # it ended by itself once the marker went
         self.assertEqual(len(self.lines("outages")), 3)  # die, restart, and gluetun's "restarting VPN"
         self.assertEqual(len(self.lines("notes")), 1)  # one note per burst, into segment 2's evidence
+
+    def test_an_unreadable_block_never_ends_the_watcher(self):
+        """Fail closed: a listing that fails isn't "no marker"."""
+        self.make_block(segment=2)
+        (self.block / "marker").unlink()
+        (self.block / "outages").write_text("")
+        docker = (self.stub / "bin" / "docker")
+        self.watch_stub()
+        # Without the marker the stub never ends the block, so the followers stop
+        # once the listing works again: the watcher still saw the outages first.
+        env = {"PATH": f"{self.stub / 'bin'}:/usr/bin:/bin", "STUB": str(self.stub), "STUB_BLOCK": str(self.block),
+               "LS_FAILS": "2"}
+        r = subprocess.run(["bash", str(VM / "watcher.sh"), str(self.block)], env=env, capture_output=True,
+                           text=True, timeout=60)
+        self.assertEqual(r.returncode, 0)
+        self.assertTrue(docker.exists())
+        self.assertGreater(len(self.lines("outages")), 0)
 
     def test_every_outage_noted_without_the_gap_and_bounded(self):
         self.assertEqual(self.watch(GAP=0), 0)
@@ -614,8 +711,16 @@ class CopyOff(Base):
         rc, lines, _ = self.run_script("copy-off.sh")  # again: the same evidence, the block already ended
         self.assertEqual((rc, lines[-2:]), (0, ["skip block_ended", "ok copy_off"]))
 
+    def test_a_lone_lodestar_is_stopped_first(self):
+        self.make_block(segment=2)
+        self.running("gluetun", "lodestar")
+        rc, lines, _ = self.run_script("copy-off.sh")
+        self.assertEqual(rc, 0)
+        self.assertEqual(lines[:2], ["ok lodestar_stopped", "ok nothing_running"])
+        self.assertTrue((self.block / "copied").exists())
+
     def test_refusals(self):
-        cases = {"Lodestar running": ("lodestar", {}, "block_running"),
+        cases = {"Lodestar alone, and it won't stop": ("lodestar", {"STOP_FAIL": 1}, "lodestar_stopped"),
                  "a collector running": ("lodestar-collector-2", {}, "block_running"),
                  "docker can't list": (None, {"PS_FAIL": 1}, "block_check"),
                  "the scrubber failed": (None, {"SCRUB_FAIL": 1}, "scrubbed")}

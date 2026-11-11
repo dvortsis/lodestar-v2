@@ -23,7 +23,12 @@ BLOCK=${4:-/var/lib/lodestar-block}
 # shellcheck source=block-lib.sh
 . "$work/block-lib.sh"
 
-fail() { echo "fail $1"; echo "fail start_block"; exit 1; }
+started=""
+# Once Lodestar has started, a failure stops it, so copy-off can end the block.
+fail() {
+  [[ -n $started ]] && { stop_lodestar || echo "fail lodestar_stopped"; }
+  echo "fail $1"; echo "fail start_block"; exit 1
+}
 
 # The arguments, already checked by the control side; checked again here.
 while IFS='=' read -r k v; do
@@ -56,6 +61,8 @@ esac
 block_procs; rc=$?
 ((rc == 2)) && fail block_check
 ((rc == 0)) && fail block_running
+# A past block's evidence is never set aside before copy-off has taken it.
+if [[ -n $(ls -A -- "$BLOCK/evidence" 2>/dev/null) && ! -e $BLOCK/copied ]]; then fail evidence_copied; fi
 echo "ok no_block"
 
 # 2. The leak test, in this run. Its lines are reported as they are.
@@ -83,11 +90,12 @@ mkdir -m 0700 -p -- "$BLOCK/tools/linux" "$BLOCK/evidence" "$BLOCK/witness" \
   && install -m 0600 -- "$work/scrub.py" "$BLOCK/tools/scrub.py" \
   && install -m 0644 -- "$work/compose.yaml" "$STACK/compose.yaml" || fail tools_staged
 for n in 1 2 3 4; do timeout 60 docker rm "lodestar-collector-$n" >/dev/null 2>&1; done  # a past block's, stopped
-rm -rf -- "$STACK/data" && mkdir -m 0700 -- "$STACK/data" || fail fresh_data
+rm -rf -- "$STACK/data" "$STACK/witness" && mkdir -m 0700 -- "$STACK/data" "$STACK/witness" || fail fresh_data
 timeout 300 docker pull "$LODESTAR_REPO@sha256:$IMAGE_DIGEST" >/dev/null 2>&1 || fail lodestar_image
 timeout 120 docker pull "$COLLECTOR_IMAGE" >/dev/null 2>&1 || fail collector_image
 timeout 120 docker pull "$PROXY_IMAGE" >/dev/null 2>&1 || fail proxy_image
-start_lodestar 1 || fail lodestar_started
+started=1
+start_lodestar 1 fresh || fail lodestar_started
 network_parent_ok || fail network_parent
 start_proxy || fail docker_proxy
 wait_api || fail api_up
@@ -124,7 +132,7 @@ unset pw token
 echo "ok setup_done"
 
 start_collector 1 || fail collector_started
-running lodestar-collector-1 || fail collector_started
+collector_ok 1 || fail collector_started
 printf 'block=%s\nsegment=1\nstate=running\n' "$BLOCK_ID" | marker_write || fail marker_written
 echo "ok collector_started"
 if start_watcher; then echo "ok outage_watcher"; else echo "fail outage_watcher"; fi

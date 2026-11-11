@@ -14,11 +14,15 @@ set -uo pipefail
 work=${1:?workdir}
 STACK=${2:-/home/lodestar/lodestar}
 BLOCK=${4:-/var/lib/lodestar-block}
-WAIT_SECONDS=${WAIT_SECONDS:-1200}  # the step's timeout leaves room for this and the switch
+WAIT_SECONDS=${WAIT_SECONDS:-900}  # the step's timeout leaves room for this and the switch
 # shellcheck source=block-lib.sh
 . "$work/block-lib.sh"
 
-fail() { echo "fail $1"; echo "fail arm_switch"; exit 1; }
+started=""
+fail() {
+  [[ -n $started ]] && { stop_lodestar || echo "fail lodestar_stopped"; }
+  echo "fail $1"; echo "fail arm_switch"; exit 1
+}
 
 case $(block_state) in
   block) ;;
@@ -58,13 +62,14 @@ if ((seg == 4)); then
 fi
 next=$((seg + 1))
 printf 'block=%s\nsegment=%s\nstate=running\n' "$id" "$next" | marker_write || fail marker_written
+started=1
 start_lodestar "$next" || fail lodestar_started
 network_parent_ok || fail network_parent
 start_proxy || fail docker_proxy  # the new container's ID; no collector runs yet
 wait_api || fail api_up
 echo "ok lodestar_started"
 start_collector "$next" || fail collector_started
-running "lodestar-collector-$next" || fail collector_started
+collector_ok "$next" || fail collector_started
 echo "ok collector_started"
 watcher_active || start_watcher || echo "fail outage_watcher"
 echo "count block_segment $next"

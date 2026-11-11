@@ -42,11 +42,12 @@ STEPS_PATH = "infra/fleet/steps/vm"
 BUILT = {
     "vm-status": {"files": ("vm-status.sh", "block-lib.sh"), "timeout": 60},
     "leak-test": {"files": ("leak-test.sh", "block-lib.sh", "compose.yaml"), "timeout": 600},
-    # The leak test (600 s) runs inside it; then the pulls (300 + 120 s), Lodestar's
-    # start (240 s), the API wait (180 s), the setup token (90 s), and the rest.
+    # The leak test (600 s) runs inside it; then the pulls (300 + 120 + 120 s),
+    # Lodestar's start (240 s), the proxy (about 200 s), the API wait (180 s),
+    # the token (90 s), the collector's start (120 s), and the rest.
     "start-block": {"files": ("start-block.sh", "block-lib.sh", "leak-test.sh", "compose.yaml", "watcher.sh",
-                              "scrub.py", "docker-proxy.cfg"), "timeout": 1800},
-    # Up to 20 minutes' wait for the segment to end (WAIT_SECONDS), then the switch.
+                              "scrub.py", "docker-proxy.cfg"), "timeout": 2400},
+    # Up to 15 minutes' wait for the segment to end (WAIT_SECONDS), then the switch.
     "arm-switch": {"files": ("arm-switch.sh", "block-lib.sh", "compose.yaml", "watcher.sh", "docker-proxy.cfg"),
                    "timeout": 2100},
     "outage-watcher": {"files": ("outage-watcher.sh", "block-lib.sh", "watcher.sh"), "timeout": 60},

@@ -14,7 +14,7 @@ JSON with exactly these keys:
       "spec_commit": "<40 hex>",                 # the collector's --spec-commit (CR-SPEC in force)
       "treatment": "adm",                        # adm | utp | route
       "segment_hours": 2,                        # 2 or 3 (screen rule 3)
-      "notice_version": 1                        # the Legal Notice version start-block accepts
+      "notice_version": 4                        # the Legal Notice version start-block accepts (4 on main, 2026-11-11)
     }
 
 The image is pinned by digest, in the one repository the project publishes;

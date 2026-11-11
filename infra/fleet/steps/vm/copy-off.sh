@@ -21,9 +21,16 @@ fail() { echo "fail $1"; echo "fail copy_off"; exit 1; }
 command -v docker >/dev/null 2>&1 || fail tool_missing_docker
 state=$(block_state)
 [[ $state == unknown ]] && fail block_check
-block_procs; rc=$?
+# A running collector is a running segment: refuse. A Lodestar left running
+# alone (a failed start or switch, or a collector that died) is stopped, so a
+# block that went wrong can still end here.
+collectors_running; rc=$?
 ((rc == 2)) && fail block_check
 ((rc == 0)) && fail block_running
+if running lodestar; then
+  stop_lodestar && ! running lodestar || fail lodestar_stopped
+  echo "ok lodestar_stopped"
+fi
 [[ -d $BLOCK/evidence && -f $BLOCK/block.env && -f $BLOCK/tools/analyze_cr.py ]] || fail evidence_present
 load_block_env || fail block_env
 echo "ok nothing_running"
@@ -46,9 +53,10 @@ echo "evidence $(printf '%s' "$doc" | base64 -w0)"
 if [[ $state == block ]]; then
   stop_watcher
   stop_proxy
-  rm -f -- "$BLOCK/marker" && sync "$BLOCK" || fail block_ended
+  : >"$BLOCK/copied" && rm -f -- "$BLOCK/marker" && sync "$BLOCK" || fail block_ended
   echo "ok block_ended"
 else
+  : >"$BLOCK/copied"
   echo "skip block_ended"
 fi
 echo "ok copy_off"

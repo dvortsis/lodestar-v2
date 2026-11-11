@@ -612,11 +612,14 @@ class VMScripts(unittest.TestCase):
             "a failed delete": ({"FAIL_FIRST_DELETE": 1, "NO_RECOVER": 1}, "tunnel_recovers"),
             # The host's own IPv6 (0d's separate check, OP-3b).
             "the stack's network has IPv6": ({"BRIDGE_V6": 1}, "bridge_ipv6_off"),
+            "the host forwards IPv6": ({"V6_FORWARDING": 1}, "host_ipv6_not_forwarded"),
             "a global IPv6 address in gluetun's namespace": ({"NS_V6": 1}, "namespace_no_global_ipv6"),
         }
         for name, (flags, failed) in cases.items():
             with self.subTest(name):
                 self.setUp()
+                if flags.pop("V6_FORWARDING", None):
+                    (self.tmp / "v6fwd").write_text("1\n")
                 rc, lines, _ = self.run_script("leak-test.sh", **flags)
                 self.assertEqual(rc, 1)
                 self.assertIn(f"fail {failed}", lines)
@@ -649,6 +652,35 @@ class VMScripts(unittest.TestCase):
         rc, lines, _ = self.run_script("leak-test.sh", PULL_FAIL=1)
         self.assertEqual(lines[-2:], ["fail probe_image", "fail leak_test"])
         self.assertNotIn("iptables", self.log())
+
+    def test_leak_test_honours_the_block_marker(self):
+        """OP-3b: a recorded block (stopped between segments) is mid-block; an unreadable one fails closed."""
+        self.block.mkdir()
+        (self.block / "marker").write_text("block=1-1\nsegment=2\n")
+        rc, lines, _ = self.run_script("leak-test.sh")
+        self.assertEqual((rc, lines[-2:]), (1, ["fail block_running", "fail leak_test"]))
+        self.assertNotIn("iptables", self.log())
+        self.assertNotIn("compose", self.log())
+        (self.block / "marker").unlink()
+        self.block.rmdir()
+        self.block.write_text("")
+        rc, lines, _ = self.run_script("leak-test.sh")
+        self.assertEqual((rc, lines[-2:]), (1, ["fail block_check", "fail leak_test"]))
+        self.assertNotIn("compose", self.log())
+
+    def test_vm_status_reports_the_block(self):
+        _, lines, _ = self.run_script("vm-status.sh")
+        self.assertIn("skip block_recorded", lines)
+        self.block.mkdir()
+        (self.block / "marker").write_text("block=1-1\nsegment=3\n")
+        _, lines, _ = self.run_script("vm-status.sh")
+        self.assertIn("ok block_recorded", lines)
+        self.assertIn("count block_segment 3", lines)
+        (self.block / "marker").unlink()
+        self.block.rmdir()
+        self.block.write_text("")
+        _, lines, _ = self.run_script("vm-status.sh")
+        self.assertIn("fail block_recorded", lines)
 
     def test_leak_test_refuses_mid_block(self):
         for flags in ({"LODESTAR": 1}, {"COLLECTORS": 1}):

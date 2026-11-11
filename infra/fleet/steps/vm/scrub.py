@@ -66,6 +66,10 @@ def scalar(v):
     return v is None or num(v) or boolean(v) or word(v) or time(v)
 
 
+def one_of(*words):
+    return lambda v: v in words
+
+
 def opt(check):
     return lambda v: v is None or check(v)
 
@@ -74,14 +78,15 @@ SWITCHES = {k: opt(boolean) for k in ("safe_restart", "coordinated_admission", "
                                        "streaming_peers", "target_prefixes", "utp", "route_backoff")}
 RESULT = {
     "schema_version": num, "state": word, "reason": word, "stop_mode": word, "samples": num, "ended": time,
-    "suppression_ended": scalar, "baseline_started": scalar, "elapsed_seconds": num,
+    "suppression_ended": opt(lambda v: num(v) or time(v)), "baseline_started": opt(lambda v: num(v) or time(v)),
+    "elapsed_seconds": num,
     "finalization_complete": boolean, "publication_failures": [word], "working_set_over_1GiB_samples": num,
     "network_parent_changes": num,
     "shutdown": {"stop_mode": word, "exit_code": opt(num), "exit_confirmed": boolean, "signal_delivered": boolean},
 }
 REPORT = {
-    "schema": num, "kind": word, "treatment": opt(word), "rehearsal": boolean, "window_hours": num,
-    "hour_seconds": num, "state": word, "samples": num, "clean_stop": boolean, "verdict": word,
+    "schema": num, "kind": one_of("ab", "comb", "comparator"), "treatment": opt(one_of("adm", "utp", "route")), "rehearsal": boolean, "window_hours": num,
+    "hour_seconds": num, "state": word, "samples": num, "clean_stop": boolean, "verdict": one_of("valid", "invalid", "void"),
     "verdict_reasons": [word],
     "checks": [{"rule": rule, "check": word, "ok": boolean, "effect": word}],
     "identity": {"image_digest": opt(digest), "switches": SWITCHES},
@@ -93,9 +98,10 @@ REPORT = {
     "resources": {k: opt(num) for k in ("peak_private_bytes", "peak_working_set_bytes", "cpu_cores_mean")},
     "activity_notes": [{"category": word}],
 }
-SEGMENT = {"segment": num, "arm": word, "result": RESULT, "report": REPORT}
+SEGMENT = {"segment": num, "arm": one_of("control", "treatment"), "result": RESULT, "report": REPORT}
 DOC = {"version": num, "rules_commit": commit, "spec_commit": commit, "lodestar_commit": commit,
-       "image_digest": digest, "treatment": word, "segment_hours": num, "role": word,
+       "image_digest": digest, "treatment": one_of("adm", "utp", "route"), "segment_hours": num,
+       "role": one_of("main", "worker"),
        "outages": num, "outage_notes": num, "segments": [SEGMENT]}
 MAX_ITEMS = 200
 
@@ -169,9 +175,12 @@ def collect(block: Path, out: Path, run=subprocess.run) -> dict:
         if not seg.is_dir():
             continue
         report_path = out / f"seg-{n}.json"
-        r = run([sys.executable, str(block / "tools" / "analyze_cr.py"), "segment", str(seg),
-                 "--output", str(report_path)], capture_output=True, timeout=300, check=False)
-        report = read_json(report_path) if r.returncode == 0 else None
+        try:  # four segments at 120 s each fit copy-off's 600 s
+            r = run([sys.executable, str(block / "tools" / "analyze_cr.py"), "segment", str(seg),
+                     "--output", str(report_path)], capture_output=True, timeout=120, check=False)
+            report = read_json(report_path) if r.returncode == 0 else None
+        except subprocess.TimeoutExpired:
+            report = None
         doc["segments"].append({"segment": n, "arm": "treatment" if n in (2, 3) else "control",
                                 "result": read_json(seg / "result.json"),
                                 "report": report if report is not None else {"state": "analysis_failed"}})

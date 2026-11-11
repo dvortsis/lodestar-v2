@@ -38,8 +38,14 @@ marker_write() {
 block_procs() {
   local names
   names=$(timeout 30 docker ps --format '{{.Names}}' 2>/dev/null) || return 2
-  printf '%s\n' "$names" | grep -Eq '^(lodestar|lodestar-collector.*)$'
+  grep -Eq '^(lodestar|lodestar-collector.*)$' <<<"$names"  # never `printf | grep -q` under pipefail (SIGPIPE)
 }
+collectors_running() {  # 0 yes, 1 no, 2 Docker can't say
+  local names
+  names=$(timeout 30 docker ps --format '{{.Names}}' 2>/dev/null) || return 2
+  grep -Eq '^lodestar-collector' <<<"$names"
+}
+stop_lodestar() { timeout 90 docker stop -t 60 lodestar >/dev/null 2>&1; }
 running() { [[ "$(timeout 30 docker inspect --type container -f '{{.State.Running}}' "$1" 2>/dev/null)" == "true" ]]; }
 # A throwaway container in gluetun's namespace (no capabilities), for Lodestar's API.
 api() { timeout 30 docker run --rm -i --network container:gluetun --cap-drop ALL "$PROBE_IMAGE" curl -s -m 20 "$@"; }
@@ -57,15 +63,16 @@ arm_of() { case $1 in 2 | 3) echo treatment ;; *) echo control ;; esac; }
 # Start Lodestar (alone: gluetun isn't recreated) with segment $1's arm. Every
 # switch but the treatment's stays at its shipped default; safe restart is on
 # for the whole block, so each later start is a resumed one.
-start_lodestar() {
-  local value=false
+start_lodestar() {  # $1 segment, $2 "fresh" to recreate whatever compose thinks
+  local value=false recreate=()
+  [[ ${2:-} == fresh ]] && recreate=(--force-recreate)
   [[ $(arm_of "$1") == treatment ]] && value=true
   (
     unset LODESTAR_DHT_COORDINATED_ADMISSION LODESTAR_DHT_UTP LODESTAR_DHT_ROUTE_BACKOFF
     export LODESTAR_IMAGE="$LODESTAR_REPO@sha256:$IMAGE_DIGEST" LODESTAR_DHT_SAFE_RESTART=true \
       "$TREATMENT_ENV=$value" DOCKER_GID=unused
     timeout 240 docker compose -f "$STACK/compose.yaml" --project-directory "$STACK" \
-      --profile block up -d --no-deps lodestar >/dev/null 2>&1
+      --profile block up -d --no-deps "${recreate[@]}" lodestar >/dev/null 2>&1
   )
 }
 # Lodestar shares gluetun's namespace (plan Lane L: checked before each collector starts).
@@ -117,8 +124,8 @@ start_collector() {
   timeout 120 docker run -d --name "lodestar-collector-$seg" --network container:gluetun --restart no \
     --oom-score-adj -500 --cap-drop ALL --security-opt no-new-privileges:true --read-only --tmpfs /tmp \
     -v "$STACK/proxy-sock:/sock:ro" -v /proc:/host/proc:ro -v /sys/fs/cgroup:/sys/fs/cgroup:ro \
-    -v "$BLOCK/tools:/tools:ro" -v "$BLOCK/password:/secrets/password:ro" -v "$BLOCK/evidence:/evidence" \
-    -v "$STACK/data:/data:ro" -v "$BLOCK/witness:/witness:ro" \
+    -v "$BLOCK/tools:/tools:ro" -v "$BLOCK/password:/secrets/password:ro" \
+    -v "$BLOCK/evidence/seg-$seg:/evidence/seg-$seg" -v "$STACK/data:/data:ro" -v "$STACK/witness:/witness:ro" \
     "$COLLECTOR_IMAGE" python3 /tools/linux/collect.py --mode docker --docker-socket /sock/docker.sock \
     --container lodestar --url "$API" \
     --run-kind ab --treatment "$TREATMENT" --intensity balanced --stop --rehearsal \
@@ -127,6 +134,17 @@ start_collector() {
     --storage-path /data --storage-path /witness "${guard[@]}" \
     --checklist auto_update=excluded --next-run "auto_update=$next" \
     --checklist backup=excluded --next-run "backup=$next" >/dev/null 2>&1
+}
+# The collector really started: its run.json, with Lodestar in gluetun's
+# namespace (plan Lane L), while it still runs. A preflight refusal exits.
+collector_ok() {
+  local seg=$1 run=$BLOCK/evidence/seg-$1/run.json until=$((SECONDS + ${COLLECT_WAIT:-120}))
+  while :; do
+    running "lodestar-collector-$seg" || return 1
+    if [[ -s $run ]]; then grep -Eq '"gluetun_network_parent": *true' "$run"; return; fi
+    ((SECONDS >= until)) && return 1
+    sleep 3
+  done
 }
 # The values start-block recorded, re-validated on every read.
 load_block_env() {

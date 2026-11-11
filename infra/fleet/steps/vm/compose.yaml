@@ -51,8 +51,11 @@ services:
       - LODESTAR_DHT_COORDINATED_ADMISSION
       - LODESTAR_DHT_UTP
       - LODESTAR_DHT_ROUTE_BACKOFF
+    # The restart witness on the host, outside the data folder (CR-SPEC 2.3,
+    # plan 0e), so a recreated container (every arm switch) is a resumed start.
     volumes:
       - ./data:/data
+      - ./witness:/var/lib/lodestar-witness
     # No raw sockets (NET_RAW could send frames past gluetun's firewall). Only
     # what the image needs to hand /data over and drop root
     # (packaging/docker/README.md).
