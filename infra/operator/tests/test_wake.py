@@ -56,6 +56,7 @@ class Gate(unittest.TestCase):
         gh = FakeGitHub()
         wake.main(["refuse"], env=event_env(REFUSAL_REASON="missing field"), deps={"channel_transport": gh})
         wake.main(["refuse"], env=event_env(REFUSAL_REASON="rm -rf /"), deps={"channel_transport": gh})
+        wake.main(["refuse"], env=event_env(REFUSAL_REASON="not an operator instruction"), deps={"channel_transport": gh})
         self.assertEqual(gh.bodies(), ["`operator-wake.yml`: instruction refused (missing field)"])
 
 
@@ -80,6 +81,21 @@ class Ledger(unittest.TestCase):
         for sessions, mode, reason in cases:
             with self.subTest(reason=reason, mode=mode):
                 self.assertEqual(wake.ledger_refusal(sessions, T0, mode, "ping-1"), reason)
+
+    def test_a_ledger_without_the_last_session_refuses(self):
+        # If archived sessions were missing from the list, every total would be too low.
+        self.assertEqual(wake.ledger_refusal([session()], T0, "routine", "x", "sesn_last"),
+                         "the spend ledger is missing the last session")
+        self.assertIsNone(wake.ledger_refusal([dict(session(), id="sesn_last")], T0, "routine", "x", "sesn_last"))
+
+    def test_when_refuses_a_time_without_a_zone(self):
+        with self.assertRaises(ValueError):
+            wake._when("2026-11-11T09:00:00")
+        self.assertEqual(wake._when("2026-11-11T09:00:00.5Z").utcoffset(), timedelta(0))
+
+    def test_naive_timestamps_refuse(self):
+        self.assertEqual(wake.ledger_refusal([dict(session(), created_at="2026-11-11T09:00:00")], T0, "routine", "x"),
+                         "the spend ledger is unreadable")
 
     def test_limits_are_exact(self):
         self.assertIsNone(wake.ledger_refusal([session("0", T0 - timedelta(minutes=5))] * 5, T0, "routine", "x"))
@@ -124,9 +140,33 @@ class Watch(unittest.TestCase):
     def test_thirty_minutes_interrupts(self):
         got, api = self.run_watch([{"status": "running"}])
         self.assertEqual(got, "the session ran past 30 minutes and was stopped")
-        self.assertEqual(api.calls[-1][2], {"events": [{"type": "user.interrupt"}]})
+        posts = [b for m, p, b in api.calls if m == "POST"]
+        self.assertEqual(posts, [{"events": [{"type": "user.interrupt"}]}])
         polls = sum(1 for m, p, _ in api.calls if m == "GET")
-        self.assertEqual(polls, wake.SESSION_MINUTES * 60 // wake.POLL_SECONDS)
+        after = wake.INTERRUPT_SECONDS // wake.POLL_SECONDS  # it waits for the stop before the archive
+        self.assertEqual(polls, wake.SESSION_MINUTES * 60 // wake.POLL_SECONDS + after)
+
+    def test_interrupt_waits_until_the_session_stops(self):
+        api, mono = FakeAnthropic(states=[{"status": "running"}, {"status": "running"}, {"status": "idle"}]), Mono()
+        wake._interrupt(api, "sesn_1", mono, mono.sleep)
+        self.assertEqual(sum(1 for m, _, _ in api.calls if m == "GET"), 3)
+
+    def test_a_disabled_workflow_stops_a_live_session(self):
+        api, mono = FakeAnthropic(states=[{"status": "running"}, {"status": "idle"}]), Mono()
+        flips = iter([False, True])
+        got = wake.watch(api, "sesn_1", mono, mono.sleep, lambda: next(flips))
+        self.assertEqual(got, "operator-wake.yml was disabled, so the session was stopped")
+        self.assertIn({"events": [{"type": "user.interrupt"}]}, [b for m, p, b in api.calls if m == "POST"])
+
+    def test_wake_disabled_reads_the_state_and_fails_open_only_on_errors(self):
+        env = event_env()
+        for state, want in (("active", False), ("disabled_manually", True), (None, False)):
+            with self.subTest(state=state):
+                self.assertEqual(wake.wake_disabled(env, lambda m, p, b: {"state": state})(), want)
+
+        def boom(m, p, b):
+            raise RuntimeError("down")
+        self.assertFalse(wake.wake_disabled(env, boom)())
 
 
 def wake_env(**over):
@@ -238,6 +278,58 @@ class Wake(unittest.TestCase):
         self.assertIn("the bridge failed (TokenRefused)", self.post.bodies()[0])
         self.assertNotIn(LOCK_KEY, self.store.objects)
         self.assert_clean(out + "".join(self.post.bodies()), marks)
+
+    def test_a_failed_archive_still_revokes_resets_and_releases(self):
+        env, _ = wake_env()
+
+        class Api(FakeAnthropic):
+            def __call__(self, method, path, body):
+                if path.endswith("/archive"):
+                    self.calls.append((method, path, body))
+                    raise RuntimeError("archive refused")
+                return super().__call__(method, path, body)
+        api = Api()
+        self.go(env, api)
+        self.assertIn(("DELETE", "/installation/token", None, "ghs_LEAKMARKTOKEN"), self.gh.calls)
+        creds = [b["auth"]["secret_value"] for m, p, b in api.calls if p.endswith("/credentials/cred_C")]
+        self.assertEqual(creds[-1], "revoked")
+        self.assertNotIn(LOCK_KEY, self.store.objects)
+        self.assertTrue(any("couldn't archive the session" in b for b in self.post.bodies()))
+
+    def test_stale_sessions_are_archived_before_a_new_token(self):
+        env, _ = wake_env()
+        stale = dict(session(run_id="7-1"), id="sesn_STALE", archived_at=None)
+        done = dict(session(run_id="6-1"), id="sesn_DONE", archived_at="2026-11-11T09:00:00Z")
+        other = dict(session(), id="sesn_OTHER", archived_at=None)  # not the bridge's
+        api = FakeAnthropic(sessions=[stale, done, other])
+        self.go(env, api)
+        posts = api.paths("POST")
+        self.assertIn("/v1/sessions/sesn_STALE/archive", posts)
+        self.assertNotIn("/v1/sessions/sesn_DONE/archive", posts)
+        self.assertNotIn("/v1/sessions/sesn_OTHER/archive", posts)
+        self.assertLess(posts.index("/v1/sessions/sesn_STALE/archive"), posts.index("/v1/vaults/vlt_V/credentials/cred_C"))
+
+    def test_the_session_is_recorded_for_the_next_ledger(self):
+        env, _ = wake_env()
+        self.go(env, FakeAnthropic())
+        self.assertEqual(json.loads(self.store.objects[CLAUDE_LOCK_KEY][0])["last_session_id"], "sesn_FAKE")
+        # The next wake refuses if the list doesn't show it.
+        self.post.calls.clear()
+        api = FakeAnthropic(sessions=[session()])
+        self.go(wake_env(COMMENT_BODY=INSTRUCTION.replace("ping-1", "ping-2"))[0], api)
+        self.assertNotIn("/v1/sessions", api.paths("POST"))
+        self.assertIn("missing the last session", self.post.bodies()[0])
+
+    def test_a_failure_before_the_lock_is_answered(self):
+        env, _ = wake_env()
+
+        class Broken(MemoryStore):
+            def put_if_absent(self, key, body):
+                raise RuntimeError("S3 lock request failed")
+        self.store = Broken()
+        rc, _ = self.go(env, FakeAnthropic())
+        self.assertIsInstance(rc, Exception)
+        self.assertIn("the bridge failed before the lock (RuntimeError)", self.post.bodies()[0])
 
     def test_gated_events_touch_nothing(self):
         for over in ({"AUTHOR_ID": "9"}, {"OPERATOR_STOP": "true"}, {"GITHUB_RUN_ATTEMPT": "2"},

@@ -35,6 +35,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Callable
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "fleet"))
@@ -53,6 +54,7 @@ PER_HOUR, PER_DAY = 6, 60
 SESSION_MINUTES = 30
 POLL_SECONDS = 10
 STALL_POLLS = 6  # a requires_action with nothing left to deny, a minute long
+INTERRUPT_SECONDS = 60  # after an interrupt, the wait for the session to stop before the archive
 TRIAGE_EFFORT = "high"  # an override replaces the model object, effort included
 UNSET_TOKEN = "revoked"
 DENY = ("This call needs approval, which the bridge never gives. Don't retry or work around it: "
@@ -118,7 +120,9 @@ def cmd_gate(env) -> int:
     return 0
 
 
-REFUSE_REASONS = set(message.REASONS) | {"OPERATOR_STOP is set"}
+# Every fixed reason but "not an operator instruction": an ordinary runner
+# comment on the channel PR gets no answer.
+REFUSE_REASONS = (set(message.REASONS) - {"not an operator instruction"}) | {"OPERATOR_STOP is set"}
 
 
 def _channel(env, transport=None):
@@ -171,8 +175,15 @@ def _when(s: str) -> datetime:
     return t
 
 
-def ledger_refusal(sessions: list[dict], now: datetime, mode: str, inst_id: str) -> str | None:
-    """The reason this wake can't start, or None. Fails closed on any doubt."""
+def ledger_refusal(sessions: list[dict], now: datetime, mode: str, inst_id: str,
+                   last_session: str | None = None) -> str | None:
+    """The reason this wake can't start, or None. Fails closed on any doubt.
+
+    `last_session` is the previous wake's session (claude-lock.json): it's
+    archived by now, so a list without it means archived sessions are missing
+    and every total below would be too low."""
+    if last_session and last_session not in {s.get("id") for s in sessions}:
+        return "the spend ledger is missing the last session"
     total, hour, day = 0, 0, 0
     for s in sessions:
         cost = ((s.get("usage") or {}).get("list_cost") or {})
@@ -233,18 +244,38 @@ def _deny_pending(call, sid: str, denied: set) -> int:
     return len(ask)
 
 
-def watch(call, sid: str, monotonic=time.monotonic, sleep=time.sleep) -> str:
-    """'done', or the escalation line for a session that couldn't escalate itself."""
+def _interrupt(call, sid: str, monotonic, sleep) -> None:
+    """Interrupt, then wait (at most a minute) until the session isn't running,
+    so the archive that follows is accepted."""
+    try:
+        call("POST", f"/v1/sessions/{sid}/events", {"events": [{"type": "user.interrupt"}]})
+    except Exception:  # noqa: BLE001 - the archive is retried by hand if it's refused
+        return
+    end = monotonic() + INTERRUPT_SECONDS
+    while monotonic() < end:
+        try:
+            if (call("GET", f"/v1/sessions/{sid}", None) or {}).get("status") in ("idle", "terminated"):
+                return
+        except Exception:  # noqa: BLE001
+            return
+        sleep(POLL_SECONDS)
+
+
+def watch(call, sid: str, monotonic=time.monotonic, sleep=time.sleep, stopped=lambda: False) -> str:
+    """'done', or the escalation line for a session that couldn't escalate itself.
+
+    `stopped()` is true once operator-wake.yml is disabled (the tripwire, or the
+    owner's kill switch): the live session is interrupted at the next poll."""
     deadline = monotonic() + SESSION_MINUTES * 60
     denied: set = set()
     stalled = 0
     while True:
         if monotonic() >= deadline:
-            try:
-                call("POST", f"/v1/sessions/{sid}/events", {"events": [{"type": "user.interrupt"}]})
-            except Exception:  # noqa: BLE001 - the archive below stops it either way
-                pass
+            _interrupt(call, sid, monotonic, sleep)
             return f"the session ran past {SESSION_MINUTES} minutes and was stopped"
+        if stopped():
+            _interrupt(call, sid, monotonic, sleep)
+            return "operator-wake.yml was disabled, so the session was stopped"
         s = call("GET", f"/v1/sessions/{sid}", None) or {}
         status, stop = s.get("status"), ((s.get("stop_reason") or {}).get("type"))
         if status == "terminated":
@@ -266,6 +297,27 @@ def watch(call, sid: str, monotonic=time.monotonic, sleep=time.sleep) -> str:
         sleep(POLL_SECONDS)
 
 
+def wake_disabled(env, transport) -> Callable[[], bool]:
+    """Reads operator-wake.yml's state with the job's token (actions: read). A
+    failed read never stops a session: only a state other than `active` does."""
+    path = f"/repos/{env.get('GITHUB_REPOSITORY', '')}/actions/workflows/operator-wake.yml"
+
+    def check() -> bool:
+        try:
+            state = (transport("GET", path, None) or {}).get("state")
+        except Exception:  # noqa: BLE001
+            return False
+        return isinstance(state, str) and state != "active"
+    return check
+
+
+def stale_sessions(sessions: list[dict]) -> list[str]:
+    """Bridge sessions an earlier wake never archived (a cancelled or lost job):
+    still attached to the vault, so they're archived before a new token goes in."""
+    return [s["id"] for s in sessions if isinstance(s.get("id"), str) and not s.get("archived_at")
+            and (s.get("metadata") or {}).get("run_id")]
+
+
 def cmd_wake(env, deps=None) -> int:
     deps = deps or {}
     try:
@@ -273,26 +325,39 @@ def cmd_wake(env, deps=None) -> int:
     except (Gated, message.Refused, Refusal):
         print("operator-wake: not for the bridge")  # gate already answered it
         return 0
-    bridge.require(env, WAKE_SETTINGS)
-    run_id = f"{env['GITHUB_RUN_ID']}-{env['GITHUB_RUN_ATTEMPT']}"
     gh_post = deps.get("channel_transport")
     now = deps.get("clock", lambda: datetime.now(timezone.utc))
-    store = deps.get("store")
-    if store is None:  # pragma: no cover - live only
-        store = bridge.connect_store(env, run_id)
-    call = deps.get("anthropic") or anthropic(env["ANTHROPIC_API_KEY"])
-    gh = deps.get("github") or github()
-    lock = OperatorLock(store, now)
-    if not lock.acquire(run_id):
+    mono, sleep = deps.get("monotonic", time.monotonic), deps.get("sleep", time.sleep)
+    try:  # nothing is held yet; a failure here still gets an answer
+        bridge.require(env, WAKE_SETTINGS)
+        run_id = f"{env['GITHUB_RUN_ID']}-{env['GITHUB_RUN_ATTEMPT']}"
+        store = deps.get("store")
+        if store is None:  # pragma: no cover - live only
+            store = bridge.connect_store(env, run_id)
+        call = deps.get("anthropic") or anthropic(env["ANTHROPIC_API_KEY"])
+        gh = deps.get("github") or github()
+        lock = OperatorLock(store, now)
+        acquired = lock.acquire(run_id)
+    except (Exception, Refusal) as e:
+        escalate(env, msg.id, f"the bridge failed before the lock ({type(e).__name__}); no session runs", gh_post)
+        raise
+    if not acquired:
         post(env, f"busy, retry (instruction {msg.id})", gh_post)
         return 0
+    if gh_post is None:  # pragma: no cover - network
+        from comments import urllib_transport  # noqa: PLC0415
+        gh_post = urllib_transport(env["GITHUB_TOKEN"])
     token = cred = sid = None
     try:
-        ids, _ = bridge.read_claude_lock(store)
+        ids, etag = bridge.read_claude_lock(store)
         if ids is None:
             escalate(env, msg.id, "the agent isn't applied yet (run operator-apply.yml)", gh_post)
             return 0
-        reason = ledger_refusal(pages(call, "/v1/sessions", {"include_archived": "true"}), now(), msg.mode, msg.id)
+        sessions = pages(call, "/v1/sessions", {"include_archived": "true"})
+        for old in stale_sessions(sessions):
+            call("POST", f"/v1/sessions/{old}/archive", {})
+            escalate(env, msg.id, "an earlier wake left a session unarchived; it is archived now", gh_post)
+        reason = ledger_refusal(sessions, now(), msg.mode, msg.id, ids.get("last_session_id"))
         if reason:
             escalate(env, msg.id, f"no session started: {reason}", gh_post)
             return 0
@@ -306,13 +371,15 @@ def cmd_wake(env, deps=None) -> int:
         if not isinstance(sid, str) or not sid:
             raise Refusal("the API returned no session")
         print(f"operator-wake: session started ({msg.mode})")
-        outcome = watch(call, sid, deps.get("monotonic", time.monotonic), deps.get("sleep", time.sleep))
+        if not bridge.record_session(store, ids, etag, sid):
+            escalate(env, msg.id, "couldn't record the session in claude-lock.json; the next wake will refuse", gh_post)
+        outcome = watch(call, sid, mono, sleep, wake_disabled(env, gh_post))
         print(f"operator-wake: session {'ended' if outcome == 'done' else 'stopped'}")
         if outcome != "done":
             escalate(env, msg.id, outcome, gh_post)
         return 0
     except (Exception, Refusal) as e:
-        escalate(env, msg.id, f"the bridge failed ({type(e).__name__}); no session runs", gh_post)
+        escalate(env, msg.id, f"the bridge failed ({type(e).__name__}); the session, if any, is archived", gh_post)
         raise
     finally:
         _cleanup(env, call, gh, sid, token, cred, lock, run_id, msg.id, gh_post)

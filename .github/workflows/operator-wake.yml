@@ -90,6 +90,7 @@ jobs:
       contents: read
       pull-requests: write
       id-token: write # assumes LodestarOperatorBridge by OIDC, in-process
+      actions: read # stops a live session once operator-wake.yml is disabled
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

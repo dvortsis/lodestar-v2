@@ -70,7 +70,7 @@ class Workflows(unittest.TestCase):
         want = {
             ("operator-wake.yml", "gate"): {"contents": "read"},
             ("operator-wake.yml", "refuse"): {"contents": "read", "pull-requests": "write"},
-            ("operator-wake.yml", "wake"): {"contents": "read", "pull-requests": "write", "id-token": "write"},
+            ("operator-wake.yml", "wake"): {"contents": "read", "pull-requests": "write", "id-token": "write", "actions": "read"},
             ("operator-wake.yml", "sweep"): {"contents": "read", "issues": "read", "pull-requests": "write", "actions": "write"},
             ("operator-apply.yml", "apply"): {"contents": "read", "id-token": "write"},
             ("operator-tripwire.yml", "trip"): {"contents": "read", "pull-requests": "write", "actions": "write"},

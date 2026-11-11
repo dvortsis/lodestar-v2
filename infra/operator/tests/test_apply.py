@@ -42,6 +42,20 @@ class Render(unittest.TestCase):
         text = "".join(p.read_text() for p in bridge.AGENT_DIR.iterdir())
         self.assertNotRegex(text, r"claude-(opus|sonnet|haiku|fable|mythos)")
 
+    def test_an_unfilled_placeholder_refuses(self):
+        real = bridge.AGENT_DIR
+        import shutil
+        import tempfile
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        shutil.copytree(real, d, dirs_exist_ok=True)
+        p = __import__("pathlib").Path(d) / "system-prompt.md"
+        p.write_text(p.read_text() + "{{OWNER_EMAIL}}")
+        bridge.AGENT_DIR = __import__("pathlib").Path(d)
+        self.addCleanup(setattr, bridge, "AGENT_DIR", real)
+        with self.assertRaises(bridge.Refusal):
+            bridge.render(env())
+
     def test_bad_values_refuse(self):
         for over in ({"OPERATOR_MODEL_ROUTINE": "gpt"}, {"OPERATOR_MODEL_ROUTINE": "claude-x\"}"},
                      {"CHANNEL_PR": "7 0"}, {"RUNNER_USER_ID": ""}, {"OPERATOR_BOT_USER_ID": "abc"}):
@@ -88,6 +102,18 @@ class Apply(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.run_apply(store, api)
         self.assertEqual(api.calls, [])
+
+    def test_a_lock_written_meanwhile_refuses(self):
+        class Racing(MemoryStore):
+            def put_if_absent(self, key, body):
+                if key == CLAUDE_LOCK_KEY:
+                    return False  # someone else wrote it first
+                return super().put_if_absent(key, body)
+        store = Racing()
+        with self.assertRaises(SystemExit) as cm:
+            self.run_apply(store, FakeAnthropic())
+        self.assertIn("changed during apply", str(cm.exception))
+        self.assertNotIn(CLAUDE_LOCK_KEY, store.objects)
 
     def test_malformed_claude_lock_refuses(self):
         store, api = MemoryStore(), FakeAnthropic()

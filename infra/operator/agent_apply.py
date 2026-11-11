@@ -67,6 +67,8 @@ def apply(env, call, store) -> dict:
         raise Refusal("the API returned no agent version")
     new = {"agent_id": agent_id, "agent_version": version, "environment_id": env_id,
            "vault_id": vault_id, "credential_id": cred_id}
+    if lock and lock.get("last_session_id"):
+        new["last_session_id"] = lock["last_session_id"]  # keeps the wake's ledger cross-check
     body = json.dumps(new, indent=1).encode()
     ok = store.put_if_absent(CLAUDE_LOCK_KEY, body) if etag is None else store.put_if_match(CLAUDE_LOCK_KEY, body, etag)
     if not ok:

@@ -32,11 +32,35 @@ def _label(method: str, path: str) -> str:
     return method + " /" + "/".join(path.split("?")[0].strip("/").split("/")[:2])
 
 
-def _send(url: str, method: str, path: str, body, headers: dict) -> object:  # pragma: no cover - network
+HOSTS = (ANTHROPIC, "https://api.github.com")
+TIMEOUT = 30
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect is an error: a credential never follows one to another URL."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, "redirect refused", headers, fp)
+
+
+def opener():
+    return urllib.request.build_opener(NoRedirect)
+
+
+def check_url(url: str, path: str) -> None:
+    """Only the two fixed HTTPS hosts, and a path that can't change the host."""
+    if not path.startswith("/") or path.startswith("//") or "@" in path.split("?")[0] or "\\" in path:
+        raise ApiError("bad path", None)
+    if url not in tuple(h + path for h in HOSTS):
+        raise ApiError("host not allowed", None)
+
+
+def _send(url: str, method: str, path: str, body, headers: dict, open_=None) -> object:
+    check_url(url, path)
     req = urllib.request.Request(url, method=method, headers=headers,
                                  data=json.dumps(body).encode() if body is not None else None)
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with (open_ or opener().open)(req, timeout=TIMEOUT) as r:
             raw = r.read()
     except urllib.error.HTTPError as e:
         raise ApiError(_label(method, path), e.code) from None

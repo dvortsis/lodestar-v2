@@ -56,7 +56,7 @@ class Mint(unittest.TestCase):
     def test_a_wider_token_is_revoked_and_refused(self):
         for kw in ({"perms": {"pull_requests": "write", "metadata": "read", "contents": "write"}},
                    {"perms": {"pull_requests": "write", "metadata": "read", "issues": "write"}},
-                   {"repos": ["o/r", "o/other"]}, {"repos": []}):
+                   {"repos": ["o/r", "o/other"]}, {"repos": []}, {"selection": "all"}):
             with self.subTest(**{k: str(v) for k, v in kw.items()}):
                 gh = FakeGitHub(**kw)
                 with self.assertRaises(ghapp.TokenRefused):

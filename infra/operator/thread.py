@@ -6,8 +6,9 @@
 `read` pages through the channel PR's comments and keeps only what the reader
 helper (infra/fleet/reader.py, fetched beside this file) trusts: unedited,
 from the runner, the operator App's bot or the control plane. `post` refuses
-anything but an `operator-report v1` or a one-line `/fleet` command, and only
-to the channel PR. GITHUB_TOKEN is the vault's placeholder; the platform
+anything but an `operator-report v1` or a one-line `/fleet` command; the PR
+number is the agent's to pass (the system prompt names the channel PR, and the
+tripwire catches a comment anywhere else). GITHUB_TOKEN is the vault's placeholder; the platform
 substitutes it at egress, header only.
 """
 

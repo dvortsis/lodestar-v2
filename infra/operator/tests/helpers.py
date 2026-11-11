@@ -49,8 +49,8 @@ def event_env(body=INSTRUCTION, **over) -> dict:
 class FakeGitHub:
     """Comment posts, the App installation and token calls, and list endpoints."""
 
-    def __init__(self, token="ghs_TESTTOKEN", perms=None, repos=None, lists=None):
-        self.calls, self.token = [], token
+    def __init__(self, token="ghs_TESTTOKEN", perms=None, repos=None, lists=None, selection="selected"):
+        self.calls, self.token, self.selection = [], token, selection
         self.perms = {"pull_requests": "write", "metadata": "read"} if perms is None else perms
         self.repos = ["o/r"] if repos is None else repos
         self.lists = lists or {}
@@ -60,12 +60,12 @@ class FakeGitHub:
         if path.endswith("/installation"):
             return {"id": 77}
         if path.endswith("/access_tokens"):
-            return {"token": self.token, "permissions": self.perms, "repository_selection": "selected",
+            return {"token": self.token, "permissions": self.perms, "repository_selection": self.selection,
                     "repositories": [{"full_name": r} for r in self.repos]}
         if method == "GET":
             for prefix, items in self.lists.items():
                 if path.startswith(prefix):
-                    return items if "page=1" in path or "page=" not in path else []
+                    return items if path.endswith("&page=1") or "&page=" not in path else []
             return []
         return None
 

@@ -108,3 +108,41 @@ class Sweep(unittest.TestCase):
         gh = self.sweep(events=[{"actor": {"id": BOT}, "event": "renamed", "created_at": old, "issue": {"number": 3}}],
                         pulls=[{"user": {"id": BOT}, "number": 12, "updated_at": old}])
         self.assertEqual(gh.bodies(), [])
+
+
+class Paging(unittest.TestCase):
+    def test_pages_until_the_lookback_then_stops(self):
+        recent, old = ISO(timedelta(minutes=5)), ISO(timedelta(minutes=tripwire.LOOKBACK_MINUTES + 5))
+        page1 = [{"actor": {"id": 1}, "event": "labeled", "created_at": recent, "issue": {"number": 3}}] * 100
+        page2 = [{"actor": {"id": BOT}, "event": "renamed", "created_at": recent, "issue": {"number": 4}}] + \
+                [{"actor": {"id": 1}, "event": "labeled", "created_at": old, "issue": {"number": 3}}] * 99
+        seen = []
+
+        def gh(method, path, body):
+            seen.append(path)
+            if path.startswith("/repos/o/r/issues/events"):
+                return page1 if path.endswith("&page=1") else page2 if path.endswith("&page=2") else []
+            return [] if method == "GET" else None
+        with redirect_stdout(io.StringIO()):
+            findings, disable = tripwire.sweep(env(), gh, NOW)
+        self.assertTrue(disable)  # the bot's event sat on page 2
+        self.assertEqual(sum(p.startswith("/repos/o/r/issues/events") for p in seen), 2)
+
+    def test_a_list_past_the_page_limit_is_a_finding(self):
+        recent = ISO(timedelta(minutes=5))
+        full = [{"actor": {"id": 1}, "event": "labeled", "created_at": recent, "issue": {"number": 3}}] * 100
+        gh = FakeGitHub()
+        gh_full = lambda m, p, b: (gh.calls.append((m, p, b, None)) or (full if p.startswith("/repos/o/r/issues/events") else []))  # noqa: E731
+        run(["sweep"], env(), gh_full)
+        self.assertIn("the sweep is incomplete: events ran past 10 pages", gh.bodies()[0])
+
+
+class Disable(unittest.TestCase):
+    def test_a_failed_disable_fails_the_job(self):
+        def gh(method, path, body):
+            if method == "PUT":
+                raise RuntimeError("403")
+            return None
+        with self.assertRaises(SystemExit) as cm:
+            run(["trip"], env(), gh)
+        self.assertEqual(cm.exception.code, 1)

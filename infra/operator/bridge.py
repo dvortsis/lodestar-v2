@@ -86,9 +86,23 @@ def read_claude_lock(store) -> tuple[dict | None, str | None]:
             and isinstance(d.get("agent_version"), int) and not isinstance(d.get("agent_version"), bool)
     except ValueError:
         ok = False
-    if not ok:
+    last = d.get("last_session_id") if ok else None
+    if not ok or (last is not None and not (isinstance(last, str) and last)):
         raise Refusal("claude-lock.json is malformed; fix it by hand")
-    return {k: d[k] for k in LOCK_FIELDS}, cur[1]
+    out = {k: d[k] for k in LOCK_FIELDS}
+    if last:
+        out["last_session_id"] = last
+    return out, cur[1]
+
+
+def record_session(store, ids: dict, etag: str, sid: str) -> bool:
+    """The wake's session into claude-lock.json (If-Match), for the next
+    wake's ledger cross-check. False if the write didn't land."""
+    body = json.dumps(dict(ids, last_session_id=sid), indent=1).encode()
+    try:
+        return bool(store.put_if_match(CLAUDE_LOCK_KEY, body, etag))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def render(env: Mapping[str, str]) -> tuple[dict, dict, dict]:

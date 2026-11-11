@@ -27,9 +27,11 @@ sys.path.insert(0, str(HERE.parent / "fleet"))
 
 import message  # noqa: E402
 
-LOOKBACK_MINUTES = 70  # the hourly sweep, with room for a late run
+# Two hourly runs: a delayed or dropped scheduled run still leaves the next one
+# covering its window. Overlaps repeat an escalation; they never hide one.
+LOOKBACK_MINUTES = 130
 WAKE_WORKFLOW = "operator-wake.yml"
-MAX_PAGES = 5
+MAX_PAGES = 10
 
 
 def _digits(v) -> str | None:
@@ -90,6 +92,10 @@ def cmd_trip(env, transport) -> int:
     return 0
 
 
+class Incomplete(Exception):
+    """A list ran past MAX_PAGES before the lookback: a finding, never a silent pass."""
+
+
 def _list(transport, path: str, stop_before: datetime | None = None, key: str = "updated_at") -> list[dict]:
     out = []
     sep = "&" if "?" in path else "?"
@@ -98,8 +104,8 @@ def _list(transport, path: str, stop_before: datetime | None = None, key: str = 
         items = [i for i in items if isinstance(i, dict)]
         out += items
         if len(items) < 100 or (stop_before and items and (_when(items[-1].get(key)) or stop_before) < stop_before):
-            break
-    return out
+            return out
+    raise Incomplete(path.split("?")[0].rsplit("/", 1)[-1])
 
 
 def sweep(env, transport, now: datetime) -> tuple[list[str], bool]:
@@ -153,7 +159,11 @@ def sweep(env, transport, now: datetime) -> tuple[list[str], bool]:
 
 
 def cmd_sweep(env, transport, now) -> int:
-    findings, disable = sweep(env, transport, now)
+    try:
+        findings, disable = sweep(env, transport, now)
+    except Incomplete as e:
+        what = str(e) if str(e).replace("_", "").isalpha() else "a list"
+        findings, disable = [f"the sweep is incomplete: {what} ran past {MAX_PAGES} pages; check by hand"], False
     if findings:
         act(env, transport, findings, disable)
     else:
