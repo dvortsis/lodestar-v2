@@ -7546,7 +7546,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-11T15:38:57Z",
+    "updated": "2026-11-11T16:12Z",
     "items": [
       {
         "slot": 1,
@@ -7599,11 +7599,12 @@
       },
       {
         "slot": 7,
-        "slice": "PK-cli",
+        "slice": "PK-ui",
         "role": "build",
         "agent": "claude",
-        "doing": "#696 fix round at cc8f82a9 self-checked OK; merge on green (session_01MMjhnBmKGR4mYZNGi1joQV)",
-        "since": "2026-11-11T13:14:59Z"
+        "doing": "launched Sonnet UI helper (session_01MMjhnC9y2v1HnPMiwDgCUR)",
+        "since": "2026-11-11T16:11Z",
+        "status": "active"
       },
       {
         "slot": 8,
