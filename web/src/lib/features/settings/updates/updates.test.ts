@@ -544,6 +544,31 @@ describe('the Updates screen', () => {
 		expect((await screen.findByTestId('updates-notice-brand_new_code')).textContent).toContain(
 			'no explanation'
 		);
+		expect((await screen.findByTestId('updates-notices')).textContent).not.toContain(
+			'brand_new_code'
+		);
+	});
+
+	it.each([
+		['install_kind_unknown', "couldn't tell how it was installed"],
+		['data_folder_unchecked', "couldn't check its data folder"],
+		['brand_new_reason', "This installation can't update itself."]
+	])('words the capability reason %s and never shows the code', async (reason, words) => {
+		status.capability = { can_install: false, reason };
+		render(UpdatesScreen);
+		const t = (await screen.findByTestId('updates-cannot-auto')).textContent ?? '';
+		expect(t).toContain(words);
+		expect(t).not.toContain(reason);
+	});
+
+	it('words the install_failed notice and never shows its code', async () => {
+		status.notices = ['install_failed'];
+		render(UpdatesScreen);
+		const banner = await screen.findByTestId('updates-notices');
+		await until(() => expect(screen.getByTestId('updates-notice-install_failed')).toBeTruthy());
+		expect(banner.textContent).toContain("The last update didn't install");
+		expect(banner.textContent).toContain('still on the old version');
+		expect(banner.textContent).not.toContain('install_failed');
 	});
 
 	describe('Roll back', () => {

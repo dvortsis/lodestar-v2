@@ -87,9 +87,11 @@
 		image_mode: m.settings_updates_cannot_image_mode,
 		trust_damaged: m.settings_updates_cannot_trust_damaged,
 		channel_unavailable: m.settings_updates_cannot_channel_unavailable,
-		not_built_yet: m.settings_updates_cannot_not_built_yet
+		not_built_yet: m.settings_updates_cannot_not_built_yet,
+		install_kind_unknown: m.settings_updates_cannot_install_kind_unknown,
+		data_folder_unchecked: m.settings_updates_cannot_data_folder_unchecked
 	};
-	const cause = (r: string) => causes[r]?.() ?? m.settings_updates_cannot_other({ reason: r });
+	const cause = (r: string) => causes[r]?.() ?? m.settings_updates_cannot_other();
 
 	const notice: Record<string, [() => string, () => string]> = {
 		revoked_key: [
@@ -131,6 +133,10 @@
 		manifest_lapsed: [
 			m.settings_updates_notice_manifest_lapsed,
 			m.settings_updates_notice_manifest_lapsed_body
+		],
+		install_failed: [
+			m.settings_updates_notice_install_failed,
+			m.settings_updates_notice_install_failed_body
 		],
 		channel_unavailable: [
 			m.settings_updates_notice_channel_unavailable,
@@ -426,7 +432,7 @@
 				{#each noticesOf(status) as code (code)}
 					<Banner
 						kind="warning"
-						title={notice[code]?.[0]() ?? m.settings_updates_notice_unknown({ code })}
+						title={notice[code]?.[0]() ?? m.settings_updates_notice_unknown()}
 						action={code === 'revoked_key' && canInstall ? revokedInstall : undefined}
 					>
 						<span data-testid="updates-notice-{code}"
