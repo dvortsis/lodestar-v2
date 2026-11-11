@@ -362,6 +362,10 @@ placement:
   - X-win-refusal-ux
   - X-win-upd-bounds
   - X-win-upd-1920
+  - X-win-upd-reoffer
+  - X-win-upd-window
+  - X-smoke-polish
+  - X-unraid-validate-all
   - X-prowlarr-settings
   - X-restart-required-creds
   - X-prowlarr-register
@@ -384,6 +388,7 @@ placement:
   - X-flake-filter-trails
   - X-soak-screen-calibrate
   - X-collect-checklist-docker
+  - X-collect-checklist-launch-2
   - X-cloud-infra
   - X-cloud-infra-2
   - P-cloud-test-plan
@@ -560,6 +565,10 @@ placement:
   - CMP-*
   - X-cmp-egress-prelaunch
   - X-cmp-native-handover
+  - X-cmp-handover-followups
+  - X-cmp-egress-api
+  - X-cmp-egress-ui
+  - D-companions-guide
   - X-cmp0-polish
   - X-cmp4b-mounts
   - X-macos-pidfile-fifo
@@ -654,6 +663,7 @@ expanded:
 - E-v08
 - E-M8
 state_override:
+  X-soak-screen-polish: done
   WK-10: done
   G-v051: done
   R-rc3-cut: done
