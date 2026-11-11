@@ -4275,7 +4275,8 @@
       "at": "2026-11-11T04:11Z",
       "slice": "OP-3b",
       "flag": "start-block accepts the pinned Legal Notice version on test VMs on the owner's behalf (refuses on mismatch); collector image python:3.12.12-alpine3.22 pinned by digest",
-      "send": "on merge"
+      "send": "on merge",
+      "sent": "2026-11-11T06:43Z"
     },
     {
       "at": "2026-11-11T04:11Z",
@@ -4293,7 +4294,8 @@
       "at": "2026-11-11T05:08Z",
       "slice": "OP-3b",
       "flag": "collector reaches Docker only through a pinned HAProxy allow-list rendered per block with the exact lodestar container/image IDs (inspect, image inspect, HEAD archive, one-shot stats, stop); real socket mounted only into the proxy",
-      "send": "on merge"
+      "send": "on merge",
+      "sent": "2026-11-11T06:43Z"
     }
   ],
   "decisions_log": [
@@ -7569,7 +7571,7 @@
     }
   ],
   "heartbeat": "2026-11-11T04:06Z",
-  "updated": "2026-11-11T06:42Z",
+  "updated": "2026-11-11T06:43Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
