@@ -110,7 +110,7 @@ def _list(transport, path: str, stop_before: datetime | None = None, key: str = 
 
 def sweep(env, transport, now: datetime) -> tuple[list[str], bool]:
     repo, bot = env["GITHUB_REPOSITORY"], _digits(env.get("OPERATOR_BOT_USER_ID"))
-    if not bot:
+    if not bot:  # defence in depth: cmd_sweep escalates on this first; keep it for direct callers
         raise SystemExit("tripwire: OPERATOR_BOT_USER_ID isn't set")
     channel = _digits(env.get("CHANNEL_PR"))
     since = now - timedelta(minutes=LOOKBACK_MINUTES)
@@ -159,6 +159,10 @@ def sweep(env, transport, now: datetime) -> tuple[list[str], bool]:
 
 
 def cmd_sweep(env, transport, now) -> int:
+    if not _digits(env.get("OPERATOR_BOT_USER_ID")):
+        # Nothing can be attributed without the bot's ID: say so (best effort), then fail the job.
+        act(env, transport, ["OPERATOR_BOT_USER_ID isn't set; nothing was checked this run"], False)
+        raise SystemExit("tripwire: OPERATOR_BOT_USER_ID isn't set")
     try:
         findings, disable = sweep(env, transport, now)
     except Incomplete as e:
