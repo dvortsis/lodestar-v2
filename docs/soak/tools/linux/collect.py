@@ -1420,6 +1420,21 @@ def check_docker_checklist(kind, checklist):
                              f"pass {item}=excluded with --next-run {item}=<UTC time of its next run>.")
 
 
+def check_checklist_complete(kind, checklist):
+    """Rule 6.5, as the analyzer's host_checklist reads it, in both modes: every item
+    is stated, and an excluded one carries its next run. Refused at launch so a run
+    can't start and fail review hours later."""
+    for item in CHECKLIST_ITEMS:
+        entry = checklist.get(item)
+        if entry is None:
+            fix = f"{item}=excluded with --next-run {item}=<UTC time of its next run>"
+            if kind != "docker":
+                fix += f", or {item}=not_applicable"
+            raise SystemExit(f"--checklist is missing {item}: pass {fix}.")
+        if entry["state"] == "excluded" and not entry.get("next_run_utc"):
+            raise SystemExit(f"--checklist {item}=excluded needs --next-run {item}=<UTC time of its next run>.")
+
+
 def note_command(argv, now=utc_now, clock=time.monotonic, boot_id_path="/proc/sys/kernel/random/boot_id"):
     """`collect.py note`: a host-activity entry (rule 6.11), stamped with UTC and
     the collector's own elapsed_seconds, appended to the run's private log."""
@@ -1581,6 +1596,7 @@ class Collector:
             raise SystemExit("--spec-commit must name the commit whose CR-SPEC governs this run (rule 7.2).")
         self.checklist = parse_checklist(a.checklist, a.next_run)
         check_docker_checklist(self.instance.kind, self.checklist)
+        check_checklist_complete(self.instance.kind, self.checklist)
         if not (read_text("/proc/sys/kernel/random/boot_id") or "").strip():
             raise SystemExit("Cannot read the boot ID; host-activity notes couldn't be placed (rule 6.11).")
 
