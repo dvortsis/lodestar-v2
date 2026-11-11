@@ -553,6 +553,17 @@ async fn refusals_are_typed_and_change_nothing() {
         w.manager(cat, windows).offer(&qbt()),
         refused(Refusal::GuidedOnly)
     );
+    // The shipped catalogue's Windows installer awaits its pin, and is
+    // still guided, never `awaiting_pin` (#705's review, I3).
+    let shipped = lodestar_companions::builtin().unwrap();
+    assert_eq!(
+        w.manager(shipped, windows).offer(&qbt()),
+        refused(Refusal::GuidedOnly)
+    );
+    assert_eq!(
+        w.manager(shipped, windows).install(&token("5.0.3")).await,
+        refused(Refusal::GuidedOnly)
+    );
     let m = w.manager(cat, LINUX);
     assert_eq!(m.install(&wrong).await, refused(Refusal::Confirmation));
     let mut other_version = token("5.0.3");
@@ -2153,6 +2164,16 @@ async fn a_release_past_its_deadline_is_waited_for_and_keeps_its_marker() {
     tokio::time::timeout(WAIT, pending).await.unwrap().unwrap();
     assert!(!w.api.release_dropped.load(Ordering::SeqCst));
     assert!(marker.is_file(), "a late release kept no marker");
+    // Logged once, at the bound, not again when it finally answers
+    // (#692's review, N1).
+    let n = lines
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| timed_out(l))
+        .count();
+    assert_eq!(n, seen + 1);
     // The next start releases what's left, and the marker goes.
     w.api.hold_release.store(false, Ordering::SeqCst);
     drop(m);
@@ -2160,6 +2181,90 @@ async fn a_release_past_its_deadline_is_waited_for_and_keeps_its_marker() {
     m.recover().await;
     m.release_pending().await;
     assert!(!marker.exists());
+}
+
+/// Lines the capture holds that match `f`.
+fn count(lines: &Capture, f: impl Fn(&String) -> bool) -> usize {
+    lines.0.lock().unwrap().iter().filter(|l| f(l)).count()
+}
+
+/// Waits, with a deadline, until `f` matches more lines than `seen`.
+async fn logged_past(lines: &Capture, seen: usize, f: impl Fn(&String) -> bool) {
+    let got = tokio::time::timeout(WAIT, async {
+        while count(lines, &f) == seen {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert!(got.is_ok(), "nothing was logged");
+}
+
+/// #692's review, N1: an undone first install whose release passes its
+/// deadline is logged once, at the bound (`release`, `timed_out`), and not
+/// again as `rollback_failed`.
+#[tokio::test]
+async fn an_undo_whose_release_passes_its_deadline_is_logged_once() {
+    let _g = SERIAL.lock().await;
+    let lines = capture();
+    let w = World::new();
+    let m = Arc::new(w.manager(catalogue("5.0.3"), LINUX));
+    m.set_live_deadline(std::time::Duration::from_millis(200));
+    // The hand-over is tried and refused, so the undo releases it, slowly.
+    w.api.refuse_hand_over.store(true, Ordering::SeqCst);
+    w.api.hold_release.store(true, Ordering::SeqCst);
+    let at_bound = |l: &String| {
+        l.contains("companions.install_failed") && l.contains("release") && l.contains("timed_out")
+    };
+    let rollback =
+        |l: &String| l.contains("companions.install_failed") && l.contains("rollback_failed");
+    let (seen, seen_rb) = (count(lines, at_bound), count(lines, rollback));
+    let install = tokio::spawn({
+        let m = m.clone();
+        async move { m.install(&token("5.0.3")).await }
+    });
+    logged_past(lines, seen, at_bound).await;
+    w.api.release_gate.notify_one();
+    let got = tokio::time::timeout(WAIT, install).await.unwrap().unwrap();
+    assert!(got.is_err(), "{got:?}");
+    assert_eq!(count(lines, at_bound), seen + 1);
+    assert_eq!(count(lines, rollback), seen_rb);
+}
+
+/// #692's review, N1: a restart whose hand-over passes its bound is logged
+/// once, at the bound (`handover`, `timed_out`), and not again under the
+/// restart's own step.
+#[tokio::test]
+async fn a_restart_whose_hand_over_passes_its_bound_is_logged_once() {
+    let _g = SERIAL.lock().await;
+    let lines = capture();
+    let w = World::new();
+    let m = Arc::new(w.manager(catalogue("5.0.3"), LINUX));
+    m.install(&token("5.0.3")).await.unwrap();
+    m.set_live_deadline(std::time::Duration::from_millis(200));
+    w.api.hang_hand_over.store(true, Ordering::SeqCst);
+    let at_bound = |l: &String| {
+        l.contains("companions.install_failed") && l.contains("handover") && l.contains("timed_out")
+    };
+    let as_restart = |l: &String| {
+        l.contains("companions.install_failed") && l.contains("restart") && l.contains("timed_out")
+    };
+    let (seen, seen_restart) = (count(lines, at_bound), count(lines, as_restart));
+    let restart = tokio::spawn({
+        let m = m.clone();
+        async move { m.restart(&qbt()).await.unwrap().finished().await }
+    });
+    logged_past(lines, seen, at_bound).await;
+    w.api.hand_over_gate.notify_one();
+    let got = tokio::time::timeout(WAIT, restart).await.unwrap().unwrap();
+    assert_eq!(
+        got,
+        Err(ManagerError::Step {
+            step: "handover",
+            code: "timed_out"
+        })
+    );
+    assert_eq!(count(lines, at_bound), seen + 1);
+    assert_eq!(count(lines, as_restart), seen_restart);
 }
 
 /// A companion this build doesn't hand over writes no marker: nothing it

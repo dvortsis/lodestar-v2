@@ -75,6 +75,9 @@ pub const SINK_REFUSED: &str = "sink_refused";
 /// gluetun has none, and FlareSolverr is CMP-12's (Q21).
 pub fn configurator(id: &CompanionId) -> Option<Box<dyn Configure>> {
     match id.as_str() {
+        // CMP-11b: on Windows, CMP-8b's adapter behind the pinned-version
+        // gate (owner cq4).
+        qbittorrent::ID if cfg!(windows) => crate::windows_qbittorrent::configurator(id),
         qbittorrent::ID => Some(Box::new(qbittorrent::QBittorrent::new(id.clone()))),
         prowlarr::ID => Some(Box::new(prowlarr::Prowlarr::new(id.clone()))),
         _ => None,
