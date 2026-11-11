@@ -465,6 +465,9 @@ describe('the Updates screen', () => {
 		expect(text).toContain('failed its health check');
 		expect(text).not.toContain("didn't install");
 		expect(text).not.toContain('selftest');
+		// Never asks for the build that failed again.
+		expect(text).toContain('Wait for a newer version');
+		expect(text).not.toMatch(/try again|reinstall/i);
 	});
 
 	it('shows the saved security choice when the status can’t load', async () => {

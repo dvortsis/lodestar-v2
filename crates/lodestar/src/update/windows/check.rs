@@ -40,8 +40,8 @@ use lodestar_api::dto::events::{Event, UpdatesEvent, UpdatesState};
 use lodestar_api::events::EventHub;
 use lodestar_api::ops::BoxFuture;
 use lodestar_api::updates::{
-    Blocked, Capability, CheckState, CheckStatus, InstallWhen, Policy, ReleaseInfo, RollbackInfo,
-    Running, UpdatesApi, UpdatesError, UpdatesStatus,
+    Blocked, Capability, CheckState, CheckStatus, HistoryEntry, InstallWhen, Policy, ReleaseInfo,
+    RollbackInfo, Running, UpdatesApi, UpdatesError, UpdatesStatus,
 };
 use lodestar_log::log_event;
 use lodestar_update::doc::{Artifact, ArtifactKind, Release, Target};
@@ -50,12 +50,13 @@ use lodestar_update::{Checked, Embedded, Notice};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
+use super::history;
 use crate::settings::updates::{Level, Mode, Updates};
 use crate::update::check::{self, CheckError, Fetch};
 use crate::update::layout::{Bin, Lock, Step};
 use crate::update::log_events::{
-    UPDATE_AVAILABLE, UPDATE_CHECK_FAILED, UPDATE_INSTALL_FAILED, UPDATE_STATE_UNREADABLE,
-    UPDATE_STATE_UNSAVED,
+    UPDATE_AVAILABLE, UPDATE_CHECK_FAILED, UPDATE_HISTORY_UNREADABLE, UPDATE_INSTALL_FAILED,
+    UPDATE_STATE_UNREADABLE, UPDATE_STATE_UNSAVED,
 };
 use crate::update::policy::{self, Block, Reason};
 use crate::update::trust_file;
@@ -233,8 +234,8 @@ pub fn offered(release: &Release, target: Option<Target>, kind: InstallKind) -> 
 }
 
 /// `updater.json`: the fields the Unix engine writes, so either reads the
-/// other's. `queued` and `rolled_back_seen` are kept as found and never
-/// set here.
+/// other's. `queued` is kept as found and never set here;
+/// `rolled_back_seen` is set as on Unix, once a rollback is announced.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Updater {
@@ -606,6 +607,10 @@ impl Notifier {
         let watcher = AbortOnDrop(watcher);
         tokio::spawn(async move {
             let mut watcher = watcher;
+            {
+                let n = n.clone();
+                blocking(move || n.announce_start()).await;
+            }
             let checks = async {
                 loop {
                     let wait = n.until_scheduled();
@@ -729,6 +734,104 @@ impl Notifier {
             self.inner.settings.borrow().mode != Mode::Off,
             self.updater().checked_at,
         )
+    }
+
+    /// At start: the update helper's last answer into the history, once
+    /// (`history::record` skips one recorded before), then `rolled_back`
+    /// published once for a rollback the history records that wasn't
+    /// announced yet, as the Unix engine does.
+    fn announce_start(&self) {
+        let Some(bin) = self.bin() else {
+            return;
+        };
+        // Damaged: logged once here, not at every status; it shows as
+        // empty, and the next entry starts it again.
+        if let Err(e) = history::read(&bin) {
+            log_event!(
+                UPDATE_HISTORY_UNREADABLE,
+                error = lodestar_log::Error::io(&e)
+            );
+        }
+        let ctx = &self.inner.ctx;
+        if let Some(answer) = super::msi::answer(&ctx.data_dir) {
+            let now = u64::try_from((self.inner.clock)()).unwrap_or(0);
+            if let Some(entry) = history::entry_for(&answer, &ctx.running, now) {
+                // With `clear_history`, one writer at a time.
+                let _state = lock(&self.inner.state);
+                if let Err(e) = history::record(&bin, entry, &*self.inner.fault) {
+                    // Looked at again at the next start.
+                    log_event!(
+                        UPDATE_STATE_UNSAVED,
+                        file = history::FILE,
+                        error = lodestar_log::Error::io(&e)
+                    );
+                }
+            }
+        }
+        let Some(last) = history::read(&bin)
+            .unwrap_or_default()
+            .entries
+            .pop()
+            .filter(|l| l.result == history::Outcome::RolledBack)
+        else {
+            return;
+        };
+        {
+            let mut state = lock(&self.inner.state);
+            if state
+                .durable
+                .rolled_back_seen
+                .is_some_and(|seen| last.at <= seen)
+            {
+                return;
+            }
+            // Best effort: unsaved, it's announced again at the next start.
+            if !state.unreadable {
+                let mut u = state.durable.clone();
+                u.format = 1;
+                u.rolled_back_seen = Some(last.at);
+                if self.write(Some(&bin), UPDATER_FILE, &u).is_ok() {
+                    state.durable = u;
+                }
+            }
+        }
+        self.publish(UpdatesState::RolledBack, Some(last.version), None);
+    }
+
+    /// The history, newest last, as `/updates` shows it.
+    fn history(bin: Option<&Bin>) -> Vec<HistoryEntry> {
+        bin.and_then(|b| history::read(b).ok())
+            .unwrap_or_default()
+            .entries
+            .into_iter()
+            .map(|e| HistoryEntry {
+                version: e.version,
+                from: e.from,
+                level: e.level,
+                at: i64::try_from(e.at).unwrap_or(i64::MAX),
+                result: e.result.code().into(),
+                reason: e.reason,
+                lost_torrents: e.lost_torrents,
+            })
+            .collect()
+    }
+
+    /// `DELETE /updates/history`: as on Unix, acknowledged only once the
+    /// file is gone durably.
+    pub fn clear_history(&self) -> Result<UpdatesStatus, UpdatesError> {
+        if let Some(bin) = self.bin() {
+            let _state = lock(&self.inner.state);
+            bin.remove_acknowledged(history::FILE, &*self.inner.fault)
+                .map_err(|e| {
+                    log_event!(
+                        UPDATE_STATE_UNSAVED,
+                        file = history::FILE,
+                        error = lodestar_log::Error::io(&e)
+                    );
+                    UpdatesError::NotSaved
+                })?;
+        }
+        Ok(self.status())
     }
 
     fn publish(&self, state: UpdatesState, version: Option<String>, error: Option<String>) {
@@ -1037,6 +1140,10 @@ impl Notifier {
                 "install_failed".into()
             });
         }
+        let history = Notifier::history(bin.as_ref());
+        if history.last().is_some_and(|h| h.result == "rolled_back") {
+            notices.push("rolled_back".into());
+        }
         notices.sort();
         notices.dedup();
         let releases = found
@@ -1103,7 +1210,7 @@ impl Notifier {
                 restores_store: None,
             },
             notices,
-            history: vec![],
+            history,
         }
     }
 
@@ -1514,10 +1621,9 @@ impl UpdatesApi for Notifier {
         Box::pin(blocking(move || n.pause(days)))
     }
 
-    /// There's no install history on Windows yet: nothing to clear.
     fn clear_history(&self) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
         let n = self.clone();
-        Box::pin(async move { Ok(blocking(move || n.status()).await) })
+        Box::pin(blocking(move || n.clear_history()))
     }
 
     fn rollback(&self) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
@@ -2278,6 +2384,159 @@ mod tests {
                 "{states:?}"
             );
         }
+    }
+
+    /// The update helper's answer, as it writes `result.json`.
+    fn answered(e: &Env, outcome: &str, version: &str, at: i64) {
+        let updates = e.dir.path().join(super::super::msi::UPDATES);
+        std::fs::create_dir_all(&updates).unwrap();
+        let a = json!({"format": 1, "id": "ab".repeat(16), "version": version,
+            "outcome": outcome, "at": at});
+        std::fs::write(updates.join(super::super::msi::RESULT), a.to_string()).unwrap();
+    }
+
+    /// The next start: this notifier gone (its lock with it), a new one.
+    fn restart(e: &mut Env) {
+        e.n = None;
+        e.n = Some(e.open(InstallKind::Msi));
+    }
+
+    fn history_of(e: &Env) -> Vec<(String, String, Option<String>)> {
+        e.status()["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| {
+                (
+                    h["version"].as_str().unwrap().to_string(),
+                    h["result"].as_str().unwrap().to_string(),
+                    h["reason"].as_str().map(String::from),
+                )
+            })
+            .collect()
+    }
+
+    /// Each answer that ends an install becomes exactly one entry, and a
+    /// second look (the next start) adds none; any other answer, none.
+    #[tokio::test]
+    async fn a_finished_answer_becomes_one_history_entry() {
+        for (outcome, result, reason) in [
+            ("installed", "installed", None),
+            ("install_failed", "failed", Some("install_failed")),
+            ("rolled_back", "rolled_back", Some("selftest")),
+            ("rollback_halted", "failed", Some("rollback_halted")),
+            ("install_interrupted", "failed", Some("install_interrupted")),
+        ] {
+            let mut e = Env::new(Mode::Notify, InstallKind::Msi);
+            answered(&e, outcome, "0.5.4", NOW - 10);
+            e.n().announce_start();
+            restart(&mut e);
+            e.n().announce_start();
+            assert_eq!(
+                history_of(&e),
+                [("0.5.4".into(), result.into(), reason.map(String::from))],
+                "{outcome}"
+            );
+        }
+        for outcome in [
+            "install_blocked",
+            "installer_busy",
+            "rollback_pending",
+            "refused",
+        ] {
+            let e = Env::new(Mode::Notify, InstallKind::Msi);
+            answered(&e, outcome, "0.5.4", NOW - 10);
+            e.n().announce_start();
+            assert!(history_of(&e).is_empty(), "{outcome}");
+            assert!(!e.bin_file(history::FILE).exists());
+        }
+    }
+
+    /// A rollback is announced once: the history says so, and
+    /// `rolled_back_seen` keeps it from being announced at the next start.
+    /// Its notice stays while it's the newest entry.
+    #[tokio::test]
+    async fn rolled_back_is_published_once() {
+        let mut e = Env::new(Mode::Notify, InstallKind::Msi);
+        answered(&e, "rolled_back", "0.5.4", NOW - 10);
+        let rolled_back = |e: &Env| {
+            e.states()
+                .iter()
+                .filter(|(s, _)| *s == UpdatesState::RolledBack)
+                .count()
+        };
+        e.n().announce_start();
+        assert_eq!(rolled_back(&e), 1);
+        assert_eq!(
+            e.states().last().unwrap(),
+            &(UpdatesState::RolledBack, Some("0.5.4".into()))
+        );
+        restart(&mut e);
+        e.n().announce_start();
+        assert_eq!(rolled_back(&e), 1);
+        assert!(Env::notices(&e.status()).contains(&"rolled_back"));
+        // A later rollback is new: announced too.
+        answered(&e, "rolled_back", "0.5.5", NOW - 5);
+        restart(&mut e);
+        e.n().announce_start();
+        assert_eq!(rolled_back(&e), 2);
+        // Installed since: not the newest any more, so no notice.
+        answered(&e, "installed", "0.5.6", NOW - 1);
+        restart(&mut e);
+        e.n().announce_start();
+        assert!(!Env::notices(&e.status()).contains(&"rolled_back"));
+        assert_eq!(rolled_back(&e), 2);
+    }
+
+    /// A damaged history shows as empty, is logged at the start, and the
+    /// next answer starts it again.
+    #[tokio::test]
+    async fn a_damaged_history_shows_empty_and_is_logged() {
+        crate::test_log::install();
+        let e = Env::new(Mode::Notify, InstallKind::Msi);
+        std::fs::create_dir_all(e.bin_file("").parent().unwrap()).unwrap();
+        std::fs::write(e.bin_file(history::FILE), b"{\"entries\": [damaged").unwrap();
+        assert!(history_of(&e).is_empty());
+        answered(&e, "installed", "0.5.4", NOW - 10);
+        e.n().announce_start();
+        assert!(crate::test_log::text().contains("update.history_unreadable"));
+        assert_eq!(history_of(&e).len(), 1);
+    }
+
+    /// The service's start records the answer through `spawn`.
+    #[tokio::test]
+    async fn the_start_records_the_last_answer() {
+        let e = Env::new(Mode::Off, InstallKind::Msi);
+        answered(&e, "installed", "0.5.4", NOW - 10);
+        let (stop, stopped) = watch::channel(false);
+        let task = e.n().spawn(stopped);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while history_of(&e).is_empty() {
+            assert!(Instant::now() < deadline, "the start recorded nothing");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        stop.send(true).unwrap();
+        task.await.unwrap();
+    }
+
+    /// Clear history removes the file, acknowledged; a failed removal is
+    /// `not_saved` and keeps it.
+    #[tokio::test]
+    async fn clear_history_is_acknowledged() {
+        let mut e = Env::new(Mode::Notify, InstallKind::Msi);
+        answered(&e, "installed", "0.5.4", NOW - 10);
+        e.n().announce_start();
+        *lock(&e.fail) = Some(Step::Rename);
+        assert!(matches!(e.n().clear_history(), Err(UpdatesError::NotSaved)));
+        assert_eq!(history_of(&e).len(), 1);
+        *lock(&e.fail) = None;
+        assert!(e.n().clear_history().unwrap().history.is_empty());
+        assert!(!e.bin_file(history::FILE).exists());
+        // The answer is still the helper's last, but it was recorded: the
+        // next start doesn't bring it back.
+        restart(&mut e);
+        e.n().announce_start();
+        assert!(history_of(&e).is_empty());
     }
 
     /// The same files as the Unix engine, both ways.

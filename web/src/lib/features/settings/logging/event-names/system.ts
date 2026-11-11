@@ -324,6 +324,10 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_update_state_unreadable_n,
 		m.settings_logging_ev_update_state_unreadable_h
 	],
+	'update.history_unreadable': [
+		m.settings_logging_ev_update_history_unreadable_n,
+		m.settings_logging_ev_update_history_unreadable_h
+	],
 	'update.dir_sync_unsupported': [
 		m.settings_logging_ev_update_dir_sync_unsupported_n,
 		m.settings_logging_ev_update_dir_sync_unsupported_h
