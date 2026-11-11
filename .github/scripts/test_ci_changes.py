@@ -66,6 +66,21 @@ class UpdateManifest(unittest.TestCase):
             self.assertFalse(ci_changes.UPDATE_MANIFEST.match(f), f)
 
 
+class CompanionPins(unittest.TestCase):
+    def test_the_tool_and_what_its_tests_read_apply(self):
+        for f in ["tools/companion-pins/pin.py", "tools/companion-pins/keys/README.md", ".github/workflows/companion-pins.yml",
+                  "crates/companions/data/catalogue.json", "crates/companions/src/catalogue.rs",
+                  "crates/lodestar/src/update/check.rs"]:
+            self.assertTrue(ci_changes.COMPANION_PINS.match(f), f)
+
+    def test_near_misses_dont(self):
+        for f in ["tools/companion-pinsX/pin.py", "tools/companion-pins", ".github/workflows/companion-pins.yml.bak",
+                  "crates/companions/data/catalogue.json.orig", "crates/companions/src/catalogue.rs.bak",
+                  "crates/companions/src/manager.rs", "crates/lodestar/src/update/download.rs",
+                  "docs/decisions/2026-11-11-CMP-13.md"]:
+            self.assertFalse(ci_changes.COMPANION_PINS.match(f), f)
+
+
 class EndToEnd(unittest.TestCase):
     def test_docs_only_pr_reports_web_and_e2e_false(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -95,6 +110,7 @@ class EndToEnd(unittest.TestCase):
             self.assertEqual(kv["rust"], "false")
             self.assertEqual(kv["infra"], "false")
             self.assertEqual(kv["update_manifest"], "false")
+            self.assertEqual(kv["companion_pins"], "false")
 
     def test_crash_exits_nonzero(self):
         # A bad base must fail the script (the workflow step then fails, not an empty output).
@@ -111,6 +127,7 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("mmap_retention=true", out)
         self.assertIn("infra=true", out)
         self.assertIn("update_manifest=true", out)
+        self.assertIn("companion_pins=true", out)
 
 
 if __name__ == "__main__":
