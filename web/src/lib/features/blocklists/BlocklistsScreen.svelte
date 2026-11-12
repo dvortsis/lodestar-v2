@@ -101,7 +101,9 @@
 <p class="text-muted-text">{m.blocklists_purpose()}</p>
 
 {#if problem}
-	<div role="alert" data-testid="blocklists-problem"><Banner kind="error">{problem}</Banner></div>
+	<div role="alert" data-testid="blocklists-problem">
+		<Banner kind="error" live={false}>{problem}</Banner>
+	</div>
 {/if}
 
 {#if data}
