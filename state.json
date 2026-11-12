@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T23:02Z",
+  "updated_at": "2026-11-12T23:12Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7677,6 +7677,21 @@
       "id": "gs2-size-call",
       "note": "\u00a72.19 flag to the owner: GS-2 at 50k, as specified (group_key + 4x4 MinHash) = 545.6 B/torrent, over the 512 budget. Runner chose Q10 (a): group_minhash 2x3 (~20 B), group_key left at generation 0 (no SCHEMA_VERSION bump, store budget unchanged); GS-3 settles group_key. The headroom left goes to RX-1 and ENR-11.",
       "added": "2026-11-12T23:02Z"
+    },
+    {
+      "id": "watch-stall-retry",
+      "note": "X-watch-stall-retry (Opus, small): watch.rs holds a Malformed verdict one more poll before failed/; stalled SMB/NFS copy >10s test. Rung 5, before UP-2 and X-watch-env. From the codebase-review session via P-master-plan-r4.",
+      "added": "2026-11-12T23:12Z"
+    },
+    {
+      "id": "utp-no-progress",
+      "note": "Fold into X-utp-spurious-rto (after #788): conn.rs on_timeout/on_packet reset timeouts only on ACK progress; test a peer whose packets ack nothing.",
+      "added": "2026-11-12T23:12Z"
+    },
+    {
+      "id": "review-798",
+      "note": "#798 P-master-plan-r4 (82246b02a, docs): fresh Opus review when a slot frees; then steps 2-9 into runner PR; owner points (v0.6 tag conditions vs r4 \u00a72.25; import pilots off Unraid, \u00a72.52) to owner summary.",
+      "added": "2026-11-12T23:12Z"
     }
   ],
   "main_health": [
@@ -8699,7 +8714,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T22:55Z",
+    "updated": "2026-11-12T23:12Z",
     "items": [
       {
         "slot": 1,
@@ -9047,7 +9062,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-12T23:02Z",
+  "updated": "2026-11-12T23:12Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
