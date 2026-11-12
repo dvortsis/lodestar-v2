@@ -307,3 +307,99 @@ fn a_source_that_needs_consent_cant_be_turned_on_and_one_that_doesnt_can() {
     let log = s.stop();
     assert!(!log.contains(PASSWORD), "the password is never logged");
 }
+
+/// Prowlarr / Jackett (X-prowlarr-settings, restored by X-prowlarr-register): registered, off, and kept
+/// off by the gate however it's asked, even with its address and API key
+/// saved. Its settings are saved through the plugin's rules, apply at the
+/// next start, and its key is never echoed or logged.
+#[test]
+fn prowlarr_is_registered_off_and_its_settings_save() {
+    const KEY: &str = "0123456789abcdef0123456789abcdef";
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Server::start(dir.path(), true);
+
+    let p = s.source("prowlarr");
+    assert_eq!(p["consent"], "account", "{p}");
+    assert_eq!(p["enabled"], false, "off by default: {p}");
+    assert_eq!(p["needs"], "credentials", "{p}");
+    assert!(
+        p["editable"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f == "config"),
+        "{p}"
+    );
+    let id = p["id"].as_u64().unwrap();
+
+    // Hostile addresses are refused, naming the rule and never the value.
+    for url in [
+        "http://169.254.169.254/latest",
+        "http://user:hunter2@prowlarr.lan:9696",
+        "http://prowlarr.lan:9696/#hunter2",
+        "file:///hunter2",
+    ] {
+        let r = s.patch(
+            id,
+            &format!(r#"{{"config":{{"url":"{url}","manager":"prowlarr"}}}}"#),
+        );
+        assert_eq!(status(&r), 400, "{url}: {r}");
+        assert!(body(&r).contains("invalid_config"), "{r}");
+        assert!(
+            !body(&r).contains("hunter2") && !body(&r).contains("169.254"),
+            "{r}"
+        );
+    }
+    let r = s.patch(
+        id,
+        &format!(r#"{{"config":{{"url":"http://prowlarr.lan:9696","manager":"prowlarr","api_key":"{KEY}"}}}}"#),
+    );
+    assert_eq!(status(&r), 400, "a key isn't a setting: {r}");
+    assert!(!r.contains(KEY), "{r}");
+
+    let r = s.patch(
+        id,
+        r#"{"config":{"url":"http://prowlarr.lan:9696/","manager":"prowlarr","agents":3}}"#,
+    );
+    assert_eq!(status(&r), 200, "{r}");
+    let r = s.send(
+        "PATCH",
+        &format!("/api/v1/sources/{id}/credentials"),
+        &format!(r#"{{"credentials":{{"api_key":"{KEY}"}}}}"#),
+    );
+    assert_eq!(status(&r), 200, "{r}");
+    assert!(!r.contains(KEY), "{r}");
+    let p = s.source("prowlarr");
+    assert_eq!(
+        p["restart_required"], true,
+        "saved settings apply at the next start: {p}"
+    );
+    assert_eq!(p["credentials"], serde_json::json!(["api_key"]), "{p}");
+    assert!(!p.to_string().contains(KEY), "{p}");
+
+    // The gate keeps it off, whatever is stored.
+    assert_gated(&s.patch(id, r#"{"enabled":true}"#));
+    assert_gated(&s.patch(
+        id,
+        &format!(r#"{{"enabled":true,"password":"{PASSWORD}"}}"#),
+    ));
+    let log = s.stop();
+    assert!(!log.contains(KEY), "the key is never logged");
+    drop(s);
+
+    // At the next start it's built from what was saved, and still off.
+    let mut s = Server::start(dir.path(), false);
+    let p = s.source("prowlarr");
+    assert_eq!(p["enabled"], false, "{p}");
+    assert_ne!(p["health"]["running"], true, "{p}");
+    assert_eq!(p["restart_required"], false, "running what was saved: {p}");
+    assert!(!p.to_string().contains(KEY), "{p}");
+    assert_gated(&s.patch(id, r#"{"enabled":true}"#));
+    let log = s.stop();
+    assert!(!log.contains(KEY), "the key is never logged");
+    let db = std::fs::read(dir.path().join("lodestar.db")).unwrap();
+    assert!(
+        !db.windows(KEY.len()).any(|w| w == KEY.as_bytes()),
+        "the database holds the key sealed only"
+    );
+}
