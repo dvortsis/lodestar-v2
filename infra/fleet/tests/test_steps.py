@@ -400,7 +400,8 @@ case "$1" in
   compose) [ -n "$COMPOSE_FAIL" ] && exit 1; rm -f "$STUB/ifdown"; exit 0 ;;  # a recreated gluetun has its interface back
   inspect)
     case "$*" in
-      *Health*) if [ -e "$STUB/was_blocked" ] && [ -n "$NO_RECOVER" ]; then echo unhealthy; else echo healthy; fi ;;
+      *Health*) if [ -n "$NO_HANDSHAKE$UNHEALTHY" ] || { [ -e "$STUB/was_blocked" ] && [ -n "$NO_RECOVER" ]; }; then
+                  echo unhealthy; else echo healthy; fi ;;
       *Config.Env*) printf 'PATH=/usr/bin\nVPN_INTERFACE=%s\n' "${VPN_IFACE-wg0}" ;;
       *Running*gluetun) echo true ;;
       *Running*lodestar) [ -n "$LODESTAR" ] && echo true || echo false ;;
@@ -452,6 +453,8 @@ case "$1" in
         "sh -c ip -6 -o addr show scope global | grep -q .") [ -n "$NS_V6" ] || exit 1; exit 0 ;;
         "grep"*) [ -n "$DNS_REMOTE" ] && exit 1; exit 0 ;;
         "sh -c echo"*) exit 0 ;;
+        # The VPN interface's received bytes: none until a handshake completes.
+        "cat /sys/class/net/${VPN_IFACE-wg0}/statistics/rx_bytes") [ -n "$NO_HANDSHAKE" ] && echo 0 || echo 4096 ;;
         "ip link set dev "*) [ -n "$IFDOWN_FAILS" ] && exit 2; : > "$STUB/ifdown"; exit 0 ;;
         *) exit 99 ;;
       esac
@@ -702,6 +705,43 @@ class VMScripts(unittest.TestCase):
             self.assertIn(f"fail {n}_ifdown", lines)
         self.assertIn("count captured_packets_ifdown 3", lines)
         self.assertFalse((self.stub / "blocked").exists())
+
+    def test_a_handshake_that_never_completed_is_its_own_failure(self):
+        """An expired PIA key: the kill switch holds, and the report says why the test failed."""
+        rc, lines, raw = self.run_script("leak-test.sh", NO_HANDSHAKE=1)
+        self.assertEqual(rc, 1, raw)
+        self.assertEqual(remote.parse(raw.encode()), raw.splitlines())  # in the grammar
+        fails = [ln for ln in lines if ln.startswith("fail ")]
+        self.assertEqual(fails, ["fail wireguard_handshake_never_completed", "fail leak_test"])  # never read as a leak
+        for n in ("ipv4_through_tunnel", "tcp_literal_up", "dns_up", "tunnel_recovers"):  # can't be judged
+            self.assertIn(f"skip {n}", lines)
+            self.assertNotIn(f"ok {n}", lines)
+        for phase in ("down", "ifdown"):  # the kill-switch phases still ran, and held
+            self.assertIn(f"ok no_egress_captured_{phase}", lines)
+            self.assertIn(f"count captured_packets_{phase} 0", lines)
+        self.assertNotIn("tunnel_healthy", raw)
+        self.assertFalse((self.stub / "blocked").exists())
+
+    def test_a_leak_with_no_handshake_is_still_a_leak(self):
+        rc, lines, _ = self.run_script("leak-test.sh", NO_HANDSHAKE=1, FIREWALL_OFF=1)
+        self.assertEqual(rc, 1)
+        self.assertIn("fail wireguard_handshake_never_completed", lines)
+        self.assertIn("fail no_egress_captured_ifdown", lines)
+        self.assertIn("count captured_packets_ifdown 3", lines)
+        self.assertEqual(lines[-1], "fail leak_test")
+
+    def test_an_unhealthy_tunnel_that_handshook_is_not_a_handshake_failure(self):
+        rc, lines, _ = self.run_script("leak-test.sh", UNHEALTHY=1)
+        self.assertEqual(rc, 1)
+        self.assertIn("fail tunnel_healthy", lines)
+        self.assertNotIn("fail wireguard_handshake_never_completed", lines)
+        self.assertIn("ok ipv4_through_tunnel", lines)  # judged, not skipped
+        self.assertEqual(lines[-1], "fail leak_test")
+        # A counter probe that never ran is never read as "no handshake".
+        self.setUp()
+        rc, lines, _ = self.run_script("leak-test.sh", UNHEALTHY=1, PROBE_NOT_RUN=1)
+        self.assertNotIn("fail wireguard_handshake_never_completed", lines)
+        self.assertEqual(lines[-1], "fail leak_test")
 
     def test_probes_that_never_ran_never_pass(self):
         rc, lines, _ = self.run_script("leak-test.sh", PROBE_NOT_RUN=1)
