@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T18:57:19Z",
+  "updated_at": "2026-11-12T19:06:13Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7368,7 +7368,7 @@
     {
       "id": "X-flake-bitmagnet-quiescent",
       "at": "2026-11-12T16:08:26Z",
-      "note": "lodestar-sources-importers bitmagnet::pg_tests::batches_are_bounded_by_count_and_memory failed on #768 (unrelated, dht-only diff) with Err(NotQuiescent) at pg_tests.rs:297; NotQuiescent maps from Postgres 55P03 (lock_not_available). Likely the PG tests share one database and run in parallel, so another test holds a lock during the quiescence check. Fix: per-test schema/database or serialise the pg tests; no fixed sleeps. One re-run spent on #768."
+      "note": "lodestar-sources-importers bitmagnet::pg_tests::batches_are_bounded_by_count_and_memory failed on #768 (unrelated, dht-only diff) with Err(NotQuiescent) at pg_tests.rs:297; NotQuiescent maps from Postgres 55P03 (lock_not_available). Likely the PG tests share one database and run in parallel, so another test holds a lock during the quiescence check. Fix: per-test schema/database or serialise the pg tests; no fixed sleeps. One re-run spent on #768. | 2026-11-12T19:06:13Z: second hit on #774. Assigned as item 3 of X-test-blockers-1112 (session_01MMjhn9aPNpQpruF2s6sPjH). settle() already flushes the fixture writer's stats; the prime suspect is autovacuum/autoanalyze."
     },
     {
       "id": "X-flake-search-toolbar-skip",
@@ -8454,7 +8454,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T18:57:19Z",
+    "updated": "2026-11-12T19:06:13Z",
     "items": [
       {
         "slot": 1,
@@ -8578,7 +8578,7 @@
         "slice": "X-test-blockers-1112",
         "role": "cloud-testing",
         "agent": "session_01MMjhn9aPNpQpruF2s6sPjH",
-        "doing": "Leak-test 'handshake never completed' outcome + saturated portable-restart flake (briefs/X-test-blockers-1112.md)",
+        "doing": "Leak-test 'handshake never completed' outcome + saturated portable-restart flake (briefs/X-test-blockers-1112.md); + bitmagnet NotQuiescent flake (item 3)",
         "since": "2026-11-12T18:57:19Z",
         "status": "active"
       }
@@ -8641,7 +8641,7 @@
     }
   ],
   "heartbeat": "2026-11-12T18:39:05Z",
-  "updated": "2026-11-12T18:57:19Z",
+  "updated": "2026-11-12T19:06:13Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
