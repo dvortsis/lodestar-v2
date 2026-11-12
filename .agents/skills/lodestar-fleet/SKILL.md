@@ -230,6 +230,11 @@ All of these need `LODESTAR_AWS_ACCOUNT_ID`, `LODESTAR_AWS_AMI_ID`, `LODESTAR_AW
 
 The live test suite `tests\Test-LodestarAutomation.ps1` calls AWS with several profiles, so it is human-run only too. `tests\Test-DeployAwsWindows.ps1` is offline: it runs a copy of the deploy script against a stub AWS CLI (Linux or macOS `pwsh`).
 
+### Bootstrap and smoke test on the instance
+- **Bootstrap order:** install the Visual Studio 2022 Build Tools (the C++ workload) before running `rustup-init`. Don't run native tools under `$ErrorActionPreference = 'Stop'`: rustup-init's warning about installing the MSVC toolchain without its prerequisites goes to stderr, Stop turns it into a terminating error, and the bootstrap fails.
+- **Run `packaging\windows\smoke.ps1` as a real administrator, not as SYSTEM** (for example, not through an SSM Run Command document). SYSTEM is already allowed on the data folder, so the smoke test's admin-entry refusal check fails falsely.
+- **Run `smoke.ps1` with PowerShell 7 (`pwsh`), not Windows PowerShell 5.1.** Under 5.1, `2>&1` on a native command throws while `$ErrorActionPreference` is `Stop`.
+
 ---
 
 ## 6. Safety rules

@@ -12,3 +12,7 @@ Follow-ups to #770 from its security review's optional findings (`runner-state:r
   - Deleting any one mask, or switching back to `-replace`, now fails the test.
   - The test clears every `AWS_*` variable but its own three, and the stub checks that none reached it.
 - **Example account IDs in four test lines on `main` became `111122223333`** (runner-approved, so the repo's only 12-digit numbers are the two placeholders): `test_watchdog.py` (two lines), `test_guard.py` and `test_templates.py`.
+- **Three Windows runbook lines from the test lane (X-test-vm, phase 2; runner-approved).** They are in `SKILL.md` §5, "Bootstrap and smoke test on the instance":
+  - install the VS 2022 Build Tools before `rustup-init`, and don't run native tools under Stop;
+  - run `smoke.ps1` as a real administrator, not SYSTEM;
+  - run it with pwsh 7, not 5.1.
