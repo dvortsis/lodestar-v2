@@ -45,16 +45,22 @@ use crate::writer::WriterStats;
 /// that same lease, and [`insert`](Self::insert) says so
 /// ([`Insert::Out`]), so it's never taken for a new lease.
 ///
-/// An out entry is kept, marked finished ([`done`](Self::done)), for a
-/// short grace ([`FINISHED_GRACE`]) after its result is committed, released
-/// or lost. Tokens are never reissued, so a finished entry still answers
-/// `Out`: the lease coming back after its commit was processed first (the
-/// two travel different paths, for milliseconds) is still known for what
-/// it is. An entry whose result is still out goes once it's older than the
-/// horizon. At most [`MAX_OUT`] entries are kept; past that the one due to
-/// expire first goes. Either way a forgotten lease coming back counts as
-/// new again, as it did before this was tracked. The coordinator's built-in
-/// worker doesn't track out ([`Default`]): its intake never asks.
+/// An out entry is marked finished once its result is committed, released
+/// or lost, and kept: tokens are never reissued, so a finished entry still
+/// answers `Out`. How long it's kept depends on how it finished:
+/// - **committed** ([`committed`](Self::committed)): for
+///   [`FINISHED_GRACE`] only. The commit and the holder's own lease coming
+///   back travel different paths in the runtime, milliseconds apart.
+/// - **released or lost** ([`done`](Self::done)): until the horizon, as
+///   while out. The coordinator keeps the lease until the loss report
+///   lands, which can be minutes away (a session down, then back), and
+///   answers the holder's claims with it meanwhile.
+///
+/// An entry still out goes at the horizon. At most [`MAX_OUT`] entries are
+/// kept, finished ones going first. Either way a forgotten lease coming
+/// back counts as new again, as it did before this was tracked, and a
+/// worker restart forgets them all. The coordinator's built-in worker
+/// doesn't track out ([`Default`]): its intake never asks.
 ///
 /// [`tracking_out`]: Self::tracking_out
 #[derive(Debug, Default)]
@@ -67,12 +73,13 @@ pub struct WorkerLeases {
     gap: GapHook,
 }
 
-/// How long a finished out entry is kept: long enough for the holder's own
+/// How long a committed out entry is kept: long enough for the holder's own
 /// lease to come back after its commit was seen first.
-pub const FINISHED_GRACE: Duration = Duration::from_secs(60);
+pub(crate) const FINISHED_GRACE: Duration = Duration::from_secs(60);
 
-/// Out entries kept at most: the pool's key cap (plan Q5), about 7 MB.
-pub const MAX_OUT: usize = 50_000;
+/// Out entries kept at most: the worker pool's key cap (plan Q5), about
+/// 10 MB at about 190 B an entry.
+pub(crate) const MAX_OUT: usize = 50_000;
 
 #[derive(Debug, Default)]
 struct Leases {
@@ -80,7 +87,9 @@ struct Leases {
     out: HashMap<InfoHash, Out>,
     /// `out`'s entries by when they expire, for the prune.
     expiry: std::collections::BTreeMap<(std::time::Instant, u64), InfoHash>,
-    /// Out entries not finished yet.
+    /// `out`'s finished entries, oldest first, for the cap.
+    finished: std::collections::BTreeMap<u64, InfoHash>,
+    /// Out entries kept and not finished yet.
     pending: usize,
     next_seq: u64,
 }
@@ -97,42 +106,73 @@ struct Out {
 impl Leases {
     fn remove_out(&mut self, key: &InfoHash) -> Option<Out> {
         let o = self.out.remove(key)?;
-        self.expiry.remove(&(o.expires, o.seq));
-        if !o.finished {
-            self.pending -= 1;
-        }
+        self.unindex(&o);
         Some(o)
     }
 
-    /// Drops what has expired, and the earliest-expiring past the cap.
+    fn unindex(&mut self, o: &Out) {
+        self.expiry.remove(&(o.expires, o.seq));
+        if o.finished {
+            self.finished.remove(&o.seq);
+        } else {
+            self.pending -= 1;
+        }
+    }
+
+    /// Drops what has expired, then, past the cap, finished entries oldest
+    /// first, then the entry due to expire first.
     fn prune(&mut self, now: std::time::Instant) {
-        while let Some((&(at, _), &key)) = self.expiry.first_key_value() {
-            if at > now && self.out.len() <= MAX_OUT {
+        while let Some((&(at, _), _)) = self.expiry.first_key_value() {
+            if at > now {
                 break;
             }
+            let ((_, seq), key) = self.expiry.pop_first().expect("a first entry");
+            self.drop_indexed(key, seq);
+        }
+        while self.out.len() > MAX_OUT {
+            let key = match self.finished.first_key_value() {
+                Some((_, &key)) => key,
+                None => *self.expiry.first_key_value().expect("indexed").1,
+            };
             self.remove_out(&key);
         }
+        debug_assert_eq!(self.out.len(), self.expiry.len());
         // A peak's capacity isn't kept for ever.
         if self.out.capacity() > 1024 && self.out.capacity() > 4 * self.out.len() {
             self.out.shrink_to(2 * self.out.len());
         }
     }
 
+    /// The index entry `seq` for `key` is gone: drops `key`'s entry if
+    /// it's that one (it always is, but progress mustn't rest on that).
+    fn drop_indexed(&mut self, key: InfoHash, seq: u64) {
+        if self.out.get(&key).is_some_and(|o| o.seq == seq) {
+            let o = self.out.remove(&key).expect("present");
+            if o.finished {
+                self.finished.remove(&o.seq);
+            } else {
+                self.pending -= 1;
+            }
+        }
+    }
+
     fn track(&mut self, key: InfoHash, token: Token, expires: std::time::Instant, finished: bool) {
         let seq = self.next_seq;
         self.next_seq += 1;
-        if !finished {
+        let o = Out {
+            token,
+            expires,
+            seq,
+            finished,
+        };
+        if let Some(old) = self.out.insert(key, o) {
+            self.unindex(&old);
+        }
+        if finished {
+            self.finished.insert(seq, key);
+        } else {
             self.pending += 1;
         }
-        self.out.insert(
-            key,
-            Out {
-                token,
-                expires,
-                seq,
-                finished,
-            },
-        );
         self.expiry.insert((expires, seq), key);
     }
 }
@@ -149,10 +189,14 @@ pub enum Insert {
     Out,
 }
 
+/// A test's probe, run at the move out with the lock held.
+#[cfg(test)]
+type Probe = Box<dyn Fn(&Mutex<Leases>) + Send>;
+
 /// Runs a test's probe at the move out, while the lock is held (tests).
 #[cfg(test)]
 #[derive(Default)]
-struct GapHook(Mutex<Option<Box<dyn Fn(&Mutex<Leases>) + Send>>>);
+struct GapHook(Mutex<Option<Probe>>);
 
 #[cfg(test)]
 impl std::fmt::Debug for GapHook {
@@ -214,26 +258,37 @@ impl WorkerLeases {
             probe(&self.inner);
         }
         if let Some(horizon) = self.horizon {
-            l.remove_out(key);
-            l.track(*key, token, now + horizon, false);
+            l.track(*key, token, later(now, horizon), false);
+            l.prune(now);
         }
         Some(token)
     }
 
-    /// The result under `token` was committed, released or lost: its entry
-    /// stays, finished, for [`FINISHED_GRACE`].
+    /// The result under `token` was released or lost: its entry stays,
+    /// finished, until the horizon (the coordinator keeps the lease until
+    /// the loss report lands).
     pub fn done(&self, key: &InfoHash, token: Token) {
-        self.done_at(key, token, std::time::Instant::now());
+        self.finish(key, token, None);
     }
 
-    fn done_at(&self, key: &InfoHash, token: Token, now: std::time::Instant) {
+    /// The result under `token` was committed: its entry stays, finished,
+    /// for [`FINISHED_GRACE`].
+    pub fn committed(&self, key: &InfoHash, token: Token) {
+        self.committed_at(key, token, std::time::Instant::now());
+    }
+
+    fn committed_at(&self, key: &InfoHash, token: Token, now: std::time::Instant) {
+        self.finish(key, token, Some(later(now, FINISHED_GRACE)));
+    }
+
+    fn finish(&self, key: &InfoHash, token: Token, until: Option<std::time::Instant>) {
         let mut l = self.lock();
         let Some(o) = l.out.get(key).copied() else {
             return;
         };
         if o.token == token && !o.finished {
-            l.remove_out(key);
-            l.track(*key, token, o.expires.min(now + FINISHED_GRACE), true);
+            let expires = until.map_or(o.expires, |u| o.expires.min(u));
+            l.track(*key, token, expires, true);
         }
     }
 
@@ -246,15 +301,24 @@ impl WorkerLeases {
         self.len() == 0
     }
 
-    /// Results out whose commit, release or loss hasn't been seen yet.
+    /// Out entries kept whose result's commit, release or loss hasn't been
+    /// seen (one past the horizon or the cap is no longer kept, so no
+    /// longer counted).
     pub fn pending_len(&self) -> usize {
         self.lock().pending
     }
 
-    /// Out entries kept, finished or not (tests and metrics).
-    pub fn out_len(&self) -> usize {
+    /// Out entries kept, finished or not.
+    #[cfg(test)]
+    pub(crate) fn out_len(&self) -> usize {
         self.lock().out.len()
     }
+}
+
+/// `now + by`, or far in the future rather than a panic under the lock.
+fn later(now: std::time::Instant, by: Duration) -> std::time::Instant {
+    now.checked_add(by)
+        .unwrap_or_else(|| now + Duration::from_secs(100 * 365 * 24 * 3600))
 }
 
 /// The pool's funnel on a worker: progress stages count directly, the
@@ -646,15 +710,15 @@ mod tests {
         assert_eq!((l.out_len(), l.pending_len()), (0, 0));
     }
 
-    /// Finished, an entry is kept for the grace only, from its finish.
+    /// Committed, an entry is kept for the grace only, from its commit.
     #[test]
-    fn finished_entries_go_after_the_grace() {
+    fn committed_entries_go_after_the_grace() {
         let l = tracking();
         let t0 = std::time::Instant::now();
         l.insert_at(K, Token(7), t0);
         l.send_out_at(&K, t0);
         let t1 = t0 + Duration::from_secs(5);
-        l.done_at(&K, Token(7), t1);
+        l.committed_at(&K, Token(7), t1);
         let k2 = InfoHash([2; 20]);
         let just_before = t1 + FINISHED_GRACE - Duration::from_millis(1);
         assert_eq!(l.insert_at(k2, Token(1), just_before), Insert::New);
@@ -662,11 +726,11 @@ mod tests {
         // Expired at its expiry instant.
         assert_eq!(l.insert_at(K, Token(7), t1 + FINISHED_GRACE), Insert::New);
         assert_eq!(l.out_len(), 0);
-        // An entry finished and sent out again keeps its new expiry.
+        // An entry committed and sent out again keeps its new expiry.
         let l = tracking();
         l.insert_at(K, Token(7), t0);
         l.send_out_at(&K, t0);
-        l.done_at(&K, Token(7), t0);
+        l.committed_at(&K, Token(7), t0);
         l.insert_at(K, Token(8), t0);
         l.send_out_at(&K, t0);
         assert_eq!((l.out_len(), l.pending_len()), (1, 1));
@@ -674,8 +738,24 @@ mod tests {
         assert_eq!(l.insert_at(K, Token(8), past_grace), Insert::Out);
     }
 
-    /// Past the cap, the entry due to expire first goes, and the map
-    /// gives back a peak's capacity.
+    /// Released or lost, an entry is kept until the horizon: the
+    /// coordinator holds the lease until the loss report lands, and may
+    /// answer the holder's claims with it meanwhile.
+    #[test]
+    fn a_lost_entry_is_kept_until_the_horizon() {
+        let l = tracking();
+        let t0 = std::time::Instant::now();
+        l.insert_at(K, Token(7), t0);
+        l.send_out_at(&K, t0);
+        l.done(&K, Token(7));
+        assert_eq!(l.pending_len(), 0);
+        let well_past_grace = t0 + FINISHED_GRACE + Duration::from_secs(1);
+        assert_eq!(l.insert_at(K, Token(7), well_past_grace), Insert::Out);
+        assert_eq!(l.insert_at(K, Token(7), t0 + H), Insert::New);
+    }
+
+    /// Past the cap, finished entries go first, then the entry due to
+    /// expire first; and the map gives back a peak's capacity.
     #[test]
     fn out_entries_are_capped_and_the_map_shrinks() {
         let l = tracking();
@@ -685,34 +765,52 @@ mod tests {
             k[..8].copy_from_slice(&(n as u64).to_le_bytes());
             InfoHash(k)
         };
-        for n in 0..=MAX_OUT {
+        let send = |n: usize| {
             l.insert_at(key(n), Token(n as u64), t0);
             l.send_out_at(&key(n), t0 + Duration::from_millis(n as u64));
+        };
+        for n in 0..MAX_OUT {
+            send(n);
         }
-        // The next insert prunes down to the cap: the first one went.
+        // Key 10 finished (lost): it goes before key 0, which is still out.
+        l.done(&key(10), Token(10));
+        send(MAX_OUT);
+        assert_eq!(l.out_len(), MAX_OUT, "a hard cap");
+        assert_eq!(l.insert_at(key(10), Token(10), t0), Insert::New);
+        assert_eq!(l.insert_at(key(0), Token(0), t0), Insert::Out);
+        // Then the earliest to expire.
+        send(MAX_OUT + 1);
         assert_eq!(l.insert_at(key(0), Token(0), t0), Insert::New);
         assert_eq!(l.out_len(), MAX_OUT);
-        assert_eq!(l.insert_at(key(1), Token(1), t0), Insert::Out);
-        for n in 1..=MAX_OUT {
-            l.done_at(&key(n), Token(n as u64), t0);
+        // Most committed: past the grace, the map gives back its capacity
+        // but keeps room for what's left.
+        for n in 1..=MAX_OUT + 1 {
+            if n % 50 != 0 {
+                l.committed_at(&key(n), Token(n as u64), t0);
+            }
         }
-        l.insert_at(
-            key(0),
-            Token(0),
-            t0 + FINISHED_GRACE + Duration::from_secs(1),
-        );
+        l.insert_at(InfoHash([9; 20]), Token(1), t0 + FINISHED_GRACE);
         let (len, cap) = {
             let g = l.lock();
             (g.out.len(), g.out.capacity())
         };
-        assert_eq!(len, 0);
-        assert!(cap <= 1024, "capacity kept: {cap}");
+        assert!(len > 900 && len < 1_100, "{len} left");
+        assert!(cap <= 4 * len, "capacity kept: {cap} for {len}");
     }
 
-    /// The move out is one step: at the instant held no longer has the
-    /// token, the lock is still held, so no `insert` can run between the
-    /// two halves. (Splitting `send_out` into two lock acquisitions fails
-    /// this, deterministically.)
+    /// The horizon's TTL (the runtime reads the protocol's default) is the
+    /// one the coordinator's lease authority enforces.
+    #[test]
+    fn the_protocols_lease_ttl_is_the_one_enforced() {
+        assert_eq!(
+            lodestar_cluster::ServerConfig::default().lease_ttl_secs,
+            crate::LEASE_TTL_SECS
+        );
+    }
+
+    /// At the instant held no longer has the token, the lock is still held,
+    /// so no `insert` can run between the two halves of the move out. A
+    /// change that lets the lock go at that point fails this.
     #[test]
     fn the_move_out_happens_under_one_lock() {
         let l = tracking();
@@ -731,7 +829,7 @@ mod tests {
         assert_eq!(
             *seen.lock().unwrap(),
             Some(true),
-            "the lock was let go mid-move"
+            "the lock was let go mid-move (None: the probe never ran)"
         );
         assert_eq!(l.insert(K, Token(7)), Insert::Out);
     }
@@ -739,40 +837,48 @@ mod tests {
     /// The prepare stage moving a key out (then, in half the rounds, its
     /// commit) racing the same lease coming back on another thread. Both
     /// start from one spinning flag, and the side given a head start
-    /// alternates, so both orders happen: the grant lands first (`Held`) or
-    /// after the move (`Out`). Either way the key is never held again once
-    /// its result went out.
+    /// alternates, so both orders come up: the grant lands first (`Held`)
+    /// or after the move (`Out`). Either way the key is never held again
+    /// once its result went out. Rounds go on until both orders were seen
+    /// (at least 2,000), the head start doubling while one is missing, up
+    /// to a deadline.
     #[test]
     fn a_grant_racing_the_move_out_or_the_commit_is_never_held_twice() {
         use std::sync::atomic::AtomicBool;
-        let parallel = std::thread::available_parallelism().map_or(1, |n| n.get()) > 1;
-        let head_start = || {
-            for _ in 0..20_000 {
-                std::hint::spin_loop();
+        let start = std::time::Instant::now();
+        let mut spins = 1_000u32;
+        let (mut held, mut out) = (0u32, 0u32);
+        let mut round = 0u32;
+        while round < 2_000 || held == 0 || out == 0 {
+            assert!(
+                start.elapsed() < Duration::from_secs(30),
+                "one order only after {round} rounds: held {held}, out {out}"
+            );
+            if round > 0 && round.is_multiple_of(200) && (held == 0 || out == 0) {
+                spins = spins.saturating_mul(2);
             }
-        };
-        let (mut held, mut out) = (0, 0);
-        for round in 0..2_000 {
             let commit = round % 4 >= 2;
-            let mover_first = round % 2 == 0;
+            let mover_first = round.is_multiple_of(2);
             let l = Arc::new(tracking());
             l.insert(K, Token(7));
             let go = Arc::new(AtomicBool::new(false));
-            let spin = |go: &AtomicBool| {
+            let wait = move |go: &AtomicBool, late: bool| {
                 while !go.load(Ordering::Acquire) {
                     std::hint::spin_loop();
+                }
+                if late {
+                    for _ in 0..spins {
+                        std::hint::spin_loop();
+                    }
                 }
             };
             let mover = {
                 let (l, go) = (l.clone(), go.clone());
                 std::thread::spawn(move || {
-                    spin(&go);
-                    if !mover_first {
-                        head_start();
-                    }
+                    wait(&go, !mover_first);
                     let moved = l.send_out(&K);
                     if commit {
-                        l.done(&K, Token(7));
+                        l.committed(&K, Token(7));
                     }
                     moved
                 })
@@ -780,10 +886,7 @@ mod tests {
             let granter = {
                 let (l, go) = (l.clone(), go.clone());
                 std::thread::spawn(move || {
-                    spin(&go);
-                    if mover_first {
-                        head_start();
-                    }
+                    wait(&go, mover_first);
                     l.insert(K, Token(7))
                 })
             };
@@ -798,14 +901,7 @@ mod tests {
             assert_eq!(l.len(), 0, "held twice in round {round}");
             assert_eq!(l.pending_len(), usize::from(!commit));
             assert_eq!(l.insert(K, Token(7)), Insert::Out);
-        }
-        // With more than one core both orders must have come up. (On one
-        // core a head start of spins may not change who runs first.)
-        if parallel {
-            assert!(
-                held > 0 && out > 0,
-                "one order only: held {held}, out {out}"
-            );
+            round += 1;
         }
     }
 

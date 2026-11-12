@@ -908,17 +908,19 @@ fn hints(s: &Shared, items: Vec<HintItem>) {
 /// How long a result's lease is remembered once its result is out
 /// (X-wk-own-lease-lost): a lease TTL, plus the longest a result may wait
 /// to be sealed. A result still out past that (a batch the coordinator
-/// keeps refusing, a spool replayed later) is forgotten, and its own lease
-/// coming back counts as new again, as before the fix.
+/// keeps refusing, a spool replayed later) is forgotten, and so is every
+/// entry at a worker restart; its own lease coming back then counts as new
+/// again, as before the fix.
 ///
 /// The TTL is the protocol's default, not the one the coordinator states.
 /// `Welcome` carries the TTL it enforces (`lease_ttl_secs`), but only the
-/// session sees it (`WorkerSession::welcome`), while `Work::connected`
-/// hands the runtime a `SessionHandle`, and the leases are built when the
-/// runtime starts, before any session. Today they're the same number:
-/// `serve` keeps the protocol's TTL (`serve::server_config`). A coordinator
-/// that ever enforced a longer one would make this horizon too short,
-/// which only brings back the old behaviour past it.
+/// session sees it (`WorkerSession::welcome`): `Work::connected` hands the
+/// runtime a `SessionHandle`, and the leases are built when the runtime
+/// starts, before any session. The TTL enforced is the coordinator's lease
+/// authority's (`ClusterServer::with_hooks` takes it from there, built from
+/// the pipeline's `LEASE_TTL_SECS`); a test in `lodestar-pipeline`
+/// (`the_protocols_lease_ttl_is_the_one_enforced`) fails if the two ever
+/// differ.
 fn out_horizon(config: &Config) -> Duration {
     let ttl = lodestar_cluster::ServerConfig::default().lease_ttl_secs;
     Duration::from_secs(ttl.unsigned_abs()) + config.seal_wait
@@ -2158,9 +2160,10 @@ async fn send_results(
                 if ok {
                     if let Some(f) = flight.remove(&batch) {
                         s.counts.committed.fetch_add(f.leases.len() as u64, Ordering::Relaxed);
-                        // Committed: their results are no longer out.
+                        // Committed: their results are no longer out (kept
+                        // briefly, finished, for the claims racing this).
                         for &(key, token) in &f.leases {
-                            s.leases.done(&InfoHash(key), Token(token));
+                            s.leases.committed(&InfoHash(key), Token(token));
                         }
                         if let Some(h) = s.session.borrow().clone() {
                             let leases = f.leases;
