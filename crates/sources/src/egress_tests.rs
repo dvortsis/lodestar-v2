@@ -73,6 +73,7 @@ struct Server {
     /// Connections accepted.
     conns: Arc<AtomicUsize>,
     /// The client address of each connection.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))] // read only by the Linux bind test
     peers: Arc<Mutex<Vec<SocketAddr>>>,
     /// The request line of each request, as it arrives.
     requests: mpsc::UnboundedReceiver<String>,

@@ -167,7 +167,14 @@ jobs:
           df -h /
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
+      # Linux never lints cfg(windows) code, so lint it here, before the tests
+      # run in the same job (X-win-clippy).
+      - name: clippy (Windows-only code)
+        if: runner.os == 'Windows'
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       # Disk numbers for the next time this job runs short (X-ci-disk).
       - name: disk after test build

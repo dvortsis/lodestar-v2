@@ -142,6 +142,21 @@
 			stop?.();
 		};
 	});
+	// The pill's "Restart needed" (§10.10.6): asks `/system` once a minute, and the Settings banner
+	// refreshes it sooner while it is open.
+	$effect(() => {
+		const status = statusRef.current;
+		if (bare || !status) return;
+		let stop: (() => void) | undefined;
+		let gone = false;
+		void import('$lib/features/restart/watch.svelte').then((mod) => {
+			if (!gone) stop = mod.watchRestart((needed) => status.setRestartNeeded(needed));
+		});
+		return () => {
+			gone = true;
+			stop?.();
+		};
+	});
 
 	$effect(() => {
 		if (shell.paletteOpen && !Palette)

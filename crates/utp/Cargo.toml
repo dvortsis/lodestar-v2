@@ -11,11 +11,11 @@ repository.workspace = true
 [dependencies]
 rand = "0.10"
 socket2 = "0.6.5"
-tokio = { version = "1.54.0", features = ["net", "time", "rt", "sync", "macros"] }
+tokio = { version = "1.54.1", features = ["net", "time", "rt", "sync", "macros"] }
 
 [dev-dependencies]
 proptest = "1.11.0"
-tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
 
 [lints]
 workspace = true

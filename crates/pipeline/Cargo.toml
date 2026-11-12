@@ -25,7 +25,7 @@ lodestar-log.workspace = true
 lodestar-network-policy.workspace = true
 # The have-filter's keyed PRF (WK-3); already in the lockfile through phf.
 siphasher = "=1.0.4"
-tokio = { version = "1.54.0", features = ["sync", "time", "rt", "macros"] }
+tokio = { version = "1.54.1", features = ["sync", "time", "rt", "macros"] }
 
 # The spool's no-follow, non-blocking opens (WK-11, runner-asked
 # `O_NOFOLLOW | O_NONBLOCK`); already in the lockfile through tokio.
@@ -45,6 +45,6 @@ lodestar-metainfo.workspace = true
 lodestar-dht.workspace = true
 lodestar-peer-wire = { workspace = true, features = ["testing"] }
 tempfile = "3.27.0"
-tokio = { version = "1.54.0", features = ["sync", "time", "rt", "rt-multi-thread", "macros", "net", "test-util"] }
+tokio = { version = "1.54.1", features = ["sync", "time", "rt", "rt-multi-thread", "macros", "net", "test-util"] }
 # CMP-10 (`tests/requires.rs`): every mapped plugin id is in the registry.
 lodestar-sources-plugins.workspace = true
