@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T00:50:48Z",
+  "updated_at": "2026-11-12T01:12:43Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6991,6 +6991,11 @@
       "slice": "X-wk-own-lease-lost",
       "at": "2026-11-12T00:50:48Z",
       "note": "Runner call: option A. WorkerLeases keeps outgoing-result tokens (out) under the same mutex; PrepareStage moves held->out atomically; insert answers held/out-same-token/new; out cleared on commit/release/loss plus TTL prune; shared edit to crates/pipeline/src/worker.rs approved. B (race window) and C (crates/cluster, WK-11b's area) rejected."
+    },
+    {
+      "slice": "v0.5.2 cut",
+      "at": "2026-11-12T01:12:43Z",
+      "note": "Before the v0.5.2 tag (owner 2.48): editorial PR into release/v0.5.2 so its version-4 notice (both copies) and operator-guidance.md:3 name 0.5.2 and its release candidates only, not 'the development builds that lead to it (the main branch)'. Version stays 4. Recorded in docs/decisions/2026-11-12-runner-notice-applies.md (#725). Also: README.md:50 and docs/user/01-before-you-start.md:40 send v0.5.1 readers to main's v5 notice (rv-725 nit)."
     }
   ],
   "main_health": [
@@ -7749,7 +7754,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T00:50:48Z",
+    "updated": "2026-11-12T01:12:43Z",
     "items": [
       {
         "slot": 1,
@@ -7912,7 +7917,7 @@
     }
   ],
   "heartbeat": "2026-11-12T00:38:52Z",
-  "updated": "2026-11-12T00:50:48Z",
+  "updated": "2026-11-12T01:12:43Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
