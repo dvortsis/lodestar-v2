@@ -1609,7 +1609,8 @@ export default [
 	// RP-6: +4 B after merging main (measured 27,980 B; nothing of the drawer's changed, so the chunk
 	// hashes in its imports moved by a few bytes). Runner to confirm.
 	// ENR-8: one dynamic import for the adult-enrichment section (§2.26, runner).
-	entry('Detail drawer (own JS + CSS)', drawerView, '28064 B'),
+	// ENR-13: one dynamic import for the identified-as section (§2.26, runner): 28,064 B -> 28,128 B.
+	entry('Detail drawer (own JS + CSS)', drawerView, '28128 B'),
 	// Raised by the runner (§2.26): +~40 B gzip noise from re-hashed chunk names, no code change in the route (#275).
 	// Raised by the runner (§2.26): +35 B from the chunk re-split when /logs was added (S-logs-1).
 	// runner §2.26, S-send: Send to client, the §10.5 primary action (+~0.16 KB)
@@ -1621,7 +1622,8 @@ export default [
 	// LEGAL-1 (runner §2.26): +64 B for the Legal Notice gate in the shared clients (measured
 	// 21,795 B, residue 19 B, rounded up to 64 B).
 	// ENR-8: one dynamic import for the adult-enrichment section (§2.26, runner).
-	entry('/t/[hash] route (own JS + CSS)', torrentView, '21904 B'),
+	// ENR-13: the same import (§2.26, runner): 21,904 B -> 21,952 B.
+	entry('/t/[hash] route (own JS + CSS)', torrentView, '21952 B'),
 	entry(
 		'Detail sections (on demand)',
 		[
