@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T04:58:20Z",
+  "updated_at": "2026-11-12T05:04:27Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7095,7 +7095,8 @@
       "id": "X-flake-remote-intake-parked",
       "note": "remote_intake.rs:~1482 reads stats.parked before hand_parked bumps it (remote.rs:524 vs :549); test-only fix folded into X-wk-out-set-polish (slot 8) as approved shared edit",
       "at": "2026-11-12T04:46:40Z"
-    }
+    },
+    "slices.yaml entry: X-flake-portable-restart-3 (next runner PR)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7918,7 +7919,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T04:58:20Z",
+    "updated": "2026-11-12T05:04:27Z",
     "items": [
       {
         "slot": 1,
@@ -8010,12 +8011,11 @@
       },
       {
         "slot": 11,
-        "slice": null,
-        "role": "build",
-        "agent": null,
-        "doing": "free after #732 merged; next launch pending",
-        "since": "2026-11-12T04:58:20Z",
-        "status": "idle"
+        "slice": "X-flake-portable-restart-3",
+        "role": "Opus slice",
+        "agent": "session_01MMjhn8cMB1NrRCcQ9XkWUg",
+        "doing": "root-cause the relaunched copy's 30 s predecessor-wait timeout (#717 Windows CI)",
+        "since": "2026-11-12T05:04:27Z"
       },
       {
         "slot": 12,
@@ -8085,7 +8085,7 @@
     }
   ],
   "heartbeat": "2026-11-12T03:41:56Z",
-  "updated": "2026-11-12T04:58:20Z",
+  "updated": "2026-11-12T05:04:27Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
