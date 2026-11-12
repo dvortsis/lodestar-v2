@@ -470,8 +470,9 @@ pub struct FleetSnapshot {
     pub reconcile_returned: u64,
     /// Leases a worker listed that weren't on record for it (counted only).
     pub reconcile_unknown: u64,
-    /// Reconcile rounds refused: a paused or replaced worker, or parts out
-    /// of order.
+    /// Reconcile rounds refused: a paused or replaced worker, the built-in
+    /// worker, parts out of order, or a second round within one heartbeat
+    /// interval.
     pub reconcile_refused: u64,
 }
 

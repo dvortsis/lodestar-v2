@@ -765,9 +765,13 @@ mod tests {
         let over = postcard::to_allocvec(&holding(MAX_HOLDING_BATCH + 1, true)).unwrap();
         assert!(postcard::from_bytes::<ToCoordinator>(&over).is_err());
         // Only the length prefix of a huge list: refused without its body.
+        // Only a length prefix near u64::MAX, no body: postcard itself
+        // gives no size hint for a length longer than the bytes left, so
+        // this is refused at the end of the input.
         let mut lie = postcard::to_allocvec(&holding(0, true)).unwrap();
         lie.pop();
-        lie.extend_from_slice(&[0xff, 0xff, 0xff, 0x7f]);
+        lie.extend_from_slice(&[0xff; 9]);
+        lie.push(0x01);
         assert!(postcard::from_bytes::<ToCoordinator>(&lie).is_err());
         let encode = |m: &ToCoordinator| frame::encode(m).unwrap();
         let mut msg = holding(1, false);
@@ -788,6 +792,34 @@ mod tests {
         );
         // An empty list is a real answer: the worker holds nothing.
         assert!(decode_to_coordinator(&encode(&holding(0, true))).is_ok());
+    }
+
+    /// The cap is checked against the stated length before allocating,
+    /// whatever the decoder: a sequence that claims `usize::MAX` elements
+    /// is refused at once (without the check, `with_capacity` would be
+    /// asked for that and abort).
+    #[test]
+    fn a_huge_stated_length_is_refused_before_allocating() {
+        use serde::de::value::{Error, SeqAccessDeserializer};
+        struct Claims(usize);
+        impl<'de> serde::de::SeqAccess<'de> for Claims {
+            type Error = Error;
+            fn next_element_seed<T: serde::de::DeserializeSeed<'de>>(
+                &mut self,
+                _: T,
+            ) -> Result<Option<T::Value>, Error> {
+                Ok(None)
+            }
+            fn size_hint(&self) -> Option<usize> {
+                Some(self.0)
+            }
+        }
+        let huge = HeldList::deserialize(SeqAccessDeserializer::new(Claims(usize::MAX)));
+        assert!(huge.is_err());
+        let over = HeldList::deserialize(SeqAccessDeserializer::new(Claims(MAX_HOLDING_BATCH + 1)));
+        assert!(over.is_err());
+        let fine = HeldList::deserialize(SeqAccessDeserializer::new(Claims(MAX_HOLDING_BATCH)));
+        assert_eq!(fine.unwrap(), HeldList::default());
     }
 
     /// The new messages are last, so every older message keeps its tag
