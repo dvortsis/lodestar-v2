@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T22:57Z",
+  "updated_at": "2026-11-12T23:02Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7672,6 +7672,11 @@
       "id": "gluetun-leak-cmp",
       "note": "X-gluetun-leak-cmp (Opus, /security-review): the crates/companions generator binds post-rules.txt read-only into gluetun; Lodestar writes the file; a missing file fails closed; goldens regenerated. Launch once X-gluetun-leak has pushed the shared rules file. No gluetun release fixes this (v3.41.3 is the newest; master unchanged).",
       "added": "2026-11-12T22:57Z"
+    },
+    {
+      "id": "gs2-size-call",
+      "note": "\u00a72.19 flag to the owner: GS-2 at 50k, as specified (group_key + 4x4 MinHash) = 545.6 B/torrent, over the 512 budget. Runner chose Q10 (a): group_minhash 2x3 (~20 B), group_key left at generation 0 (no SCHEMA_VERSION bump, store budget unchanged); GS-3 settles group_key. The headroom left goes to RX-1 and ENR-11.",
+      "added": "2026-11-12T23:02Z"
     }
   ],
   "main_health": [
@@ -9042,7 +9047,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-12T22:57Z",
+  "updated": "2026-11-12T23:02Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
