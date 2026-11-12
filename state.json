@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T22:13:28Z",
+  "updated_at": "2026-11-12T22:15:59Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7512,6 +7512,21 @@
       "id": "merged-777",
       "note": "#777 M8-WIN-1 merged as c904f883 after delta self-check MERGE (rv-777-c62c03cf-delta). Session archived. O1 -> X-win-soak-attach-proc-hash. Owner FYI batch: M8-WIN-1 refinements.",
       "added": "2026-11-12T22:13:28Z"
+    },
+    {
+      "id": "owner-q-sec-exact-input-test",
+      "note": "From M8-SEC-0 (#786): may a fix PR ship its exact-input regression test before the release? Default no (the trigger input is a PoC; \u00a72.47). Loosening is the owner's call: owner queue in the next batch.",
+      "added": "2026-11-12T22:15:59Z"
+    },
+    {
+      "id": "runner-pr-X-sec-disclose-v1",
+      "note": "From M8-SEC-0 (#786): add slice X-sec-disclose-v1 (post-release disclosure: the held rows in docs/security/v1/*.md and the follow-up tests) and fix slices X-sec-<id> with neutral titles, in the next runner PR.",
+      "added": "2026-11-12T22:15:59Z"
+    },
+    {
+      "id": "owner-ask-screen-replay",
+      "note": "After X-soak-screen-calibrate merges: ask the owner to replay r4 and r5 with the new analyzer and relay only the screen: lines (no raw data). Owned paths widened by the runner: linux/collect.py screen core + SCREEN_PREFIXES, test_screen.py, screen-thresholds.json (new hash); new input: anon RSS outside mimalloc per 1,000 stored; mimalloc growth demoted to info. \u00a72.19 flag.",
+      "added": "2026-11-12T22:15:59Z"
     }
   ],
   "main_health": [
@@ -8828,7 +8843,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-12T22:13:28Z",
+  "updated": "2026-11-12T22:15:59Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
