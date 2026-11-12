@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T00:46:18Z",
+  "updated_at": "2026-11-12T00:50:48Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6986,7 +6986,12 @@
     "owner flag owed (\u00a72.19): OUT-2 Torznab key 'reveal' = shown once at create/regenerate behind the password dialog, because B12 keys are hash-only; one torznab-scoped key per app, named by app; no retrievable storage (would weaken B12, owner's call, not requested)",
     "#718 shared edit approved: web/e2e/support/test.ts default getSystem mock with nothing pending",
     "rv-712 nits for X-wk-own-lease-lost/WK-G: scenarios.rs:432 hand-back recorded after both fetches case; testing.rs:1436 'TTL of base time' -> 'holder silent for a TTL' once WK-G can override TTL; WK-G must handle 'two clocks expire leases' (pipeline wall-clock expiry lib.rs:1026-1042 vs harness base clock)",
-    "flake: lodestar/src/worker/spool.rs batches_spooled_offline_are_replayed_once_then_removed reads reconcile() right after bytes()==0 (race); fix assigned to #724 X-spool-damage-log; #717 RX-0 gets one rerun of windows job after its run completes"
+    "flake: lodestar/src/worker/spool.rs batches_spooled_offline_are_replayed_once_then_removed reads reconcile() right after bytes()==0 (race); fix assigned to #724 X-spool-damage-log; #717 RX-0 gets one rerun of windows job after its run completes",
+    {
+      "slice": "X-wk-own-lease-lost",
+      "at": "2026-11-12T00:50:48Z",
+      "note": "Runner call: option A. WorkerLeases keeps outgoing-result tokens (out) under the same mutex; PrepareStage moves held->out atomically; insert answers held/out-same-token/new; out cleared on commit/release/loss plus TTL prune; shared edit to crates/pipeline/src/worker.rs approved. B (race window) and C (crates/cluster, WK-11b's area) rejected."
+    }
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7744,7 +7749,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T00:46:18Z",
+    "updated": "2026-11-12T00:50:48Z",
     "items": [
       {
         "slot": 1,
@@ -7907,7 +7912,7 @@
     }
   ],
   "heartbeat": "2026-11-12T00:38:52Z",
-  "updated": "2026-11-12T00:46:18Z",
+  "updated": "2026-11-12T00:50:48Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
