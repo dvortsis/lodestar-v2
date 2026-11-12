@@ -1,4 +1,4 @@
-# X-test-infra-blockers decisions
+# X-test-infra-blockers decisions (#770)
 
 Blockers 2 and 3 from the cloud tester (2026-11-12): the PIA key step failed for us-brooklyn, and the AWS Windows test instance never reached SSM. Both are scripts the owner and the tester run; this PR changes and tests them offline only.
 
