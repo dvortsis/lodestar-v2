@@ -150,7 +150,7 @@ test.describe('Settings → Outputs', () => {
 		// The example command wraps instead of scrolling, between words where it can: nothing of it is hidden at any width.
 		const curl = page.getByTestId('outputs-bitmagnet-curl');
 		await expect(curl).toContainText('http://<bitmagnet-host>:3333/import');
-		for (const width of [360, 768, 1366]) {
+		for (const width of [320, 360, 768, 1366]) {
 			await page.setViewportSize({ width, height: 900 });
 			await expect.poll(() => curl.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
 		}

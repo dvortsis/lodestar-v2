@@ -301,7 +301,7 @@
 	<p class="text-small">{m.settings_outputs_bitmagnet_import()}</p>
 	<!-- Wrapped, not scrolled: the whole command reads at every width, and copies as one line. -->
 	<pre
-		class="whitespace-pre-wrap wrap-anywhere rounded-box bg-base-200 p-3 font-mono text-small"
+		class="whitespace-pre-wrap break-words rounded-box bg-base-200 p-3 font-mono text-small"
 		data-testid="outputs-bitmagnet-curl"><code
 			>curl --data-binary @lodestar-export-YYYYMMDD-HHMMSS.bitmagnet.ndjson http://&lt;bitmagnet-host&gt;:3333/import</code
 		></pre>
