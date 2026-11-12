@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T08:24:46Z",
+  "updated_at": "2026-11-12T08:31:11Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7168,6 +7168,16 @@
       "id": "X-rx0-nits",
       "at": "2026-11-12T08:24:46Z",
       "note": "rv-717-e9350c1d N1 ([:alpha:] ASCII fold uncharged, <=1.6%), N2 (one timing figure: ~9-12 ms, [\\w.-]x51), N3 optional bracket over-charge, N4 <U+0041 cheap charge, N5 Perl-class wording. Fold into RX-1."
+    },
+    {
+      "id": "X-dht-passive-lookup-race",
+      "at": "2026-11-12T08:31:11Z",
+      "note": "M8-NET-E2E finding: a hash first harvested from a passive GetPeers (a client looking up before announcing) launches the crawler lookup at once, races the announce, finds no peers, then waits the fetch pool retry_backoff (120 s). Likely common on the real DHT. Candidates: delay the lookup after a passive GetPeers sighting, or let a later Announce/sample sighting cut the backoff short. Track C; Opus; A/B before shipping."
+    },
+    {
+      "id": "owner-flag-net-e2e-clock",
+      "at": "2026-11-12T08:31:11Z",
+      "note": "Section 2.19 flag: M8-NET-E2E measures the 5 s per hash from harvest (first sighting) to /search, reading section 17 literally; the T0-to-harvest time is reported but has no bar (tail = X-sampler-frontier). Send with the merge FYI."
     }
   ],
   "main_health": [
@@ -8080,7 +8090,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T08:24:46Z",
+    "updated": "2026-11-12T08:31:11Z",
     "items": [
       {
         "slot": 1,
@@ -8105,7 +8115,7 @@
         "slice": "M8-NET-E2E",
         "role": "build",
         "agent": "session_01MMjhnAsZmQbQajtBLyTfXU",
-        "doing": "session_01MMjhnAsZmQbQajtBLyTfXU: 5 s bar missed 7/20 on Linux (sampler tail); trying realistic announce path (opt 1); bar unchanged pending numbers",
+        "doing": "session_01MMjhnAsZmQbQajtBLyTfXU: runner decision C: original topology, per-hash harvest->search <= 5 s, harvest by 30 s deadline; then CI on 3 OSes",
         "since": "2026-11-12T07:59:10Z",
         "status": "active"
       },
@@ -8213,7 +8223,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T08:24:46Z",
+  "updated": "2026-11-12T08:31:11Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
