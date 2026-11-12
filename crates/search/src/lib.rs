@@ -24,6 +24,7 @@ pub mod population;
 pub mod query;
 mod rebuild;
 pub mod recovery;
+pub mod regex;
 mod retry_dir;
 pub mod schema;
 mod seek_guard;

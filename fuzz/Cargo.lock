@@ -1473,6 +1473,7 @@ dependencies = [
  "lodestar-metainfo",
  "lodestar-release-parser",
  "lodestar-store",
+ "regex-syntax",
  "serde",
  "tantivy",
  "tantivy-fst",

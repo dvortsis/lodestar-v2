@@ -54,7 +54,7 @@
 	"settings_outputs_bitmagnet_heading": "bitmagnet export",
 	"settings_outputs_bitmagnet_intro": "Download your torrents as a file that bitmagnet can import. bitmagnet then fetches each torrent's details from the DHT itself.",
 	"settings_outputs_bitmagnet_left_out": "Always left out: torrents from private sources and private trackers, hidden torrents, unverified ones, and anything blocklisted or removed. Adult torrents are left out unless you include them below.",
-	"settings_outputs_bitmagnet_import": "To import the file, send it to bitmagnet's import address. For example, with bitmagnet on port 3333 of the same computer:",
+	"settings_outputs_bitmagnet_import": "To import the file, send it to bitmagnet's import address. Replace <bitmagnet-host> with the address of the computer running bitmagnet, such as 192.168.1.20, or localhost if it's this computer:",
 	"settings_outputs_bitmagnet_start": "Download export",
 	"settings_outputs_bitmagnet_waiting": "Starting the export…",
 	"settings_outputs_bitmagnet_running": "Exported {done} of {total} torrents…",
@@ -82,6 +82,5 @@
 	"settings_outputs_adult_load_failed": "Couldn't load this setting.",
 	"settings_outputs_adult_read_only": "Lodestar's configuration sets this, so it can't be changed here.",
 	"settings_outputs_bitmagnet_stale": "Lodestar couldn't update this export's progress. It may still be running.",
-	"settings_outputs_bitmagnet_example": "Example import command",
 	"settings_outputs_bitmagnet_warning": "Warning:"
 }
