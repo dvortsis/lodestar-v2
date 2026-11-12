@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T11:10:43Z",
+  "updated_at": "2026-11-12T11:40:16Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7253,6 +7253,16 @@
       "id": "owner-flag-753",
       "note": "\u00a72.19 at UP-0 merge: private uploads stored PRIVATE+PRIVATE_SOURCE; RSS/alert feeds mask PRIVACY (crawled BEP 27 now excluded from feeds, stricter); plain exports keep OUT-0 rule; N4: a later public DHT sighting clears PRIVATE_SOURCE (PRIVATE stays) so the hash reappears in plain CSV/NDJSON/magnet exports like any crawled BEP 27 torrent; N5: notifications (ntfy/Discord/email/webhooks) must mask PRIVACY when wired; 8 MiB body cap, 4 in flight, 60 s read deadline (\u00a72.26).",
       "at": "2026-11-12T11:10:43Z"
+    },
+    {
+      "id": "v052-rc3-ready",
+      "note": "rc.3 = release/v0.5.2 114bb625 READY: ci-ok green, Release dry run green (smoke, packages, MSI), e2e via #740 full playwright + #751 identical tree. Owner tag steps sent via dashboard session; await \"tagged\", then verify minisig/SHA256SUMS/digest and green-light soak (briefs/v052-rc3-owner-steps.md).",
+      "at": "2026-11-12T11:40:16Z"
+    },
+    {
+      "id": "X-e2e-dispatch-release",
+      "note": "e2e.yml workflow_dispatch runs heavy jobs only with update_snapshots; release branches get no dispatchable E2E. Consider a dispatch input to run (not regenerate) on a ref. Runner-owned CI improvement; owner decides workflow permission changes if any.",
+      "at": "2026-11-12T11:40:16Z"
     }
   ],
   "main_health": [
@@ -8333,7 +8343,7 @@
     }
   ],
   "heartbeat": "2026-11-12T09:44:56Z",
-  "updated": "2026-11-12T11:10:43Z",
+  "updated": "2026-11-12T11:40:16Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
