@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T22:04:01Z",
+  "updated_at": "2026-11-12T22:08:33Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7337,7 +7337,7 @@
     },
     {
       "id": "X-leak-test-handshake-msg",
-      "note": "Tester: leak test fails generically when the WireGuard handshake never completes (expired PIA key). Kill switch held (0 packets). Follow-up: start-block / leak test reports \"handshake never completed\" explicitly. Await tester rerun confirmation.",
+      "note": "Tester: leak test fails generically when the WireGuard handshake never completes (expired PIA key). Kill switch held (0 packets). Follow-up: start-block / leak test reports \"handshake never completed\" explicitly. Await tester rerun confirmation. | 2026-11-12: covered by #778 (X-test-blockers-1112); close when #778 merges.",
       "at": "2026-11-12T14:14:49Z"
     },
     {
@@ -7408,7 +7408,7 @@
     },
     {
       "id": "X-flake-portable-restart-saturated",
-      "note": "Tester 5a: a_portable_restart_serves_again_on_the_same_port (windows_service.rs:672) fails 1/6 on a saturated 4-vCPU host: new copy serves on console ~28 s later but lodestar.jsonl has none of its lines by the 90 s deadline (both copies run below-normal priority). Fix: accept console app.serving too, or wait on jsonl with more headroom. Not seen on CI yet; low priority."
+      "note": "Tester 5a: a_portable_restart_serves_again_on_the_same_port (windows_service.rs:672) fails 1/6 on a saturated 4-vCPU host: new copy serves on console ~28 s later but lodestar.jsonl has none of its lines by the 90 s deadline (both copies run below-normal priority). Fix: accept console app.serving too, or wait on jsonl with more headroom. Not seen on CI yet; low priority. | 2026-11-12: covered by #778 (X-test-blockers-1112); close when #778 merges."
     },
     {
       "id": "test-update-helper-real-upgrade",
@@ -8524,7 +8524,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T22:04:01Z",
+    "updated": "2026-11-12T22:08:33Z",
     "items": [
       {
         "slot": 1,
@@ -8668,6 +8668,96 @@
         "agent": "claude",
         "doing": "cloud-testing: reserved: Cloud Tester lanes first; then the gluetun-leak fix when its diagnosis lands; else X-soak-screen-calibrate once #777 (shares analyze_cr0.py) merges",
         "status": "idle"
+      },
+      {
+        "slot": 17,
+        "slice": "X-utp-backoff",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhnB3JA4wKEcwoa3rh91: owner window (\u00a72.63) until 23:30Z; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/X-utp-backoff.md",
+        "since": "2026-11-12T22:08:33Z",
+        "status": "active"
+      },
+      {
+        "slot": 18,
+        "slice": "NOS-0",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhnAcF2hAwDyo9ArAQHd: owner window (\u00a72.63) until 23:30Z; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/NOS-0.md",
+        "since": "2026-11-12T22:08:33Z",
+        "status": "active"
+      },
+      {
+        "slot": 19,
+        "slice": "LEM-0",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhnAT9qFMjMJiH91VUfM: owner window (\u00a72.63) until 23:30Z; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/LEM-0.md",
+        "since": "2026-11-12T22:08:33Z",
+        "status": "active"
+      },
+      {
+        "slot": 20,
+        "slice": "NOS-2a",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhn9T6q1G9rBENxYZuHb: owner window (\u00a72.63) until 23:30Z; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/NOS-2a.md",
+        "since": "2026-11-12T22:08:33Z",
+        "status": "active"
+      },
+      {
+        "slot": 21,
+        "slice": "X-restart-save-lag",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhnAmqVHzHLPT4ZUX58K: owner window (\u00a72.63) until 23:30Z; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/X-restart-save-lag.md",
+        "since": "2026-11-12T22:08:33Z",
+        "status": "active"
+      },
+      {
+        "slot": 22,
+        "slice": "X-win-upd-manual-rollback",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhnA7MTzJty5dGrxtPTC: owner window (\u00a72.63) until 23:30Z; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/X-win-upd-manual-rollback.md",
+        "since": "2026-11-12T22:08:33Z",
+        "status": "active"
+      },
+      {
+        "slot": 23,
+        "slice": "M8-SEC-0",
+        "role": "docs",
+        "agent": "claude",
+        "doing": "session_01MMjhnCiy9xmJwkhkDiZsd4: owner window (\u00a72.63) until 23:30Z; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/M8-SEC-0.md",
+        "since": "2026-11-12T22:08:33Z",
+        "status": "active"
+      },
+      {
+        "slot": 24,
+        "slice": "ENR-13",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhn9aiUogqrUAigBpjxV: owner window (\u00a72.63) until 23:30Z; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/ENR-13.md",
+        "since": "2026-11-12T22:08:33Z",
+        "status": "active"
+      },
+      {
+        "slot": 25,
+        "slice": "X-banner-live-region",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhnBn59gULGWufMiioeP: owner window (\u00a72.63) until 23:30Z; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/X-banner-live-region.md",
+        "since": "2026-11-12T22:08:33Z",
+        "status": "active"
+      },
+      {
+        "slot": 26,
+        "slice": "M8-DOC-2",
+        "role": "docs",
+        "agent": "claude",
+        "doing": "session_01MMjhnA41Z4h2JU2HX9jca2: owner window (\u00a72.63) until 23:30Z; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/M8-DOC-2.md",
+        "since": "2026-11-12T22:08:33Z",
+        "status": "active"
       }
     ]
   },
@@ -8728,7 +8818,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-12T22:04:01Z",
+  "updated": "2026-11-12T22:08:33Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -8967,5 +9057,22 @@
       16
     ],
     "note": "Owner 2026-11-12 (\u00a72.61/\u00a72.62, and reminded 21:00Z): up to 4 extra sessions for testing-related work, shared with the Cloud Tester. Slot 13 X-test-vm lanes; 14 X-test-blockers-1112 (#778); 15 X-unraid-validate-all; 16 reserved (tester lanes, gluetun-leak fix, then X-soak-screen-calibrate after #777)."
+  },
+  "window_1112": {
+    "decided": "owner, runner chat 2026-11-12T22:05Z (\u00a72.63, to record): run up to 10 more sessions until 2026-11-12T23:30Z (end time confirmed by the owner)",
+    "slots": [
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26
+    ],
+    "ends": "2026-11-12T23:30:00Z",
+    "after": "sessions stop; their PRs or drafts are resumed in normal slots (12 + 4) as those free"
   }
 }
