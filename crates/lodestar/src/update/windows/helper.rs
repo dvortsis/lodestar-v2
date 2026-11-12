@@ -64,6 +64,10 @@ use super::msi::{self, ENVELOPE, Installed, PINS, Pins, REQUEST, Refusal, Stagin
 use super::rollback;
 use crate::update::layout::{self, Bin, Lock};
 use crate::update::trust_file;
+// The shared bounded run (X-svc-eventcreate-bounded), used by the
+// Windows-only `System`.
+#[cfg_attr(not(windows), allow(unused_imports))]
+use crate::windows::process::{EVENT_LOG_WAIT, run_bounded, supervise};
 
 /// The one argument the copy is started with, after `update-helper`.
 pub const COPY_FLAG: &str = "--run-msi";
@@ -1081,99 +1085,6 @@ fn parent_gone_with(
     }
 }
 
-/// A started `msiexec`, as [`supervise`] sees it.
-pub(super) trait Started {
-    /// `Some(code)` once it has ended (`Some(None)`: with no exit code).
-    fn ended(&mut self) -> io::Result<Option<Option<i32>>>;
-    /// Ends it and reaps it.
-    fn end(&mut self);
-}
-
-impl Started for std::process::Child {
-    fn ended(&mut self) -> io::Result<Option<Option<i32>>> {
-        Ok(self.try_wait()?.map(|s| s.code()))
-    }
-    /// Reaped only once it's killed (an ended child counts as killed), so
-    /// a kill that fails never leaves this waiting.
-    fn end(&mut self) {
-        if self.kill().is_ok() {
-            let _ = self.wait();
-        }
-    }
-}
-
-/// Waits for a started `msiexec`, ending it at `deadline`. Every error
-/// comes after it started, so it's `TimedOut` (the deadline) or
-/// `Interrupted` (no exit code, or it couldn't be waited on), never one
-/// that [`run_copy`] answers as a refusal (P-4).
-#[cfg_attr(not(windows), allow(dead_code))]
-pub(super) fn supervise(
-    child: &mut dyn Started,
-    deadline: Duration,
-    poll: Duration,
-    now: &dyn Fn() -> Instant,
-    sleep: &mut dyn FnMut(Duration),
-) -> io::Result<i32> {
-    let start = now();
-    loop {
-        match child.ended() {
-            Ok(Some(Some(code))) => return Ok(code),
-            Ok(Some(None)) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Interrupted,
-                    "msiexec ended without a code",
-                ));
-            }
-            Err(e) => {
-                child.end();
-                return Err(io::Error::new(
-                    io::ErrorKind::Interrupted,
-                    format!("waiting for msiexec: {e}"),
-                ));
-            }
-            Ok(None) => {}
-        }
-        if now().saturating_duration_since(start) >= deadline {
-            child.end();
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "msiexec ran past its deadline",
-            ));
-        }
-        sleep(poll);
-    }
-}
-
-/// The longest the update helper waits for `eventcreate` to write its
-/// Event Log entry. One entry takes far less; past it, the entry is given
-/// up (it's best effort) so a hung `eventcreate` never holds up a rollback
-/// or the service's restart.
-pub(super) const EVENT_LOG_WAIT: Duration = Duration::from_secs(10);
-
-/// How often [`run_bounded`] looks at the child.
-const EVENT_LOG_POLL: Duration = Duration::from_millis(50);
-
-/// Runs `cmd` with no input or output, for at most `limit`: past it the
-/// child is killed and reaped, and the call answers `TimedOut`. Through
-/// [`supervise`], so the bound and the kill are the ones msiexec gets;
-/// its error text names msiexec, which the Event Log's caller discards.
-#[cfg_attr(not(windows), allow(dead_code))]
-pub(super) fn run_bounded(mut cmd: std::process::Command, limit: Duration) -> io::Result<i32> {
-    use std::process::Stdio;
-    let mut child = cmd
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
-    supervise(
-        &mut child,
-        limit,
-        EVENT_LOG_POLL,
-        &Instant::now,
-        &mut std::thread::sleep,
-    )
-}
-
 /// Removes earlier copies (`run-*.exe`) and their parent locks
 /// (`run-*.parent`) from staging; one still running can't be removed and
 /// stays until a later run.
@@ -1539,7 +1450,7 @@ impl System for Windows {
                 "/D",
                 message,
             ]);
-            run_bounded(c, EVENT_LOG_WAIT)
+            run_bounded(c, "eventcreate", EVENT_LOG_WAIT)
         });
     }
 
@@ -1604,6 +1515,7 @@ impl System for Windows {
             .map_err(|e| io::Error::other(format!("starting msiexec: {e}")))?;
         supervise(
             &mut child,
+            "msiexec",
             MSIEXEC_WAIT,
             Duration::from_secs(1),
             &Instant::now,
@@ -1704,6 +1616,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
+    use crate::windows::process::Started;
 
     const NOW: u64 = 1_800_000_000;
     const MSI: &[u8] = b"the 0.7.0 msi";
@@ -4391,6 +4304,7 @@ mod tests {
         let elapsed = std::cell::Cell::new(Duration::ZERO);
         let got = supervise(
             &mut child,
+            "msiexec",
             Duration::from_secs(10),
             Duration::from_secs(1),
             &|| start + elapsed.get(),
@@ -4537,51 +4451,6 @@ mod tests {
         for bad in ["io: C:\\Users\\alice", "Artifact", "", &"a".repeat(41)] {
             assert_eq!(rollback::shown_code(bad), "an unexpected reason", "{bad:?}");
         }
-    }
-
-    /// A child that never exits: a long sleep, on either platform.
-    fn never_exits() -> std::process::Command {
-        if cfg!(windows) {
-            let mut c = std::process::Command::new("powershell.exe");
-            c.args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "Start-Sleep -Seconds 600",
-            ]);
-            c
-        } else {
-            let mut c = std::process::Command::new("sleep");
-            c.arg("600");
-            c
-        }
-    }
-
-    /// The `eventcreate` bound (X-event-log-followups): a child that never
-    /// exits is killed at the limit and the call answers `TimedOut`, well
-    /// within the test's 10 s deadline; one that ends answers its code.
-    #[test]
-    fn a_hung_event_log_command_is_killed_at_its_bound() {
-        let start = Instant::now();
-        let e = run_bounded(never_exits(), Duration::from_millis(300)).unwrap_err();
-        assert_eq!(e.kind(), io::ErrorKind::TimedOut, "{e}");
-        assert!(
-            start.elapsed() < Duration::from_secs(10),
-            "{:?}",
-            start.elapsed()
-        );
-
-        let quick = if cfg!(windows) {
-            let mut c = std::process::Command::new("cmd.exe");
-            c.args(["/C", "exit 3"]);
-            c
-        } else {
-            let mut c = std::process::Command::new("sh");
-            c.args(["-c", "exit 3"]);
-            c
-        };
-        assert_eq!(run_bounded(quick, Duration::from_secs(10)).unwrap(), 3);
-        assert!(EVENT_LOG_WAIT >= Duration::from_secs(10));
     }
 
     /// `f`'s first `Some`, tried for up to 10 s: a lock just let go of can
