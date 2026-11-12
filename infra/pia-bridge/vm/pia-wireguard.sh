@@ -49,6 +49,9 @@ LABEL='[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?'
 HOSTNAME_RE="^$LABEL(\.$LABEL)*\$"
 valid_hostname() { (( ${#1} <= 253 )) && [[ $1 =~ $HOSTNAME_RE ]]; }
 
+# Stage 13's failures each say which check failed, in one bounded line.
+fail13() { printf 'pia-wireguard: stage 13: %s\n' "$(clean "${1:0:200}")" >&2; fail 13; }
+
 IPV4='^([0-9]{1,3}\.){3}[0-9]{1,3}$'
 WGKEY='^[A-Za-z0-9+/]{43}=$'
 
@@ -70,25 +73,28 @@ rm -f -- "$work/token.json"
 
 # 2. The region's WireGuard server: its address and certificate name.
 curl --fail --silent --max-time 30 https://serverlist.piaservers.net/vpninfo/servers/v6 \
-  >"$work/servers" 2>/dev/null || fail 13
+  >"$work/servers" 2>/dev/null || fail13 "could not fetch the server list"
 head -n 1 "$work/servers" >"$work/servers.json"
+jq -e 'type == "object"' "$work/servers.json" >/dev/null 2>&1 || fail13 "the server list is not JSON"
+jq -e --arg r "$region" 'any(.regions[]?; .id == $r)' "$work/servers.json" >/dev/null 2>&1 \
+  || fail13 "region $region is not in the server list"
+jq -e --arg r "$region" '[.regions[] | select(.id == $r)][0].servers.wg[0] | type == "object"' \
+  "$work/servers.json" >/dev/null 2>&1 || fail13 "region $region has no WireGuard server"
 # jq checks the characters first, as bash's $(...) drops NUL bytes ("a\u0000b"
 # would come out as "ab"). Anything else becomes "invalid:" and a JSON-escaped
 # copy, which the hostname check below rejects and reports.
 wg_ip=$(jq -er --arg r "$region" '[.regions[] | select(.id == $r)][0].servers.wg[0].ip
-  | select(type == "string" and test("^[0-9.]{7,15}$"))' "$work/servers.json" 2>/dev/null) || fail 13
+  | select(type == "string" and test("^[0-9.]{7,15}$"))' "$work/servers.json" 2>/dev/null) \
+  || fail13 "region $region: the WireGuard server's address is not IPv4"
 wg_cn=$(jq -er --arg r "$region" '[.regions[] | select(.id == $r)][0].servers.wg[0].cn
   | select(type == "string") | if test("^[A-Za-z0-9.-]{1,253}$") then . else "invalid:" + (.[:80] | @json) end' \
-  "$work/servers.json" 2>/dev/null) || fail 13
-[[ $wg_ip =~ $IPV4 ]] || fail 13
+  "$work/servers.json" 2>/dev/null) || fail13 "region $region: the certificate name is not a string"
+[[ $wg_ip =~ $IPV4 ]] || fail13 "region $region: the WireGuard server's address is not IPv4"
 # PIA's certificate names are DNS names; some carry capitals. Names match without
 # case, in DNS and in curl's certificate check, so lowercase first.
 wg_cn=${wg_cn,,}
-if ! valid_hostname "$wg_cn"; then
-  printf 'pia-wireguard: stage 13: the server list gave region %s a certificate name that is not a hostname: "%s"\n' \
-    "$region" "$(clean "${wg_cn:0:80}")" >&2
-  fail 13
-fi
+valid_hostname "$wg_cn" \
+  || fail13 "region $region: the certificate name is not a hostname: \"${wg_cn:0:100}\""
 
 # 3. A fresh key pair; PIA registers the public half. The server must present
 #    a certificate for its name signed by PIA's CA, at the listed address.
@@ -96,7 +102,7 @@ priv=$(wg genkey)
 pub=$(printf '%s' "$priv" | wg pubkey)
 [[ $priv =~ $WGKEY && $pub =~ $WGKEY ]] || fail 14
 #    No --fail: a refusal's status and PIA's reason are what stage 15 reports.
-http=$(curl --silent --max-time 30 --get \
+http=$(curl --silent --max-time 30 --max-filesize 65536 --get \
   --connect-to "$wg_cn::$wg_ip:" --cacert "$work/pia-ca.crt" \
   --data-urlencode "pt@$work/token" --data-urlencode "pubkey=$pub" \
   --output "$work/addkey.json" --write-out '%{http_code}' \
@@ -107,8 +113,9 @@ if ! [[ $http =~ ^2 ]] || ! jq -e '.status == "OK"' "$work/addkey.json" >/dev/nu
   # JSON object. Never the reply itself; the token and key are masked, to be sure.
   st="" msg=""
   if jq -e 'type == "object"' "$work/addkey.json" >/dev/null 2>&1; then
-    st=$(jq -r '.status // "" | tostring' "$work/addkey.json" 2>/dev/null) || st=""
-    msg=$(jq -r '.message // "" | tostring' "$work/addkey.json" 2>/dev/null) || msg=""
+    # Printable ASCII only, in jq too: a NUL would make bash warn on stderr.
+    st=$(jq -r '.status // "" | tostring | gsub("[^ -~]"; "")' "$work/addkey.json" 2>/dev/null) || st=""
+    msg=$(jq -r '.message // "" | tostring | gsub("[^ -~]"; "")' "$work/addkey.json" 2>/dev/null) || msg=""
   fi
   token=$(<"$work/token")
   st=$(clean "${st:0:4096}") msg=$(clean "${msg:0:4096}")

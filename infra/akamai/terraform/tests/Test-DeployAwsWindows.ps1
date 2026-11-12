@@ -16,7 +16,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-if ($IsWindows -or -not $IsCoreCLR) {
+if ($PSVersionTable.PSEdition -ne 'Core' -or $IsWindows) {
     Write-Host 'skip: this test needs pwsh on Linux or macOS (its AWS CLI stub is a shell script)'
     exit 0
 }
@@ -122,6 +122,7 @@ try {
     $runIndex = [array]::FindIndex([string[]]$r.Calls, [Predicate[string]] { param($c) $c.StartsWith('CALL <ec2> <run-instances>') })
     Check 'the group is checked before the launch' ($sgIndex -ge 0 -and $sgIndex -lt $runIndex) "order $sgIndex, $runIndex"
     Check 'it says a public IPv4 is attached, outbound only' ($r.Out -match 'Public IPv4:\s+attached at launch' -and $r.Out -match 'reachable outbound only') $r.Out
+    Check 'the plan names the public IPv4 charge' ($r.Out -match 'public IPv4 is billed on top') $r.Out
 
     # 2. Refusals: any inbound rule, a failed call, an odd answer. No launch, not even a dry run.
     foreach ($case in @(

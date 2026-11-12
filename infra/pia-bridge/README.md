@@ -11,6 +11,6 @@ Plan: `docs/plan/2026-11-08-cloud-operator.md` §3–§4. Decisions: `docs/decis
 | `vm/pia-ca.rsa.4096.crt` | PIA's CA (from `github.com/pia-foss/manual-connections`), pinned by a test |
 | `tests/` | Fakes for S3, the Linode firewall API, the Actions API and SSH; the VM step against stub `curl` and `wg`; one end-to-end run of the real bootstrap and step |
 
-**Reading a failure by hand.** `deliver-pia` discards the step's output, so only its exit code reaches the job. Run by hand, two stages also print one line to stderr: stage 13 the rejected certificate name (it must be a DNS hostname; capitals are allowed and lowercased), and stage 15 addKey's HTTP status (`000` for no reply) with PIA's `status` and `message`. Both lines are cut short and stripped of control characters, and neither prints the token, the key or PIA's reply.
+**Reading a failure by hand.** `deliver-pia` discards the step's output, so only its exit code reaches the job. Run by hand, two stages also print one line to stderr: stage 13 which check failed, with the rejected certificate name (it must be a DNS hostname; capitals are allowed and lowercased), and stage 15 addKey's HTTP status (`000` for no reply) with PIA's `status` and `message`. Both lines are cut short and stripped of control characters, and neither prints the token, the key or PIA's reply.
 
 Run the tests with `infra/fleet/run_tests.sh` (CI's infra job runs it). Nothing here calls a network in a test. Every change here gets a fresh Opus review and a `/security-review` (plan §3).

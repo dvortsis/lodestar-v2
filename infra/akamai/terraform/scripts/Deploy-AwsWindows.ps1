@@ -173,6 +173,7 @@ Public IPv4:           attached at launch, for outbound traffic to SSM only.
 Instance Profile:      $instanceProfileArn
 Root Volume:           $RootVolumeGiB GiB, encrypted (EBS storage is billed on top)
 Hourly Rate:           `$0.3370 / hour (on-demand, us-east-1, incl. Windows licence; check current AWS pricing)
+                       The public IPv4 is billed on top (about `$0.005 / hour; check current AWS pricing).
 $($expCheck.LeaseHours)-Hour Estimated Cost:  `$$([math]::Round(0.3370 * $expCheck.LeaseHours, 3))
 Mandatory Tags:        Project=Lodestar, Environment=Test, ManagedBy=Terraform,
                        ExpiresAt=$($expCheck.IsoString)

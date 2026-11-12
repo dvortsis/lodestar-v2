@@ -200,6 +200,42 @@ class VMStep(unittest.TestCase):
                     self.assertLessEqual(len(r.stderr), 200)
                     self.assertTrue(all(" " <= c <= "~" for c in r.stderr[:-1]))
 
+    def test_every_stage_13_failure_says_which_check_failed(self):
+        wg = {"ip": "192.0.2.10", "cn": "c"}
+        for name, servers, says in (
+                ("not json", "<html>", "the server list is not JSON"),
+                ("region missing", {"regions": [{"id": "other", "servers": {"wg": [wg]}}]},
+                 "region ca_test is not in the server list"),
+                ("no regions", {}, "region ca_test is not in the server list"),
+                ("no wg server", {"regions": [{"id": "ca_test", "servers": {"wg": []}}]},
+                 "region ca_test has no WireGuard server"),
+                ("no servers", {"regions": [{"id": "ca_test"}]}, "region ca_test has no WireGuard server"),
+                ("ip missing", {"regions": [{"id": "ca_test", "servers": {"wg": [{"cn": "c"}]}}]},
+                 "region ca_test: the WireGuard server's address is not IPv4"),
+                ("ip not ipv4", {"regions": [{"id": "ca_test", "servers": {"wg": [{"ip": "1.2.3", "cn": "c"}]}}]},
+                 "region ca_test: the WireGuard server's address is not IPv4"),
+                ("ip too long", {"regions": [{"id": "ca_test", "servers": {"wg": [{"ip": "1111.2.3.4", "cn": "c"}]}}]},
+                 "region ca_test: the WireGuard server's address is not IPv4"),
+                ("cn not a string", {"regions": [{"id": "ca_test", "servers": {"wg": [{"ip": "192.0.2.10", "cn": 7}]}}]},
+                 "region ca_test: the certificate name is not a string"),
+                ("cn not a hostname", {"regions": [{"id": "ca_test", "servers": {"wg": [{"ip": "192.0.2.10", "cn": "a_b"}]}}]},
+                 'region ca_test: the certificate name is not a hostname: "invalid:"a_b""')):
+            with self.subTest(name):
+                self.setUp()
+                (self.stub / "servers.json").write_text(servers if isinstance(servers, str) else json.dumps(servers))
+                r = self.run_step()
+                self.assertEqual(r.returncode, 13)
+                self.assertEqual(r.stderr, f"pia-wireguard: stage 13: {says}\n")
+                self.assertFalse(self.work.exists())
+
+    def test_stage_15_survives_a_nul_in_pias_reply(self):
+        r = self.addkey_reply("401", json.dumps({"status": "E\u0000R", "message": "a\u0000b"}))
+        self.assert_stage15(r, 'pia-wireguard: stage 15: addKey refused: http 401, status "ER", message "ab"\n')
+
+    def test_addkey_reply_size_is_capped(self):
+        self.run_step()
+        self.assertIn("--max-filesize 65536", self.argv())
+
     def addkey_reply(self, http, body):
         (self.stub / "http").write_text(http)
         (self.stub / "reply").write_bytes(body if isinstance(body, bytes) else body.encode())
@@ -243,6 +279,7 @@ class VMStep(unittest.TestCase):
         self.assertTrue(all(" " <= c <= "~" for c in line[:-1]))  # no control or non-ASCII character
         self.assertLessEqual(len(line), 320)
         self.assertIn("[token]", line)
+        self.assertIn("[key]", line)  # masked, though PIA never sees the private key
         for secret in (TOKEN, USER, PASSWORD, "10.9.9.9"):
             self.assertNotIn(secret, line)
         self.assertNotIn(PRIV, line)  # the private key never leaves the VM; nor is it printed
