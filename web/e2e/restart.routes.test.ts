@@ -265,19 +265,24 @@ test.describe('restart banner', () => {
 			await expect(page.getByTestId('restart-tray')).toBeVisible();
 			// To the very end of the page, where nothing may sit under the tray.
 			await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
-			// The tray is not on top of the centre of any of the last controls.
+			// No control's box, not just its centre, overlaps the tray's.
 			const covered = await page.evaluate(() => {
-				const main = document.querySelector('main')!;
+				const tray = document
+					.querySelector('[data-testid="restart-tray"]')!
+					.getBoundingClientRect();
 				const controls = [
-					...main.querySelectorAll<HTMLElement>('input, button, [role="switch"], [role="radio"]')
+					...document.querySelectorAll<HTMLElement>(
+						'main input, main button, main [role="switch"], main [role="radio"]'
+					)
 				].filter((el) => el.checkVisibility() && el.getBoundingClientRect().height > 0);
-				return controls.slice(-3).flatMap((el) => {
+				return controls.flatMap((el) => {
 					const r = el.getBoundingClientRect();
-					const at = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
-					// Covered by the tray, which is what this is about (other layers are not its doing).
-					return at?.closest('[data-testid="restart-tray"]')
-						? [`${el.tagName} ${el.textContent?.trim().slice(0, 30)}`]
-						: [];
+					const overlaps =
+						r.bottom > tray.top &&
+						r.top < tray.bottom &&
+						r.right > tray.left &&
+						r.left < tray.right;
+					return overlaps ? [`${el.tagName} ${el.textContent?.trim().slice(0, 30)}`] : [];
 				});
 			});
 			expect(covered).toEqual([]);

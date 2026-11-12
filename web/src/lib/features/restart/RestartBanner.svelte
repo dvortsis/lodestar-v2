@@ -38,8 +38,9 @@
 		const el = tray;
 		const measure = () => {
 			const bar = document.querySelector<HTMLElement>('[data-testid="save-bar"]');
-			lift = Math.max(MIN_LIFT, bar ? bar.offsetHeight + 16 : 0);
-			const room = `${lift + el.offsetHeight + 16}px`;
+			const next = Math.max(MIN_LIFT, bar ? bar.offsetHeight + 16 : 0);
+			lift = next;
+			const room = `${next + el.offsetHeight + 16}px`;
 			document.body.style.paddingBottom = room;
 			document.documentElement.style.scrollPaddingBottom = room;
 		};

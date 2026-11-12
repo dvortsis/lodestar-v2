@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { tick } from 'svelte';
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { ApiError } from '$lib/api/client';
 import RestartBanner from './RestartBanner.svelte';
@@ -173,4 +174,28 @@ it('lists each pending field with its saved value (Review)', async () => {
 	render(RestartBanner);
 	await fireEvent.click(await screen.findByRole('button', { name: 'Review' }, { timeout: 10_000 }));
 	await until(() => expect(screen.getByTestId('restart-review')).toBeTruthy());
+});
+
+it('Keep stays kept when an older /system read lands after it', async () => {
+	api.get.mockResolvedValueOnce(awaiting(Date.now() / 1000 + 300));
+	api.post.mockResolvedValue({ address_change: null, restarting: false });
+	render(RestartBanner);
+	const keep = await screen.findByRole(
+		'button',
+		{ name: 'Keep this address' },
+		{ timeout: 10_000 }
+	);
+	// A read that started before Keep and answers after it, with the old state.
+	let release!: (s: System) => void;
+	api.get.mockReturnValueOnce(new Promise<System>((done) => (release = done)));
+	void restart.refresh();
+	api.get.mockResolvedValue(awaiting(Date.now() / 1000 + 300));
+	await fireEvent.click(keep);
+	await until(() => expect(api.post).toHaveBeenCalledWith('/system/address/keep'));
+	await until(() => expect(screen.queryByText('Keep this address?')).toBeNull());
+	release(awaiting(Date.now() / 1000 + 300));
+	await new Promise((done) => setTimeout(done, 0));
+	await tick();
+	expect(screen.queryByText('Keep this address?')).toBeNull();
+	expect(restart.system?.address_change).toBeNull();
 });

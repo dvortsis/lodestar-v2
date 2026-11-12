@@ -2,13 +2,13 @@
 // restart banner once a change waits (or a new HTTP address waits to be kept). The chrome starts it
 // after the first interaction.
 //
-// - Asks `GET /system` on start, on each route change, when the tab is focused again, every 15 s on a Settings screen and once a
-//   minute elsewhere; the banner shares the same store.
+// - Asks `GET /system` on start, on each route change, when the tab is focused again, every 15 s
+//   on a Settings screen and once a minute elsewhere; the banner shares the same store.
 // - The banner floats (a fixed tray at the bottom), so it never moves content; it is mounted on the
 //   body and checks the route itself.
 // - The polite live region is created here, empty, as soon as the watch starts, and its text is
-//   set only when the words change (the pending count, or an address waiting to be kept). The pill's own announcement stays quiet for this state, so the
-//   two never say it twice.
+//   set only when the words change (the pending count, or an address waiting to be kept). The
+//   pill's own announcement stays quiet for this state, so the two never say it twice.
 import { mount, unmount, type Component } from 'svelte';
 import { page } from '$app/state';
 import { restart } from './restart.svelte';

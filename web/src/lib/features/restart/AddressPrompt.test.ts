@@ -107,3 +107,19 @@ it('Keep pressed while a 0:00 check is in flight wins over that check', async ()
 	await vi.advanceTimersByTimeAsync(2_000);
 	expect(restart.waiting).toBeNull();
 });
+
+it('three failed checks are three in a row: a success in between starts the count again', async () => {
+	api.get
+		.mockRejectedValueOnce(new Error('down'))
+		.mockRejectedValueOnce(new Error('down'))
+		.mockResolvedValueOnce(system(300))
+		.mockRejectedValueOnce(new Error('down'))
+		.mockRejectedValueOnce(new Error('down'))
+		.mockResolvedValue(system(300));
+	render(AddressPrompt, { props: { system: system(-60) } });
+	await until(() => expect(api.get).toHaveBeenCalledTimes(1));
+	await vi.advanceTimersByTimeAsync(5 * 5_500);
+	await until(() => expect(api.get.mock.calls.length).toBeGreaterThanOrEqual(5));
+	// Fail, fail, succeed, fail, fail: never three in a row.
+	expect(restart.waiting).toBeNull();
+});
