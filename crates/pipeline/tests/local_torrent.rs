@@ -317,6 +317,16 @@ async fn a_private_file_never_reaches_a_dht_facing_path() {
     .swarm_hashes()
     .collect();
     assert_eq!(hybrid.len(), 2);
+    // Stored as both BEP 27 private and `private_source` (runner,
+    // 2026-11-12): every outward gate leaves it out under its own rule.
+    use lodestar_store::flags;
+    let row = store.torrent(pid).unwrap().unwrap();
+    assert_eq!(
+        row.flags & (flags::PRIVATE | flags::PRIVATE_SOURCE),
+        flags::PRIVATE | flags::PRIVATE_SOURCE
+    );
+    let public_row = store.torrent(id).unwrap().unwrap();
+    assert_eq!(public_row.flags & flags::PRIVACY, 0);
 
     // Scrapes (trackers and BEP 33 over the DHT): never offered.
     let new = store.unscraped_after(0, 100).unwrap();
@@ -371,6 +381,10 @@ async fn a_private_file_never_reaches_a_dht_facing_path() {
     // address carries the uploader's passkey.
     let source = upload_source(&store);
     let claims = store.torrent_claims(pid).unwrap();
+    assert!(
+        claims.iter().all(|c| c.private_source),
+        "its claims are private too"
+    );
     assert!(claims.iter().filter(|c| c.source == source).all(|c| {
         c.claims
             .as_ref()

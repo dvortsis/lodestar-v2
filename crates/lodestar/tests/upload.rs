@@ -268,6 +268,17 @@ fn a_served_instance_takes_an_upload_end_to_end() {
     });
     assert!(!rss.contains("Private Cut"), "{rss}");
     assert!(!rss.contains(&private_hash), "{rss}");
+    // The plain exports (CSV, NDJSON, magnets): the public upload, never
+    // the private one.
+    for format in ["csv", "json", "magnets"] {
+        let r = get(&s, &format!("/api/v1/export?format={format}"));
+        assert!(r.starts_with("HTTP/1.0 200"), "{format}: {r}");
+        assert!(
+            !r.contains("Private Cut") && !r.contains(&private_hash),
+            "{format}: {r}"
+        );
+        assert!(r.contains("Public"), "{format}: {r}");
+    }
     // And the instance's own alert list does show it: it's kept local.
     until("the private alert", || {
         let r = get(&s, &format!("/api/v1/saved-searches/{search}/alerts"));

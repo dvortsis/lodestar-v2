@@ -20,9 +20,11 @@
 //!   `private` (BEP 27) keeps no tracker and no comment:** a private
 //!   tracker's announce address holds the uploader's passkey.
 //! - **Private:** a `private=1` info dict is stored with the store's
-//!   `flags::PRIVATE`, which `prepare` derives from the dict itself. It's
-//!   in `flags::PRIVACY`, which every §18.7 gate refuses, so the key never
-//!   reaches the DHT, a tracker, a scrape, a cache lookup or a refetch.
+//!   `flags::PRIVATE` (BEP 27, from the dict itself) and as
+//!   `private_source`, since its hash may be known nowhere else. So every
+//!   §18.7 gate leaves it out under its own rule: it never reaches the
+//!   DHT, a tracker, a scrape, a cache lookup, a refetch, a feed or an
+//!   export.
 //! - **Judged** ([`task`]): on the blocking pool, through
 //!   [`torrent_cache::judge_sealed`], exactly as a cache's verified file
 //!   is (the floor's hash list first, then the full filter). A held
@@ -349,6 +351,8 @@ fn judge_one(
         // changed before its commit.
         info_raw: if held { local.info_raw } else { Vec::new() },
         key: local.key,
+        // BEP 27: its hash may be known nowhere else (§18.7).
+        private_source: local.private,
     };
     (outcome, Some(commit))
 }
