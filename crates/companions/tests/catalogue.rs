@@ -5,8 +5,9 @@
 //! validation into something weaker.
 
 use lodestar_companions::catalogue::{
-    Arch, ArchiveKind, Catalogue, DOWNLOAD_HOSTS, Exposure, MAX_ARTIFACT_SIZE, MAX_JSON, Need,
-    NotAvailable, Platform, Proto, REGISTRIES, Rule, SUPPORTED, TemplateId, UpstreamSig, builtin,
+    Arch, ArchiveKind, Catalogue, DOWNLOAD_HOSTS, Exposure, INSTALLER_SOURCES, MAX_ARTIFACT_SIZE,
+    MAX_JSON, Need, NotAvailable, Platform, Proto, REGISTRIES, Rule, SUPPORTED, TemplateId,
+    UpstreamSig, builtin,
 };
 use proptest::prelude::*;
 use serde_json::{Value, json};
@@ -868,8 +869,10 @@ proptest! {
     /// is refused, or (where the text happens to be valid for that field)
     /// leaves every safety invariant intact. Never a panic.
     #[test]
-    fn string_mutations_never_weaken_the_catalogue(pick in any::<prop::sample::Index>(), text in hostile()) {
-        let base = pinned();
+    fn string_mutations_never_weaken_the_catalogue(
+        pick in any::<prop::sample::Index>(), text in hostile(), installer in any::<bool>(),
+    ) {
+        let base = if installer { with_installer() } else { pinned() };
         let mut leaves = Vec::new();
         string_leaves(&base, &mut Vec::new(), &mut leaves);
         let path = &leaves[pick.index(leaves.len())];
@@ -895,8 +898,9 @@ proptest! {
             Just(0u64), Just(1), Just(80), Just(1023), Just(1024), Just(65535), Just(65536),
             Just(MAX_ARTIFACT_SIZE), Just(MAX_ARTIFACT_SIZE + 1), Just(u64::MAX), any::<u64>(),
         ],
+        installer in any::<bool>(),
     ) {
-        let base = pinned();
+        let base = if installer { with_installer() } else { pinned() };
         let mut leaves = Vec::new();
         number_leaves(&base, &mut Vec::new(), &mut leaves);
         let path = &leaves[pick.index(leaves.len())];
@@ -911,8 +915,8 @@ proptest! {
     /// unless the field is optional (`executable`, `pin`, `digest`,
     /// `health`, `native`, `container`, `fingerprint`).
     #[test]
-    fn dropping_a_required_field_is_refused(pick in any::<prop::sample::Index>()) {
-        let base = pinned();
+    fn dropping_a_required_field_is_refused(pick in any::<prop::sample::Index>(), installer in any::<bool>()) {
+        let base = if installer { with_installer() } else { pinned() };
         let mut objects = Vec::new();
         object_keys(&base, &mut Vec::new(), &mut objects);
         let (path, key) = &objects[pick.index(objects.len())];
@@ -990,9 +994,23 @@ fn assert_invariants(c: &Catalogue) {
                     );
                     assert!(!x.as_str().starts_with('/'));
                 }
+                // Only an installer has a folder of its own, on an installer
+                // source that is never a fetch host.
+                if let Some(r) = &a.release {
+                    assert_eq!(a.archive, ArchiveKind::Installer);
+                    let h = r.host();
+                    assert!(INSTALLER_SOURCES.contains(&h), "{h}");
+                    assert!(!DOWNLOAD_HOSTS.contains(&h) && !e.allows_host(h), "{h}");
+                }
                 if let Ok(p) = a.pin() {
                     assert!(p.url.as_str().starts_with("https://"));
-                    assert!(e.allows_host(p.url.host()));
+                    match &a.release {
+                        Some(r) => {
+                            assert_eq!(p.url.host(), r.host());
+                            assert!(p.url.as_str().starts_with(r.as_str()));
+                        }
+                        None => assert!(e.allows_host(p.url.host())),
+                    }
                     assert!(p.size > 0 && p.size <= MAX_ARTIFACT_SIZE);
                 }
             }
@@ -1010,4 +1028,191 @@ fn assert_invariants(c: &Catalogue) {
             assert!(!h.path.as_str().contains(".."));
         }
     }
+}
+
+// ─── Installer pins (X-cmp13-installer-pins) ────────────────────────────
+
+const SF: &str = "https://downloads.sourceforge.net/project/qbittorrent/qbittorrent-win32/";
+const FPR: &str = "D8F3DA77AAC6741053599C136E4A2D025B7CC9A2";
+
+/// The pinned catalogue with qBittorrent's Windows installer pinned from
+/// its own SourceForge folder, as the pin tool writes it.
+fn with_installer() -> Value {
+    let mut v = pinned();
+    let artifacts = qbit(&mut v)["native"]["artifacts"].as_array_mut().unwrap();
+    artifacts.push(json!({
+        "platform": "windows", "arch": "x86_64", "archive": "installer", "executable": null,
+        "release": SF,
+        "pin": {"version": "5.0.3",
+                "url": format!("{SF}qbittorrent-5.0.3/qbittorrent_5.0.3_x64_setup.exe"),
+                "size": 40_000_000, "sha256": SHA2,
+                "upstream_sig": {"kind": "verified_at_pin", "fingerprint": FPR}}
+    }));
+    v
+}
+
+fn installer(v: &mut Value) -> &mut Value {
+    &mut qbit(v)["native"]["artifacts"][2]
+}
+
+fn installer_refused(rule: Rule, f: impl FnOnce(&mut Value)) {
+    let mut v = with_installer();
+    f(&mut v);
+    match parse(&v) {
+        Ok(_) => panic!("accepted an installer pin that breaks {rule:?}"),
+        Err(e) => assert_eq!(e.rule(), rule, "{e}"),
+    }
+}
+
+#[test]
+fn reads_an_installer_pinned_from_its_own_folder() {
+    let c = parse(&with_installer()).unwrap();
+    let a = c
+        .get("qbittorrent")
+        .unwrap()
+        .artifact(Platform::Windows, Arch::X86_64)
+        .unwrap();
+    assert_eq!(a.archive, ArchiveKind::Installer);
+    assert_eq!(a.release.as_ref().unwrap().as_str(), SF);
+    let pin = a.pin().unwrap();
+    assert_eq!(pin.url.host(), "downloads.sourceforge.net");
+    assert_eq!(pin.url.file_name(), "qbittorrent_5.0.3_x64_setup.exe");
+    assert_eq!(
+        pin.upstream_sig,
+        UpstreamSig::VerifiedAtPin {
+            fingerprint: lodestar_companions::catalogue::Fingerprint::parse(FPR).unwrap()
+        }
+    );
+    // Every other artifact has no folder of its own.
+    let linux = c
+        .get("qbittorrent")
+        .unwrap()
+        .artifact(Platform::Linux, Arch::X86_64)
+        .unwrap();
+    assert!(linux.release.is_none());
+}
+
+#[test]
+fn an_unpinned_installer_needs_no_folder_and_old_catalogues_load() {
+    // The builtin catalogue, written before the field, names none.
+    let c = builtin().unwrap();
+    let artifacts = c.entries().iter().filter_map(|e| e.native.as_ref());
+    assert!(
+        artifacts
+            .flat_map(|n| &n.artifacts)
+            .all(|a| a.release.is_none())
+    );
+    let mut v = with_installer();
+    let a = installer(&mut v).as_object_mut().unwrap();
+    a.remove("release");
+    a.insert("pin".into(), Value::Null);
+    assert!(parse(&v).is_ok());
+}
+
+#[test]
+fn a_folder_named_installer_may_await_its_pin_and_pins_never_name_a_mirror() {
+    let mut v = with_installer();
+    installer(&mut v)["pin"] = Value::Null;
+    let c = parse(&v).unwrap();
+    let a = c
+        .get("qbittorrent")
+        .unwrap()
+        .artifact(Platform::Windows, Arch::X86_64)
+        .unwrap();
+    assert!(a.release.is_some());
+    assert_eq!(a.pin().unwrap_err(), NotAvailable::AwaitingPin);
+    // A pin names the folder's own host, never a download mirror.
+    installer_refused(Rule::HostNotAllowed, |v| {
+        installer(v)["pin"]["url"] = json!(
+            "https://netix.dl.sourceforge.net/project/qbittorrent/qbittorrent-win32/qbittorrent-5.0.3/qbittorrent_5.0.3_x64_setup.exe"
+        );
+    });
+}
+
+#[test]
+fn installer_sources_are_never_fetch_hosts() {
+    for h in INSTALLER_SOURCES {
+        assert!(!DOWNLOAD_HOSTS.contains(h), "{h}");
+    }
+}
+
+#[test]
+fn refuses_installer_folders_and_pins_out_of_place() {
+    // Without its own folder, an installer's pin is checked against the
+    // entry's release folder and fetch hosts, as before: SourceForge is
+    // then refused.
+    installer_refused(Rule::HostNotAllowed, |v| {
+        installer(v).as_object_mut().unwrap().remove("release");
+    });
+    // Only an installer has a folder of its own.
+    installer_refused(Rule::Source, |v| {
+        qbit(v)["native"]["artifacts"][0]["release"] = json!(SF);
+    });
+    installer_refused(Rule::Source, |v| {
+        qbit(v)["native"]["artifacts"][1]["release"] = json!(SF);
+    });
+    // The folder: https, a known installer source, SourceForge's shape.
+    installer_refused(Rule::Url, |v| {
+        installer(v)["release"] = json!(SF.replace("https", "http"))
+    });
+    installer_refused(Rule::Url, |v| installer(v)["release"] = json!("not a url"));
+    installer_refused(Rule::Syntax, |v| installer(v)["release"] = json!(7));
+    installer_refused(Rule::HostNotAllowed, |v| {
+        installer(v)["release"] =
+            json!("https://evil.example/project/qbittorrent/qbittorrent-win32/");
+    });
+    installer_refused(Rule::HostNotAllowed, |v| {
+        installer(v)["release"] =
+            json!("https://sourceforge.net/project/qbittorrent/qbittorrent-win32/");
+    });
+    // The fetch-host list in the wrong place: an installer folder on a
+    // fetch host, or the installer source added to the entry's hosts (the
+    // entry's own DOWNLOAD_HOSTS rule refuses that first).
+    installer_refused(Rule::HostNotAllowed, |v| {
+        installer(v)["release"] =
+            json!("https://github.com/project/qbittorrent/qbittorrent-win32/");
+    });
+    installer_refused(Rule::HostNotAllowed, |v| {
+        qbit(v)["hosts"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("downloads.sourceforge.net"));
+    });
+    for path in [
+        "/project/qbittorrent/",
+        "/project/qbittorrent/qbittorrent-win32",
+        "/project/qbittorrent/qbittorrent-win32/extra/",
+        "/projects/qbittorrent/qbittorrent-win32/",
+        "/project/qbittorrent/qbittorrent-win32/../",
+    ] {
+        let want = if path.contains("..") {
+            Rule::Url
+        } else {
+            Rule::Source
+        };
+        installer_refused(want, |v| {
+            installer(v)["release"] = json!(format!("https://downloads.sourceforge.net{path}"));
+        });
+    }
+    // The pin: inside its own folder, as `<folder>/<file>`, on its host.
+    installer_refused(Rule::HostNotAllowed, |v| {
+        installer(v)["pin"]["url"] = json!(
+            "https://github.com/userdocs/qbittorrent-nox-static/releases/download/x/qbittorrent_setup.exe"
+        );
+    });
+    installer_refused(Rule::Source, |v| {
+        installer(v)["pin"]["url"] = json!(format!("{SF}qbittorrent_5.0.3_x64_setup.exe"));
+    });
+    installer_refused(Rule::Source, |v| {
+        installer(v)["pin"]["url"] = json!(
+            "https://downloads.sourceforge.net/project/other/qbittorrent-win32/v/qbittorrent_setup.exe"
+        );
+    });
+    installer_refused(Rule::Archive, |v| {
+        installer(v)["pin"]["url"] =
+            json!(format!("{SF}qbittorrent-5.0.3/qbittorrent_5.0.3_x64.zip"));
+    });
+    installer_refused(Rule::Version, |v| {
+        installer(v)["pin"]["version"] = json!("5.0.4");
+    });
 }

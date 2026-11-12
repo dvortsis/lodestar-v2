@@ -6,6 +6,8 @@ committed, and nothing touches the network.
 """
 
 import contextlib
+import dataclasses
+import datetime
 import hashlib
 import io
 import json
@@ -269,10 +271,25 @@ class Download(Case):
         for tag in ("release-5.1.0_v2.0.11", "release-5.0.3", "release-5.0.3_v2.0.11/x", "5.0.3"):
             with self.subTest(tag=tag):
                 self.refused(
-                    Fake(files), "request", "--tag", tag, "--skip-image", companion="qbittorrent", version="5.0.3"
+                    Fake(files),
+                    "request",
+                    "--tag",
+                    tag,
+                    "--skip-image",
+                    "--artifacts",
+                    "linux-x86_64",
+                    companion="qbittorrent",
+                    version="5.0.3",
                 )
         status, err = self.run_pin(
-            Fake(files), "--tag", "release-5.0.3_v2.0.11", "--skip-image", companion="qbittorrent", version="5.0.3"
+            Fake(files),
+            "--tag",
+            "release-5.0.3_v2.0.11",
+            "--skip-image",
+            "--artifacts",
+            "linux-x86_64,linux-aarch64",
+            companion="qbittorrent",
+            version="5.0.3",
         )
         self.assertEqual(status, 0, err)
         self.assertIn("image digest was not re-pinned", self.report.read_text())
@@ -353,6 +370,10 @@ class Drift(unittest.TestCase):
         self.assertEqual(pin.MAX_ARTIFACT_SIZE, 512 * 1024 * 1024)
         registries = re.search(r"pub const REGISTRIES: &\[&str\] = &\[(.*?)\];", cat, re.S).group(1)
         self.assertEqual(sorted(re.findall(r'"([^"]+)"', registries)), sorted(pin.REGISTRIES))
+        sources = re.search(r"pub const INSTALLER_SOURCES: &\[&str\] = &\[(.*?)\];", cat, re.S).group(1)
+        self.assertEqual(tuple(re.findall(r'"([^"]+)"', sources)), pin.INSTALLER_SOURCES)
+        recipe = upstream.RECIPES["qbittorrent"]
+        self.assertIn(pin.host_of(recipe.installer_release), pin.INSTALLER_SOURCES)
         check = (ROOT / "crates/lodestar/src/update/check.rs").read_text()
         self.assertIn(f"pub const MAX_HOPS: usize = {pin.MAX_HOPS};", check)
 
@@ -726,6 +747,450 @@ class Container(Case):
                 mutate(r)
                 with self.assertRaises(pin.Refused):
                     pin.resolve_digest(Fake(r), "lscr.io/linuxserver/prowlarr", tag)
+
+
+SF_DIR = "https://downloads.sourceforge.net/project/qbittorrent/qbittorrent-win32/qbittorrent-5.0.3/"
+SF = SF_DIR + "qbittorrent_5.0.3_x64_setup.exe"
+MIRROR = SF.replace("downloads.sourceforge.net", "netix.dl.sourceforge.net")
+INSTALLER = b"MZ an installer" * 200
+FEED = "https://sourceforge.net/projects/qbittorrent/rss?path=/qbittorrent-win32/qbittorrent-5.0.3"
+TAG_REF = "https://api.github.com/repos/qbittorrent/qBittorrent/git/ref/tags/release-5.0.3"
+TAG_SHA = "a" * 40
+TAG_OBJ = f"https://api.github.com/repos/qbittorrent/qBittorrent/git/tags/{TAG_SHA}"
+FEED_PATH = "/qbittorrent-win32/qbittorrent-5.0.3/qbittorrent_5.0.3_x64_setup.exe"
+
+
+def feed(items):
+    """SourceForge's folder feed, in its documented RSS and Media RSS shape."""
+    body = "".join(
+        f"<item><title><![CDATA[{path}]]></title>"
+        f"<link>https://sourceforge.net/projects/qbittorrent/files{path}/download</link>"
+        f'<media:content url="https://sourceforge.net/projects/qbittorrent/files{path}/download" '
+        f'type="application/x-msdownload; charset=binary" filesize="{size}">'
+        f'<media:hash algo="md5">{md5}</media:hash></media:content></item>'
+        for path, size, md5 in items
+    )
+    return (
+        '<?xml version="1.0" encoding="utf-8"?><rss xmlns:content="http://purl.org/rss/1.0/modules/content/" '
+        'xmlns:media="http://video.search.yahoo.com/mrss/" version="2.0"><channel><title>qBittorrent</title>'
+        f"{body}</channel></rss>"
+    ).encode()
+
+
+def md5(b):
+    return hashlib.md5(b, usedforsecurity=False).hexdigest()
+
+
+@unittest.skipUnless(GPG, "gpg is not installed")
+class InstallerPins(Case):
+    """qBittorrent's Windows installer: read from SourceForge at pin time only,
+    pinned only with the release key's signature (X-cmp13-installer-pins)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.root = Path(tempfile.mkdtemp(prefix="pins-gpg-"))
+        cls.gpg = Gpg(cls.root)
+        cls.a = cls.gpg.new_key("release")
+        cls.b = cls.gpg.new_key("intruder")
+
+    @classmethod
+    def tearDownClass(cls):
+        subprocess.run(["gpgconf", "--homedir", str(cls.gpg.home), "--kill", "all"], capture_output=True)
+        shutil.rmtree(cls.root, ignore_errors=True)
+
+    def recipe(self, policy=None):
+        policy = policy or upstream.OpenPgp(".asc", (self.a,))
+        base = upstream.RECIPES["qbittorrent"]
+        return dataclasses.replace(base, signature={**base.signature, "windows-x86_64": policy})
+
+    def routes(self, sig=None, body=INSTALLER, listed=None, tag_date="2026-01-01T00:00:00Z", tag_type="tag"):
+        sig = self.gpg.sign(self.a, INSTALLER) if sig is None else sig
+        listed = [(FEED_PATH, len(INSTALLER), md5(INSTALLER))] if listed is None else listed
+        return {
+            SF: redirect(MIRROR),
+            MIRROR: ok(body),
+            SF + ".asc": redirect(MIRROR + ".asc"),
+            MIRROR + ".asc": ok(sig),
+            FEED: ok(feed(listed)),
+            TAG_REF: ok(json.dumps({"object": {"type": tag_type, "sha": TAG_SHA}}).encode()),
+            TAG_OBJ: ok(json.dumps({"tagger": {"date": tag_date}}).encode()),
+        }
+
+    def pin(self, fake, *extra, recipe=None):
+        return self.run_pin(
+            fake,
+            "--tag",
+            "release-5.0.3_v2.0.11",
+            "--skip-image",
+            "--artifacts",
+            "windows-x86_64",
+            *extra,
+            companion="qbittorrent",
+            version="5.0.3",
+            recipe=recipe or self.recipe(),
+        )
+
+    def refuse(self, fake, code, recipe=None):
+        status, err = self.pin(fake, recipe=recipe)
+        self.assertEqual(status, 1, err)
+        self.assertIn(f"{code}:", err)
+        self.assertFalse(self.out.exists())
+        self.assertFalse(self.report.exists())
+        return err
+
+    def test_pinned_from_its_own_folder_with_the_release_key(self):
+        shutil.copy(self.gpg.export(self.a), self.keys / f"{self.a}.asc")
+        status, err = self.pin(Fake(self.routes()))
+        self.assertEqual(status, 0, err)
+        a = self.entry("qbittorrent")["native"]["artifacts"][2]
+        self.assertEqual(list(a), ["platform", "arch", "archive", "executable", "release", "pin"])
+        self.assertEqual(a["release"], "https://downloads.sourceforge.net/project/qbittorrent/qbittorrent-win32/")
+        self.assertEqual(
+            a["pin"],
+            {
+                "version": "5.0.3",
+                "url": SF,
+                "size": len(INSTALLER),
+                "sha256": hashlib.sha256(INSTALLER).hexdigest(),
+                "upstream_sig": {"kind": "verified_at_pin", "fingerprint": self.a},
+            },
+        )
+        # The fetch hosts are untouched: SourceForge is never one.
+        self.assertNotIn("downloads.sourceforge.net", self.entry("qbittorrent")["hosts"])
+
+    def test_the_bytes_are_tied_to_the_version(self):
+        shutil.copy(self.gpg.export(self.a), self.keys / f"{self.a}.asc")
+        status, err = self.pin(Fake(self.routes()))
+        self.assertEqual(status, 0, err)
+        report = self.report.read_text()
+        self.assertIn(f"MD5 `{md5(INSTALLER)}`", report)
+        self.assertIn("dated 2026-01-01T00:00:00Z", report)
+        self.assertIn("answered at `https://netix.dl.sourceforge.net/project/qbittorrent/", report)
+        self.out.unlink()
+        self.report.unlink()
+        other = b"MZ another genuinely signed file" * 100
+        same = bytes(reversed(INSTALLER))  # same length, other bytes
+        cases = {
+            # A mirror serving another signed file: the feed's MD5 and size don't match.
+            "other bytes": self.routes(sig=self.gpg.sign(self.a, other), body=other),
+            "wrong size": self.routes(listed=[(FEED_PATH, len(INSTALLER) + 1, md5(INSTALLER))]),
+            # Same size, other MD5: the MD5 is the binding, not the size.
+            "wrong md5": self.routes(listed=[(FEED_PATH, len(INSTALLER), md5(b"x"))]),
+            "same-size signed file": self.routes(sig=self.gpg.sign(self.a, same), body=same),
+            "a time without a zone": self.routes(tag_date="2026-01-01T00:00:00"),
+            "no item": self.routes(listed=[]),
+            "two items": self.routes(listed=[(FEED_PATH, len(INSTALLER), md5(INSTALLER))] * 2),
+            "another path only": self.routes(
+                listed=[(FEED_PATH.replace("_x64_", "_lt12_x64_"), len(INSTALLER), md5(INSTALLER))]
+            ),
+            # Signed before the release was tagged: an older file.
+            "older signature": self.routes(tag_date="2099-01-01T00:00:00Z"),
+            "lightweight tag": self.routes(tag_type="commit"),
+            "no tag date": self.routes(tag_date="soon"),
+        }
+        for name, routes in cases.items():
+            with self.subTest(name):
+                self.refuse(Fake(routes), "installer_mismatch")
+        # The download ending at another project's copy of the path.
+        routes = self.routes()
+        elsewhere = MIRROR.replace("/project/qbittorrent/", "/project/other/")
+        routes[SF] = redirect(elsewhere)
+        routes[elsewhere] = ok(INSTALLER)
+        self.refuse(Fake(routes), "installer_mismatch")
+        # The download ending at another file's path.
+        routes = self.routes()
+        lt12 = MIRROR.replace("_x64_", "_lt12_x64_")
+        routes[SF] = redirect(lt12)
+        routes[lt12] = ok(INSTALLER)
+        self.refuse(Fake(routes), "installer_mismatch")
+        # The feed only from SourceForge's origin, never a mirror or elsewhere.
+        for to in ("https://netix.dl.sourceforge.net/rss", "https://evil.example/rss"):
+            with self.subTest(to):
+                routes = self.routes()
+                routes[FEED] = redirect(to)
+                routes[to] = ok(feed([(FEED_PATH, len(INSTALLER), md5(INSTALLER))]))
+                self.refuse(Fake(routes), "host_not_allowed")
+        # A document type in the feed (entity expansion) is refused, even with
+        # a matching item and in another encoding.
+        good = feed([(FEED_PATH, len(INSTALLER), md5(INSTALLER))]).decode()
+        doctype = good.replace("<rss ", '<!DOCTYPE rss [<!ENTITY a "aaaa">]><rss ', 1)
+        for name, body in (
+            ("utf-8", doctype.encode()),
+            ("utf-16", doctype.replace('encoding="utf-8"', 'encoding="utf-16"').encode("utf-16")),
+        ):
+            with self.subTest(name):
+                routes = self.routes()
+                routes[FEED] = ok(body)
+                err = self.refuse(Fake(routes), "installer_mismatch")
+                self.assertTrue("document type" in err or "isn't UTF-8" in err, err)
+
+    def test_the_slack_boundary_exactly(self):
+        shutil.copy(self.gpg.export(self.a), self.keys / f"{self.a}.asc")
+        sig = self.gpg.sign(self.a, INSTALLER)
+        art = self.tmp / "art"
+        art.write_bytes(INSTALLER)
+        _, signed_at = pin.verify_openpgp(GPG, art, sig, (self.a,), self.keys)
+        iso = lambda ts: datetime.datetime.fromtimestamp(ts, datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+        status, err = self.pin(Fake(self.routes(sig=sig, tag_date=iso(signed_at + pin.TAG_SLACK))))
+        self.assertEqual(status, 0, err)  # signed exactly two days before the tag: allowed
+        self.out.unlink()
+        self.report.unlink()
+        self.refuse(Fake(self.routes(sig=sig, tag_date=iso(signed_at + pin.TAG_SLACK + 1))), "installer_mismatch")
+
+    def test_the_two_days_of_slack(self):
+        shutil.copy(self.gpg.export(self.a), self.keys / f"{self.a}.asc")
+        now = datetime.datetime.now(datetime.UTC)
+        at = lambda d: (now + datetime.timedelta(days=d)).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+        status, err = self.pin(Fake(self.routes(tag_date=at(1))))
+        self.assertEqual(status, 0, err)  # signed a day before the tag: within the slack
+        self.out.unlink()
+        self.report.unlink()
+        self.refuse(Fake(self.routes(tag_date=at(3))), "installer_mismatch")
+
+    def test_refusals(self):
+        shutil.copy(self.gpg.export(self.a), self.keys / f"{self.a}.asc")
+        no_sig = self.routes()
+        del no_sig[MIRROR + ".asc"]
+        del no_sig[SF + ".asc"]
+        self.refuse(Fake(no_sig), "signature_missing")
+        self.refuse(Fake(self.routes(body=INSTALLER + b"!")), "bad_signature")
+        self.refuse(Fake(self.routes(sig=self.gpg.sign(self.b, INSTALLER))), "bad_signature")
+        self.refuse(Fake(self.routes(sig=b"not a signature")), "bad_signature")
+        self.refuse(Fake(self.routes()), "installer", recipe=self.recipe(upstream.Unsigned("no")))
+        for to in (
+            "https://evil.example/x.exe",
+            "https://a.b.dl.sourceforge.net/x.exe",
+            "https://dl.sourceforge.net.evil.example/x.exe",
+            "http://netix.dl.sourceforge.net/x.exe",
+            "https://github.com/x.exe",
+            "https://www.fosshub.com/x.exe",
+        ):
+            with self.subTest(to=to):
+                routes = self.routes()
+                routes[SF] = redirect(to)
+                routes[to] = ok(INSTALLER)
+                self.refuse(Fake(routes), "host_not_allowed")
+        routes = self.routes()
+        routes[SF + ".asc"] = redirect("https://evil.example/sig.asc")
+        self.refuse(Fake(routes), "host_not_allowed")
+
+    def test_the_key_is_fetched_by_fingerprint_when_not_committed(self):
+        sources = (("https://keys.example/k", ("keys.example",)), ("https://github.com/u.gpg", ("github.com",)))
+        policy = upstream.OpenPgp(".asc", (self.a,), key_sources=sources)
+        routes = self.routes()
+        routes["https://keys.example/k"] = ok(self.gpg.run("--armor", "--export", self.a))
+        # A user's key list may hold other keys too; only the pinned one is used.
+        routes["https://github.com/u.gpg"] = ok(self.gpg.run("--armor", "--export", self.b, self.a))
+        status, err = self.pin(Fake(routes), recipe=self.recipe(policy))
+        self.assertEqual(status, 0, err)
+        report = self.report.read_text()
+        self.assertIn(f"Commit it as `keys/{self.a}.asc`", report)
+        self.assertIn("BEGIN PGP PUBLIC KEY BLOCK", report)
+        # A source that doesn't serve the pinned key refuses the pin.
+        self.out.unlink()
+        self.report.unlink()
+        routes["https://github.com/u.gpg"] = ok(self.gpg.run("--armor", "--export", self.b))
+        self.refuse(Fake(routes), "unknown_key", recipe=self.recipe(policy))
+        # Nowhere to fetch it from, and no committed key: refused.
+        none = upstream.OpenPgp(".asc", (self.a,))
+        self.refuse(Fake(routes), "key_not_pinned", recipe=self.recipe(none))
+
+    def test_mirror_hosts(self):
+        hosts = pin.INSTALLER_HOSTS
+        for h in ("downloads.sourceforge.net", "sourceforge.net", "netix.dl.sourceforge.net", "a-1.dl.sourceforge.net"):
+            self.assertTrue(hosts.allows(h), h)
+        for h in (
+            "dl.sourceforge.net",
+            "a.b.dl.sourceforge.net",
+            "-a.dl.sourceforge.net",
+            "evil.example",
+            "sourceforge.net.evil.example",
+            "xdl.sourceforge.net",
+        ):
+            self.assertFalse(hosts.allows(h), h)
+        # SourceForge stays refused on every other fetch.
+        with self.assertRaises(pin.Refused):
+            pin.check_url("https://downloads.sourceforge.net/x", pin.DOWNLOAD_HOSTS + ("downloads.sourceforge.net",))
+
+
+class LocalServer:
+    """A real HTTP server on loopback, for the real transport's tests."""
+
+    def __init__(self, handler):
+        import http.server
+        import threading
+
+        self.release = threading.Event()
+        release = self.release
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_GET(self):
+                try:
+                    handler(self, release)
+                except OSError:
+                    pass  # the client shut the socket at its deadline
+
+            def log_message(self, *args):
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.daemon_threads = True
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.server.server_port}/"
+
+    def close(self):
+        self.release.set()
+        self.server.shutdown()
+        self.server.server_close()
+
+
+class RealTransport(unittest.TestCase):
+    """fetch() over a real socket: complete bodies arrive, stalls and drips
+    can't outlast the deadline. Loopback is plain HTTP, so the https rule is
+    lifted for these tests only."""
+
+    def serve(self, handler):
+        srv = LocalServer(handler)
+        self.addCleanup(srv.close)
+        env = mock.patch.dict(os.environ, {"NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"})
+        env.start()
+        self.addCleanup(env.stop)
+        lifted = mock.patch.object(pin, "check_url", lambda url, hosts: None)
+        lifted.start()
+        self.addCleanup(lifted.stop)
+        return srv.url
+
+    def test_complete_bodies_arrive_length_delimited_and_chunked(self):
+        body = b"companion build " * 10000
+
+        def length(h, _):
+            h.send_response(200)
+            h.send_header("Content-Length", str(len(body)))
+            h.end_headers()
+            h.wfile.write(body)
+
+        def chunked(h, _):
+            h.send_response(200)
+            h.send_header("Transfer-Encoding", "chunked")
+            h.end_headers()
+            for i in range(0, len(body), 4096):
+                part = body[i : i + 4096]
+                h.wfile.write(b"%x\r\n%s\r\n" % (len(part), part))
+            h.wfile.write(b"0\r\n\r\n")
+
+        for handler in (length, chunked):
+            with self.subTest(handler.__name__):
+                url = self.serve(handler)
+                self.assertEqual(pin.fetch_bytes(pin.Transport(), url, (), len(body)), body)
+                with tempfile.TemporaryDirectory() as d:
+                    size, sha = pin.fetch_file(pin.Transport(), url, (), len(body), Path(d) / "f")
+                self.assertEqual((size, sha), (len(body), hashlib.sha256(body).hexdigest()))
+
+    def test_a_stall_or_a_drip_is_refused_at_the_deadline(self):
+        import time
+
+        def stall(h, release):
+            h.send_response(200)
+            h.send_header("Content-Length", "100000")
+            h.end_headers()
+            h.wfile.write(b"x" * 10)
+            h.wfile.flush()
+            release.wait(30)
+
+        def drip(h, release):
+            h.send_response(200)
+            h.send_header("Content-Length", "100000")
+            h.end_headers()
+            while not release.wait(0.05):  # one byte per tick, until the test ends
+                h.wfile.write(b"x")
+                h.wfile.flush()
+
+        def chunk_line_drip(h, release):
+            # Chunked, then the chunk-size line one byte at a time and never
+            # ended: `read1` reads that line with many recvs.
+            h.send_response(200)
+            h.send_header("Transfer-Encoding", "chunked")
+            h.end_headers()
+            h.wfile.flush()
+            while not release.wait(0.05):
+                h.wfile.write(b"0")
+                h.wfile.flush()
+
+        for handler in (stall, drip, chunk_line_drip):
+            with self.subTest(handler.__name__), mock.patch.object(pin, "OVERALL", 1):
+                url = self.serve(handler)
+                start = time.monotonic()
+                with self.assertRaises(pin.Refused) as e:
+                    pin.fetch_bytes(pin.Transport(), url, (), 100000)
+                self.assertEqual(e.exception.code, "timeout")
+                self.assertLess(time.monotonic() - start, 20)
+
+
+class SinglePlatform(Case):
+    GHCR = "https://ghcr.io/v2/qdm12/thing/manifests/v1"
+
+    def manifest(self, cfg):
+        digest = "sha256:" + hashlib.sha256(cfg).hexdigest()
+        body = json.dumps(
+            {"mediaType": "application/vnd.oci.image.manifest.v1+json", "config": {"digest": digest}}
+        ).encode()
+        blob = f"https://ghcr.io/v2/qdm12/thing/blobs/{digest}"
+        store = "https://pkg-containers.githubusercontent.com/b"
+        return {self.GHCR: ok(body), blob: redirect(store), store: ok(cfg)}
+
+    def test_the_config_names_the_platform(self):
+        routes = self.manifest(json.dumps({"os": "linux", "architecture": "amd64"}).encode())
+        _, platforms = pin.resolve_digest(Fake(routes), "ghcr.io/qdm12/thing", "v1")
+        self.assertEqual(platforms, ["linux/amd64"])
+
+    def test_the_token_reaches_the_registry_only(self):
+        cfg = json.dumps({"os": "linux", "architecture": "amd64"}).encode()
+        routes = self.manifest(cfg)
+        body = routes.pop(self.GHCR)[2]
+        routes[self.GHCR] = (401, {"WWW-Authenticate": 'Bearer realm="https://ghcr.io/token",service="ghcr.io"'}, b"")
+        routes["https://ghcr.io/token?service=ghcr.io&scope=repository%3Aqdm12%2Fthing%3Apull"] = ok(
+            b'{"token": "t0k"}'
+        )
+        fake = Fake(routes)
+        real_get = fake.get
+
+        def get(url, headers):
+            if url == self.GHCR and headers.get("Authorization") == "Bearer t0k":
+                fake.calls.append((url, dict(headers)))
+                return pin.Response(200, {}, io.BytesIO(body))
+            return real_get(url, headers)
+
+        fake.get = get
+        _, platforms = pin.resolve_digest(fake, "ghcr.io/qdm12/thing", "v1")
+        self.assertEqual(platforms, ["linux/amd64"])
+        blob = [h for u, h in fake.calls if "/blobs/" in u]
+        self.assertEqual([h.get("Authorization") for h in blob], ["Bearer t0k"])
+        store = [h for u, h in fake.calls if u.startswith("https://pkg-containers.githubusercontent.com/")]
+        self.assertEqual(store, [{}], "the blob host got credentials")
+
+    def test_a_manifest_without_a_config_or_a_config_without_a_platform(self):
+        no_cfg = {self.GHCR: ok(json.dumps({"mediaType": "application/vnd.oci.image.manifest.v1+json"}).encode())}
+        with self.assertRaises(pin.Refused) as e:
+            pin.resolve_digest(Fake(no_cfg), "ghcr.io/qdm12/thing", "v1")
+        self.assertEqual(e.exception.code, "registry")
+        no_os = self.manifest(json.dumps({"architecture": "amd64"}).encode())
+        with self.assertRaises(pin.Refused) as e:
+            pin.resolve_digest(Fake(no_os), "ghcr.io/qdm12/thing", "v1")
+        self.assertEqual(e.exception.code, "registry")
+
+    def test_another_platform_or_a_wrong_config_is_refused(self):
+        arm = self.manifest(json.dumps({"os": "linux", "architecture": "arm64"}).encode())
+        with self.assertRaises(pin.Refused) as e:
+            pin.resolve_digest(Fake(arm), "ghcr.io/qdm12/thing", "v1")
+        self.assertEqual(e.exception.code, "registry")
+        bad = self.manifest(json.dumps({"os": "linux", "architecture": "amd64"}).encode())
+        store = "https://pkg-containers.githubusercontent.com/b"
+        bad[store] = ok(b'{"os": "linux", "architecture": "amd64", "x": 1}')
+        with self.assertRaises(pin.Refused) as e:
+            pin.resolve_digest(Fake(bad), "ghcr.io/qdm12/thing", "v1")
+        self.assertEqual(e.exception.code, "digest_mismatch")
 
 
 class RealOpener(unittest.TestCase):
