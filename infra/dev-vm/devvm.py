@@ -16,7 +16,7 @@ Guard rails, enforced in code:
 
 Usage:
   devvm.py status
-  devvm.py create --ssh-pubkey-file KEY.pub --admin-ip A.B.C.D --workdir DIR
+  devvm.py create --ssh-pubkey-file KEY.pub --admin-ip A.B.C.D|none --workdir DIR
   devvm.py set-admin-ip --label claude-dev-YYYYMMDD --admin-ip A.B.C.D
   devvm.py delete --label claude-dev-YYYYMMDD --confirm claude-dev-YYYYMMDD
 """
@@ -104,7 +104,10 @@ def render_user_data(pubkey: str, host_priv: str, host_pub: str) -> str:
     return t
 
 
-def firewall_rules(admin_ip: str) -> dict:
+def firewall_rules(admin_ip: str | None) -> dict:
+    """Inbound DROP; with an admin address, TCP/22 from that /32 only."""
+    if admin_ip is None:
+        return {"inbound_policy": "DROP", "outbound_policy": "ACCEPT", "inbound": [], "outbound": []}
     return {
         "inbound_policy": "DROP",
         "outbound_policy": "ACCEPT",
@@ -127,7 +130,7 @@ def check_ip(ip: str) -> str:
 
 
 def cmd_create(a) -> None:
-    admin_ip = check_ip(a.admin_ip)
+    admin_ip = None if a.admin_ip == "none" else check_ip(a.admin_ip)
     pubkey = Path(a.ssh_pubkey_file).read_text().strip()
     if not pubkey.startswith(("ssh-ed25519 ", "ssh-rsa ", "ecdsa-sha2-")) or "PRIVATE" in pubkey:
         sys.exit("that is not an SSH public key")
@@ -221,7 +224,7 @@ def main() -> None:
     sub.add_parser("status")
     c = sub.add_parser("create")
     c.add_argument("--ssh-pubkey-file", required=True)
-    c.add_argument("--admin-ip", required=True)
+    c.add_argument("--admin-ip", required=True, help='public IPv4 for SSH, or "none" for no inbound at all')
     c.add_argument("--workdir", required=True, help="outside the repository")
     s = sub.add_parser("set-admin-ip")
     s.add_argument("--label", required=True)

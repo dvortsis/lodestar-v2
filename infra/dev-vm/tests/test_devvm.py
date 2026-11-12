@@ -79,6 +79,10 @@ class FirewallTests(unittest.TestCase):
         self.assertEqual((rule["protocol"], rule["ports"], rule["action"]), ("TCP", "22", "ACCEPT"))
         self.assertEqual(rule["addresses"], {"ipv4": ["198.51.100.4/32"]})
 
+    def test_no_admin_address_means_no_inbound_at_all(self):
+        r = devvm.firewall_rules(None)
+        self.assertEqual((r["inbound_policy"], r["inbound"]), ("DROP", []))
+
     def test_only_public_ipv4_is_accepted(self):
         for bad in ("10.0.0.1", "192.168.1.2", "127.0.0.1", "0.0.0.0", "100.64.0.1", "::1", "1.2.3.0/24"):
             with self.subTest(bad=bad), self.assertRaises((SystemExit, ValueError)):
