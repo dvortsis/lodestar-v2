@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T05:19:17Z",
+  "updated_at": "2026-11-12T05:27:33Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7100,7 +7100,17 @@
     "release/v0.5.2: P-v052-cut opening release/v052-tokio-notice from runner-state patches/v052-tokio-notice.patch (runner 06383e6b); review + merge before v0.5.2 tag",
     "slices.yaml entry: X-restart-banner-polish (next runner PR)",
     "X-restart-save-lag (Opus, web): banner learns of a Settings save within 15 s; restart store is async-race code, so Opus only",
-    "slices.yaml entry: X-filters-budget-headroom (next runner PR)"
+    "slices.yaml entry: X-filters-budget-headroom (next runner PR)",
+    {
+      "id": "X-filters-budget-headroom-closed",
+      "at": "2026-11-12T05:27:33Z",
+      "note": "Closed, no change (runner \u00a72.26): Filters first view 31144 B local vs 31140 B limit (CI green on main, so CI is at or just under). Dialogs already lazy; no unused code; folding Rules remove buttons into a snippet grew it +83 B; moving add-forms on demand only moves cost into Filters dialogs (35.88/35.9 kB). Rule: the next PR adding to that chunk gets a measured raise (measured + ~10%) with an owner flag. Session archived."
+    },
+    {
+      "id": "runner-pr-741",
+      "at": "2026-11-12T05:27:33Z",
+      "note": "Runner PR #741 (\u00a72.58 + 15 slice entries) open, head a56463ca; fresh review running on b055ffef + self-checked delta (entry removed)"
+    }
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7938,7 +7948,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T05:19:17Z",
+    "updated": "2026-11-12T05:27:33Z",
     "items": [
       {
         "slot": 1,
@@ -7995,11 +8005,9 @@
       },
       {
         "slot": 7,
-        "slice": "X-filters-budget-headroom",
-        "role": "Sonnet slice",
-        "agent": "session_01MMjhn8WrGpnM1jiYP9RY1X",
-        "doing": "find >=0.3 kB headroom on Filters first view without raising the limit",
-        "since": "2026-11-12T05:19:17Z"
+        "status": "idle",
+        "doing": "free: X-filters-budget-headroom closed with no change (05:28Z)",
+        "since": "2026-11-12T05:27:33Z"
       },
       {
         "slot": 8,
@@ -8104,7 +8112,7 @@
     }
   ],
   "heartbeat": "2026-11-12T03:41:56Z",
-  "updated": "2026-11-12T05:19:17Z",
+  "updated": "2026-11-12T05:27:33Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
