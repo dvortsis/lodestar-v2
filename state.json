@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T13:15:27Z",
+  "updated_at": "2026-11-12T13:17:34Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7309,6 +7309,16 @@
       "id": "ENR-13-brief-notes",
       "at": "2026-11-12T13:11:56Z",
       "note": "From rv-760: ENR-13 renders identification text as plain text with bidi isolation (stored text may hold control/direction chars); resolved_via null is not \"from the name\"; Debug of response types prints titles (consider redaction). Also from ENR-14: call Interest::opened from the detail drawer; Switches::kill_switch_tripped reads false in host (route-down wastes lookups) -> later slice."
+    },
+    {
+      "id": "X-watch-env",
+      "at": "2026-11-12T13:17:34Z",
+      "note": "UP-1 (runner): LODESTAR_WATCH_DIR env + config.rs key for Docker users, same validation as the watch setting (absolute dir, not in/around data dir). Later slice."
+    },
+    {
+      "id": "UP-2-brief-notes",
+      "at": "2026-11-12T13:17:34Z",
+      "note": "UP-2 must show the watch status reason next to the folder field (e.g. \"disabled: inside the data directory\"; Section::check cannot see the data dir, so a save can pass and be disabled at apply). Settings section \"watch\" is registered but hidden until UP-2 adds the screen."
     }
   ],
   "main_health": [
@@ -8409,7 +8419,7 @@
     }
   ],
   "heartbeat": "2026-11-12T12:38:43Z",
-  "updated": "2026-11-12T13:15:27Z",
+  "updated": "2026-11-12T13:17:34Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
