@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T07:01:12Z",
+  "updated_at": "2026-11-12T07:01:36Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8122,7 +8122,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T07:01:12Z",
+  "updated": "2026-11-12T07:01:36Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -8315,8 +8315,16 @@
   "cloud_tester": {
     "parent": "session_01MMjhnBD1KHxsn7QRHHmpeM",
     "reserved": 4,
-    "updated": "2026-11-12T07:01:12Z",
-    "items": [],
-    "note": "Sub-sessions of X-test-vm (test lanes only). Told 07:0xZ it may start (a) Windows-lane cloud session in lodestar-cloud-test and (b) Linux VM Remote Control session; ids pending."
+    "updated": "2026-11-12T07:01:36Z",
+    "items": [
+      {
+        "session": "session_01MMjhnAQgWauSQaaCZSzr9C",
+        "lane": "Windows lane setup (AWS, phase 1)",
+        "env": "lodestar-cloud-test",
+        "since": "2026-11-12T07:00Z",
+        "doing": "find IDs, check egress, deploy least-privilege IAM stack, simulate policy; no RunInstances, no secret reads, no terraform"
+      }
+    ],
+    "note": "Pending: Linux VM Remote Control session (after owner sends SSH key and IP); Windows phase 2 replaces phase 1."
   }
 }
