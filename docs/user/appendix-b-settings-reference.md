@@ -14,6 +14,20 @@ Every field in the Lodestar Unraid template in one table. The recommended value 
 | Intensity | Crawler effort (`LODESTAR_INTENSITY`) | `balanced` | `aggressive` can overload home routers. |
 | DHT port | Gluetun template only (`LODESTAR_DHT_PORT`) | `6881` | Match the port your VPN provider forwards. |
 
+## Updates settings on Windows (newer than v0.5.1)
+
+These are in **Settings → Updates**. Each can also be set in `config.toml` or locked by a variable. v0.5.1 has none of them.
+
+| Setting (key) | Label | Default | Recommended | Notes |
+|---|---|---|---|---|
+| `updates.mode` (`LODESTAR_UPDATES`) | How to update | Off | Check and notify | Install automatically behaves like Check and notify on Windows. Container image updates is for Docker and Unraid. |
+| `updates.level` (`LODESTAR_UPDATES_LEVEL`) | Which releases | Fixes only | Fixes only | Used by automatic installs, which Windows doesn't run yet. |
+| `updates.security_fixes` (`LODESTAR_UPDATES_SECURITY_FIXES`) | Always install security fixes | On under Install automatically, off under Check and notify | Leave as it is | Nothing installs unattended on Windows, so it changes nothing there yet. |
+| `updates.channel` (`LODESTAR_UPDATES_CHANNEL`) | Channel | Stable | Stable | Nightly is for testing only. |
+| `updates.wait_days` (`LODESTAR_UPDATES_WAIT_DAYS`) | Days to wait after a release | 3 | 3 | 0 to 14. **Install now** ignores it. |
+| `updates.window` (`LODESTAR_UPDATES_WINDOW`) | Install window | `03:00-05:00` | Leave as it is | Local time. Automatic installs only; **Install now** ignores it. |
+| `updates.allow_reindex` (`LODESTAR_UPDATES_ALLOW_REINDEX`) | Allow search index rebuilds | On | On | Applies to automatic installs. |
+
 ## Release scope
 
 This reference covers v0.5.1. The Sources screen, pack-version controls and safe-restart switch described in development notes are not available in this release.
