@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T13:19:13Z",
+  "updated_at": "2026-11-12T13:19:51Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8054,6 +8054,11 @@
       "pr": 753,
       "sha": "840512099d710f22d5dcae1faf5083705d79fddc",
       "at": "2026-11-12T13:14:00Z"
+    },
+    {
+      "pr": 756,
+      "sha": "0a70c788a1d7265e74282cede2c11f64a873c05d",
+      "at": "2026-11-12T13:19:51Z"
     }
   ],
   "active_sessions": {
@@ -8291,7 +8296,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T13:15:27Z",
+    "updated": "2026-11-12T13:19:51Z",
     "items": [
       {
         "slot": 1,
@@ -8313,11 +8318,11 @@
       },
       {
         "slot": 4,
-        "slice": "X-dht-lookup-converge",
+        "slice": "M8-NET-E2E",
         "role": "build",
         "agent": "session_01MMjhnAsZmQbQajtBLyTfXU",
-        "doing": "DHT get_peers lookup convergence fix (M8-NET-E2E parked on WIP until it merges)",
-        "since": "2026-11-12T08:56:58Z",
+        "doing": "#756 merged; resuming parked M8-NET-E2E (bring main in, 20 local runs)",
+        "since": "2026-11-12T13:19:51Z",
         "status": "active"
       },
       {
@@ -8424,7 +8429,7 @@
     }
   ],
   "heartbeat": "2026-11-12T12:38:43Z",
-  "updated": "2026-11-12T13:19:13Z",
+  "updated": "2026-11-12T13:19:51Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
