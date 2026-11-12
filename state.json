@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T07:19:20Z",
+  "updated_at": "2026-11-12T07:26:36Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8158,7 +8158,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T07:19:20Z",
+  "updated": "2026-11-12T07:26:36Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -8359,9 +8359,15 @@
         "env": "lodestar-cloud-test",
         "since": "2026-11-12T07:00Z",
         "doing": "find IDs, check egress, deploy least-privilege IAM stack, simulate policy; no RunInstances, no secret reads, no terraform"
+      },
+      {
+        "name": "Linux lane (Remote Control on the test VM)",
+        "session": "session_01MMjhnA1E7uHD6h6eTQyuh9",
+        "since": "2026-11-12T07:26:36Z",
+        "doing": "infra/dev-vm/linux-lane.md priorities 1, 2, 4; crawl results are leads only"
       }
     ],
-    "note": "Pending: Linux VM Remote Control session (after owner sends SSH key and IP); Windows phase 2 replaces phase 1."
+    "note": "Tester holds 2 of 4 (both in use). Runner holds 2 (GS-0, UN-0). Ask before a 3rd."
   },
   "extra": {
     "updated": "2026-11-12T07:04:58Z",
