@@ -94,6 +94,12 @@ pub struct LeaseTable {
     leases: HashMap<InfoHash, Lease>,
     /// Unix seconds each worker was last heard from.
     workers: HashMap<WorkerId, i64>,
+    /// Leases whose results the holder's batch delivered (`Fetched`, sent
+    /// on the coordinator's `Accepted`): token → key, and when it was
+    /// marked (X-wk-fetched-lease). Only the commit, a loss, an eviction or
+    /// the TTL after the mark ends one; meanwhile the holder's own claims
+    /// are answered as committed, never with the lease.
+    fetched: HashMap<Token, (InfoHash, i64)>,
 }
 
 impl LeaseTable {
@@ -104,6 +110,7 @@ impl LeaseTable {
             ttl: ttl_secs,
             leases: HashMap::new(),
             workers: HashMap::new(),
+            fetched: HashMap::new(),
         }
     }
 
@@ -201,7 +208,33 @@ impl LeaseTable {
         if !self.is_current(key, token) {
             return None;
         }
+        self.fetched.remove(&token);
         self.leases.remove(key)
+    }
+
+    /// The holder's batch carrying `key`'s result was accepted: marked
+    /// fetched, from the first mark (a repeat keeps it). `None`, nothing
+    /// marked, unless `worker` holds the key under `token`.
+    pub fn mark_fetched(
+        &mut self,
+        worker: WorkerId,
+        key: &InfoHash,
+        token: Token,
+        now: i64,
+    ) -> Option<Lease> {
+        let lease = *self
+            .leases
+            .get(key)
+            .filter(|l| l.holder == worker && l.token == token)?;
+        self.fetched.entry(token).or_insert((*key, now));
+        Some(lease)
+    }
+
+    /// Whether `worker` holds `key` under a lease marked fetched.
+    pub fn is_fetched(&self, worker: WorkerId, key: &InfoHash) -> bool {
+        self.leases
+            .get(key)
+            .is_some_and(|l| l.holder == worker && self.fetched.contains_key(&l.token))
     }
 
     /// Ends every lease held by a worker silent for longer than the TTL,
@@ -215,21 +248,40 @@ impl LeaseTable {
             .filter(|&(_, &seen)| seen + ttl < now)
             .map(|(&w, _)| w)
             .collect();
-        if dead.is_empty() {
+        // A fetched lease whose commit hasn't come a TTL after the mark
+        // expires too, holder alive or not: its batch never reached the
+        // store (X-wk-fetched-lease).
+        let stuck: Vec<InfoHash> = self
+            .fetched
+            .iter()
+            .filter(|&(t, &(k, marked))| {
+                marked + ttl < now && self.leases.get(&k).is_some_and(|l| l.token == *t)
+            })
+            .map(|(_, &(k, _))| k)
+            .collect();
+        if dead.is_empty() && stuck.is_empty() {
             return Vec::new();
         }
         for w in &dead {
             self.workers.remove(w);
         }
-        let expired: Vec<InfoHash> = self
+        let mut expired: Vec<InfoHash> = self
             .leases
             .iter()
             .filter(|(_, l)| dead.contains(&l.holder))
             .map(|(k, _)| *k)
             .collect();
+        expired.extend(stuck.into_iter().filter(|k| {
+            self.leases
+                .get(k)
+                .is_some_and(|l| !dead.contains(&l.holder))
+        }));
         expired
             .into_iter()
             .filter_map(|k| self.leases.remove(&k).map(|l| (k, l)))
+            .inspect(|(_, l)| {
+                self.fetched.remove(&l.token);
+            })
             .collect()
     }
 
@@ -256,6 +308,9 @@ impl LeaseTable {
             .collect();
         keys.into_iter()
             .filter_map(|k| self.leases.remove(&k).map(|l| (k, l)))
+            .inspect(|(_, l)| {
+                self.fetched.remove(&l.token);
+            })
             .collect()
     }
 
@@ -555,6 +610,14 @@ impl LeaseAuthority {
                 if s.committed_recently(worker, &c.key) {
                     return BatchAnswer::Committed;
                 }
+                // The holder's own claim on a lease whose result it already
+                // delivered: answered as committed, never with the lease,
+                // however long the commit takes (X-wk-fetched-lease). The
+                // claim's source still joins the lease.
+                if s.table.is_fetched(worker, &c.key) {
+                    let _ = s.claim(worker, *c, now);
+                    return BatchAnswer::Committed;
+                }
                 if s.would_lease(&c.key) {
                     if allowed == 0 {
                         return BatchAnswer::Busy;
@@ -684,6 +747,21 @@ impl LeaseAuthority {
             .get(key)
             .filter(|l| l.holder == worker && l.token == token)
             .copied()
+    }
+
+    /// The holder's batch carrying `key`'s result was accepted
+    /// (`Outcome::Fetched`): the lease stays for the commit, marked so the
+    /// holder's own claims no longer get it back, and expires a TTL after
+    /// the mark if the commit never comes. `None`, nothing marked, unless
+    /// `worker` holds the key under `token`.
+    pub fn fetched(
+        &self,
+        worker: WorkerId,
+        key: &InfoHash,
+        token: Token,
+        now: i64,
+    ) -> Option<Lease> {
+        self.lock().table.mark_fetched(worker, key, token, now)
     }
 
     /// The holder lost the key: ends the lease and reports the loss once.
@@ -856,6 +934,11 @@ impl LeaseAuthority {
     pub fn in_flight(&self, key: &InfoHash) -> bool {
         let s = self.lock();
         s.table.get(key).is_some() || s.pending.contains_key(key)
+    }
+
+    #[cfg(test)]
+    fn fetched_marks_for_test(&self) -> usize {
+        self.lock().table.fetched.len()
     }
 
     #[cfg(test)]
@@ -1747,5 +1830,102 @@ mod tests {
         a.serve_remote();
         a.serve_remote();
         assert_eq!(get(&ev.serving), 1);
+    }
+
+    /// X-wk-fetched-lease: once the holder reports its result `Fetched`
+    /// (its batch was accepted), its own claims are answered as committed,
+    /// never with the lease, however long the writer takes (here 500 s,
+    /// past the worker's 180 s grace): the lease isn't lost and stays for
+    /// the commit. Another worker's claim is answered as before.
+    #[test]
+    fn a_fetched_lease_answers_its_holders_claims_as_committed() {
+        let (a, ev) = counted();
+        let key = InfoHash([1; 20]);
+        let BatchAnswer::Claimed {
+            claimed: Claimed::Granted(t),
+            ..
+        } = a.claim_batch(A, &[claim(1, 0)], 0, None, None)[0]
+        else {
+            panic!()
+        };
+        assert!(a.fetched(B, &key, t, 1).is_none(), "only the holder");
+        assert!(a.fetched(A, &key, Token(t.0 + 1), 1).is_none(), "its token");
+        assert!(a.fetched(A, &key, t, 1).is_some());
+        assert_eq!(
+            a.claim_batch(A, &[claim(1, 3)], 500, None, None)[0],
+            BatchAnswer::Committed
+        );
+        let lease = a.get(&key).expect("still leased, for the commit");
+        assert_eq!((lease.token, lease.holder), (t, A));
+        assert_eq!(lease.sources, 0b1001, "the claim's source joined it");
+        assert_eq!(get(&ev.lost), 0);
+        assert!(matches!(
+            a.claim_batch(B, &[claim(1, 0)], 500, None, None)[0],
+            BatchAnswer::Claimed {
+                claimed: Claimed::Held { holder: A, token },
+                harvested: false,
+            } if token == t
+        ));
+        // The writer's commit ends it, and its mark with it.
+        assert!(a.commit(A, &key, t).is_some());
+        assert_eq!(a.fetched_marks_for_test(), 0);
+    }
+
+    /// A worker that never sends `Fetched` (an older one) gets its lease
+    /// back on its own claim, as before.
+    #[test]
+    fn a_holder_that_never_reports_fetched_gets_its_lease_back() {
+        let (a, _) = counted();
+        let BatchAnswer::Claimed {
+            claimed: Claimed::Granted(t),
+            ..
+        } = a.claim_batch(A, &[claim(1, 0)], 0, None, None)[0]
+        else {
+            panic!()
+        };
+        assert!(matches!(
+            a.claim_batch(A, &[claim(1, 0)], 500, None, None)[0],
+            BatchAnswer::Claimed {
+                claimed: Claimed::Held { holder: A, token },
+                ..
+            } if token == t
+        ));
+    }
+
+    /// A fetched lease whose commit never comes expires a TTL after the
+    /// mark, though its holder still heartbeats; its key waits for a
+    /// re-grant like any expired lease, and a late report under the old
+    /// token is stale. Ended any other way, the mark goes with the lease.
+    #[test]
+    fn a_fetched_lease_with_no_commit_expires_a_ttl_after_the_mark() {
+        let (a, _) = counted();
+        let key = InfoHash([1; 20]);
+        let Claimed::Granted(t) = a.claim(A, claim(1, 0), 0) else {
+            panic!()
+        };
+        assert!(a.fetched(A, &key, t, 10).is_some());
+        assert!(
+            a.fetched(A, &key, t, 300).is_some(),
+            "the first mark counts"
+        );
+        a.heartbeat(A, 600);
+        assert_eq!(a.expire(610), 0, "a TTL after the mark, not before");
+        a.heartbeat(A, 611);
+        assert_eq!(a.expire(611), 1);
+        assert_eq!((a.len(), a.pending()), (0, 1));
+        assert_eq!(a.fetched_marks_for_test(), 0);
+        assert!(a.commit(A, &key, t).is_none(), "the old token is stale");
+        // Lost or evicted: the mark goes too.
+        let Claimed::Granted(t) = a.claim(A, claim(2, 0), 700) else {
+            panic!()
+        };
+        assert!(a.fetched(A, &InfoHash([2; 20]), t, 700).is_some());
+        assert!(a.lost(&InfoHash([2; 20]), t, 1).is_some());
+        let Claimed::Granted(t) = a.claim(A, claim(3, 0), 700) else {
+            panic!()
+        };
+        assert!(a.fetched(A, &InfoHash([3; 20]), t, 700).is_some());
+        assert_eq!(a.evict(A), 1);
+        assert_eq!(a.fetched_marks_for_test(), 0);
     }
 }

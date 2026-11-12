@@ -311,6 +311,7 @@ placement:
   - X-spool-damage-log
   - X-wk-own-lease-lost
   - X-wk-out-set-polish
+  - X-wk-fetched-lease
 - ws: ws-web
   match:
   - W*

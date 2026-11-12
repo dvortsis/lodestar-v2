@@ -1516,6 +1516,17 @@ mod queues {
         );
         // The worker still counts the fetched lease, as the coordinator does.
         assert_eq!(s.leases(), 1);
+        // Its own claim on the fetched lease is answered as stored, never
+        // with the lease, which stays for the commit (X-wk-fetched-lease).
+        assert_eq!(
+            s.claim(vec![item(1)]).await.unwrap(),
+            [GrantItem::Denied {
+                key: [1; 20],
+                reason: DenyReason::Stored,
+            }]
+        );
+        let key1 = lodestar_metainfo::InfoHash([1; 20]);
+        assert_eq!(authority.get(&key1).map(|l| l.token.0), Some(t1));
         // The commit ends a fetched lease, under its holder and token.
         let key = lodestar_metainfo::InfoHash([1; 20]);
         assert!(

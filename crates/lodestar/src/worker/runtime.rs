@@ -2167,9 +2167,27 @@ async fn send_results(
                         for &(key, token) in &f.leases {
                             s.leases.committed(&InfoHash(key), Token(token));
                         }
+                        // `Fetched` first, then forgotten: the coordinator
+                        // keeps each lease until its writer commits, and
+                        // with the mark answers this worker's own claims as
+                        // committed meanwhile, never with the lease
+                        // (X-wk-fetched-lease). One task, so in that order.
                         if let Some(h) = s.session.borrow().clone() {
                             let leases = f.leases;
-                            tokio::spawn(async move { let _ = h.committed(leases).await; });
+                            tokio::spawn(async move {
+                                for part in leases.chunks(MAX_OUTCOME_BATCH) {
+                                    let fetched = part
+                                        .iter()
+                                        .map(|&(key, token)| OutcomeItem {
+                                            key,
+                                            token,
+                                            outcome: Outcome::Fetched,
+                                        })
+                                        .collect();
+                                    let _ = h.report(fetched).await;
+                                }
+                                let _ = h.committed(leases).await;
+                            });
                         }
                         // A spooled segment goes once all of it is in.
                         if let (Some(from), Some(sp)) = (f.from, &s.spool)
@@ -4440,6 +4458,54 @@ pub(crate) mod tests {
         .await;
         assert_eq!(c.sent.load(Ordering::Relaxed), 1, "counted once");
         drop(session);
+        rt.shutdown().await;
+    }
+
+    /// An accepted batch's leases are reported `Fetched` (X-wk-fetched-lease):
+    /// the coordinator then answers this worker's own claims for them as
+    /// committed, never with the lease, however long its writer takes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_accepted_batch_reports_its_leases_fetched() {
+        use lodestar_cluster::proto::ToWorker;
+        let mut rt = Runtime::start(config(Arc::new(MapFetch::default())));
+        let (mut coord, mut session) = session_pair().await;
+        rt.connected(session.handle());
+        let out = lock(&rt.shared.out).take().unwrap();
+        let record = sealed(1);
+        let (key, token) = (record.key.0, record.token.0);
+        out.send(record).await.unwrap();
+        let first = next_results(&mut coord).await;
+        coord
+            .send(ToWorker::Accepted {
+                batch: first.batch,
+                accepted: true,
+            })
+            .await
+            .unwrap();
+        let e = tokio::time::timeout(DEADLINE, session.next_event())
+            .await
+            .unwrap()
+            .unwrap();
+        rt.event(e);
+        let items = tokio::time::timeout(DEADLINE, async {
+            loop {
+                match coord.recv().await {
+                    Ok(Some(ToCoordinator::Outcome(o))) => return o.items,
+                    Ok(Some(_)) => {}
+                    other => panic!("the link ended: {other:?}"),
+                }
+            }
+        })
+        .await
+        .expect("an outcome in time");
+        assert_eq!(
+            items,
+            [OutcomeItem {
+                key,
+                token,
+                outcome: Outcome::Fetched,
+            }]
+        );
         rt.shutdown().await;
     }
 
