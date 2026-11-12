@@ -27,7 +27,7 @@ $root = Join-Path ([IO.Path]::GetTempPath()) ('lodestar-jw-' + [guid]::NewGuid()
 $install = Join-Path $root 'install'
 $tmp = Join-Path $root 'tmp'
 New-Item -ItemType Directory -Path $install, $tmp | Out-Null
-foreach ($f in 'join-worker.ps1', 'join-token-file.ps1', 'dacl-check.ps1') {
+foreach ($f in 'join-worker.ps1', 'join-token-file.ps1', 'dacl-check.ps1', 'service-sid.ps1') {
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot $f) -Destination $install
 }
 
@@ -95,7 +95,8 @@ function Invoke-Join([string]$mode, [string]$token = $sentinel, [string]$address
   $script:case++
   $data = Join-Path $root "data-$script:case"
   $log = New-Object 'Collections.Generic.List[string]'
-  $extra = "-StubArgs $mode -TimeoutSeconds $timeout"
+  # EventLog: a service every Windows has, so icacls can name its SID as an owner.
+  $extra = "-StubArgs $mode -TimeoutSeconds $timeout -ServiceName EventLog"
   $before = @(Get-ChildItem -LiteralPath $tmp -Directory | ForEach-Object FullName)
   $result = [Lodestar.Setup.JoinRunner]::Run($install, $data, $address, $token,
     [Action[string]] ({ param($l) $log.Add($l) }.GetNewClosure()), $tmp, $extra, 120000)
@@ -150,7 +151,11 @@ Assert ($r.Seen.envtoken -eq 'unset') "ok: LODESTAR_TOKEN was set in lodestar's 
 Assert-PrivateSddl $r.Seen.filesddl 'ok: the token file'
 Assert-PrivateSddl $r.Seen.dirsddl 'ok: the token folder'
 Assert ($r.Seen.dirsddl -match 'D:P') 'ok: the token folder inherits permissions'
-Assert (Test-Path -LiteralPath (Join-Path $r.Data 'cluster\credentials')) 'ok: no credentials'
+$creds = Join-Path $r.Data 'cluster\credentials'
+Assert (Test-Path -LiteralPath $creds) 'ok: no credentials'
+. (Join-Path $PSScriptRoot 'service-sid.ps1')
+$credsOwner = (Get-Acl -LiteralPath $creds).GetOwner([Security.Principal.SecurityIdentifier]).Value
+Assert ($credsOwner -eq (Get-ServiceSid 'EventLog').Value) "ok: the credentials are owned by $credsOwner, not the service"
 Assert-TokenGone $r 'ok'
 Assert-NoToken $r 'ok'
 Assert ($r.Work.Count -eq 1) "ok: expected one work folder, got $($r.Work.Count)"

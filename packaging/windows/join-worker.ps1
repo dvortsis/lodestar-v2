@@ -35,7 +35,10 @@ param(
   # Tests only: where the private folders go (default C:\Windows\Temp) and extra arguments
   # put before `worker` (a stub's mode). The MSI passes neither.
   [string]$TempRoot = '',
-  [string[]]$StubArgs = @()
+  [string[]]$StubArgs = @(),
+  # Tests only: a service that exists on the test machine (the Lodestar service doesn't yet),
+  # whose SID is given the worker's files.
+  [ValidatePattern('\A[A-Za-z0-9_]{1,64}\z')][string]$ServiceName = 'Lodestar'
 )
 $ErrorActionPreference = 'Stop'
 
@@ -176,7 +179,7 @@ try {
     # allow only OWNER RIGHTS, SYSTEM and Administrators (integrations secret.rs): the
     # service's own account gets them as their owner. /L: never through a link.
     . (Join-Path $PSScriptRoot 'service-sid.ps1')
-    $svc = (Get-ServiceSid 'Lodestar').Value
+    $svc = (Get-ServiceSid $ServiceName).Value
     $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
     $owned = $true
     foreach ($target in @(@((Join-Path $DataDir 'secrets.key'), @()), @((Join-Path $DataDir 'cluster'), @('/T')))) {
