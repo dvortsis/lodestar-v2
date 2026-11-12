@@ -40,12 +40,12 @@ Section 5 of the Legal Notice allows the Application log to hold what happened, 
 ## Docs and checks
 - **`settings/logging.rs`:** the comments said nothing writes to the Windows Event Log. They now say Lodestar's logging never does, that the service's and the update helper's fixed notes do, and that `event_log_errors` stays hidden and unused.
 - **User guide, chapter 6.1:** the two table rows about the Windows service's failures now point to the Application log, marked "(Newer than v0.5.1)" as section 6.2 is:
-  - "three failure events": three Lodestar notes too;
+  - "three failure events": when the cause is the data folder (section 6.2), three Lodestar notes too;
   - "stops at once and stays stopped": look for the Lodestar error, event ID 3, first.
 
   The wording matches the service's note: it names the data folder and the Repair fix. `lint_docs.py docs/user --strict`: 0 failed, 0 warnings.
 - **`docs/legal/operator-guidance.md`:** its status line now describes the development builds on `main`, which lead to the next release cut from `main`, as version 5 of the Legal Notice. That's the runner's wording (owner-decisions §2.57 delegates it), since 0.5.2 itself ships version 4. The rest of the page says nothing about the Event Log, and needs nothing: the notes hold no visitor's data.
-- **`docs/legal/README.md`:** the section 5 row lists .NET's `System.Diagnostics.EventLog` and `WriteEntry` beside `eventcreate` and the rest, as `tests/legal_facts.rs` already checks them, compared without case.
+- **`docs/legal/README.md`:** #709 already rewrote the section 5 row to list .NET's `Diagnostics.EventLog` and `WriteEntry` beside `eventcreate` and the rest, ignoring case, as `tests/legal_facts.rs` checks. So this PR takes `main`'s row, and the file has no change of its own.
 - **`packaging/windows/smoke.ps1`:** after the refused start (the administrator's Explorer entry on the data folder), it waits up to 30 s for an Application log event from the source `Lodestar`, ID 3, since the start. The wait polls, with no fixed sleep. It checks that:
   - the service's own account, `NT SERVICE\Lodestar` (its SID from `sc showsid`), wrote it;
   - it gives the Repair fix;
