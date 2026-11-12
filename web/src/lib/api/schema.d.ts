@@ -2348,6 +2348,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/torrents/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Adds one `.torrent` file, sent as the raw request body. */
+        post: operations["uploadTorrent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/torrents/{hash}": {
         parameters: {
             query?: never;
@@ -10253,6 +10270,12 @@ export interface components {
          */
         Topic: "torrents" | "crawler" | "rebuild" | "alerts" | "insights" | "settings" | "updates" | "search_live";
         /**
+         * Format: binary
+         * @description The request body: the `.torrent` file's bytes (the schema only; the
+         *     handler reads the body itself).
+         */
+        TorrentBody: string;
+        /**
          * @description `GET /torrents/{hash}`: the torrent summary (`docs/metrics.md` §7.1),
          *     its swarm section (§7.2) and the first 500 files.
          *
@@ -10618,6 +10641,16 @@ export interface components {
          * @enum {string}
          */
         UpdatesUnavailable: "fixture" | "network" | "windows_helper";
+        /** @description The body of a `202`. */
+        UploadAccepted: {
+            /** @description The info dict's primary hash, as 40 hex characters. */
+            info_hash: string;
+            /**
+             * @description The info dict says `private=1` (BEP 27): stored as private, so it
+             *     never reaches the DHT, a tracker or a cache.
+             */
+            private: boolean;
+        };
         /** @description `POST /usage/clear`. */
         UsageClear: {
             /**
@@ -16093,6 +16126,95 @@ export interface operations {
             };
             /** @description `restart_unavailable`: restart it the way it was started (the message says how). `restart_failed`: it couldn't get ready to restart (the portable build couldn't start its new copy), so it's still running. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    uploadTorrent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The `.torrent` file itself, at most 8 MiB. Nothing else: no multipart, no file name. */
+        requestBody: {
+            content: {
+                "application/x-bittorrent": components["schemas"]["TorrentBody"];
+            };
+        };
+        responses: {
+            /** @description Judged and handed to the store. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadAccepted"];
+                };
+            };
+            /** @description `malformed_torrent`: not a `.torrent` within the limits. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `cross_origin`: sent from another site. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `body_too_large`: over 8 MiB. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unsupported_media_type`: the body isn't sent as `application/x-bittorrent`. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `refused`: on the safety floor's list; or `held`: the filter holds it. Neither is stored. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `rate_limited`: too many uploads; wait for `Retry-After`. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `uploads_unavailable`: uploads aren't being taken right now. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
