@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T18:53:23Z",
+  "updated_at": "2026-11-12T18:57:19Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7427,6 +7427,11 @@
       "at": "2026-11-12T18:53:23Z",
       "from": "M8-PERF-1 (session_01MMjhnCqKPZbudhT8jXbC8k)",
       "note": "No low-resource mode exists in the product (architecture \u00a73 only describes it: trigram field, file index, caches, merge threads). M8-PERF-1's --low-resource records the missing switches and its verdict is 'incomplete', so G-v1-10m can't pass until a crates/search + settings slice adds the real switch. Plan it before G-v1-10m. Regex row reports 'unavailable' until RX-1 merges (runner agreed)."
+    },
+    {
+      "id": "owner-cloud-testing-priority",
+      "at": "2026-11-12T18:57:19Z",
+      "note": "OWNER (direct, runner chat 2026-11-12 ~18:56Z): 'Have Agent Runner prioritize anything needed for cloud testing.' Runner rule: cloud-testing PRs get reviewed and merged first; cloud-testing fix slices take the cloud-testing slots (13-16) at once, and the next free build slot ahead of features. Record as owner-decisions \u00a72.62 in the next runner PR (with \u00a72.61)."
     }
   ],
   "main_health": [
@@ -8449,7 +8454,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T18:52:01Z",
+    "updated": "2026-11-12T18:57:19Z",
     "items": [
       {
         "slot": 1,
@@ -8567,6 +8572,15 @@
         "doing": "session_01MMjhnBD1KHxsn7QRHHmpeM: branch claude/dreamy-edison-xlmtoy. Owner authorized AWS setup (06:49Z/06:52Z, verified). Owner 2026-11-12 (\u00a72.61, to record): 12 build slots + up to 4 for cloud testing; the tester and its lanes use the 4 (see cloud_tester).",
         "since": "2026-11-12T06:37:34Z",
         "status": "active"
+      },
+      {
+        "slot": 14,
+        "slice": "X-test-blockers-1112",
+        "role": "cloud-testing",
+        "agent": "session_01MMjhn9aPNpQpruF2s6sPjH",
+        "doing": "Leak-test 'handshake never completed' outcome + saturated portable-restart flake (briefs/X-test-blockers-1112.md)",
+        "since": "2026-11-12T18:57:19Z",
+        "status": "active"
       }
     ]
   },
@@ -8627,7 +8641,7 @@
     }
   ],
   "heartbeat": "2026-11-12T18:39:05Z",
-  "updated": "2026-11-12T18:53:23Z",
+  "updated": "2026-11-12T18:57:19Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -8852,7 +8866,8 @@
     },
     "notes": [
       "2026-11-12T17:37:15Z: #770 merged (a22f05f6). Deploy-AwsWindows.ps1 now launches with a public IPv4 via --network-interfaces and refuses if the SG has inbound rules; it needs ec2:DescribeSecurityGroups (owner decides IAM). Stage 13/15 fixes are on main.",
-      "2026-11-12T18:05:18Z: Windows lane phase 2 done, VM torn down, est. $0.50, nothing tagged left. 5a portable restart 30/30 idle and 30/30 at 2 burners, 5/6 saturated (jsonl wait starves). 5b MSI smoke PASS on nightly 9a6fcb48. 5c update helper unit/integration pass; real upgrade/rollback + ID 900 blocked on a signed release > 0.5.0 (owner releases). 5d Stop-Service 0.26-0.53 s, clean. Runbook gaps (bootstrap order, admin not SYSTEM, pwsh 7) routed to #771."
+      "2026-11-12T18:05:18Z: Windows lane phase 2 done, VM torn down, est. $0.50, nothing tagged left. 5a portable restart 30/30 idle and 30/30 at 2 burners, 5/6 saturated (jsonl wait starves). 5b MSI smoke PASS on nightly 9a6fcb48. 5c update helper unit/integration pass; real upgrade/rollback + ID 900 blocked on a signed release > 0.5.0 (owner releases). 5d Stop-Service 0.26-0.53 s, clean. Runbook gaps (bootstrap order, admin not SYSTEM, pwsh 7) routed to #771.",
+      "2026-11-12T18:57:19Z: owner says prioritise cloud testing. X-test-blockers-1112 launched (cloud slot 14): leak-test handshake outcome + saturated restart flake. #774 X-ci-deploy-aws-test under review; #776 (clippy 1.100) merges first. gluetun-leak slice launches the moment the tester's diagnosis lands. DescribeSecurityGroups IAM raised to the owner directly."
     ]
   },
   "extra": {
