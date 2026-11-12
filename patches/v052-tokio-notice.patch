@@ -1,0 +1,598 @@
+From 06383e6b2ca06d55ea6ea6380546b6a50b6390e6 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 12 Nov 2026 05:12:15 +0000
+Subject: [PATCH] Release v0.5.2: tokio 1.54.1, and the notice names 0.5.2 only
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+tokio 1.54.0 is yanked: its Interval can drop a timer entry the time
+driver still writes to (tokio-rs/tokio#8695, fixed in 1.54.1 by #8692),
+which aborted a DHT test on main (#731). The owner chose to carry the
+fix in v0.5.2 rather than cut a v0.5.1.x now (main §2.58), so this
+backports #731's bump: tokio's lock entry, every requirement on 1.54.0,
+the companions exact pin and the shipped licence list. cargo also
+refreshes fuzz/Cargo.lock's stale 0.5.0 workspace versions to 0.5.2.
+
+The Legal Notice's "Applies to" line on this branch said version 4
+applies to main's development builds, which now carry version 5. It
+now names 0.5.2 and its release candidates only (owner delegation
+§2.57; the mirror image of #725). NOTICE_VERSION stays 4: the edit says
+which software the notice describes, not what it does.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EYhgh4JX3AmHzKXPjYCoUg
+---
+ Cargo.lock                                    |  4 +-
+ bench/Cargo.toml                              |  2 +-
+ crates/api/Cargo.toml                         |  4 +-
+ crates/api/src/legal/notice.md                |  2 +-
+ crates/cluster/Cargo.toml                     |  4 +-
+ crates/companions/Cargo.toml                  |  2 +-
+ crates/crawler-sim/Cargo.toml                 |  2 +-
+ crates/dht/Cargo.toml                         |  4 +-
+ crates/integrations/Cargo.toml                |  4 +-
+ crates/lodestar/Cargo.toml                    |  2 +-
+ crates/peer-wire/Cargo.toml                   |  4 +-
+ crates/pipeline/Cargo.toml                    |  4 +-
+ crates/sources-importers/Cargo.toml           |  4 +-
+ crates/sources-plugins/Cargo.toml             |  4 +-
+ crates/sources/Cargo.toml                     |  4 +-
+ crates/tracker-scrape/Cargo.toml              |  4 +-
+ crates/utp/Cargo.toml                         |  4 +-
+ .../2026-11-12-runner-v052-tokio-notice.md    | 16 +++++++
+ docs/legal/legal-notice.md                    |  2 +-
+ docs/legal/operator-guidance.md               |  2 +-
+ fuzz/Cargo.lock                               | 46 +++++++++----------
+ web/licenses/rust.json                        |  2 +-
+ 22 files changed, 71 insertions(+), 55 deletions(-)
+ create mode 100644 docs/decisions/2026-11-12-runner-v052-tokio-notice.md
+
+diff --git a/Cargo.lock b/Cargo.lock
+index ad5cc47a5..b24eb1169 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -3366,9 +3366,9 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
+ 
+ [[package]]
+ name = "tokio"
+-version = "1.54.0"
++version = "1.54.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "a0c168a474b95bfecfe908a65d4bdffc523144b649a74c09c286afb35d53e0bc"
++checksum = "b52fd3255258d26fac7264ab5a76b53c13367136dc011d3d6ad4f8ed070396a3"
+ dependencies = [
+  "bytes",
+  "libc",
+diff --git a/bench/Cargo.toml b/bench/Cargo.toml
+index 00bc283f0..4f989ba5e 100644
+--- a/bench/Cargo.toml
++++ b/bench/Cargo.toml
+@@ -20,7 +20,7 @@ lodestar-tracker-scrape = { workspace = true, features = ["testing"] }
+ rand = "0.10.3"
+ rand_chacha = "0.10.0"
+ tempfile = "3.27.0"
+-tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros", "time"] }
++tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time"] }
+ 
+ # `examples/reporting-overhead.rs` drives the API's router in process. As
+ # dev-dependencies they stay out of the bench gates' change detection
+diff --git a/crates/api/Cargo.toml b/crates/api/Cargo.toml
+index ff2d54f4f..5eaaa36e9 100644
+--- a/crates/api/Cargo.toml
++++ b/crates/api/Cargo.toml
+@@ -30,7 +30,7 @@ serde_json = "1"
+ serde_path_to_error = "0.1.20"
+ serde_urlencoded = "0.7.1"
+ sha2 = "0.11"
+-tokio = { version = "1.54.0", features = ["rt", "macros", "sync", "time"] }
++tokio = { version = "1.54.1", features = ["rt", "macros", "sync", "time"] }
+ tracing = "0.1.44"
+ utoipa = { version = "5.5.0", default-features = false, features = ["macros"] }
+ 
+@@ -42,5 +42,5 @@ lodestar-bencode.workspace = true
+ lodestar-pipeline.workspace = true
+ proptest = "1.11.0"
+ tempfile = "3.27.0"
+-tokio = { version = "1.54.0", features = ["rt", "macros", "sync", "time", "net", "io-util", "test-util"] }
++tokio = { version = "1.54.1", features = ["rt", "macros", "sync", "time", "net", "io-util", "test-util"] }
+ tower = { version = "0.5", features = ["util"] }
+diff --git a/crates/api/src/legal/notice.md b/crates/api/src/legal/notice.md
+index 27d8b3dec..f8acc854a 100644
+--- a/crates/api/src/legal/notice.md
++++ b/crates/api/src/legal/notice.md
+@@ -2,7 +2,7 @@
+ 
+ **Version 4 · 2026-11-07**
+ 
+-*Applies to Lodestar 0.5.2 and the development builds that lead to it (the `main` branch). Where this notice says "this version", it means that software (a development build may report an earlier version number). The v0.5.1 release carries its own copy of this notice, version 3, written for what that build does.*
++*Applies to Lodestar 0.5.2 and its release candidates. Where this notice says "this version", it means that software. Each release carries its own copy of this notice, written for what that build does: v0.5.1 carries version 3, and the development builds on the `main` branch carry a later version.*
+ 
+ Lodestar shows this notice before first use, and again whenever its version is raised, and asks you to confirm that you have read it. It explains what the software does on your network, what it finds, what is yours to decide, and what the makers do and don't promise. It is a notice, not a contract that limits what you may do with the software: your rights to run, study, change and share Lodestar come from its licence (section 1) and nothing here takes them away.
+ 
+diff --git a/crates/cluster/Cargo.toml b/crates/cluster/Cargo.toml
+index 3dda21f73..97791054b 100644
+--- a/crates/cluster/Cargo.toml
++++ b/crates/cluster/Cargo.toml
+@@ -24,7 +24,7 @@ zeroize = "=1.9.1"
+ futures-util = { version = "=0.3.34", default-features = false, features = ["sink", "std"] }
+ postcard = { version = "=1.1.3", default-features = false, features = ["alloc"] }
+ serde = { version = "=1.0.229", default-features = false, features = ["derive", "std"] }
+-tokio = { version = "1.54.0", features = ["rt", "net", "sync", "time", "io-util", "macros"] }
++tokio = { version = "1.54.1", features = ["rt", "net", "sync", "time", "io-util", "macros"] }
+ tokio-rustls = { version = "=0.26.6", default-features = false }
+ tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake"] }
+ zstd = "=0.14.3"
+@@ -35,4 +35,4 @@ workspace = true
+ [dev-dependencies]
+ proptest = "1.11.0"
+ tempfile = "3.27.0"
+-tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
++tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
+diff --git a/crates/companions/Cargo.toml b/crates/companions/Cargo.toml
+index 98ef26317..2b83dd4f4 100644
+--- a/crates/companions/Cargo.toml
++++ b/crates/companions/Cargo.toml
+@@ -23,7 +23,7 @@ serde_json = "=1.0.154"
+ [dev-dependencies]
+ lodestar-companions = { path = ".", features = ["testing"] }
+ proptest = "=1.11.0"
+-tokio = { version = "=1.54.0", features = ["rt", "macros"] }
++tokio = { version = "=1.54.1", features = ["rt", "macros"] }
+ 
+ [lints]
+ workspace = true
+diff --git a/crates/crawler-sim/Cargo.toml b/crates/crawler-sim/Cargo.toml
+index 7a8e7a90b..ae548e831 100644
+--- a/crates/crawler-sim/Cargo.toml
++++ b/crates/crawler-sim/Cargo.toml
+@@ -21,4 +21,4 @@ lodestar-network-policy.workspace = true
+ lodestar-peer-wire.workspace = true
+ lodestar-sources = { workspace = true, features = ["testing"] }
+ lodestar-store.workspace = true
+-tokio = { version = "1.54.0", features = ["sync", "time", "rt", "macros", "test-util"] }
++tokio = { version = "1.54.1", features = ["sync", "time", "rt", "macros", "test-util"] }
+diff --git a/crates/dht/Cargo.toml b/crates/dht/Cargo.toml
+index 47c021616..69d0b446b 100644
+--- a/crates/dht/Cargo.toml
++++ b/crates/dht/Cargo.toml
+@@ -24,11 +24,11 @@ rand = "0.10"
+ sha1 = "0.11"
+ sha2 = "0.11"
+ socket2 = "0.6.5"
+-tokio = { version = "1.54.0", features = ["net", "time", "rt", "macros", "sync"] }
++tokio = { version = "1.54.1", features = ["net", "time", "rt", "macros", "sync"] }
+ 
+ [dev-dependencies]
+ proptest = "1.11.0"
+-tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros", "time", "net", "sync", "test-util", "io-util"] }
++tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time", "net", "sync", "test-util", "io-util"] }
+ 
+ [lints]
+ workspace = true
+diff --git a/crates/integrations/Cargo.toml b/crates/integrations/Cargo.toml
+index 2065c2736..4025d2415 100644
+--- a/crates/integrations/Cargo.toml
++++ b/crates/integrations/Cargo.toml
+@@ -24,7 +24,7 @@ reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no
+ rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+ serde = { version = "1.0.229", features = ["derive"] }
+ serde_json = "1.0.154"
+-tokio = { version = "1.54.0", features = ["rt", "net", "sync", "time"] }
++tokio = { version = "1.54.1", features = ["rt", "net", "sync", "time"] }
+ tracing = "0.1.44"
+ zeroize = "1.9.1"
+ 
+@@ -35,7 +35,7 @@ workspace = true
+ axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
+ proptest = "1.11.0"
+ tempfile = "3.27.0"
+-tokio = { version = "1.54.0", features = ["rt", "rt-multi-thread", "macros", "net", "sync", "time", "io-util"] }
++tokio = { version = "1.54.1", features = ["rt", "rt-multi-thread", "macros", "net", "sync", "time", "io-util"] }
+ # The TLS side of the email tests' SMTP server. Already in the tree (reqwest
+ # and lettre use it); no default features, so no aws-lc.
+ tokio-rustls = { version = "=0.26.6", default-features = false, features = ["tls12"] }
+diff --git a/crates/lodestar/Cargo.toml b/crates/lodestar/Cargo.toml
+index 3bfa17cb0..f9ad71c30 100644
+--- a/crates/lodestar/Cargo.toml
++++ b/crates/lodestar/Cargo.toml
+@@ -51,7 +51,7 @@ mimalloc = { version = "0.1", default-features = false, features = ["extended"]
+ serde = { version = "1", features = ["derive"] }
+ serde_json = "1"
+ sha2 = "0.11.0"
+-tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
++tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
+ toml = { version = "0.9", default-features = false, features = ["parse", "serde"] }
+ tracing = "0.1.44"
+ tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
+diff --git a/crates/peer-wire/Cargo.toml b/crates/peer-wire/Cargo.toml
+index b52925fdf..cb60050bc 100644
+--- a/crates/peer-wire/Cargo.toml
++++ b/crates/peer-wire/Cargo.toml
+@@ -24,7 +24,7 @@ num-bigint = "0.5.1"
+ rand = "0.10"
+ sha1 = "0.11"
+ sha2 = "0.11"
+-tokio = { version = "1.54.0", features = ["net", "io-util", "time", "rt", "macros"] }
++tokio = { version = "1.54.1", features = ["net", "io-util", "time", "rt", "macros"] }
+ 
+ [lints]
+ workspace = true
+@@ -32,4 +32,4 @@ workspace = true
+ [dev-dependencies]
+ lodestar-peer-wire = { path = ".", features = ["testing"] }
+ proptest = "1.11.0"
+-tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
++tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
+diff --git a/crates/pipeline/Cargo.toml b/crates/pipeline/Cargo.toml
+index 0bcd971ca..c077f5c9b 100644
+--- a/crates/pipeline/Cargo.toml
++++ b/crates/pipeline/Cargo.toml
+@@ -23,7 +23,7 @@ lodestar-log.workspace = true
+ lodestar-network-policy.workspace = true
+ # The have-filter's keyed PRF (WK-3); already in the lockfile through phf.
+ siphasher = "=1.0.4"
+-tokio = { version = "1.54.0", features = ["sync", "time", "rt", "macros"] }
++tokio = { version = "1.54.1", features = ["sync", "time", "rt", "macros"] }
+ 
+ [lints]
+ workspace = true
+@@ -38,4 +38,4 @@ lodestar-metainfo.workspace = true
+ lodestar-dht.workspace = true
+ lodestar-peer-wire = { workspace = true, features = ["testing"] }
+ tempfile = "3.27.0"
+-tokio = { version = "1.54.0", features = ["sync", "time", "rt", "rt-multi-thread", "macros", "net", "test-util"] }
++tokio = { version = "1.54.1", features = ["sync", "time", "rt", "rt-multi-thread", "macros", "net", "test-util"] }
+diff --git a/crates/sources-importers/Cargo.toml b/crates/sources-importers/Cargo.toml
+index b7b2f16f6..af25f7e43 100644
+--- a/crates/sources-importers/Cargo.toml
++++ b/crates/sources-importers/Cargo.toml
+@@ -22,7 +22,7 @@ rusqlite = { version = "0.40.2", features = ["bundled", "hooks", "limits"] }
+ rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+ rustls-platform-verifier = "=0.7.1"
+ sha2 = "0.11.0"
+-tokio = { version = "1.54.0", features = ["rt", "macros", "time"] }
++tokio = { version = "1.54.1", features = ["rt", "macros", "time"] }
+ tokio-postgres = { version = "0.7", default-features = false, features = ["runtime"] }
+ tokio-rustls = { version = "=0.26.6", default-features = false }
+ tracing = "0.1.44"
+@@ -37,4 +37,4 @@ workspace = true
+ lodestar-pipeline.workspace = true
+ proptest = "1.11.0"
+ tempfile = "3.27.0"
+-tokio = { version = "1.54.0", features = ["rt", "rt-multi-thread", "macros", "time", "net", "io-util", "sync"] }
++tokio = { version = "1.54.1", features = ["rt", "rt-multi-thread", "macros", "time", "net", "io-util", "sync"] }
+diff --git a/crates/sources-plugins/Cargo.toml b/crates/sources-plugins/Cargo.toml
+index 598f6ccc3..3ffdd443e 100644
+--- a/crates/sources-plugins/Cargo.toml
++++ b/crates/sources-plugins/Cargo.toml
+@@ -25,14 +25,14 @@ lodestar-tracker-scrape.workspace = true
+ quick-xml = { version = "=0.42.0", default-features = false }
+ serde = { version = "1.0.229", features = ["derive"] }
+ serde_json = "1.0.154"
+-tokio = { version = "1.54.0", features = ["sync", "time", "rt", "macros"] }
++tokio = { version = "1.54.1", features = ["sync", "time", "rt", "macros"] }
+ url = "2.5.8"
+ 
+ [dev-dependencies]
+ lodestar-sources-plugins = { path = ".", features = ["testing"] }
+ lodestar-store.workspace = true
+ proptest = "1.11.0"
+-tokio = { version = "1.54.0", features = ["sync", "time", "rt", "macros", "test-util"] }
++tokio = { version = "1.54.1", features = ["sync", "time", "rt", "macros", "test-util"] }
+ 
+ [lints]
+ workspace = true
+diff --git a/crates/sources/Cargo.toml b/crates/sources/Cargo.toml
+index fe89b022d..28da160a0 100644
+--- a/crates/sources/Cargo.toml
++++ b/crates/sources/Cargo.toml
+@@ -19,7 +19,7 @@ lodestar-network-policy.workspace = true
+ lodestar-metainfo.workspace = true
+ lodestar-peer-wire.workspace = true
+ lodestar-store.workspace = true
+-tokio = { version = "1.54.0", features = ["sync", "time", "rt", "macros", "net"] }
++tokio = { version = "1.54.1", features = ["sync", "time", "rt", "macros", "net"] }
+ url = "2.5.8"
+ 
+ [lints]
+@@ -27,4 +27,4 @@ workspace = true
+ 
+ [dev-dependencies]
+ proptest = "1.11.0"
+-tokio = { version = "1.54.0", features = ["sync", "time", "rt", "macros", "test-util", "net", "io-util"] }
++tokio = { version = "1.54.1", features = ["sync", "time", "rt", "macros", "test-util", "net", "io-util"] }
+diff --git a/crates/tracker-scrape/Cargo.toml b/crates/tracker-scrape/Cargo.toml
+index 819283788..bbf5a1fee 100644
+--- a/crates/tracker-scrape/Cargo.toml
++++ b/crates/tracker-scrape/Cargo.toml
+@@ -21,14 +21,14 @@ rand = "0.10"
+ # is a C/CMake build that complicates the Windows and musl targets.
+ reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider"] }
+ rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+-tokio = { version = "1.54.0", features = ["net", "time", "rt", "macros"] }
++tokio = { version = "1.54.1", features = ["net", "time", "rt", "macros"] }
+ url = "2.5"
+ 
+ [dev-dependencies]
+ lodestar-tracker-scrape = { path = ".", features = ["testing"] }
+ lodestar-bencode.workspace = true
+ proptest = "1.11.0"
+-tokio = { version = "1.54.0", features = ["net", "time", "rt", "rt-multi-thread", "macros", "io-util"] }
++tokio = { version = "1.54.1", features = ["net", "time", "rt", "rt-multi-thread", "macros", "io-util"] }
+ 
+ [lints]
+ workspace = true
+diff --git a/crates/utp/Cargo.toml b/crates/utp/Cargo.toml
+index 8207afde0..c751b6415 100644
+--- a/crates/utp/Cargo.toml
++++ b/crates/utp/Cargo.toml
+@@ -11,11 +11,11 @@ repository.workspace = true
+ [dependencies]
+ rand = "0.10"
+ socket2 = "0.6.5"
+-tokio = { version = "1.54.0", features = ["net", "time", "rt", "sync", "macros"] }
++tokio = { version = "1.54.1", features = ["net", "time", "rt", "sync", "macros"] }
+ 
+ [dev-dependencies]
+ proptest = "1.11.0"
+-tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
++tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
+ 
+ [lints]
+ workspace = true
+diff --git a/docs/decisions/2026-11-12-runner-v052-tokio-notice.md b/docs/decisions/2026-11-12-runner-v052-tokio-notice.md
+new file mode 100644
+index 000000000..33e7cca44
+--- /dev/null
++++ b/docs/decisions/2026-11-12-runner-v052-tokio-notice.md
+@@ -0,0 +1,16 @@
++# Runner decisions: tokio 1.54.1 and the notice's "Applies to" line on `release/v0.5.2`
++
++- **tokio 1.54.0 → 1.54.1 on `release/v0.5.2`** (owner, 2026-11-12: "go with the runner's recommendation"; recorded as `docs/owner-decisions.md` §2.58 on `main`).
++  - **Why:** tokio 1.54.0 can drop a timer entry the time driver is still writing to when `Interval::poll_tick` resets inside `select!` (tokio-rs/tokio#8695; fixed by tokio-rs/tokio#8692 in 1.54.1). crates.io has yanked 1.54.0. It aborted a DHT test on `main` (X-flake-dht-scrape-join, #731). Every crate using `tokio::time::interval` carried the race, so v0.5.2 must not ship on 1.54.0.
++  - **The change is the same as #731's on `main`:**
++    - `Cargo.lock`: tokio's version and checksum only.
++    - Every `tokio` requirement on 1.54.0 now asks for 1.54.1. `crates/companions` keeps an exact pin, now `=1.54.1`. No features change.
++    - `web/licenses/rust.json`, regenerated with `.github/scripts/licenses.py`.
++  - **`fuzz/Cargo.lock`** gets the same bump. cargo also refreshes the workspace crates' own versions there from 0.5.0 to 0.5.2, which the cut had left stale. No third-party package changes version.
++  - **No v0.5.1.x now:** v0.5.2 carries the fix. If v0.5.2 slips by more than a few days, the runner prepares a v0.5.1.1 with only this bump and asks the owner before anything is cut or tagged (§2.58).
++- **The Legal Notice's "Applies to" line on this branch names 0.5.2 and its release candidates only** (owner delegation, `docs/owner-decisions.md` §2.57; the mirror image of #725 on `main`).
++  - The line said version 4 applied to "the development builds that lead to it (the `main` branch)". `main` now carries version 5, so that was wrong.
++  - It now reads: "Applies to Lodestar 0.5.2 and its release candidates. … Each release carries its own copy of this notice, written for what that build does: v0.5.1 carries version 3, and the development builds on the `main` branch carry a later version."
++  - The bracketed note "a development build may report an earlier version number" is dropped. It only fit `main`'s builds, and this branch's builds report 0.5.2.
++  - `docs/legal/operator-guidance.md`'s status line gets the same change. Its date stays, because the substance it describes is unchanged.
++  - **`NOTICE_VERSION` stays 4, and so does its date.** The edit says which software the notice describes, not what that software does, so it isn't a change in substance. The precedent is 9cf2998d and #725. Both notice copies stay byte-identical (`crates/lodestar/tests/legal_facts.rs`).
+diff --git a/docs/legal/legal-notice.md b/docs/legal/legal-notice.md
+index 27d8b3dec..f8acc854a 100644
+--- a/docs/legal/legal-notice.md
++++ b/docs/legal/legal-notice.md
+@@ -2,7 +2,7 @@
+ 
+ **Version 4 · 2026-11-07**
+ 
+-*Applies to Lodestar 0.5.2 and the development builds that lead to it (the `main` branch). Where this notice says "this version", it means that software (a development build may report an earlier version number). The v0.5.1 release carries its own copy of this notice, version 3, written for what that build does.*
++*Applies to Lodestar 0.5.2 and its release candidates. Where this notice says "this version", it means that software. Each release carries its own copy of this notice, written for what that build does: v0.5.1 carries version 3, and the development builds on the `main` branch carry a later version.*
+ 
+ Lodestar shows this notice before first use, and again whenever its version is raised, and asks you to confirm that you have read it. It explains what the software does on your network, what it finds, what is yours to decide, and what the makers do and don't promise. It is a notice, not a contract that limits what you may do with the software: your rights to run, study, change and share Lodestar come from its licence (section 1) and nothing here takes them away.
+ 
+diff --git a/docs/legal/operator-guidance.md b/docs/legal/operator-guidance.md
+index fa03a939f..817279c35 100644
+--- a/docs/legal/operator-guidance.md
++++ b/docs/legal/operator-guidance.md
+@@ -1,6 +1,6 @@
+ # Running a Lodestar that other people can reach
+ 
+-*Status (2026-11-06): this page describes Lodestar 0.5.2 and the development builds that lead to it, the same software as version 4 of the Legal Notice. Rule packs on by default for a new data folder and the unauthorised-copy pack are built; the sources marked **(planned)** come later.*
++*Status (2026-11-06): this page describes Lodestar 0.5.2 and its release candidates, the same software as version 4 of the Legal Notice. Rule packs on by default for a new data folder and the unauthorised-copy pack are built; the sources marked **(planned)** come later.*
+ 
+ This page is for the person who makes a Lodestar instance reachable by others: through its web interface, its API, an alert feed or an integration. Publishing the software and running a service are different things. The makers do the first; if you do the second, the duties below may fall on you. **This is guidance, not legal advice.** What applies to you depends on where you and your users are and on what your service does; ask a lawyer before you offer an index to others.
+ 
+diff --git a/fuzz/Cargo.lock b/fuzz/Cargo.lock
+index 1b66c74ac..1e964290a 100644
+--- a/fuzz/Cargo.lock
++++ b/fuzz/Cargo.lock
+@@ -1188,11 +1188,11 @@ dependencies = [
+ 
+ [[package]]
+ name = "lodestar-bencode"
+-version = "0.5.0"
++version = "0.5.2"
+ 
+ [[package]]
+ name = "lodestar-classify"
+-version = "0.5.0"
++version = "0.5.2"
+ dependencies = [
+  "lodestar-metainfo",
+  "lodestar-release-parser",
+@@ -1200,7 +1200,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "lodestar-cluster"
+-version = "0.5.0"
++version = "0.5.2"
+ dependencies = [
+  "futures-util",
+  "lodestar-integrations",
+@@ -1221,7 +1221,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "lodestar-dht"
+-version = "0.5.0"
++version = "0.5.2"
+ dependencies = [
+  "lodestar-bencode",
+  "lodestar-log",
+@@ -1237,7 +1237,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "lodestar-filter"
+-version = "0.5.0"
++version = "0.5.2"
+ dependencies = [
+  "chacha20poly1305",
+  "flate2",
+@@ -1283,7 +1283,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "lodestar-integrations"
+-version = "0.5.0"
++version = "0.5.2"
+ dependencies = [
+  "chacha20poly1305",
+  "getrandom 0.3.4",
+@@ -1301,14 +1301,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "lodestar-log"
+-version = "0.5.0"
++version = "0.5.2"
+ dependencies = [
+  "tracing",
+ ]
+ 
+ [[package]]
+ name = "lodestar-metainfo"
+-version = "0.5.0"
++version = "0.5.2"
+ dependencies = [
+  "chardetng",
+  "encoding_rs",
+@@ -1319,11 +1319,11 @@ dependencies = [
+ 
+ [[package]]
+ name = "lodestar-network-policy"
+-version = "0.5.0"
++version = "0.5.2"
+ 
+ [[package]]
+ name = "lodestar-peer-wire"
+-version = "0.5.0"
++version = "0.5.2"
+ dependencies = [
+  "lodestar-bencode",
+  "lodestar-log",
+@@ -1339,7 +1339,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "lodestar-pipeline"
+-version = "0.5.0"
++version = "0.5.2"
+ dependencies = [
+  "lodestar-classify",
+  "lodestar-cluster",
+@@ -1359,11 +1359,11 @@ dependencies = [
+ 
+ [[package]]
+ name = "lodestar-release-parser"
+-version = "0.5.0"
++version = "0.5.2"
+ 
+ [[package]]
+ name = "lodestar-search"
+-version = "0.5.0"
++version = "0.5.2"
+ dependencies = [
+  "lodestar-classify",
+  "lodestar-log",
+@@ -1378,7 +1378,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "lodestar-sources"
+-version = "0.5.0"
++version = "0.5.2"
+ dependencies = [
+  "lodestar-integrations",
+  "lodestar-metainfo",
+@@ -1391,7 +1391,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "lodestar-sources-feeds"
+-version = "0.5.0"
++version = "0.5.2"
+ dependencies = [
+  "lodestar-metainfo",
+  "quick-xml",
+@@ -1399,7 +1399,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "lodestar-sources-importers"
+-version = "0.5.0"
++version = "0.5.2"
+ dependencies = [
+  "lodestar-classify",
+  "lodestar-filter",
+@@ -1418,7 +1418,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "lodestar-sources-plugins"
+-version = "0.5.0"
++version = "0.5.2"
+ dependencies = [
+  "lodestar-integrations",
+  "lodestar-metainfo",
+@@ -1434,7 +1434,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "lodestar-store"
+-version = "0.5.0"
++version = "0.5.2"
+ dependencies = [
+  "lodestar-metainfo",
+  "rusqlite",
+@@ -1443,7 +1443,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "lodestar-tracker-scrape"
+-version = "0.5.0"
++version = "0.5.2"
+ dependencies = [
+  "lodestar-bencode",
+  "lodestar-metainfo",
+@@ -1456,7 +1456,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "lodestar-update"
+-version = "0.5.0"
++version = "0.5.2"
+ dependencies = [
+  "base64 0.22.1",
+  "blake2",
+@@ -1469,7 +1469,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "lodestar-utp"
+-version = "0.5.0"
++version = "0.5.2"
+ dependencies = [
+  "rand 0.10.3",
+  "socket2",
+@@ -2713,9 +2713,9 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
+ 
+ [[package]]
+ name = "tokio"
+-version = "1.54.0"
++version = "1.54.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "a0c168a474b95bfecfe908a65d4bdffc523144b649a74c09c286afb35d53e0bc"
++checksum = "b52fd3255258d26fac7264ab5a76b53c13367136dc011d3d6ad4f8ed070396a3"
+ dependencies = [
+  "bytes",
+  "libc",
+diff --git a/web/licenses/rust.json b/web/licenses/rust.json
+index c0be71ea2..1cfadede7 100644
+--- a/web/licenses/rust.json
++++ b/web/licenses/rust.json
+@@ -3749,7 +3749,7 @@
+ 		},
+ 		{
+ 			"name": "tokio",
+-			"version": "1.54.0",
++			"version": "1.54.1",
+ 			"license": "MIT",
+ 			"repository": "https://github.com/tokio-rs/tokio",
+ 			"targets": [
+-- 
+2.43.0
+
