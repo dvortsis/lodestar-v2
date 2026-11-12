@@ -346,12 +346,12 @@ impl Services {
         // apply together at the next start. A store that can't be read
         // fails the start rather than registering it unconfigured.
         let prowlarr = {
-            use lodestar_sources_plugins::prowlarr::{ID, Prowlarr};
+            use lodestar_sources_plugins::prowlarr::{self, Prowlarr};
             let store = control.clone();
             let saved = prowlarr_saved(
                 tokio::task::spawn_blocking(move || {
                     let store = store.lock().unwrap_or_else(|e| e.into_inner());
-                    store.source_setting(ID, lodestar_store::SourceSetting::Config)
+                    store.source_setting(prowlarr::ID, lodestar_store::SourceSetting::Config)
                 })
                 .await?,
             )?;
@@ -847,8 +847,14 @@ impl Services {
         // shutdown doesn't wait on them.
         let hub = events.clone();
         let (stopping_tx, stopping) = watch::channel(false);
-        let signal = async move {
-            signal.await;
+        // The updates engine hears the stop the moment the signal fires,
+        // not after the serving drain below (up to SHUTDOWN_GRACE): an
+        // install that reached its switch during the drain would otherwise
+        // still switch (X-upd-stop-early). `Handles::shutdown` still stops
+        // its task in the same place as before: on Unix with no wait, an
+        // abort at once; on Windows after `UPDATES_STOP_WAIT`.
+        let updates_stop = early_updates_stop(handles.updates.as_ref().map(|(s, _)| s));
+        let signal = on_shutdown(signal, updates_stop, move || {
             if let Some(t) = &requeue_stop {
                 t.cancel();
             }
@@ -856,7 +862,7 @@ impl Services {
             jobs.close();
             logs.close();
             let _ = stopping_tx.send(true);
-        };
+        });
         let serve = axum::serve(listener, app)
             .with_graceful_shutdown(signal)
             .into_future();
@@ -880,6 +886,33 @@ impl Services {
         served?;
         stopped
     }
+}
+
+/// The updates stop to send when the shutdown signal fires. Unix only: its
+/// engine switches in-process, which the early stop closes. On Windows the
+/// `Notifier` has no switch to race, and its last look at the settings must
+/// stay after the drain, so a switch to Off saved by a request still being
+/// served withdraws a waiting install (X-win-upd-stop-wait, owner §2.13).
+fn early_updates_stop(updates: Option<&watch::Sender<bool>>) -> Option<watch::Sender<bool>> {
+    if cfg!(windows) {
+        return None;
+    }
+    updates.cloned()
+}
+
+/// The shutdown signal as the server sees it: waits for `signal`, sends the
+/// updates engine its stop at once, before anything drains, then runs
+/// `rest` (closing streams and starting the drain's clock).
+async fn on_shutdown(
+    signal: impl Future<Output = ()>,
+    updates_stop: Option<watch::Sender<bool>>,
+    rest: impl FnOnce(),
+) {
+    signal.await;
+    if let Some(stop) = &updates_stop {
+        let _ = stop.send(true);
+    }
+    rest();
 }
 
 /// How long the graceful shutdown waits for open connections once the
@@ -1356,6 +1389,70 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// The early stop is Unix only: on Windows the Notifier's last look at
+    /// the settings stays after the drain (X-win-upd-stop-wait, owner
+    /// §2.13), and Windows CI runs this to keep it so.
+    #[test]
+    fn the_early_updates_stop_is_unix_only() {
+        let (stop, _engine) = watch::channel(false);
+        let early = early_updates_stop(Some(&stop));
+        if cfg!(windows) {
+            assert!(early.is_none(), "Windows must keep the old stop order");
+        } else {
+            assert!(early.is_some(), "Unix sends the updates stop early");
+        }
+        assert!(early_updates_stop(None).is_none());
+    }
+
+    /// The shutdown signal reaches the updates engine while serving is
+    /// still draining (X-upd-stop-early): a request held open keeps the
+    /// drain going, and the engine's stop is already sent. Before, it was
+    /// sent only by `Handles::shutdown`, after the drain.
+    #[tokio::test]
+    async fn the_updates_stop_is_sent_before_serving_drains() {
+        const DEADLINE: Duration = Duration::from_secs(20);
+        let (fire, fired) = tokio::sync::oneshot::channel::<()>();
+        let (updates_stop, mut engine) = watch::channel(false);
+        let (stopping_tx, stopping) = watch::channel(false);
+        let signal = on_shutdown(
+            async move {
+                let _ = fired.await;
+            },
+            Some(updates_stop),
+            move || {
+                let _ = stopping_tx.send(true);
+            },
+        );
+        // Serving: ends on the signal, then drains until the held request
+        // is let go, as axum's graceful shutdown does.
+        let (let_go, held) = tokio::sync::oneshot::channel::<()>();
+        let drained = Arc::new(AtomicBool::new(false));
+        let d = drained.clone();
+        let serve = async move {
+            signal.await;
+            let _ = held.await;
+            d.store(true, Ordering::SeqCst);
+        };
+        let serving = tokio::spawn(bounded(serve, stopping, DEADLINE * 2));
+        fire.send(()).unwrap();
+        // The engine hears the stop while the drain is still held open.
+        tokio::time::timeout(DEADLINE, engine.wait_for(|stopped| *stopped))
+            .await
+            .expect("the engine heard the stop before the drain ended")
+            .unwrap();
+        assert!(
+            !drained.load(Ordering::SeqCst),
+            "the drain had already ended"
+        );
+        let_go.send(()).unwrap();
+        let served = tokio::time::timeout(DEADLINE, serving)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(served, Some(()));
+        assert!(drained.load(Ordering::SeqCst));
+    }
 
     /// No wait (Unix): a task not yet polled is aborted before it is, as
     /// the stop did before the wait existed.
