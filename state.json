@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T18:02:03Z",
+  "updated_at": "2026-11-12T18:04:39Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7406,6 +7406,10 @@
     {
       "id": "owner-flag-enr14-ua",
       "note": "rv-764 I2: ENR-14 User-Agent carries the project repo URL (owner GitHub handle) as Wikimedia-required contact; runner accepted (project public URL, nothing about the user); \u00a72.19 flag in the dashboard FYI batch."
+    },
+    {
+      "id": "X-dht-id-change-interval",
+      "note": "rv-768 O-2: each external-IP flip replans the join (~200-450 queries, bounded). Consider a minimum interval between id changes; low priority."
     }
   ],
   "main_health": [
@@ -8181,6 +8185,11 @@
       "pr": 770,
       "sha": "a22f05f6926ba61ff76a6e1956e884663ae55fae",
       "at": "2026-11-12T17:37:15Z"
+    },
+    {
+      "pr": 768,
+      "sha": "d20bc0ac0fc379b501e284eb9912c668372d8946",
+      "at": "2026-11-12T18:04:39Z"
     }
   ],
   "active_sessions": {
@@ -8418,7 +8427,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T17:59:34Z",
+    "updated": "2026-11-12T18:04:39Z",
     "items": [
       {
         "slot": 1,
@@ -8449,11 +8458,11 @@
       },
       {
         "slot": 8,
-        "slice": "X-dht-bep42-rejoin",
+        "slice": "X-dht-rejoin-nits",
         "role": "build",
         "agent": "claude",
-        "doing": "#768 ready 2a1f4392; fresh Opus review running",
-        "since": "2026-11-12T15:41:01Z",
+        "doing": "rv-768 O-1 duplicate self-lookup fix + test; decisions file",
+        "since": "2026-11-12T18:04:39Z",
         "status": "active"
       },
       {
@@ -8551,7 +8560,7 @@
     }
   ],
   "heartbeat": "2026-11-12T15:41:01Z",
-  "updated": "2026-11-12T18:02:03Z",
+  "updated": "2026-11-12T18:04:39Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
