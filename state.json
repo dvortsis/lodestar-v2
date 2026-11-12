@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T07:01:36Z",
+  "updated_at": "2026-11-12T07:02:51Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7975,8 +7975,8 @@
     "note": "owner \u00a72.36 (2026-11-04): up to 12 slots; cut to 4 at 2026-11-06T00:00Z by trig_01RJzwL47gE81BrRv2vR2cx4 (running ones finish). \u00a72.33 auto-approve best-practice decisions. Owner 2026-11-05 ~01:20Z: memory/performance and soak r5 first; keep other slots busy with work that does not compete. The 2026-11-02 two-slot cut and launch pause are superseded. Owner 2026-11-05 ~02:45Z (\u00a72.41): until 2026-11-06T00:00Z, launch the next ready slice whenever a slot is free (critical path, then unlocks); a slot stays empty only for a recorded reason (status idle, reason in doing); hourly check from the dashboard session.",
     "source": "owner \u00a72.59 2026-11-12T06:03Z: \"Reduce max sessions to 8. Allow sessions to finish.\" (replaces \u00a72.56 12)",
     "rule_2_59": "9 active at the time: none stopped; each finishes its slice incl. review rounds; no launch and no follow-on slice while >= 8 active; finished slots are removed until <= 8.",
-    "cloud_tester_reserved": 4,
-    "rule_2_60": "owner 2026-11-12T07:00Z: \"You can reserve 4 additional sessions exclusively for Cloud Tester\". X-test-vm may run up to 4 sub-sessions beyond phase_total 8; exclusive; its own session stays in the 8."
+    "rule_2_60": "owner 07:00Z \"You can reserve 4 additional sessions exclusively for Cloud Tester\"; then to X-test-vm 07:01:20Z \"...You and Agent Runner can share those 4 slots between yourselves. Make sure you coordinate...\" Split agreed: tester <=2 (cloud_tester), runner <=2 (extra); ask before a 3rd; whoever frees one tells the other. #746.",
+    "extra_shared": 4
   },
   "owner_instructions": [
     {
@@ -8122,7 +8122,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T07:01:36Z",
+  "updated": "2026-11-12T07:02:51Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -8314,7 +8314,7 @@
   ],
   "cloud_tester": {
     "parent": "session_01MMjhnBD1KHxsn7QRHHmpeM",
-    "reserved": 4,
+    "reserved": 2,
     "updated": "2026-11-12T07:01:36Z",
     "items": [
       {
@@ -8326,5 +8326,10 @@
       }
     ],
     "note": "Pending: Linux VM Remote Control session (after owner sends SSH key and IP); Windows phase 2 replaces phase 1."
+  },
+  "extra": {
+    "updated": "2026-11-12T07:02:51Z",
+    "max": 2,
+    "items": []
   }
 }
