@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T22:33Z",
+  "updated_at": "2026-11-12T22:46Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7557,6 +7557,21 @@
       "id": "owner-2-64",
       "note": "Owner 22:30Z: window sessions run until 00:00Z 2026-11-13; replace each when its PR is ready; keep 10 building while work exists; at 00:00Z cut to 4 build + 4 cloud-testing. Record as owner-decisions \u00a72.64 (UTC only) in the next runner PR; limits.phase_total 4 (+4 testing).",
       "added": "2026-11-12T22:33Z"
+    },
+    {
+      "id": "rv-792-o4",
+      "note": "X-win-soak-start-time follow-up (rv-792 O4): start-time or pending-rename check at attach; NTFS tunnelling caveat (about 15 s). Testing priority; after #792 merges (same files).",
+      "added": "2026-11-12T22:46Z"
+    },
+    {
+      "id": "rv-784-optional",
+      "note": "X-ci-main-signal-nits: decisions wording (in order, per group, two run lengths), assert exact group values, heading (#784), run the concurrency test in the changes job (O3). After #784 merges.",
+      "added": "2026-11-12T22:46Z"
+    },
+    {
+      "id": "owner-2-64b",
+      "note": "Owner 22:41Z: \"Keep opening slices if there is work available.\" (with \u00a72.64 window).",
+      "added": "2026-11-12T22:46Z"
     }
   ],
   "main_health": [
@@ -8579,7 +8594,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T22:33Z",
+    "updated": "2026-11-12T22:46Z",
     "items": [
       {
         "slot": 1,
@@ -8813,6 +8828,24 @@
         "doing": "session_01MMjhnA41Z4h2JU2HX9jca2: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/M8-DOC-2.md",
         "since": "2026-11-12T22:08:33Z",
         "status": "active"
+      },
+      {
+        "slot": 27,
+        "slice": "CMP-12",
+        "status": "active",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhnB3vNLPygvFq3LtvZp: owner window (\u00a72.64, \"keep opening slices\") until 00:00Z 2026-11-13; brief briefs/CMP-12.md; /security-review",
+        "since": "2026-11-12T22:46Z"
+      },
+      {
+        "slot": 28,
+        "slice": "WK-18",
+        "status": "active",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhn8ht4VBbYS74uVp94c: owner window (\u00a72.64) until 00:00Z 2026-11-13; Sonnet; brief briefs/WK-18.md; /security-review (token)",
+        "since": "2026-11-12T22:46Z"
       }
     ]
   },
@@ -8873,7 +8906,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-12T22:33Z",
+  "updated": "2026-11-12T22:46Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
