@@ -32,7 +32,6 @@ Write `docs/user/companions.md` (owned). If the guide's chapter numbering needs 
 
 ## 3. Don't
 - PK-guide-2 has merged (#704), so you may add your entries to glossary.md, index.md, revisions.md and appendix-a-answers.md: small, additive edits only.
-  - Otherwise list the entries you need in the PR description, and the runner adds them after both merge.
 - Don't edit docs/operations.md, chapter 04 or 06, `runner/`, packaging or code.
 
 ## Owns
