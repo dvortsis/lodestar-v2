@@ -31,9 +31,10 @@
 //! coordinator's own record of the key (the fetch queue it started from),
 //! never the worker's. It never counts "harvested" again; the key's
 //! earlier terminal outcome gets a `LATE_RESULTS` correction beside it, so
-//! the funnel still reconciles. A late result from a quarantined, revoked
-//! or purged worker is refused outright, and so is any result older than
-//! that worker's last purge ([`Standing`], which WK-13 fills).
+//! the funnel still reconciles. Any result from a quarantined, revoked or
+//! purged worker is refused outright, late or not (WK-11), and so is any
+//! result older than that worker's last purge ([`Standing`], which WK-13
+//! fills).
 //!
 //! **The queue (§19.5).** Results wait in a small queue in front of the
 //! writer. While it's full, a batch is refused for now and the worker sends
@@ -124,8 +125,9 @@ pub const LATE_FOR_SECS: i64 = 25 * 3600;
 /// Whether a worker's results may still be taken (plan Q7). WK-13 fills it
 /// from quarantine and purge-by-worker; until then [`NoStanding`].
 pub trait Standing: Send + Sync + 'static {
-    /// Every late result from `worker` is refused: it is quarantined,
-    /// revoked or purged.
+    /// Every result from `worker` is refused, late or of this epoch: it is
+    /// quarantined, revoked or purged (WK-11 widened it from late results
+    /// only; the name is kept).
     fn refuses_late(&self, worker: WorkerId) -> bool;
     /// Unix seconds of `worker`'s last purge: any result fetched at or
     /// before it is refused, late or not.
@@ -636,14 +638,24 @@ impl RemoteIntake {
             path_bytes: BATCH_PATH_BYTES,
         };
         let mut out = Taken::default();
+        // Refused whatever the epoch (plan Q7, WK-11): a quarantined,
+        // revoked or purged worker's replayed spool is no more welcome in
+        // this run than in a later one.
+        let refused = parts.standing.refuses_late(worker);
         for rec in records {
             let fetched_at = corrected(rec.metadata_at, offset);
             let late = epoch_of(rec.token) < self.epoch;
-            if late {
-                if parts.standing.refuses_late(worker) {
-                    bump(&self.stats.late_refused);
-                    continue;
+            if refused {
+                bump(&self.stats.late_refused);
+                // One of this run still under its lease goes back to wait
+                // for a re-grant (its cohort kept, no loss counted), so the
+                // key isn't stranded with a worker that's been refused.
+                if !late && self.authority.held(worker, &rec.key, rec.token).is_some() {
+                    self.authority.requeue_back(&rec.key, rec.token);
                 }
+                continue;
+            }
+            if late {
                 if let Some(r) = self.late(worker, rec, fetched_at, purge, parts, &mut budget, now)
                 {
                     out.results.push(r);

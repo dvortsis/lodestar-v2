@@ -57,6 +57,8 @@ use tokio::task::JoinHandle;
 
 use super::have::WorkerHave;
 use super::session::Work;
+use super::spool::{Origin, Replay, SpoolConfig, WorkerSpool};
+use lodestar_pipeline::spool::Kind;
 
 /// A worker's fetch-pool byte budget (X-fetch-pool-bytes' note for WK-10:
 /// the same as WK-7's fetched queue).
@@ -143,6 +145,9 @@ pub struct Config {
     /// How keys the coordinator answered `Busy` are claimed again
     /// (X-wk-busy-retry).
     pub busy_retry: BusyRetry,
+    /// The on-disk spool while no session is up (WK-11); `None` keeps
+    /// unaccepted batches in memory only, and pauses fetching at once.
+    pub spool: Option<SpoolConfig>,
 }
 
 /// The retry of `Busy` claims: a capped exponential back-off with equal
@@ -196,6 +201,7 @@ impl Config {
             reconnect_debounce: RECONNECT_DEBOUNCE,
             retry_every: POLL_EVERY,
             busy_retry: BusyRetry::default(),
+            spool: None,
         }
     }
 }
@@ -367,6 +373,12 @@ struct Shared {
     /// The pool's peer requests, to the DHT; `None` with no DHT.
     peer_requests: Option<mpsc::Sender<lodestar_sources::PeerRequest>>,
     dht_counts: Arc<super::dht::DhtCounts>,
+    /// The spool (WK-11), if configured.
+    spool: Option<Arc<WorkerSpool>>,
+    /// Bumped just before each session change, so the session task
+    /// notices one it missed while busy (a watch can change twice between
+    /// looks).
+    generation: AtomicU64,
 }
 
 /// The runtime (see the module docs).
@@ -436,7 +448,14 @@ impl Runtime {
                 config.dht_linger,
             ));
         }
+        // Opened by the session task, on a blocking thread.
+        let spool = config
+            .spool
+            .clone()
+            .map(|c| Arc::new(WorkerSpool::new(c, config.worker.0)));
         let shared = Arc::new(Shared {
+            spool,
+            generation: AtomicU64::new(0),
             have: WorkerHave::new(),
             judge: Arc::new(Judge::new(config.worker)),
             leases: Arc::new(WorkerLeases::default()),
@@ -518,6 +537,11 @@ impl Runtime {
 
     pub fn counts(&self) -> Arc<Counts> {
         self.shared.counts.clone()
+    }
+
+    /// The spool, if one is configured and opened (WK-11).
+    pub fn spool(&self) -> Option<Arc<WorkerSpool>> {
+        self.shared.spool.clone()
     }
 
     /// The DHT's counters.
@@ -710,13 +734,19 @@ impl Work for Runtime {
         // and dictionary snapshots over by itself (WK-10a).
         let _ = self.shared.acks.try_send(self.shared.have.reconnected());
         self.shared.fresh_session.store(true, Ordering::Release);
+        // Before the session itself: the session task reads the session,
+        // then the generation, so once it sees this session it sees this
+        // bump too, and resets once for it, never again a moment later.
+        self.shared.generation.fetch_add(1, Ordering::AcqRel);
         self.shared.session.send_replace(Some(session));
         want_dht(&self.shared);
         self.shared.refresh_pause();
     }
 
     fn disconnected(&mut self) {
+        self.shared.generation.fetch_add(1, Ordering::AcqRel);
         self.shared.session.send_replace(None);
+
         // The pool opens no new connection, then the DHT pauses: the
         // coordinator re-plans without this worker and widens the others'
         // shares (WK-5); the DHT stops if no session is back within its
@@ -745,6 +775,20 @@ impl Work for Runtime {
     /// the deadline), and returns the losses not reported yet. Results the
     /// session task sent are committed by the coordinator; everything else
     /// goes back with `Drained`.
+    /// Once a spool replay has drained (WK-11): the leases this worker
+    /// holds, to compare with the coordinator's count.
+    fn reconcile(&mut self) -> Option<u32> {
+        let sp = self.shared.spool.as_ref()?;
+        sp.take_reconcile()
+            .then(|| u32::try_from(self.shared.leases.len()).unwrap_or(u32::MAX))
+    }
+
+    fn reconciled(&mut self, worker: u32, coordinator: u32) {
+        if let Some(sp) = &self.shared.spool {
+            sp.reconcile(worker, coordinator);
+        }
+    }
+
     async fn drain(&mut self) -> Vec<OutcomeItem> {
         let started = std::time::Instant::now();
         self.stop_stages().await;
@@ -1060,7 +1104,8 @@ fn want_dht(s: &Shared) {
             return Desired::Stop;
         };
         let up = s.session.borrow().as_ref().is_some_and(|h| !h.is_closed());
-        if !up || s.fresh_session.load(Ordering::Acquire) {
+        // A full spool keeps only the routing too (WK-11).
+        if !up || s.fresh_session.load(Ordering::Acquire) || s.spool_full() {
             return Desired::Pause;
         }
         Desired::Run(Want {
@@ -1262,6 +1307,18 @@ fn release(s: &Shared, reports: &Arc<dyn Reports>, key: InfoHash, token: Token) 
 }
 
 impl Shared {
+    /// Whether the spool is full (WK-11): fetching pauses, nothing new is
+    /// claimed and the DHT keeps only its routing, session or not.
+    fn spool_full(&self) -> bool {
+        self.spool.as_ref().is_some_and(|sp| sp.is_full())
+    }
+
+    /// Pauses the pool, and the DHT with it while the spool is full.
+    fn refresh_spool_pause(&self) {
+        self.refresh_pause();
+        want_dht(self);
+    }
+
     /// Pauses the pool while a result waits for a sealable key or no
     /// session is up, and resumes it otherwise. Worked out from the state
     /// now, under the watch's write lock, so calls in any order leave it
@@ -1278,8 +1335,14 @@ impl Shared {
             // A new session's first `Assign` may re-plan this worker: until
             // it comes, the pool waits, as the DHT does.
             let fresh = self.fresh_session.load(Ordering::Acquire);
-            let pause =
-                self.waiting.load(Ordering::Acquire) > 0 || !up || fresh || !self.fetching();
+            // A full spool pauses it too (WK-11), session or not, until a
+            // replay makes room.
+            let full = self.spool_full();
+            let pause = self.waiting.load(Ordering::Acquire) > 0
+                || !up
+                || full
+                || fresh
+                || !self.fetching();
             std::mem::replace(told, pause) != pause
         });
     }
@@ -1413,7 +1476,7 @@ async fn supervise(s: Arc<Shared>) {
 
 /// Refreshes the heartbeat's stats every `stats_every` (WK-10c):
 /// claimed, results sent ("fetched"), results the coordinator accepted
-/// ("processed"), CPU and resident memory. The spool is WK-11's.
+/// ("processed"), CPU and resident memory, and the spool's bytes (WK-11).
 async fn heartbeat_stats(s: Arc<Shared>) {
     let mut process = super::budget::Process::default();
     let mut every = tokio::time::interval(s.config.stats_every);
@@ -1428,7 +1491,7 @@ async fn heartbeat_stats(s: Arc<Shared>) {
             processed: get(&s.counts.committed),
             cpu_permille,
             rss_mb,
-            spool_bytes: 0,
+            spool_bytes: s.spool.as_ref().map_or(0, |sp| sp.bytes()),
         };
         let session = s.session.borrow().clone();
         if let Some(h) = session {
@@ -1661,7 +1724,7 @@ async fn claim(s: Arc<Shared>, found: mpsc::Receiver<Found>) {
         // would drop them now (#599's review). The DHT finds them again.
         // Nor while the assignment turns fetching off, as `sift` holds
         // back new finds then: a retried key gets the same checks.
-        if s.sealing_down(unix_now()) || !s.fetching() {
+        if s.sealing_down(unix_now()) || !s.fetching() || s.spool_full() {
             s.counts
                 .held_back
                 .fetch_add(batch.len() as u64, Ordering::Relaxed);
@@ -1780,8 +1843,9 @@ fn sift(
     bump(&s.counts.found);
     // Nothing is claimed while sealing is down: it couldn't be sent, and
     // its lease would only wait (#599's review). Nor while the assignment
-    // turns fetching off.
-    if s.sealing_down(unix_now()) || !s.fetching() {
+    // turns fetching off, or the spool is full (WK-11: the pool is paused,
+    // so a lease would only wait).
+    if s.sealing_down(unix_now()) || !s.fetching() || s.spool_full() {
         bump(&s.counts.held_back);
         return None;
     }
@@ -1859,6 +1923,13 @@ struct InFlight {
     refused: bool,
     /// Counted in `Counts::sent` already.
     counted: bool,
+    kind: Kind,
+    /// Where in the spool it was read from, for a replayed batch.
+    from: Option<Origin>,
+    /// When the batch was made, just after its records were sealed: a
+    /// spooled one's age runs from this, not from when it was spooled, so
+    /// the 24 h cap stays inside the wire key's two days (WK-11).
+    at: i64,
 }
 
 /// Puts records into batches (`encode`) in flight. A record that can't be
@@ -1893,6 +1964,9 @@ fn batch_up(
                 sent: false,
                 refused: false,
                 counted: false,
+                kind: Kind::Results,
+                from: None,
+                at: unix_now(),
             },
         );
     }
@@ -1914,10 +1988,14 @@ async fn send_due(
         .iter_mut()
         .filter(|(_, f)| !f.sent || (refused_too && f.refused))
     {
-        let msg = ToCoordinator::Results(Payload {
+        let payload = Payload {
             batch,
             bytes: f.payload.clone(),
-        });
+        };
+        let msg = match f.kind {
+            Kind::Results => ToCoordinator::Results(payload),
+            Kind::Counters => ToCoordinator::Counters(payload),
+        };
         if h.send(msg).await.is_err() {
             break;
         }
@@ -1945,9 +2023,56 @@ async fn send_results(
     let mut sessions = s.session.subscribe();
     let mut retry = tokio::time::interval(s.config.retry_every);
     retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut replay = Replay::default();
+    if let Some(sp) = &s.spool {
+        sp.start().await;
+    }
+    let mut seen = s.generation.load(Ordering::Acquire);
     loop {
-        // Send whatever is due on the current session.
+        // The session first, then the generation: a connect bumps the
+        // generation before it replaces the session, so a new session is
+        // never seen with the old generation (and reset again after).
         let session = sessions.borrow_and_update().clone();
+        // A session change, even one missed while busy below: whatever
+        // wasn't accepted goes again (a batch id is idempotent, §19.2).
+        // Replayed batches are dropped here and read again from the
+        // spool, past what was accepted.
+        let now_gen = s.generation.load(Ordering::Acquire);
+        if now_gen != seen {
+            seen = now_gen;
+            flight.retain(|_, f| f.from.is_none());
+            replay.restart();
+            for f in flight.values_mut() {
+                f.sent = false;
+            }
+        }
+        if let Some(sp) = &s.spool {
+            // No session: batches go to disk. A session: the spool is
+            // replayed, a segment at a time (WK-11).
+            if session.as_ref().is_none_or(|h| h.is_closed()) {
+                spool_live(&s, sp, &mut flight).await;
+            } else if replay.is_idle() {
+                for r in sp.next(&mut replay).await {
+                    flight.insert(
+                        next_batch,
+                        InFlight {
+                            payload: r.payload,
+                            leases: r.leases,
+                            _held: Vec::new(),
+                            sent: false,
+                            refused: false,
+                            counted: true,
+                            kind: r.kind,
+                            from: Some(r.from),
+                            at: 0,
+                        },
+                    );
+                    next_batch += 1;
+                }
+                // A segment removed on the way may have cleared "full".
+                s.refresh_spool_pause();
+            }
+        }
         send_due(&s, session, &mut flight, false).await;
         tokio::select! {
             record = outbound.recv() => {
@@ -1984,6 +2109,13 @@ async fn send_results(
                             let leases = f.leases;
                             tokio::spawn(async move { let _ = h.committed(leases).await; });
                         }
+                        // A spooled segment goes once all of it is in.
+                        if let (Some(from), Some(sp)) = (f.from, &s.spool)
+                            && let Some(seq) = replay.accepted(from)
+                        {
+                            sp.remove(seq).await;
+                            s.refresh_spool_pause();
+                        }
                     }
                 } else if let Some(f) = flight.get_mut(&batch) {
                     // Refused for now (backpressure): sent again on the
@@ -1995,11 +2127,7 @@ async fn send_results(
                 if changed.is_err() {
                     return;
                 }
-                // A new session: whatever wasn't accepted goes again (a
-                // batch id is idempotent, §19.2).
-                for f in flight.values_mut() {
-                    f.sent = false;
-                }
+                // The reset is at the top of the loop, by generation.
             }
             _ = retry.tick() => {
                 for f in flight.values_mut().filter(|f| f.refused) {
@@ -2008,6 +2136,47 @@ async fn send_results(
                 }
             }
         }
+    }
+}
+
+/// With no session: every live batch not accepted goes to the spool and
+/// leaves memory (its records' bytes leave the outbound budget, so the
+/// prepare stage keeps going). One that won't fit stays in memory and
+/// pauses fetching until the spool has room (WK-11).
+async fn spool_live(s: &Shared, sp: &WorkerSpool, flight: &mut BTreeMap<u64, InFlight>) {
+    let live: Vec<u64> = flight
+        .iter()
+        .filter(|(_, f)| f.from.is_none())
+        .map(|(&b, _)| b)
+        .collect();
+    let mut wrote = false;
+    for batch in live {
+        let Some(f) = flight.get(&batch) else {
+            continue;
+        };
+        if sp.is_full() {
+            break;
+        }
+        if !sp
+            .put(f.kind, batch, f.at, f.leases.clone(), f.payload.clone())
+            .await
+        {
+            s.refresh_spool_pause();
+            break;
+        }
+        wrote = true;
+        if let Some(f) = flight.remove(&batch)
+            && !f.counted
+        {
+            s.counts
+                .sent
+                .fetch_add(f.leases.len() as u64, Ordering::Relaxed);
+        }
+    }
+    // Durable before anything else happens (appends between rounds are
+    // synced at most a second apart by the spool itself).
+    if wrote {
+        sp.sync().await;
     }
 }
 
@@ -2047,8 +2216,40 @@ fn encode<T: std::borrow::Borrow<SealedRecord>>(
     }
 }
 
+/// What the spool's tests (`worker/spool.rs`) reach inside the runtime.
 #[cfg(test)]
-mod tests {
+impl Runtime {
+    pub(crate) fn test_outbound(&self) -> ByteSender<SealedRecord> {
+        lock(&self.shared.out).take().expect("the outbound queue")
+    }
+    pub(crate) fn test_pool_paused(&self) -> bool {
+        self.shared.refresh_pause();
+        *self.shared.pool_paused.borrow()
+    }
+    pub(crate) fn test_grant(&self, key: InfoHash, token: Token, peers: Vec<std::net::SocketAddr>) {
+        granted(&self.shared, key, token, peers, unix_now());
+    }
+    /// Re-checks the pauses, then whether the DHT is told to run.
+    pub(crate) fn test_dht_runs(&self) -> bool {
+        self.shared.refresh_spool_pause();
+        lock(&self.shared.dht_want)
+            .as_ref()
+            .is_some_and(|w| matches!(*w.borrow(), super::dht::Desired::Run(_)))
+    }
+    /// Whether the DHT is told to run, as it stands (no re-check).
+    pub(crate) fn test_dht_told_to_run(&self) -> bool {
+        lock(&self.shared.dht_want)
+            .as_ref()
+            .is_some_and(|w| matches!(*w.borrow(), super::dht::Desired::Run(_)))
+    }
+    /// Whether a fresh find would be claimed now.
+    pub(crate) fn test_would_claim(&self, key: InfoHash) -> bool {
+        sift(&self.shared, Found::key(key, 0), true, false).is_some()
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
     //! The runtime on its own (events fed by hand), and end to end against
     //! an in-process coordinator: `serve`'s cluster port and tick (WK-10a)
     //! on a real pipeline, over TCP and mutual TLS.
@@ -2070,10 +2271,13 @@ mod tests {
 
     use super::*;
 
-    const DEADLINE: Duration = Duration::from_secs(20);
-    const W: WorkerId = WorkerId(5);
+    pub(crate) const DEADLINE: Duration = Duration::from_secs(20);
+    pub(crate) const W: WorkerId = WorkerId(5);
 
-    async fn until<T: std::fmt::Debug>(name: &str, mut what: impl FnMut() -> (bool, T)) -> T {
+    pub(crate) async fn until<T: std::fmt::Debug>(
+        name: &str,
+        mut what: impl FnMut() -> (bool, T),
+    ) -> T {
         let start = Instant::now();
         loop {
             let (done, seen) = what();
@@ -2086,7 +2290,7 @@ mod tests {
     }
 
     /// A bencoded single-file info dict.
-    fn info(name: &str) -> Vec<u8> {
+    pub(crate) fn info(name: &str) -> Vec<u8> {
         let mut v = b"d6:lengthi1048576e4:name".to_vec();
         v.extend(format!("{}:{name}", name.len()).bytes());
         v.extend(b"12:piece lengthi262144e6:pieces20:");
@@ -2095,13 +2299,13 @@ mod tests {
         v
     }
 
-    fn key_of(raw: &[u8]) -> InfoHash {
+    pub(crate) fn key_of(raw: &[u8]) -> InfoHash {
         lodestar_metainfo::Info::parse(raw).unwrap().v1.unwrap()
     }
 
     /// Serves the info dicts it's given; refuses every other key.
     #[derive(Default)]
-    struct MapFetch(Mutex<HashMap<InfoHash, Vec<u8>>>);
+    pub(crate) struct MapFetch(pub(crate) Mutex<HashMap<InfoHash, Vec<u8>>>);
 
     impl Fetcher for MapFetch {
         fn fetch(
@@ -2123,7 +2327,7 @@ mod tests {
         }
     }
 
-    fn config(fetcher: Arc<dyn Fetcher>) -> Config {
+    pub(crate) fn config(fetcher: Arc<dyn Fetcher>) -> Config {
         Config {
             allow_private: true,
             drain_deadline: Duration::from_secs(2),
@@ -2131,7 +2335,7 @@ mod tests {
         }
     }
 
-    fn assignment(revision: u64, dict_version: u64, filter_version: u64) -> Assign {
+    pub(crate) fn assignment(revision: u64, dict_version: u64, filter_version: u64) -> Assign {
         Assignment {
             revision,
             dht: None,
@@ -2154,7 +2358,7 @@ mod tests {
     /// Waits out the last minute before midnight UTC first: a test that
     /// seals under today's key would otherwise see the day turn under it
     /// (a condition with a deadline, not a fixed sleep).
-    async fn filter_chunks() -> (u64, Vec<SnapshotChunk>) {
+    pub(crate) async fn filter_chunks() -> (u64, Vec<SnapshotChunk>) {
         let start = Instant::now();
         while unix_now().rem_euclid(DAY) >= DAY - 60 {
             assert!(
@@ -2167,7 +2371,7 @@ mod tests {
     }
 
     /// The same, with the wire key of the day `at` falls on.
-    fn filter_chunks_at(at: i64) -> (u64, Vec<SnapshotChunk>) {
+    pub(crate) fn filter_chunks_at(at: i64) -> (u64, Vec<SnapshotChunk>) {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("c.db"), StoreConfig::default()).unwrap();
         let snap: FilterSnapshot =
@@ -2223,7 +2427,11 @@ mod tests {
         }
     }
 
-    fn assign_dht(revision: u64, shard: Option<ShardSpec>, intensity: Intensity) -> Assign {
+    pub(crate) fn assign_dht(
+        revision: u64,
+        shard: Option<ShardSpec>,
+        intensity: Intensity,
+    ) -> Assign {
         Assignment {
             revision,
             dht: shard,
@@ -3777,7 +3985,7 @@ mod tests {
     }
 
     /// A sealed record for `n`, as the judge would make it.
-    fn sealed(n: usize) -> SealedRecord {
+    pub(crate) fn sealed(n: usize) -> SealedRecord {
         use lodestar_pipeline::wire::ResultRecord;
         use lodestar_pipeline::wire::filter_snapshot::WireKey;
         let raw = info(&format!("record {n}"));
@@ -3957,7 +4165,7 @@ mod tests {
 
     /// A worker session over the in-process link, with the coordinator's
     /// end returned for the test to drive.
-    async fn session_pair() -> (
+    pub(crate) async fn session_pair() -> (
         lodestar_cluster::CoordinatorLink,
         lodestar_cluster::WorkerSession,
     ) {
@@ -4007,7 +4215,7 @@ mod tests {
     }
 
     /// The next `Results` the coordinator gets, skipping anything else.
-    async fn next_results(coord: &mut lodestar_cluster::CoordinatorLink) -> Payload {
+    pub(crate) async fn next_results(coord: &mut lodestar_cluster::CoordinatorLink) -> Payload {
         tokio::time::timeout(DEADLINE, async {
             loop {
                 match coord.recv().await {
