@@ -36,24 +36,50 @@ read -r -s -p "PIA username (hidden): " pia_user; echo
 read -r -s -p "PIA password: " pia_pass; echo
 [[ -n $pia_user && -n $pia_pass ]] || { echo "empty username or password" >&2; exit 5; }
 
-work=$(mktemp -d /dev/shm/pia.XXXXXXXX)
-trap 'rm -rf -- "$work"; unset pia_pass' EXIT
-# jq builds the JSON from the environment, so the password never sits in argv.
-PIA_USER=$pia_user PIA_PASS=$pia_pass jq -n '{username: env.PIA_USER, password: env.PIA_PASS}' >"$work/login.json"
-unset pia_pass
-printf '%s' "$region" >"$work/region"
-cp -- "$ca" "$work/pia-ca.crt"
-
+work=""
+trap '[[ -n $work ]] && rm -rf -- "$work"; unset pia_pass' EXIT
 install -d -m 0700 -o lodestar -g lodestar /home/lodestar/lodestar
 install -d -m 0700 -o root -g root "$dest_dir"
-set +e
-bash "$step" "$work" "$dest" >/dev/null 2>&1
-rc=$?
-set -e
-case $rc in
-  0) chmod 600 "$dest"; echo "OK: WireGuard configuration written (root only). The login is deleted." ;;
-  11) echo "FAILED ($rc): the login file could not be read" >&2 ;;
-  12) echo "FAILED ($rc): PIA refused the login; check the username and password" >&2 ;;
-  *) echo "FAILED ($rc): see the fail calls in $step for the stage" >&2 ;;
-esac
+
+stage() {
+  case $1 in
+    10) echo "the region id was rejected" ;;
+    11) echo "the login file could not be read" ;;
+    12) echo "PIA refused the login (check the username and password)" ;;
+    13) echo "PIA's server list could not be fetched, or had no usable server for $region" ;;
+    14) echo "no WireGuard key pair could be made" ;;
+    15) echo "PIA's VPN server did not accept the new key" ;;
+    16) echo "PIA's VPN server sent back an unusable answer" ;;
+    *) echo "unexpected exit $1" ;;
+  esac
+}
+
+# PIA's servers fail now and then (stages 13, 15 and 16), so those retry with the
+# same login, typed once. A refused login or a local error doesn't retry.
+rc=1
+for attempt in 1 2 3 4; do
+  # The step deletes its work directory whatever happens, so each attempt gets a new one.
+  work=$(mktemp -d /dev/shm/pia.XXXXXXXX)
+  # jq builds the JSON from the environment, so the password never sits in argv.
+  PIA_USER=$pia_user PIA_PASS=$pia_pass jq -n '{username: env.PIA_USER, password: env.PIA_PASS}' >"$work/login.json"
+  printf '%s' "$region" >"$work/region"
+  cp -- "$ca" "$work/pia-ca.crt"
+  set +e
+  bash "$step" "$work" "$dest" >/dev/null 2>&1
+  rc=$?
+  set -e
+  rm -rf -- "$work"; work=""
+  [[ $rc -eq 0 ]] && break
+  echo "attempt $attempt: $(stage "$rc") (exit $rc)" >&2
+  case $rc in 13|15|16) ;; *) break ;; esac
+  [[ $attempt -lt 4 ]] && sleep $((attempt * 15))
+done
+unset pia_pass
+
+if [[ $rc -eq 0 ]]; then
+  chmod 600 "$dest"
+  echo "OK: WireGuard configuration written (root only). The login is deleted."
+else
+  echo "FAILED ($rc): $(stage "$rc"). The login is deleted." >&2
+fi
 exit "$rc"
