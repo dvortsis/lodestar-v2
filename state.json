@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T22:01:40Z",
+  "updated_at": "2026-11-12T22:04:01Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7497,6 +7497,11 @@
       "id": "merged-774",
       "note": "#774 X-ci-deploy-aws-test merged (bd860547); session archived; owner FYI pending in next batch",
       "added": "2026-11-12T22:01:40Z"
+    },
+    {
+      "id": "X-ci-concurrency-test-filter",
+      "note": "#784: test_workflow_concurrency.py runs in the lint job (rust filter); a PR touching only web.yml/e2e.yml/the test would not run it. Low priority: add those paths to RUST_ALSO in ci_changes.py later.",
+      "added": "2026-11-12T22:04:01Z"
     }
   ],
   "main_health": [
@@ -8519,7 +8524,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T22:01:40Z",
+    "updated": "2026-11-12T22:04:01Z",
     "items": [
       {
         "slot": 1,
@@ -8598,7 +8603,7 @@
         "slice": "X-ci-main-signal",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBZQeRoCk9GRPDM6HP: cloud-testing priority: main pushes stop cancelling CI (cancel-in-progress only on PRs), Sonnet; briefs/X-ci-main-signal.md",
+        "doing": "session_01MMjhnBZQeRoCk9GRPDM6HP: cloud-testing priority: #784 at 07abd0b7 (concurrency test wired into lint job); review on ready",
         "since": "2026-11-12T22:01:40Z",
         "status": "active"
       },
@@ -8723,7 +8728,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-12T22:01:40Z",
+  "updated": "2026-11-12T22:04:01Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
