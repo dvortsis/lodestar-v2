@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T08:56:58Z",
+  "updated_at": "2026-11-12T09:00:35Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7878,6 +7878,11 @@
       "pr": 734,
       "sha": "073e6ed45ff5649febe9410d3a37bcb110a77248",
       "at": "2026-11-12T07:59:10Z"
+    },
+    {
+      "pr": 717,
+      "sha": "80f009cdd7aa60b7124e2274fc1c47a1b6804164",
+      "at": "2026-11-12T09:00:35Z"
     }
   ],
   "active_sessions": {
@@ -8115,7 +8120,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T08:56:58Z",
+    "updated": "2026-11-12T09:00:35Z",
     "items": [
       {
         "slot": 1,
@@ -8155,11 +8160,11 @@
       },
       {
         "slot": 10,
-        "slice": "RX-0",
+        "slice": "X-rx0-nits",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8dQvKpaNcN6wp9PY6: #717 e9350c1d delta rv MERGE (rv-717-e9350c1d); waiting ci-ok, then merge. Nits N1-N5 to RX-1 or follow-up",
-        "since": "2026-11-11T21:46:53Z",
+        "doing": "RX-0 review nits N1-N5 (regex cost model wording/charges)",
+        "since": "2026-11-12T09:00:35Z",
         "status": "active"
       },
       {
@@ -8248,7 +8253,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T08:56:58Z",
+  "updated": "2026-11-12T09:00:35Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
