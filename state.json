@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T20:59:35Z",
+  "updated_at": "2026-11-12T21:02:06Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8489,7 +8489,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T20:59:35Z",
+    "updated": "2026-11-12T21:02:06Z",
     "items": [
       {
         "slot": 1,
@@ -8616,6 +8616,23 @@
         "doing": "#778 CHANGES relayed (B1 ANALYZE pg_catalog.pg_database in Fixture::new; I1 confirm windows_service green)",
         "since": "2026-11-12T18:57:19Z",
         "status": "active"
+      },
+      {
+        "slot": 15,
+        "slice": "X-unraid-validate-all",
+        "role": "cloud-testing",
+        "agent": "claude",
+        "doing": "session_01MMjhn8oFWgqJZRqVkfGYoW: launched; validator checks every template + Requires (gluetun template Requires empty today), CI job inside ci-ok",
+        "since": "2026-11-12T21:02:06Z",
+        "status": "active"
+      },
+      {
+        "slot": 16,
+        "slice": "",
+        "role": "cloud-testing",
+        "agent": "",
+        "doing": "reserved: Cloud Tester lanes first; then the gluetun-leak fix when its diagnosis lands; else X-soak-screen-calibrate once #777 (shares analyze_cr0.py) merges",
+        "status": "idle"
       }
     ]
   },
@@ -8676,7 +8693,7 @@
     }
   ],
   "heartbeat": "2026-11-12T18:39:05Z",
-  "updated": "2026-11-12T20:59:35Z",
+  "updated": "2026-11-12T21:02:06Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -8906,9 +8923,14 @@
     ]
   },
   "extra": {
-    "updated": "2026-11-12T18:52:01Z",
-    "max": 0,
-    "items": [],
-    "note": "Owner 2026-11-12 (\u00a72.61, to record in the next runner PR): 12 build slots (slots 1-12) plus up to 4 for cloud testing (slot 13 X-test-vm and its lanes). GS-1 and X-ci-deploy-aws-test moved into slots 7 and 9."
+    "updated": "2026-11-12T21:02:06Z",
+    "max": 4,
+    "items": [
+      13,
+      14,
+      15,
+      16
+    ],
+    "note": "Owner 2026-11-12 (\u00a72.61/\u00a72.62, and reminded 21:00Z): up to 4 extra sessions for testing-related work, shared with the Cloud Tester. Slot 13 X-test-vm lanes; 14 X-test-blockers-1112 (#778); 15 X-unraid-validate-all; 16 reserved (tester lanes, gluetun-leak fix, then X-soak-screen-calibrate after #777)."
   }
 }
