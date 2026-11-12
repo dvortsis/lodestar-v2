@@ -48,12 +48,13 @@ lodestar_log::catalogue! {
         fields: { error: Label },
     }
     /// An install was stopped by the shutdown before its switch. Not a
-    /// failure: the version stays queued for the next start.
+    /// failure: nothing changed, the version isn't held back, and one
+    /// queued for the window stays queued for the next start.
     UPDATE_INSTALL_STOPPED {
         id: "update.install_stopped",
         component: System,
         level: Info,
-        message: "The update install stopped with the service; it stays queued",
+        message: "The update install stopped with the service before its switch; nothing changed",
         fields: {},
     }
     /// An updater state file (`updater.json`, `skipped`, `history.json`)

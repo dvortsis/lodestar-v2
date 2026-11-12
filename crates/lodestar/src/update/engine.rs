@@ -1278,12 +1278,13 @@ impl Engine {
         *lock(&self.inner.installing) = Some(v.clone());
         let result = self.install_steps(&v).await;
         if result == Err(STOPPING) {
-            // Not a failure of this version: it stays queued, and isn't
-            // held back, for the next start. The service is stopping, so
-            // nothing is published.
+            // Not a failure of this version: it isn't held back, and a
+            // queued one stays queued, for the next start. The service is
+            // stopping, so nothing is published. Logged before `installing`
+            // clears, so a test that waits on that sees the line.
+            log_event!(UPDATE_INSTALL_STOPPED);
             *lock(&self.inner.installing) = None;
             drop(one);
-            log_event!(UPDATE_INSTALL_STOPPED);
             return result;
         }
         if result.is_ok() {
@@ -1372,9 +1373,8 @@ impl Engine {
         // The service's stop came first: no switch. (A supervisor also
         // drops a switch that meets a forwarded stop; this keeps the
         // version queued and the overlay gone either way.) Nothing awaits
-        // from here to the switch, but the stop is only sent once serving
-        // has drained, so an install can still reach the switch in that
-        // drain.
+        // from here to the switch, and the stop is sent when the shutdown
+        // signal fires, before serving drains (X-upd-stop-early).
         if self.stopping() {
             let _ = bin.remove_overlay(v);
             return Err(STOPPING);
@@ -2298,7 +2298,7 @@ mod tests {
 
     /// The two tests whose installs are stopped take turns, so each can
     /// count the `update.install_stopped` lines it adds to the shared log.
-    static STOPS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static STOPS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     /// The service's stop sent once the overlay is staged (here, from the
     /// supervisor's verification, just before the last reverify): no
@@ -2306,7 +2306,7 @@ mod tests {
     /// held back for the next start.
     #[tokio::test]
     async fn a_stop_before_the_switch_switches_nothing() {
-        let _one = STOPS.lock().unwrap_or_else(|e| e.into_inner());
+        let _one = STOPS.lock().await;
         let e = env(Mode::Notify);
         e.serve(NOW - 100, "0.6.0", None);
         e.engine.run_check().await.unwrap();
@@ -2361,7 +2361,7 @@ mod tests {
     #[tokio::test]
     async fn a_stop_before_the_switch_leaves_a_window_install_queued() {
         crate::test_log::install();
-        let _one = STOPS.lock().unwrap_or_else(|e| e.into_inner());
+        let _one = STOPS.lock().await;
         let stopped_lines = || {
             crate::test_log::text()
                 .lines()
@@ -2412,8 +2412,7 @@ mod tests {
         let text = crate::test_log::text();
         let last = text
             .lines()
-            .filter(|l| l.contains(r#"event="update.install_stopped""#))
-            .last()
+            .rfind(|l| l.contains(r#"event="update.install_stopped""#))
             .unwrap();
         assert!(last.contains("INFO"), "{last}");
         // No stop is ever logged as a failure.

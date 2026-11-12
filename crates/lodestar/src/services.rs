@@ -851,7 +851,7 @@ impl Services {
         // install that reached its switch during the drain would otherwise
         // still switch (X-upd-stop-early). `Handles::shutdown` still waits
         // for, then aborts, its task in the same place as before.
-        let updates_stop = handles.updates.as_ref().map(|(stop, _)| stop.clone());
+        let updates_stop = early_updates_stop(&handles);
         let signal = on_shutdown(signal, updates_stop, move || {
             if let Some(t) = &requeue_stop {
                 t.cancel();
@@ -884,6 +884,18 @@ impl Services {
         served?;
         stopped
     }
+}
+
+/// The updates stop to send when the shutdown signal fires. Unix only: its
+/// engine switches in-process, which the early stop closes. On Windows the
+/// `Notifier` has no switch to race, and its last look at the settings must
+/// stay after the drain, so a switch to Off saved by a request still being
+/// served withdraws a waiting install (X-win-upd-stop-wait, owner §2.13).
+fn early_updates_stop(handles: &Handles) -> Option<watch::Sender<bool>> {
+    if cfg!(windows) {
+        return None;
+    }
+    handles.updates.as_ref().map(|(stop, _)| stop.clone())
 }
 
 /// The shutdown signal as the server sees it: waits for `signal`, sends the
