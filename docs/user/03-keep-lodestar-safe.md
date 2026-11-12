@@ -88,7 +88,7 @@ gluetun's firewall is its kill switch. When the VPN drops, it blocks every new c
 4. Apply, then open gluetun's log.
    **Result:** The log shows `[firewall] enabled successfully`. If gluetun stops with `post-rules.txt: is a directory`, the file wasn't at the host path, so Docker made a folder there. Delete the folder, save the file in its place, and start gluetun again.
 
-With the file, a connection that used the VPN never leaves any other way. Each rule only blocks traffic; none lets anything new through. Lodestar's own example templates don't include the file yet **(planned)**.
+With the file, a connection that used the VPN never leaves any other way. The rules never let anything new through. The companion templates Lodestar generates don't include the file or the variable yet **(planned)**, so add both by hand.
 
 A VPN hides your home IP from peers. It doesn't hide your activity from the VPN provider, and it doesn't make the web UI private. Inbound DHT reach needs a port your provider forwards: allow it in gluetun with `FIREWALL_VPN_INPUT_PORTS` and set **DHT port** in the template to the same number. Without it, Lodestar still crawls with fewer nodes.
 

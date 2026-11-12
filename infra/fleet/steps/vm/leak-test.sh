@@ -200,6 +200,8 @@ iface=$(docker inspect --type container -f '{{range .Config.Env}}{{println .}}{{
   | sed -n 's/^VPN_INTERFACE=//p' | tail -n 1)
 iface=${iface:-wg0}  # gluetun's WireGuard default; compose.yaml sets it explicitly
 [[ $iface =~ ^[a-z][a-z0-9]{0,14}$ ]] || { bad vpn_interface; finish; }
+# The rules name the interface; a name gluetun didn't use would make them inert.
+check vpn_interface_live iface_up
 check post_rules_ipv4 post_rules_on iptables "$iface"
 check post_rules_ipv6 post_rules_on ip6tables "$iface"
 

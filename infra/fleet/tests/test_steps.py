@@ -493,6 +493,7 @@ case "$1" in
         "sh -c dig"*) if [ -n "$down" ] && [ -z "$leak" ]; then DIG_FAIL=1; else DIG_FAIL=$DIG_UP_FAIL; fi
                       DIG_FAIL=$DIG_FAIL "$@" ;;
         "sh -c ip -o link show up dev \"\$1\" | grep -q . iface ${VPN_IFACE-wg0}")
+                      [ -n "$IFACE_MISSING" ] && exit 1
                       [ -e "$STUB/ifdown" ] && [ -z "$IFACE_BACK" ] && exit 1; exit 0 ;;
         "sh -c command"*) [ -n "$NO_TOOLS" ] && exit 1; exit 0 ;;
         "sh -c ip -6 -o addr show scope global | grep -q .") [ -n "$NS_V6" ] || exit 1; exit 0 ;;
@@ -642,7 +643,7 @@ class VMScripts(unittest.TestCase):
             for n in ("captured_packets", "captured_tcp", "captured_udp", "captured_icmp", "captured_other",
                       "host_egress_packets"):
                 self.assertIn(f"count {n}_{phase} 0", lines)
-        names += ["post_rules_ipv4", "post_rules_ipv6", "egress_found"]
+        names += ["vpn_interface_live", "post_rules_ipv4", "post_rules_ipv6", "egress_found"]
         for name in names:
             self.assertIn(f"ok {name}", lines)
         self.assertFalse(any(ln.startswith("fail ") for ln in lines))
@@ -694,6 +695,8 @@ class VMScripts(unittest.TestCase):
             "the host counter can't be read": ({"COUNTER_UNREADABLE": 1}, "no_host_egress_down"),
             "the host counter can't be set": ({"COUNTER_FAILS": 1}, "no_host_egress_down"),
             "no compose bridge on the veth": ({"NO_BRIDGE": 1}, "egress_found"),
+            # gluetun's tunnel isn't the interface its config (and the rules) name.
+            "the named interface isn't gluetun's": ({"IFACE_MISSING": 1}, "vpn_interface_live"),
             "the interface won't go down": ({"IFDOWN_FAILS": 1}, "vpn_interface_down"),
             # A probe container that never runs its command is never read as blocked.
             "the probes never run": ({"PROBE_NOT_RUN": 1}, "probe_ran"),
