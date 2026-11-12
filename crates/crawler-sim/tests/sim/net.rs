@@ -563,9 +563,11 @@ mod tests {
             .max()
             .unwrap();
         let pos = n.rank(&target);
-        for j in pos.saturating_sub(WINDOW)..(pos + WINDOW).min(n.nodes.len()) {
+        let lo = pos.saturating_sub(WINDOW);
+        let hi = (pos + WINDOW).min(n.nodes.len());
+        for (j, node) in n.nodes.iter().enumerate().take(hi).skip(lo) {
             if !holders.contains(&j) {
-                assert!(xor(&n.nodes[j].id.0, &target) > worst);
+                assert!(xor(&node.id.0, &target) > worst);
             }
         }
     }
