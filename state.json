@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T22:47Z",
+  "updated_at": "2026-11-12T22:52Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7572,6 +7572,66 @@
       "id": "owner-2-64b",
       "note": "Owner 22:41Z: \"Keep opening slices if there is work available.\" (with \u00a72.64 window).",
       "added": "2026-11-12T22:46Z"
+    },
+    {
+      "id": "merged-765",
+      "note": "#765 UP-1 merged (8f820fcc) after the runner checked the P1-P5 delta; session archived. UP-1 O2/O6 are runner follow-ups (see the PR description).",
+      "added": "2026-11-12T22:52Z"
+    },
+    {
+      "id": "enr-13b",
+      "note": "ENR-13b (Rust, Opus): the detail GET offers the id to lodestar_pipeline::identify::Interest, rate-limited per client and overall like DrawerInterest, not gated on adult. Launch after #764 ENR-14 merges (it wires identify).",
+      "added": "2026-11-12T22:52Z"
+    },
+    {
+      "id": "enr-13-parsed-from",
+      "note": "Web nit: parsed/Parsed.svelte shows \"From: name\" for a null resolved_via (ENR-13).",
+      "added": "2026-11-12T22:52Z"
+    },
+    {
+      "id": "enr-13-size",
+      "note": "\u00a72.26 flag to the owner: ENR-13 raised the Detail drawer limit 28,064 -> 28,128 B and /t/[hash] 21,904 -> 21,952 B for the lazy loader (the ENR-8 pattern).",
+      "added": "2026-11-12T22:52Z"
+    },
+    {
+      "id": "wk-18w",
+      "note": "WK-18 split: the WiX join is WK-18w (launched). WK-18 does compose, Unraid and the decisions file.",
+      "added": "2026-11-12T22:52Z"
+    },
+    {
+      "id": "win-rollback-2",
+      "note": "X-win-upd-manual-rollback-2: helper.rs request kind, check.rs rollback.available + Roll back with a loss confirmation; BLOCKING: purge_for_restore scrub before the request (content safety). After #795.",
+      "added": "2026-11-12T22:52Z"
+    },
+    {
+      "id": "banner-followup",
+      "note": "#794 takes live={false} for StorageStep and BlocklistsScreen in the same PR.",
+      "added": "2026-11-12T22:52Z"
+    },
+    {
+      "id": "fuzz-leads-1112",
+      "note": "Testing fuzz leads: the cluster_filter_snapshot harness at ~95 exec/s (~10 ms per input; probably an engine build per snapshot); cluster_assign coverage is small (ft 287). 33 targets x 30 min: 0 crashes.",
+      "added": "2026-11-12T22:52Z"
+    },
+    {
+      "id": "gluetun-leak",
+      "note": "Testing blocker: gluetun v3.41.3 ESTABLISHED accept with no -o leaks teardown/ICMP via eth0 on tunnel drop. X-gluetun-leak launched. Owner FYI: the docs overclaim the kill switch until it merges.",
+      "added": "2026-11-12T22:52Z"
+    },
+    {
+      "id": "testing-msg-blocked",
+      "note": "The runner could not message the testing session (session_01MMjhnBD1KHxsn7QRHHmpeM): trusted device needed. Asked the owner to relay.",
+      "added": "2026-11-12T22:52Z"
+    },
+    {
+      "id": "soak-unjudged",
+      "note": "#796: a checkpoint with every memory input absent reads unjudged, not ok (runner \u00a72.33).",
+      "added": "2026-11-12T22:52Z"
+    },
+    {
+      "id": "cmp-egress-admin-pw",
+      "note": "X-cmp-egress-api: the PUT needs the admin password (as patch_source does); 409 takes_no_route; no new log event (follow-up).",
+      "added": "2026-11-12T22:52Z"
     }
   ],
   "main_health": [
@@ -8594,7 +8654,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T22:47Z",
+    "updated": "2026-11-12T22:52Z",
     "items": [
       {
         "slot": 1,
@@ -8855,6 +8915,24 @@
         "agent": "claude",
         "doing": "session_01MMjhnA6QRL7ZBHsGodHmKo: owner window (\u00a72.64, \"keep opening slices\") until 00:00Z 2026-11-13; brief briefs/X-percolate-promoted-hold.md",
         "since": "2026-11-12T22:47Z"
+      },
+      {
+        "slot": 30,
+        "slice": "X-gluetun-leak",
+        "status": "active",
+        "role": "build",
+        "agent": "claude",
+        "doing": "cloud-testing: session_01MMjhn9LiMXgY2GmV4Zu74h: testing blocker #1; brief briefs/X-gluetun-leak.md",
+        "since": "2026-11-12T22:52Z"
+      },
+      {
+        "slot": 31,
+        "slice": "WK-18w",
+        "status": "active",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhn9uJBPzSurs8AkipKz: owner window (\u00a72.64) until 00:00Z 2026-11-13; replaces UP-1 (#765 merged); brief briefs/WK-18w.md",
+        "since": "2026-11-12T22:52Z"
       }
     ]
   },
@@ -8915,7 +8993,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-12T22:47Z",
+  "updated": "2026-11-12T22:52Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
