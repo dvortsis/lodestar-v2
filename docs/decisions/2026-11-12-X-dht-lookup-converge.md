@@ -25,9 +25,12 @@ The reproducer: 50 loopback nodes, 18 swarms announced to their true-closest 8 n
 - **Parking.** While routers are configured, no bootstrap self-lookup has finished since the start, no family table holds K (8) nodes, and less than `PARK_DEADLINE` (30 s) has passed, owned `get_peers` requests stay in their queue: `Actor::parks_lookups`, checked where the tick starts queued requests.
   - The queue is the existing bounded one (`MAX_GET_PEERS`, 32). Admission already refuses beyond it, and the pool's permits hold the rest, so nothing is dropped silently.
   - They start when the bootstrap settles, or once a table reaches K, whichever comes first. The bootstrap settles when a self-lookup (`Lookup::bootstrap` marks them) ends with nodes in its family's table, or when every self-lookup of the round has ended without. It's judged per family because a dual-stack node's v6 self-lookup can end at once, inside `start_bootstrap`: with no v6 router, or with v6 unroutable as on many Docker hosts. Counting that as "bootstrapped" would have turned parking off for every dual-stack install (fresh-review finding).
+  - "Every self-lookup has ended" is judged only once `start_bootstrap` has created the round's self-lookup for every family. Judged while it was still creating them, a family listed first in `dht.bind` that ended at once would count as the round's last, and lift parking from the first instant: `["[::]:6881", "0.0.0.0:6881"]` on a host without working IPv6, or v4 listed first on a v6-only host (delta-review finding I-1). A lookup that ends inside the loop therefore never counts as the last. If every family's lookup has ended by the end of the loop, the round settles there.
   - If the bootstrap fails, its self-lookup still ends, with an empty table, and the requests start and end empty as before. `dht.bootstrap_unreachable` already reports that, so there's no new event or metric.
   - At the deadline they start anyway.
-  - With no routers configured (tests, a saved table), nothing parks.
+  - With no routers configured, nothing parks. A saved table of K or more nodes doesn't park either. A saved table of fewer than K does, while routers are configured, until the bootstrap settles.
+  - The 30 s runs from the actor's construction, after the routers' names resolve (`park_since`, not `epoch`), so slow DNS doesn't use it up.
+  - Time spent parked counts against the pool's `lookup_wait` (30 s), whose clock starts when the pool hands a request over. Normally parking lasts well under a second. In the worst case, a bootstrap that never answers, `PARK_DEADLINE` and `lookup_wait` run out together, and the key retries after the pool's backoff, as it did before parking.
 - **Router seeding was rejected.** Seeding every thin-table lookup with the bootstrap routers would fix shape A too. But a cold start's restored queue can hold 200,000 keys, so it would send thousands of queries to the public routers within seconds: the burst we must never send. With parking, routers see only the bootstrap's own queries.
 - **`Lookup::bootstrap` is marked explicitly.** Comparing the lookup's target with `ids[0]` misses once BEP 42 gives the node a new id mid-lookup (it does in crawler-sim, whose node has a public address).
 
@@ -47,6 +50,13 @@ The reproducer: 50 loopback nodes, 18 swarms announced to their true-closest 8 n
   - at Balanced (200 queries/s, half of it for sampling) that's 1–2 s of spare budget;
   - nothing changes on the wire.
 
+## Follow-up (pre-existing, not changed here)
+
+- **A BEP 42 id change mid-bootstrap leaves the new id's neighbourhood unlooked-up** (X-dht-bep42-rejoin).
+  - When external-IP votes give the node a new id, `on_external_ip` rebuilds the tables around it, but nothing looks up the new id's own neighbourhood until the next thin-table re-bootstrap or the stale refresh.
+  - The join refresh, planned from the first self-lookup, covers the levels above the old id's closest neighbour, not the new id's.
+  - This predates the PR. It affects only nodes whose public address isn't BEP 42-exempt and whose id changes while the bootstrap runs.
+
 ## Lookup cost and behaviour
 
 - A parked request sends nothing until it starts, then costs what it always did. A lookup per request is unchanged: same `ALPHA`, K, `MAX_PEER_QUERIES` and termination.
@@ -57,9 +67,10 @@ The reproducer: 50 loopback nodes, 18 swarms announced to their true-closest 8 n
 - **`node/join_tests.rs`: the real actor on a scripted network, answered by hand.** No socket is read and no clock is waited on.
   - A request made before any node is known is parked (queued, not started). After the bootstrap it finds its peer, and the router gets no more `get_peers` than it does in a control run where the same request comes after the bootstrap. While parked, the router saw only the bootstrap's one query.
   - A bootstrap that times out ends parked requests empty.
-  - `PARK_DEADLINE` releases them even with the bootstrap still out (the actor's epoch is moved past it, not slept to).
+  - `PARK_DEADLINE` releases them even with the bootstrap still out (`park_since` is moved past it, not slept to).
   - With no routers, nothing parks.
-  - Dual stack with routers only in v4: the v6 self-lookup ends at once, but requests stay parked until v4's ends with nodes. Then only v4 plans its join refresh. This fails if any ended self-lookup releases parking, and it runs without IPv6 on the host, since the v6 leg never sends.
+  - Dual stack with routers only in v4, with v6 listed second and listed first: the v6 self-lookup ends at once, but requests stay parked until v4's ends with nodes. Then only v4 plans its join refresh. This fails if any ended self-lookup releases parking, or if the round is judged before every family's lookup exists. It runs without IPv6 on the host, since the v6 leg never sends.
+  - Both families ending at once (no v6 router, and v4's router refused at send), in either order: the round settles at the end of `start_bootstrap`, and requests start and end empty as before.
   - A joined node whose neighbours know nothing far plans one target per level above its closest neighbour (11 here), keeps maintenance lookups at 8 or fewer, learns the far half, and plans nothing on a second bootstrap round.
   - Without the fix, the peer test fails (empty peers), the far-half test fails (no far node known), and the deadline test fails (not parked).
   - The router answers in the routing table like any node. In the peer test its id is near the hash, so ordinary routing asks it one `get_peers` either way. Parking adds none, which the test checks against a control run made after the bootstrap.

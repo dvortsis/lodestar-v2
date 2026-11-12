@@ -282,12 +282,12 @@ fn parked_requests_start_at_the_deadline_without_a_bootstrap() {
     let mut rx = request(&mut a, InfoHash([5; 20]));
     a.maintain(&sockets);
     assert_eq!(a.get_peers_queue.len(), 1, "parked");
-    let start = a.epoch;
+    let start = a.park_since;
     assert!(a.parks_lookups(start + PARK_DEADLINE - Duration::from_millis(1)));
     assert!(!a.parks_lookups(start + PARK_DEADLINE));
-    // The actor's own clock past the deadline: started, and with nobody
+    // Parking's own clock past the deadline: started, and with nobody
     // to ask it ends empty at once.
-    a.epoch = Instant::now()
+    a.park_since = Instant::now()
         .checked_sub(PARK_DEADLINE)
         .expect("the clock is past the deadline");
     a.maintain(&sockets);
@@ -377,50 +377,85 @@ fn a_joined_node_learns_the_far_half_its_neighbours_dont_know() {
     assert!(a.join_refresh.is_none(), "not planned twice");
 }
 
-#[test]
-fn a_v6_family_without_a_router_doesnt_end_the_parking() {
-    // Dual stack, routers only in v4: the v6 self-lookup has nobody to
-    // ask and ends at once, inside start_bootstrap. v4's is still out.
+/// An actor with a second, v6 family that has no router and no node:
+/// its self-lookup has nobody to ask and ends at once, inside
+/// `start_bootstrap`. Listed first or second (`dht.bind`'s order). The v6
+/// leg never sends, so its socket slot needs no IPv6 on the host.
+fn dual_stack(v6_first: bool, query_timeout: Duration) -> (Actor, Vec<SendSocket>, usize) {
     let router = unbound(false, 7);
-    let (mut a, mut sockets) = actor(router, Duration::from_secs(4));
-    // The v6 leg never sends (no v6 router, no v6 node), so its socket
-    // slot needs no IPv6 on the host: a placeholder runs everywhere.
+    let (mut a, mut sockets) = actor(router, query_timeout);
     let placeholder = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     placeholder.set_nonblocking(true).unwrap();
-    sockets.push(SendSocket::Udp(placeholder));
-    a.families.push(Family {
+    let v6 = Family {
         table: RoutingTable::new(a.ids[0], true),
         ipv6: true,
-    });
-    a.join_planned.push(false);
-    a.start_bootstrap(&sockets, Vec::new());
-    assert!(
-        !a.lookups.values().any(|l| l.bootstrap && l.family == 1),
-        "the v6 self-lookup ended at once"
-    );
-    assert!(!a.bootstrapped, "v4's self-lookup is still out");
-    let _rx = request(&mut a, InfoHash([5; 20]));
-    a.maintain(&sockets);
-    assert_eq!(a.get_peers_queue.len(), 1, "still parked");
-    assert!(a.parks_lookups(Instant::now()));
-    // v4's bootstrap ends with nodes: parking lifts, and v4 alone plans
-    // its join refresh. The empty v6 family stays unplanned, free to
-    // plan once its own bootstrap fills it.
-    let own = a.ids[0];
-    let (_, groups) = two_neighbourhoods(own);
-    let net = Net {
-        router,
-        router_id: at_level(at_level(own, 0, 0x55), 1, 0),
-        groups,
-        holder: None,
     };
-    let mut seen = Seen::default();
-    for _ in 0..ROUNDS {
-        if a.bootstrapped {
-            break;
+    let at = if v6_first { 0 } else { 1 };
+    sockets.insert(at, SendSocket::Udp(placeholder));
+    a.families.insert(at, v6);
+    a.join_planned.insert(at, false);
+    (a, sockets, at)
+}
+
+#[test]
+fn a_v6_family_without_a_router_doesnt_end_the_parking() {
+    for v6_first in [false, true] {
+        let (mut a, sockets, v6) = dual_stack(v6_first, Duration::from_secs(4));
+        let v4 = 1 - v6;
+        a.start_bootstrap(&sockets, Vec::new());
+        assert!(
+            !a.lookups.values().any(|l| l.bootstrap && l.family == v6),
+            "v6 first {v6_first}: the v6 self-lookup ended at once"
+        );
+        assert!(
+            a.lookups.values().any(|l| l.bootstrap && l.family == v4),
+            "v6 first {v6_first}: v4's self-lookup is out"
+        );
+        assert!(!a.bootstrapped, "v6 first {v6_first}: v4's is still out");
+        let _rx = request(&mut a, InfoHash([5; 20]));
+        a.maintain(&sockets);
+        assert_eq!(a.get_peers_queue.len(), 1, "v6 first {v6_first}: parked");
+        assert!(a.parks_lookups(Instant::now()));
+        // v4's bootstrap ends with nodes: parking lifts, and v4 alone
+        // plans its join refresh. The empty v6 family stays unplanned,
+        // free to plan once its own bootstrap fills it.
+        let own = a.ids[0];
+        let (router, groups) = two_neighbourhoods(own);
+        let net = Net {
+            router,
+            router_id: at_level(at_level(own, 0, 0x55), 1, 0),
+            groups,
+            holder: None,
+        };
+        let mut seen = Seen::default();
+        for _ in 0..ROUNDS {
+            if a.bootstrapped {
+                break;
+            }
+            answer(&mut a, &sockets, &net, &mut seen);
         }
-        answer(&mut a, &sockets, &net, &mut seen);
+        assert!(a.bootstrapped, "v6 first {v6_first}: v4's ended with nodes");
+        assert!(a.join_planned[v4] && !a.join_planned[v6]);
     }
-    assert!(a.bootstrapped, "v4's self-lookup ended with nodes");
-    assert_eq!(a.join_planned, [true, false]);
+}
+
+#[test]
+fn every_family_ending_at_once_ends_the_parking() {
+    // Both families' self-lookups end inside start_bootstrap: v6 has no
+    // router, and v4's router query fails at send (a port-0 address is
+    // refused by the routing policy). The round is over, nothing will
+    // bring nodes, so parked requests start and end empty as before.
+    for v6_first in [false, true] {
+        let (mut a, sockets, _) = dual_stack(v6_first, Duration::from_secs(4));
+        a.bootstrap = vec![SocketAddr::from(([127, 0, 0, 1], 0))];
+        a.start_bootstrap(&sockets, Vec::new());
+        assert!(
+            !a.lookups.values().any(|l| l.bootstrap),
+            "v6 first {v6_first}: every self-lookup ended at once"
+        );
+        assert!(a.bootstrapped, "v6 first {v6_first}: the round settled");
+        let mut rx = request(&mut a, InfoHash([5; 20]));
+        a.maintain(&sockets);
+        assert_eq!(rx.try_recv(), Ok(Vec::new()), "started and ended empty");
+    }
 }

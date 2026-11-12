@@ -432,6 +432,14 @@ struct Actor {
     join_refresh: Option<Vec<(usize, NodeId)>>,
     /// Per family: its join refresh has been planned (once per start).
     join_planned: Vec<bool>,
+    /// While `start_bootstrap` is still creating a round's self-lookups:
+    /// one that ends at once then isn't the round's last, because a later
+    /// family's may not exist yet ([`Actor::bootstrapped`]'s rule, settled
+    /// after the loop instead).
+    bootstrap_starting: bool,
+    /// When parking's [`PARK_DEADLINE`] runs from: the actor's construction,
+    /// after the routers' names resolved, so slow DNS doesn't use it up.
+    park_since: Instant,
     /// Bootstrap-router queries in flight, for `dht.bootstrap_unreachable`.
     seed_tids: Set<u64>,
     /// The last bootstrap's routers refused (policy or socket) and throttled
@@ -711,6 +719,8 @@ impl Actor {
             bootstrapped: false,
             join_refresh: None,
             join_planned: vec![false; family_count],
+            bootstrap_starting: false,
+            park_since: Instant::now(),
             seed_tids: Set::default(),
             seed_refused: 0,
             seed_throttled: 0,
@@ -1852,7 +1862,7 @@ impl Actor {
         !self.bootstrapped
             && !self.bootstrap.is_empty()
             && self.families.iter().all(|f| f.table.len() < K)
-            && now.duration_since(self.epoch) < PARK_DEADLINE
+            && now.duration_since(self.park_since) < PARK_DEADLINE
     }
 
     /// Starts the next join-refresh lookups, keeping the maintenance
@@ -2135,7 +2145,7 @@ impl Actor {
         if done.bootstrap {
             let f = done.family;
             let found = !self.families[f].table.is_empty();
-            let others_out = self.lookups.values().any(|l| l.bootstrap);
+            let others_out = self.bootstrap_starting || self.lookups.values().any(|l| l.bootstrap);
             if found || !others_out {
                 self.bootstrapped = true;
             }
@@ -2257,6 +2267,7 @@ impl Actor {
             self.seed_answered = false;
         }
         (self.seed_refused, self.seed_throttled) = (0, 0);
+        self.bootstrap_starting = true;
         for f in 0..self.families.len() {
             let ipv6 = self.families[f].ipv6;
             let known: Vec<NodeInfo> = saved
@@ -2274,6 +2285,12 @@ impl Actor {
             self.start_lookup_as(
                 sockets, f, target, &known, &routers, None, false, None, true,
             );
+        }
+        self.bootstrap_starting = false;
+        // Every family's self-lookup ended inside the loop, none with
+        // nodes: the round is over, so parked requests may start.
+        if !self.lookups.values().any(|l| l.bootstrap) {
+            self.bootstrapped = true;
         }
         // Every router refused at send, or none resolved.
         self.end_seed_round_if_done();
