@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T05:16:30Z",
+  "updated_at": "2026-11-12T05:17:01Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7098,7 +7098,8 @@
     },
     "slices.yaml entry: X-flake-portable-restart-3 (next runner PR)",
     "release/v0.5.2: P-v052-cut opening release/v052-tokio-notice from runner-state patches/v052-tokio-notice.patch (runner 06383e6b); review + merge before v0.5.2 tag",
-    "slices.yaml entry: X-restart-banner-polish (next runner PR)"
+    "slices.yaml entry: X-restart-banner-polish (next runner PR)",
+    "X-restart-save-lag (Opus, web): banner learns of a Settings save within 15 s; restart store is async-race code, so Opus only"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7931,7 +7932,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T05:16:30Z",
+    "updated": "2026-11-12T05:17:01Z",
     "items": [
       {
         "slot": 1,
@@ -8006,9 +8007,9 @@
       {
         "slot": 9,
         "slice": "X-restart-banner-polish",
-        "role": "build",
+        "role": "Sonnet slice (tests only)",
         "agent": "claude",
-        "doing": "rv-718-0e2c082f nits: begin-bump test, test yields",
+        "doing": "rv-718 nits, test-only (Sonnet session: no store logic)",
         "since": "2026-11-12T05:16:30Z",
         "status": "active"
       },
@@ -8097,7 +8098,7 @@
     }
   ],
   "heartbeat": "2026-11-12T03:41:56Z",
-  "updated": "2026-11-12T05:16:30Z",
+  "updated": "2026-11-12T05:17:01Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
