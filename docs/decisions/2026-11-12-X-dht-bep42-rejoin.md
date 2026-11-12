@@ -11,3 +11,20 @@ From rv-756 N-3, a follow-up named in `2026-11-12-X-dht-lookup-converge.md`. Whe
 - **Shards are unchanged.** The new ids still come from `secure_id::virtual_ids_in` in the shard's slots (WK-4). The rejoin only targets `ids[0]`.
 - **No change without an id change.** No flag is set, so the tick does nothing, and the extra `done.target == ids[0]` check holds for every self-lookup, because `start_bootstrap` targets `ids[0]`.
 - **Cost:** one extra `find_node` lookup per family (about 8–20 queries), plus the join refresh again (about 200–450 queries, as in `2026-11-12-X-dht-lookup-converge.md`), once per change of public address. Nothing changes on the wire.
+
+## crawler-sim goldens (shared edit, runner-approved)
+
+The sim's node has a public address, so in every scenario it takes a new BEP 42 id once, mid-bootstrap. It now runs the rejoin and a join planned around the new id, instead of a join planned from the old id's neighbourhood. The four goldens in `crates/crawler-sim/tests/sim/golden/` were re-blessed with `CRAWLER_SIM_BLESS=1`.
+
+| Scenario | Min-1 admitted | Steady completed /min | Steady fetched /min | queries_out |
+|---|---|---|---|---|
+| healthy | 116 → 128 | 271.6 → 266.1 (−2.0%) | 77.6 → 77.9 | 41166 → 40950 |
+| high-latency | 106 → 102 | 103.4 → 106.4 (+2.9%) | 28.0 → 32.6 | 27257 → 26182 |
+| admission-pressure | 285 → 259 | 284.1 → 280.9 (−1.1%) | 27.9 → 27.0 | 56509 → 55958 |
+| restart-honoured | 46 → 45 | 116.6 → 114.8 (−1.5%) | 27.9 → 28.1 | 144975 → 143107 |
+
+- **Why they move.** The join refresh's lookups now target the new id's levels, and the rejoin self-lookup fills the new id's own neighbourhood. That changes which nodes the table holds, and so which nodes later lookups and samples ask. In this deterministic sim, a different query order shifts every later count a little.
+  - Minute 1 moves either way, depending on whether the earlier neighbourhood fill helps or delays the first owned lookups.
+  - `queries_out` falls by 0.5–4%: with a join counted against the right id and closer neighbours, there are fewer levels to look up and lookups converge sooner.
+  - Steady-state completions stay within −2.0% to +2.9%. The runner accepted the −2% on `healthy` as the cost of correct neighbourhood coverage (§2.26).
+- **One extra self-lookup per id change, checked.** With a temporary trace (not committed), every sim run printed exactly one id change and exactly one rejoin self-lookup for its one family, in all four golden scenarios and in the sim's other tests. `restart-honoured`'s second run restores ids that already fit, so it issues none.
