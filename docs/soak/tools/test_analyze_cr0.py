@@ -952,6 +952,143 @@ class AnalyzerTests(unittest.TestCase):
         self.rows([sample(0, phase="startup")])
         self.assertEqual(analyze(self.root)["memory_attribution"]["refused"], "no_baseline")
 
+    # ---- Windows 1.0 checks (M8-WIN-1) ----
+    def svc_rows(self, pid_at=lambda i: 700, start=1000):
+        return [sample(i * 60, i, service_pid=pid_at(i), service_start_ticks=pid_at(i) * 10, image_sha256="b" * 64,
+                       values={"start_time_seconds": start, "dht_peer_admitted_total": i,
+                               "dht_peer_active": 3, "dht_peer_queued": 0,
+                               "dht_sample_cooling": 200000, "dht_sample_inflight": 0})
+                for i in range(5)]
+
+    def life(self, **parts):
+        (self.root / "lifecycle.json").write_text(json.dumps({"schema_version": 1, **parts}))
+
+    GOOD_UP = {"from_version": "0.5.1", "to_version": "1.0.0", "service_running": True,
+               "service_restarted": True, "image_matches_installed": True,
+               "from_image_sha256": "a" * 64, "to_image_sha256": "b" * 64,
+               "data_present": True, "torrents_before": 500, "torrents_after": 520}
+    GOOD_UN = {"service_present": False, "program_files_present": False,
+               "data_present": True, "data_policy": "kept"}
+
+    def done(self, **changes):
+        (self.root / "result.json").write_text(json.dumps(
+            {"schema_version": 2, "reason": "baseline_window_complete", "samples": 5,
+             "service_detached": True, "finalization_complete": True,
+             "shutdown": {"exit_confirmed": False}, **changes}))
+
+    def checks(self, rows=None, finished=True, bound="b" * 64, **parts):
+        self.run_json(service_image_sha256=bound, settings={"baseline_hours": 24, "service_mode": True})
+        self.rows(rows if rows is not None else self.svc_rows())
+        if finished:
+            self.done()
+        if parts:
+            self.life(**parts)
+        return analyze(self.root)["windows_checks"]
+
+    def test_memory_fit_constants_are_unchanged(self):
+        from analyze_cr0 import MEMORY_FIT
+        self.assertEqual((MEMORY_FIT["field"], MEMORY_FIT["from_hour"], MEMORY_FIT["to_hour"],
+                          MEMORY_FIT["bar_mib_per_hour"], MEMORY_FIT["min_samples"]),
+                         ("private_bytes", 12.0, 24.0, 2.0, 30))
+
+    def test_old_evidence_reports_absent_not_failed(self):
+        self.rows([sample(0, 1), sample(60, 2)])
+        checks = analyze(self.root)["windows_checks"]
+        self.assertEqual({c["status"] for c in checks.values()}, {"absent"})
+        self.assertIn("absent", markdown(analyze(self.root)))
+
+    def test_service_restart_pass_and_fail(self):
+        self.assertEqual(self.checks()["service_restart"]["status"], "pass")
+        pid = self.checks(self.svc_rows(lambda i: 700 if i < 3 else 701))
+        self.assertEqual(pid["service_restart"]["status"], "fail")
+        start = self.checks(self.svc_rows(start=1000)[:3] + self.svc_rows(start=2000)[3:])
+        self.assertEqual(start["service_restart"]["status"], "fail")
+
+    def test_unfinished_or_aborted_service_run_fails_restart_check(self):
+        # A restart or reboot ends the loop before another sample, so one PID proves nothing.
+        self.assertEqual(self.checks(finished=False)["service_restart"]["status"], "fail")
+        for reason in ("process_exited_1", "collector_error"):
+            self.rows(self.svc_rows())
+            self.done(reason=reason)
+            self.assertEqual(analyze(self.root)["windows_checks"]["service_restart"]["status"], "fail", reason)
+
+    def test_sample_without_service_identity_fails_restart_check(self):
+        rows = self.svc_rows()
+        del rows[2]["service_pid"]
+        self.assertEqual(self.checks(rows)["service_restart"]["status"], "fail")
+
+    def test_build_binding(self):
+        self.assertEqual(self.checks()["build_binding"]["status"], "pass")
+        rows = self.svc_rows()
+        rows[3]["image_sha256"] = "c" * 64  # binary swapped mid-run
+        self.assertEqual(self.checks(rows)["build_binding"]["status"], "fail")
+        self.assertEqual(self.checks(bound="d" * 64)["build_binding"]["status"], "fail")
+        rows = self.svc_rows()
+        del rows[1]["image_sha256"]
+        self.assertEqual(self.checks(rows)["build_binding"]["status"], "fail")
+
+    def test_versions_are_information_not_a_check(self):
+        # An RC prints the base version, so equal versions with a new binary still pass.
+        up = {**self.GOOD_UP, "from_version": "1.0.0", "to_version": "1.0.0"}
+        self.assertEqual(self.checks(upgrade=up)["upgrade"]["status"], "pass")
+
+    def test_service_restart_needs_a_complete_sample_set(self):
+        self.assertEqual(self.checks([])["service_restart"]["status"], "fail")  # empty samples
+        self.rows(self.svc_rows())
+        self.done(samples=1440)  # truncated file
+        self.assertEqual(analyze(self.root)["windows_checks"]["service_restart"]["status"], "fail")
+        self.done(finalization_complete=False)
+        self.assertEqual(analyze(self.root)["windows_checks"]["service_restart"]["status"], "fail")
+
+    def test_service_mode_without_any_hash_fails_binding(self):
+        rows = [{k: v for k, v in r.items() if k != "image_sha256"} for r in self.svc_rows()]
+        self.assertEqual(self.checks(rows, bound=None)["build_binding"]["status"], "fail")
+
+    def test_lifecycle_file_cannot_hide_check_lines_with_a_key(self):
+        checks = self.checks(invalid=True, upgrade=self.GOOD_UP, uninstall=self.GOOD_UN)
+        self.assertEqual((checks["upgrade"]["status"], checks["uninstall"]["status"]), ("pass", "pass"))
+
+    def test_list_values_fail_instead_of_raising(self):
+        rows = self.svc_rows()
+        rows[1]["service_start_ticks"] = [1, 2]
+        self.assertEqual(self.checks(rows)["service_restart"]["status"], "fail")
+        self.assertEqual(self.checks(bound=["x"])["build_binding"]["status"], "fail")
+
+    def test_upgrade_must_land_on_the_bound_binary(self):
+        same = {**self.GOOD_UP, "from_image_sha256": "b" * 64}
+        other = {**self.GOOD_UP, "to_image_sha256": "c" * 64}
+        for up in (same, other):
+            self.assertEqual(self.checks(upgrade=up)["upgrade"]["status"], "fail")
+
+    def test_upgrade_pass_and_fail(self):
+        self.assertEqual(self.checks(upgrade=self.GOOD_UP)["upgrade"]["status"], "pass")
+        for change in ({"service_running": False}, {"service_restarted": False}, {"image_matches_installed": False}, {"data_present": False}, {"torrents_after": 10},
+                       {"torrents_before": 0}, {"torrents_after": None}):
+            self.assertEqual(self.checks(upgrade={**self.GOOD_UP, **change})["upgrade"]["status"],
+                             "fail", change)
+
+    def test_uninstall_pass_and_fail(self):
+        self.assertEqual(self.checks(uninstall=self.GOOD_UN)["uninstall"]["status"], "pass")
+        removed = {**self.GOOD_UN, "data_present": False, "data_policy": "removed"}
+        self.assertEqual(self.checks(uninstall=removed)["uninstall"]["status"], "pass")
+        for change in ({"service_present": True}, {"program_files_present": True},
+                       {"data_present": False}, {"data_policy": "removed"}, {"data_policy": "maybe"}):
+            self.assertEqual(self.checks(uninstall={**self.GOOD_UN, **change})["uninstall"]["status"],
+                             "fail", change)
+
+    def test_invalid_lifecycle_file_fails_both_steps(self):
+        self.rows(self.svc_rows())
+        (self.root / "lifecycle.json").write_text("{not json")
+        checks = analyze(self.root)["windows_checks"]
+        self.assertEqual((checks["upgrade"]["status"], checks["uninstall"]["status"]), ("fail", "fail"))
+
+    def test_detached_service_result_is_not_a_failed_shutdown(self):
+        self.rows(self.svc_rows())
+        self.done()
+        report = analyze(self.root)
+        self.assertIsNone(report["clean_shutdown"])
+        self.assertEqual(report["run_state"], "detached_service_running")
+
 
 if __name__ == "__main__":
     unittest.main()
