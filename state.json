@@ -8012,7 +8012,7 @@
         "slice": "X-upd-stop-early",
         "role": "slice",
         "agent": "session_01MMjhn9asevZ2GAyojLHZJZ",
-        "doing": "PR #734 (adb01dbe) CI running",
+        "doing": "session_01MMjhn9asevZ2GAyojLHZJZ: PR #734 (e26ceb50), fix round; awaiting ready.",
         "since": "2026-11-12T04:02:44Z",
         "status": "active"
       },
@@ -8048,7 +8048,7 @@
         "slice": "OUT-2",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCM61Vu5obDjZWTpeu: told to branch (TZ-0 #715 merged as c5abcb85)",
+        "doing": "session_01MMjhnCM61Vu5obDjZWTpeu: PR #735 (f2c9ad5a) rv-735 MERGE + I1 relayed; awaiting ready.",
         "since": "2026-11-12T00:07:35Z",
         "status": "active"
       },
