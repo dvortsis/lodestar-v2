@@ -46,7 +46,7 @@
 //! be ones it lost). A listed lease we don't have on record for it is
 //! counted, never created: the list can only give leases back, and only
 //! its own. A paused (quarantined) or no longer current worker's list is
-//! refused.
+//! refused, and so is a second round within one heartbeat interval.
 //!
 //! **Hooks** for the slices that build on the protocol: an
 //! [`InboundSink`] for what workers send (results, counters, outcomes,
@@ -327,6 +327,9 @@ struct WorkerState {
     last_ack: Option<(u64, i64)>,
     /// A reconcile's list being gathered, part by part (WK-11b).
     holding: Option<Gathering>,
+    /// When the worker's last reconcile was carried out: at most one per
+    /// heartbeat interval, since each scans the lease table.
+    last_round_ms: Option<i64>,
 }
 
 /// A [`Holding`] round so far, on one session. `listed` keeps only tokens
@@ -849,6 +852,7 @@ impl ClusterServer {
             capabilities: Capabilities::default(),
             last_ack: None,
             holding: None,
+            last_round_ms: None,
         });
         state.paused = true;
         true
@@ -1308,6 +1312,7 @@ impl ClusterServer {
                     capabilities: Capabilities::default(),
                     last_ack: None,
                     holding: None,
+                    last_round_ms: None,
                 });
             if let Some(old) = state.session.take() {
                 old.stop(StopReason::Replaced);
@@ -1361,6 +1366,7 @@ impl ClusterServer {
             && state.session.as_ref().is_some_and(|s| s.id == id)
         {
             state.session = None;
+            state.holding = None;
         }
     }
 
@@ -1619,9 +1625,15 @@ impl ClusterServer {
             state.holding = Some(g);
             return None;
         }
-        if g.next.is_none() {
+        let now_ms = self.clock.now_ms();
+        let every = i64::try_from(self.config.heartbeat.as_millis()).unwrap_or(i64::MAX);
+        let too_soon = state
+            .last_round_ms
+            .is_some_and(|at| now_ms.saturating_sub(at) < every);
+        if g.next.is_none() || too_soon {
             return refused();
         }
+        state.last_round_ms = Some(now_ms);
         // Under the fleet lock, so no grant on this session lands between
         // the list and the return.
         let returned = self.leases.reconcile(w, peer.session, &g.listed);
@@ -1972,6 +1984,7 @@ impl ClusterServer {
             if now_ms.saturating_sub(state.last_seen_ms) > silent_ms {
                 slot.stop(StopReason::HeartbeatTimeout);
                 state.session = None;
+                state.holding = None;
             }
         }
         for w in revoked {

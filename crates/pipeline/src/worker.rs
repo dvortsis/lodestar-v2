@@ -286,7 +286,20 @@ impl WorkerLeases {
     }
 
     fn committed_at(&self, key: &InfoHash, token: Token, now: std::time::Instant) {
-        self.finish(key, token, Some(later(now, FINISHED_GRACE)));
+        let until = later(now, FINISHED_GRACE);
+        // A replayed result (after a restart) never went out through
+        // `send_out`, so it has no entry: it gets a finished one, so the
+        // reconcile list still names its lease until its `Fetched` report
+        // lands (WK-11b). An entry under another token is left alone.
+        if self.horizon.is_some() {
+            let mut l = self.lock();
+            if !l.out.contains_key(key) {
+                l.track(*key, token, until, true);
+                l.prune(now);
+                return;
+            }
+        }
+        self.finish(key, token, Some(until));
     }
 
     fn finish(&self, key: &InfoHash, token: Token, until: Option<std::time::Instant>) {
@@ -719,6 +732,28 @@ mod tests {
             ]
         );
         assert_eq!(l.len(), 2, "the count is still keys held only");
+    }
+
+    /// A replayed result's lease (no out entry: it was spooled before a
+    /// restart) is listed once its batch is committed, for the grace, and
+    /// its own lease coming back isn't new (WK-11b's review).
+    #[test]
+    fn a_replayed_results_commit_keeps_it_listed() {
+        let l = tracking();
+        l.committed(&K, Token(5));
+        assert_eq!(l.tokens(), [(K, Token(5))]);
+        assert_eq!(l.pending_len(), 0, "finished");
+        assert_eq!(l.insert(K, Token(5)), Insert::Out);
+        // An entry under another token is left as it is.
+        let other = InfoHash([9; 20]);
+        l.insert(other, Token(6));
+        l.send_out(&other);
+        l.committed(&other, Token(7));
+        assert_eq!(l.pending_len(), 1);
+        // Untracked leases (the built-in worker) keep nothing.
+        let plain = WorkerLeases::default();
+        plain.committed(&K, Token(5));
+        assert!(plain.tokens().is_empty());
     }
 
     /// The coordinator's built-in worker: nothing is tracked out, and the

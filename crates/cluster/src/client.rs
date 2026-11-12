@@ -825,6 +825,10 @@ impl Driver {
             Command::Holding(leases, reply) => {
                 // Its round number comes from the claims' counter: never 0,
                 // never reused on this session.
+                // The parts go out back to back without reading: a list of
+                // many parts against a coordinator that isn't reading can
+                // stall until its send timeout ends the session. Lists are
+                // rare (after a replay with drift) and usually one part.
                 let round = self.next_batch;
                 self.next_batch += 1;
                 self.reconciling = Some((round, reply));

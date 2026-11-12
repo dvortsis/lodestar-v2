@@ -1574,6 +1574,12 @@ async fn a_reconnected_worker_gets_back_only_the_leases_its_list_leaves_out() {
         assert_eq!((s.reconcile_returned, s.reconcile_unknown), (1, 1));
         assert_eq!((s.harvested, s.regrants, s.outcomes), (4, 1, 0));
         assert_eq!(a.heartbeat().await.unwrap().leases, 4);
+        // One round per heartbeat interval: a second at once is refused.
+        assert_eq!(
+            a.holding(vec![]).await.unwrap(),
+            Some(ReconcileAnswer::Refused)
+        );
+        c.advance(5);
         // A list of everything it holds now returns nothing.
         let all = vec![
             held(1, t[0]),
@@ -1654,10 +1660,11 @@ async fn a_paused_workers_list_is_refused() {
     .await;
 }
 
-/// The list is a snapshot. A lease committed before it lands stays
-/// committed (listed, it's counted unknown, never created again); a
-/// listed lease committed after it commits as usual; and a lease returned
-/// and then reported is a stale report, never a second loss.
+/// The list is a snapshot. A lease committed between the list's making
+/// and its landing stays committed (listed, it's counted unknown, never
+/// created again); a listed lease whose result was out commits after it
+/// as usual; and a lease returned and then reported lost is a stale
+/// report, never a second loss.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_list_racing_commits_and_reports_loses_and_double_counts_nothing() {
     guard(async {
@@ -1683,7 +1690,8 @@ async fn a_list_racing_commits_and_reports_loses_and_double_counts_nothing() {
         assert_eq!(c.server.lease(&k(1)), None, "committed, not created");
         // Key 3's result was out when the list was built: it commits.
         assert!(authority.commit(w, &k(3), Token(t[2])).is_some());
-        // Key 2 went back; the worker's late loss report is stale.
+        // Key 2 went back; the worker's late loss report (`PeerFound`) is
+        // stale.
         let before = c.server.snapshot();
         a.report(vec![fetched(key(2), t[1])]).await.unwrap();
         a.heartbeat().await.unwrap();
@@ -1712,6 +1720,7 @@ async fn a_list_goes_in_parts_and_parts_out_of_order_are_refused() {
         let n = u32::try_from(many.len()).unwrap();
         assert_eq!(a.holding(many).await.unwrap(), done(0, n, 0));
         drop(a);
+        c.advance(5);
 
         let mut link = c.link(&nas).await;
         link.send(ToCoordinator::Hello(Hello::new(
@@ -1826,6 +1835,65 @@ async fn a_lease_committed_before_its_fetched_report_is_listed_and_kept() {
             (1, 0, 0)
         );
         assert_eq!((s.leases, s.pending, s.regrants), (0, 0, 0));
+    })
+    .await;
+}
+
+/// A re-grant reserved for the worker while its store check runs is
+/// marked for the worker's session before the check: a list landing
+/// meanwhile, without it, leaves it, and the grant then arrives.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_regrant_on_its_way_is_never_returned_by_a_list() {
+    guard(async {
+        let (entered_tx, entered) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = std::sync::mpsc::channel();
+        let check = Arc::new(RegrantCheck::default());
+        let c = coordinator_with(config(), Some(check.clone())).await;
+        let vps = c.join("vps").await;
+        let mut b = c.session(&vps).await;
+        leases_left_by_a_silent_worker(&c, &b, &[1]).await;
+        *check.gate.lock().unwrap() = Some((entered_tx, release_rx));
+        let ticking = {
+            let server = c.server.clone();
+            tokio::spawn(async move { server.tick().await })
+        };
+        entered.await.unwrap();
+        let k = InfoHash(key(1));
+        let reserved = c.server.lease(&k).unwrap();
+        assert_eq!(reserved.holder, vps.worker());
+        assert_eq!(b.holding(vec![]).await.unwrap(), done(0, 0, 1));
+        release.send(()).unwrap();
+        ticking.await.unwrap();
+        let WorkerEvent::Regranted(items) = event(&mut b).await else {
+            panic!("no re-grant");
+        };
+        assert_eq!(token_of(&items[0]), reserved.token.0);
+        assert_eq!(c.server.lease(&k).map(|l| l.token), Some(reserved.token));
+        assert_eq!(c.server.snapshot().reconcile_returned, 0);
+    })
+    .await;
+}
+
+/// A re-grant already in the session's queue when the list lands (no
+/// store check: it's queued at once) is kept too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_queued_regrant_is_never_returned_by_a_list() {
+    guard(async {
+        let c = coordinator(config()).await;
+        let vps = c.join("vps").await;
+        let mut b = c.session(&vps).await;
+        leases_left_by_a_silent_worker(&c, &b, &[1]).await;
+        c.server.tick().await;
+        let k = InfoHash(key(1));
+        let queued = c.server.lease(&k).unwrap();
+        assert_eq!(queued.holder, vps.worker());
+        // b hasn't read the grant: its list doesn't name it.
+        assert_eq!(b.holding(vec![]).await.unwrap(), done(0, 0, 1));
+        let WorkerEvent::Regranted(items) = event(&mut b).await else {
+            panic!("no re-grant");
+        };
+        assert_eq!(token_of(&items[0]), queued.token.0);
+        assert_eq!(c.server.lease(&k).map(|l| l.token), Some(queued.token));
     })
     .await;
 }
