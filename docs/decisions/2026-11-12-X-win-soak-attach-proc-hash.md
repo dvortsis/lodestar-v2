@@ -1,4 +1,4 @@
-# X-win-soak-attach-proc-hash: the Windows soak checks the running process is the file it hashes
+# X-win-soak-attach-proc-hash decisions
 
 Runner call (`docs/owner-decisions.md` §2.33), from the M8-WIN-1 review's optional item O1. No owner decision changes.
 
@@ -17,3 +17,7 @@ An MSI upgrade can replace the file while the old process keeps running (files i
 ## Evidence
 
 Unchanged: hashes only, no paths. A refusal writes nothing, because it runs before the run folder exists. The helper takes injectable probes like the lifecycle helpers, and `test_cr0_collector.ps1` covers it with real temp files.
+
+## Limit
+
+The check hashes the file at the running process's reported program path. If Windows keeps the original path for a process whose file was renamed and replaced, or an in-use file is replaced only at the next reboot, the hashes can still match. The runbook therefore also tells the owner to restart the service after an upgrade; the upgrade record's `image_matches_installed` stays the second line of defence. A start-time or pending-rename check would need a Windows machine to verify and is left for a follow-up.

@@ -122,18 +122,20 @@ try {
     $other = Join-Path $fixture 'other.exe'
     [IO.File]::WriteAllText($other, 'older build')
     $registered = (Get-FileHash -LiteralPath $exe).Hash
-    function New-BindProbe([string]$Running, [string]$Registered = $registered) {
+    function New-BindProbe([string]$Running, [string]$Registered) {
         @{ Identity = { param($n) @{ pid = 7; start_ticks = 99 } }
            ProcessImage = { param($procId) $Running }.GetNewClosure()
            ServiceImage = { param($n) $Registered }.GetNewClosure() }
     }
-    Assert-SoakAttachBinding 'Lodestar' $exe (New-BindProbe $exe)
-    $rejected = $false; try { Assert-SoakAttachBinding 'Lodestar' $exe (New-BindProbe $other) } catch { $rejected = $true }
-    Assert $rejected 'a different running binary was accepted'
-    $rejected = $false; try { Assert-SoakAttachBinding 'Lodestar' $other (New-BindProbe $exe) } catch { $rejected = $true }
-    Assert $rejected 'a different -Exe was accepted'
-    $rejected = $false; try { Assert-SoakAttachBinding 'Lodestar' $exe (New-BindProbe '') } catch { $rejected = $true }
-    Assert $rejected 'an unreadable process path was accepted'
+    Assert-SoakAttachBinding 'Lodestar' $exe (New-BindProbe $exe $registered)
+    $why = ''; try { Assert-SoakAttachBinding 'Lodestar' $exe (New-BindProbe $other $registered) } catch { $why = $_.Exception.Message }
+    Assert ($why -like '*not the installed program file*') 'a different running binary not refused for the right reason'
+    $why = ''; try { Assert-SoakAttachBinding 'Lodestar' $other (New-BindProbe $exe $registered) } catch { $why = $_.Exception.Message }
+    Assert ($why -like '-Exe is not*') 'a different -Exe not refused for the right reason'
+    $why = ''; try { Assert-SoakAttachBinding 'Lodestar' $exe (New-BindProbe '' $registered) } catch { $why = $_.Exception.Message }
+    Assert ($why -like '*elevated*') 'an unreadable process path not refused for the right reason'
+    $why = ''; try { Assert-SoakAttachBinding 'Lodestar' $exe (New-BindProbe $exe ('A' * 64)) } catch { $why = $_.Exception.Message }
+    Assert ($why -like '*not the installed program file*') 'a differing ImagePath hash was accepted'
 } finally {
     foreach ($f in @($life, $exe, $other)) { if ($f -and [IO.File]::Exists($f)) { [IO.File]::Delete($f) } }
     [IO.Directory]::Delete($fixture)
