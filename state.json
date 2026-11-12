@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T15:41:01Z",
+  "updated_at": "2026-11-12T15:52:10Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3834,14 +3834,7 @@
     "52": "MERGED by the filter session (self-merge again), conflicts with B0"
   },
   "heartbeats": 9,
-  "reviews_in_flight": [
-    {
-      "pr": 762,
-      "sha": "885c7717022ad9664c4ae54606df69deb36559f1",
-      "kind": "security-review",
-      "since": "2026-11-12T15:41:01Z"
-    }
-  ],
+  "reviews_in_flight": [],
   "carry_forward": {
     "next-bans-touch": [
       "bans.mjs:241 accept '=' so class:pb-11={x} is caught",
@@ -7361,6 +7354,11 @@
       "id": "UP-2-brief-watch-keys",
       "note": "UP-2 brief: #765 (UP-1) adds settings_watch_after_option_move/_delete option labels and watch.* log event names/help in web messages; UP-2 adds section/group/field labels and help.",
       "at": "2026-11-12T14:47:39Z"
+    },
+    {
+      "id": "X-un1-nits",
+      "at": "2026-11-12T15:52:10Z",
+      "note": "rv-762 nits (UN-1 #762, MERGE): (1) prowlarr.rs poll/usenet_due marks a usenet indexer polled before the request, so a failed/oversized page waits 1 h not 15 min, and results unsent when the 4,096 poll budget runs out wait 1 h (lost on >100/h indexers); mark polled only after a fully emitted 200, or fix the USENET_POLL_ITEMS doc; (2) unverified.rs UnverifiedStats::held doc vs usenet hold counted held, BT counts dropped; (3) lib.rs intake retried branch: defensive is_usenet() refusal; (4) CONFIG_SCHEMA usenet switch spends indexer API quota on items not visible or sendable until UN-3/UN-4: describe it or hide until UN-3 (runner UX call \u00a72.26); (5) switching usenet off leaves up to 1M rows until source purge; (6) tests/claim_trackers.rs shared edit unnamed in PR list. See reviews/rv-762-885c7717.md"
     }
   ],
   "main_health": [
@@ -8481,7 +8479,7 @@
     }
   ],
   "heartbeat": "2026-11-12T15:41:01Z",
-  "updated": "2026-11-12T15:41:01Z",
+  "updated": "2026-11-12T15:52:10Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
