@@ -56,7 +56,7 @@
 	"settings_updates_step_checking_health": "检查运行状况",
 	"settings_updates_step_current": "进行中",
 	"settings_updates_rolled_back": "对 {version} 的最近一次更新未能正常工作，已回滚。{reason}",
-	"settings_updates_rolled_back_next": "你正在运行的是可正常工作的版本，下方的历史记录说明了发生了什么。请等待更新的版本，不要再次安装这个版本。",
+	"settings_updates_rolled_back_next": "你正在运行的是可正常工作的版本，下方的历史记录说明了发生了什么。请等待比失败版本更新的版本。",
 	"settings_updates_how_heading": "如何更新",
 	"settings_updates_contacts": "检查更新会联系 GitHub。选择“关闭”则永不联系，除非你点击“立即检查”。",
 	"settings_updates_mode_off": "关闭",
