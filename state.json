@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T02:35:52Z",
+  "updated_at": "2026-11-12T02:36:15Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7034,7 +7034,12 @@
       "note": "crates/dht/tests/scrape.rs scrape_lookup_estimates_the_swarm aborted (SIGABRT) on test (ubuntu-latest), run 43132875604 job 130905291698, #725 head 428b5230 (docs-only PR): tokio 1.54 harness.rs:426 / state.rs:387 'assertion failed: snapshot.is_join_interested()' after a panic-cannot-unwind (core panicking.rs:233). First sighting. Needs an Opus slice (DHT, concurrency): find which JoinHandle/abort path in dht node shutdown or scrape lookup triggers it; queue for next free slot. Not a fixed-sleep fix."
     },
     "Next runner PR: X-svc-eventcreate-bounded slice entry (slot 1, same session as #721); owner FYI: #721 + #722 merged",
-    "Next runner PR: slice entries X-flake-dht-scrape-join and X-prowlarr-no-fetch-wait (slot 6, same session as #723); owner FYI: #723 merged"
+    "Next runner PR: slice entries X-flake-dht-scrape-join and X-prowlarr-no-fetch-wait (slot 6, same session as #723); owner FYI: #723 merged",
+    {
+      "id": "X-win-clippy",
+      "at": "2026-11-12T02:36:15Z",
+      "note": "Windows-target clippy (x86_64-pc-windows-gnu, from X-svc-eventcreate-bounded session) shows warnings on main that -D warnings would fail: companions/src/config_files.rs:26 unused import File; needless mut at companions/src/extract.rs:780, fetch.rs:584, layout.rs:693, manager.rs:530; lodestar/src/main.rs:301 collapsible if. Linux CI never lints cfg(windows). Slice: fix them + make the existing test (windows-latest) job (or a new lint step on it) run `cargo clippy --workspace --all-targets -- -D warnings` so Windows-only code is linted. Sonnet-able for the fixes; CI step is the runner's call (no permission/secret change). Queue for next free slot."
+    }
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7812,7 +7817,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T02:35:52Z",
+    "updated": "2026-11-12T02:36:15Z",
     "items": [
       {
         "slot": 1,
@@ -7974,7 +7979,7 @@
     }
   ],
   "heartbeat": "2026-11-12T00:38:52Z",
-  "updated": "2026-11-12T02:35:52Z",
+  "updated": "2026-11-12T02:36:15Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
