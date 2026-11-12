@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T07:29:53Z",
+  "updated_at": "2026-11-12T07:34:41Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8158,7 +8158,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T07:29:53Z",
+  "updated": "2026-11-12T07:34:41Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -8350,16 +8350,9 @@
   ],
   "cloud_tester": {
     "parent": "session_01MMjhnBD1KHxsn7QRHHmpeM",
-    "reserved": 2,
+    "reserved": 1,
     "updated": "2026-11-12T07:01:36Z",
     "items": [
-      {
-        "session": "session_01MMjhnAQgWauSQaaCZSzr9C",
-        "lane": "Windows lane setup (AWS, phase 1)",
-        "env": "lodestar-cloud-test",
-        "since": "2026-11-12T07:00Z",
-        "doing": "find IDs, check egress, deploy least-privilege IAM stack, simulate policy; no RunInstances, no secret reads, no terraform"
-      },
       {
         "name": "Linux lane (Remote Control on the test VM)",
         "session": "session_01MMjhnA1E7uHD6h6eTQyuh9",
@@ -8367,11 +8360,11 @@
         "doing": "infra/dev-vm/linux-lane.md priorities 1, 2, 4; crawl results are leads only"
       }
     ],
-    "note": "Tester holds 2 of 4 (both in use). Runner holds 2 (GS-0, UN-0). Ask before a 3rd."
+    "note": "Tester holds 1 (Linux lane). It archived Windows phase 1 at ~07:30Z (stalled on a connector prompt) and lent the slot to the runner overnight; it asks before taking it back in the morning."
   },
   "extra": {
-    "updated": "2026-11-12T07:04:58Z",
-    "max": 2,
+    "updated": "2026-11-12T07:34:41Z",
+    "max": 3,
     "items": [
       {
         "slice": "GS-0",
@@ -8386,8 +8379,15 @@
         "agent": "claude",
         "doing": "session_01MMjhnAdBqiEwP5PvJACUzA: building per briefs/UN-0.md (/security-review)",
         "since": "2026-11-12T07:04Z"
+      },
+      {
+        "slice": "ENR-10",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhnBLbxrt4466ABDDCXp: building per briefs/ENR-10.md (/security-review); in the slot lent overnight; moves to a build slot when one frees",
+        "since": "2026-11-12T07:34:41Z"
       }
     ],
-    "note": "\u00a72.60: runner holds 2 of the shared 4; ask the cloud tester before a 3rd."
+    "note": "\u00a72.60: runner holds 2 + 1 lent overnight by the tester; return it on request."
   }
 }
