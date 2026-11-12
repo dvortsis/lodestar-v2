@@ -7747,6 +7747,16 @@
       "id": "merged-778",
       "note": "#778 X-test-blockers-1112 merged 9f3723ad (handshake reporting, two flakes, ANALYZE pg_catalog fix).",
       "added": "2026-11-12T23:25Z"
+    },
+    {
+      "id": "review-queue-2325",
+      "note": "Reviewer queue (in order when slots free): #803 X-percolate-promoted-hold 34dbabcc; #798 P-master-plan-r4 9a3f1fb4 (restart); #793 ENR-13 c49eb063; #797 WK-18 b8f0a5bc; #801 WK-18s once ready; #799 CMP-12 once ready; #783 M8-REL-1 once ready.",
+      "added": "2026-11-12T23:25Z"
+    },
+    {
+      "id": "percolate-held-explicit",
+      "note": "Next slice touching crates/search percolate.rs: return held ids explicitly (replace store inference in #803) and fix stale Due::hold_unresolved doc comment.",
+      "added": "2026-11-12T23:25Z"
     }
   ],
   "main_health": [
