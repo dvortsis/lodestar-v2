@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T14:59:05Z",
+  "updated_at": "2026-11-12T15:41:01Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3835,10 +3835,12 @@
   },
   "heartbeats": 9,
   "reviews_in_flight": [
-    "88",
-    98,
-    91,
-    106
+    {
+      "pr": 762,
+      "sha": "885c7717022ad9664c4ae54606df69deb36559f1",
+      "kind": "security-review",
+      "since": "2026-11-12T15:41:01Z"
+    }
   ],
   "carry_forward": {
     "next-bans-touch": [
@@ -4121,7 +4123,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-12T12:38:43Z",
+  "last_heartbeat": "2026-11-12T15:41:01Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -8346,7 +8348,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T14:59:05Z",
+    "updated": "2026-11-12T15:41:01Z",
     "items": [
       {
         "slot": 1,
@@ -8371,18 +8373,18 @@
         "slice": "M8-NET-E2E",
         "role": "build",
         "agent": "session_01MMjhnAsZmQbQajtBLyTfXU",
-        "doing": "#763 open (2b30d5b6); awaiting Linux/Windows e2e_search times from CI, then ready",
+        "doing": "session_01MMjhnAsZmQbQajtBLyTfXU: #763 at 30223eca (docs push), CI re-running; Windows max 3138 ms, Linux passed",
         "since": "2026-11-12T13:19:51Z",
         "status": "active"
       },
       {
         "slot": 8,
-        "slice": null,
-        "role": null,
-        "agent": null,
-        "doing": "idle (X-always-adult-detail-mask went to slot 11, same session as ENR-12)",
-        "since": "2026-11-12T12:42:43Z",
-        "status": "idle"
+        "slice": "X-dht-bep42-rejoin",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhnCe1kcR2oZ6RFAyyjw: one self-lookup for the new ids[0] after a BEP 42 id change (rv-756 N-3; briefs/X-dht-bep42-rejoin.md)",
+        "since": "2026-11-12T15:41:01Z",
+        "status": "active"
       },
       {
         "slot": 10,
@@ -8398,7 +8400,7 @@
         "slice": "X-always-adult-detail-mask",
         "role": "build",
         "agent": "claude",
-        "doing": "#760 ENR-12 merged; X-always-adult-detail-mask (briefs/X-always-adult-detail-mask.md), same session",
+        "doing": "session_01MMjhnBLbxrt4466ABDDCXp: PR #767 at d0291784, CI running",
         "since": "2026-11-12T14:34:48Z",
         "status": "active"
       },
@@ -8407,7 +8409,7 @@
         "slice": "UN-1",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAnAppXqNvpq32hgDM: Prowlarr Newznab results as usenet items, NZB link never stored (briefs/UN-1.md)",
+        "doing": "session_01MMjhnAnAppXqNvpq32hgDM: #762 ready at 885c7717, fresh Opus /security-review running",
         "since": "2026-11-12T12:41:40Z",
         "status": "active"
       },
@@ -8478,8 +8480,8 @@
       "words": "go with the runner's recommendation"
     }
   ],
-  "heartbeat": "2026-11-12T12:38:43Z",
-  "updated": "2026-11-12T14:59:05Z",
+  "heartbeat": "2026-11-12T15:41:01Z",
+  "updated": "2026-11-12T15:41:01Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -8691,7 +8693,7 @@
         "slice": "GS-0",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8qXgAJy8Q8NE66YaY: building per briefs/GS-0.md",
+        "doing": "session_01MMjhn8qXgAJy8Q8NE66YaY: #754 round 4 at 941ed946 (delta self-checked OK), CI running",
         "since": "2026-11-12T07:04Z"
       },
       {
