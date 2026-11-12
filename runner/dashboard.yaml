@@ -556,6 +556,7 @@ placement:
   - OUT-1
   - OUT-3
   - D-outputs-guide
+  - X-outputs-guide-nits
   - IRC-2
   - IRC-3
 - ws: ws-m7-gates

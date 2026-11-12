@@ -148,12 +148,14 @@ Prowlarr, Sonarr and Radarr show Lodestar's errors in their own long messages, w
 
 | The message contains | What it means | What to do |
 |---|---|---|
-| **invalid credentials**, **Invalid API key**, `401` or `403` | The key is wrong, expired, revoked or regenerated, or it lacks Torznab access | Create a new key on **Settings → Outputs** and paste it into the app |
-| `429` or **TooManyRequests** | The app asked too often, or this address tried too many wrong keys | Wait a few minutes. The app pauses Lodestar for a while, then tries again by itself |
-| `503` or **ServiceUnavailable** | Search is turned off in Lodestar | Turn on **Enable search** in **Settings → Search & ranking**, then restart Lodestar |
+| **invalid credentials**, **Invalid API key**, `[401:Unauthorized]` or `[403:Forbidden]` | The key is wrong, expired, revoked or regenerated, or it lacks Torznab access | Create a new key on **Settings → Outputs** and paste it into the app |
+| `[429:TooManyRequests]` | The app asked too often, or this address tried too many wrong keys | Wait a few minutes. The app pauses Lodestar for a while, then tries again by itself |
+| `[503:ServiceUnavailable]` | Search is turned off in Lodestar | Turn on **Enable search** in **Settings → Search & ranking**, then restart Lodestar |
 | **timed out**, **Connection refused**, **connection failure** or **DNS** | The app can't reach Lodestar at that address | Check the address and port from the app's computer or container. Inside a container, don't use `localhost` (section 7.3) |
-| `404` or **NotFound** | The URL or the API Path is wrong | Set **URL** to the **Torznab address** and **API Path** to `/api` |
+| `[404:NotFound]` | The URL or the API Path is wrong | Set **URL** to the **Torznab address** and **API Path** to `/api` |
 | **no results** | Lodestar has nothing in those categories yet | Wait until Lodestar has indexed some shows or movies, then test again |
+
+Both search being off and a timeout say **server is unavailable**. Look for `[503:ServiceUnavailable]` (search is off) or **timed out** (the app can't reach Lodestar).
 
 Keys made on **Settings → Outputs** always have Torznab access. A key from **Settings → Security** without the Torznab scope gets the credentials error.
 
