@@ -96,7 +96,8 @@ pub struct Matched {
 /// What one run did.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Percolation {
-    /// Searches that ran, in the order given.
+    /// Searches that ran, in the order given. A held search (see
+    /// [`percolate`]) isn't here and keeps its watermark.
     pub matched: Vec<Matched>,
     /// The highest id in the snapshot, which bounds every range: a
     /// search never moves past what it could see.
@@ -119,6 +120,13 @@ impl Percolation {
 
 /// Runs `due` against `index` up to `through`, on one searcher snapshot,
 /// checking `cancel` before each search. `now` resolves relative dates.
+///
+/// **Held searches** (GS-0): while `payload_sig` isn't complete in the
+/// snapshot, a saved search containing `sig:<info hash>` isn't run. It's
+/// left out of [`Percolation::matched`], so its watermark stays and it
+/// runs once the backfill is done. It isn't counted as stopped, capped
+/// or failed: nothing is lost by waiting, and [`Percolation::more`]
+/// doesn't spin on it.
 pub fn percolate(
     index: &SearchIndex,
     due: &[Due<'_>],
@@ -143,6 +151,11 @@ pub fn percolate(
     let id_field = index.fields().id;
     // Ids start at 1, so a watermark of 0 or below never changes a range.
     let term = |v: i64| Term::from_field_u64(id_field, v.max(0) as u64);
+    // Whether `sig:<info hash>` can resolve every reference in this
+    // snapshot (see the held searches above).
+    let sig_complete = index
+        .prefilter("payload_sig", &searcher, Box::new(EmptyQuery))
+        .is_some();
     for d in due {
         // `sig:<info hash>` resolves its reference torrent through the
         // query's own visibility clauses (`compile::SamePayload`). A saved
@@ -158,10 +171,7 @@ pub fn percolate(
         // the new torrents it covers are indexed with the field.
         let guarded;
         let query = if !d.count_only && d.query.mentions_same_payload() {
-            let complete = index
-                .prefilter("payload_sig", &searcher, Box::new(EmptyQuery))
-                .is_some();
-            if !complete {
+            if !sig_complete {
                 continue;
             }
             guarded = d.query.clone().with_default_visibility();

@@ -2546,6 +2546,15 @@ mod tests {
         assert!(sig("-sig:7a9f3c12dd0e44b1").mentions_provenance());
         assert!(sig(&format!("x (y | sig:{hash})")).mentions_provenance());
         assert!(!sig(&format!("hash:{hash}")).mentions_provenance());
+        // Only the pasted-hash form resolves a reference torrent.
+        let same = |q: &str| sig(q).mentions_same_payload();
+        assert!(same(&format!("sig:{hash}")));
+        assert!(same(&format!("-sig:{hash}")));
+        assert!(same(&format!("x (y | sig:{hash})")));
+        assert!(same(&format!("file:(x) (sig:7a9f3c12dd0e44b1 | sig:{hash})")));
+        assert!(!same("sig:7a9f3c12dd0e44b1"));
+        assert!(!same("-sig:7a9f3c12dd0e44b1 | x"));
+        assert!(!same(&format!("hash:{hash}")));
         assert_eq!(sig_hex(0xff), "00000000000000ff");
         assert_eq!(sig_hex(u64::MAX), "ffffffffffffffff");
     }
