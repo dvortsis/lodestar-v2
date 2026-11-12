@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T17:28:49Z",
+  "updated_at": "2026-11-12T17:32:38Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8401,7 +8401,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T16:26:15Z",
+    "updated": "2026-11-12T17:32:38Z",
     "items": [
       {
         "slot": 1,
@@ -8444,7 +8444,7 @@
         "slice": "ENR-14",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnC4XbpeYvFDktXwLxV: Wikidata parser and plugin, the pattern for enrichment plugins (briefs/ENR-14.md)",
+        "doing": "#764 ready 5a96f302; fresh Opus security review running",
         "since": "2026-11-12T12:41:40Z",
         "status": "active"
       },
@@ -8462,7 +8462,7 @@
         "slice": "X-un1-nits",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAnAppXqNvpq32hgDM: #762 UN-1 merged (d6acfead); now rv-762 nits (briefs/X-un1-nits.md)",
+        "doing": "#769 CHANGES relayed (B1 retry test, I1 hourly stamp, I2 skip at budget 0); fix round",
         "since": "2026-11-12T15:59:55Z",
         "status": "active"
       },
@@ -8534,7 +8534,7 @@
     }
   ],
   "heartbeat": "2026-11-12T15:41:01Z",
-  "updated": "2026-11-12T17:28:49Z",
+  "updated": "2026-11-12T17:32:38Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
