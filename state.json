@@ -8580,9 +8580,10 @@
         "slot": 11,
         "slice": "M8-REL-1",
         "role": "build",
-        "agent": "session_01MMjhn8mh12Mrj1m33EM83f",
-        "doing": "launched: relevance --data-dir (hash-keyed judgments) and --held-out aggregates",
-        "since": "2026-11-12T20:46:15Z"
+        "agent": "claude",
+        "doing": "session_01MMjhn8mh12Mrj1m33EM83f: launched, building relevance --data-dir and --held-out",
+        "since": "2026-11-12T20:46:15Z",
+        "status": "active"
       },
       {
         "slot": 12,
