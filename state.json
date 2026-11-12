@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T13:14:00Z",
+  "updated_at": "2026-11-12T13:15:27Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7245,11 +7245,6 @@
       "at": "2026-11-12T11:03:21Z"
     },
     {
-      "id": "UP-1-brief-notes",
-      "note": "From rv-753: N1 served-binary test waits for private alert before RSS check (lodestar/tests/upload.rs:283 above :265); N2 unit test for PRIVACY check in api alerts.rs:352; N3 catch_unwind around upload judging (panic disables uploads until restart).",
-      "at": "2026-11-12T11:10:43Z"
-    },
-    {
       "id": "owner-flag-753",
       "note": "\u00a72.19 at UP-0 merge: private uploads stored PRIVATE+PRIVATE_SOURCE; RSS/alert feeds mask PRIVACY (crawled BEP 27 now excluded from feeds, stricter); plain exports keep OUT-0 rule; N4: a later public DHT sighting clears PRIVATE_SOURCE (PRIVATE stays) so the hash reappears in plain CSV/NDJSON/magnet exports like any crawled BEP 27 torrent; N5: notifications (ntfy/Discord/email/webhooks) must mask PRIVACY when wired; 8 MiB body cap, 4 in flight, 60 s read deadline (\u00a72.26).",
       "at": "2026-11-12T11:10:43Z"
@@ -8281,15 +8276,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T13:14:00Z",
+    "updated": "2026-11-12T13:15:27Z",
     "items": [
       {
         "slot": 1,
-        "slice": "UP-0",
+        "slice": "UP-1",
         "role": "build",
         "agent": "claude",
-        "doing": "#753 UP-0 merged; next UP-1 (brief pending, N1-N3 from UP-1-brief-notes)",
-        "since": "2026-11-12T13:14:00Z",
+        "doing": "UP-1 folder watch + rv-753 N1-N3 (briefs/UP-1.md), same session as UP-0",
+        "since": "2026-11-12T13:15:27Z",
         "status": "active"
       },
       {
@@ -8414,7 +8409,7 @@
     }
   ],
   "heartbeat": "2026-11-12T12:38:43Z",
-  "updated": "2026-11-12T13:14:00Z",
+  "updated": "2026-11-12T13:15:27Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
