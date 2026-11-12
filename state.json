@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T08:14:19Z",
+  "updated_at": "2026-11-12T08:23:32Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7158,6 +7158,11 @@
       "id": "ENR-12-plugin-label",
       "at": "2026-11-12T08:14:19Z",
       "note": "ResolvedVia::Plugin (ENR-10) is kept out of /search/fields listed values until a slice makes it fire (id-based lookups). That slice lists it and adds the labels.ts entry + detail_via_plugin message key. Attach to ENR-12 notes in next runner PR."
+    },
+    {
+      "id": "X-sampler-frontier",
+      "at": "2026-11-12T08:23:32Z",
+      "note": "M8-NET-E2E finding: BEP 51 sampler frontier refills only from the crawler routing table; with K=8 buckets a 50-node loopback net does not fit, so some nodes are sampled only after 6-10 s (9 of 18 hashes at 1.1 s, rest at 10.1 s). Candidate fix: offer nodes from sample replies to the frontier. Track C (crawler yield); Opus; needs A/B evidence before shipping."
     }
   ],
   "main_health": [
@@ -8070,7 +8075,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T08:04:08Z",
+    "updated": "2026-11-12T08:23:32Z",
     "items": [
       {
         "slot": 1,
@@ -8095,7 +8100,7 @@
         "slice": "M8-NET-E2E",
         "role": "build",
         "agent": "session_01MMjhnAsZmQbQajtBLyTfXU",
-        "doing": "session_01MMjhnAsZmQbQajtBLyTfXU: building per briefs/M8-NET-E2E.md (#734 X-upd-stop-early merged 073e6ed4, session archived)",
+        "doing": "session_01MMjhnAsZmQbQajtBLyTfXU: 5 s bar missed 7/20 on Linux (sampler tail); trying realistic announce path (opt 1); bar unchanged pending numbers",
         "since": "2026-11-12T07:59:10Z",
         "status": "active"
       },
@@ -8203,7 +8208,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T08:14:19Z",
+  "updated": "2026-11-12T08:23:32Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
