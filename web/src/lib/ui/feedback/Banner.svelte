@@ -12,7 +12,7 @@
 		children: Snippet;
 		/** One optional action (a Button). */
 		action?: Snippet;
-		/** False drops the role, for a Banner inside a live region that already announces it. */
+		/** False drops the role, for a Banner inside a live region that already announces it. That wrapper must stay in the DOM when the content changes. */
 		live?: boolean;
 		class?: string;
 	}
