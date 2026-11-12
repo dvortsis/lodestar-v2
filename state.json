@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T08:31:11Z",
+  "updated_at": "2026-11-12T08:42:39Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7178,6 +7178,16 @@
       "id": "owner-flag-net-e2e-clock",
       "at": "2026-11-12T08:31:11Z",
       "note": "Section 2.19 flag: M8-NET-E2E measures the 5 s per hash from harvest (first sighting) to /search, reading section 17 literally; the T0-to-harvest time is reported but has no bar (tail = X-sampler-frontier). Send with the merge FYI."
+    },
+    {
+      "id": "briefs-key-on-privacy",
+      "at": "2026-11-12T08:42:39Z",
+      "note": "UP-0 finding: RSS feed gate masked only PRIVATE_SOURCE, not flags::PRIVACY (fixed in UP-0, option b). Every future outward-gate slice (OUT-*, ENR-9..14, Torznab/Stremio/export additions) must key on flags::PRIVACY; add to their briefs. M8-PURGE audit should check every gate for it."
+    },
+    {
+      "id": "owner-fyi-up0-feeds",
+      "at": "2026-11-12T08:42:39Z",
+      "note": "FYI (stricter, section 2.37): RSS feeds now leave out crawled BEP 27 private torrents as well as private uploads (UP-0). Send with UP-0 merge FYI."
     }
   ],
   "main_health": [
@@ -8090,14 +8100,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T08:31:11Z",
+    "updated": "2026-11-12T08:42:39Z",
     "items": [
       {
         "slot": 1,
         "slice": "UP-0",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBPrS4p53kbc5CSm2o: step 1 (0a7fbfae) confirmed 07:17Z; building. Owner flag due: upload rate bucket 30 burst/1 per s/10k IPs (\u00a72.26); stricter Sec-Fetch-Site refusal",
+        "doing": "session_01MMjhnBPrS4p53kbc5CSm2o: runner chose (b) feed gate masks PRIVACY; fix round (408 deadline etc.), then PR",
         "since": "2026-11-12T07:11:01Z",
         "status": "active"
       },
@@ -8223,7 +8233,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T08:31:11Z",
+  "updated": "2026-11-12T08:42:39Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
