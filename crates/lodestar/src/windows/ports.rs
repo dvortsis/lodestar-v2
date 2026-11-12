@@ -505,6 +505,22 @@ mod tests {
     }
 
     #[test]
+    fn the_ipv4_commands_are_pinned() {
+        let w = assess(Family::V4, range(1025, 3976, 0), 1000).unwrap();
+        assert_eq!(
+            w.command().unwrap(),
+            "netsh int ipv4 set dynamicport tcp start=49152 num=16384"
+        );
+        // The show forms `query` runs, as arguments.
+        assert_eq!(Family::V4.netsh(), "ipv4");
+        assert_eq!(Family::V6.netsh(), "ipv6");
+        assert!(
+            w.to_string()
+                .contains("netsh int ipv4 show excludedportrange protocol=tcp")
+        );
+    }
+
+    #[test]
     fn a_fix_never_goes_below_port_1025() {
         let w = assess(Family::V4, range(49152, 16384, 0), 40_000).unwrap();
         assert_eq!(w.needed, 82_048);
