@@ -207,6 +207,10 @@ SCREEN_INFO = ("mimalloc_committed_mib_per_1000_stored",)  # read 37.79 on the p
 # A counter in one of these states has no reading; the checkpoint decides without it
 # and names it. Any other state that isn't ok or a trip (unusable) holds back ok.
 SCREEN_MISSING = ("absent", "absent_at_checkpoint", "too_few_samples", "too_little_stored")
+# The judged memory counters. With none of them read, a checkpoint that would be ok is
+# `unjudged` instead: an ok on structure alone isn't evidence of clean memory (r4's rc.3).
+SCREEN_MEMORY = ("anon_mappings_128k_512k_per_1000_stored", "anon_mappings_128k_512k",
+                 "mimalloc_committed_mib", "anon_outside_mimalloc_mib_per_1000_stored")
 
 
 def screen_config(thresholds):
@@ -300,6 +304,9 @@ def screen_checkpoint(points, last_hour, hour, run):
         out["status"] = "ok"
     if out["status"] != "not_available" and missing:
         out["without"] = missing
+    memory = [f"{s}:{n}" for n, s in states if n in SCREEN_MEMORY]
+    if out["status"] == "ok" and all(m.split(":", 1)[0] in SCREEN_MISSING for m in memory):
+        out.update(status="unjudged", memory_missing=memory)
     if out["status"] == "not_available":  # an unusable reading first: it's the cause
         out["reason"] = next((f"{s}:{n}" for n, s in states if s != "ok" and s not in SCREEN_MISSING),
                              next(f"{s}:{n}" for n, s in states if s != "ok"))
@@ -314,6 +321,8 @@ def screen_line(out):
         out["line"] = f"trip({out['counter']}, {shown}, {r['threshold']:g})"
     elif out["status"] == "ok":
         out["line"] = f"ok(without {', '.join(out['without'])})" if out.get("without") else "ok"
+    elif out["status"] == "unjudged":
+        out["line"] = f"unjudged(no memory inputs: {', '.join(out['memory_missing'])})"
     else:
         out["line"] = f"not_available({out['reason']})"
     return out
@@ -330,9 +339,10 @@ def screen_overall(checkpoints):
         if without:
             return {"status": "ok", "line": f"ok(without {', '.join(without)})", "without": without}
         return {"status": "ok", "line": "ok"}
-    first = next((c for c in reached if c["status"] != "ok"), None)
-    reason = first["reason"] if first else "not_reached"
-    return {"status": "not_available", "line": f"not_available({reason})"}
+    first = next((c for c in reached if c["status"] != "ok"), None)  # unjudged is never ok
+    if first is None:
+        return {"status": "not_available", "line": "not_available(not_reached)"}
+    return {"status": first["status"], "line": first["line"]}
 # --- end of screen core
 
 

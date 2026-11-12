@@ -526,7 +526,7 @@ class MissingDataTests(Base):
 
     def test_older_run_directories_still_analyze(self):
         """r3's binary: no mmap, segment, memory or mapping gauges, and no frozen thresholds.
-        The pool's key count is still read, so the screen decides on that and names the rest."""
+        The pool's key count is still read, but with no memory input it's unjudged."""
         def r3(h):
             s = r5(h)
             s["prom"] = {}
@@ -534,8 +534,9 @@ class MissingDataTests(Base):
         report = analyze(self.run_dir(r3, frozen=False), now=NOW)
         self.assertIsNotNone(report["memory_fit"]["slope_mib_per_hour"])
         self.assertEqual(report["screen"]["thresholds"]["source"], "analyzer_not_frozen")
-        for c in report["screen"]["checkpoints"]:
-            self.assertEqual(c["status"], "ok")
+        for c in report["screen"]["checkpoints"]:  # no memory input: unjudged, never ok
+            self.assertEqual(c["status"], "unjudged")
+            self.assertTrue(c["line"].startswith("unjudged(no memory inputs: "), c["line"])
             self.assertEqual({n for n, r in c["counters"].items() if r["status"] == "ok"}, {"fetch_pending"})
             self.assertEqual(len(c["without"]), 13)
         self.assertIn("aren't frozen", markdown(report))

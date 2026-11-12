@@ -1218,17 +1218,32 @@ class ScreenCalibrationTests(unittest.TestCase):
             self.assertIn("mmap_cache_excess[main]", self.without(c))
             self.assertIn("anon_mappings_128k_512k", self.without(c))
 
-    def test_r4s_own_rc3_evidence_cant_trip_and_says_why(self):
-        """What the owner's replay of r4 will print: no memory gauges, so ok on the
-        rest, naming the memory inputs. An ok here is not a pass, and not a clean run."""
+    def test_r4s_own_rc3_evidence_is_unjudged_for_memory(self):
+        """What the owner's replay of r4 will print: no memory gauges, so the structural
+        counters alone can't make it ok (runner, §2.33: absence of evidence isn't a pass)."""
+        from analyze_cr0 import screen_overall
         cps = self.checkpoints(screen_points(screen_r4_rc3))
+        line = ("unjudged(no memory inputs: absent:anon_mappings_128k_512k_per_1000_stored, "
+                "absent:anon_mappings_128k_512k, absent:mimalloc_committed_mib, "
+                "absent:anon_outside_mimalloc_mib_per_1000_stored)")
         for c in cps:
-            self.assertEqual(c["status"], "ok")
-            self.assertEqual(c["line"], "ok(without absent:mmap_cache_excess[main], "
-                                        "absent:segments_per_1000_stored[main], absent:segments[main], "
-                                        "absent:anon_mappings_128k_512k_per_1000_stored, "
-                                        "absent:anon_mappings_128k_512k, absent:mimalloc_committed_mib, "
-                                        "absent:anon_outside_mimalloc_mib_per_1000_stored, absent:fetch_held_mib)")
+            self.assertEqual((c["status"], c["line"]), ("unjudged", line))
+            self.assertIn("mmap_cache_excess[main]", self.without(c))  # still named in the JSON
+        self.assertEqual(screen_overall(cps), {"status": "unjudged", "line": line})
+
+    def test_unjudged_only_when_every_memory_input_is_missing(self):
+        from analyze_cr0 import screen_checkpoint, screen_overall
+        # One memory input left (mimalloc's level): ok, naming the rest.
+        keep = [(h, dict(p, mimalloc_committed_mib=500.0)) for h, p in screen_points(screen_r4_rc3)]
+        for c in self.checkpoints(keep):
+            self.assertEqual(c["status"], "ok", c["line"])
+        # A structural trip still trips without memory inputs.
+        leak = [(h, dict(p, **{"segments[files]": 3 + p["stored"] / 10})) for h, p in screen_points(screen_r4_rc3)]
+        self.assertEqual(self.checkpoints(leak)[0]["status"], "trip")
+        # Overall: an unjudged checkpoint beside ok ones isn't ok.
+        ok = screen_checkpoint(screen_points(screen_r5_replay), 12.5, 3, self.run)
+        unjudged = self.checkpoints(screen_points(screen_r4_rc3))[1]
+        self.assertEqual(screen_overall([ok, unjudged])["status"], "unjudged")
 
     def test_an_early_fill_ahead_of_residency_reads_low_not_high(self):
         cps = self.checkpoints(screen_points(screen_r5_early_fill))
@@ -1276,7 +1291,9 @@ class ScreenCalibrationTests(unittest.TestCase):
                 r4 = self.checkpoints(screen_points(screen_r4_replay, drop={name}))
                 if "anon_outside_mimalloc_mib_per_1000_stored" in counters:
                     # r4's only tripping reading gone: the screen says so, and never trips on nothing.
-                    self.assertTrue(all(c["status"] == "ok" for c in r4), [c["line"] for c in r4])
+                    # Without mimalloc too (and r4 has no mapping gauge) no memory input is left.
+                    want = "unjudged" if name == "mem_mimalloc_committed_bytes" else "ok"
+                    self.assertTrue(all(c["status"] == want for c in r4), [c["line"] for c in r4])
                     self.assertTrue(all("anon_outside_mimalloc_mib_per_1000_stored" in self.without(c) for c in r4))
                 else:
                     self.assertTrue(all(c["counter"] == "anon_outside_mimalloc_mib_per_1000_stored" for c in r4))

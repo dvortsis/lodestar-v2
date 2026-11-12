@@ -19,9 +19,14 @@ After #562 merged, the owner replayed the analyzer over r4's and r5's private ru
   - Otherwise the checkpoint is ok when at least one judged counter is ok and every other one has no reading: `absent`, `absent_at_checkpoint`, `too_few_samples` or `too_little_stored`. Those counters go in the checkpoint's `without` list, and its line reads `ok(without absent:mmap_cache_excess[main], …)`. A trip records `without` in the JSON too. Its line is unchanged.
   - A checkpoint is `not_available` only when no judged counter has a reading, named as before by the first one (`not_available(absent:…)`).
   - **`unusable` still holds back ok.** A slope too large to compute is an input that's there but can't be judged, which is a reason to look, not a missing gauge. The reason then names the unusable counter, ahead of any absent one.
-  - **An `ok(without …)` is only as good as what it went without.** A run missing every memory input, like r4's own evidence (below), reads ok on the structural counters alone. The line names what's missing so it can't be read as a clean run.
   - **Checkpoint-level gaps are unchanged.** `not_reached`, `no_sample_at_checkpoint`, `identity_change` and the threshold-file states are about the run, not one input, and still give `not_available`. The overall line is ok only when every reached checkpoint is ok, and it lists the union of their `without` entries.
 - **D4. The two copies stay one.** The change is in the screen-core block, kept byte-identical in `analyze_cr0.py` and `linux/collect.py` (`test_screen.py` checks it). The analyzer's `SCREEN_PREFIXES` also keeps `lodestar_mem_rss_anon_bytes` lines. The collector passes the whole snapshot, so it needs no prefix change. The Windows collector is untouched.
+- **The tools README** (`docs/soak/tools/README.md`, runner-approved): "What it watches" lists the new input and shows mimalloc's growth as information. "Reading it" explains `ok(without …)` and `unjudged(…)`.
+- **D5. A checkpoint with no memory input is `unjudged`, not ok** (runner, 2026-11-12T22:48Z, under §2.33: absence of evidence isn't a pass).
+  - **What counts as a memory input:** the 128–512 KiB mapping growth and level, mimalloc's committed level, and memory outside mimalloc.
+  - **The rule:** when none of those has a reading and nothing trips, the checkpoint reads `unjudged(no memory inputs: absent:…, …)`, naming them. It's never ok: the overall line is ok only when every reached checkpoint is ok, and otherwise it shows the first checkpoint that isn't.
+  - **What doesn't change:** a trip on a structural counter still trips. A checkpoint missing only some memory inputs stays `ok(without …)`. The format follows the screen's other lines (`unjudged(…)`, no space).
+  - r4's own rc.3 evidence (below) and r3-era runs read `unjudged`.
 
 ## The thresholds and their basis
 Only committed aggregates are used: `2026-11-05-soak-r4-verdict.md`, `2026-11-06-soak-r5-verdict.md`, `2026-11-05-X-mimalloc-override.md`, the 37.79 in `2026-11-08-runner-followups-3.md`, and the harness figures in `2026-11-07-X-soak-screen.md`. No per-checkpoint replay values reached the runner, and raw soak data stays private.
@@ -60,7 +65,8 @@ Every value in the tests is invented and shaped by the figures above. No owner s
 - **`test_analyze_cr0.py::ScreenCalibrationTests`:**
   - **An r5-shaped pass:** mimalloc fills at 37.79 per 1,000 to hour 4, then is flat. It reads `ok` at hours 3, 6 and 12, with the fill shown as `info`.
   - **An r4-shaped trip:** r4's memory behaviour on a binary with the memory gauges (rc.4 or later). It has no mapping gauge and no main-index segment count, as in r4's replay, and memory outside mimalloc at 22.9 per 1,000. It trips `anon_outside_mimalloc_mib_per_1000_stored` at every checkpoint, and names `mmap_cache_excess[main]` in `without`.
-  - **r4 as rc.3 recorded it:** no memory gauges at all. The test pins the `ok(without …)` line the replay will print.
+  - **r4 as rc.3 recorded it:** no memory gauges at all. The test pins the `unjudged(no memory inputs: …)` line the replay will print, at each checkpoint and overall.
+  - **`unjudged`'s edges:** one memory input left gives ok, a structural trip still trips, and an unjudged checkpoint beside ok ones keeps the overall line from reading ok.
   - **The early fill, the two other no-reading states and `unusable`:** an early fill ahead of residency reads ok. `too_little_stored` and `absent_at_checkpoint` are named, not blocking. An unusable reading beside an ok one gives `not_available(unusable:…)`.
   - **Missing inputs:** a case for each of the ten raw inputs (stored, the pool's keys, both indexes' cache entries and segments, the mapping gauge, mimalloc's committed bytes, RssAnon and held bytes). r5's shape stays ok and names exactly the counters that input feeds. r4's shape still trips, unless the dropped input is one its trip needs.
   - **Every input absent:** `not_available`.
@@ -75,7 +81,6 @@ Every value in the tests is invented and shaped by the figures above. No owner s
 
 ## After merge
 1. **The owner replays r4 and r5 with the new analyzer and relays only the `screen:` lines.** The runner puts that request to the owner.
-   - **r4 can't trip on this input.** It ran rc.3, and X-mem-gauges (`mem_rss_anon_bytes`, `mem_mimalloc_committed_bytes`) first shipped in rc.4 (`2026-11-05-soak-r4-verdict.md`, "What follows"). Its replay is expected to read `ok(without …)`, naming `mimalloc_committed_mib` and `anon_outside_mimalloc_mib_per_1000_stored` as absent. That's an ok on the structural counters alone, not a clean run. The trip on r4's growth is proven only by the fixture of its shape on a gauged binary.
+   - **r4 can't trip on this input.** It ran rc.3, and X-mem-gauges (`mem_rss_anon_bytes`, `mem_mimalloc_committed_bytes`) first shipped in rc.4 (`2026-11-05-soak-r4-verdict.md`, "What follows"). Its replay is expected to read `unjudged(no memory inputs: …)` (D5). The trip on r4's growth is proven only by the fixture of its shape on a gauged binary.
    - **r5** should read `ok`. If its outside-mimalloc growth reads within 1.5 times of 8, a follow-up retunes it under a new hash.
-   - **For the runner:** whether a checkpoint missing every memory-growth input should read something other than `ok(without …)`, so an ok like r4's can't be misread.
 2. **Precondition 1 of `2026-11-07-X-soak-screen.md` still holds:** read the mapping gauge for about an hour on the musl release build with `override`. The in-run screen advises only until both steps are done.

@@ -82,12 +82,18 @@ An early warning, run before and during a soak (X-soak-screen,
 it never passes one.** The memory gate above is the only verdict, and the screen
 never changes it.
 
-- **What it watches**, at baseline hours 3, 6 and 12, each per 1,000 stored
-  torrents and against a level: the search mmap-cache entries against the
-  segments, the segment count, the 128-512 KiB anonymous mappings outside the
-  allocator's arena (r4's growth), mimalloc's committed bytes, and the fetch
-  pool's size and held bytes against their caps. Memory itself isn't an input:
-  r5's early slope read 6.58 MiB/h and the run passed.
+- **What it watches**, at baseline hours 3, 6 and 12:
+  - per 1,000 stored torrents and against a level: the search mmap-cache
+    entries against the segments, the segment count, and the 128-512 KiB
+    anonymous mappings outside the allocator's arena (r4's growth);
+  - per 1,000 stored: anonymous memory outside mimalloc (RssAnon minus
+    mimalloc's committed bytes, where r4's C heap grew);
+  - against a level: mimalloc's committed bytes. Their growth per 1,000 is
+    shown as `info`, never judged;
+  - against their caps: the fetch pool's size and held bytes.
+
+  Private memory isn't an input: r5's early slope read 6.58 MiB/h, and the run
+  passed.
 - **Before a soak**, the `Soak screen` workflow (`.github/workflows/soak-screen.yml`,
   on a `release/**` push or run by hand from the Actions tab)
   runs the dhat retention test and `mem-cheap` on musl, each with a control
@@ -101,6 +107,8 @@ never changes it.
   - `ok(without <state>:<counter>, …)`: nothing tripped among the inputs that
     were there, and the named ones had no reading. That happens with an older
     binary, or on Windows, which has no mapping gauge and no RssAnon.
+  - `unjudged(no memory inputs: …)`: nothing tripped, but none of the memory
+    inputs had a reading (an older binary, such as r4's rc.3). It isn't ok.
   - `trip(<counter>, <value>, <threshold>)`: **stop the run and investigate**.
     You stop it: the collector never does.
   - `not_available(<reason>)`: no input had a reading, an input couldn't be
