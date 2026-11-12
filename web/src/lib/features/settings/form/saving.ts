@@ -232,6 +232,8 @@ export async function send(e: Engine, batch: Batch): Promise<Sent | Failed> {
 	for (let attempt = 0; ; attempt++) {
 		try {
 			const res = await patchBatch(body);
+			// Tells the restart watch (restart/saved.ts) to ask `/system` now, not at its next poll.
+			dispatchEvent(new Event('ls-settings-saved'));
 			return { ok: true, values: res.sections, batch: body };
 		} catch (err) {
 			const handler =
