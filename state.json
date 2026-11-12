@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T16:09:35Z",
+  "updated_at": "2026-11-12T16:26:15Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8134,6 +8134,11 @@
       "pr": 754,
       "sha": "53130cccf97e8971b8c621560b359f55c0a1ecb1",
       "at": "2026-11-12T16:09:35Z"
+    },
+    {
+      "pr": 763,
+      "sha": "423a91b17c62554e5a8ea9d1867e08b0a071e5c6",
+      "at": "2026-11-12T16:26:15Z"
     }
   ],
   "active_sessions": {
@@ -8371,7 +8376,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T16:03:30Z",
+    "updated": "2026-11-12T16:26:15Z",
     "items": [
       {
         "slot": 1,
@@ -8393,11 +8398,11 @@
       },
       {
         "slot": 4,
-        "slice": "M8-NET-E2E",
+        "slice": "X-m8-net-e2e-nits",
         "role": "build",
         "agent": "session_01MMjhnAsZmQbQajtBLyTfXU",
-        "doing": "session_01MMjhnAsZmQbQajtBLyTfXU: #763 at 30223eca (docs push), CI re-running; Windows max 3138 ms, Linux passed",
-        "since": "2026-11-12T13:19:51Z",
+        "doing": "#763 M8-NET-E2E merged (423a91b1); now the rv-763 follow-ups + macOS time (briefs/X-m8-net-e2e-nits.md)",
+        "since": "2026-11-12T16:26:15Z",
         "status": "active"
       },
       {
@@ -8504,7 +8509,7 @@
     }
   ],
   "heartbeat": "2026-11-12T15:41:01Z",
-  "updated": "2026-11-12T16:09:35Z",
+  "updated": "2026-11-12T16:26:15Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
