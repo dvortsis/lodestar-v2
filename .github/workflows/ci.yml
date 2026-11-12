@@ -171,7 +171,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       # Linux never lints cfg(windows) code, so lint it here, before the tests
-      # reuse the same build cache (X-win-clippy).
+      # run in the same job (X-win-clippy).
       - name: clippy (Windows-only code)
         if: runner.os == 'Windows'
         run: cargo clippy --workspace --all-targets -- -D warnings

@@ -690,7 +690,7 @@ fn real_dir(path: &Path) -> io::Result<bool> {
 
 /// Creates `path` (0755) unless it's there already.
 fn ensure_dir(path: &Path) -> Result<(), LayoutError> {
-    #[cfg_attr(windows, allow(unused_mut))] // only Unix sets a mode
+    #[cfg_attr(not(unix), allow(unused_mut))] // only Unix sets a mode
     let mut b = fs::DirBuilder::new();
     #[cfg(unix)]
     {
