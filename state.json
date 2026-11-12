@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T02:36:15Z",
+  "updated_at": "2026-11-12T02:42:12Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7039,6 +7039,17 @@
       "id": "X-win-clippy",
       "at": "2026-11-12T02:36:15Z",
       "note": "Windows-target clippy (x86_64-pc-windows-gnu, from X-svc-eventcreate-bounded session) shows warnings on main that -D warnings would fail: companions/src/config_files.rs:26 unused import File; needless mut at companions/src/extract.rs:780, fetch.rs:584, layout.rs:693, manager.rs:530; lodestar/src/main.rs:301 collapsible if. Linux CI never lints cfg(windows). Slice: fix them + make the existing test (windows-latest) job (or a new lint step on it) run `cargo clippy --workspace --all-targets -- -D warnings` so Windows-only code is linted. Sonnet-able for the fixes; CI step is the runner's call (no permission/secret change). Queue for next free slot."
+    },
+    {
+      "id": "X-tokio-1541-v052",
+      "what": "Backport tokio 1.54.1 bump (Cargo.lock, fuzz/Cargo.lock, Cargo.toml reqs) into release/v0.5.2 by release PR before the v0.5.2 tag; 1.54.0 is yanked (tokio#8695 Interval UAF)",
+      "after": "X-flake-dht-scrape-join merges",
+      "at": "2026-11-12T02:42:12Z"
+    },
+    {
+      "id": "owner-fyi-tokio-v051",
+      "what": "Owner FYI via dashboard: published v0.5.1 ships yanked tokio 1.54.0 (Interval UAF, tokio#8695; DHT actor select! over interval.tick()). Owner decides whether to cut v0.5.1.x; runner recommends folding the fix into v0.5.2 unless v0.5.2 slips",
+      "at": "2026-11-12T02:42:12Z"
     }
   ],
   "main_health": [
@@ -7817,7 +7828,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T02:36:15Z",
+    "updated": "2026-11-12T02:42:12Z",
     "items": [
       {
         "slot": 1,
@@ -7868,7 +7879,7 @@
         "slice": "X-flake-dht-scrape-join",
         "role": "Opus slice (then X-prowlarr-register)",
         "agent": "session_01MMjhnCHsnr3wRoSQhHd9kN",
-        "doing": "root-cause the tokio join-interest abort in dht scrape test; then X-prowlarr-no-fetch-wait (rv-723 I + 2 nits)",
+        "doing": "session_01MMjhnCHsnr3wRoSQhHd9kN: root cause tokio 1.54.0 Interval UAF (yanked; tokio#8695, fix #8692 in 1.54.1); runner approved lock + Cargo.toml bump to 1.54.1; then X-prowlarr-no-fetch-wait",
         "since": "2026-11-12T02:35:52Z",
         "status": "active"
       },
@@ -7894,7 +7905,7 @@
         "slice": "X-restart-banner",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8jotRy9XX9TihNaWZ: restart banner, Restart now, restart flow (\u00a710.10.6; G-m6 dep), Sonnet",
+        "doing": "session_01MMjhn8jotRy9XX9TihNaWZ: round-2 CHANGES relayed (rv-718-a8fe8f58: tray covers SaveBar, ticking live region, live-region rewrite, client clock, vitest timeouts)",
         "since": "2026-11-11T21:46:53Z",
         "status": "active"
       },
@@ -7979,7 +7990,7 @@
     }
   ],
   "heartbeat": "2026-11-12T00:38:52Z",
-  "updated": "2026-11-12T02:36:15Z",
+  "updated": "2026-11-12T02:42:12Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
