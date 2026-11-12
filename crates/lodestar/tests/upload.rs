@@ -172,12 +172,35 @@ fn until(what: &str, mut f: impl FnMut() -> Option<String>) -> String {
 #[test]
 fn a_served_instance_takes_an_upload_end_to_end() {
     let s = start();
+    // A saved search with an RSS feed, matching both uploads.
+    let r = exchange(
+        s.port,
+        &format!(
+            "POST /api/v1/saved-searches HTTP/1.0\r\nCookie: {}\r\nContent-Type: application/json",
+            s.cookie
+        ),
+        br#"{"name":"Cuts","q":"Cut","alert":true,"rss":true}"#,
+    )
+    .unwrap();
+    assert!(r.starts_with("HTTP/1.0 201"), "{r}");
+    let search: i64 = r
+        .split("\"id\":")
+        .nth(1)
+        .and_then(|r| r.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|n| n.parse().ok())
+        .expect("the saved search's id");
     let r = upload(&s, &torrent("Public Cut 2021 1080p.mkv", false));
     assert!(r.starts_with("HTTP/1.0 202"), "{r}");
     assert!(r.contains("\"private\":false"), "{r}");
     let r = upload(&s, &torrent("Private Cut 2021 1080p.mkv", true));
     assert!(r.starts_with("HTTP/1.0 202"), "{r}");
     assert!(r.contains("\"private\":true"), "{r}");
+    let private_hash = r
+        .split("\"info_hash\":\"")
+        .nth(1)
+        .and_then(|r| r.split('"').next())
+        .expect("the private one's hash")
+        .to_string();
     // Without the page's origin, and without a session: refused.
     let r = exchange(
         s.port,
@@ -236,4 +259,18 @@ fn a_served_instance_takes_an_upload_end_to_end() {
         r.contains("Public Cut 2021").then_some(r)
     });
     assert!(!feed.contains("Private Cut"), "{feed}");
+
+    // The saved search's RSS feed: the public one, never the private
+    // one's name, hash or magnet (§18.7, BEP 27).
+    let rss = until("the feed", || {
+        let r = get(&s, &format!("/api/v1/feeds/{search}"));
+        r.contains("Public Cut 2021").then_some(r)
+    });
+    assert!(!rss.contains("Private Cut"), "{rss}");
+    assert!(!rss.contains(&private_hash), "{rss}");
+    // And the instance's own alert list does show it: it's kept local.
+    until("the private alert", || {
+        let r = get(&s, &format!("/api/v1/saved-searches/{search}/alerts"));
+        r.contains(&private_hash).then_some(r)
+    });
 }

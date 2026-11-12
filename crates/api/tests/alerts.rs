@@ -882,6 +882,33 @@ async fn the_feed_shows_shown_public_alerts_with_magnets() {
     );
 }
 
+/// A feed leaves out every privacy bit, not only `private_source`: a
+/// crawled BEP 27 private torrent, and a remote row whose private bit
+/// isn't verified yet (UP-0's runner ruling: the feed masks
+/// `flags::PRIVACY`, as every other outward gate does).
+#[tokio::test]
+async fn the_feed_leaves_out_bep27_private_and_unverified_remote_rows() {
+    let f = fixture();
+    let c = session(&f);
+    let h = &f.hashes;
+    for bit in [flags::PRIVATE, flags::REMOTE_UNVERIFIED] {
+        f.store
+            .lock()
+            .unwrap()
+            .connection()
+            .execute(
+                "UPDATE torrents SET flags = ?1 WHERE id = (SELECT MIN(id) FROM torrents)",
+                [bit],
+            )
+            .unwrap();
+        let r = send(&f.app, get(&feed_uri(f.nature, None), Some(&c))).await;
+        assert_eq!(r.status, StatusCode::OK);
+        // The first torrent is gone; the other public ones stay.
+        assert_eq!(guids(&r.text), [h[5].clone(), h[1].clone()], "{bit}");
+        assert!(!r.text.contains("Planet.Earth"), "{bit}");
+    }
+}
+
 #[tokio::test]
 async fn etags_are_strong_and_304_when_unchanged() {
     let f = fixture();
