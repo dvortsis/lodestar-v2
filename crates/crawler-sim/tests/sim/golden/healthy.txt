@@ -8,63 +8,63 @@ pool: sockets=400 per_ip=2 max_pending=200000 max_lookups=256 lookup_wait=30s re
 
 # per minute: counter deltas; gauges sampled each second as mean/max
 min admitted rejected completed peers_found fetch_started fetched stored harvested dht_active dht_queued pool_lookups pool_active
-  1 116 12219 116 50 122 41 41 12335 12/32 0/0 13/32 6/16
-  2 81 122 79 37 87 22 22 203 8/32 0/0 9/32 4/15
-  3 168 8772 170 63 184 61 61 42 14/32 0/0 15/32 10/26
-  4 141 107 111 36 86 16 16 80 12/32 0/0 14/32 4/19
-  5 297 10494 295 118 298 95 95 1928 29/32 0/0 31/32 15/22
-  6 284 1470 288 120 259 105 105 1608 29/32 0/0 30/32 13/23
-  7 307 11058 305 101 278 90 90 849 29/32 0/0 31/32 14/23
-  8 290 1444 288 84 227 66 66 93 29/32 0/0 31/32 12/18
-  9 315 11215 315 97 254 80 80 403 29/32 0/0 31/32 12/17
- 10 298 1637 299 99 245 91 91 360 29/32 0/0 31/32 12/21
-steady (after 3 warmup min), per min: admitted=276.0 rejected=5346.4 completed=271.6 fetched=77.6 stored=77.6
+  1 128 12215 128 53 139 43 43 12343 14/32 0/0 15/32 6/16
+  2 81 156 81 33 80 25 25 237 8/31 0/0 8/32 3/13
+  3 181 8709 181 57 126 48 48 0 17/32 0/0 17/32 6/17
+  4 134 174 111 33 52 16 16 98 12/32 0/0 13/32 2/16
+  5 297 10480 288 115 273 95 95 1946 28/32 0/0 30/32 15/21
+  6 285 1534 286 137 303 108 108 1610 28/32 0/0 30/32 16/24
+  7 288 10977 289 92 235 84 84 782 29/32 0/0 31/32 12/18
+  8 292 1535 290 92 213 78 78 128 29/32 0/0 31/33 10/17
+  9 303 11125 304 107 262 90 90 372 29/32 0/0 31/32 15/25
+ 10 295 1785 295 94 197 74 74 428 29/32 0/0 31/33 10/17
+steady (after 3 warmup min), per min: admitted=270.6 rejected=5372.9 completed=266.1 fetched=77.9 stored=77.9
 
 # DHT node stats at the end (node::StatsSnapshot), one per line
-packets_in=35003
-packets_out=41166
+packets_in=34768
+packets_out=40950
 malformed_in=0
 queries_in=0
-responses_in=34207
-errors_in=796
-queries_out=41166
-timeouts=6096
-throttled=149
+responses_in=33962
+errors_in=806
+queries_out=40950
+timeouts=6119
+throttled=180
 send_errors=0
 spoofed=0
 routing_nodes=69
-outstanding=66
-harvested_sample=17901
+outstanding=62
+harvested_sample=17944
 harvest_dropped=0
-lookups_completed=2266
-samples_sent=3340
-sample_failures=1058
+lookups_completed=2253
+samples_sent=3356
+sample_failures=1065
 sample_cooling=1951
-sample_inflight=4
+sample_inflight=1
 sample_stale=0
 sample_frontier=0
 sample_deferred=0
-peer_admitted=2297
-peer_rejected=58538
-peer_rejected_capacity=58538
+peer_admitted=2284
+peer_rejected=58690
+peer_rejected_capacity=58690
 peer_rejected_paused=0
 peer_rejected_caller_closed=0
 peer_ack_failed=0
-peer_command_full=13909
+peer_command_full=13907
 peer_command_closed=0
 peer_cancelled=0
 peer_queued_dropped_caller_closed=0
 peer_queued_dropped_paused=0
-peer_active=32
+peer_active=29
 peer_queued=0
-lookup_scheduled=42
-lookup_deadlines=2
+lookup_scheduled=37
+lookup_deadlines=0
 denied=0
 
 # fetch pool stats at the end (PoolStats)
-pending=17234 active=10 waiting=17224 lookups=31 lookup_backlog=0
-fetched=667 duplicates=0 finder_full=0 finder_closed=0 lookup_unaccepted=72447 retry_unaccepted=55577
-failures: Unreachable=617 TimedOut=355 Refused=391 EncryptionFailed=0 Invalid=0 Oversize=0 HashMismatch=0
+pending=17283 active=15 waiting=17268 lookups=31 lookup_backlog=0
+fetched=661 duplicates=0 finder_full=0 finder_closed=0 lookup_unaccepted=72597 retry_unaccepted=55673
+failures: Unreachable=552 TimedOut=308 Refused=344 EncryptionFailed=0 Invalid=0 Oversize=0 HashMismatch=0
 lost: NoPeers=0 TimedOut=0 Refused=0 EncryptionFailed=0 Oversize=0 Invalid=0 Blocked=0 Evicted=0 GaveUp=0 Unreachable=0
 evicted_service: unaccepted=0 lookup=0 peers=0 fetch=0
 admission_waits=0
@@ -87,12 +87,12 @@ dht_stream_seen_full=0
 dht_stream_terminals=0
 dht_stream_first_batches=0
 dht_stream_first_batch_millis=0
-funnel: Harvested=17901 PeerFound=805 Fetched=667 Lost=0
+funnel: Harvested=17944 PeerFound=813 Fetched=661 Lost=0
 
 # scripted network
-queries=41166 ping=0 find_node=7898 get_peers=29928 sample=3340 other=0
-to_dead=4771 to_unknown=0 lost=1392 rate_limited=0 errors=161 unsupported=649 sample_early=0 replies=35003 values_replies=5640
-discoveries_dropped=0 pool_queue_at_end=17234
+queries=40950 ping=0 find_node=7828 get_peers=29766 sample=3356 other=0
+to_dead=4784 to_unknown=0 lost=1395 rate_limited=0 errors=173 unsupported=648 sample_early=0 replies=34771 values_replies=5692
+discoveries_dropped=0 pool_queue_at_end=17283
 
-outcome_log events=20608 fnv64=9798c229086d1504
-fingerprint=a55c8411f3e45102
+outcome_log events=20485 fnv64=55dae8c14d2f1d5b
+fingerprint=affed604dfb8d659

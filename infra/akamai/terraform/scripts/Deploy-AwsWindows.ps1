@@ -76,6 +76,26 @@ function Audit([string]$Message) {
 $region = 'us-east-1'
 $instanceType = 'c6a.xlarge'
 
+# A refused AWS call's reason, safe to print: the first non-blank line, printable
+# ASCII only (-creplace: -replace ignores case, and U+212A KELVIN SIGN would then
+# match a-z and survive), with ARNs, access key IDs, 12-digit account IDs, and IPv4 and IPv6
+# addresses masked, and AWS's encoded authorization message dropped. At most 200
+# characters; '(no reason given)' when there's nothing left.
+function Get-SafeAwsError([string]$Text) {
+    $line = (($Text -split "`r?`n") | ForEach-Object { ($_ -creplace '[^\x20-\x7E]', '').Trim() } |
+        Where-Object { $_ } | Select-Object -First 1)
+    if (-not $line) { return '(no reason given)' }
+    $line = $line -replace '(?i)\s*Encoded authorization failure message:.*$', ''
+    $line = $line -replace '(?i)arn:[^\s,;"''()\[\]]+', '[arn]'
+    $line = $line -replace '(?<![A-Z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])', '[key-id]'
+    $line = $line -replace '(?<![0-9])[0-9]{12}(?![0-9])', '[account]'
+    $line = $line -replace '(?<![0-9.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9])', '[ip]'
+    # IPv6: a '::' or eight groups, so a time such as 12:30:45 stays as it is.
+    $line = $line -replace '(?i)(?<![0-9a-f:])(?=[0-9a-f:]*::|(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4})[0-9a-f:]{2,39}(?:%[0-9a-z]+)?(?![0-9a-f:])', '[ip]'
+    if ($line.Length -gt 200) { $line = $line.Substring(0, 200) }
+    return $line.Trim()
+}
+
 # 0. Validate account-specific parameters before any AWS call (no defaults exist).
 function Assert-Id([string]$Name, [string]$Value, [string]$Pattern) {
     if ([string]::IsNullOrWhiteSpace($Value) -or $Value -cnotmatch $Pattern) {
@@ -146,7 +166,8 @@ $r = Invoke-AwsCli @('ec2', 'describe-security-groups', '--group-ids', $Security
     '--profile', 'lodestar-provisioner', '--region', $region,
     '--query', 'SecurityGroups[].[GroupId,length(IpPermissions)]', '--output', 'text')
 if ($r.ExitCode -ne 0) {
-    throw "Could not read security group $SecurityGroupId (exit $($r.ExitCode)). No deployment performed."
+    Audit "AWS said: $(Get-SafeAwsError $r.Err)"
+    throw "Could not read security group $SecurityGroupId (exit $($r.ExitCode)). This read needs ec2:DescribeSecurityGroups on LodestarProvisioner (UnauthorizedOperation means the role lacks it). No deployment performed."
 }
 $sgRows = ConvertFrom-AwsTextRows $r.Out
 if ($sgRows.Count -ne 1 -or $sgRows[0].Count -ne 2 -or $sgRows[0][0] -cne $SecurityGroupId -or $sgRows[0][1] -cnotmatch '^[0-9]{1,4}$') {
