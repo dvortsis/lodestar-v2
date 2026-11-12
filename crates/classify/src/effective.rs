@@ -22,11 +22,16 @@ pub enum ResolvedVia {
 }
 
 impl ResolvedVia {
-    pub const ALL: [ResolvedVia; 4] = [
+    /// The listed methods: what `/search/fields` and the query language's
+    /// hints offer. [`ResolvedVia::Plugin`] isn't listed yet: ENR-10's own
+    /// lookups never resolve a title (runner, 2026-11-12), so offering it
+    /// would match nothing. The slice that first makes it fire lists it,
+    /// with its label. [`from_name`](Self::from_name) still reads it, so
+    /// stored records and `resolved:plugin` queries work.
+    pub const ALL: [ResolvedVia; 3] = [
         ResolvedVia::File,
         ResolvedVia::Folder,
         ResolvedVia::Structure,
-        ResolvedVia::Plugin,
     ];
 
     /// The name used by `resolved:` queries and the UI tooltip.
@@ -40,7 +45,10 @@ impl ResolvedVia {
     }
 
     pub fn from_name(name: &str) -> Option<ResolvedVia> {
-        ResolvedVia::ALL.into_iter().find(|v| v.as_str() == name)
+        ResolvedVia::ALL
+            .into_iter()
+            .chain([ResolvedVia::Plugin])
+            .find(|v| v.as_str() == name)
     }
 }
 
@@ -386,6 +394,10 @@ mod tests {
         assert_eq!(r.confidence, MAX_PLUGIN_CONFIDENCE);
         assert!(r.ambiguous && r.resolved_from.is_none());
         assert_eq!(ResolvedVia::from_name("plugin"), Some(ResolvedVia::Plugin));
+        assert!(
+            !ResolvedVia::ALL.contains(&ResolvedVia::Plugin),
+            "not listed yet"
+        );
         // Not surer than the files: kept.
         let (files, comp) = tree(&[("Show.Name.S02E05.2160p.WEB-DL.mkv", 9)]);
         let e = resolve("a8f3x.zip.part", &files, &comp);
