@@ -312,6 +312,7 @@ placement:
   - X-wk-own-lease-lost
   - X-wk-out-set-polish
   - X-wk-fetched-lease
+  - X-wk-fetched-lease-nits
 - ws: ws-web
   match:
   - W*
@@ -411,6 +412,7 @@ placement:
   - X-op4-polish
   - X-tripwire-reviews-lookback
   - X-flake-dht-scrape-join
+  - X-dht-lookup-converge
   - X-win-clippy
   - X-banner-live-region
   - X-prowlarr-no-fetch-wait

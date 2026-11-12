@@ -85,6 +85,7 @@ fn parts() -> Vec<(&'static str, Doc)> {
         ("facets", crate::facets::ApiDoc::openapi()),
         ("suggest", crate::suggest::ApiDoc::openapi()),
         ("torrents", crate::torrents::ApiDoc::openapi()),
+        ("upload", crate::upload::ApiDoc::openapi()),
         ("filters", crate::filters::ApiDoc::openapi()),
         ("settings", crate::settings::ApiDoc::openapi()),
         ("ops", crate::ops::ApiDoc::openapi()),

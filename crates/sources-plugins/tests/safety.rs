@@ -732,6 +732,12 @@ async fn no_enable_path_opens_a_consent_class_in_any_shipped_plugin() {
     // Nothing the refusals touched was written.
     let store = Store::open(&db, StoreConfig::default()).unwrap();
     for row in store.sources().unwrap() {
+        // The built-in upload source (UP-0) is no plugin: it's always on,
+        // and no consent class applies to it.
+        if row.plugin == lodestar_pipeline::local_torrent::SOURCE {
+            assert_eq!(row.state, SourceState::Enabled);
+            continue;
+        }
         let m = manifests.iter().find(|m| m.id == row.plugin).unwrap();
         assert_eq!(
             row.state == SourceState::Enabled,

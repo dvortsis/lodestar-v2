@@ -8,9 +8,12 @@
 //!
 //! A lease ends exactly once:
 //! - the holder commits the torrent or reports it lost, with the lease's
-//!   token; or
+//!   token;
 //! - the holder goes silent for longer than the TTL, and the lease expires
-//!   (to be granted again elsewhere with its cohort and sources kept).
+//!   (to be granted again elsewhere with its cohort and sources kept); or
+//! - the holder reported its result `Fetched` (its batch was accepted) and
+//!   no commit came within a TTL of that, holder alive or not: it expires
+//!   the same way (X-wk-fetched-lease).
 //!
 //! A report carrying any other token is stale (from a holder whose lease
 //! expired) and changes nothing, so nothing is ever counted twice.
@@ -369,6 +372,23 @@ pub const RECENT_COMMITS: usize = 16_384;
 /// A worker reports it for a key the hash lists or the floor refused, and
 /// a re-grant reports it for a key the store check found held.
 pub(crate) const LOSS_BLOCKED: u8 = 7;
+
+/// What [`LeaseAuthority::fetched`] made of a `Fetched` report, decided
+/// under one lock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchedReport {
+    /// The sender holds the key under that token: the lease is marked.
+    Marked(Lease),
+    /// The key has no lease, isn't waiting for a re-grant, and was
+    /// committed (or lost as blocked) lately: the commit beat the report,
+    /// the usual order (`Fetched` goes out on `Accepted`). The recent
+    /// commits are keys only, so this doesn't check the sender or token.
+    Committed,
+    /// Anything else: a lease under another token or holder, a key
+    /// waiting for a re-grant, or a key this run doesn't know (or
+    /// committed too long ago to remember: [`RECENT_COMMITS`]).
+    Stale,
+}
 
 /// One answer of [`LeaseAuthority::claim_batch`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -754,16 +774,33 @@ impl LeaseAuthority {
     /// The holder's batch carrying `key`'s result was accepted
     /// (`Outcome::Fetched`): the lease stays for the commit, marked so the
     /// holder's own claims no longer get it back, and expires a TTL after
-    /// the mark if the commit never comes. `None`, nothing marked, unless
-    /// `worker` holds the key under `token`.
+    /// the mark if the commit never comes: [`FetchedReport::Marked`]. Only
+    /// if `worker` holds the key under `token`; otherwise nothing is
+    /// marked, and the report is [`FetchedReport::Committed`] if the key
+    /// was committed lately (with no lease or re-grant since), else
+    /// [`FetchedReport::Stale`]. One lock for the mark and the answer, so a
+    /// commit can't land in between.
     pub fn fetched(
         &self,
         worker: WorkerId,
         key: &InfoHash,
         token: Token,
         now: i64,
-    ) -> Option<Lease> {
-        self.lock().table.mark_fetched(worker, key, token, now)
+    ) -> FetchedReport {
+        let mut s = self.lock();
+        if let Some(lease) = s.table.mark_fetched(worker, key, token, now) {
+            return FetchedReport::Marked(lease);
+        }
+        let committed = s.table.get(key).is_none()
+            && !s.pending.contains_key(key)
+            && s.recent
+                .as_ref()
+                .is_some_and(|(seqs, _)| seqs.contains_key(key));
+        if committed {
+            FetchedReport::Committed
+        } else {
+            FetchedReport::Stale
+        }
     }
 
     /// The holder lost the key: ends the lease and reports the loss once.
@@ -1851,9 +1888,18 @@ mod tests {
         else {
             panic!()
         };
-        assert!(a.fetched(B, &key, t, 1).is_none(), "only the holder");
-        assert!(a.fetched(A, &key, Token(t.0 + 1), 1).is_none(), "its token");
-        assert!(a.fetched(A, &key, t, 1).is_some());
+        assert!(
+            !matches!(a.fetched(B, &key, t, 1), FetchedReport::Marked(_)),
+            "only the holder"
+        );
+        assert!(
+            !matches!(
+                a.fetched(A, &key, Token(t.0 + 1), 1),
+                FetchedReport::Marked(_)
+            ),
+            "its token"
+        );
+        assert!(matches!(a.fetched(A, &key, t, 1), FetchedReport::Marked(_)));
         assert_eq!(
             a.claim_batch(A, &[claim(1, 3)], 500, None, None)[0],
             BatchAnswer::Committed
@@ -1906,9 +1952,12 @@ mod tests {
         let Claimed::Granted(t) = a.claim(A, claim(1, 0), 0) else {
             panic!()
         };
-        assert!(a.fetched(A, &key, t, 10).is_some());
+        assert!(matches!(
+            a.fetched(A, &key, t, 10),
+            FetchedReport::Marked(_)
+        ));
         assert!(
-            a.fetched(A, &key, t, 300).is_some(),
+            matches!(a.fetched(A, &key, t, 300), FetchedReport::Marked(_)),
             "the first mark counts"
         );
         a.heartbeat(A, 600);
@@ -1922,13 +1971,93 @@ mod tests {
         let Claimed::Granted(t) = a.claim(A, claim(2, 0), 700) else {
             panic!()
         };
-        assert!(a.fetched(A, &InfoHash([2; 20]), t, 700).is_some());
+        assert!(matches!(
+            a.fetched(A, &InfoHash([2; 20]), t, 700),
+            FetchedReport::Marked(_)
+        ));
         assert!(a.lost(&InfoHash([2; 20]), t, 1).is_some());
         let Claimed::Granted(t) = a.claim(A, claim(3, 0), 700) else {
             panic!()
         };
-        assert!(a.fetched(A, &InfoHash([3; 20]), t, 700).is_some());
+        assert!(matches!(
+            a.fetched(A, &InfoHash([3; 20]), t, 700),
+            FetchedReport::Marked(_)
+        ));
         assert_eq!(a.evict(A), 1);
         assert_eq!(a.fetched_marks_for_test(), 0);
+    }
+
+    /// A marked lease whose holder is also silent past the TTL expires
+    /// once, counted once, not once per reason (X-wk-fetched-lease-nits).
+    #[test]
+    fn a_marked_lease_of_a_silent_holder_expires_once() {
+        let (a, ev) = counted();
+        let key = InfoHash([1; 20]);
+        let Claimed::Granted(t) = a.claim(A, claim(1, 0), 0) else {
+            panic!()
+        };
+        assert!(matches!(a.fetched(A, &key, t, 0), FetchedReport::Marked(_)));
+        assert_eq!(a.expire(700), 1, "silent and stuck: one expiry");
+        assert_eq!((a.len(), a.pending(), get(&ev.lost)), (0, 1, 0));
+        assert_eq!(a.fetched_marks_for_test(), 0);
+        assert_eq!(a.expire(1_400), 0, "nothing left to expire");
+    }
+
+    /// After a marked lease expires, its holder's claim is a re-grant under
+    /// a new token, not a denial and not a second harvest.
+    #[test]
+    fn the_holders_claim_after_a_marked_lease_expires_is_granted_anew() {
+        let (a, ev) = counted();
+        let key = InfoHash([1; 20]);
+        let BatchAnswer::Claimed {
+            claimed: Claimed::Granted(t),
+            ..
+        } = a.claim_batch(A, &[claim(1, 0)], 0, None, None)[0]
+        else {
+            panic!()
+        };
+        assert!(matches!(a.fetched(A, &key, t, 0), FetchedReport::Marked(_)));
+        a.heartbeat(A, 601);
+        assert_eq!(a.expire(601), 1);
+        let BatchAnswer::Claimed {
+            claimed: Claimed::Granted(new),
+            harvested: false,
+        } = a.claim_batch(A, &[claim(1, 0)], 602, None, None)[0]
+        else {
+            panic!("a re-grant")
+        };
+        assert_ne!(new, t);
+        assert_eq!(get(&ev.harvested), 1, "harvested once");
+        assert_eq!(a.get(&key).map(|l| (l.holder, l.token)), Some((A, new)));
+    }
+
+    /// A `Fetched` report is marked, committed (the commit beat it) or
+    /// stale, decided under one lock.
+    #[test]
+    fn a_fetched_report_is_marked_committed_or_stale() {
+        let (a, _) = counted();
+        a.serve_remote();
+        let key = InfoHash([1; 20]);
+        let Claimed::Granted(t) = a.claim(A, claim(1, 0), 0) else {
+            panic!()
+        };
+        assert_eq!(a.fetched(A, &key, Token(t.0 + 1), 1), FetchedReport::Stale);
+        assert_eq!(a.fetched(B, &key, t, 1), FetchedReport::Stale);
+        assert!(matches!(a.fetched(A, &key, t, 1), FetchedReport::Marked(_)));
+        assert!(a.commit(A, &key, t).is_some());
+        assert_eq!(a.fetched(A, &key, t, 2), FetchedReport::Committed);
+        assert_eq!(
+            a.fetched(A, &InfoHash([9; 20]), t, 2),
+            FetchedReport::Stale,
+            "a key this run doesn't know"
+        );
+        // Leased again since its commit (the built-in worker may), then
+        // waiting for a re-grant: the old token's report is stale both ways.
+        let Claimed::Granted(_) = a.claim(WorkerId::LOCAL, claim(1, 0), 3) else {
+            panic!()
+        };
+        assert_eq!(a.fetched(A, &key, t, 3), FetchedReport::Stale, "leased");
+        assert_eq!(a.evict(WorkerId::LOCAL), 1);
+        assert_eq!(a.fetched(A, &key, t, 3), FetchedReport::Stale, "pending");
     }
 }

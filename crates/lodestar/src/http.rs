@@ -41,6 +41,9 @@ pub struct AppState {
     pub crawl: Option<lodestar_pipeline::Control>,
     /// The cluster port (WK-1), for its `lodestar_cluster_*` series.
     pub cluster: Option<crate::cluster::ClusterHandle>,
+    /// The `.torrent` upload route's way into the pipeline (UP-0), on the
+    /// `/api/v1` nest only.
+    pub uploads: Option<lodestar_api::upload::Uploader>,
 }
 
 #[derive(Clone)]
@@ -70,13 +73,17 @@ pub fn router(state: AppState, api: ApiState) -> Router {
             require_session,
         ))
         .with_state(state.clone());
+    let api = match state.uploads.clone() {
+        Some(u) => lodestar_api::router(api).layer(axum::Extension(u)),
+        None => lodestar_api::router(api),
+    };
     Router::new()
         .route("/status", get(page))
         .route("/metrics", get(prometheus))
         .route("/healthz", get(healthz))
         .with_state(state)
         .merge(status_route)
-        .nest("/api/v1", lodestar_api::router(api))
+        .nest("/api/v1", api)
         .fallback(crate::web::serve)
 }
 

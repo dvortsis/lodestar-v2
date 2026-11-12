@@ -422,8 +422,9 @@ impl Store {
 
 /// What may be shown of a torrent `t` joined to an alert: never one a
 /// filter rule hid (`?hidden` holds [`flags::HIDDEN`], plus
-/// [`flags::PRIVATE_SOURCE`] where private-source torrents are left out
-/// too), and, when `?type` is a content type code (Adult's, while "Show
+/// [`flags::PRIVACY`] where private torrents are left out too: a BEP 27
+/// private one, a private source's find, or a remote row not yet
+/// verified), and, when `?type` is a content type code (Adult's, while "Show
 /// adult content" is off), never one classified as it. A torrent counts
 /// as classified only with a `torrent_parsed` row (as `Store::enrichment`
 /// reads it), so this is exactly the API's per-row `withheld` rule.
@@ -453,7 +454,8 @@ impl Store {
     /// recorded first: up to `limit` below the alert id `before`, or from
     /// the newest (as [`Store::alerts`]). `hidden_type` is as
     /// [`Store::unread_shown`] takes it; `public_only` also leaves out
-    /// private-source torrents (a feed, §18.7). The rule runs in SQL over
+    /// private torrents, every [`flags::PRIVACY`] bit (a feed, §18.7;
+    /// BEP 27 private ones too, UP-0). The rule runs in SQL over
     /// the search's alerts (at most `keep` after a prune, sorted once), so
     /// a search whose matches are mostly withheld costs no lookup per row.
     pub fn shown_alerts(
@@ -464,12 +466,7 @@ impl Store {
         hidden_type: Option<u8>,
         public_only: bool,
     ) -> Result<Vec<Alert>> {
-        let hidden = flags::HIDDEN
-            | if public_only {
-                flags::PRIVATE_SOURCE
-            } else {
-                0
-            };
+        let hidden = flags::HIDDEN | if public_only { flags::PRIVACY } else { 0 };
         let mut stmt = self.conn.prepare_cached(&format!(
             "SELECT a.id, a.saved_search_id, a.torrent_id, a.created_at, a.read_at
              FROM alerts a JOIN torrents t ON t.id = a.torrent_id
@@ -1037,6 +1034,26 @@ mod tests {
             t(s.shown_alerts(a, None, 10, Some(11), true).unwrap()),
             [3000, 1]
         );
+        // And every other privacy bit: a BEP 27 private torrent (UP-0) or
+        // a remote row whose private bit isn't verified yet.
+        for bit in [flags::PRIVATE, flags::REMOTE_UNVERIFIED] {
+            s.conn
+                .execute("UPDATE torrents SET flags = ?1 WHERE id = 3000", [bit])
+                .unwrap();
+            assert_eq!(
+                t(s.shown_alerts(a, None, 10, Some(11), true).unwrap()),
+                [1],
+                "{bit}"
+            );
+            assert_eq!(
+                t(s.shown_alerts(a, None, 10, Some(11), false).unwrap())[0],
+                3000,
+                "kept on the instance's own list"
+            );
+        }
+        s.conn
+            .execute("UPDATE torrents SET flags = 0 WHERE id = 3000", [])
+            .unwrap();
         // Paging: below a cursor, and a limit.
         assert_eq!(
             t(s.shown_alerts(a, Some(3000), 1, Some(11), false).unwrap()),
