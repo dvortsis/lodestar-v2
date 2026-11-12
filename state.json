@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T22:15:59Z",
+  "updated_at": "2026-11-12T22:27:39Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7527,6 +7527,21 @@
       "id": "owner-ask-screen-replay",
       "note": "After X-soak-screen-calibrate merges: ask the owner to replay r4 and r5 with the new analyzer and relay only the screen: lines (no raw data). Owned paths widened by the runner: linux/collect.py screen core + SCREEN_PREFIXES, test_screen.py, screen-thresholds.json (new hash); new input: anon RSS outside mimalloc per 1,000 stored; mimalloc growth demoted to info. \u00a72.19 flag.",
       "added": "2026-11-12T22:15:59Z"
+    },
+    {
+      "id": "merged-773",
+      "note": "#773 X-dht-rejoin-nits merged as 2e83895b (fresh Opus MERGE, rv-773-99b3b659). Session archived. Next runner PR: add the X-dht-rejoin-nits slices.yaml entry; O-1 decisions heading says (#768) not (#773), O-2 per-family clear robustness note.",
+      "added": "2026-11-12T22:27:39Z"
+    },
+    {
+      "id": "rv-782-changes",
+      "note": "#782 CMP-D CHANGES (B1 Windows qBittorrent LAN exposure, I1-I7) relayed 22:24Z; fix round pushed cf774494; delta self-check on ready.",
+      "added": "2026-11-12T22:27:39Z"
+    },
+    {
+      "id": "owner-flags-window-1112",
+      "note": "\u00a72.19 flags for the owner batch: NOS-0 canonical escaping per NIP-01 text and i-tag split at first colon; NOS-2a BND.ADDR form-checked not policy-checked; X-utp-backoff three decisions; ENR-13 own size-limit entry for the Identified chunk; X-restart-save-lag form dispatch line.",
+      "added": "2026-11-12T22:27:39Z"
     }
   ],
   "main_health": [
@@ -8549,7 +8564,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T22:13:28Z",
+    "updated": "2026-11-12T22:27:39Z",
     "items": [
       {
         "slot": 1,
@@ -8616,11 +8631,11 @@
       },
       {
         "slot": 8,
-        "slice": "X-dht-rejoin-nits",
+        "slice": "X-win-soak-attach-proc-hash",
         "role": "build",
         "agent": "claude",
-        "doing": "rv-768 O-1 duplicate self-lookup fix + test; decisions file",
-        "since": "2026-11-12T18:04:39Z",
+        "doing": "cloud-testing: session_01MMjhn9uwcjth652E14uw9Z: launched after #773 merged; Windows soak refuses a running process that is not the hashed file (rv-777 O1)",
+        "since": "2026-11-12T22:27:39Z",
         "status": "active"
       },
       {
@@ -8843,7 +8858,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-12T22:15:59Z",
+  "updated": "2026-11-12T22:27:39Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
