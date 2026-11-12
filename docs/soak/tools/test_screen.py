@@ -2,8 +2,10 @@
 
 Synthetic runs are shaped by the published verdicts (the raw soak evidence is
 private): r4's 128-512 KiB mappings, 1,843 -> 2,085 in 1.9 h, about 0.2 per stored
-torrent; r5's stored rate, segment and mmap-cache levels, flat mimalloc committed
-bytes and its noisy early memory slope. No network, no wall clock, no sleeps.
+torrent, and its anonymous memory outside mimalloc, about 22.9 MiB per 1,000 stored;
+r5's stored rate, segment and mmap-cache levels, flat mimalloc committed bytes, its
+RssAnon slope of 0.86 MiB/h and its noisy early memory slope. No network, no wall
+clock, no sleeps.
 """
 
 import copy
@@ -38,9 +40,11 @@ def sawtooth(h, low, high, period):
 def r5(h):
     """r5-shaped: about 681 stored an hour, merges bounding the segments (files
     peak 21), the mmap cache tracking them, mimalloc filling to 568 MiB then flat,
-    the pool at its cap, and the noisy early memory slope (6.58 MiB/h to 14.6 h)."""
+    RssAnon outside it rising 0.86 MiB/h with noise, the pool at its cap, and the
+    noisy early memory slope (6.58 MiB/h to 14.6 h)."""
     stored = 900 + 681 * h
     files, main = round(sawtooth(h, 8, 21, 1.5)), round(sawtooth(h, 3, 6, 2.3))
+    committed = 520 + 8 * min(h, 6.0)
     return {
         "stored": stored,
         "private_mib": 200 + 6.58 * min(h, 14.6) + 0.91 * max(0.0, h - 14.6) + 12 * math.sin(h * 7),
@@ -50,7 +54,8 @@ def r5(h):
             'search_segments{index="files"}': files, 'search_segments{index="main"}': main,
             'mem_anon_mappings{size="lt_128k"}': 4, 'mem_anon_mappings{size="128k_512k"}': 2,
             'mem_anon_mappings{size="512k_2m"}': 0, 'mem_anon_mappings{size="ge_2m"}': 34,
-            "mem_mimalloc_committed_bytes": (520 + 8 * min(h, 6.0)) * MIB,
+            "mem_mimalloc_committed_bytes": committed * MIB,
+            "mem_rss_anon_bytes": (committed + 40 + 0.86 * h + 3 * math.sin(h * 5)) * MIB,
             "fetch_held_bytes": (20 + 5 * math.sin(h)) * MIB,
         },
         "fetch_pending": 200000,
@@ -58,9 +63,11 @@ def r5(h):
 
 
 def r4(h):
-    """r5's shape with r4's growth: 128-512 KiB mappings at about 0.2 per stored torrent."""
+    """r5's shape with r4's growth: 128-512 KiB mappings at about 0.2 per stored torrent,
+    about 120 kB dirty each, outside mimalloc (22.9 MiB per 1,000 stored)."""
     s = r5(h)
     s["prom"]['mem_anon_mappings{size="128k_512k"}'] = 300 + 0.2 * (s["stored"] - 900)
+    s["prom"]["mem_rss_anon_bytes"] += 22.9 * (s["stored"] - 900) / 1000 * MIB
     return s
 
 
@@ -72,7 +79,8 @@ def failing_gate(h):
 
 
 def no_new_gauges(h):
-    """A binary from before X-soak-screen (r3's lacked even the mmap gauge)."""
+    """A binary from before X-soak-screen (r3's lacked even the mmap gauge): the
+    mapping and held-bytes gauges are absent, the memory gauges are there."""
     s = r5(h)
     s["prom"] = {k: v for k, v in s["prom"].items() if not k.startswith(("mem_anon", "fetch_held"))}
     return s
@@ -135,8 +143,13 @@ class ThresholdsFileTests(unittest.TestCase):
         config()  # the analyzer accepts it
         for group in ("in_run", "sweep"):
             for name, c in data[group]["counters"].items():
-                for field in ("value", "reason", "clean", "margin", "unit"):
+                for field in ("reason", "clean", "margin", "unit"):
                     self.assertIn(field, c, f"{group}.{name}")
+                if group == "in_run" and name in analyze_cr0.SCREEN_INFO:  # information only
+                    self.assertEqual(c["trips"], "never", name)
+                    self.assertNotIn("value", c, name)
+                    continue
+                self.assertIn("value", c, f"{group}.{name}")
                 self.assertEqual(c["trips"], "above", name)
         self.assertEqual(screen_sweep.sweep_thresholds(THRESHOLDS),
                          {k: v["value"] for k, v in data["sweep"]["counters"].items()})
@@ -160,6 +173,11 @@ class ThresholdsFileTests(unittest.TestCase):
             lambda d: d["in_run"]["counters"]["segments"].update(value="64"),
             lambda d: d["in_run"]["counters"]["segments"].update(trips="below"),
             lambda d: d["in_run"]["counters"].update(extra={"value": 1, "trips": "above"}),
+            # An information counter never gets a threshold, and a judged one is never "never".
+            lambda d: d["in_run"]["counters"]["mimalloc_committed_mib_per_1000_stored"].update(value=20),
+            lambda d: d["in_run"]["counters"]["mimalloc_committed_mib_per_1000_stored"].update(trips="above"),
+            lambda d: d["in_run"]["counters"].update(mimalloc_committed_mib_per_1000_stored=None),
+            lambda d: d["in_run"]["counters"]["segments"].update(trips="never"),
         ]
         for i, broken in enumerate(breaks):
             d = copy.deepcopy(good)
@@ -196,6 +214,9 @@ class CoreTests(unittest.TestCase):
                                "segments[files]": 15, "mmap_cache_excess[files]": 72 - 8 * 15,
                                "anon_mappings_128k_512k": 2085, "mimalloc_committed_mib": 568,
                                "fetch_held_mib": 1})
+        # RssAnon with mimalloc's committed bytes gives the memory outside it.
+        got = screen_inputs({}, text + "lodestar_mem_rss_anon_bytes 637534208\n")
+        self.assertEqual((got["rss_anon_mib"], got["anon_outside_mimalloc_mib"]), (608, 40))
         self.assertEqual(screen_inputs({}, ""), {})
         # A value no float holds, or a non-finite JSON value, is absent, never ok.
         self.assertEqual(screen_inputs({"torrents": float("inf")},
@@ -212,6 +233,8 @@ class CoreTests(unittest.TestCase):
         """Trips strictly above the threshold; at it, ok."""
         run = config()
         for name, kind, key in analyze_cr0.SCREEN_COUNTERS:
+            if name in analyze_cr0.SCREEN_INFO:
+                continue  # test_information_counters_never_trip
             limit = run["counters"][name]["value"]
             k = key.replace("[]", "[main]")
             label = name + ("[main]" if key.endswith("[]") else "")
@@ -224,6 +247,26 @@ class CoreTests(unittest.TestCase):
                 self.assertEqual(got["status"], want, f"{label} at {limit}{delta:+g}: {got}")
                 if want == "trip":
                     self.assertEqual(got["value"] > got["threshold"], True)
+
+    def test_information_counters_never_trip(self):
+        run = config()
+        for name in analyze_cr0.SCREEN_INFO:
+            key = dict((n, k) for n, _, k in analyze_cr0.SCREEN_COUNTERS)[name]
+            for slope in (0, 37.79, 1e6):
+                out = screen_checkpoint(self.linear(key, slope), 4.0, 3, run)
+                r = out["counters"][name]
+                self.assertEqual((r["status"], r["info"], r["threshold"]), ("info", True, None))
+                self.assertAlmostEqual(r["value"], slope)
+                self.assertNotEqual(out.get("counter"), name)
+                self.assertNotIn(name, " ".join(out.get("without", [])))
+        # It never decides a checkpoint alone: with only it computed, there's no ok.
+        alone = [(h, {"stored": p["stored"]}) for h, p in self.linear("x", 0)]
+        for h, p in alone:
+            p["mimalloc_committed_mib"] = 0.0 if h < 3 else None
+        alone = [(h, {k: v for k, v in p.items() if v is not None}) for h, p in alone]
+        out = screen_checkpoint(alone, 4.0, 3, run)
+        self.assertEqual(out["counters"]["mimalloc_committed_mib_per_1000_stored"]["status"], "info")
+        self.assertEqual(out["line"], "not_available(absent:mmap_cache_entries_per_1000_stored[main])")
 
     def test_a_trip_names_the_counter_value_and_threshold(self):
         run = config()
@@ -258,13 +301,16 @@ class RunTests(Base):
         s = self.screen(self.run_dir(r5))
         self.assertEqual([c["line"] for c in s["checkpoints"]], ["ok", "ok", "ok"])
         self.assertEqual(s["overall"]["line"], "ok")
-        # Every input counted, none quietly skipped.
+        # Every input counted, none quietly skipped; mimalloc's growth shown, not judged.
         for c in s["checkpoints"]:
-            self.assertEqual(len(c["counters"]), 14)
-            self.assertTrue(all(r["status"] == "ok" for r in c["counters"].values()))
+            self.assertEqual(len(c["counters"]), 15)
+            self.assertEqual({n for n, r in c["counters"].items() if r["status"] != "ok"},
+                             {"mimalloc_committed_mib_per_1000_stored"})
+            self.assertEqual(c["counters"]["mimalloc_committed_mib_per_1000_stored"]["status"], "info")
+            self.assertLess(c["counters"]["anon_outside_mimalloc_mib_per_1000_stored"]["value"], 2)
 
-    def test_memory_is_not_a_screen_input(self):
-        """r5 read 6.58 MiB/h at 14.6 h; any memory series gives the same screen."""
+    def test_private_memory_is_not_a_screen_input(self):
+        """r5 read 6.58 MiB/h at 14.6 h; any private-memory series gives the same screen."""
         quiet = self.screen(self.run_dir(r5))
         def flat(h):
             s = r5(h)
@@ -464,18 +510,23 @@ class NeverAPassTests(Base):
 
 
 class MissingDataTests(Base):
-    def test_snapshots_without_the_new_metrics_are_not_available(self):
+    def test_snapshots_without_the_new_metrics_decide_on_the_rest_and_name_them(self):
         s = self.screen(self.run_dir(no_new_gauges))
+        absent = ["absent:anon_mappings_128k_512k_per_1000_stored", "absent:anon_mappings_128k_512k",
+                  "absent:fetch_held_mib"]
+        self.assertEqual(s["overall"]["line"], f"ok(without {', '.join(absent)})")
         for c in s["checkpoints"]:
-            self.assertEqual(c["status"], "not_available")
-            self.assertEqual(c["line"], "not_available(absent:anon_mappings_128k_512k_per_1000_stored)")
+            self.assertEqual(c["status"], "ok")
+            self.assertEqual(c["without"], absent)
+            self.assertEqual(c["line"], f"ok(without {', '.join(absent)})")
             for name, r in c["counters"].items():
-                if name.startswith(("anon", "fetch_held")):
+                if name.startswith(("anon_mappings", "fetch_held")):
                     self.assertEqual(r["status"], "absent", name)
                     self.assertIsNone(r["value"])
 
     def test_older_run_directories_still_analyze(self):
-        """r3's binary: no mmap, segment, memory or mapping gauges, and no frozen thresholds."""
+        """r3's binary: no mmap, segment, memory or mapping gauges, and no frozen thresholds.
+        The pool's key count is still read, so the screen decides on that and names the rest."""
         def r3(h):
             s = r5(h)
             s["prom"] = {}
@@ -483,8 +534,19 @@ class MissingDataTests(Base):
         report = analyze(self.run_dir(r3, frozen=False), now=NOW)
         self.assertIsNotNone(report["memory_fit"]["slope_mib_per_hour"])
         self.assertEqual(report["screen"]["thresholds"]["source"], "analyzer_not_frozen")
-        self.assertTrue(all(c["status"] == "not_available" for c in report["screen"]["checkpoints"]))
+        for c in report["screen"]["checkpoints"]:
+            self.assertEqual(c["status"], "ok")
+            self.assertEqual({n for n, r in c["counters"].items() if r["status"] == "ok"}, {"fetch_pending"})
+            self.assertEqual(len(c["without"]), 13)
         self.assertIn("aren't frozen", markdown(report))
+        # With the pool's count gone too there's nothing usable: not_available.
+        def bare(h):
+            s = r5(h)
+            s["prom"], s["fetch_pending"] = {}, -1  # negative: no reading
+            return s
+        report = analyze(self.run_dir(bare, frozen=False), now=NOW)
+        self.assertEqual(report["screen"]["overall"]["line"],
+                         "not_available(absent:mmap_cache_entries_per_1000_stored[main])")
 
     def test_a_missing_checkpoint_doesnt_shift_the_others(self):
         s = self.screen(self.run_dir(r5, keep=lambda h: not 5.5 < h <= 6.0))
@@ -523,19 +585,21 @@ class MissingDataTests(Base):
         self.assertEqual([c["line"] for c in self.screen(root)["checkpoints"]],
                          ["ok", "not_available(identity_change)", "not_available(identity_change)"])
 
-    def test_the_windows_collector_reports_linux_only_gauges_not_available(self):
-        """cr0-soak.ps1 evidence: no /proc gauges, so no mapping counts; nothing trips."""
+    def test_the_windows_collector_names_linux_only_gauges_and_decides_on_the_rest(self):
+        """cr0-soak.ps1 evidence: no /proc gauges, so no mapping counts or RssAnon; nothing trips."""
         def windows(h):
             s = r5(h)
-            s["prom"] = {k: v for k, v in s["prom"].items() if not k.startswith("mem_anon")}
+            s["prom"] = {k: v for k, v in s["prom"].items() if not k.startswith(("mem_anon", "mem_rss"))}
             return s
         run = {"commit": "a" * 40, "common_sha256": "b" * 64, "os": "Microsoft Windows 11",
                "settings": {"baseline_hours": 24, "intensity": "balanced", "leg": "main", "rehearsal": False}}
         s = self.screen(self.run_dir(windows, run=run, frozen=False))
         for c in s["checkpoints"]:
-            self.assertEqual(c["line"], "not_available(absent:anon_mappings_128k_512k_per_1000_stored)")
+            self.assertEqual(c["line"], "ok(without absent:anon_mappings_128k_512k_per_1000_stored, "
+                                        "absent:anon_mappings_128k_512k, "
+                                        "absent:anon_outside_mimalloc_mib_per_1000_stored)")
             rest = {n: r["status"] for n, r in c["counters"].items() if not n.startswith("anon")}
-            self.assertEqual(set(rest.values()), {"ok"}, rest)
+            self.assertEqual(set(rest.values()), {"ok", "info"}, rest)
 
 
 class FreezingTests(Base):

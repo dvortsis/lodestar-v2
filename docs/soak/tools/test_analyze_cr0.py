@@ -1090,5 +1090,154 @@ class AnalyzerTests(unittest.TestCase):
         self.assertEqual(report["run_state"], "detached_service_running")
 
 
+
+# X-soak-screen-calibrate: the screen against r4- and r5-shaped runs. Every value is
+# invented; the shapes follow the committed aggregates only (r5's replayed mimalloc
+# growth of 37.79 MiB per 1,000 stored and RssAnon 0.86 MiB/h; r4's 47 MiB in 1.9 h,
+# about 63% outside mimalloc, at about 680 stored an hour). No owner soak data.
+SCREEN_MIB = 2**20
+
+
+def screen_r5_replay(h):
+    """A pass: mimalloc fills at 37.79 MiB per 1,000 stored to hour 4, then flat at
+    568 MiB; RssAnon outside it rises 0.86 MiB/h with noise; every gauge present."""
+    stored = 900 + 695 * h
+    committed = 568 - 37.79 * max(0.0, 695 * 4 - (stored - 900)) / 1000
+    files, main = round(8 + 13 * ((h / 1.5) % 1)), round(3 + 3 * ((h / 2.3) % 1))
+    prom = {'search_mmap_cache_entries{index="files"}': 5 * files + 4,
+            'search_mmap_cache_entries{index="main"}': 6 * main,
+            'search_segments{index="files"}': files, 'search_segments{index="main"}': main,
+            'mem_anon_mappings{size="128k_512k"}': 2,
+            "mem_mimalloc_committed_bytes": committed * SCREEN_MIB,
+            "mem_rss_anon_bytes": (committed + 40 + 0.86 * h + 3 * math.sin(h * 5)) * SCREEN_MIB,
+            "fetch_held_bytes": 20 * SCREEN_MIB}
+    return {"torrents": stored, "fetch_pending": 200000}, prom
+
+
+def screen_r4_replay(h):
+    """A fail, shaped like r4's collector: no mapping gauge and no main-index segment
+    count (so mmap_cache_excess[main] is absent), mimalloc nearly flat, and anonymous
+    memory outside it growing 22.9 MiB per 1,000 stored (47 x 0.63 / (1.9 x 680 / 1,000))."""
+    values, prom = screen_r5_replay(h)
+    stored = 900 + 680 * h
+    values["torrents"] = stored
+    committed = 500 + 0.5 * h
+    del prom['mem_anon_mappings{size="128k_512k"}'], prom['search_segments{index="main"}']
+    prom["mem_mimalloc_committed_bytes"] = committed * SCREEN_MIB
+    prom["mem_rss_anon_bytes"] = (committed + 60 + 22.9 * (stored - 900) / 1000) * SCREEN_MIB
+    return values, prom
+
+
+def screen_text(prom):
+    return "".join(f"lodestar_{k} {v:.0f}\n" for k, v in prom.items())
+
+
+def screen_points(shape, drop=()):
+    """(hour, inputs) every minute to hour 12.5, through the analyzer's own parser."""
+    from analyze_cr0 import screen_inputs
+    out = []
+    for i in range(12 * 60 + 31):
+        values, prom = shape(i / 60)
+        values = {k: v for k, v in values.items() if k not in drop}
+        prom = {k: v for k, v in prom.items() if k not in drop}
+        out.append((i / 60, screen_inputs(values, screen_text(prom))))
+    return out
+
+
+# Each raw input, and the judged counters that go without a reading when it's absent.
+SCREEN_INPUT_COUNTERS = {
+    "torrents": ["mmap_cache_entries_per_1000_stored[main]", "mmap_cache_entries_per_1000_stored[files]",
+                 "segments_per_1000_stored[main]", "segments_per_1000_stored[files]",
+                 "anon_mappings_128k_512k_per_1000_stored", "anon_outside_mimalloc_mib_per_1000_stored"],
+    "fetch_pending": ["fetch_pending"],
+    'search_mmap_cache_entries{index="main"}': ["mmap_cache_entries_per_1000_stored[main]",
+                                                "mmap_cache_excess[main]"],
+    'search_mmap_cache_entries{index="files"}': ["mmap_cache_entries_per_1000_stored[files]",
+                                                 "mmap_cache_excess[files]"],
+    'search_segments{index="main"}': ["mmap_cache_excess[main]", "segments_per_1000_stored[main]",
+                                      "segments[main]"],
+    'search_segments{index="files"}': ["mmap_cache_excess[files]", "segments_per_1000_stored[files]",
+                                       "segments[files]"],
+    'mem_anon_mappings{size="128k_512k"}': ["anon_mappings_128k_512k_per_1000_stored", "anon_mappings_128k_512k"],
+    "mem_mimalloc_committed_bytes": ["mimalloc_committed_mib", "anon_outside_mimalloc_mib_per_1000_stored"],
+    "mem_rss_anon_bytes": ["anon_outside_mimalloc_mib_per_1000_stored"],
+    "fetch_held_bytes": ["fetch_held_mib"],
+}
+
+
+class ScreenCalibrationTests(unittest.TestCase):
+    """r5 (a pass) reads ok and r4 (a fail) trips, from shapes alone; an absent input
+    is named and the rest still decide; nothing usable at all is not_available."""
+
+    def setUp(self):
+        from analyze_cr0 import screen_config
+        here = Path(__file__).resolve().parent
+        self.run = screen_config(json.loads((here.parent / "screen-thresholds.json").read_text(encoding="utf-8")))
+
+    def checkpoints(self, points):
+        from analyze_cr0 import screen_checkpoint
+        return [screen_checkpoint(points, points[-1][0], h, self.run) for h in (3, 6, 12)]
+
+    def without(self, c):
+        return [m.split(":", 1)[1] for m in c.get("without", [])]
+
+    def test_the_r5_shape_doesnt_trip_and_mimallocs_fill_is_information_only(self):
+        cps = self.checkpoints(screen_points(screen_r5_replay))
+        self.assertEqual([c["line"] for c in cps], ["ok", "ok", "ok"])
+        fill = cps[0]["counters"]["mimalloc_committed_mib_per_1000_stored"]
+        self.assertEqual(fill["status"], "info")
+        self.assertAlmostEqual(fill["value"], 37.79, places=1)  # above the old threshold of 20
+        outside = [c["counters"]["anon_outside_mimalloc_mib_per_1000_stored"]["value"] for c in cps]
+        self.assertTrue(all(abs(v) < 8 / 1.5 for v in outside), outside)
+
+    def test_the_r4_shape_trips_on_memory_outside_mimalloc_at_every_checkpoint(self):
+        cps = self.checkpoints(screen_points(screen_r4_replay))
+        for c in cps:
+            self.assertEqual(c["status"], "trip", c["line"])
+            self.assertEqual(c["counter"], "anon_outside_mimalloc_mib_per_1000_stored")
+            self.assertRegex(c["line"], r"^trip\(anon_outside_mimalloc_mib_per_1000_stored, 22\.9[0-9], 8\)$")
+            # What it went without is still named in the JSON.
+            self.assertIn("mmap_cache_excess[main]", self.without(c))
+            self.assertIn("anon_mappings_128k_512k", self.without(c))
+
+    def test_each_absent_input_is_named_and_the_rest_still_decide(self):
+        for name, counters in SCREEN_INPUT_COUNTERS.items():
+            with self.subTest(input=name):
+                for c in self.checkpoints(screen_points(screen_r5_replay, drop={name})):
+                    self.assertEqual(c["status"], "ok", c["line"])
+                    self.assertEqual(sorted(self.without(c)), sorted(counters))
+                    self.assertTrue(c["line"].startswith("ok(without "), c["line"])
+                r4 = self.checkpoints(screen_points(screen_r4_replay, drop={name}))
+                if "anon_outside_mimalloc_mib_per_1000_stored" in counters:
+                    # r4's only tripping reading gone: the screen says so, and never trips on nothing.
+                    self.assertTrue(all(c["status"] == "ok" for c in r4), [c["line"] for c in r4])
+                    self.assertTrue(all("anon_outside_mimalloc_mib_per_1000_stored" in self.without(c) for c in r4))
+                else:
+                    self.assertTrue(all(c["counter"] == "anon_outside_mimalloc_mib_per_1000_stored" for c in r4))
+
+    def test_every_input_absent_is_not_available(self):
+        for c in self.checkpoints(screen_points(screen_r5_replay, drop=set(SCREEN_INPUT_COUNTERS))):
+            self.assertEqual(c["status"], "not_available")
+            self.assertEqual(c["line"], "not_available(absent:mmap_cache_entries_per_1000_stored[main])")
+            self.assertNotIn("without", c)
+
+    def test_through_the_analyzer_r5_reads_ok_and_r4_trips(self):
+        from test_screen import write_run, NOW
+        def shaped(shape):
+            def s(h):
+                values, prom = shape(h)
+                return {"stored": values["torrents"], "fetch_pending": values["fetch_pending"],
+                        "private_mib": 300, "prom": prom}
+            return s
+        with tempfile.TemporaryDirectory() as tmp:
+            r5 = analyze(write_run(Path(tmp) / "r5", shaped(screen_r5_replay), hours=13.0), now=NOW)
+            r4 = analyze(write_run(Path(tmp) / "r4", shaped(screen_r4_replay), hours=13.0), now=NOW)
+        self.assertEqual(r5["screen"]["overall"]["line"], "ok")
+        self.assertRegex(r4["screen"]["overall"]["line"], r"^trip\(anon_outside_mimalloc_mib_per_1000_stored, ")
+        self.assertIn("screen: trip(anon_outside_mimalloc_mib_per_1000_stored", markdown(r4))
+        # Advisory only: the gate's figures don't read the screen.
+        self.assertNotIn("screen", json.dumps(r4["memory_fit"]))
+
+
 if __name__ == "__main__":
     unittest.main()
