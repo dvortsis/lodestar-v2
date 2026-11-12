@@ -114,7 +114,12 @@ impl OpsApi for FakeOps {
 
     fn sources(&self) -> BoxFuture<'_, Result<Vec<Source>, OpsError>> {
         Box::pin(async {
+            // Every find of `adultsite` is Adult, as its manifest says: the
+            // same mask the drawer is given (`ALWAYS_ADULT_MASK`).
+            let mut adult_site = source(4, "adultsite", "Adult Site", "external", "discovery", &[]);
+            adult_site.always_adult = true;
             Ok(vec![
+                adult_site,
                 source(0, "dht", "Mainline DHT", "none", "discovery", &[]),
                 source(
                     1,
@@ -859,6 +864,15 @@ async fn interest_is_offered_only_with_show_adult_content_on() {
     let a = ok(&f, &cookie, item::MATCHED, ip(7)).await;
     let b = ok(&bare, &bare_cookie, item::MATCHED, ip(7)).await;
     assert_eq!(a["adult_enrichment"], b["adult_enrichment"]);
+    // The always-adult finder is known from the manifests, so a torrent it
+    // found and you didn't call Not adult is adult without the drawer too
+    // (X-always-adult-detail-mask); one you did call Not adult isn't.
+    let a = ok(&f, &cookie, item::ALWAYS_ADULT, ip(7)).await;
+    let b = ok(&bare, &bare_cookie, item::ALWAYS_ADULT, ip(7)).await;
+    assert_eq!(a["adult_enrichment"]["source"]["plugin"], "stashdb", "{a}");
+    assert_eq!(a["adult_enrichment"], b["adult_enrichment"]);
+    let b = ok(&bare, &bare_cookie, item::ALWAYS_ADULT_NOT_ADULT, ip(7)).await;
+    assert!(absent(&b), "{b}");
 }
 
 #[tokio::test]

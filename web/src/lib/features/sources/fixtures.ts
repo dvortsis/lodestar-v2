@@ -22,6 +22,7 @@ export const source = (over: Partial<Source> & { id: number; name: string }): So
 	egress: { live: null, setting: { route: 'direct' }, warnings: [] },
 	enabled: false,
 	endpoints: [],
+	always_adult: false,
 	finds_private: false,
 	health: { harvested_24h: 0, last_error: null, last_run: null, running: false, stored_24h: 0 },
 	kinds: ['discovery'],

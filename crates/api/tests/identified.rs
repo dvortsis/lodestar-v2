@@ -108,7 +108,11 @@ impl OpsApi for FakeOps {
 
     fn sources(&self) -> BoxFuture<'_, Result<Vec<Source>, OpsError>> {
         Box::pin(async {
+            // Every find of `adultsite` is Adult, as its manifest says.
+            let mut adult = source(5, "adultsite", "Adult Site", "external", "discovery", &[]);
+            adult.always_adult = true;
             Ok(vec![
+                adult,
                 source(0, "dht", "Mainline DHT", "none", "discovery", &[]),
                 source(
                     1,
@@ -255,9 +259,16 @@ mod item {
     pub const ACCOUNT: usize = 10;
     /// An ambiguous name over a show's episode, resolved via the plugin.
     pub const PLUGIN: usize = 11;
+    /// Found by the always-adult source, answered, and not reclassified
+    /// Adult yet (the window before `adult_by_source`).
+    pub const ADULT_FINDER: usize = 12;
+    /// Found by the always-adult source, answered, then marked Not adult.
+    pub const NOT_ADULT_FINDER: usize = 13;
+    /// Found by a registered source this build doesn't run.
+    pub const GHOST: usize = 14;
 }
 
-const NAMES: [&str; 12] = [
+const NAMES: [&str; 15] = [
     "Some.Film.1994.1080p.BluRay.x264",
     "Other.Film.2001.1080p.BluRay.x264",
     "Private.Film.2002.1080p.BluRay.x264",
@@ -270,6 +281,9 @@ const NAMES: [&str; 12] = [
     "Bep27.Film.2008.1080p.BluRay.x264",
     "Account.Film.2009.1080p.BluRay.x264",
     "New Folder (2)",
+    "Finder.Film.2010.1080p.BluRay.x264",
+    "NotAdult.Film.2011.1080p.BluRay.x264",
+    "Ghost.Film.2012.1080p.BluRay.x264",
 ];
 
 struct Fixture {
@@ -325,16 +339,24 @@ fn full() -> Claims {
 }
 
 /// `interest`: whether the host says which sources are always adult
-/// (through `DrawerInterest`; none are, here).
+/// through `DrawerInterest` too, as well as through its manifests.
 fn fixture_with(interest: bool) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("t.db");
     let mut store = Store::open(&db, StoreConfig::default()).unwrap();
-    let ids_of: Vec<SourceId> = ["dht", "wikidata", "tmdb", "nyaa", "acctenr"]
-        .iter()
-        .map(|p| store.register_source(p, "1", 1_700_000_000).unwrap())
-        .collect();
-    let [dht, wikidata, tmdb, nyaa, acct] = ids_of[..] else {
+    let ids_of: Vec<SourceId> = [
+        "dht",
+        "wikidata",
+        "tmdb",
+        "nyaa",
+        "acctenr",
+        "adultsite",
+        "ghost",
+    ]
+    .iter()
+    .map(|p| store.register_source(p, "1", 1_700_000_000).unwrap())
+    .collect();
+    let [dht, wikidata, tmdb, nyaa, acct, adultsite, ghost] = ids_of[..] else {
         panic!()
     };
     assert_eq!(
@@ -354,6 +376,8 @@ fn fixture_with(interest: bool) -> Fixture {
         let (source, extra_flags) = match i {
             item::PRIVATE => (dht, flags::PRIVATE_SOURCE),
             item::FINDER => (nyaa, 0),
+            item::ADULT_FINDER | item::NOT_ADULT_FINDER => (adultsite, 0),
+            item::GHOST => (ghost, 0),
             _ => (dht, 0),
         };
         store
@@ -396,9 +420,27 @@ fn fixture_with(interest: bool) -> Fixture {
         (item::ACCOUNT, acct, answer("Account Answer", 90)),
         (item::PLUGIN, wikidata, answer("Plugin Answer", 90)),
         (item::PLUGIN, tmdb, answer("Weaker Answer", 50)),
+        (item::ADULT_FINDER, wikidata, answer("Finder Answer", 90)),
+        (
+            item::NOT_ADULT_FINDER,
+            wikidata,
+            answer("NotAdult Answer", 90),
+        ),
+        (item::GHOST, wikidata, answer("Ghost Answer", 90)),
     ] {
         assert!(store.put_claims(ids[i], src, &claims, false).unwrap());
     }
+    assert!(
+        store
+            .set_correction(
+                ids[item::NOT_ADULT_FINDER],
+                lodestar_store::ClassCorrection {
+                    adult: Some(false),
+                    not_junk: false,
+                },
+            )
+            .unwrap()
+    );
     // The backfill resolves the ambiguous name with the surest answer, as
     // ENR-10 does.
     {
@@ -451,8 +493,9 @@ fn fixture_with(interest: bool) -> Fixture {
         }),
     );
     if interest {
+        // The same mask the manifests give: `adultsite` (source 5).
         app = app.layer(axum::Extension(lodestar_api::DrawerInterest::new(
-            0,
+            1 << 5,
             |_| true,
         )));
     }
@@ -660,15 +703,27 @@ async fn resolved_via_lists_only_the_listed_methods() {
     assert_eq!(alts[1]["chosen"], false);
 }
 
-/// While the host doesn't say which sources are always adult, no torrent
-/// can be confirmed not to be one's find: the section fails closed.
+/// In the binary's configuration, with no drawer installed, the
+/// always-adult sources come from the plugins' manifests: the section
+/// shows for an ordinary torrent, and never for one an always-adult
+/// source found (before its reclassification, or after you said Not
+/// adult) or one a source this build doesn't run found.
 #[tokio::test]
-async fn unknown_always_adult_sources_show_nothing() {
-    let f = fixture_with(false);
-    let c = session(&f).await;
-    for i in [item::TWO, item::PLUGIN, item::ACCOUNT] {
-        let body = ok(&f, &c, i).await;
-        assert!(absent(&body), "{i}: {body}");
+async fn the_manifests_say_which_finders_are_always_adult() {
+    for interest in [false, true] {
+        let f = fixture_with(interest);
+        let c = session(&f).await;
+        for i in [item::TWO, item::PLUGIN, item::ACCOUNT] {
+            let body = ok(&f, &c, i).await;
+            assert!(!absent(&body), "{interest} {i}: {body}");
+        }
+        for i in [item::ADULT_FINDER, item::NOT_ADULT_FINDER, item::GHOST] {
+            let r = detail(&f, &c, i).await;
+            assert_eq!(r.status, StatusCode::OK, "{interest} {i}: {}", r.text);
+            let body: Value = serde_json::from_str(&r.text).unwrap();
+            assert!(absent(&body), "{interest} {i}: {body}");
+            assert!(!r.text.contains("Answer"), "{interest} {i}: {}", r.text);
+        }
     }
 }
 

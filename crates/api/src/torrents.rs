@@ -108,6 +108,8 @@ pub(crate) struct PluginName {
     /// The hosts its manifest contacts, as `protocol://host`: the only
     /// places an adult-enrichment link of its may point.
     pub endpoints: Vec<String>,
+    /// Everything it finds is Adult (its manifest's `always_adult`).
+    pub always_adult: bool,
 }
 
 /// Display names and privacy by manifest id.
@@ -252,6 +254,7 @@ fn plugin_name(src: crate::ops::Source) -> (String, PluginName) {
             name: src.name,
             public,
             endpoints: src.endpoints,
+            always_adult: src.always_adult,
         },
     )
 }
@@ -266,6 +269,9 @@ pub(crate) struct SourceEntry {
     /// run (or no pipeline is served), whose class isn't known: a public
     /// caller sees none of those.
     pub public: Option<bool>,
+    /// Everything it finds is Adult; `None` when this build doesn't run
+    /// its plugin (or no pipeline is served), whose manifest isn't known.
+    pub always_adult: Option<bool>,
 }
 
 /// The store's sources by id, named from [`plugin_names`].
@@ -283,6 +289,7 @@ impl Catalogue {
                 id: row.id.get(),
                 name: known.map_or_else(|| row.plugin.clone(), |n| n.name.clone()),
                 public: known.map(|n| n.public),
+                always_adult: known.map(|n| n.always_adult),
                 plugin: row.plugin,
             });
         }
@@ -298,6 +305,32 @@ impl Catalogue {
             by_id[i] = Some(e);
         }
         Catalogue { by_id }
+    }
+
+    /// The registered sources whose every find is Adult, as a bitset over
+    /// source ids: the same rule `AdultSources::of` applies to the
+    /// pipeline's manifests (X-always-adult-detail-mask), read from the
+    /// listing the host always serves. Only the known ones: a source
+    /// whose manifest isn't known isn't in it ([`Catalogue::adult_or_unknown`]).
+    pub(crate) fn always_adult_bits(&self) -> u64 {
+        self.by_id
+            .iter()
+            .flatten()
+            .filter(|e| e.always_adult == Some(true))
+            .fold(0, |bits, e| {
+                bits | 1u64.checked_shl(u32::from(e.id)).unwrap_or(0)
+            })
+    }
+
+    /// Of `bits` (a torrent's finders), the sources that are always adult
+    /// **or can't be confirmed not to be**: a bit with no registered
+    /// source, or a source whose plugin this build doesn't run. For a
+    /// check that must fail closed.
+    pub(crate) fn adult_or_unknown(&self, bits: u64) -> u64 {
+        (0..MAX_SOURCES)
+            .filter(|&id| bits & (1u64 << id) != 0)
+            .filter(|&id| self.get(id).is_none_or(|e| e.always_adult != Some(false)))
+            .fold(0, |out, id| out | (1u64 << id))
     }
 
     pub(crate) fn get(&self, id: u8) -> Option<&SourceEntry> {
@@ -636,11 +669,10 @@ pub(crate) async fn detail(
     // Read once, so the 404, the section and the lookup agree.
     let adult_shown = s.adult.shown();
     let names = plugin_names(&s).await;
-    let always_adult = interest.as_ref().map_or(0, |i| i.0.0.always_adult);
-    // `None` while the host hasn't said which sources are always adult:
-    // the "Identified as" section can't confirm a torrent isn't one's
-    // find, so it fails closed (runner, 2026-11-12).
-    let always_adult_known = interest.as_ref().map(|i| i.0.0.always_adult);
+    // The drawer's mask, when the host installs one; the catalogue's,
+    // from the manifests, always (X-always-adult-detail-mask). Both come
+    // from the same manifests, so they agree; the union is used anyway.
+    let drawer_adult = interest.as_ref().map_or(0, |i| i.0.0.always_adult);
     let (detail, wanted) = tokio::task::spawn_blocking(move || {
         let (row, tree) = load(&s, &hash, adult_shown)?;
         // Opening a torrent is interest: scrape it soon (§15).
@@ -651,6 +683,7 @@ pub(crate) async fn detail(
         let summary = swarm::summary(&store, s.hot.as_deref(), &row).map_err(internal)?;
         let more = swarm::detail(&store, &summary, row.id).map_err(internal)?;
         let catalogue = Catalogue::read(&store, &names).map_err(internal)?;
+        let always_adult = catalogue.always_adult_bits() | drawer_adult;
         let claims = store.torrent_claims(row.id).map_err(internal)?;
         let provenance = catalogue.provenance(&row, &claims, viewer);
         // Only for the admin with "Show adult content" on (§20.9), only
@@ -680,15 +713,14 @@ pub(crate) async fn detail(
         } else {
             (None, false)
         };
-        let identified = identified_section(
-            &store,
-            &row,
-            &claims,
-            &catalogue,
-            viewer,
-            always_adult_known,
-        )
-        .map_err(internal)?;
+        // The finders that are always adult, or can't be confirmed not to
+        // be (fail closed). `None` only when the plugins couldn't be listed
+        // at all: nothing is known, so no section shows.
+        let finders_adult = (!names.is_empty())
+            .then(|| catalogue.adult_or_unknown(row.sources) | (drawer_adult & row.sources));
+        let identified =
+            identified_section(&store, &row, &claims, &catalogue, viewer, finders_adult)
+                .map_err(internal)?;
         drop(store);
         let id = row.id;
         let detail = detail_of(&row, &tree, summary, more, provenance, section, identified);
@@ -750,10 +782,11 @@ pub(crate) async fn files(
 /// enrichment plugin's stored answer (ENR-10), for `viewer`. `None` when
 /// there's nothing to show.
 ///
-/// - **Fails closed while the always-adult sources are unknown**
-///   (`always_adult` is `None`: the host hasn't installed
-///   [`DrawerInterest`]): no section at all, since no torrent can be
-///   confirmed not to be an always-adult source's find.
+/// - **Fails closed on always-adult finders.** `always_adult` is the
+///   torrent's finders that are always adult or can't be confirmed not to
+///   be ([`Catalogue::adult_or_unknown`]); any one hides the section.
+///   `None` when nothing is known (the plugins couldn't be listed): no
+///   section at all.
 /// - **Never wider than the detail view, and stricter where unsure.**
 ///   None for a torrent that's hidden, held (a tombstone or quarantine on
 ///   a swarm hash), private in any way (`PRIVACY`: a private source, BEP
@@ -1302,6 +1335,7 @@ pub(crate) mod tests {
                 plugin: plugin.into(),
                 name: name.into(),
                 public,
+                always_adult: Some(false),
             })
             .collect(),
         )
@@ -1536,6 +1570,7 @@ pub(crate) mod tests {
             plugin: plugin.into(),
             name: plugin.into(),
             public,
+            always_adult: Some(false),
         };
         let c = Catalogue::of(vec![
             entry(0, "dht", Some(true)),
@@ -1604,6 +1639,7 @@ pub(crate) mod tests {
             plugin: plugin.into(),
             name: plugin.into(),
             public,
+            always_adult: Some(false),
         };
         let c = Catalogue::of(vec![
             entry(0, "dht", Some(true)),
@@ -1627,6 +1663,42 @@ pub(crate) mod tests {
         );
     }
 
+    /// The catalogue's always-adult bits are the listed sources whose
+    /// manifest says so, by source id (`AdultSources::of`'s rule), and
+    /// every finder it can't vouch for counts as always adult where that
+    /// fails closed (X-always-adult-detail-mask).
+    #[test]
+    fn the_always_adult_mask_follows_the_manifests_and_fails_closed() {
+        let manifests = [
+            (0u8, "dht", false),
+            (3, "adultsite", true),
+            (7, "other", true),
+        ];
+        let entry = |id: u8, plugin: &str, always_adult: Option<bool>| SourceEntry {
+            id,
+            plugin: plugin.into(),
+            name: plugin.into(),
+            public: Some(true),
+            always_adult,
+        };
+        let c = Catalogue::of(
+            manifests
+                .iter()
+                .map(|&(id, plugin, adult)| entry(id, plugin, Some(adult)))
+                .chain([entry(9, "unknown", None)])
+                .collect(),
+        );
+        assert_eq!(c.always_adult_bits(), (1 << 3) | (1 << 7));
+        // Of a torrent's finders: the always-adult one, the one whose
+        // manifest isn't known (9), and a bit with no source at all (12).
+        let finders = 1 | (1 << 3) | (1 << 9) | (1 << 12);
+        assert_eq!(c.adult_or_unknown(finders), (1 << 3) | (1 << 9) | (1 << 12));
+        assert_eq!(c.adult_or_unknown(1), 0, "the DHT is vouched for");
+        // An unknown source isn't counted as always adult where that would
+        // widen something: only the known ones are in the bits.
+        assert_eq!(c.always_adult_bits() & (1 << 9), 0);
+    }
+
     /// Every text is cut to its limit on a character boundary, however
     /// the row was written.
     #[test]
@@ -1647,6 +1719,7 @@ pub(crate) mod tests {
             plugin: "w".into(),
             name: "W".into(),
             public: Some(true),
+            always_adult: Some(false),
         };
         let a = identification(&Claims::default(), &d, 250, &src);
         let t = a.canonical_title.unwrap();
@@ -1782,6 +1855,7 @@ pub(crate) mod tests {
                         name: format!("P{i}"),
                         public: true,
                         endpoints: Vec::new(),
+                        always_adult: false,
                     },
                 )
             })
@@ -2081,6 +2155,7 @@ pub(crate) mod tests {
                     plugin: plugin.into(),
                     name: names[plugin].name.clone(),
                     public: Some(names[plugin].public),
+                    always_adult: Some(names[plugin].always_adult),
                 })
                 .collect(),
         );
