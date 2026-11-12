@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T11:03:21Z",
+  "updated_at": "2026-11-12T11:06:14Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7943,6 +7943,11 @@
       "pr": 752,
       "sha": "7d47fa86ea1b923dd2613b22b696a80bd0f225fd",
       "at": "2026-11-12T11:03:21Z"
+    },
+    {
+      "pr": 747,
+      "sha": "500cb692cdf00568a9a26b5ec73d1be7a603bed2",
+      "at": "2026-11-12T11:06:14Z"
     }
   ],
   "active_sessions": {
@@ -8180,7 +8185,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T11:03:21Z",
+    "updated": "2026-11-12T11:06:14Z",
     "items": [
       {
         "slot": 1,
@@ -8238,11 +8243,11 @@
       },
       {
         "slot": 12,
-        "slice": "D-outputs-guide",
+        "slice": "X-outputs-guide-nits",
         "role": "docs",
         "agent": "claude",
-        "doing": "#747: main in, Figure 7.2 regen after #749 merged",
-        "since": "2026-11-12T09:38:52Z",
+        "doing": "#747 merged; docs nits N1-N3 follow-up",
+        "since": "2026-11-12T11:06:14Z",
         "status": "active"
       },
       {
@@ -8313,7 +8318,7 @@
     }
   ],
   "heartbeat": "2026-11-12T09:44:56Z",
-  "updated": "2026-11-12T11:03:21Z",
+  "updated": "2026-11-12T11:06:14Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
