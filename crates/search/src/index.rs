@@ -1469,6 +1469,7 @@ impl SearchIndex {
             hot: self.hot.as_ref(),
             utc_offset,
             buckets,
+            visible: &[],
         };
         let compile::Parts {
             query,
@@ -2335,6 +2336,14 @@ mod population_tests {
 
     const HEAP: usize = 15 << 20;
 
+    /// This build's generations with `payload_sig`'s producer shipping
+    /// its next one, so every existing index walks it.
+    fn sig_shipped() -> Generations {
+        let g = Generations::current();
+        let next = g.get("payload_sig").unwrap() + 1;
+        g.with("payload_sig", next)
+    }
+
     fn store(n: usize) -> Store {
         use lodestar_bencode::{OwnedValue, to_vec};
         let mut store = Store::open_in_memory(lodestar_store::StoreConfig::default()).unwrap();
@@ -2541,9 +2550,7 @@ mod population_tests {
         while w.catch_up(store, 100).unwrap() > 0 {}
         w.commit().unwrap();
         drop(w);
-        index
-            .with_generations(Generations::current().with("payload_sig", 1))
-            .unwrap()
+        index.with_generations(sig_shipped()).unwrap()
     }
 
     #[test]
@@ -2604,9 +2611,7 @@ mod population_tests {
         while w.catch_up(&mut store, 100).unwrap() > 0 {}
         w.commit().unwrap();
         drop(w);
-        let index = index
-            .with_generations(Generations::current().with("payload_sig", 1))
-            .unwrap();
+        let index = index.with_generations(sig_shipped()).unwrap();
         let mut w = index.writer(HEAP).unwrap();
         // Exactly the 9 stored: the cursor stops at 9.
         assert_eq!(w.catch_up_counted(&mut store, 9).unwrap().backfilled, 9);
@@ -2651,7 +2656,7 @@ mod population_tests {
         w.commit().unwrap();
         drop(w);
         // One producer ships and walks a third of the way...
-        let first = Generations::current().with("payload_sig", 1);
+        let first = sig_shipped();
         let index = index.with_generations(first.clone()).unwrap();
         let mut w = index.writer(HEAP).unwrap();
         assert_eq!(w.catch_up_counted(&mut store, 10).unwrap().backfilled, 10);

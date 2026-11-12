@@ -5,10 +5,11 @@ use std::sync::Arc;
 
 use lodestar_classify::Category;
 use lodestar_store::{Col, HotColumns};
+use tantivy::Searcher;
 use tantivy::Term;
 use tantivy::query::{
-    AllQuery, BooleanQuery, BoostQuery, ConstScoreQuery, EmptyQuery, FuzzyTermQuery, Occur,
-    PhraseQuery, Query, RangeQuery, RegexQuery, TermQuery, TermSetQuery,
+    AllQuery, BooleanQuery, BoostQuery, ConstScoreQuery, EmptyQuery, EnableScoring, FuzzyTermQuery,
+    Occur, PhraseQuery, Query, RangeQuery, RegexQuery, TermQuery, TermSetQuery, Weight,
 };
 use tantivy::schema::{Field, IndexRecordOption};
 
@@ -49,6 +50,10 @@ pub(crate) struct Cx<'a> {
     /// `file_ext_bucket`) are complete, so [`bucket_clause`]s read them
     /// ([`search_file_clauses`] says which file sets that needs).
     pub buckets: bool,
+    /// The query's visibility clauses, compiled ([`visibility_clause`]):
+    /// set by [`compile`] for `sig:<info hash>`, whose reference torrent
+    /// must pass them ([`SamePayload`]). Callers pass `&[]`.
+    pub visible: &'a [Q],
 }
 
 impl std::ops::Deref for Cx<'_> {
@@ -399,6 +404,16 @@ pub(crate) fn compile(node: &Node, f: &Cx<'_>, now: i64) -> Parts {
         Node::And { of } => of.iter().collect(),
         n => vec![n],
     };
+    let visible: Vec<Q> = of
+        .iter()
+        .filter(|n| visibility_clause(n))
+        .filter_map(|n| compile_opt(n, f, now))
+        .collect();
+    let cx = Cx {
+        visible: &visible,
+        ..*f
+    };
+    let f = &cx;
     // Hot-column and time-of-day clauses aren't in the index: at the top
     // level they're always checked in the collector, negated ones too, and
     // never drive (a filter-only query becomes everything, checked).
@@ -1055,7 +1070,120 @@ fn compile_opt(node: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
             )),
             _ => Box::new(EmptyQuery),
         },
+        Node::Sig { sig } => match (hex8(sig), hex20(sig)) {
+            (Some(sig), _) => sig_term(f.payload_sig, sig),
+            (None, Some(hash)) if f.hash != ABSENT => Box::new(SamePayload {
+                hash,
+                hash_field: f.hash,
+                sig_field: f.payload_sig,
+                visible: Arc::new(f.visible.iter().map(|q| q.box_clone()).collect()),
+            }),
+            _ => Box::new(EmptyQuery),
+        },
     })
+}
+
+/// The documents whose `payload_sig` is `sig`; none on an index without
+/// the field. While a backfill fills it, only those done so far: the
+/// search reports it partial ([`Node::population_fields`]).
+fn sig_term(field: Field, sig: u64) -> Q {
+    if field == ABSENT {
+        return Box::new(EmptyQuery);
+    }
+    Box::new(TermQuery::new(
+        Term::from_field_u64(field, sig),
+        IndexRecordOption::Basic,
+    ))
+}
+
+/// `sig:<info hash>`, "same payload as this torrent": the torrent with
+/// that hash, and every torrent whose `payload_sig` is its. The signature
+/// is read when the query runs, from the snapshot it runs on, so a lease
+/// pages one answer. A torrent whose document doesn't carry it yet (a
+/// backfill hasn't reached it) or that has no content files matches only
+/// itself: never nothing while it's indexed. An info hash no indexed
+/// torrent has matches nothing.
+///
+/// **A withheld reference looks unknown** (B13's rule): the reference
+/// counts only if it passes the request's own visibility clauses
+/// (`visible`), so a torrent a filter rule hid, or an Adult one while
+/// Adult is hidden, resolves to nothing, and the query then matches only
+/// that torrent, which the same clauses remove: exactly what an unknown
+/// hash answers.
+#[derive(Debug, Clone)]
+pub(crate) struct SamePayload {
+    hash: [u8; 20],
+    hash_field: Field,
+    sig_field: Field,
+    visible: Arc<Vec<Q>>,
+}
+
+/// A clause the search adds for the request's visibility, in the shape
+/// it adds it (`api::search::base_query`): `hidden:no`
+/// ([`Node::without_hidden`]), `verified:yes`
+/// ([`Node::without_unverified`]) and `-type:adult` (Adult hidden). The
+/// user writing the same clause asks for the same thing.
+fn visibility_clause(n: &Node) -> bool {
+    match n {
+        Node::Flag { name, value: false } => name == "hidden",
+        Node::Verified { any } => any == &[Verified::Yes],
+        Node::Not { of } => matches!(
+            &**of,
+            Node::Tag { key: TagKey::Type, any } if any.len() == 1 && any[0] == "adult"
+        ),
+        _ => false,
+    }
+}
+
+impl SamePayload {
+    /// The signature of the torrent with this hash in `searcher`'s
+    /// snapshot, if it's indexed and its document carries one.
+    fn resolve(&self, searcher: &Searcher) -> tantivy::Result<Option<u64>> {
+        if self.sig_field == ABSENT {
+            return Ok(None);
+        }
+        let own: Q = Box::new(TermQuery::new(
+            Term::from_field_bytes(self.hash_field, &self.hash),
+            IndexRecordOption::Basic,
+        ));
+        let reference = BooleanQuery::new(
+            std::iter::once(own)
+                .chain(self.visible.iter().map(|q| q.box_clone()))
+                .map(|q| (Occur::Must, q))
+                .collect(),
+        );
+        let name = searcher.schema().get_field_name(self.sig_field);
+        // One torrent per hash: at most one live document matches.
+        let found = searcher.search(&reference, &tantivy::collector::DocSetCollector)?;
+        let Some(addr) = found.into_iter().min() else {
+            return Ok(None);
+        };
+        let seg = searcher.segment_reader(addr.segment_ord);
+        Ok(seg
+            .fast_fields()
+            .column_opt::<u64>(name)?
+            .and_then(|c| c.first(addr.doc_id)))
+    }
+}
+
+impl Query for SamePayload {
+    fn weight(&self, scoring: EnableScoring<'_>) -> tantivy::Result<Box<dyn Weight>> {
+        let searcher = scoring.searcher().ok_or_else(|| {
+            tantivy::TantivyError::InvalidArgument("sig: needs the searcher it runs on".into())
+        })?;
+        let own: Q = Box::new(TermQuery::new(
+            Term::from_field_bytes(self.hash_field, &self.hash),
+            IndexRecordOption::Basic,
+        ));
+        let q: Q = match self.resolve(searcher)? {
+            Some(sig) => Box::new(BooleanQuery::new(vec![
+                (Occur::Should, own),
+                (Occur::Should, sig_term(self.sig_field, sig)),
+            ])),
+            None => own,
+        };
+        q.weight(scoring)
+    }
 }
 
 /// Phrases and NEAR need word order, which only `name` keeps at the
@@ -1235,6 +1363,14 @@ pub(crate) fn regex_escape(s: &str) -> String {
         out.push(c);
     }
     out
+}
+
+/// [`crate::query::SIG_DIGITS`] hex digits as the signature.
+fn hex8(s: &str) -> Option<u64> {
+    if s.len() != crate::query::SIG_DIGITS || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    u64::from_str_radix(s, 16).ok()
 }
 
 fn hex20(s: &str) -> Option<[u8; 20]> {

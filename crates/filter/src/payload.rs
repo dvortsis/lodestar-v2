@@ -2,10 +2,12 @@
 //! sizes of a torrent's non-padding files, the same under any name. CS-8a
 //! (§20.5.1) blocks reposts of a CS-1 torrent by it, but only when the
 //! payload is specific enough that an unrelated torrent can't share it.
+//!
+//! The hash is `lodestar_classify::payload`'s, the one search indexes for
+//! `sig:` (GS-0), so "block this payload" and `sig:` always agree. This
+//! module adds CS-8a's specificity rule on top.
 
 use lodestar_classify::FileInfo;
-
-use crate::hash::fmix64;
 
 /// A payload at least this large is specific.
 pub const SPECIFIC_BYTES: u64 = 50 << 20;
@@ -24,26 +26,14 @@ pub struct PayloadSig {
 
 /// The signature of a torrent's files; `None` with no content files.
 pub fn payload_sig(files: &[FileInfo]) -> Option<PayloadSig> {
-    let mut sizes: Vec<u64> = files
-        .iter()
-        .filter(|f| !f.padding)
-        .map(|f| f.size)
-        .collect();
-    if sizes.is_empty() {
-        return None;
-    }
-    sizes.sort_unstable();
-    let mut h: u64 = 0x6c6f_6465_7374_6172; // "lodestar"
-    for s in &sizes {
-        h = fmix64(h ^ s);
-    }
-    let total: u64 = sizes.iter().fold(0u64, |a, &s| a.saturating_add(s));
-    let distinctive = sizes
-        .iter()
-        .filter(|&&s| s >= DISTINCTIVE && s % DISTINCTIVE != 0)
+    let sig = lodestar_classify::payload::payload_sig(files)?;
+    let content = || files.iter().filter(|f| !f.padding).map(|f| f.size);
+    let total: u64 = content().fold(0u64, |a, s| a.saturating_add(s));
+    let distinctive = content()
+        .filter(|&s| s >= DISTINCTIVE && s % DISTINCTIVE != 0)
         .count();
     Some(PayloadSig {
-        sig: fmix64(h ^ sizes.len() as u64),
+        sig,
         specific: total >= SPECIFIC_BYTES || distinctive >= SPECIFIC_FILES,
     })
 }
@@ -58,6 +48,35 @@ mod tests {
             .enumerate()
             .map(|(i, &s)| FileInfo::new(vec![format!("f{i}")], s))
             .collect()
+    }
+
+    /// CS-8a as it was before the hash moved to `classify` (GS-0): the
+    /// signature and the specificity of each, computed then.
+    #[test]
+    fn cs8a_golden() {
+        let cases: [(&[u64], u64, bool); 6] = [
+            (&[0], 0x45c7_cc7a_d09f_1bd7, false),
+            (&[0, 0], 0xf0f3_2bcd_c2b8_4f38, false),
+            (&[1, 2, 3], 0xc139_462d_0f89_1eb8, false),
+            (&[100_001, 200_003], 0xf90e_dc4d_82fd_355c, true),
+            (&[50 << 20], 0xa89f_7740_e0f3_d1ff, true),
+            (
+                &[u64::MAX, 1 << 63, 4_700_000_000],
+                0x132d_ea17_fc37_2d7d,
+                true,
+            ),
+        ];
+        for (sizes, sig, specific) in cases {
+            assert_eq!(
+                payload_sig(&files(sizes)),
+                Some(PayloadSig { sig, specific }),
+                "{sizes:?}"
+            );
+            assert_eq!(
+                lodestar_classify::payload::payload_sig(&files(sizes)),
+                Some(sig)
+            );
+        }
     }
 
     #[test]
@@ -78,9 +97,16 @@ mod tests {
         let plain = payload_sig(&f).unwrap();
         let mut pad = FileInfo::new(vec!["pad".into()], 16 << 10);
         pad.padding = true;
-        f.push(pad);
+        f.push(pad.clone());
         assert_eq!(payload_sig(&f).unwrap(), plain);
         assert_eq!(payload_sig(&[]), None);
+        assert_eq!(payload_sig(&[pad]), None);
+        // A padding file's size never counts toward specificity.
+        let mut big_pad = FileInfo::new(vec!["pad".into()], SPECIFIC_BYTES);
+        big_pad.padding = true;
+        let mut small = files(&[10]);
+        small.push(big_pad);
+        assert!(!payload_sig(&small).unwrap().specific);
     }
 
     #[test]

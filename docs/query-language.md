@@ -62,6 +62,7 @@ The rest of this page is the precise reference: every field, operator and error.
 - [Swarm health](#swarm-health)
 - [Files inside torrents](#files-inside-torrents)
 - [Pasting a hash or magnet link](#pasting-a-hash-or-magnet-link)
+- [Same payload under another name](#same-payload-under-another-name)
 - [How results are ranked](#how-results-are-ranked)
 - [Plurals fallback](#plurals-fallback)
 - [Counts, pages and "reload"](#counts-pages-and-reload)
@@ -421,6 +422,26 @@ hash:0123456789abcdef0123456789abcdef01234567
 - `hash:` and `magnet:` can be written explicitly too. A 32-character base32 hash isn't read yet.
 - If the torrent is Adult and Adult is hidden, you get "not found" (see [Adult](#hidden-torrents-and-adult)).
 
+## Same payload under another name
+
+`sig:` finds **clones**: torrents with exactly the same files, whatever they're called. The **payload signature** is a short code worked out from the sizes of a torrent's files (not their names or order, and leaving out padding files). Two torrents with the same signature almost always hold the same data. The exception is a small payload, or one made only of round sizes (one small file, say), which unrelated torrents can share by chance.
+
+```query
+sig:7a9f3c12dd0e44b1
+sig:0123456789abcdef0123456789abcdef01234567
+-sig:7a9f3c12dd0e44b1
+```
+
+- Give it a signature (16 hex digits) or the info hash of a torrent (40 hex digits, or a magnet link). With a hash, you get that torrent and every torrent with the same payload.
+- A torrent with no content files has no signature: by hash, it finds only itself.
+- After an upgrade, Lodestar fills in the signature of torrents it already had in the background. Until that's done, `sig:` finds only the torrents done so far, and the results say they may be incomplete.
+
+A shortened signature is an error, so a typo never quietly finds nothing:
+
+```query-fail
+sig:7a9f3c12 => use all 16 hex digits of a payload signature
+```
+
 ## How results are ranked
 
 Order **by relevance** is the default. Other sorts are `discovered`, `size`, `files`, `seeders`, `leechers`, `trackers` and `seen`, each ascending or descending.
@@ -567,14 +588,12 @@ These are in the plan but don't work today. Each gives an error that says so, an
 | Plan | Today |
 |---|---|
 | `/S0[1-9]E\d+/` regular expressions | *regex search arrives with the trigram index* |
-| `sig:` (identical payload) | *arrives with grouping keys (M7)* |
 | `resolved:plugin` | not a value; use `files`, `folder` or `structure` |
 
 Each of these fails with the message shown after `=>`:
 
 ```query-fail
 /S0[1-9]E\d+/ => regex search arrives
-sig:7a9f3c12 => arrives with grouping keys
 ```
 
 ## Limits

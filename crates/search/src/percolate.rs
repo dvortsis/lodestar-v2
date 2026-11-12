@@ -144,6 +144,18 @@ pub fn percolate(
     // Ids start at 1, so a watermark of 0 or below never changes a range.
     let term = |v: i64| Term::from_field_u64(id_field, v.max(0) as u64);
     for d in due {
+        // `sig:<info hash>` resolves its reference torrent through the
+        // query's own visibility clauses (`compile::SamePayload`). A saved
+        // search has none, so a withheld reference's clones would alert
+        // where an unknown hash alerts nothing: it runs with the default
+        // visibility instead (GS-0). Live queries carry their own.
+        let guarded;
+        let query = if !d.count_only && d.query.mentions_same_payload() {
+            guarded = d.query.clone().with_default_visibility();
+            &guarded
+        } else {
+            d.query
+        };
         let end = upto.min(d.watermark.saturating_add(limits.max_range.max(1)));
         if end <= d.watermark {
             continue;
@@ -158,7 +170,7 @@ pub fn percolate(
         let scan_cancel = (d.stoppable || !out.matched.is_empty()).then(|| cancel.clone());
         let compiled = match &scan_cancel {
             Some(token) => {
-                match index.compile_cancelled(d.query, now, d.utc_offset, d.stems, token) {
+                match index.compile_cancelled(query, now, d.utc_offset, d.stems, token) {
                     Ok(compiled) => compiled,
                     // Not run: it keeps its watermark, as a stopped scan does.
                     Err(Error::Cancelled | Error::OutOfTime) => {
@@ -168,7 +180,7 @@ pub fn percolate(
                     Err(e) => return Err(e),
                 }
             }
-            None => index.compile(d.query, now, d.utc_offset, d.stems),
+            None => index.compile(query, now, d.utc_offset, d.stems),
         };
         let range: Box<dyn Query> = Box::new(RangeQuery::new(
             Bound::Excluded(term(d.watermark)),
