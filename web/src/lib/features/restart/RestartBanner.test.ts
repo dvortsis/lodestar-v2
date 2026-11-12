@@ -188,13 +188,14 @@ it('Keep stays kept when an older /system read lands after it', async () => {
 	// A read that started before Keep and answers after it, with the old state.
 	let release!: (s: System) => void;
 	api.get.mockReturnValueOnce(new Promise<System>((done) => (release = done)));
-	void restart.refresh();
+	const stale = restart.refresh();
 	api.get.mockResolvedValue(awaiting(Date.now() / 1000 + 300));
 	await fireEvent.click(keep);
 	await until(() => expect(api.post).toHaveBeenCalledWith('/system/address/keep'));
 	await until(() => expect(screen.queryByText('Keep this address?')).toBeNull());
 	release(awaiting(Date.now() / 1000 + 300));
-	await new Promise((done) => setTimeout(done, 0));
+	// The stale read's own promise: it has landed (and been dropped) once this resolves.
+	await stale;
 	await tick();
 	expect(screen.queryByText('Keep this address?')).toBeNull();
 	expect(restart.system?.address_change).toBeNull();

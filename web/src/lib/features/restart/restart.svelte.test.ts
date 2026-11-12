@@ -47,20 +47,36 @@ it('a refresh after Keep asks again instead of joining the read from before it',
 	await restart.refresh();
 	let release!: (s: System) => void;
 	api.get.mockReturnValueOnce(new Promise<System>((done) => (release = done)));
-	void restart.refresh();
+	const stale = restart.refresh();
 	restart.setAddressChange(null);
 	api.get.mockResolvedValueOnce({ ...awaiting(), address_change: null });
 	await restart.refresh();
 	expect(api.get).toHaveBeenCalledTimes(3);
 	release(awaiting());
-	await Promise.resolve();
+	await stale;
 	expect(restart.system?.address_change).toBeNull();
 });
 
-it('a restart that began is newer than any read in flight, and reads pause while it lasts', async () => {
+it('reads pause while a restart lasts', async () => {
 	api.get.mockResolvedValueOnce(awaiting());
 	await restart.refresh();
 	restart.begin({ target: null, startedAt: 1, estimateSeconds: 4 });
 	await restart.refresh();
 	expect(api.get).toHaveBeenCalledTimes(1);
+});
+
+it('a read in flight when a restart starts is dropped even after the restart state is cleared', async () => {
+	api.get.mockResolvedValueOnce(awaiting());
+	await restart.refresh();
+	const before = restart.system;
+	let release!: (s: System) => void;
+	api.get.mockReturnValueOnce(new Promise<System>((done) => (release = done)));
+	const stale = restart.refresh();
+	// A restart starts, and is later cleared (a page that gave up, a test): `waiting` alone no
+	// longer says that this read is older than the restart.
+	restart.begin({ target: null, startedAt: 1, estimateSeconds: 4 });
+	restart.begin(null);
+	release({ ...awaiting(), address_change: null });
+	expect(await stale).toBe(true);
+	expect(restart.system).toBe(before);
 });
