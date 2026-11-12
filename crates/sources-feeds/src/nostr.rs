@@ -752,7 +752,8 @@ pub fn release(e: &Event) -> Option<Release> {
                 }
             }
             "t" => {
-                r.adult |= adult_term(v.trim());
+                let shown: String = v.chars().filter(|&c| !hidden_char(c)).collect();
+                r.adult |= adult_term(shown.trim());
                 push_tag(&mut r.tags, v);
             }
             "content-warning" => {

@@ -94,9 +94,19 @@ fn refused(msg: &str) -> Refused {
 // separators=(',', ':') and ensure_ascii=False, which agrees with NIP-01
 // for these characters) ──
 
+/// created_at, kind, tags, content, the canonical form, the id.
+type Vector = (
+    u64,
+    u16,
+    Vec<Vec<String>>,
+    &'static str,
+    &'static str,
+    &'static str,
+);
+
 #[test]
 fn canonical_golden_vectors() {
-    let cases: [(u64, u16, Vec<Vec<String>>, &str, &str, &str); 4] = [
+    let cases: [Vector; 4] = [
         (
             1_700_000_000,
             1,
@@ -476,7 +486,7 @@ fn unknown_kinds_are_ignored() {
 
 #[test]
 fn adult_tags_and_warnings() {
-    for t in ["nsfw", "NSFW", "porn", "xxx", "adult"] {
+    for t in ["nsfw", "NSFW", "porn", "xxx", "adult", " ns\u{200b}fw "] {
         assert!(
             release_of(&[&["x", HASH], &["t", t]], "").unwrap().adult,
             "{t}"
