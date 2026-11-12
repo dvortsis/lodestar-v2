@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T02:54:18Z",
+  "updated_at": "2026-11-12T02:55:46Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7062,7 +7062,10 @@
       "at": "2026-11-12T02:54:18Z"
     },
     "X-upd-stop-early is now unblocked (#709 and #715 merged; services.rs free): launch on the next free slot",
-    "owner FYI owed: #715 TZ-0 Torznab server merged (c5abcb85); adult off by default and separate from Show adult content"
+    "owner FYI owed: #715 TZ-0 Torznab server merged (c5abcb85); adult off by default and separate from Show adult content",
+    "X-upd-stop-early: brief written (briefs/X-upd-stop-early.md); runs in slot 4 after X-companion-pins-polish",
+    "owner FYI owed: #720 X-cmp13-installer-pins merged (65ce6ce4): installer pins from SourceForge at pin time only, bound to version by feed + tag date; no new run-time host",
+    "slices.yaml next runner PR: X-tz0-polish, X-companion-pins-polish, X-upd-stop-early entries"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7611,6 +7614,11 @@
       "pr": 715,
       "sha": "c5abcb854f6606fca89119abab08a0f7505b449b",
       "at": "2026-11-12T02:54:18Z"
+    },
+    {
+      "pr": 720,
+      "sha": "65ce6ce40513bc731b46cf8bb96845d634a94608",
+      "at": "2026-11-12T02:55:46Z"
     }
   ],
   "active_sessions": {
@@ -7845,7 +7853,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T02:54:18Z",
+    "updated": "2026-11-12T02:55:46Z",
     "items": [
       {
         "slot": 1,
@@ -7875,11 +7883,11 @@
       },
       {
         "slot": 4,
-        "slice": "X-cmp13-installer-pins",
+        "slice": "X-companion-pins-polish",
         "role": "slice",
         "agent": "session_01MMjhn9asevZ2GAyojLHZJZ",
-        "doing": "session_01MMjhn9asevZ2GAyojLHZJZ: installer pins (Opus, /security-review); waits for CMP-11b #711; dry-run inputs to runner",
-        "since": "2026-11-11T23:13:20Z",
+        "doing": "session_01MMjhn9asevZ2GAyojLHZJZ: companions README row, companion-pins.yml input text + concurrency; then X-upd-stop-early in the same session",
+        "since": "2026-11-12T02:55:46Z",
         "status": "active"
       },
       {
@@ -8007,7 +8015,7 @@
     }
   ],
   "heartbeat": "2026-11-12T00:38:52Z",
-  "updated": "2026-11-12T02:54:18Z",
+  "updated": "2026-11-12T02:55:46Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
