@@ -118,6 +118,20 @@ pub enum Unavailable {
     NeedsResolutionHistory,
     /// Identical-payload clones need the payload signature (M7).
     NeedsPayloadSignature,
-    /// The same file elsewhere needs per-file piece roots (M7).
+    /// The same file elsewhere needs per-file piece roots (M7), which
+    /// the serving index doesn't have.
     NeedsPieceRoots,
+    /// The torrent has no content files (only padding, or none), so it
+    /// has no payload signature and no files to look up.
+    NoContentFiles,
+    /// The same file elsewhere needs v2 piece roots, which a v1-only
+    /// torrent doesn't have.
+    NeedsV2Files,
+    /// The torrent's payload is too small, or made only of round sizes,
+    /// for an equal signature to mean the same content (CS-8a's
+    /// specificity rule), so identical payloads aren't matched.
+    PayloadNotSpecific,
+    /// Only part of the torrent's file list is stored (an import that
+    /// dropped files), so its sizes aren't its payload.
+    PartialFileList,
 }
