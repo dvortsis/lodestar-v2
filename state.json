@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T07:38:35Z",
+  "updated_at": "2026-11-12T07:51:58Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7133,6 +7133,16 @@
       "id": "X-restart-watch-nits",
       "note": "rv-745 nits: restart.rs:449 WATCH_SCRIPT_LIMIT doc still names Wait-Process (now loop deadline from ready); a ready just after the 60 s cap shows +60.0 s. Ride the next restart.rs touch.",
       "at": "2026-11-12T07:37:09Z"
+    },
+    {
+      "id": "X-snapshot-tier-purge",
+      "note": "UN-0 (#748): usenet rows deleted by a tier purge stay in older snapshots until pruned (snapshot_deletions holds 20-byte hashes only). Needs a tier-purged marker in snapshots.rs. Owner \u00a72.19 flag due.",
+      "at": "2026-11-12T07:51:58Z"
+    },
+    {
+      "id": "UN-1-cap-cost",
+      "note": "UN-0: the 1M cap count+evict costs ~160 ms per adding batch at 1M items inside the writer txn. Fix: (network,id) index in SRC-3b migration or a kept count; UN-1 must measure before enabling.",
+      "at": "2026-11-12T07:51:58Z"
     }
   ],
   "main_health": [
@@ -8168,7 +8178,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T07:38:35Z",
+  "updated": "2026-11-12T07:51:58Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -8387,7 +8397,7 @@
         "slice": "UN-0",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAdBqiEwP5PvJACUzA: building per briefs/UN-0.md (/security-review)",
+        "doing": "session_01MMjhnAdBqiEwP5PvJACUzA: PR #748 (66b125a2) CI running; awaiting ready",
         "since": "2026-11-12T07:04Z"
       }
     ],
