@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T04:01:05Z",
+  "updated_at": "2026-11-12T04:02:44Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7652,6 +7652,11 @@
       "pr": 727,
       "sha": "07e07b4361c1c292b219874fa38139ef7cfc076f",
       "at": "2026-11-12T04:01:05Z"
+    },
+    {
+      "pr": 730,
+      "sha": "66ca24b01f8aad948c76bb7180138990217579a8",
+      "at": "2026-11-12T04:02:44Z"
     }
   ],
   "active_sessions": {
@@ -7886,7 +7891,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T04:01:05Z",
+    "updated": "2026-11-12T04:02:44Z",
     "items": [
       {
         "slot": 1,
@@ -7916,11 +7921,11 @@
       },
       {
         "slot": 4,
-        "slice": "X-companion-pins-polish",
+        "slice": "X-upd-stop-early",
         "role": "slice",
         "agent": "session_01MMjhn9asevZ2GAyojLHZJZ",
-        "doing": "session_01MMjhn9asevZ2GAyojLHZJZ: companions README row, companion-pins.yml input text + concurrency; then X-upd-stop-early in the same session",
-        "since": "2026-11-12T02:55:46Z",
+        "doing": "PR #734 (adb01dbe) CI running",
+        "since": "2026-11-12T04:02:44Z",
         "status": "active"
       },
       {
@@ -8048,7 +8053,7 @@
     }
   ],
   "heartbeat": "2026-11-12T03:41:56Z",
-  "updated": "2026-11-12T04:01:05Z",
+  "updated": "2026-11-12T04:02:44Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
