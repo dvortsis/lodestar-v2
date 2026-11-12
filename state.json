@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T15:52:10Z",
+  "updated_at": "2026-11-12T15:59:55Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7359,6 +7359,11 @@
       "id": "X-un1-nits",
       "at": "2026-11-12T15:52:10Z",
       "note": "rv-762 nits (UN-1 #762, MERGE): (1) prowlarr.rs poll/usenet_due marks a usenet indexer polled before the request, so a failed/oversized page waits 1 h not 15 min, and results unsent when the 4,096 poll budget runs out wait 1 h (lost on >100/h indexers); mark polled only after a fully emitted 200, or fix the USENET_POLL_ITEMS doc; (2) unverified.rs UnverifiedStats::held doc vs usenet hold counted held, BT counts dropped; (3) lib.rs intake retried branch: defensive is_usenet() refusal; (4) CONFIG_SCHEMA usenet switch spends indexer API quota on items not visible or sendable until UN-3/UN-4: describe it or hide until UN-3 (runner UX call \u00a72.26); (5) switching usenet off leaves up to 1M rows until source purge; (6) tests/claim_trackers.rs shared edit unnamed in PR list. See reviews/rv-762-885c7717.md"
+    },
+    {
+      "id": "UN-4-usenet-off-purge",
+      "at": "2026-11-12T15:59:55Z",
+      "note": "rv-762 nit 5: switching usenet off leaves up to 1M stored usenet items until a source purge; UN-4 (or the source-purge path) removes them, or names it as a known gap"
     }
   ],
   "main_health": [
@@ -8109,6 +8114,11 @@
       "pr": 757,
       "sha": "385aae12ae497eda87a42ba962f85682a6b4a054",
       "at": "2026-11-12T14:46:26Z"
+    },
+    {
+      "pr": 762,
+      "sha": "d6acfeadb74778f8c8ceb84b28cb5664ee08a3bf",
+      "at": "2026-11-12T15:59:55Z"
     }
   ],
   "active_sessions": {
@@ -8346,7 +8356,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T15:41:01Z",
+    "updated": "2026-11-12T15:59:55Z",
     "items": [
       {
         "slot": 1,
@@ -8404,11 +8414,11 @@
       },
       {
         "slot": 12,
-        "slice": "UN-1",
+        "slice": "X-un1-nits",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAnAppXqNvpq32hgDM: #762 ready at 885c7717, fresh Opus /security-review running",
-        "since": "2026-11-12T12:41:40Z",
+        "doing": "session_01MMjhnAnAppXqNvpq32hgDM: #762 UN-1 merged (d6acfead); now rv-762 nits (briefs/X-un1-nits.md)",
+        "since": "2026-11-12T15:59:55Z",
         "status": "active"
       },
       {
@@ -8479,7 +8489,7 @@
     }
   ],
   "heartbeat": "2026-11-12T15:41:01Z",
-  "updated": "2026-11-12T15:52:10Z",
+  "updated": "2026-11-12T15:59:55Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
