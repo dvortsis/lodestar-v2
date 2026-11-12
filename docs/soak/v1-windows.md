@@ -14,7 +14,7 @@ A *service* is a program Windows starts by itself and keeps running in the backg
 ## Before you start
 
 - Windows 10 or 11, an administrator account, Python 3.12 or newer, and [PowerShell 7](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows) (`pwsh`).
-- At least 50 GB free on `C:`. Docker Desktop stopped. Windows set not to sleep (Settings → System → Power), and **Windows Update paused for 5 weeks** (Settings → Windows Update → Pause), because a forced restart ends the run.
+- At least 50 GB free on `C:`. Docker Desktop stopped. Windows set not to sleep (Settings → System → Power), and **Windows Update paused for 1 week** (Settings → Windows Update → Pause updates; you resume it in Phase 5), because a forced restart ends the run.
 - Do not run the soak on a PC whose Lodestar data you want to keep. If it has one, first [back up its data](../user/03-keep-lodestar-safe.md#37-back-up-and-restore), or use another PC.
 - Two installers: the MSI of the **last public release** before the RC (newest on the Releases page; v0.5.1 on 2026-11-12Z, so `<last-release>` below means `lodestar-0.5.1-x86_64.msi`) and the RC MSI. Check both as [section 4.2 of the user guide](../user/04-install-on-windows-and-linux.md#42-check-the-download-before-you-run-it) describes.
 - A copy of this repository, for `docs/soak/tools`.
@@ -40,7 +40,7 @@ New-Item -ItemType Directory C:\LodestarSoak | Out-Null
    $Before  = Get-SoakTorrentCount '127.0.0.1:8090'
    $FromVer = Get-SoakInstalledVersion   # information only
    $OldPid  = Get-SoakServiceIdentity Lodestar
-   $OldImg  = (Get-SoakServiceImage Lodestar).sha256
+   $OldImg  = (Get-SoakServiceImage Lodestar).sha256   # the runner compares it with lodestar.exe in <last-release>'s portable zip
    ```
 
 ## Phase 2: upgrade to the RC (about 10 min)
@@ -93,10 +93,12 @@ Leave the window open and the PC awake. To check progress, read `$Run\status.jso
 python "$Tools\analyze_cr0.py" $Run --output C:\LodestarSoak\report.md
 ```
 
+Resume Windows Update (Settings → Windows Update → Resume updates).
+
 Open `report.md`. The **Memory gate** says "meets the bar", and the **Windows 1.0 checks** section shows `pass` on all four lines: service restart, build binding, upgrade and uninstall. `absent` or `fail` on any of them is not a pass.
 
 ## What to send back
 
-Send the runner **`report.md`** (the runner checks `service_image_sha256` in `run.json` against the RC's published checksums), plus `$Run\run.json`, `$Run\result.json` and `$Run\lifecycle.json`. They hold versions, hashes, counts, memory figures and pass/fail lines only. The time-zone field is withheld in service mode.
+Send the runner **`report.md`** (the runner checks `service_image_sha256` in `run.json` against the `lodestar.exe` inside the RC's portable zip), plus `$Run\run.json`, `$Run\result.json` and `$Run\lifecycle.json`. They hold versions, hashes, counts, memory figures and pass/fail lines only. The time-zone field is withheld in service mode.
 
 **Never send** the raw `samples.jsonl` or `metrics` folder unless asked, the database, anything under `C:\ProgramData\Lodestar` (logs, keys, the setup token), your password, or screenshots of the web page. Keep them private.

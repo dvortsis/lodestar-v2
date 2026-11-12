@@ -231,7 +231,10 @@ function Get-SoakInstalledVersion([string]$Exe = (Join-Path $env:ProgramFiles 'L
     (& $Version $Exe) -replace '^\S+\s+', ''
 }
 
-function Save-SoakUpgrade([string]$Path, [string]$FromVersion, [string]$FromImageSha256, [long]$TorrentsBefore, [long]$PreviousStartTicks,
+function Save-SoakUpgrade([Parameter(Mandatory)][string]$Path, [string]$FromVersion,
+    [Parameter(Mandatory)][ValidatePattern('^[0-9A-Fa-f]{64}$')][string]$FromImageSha256,
+    [Parameter(Mandatory)][ValidateRange(1, [long]::MaxValue)][long]$TorrentsBefore,
+    [Parameter(Mandatory)][ValidateRange(1, [long]::MaxValue)][long]$PreviousStartTicks,
     [string]$Bind = '127.0.0.1:8090', [string]$Service = 'Lodestar', [string]$DataDir = (Join-Path $env:ProgramData 'Lodestar'),
     [string]$Exe = (Join-Path $env:ProgramFiles 'Lodestar\lodestar.exe'), [hashtable]$Probe = @{}) {
     # Run after the MSI upgrade finished. FromVersion, FromImageSha256 and PreviousStartTicks

@@ -1048,6 +1048,12 @@ class AnalyzerTests(unittest.TestCase):
         checks = self.checks(invalid=True, upgrade=self.GOOD_UP, uninstall=self.GOOD_UN)
         self.assertEqual((checks["upgrade"]["status"], checks["uninstall"]["status"]), ("pass", "pass"))
 
+    def test_list_values_fail_instead_of_raising(self):
+        rows = self.svc_rows()
+        rows[1]["service_start_ticks"] = [1, 2]
+        self.assertEqual(self.checks(rows)["service_restart"]["status"], "fail")
+        self.assertEqual(self.checks(bound=["x"])["build_binding"]["status"], "fail")
+
     def test_upgrade_must_land_on_the_bound_binary(self):
         same = {**self.GOOD_UP, "from_image_sha256": "b" * 64}
         other = {**self.GOOD_UP, "to_image_sha256": "c" * 64}

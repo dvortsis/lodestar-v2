@@ -855,8 +855,8 @@ def windows_checks(root, rows, result, run):
     no service restart, upgrade from the last release, clean uninstall. Each is
     pass, fail or absent (the evidence predates the field); none touches MEMORY_FIT."""
     checks = {}
-    seen = {(r["service_pid"], r.get("service_start_ticks")) for r in rows
-            if number(r.get("service_pid"))}
+    seen = {(r["service_pid"], json.dumps(r.get("service_start_ticks"), sort_keys=True)) for r in rows
+            if number(r.get("service_pid"))}  # json.dumps: a list in the file stays hashable
     starts = {r["values"]["start_time_seconds"] for r in rows
               if r.get("service_pid") is not None and number(r["values"].get("start_time_seconds"))}
     service_mode = bool(seen) or (run.get("settings") or {}).get("service_mode") is True
@@ -880,6 +880,8 @@ def windows_checks(root, rows, result, run):
                                      ("pass", f"one service process across {len(rows)} samples, window complete"))
     seen_hashes = {r["image_sha256"] for r in rows if isinstance(r.get("image_sha256"), str)}
     bound = run.get("service_image_sha256")
+    if not isinstance(bound, str):
+        bound = None  # a list or number can't match a hash; it fails below
     if not service_mode:
         checks["build_binding"] = ("absent", "not a service-mode run")
     elif not seen_hashes and bound is None:

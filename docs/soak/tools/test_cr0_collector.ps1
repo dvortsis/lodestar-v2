@@ -137,37 +137,59 @@ Assert $rejected 'missing torrent metric accepted'
 Assert ((Get-SoakInstalledVersion 'x.exe' { param($e) 'lodestar 1.0.0' }) -eq '1.0.0') 'version prefix stripped'
 
 $lifeDir = Join-Path ([IO.Path]::GetTempPath()) ('cr0-prod-' + [Guid]::NewGuid().ToString('N'))
-[void][IO.Directory]::CreateDirectory($lifeDir)
+$dataDir = Join-Path $lifeDir 'data'
+[void][IO.Directory]::CreateDirectory($dataDir)
 $lifePath = Join-Path $lifeDir 'lifecycle.json'
-function New-UpgradeProbe([hashtable]$Over = @{}) {
+$exePath = Join-Path $lifeDir 'installed.exe'
+$sameImage = Join-Path $lifeDir 'running-same.exe'
+$otherImage = Join-Path $lifeDir 'running-other.exe'
+$dataFile = Join-Path $dataDir 'db'
+$h0 = 'A' * 64
+foreach ($f in @($exePath, $sameImage)) { [IO.File]::WriteAllText($f, 'new build') }
+[IO.File]::WriteAllText($otherImage, 'old build')
+# Real files and folders: only the Windows service and process calls are replaced.
+function New-UpgradeProbe([string]$Image = $sameImage, [hashtable]$Over = @{}) {
     $probe = @{
         Identity = { param($n) @{ pid = 7; start_ticks = 500 } }
         Status = { param($n) 'Running' }
-        ProcessImage = { param($procId) 'image' }
-        Hash = { param($f) 'H1' }
-        Data = { param($d) $true }
+        ProcessImage = { param($procId) $Image }.GetNewClosure()
         Torrents = { param($b) 520 }
         Version = { param($e) '1.0.0' }
-        ServiceImage = { param($n) 'H1' }
+        ServiceImage = { param($n) 'B' * 64 }
     }
     foreach ($key in $Over.Keys) { $probe[$key] = $Over[$key] }
     $probe
 }
 function Read-Step([string]$Step) { (Get-Content -LiteralPath $lifePath -Raw | ConvertFrom-Json).$Step }
+function Save-Up([hashtable]$Probe, [string]$Data = $dataDir, [long]$Previous = 100) {
+    Save-SoakUpgrade $lifePath '0.5.1' $h0 500 $Previous -DataDir $Data -Exe $exePath -Probe $Probe
+}
 try {
-    Save-SoakUpgrade $lifePath '0.5.1' 'H0' 500 100 -Probe (New-UpgradeProbe)
+    [IO.File]::WriteAllText($dataFile, 'x')
+    Save-Up (New-UpgradeProbe)
     $up = Read-Step 'upgrade'
     Assert ($up.service_running -and $up.service_restarted -and $up.image_matches_installed -and $up.data_present) 'upgrade pass booleans'
-    Assert ($up.from_image_sha256 -eq 'H0' -and $up.to_image_sha256 -eq 'H1' -and $up.torrents_before -eq 500 -and $up.torrents_after -eq 520) 'upgrade values'
-    Save-SoakUpgrade $lifePath '0.5.1' 'H0' 500 500 -Probe (New-UpgradeProbe)
+    Assert ($up.from_image_sha256 -eq $h0 -and $up.to_image_sha256 -eq ('B' * 64) -and $up.torrents_before -eq 500 -and $up.torrents_after -eq 520) 'upgrade values'
+    Save-Up (New-UpgradeProbe) -Previous 500
     Assert (-not (Read-Step 'upgrade').service_restarted) 'same start time is not a restart'
-    Save-SoakUpgrade $lifePath '0.5.1' 'H0' 500 100 -Probe (New-UpgradeProbe @{ Data = { param($d) $false }; Status = { param($n) 'Stopped' }; Hash = { param($f) $f } })
-    $up = Read-Step 'upgrade'
-    Assert (-not $up.data_present -and -not $up.service_running -and -not $up.image_matches_installed) 'upgrade failure booleans'
+    Save-Up (New-UpgradeProbe $otherImage)
+    Assert (-not (Read-Step 'upgrade').image_matches_installed) 'a different running binary is not the installed one'
+    Save-Up (New-UpgradeProbe $sameImage @{ Status = { param($n) 'Stopped' } })
+    Assert (-not (Read-Step 'upgrade').service_running) 'stopped service'
+    [IO.File]::Delete($dataFile)
+    Save-Up (New-UpgradeProbe)
+    Assert (-not (Read-Step 'upgrade').data_present) 'empty data folder'
+    Save-Up (New-UpgradeProbe) -Data (Join-Path $lifeDir 'missing')
+    Assert (-not (Read-Step 'upgrade').data_present) 'missing data folder'
     $rejected=$false
-    try { Save-SoakUpgrade $lifePath '0.5.1' 'H0' 500 100 -Probe (New-UpgradeProbe @{ Identity = { param($n) throw 'Service is not running.' } }) } catch { $rejected=$true }
+    try { Save-Up (New-UpgradeProbe $sameImage @{ Identity = { param($n) throw 'Service is not running.' } }) } catch { $rejected=$true }
     Assert $rejected 'stopped service accepted'
-    Save-SoakUninstall $lifePath 'kept' -Probe @{ ServicePresent = { param($n) $false }; Exists = { param($d) $d -like '*Data*' } } -DataDir 'Data' -ProgramDir 'Program'
+    foreach ($bad in @(@('not-a-hash', 500, 100), @($h0, 0, 100), @($h0, 500, 0))) {
+        $rejected=$false
+        try { Save-SoakUpgrade $lifePath '0.5.1' $bad[0] $bad[1] $bad[2] -DataDir $dataDir -Exe $exePath -Probe (New-UpgradeProbe) } catch { $rejected=$true }
+        Assert $rejected "invalid upgrade baseline accepted: $($bad -join ',')"
+    }
+    Save-SoakUninstall $lifePath 'kept' -DataDir $dataDir -ProgramDir (Join-Path $lifeDir 'no-program') -Probe @{ ServicePresent = { param($n) $false } }
     $un = Read-Step 'uninstall'
     Assert (-not $un.service_present -and -not $un.program_files_present -and $un.data_present -and $un.data_policy -eq 'kept') 'uninstall record'
     Assert ((Read-Step 'upgrade') -ne $null) 'uninstall keeps the upgrade step'
@@ -175,7 +197,8 @@ try {
     try { Save-SoakUninstall $lifePath 'maybe' } catch { $rejected=$true }
     Assert $rejected 'unknown data policy accepted'
 } finally {
-    if ([IO.File]::Exists($lifePath)) { [IO.File]::Delete($lifePath) }
+    foreach ($f in @($lifePath, $exePath, $sameImage, $otherImage, $dataFile)) { if ([IO.File]::Exists($f)) { [IO.File]::Delete($f) } }
+    [IO.Directory]::Delete($dataDir)
     [IO.Directory]::Delete($lifeDir)
 }
 'Collector fault-injection assertions passed.'
