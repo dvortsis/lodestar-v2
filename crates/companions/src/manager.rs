@@ -766,12 +766,18 @@ impl Inner {
             return Err(Refusal::InContainer);
         }
         let (platform, arch) = self.p.host.platform.ok_or(Refusal::UnsupportedPlatform)?;
+        // An installer is yours to run, pinned or not (owner cq4): say so
+        // before the pin is looked at, so an unpinned one never reads as
+        // "Lodestar will install this once pinned" (#705's review, I3).
+        if entry
+            .artifact(platform, arch)
+            .is_some_and(|a| a.archive == ArchiveKind::Installer)
+        {
+            return Err(Refusal::GuidedOnly);
+        }
         let (a, pin) = entry
             .installable(platform, arch)
             .map_err(Refusal::NotAvailable)?;
-        if a.archive == ArchiveKind::Installer {
-            return Err(Refusal::GuidedOnly);
-        }
         if profile(id, Path::new(""), 0).is_none() || entry.health.is_none() {
             return Err(Refusal::NoProfile);
         }

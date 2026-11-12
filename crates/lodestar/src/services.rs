@@ -336,6 +336,30 @@ impl Services {
         let reenrich = pipeline_config.reenrich.clone();
         let quarantine_secs = pipeline_config.quarantine.as_secs() as i64;
         let control = Arc::new(Mutex::new(control));
+        // Prowlarr / Jackett (SRC-7, X-prowlarr-register): an Account
+        // source, registered off. The consent gate keeps it off in this
+        // build (`consent_text_approved` refuses every class but None, as
+        // for the torrent cache), and the Legal Notice says so (section 2).
+        // Its saved address and its API key are read here, once, so both
+        // apply together at the next start. A store that can't be read
+        // fails the start rather than registering it unconfigured.
+        let prowlarr = {
+            use lodestar_sources_plugins::prowlarr::{ID, Prowlarr};
+            let store = control.clone();
+            let saved = prowlarr_saved(
+                tokio::task::spawn_blocking(move || {
+                    let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                    store.source_setting(ID, lodestar_store::SourceSetting::Config)
+                })
+                .await?,
+            )?;
+            let credentials = Arc::new(lodestar_sources::consent::SourceCredentials::new(
+                control.clone(),
+                config.data_dir.clone(),
+            ));
+            Prowlarr::at_start(saved.as_deref(), credentials).await
+        };
+        plugins.push(Arc::new(prowlarr));
         // Companion recovery runs before anything could start one (CMP-5).
         let companions = if crate::fixture::active() {
             None
@@ -1226,6 +1250,47 @@ mod gate_tests {
         );
         pipeline.shutdown().await.unwrap();
         serving.shutdown().unwrap();
+    }
+}
+
+/// The Prowlarr source's saved settings as read at start: none saved, or
+/// the text, passed on; a store that can't read them fails the start,
+/// naming the setting and never its value (X-prowlarr-register). (A key
+/// that can't be read doesn't: `Prowlarr::at_start` pins that, and every
+/// run stops on it, so a restored backup without `secrets.key` still
+/// starts.)
+fn prowlarr_saved(
+    read: lodestar_store::Result<Option<String>>,
+) -> Result<Option<String>, BoxError> {
+    read.map_err(|e| format!("reading the Prowlarr source's settings: {e}").into())
+}
+
+#[cfg(test)]
+mod prowlarr_tests {
+    use super::*;
+
+    #[test]
+    fn a_store_error_reading_prowlarrs_settings_fails_the_start() {
+        let err = prowlarr_saved(Err(lodestar_store::Error::Corrupt("setting is not text")))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("reading the Prowlarr source's settings"),
+            "{err}"
+        );
+        assert!(err.contains("setting is not text"), "{err}");
+    }
+
+    #[test]
+    fn saved_or_missing_settings_pass_through() {
+        assert_eq!(prowlarr_saved(Ok(None)).unwrap(), None);
+        let saved = r#"{"url":"http://prowlarr.lan:9696/","manager":"prowlarr"}"#;
+        assert_eq!(
+            prowlarr_saved(Ok(Some(saved.to_string())))
+                .unwrap()
+                .as_deref(),
+            Some(saved)
+        );
     }
 }
 

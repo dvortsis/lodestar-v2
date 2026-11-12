@@ -94,11 +94,11 @@ fn peer_ttl_matches_the_thirty_minute_sentence() {
 fn registered_sources_and_consent_classes_match_section_2() {
     let n = read(NOTICE);
     let s2 = "2 (What Lodestar does on your network)";
-    // Services::start registers exactly these three plugins.
+    // Services::start registers exactly these four plugins.
     let services = read("crates/lodestar/src/services.rs");
     assert_eq!(
         services.matches("plugins.push(").count(),
-        3,
+        4,
         "Services::start registers a different set of source plugins; update {s2}'s \
          \"This version has:\" inventory and the built/planned class list"
     );
@@ -106,6 +106,7 @@ fn registered_sources_and_consent_classes_match_section_2() {
         ("DHT crawler", "plugins.push(dht)"),
         ("torrent cache", "plugins.push(cache.plugin.clone())"),
         ("Sonarr and Radarr webhooks", "plugins.push(arr)"),
+        ("Prowlarr or Jackett", "plugins.push(Arc::new(prowlarr))"),
     ] {
         assert!(
             services.contains(needle),
@@ -200,14 +201,87 @@ fn registered_sources_and_consent_classes_match_section_2() {
         "turned on through the API",
         "the consent gate refuses to enable it through the API too",
     );
-    // No Account, Restricted or Overlay source is registered.
+    // Prowlarr / Jackett is the one Account source, registered off and
+    // kept off by the same gate (X-prowlarr-register).
+    // Built as Lodestar builds it, unconfigured: its manifest and its
+    // endpoints are the plugin's own.
+    let creds = std::sync::Arc::new(lodestar_sources_plugins::StaticCredentials::default());
+    let unset = lodestar_sources_plugins::prowlarr::Prowlarr::unconfigured(creds);
+    let m = unset.manifest();
+    assert_eq!(
+        m.consent,
+        Consent::Account,
+        "Legal Notice section 2: Prowlarr's consent class changed"
+    );
+    assert!(
+        !m.enabled_by_default,
+        "Legal Notice section 2: Prowlarr is now on by default"
+    );
+    assert!(
+        m.finds_private,
+        "Legal Notice section 2: Prowlarr's finds are no longer marked private"
+    );
+    assert!(
+        m.endpoints.is_empty(),
+        "Legal Notice section 2: Prowlarr now has built-in hosts besides the address you give it"
+    );
+    assert!(
+        unset.endpoints().is_none(),
+        "Legal Notice section 2: an unconfigured Prowlarr may reach something"
+    );
+    assert!(
+        !lodestar_pipeline::control::consent_text_approved(m.consent),
+        "Legal Notice section 2 says Prowlarr or Jackett can't be turned on in this version, but \
+         the consent gate now lets its class through"
+    );
+    for phrase in [
+        "one Account source, **Prowlarr or Jackett**, which asks the indexer manager you run",
+        "Prowlarr or Jackett can't be turned on in this version either.",
+        "after you accept what an Account source does and enter its API key",
+        "Built: **Prowlarr or Jackett**, the indexer manager you run yourself.",
+        "Lodestar contacts only the address you give it",
+    ] {
+        require(
+            &n,
+            s2,
+            phrase,
+            "Prowlarr is registered, Consent::Account, gated off",
+        );
+    }
+    // Configured, it reaches the address you give it alone, under the
+    // download-client policy (the endpoints are built only from it).
+    let prowlarr = read("crates/sources-plugins/src/prowlarr.rs");
+    let endpoints = item(&prowlarr, "    pub fn endpoints(&self)");
+    let end = endpoints
+        .find("\n    }")
+        .expect("Prowlarr::endpoints' body; update tests/legal_facts.rs");
+    let endpoints = &endpoints[..end];
+    assert!(
+        endpoints.contains(
+            "Some(Endpoints::user_entered(NetPolicy::download_client()).only_origins(&[&c.base]))"
+        ),
+        "Legal Notice section 2: Prowlarr no longer contacts only the address you give it"
+    );
+    require(
+        &n,
+        s2,
+        "Lodestar never downloads a `.torrent` file from any indexer",
+        "Prowlarr reads indexers' listings only",
+    );
+    require(
+        &n,
+        s2,
+        "What private indexers report is marked private",
+        "Prowlarr marks private indexers' finds private",
+    );
+    // No Restricted or Overlay source is registered.
     for class in ["Account", "Restricted", "Overlay"] {
         require(&n, s2, &format!("- **{class}** sources"), "class list");
     }
     assert_eq!(
         n.matches("None is built yet.").count(),
-        3,
-        "Legal Notice section 2: Account, Restricted and Overlay are each \"None is built yet.\" in section 2"
+        2,
+        "Legal Notice section 2: Restricted and Overlay are each \"None is built yet.\" in section 2"
     );
 }
 

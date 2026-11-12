@@ -1847,6 +1847,7 @@ dependencies = [
 name = "lodestar-pipeline"
 version = "0.5.0"
 dependencies = [
+ "libc",
  "lodestar-bencode",
  "lodestar-classify",
  "lodestar-cluster",
