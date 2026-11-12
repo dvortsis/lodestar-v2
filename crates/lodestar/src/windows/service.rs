@@ -327,25 +327,57 @@ pub fn same_dir(a: &Path, b: &Path) -> bool {
     norm(a) == norm(b)
 }
 
-/// The config path when the arguments are a service command line (none,
-/// `serve`, and an optional `--config <path>`), else `None`: every other
+/// What a service command line runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// `serve` (or no subcommand): Lodestar itself.
+    Serve,
+    /// Plain `worker`: a worker of an existing Lodestar, from the
+    /// credentials the installer's one-shot `--join-only` saved (WK-18s).
+    Worker,
+}
+
+/// A service command line: its role and its optional `--config <path>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceCommand {
+    pub config: Option<PathBuf>,
+    pub role: Role,
+}
+
+/// The service command line the arguments are (none, `serve` or plain
+/// `worker`, and an optional `--config <path>`), else `None`: every other
 /// command runs as usual, without asking the SCM anything.
-pub fn service_command<I, T>(args: I) -> Option<Option<PathBuf>>
+pub fn service_command<I, T>(args: I) -> Option<ServiceCommand>
 where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString> + Clone,
 {
+    use crate::cli::Command;
     use clap::Parser;
     let cli = crate::cli::Cli::try_parse_from(args).ok()?;
-    // `serve --fixture` serves test data offline: never a service start.
-    matches!(
-        cli.command,
-        None | Some(crate::cli::Command::Serve {
+    let role = match cli.command {
+        // `serve --fixture` serves test data offline: never a service start.
+        None
+        | Some(Command::Serve {
             fixture: None,
-            child: false
-        })
-    )
-    .then_some(cli.config)
+            child: false,
+        }) => Role::Serve,
+        // Only with no flags: a service never joins (a token file would join
+        // again on every start), never rotates and keeps the default folder,
+        // which the start-up check secures.
+        Some(Command::Worker(crate::cli::worker::WorkerArgs {
+            join: None,
+            token_file: None,
+            data: None,
+            rotate_key: false,
+            join_only: false,
+        })) => Role::Worker,
+        _ => return None,
+    };
+    Some(ServiceCommand {
+        config: cli.config,
+        role,
+    })
 }
 
 #[cfg(windows)]
@@ -722,6 +754,8 @@ mod scm {
 
     /// The `--config` path from the command line, for `service_main`.
     static CONFIG_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+    /// What the command line runs, for `service_main`.
+    static ROLE: OnceLock<super::Role> = OnceLock::new();
     /// The service's exit code, for the process's.
     static EXIT: OnceLock<u32> = OnceLock::new();
     /// For the control handler, which runs on the dispatcher's thread.
@@ -733,12 +767,13 @@ mod scm {
     /// Runs Lodestar as a service if the SCM started this process with
     /// `config` from its command line, and returns its exit code once it
     /// has stopped; `None` for an ordinary run.
-    pub fn run_if_launched(config: Option<PathBuf>) -> Option<ExitCode> {
+    pub fn run_if_launched(command: super::ServiceCommand) -> Option<ExitCode> {
         // A service has no console; a console run needn't ask the SCM.
         if std::io::stdin().is_terminal() {
             return None;
         }
-        let _ = CONFIG_PATH.set(config);
+        let _ = CONFIG_PATH.set(command.config);
+        let _ = ROLE.set(command.role);
         // Fails at once (ERROR_FAILED_SERVICE_CONTROLLER_CONNECT) unless
         // the SCM started this process.
         service_dispatcher::start(NAME, ffi_service_main).ok()?;
@@ -847,10 +882,11 @@ mod scm {
                             error = lodestar_log::Error::kind(why)
                         );
                     }
-                    match config
-                        .map_err(BoxError::from)
-                        .and_then(|c| serve(&c, stop_rx))
-                    {
+                    let role = ROLE.get().copied().unwrap_or(super::Role::Serve);
+                    match config.map_err(BoxError::from).and_then(|c| match role {
+                        super::Role::Serve => serve(&c, stop_rx),
+                        super::Role::Worker => worker(&c, stop_rx),
+                    }) {
                         Ok(Ended::Stopped) => {
                             lodestar_log::log_event!(crate::logging::events::SERVICE_STOPPED);
                             0
@@ -1098,6 +1134,28 @@ mod scm {
         })
     }
 
+    /// The worker (WK-18s): `lodestar worker` from the saved credentials,
+    /// stopped gracefully by the SCM's Stop or Shutdown. It has no store,
+    /// web page or Restart now; an error is reported as for `serve` (code 1),
+    /// so the SCM's recovery restarts it. Its progress lines have no log
+    /// event yet, so only the service's own events are logged.
+    fn worker(config: &Config, stop: watch::Receiver<bool>) -> Result<Ended, BoxError> {
+        std::fs::create_dir_all(&config.data_dir)?;
+        let args = crate::cli::worker::WorkerArgs {
+            join: None,
+            token_file: None,
+            data: None,
+            rotate_key: false,
+            join_only: false,
+        };
+        let mut stop = stop;
+        let stopping = async move { stopped(&mut stop).await };
+        let report: crate::worker::session::Report = std::sync::Arc::new(|_: &str| {});
+        crate::cli::worker::run_until(config, args, stopping, report)
+            .map(|()| Ended::Stopped)
+            .map_err(|e| BoxError::from(e.to_string()))
+    }
+
     /// Resolves once a stop is requested.
     async fn stopped(stop: &mut watch::Receiver<bool>) {
         while !*stop.borrow_and_update() {
@@ -1129,7 +1187,14 @@ mod scm {
 mod tests {
     use super::*;
 
+    /// The `--config` path of a serve command line.
     fn command(s: &str) -> Option<Option<PathBuf>> {
+        let c = role_of(s)?;
+        assert_eq!(c.role, Role::Serve, "{s}");
+        Some(c.config)
+    }
+
+    fn role_of(s: &str) -> Option<ServiceCommand> {
         service_command(std::iter::once("lodestar").chain(s.split_whitespace()))
     }
 
@@ -1367,6 +1432,30 @@ mod tests {
             "bogus",
         ] {
             assert_eq!(command(other), None, "{other}");
+        }
+    }
+
+    #[test]
+    fn only_a_plain_worker_command_line_is_a_worker_service() {
+        let worker = |config: Option<&str>| {
+            Some(ServiceCommand {
+                config: config.map(Into::into),
+                role: Role::Worker,
+            })
+        };
+        assert_eq!(role_of("worker"), worker(None));
+        assert_eq!(role_of("--config c.toml worker"), worker(Some("c.toml")));
+        // A service never joins (a token file would join on every start),
+        // rotates, or uses another folder than the one the start secures.
+        for other in [
+            "worker --join https://c:8091",
+            "worker --join https://c:8091 --token-file t",
+            "worker --join https://c:8091 --token-file t --join-only",
+            "worker --data D:\\w",
+            "worker --rotate-key",
+            "worker --help",
+        ] {
+            assert_eq!(role_of(other), None, "{other}");
         }
     }
 

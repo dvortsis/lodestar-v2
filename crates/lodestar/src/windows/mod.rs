@@ -43,9 +43,15 @@ pub fn hook() -> Option<ExitCode> {
         // Restart now for an ordinary run; a service sets its own method,
         // which never runs this.
         crate::system::Restart::global().set_prepare(Box::new(relaunch::start_successor));
-        let config_path = service::service_command(std::env::args_os())?;
-        if let Some(code) = service::run_if_launched(config_path.clone()) {
+        let command = service::service_command(std::env::args_os())?;
+        let config_path = command.config.clone();
+        let role = command.role;
+        if let Some(code) = service::run_if_launched(command) {
             return Some(code);
+        }
+        // An ordinary `lodestar worker` run starts as it always did.
+        if role == service::Role::Worker {
+            return None;
         }
         // An unreadable config is `main`'s to report.
         if let Ok(config) =
