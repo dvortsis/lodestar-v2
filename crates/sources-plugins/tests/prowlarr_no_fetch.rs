@@ -187,7 +187,8 @@ impl Fetch for Loopback {
     }
 }
 
-/// Runs one cycle of the plugin as `manager` against the fake manager
+/// Runs the plugin as `manager` until it asks for the indexer list a
+/// second time (one whole cycle), against the fake manager
 /// serving `pages` (request path, recorded body in `case`), with every URL
 /// in those bodies pointing at the trap, and checks that nothing but those
 /// paths was asked for and the trap was never reached.
@@ -272,6 +273,7 @@ async fn never_fetches_an_item(manager: Manager, case: &str, pages: &[(&str, &st
         lines, want,
         "only the list and the pages, never a download path"
     );
+    // At least: the second cycle may already have sent some of its own.
     assert!(got.len() >= finds, "the first cycle's finds: {got:#?}");
 }
 

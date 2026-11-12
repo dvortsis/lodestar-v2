@@ -13,5 +13,5 @@
     - every `.http` (any use of the client handle, including one passed to a helper), `.send(`, `.poll(` and `.poll_stream(` is one of four known lines: `http: kit.http,`, the two sends of `list_request()` and `page_request(ix)`, and `Job::poll`'s call (X-prowlarr-no-fetch-wait). A client reached by another name isn't seen, and the behavioural tests cover that;
     - the cut that leaves out unit tests matches any `#[cfg(test)] mod …`, not only `mod tests`; `src/prowlarr.rs` has none today.
   - **The source check is exact on purpose.** A rustfmt reflow or a rename fails it, and its message says what to re-check against the notice. That's the point of a backstop.
-  - **Checked against mutants.** Three temporary edits each failed every test: fetching the first item's `<link>` before emitting the finds, after emitting them, and from a detached task.
+  - **Checked against mutants.** Temporary edits that fetch the first item's `<link>` before emitting the finds, after emitting them, from a detached task, or through a helper each failed every test. A helper given `&self.http` that sends an already-built request with `Client::send(c, &r)` fails the source check alone (X-prowlarr-no-fetch-wait).
 - **No seam in `src/prowlarr.rs`:** the test drives the plugin through `FakeCtx::with_fetch`, as the plugin's other tests do.
