@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T02:09:24Z",
+  "updated_at": "2026-11-12T02:10:33Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7027,7 +7027,12 @@
       "at": "2026-11-12T02:06:22Z",
       "note": "crates/lodestar/src/logging/refs.rs:55 bans substring '0707' in a random HMAC ref (~1/13k). Fixed as approved shared edit in RX-0 #717's next push (assert_ne!(r, \"ref:07070707\")). Seen on #717 Windows re-run job 130910086928."
     },
-    "Next runner PR: add X-win-upd-history-polish slice entry (same session as #722, slot 5); owner FYI: #722 merged"
+    "Next runner PR: add X-win-upd-history-polish slice entry (same session as #722, slot 5); owner FYI: #722 merged",
+    {
+      "id": "X-flake-dht-scrape-join",
+      "at": "2026-11-12T02:10:33Z",
+      "note": "crates/dht/tests/scrape.rs scrape_lookup_estimates_the_swarm aborted (SIGABRT) on test (ubuntu-latest), run 43132875604 job 130905291698, #725 head 428b5230 (docs-only PR): tokio 1.54 harness.rs:426 / state.rs:387 'assertion failed: snapshot.is_join_interested()' after a panic-cannot-unwind (core panicking.rs:233). First sighting. Needs an Opus slice (DHT, concurrency): find which JoinHandle/abort path in dht node shutdown or scrape lookup triggers it; queue for next free slot. Not a fixed-sleep fix."
+    }
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7795,7 +7800,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T02:09:24Z",
+    "updated": "2026-11-12T02:10:33Z",
     "items": [
       {
         "slot": 1,
@@ -7957,7 +7962,7 @@
     }
   ],
   "heartbeat": "2026-11-12T00:38:52Z",
-  "updated": "2026-11-12T02:09:24Z",
+  "updated": "2026-11-12T02:10:33Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
