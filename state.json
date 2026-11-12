@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T13:49:37Z",
+  "updated_at": "2026-11-12T13:57:04Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7329,6 +7329,11 @@
       "id": "owner-q-un1-usenet-ref",
       "note": "UN-1 #762: L3 kept (no external_ref on private usenet finds). Its decisions file carries an open owner question with a proposed narrow rule (usenet:<id>:<guid>). Send with the UN-1 merge FYI; also flag USENET_POLL_EVERY hourly vs Q4 15 min (\u00a72.26, \u00a72.19).",
       "at": "2026-11-12T13:49:37Z"
+    },
+    {
+      "id": "m8-net-e2e-macos-time",
+      "note": "After #763 merges: read the e2e_search: line from main's macOS test job; record it in the next runner note; follow-up slice if > 5 s per hash.",
+      "at": "2026-11-12T13:57:04Z"
     }
   ],
   "main_health": [
@@ -8301,7 +8306,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T13:19:51Z",
+    "updated": "2026-11-12T13:57:04Z",
     "items": [
       {
         "slot": 1,
@@ -8326,7 +8331,7 @@
         "slice": "M8-NET-E2E",
         "role": "build",
         "agent": "session_01MMjhnAsZmQbQajtBLyTfXU",
-        "doing": "#756 merged; resuming parked M8-NET-E2E (bring main in, 20 local runs)",
+        "doing": "#763 open (2b30d5b6); awaiting Linux/Windows e2e_search times from CI, then ready",
         "since": "2026-11-12T13:19:51Z",
         "status": "active"
       },
@@ -8434,7 +8439,7 @@
     }
   ],
   "heartbeat": "2026-11-12T12:38:43Z",
-  "updated": "2026-11-12T13:49:37Z",
+  "updated": "2026-11-12T13:57:04Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
