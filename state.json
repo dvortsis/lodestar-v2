@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T11:40:16Z",
+  "updated_at": "2026-11-12T11:45:17Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7263,7 +7263,8 @@
       "id": "X-e2e-dispatch-release",
       "note": "e2e.yml workflow_dispatch runs heavy jobs only with update_snapshots; release branches get no dispatchable E2E. Consider a dispatch input to run (not regenerate) on a ref. Runner-owned CI improvement; owner decides workflow permission changes if any.",
       "at": "2026-11-12T11:40:16Z"
-    }
+    },
+    "X-dog-decisions-grammar: docs/decisions/2026-11-12-D-outputs-guide.md, the \"So section 7.5 maps...\" sentence has \"not by exact text\" misplaced after the bracketed-form sentence; fix in the next runner docs PR"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7973,6 +7974,11 @@
       "pr": 750,
       "sha": "2e6ae3ebcae8d395a21369cd36df677a697542c8",
       "at": "2026-11-12T11:10:14Z"
+    },
+    {
+      "pr": 758,
+      "sha": "1d681d928a7574bf1695fc57e9b5b58e0685c60f",
+      "at": "2026-11-12T11:45:17Z"
     }
   ],
   "active_sessions": {
@@ -8210,7 +8216,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T11:10:14Z",
+    "updated": "2026-11-12T11:45:17Z",
     "items": [
       {
         "slot": 1,
@@ -8268,12 +8274,12 @@
       },
       {
         "slot": 12,
-        "slice": "X-outputs-guide-nits",
-        "role": "docs",
-        "agent": "claude",
-        "doing": "#747 merged; docs nits N1-N3 follow-up",
-        "since": "2026-11-12T11:06:14Z",
-        "status": "active"
+        "slice": null,
+        "role": null,
+        "agent": null,
+        "doing": "#758 X-outputs-guide-nits merged; idle",
+        "since": "2026-11-12T11:45:17Z",
+        "status": "idle"
       },
       {
         "slot": 13,
@@ -8343,7 +8349,7 @@
     }
   ],
   "heartbeat": "2026-11-12T09:44:56Z",
-  "updated": "2026-11-12T11:40:16Z",
+  "updated": "2026-11-12T11:45:17Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
