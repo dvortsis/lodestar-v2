@@ -30,7 +30,7 @@ use super::{
 };
 use crate::compact::{self, CompactNodes, NodeId, NodeInfo};
 use crate::krpc::{self, Body, ErrorBody, Message, Method, Query, Response, Want, error_code};
-use crate::routing::{Contact, Inserted, RoutingTable, Status};
+use crate::routing::{Contact, Inserted, K, RoutingTable, Status};
 use crate::secure_id;
 use crate::state::{State, StateError};
 
@@ -54,6 +54,13 @@ const RECENT_SAMPLES: usize = 20;
 const MAX_GET_PEERS: usize = super::PEER_REQUEST_CAPACITY;
 const MAX_GET_PEERS_QUEUE: usize = MAX_GET_PEERS;
 const LOOKUP_DEADLINE: Duration = Duration::from_secs(25);
+/// The join refresh's levels at most, from the farthest: 2^32 nodes is
+/// far more than the DHT holds (about 2^23), so deeper levels would only
+/// cost queries.
+const JOIN_LEVELS: usize = 32;
+/// How long after a start owned get_peers requests may wait for the
+/// first self-lookup ([`Actor::parks_lookups`]).
+const PARK_DEADLINE: Duration = Duration::from_secs(30);
 const MAX_PEER_QUERIES: usize = 64;
 /// Share of the query budget spent on BEP 51 sampling; the rest stays
 /// free for routing maintenance and lookups.
@@ -412,6 +419,15 @@ struct Actor {
     epoch: Instant,
     bootstrap: Vec<SocketAddr>,
     last_bootstrap: Option<Instant>,
+    /// A self-lookup has finished since the start, found nodes or not:
+    /// owned lookups stop waiting for one ([`Actor::parks_lookups`]).
+    bootstrapped: bool,
+    /// Kademlia's join step: the far targets still to look up once, after
+    /// the first self-lookup that left nodes in the table. `None` until
+    /// then; drained a few at a time on the tick.
+    join_refresh: Option<Vec<(usize, NodeId)>>,
+    /// The join refresh has been planned (it runs once per start).
+    join_planned: bool,
     /// Bootstrap-router queries in flight, for `dht.bootstrap_unreachable`.
     seed_tids: Set<u64>,
     /// The last bootstrap's routers refused (policy or socket) and throttled
@@ -688,6 +704,9 @@ impl Actor {
                 .map(lodestar_network_policy::normalize)
                 .collect(),
             last_bootstrap: None,
+            bootstrapped: false,
+            join_refresh: None,
+            join_planned: false,
             seed_tids: Set::default(),
             seed_refused: 0,
             seed_throttled: 0,
@@ -1683,6 +1702,7 @@ impl Actor {
                 Some(hash),
                 false,
                 Some(owner),
+                false,
             );
         }
     }
@@ -1787,7 +1807,17 @@ impl Actor {
         // A hash-bearing lookup always starts, under the next id; the
         // waiter is in place before the first drive, which may finish it.
         self.scrape_waiters.insert(self.next_lookup, reply);
-        self.start_lookup_as(sockets, 0, NodeId(hash.0), &[], &[], Some(hash), true, None);
+        self.start_lookup_as(
+            sockets,
+            0,
+            NodeId(hash.0),
+            &[],
+            &[],
+            Some(hash),
+            true,
+            None,
+            false,
+        );
     }
 
     /// Answers a finished (or timed-out) scrape lookup with its counts.
@@ -1804,6 +1834,36 @@ impl Actor {
                 peers: peers.count(),
                 responders,
             }));
+        }
+    }
+
+    /// Whether owned get_peers requests wait in their queue rather than
+    /// start: right after a start with bootstrap routers to ask, before
+    /// the first self-lookup has finished and while no table holds [`K`]
+    /// nodes. A lookup started then has nobody to ask, or only a router's
+    /// neighbourhood, and ends empty; the routers are never asked on its
+    /// behalf (politeness, §2.33). After [`PARK_DEADLINE`] they start
+    /// anyway and end empty, as they did before parking.
+    fn parks_lookups(&self, now: Instant) -> bool {
+        !self.bootstrapped
+            && !self.bootstrap.is_empty()
+            && self.families.iter().all(|f| f.table.len() < K)
+            && now.duration_since(self.epoch) < PARK_DEADLINE
+    }
+
+    /// Starts the next join-refresh lookups, keeping the maintenance
+    /// lookups at half of [`MAX_LOOKUPS`] or fewer, so the stale-bucket
+    /// refresh and the re-bootstrap always have room. Owned get_peers
+    /// lookups don't count against it.
+    fn join_refresh_tick(&mut self, sockets: &[SendSocket]) {
+        while self.maintenance_lookups() < MAX_LOOKUPS / 2 {
+            let Some((f, target)) = self.join_refresh.as_mut().and_then(Vec::pop) else {
+                break;
+            };
+            self.start_lookup(sockets, f, target, &[], &[], None);
+        }
+        if self.join_refresh.as_ref().is_some_and(Vec::is_empty) {
+            self.join_refresh = None;
         }
     }
 
@@ -1828,7 +1888,7 @@ impl Actor {
         info_hash: Option<InfoHash>,
     ) {
         self.start_lookup_as(
-            sockets, family, target, known, seeds, info_hash, false, None,
+            sockets, family, target, known, seeds, info_hash, false, None, false,
         );
     }
 
@@ -1843,11 +1903,15 @@ impl Actor {
         info_hash: Option<InfoHash>,
         scrape: bool,
         owner: Option<u32>,
+        bootstrap: bool,
     ) {
         if info_hash.is_none() && self.maintenance_lookups() >= MAX_LOOKUPS {
             return;
         }
         let lid = self.insert_lookup(family, target, known, info_hash, scrape, owner);
+        if let Some(l) = self.lookups.get_mut(&lid) {
+            l.bootstrap = bootstrap;
+        }
         // A router answers in the family it sees the query arrive in. Through
         // NAT64 that's IPv4, so an IPv6 family asks for its own (BEP 32).
         let ipv6 = self.families[family].ipv6;
@@ -2061,6 +2125,28 @@ impl Actor {
         let Some(done) = self.lookups.remove(&lid) else {
             return;
         };
+        if done.bootstrap {
+            self.bootstrapped = true;
+            // The first self-lookup to leave nodes in the table plans the
+            // join refresh: every prefix length farther than our closest
+            // neighbour, once.
+            if !self.join_planned && self.families.iter().any(|f| !f.table.is_empty()) {
+                self.join_planned = true;
+                let mut targets = Vec::new();
+                for f in 0..self.families.len() {
+                    let rng = &mut self.rng;
+                    for t in self.families[f]
+                        .table
+                        .join_targets(JOIN_LEVELS, || rng.random())
+                    {
+                        targets.push((f, t));
+                    }
+                }
+                // Popped from the end: the farthest level goes first.
+                targets.reverse();
+                self.join_refresh = Some(targets);
+            }
+        }
         if done.scrape {
             self.finish_scrape(lid, &done);
         } else if let Some(owner) = done.owner {
@@ -2171,7 +2257,9 @@ impl Actor {
                 .copied()
                 .collect();
             let target = self.ids[0];
-            self.start_lookup(sockets, f, target, &known, &routers, None);
+            self.start_lookup_as(
+                sockets, f, target, &known, &routers, None, false, None, true,
+            );
         }
         // Every router refused at send, or none resolved.
         self.end_seed_round_if_done();
@@ -2250,6 +2338,7 @@ impl Actor {
                 .store(h.guard_len() as u64, Ordering::Relaxed);
         }
 
+        self.join_refresh_tick(sockets);
         for f in 0..self.families.len() {
             // Refresh stale buckets.
             let targets = {
@@ -2294,7 +2383,7 @@ impl Actor {
                 }
             }
         }
-        while !self.paused && self.active_get_peers < MAX_GET_PEERS {
+        while !self.paused && self.active_get_peers < MAX_GET_PEERS && !self.parks_lookups(now_i) {
             let Some((hash, reply, permit)) = self.get_peers_queue.pop_front() else {
                 break;
             };
@@ -2582,7 +2671,7 @@ mod tests {
         }
     }
 
-    fn fixture() -> (Actor, Vec<SendSocket>) {
+    pub(super) fn fixture() -> (Actor, Vec<SendSocket>) {
         let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         socket.set_nonblocking(true).unwrap();
         let addr = socket.local_addr().unwrap();
@@ -3934,3 +4023,7 @@ mod prefix_tests;
 #[cfg(test)]
 #[path = "shard_tests.rs"]
 mod shard_tests;
+
+#[cfg(test)]
+#[path = "join_tests.rs"]
+mod join_tests;
