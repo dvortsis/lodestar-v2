@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T07:34:41Z",
+  "updated_at": "2026-11-12T07:37:09Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7128,6 +7128,11 @@
       "id": "X-writer-upload-counters",
       "note": "UP-0: lease-free commits count uploads under WriterStats::torrent_cache; split when a slice owns writer.rs. Owner flag due: UP-0 private=1 via flags::PRIVATE/PRIVACY (not private_source); created-by dropped.",
       "at": "2026-11-12T07:19:20Z"
+    },
+    {
+      "id": "X-restart-watch-nits",
+      "note": "rv-745 nits: restart.rs:449 WATCH_SCRIPT_LIMIT doc still names Wait-Process (now loop deadline from ready); a ready just after the 60 s cap shows +60.0 s. Ride the next restart.rs touch.",
+      "at": "2026-11-12T07:37:09Z"
     }
   ],
   "main_health": [
@@ -7788,6 +7793,11 @@
       "sha": "833a0d251cf552ea1c5c2b7e249fdac8a398a725",
       "at": "2026-11-12T07:15:32Z",
       "base": "release/v0.5.2"
+    },
+    {
+      "pr": 745,
+      "sha": "65ecfe20182cb51bedcd527f6c49cf017736502a",
+      "at": "2026-11-12T07:37:09Z"
     }
   ],
   "active_sessions": {
@@ -8025,7 +8035,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T07:29:53Z",
+    "updated": "2026-11-12T07:37:09Z",
     "items": [
       {
         "slot": 1,
@@ -8074,11 +8084,11 @@
       },
       {
         "slot": 11,
-        "slice": "X-flake-portable-restart-3",
-        "role": "Opus slice",
-        "agent": "session_01MMjhn8cMB1NrRCcQ9XkWUg",
-        "doing": "PR #745 (b20bb8b3) CI running; runner accepted (a) timeline line, (b) 60->90 s, (c) exited+2s only if bind/lock checks still guard; archive after merge (\u00a72.59)",
-        "since": "2026-11-12T05:04:27Z",
+        "slice": "ENR-10",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhnBLbxrt4466ABDDCXp: building per briefs/ENR-10.md (/security-review); moved here from the lent extra slot after #745 merged",
+        "since": "2026-11-12T07:37:09Z",
         "status": "active"
       },
       {
@@ -8158,7 +8168,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T07:34:41Z",
+  "updated": "2026-11-12T07:37:09Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -8360,11 +8370,11 @@
         "doing": "infra/dev-vm/linux-lane.md priorities 1, 2, 4; crawl results are leads only"
       }
     ],
-    "note": "Tester holds 1 (Linux lane). It archived Windows phase 1 at ~07:30Z (stalled on a connector prompt) and lent the slot to the runner overnight; it asks before taking it back in the morning."
+    "note": "Tester holds 1 (Linux lane). It archived Windows phase 1 at ~07:30Z (stalled on a connector prompt) and lent the slot to the runner overnight; it asks before taking it back in the morning. Lent slot cleared 2026-11-12T07:37:09Z; tester not yet told (its session refuses cross-session messages without a trusted device)."
   },
   "extra": {
-    "updated": "2026-11-12T07:34:41Z",
-    "max": 3,
+    "updated": "2026-11-12T07:37:09Z",
+    "max": 2,
     "items": [
       {
         "slice": "GS-0",
@@ -8379,15 +8389,8 @@
         "agent": "claude",
         "doing": "session_01MMjhnAdBqiEwP5PvJACUzA: building per briefs/UN-0.md (/security-review)",
         "since": "2026-11-12T07:04Z"
-      },
-      {
-        "slice": "ENR-10",
-        "role": "build",
-        "agent": "claude",
-        "doing": "session_01MMjhnBLbxrt4466ABDDCXp: building per briefs/ENR-10.md (/security-review); in the slot lent overnight; moves to a build slot when one frees",
-        "since": "2026-11-12T07:34:41Z"
       }
     ],
-    "note": "\u00a72.60: runner holds 2 + 1 lent overnight by the tester; return it on request."
+    "note": "\u00a72.60: runner holds 2 (GS-0, UN-0). The slot lent overnight by the tester is clear again (ENR-10 moved to build slot 11 at 2026-11-12T07:37:09Z)."
   }
 }
