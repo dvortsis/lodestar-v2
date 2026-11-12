@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T07:26:36Z",
+  "updated_at": "2026-11-12T07:29:53Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8025,7 +8025,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T07:16:24Z",
+    "updated": "2026-11-12T07:29:53Z",
     "items": [
       {
         "slot": 1,
@@ -8086,7 +8086,7 @@
         "slice": "D-outputs-guide",
         "role": "docs",
         "agent": "claude",
-        "doing": "session_01MMjhnCM61Vu5obDjZWTpeu: #735 OUT-2 merged 8e40a635; D-outputs-guide per briefs/D-outputs-guide.md (same session)",
+        "doing": "session_01MMjhnCM61Vu5obDjZWTpeu: D-outputs-guide PR #747 (2ac5eaff) CI running; then X-out2-curl-wrap (Outputs curl example clipped at 1366 px; example host to match guide) in same session",
         "since": "2026-11-12T07:13:28Z",
         "status": "active"
       },
@@ -8158,7 +8158,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T07:26:36Z",
+  "updated": "2026-11-12T07:29:53Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
