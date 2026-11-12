@@ -229,7 +229,7 @@ bitmagnet takes the file at its import address. On the computer that has the fil
 curl --data-binary @<file> http://<bitmagnet-host>:3333/import
 ```
 
-Replace `<file>` with the file's name, such as `lodestar-export-20261112-093015.bitmagnet.ndjson`. Replace `<bitmagnet-host>` with the address of the computer running bitmagnet, and `3333` if you changed bitmagnet's port.
+Replace `<file>` with the file's name, such as `lodestar-export-20261112-093015.bitmagnet.ndjson`. Replace `<bitmagnet-host>` with the address of the computer running bitmagnet, such as `192.168.1.20`, or `localhost` if it's this computer. Replace `3333` if you changed bitmagnet's port.
 
 On Windows, in PowerShell, type `curl.exe` instead of `curl`, and put the file part in quotes, because PowerShell reads `@` itself:
 
