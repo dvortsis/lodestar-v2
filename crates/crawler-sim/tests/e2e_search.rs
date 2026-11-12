@@ -1,8 +1,8 @@
 //! The in-process DHT test network (architecture §17, M8-NET-E2E): about
 //! 50 real DHT nodes on loopback and fake peers serving known info dicts
 //! over the real peer wire. A fresh install's crawler joins, and every
-//! known torrent must be found by `/search` within 5 s of its peer
-//! starting to serve:
+//! known torrent must be returned by `/search` within 5 s of the crawler
+//! harvesting it:
 //!
 //! ```text
 //!  fake peers ──announce──▶ DHT nodes ◀──BEP 51 sample, get_peers── crawler (DhtSource)
@@ -14,14 +14,23 @@
 //!
 //! Everything from the crawler's socket to the search response is the
 //! production code; only the network around it is the test's.
+//!
+//! The clock (runner, 2026-11-12): §17 reads "harvest → fetch → store →
+//! index → search … within 5 s", so each hash's 5 s runs from the
+//! crawler's first sighting of it to `/search` returning it. How long
+//! the DHT takes to show the crawler a hash is asserted separately, with
+//! a 30 s deadline and no bar (its tail is the sampler-frontier finding
+//! in `docs/decisions/2026-11-12-M8-NET-E2E.md`).
 
 mod e2e;
 
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use e2e::app::App;
+use e2e::harvests;
 use e2e::net::{Client, Network};
 use e2e::torrents::{Rng, Torrent, WORD, generate};
 use e2e::wait::until;
@@ -36,24 +45,31 @@ const NODES: usize = 50;
 /// Honest peers, and the torrents each seeds.
 const PEERS: usize = 8;
 const PER_PEER: usize = 2;
-/// The pass bar (§17).
+/// The pass bar (§17), per hash, from harvest to searchable.
 const BAR: Duration = Duration::from_secs(5);
-/// The wait's own deadline: longer than the bar, so a miss says by how
-/// much.
-const DEADLINE: Duration = Duration::from_secs(20);
+/// Every served hash must be harvested by then (no bar; see above).
+const HARVEST_DEADLINE: Duration = Duration::from_secs(30);
+/// The search wait: past the last possible harvest plus the bar, so a
+/// miss reports how long it took.
+const SEARCH_DEADLINE: Duration = Duration::from_secs(40);
 
 fn hash(t: &Torrent) -> InfoHash {
     InfoHash(t.seed.info_hash)
 }
 
 /// One line on the test's real stderr, past libtest's capture, so CI logs
-/// keep the measured time of a passing run.
+/// keep the measured times of a passing run.
 fn report(line: &str) {
     let _ = writeln!(std::io::stderr(), "{line}");
 }
 
+fn ms(d: Duration) -> u128 {
+    d.as_millis()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn announced_torrents_are_searchable_within_five_seconds() {
+async fn every_harvested_torrent_is_searchable_within_five_seconds() {
+    harvests::record();
     let mut rng = Rng::new(SEED);
     let known = generate(&mut rng, PEERS * PER_PEER, "Known");
     let forged = generate(&mut rng, 1, "Forged").remove(0);
@@ -64,16 +80,7 @@ async fn announced_torrents_are_searchable_within_five_seconds() {
     // The network and an install, ready before any peer serves.
     let net = Network::start(NODES).await;
     let prepared = App::prepare();
-    let first = std::env::var_os("E2E_CRAWLER_FIRST").is_some();
-    let (mut early, mut prepared) = if first {
-        let app = prepared.start(net.bootstrap().to_string()).await;
-        app.joined().await;
-        (Some(app), None)
-    } else {
-        (None, Some(prepared))
-    };
 
-    // The clock starts as the peers start serving.
     let started = Instant::now();
     let mut peers = Vec::new();
     for chunk in known.chunks(PER_PEER) {
@@ -91,107 +98,142 @@ async fn announced_torrents_are_searchable_within_five_seconds() {
     let mut client = Client::new(client_id).await;
     for (chunk, peer) in known.chunks(PER_PEER).zip(&peers) {
         for t in chunk {
-            client
-                .announce(net.bootstrap(), hash(t), peer.addr().port())
-                .await;
+            client.announce(&net, hash(t), peer.addr().port()).await;
         }
     }
     client
-        .announce(net.bootstrap(), hash(&forged), liar.addr().port())
+        .announce(&net, hash(&forged), liar.addr().port())
         .await;
     // Asked about, so the network lists it, but nobody has it.
-    client.ask_only(net.bootstrap(), hash(&orphan)).await;
-    let announced = started.elapsed();
-    // The crawler starts once its swarms are announced: a node it had
+    client.ask_only(&net, hash(&orphan)).await;
+    // The crawler starts once the swarms are announced: a node it had
     // already sampled would wait out its BEP 51 interval (at least 60 s)
-    // before listing them.
-    let app = match early.take() {
-        Some(app) => app,
-        None => {
-            prepared
-                .take()
-                .unwrap()
-                .start(net.bootstrap().to_string())
-                .await
-        }
-    };
+    // before listing them, and a hash it saw passively before its
+    // announce would race it (both findings in the decisions file).
+    let app = prepared.start(net.bootstrap().to_string()).await;
 
+    // When `/search` first returned each known torrent (by name). Polled,
+    // so each is at or after the real moment: the measure only errs long.
+    let mut searchable: BTreeMap<[u8; 20], Instant> = BTreeMap::new();
     let app_ref = &app;
     let known_ref = &known;
-    // When the writer had stored them all: the rest is the indexer's.
-    let mut stored_at = None;
-    let stored_ref = &mut stored_at;
-    let mut stages: Vec<(u64, u64, Duration)> = Vec::new();
-    let stages_ref = &mut stages;
+    let seen = &mut searchable;
     let results = until(
         "every known torrent to be searchable",
-        DEADLINE,
+        SEARCH_DEADLINE,
         async || {
-            let stored = app_ref
-                .pipeline
-                .writer_stats()
-                .stored
-                .load(Ordering::Relaxed);
-            let rx = app_ref
-                .pipeline
-                .intake_stats()
-                .received
-                .load(Ordering::Relaxed);
-            let f = app_ref
-                .pipeline
-                .pool_stats()
-                .fetched
-                .load(Ordering::Relaxed);
-            if stages_ref.last().map(|l| (l.0, l.1)) != Some((rx, f)) {
-                stages_ref.push((rx, f, started.elapsed()));
-            }
-            if stored_ref.is_none() && stored >= known_ref.len() as u64 {
-                *stored_ref = Some(started.elapsed());
-            }
             let r = app_ref.search(WORD, 100).await;
-            let missing: Vec<&str> = known_ref
+            let now = Instant::now();
+            for t in known_ref {
+                if r.hits.iter().any(|h| h.name == t.name) {
+                    seen.entry(t.seed.info_hash).or_insert(now);
+                }
+            }
+            let missing: Vec<String> = known_ref
                 .iter()
-                .filter(|t| !r.hits.iter().any(|h| h.name == t.name))
-                .map(|t| t.name.as_str())
+                .filter(|t| !seen.contains_key(&t.seed.info_hash))
+                .map(|t| {
+                    let harvested = harvests::sampled(&t.seed.info_hash).is_some();
+                    format!("{} (harvested: {harvested})", t.name)
+                })
                 .collect();
             if missing.is_empty() {
                 Ok(r)
             } else {
+                let queue: Vec<String> = app_ref
+                    .pipeline
+                    .monitor()
+                    .pool()
+                    .snapshot()
+                    .await
+                    .iter()
+                    .map(|k| {
+                        format!(
+                            "{:02x}{:02x}:{}",
+                            k.info_hash.0[0], k.info_hash.0[1], k.attempts
+                        )
+                    })
+                    .collect();
+                let pool = app_ref.pipeline.pool_stats();
+                let dht = app_ref.dht.stats().unwrap_or_default();
                 Err(format!(
-                    "{} of {} missing: {missing:?}",
+                    "{} of {} missing: {missing:?}; queue (hash:attempts) {queue:?}; \
+                     fetched={} lost={:?} failures={:?}; dht lookups_completed={} \
+                     peer_admitted={} peer_rejected={} table={} timeouts={} throttled={} \
+                     denied={} send_errors={} lookup_deadlines={} peer_queued_dropped={:?} \
+                     peer_cancelled={} answered={}",
                     missing.len(),
-                    known_ref.len()
+                    known_ref.len(),
+                    pool.fetched.load(Ordering::Relaxed),
+                    pool.lost.each_ref().map(|f| f.load(Ordering::Relaxed)),
+                    pool.failures.each_ref().map(|f| f.load(Ordering::Relaxed)),
+                    dht.lookups_completed,
+                    dht.peer_admitted,
+                    dht.peer_rejected,
+                    dht.routing_nodes,
+                    dht.timeouts,
+                    dht.throttled,
+                    dht.denied,
+                    dht.send_errors,
+                    dht.lookup_deadlines,
+                    dht.peer_queued_dropped,
+                    dht.peer_cancelled,
+                    dht.peer_lookups_answered,
                 ))
             }
         },
     )
     .await;
-    let took = started.elapsed();
-    report(&format!("stages (received, fetched, at): {stages:?}"));
+
+    // Every served hash was harvested, within the harvest deadline.
+    let forged_hash = forged.seed.info_hash;
+    until(
+        "the forged hash to be harvested",
+        HARVEST_DEADLINE,
+        async || {
+            harvests::sampled(&forged_hash)
+                .map(|_| ())
+                .ok_or_else(|| "not yet".to_string())
+        },
+    )
+    .await;
+    let mut harvest_at = Vec::new();
+    for t in known.iter().chain([&forged]) {
+        let at = harvests::sampled(&t.seed.info_hash)
+            .unwrap_or_else(|| panic!("{} became searchable without a harvest", t.name));
+        let after = at.saturating_duration_since(started);
+        assert!(
+            after <= HARVEST_DEADLINE,
+            "{} harvested {after:?} after its peer served",
+            t.name
+        );
+        harvest_at.push(after);
+    }
+
+    // The bar, per hash: harvest → searchable.
+    let mut lag: Vec<(Duration, &str)> = known
+        .iter()
+        .map(|t| {
+            let h = harvests::sampled(&t.seed.info_hash).expect("checked above");
+            let s = searchable[&t.seed.info_hash];
+            (s.saturating_duration_since(h), t.name.as_str())
+        })
+        .collect();
+    harvest_at.sort();
     let dht = app.dht.stats().unwrap_or_default();
     report(&format!(
-        "e2e_search: {} torrents searchable {took:?} after their peers started serving \
-         (bar {BAR:?}; announced by {announced:?}, stored by {stored_at:?}); dht samples_sent={} harvested_sample={} get_peers={} announce={} \
-         lookups_completed={} lookup_ms={}/{} timeouts={} throttled={} peer_rejected={}; \
-         network dropped/timeouts={:?}; pool fetched={} failures={:?}",
-        known.len(),
+        "e2e_search: harvest->searchable ms per hash {:?}; max {} ms (bar {} ms); \
+         T0->harvest ms sorted {:?}; dht samples_sent={} harvested_sample={} \
+         lookups_completed={} timeouts={}; network dropped/timeouts={:?}",
+        lag.iter().map(|(d, _)| ms(*d)).collect::<Vec<_>>(),
+        lag.iter().map(|(d, _)| ms(*d)).max().unwrap_or(0),
+        ms(BAR),
+        harvest_at.iter().map(|d| ms(*d)).collect::<Vec<_>>(),
         dht.samples_sent,
         dht.harvested_sample,
-        dht.harvested_get_peers,
-        dht.harvested_announce,
         dht.lookups_completed,
-        dht.peer_lookup_millis,
-        dht.peer_lookups_answered,
         dht.timeouts,
-        dht.throttled,
-        dht.peer_rejected,
         net.dropped_and_timeouts(),
-        app.pipeline.pool_stats().fetched.load(Ordering::Relaxed),
-        app.pipeline
-            .pool_stats()
-            .failures
-            .each_ref()
-            .map(|f| f.load(Ordering::Relaxed)),
     ));
 
     // Each by name, with the size and file count of the dict its peer
@@ -207,22 +249,26 @@ async fn announced_torrents_are_searchable_within_five_seconds() {
     // The forged dict is fetched and rejected: the failure is counted
     // as a hash mismatch and nothing is stored.
     let pool = app.pipeline.pool_stats();
-    until("the forged metadata to be rejected", DEADLINE, async || {
-        let n = pool.failure_count(FailureKind::HashMismatch);
-        (n >= 1)
-            .then_some(())
-            .ok_or(format!("hash mismatches: {n}"))
-    })
+    until(
+        "the forged metadata to be rejected",
+        SEARCH_DEADLINE,
+        async || {
+            let n = pool.failure_count(FailureKind::HashMismatch);
+            (n >= 1)
+                .then_some(())
+                .ok_or(format!("hash mismatches: {n}"))
+        },
+    )
     .await;
     // The orphan is harvested and looked up, and the lookup finds no
     // peer: it waits in the queue with an attempt spent.
     let orphan_hash = hash(&orphan);
-    let queue = app.pipeline.monitor();
+    let monitor = app.pipeline.monitor();
     until(
         "the orphan's lookup to come back empty",
-        DEADLINE,
+        SEARCH_DEADLINE,
         async || {
-            let snap = queue.pool().snapshot().await;
+            let snap = monitor.pool().snapshot().await;
             match snap.iter().find(|k| k.info_hash == orphan_hash) {
                 Some(k) if k.attempts >= 1 => Ok(()),
                 Some(k) => Err(format!("queued, {} attempts", k.attempts)),
@@ -258,8 +304,10 @@ async fn announced_torrents_are_searchable_within_five_seconds() {
     net.shutdown().await;
     drop((peers, liar));
 
+    lag.sort();
+    let over: Vec<_> = lag.iter().filter(|(d, _)| *d > BAR).collect();
     assert!(
-        took <= BAR,
-        "the known torrents took {took:?} to become searchable, over the {BAR:?} bar"
+        over.is_empty(),
+        "harvest to searchable over the {BAR:?} bar: {over:?}"
     );
 }

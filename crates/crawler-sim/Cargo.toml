@@ -26,6 +26,7 @@ lodestar-store.workspace = true
 # already in the lockfile at the versions lodestar-api uses.
 lodestar-api.workspace = true
 lodestar-bencode.workspace = true
+lodestar-log.workspace = true
 lodestar-pipeline.workspace = true
 lodestar-search.workspace = true
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query", "matched-path"] }

@@ -159,23 +159,6 @@ impl App {
         serde_json::from_slice(&bytes).expect("a search response")
     }
 
-    /// Waits until the crawler's node has joined: at least 8 nodes in its
-    /// routing table.
-    pub async fn joined(&self) {
-        let handle = self.dht.node_handle();
-        super::wait::until("the crawler to join", Duration::from_secs(20), async || {
-            let node = handle.lock().expect("dht handle lock").clone();
-            let Some(node) = node else {
-                return Err("not started".into());
-            };
-            let size = node.snapshot().await.map_or(0, |s| s.table_sizes[0]);
-            (size >= 8)
-                .then_some(())
-                .ok_or(format!("{size} nodes known"))
-        })
-        .await;
-    }
-
     /// Whether the store holds `hash`, through a connection of its own.
     pub fn stored(&self, hash: &[u8; 20]) -> bool {
         let store = Store::open_reader(&self.db, StoreConfig::default()).expect("reader");

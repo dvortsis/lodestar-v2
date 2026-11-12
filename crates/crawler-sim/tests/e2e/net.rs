@@ -4,13 +4,12 @@
 //! `get_peers` for the token, then `announce_peer`, to the nodes closest
 //! to each info hash.
 
-use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use lodestar_dht::NodeId;
 use lodestar_dht::krpc::{self, Body, Message, Method, Query};
 use lodestar_dht::node::{Config, Intensity, Node};
-use lodestar_dht::{NodeId, NodeInfo};
 use lodestar_metainfo::InfoHash;
 use tokio::net::UdpSocket;
 
@@ -48,6 +47,7 @@ fn node_config(bootstrap: Vec<String>) -> Config {
 
 pub struct Network {
     nodes: Vec<Node>,
+    ids: Vec<(NodeId, SocketAddr)>,
 }
 
 impl Network {
@@ -79,12 +79,26 @@ impl Network {
                 .ok_or(format!("{short} nodes know < {want}"))
         })
         .await;
-        Network { nodes }
+        let mut ids = Vec::new();
+        for node in &nodes {
+            let s = node.snapshot().await.expect("running");
+            ids.push((s.ids[0], node.local_addrs()[0]));
+        }
+        Network { nodes, ids }
     }
 
     /// Where a new node, or a client's lookup, starts.
     pub fn bootstrap(&self) -> SocketAddr {
         self.nodes[0].local_addrs()[0]
+    }
+
+    /// The `k` nodes closest to `hash` by XOR distance (BEP 5): where a
+    /// client's lookup would end, so where it announces.
+    pub fn closest(&self, hash: InfoHash, k: usize) -> Vec<SocketAddr> {
+        let target = NodeId(hash.0);
+        let mut ids = self.ids.clone();
+        ids.sort_by_key(|(id, _)| id.distance(&target));
+        ids.into_iter().take(k).map(|(_, a)| a).collect()
     }
 
     /// Replies the network's nodes dropped to their rate limits, and
@@ -160,8 +174,8 @@ impl Client {
     }
 
     /// A `get_peers` for `hash`: the node sees the hash (a passive
-    /// harvest) and answers with an announce token and closer nodes.
-    async fn get_peers(&mut self, to: SocketAddr, hash: InfoHash) -> (Vec<u8>, Vec<NodeInfo>) {
+    /// harvest) and hands out an announce token.
+    async fn get_peers(&mut self, to: SocketAddr, hash: InfoHash) -> Vec<u8> {
         let reply = self
             .ask(
                 to,
@@ -174,61 +188,16 @@ impl Client {
             )
             .await;
         match krpc::parse(&reply).expect("a KRPC reply").body {
-            Body::Response(r) => (
-                r.token.expect("get_peers returns a token").to_vec(),
-                r.nodes.iter().collect(),
-            ),
+            Body::Response(r) => r.token.expect("get_peers returns a token").to_vec(),
             other => panic!("get_peers to {to}: {other:?}"),
         }
     }
 
-    /// An iterative BEP 5 `get_peers` lookup from `bootstrap`, the way a
-    /// client looks for a torrent's swarm: ask the closest node not yet
-    /// asked, learn closer ones, until the [`ANNOUNCE_TO`] closest heard
-    /// of have all answered. Returns those, with their tokens.
-    pub async fn lookup(
-        &mut self,
-        bootstrap: SocketAddr,
-        hash: InfoHash,
-    ) -> Vec<(SocketAddr, Vec<u8>)> {
-        let target = NodeId(hash.0);
-        // By distance: (node, its token once it has answered).
-        let mut known: BTreeMap<[u8; 20], (SocketAddr, Option<Vec<u8>>)> = BTreeMap::new();
-        let (_, nodes) = self.get_peers(bootstrap, hash).await;
-        let learn = |known: &mut BTreeMap<_, _>, nodes: Vec<NodeInfo>| {
-            for n in nodes {
-                known
-                    .entry(n.id.distance(&target))
-                    .or_insert((n.addr, None));
-            }
-        };
-        learn(&mut known, nodes);
-        loop {
-            let next = known
-                .values_mut()
-                .take(ANNOUNCE_TO)
-                .find(|(_, token)| token.is_none())
-                .map(|(addr, _)| *addr);
-            let Some(addr) = next else { break };
-            let (token, nodes) = self.get_peers(addr, hash).await;
-            for (a, t) in known.values_mut() {
-                if *a == addr {
-                    *t = Some(token.clone());
-                }
-            }
-            learn(&mut known, nodes);
-        }
-        known
-            .into_values()
-            .take(ANNOUNCE_TO)
-            .map(|(addr, token)| (addr, token.expect("every one of them answered")))
-            .collect()
-    }
-
-    /// Looks `hash` up and announces `peer_port` on 127.0.0.1 to the
-    /// closest nodes found.
-    pub async fn announce(&mut self, bootstrap: SocketAddr, hash: InfoHash, peer_port: u16) {
-        for (to, token) in self.lookup(bootstrap, hash).await {
+    /// Announces `peer_port` on 127.0.0.1 for `hash` to the nodes closest
+    /// to it, each with the token its `get_peers` handed out.
+    pub async fn announce(&mut self, net: &Network, hash: InfoHash, peer_port: u16) {
+        for to in net.closest(hash, ANNOUNCE_TO) {
+            let token = self.get_peers(to, hash).await;
             let reply = self
                 .ask(
                     to,
@@ -249,9 +218,11 @@ impl Client {
         }
     }
 
-    /// Looks `hash` up and announces nothing: the network sees the hash,
-    /// but no peer has it.
-    pub async fn ask_only(&mut self, bootstrap: SocketAddr, hash: InfoHash) {
-        self.lookup(bootstrap, hash).await;
+    /// Asks the closest nodes for peers of `hash` and announces nothing:
+    /// the network sees the hash, but no peer has it.
+    pub async fn ask_only(&mut self, net: &Network, hash: InfoHash) {
+        for to in net.closest(hash, ANNOUNCE_TO) {
+            self.get_peers(to, hash).await;
+        }
     }
 }

@@ -2,6 +2,7 @@
 //! torrents, one assembled install and condition waits.
 
 pub mod app;
+pub mod harvests;
 pub mod net;
 pub mod torrents;
 pub mod wait;
