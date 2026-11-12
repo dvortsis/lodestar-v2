@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T22:55Z",
+  "updated_at": "2026-11-12T22:56Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7652,6 +7652,21 @@
       "id": "parsed-from-check",
       "note": "Check whether a null resolved_via means \"title from the name\" (Parsed.svelte); if so, the ENR-13 nit is moot.",
       "added": "2026-11-12T22:55Z"
+    },
+    {
+      "id": "wk-18s",
+      "note": "WK-18s (core): lodestar worker --join-only, plus the worker under the SCM (service.rs). Done by the WK-18w session first, then WK-18w (b) as a draft until it merges.",
+      "added": "2026-11-12T22:56Z"
+    },
+    {
+      "id": "consent-external-owner",
+      "note": "OWNER QUESTION (Legal Notice wording): X-consent-gate-lift r1 lifts Restricted and Overlay only; External (torrent cache) waits for owner-approved Legal Notice \u00a72 wording. The session drafts a sentence in its decisions file; follow-up X-consent-gate-lift-external.",
+      "added": "2026-11-12T22:56Z"
+    },
+    {
+      "id": "wk-19-windows",
+      "note": "WK-19 (docs/user/workers.md) must cover the Windows join (see the WK-18w decisions file).",
+      "added": "2026-11-12T22:56Z"
     }
   ],
   "main_health": [
@@ -9022,7 +9037,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-12T22:55Z",
+  "updated": "2026-11-12T22:56Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
