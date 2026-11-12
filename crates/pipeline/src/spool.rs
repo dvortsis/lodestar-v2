@@ -1497,10 +1497,12 @@ mod tests {
         FAIL_NEXT_DIR_SYNC.with(|f| f.set(true));
         assert!(s.append(&record(1), now).is_err());
         assert_eq!(s.segments(), vec![1]);
+        // Each file's own size: on Windows a folder listing's sizes can
+        // lag a file still being written.
         let on_disk = |d: &Path| -> u64 {
             fs::read_dir(d)
                 .unwrap()
-                .map(|e| e.unwrap().metadata().unwrap().len())
+                .map(|e| fs::metadata(e.unwrap().path()).unwrap().len())
                 .sum()
         };
         assert_eq!(s.bytes(), HEADER_LEN as u64);

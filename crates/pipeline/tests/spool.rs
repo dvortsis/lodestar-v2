@@ -222,7 +222,7 @@ fn the_byte_cap_refuses_a_record_that_would_pass_it() {
     s.close_active().unwrap();
     let on_disk: u64 = fs::read_dir(dir.path())
         .unwrap()
-        .map(|e| e.unwrap().metadata().unwrap().len())
+        .map(|e| fs::metadata(e.unwrap().path()).unwrap().len())
         .sum();
     assert_eq!(on_disk, s.bytes());
     assert!(!s.has_room(500));
