@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T16:03:30Z",
+  "updated_at": "2026-11-12T16:08:26Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7364,6 +7364,11 @@
       "id": "UN-4-usenet-off-purge",
       "at": "2026-11-12T15:59:55Z",
       "note": "rv-762 nit 5: switching usenet off leaves up to 1M stored usenet items until a source purge; UN-4 (or the source-purge path) removes them, or names it as a known gap"
+    },
+    {
+      "id": "X-flake-bitmagnet-quiescent",
+      "at": "2026-11-12T16:08:26Z",
+      "note": "lodestar-sources-importers bitmagnet::pg_tests::batches_are_bounded_by_count_and_memory failed on #768 (unrelated, dht-only diff) with Err(NotQuiescent) at pg_tests.rs:297; NotQuiescent maps from Postgres 55P03 (lock_not_available). Likely the PG tests share one database and run in parallel, so another test holds a lock during the quiescence check. Fix: per-test schema/database or serialise the pg tests; no fixed sleeps. One re-run spent on #768."
     }
   ],
   "main_health": [
@@ -8494,7 +8499,7 @@
     }
   ],
   "heartbeat": "2026-11-12T15:41:01Z",
-  "updated": "2026-11-12T16:03:30Z",
+  "updated": "2026-11-12T16:08:26Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
