@@ -14,9 +14,10 @@
 #
 # Run as root by the step bootstrap: step.sh <workdir> [stack] [pia-run] [block]
 # (tests and start-block pass the last three); <workdir> holds the committed
-# compose.yaml and block-lib.sh. Output is fixed names only (`ok|fail <name>`,
-# `count <name> <int>`); the control side drops anything else. Exit 0 only when
-# every check passed.
+# compose.yaml and block-lib.sh. Output is fixed names only (`ok|fail|skip
+# <name>`, `count <name> <int>`); the control side drops anything else. `skip`
+# marks a check that can't be judged (the tunnel-up checks when the WireGuard
+# handshake never completed), never a pass. Exit 0 only when every check passed.
 set -uo pipefail
 work=${1:?workdir}
 STACK=${2:-/home/lodestar/lodestar}  # tests pass a temporary stack; the bootstrap never does

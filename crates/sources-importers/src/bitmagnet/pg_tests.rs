@@ -141,6 +141,14 @@ impl Fixture {
         ))
         .await
         .unwrap();
+        // Each fixture's DROP and CREATE DATABASE also counts toward the
+        // shared catalog `pg_database`'s autoanalyze threshold, which the
+        // tables' storage options can't reach. An autoanalyze of it
+        // mid-import would move the snapshot `quiet()` compares, so it's
+        // analyzed here, before the test reads anything.
+        a.batch_execute("ANALYZE pg_catalog.pg_database")
+            .await
+            .unwrap();
         let db = admin(base, Some(&name)).await;
         if let Some(l) = layout {
             db.batch_execute(&ddl(l)).await.unwrap();
