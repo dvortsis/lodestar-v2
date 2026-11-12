@@ -695,52 +695,16 @@ fn a_lost_retransmission_is_fast_retransmitted_again() {
     assert_eq!(b.read(&mut buf).unwrap(), 8 * MSS);
 }
 
-#[test]
-fn backoff_stays_capped_across_timeouts_separated_by_progress() {
-    let (mut a, mut b, mut now) = connected(12);
-    let mut first_waits = Vec::new();
-    for i in 0..8u8 {
-        a.write(&[i; 100]).unwrap();
-        let lost = drain(&mut a, now);
-        assert_eq!(lost.len(), 1);
-        let d = a.deadline().unwrap();
-        first_waits.push(d - now);
-        now = d;
-        a.on_timeout(now);
-        // The resend gets through and is acknowledged: progress, but no
-        // round-trip sample (Karn).
-        let resent = drain(&mut a, now);
-        deliver(&mut b, &resent, now);
-        deliver(&mut a, &drain(&mut b, now), now);
-        assert!(a.inflight.is_empty());
-    }
-    assert!(!a.is_closed());
-    let base = first_waits[0];
-    for w in &first_waits {
-        assert!(
-            *w <= base * (1 << crate::ledbat::PROGRESS_BACKOFF_CAP),
-            "{first_waits:?}"
-        );
-    }
-    assert!(
-        first_waits[1] > base,
-        "without a sample the backoff is kept: {first_waits:?}"
-    );
-}
-
-#[test]
-fn a_round_trip_jump_costs_few_retransmissions() {
-    // Guards Karn, not the cap: it passes without the cap too. The round
-    // trip jumps from 20 ms to 1.8 s, well past the 500 ms timeout. Resetting the backoff on any progress would resend each
-    // of these one-packet messages twice; Karn keeps it until a first
-    // transmission gets through, which then gives a sample.
+/// One-packet messages sent one after another once the round trip
+/// jumps from 20 ms to `rtt`; returns the resends they cost.
+fn resends_after_a_round_trip_jump(rtt: Duration, messages: u8) -> u64 {
     let mut sim = Sim::new(13, CLEAN, 1, 1);
     while sim.b.is_none() || sim.a.state() != State::Connected {
         assert!(sim.step());
     }
-    sim.link.delay_ms = 900;
+    sim.link.delay_ms = (rtt / 2).as_millis() as u64;
     let mut buf = [0u8; 256];
-    for i in 0..20u8 {
+    for i in 0..messages {
         sim.a.write(&[i; 200]).unwrap();
         let mut got = Vec::new();
         for _ in 0..10_000 {
@@ -754,9 +718,46 @@ fn a_round_trip_jump_costs_few_retransmissions() {
             }
             assert!(sim.step());
         }
-        assert_eq!(got, [i; 200]);
+        assert_eq!(got, [i; 200], "message {i} at {rtt:?}");
     }
-    assert!(sim.a.retransmits <= 3, "{} resends", sim.a.retransmits);
+    sim.a.retransmits
+}
+
+#[test]
+fn a_round_trip_jump_costs_few_retransmissions() {
+    // After the round trip jumps well past the 500 ms timeout, Karn keeps
+    // the backoff until a first transmission outlasts the round trip and
+    // gives a sample; the messages after that aren't resent. Resetting the
+    // backoff on any progress resends every message about twice, and
+    // capping its growth across progress traps it below twice the round
+    // trip, so every message is resent for good.
+    for ms in [1_800, 2_500, 5_000, 10_000] {
+        let rtt = Duration::from_millis(ms);
+        let resends = resends_after_a_round_trip_jump(rtt, 20);
+        assert!(resends <= 8, "{resends} resends at {rtt:?}");
+    }
+}
+
+#[test]
+fn an_ack_whose_hole_isnt_our_oldest_says_nothing_about_it() {
+    let (mut a, mut b, now) = connected(16);
+    for _ in 0..8 {
+        a.cc.on_ack(MSS, 1000, now);
+    }
+    a.write(&payload(5 * MSS, 6)).unwrap();
+    let sent = drain(&mut a, now);
+    assert_eq!(sent.len(), 5);
+    // An ACK one behind what B really has, with three bits set past its
+    // (wrong) hole: its mask doesn't describe our oldest packet.
+    deliver(&mut b, &sent[1..4], now);
+    let acks = drain(&mut b, now);
+    let mut h = parse(&acks[0]).unwrap().header;
+    h.ack_nr = h.ack_nr.wrapping_sub(1);
+    let mut stale = Vec::new();
+    packet::encode(&h, Some(&[0b0000_1110, 0, 0, 0]), &[], &mut stale);
+    a.on_packet(&parse(&stale).unwrap(), now);
+    assert!(drain(&mut a, now).is_empty(), "no fast retransmit");
+    assert_eq!(a.retransmits, 0);
 }
 
 #[test]

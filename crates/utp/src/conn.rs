@@ -119,9 +119,6 @@ pub(crate) struct Connection {
     /// timeout doesn't count towards giving up when the peer answered
     /// with a closed window (a live receiver that's full isn't dead).
     heard: bool,
-    /// Whether an ACK acknowledged something since the last timeout, so
-    /// the next timeout grows the backoff only up to its cap.
-    progressed: bool,
     /// Transmission counter behind `Sent::order`.
     next_order: u64,
     /// When the last packet from the peer arrived (or the connection was
@@ -239,7 +236,6 @@ impl Connection {
             rtt: Rtt::new(),
             timer: None,
             heard: false,
-            progressed: false,
             next_order: 0,
             last_recv: now,
             handshake_deadline: None,
@@ -441,7 +437,7 @@ impl Connection {
             self.flight -= p.payload.len();
         }
         self.cc.on_timeout();
-        self.rtt.back_off(std::mem::take(&mut self.progressed));
+        self.rtt.back_off();
         self.dup_acks = 0;
         // Re-armed when the retransmission goes out.
         self.timer = None;
@@ -563,7 +559,6 @@ impl Connection {
         }
         if acked_bytes > 0 || progressed {
             self.cc.on_ack(acked_bytes, p.header.timestamp_diff_us, now);
-            self.progressed = true;
             self.timeouts = 0;
             self.dup_acks = 0;
             if !self.time_wait {

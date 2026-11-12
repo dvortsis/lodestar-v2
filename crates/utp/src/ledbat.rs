@@ -18,12 +18,6 @@ const SLOT: Duration = Duration::from_secs(60);
 pub(crate) const INITIAL_RTO: Duration = Duration::from_secs(1);
 const MIN_RTO: Duration = Duration::from_millis(500);
 pub(crate) const MAX_RTO: Duration = Duration::from_secs(60);
-/// How far timeouts separated by progress may back the timer off (4×).
-/// Without a fresh sample Karn's rule keeps the backoff, so on a lossy
-/// link it would otherwise compound across every lost retransmission;
-/// 4× still outlasts a round trip that jumped up to four times the old
-/// timeout, so the next new packet gets a sample and resets it.
-pub(crate) const PROGRESS_BACKOFF_CAP: u32 = 2;
 
 #[derive(Debug)]
 pub(crate) struct Ledbat {
@@ -179,14 +173,8 @@ impl Rtt {
         self.backoff = 0;
     }
 
-    /// A timeout. Consecutive ones (nothing acknowledged in between)
-    /// double the timer each time, up to `MAX_RTO`. One that follows
-    /// progress grows it only up to `PROGRESS_BACKOFF_CAP`, and never
-    /// shrinks it: only a sample may (Karn).
-    pub fn back_off(&mut self, after_progress: bool) {
-        if !after_progress || self.backoff < PROGRESS_BACKOFF_CAP {
-            self.backoff = self.backoff.saturating_add(1);
-        }
+    pub fn back_off(&mut self) {
+        self.backoff = self.backoff.saturating_add(1);
     }
 }
 
@@ -273,30 +261,13 @@ mod tests {
         r.sample(Duration::from_millis(2000));
         let rto = r.rto();
         assert!(rto > MIN_RTO);
-        r.back_off(false);
+        r.back_off();
         assert_eq!(r.rto(), (rto * 2).min(MAX_RTO));
         for _ in 0..40 {
-            r.back_off(false);
+            r.back_off();
         }
         assert_eq!(r.rto(), MAX_RTO);
         r.sample(Duration::from_millis(400));
         assert!(r.rto() < MAX_RTO, "a fresh sample resets the backoff");
-    }
-
-    #[test]
-    fn backoff_across_progress_is_capped_but_kept() {
-        let mut r = Rtt::new();
-        r.sample(Duration::from_millis(100));
-        let base = r.rto();
-        for _ in 0..10 {
-            r.back_off(true);
-        }
-        assert_eq!(r.rto(), base * (1 << PROGRESS_BACKOFF_CAP));
-        // Consecutive timeouts still grow it past the cap...
-        r.back_off(false);
-        assert_eq!(r.rto(), base * (2 << PROGRESS_BACKOFF_CAP));
-        // ...and a later one after progress doesn't shrink it (Karn).
-        r.back_off(true);
-        assert_eq!(r.rto(), base * (2 << PROGRESS_BACKOFF_CAP));
     }
 }
