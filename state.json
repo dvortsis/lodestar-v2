@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T01:17:06Z",
+  "updated_at": "2026-11-12T01:25:03Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7006,6 +7006,11 @@
       "slice": "X-restart-banner",
       "at": "2026-11-12T01:17:06Z",
       "note": "rv-718 CHANGES relayed: awaiting_confirmation not shown via watch; cross-origin probe blocked by CSP (runner: no CSP change, link + optional one-shot navigation); layout shift; live region in shell. Owner FYI owed: address-change restart page uses an Open link instead of a cross-origin probe because CSP connect-src 'self' stays."
+    },
+    {
+      "slice": "X-svc-eventcreate-bounded",
+      "at": "2026-11-12T01:25:03Z",
+      "note": "After #721 merges (service.rs is its owns): windows/service.rs:918-937 eventcreate .status() has no deadline (called from :776 refusal and :789 rollback wait); move run_bounded/supervise to windows/mod.rs (or similar), give it the same 10 s deadline + kill/reap, test with a never-exiting child. Add slices.yaml entry in next runner PR. From rv-721."
     }
   ],
   "main_health": [
@@ -7764,7 +7769,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T01:17:06Z",
+    "updated": "2026-11-12T01:25:03Z",
     "items": [
       {
         "slot": 1,
@@ -7927,7 +7932,7 @@
     }
   ],
   "heartbeat": "2026-11-12T00:38:52Z",
-  "updated": "2026-11-12T01:17:06Z",
+  "updated": "2026-11-12T01:25:03Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
