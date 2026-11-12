@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T06:15:37Z",
+  "updated_at": "2026-11-12T06:18:09Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7983,7 +7983,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T06:15:37Z",
+    "updated": "2026-11-12T06:18:09Z",
     "items": [
       {
         "slot": 1,
@@ -8017,7 +8017,7 @@
         "slice": "X-wk-out-set-polish",
         "role": "slice",
         "agent": "session_01MMjhnCfcVrMUCDWwedtr7c",
-        "doing": "rv-727 Importants: real race test (spin flag, alternate order, both outcomes), out-set memory numbers in decisions + WK-G notes, nits",
+        "doing": "#737 rv-737-84da83fe MERGE+1 Important (60 s grace vs writer-commit lag reopens double-hold) relayed; fix round, then runner self-checks delta; archive after merge",
         "since": "2026-11-12T04:01:05Z",
         "status": "active"
       },
@@ -8107,7 +8107,7 @@
     }
   ],
   "heartbeat": "2026-11-12T03:41:56Z",
-  "updated": "2026-11-12T06:15:37Z",
+  "updated": "2026-11-12T06:18:09Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
