@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T02:56:34Z",
+  "updated_at": "2026-11-12T03:14:46Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7066,7 +7066,14 @@
     "X-upd-stop-early: brief written (briefs/X-upd-stop-early.md); runs in slot 4 after X-companion-pins-polish",
     "owner FYI owed: #720 X-cmp13-installer-pins merged (65ce6ce4): installer pins from SourceForge at pin time only, bound to version by feed + tag date; no new run-time host",
     "slices.yaml next runner PR: X-tz0-polish, X-companion-pins-polish, X-upd-stop-early entries",
-    "owner told (via dashboard session): #725, #715, #720 merged; notice wording; release/v0.5.2 notice editorial fix still owed before the v0.5.2 tag"
+    "owner told (via dashboard session): #725, #715, #720 merged; notice wording; release/v0.5.2 notice editorial fix still owed before the v0.5.2 tag",
+    {
+      "id": "X-banner-live-region",
+      "note": "From #726: Banner.svelte always sets role=\"status\"; StorageStep now wraps it in another status region (nested live regions, possible double announce). Give Banner a prop to drop its role, or a `live` opt-in; audit other callers. Small web slice; Sonnet.",
+      "at": "2026-11-12T03:14:46Z"
+    },
+    "owner FYI owed: #726 X-pk-ui-polish merged (91af6c9d)",
+    "slices.yaml next runner PR: X-win-clippy entry (Sonnet; owns ci.yml test-job step + lint-only lines)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7625,6 +7632,11 @@
       "pr": 725,
       "sha": "45143ae229a91c5a282f6073b7d00615137809b4",
       "at": "2026-11-12T02:56:34Z"
+    },
+    {
+      "pr": 726,
+      "sha": "91af6c9db189a4523a93b57bc5cc448ec9619e80",
+      "at": "2026-11-12T03:14:46Z"
     }
   ],
   "active_sessions": {
@@ -7859,7 +7871,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T02:56:34Z",
+    "updated": "2026-11-12T03:14:46Z",
     "items": [
       {
         "slot": 1,
@@ -7916,11 +7928,11 @@
       },
       {
         "slot": 7,
-        "slice": "X-pk-ui-polish",
+        "slice": "X-win-clippy",
         "role": "helper",
         "agent": "session_01MMjhn8WrGpnM1jiYP9RY1X",
-        "doing": "PK-ui/PK-exc polish (Sonnet)",
-        "since": "2026-11-12T01:30:56Z"
+        "doing": "session_01MMjhn8WrGpnM1jiYP9RY1X (Sonnet): Windows-only clippy fixes + Windows clippy step in CI test job",
+        "since": "2026-11-12T03:14:46Z"
       },
       {
         "slot": 8,
@@ -8021,7 +8033,7 @@
     }
   ],
   "heartbeat": "2026-11-12T00:38:52Z",
-  "updated": "2026-11-12T02:56:34Z",
+  "updated": "2026-11-12T03:14:46Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
