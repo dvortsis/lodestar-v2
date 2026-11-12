@@ -20,7 +20,7 @@ The service has already reported Running to the SCM when it refuses to start (th
   - a real child that never exits (`sleep 600`, or `Start-Sleep` on Windows) is killed at a 300 ms bound, well inside the test's 10 s deadline;
   - its error names it;
   - a child that ends answers its code.
-- **`windows::service::tests::a_hung_event_note_never_holds_up_the_refusal`:** the service's note with a child that never exits returns within 10 s.
+- **`windows::service::tests::a_hung_event_note_never_holds_up_the_refusal`:** the service's note with a child that never exits returns within 10 s, answering `TimedOut`. `write_event_note` returns the run's result (the service discards it), so a spawn error, which also returns at once, can't pass for the bound (self-review).
 - **The helper's `supervise` tests** (`a_started_msiexec_is_never_classed_as_not_started`, over a fake child and clock) run unchanged through the moved function.
 - **No fixed sleeps, and no tokio `test-util`.** `supervise` polls with a deadline.
 
@@ -32,3 +32,6 @@ The service has already reported Running to the SCM when it refuses to start (th
   - `lodestar/src/main.rs:301`: a collapsible `if`.
 
   Linux CI doesn't lint `cfg(windows)` code, so they don't fail it. I told the runner.
+
+## Self-review (fresh Opus reviewer)
+No blocking or important findings, and 2 polish items, both fixed: a comment that sat on the wrong import, and the service test now telling "killed at the bound" from an early spawn error.

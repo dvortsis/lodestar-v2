@@ -207,8 +207,11 @@ const MAX_SHOWN: usize = 260;
 /// Running by then, so without the bound a hung `eventcreate` would keep
 /// it Running, and on the rollback path the stop signal would never be
 /// seen (rv-702 N2; X-svc-eventcreate-bounded).
-fn write_event_note(cmd: std::process::Command, limit: std::time::Duration) {
-    let _ = super::process::run_bounded(cmd, "eventcreate", limit);
+fn write_event_note(
+    cmd: std::process::Command,
+    limit: std::time::Duration,
+) -> std::io::Result<i32> {
+    super::process::run_bounded(cmd, "eventcreate", limit)
 }
 
 /// How the service's idle wait during a rollback ended.
@@ -944,7 +947,7 @@ mod scm {
             .args(["/T", kind, "/ID", id.as_str(), "/L", "APPLICATION"])
             .args(["/SO", super::EVENT_SOURCE, "/D"])
             .arg(super::event_log_text(refusal, dir));
-        super::write_event_note(cmd, crate::windows::process::EVENT_LOG_WAIT);
+        let _ = super::write_event_note(cmd, crate::windows::process::EVENT_LOG_WAIT);
     }
 
     /// Serialises status reports, so a progress tick never follows
@@ -1636,10 +1639,14 @@ mod tests {
     #[test]
     fn a_hung_event_note_never_holds_up_the_refusal() {
         let start = std::time::Instant::now();
-        write_event_note(
+        let got = write_event_note(
             crate::windows::process::never_exits(),
             std::time::Duration::from_millis(300),
         );
+        // Killed at the bound, not ended early some other way (a spawn
+        // error returns at once too, and must not pass for this).
+        let e = got.unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::TimedOut, "{e}");
         assert!(
             start.elapsed() < std::time::Duration::from_secs(10),
             "{:?}",

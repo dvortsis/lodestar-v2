@@ -63,9 +63,9 @@ use super::check::{self as win, SKIP_FAILED};
 use super::msi::{self, ENVELOPE, Installed, PINS, Pins, REQUEST, Refusal, Staging, UPDATES};
 use super::rollback;
 use crate::update::layout::{self, Bin, Lock};
-// The shared bounded run (X-svc-eventcreate-bounded); used by the
-// Windows-only `System` and the tests.
 use crate::update::trust_file;
+// The shared bounded run (X-svc-eventcreate-bounded), used by the
+// Windows-only `System`.
 #[cfg_attr(not(windows), allow(unused_imports))]
 use crate::windows::process::{EVENT_LOG_WAIT, run_bounded, supervise};
 
