@@ -15,6 +15,11 @@ Nothing here reverses or loosens an owner decision, weakens a security or conten
 - **The code has no stubs.** No `todo!()`; every `unimplemented!()` is in a test double; 3 TODOs. What's unfinished is deferred on purpose and says so (build-plan §0.1).
 - **Building is not what decides the date of 1.0.** The crawler gate (12.3/min against 100/min, no A/B run yet), one Unraid box serving four exclusive queues, and the owner's actions are.
 
+## Findings from the owner's codebase review
+A separate session reviewed `main` at `f47369b8` for bugs at the owner's request and found no high-severity defect in what it read. The runner placed its two findings on rung 5:
+- **X-watch-stall-retry** (new, Opus): the watch folder holds a Malformed verdict for one more poll, so a copy that stalls for more than 10 s isn't moved to `failed/` for good (`crates/lodestar/src/watch.rs`). It runs before UP-2 and X-watch-env.
+- **X-utp-spurious-rto** (already planned after #788): it also resets `timeouts` only on ACK progress, so a peer whose packets acknowledge nothing can't hold a connection open (`crates/utp/src/conn.rs`).
+
 ## Runner-level refinements (flagged under §2.19)
 - **§0.1, §0.3 and §0.9 are snapshots that point at live sources.** They state their commit and time, and name the dashboard and `runner-state` as the live view. `docs/handoff.md` §8 no longer keeps a dated list. A dated list in two documents went stale in a day, twice.
 - **The track tables keep their r3 text.** They record how each track was planned and what each step's exit was. §0.2 adds one line per track saying where it stands, so the history isn't rewritten.

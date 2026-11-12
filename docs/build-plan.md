@@ -61,7 +61,8 @@ So: **the host is never idle, and build slots never wait for it.**
 5. **v0.7 / M7.** It doesn't wait for the v0.6 tag:
    - grouping and regex: GS-2 → GS-3, GS-4, RX-1; GS-3 → GS-5; RX-1 → ENR-11 → OUT-1 → OUT-3;
    - enrichment: ENR-14 → the twelve plug-ins (ENR-tmdb, -tvdb, -anilist, -anidb, -mb, -ol, -igdb, -discogs, -steam, -srrdb, -predb, -debrid), which run side by side; ENR-13;
-   - upload: UP-2, X-watch-env;
+   - upload: X-watch-stall-retry first (a stalled copy into the watch folder is failed for good on Unix; from the 2026-11-12 codebase review), then UP-2 and X-watch-env, which touch the same file;
+   - uTP: X-utp-spurious-rto after X-utp-backoff (#788); it also makes a connection time out when the peer's packets acknowledge nothing (same review);
    - unverified items and usenet: SRC-3b (after GS-3 and ENR-11; a migration) → UN-3 → UN-4;
    - IRC: NOS-2a → IRC-0 → IRC-1 → IRC-2, IRC-3;
    - small: X-unverified-cap-index (ready), X-percolate-promoted-hold (building);
