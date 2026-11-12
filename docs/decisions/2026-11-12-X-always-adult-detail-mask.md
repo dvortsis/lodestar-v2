@@ -34,8 +34,9 @@ Slice X-always-adult-detail-mask (runner brief, 2026-11-12), the follow-up to #7
 - ENR-7's section, by contrast, honours Not adult as before.
 
 ## Nothing else changes
-No new route and no new text served. `always_adult` is one boolean per source in `GET /sources`, which the admin already reads. Which torrents are visible doesn't change. The "Identified as" section can now appear where ENR-12's rules allow it, and ENR-7's where its own rules always meant it to.
+No new route and no new text served. The served `/sources` shape gains one boolean per source, `always_adult`, in `GET /sources` and `GET /sources/{id}`, which the admin already reads. `openapi.json` and `schema.d.ts` are regenerated with the repo's tools (`cargo run -p lodestar --bin openapi`, `npm run api:types`). Which torrents are visible doesn't change. The "Identified as" section can now appear where ENR-12's rules allow it, and ENR-7's where its own rules always meant it to.
 
 ## Files outside the brief's owns
 - The brief's shared allowance: `crates/api/src/torrents.rs`, `crates/api/tests/identified.rs` and `crates/api/tests/adult_enrichment.rs`, plus the regenerated `openapi.json` and `schema.d.ts`.
 - Test-only fixture lines, one `always_adult: false` each (runner-approved, 2026-11-12): `crates/api/tests/ops.rs` (two), `crates/api/tests/sources_spec.rs`, and `web/src/lib/features/sources/fixtures.ts`'s `source()` builder. They're needed because the field is required in the served shape.
+- The six `/sources` goldens in `crates/api/tests/golden/` (`ops_sources`, `ops_source_get`, `ops_source_priority`, `ops_source_credentials`, `ops_source_consent_given`, `ops_source_egress_socks5`), re-blessed with `LODESTAR_BLESS=1` (runner-approved). Each only gains `"always_adult":false`.
