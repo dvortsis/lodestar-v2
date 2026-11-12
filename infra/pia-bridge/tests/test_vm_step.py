@@ -46,6 +46,7 @@ case "$STUB_MODE:$url" in
     case "$STUB_MODE" in
       addkeyfail) printf '{"status":"ERROR"}' > "$o"; printf 200 ;;
       addkeydown) printf 000; exit 7 ;;  # connection refused: no body, no status
+      addkeyrc) cat "$STUB/addkey.json" > "$o"; printf 200; exit 18 ;;  # a full OK body, but curl failed
       addkeyreply) cat "$STUB/reply" > "$o"; printf '%s' "$(cat "$STUB/http")" ;;
       *) cat "$STUB/addkey.json" > "$o"; printf 200 ;;
     esac ;;
@@ -143,6 +144,8 @@ class VMStep(unittest.TestCase):
                     {"regions": [{"id": "ca_test", "servers": {"wg": [{"ip": "192.0.2.10", "cn": "x::1.2.3.4:"}]}}]})), 13),
                 ("NUL in the endpoint", lambda: (self.stub / "servers.json").write_text(json.dumps(
                     {"regions": [{"id": "ca_test", "servers": {"wg": [{"ip": "192.0.2.1\u00000", "cn": "c"}]}}]})), 13),
+                ("newline after the endpoint", lambda: (self.stub / "servers.json").write_text(json.dumps(
+                    {"regions": [{"id": "ca_test", "servers": {"wg": [{"ip": "192.0.2.10\n", "cn": "c"}]}}]})), 13),
                 ("cn with a space", lambda: (self.stub / "servers.json").write_text(json.dumps(
                     {"regions": [{"id": "ca_test", "servers": {"wg": [{"ip": "192.0.2.10", "cn": "a b"}]}}]})), 13),
                 # Bash arithmetic would run this as root, were the digits check not first.
@@ -184,7 +187,7 @@ class VMStep(unittest.TestCase):
         bad = ["", "a" * 64, ".".join(["a" * 63] * 4), "-lead", "trail-", "a.-b", "a-.b", "a..b", ".a", "a.",
                "a:1", "x::1.2.3.4:", "a/b", "evil@host", "a b", "a\tb", "a\nb", "a\rb", "a\x00b", "a\x1bb",
                "a_b", "a%2fb", "a?b", "a#b", "a\\b", "é.example", "a\u0131b", "[::1]", "a;id", "$(id)",
-               "a\u0000:1.2.3.4:", 401, None, ["a"]]
+               "a\u0000:1.2.3.4:", "abc\n", "\nabc", "a.b\n:1.2.3.4:", 401, None, ["a"]]
         for cn in bad:
             with self.subTest(cn=repr(cn)):
                 self.setUp()
@@ -230,7 +233,7 @@ class VMStep(unittest.TestCase):
 
     def test_stage_15_survives_a_nul_in_pias_reply(self):
         r = self.addkey_reply("401", json.dumps({"status": "E\u0000R", "message": "a\u0000b"}))
-        self.assert_stage15(r, 'pia-wireguard: stage 15: addKey refused: http 401, status "ER", message "ab"\n')
+        self.assert_stage15(r, 'pia-wireguard: stage 15: addKey refused: curl 0, http 401, status "ER", message "ab"\n')
 
     def test_addkey_reply_size_is_capped(self):
         self.run_step()
@@ -250,22 +253,25 @@ class VMStep(unittest.TestCase):
 
     def test_stage_15_reports_the_http_status_and_pias_reason(self):
         r = self.addkey_reply("401", json.dumps({"status": "ERROR", "message": "Login failed!", "peer_ip": "10.9.9.9"}))
-        self.assert_stage15(r, 'pia-wireguard: stage 15: addKey refused: http 401, status "ERROR", message "Login failed!"\n')
+        self.assert_stage15(r, 'pia-wireguard: stage 15: addKey refused: curl 0, http 401, status "ERROR", message "Login failed!"\n')
         self.setUp()
         r = self.run_step("addkeyfail")  # 200 but not OK
-        self.assert_stage15(r, 'pia-wireguard: stage 15: addKey refused: http 200, status "ERROR", message ""\n')
+        self.assert_stage15(r, 'pia-wireguard: stage 15: addKey refused: curl 0, http 200, status "ERROR", message ""\n')
         self.setUp()
         r = self.run_step("addkeydown")
-        self.assert_stage15(r, 'pia-wireguard: stage 15: addKey refused: http 000, status "", message ""\n')
+        self.assert_stage15(r, 'pia-wireguard: stage 15: addKey refused: curl 7, http 000, status "", message ""\n')
+        self.setUp()  # curl failed, though the body and status look fine
+        r = self.run_step("addkeyrc")
+        self.assert_stage15(r, 'pia-wireguard: stage 15: addKey refused: curl 18, http 200, status "OK", message ""\n')
         self.setUp()  # not JSON: the status alone, never the body
         r = self.addkey_reply("502", "<html>Bad Gateway 10.9.9.9</html>")
-        self.assert_stage15(r, 'pia-wireguard: stage 15: addKey refused: http 502, status "", message ""\n')
+        self.assert_stage15(r, 'pia-wireguard: stage 15: addKey refused: curl 0, http 502, status "", message ""\n')
         self.setUp()  # JSON, but not an object
         r = self.addkey_reply("500", '["ERROR", "x"]')
-        self.assert_stage15(r, 'pia-wireguard: stage 15: addKey refused: http 500, status "", message ""\n')
+        self.assert_stage15(r, 'pia-wireguard: stage 15: addKey refused: curl 0, http 500, status "", message ""\n')
         self.setUp()  # a full OK reply behind a non-2xx status still fails
         r = self.addkey_reply("302", json.dumps(ADDKEY))
-        self.assert_stage15(r, 'pia-wireguard: stage 15: addKey refused: http 302, status "OK", message ""\n')
+        self.assert_stage15(r, 'pia-wireguard: stage 15: addKey refused: curl 0, http 302, status "OK", message ""\n')
 
     def test_stage_15_message_is_bounded_stripped_and_never_leaks(self):
         hostile = ("\x1b]0;pwned\x07line1\nline2\r" + TOKEN + "\u202e" + PRIV + SERVER_KEY + "z" * 5000)
@@ -273,7 +279,7 @@ class VMStep(unittest.TestCase):
                                                  "server_key": SERVER_KEY, "peer_ip": "10.9.9.9"}))
         self.assertEqual(r.returncode, 15)
         line = r.stderr
-        self.assertTrue(line.startswith('pia-wireguard: stage 15: addKey refused: http 403, status "ERR[31mSSS'), line)
+        self.assertTrue(line.startswith('pia-wireguard: stage 15: addKey refused: curl 0, http 403, status "ERR[31mSSS'), line)
         self.assertEqual(line.count("\n"), 1)
         self.assertTrue(line.endswith('"\n'))
         self.assertTrue(all(" " <= c <= "~" for c in line[:-1]))  # no control or non-ASCII character
