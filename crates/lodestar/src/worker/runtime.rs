@@ -910,6 +910,15 @@ fn hints(s: &Shared, items: Vec<HintItem>) {
 /// to be sealed. A result still out past that (a batch the coordinator
 /// keeps refusing, a spool replayed later) is forgotten, and its own lease
 /// coming back counts as new again, as before the fix.
+///
+/// The TTL is the protocol's default, not the one the coordinator states.
+/// `Welcome` carries the TTL it enforces (`lease_ttl_secs`), but only the
+/// session sees it (`WorkerSession::welcome`), while `Work::connected`
+/// hands the runtime a `SessionHandle`, and the leases are built when the
+/// runtime starts, before any session. Today they're the same number:
+/// `serve` keeps the protocol's TTL (`serve::server_config`). A coordinator
+/// that ever enforced a longer one would make this horizon too short,
+/// which only brings back the old behaviour past it.
 fn out_horizon(config: &Config) -> Duration {
     let ttl = lodestar_cluster::ServerConfig::default().lease_ttl_secs;
     Duration::from_secs(ttl.unsigned_abs()) + config.seal_wait

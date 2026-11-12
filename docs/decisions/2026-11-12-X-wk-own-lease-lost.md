@@ -1,4 +1,4 @@
-# X-wk-own-lease-lost decisions: a worker that re-sights a key it holds never ends its own lease as lost
+# X-wk-own-lease-lost decisions (#727): a worker that re-sights a key it holds never ends its own lease as lost
 
 Found by WK-20's harness (#712, `docs/decisions/2026-11-11-WK-20.md`, finding (a)). Brief: runner, 2026-11-12.
 
@@ -40,6 +40,8 @@ A worker claims every key its DHT sees, including keys it already holds. The coo
 - **Every entry is pruned on `insert` once it's older than the horizon**, a lease TTL (600 s) plus the longest a result may wait to be sealed (`seal_wait`, 600 s). That bounds the map to the results of one horizon.
   - **The limit:** a result still out past the horizon is forgotten. That covers a batch the coordinator keeps refusing for longer, or a spool replayed later, with the session up or not. Its own lease coming back then counts as new, which is the old behaviour, not worse, and the coordinator fences any stale result as before. WK-G's gates should know a holder's sightings stay safe only within the horizon.
 - **The funnel's identity holds:** a held-again grant changes no lease on either side, so harvested = Σ terminal − late + in flight, as the chaos scenario asserts.
+
+**Superseded in part by X-wk-out-set-polish** (`docs/decisions/2026-11-12-X-wk-out-set-polish.md`): finished entries now go after a 60 s grace, at most 50,000 entries are kept, and the memory cost is stated there.
 
 ## Tests
 - **`WorkerLeases` unit tests:**
