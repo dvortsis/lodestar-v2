@@ -457,6 +457,9 @@ struct Inner {
     /// Looks at the helper's answer finished, for the tests.
     #[cfg(test)]
     looks: std::sync::atomic::AtomicU64,
+    /// Answers the looks have tried to record, for the tests.
+    #[cfg(test)]
+    tried: std::sync::atomic::AtomicU64,
     /// The helper's answer whose record failed, until it's recorded.
     unrecorded: Mutex<Option<super::msi::Answer>>,
     /// How long the check loop sleeps at most, for a look even with
@@ -531,6 +534,8 @@ impl Notifier {
                 at_lock: std::sync::atomic::AtomicU64::new(0),
                 #[cfg(test)]
                 looks: std::sync::atomic::AtomicU64::new(0),
+                #[cfg(test)]
+                tried: std::sync::atomic::AtomicU64::new(0),
                 unrecorded: Mutex::new(None),
                 look_every: std::sync::atomic::AtomicU64::new(MAX_SLEEP.as_millis() as u64),
                 installing: Mutex::new(None),
@@ -635,6 +640,9 @@ impl Notifier {
                         blocking(move || n.look()).await;
                     }
                     let wait = n.until_scheduled();
+                    // Off has no check to wait for, but still wakes to look
+                    // at the helper's answer.
+                    let nap = wait.map_or(n.look_every(), |w| w.min(n.look_every()));
                     // The stop first, here and at the lock: a stop that
                     // comes as a check falls due never starts the check,
                     // which would cost the service's stop its whole wait.
@@ -645,9 +653,7 @@ impl Notifier {
                             if r.is_err() { return; }
                             continue;
                         }
-                        // Off has no check to wait for, but still wakes to
-                        // look at the helper's answer.
-                        () = sleep(Some(wait.map_or(n.look_every(), |w| w.min(n.look_every())))) => {}
+                        () = sleep(Some(nap)) => {}
                     }
                     if n.due() {
                         #[cfg(test)]
@@ -805,8 +811,15 @@ impl Notifier {
         // One whose record failed is kept here and tried first: a
         // hand-over may have removed it from `result.json` since.
         let kept = lock(&self.inner.unrecorded).take();
+        // Still in `result.json` too: tried once, not twice.
+        let current = super::msi::answer(&ctx.data_dir).filter(|a| kept.as_ref() != Some(a));
         let now = u64::try_from((self.inner.clock)()).unwrap_or(0);
-        for answer in kept.into_iter().chain(super::msi::answer(&ctx.data_dir)) {
+        // Older first: when both fail, the newer one is what's kept.
+        for answer in kept.into_iter().chain(current) {
+            #[cfg(test)]
+            self.inner
+                .tried
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             // With `clear_history`, one writer at a time.
             let _state = lock(&self.inner.state);
             if let Err((file, e)) =
@@ -817,7 +830,7 @@ impl Notifier {
                     file = file,
                     error = lodestar_log::Error::io(&e)
                 );
-                lock(&self.inner.unrecorded).get_or_insert(answer);
+                *lock(&self.inner.unrecorded) = Some(answer);
             }
         }
         let Some(last) = history::read(&bin)
@@ -2720,6 +2733,47 @@ mod tests {
         let s = UpdatesApi::status(e.n()).await;
         assert_eq!(s.history.len(), 1);
         assert_eq!(s.history[0].result, "failed");
+    }
+
+    /// While the write keeps failing, a kept answer that's still in
+    /// `result.json` is tried once a look, not twice (nor logged twice).
+    #[tokio::test]
+    async fn a_kept_answer_still_in_the_file_is_tried_once() {
+        let e = Env::new(Mode::Notify, InstallKind::Msi);
+        e.n().bin().unwrap();
+        answered(&e, "install_failed", "0.5.4", NOW - 10);
+        std::fs::create_dir(e.bin_file(history::FILE)).unwrap();
+        e.n().look();
+        let tried = || e.n().inner.tried.load(std::sync::atomic::Ordering::SeqCst);
+        let before = tried();
+        e.n().look();
+        assert_eq!(tried() - before, 1);
+    }
+
+    /// Two different answers whose records failed: the newer is kept, so
+    /// a hand-over that removes it from `result.json` doesn't lose it.
+    #[tokio::test]
+    async fn of_two_failed_answers_the_newer_is_kept() {
+        let e = Env::new(Mode::Notify, InstallKind::Msi);
+        e.n().bin().unwrap();
+        std::fs::create_dir(e.bin_file(history::FILE)).unwrap();
+        answered(&e, "install_failed", "0.5.4", NOW - 10);
+        e.n().look();
+        answered_to(&e, &"cd".repeat(16), "rolled_back", "0.5.5", NOW - 5);
+        e.n().look();
+        // As a hand-over does.
+        let updates = e.dir.path().join(super::super::msi::UPDATES);
+        std::fs::remove_file(updates.join(super::super::msi::RESULT)).unwrap();
+        std::fs::remove_dir(e.bin_file(history::FILE)).unwrap();
+        e.n().look();
+        assert_eq!(
+            history_of(&e),
+            [(
+                "0.5.5".into(),
+                "rolled_back".into(),
+                Some("selftest".into())
+            )]
+        );
     }
 
     /// The service's start records the answer through `spawn`.

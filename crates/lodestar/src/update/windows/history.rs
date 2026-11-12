@@ -5,12 +5,13 @@
 //! **The service writes it, never the update helper.** Each time the
 //! service looks (at its start, at every status, at each check-loop wake
 //! and before a hand-over), the helper's last answer
-//! (`<data>\updates\result.json`) is turned into at most one entry. The helper gains no file and no right
-//! (§2.47 Q13). The answer is display-only input that this account can
-//! write too, so it's checked before anything is kept: the version must
-//! parse, the outcome must be one that ends an install, and the time must
-//! be plausible. An entry holds a version, a result, a time and a reason
-//! code: no path, account or setting.
+//! (`<data>\updates\result.json`) is turned into at most one entry. The
+//! helper gains no file and no right (§2.47 Q13). The answer is
+//! display-only input that this account can write too, so it's checked
+//! before anything is kept: the version must parse, the outcome must be one
+//! that ends an install, and the time must be plausible. An entry holds a
+//! version, a result, a time and a reason code: no path, account or
+//! setting.
 
 use std::io;
 
