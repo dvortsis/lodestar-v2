@@ -12,17 +12,23 @@
 //! the budgets and the measured values as a Markdown table (CI passes
 //! `$RUNNER_TEMP/size-report.md`, which a later step copies into the job
 //! summary).
+//!
+//! **10M mode** (`--dataset DIR`, M8-PERF-1) measures a persisted
+//! [`dataset`] instead of building a temporary corpus, and adds the §3
+//! figures the CI gate doesn't check: store plus torrent index (1.5 KB),
+//! the all-in figure (about 2.3 KB, a target, reported), and whether every
+//! field the 1.0 index defines is populated. `--json PATH` writes every
+//! figure against its budget (`bench/README.md`). Without `--dataset` the
+//! run is the CI gate's, unchanged.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
 
+use lodestar_bench::dataset::{self, Row, Status, Totals, load, scrape_all};
 use lodestar_bench::synth::Generator;
-use lodestar_metainfo::Info;
-use lodestar_store::{
-    NewTorrent, Store, StoreConfig, SwarmUpdate, TrackerCounts, WriteBatch, filetree,
-};
+use lodestar_store::{Store, StoreConfig};
 
 /// Budgets in bytes per torrent (owner-set, §3; the runner tunes them under
 /// owner-decisions §2.26, a slice never does) at a ~30-file average. §3 allows 1.5 KB for
@@ -34,6 +40,10 @@ const BLOB_BUDGET: f64 = 600.0;
 const INDEX_BUDGET: f64 = 512.0;
 /// The file index in smart mode (§3).
 const FILE_INDEX_BUDGET: f64 = 800.0;
+/// §3: the canonical store plus the torrent index.
+const STORE_AND_INDEX_BUDGET: f64 = 1536.0;
+/// §3: the honest all-in figure, a target (reported, never gated).
+const ALL_IN_TARGET: f64 = 2.3 * 1024.0;
 
 const USAGE: &str = "usage: size-report [--torrents N] [--seed S] [--train N] \
 [--dict-size BYTES] [--level L] [--db PATH] [--gate] [--summary PATH]
@@ -46,7 +56,13 @@ const USAGE: &str = "usage: size-report [--torrents N] [--seed S] [--train N] \
   --level L         zstd level (default: the store default)
   --db PATH         keep the database at PATH instead of a temp dir
   --gate            exit 1 if a budget is exceeded or a value can't be measured
-  --summary PATH    append the budget table (Markdown) to PATH";
+  --summary PATH    append the budget table (Markdown) to PATH
+
+10M mode (bench/README.md):
+  --dataset DIR     measure (or build once) the persisted dataset for --seed
+                    and --torrents in DIR; another key is refused
+  --low-resource    the low-resource figures (plan RQ8)
+  --json PATH       write every figure against its §3 budget";
 
 struct Args {
     torrents: usize,
@@ -57,6 +73,9 @@ struct Args {
     db: Option<PathBuf>,
     gate: bool,
     summary: Option<PathBuf>,
+    dataset: Option<PathBuf>,
+    low_resource: bool,
+    json: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -69,6 +88,9 @@ fn parse_args() -> Result<Args, String> {
         db: None,
         gate: false,
         summary: None,
+        dataset: None,
+        low_resource: false,
+        json: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
@@ -87,6 +109,9 @@ fn parse_args() -> Result<Args, String> {
             "--db" => args.db = Some(value()?.into()),
             "--gate" => args.gate = true,
             "--summary" => args.summary = Some(value()?.into()),
+            "--dataset" => args.dataset = Some(value()?.into()),
+            "--low-resource" => args.low_resource = true,
+            "--json" => args.json = Some(value()?.into()),
             "-h" | "--help" => return Err(USAGE.to_owned()),
             other => return Err(format!("unknown argument {other}\n\n{USAGE}")),
         }
@@ -94,60 +119,16 @@ fn parse_args() -> Result<Args, String> {
     if args.torrents == 0 {
         return Err("--torrents must be positive".to_owned());
     }
-    Ok(args)
-}
-
-#[derive(Default)]
-struct Totals {
-    files: u64,
-    info_bytes: u64,
-    raw_tree_bytes: u64,
-    generate_parse: std::time::Duration,
-    store: std::time::Duration,
-}
-
-/// Generates and inserts `n` torrents in batches.
-fn load(
-    store: &mut Store,
-    generator: &mut Generator,
-    n: usize,
-    totals: &mut Totals,
-) -> Result<(), Box<dyn std::error::Error>> {
-    const BATCH: usize = 1000;
-    let mut left = n;
-    while left > 0 {
-        let take = left.min(BATCH);
-        left -= take;
-        let t0 = Instant::now();
-        let synth: Vec<_> = generator.by_ref().take(take).collect();
-        let infos: Vec<Info> = synth
-            .iter()
-            .map(|t| Info::parse(&t.info))
-            .collect::<Result<_, _>>()?;
-        totals.generate_parse += t0.elapsed();
-        for (t, info) in synth.iter().zip(&infos) {
-            totals.files += info.files.len() as u64;
-            totals.info_bytes += t.info.len() as u64;
-            totals.raw_tree_bytes +=
-                filetree::encode(&info.files, info.path_encoding)?.len() as u64;
-        }
-        let batch: Vec<_> = synth
-            .iter()
-            .zip(&infos)
-            .map(|(t, info)| NewTorrent {
-                info,
-                raw_info: Some(&t.info),
-                discovered_at: t.discovered_at,
-                metadata_at: t.discovered_at + 5,
-                extra_flags: 0,
-                source: lodestar_store::SourceId::new(0).expect("valid id"),
-            })
-            .collect();
-        let t1 = Instant::now();
-        store.insert(&batch)?;
-        totals.store += t1.elapsed();
+    if args.dataset.is_some() && (args.db.is_some() || args.level.is_some()) {
+        return Err("--dataset is built with the store defaults: no --db or --level".to_owned());
     }
-    Ok(())
+    if args.dataset.is_some() && (args.train != 20_000 || args.dict_size != 112 << 10) {
+        return Err("--dataset is built with the default --train and --dict-size".to_owned());
+    }
+    if args.low_resource && args.dataset.is_none() {
+        return Err("--low-resource needs --dataset".to_owned());
+    }
+    Ok(args)
 }
 
 /// One budget line: what was measured, its value and its budget, in bytes
@@ -184,6 +165,9 @@ struct Report {
     torrents: usize,
     checks: Vec<Check>,
     invalid: Vec<String>,
+    /// 10M mode's rows beyond the gate's checks (reported figures, fields
+    /// not populated, low-resource switches).
+    extra: Vec<Row>,
 }
 
 impl Report {
@@ -198,6 +182,41 @@ impl Report {
                 .checks
                 .iter()
                 .all(|c| c.verdict() != Verdict::Unmeasured)
+    }
+
+    /// Every check as a report row, then the extra ones.
+    fn rows(&self) -> Vec<Row> {
+        let mut rows: Vec<Row> = self
+            .checks
+            .iter()
+            .map(|c| {
+                let mut row = Row::measured(
+                    format!(
+                        "size.{}",
+                        c.what.replace([' ', '(', ')'], "_").trim_end_matches('_')
+                    ),
+                    c.what,
+                    c.got,
+                    "B/torrent",
+                    Some(c.budget),
+                );
+                if c.verdict() == Verdict::Unmeasured {
+                    row.status = Status::Unmeasured(format!("{} is not a measurement", c.got));
+                }
+                row
+            })
+            .collect();
+        rows.extend(self.invalid.iter().map(|reason| {
+            Row::without(
+                "size.coverage",
+                "The indexes hold the whole corpus",
+                "",
+                None,
+                Status::Unmeasured(reason.clone()),
+            )
+        }));
+        rows.extend(self.extra.iter().cloned());
+        rows
     }
 
     fn markdown(&self) -> String {
@@ -238,25 +257,70 @@ fn write_summary(path: Option<&Path>, text: &str) -> std::io::Result<()> {
     writeln!(f, "{text}")
 }
 
-fn run(args: &Args) -> Result<Report, Box<dyn std::error::Error>> {
+/// Build-phase timings, for the throughput line (none for a dataset).
+struct Timings {
+    train: std::time::Duration,
+    recompressed: u64,
+    enrich: std::time::Duration,
+    scrape: std::time::Duration,
+    index: std::time::Duration,
+}
+
+fn run(args: &Args, ds: Option<&dataset::Dataset>) -> Result<Report, Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
-    let path = args
-        .db
-        .clone()
-        .unwrap_or_else(|| tmp.path().join("lodestar.db"));
+    let level = args
+        .level
+        .unwrap_or(StoreConfig::default().compression_level);
+    let (path, index_path, totals, timings) = match ds {
+        Some(ds) => (
+            ds.db(),
+            lodestar_search::index_dir(&ds.index_root()),
+            ds.totals.clone(),
+            None,
+        ),
+        None => {
+            let path = args
+                .db
+                .clone()
+                .unwrap_or_else(|| tmp.path().join("lodestar.db"));
+            let index_path = lodestar_search::index_dir(&tmp.path().join("index"));
+            let (totals, timings) = build(args, &path, &index_path)?;
+            (path, index_path, totals, Some(timings))
+        }
+    };
+    let store = Store::open_reader(&path, StoreConfig::default())?;
+    let index = lodestar_search::SearchIndex::open(&index_path)?;
+    measure(
+        args,
+        &store,
+        &path,
+        &index,
+        &index_path,
+        &totals,
+        timings,
+        level,
+        ds.is_some(),
+    )
+}
+
+/// Builds the temporary corpus the CI gate measures.
+fn build(
+    args: &Args,
+    path: &Path,
+    index_path: &Path,
+) -> Result<(Totals, Timings), Box<dyn std::error::Error>> {
     let mut config = StoreConfig::default();
     if let Some(level) = args.level {
         config.compression_level = level;
     }
-    let level = config.compression_level;
-    let mut store = Store::open(&path, config)?;
+    let mut store = Store::open(path, config)?;
     let mut generator = Generator::new(args.seed);
     let mut totals = Totals::default();
 
     let first = args.train.min(args.torrents);
     load(&mut store, &mut generator, first, &mut totals)?;
     let t0 = Instant::now();
-    let dict = store.train_file_dict(first, args.dict_size)?;
+    store.train_file_dict(first, args.dict_size)?;
     let recompressed = store.recompress_files(1000)?;
     let train_time = t0.elapsed();
     load(
@@ -281,21 +345,45 @@ fn run(args: &Args) -> Result<Report, Box<dyn std::error::Error>> {
 
     // The torrent index (§8), built by the same catch-up path the server
     // uses, then merged as it would be at rest.
-    let index_path = lodestar_search::index_dir(&tmp.path().join("index"));
     let t2 = Instant::now();
-    let index = lodestar_search::SearchIndex::open(&index_path)?;
+    let index = lodestar_search::SearchIndex::open(index_path)?;
     let mut indexer = index.writer(256 << 20)?;
     while indexer.catch_up(&mut store, 5000)? > 0 {
         indexer.commit()?;
     }
     indexer.finish()?;
     let index_time = t2.elapsed();
-    let index_bytes = dir_size(&index_path)? as f64;
+    Ok((
+        totals,
+        Timings {
+            train: train_time,
+            recompressed,
+            enrich: enrich_time,
+            scrape: scrape_time,
+            index: index_time,
+        },
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn measure(
+    args: &Args,
+    store: &Store,
+    path: &Path,
+    index: &lodestar_search::SearchIndex,
+    index_path: &Path,
+    totals: &Totals,
+    timings: Option<Timings>,
+    level: i32,
+    full: bool,
+) -> Result<Report, Box<dyn std::error::Error>> {
+    let index_bytes = dir_size(index_path)? as f64;
     let file_index_bytes = dir_size(&index_path.join("files"))? as f64;
 
     let n = args.torrents as f64;
     let conn = store.connection();
-    let file_bytes = std::fs::metadata(&path)?.len() as f64;
+    let dict: bool = conn.query_row("SELECT count(*) > 0 FROM zstd_dicts", [], |r| r.get(0))?;
+    let file_bytes = std::fs::metadata(path)?.len() as f64;
     let blob_bytes: f64 =
         conn.query_row("SELECT total(length(data)) FROM torrent_files", [], |r| {
             r.get(0)
@@ -323,9 +411,10 @@ fn run(args: &Args) -> Result<Report, Box<dyn std::error::Error>> {
     println!(
         "  file tree, stored   {:.0} B mean (zstd {level}, {} dictionary; {:.1}x)",
         blob_bytes / n,
-        match dict {
-            Some(_) => format!("{} KiB", args.dict_size >> 10),
-            None => "no".to_owned(),
+        if dict {
+            format!("{} KiB", args.dict_size >> 10)
+        } else {
+            "no".to_owned()
         },
         totals.raw_tree_bytes as f64 / blob_bytes
     );
@@ -421,32 +510,54 @@ fn run(args: &Args) -> Result<Report, Box<dyn std::error::Error>> {
         );
     }
 
-    println!(
-        "\n  throughput          generate+parse {:.0}/s, store {:.0}/s; \
-         training + recompressing {} blobs took {:.1} s; enriching {:.0}/s; indexing {:.0}/s; \
-         swarm updates {:.0}/s",
-        n / totals.generate_parse.as_secs_f64(),
-        n / totals.store.as_secs_f64(),
-        group(recompressed),
-        train_time.as_secs_f64(),
-        n / enrich_time.as_secs_f64(),
-        n / index_time.as_secs_f64(),
-        n / scrape_time.as_secs_f64()
-    );
+    if let Some(t) = &timings {
+        println!(
+            "\n  throughput          generate+parse {:.0}/s, store {:.0}/s; \
+             training + recompressing {} blobs took {:.1} s; enriching {:.0}/s; indexing {:.0}/s; \
+             swarm updates {:.0}/s",
+            n / totals.generate_parse.as_secs_f64(),
+            n / totals.store.as_secs_f64(),
+            group(t.recompressed),
+            t.train.as_secs_f64(),
+            n / t.enrich.as_secs_f64(),
+            n / t.index.as_secs_f64(),
+            n / t.scrape.as_secs_f64()
+        );
+    }
 
     let check = |what, got, budget| Check { what, got, budget };
+    let mut checks = vec![
+        check("file-tree blob mean", blob_bytes / n, BLOB_BUDGET),
+        check("canonical store", file_bytes / n, STORE_BUDGET),
+        check("torrent index", index_bytes / n, INDEX_BUDGET),
+        check(
+            "file index (smart)",
+            file_index_bytes / n,
+            FILE_INDEX_BUDGET,
+        ),
+    ];
+    let extra = if full {
+        checks.push(check(
+            "store + torrent index",
+            (file_bytes + index_bytes) / n,
+            STORE_AND_INDEX_BUDGET,
+        ));
+        full_rows(
+            args,
+            index,
+            (file_bytes + index_bytes + file_index_bytes) / n,
+        )
+    } else {
+        Vec::new()
+    };
+    if args.low_resource {
+        // RQ8: no file index in low-resource mode, so its budget doesn't apply.
+        checks.retain(|c| c.what != "file index (smart)");
+    }
     let report = Report {
         torrents: args.torrents,
-        checks: vec![
-            check("file-tree blob mean", blob_bytes / n, BLOB_BUDGET),
-            check("canonical store", file_bytes / n, STORE_BUDGET),
-            check("torrent index", index_bytes / n, INDEX_BUDGET),
-            check(
-                "file index (smart)",
-                file_index_bytes / n,
-                FILE_INDEX_BUDGET,
-            ),
-        ],
+        checks,
+        extra,
         invalid: coverage(
             args.torrents as u64,
             index.num_docs(),
@@ -454,6 +565,13 @@ fn run(args: &Args) -> Result<Report, Box<dyn std::error::Error>> {
             index.num_files(),
         ),
     };
+    if full {
+        println!(
+            "    {:<22} {:>7.1} (target about {ALL_IN_TARGET:.0}, reported)",
+            "all-in",
+            (file_bytes + index_bytes + file_index_bytes) / n
+        );
+    }
     println!("\n  budgets (bytes per torrent)");
     for c in &report.checks {
         let verdict = match c.verdict() {
@@ -469,7 +587,65 @@ fn run(args: &Args) -> Result<Report, Box<dyn std::error::Error>> {
     for reason in &report.invalid {
         println!("    FAIL (invalid measurement): {reason}");
     }
+    for row in &report.extra {
+        if let Status::Unavailable(why) | Status::Unmeasured(why) | Status::Off(why) = &row.status {
+            println!("    {:<22} {why}", row.id);
+        }
+    }
     Ok(report)
+}
+
+/// 10M mode's rows beyond the gate's checks: the all-in figure, every
+/// index field the 1.0 build defines that isn't populated, and in
+/// low-resource mode the switches this build lacks.
+fn full_rows(args: &Args, index: &lodestar_search::SearchIndex, all_in: f64) -> Vec<Row> {
+    let mut rows = vec![Row::measured(
+        "size.all_in",
+        "All-in (target about 2.3 KB per torrent, reported)",
+        all_in,
+        "B/torrent",
+        None,
+    )];
+    let unpopulated = index.unpopulated();
+    if unpopulated.is_empty() {
+        rows.push(Row::measured(
+            "size.fields.unpopulated",
+            "Every 1.0 index field populated",
+            0.0,
+            "fields",
+            Some(0.0),
+        ));
+    }
+    for f in unpopulated {
+        rows.push(Row::without(
+            format!("size.fields.{}", f.field),
+            "Every 1.0 index field populated",
+            "",
+            None,
+            Status::Unavailable(format!("{} is {:?} in this index", f.field, f.availability)),
+        ));
+    }
+    if args.low_resource {
+        rows.push(Row::without(
+            "size.file_index__smart",
+            "file index (smart)",
+            "B/torrent",
+            Some(FILE_INDEX_BUDGET),
+            Status::Off("low-resource mode has no file index".into()),
+        ));
+        for what in ["the trigram field", "the file index"] {
+            rows.push(Row::without(
+                format!("low_resource.switch.{}", what.replace(' ', "_")),
+                "Low-resource mode (§3, plan RQ8)",
+                "",
+                None,
+                Status::Unavailable(format!(
+                    "this build has no switch to turn off {what}: the sizes above include it"
+                )),
+            ));
+        }
+    }
+    rows
 }
 
 /// Reasons the index sizes don't describe the whole generated corpus: an
@@ -487,79 +663,6 @@ fn coverage(torrents: u64, docs: u64, files: u64, indexed_files: u64) -> Vec<Str
         ));
     }
     invalid
-}
-
-/// Trackers in the synthetic scrape list, about a real default list.
-const TRACKERS: usize = 20;
-const SCRAPED_AT: i64 = 1_760_000_000;
-
-/// Writes one scrape result per stored torrent: about 40% of swarms are
-/// live (a heavy tail of seeders, one to six of the 20 trackers reporting,
-/// and history); the rest are dead.
-fn scrape_all(store: &mut Store, seed: u64) -> Result<(), Box<dyn std::error::Error>> {
-    let trackers = (0..TRACKERS)
-        .map(|i| store.upsert_tracker(&format!("udp://tracker{i}.example:6969"), SCRAPED_AT))
-        .collect::<Result<Vec<u16>, _>>()?;
-    let mut after = 0;
-    loop {
-        let ids = store.ids_after(after, 5000)?;
-        let Some(&last) = ids.last() else {
-            return Ok(());
-        };
-        after = last;
-        let updates: Vec<SwarmUpdate> = ids
-            .iter()
-            .map(|&id| synth_swarm(id, seed, &trackers))
-            .collect();
-        store.write(&WriteBatch {
-            swarm: &updates,
-            ..WriteBatch::default()
-        })?;
-    }
-}
-
-fn synth_swarm(id: i64, seed: u64, trackers: &[u16]) -> SwarmUpdate {
-    // splitmix64: a cheap, well-mixed draw per torrent.
-    let mut x = (id as u64 ^ seed).wrapping_add(0x9e37_79b9_7f4a_7c15);
-    x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-    x ^= x >> 31;
-    let live = x % 100 < 40;
-    let mut u = SwarmUpdate {
-        torrent_id: id,
-        at: SCRAPED_AT,
-        seeders: 0,
-        leechers: 0,
-        completed: 0,
-        trackers_reporting: 0,
-        trackers_checked: trackers.len() as u16,
-        dht: ((x >> 40) % 10 < 7).then_some((0, 0)),
-        per_tracker: Vec::new(),
-        next_scrape_at: SCRAPED_AT + 2 * 86_400,
-        flags: 0,
-        interest: false,
-    };
-    if live {
-        // 70% of live swarms under 10 seeders, 25% under 100, 5% under 1,000.
-        let scale = [10, 100, 1_000][((x >> 8) % 100 / 70 + (x >> 8) % 100 / 95) as usize];
-        u.seeders = ((x >> 16) % scale) as u32;
-        u.leechers = u.seeders / 3 + ((x >> 24) % 7) as u32;
-        u.completed = u.seeders * 20 + ((x >> 32) % 100) as u32;
-        let reporting = 1 + (x >> 44) % 6;
-        let first = (x >> 50) as usize;
-        u.per_tracker = (0..reporting as usize)
-            .map(|k| TrackerCounts {
-                tracker: trackers[(first + k * 7) % trackers.len()],
-                seeders: u.seeders,
-                leechers: u.leechers,
-                completed: u.completed,
-            })
-            .collect();
-        u.trackers_reporting = reporting as u16;
-        u.dht = u.dht.map(|_| (u.seeders / 2, u.leechers / 2));
-        u.next_scrape_at = SCRAPED_AT + 6 * 3600;
-    }
-    u
 }
 
 /// Sum of the sizes of the files directly in `dir`. It does not recurse, on
@@ -597,7 +700,21 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let result = run(&args);
+    let ds = match &args.dataset {
+        Some(dir) => {
+            let key = dataset::Key::new(args.seed, args.torrents as u64);
+            eprintln!("dataset {} ({key})", dir.display());
+            match dataset::open_or_build(dir, key, &mut |l| eprintln!("  {l}")) {
+                Ok(ds) => Some(ds),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        None => None,
+    };
+    let result = run(&args, ds.as_ref());
     let text = match &result {
         Ok(report) => report.markdown(),
         Err(e) => {
@@ -609,7 +726,41 @@ fn main() -> ExitCode {
     if let Err(e) = &written {
         eprintln!("error: writing the summary: {e}");
     }
-    if succeeds(args.gate, &result, written.is_ok()) {
+    let mut json_ok = true;
+    if let Some(path) = &args.json {
+        let rows = match &result {
+            Ok(report) => report.rows(),
+            Err(e) => vec![Row::without(
+                "run",
+                "The whole run",
+                "",
+                None,
+                Status::Unmeasured(format!("size-report could not measure: {e}")),
+            )],
+        };
+        let mode = if args.low_resource {
+            "low-resource"
+        } else {
+            "default"
+        };
+        let report = dataset::report(
+            "size-report",
+            mode,
+            ds.as_ref().map(|d| d.key),
+            ds.as_ref().map(|d| d.dir.as_path()),
+            &rows,
+        );
+        if let Err(e) = dataset::write_report(path, &report) {
+            eprintln!("error: writing {}: {e}", path.display());
+            json_ok = false;
+        }
+    }
+    // 10M mode passes only when every row does, the extra ones included.
+    let full_ok = match (&result, &ds) {
+        (Ok(report), Some(_)) => !args.gate || dataset::verdict(&report.rows()) == "pass",
+        _ => true,
+    };
+    if json_ok && full_ok && succeeds(args.gate, &result, written.is_ok()) {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
@@ -642,6 +793,7 @@ mod tests {
                 budget: INDEX_BUDGET,
             }],
             invalid,
+            extra: Vec::new(),
         }
     }
 

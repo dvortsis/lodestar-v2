@@ -8,7 +8,96 @@ gates on (architecture §3, §8, §17). Run each in release:
 | `size-report` | Bytes per torrent against the §3 size budget | `size budget (§3)` |
 | `search-bench` | Search latency p95 per query class, count estimates | `search latency (§3)` |
 | `relevance` | Ranking quality: NDCG@10, MRR, recall@50 | `relevance (§8)` |
+| `search-bench`, `size-report` with `--dataset` | Every §3 row and size figure at 10M, with a JSON report ([10M mode](#10m-mode)) | none yet (M8-PERF-3) |
 | `reporting-overhead` (an example: it needs the API crate, a dev-dependency) | Insights' cost: search p95 and ingest with Insights open and the digest running, rollup bytes per year | `reporting overhead (§3)`, nightly |
+
+## 10M mode
+
+The §3 budgets are set "on a synthetic 10M-torrent / 300M-file dataset, 4
+cores, NVMe". `--dataset DIR` runs `search-bench` and `size-report` there.
+It can't run in a pull request's CI (M8-PERF-3 adds the dedicated runner's
+workflow). The CI gates above don't change: without `--dataset` both bins
+run exactly as before.
+
+```sh
+# Build once (hours at 10M; about 25 GB), then measure. Run each bin in a
+# fresh process: steady-state RSS isn't measured in the process that built.
+cargo run --release -p lodestar-bench --bin size-report -- \
+    --dataset /bench/10m --torrents 10000000 --json size.json
+cargo run --release -p lodestar-bench --bin search-bench -- \
+    --dataset /bench/10m --torrents 10000000 --json search.json --drop-caches
+cargo run --release -p lodestar-bench --bin search-bench -- \
+    --dataset /bench/10m --torrents 10000000 --json search-low.json --low-resource
+```
+
+### The dataset
+
+`lodestar_bench::dataset` builds it once into the folder you name and
+reuses it after that:
+
+- **Keyed** by the dataset format (`dataset::FORMAT`), the generator's
+  version (`synth::VERSION`), the seed and the torrent count, recorded in
+  `dataset.json`. A folder whose key differs is refused, and the message
+  names both keys. Raise `synth::VERSION` in any change to what a seed
+  generates, and `FORMAT` in any change to how a dataset is built.
+- **Never a data directory.** It builds only in a new or empty folder, or
+  one holding a `dataset.json`, and refuses `$LODESTAR_DATA_DIR`.
+- **Built like a real store:** 20,000 torrents, a trained zstd
+  dictionary, the rest with it; enrichment; one scrape a torrent from 20
+  synthetic trackers; a year of Insights rollups (B11a's wide hour, every
+  metric) compacted at the anchor; then both indexes. An interrupted build
+  resumes from its last finished phase.
+- **Deterministic:** nothing reads the clock, so two clean builds of one
+  key give the same SQLite file byte for byte, except two header counters
+  SQLite bumps at each checkpoint (`bench/tests/dataset.rs`).
+  Tantivy names its segments at random, so the indexes match by their
+  documents, not their bytes.
+- **Read-only once built.** The rows that write (new torrent →
+  searchable) run on `DIR/scratch`, a copy made at the start of those
+  rows and removed after them. Leave room for it: as much again as the
+  dataset.
+
+### What runs
+
+`search-bench --dataset` runs every table the CI gate runs, then:
+
+| Row | How |
+|---|---|
+| Cold start | Before anything else: open the store and index, load hot columns from SQLite, answer the first page. Reported. `--drop-caches` (root) drops the page cache first; the row id says whether it did. |
+| Regex | `/…/` queries timed like keyword ones, gated at 500 ms. `unavailable` until the parser accepts a pattern (RX-1). |
+| Insights | The overview's and stage pages' store reads for 24 h to 1 y, uncached, gated at 50 ms. |
+| Steady-state RSS | A mixed load for `--steady-secs` (60) after the tables, sampled every 250 ms; the highest sample is gated (< 1 GiB, < 512 MiB low-resource). |
+| New torrent → searchable | The CI's idle check, then `--nrt-rounds` (50) probes under a background ingest of `--ingest-rate` (100/s); p95 gated at 5 s. The ingest rate reached is a row too. |
+
+`--low-resource` runs the plan's RQ8 subset: no file or regex rows (`off`),
+the RSS budget at 512 MiB. This build has no switch to turn the trigram
+field and the file index off, so those rows are `unavailable` and the
+verdict is `incomplete` until it does.
+
+`size-report --dataset` adds store plus torrent index (≤ 1,536 B), the
+all-in figure (about 2.3 KB, reported), and a row for each index field
+that isn't populated.
+
+### The JSON report
+
+`--json PATH` writes one object:
+
+| Field | What |
+|---|---|
+| `report_format` | 1. Raised when a field changes meaning. |
+| `tool`, `mode` | `search-bench` or `size-report`; `default` or `low-resource`. |
+| `verdict` | `fail` if a row failed; else `incomplete` if one is `unavailable` or `unmeasured`; else `pass`. |
+| `machine` | `cores`, `memory_bytes`, `cpu`, `os`, `arch`, `kernel`, and `disk` (`nvme`, `ssd`, `hdd` or `unknown`) for the dataset's folder. Anything unreadable is `null`. |
+| `dataset` | The key: `format`, `generator`, `seed`, `torrents` (`null` without `--dataset`). |
+| `git` | `rev` (`$GITHUB_SHA`, else `git rev-parse HEAD`) and `dirty`. |
+| `rows` | Each `{id, budget_row, value, unit, budget, status, reason}`. |
+
+A row passes when `value <= budget`. `status` is one of `pass`, `fail`,
+`reported` (no budget in §3), `off` (not offered in this mode),
+`unavailable` (the build can't do it yet) or `unmeasured` (the value can't
+be trusted, say a starved ingest or a dataset built in the same process);
+the last three carry a `reason`. With `--gate`, a `--dataset` run exits 1
+unless the verdict is `pass`. Row ids are stable; M8-PERF-3 gates on them.
 
 ## Reporting overhead
 
