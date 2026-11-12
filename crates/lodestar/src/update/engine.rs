@@ -65,8 +65,8 @@ use super::check::{self, CheckError, Fetch};
 use super::journal::Kept;
 use super::layout::{Bin, Step};
 use super::log_events::{
-    UPDATE_AVAILABLE, UPDATE_CHECK_FAILED, UPDATE_INSTALL_FAILED, UPDATE_OVERLAY_UNREADABLE,
-    UPDATE_STATE_UNREADABLE, UPDATE_STATE_UNSAVED,
+    UPDATE_AVAILABLE, UPDATE_CHECK_FAILED, UPDATE_INSTALL_FAILED, UPDATE_INSTALL_STOPPED,
+    UPDATE_OVERLAY_UNREADABLE, UPDATE_STATE_UNREADABLE, UPDATE_STATE_UNSAVED,
 };
 use super::policy::{self, Block, Reason, Refusal};
 use super::window::{When, Window};
@@ -1278,12 +1278,13 @@ impl Engine {
         *lock(&self.inner.installing) = Some(v.clone());
         let result = self.install_steps(&v).await;
         if result == Err(STOPPING) {
-            // Not a failure of this version: it stays queued, and isn't
-            // held back, for the next start. The service is stopping, so
-            // nothing is published.
+            // Not a failure of this version: it isn't held back, and a
+            // queued one stays queued, for the next start. The service is
+            // stopping, so nothing is published. Logged before `installing`
+            // clears, so a test that waits on that sees the line.
+            log_event!(UPDATE_INSTALL_STOPPED);
             *lock(&self.inner.installing) = None;
             drop(one);
-            log_event!(UPDATE_INSTALL_FAILED, error = STOPPING);
             return result;
         }
         if result.is_ok() {
@@ -1372,9 +1373,8 @@ impl Engine {
         // The service's stop came first: no switch. (A supervisor also
         // drops a switch that meets a forwarded stop; this keeps the
         // version queued and the overlay gone either way.) Nothing awaits
-        // from here to the switch, but the stop is only sent once serving
-        // has drained, so an install can still reach the switch in that
-        // drain.
+        // from here to the switch, and the stop is sent when the shutdown
+        // signal fires, before serving drains (X-upd-stop-early).
         if self.stopping() {
             let _ = bin.remove_overlay(v);
             return Err(STOPPING);
@@ -2296,12 +2296,17 @@ mod tests {
         assert!(!s.releases[0].eligible);
     }
 
+    /// The two tests whose installs are stopped take turns, so each can
+    /// count the `update.install_stopped` lines it adds to the shared log.
+    static STOPS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     /// The service's stop sent once the overlay is staged (here, from the
     /// supervisor's verification, just before the last reverify): no
     /// switch is asked for, the staged folder goes, and the version isn't
     /// held back for the next start.
     #[tokio::test]
     async fn a_stop_before_the_switch_switches_nothing() {
+        let _one = STOPS.lock().await;
         let e = env(Mode::Notify);
         e.serve(NOW - 100, "0.6.0", None);
         e.engine.run_check().await.unwrap();
@@ -2347,6 +2352,76 @@ mod tests {
         ));
         assert_eq!(e.downloads.asked.lock().unwrap().len(), asked);
         task.await.unwrap();
+    }
+
+    /// The same stop on a version queued for the window, once it's due
+    /// (rv-714): it switches nothing, leaves no staged overlay, isn't held
+    /// back, and stays queued for the next start. The stop is logged once,
+    /// at Info, as `update.install_stopped`, never as a failure.
+    #[tokio::test]
+    async fn a_stop_before_the_switch_leaves_a_window_install_queued() {
+        crate::test_log::install();
+        let _one = STOPS.lock().await;
+        let stopped_lines = || {
+            crate::test_log::text()
+                .lines()
+                .filter(|l| l.contains(r#"event="update.install_stopped""#))
+                .count()
+        };
+        let before = stopped_lines();
+        let e = env(Mode::Notify);
+        e.serve(NOW - 100, "0.6.7", None);
+        e.engine.run_check().await.unwrap();
+        e.engine
+            .install_request("0.6.7", InstallWhen::Window, false)
+            .await
+            .unwrap();
+        // NOW is 08:00 UTC; the window opens at 03:00 the next day.
+        let opens = NOW - 8 * 3600 + 86_400 + 3 * 3600;
+        e.set_clock(opens + 60);
+        assert_eq!(e.engine.next_install(), Some((Version::new(0, 6, 7), true)));
+        let (stop, stopped) = watch::channel(false);
+        let stop = Arc::new(stop);
+        let s = stop.clone();
+        let verified = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let v = verified.clone();
+        *lock(&e.on_verify) = Box::new(move || {
+            v.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = s.send(true);
+            None
+        });
+        let task = e.engine.spawn(stopped);
+        e.until("the queued install was stopped", |_| {
+            verified.load(std::sync::atomic::Ordering::SeqCst)
+        })
+        .await;
+        e.until("the install ended", |e| {
+            lock(&e.engine.inner.installing).is_none()
+        })
+        .await;
+        task.await.unwrap();
+        assert!(e.switched().is_empty(), "{:?}", e.switched());
+        let bin = Bin::open(e.dir.path()).unwrap();
+        assert!(bin.overlays().unwrap().is_empty());
+        assert!(lock(&e.engine.inner.failed).is_none());
+        // Still queued, and due, for the next start.
+        assert_eq!(e.engine.next_install(), Some((Version::new(0, 6, 7), true)));
+        // Exactly one line more, at Info: the two stop tests take turns,
+        // and nothing else logs this event.
+        assert_eq!(stopped_lines(), before + 1);
+        let text = crate::test_log::text();
+        let last = text
+            .lines()
+            .rfind(|l| l.contains(r#"event="update.install_stopped""#))
+            .unwrap();
+        assert!(last.contains("INFO"), "{last}");
+        // No stop is ever logged as a failure.
+        assert!(
+            !text
+                .lines()
+                .any(|l| l.contains("update.install_failed") && l.contains("stopping")),
+            "{text}"
+        );
     }
 
     /// Install now: downloaded, staged, verified as the supervisor will,
