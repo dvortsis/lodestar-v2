@@ -5,9 +5,22 @@ Follow-up to X-wk-own-lease-lost (#727), from its review (`reviews/rv-727-ebd93d
 ## What the out set keeps, and for how long
 The out set is the tokens of a worker's results on their way out, in `WorkerLeases` (`crates/pipeline/src/worker.rs`).
 - **While a result is out:** its entry is kept until the horizon, a lease TTL plus `seal_wait`, 1,200 s at defaults.
-- **Once it's committed** (`committed`): the entry is finished and kept for `FINISHED_GRACE` (60 s) only.
-  - That's long enough for the holder's own lease to come back on the claim path after the commit was seen on the results path. The two run milliseconds apart in the runtime.
+- **Once it's committed** (`committed`): the entry is finished and kept for `FINISHED_GRACE` (180 s) only.
+  - **The grace covers the coordinator's writer lag** (the runner's review of #737, rv-737).
+    - `Accepted` means only that the batch is in the coordinator's 16-slot intake queue.
+    - The coordinator ends the lease when its writer commits, behind up to 64 more batches in the writer's queue. Until then it answers the holder's claims with the lease.
+    - 180 s holds while the writer clears a batch every 2.25 s or faster (80 queued batches).
+    - The first draft's 60 s assumed the lease ended at `Accepted`; it doesn't.
   - #727 kept every finished entry until the horizon.
+  - **The window that remains:** a writer lagging more than 180 s (a busy SQLite, a slow disk) still reopens #727's double-hold. The holder's own lease comes back as new, the pool turns it away as a duplicate, and the lease ends as lost while its result waits in the writer's queue.
+  - **The follow-up that closes it: X-wk-fetched-lease** (the runner, 2026-11-12):
+    - the worker sends `Outcome::Fetched` for a batch's leases on `Accepted`;
+    - the coordinator's authority marks those leases fetched;
+    - it answers the holder's own claim on a fetched lease `Denied{Stored}`, so the key never reaches the pool again, and other workers' claims are unchanged;
+    - a fetched lease still expires on the TTL if the writer never commits;
+    - an older worker that never sends `Fetched` gets today's behaviour.
+
+    With that in place the grace can shrink or go.
 - **Once it's released or lost** (`done`): the entry is finished but kept until the horizon, as while out.
   - The coordinator keeps that lease until the loss report lands. The report waits for a session, so with the session down for minutes it can arrive well after a reconnected claim.
   - Until then the coordinator answers the holder's claims with that lease, so the entry must still answer `Out` (rv727, and this PR's self-review B1).
@@ -26,13 +39,16 @@ The out set is the tokens of a worker's results on their way out, in `WorkerLeas
   - **The hash map's slot:** a 20-byte key and a 40-byte value, padded to 64 B, plus a control byte, at its load factor. About 85 B at 50,000 entries: 65,536 buckets × 65 B, about 4.3 MB.
   - **The expiry index:** about 100 B. Keys arrive in rising order, so B-tree leaves split about half full, and there are internal nodes on top.
   - **The finished index:** a little more for finished entries.
-- **Steady state:** what's out (seconds' worth) plus 60 s of committed entries:
-  - about 1.2 MB at 100 results/s;
-  - about 3.5 MB at 250 results/s.
+- **Steady state:** what's out (seconds' worth) plus 180 s of committed entries:
+  - about 18,000 entries, about 3.4 MB, at 100 results/s;
+  - about 45,000 entries, about 8.5 MB, at 250 results/s.
+  - That's near the 50,000 cap. Above about 275 results/s the cap binds: committed entries go first (they expire first), so the grace in effect gets shorter, never the horizon of a lost or out entry.
 - **Worst case: results aren't being committed.** That happens when the coordinator keeps granting leases but refuses the batches (backpressure), or the session drops while the worker still fetches the leases it holds. Then every result stays out until the horizon.
   - That's capped at 50,000 entries, about 10 MB. Past the cap, finished entries go first, then the one due to expire first (above).
   - An unreachable coordinator grants nothing new, so there the set is bounded by the leases already held, at most the pool cap.
-- **For WK-G:** include the out set in the worker RSS gate. Expect at most about 10 MB, and about 1–4 MB in steady state at defaults.
+- **For WK-G:** include the out set in the worker RSS gate.
+  - Expect at most about 10 MB, and about 3–9 MB in steady state at 100–250 results/s.
+  - Note the window that remains (above): a writer lagging more than 180 s can still end a holder's own lease as lost, until X-wk-fetched-lease lands.
 
 ## The horizon's TTL
 - **It's the protocol's default** (`ServerConfig::default().lease_ttl_secs`), not the TTL the coordinator states in `Welcome`.

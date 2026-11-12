@@ -2160,8 +2160,10 @@ async fn send_results(
                 if ok {
                     if let Some(f) = flight.remove(&batch) {
                         s.counts.committed.fetch_add(f.leases.len() as u64, Ordering::Relaxed);
-                        // Committed: their results are no longer out (kept
-                        // briefly, finished, for the claims racing this).
+                        // Accepted: their results are no longer out. Kept,
+                        // finished, for the grace: the coordinator holds the
+                        // lease until its writer commits, and answers this
+                        // worker's claims with it meanwhile.
                         for &(key, token) in &f.leases {
                             s.leases.committed(&InfoHash(key), Token(token));
                         }

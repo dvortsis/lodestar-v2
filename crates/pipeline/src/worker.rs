@@ -49,8 +49,10 @@ use crate::writer::WriterStats;
 /// or lost, and kept: tokens are never reissued, so a finished entry still
 /// answers `Out`. How long it's kept depends on how it finished:
 /// - **committed** ([`committed`](Self::committed)): for
-///   [`FINISHED_GRACE`] only. The commit and the holder's own lease coming
-///   back travel different paths in the runtime, milliseconds apart.
+///   [`FINISHED_GRACE`] only. `Accepted` means the batch is in the
+///   coordinator's intake queue, not that it's written: the coordinator
+///   keeps the lease (and answers the holder's claims with it) until its
+///   writer commits, so the grace covers the writer's lag.
 /// - **released or lost** ([`done`](Self::done)): until the horizon, as
 ///   while out. The coordinator keeps the lease until the loss report
 ///   lands, which can be minutes away (a session down, then back), and
@@ -73,9 +75,14 @@ pub struct WorkerLeases {
     gap: GapHook,
 }
 
-/// How long a committed out entry is kept: long enough for the holder's own
-/// lease to come back after its commit was seen first.
-pub(crate) const FINISHED_GRACE: Duration = Duration::from_secs(60);
+/// How long a committed out entry is kept: the coordinator's writer lag
+/// it covers. The coordinator ends the lease only when its writer commits
+/// the batch, behind up to 16 batches in intake and 64 in the writer's
+/// queue; 180 s holds while the writer clears a batch every 2.25 s or
+/// faster. A writer lagging longer still lets the holder's own lease come
+/// back as new, and end as lost (X-wk-out-set-polish's decisions; the
+/// follow-up X-wk-fetched-lease closes that at the coordinator).
+pub(crate) const FINISHED_GRACE: Duration = Duration::from_secs(180);
 
 /// Out entries kept at most: the worker pool's key cap (plan Q5), about
 /// 10 MB at about 190 B an entry.
@@ -756,6 +763,27 @@ mod tests {
         let well_past_grace = t0 + FINISHED_GRACE + Duration::from_secs(1);
         assert_eq!(l.insert_at(K, Token(7), well_past_grace), Insert::Out);
         assert_eq!(l.insert_at(K, Token(7), t0 + H), Insert::New);
+    }
+
+    /// A writer lagging less than the grace (the coordinator still holds
+    /// the lease, and answers the holder's claim with it) never makes that
+    /// lease look new, so nothing ends it; past the grace it does, the
+    /// window this grace leaves (on the injected clock).
+    #[test]
+    fn a_writer_lagging_less_than_the_grace_ends_no_lease() {
+        let l = tracking();
+        let t0 = std::time::Instant::now();
+        assert_eq!(l.insert_at(K, Token(7), t0), Insert::New);
+        l.send_out_at(&K, t0);
+        // `Accepted`: in the coordinator's intake, not yet written.
+        l.committed_at(&K, Token(7), t0);
+        for lag in [1, 60, 120, 179] {
+            let at = t0 + Duration::from_secs(lag);
+            assert_eq!(l.insert_at(K, Token(7), at), Insert::Out, "{lag} s");
+        }
+        assert_eq!(l.len(), 0, "never held again, so never fed to the pool");
+        assert_eq!(l.take(&K), None, "and nothing for a loss to end");
+        assert_eq!(l.insert_at(K, Token(7), t0 + FINISHED_GRACE), Insert::New);
     }
 
     /// Past the cap, finished entries go first, then the entry due to

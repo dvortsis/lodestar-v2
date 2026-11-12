@@ -41,7 +41,7 @@ A worker claims every key its DHT sees, including keys it already holds. The coo
   - **The limit:** a result still out past the horizon is forgotten. That covers a batch the coordinator keeps refusing for longer, or a spool replayed later, with the session up or not. A worker restart forgets every entry, since they're in memory only. Its own lease coming back then counts as new, which is the old behaviour, not worse, and the coordinator fences any stale result as before. WK-G's gates should know a holder's sightings stay safe only within the horizon.
 - **The funnel's identity holds:** a held-again grant changes no lease on either side, so harvested = Σ terminal − late + in flight, as the chaos scenario asserts.
 
-**Superseded in part by X-wk-out-set-polish** (`docs/decisions/2026-11-12-X-wk-out-set-polish.md`): committed entries now go after a 60 s grace (released or lost ones are still kept to the horizon), at most 50,000 entries are kept, and the memory cost is stated there.
+**Superseded in part by X-wk-out-set-polish** (`docs/decisions/2026-11-12-X-wk-out-set-polish.md`): committed entries now go after a 180 s grace (released or lost ones are still kept to the horizon), at most 50,000 entries are kept, and the memory cost is stated there.
 
 ## Tests
 - **`WorkerLeases` unit tests:**
