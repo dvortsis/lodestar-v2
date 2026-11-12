@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T07:02:51Z",
+  "updated_at": "2026-11-12T07:04:58Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4120,7 +4120,7 @@
     "fixture-specs-ratelimit": "Running all *.fixture.test.ts against one server trips the password rate limit (detail logs in per test); shortcuts.fixture needs a dev build (/dev/shortcuts). S-e2e fixture job must use one server per spec file or a shared storageState login."
   },
   "blocked_on_owner": [],
-  "launches_today": 32,
+  "launches_today": 34,
   "last_heartbeat": "2026-11-12T06:39:51Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
@@ -8122,7 +8122,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T07:02:51Z",
+  "updated": "2026-11-12T07:04:58Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -8328,8 +8328,24 @@
     "note": "Pending: Linux VM Remote Control session (after owner sends SSH key and IP); Windows phase 2 replaces phase 1."
   },
   "extra": {
-    "updated": "2026-11-12T07:02:51Z",
+    "updated": "2026-11-12T07:04:58Z",
     "max": 2,
-    "items": []
+    "items": [
+      {
+        "slice": "GS-0",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhn8qXgAJy8Q8NE66YaY: building per briefs/GS-0.md",
+        "since": "2026-11-12T07:04Z"
+      },
+      {
+        "slice": "UN-0",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhnAdBqiEwP5PvJACUzA: building per briefs/UN-0.md (/security-review)",
+        "since": "2026-11-12T07:04Z"
+      }
+    ],
+    "note": "\u00a72.60: runner holds 2 of the shared 4; ask the cloud tester before a 3rd."
   }
 }
