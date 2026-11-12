@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T11:06:14Z",
+  "updated_at": "2026-11-12T11:10:14Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7948,6 +7948,11 @@
       "pr": 747,
       "sha": "500cb692cdf00568a9a26b5ec73d1be7a603bed2",
       "at": "2026-11-12T11:06:14Z"
+    },
+    {
+      "pr": 750,
+      "sha": "2e6ae3ebcae8d395a21369cd36df677a697542c8",
+      "at": "2026-11-12T11:10:14Z"
     }
   ],
   "active_sessions": {
@@ -8185,7 +8190,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T11:06:14Z",
+    "updated": "2026-11-12T11:10:14Z",
     "items": [
       {
         "slot": 1,
@@ -8234,11 +8239,11 @@
       },
       {
         "slot": 11,
-        "slice": "ENR-10",
+        "slice": "ENR-12",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBLbxrt4466ABDDCXp: PR #750 (27640fbb) fresh Opus review running; CI running",
-        "since": "2026-11-12T07:37:09Z",
+        "doing": "#750 ENR-10 merged; ENR-12 Identified-as detail API + N6/N7 (briefs/ENR-12.md)",
+        "since": "2026-11-12T11:10:14Z",
         "status": "active"
       },
       {
@@ -8318,7 +8323,7 @@
     }
   ],
   "heartbeat": "2026-11-12T09:44:56Z",
-  "updated": "2026-11-12T11:06:14Z",
+  "updated": "2026-11-12T11:10:14Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
