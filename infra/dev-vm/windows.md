@@ -10,13 +10,15 @@ One AWS Windows Server instance that Claude creates, tests on and deletes. It ru
 | Backstop | `lodestar-expiration-guard` terminates it at `min(ExpiresAt, start + 48 h)`. Its deletion path is unproven, so Claude deletes it itself and checks |
 | Access | SSM Run Command (`AWS-RunPowerShellScript`) only. No RDP, no key pair, no inbound port |
 
+**The AWS connector's tool gives up on a script after 60 s.** Keep each call short: send a create, then check its status in separate calls. Never loop inside one call for longer than about 45 s.
+
 ## Two phases, because a session reads its connectors when it starts
 
 ### Phase 1: setup, on the owner's one-time admin sign-in
 The owner has signed the AWS MCP connector in as their admin. A new session started after that does only this, then stops:
 1. **Find the IDs; never write them to the repo.**
-   - VPC and security group: `DescribeStacks` on `lodestar-expiration-guard`, parameters `LodestarVpcId` and `WindowsSecurityGroupId`.
-   - Subnet: `DescribeSubnets` in that VPC. If there's more than one, ask the owner.
+   - VPC, subnet, security group and instance profile: the **outputs** of the `lodestar-foundation` stack. The guard stack's live parameters hold only `NotificationEmail`.
+   - Subnet: confirm with `DescribeSubnets` in that VPC. If there's more than one, ask the owner.
    - Instance profile and its role: `ListInstanceProfiles`. Expect one Lodestar profile; check that the role has `AmazonSSMManagedInstanceCore`.
 2. **Check the way out to the internet.** Claude Code, GitHub, rustup and Node all need it.
    - Look at the subnet's route table (its explicit association, else the VPC's main one) for `0.0.0.0/0` to an `igw-` or a `nat-`.
@@ -38,7 +40,11 @@ The owner has signed the AWS MCP connector in as their admin. A new session star
 A new session, started after the swap. First check `GetCallerIdentity`: the ARN must end in `user/lodestar-claude-testvm`. If it doesn't, stop.
 1. **One at a time:** refuse if any `Project=Lodestar` instance is pending, running, stopping or stopped.
 2. **Launch**, matching `infra/akamai/terraform/scripts/Deploy-AwsWindows.ps1` (lines 155–164):
-   - the image, subnet, security group and instance profile;
+   - the image and instance profile;
+   - **a public IPv4 address:** `NetworkInterfaces=[{DeviceIndex: 0, SubnetId, Groups: [SG], AssociatePublicIpAddress: true}]`, with no top-level `SubnetId` or `SecurityGroupIds`.
+     - **Why:** the subnet routes `0.0.0.0/0` to an internet gateway but has `MapPublicIpOnLaunch=false`, and there's no NAT gateway and no VPC endpoint. Without a public address, the instance can't reach SSM or the internet.
+     - It's still unreachable from outside, because the security group allows no inbound traffic. The address costs about $0.005/h.
+     - `Deploy-AwsWindows.ps1` doesn't do this yet; that's a follow-up for the runner.
    - `MetadataOptions.HttpTokens=required`;
    - `/dev/sda1` with `VolumeSize=100, Encrypted=true`;
    - tags `Project=Lodestar`, `Environment=Test`, `ManagedBy=Terraform`, `ExpiresAt=<now + lane length, at most 48 h, %Y-%m-%dT%H:%M:%SZ>` on both the instance and the volume.

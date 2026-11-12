@@ -10,7 +10,7 @@ TEMPLATE = Path(__file__).resolve().parents[1] / "aws-claude-testvm.json"
 def statements():
     t = json.loads(TEMPLATE.read_text())
     user = t["Resources"]["ClaudeTestVmUser"]["Properties"]
-    return t, user, user["Policies"][0]["PolicyDocument"]["Statement"]
+    return t, user, t["Resources"]["ClaudeTestVmPolicy"]["Properties"]["PolicyDocument"]["Statement"]
 
 
 def actions(st):
@@ -24,10 +24,18 @@ class PolicyTests(unittest.TestCase):
         self.assertIsNone(re.search(r"\b\d{12}\b", text))
         self.assertIsNone(re.search(r"\b(subnet|sg|vpc|ami|i)-[0-9a-f]{8,17}\b", text))
 
-    def test_only_the_mcp_sign_in_managed_policy(self):
+    def test_only_the_mcp_sign_in_policy_and_our_own(self):
         _, user, _ = statements()
-        self.assertEqual(user["ManagedPolicyArns"], ["arn:aws:iam::aws:policy/AWSMCPSignInOAuthAccessPolicy"])
+        self.assertEqual(user["ManagedPolicyArns"],
+                         ["arn:aws:iam::aws:policy/AWSMCPSignInOAuthAccessPolicy", {"Ref": "ClaudeTestVmPolicy"}])
         self.assertNotIn("Groups", user)
+        self.assertNotIn("Policies", user)
+
+    def test_policy_fits_iams_managed_policy_limit(self):
+        t, _, _ = statements()
+        doc = t["Resources"]["ClaudeTestVmPolicy"]["Properties"]["PolicyDocument"]
+        # IAM counts the policy without whitespace; Fn::Sub ARNs grow by the account ID.
+        self.assertLess(len(json.dumps(doc, separators=(",", ":"))) + 12 * 20, 6144)
 
     def test_no_wildcard_writes(self):
         _, _, sts = statements()
