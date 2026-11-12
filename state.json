@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T03:14:46Z",
+  "updated_at": "2026-11-12T03:21:26Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7073,7 +7073,12 @@
       "at": "2026-11-12T03:14:46Z"
     },
     "owner FYI owed: #726 X-pk-ui-polish merged (91af6c9d)",
-    "slices.yaml next runner PR: X-win-clippy entry (Sonnet; owns ci.yml test-job step + lint-only lines)"
+    "slices.yaml next runner PR: X-win-clippy entry (Sonnet; owns ci.yml test-job step + lint-only lines)",
+    {
+      "id": "owner-flag-out2-budgets",
+      "note": "\u00a72.19 flag owed: OUT-2 budgets: FiltersScreen first view 31.14->31.24 KB and SourcesScreen 31.1->31.2 KB approved (\u00a72.26, registry-entry precedent); Settings section (45.1 KB, already over \u00a710.1 45 KB) NOT raised, OUT-2 must recover >= 62 B",
+      "at": "2026-11-12T03:21:26Z"
+    }
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -8033,7 +8038,7 @@
     }
   ],
   "heartbeat": "2026-11-12T00:38:52Z",
-  "updated": "2026-11-12T03:14:46Z",
+  "updated": "2026-11-12T03:21:26Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
