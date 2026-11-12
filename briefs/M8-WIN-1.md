@@ -4,7 +4,7 @@
 Runner brief, 2026-11-12T18:51Z. Epic M8, on the path to G-v1-windows (the owner runs the soak on their own Windows PC). Deps ext:v051-soak-verdict and ext:owner-m8-q3 hold.
 
 ## Read first
-- `docs/plan/2026-11-06-m8-hardening.md`: the "Windows soak" row (~27), the slice row (~61), G-v1-windows (~87), and the owner's OQ3 answer recorded under `docs/owner-decisions.md` (search "m8-q3" / "OQ3").
+- `docs/plan/2026-11-06-m8-hardening.md`: the "Windows soak" row (~27), the slice row (~61), G-v1-windows (~87), and OQ3 in §5 (~221): 24 h in MSI service mode on the RC, CR-0's memory rule, plus no crash or service restart, an upgrade from the last public release and a clean uninstall. Decided as recommended under `docs/owner-decisions.md` §2.46 (`owner-m8-q3`); `docs/decisions/2026-11-06-runner-planning-wave-answers.md` has the reason.
 - `docs/decisions/2026-10-30-CR-0-acceptance.md` (the memory rule) and `docs/soak/tools/analyze_cr0.py` (`MEMORY_FIT`), `cr0-soak.ps1`, `cr0-common.ps1`, `test_analyze_cr0.py`.
 - Use the project skill `user-docs` for the runbook's wording (the reader may not know Windows services).
 
