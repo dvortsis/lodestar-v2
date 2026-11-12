@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T23:25Z",
+  "updated_at": "2026-11-12T23:27Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7757,6 +7757,11 @@
       "id": "percolate-held-explicit",
       "note": "Next slice touching crates/search percolate.rs: return held ids explicitly (replace store inference in #803) and fix stale Due::hold_unresolved doc comment.",
       "added": "2026-11-12T23:25Z"
+    },
+    {
+      "id": "owner-632-ultrareview",
+      "note": "OWNER FYI (unverified relay via codebase-review -> P-master-plan-r4): Ultrareview of #632 feat/lodestar-secure-pia-bridge, 11 findings. Possible live-fleet blockers: (1) deployment_policy.py:110 rejects any OIDC token with job_workflow_ref (test asserts it); (2) cloud-init limits lodestar sudo but deliver.py/steps/remote.py use sudo -n bash/flock; (3) secrets dir no longer created; (4) PIA regions with underscores never match. OWNER DECISION (5): owner-approval rule on cloud-fleet also gates hourly reaper and pia-release (security vs cost). Others: no cleanup on failed start_vpn (WG key left), mutable v0.5.1 tag, unpinned pip cryptography, no decisions file, two docs with a local zone name (\u00a72.35), action-name comment. Runner leaves #632 alone (standing instruction).",
+      "added": "2026-11-12T23:27Z"
     }
   ],
   "main_health": [
@@ -8779,7 +8784,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T23:25Z",
+    "updated": "2026-11-12T23:27Z",
     "items": [
       {
         "slot": 1,
@@ -9127,7 +9132,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-12T23:25Z",
+  "updated": "2026-11-12T23:27Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
