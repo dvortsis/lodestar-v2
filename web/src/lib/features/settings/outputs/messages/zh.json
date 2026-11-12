@@ -54,7 +54,7 @@
 	"settings_outputs_bitmagnet_heading": "bitmagnet 导出",
 	"settings_outputs_bitmagnet_intro": "把你的种子下载为 bitmagnet 可以导入的文件。之后 bitmagnet 会自己从 DHT 获取每个种子的详情。",
 	"settings_outputs_bitmagnet_left_out": "始终不包含：来自私有来源和私有 Tracker 的种子、隐藏的种子、未验证的种子，以及任何被屏蔽或已删除的内容。成人种子默认不包含，除非你在下面选择包含。",
-	"settings_outputs_bitmagnet_import": "要导入文件，请把它发送到 bitmagnet 的导入地址。例如，bitmagnet 运行在同一台电脑的 3333 端口时：",
+	"settings_outputs_bitmagnet_import": "要导入文件，请把它发送到 bitmagnet 的导入地址。把 <bitmagnet-host> 换成运行 bitmagnet 的电脑的地址：",
 	"settings_outputs_bitmagnet_start": "下载导出文件",
 	"settings_outputs_bitmagnet_waiting": "正在开始导出…",
 	"settings_outputs_bitmagnet_running": "已导出 {done} / {total} 个种子…",
@@ -82,6 +82,5 @@
 	"settings_outputs_adult_load_failed": "无法加载此设置。",
 	"settings_outputs_adult_read_only": "由 Lodestar 的配置设置，无法在此更改。",
 	"settings_outputs_bitmagnet_stale": "Lodestar 无法更新这次导出的进度，它可能仍在运行。",
-	"settings_outputs_bitmagnet_example": "导入命令示例",
 	"settings_outputs_bitmagnet_warning": "警告："
 }

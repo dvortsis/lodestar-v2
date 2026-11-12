@@ -299,14 +299,10 @@
 	</div>
 
 	<p class="text-small">{m.settings_outputs_bitmagnet_import()}</p>
-	<!-- Focusable, so a keyboard can scroll it sideways on a narrow screen. -->
-	<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+	<!-- Wrapped, not scrolled: the whole command reads at every width, and copies as one line. -->
 	<pre
-		tabindex="0"
-		role="region"
-		aria-label={m.settings_outputs_bitmagnet_example()}
-		class="overflow-x-auto rounded-box bg-base-200 p-3 font-mono text-small {FOCUS_RING}"
+		class="whitespace-pre-wrap break-all rounded-box bg-base-200 p-3 font-mono text-small"
 		data-testid="outputs-bitmagnet-curl"><code
-			>curl --data-binary @lodestar-export-YYYYMMDD-HHMMSS.bitmagnet.ndjson http://localhost:3333/import</code
+			>curl --data-binary @lodestar-export-YYYYMMDD-HHMMSS.bitmagnet.ndjson http://&lt;bitmagnet-host&gt;:3333/import</code
 		></pre>
 </div>
