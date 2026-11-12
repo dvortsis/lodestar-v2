@@ -370,7 +370,7 @@ fn run_promoted(
     // unless the queue's end (or a row the index hasn't reached) came
     // first, when the next run retries the held rows from the head.
     let examined = done.len() + held.len();
-    seen.promoted_after = if whole && rows.len() == PROMOTED_BATCH {
+    let after = if whole && rows.len() == PROMOTED_BATCH {
         rows[examined - 1].seq
     } else if stopped {
         examined
@@ -383,6 +383,7 @@ fn run_promoted(
     // once: a batch of held rows waits for a commit or the idle poll.
     run.more |= stopped || (whole && rows.len() == PROMOTED_BATCH && !done.is_empty());
     if done.is_empty() && hits.is_empty() {
+        seen.promoted_after = after;
         seen.held.extend(held);
         return Ok(());
     }
@@ -401,7 +402,9 @@ fn run_promoted(
         .collect();
     run.created
         .extend(store.record_promoted_rows(&done, &results, now)?);
-    // Only once recorded: a failed write retries every search.
+    // Only once recorded: after a failed write the same batch is taken
+    // again, with every search.
+    seen.promoted_after = after;
     for seq in &done {
         seen.held.remove(seq);
     }
@@ -446,6 +449,12 @@ fn matched_promoted(
     let p = percolate(index, &due, row.torrent_id, limits, now, cancel)?;
     if p.stopped {
         return Ok(None);
+    }
+    // A torrent the snapshot no longer reaches (removed since, and the
+    // highest id) matches nothing: the row is done, never held for ever
+    // on a search `percolate` passed over because its range was empty.
+    if p.snapshot_max < row.torrent_id {
+        return Ok(Some(Vec::new()));
     }
     let ran: HashSet<i64> = p
         .matched
@@ -1719,6 +1728,59 @@ mod tests {
         finish_backfill(&mut s);
         s.index.refresh().unwrap();
         assert_eq!(held(&s), Some(vec![]));
+    }
+
+    /// Under a spent budget each run finishes one row and stops at the
+    /// next. The cursor moves past a held row, so the rows behind it
+    /// still go, one a run, and the held one waits for Ready.
+    #[test]
+    fn a_spent_budget_steps_past_a_held_row() {
+        let (mut s, item) = disk_setup();
+        let w = s.index.watermark().unwrap();
+        let sig = save(&mut s.store, "sig", &sig_of(5), w);
+        // Past `sig`'s watermark, so not due for it.
+        let free: Vec<i64> = (0..2)
+            .map(|i| unverified(&mut s.store, &format!("Promo.Late.{i}")))
+            .collect();
+        add(&mut s.store, &names(20, 22));
+        index_all(&s.index, &mut s.store);
+        let w2 = s.index.watermark().unwrap();
+        let promo = save(&mut s.store, "promo", "Promo", w2);
+        start_backfill(&mut s);
+        promote(&mut s.store, item, "Promo.Even", 0);
+        for (i, id) in free.iter().enumerate() {
+            promote(&mut s.store, *id, &format!("Promo.Late.{i}"), 0);
+        }
+        let mut w = s.index.writer(15 << 20).unwrap();
+        w.catch_up(&mut s.store, 3).unwrap();
+        w.commit().unwrap();
+        drop(w);
+        assert_backfilling(&s.index);
+        let spent = PercolatorConfig {
+            budget: Duration::ZERO,
+            ..quick()
+        };
+        let mut seen = Seen::default();
+        let mut go = |s: &mut Setup| {
+            run_once(&s.index, &mut s.store, None, w2, &spent, NOW, &mut seen).unwrap()
+        };
+        let counts = |r: &Run| (r.promoted, r.promoted_held, r.more);
+        // The held row first (it's the run's first, so it finishes), then
+        // stopped at the next.
+        assert_eq!(counts(&go(&mut s)), (0, 1, true));
+        assert_eq!(counts(&go(&mut s)), (1, 0, true));
+        assert_eq!(alert_ids(&s.store, promo), [item, free[0]]);
+        let r = go(&mut s);
+        assert_eq!((r.promoted, r.promoted_held), (1, 0));
+        assert_eq!(alert_ids(&s.store, promo), [item, free[0], free[1]]);
+        assert_eq!(s.store.promoted_due(i64::MAX, 10).unwrap().len(), 1);
+        // From the head again: still held.
+        assert_eq!(counts(&go(&mut s)), (0, 1, false));
+        finish_backfill(&mut s);
+        let r = go(&mut s);
+        assert_eq!(r.promoted, 1);
+        assert!(alert_ids(&s.store, sig).contains(&item));
+        assert!(s.store.promoted_due(i64::MAX, 10).unwrap().is_empty());
     }
 
     /// A restart while a row is held: it's still queued, and runs once
