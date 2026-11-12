@@ -619,25 +619,26 @@ fn damage_logged(s: &Spool) -> u64 {
 }
 
 /// Damage is logged by segment, one line per segment the first time it's
-/// read, however many of its frames are bad and however often it's read
-/// again; a torn tail and a bad header at open log one each.
+/// read, however many of its records are damaged and however often it's
+/// read again; a torn tail and a bad header at open log one each.
 #[test]
 fn damage_is_logged_once_per_segment() {
+    // Four records that don't open (sealed under another key): damage that
+    // doesn't stop the segment, so all four are found, and still one line.
     let dir = tempfile::tempdir().unwrap();
-    let mut s = spool(dir.path(), Caps::default());
+    let other_key = Arc::new(SecretStore::from_key(&[9; 32]));
+    let mut s = Spool::open(dir.path(), W, Caps::default(), other_key).unwrap();
     for b in 1..=4 {
         s.append(&record(b, NOW, 200), NOW).unwrap();
     }
     s.close_active().unwrap();
-    let path = only_segment(dir.path());
-    let mut bytes = fs::read(&path).unwrap();
-    let frame = (bytes.len() - HEADER_LEN) / 4;
-    // Two bad frames part-way: still one line.
-    bytes[HEADER_LEN + frame + FRAME_HEAD + 5] ^= 0x40;
-    bytes[HEADER_LEN + 2 * frame + FRAME_HEAD + 5] ^= 0x40;
-    fs::write(&path, &bytes).unwrap();
+    drop(s);
+    let mut s = spool(dir.path(), Caps::default());
     for _ in 0..3 {
-        assert_eq!(s.read(1, NOW).unwrap().records.len(), 1);
+        let seg = s.read(1, NOW).unwrap();
+        assert!(seg.records.is_empty());
+        assert_eq!(seg.damage.len(), 4, "{:?}", seg.damage);
+        assert!(seg.damage.iter().all(|d| d.part == "seal"));
     }
     assert_eq!(damage_logged(&s), 1);
 
@@ -666,6 +667,68 @@ fn damage_is_logged_once_per_segment() {
     drop(other);
     let s = spool(dir.path(), Caps::default());
     assert_eq!(damage_logged(&s), 1);
+}
+
+/// Every pipeline event logged in this test binary, as its id, its field
+/// names and its line with nothing masked.
+fn capture() -> &'static Capture {
+    static SINK: std::sync::OnceLock<Capture> = std::sync::OnceLock::new();
+    let sink = SINK.get_or_init(|| Capture(std::sync::Mutex::new(Vec::new())));
+    let _ = lodestar_log::set_sink(sink);
+    for e in lodestar_pipeline::log_events::CATALOGUE.events {
+        e.set_on(true);
+    }
+    sink
+}
+
+struct Capture(std::sync::Mutex<Vec<(&'static str, Vec<&'static str>, String)>>);
+
+impl lodestar_log::Sink for Capture {
+    fn record(&self, record: &lodestar_log::Record<'_>) {
+        self.0.lock().unwrap().push((
+            record.event.id,
+            record.fields.iter().map(|(name, _)| *name).collect(),
+            record.text(lodestar_log::Mask::NONE, None),
+        ));
+    }
+}
+
+/// The damage line names the segment by its number, in decimal, and the
+/// part, and nothing else: no path, no byte, no other field. (Other tests
+/// in this binary log too, so it's found by its segment number, which only
+/// this test uses.)
+#[test]
+fn the_damage_line_carries_only_the_segment_number_and_part() {
+    let sink = capture();
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = spool(dir.path(), Caps::default());
+    s.append(&record(1, NOW, 10), NOW).unwrap();
+    s.close_active().unwrap();
+    drop(s);
+    // Segment 1's file under segment 5001's name: its header names
+    // another number, so it's dropped at open.
+    let renamed = dir.path().join(format!("{:016x}.lsp", 5001));
+    fs::rename(dir.path().join("0000000000000001.lsp"), &renamed).unwrap();
+    let s = spool(dir.path(), Caps::default());
+    assert_eq!(damage_logged(&s), 1);
+    assert!(!renamed.exists());
+    let event = &lodestar_pipeline::log_events::SPOOL_DAMAGED::EVENT;
+    let lines: Vec<_> = sink
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, _, text)| text.contains("segment=5001 "))
+        .cloned()
+        .collect();
+    assert_eq!(
+        lines,
+        vec![(
+            "pipeline.spool_damaged",
+            vec!["segment", "part"],
+            format!("{} segment=5001 part=header", event.message),
+        )]
+    );
 }
 
 /// However much of the spool is damaged, it logs at most

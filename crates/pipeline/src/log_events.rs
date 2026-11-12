@@ -46,8 +46,8 @@ lodestar_log::catalogue! {
     /// header doesn't read or names another worker, its last write was
     /// torn, or damage stops it part-way. What can't be read is dropped
     /// and counted; the rest is replayed. Named by the segment's number, in
-    /// decimal (its file name is that number in 16 hex digits), and the part
-    /// that failed first, never a byte of it. One line per segment, the
+    /// decimal (its file name is that number in 16 hex digits), and the first
+    /// damaged part found, never a byte of it. One line per segment, the
     /// first time it's read, and at most `spool::MAX_DAMAGE_LOGS` a spool.
     SPOOL_DAMAGED {
         id: "pipeline.spool_damaged",
