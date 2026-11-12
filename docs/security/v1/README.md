@@ -21,7 +21,7 @@ Each surface is one read-only review slice and writes one report in this folder.
 A finding that belongs to another surface is still recorded, in the report of the review that found it, with a note naming the surface it belongs to. Nothing is dropped because it's out of scope.
 
 ## 2. How a review runs
-1. **Pin the head.** The review names the commit of `main` it reads, in full, at the top of its report. Every finding refers to that commit.
+1. **Pin the head.** The review names the commit it reads (`main` for M8-SEC-1..8, `release/v1.0` for the RC delta review), in full, at the top of its report. Every finding refers to that commit.
 2. **A fresh reviewer.** A fresh Opus reviewer reads the surface's code at that head. It is given the code and the spec sections, not anyone's opinion of the code.
 3. **Read-only.** The review changes no code, test or workflow. Its only output is its report and the held details (§5).
 4. **The threat model first.** Before reading for bugs, the report writes down for its surface:
@@ -36,12 +36,15 @@ A finding that belongs to another surface is still recorded, in the report of th
    - failures close safely: a filter that can't load hides, it doesn't show; a signature that can't be checked means no install;
    - every `unsafe` block has a stated invariant that holds.
 6. **Fuzzing** (M8-SEC-1, and any other surface with a fuzz target): run the targets for the time the slice gives, and record each target's run time, executions and result. A crash is a finding.
+   - **Where:** the review's long runs happen inside the review session's own container, never in a GitHub Actions job. CI's `fuzz` job and any scheduled long-run workflow are public: libFuzzer prints the crashing input in the log and the job uploads it as an artifact.
+   - **A crash input never goes into** `fuzz/seeds/`, a corpus, a commit or a CI artifact while its finding is held. It travels with the finding's detail (§5) and lands with the exact-input test after the release.
+   - **A crash first seen in public CI counts as already disclosed.** It is still rated, gets an id and a fix slice, and is fixed first; nothing about it is held, because it can't be.
 7. **Re-run the checks.** If the review relies on a test passing, it runs that test itself at the pinned head.
 
 ## 3. Severity
 Severity follows `runner/standards.md` §5, read for security. When a finding could fit two levels, it takes the higher one.
 
-- **Blocking:** an attacker from the threat model (§2 step 4) can break a guarantee the spec makes. Examples: getting past authentication or the setup token; reading or changing data or settings without permission; running code; reaching a host or network the policy forbids; getting past the child-safety core, its locked floor or the weakening guardrails; a secret leaking; an unsigned update being installed; a crash, hang or memory or CPU blow-up that untrusted input can trigger. 
+- **Blocking:** an attacker from the threat model (§2 step 4) can break a guarantee the spec makes. Examples: getting past authentication or the setup token; reading or changing data or settings without permission; running code; reaching a host or network the policy forbids; getting past the child-safety core, its locked floor or the weakening guardrails; a secret leaking; an unsigned update being installed; a crash, hang or memory or CPU blow-up that untrusted input can trigger.
 - **Important:** a weakness that needs a precondition the threat model doesn't grant the attacker today, a missing layer of defence in depth, or a gap that later slices would inherit. Example: a bound that holds only because a caller happens to enforce it.
 - **Polish:** hardening with no plausible way to exploit it. A reviewer who sees a way to exploit a polish finding rates it higher instead.
 
@@ -63,7 +66,7 @@ The fix's own code change necessarily shows where the flaw was; that is the one 
 - any file on any branch of this repository, `runner-state` and its briefs included;
 - a commit message, pull request title or body, review, or comment;
 - an issue, discussion, or CI log or artifact;
-- a slice id or title in `runner/slices.yaml`, or `runner/dashboard.yaml`;
+- a slice id, title or `owns` entry in `runner/slices.yaml`, or `runner/dashboard.yaml`. A fix slice's `owns` names only the component or crate (for example `crates/api/**`), never the flawed file;
 - an Artifact page, a shared document or any other outside service.
 
 **Where it goes:**
@@ -97,7 +100,7 @@ Each review writes `docs/security/v1/<n>-<surface>.md` with these sections, in t
    | S2-02 | important | fixed in v1.0.0 | (full summary, once released) |
    | S2-03 | polish | backlog | (full summary) |
 
-   Status is one of `held`, `fixed on main, held`, `fixed in <version>`, or `backlog` for polish.
+   Status is one of `held`, `fixed on main, held`, `fixed in <version>`, `backlog` for polish, or `not a flaw` for a finding the owner closes as one (its detail is then recorded in full, unless it is content-safety material, §5).
 5. **Cross-surface notes:** findings that belong to another surface (§1).
 
 ## 8. Outside reports

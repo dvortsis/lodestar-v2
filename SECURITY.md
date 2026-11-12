@@ -22,7 +22,8 @@ That button is the only reporting channel. There is no security email address.
 - the Docker image, the Unraid template and the Windows installer;
 - the update engine, including how it checks signatures;
 - the cluster (worker mode) and the companion manager;
-- the GitHub Actions workflows in `.github/workflows/`.
+- the GitHub Actions workflows in `.github/workflows/`;
+- the project's deployed roadmap dashboard (`tools/status-connector`).
 
 Examples: getting past the login or the setup token, reading or changing data without permission, getting past the child-safety core, a crash or runaway memory or CPU use caused by network input or a search query, a leak of credentials or torrent details into logs, and a way to make the updater install something that isn't signed.
 
