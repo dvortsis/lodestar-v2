@@ -1481,6 +1481,11 @@ owner_queue:
   action: 'Runner calls you may want to veto (§2.19): Torznab keys are shown once, when made or regenerated, and only after you enter your password (OUT-2); the installer pin check for SourceForge downloads (size, MD5, exact path, signature date near the GitHub tag; X-cmp13-installer-pins); the Legal Notice on main now says it applies to main''s development builds, not 0.5.2 (§2.57)'
   unblocks: Nothing; these go ahead unless you object
   when: Any time
+- n: 12
+  type: action
+  action: 'Deploy the status connector: add the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets (repository Settings, Actions, or the status-connector-deploy environment) and re-run "Status connector deploy", or run `npx wrangler deploy` from tools/status-connector. Without them the workflow only runs the tests, so #742 is merged but not live'
+  unblocks: The dashboard's per-hour activity bars (#742)
+  when: Any time
 
 gates:
 - id: G-v05
@@ -1700,7 +1705,7 @@ notes:
       controls and the Internet Archive reader are next. Your answers on terms of service, private sources, caches and
       the Sukebei feed are recorded, so the main plug-in can start once its foundations land.
   - label: Four slots
-    text: 'By your instruction at most twelve worker slots run at once from 2026-11-11T21:41Z, filled only when ready work fits the plan (owner-decisions §2.56, replacing §2.54''s eight). The runner paused on 2026-11-09 at your request and resumed on your command on 2026-11-11. The runner approves best-practice UX and performance decisions itself, listing them in the daily summary (§2.33). The runner keeps the current list in its state file, shown on the slots view.'
+    text: 'By your instruction at most eight worker slots run at once from 2026-11-12T06:03Z, filled only when ready work fits the plan (owner-decisions §2.59, replacing §2.56''s twelve). Sessions already running finish their slices first. The runner paused on 2026-11-09 at your request and resumed on your command on 2026-11-11. The runner approves best-practice UX and performance decisions itself, listing them in the daily summary (§2.33). The runner keeps the current list in its state file, shown on the slots view.'
   you:
   - label: The comparator run
     text: bitmagnet's 24-hour run (25 hours with warm-up) on your Unraid box is booked from 2026-11-07T13:00Z, after a short rehearsal at 11:30Z. No Lodestar run until 12 hours after it ends.
