@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T21:39:04Z",
+  "updated_at": "2026-11-12T22:01:40Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7492,6 +7492,11 @@
       "id": "X-win-soak-attach-proc-hash",
       "note": "rv-777 O1: attach compares running process image hash and -Exe hash with ImagePath hash",
       "added": "2026-11-12T21:26:11Z"
+    },
+    {
+      "id": "merged-774",
+      "note": "#774 X-ci-deploy-aws-test merged (bd860547); session archived; owner FYI pending in next batch",
+      "added": "2026-11-12T22:01:40Z"
     }
   ],
   "main_health": [
@@ -8514,7 +8519,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T21:39:04Z",
+    "updated": "2026-11-12T22:01:40Z",
     "items": [
       {
         "slot": 1,
@@ -8590,11 +8595,11 @@
       },
       {
         "slot": 9,
-        "slice": "X-ci-deploy-aws-test",
+        "slice": "X-ci-main-signal",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnApj842sdoDVQHBSn3: cloud-testing priority: #774 at 03a027f5 delta self-check MERGE; ci-ok queued; merge on green",
-        "since": "2026-11-12T18:16:59Z",
+        "doing": "session_01MMjhnBZQeRoCk9GRPDM6HP: cloud-testing priority: main pushes stop cancelling CI (cancel-in-progress only on PRs), Sonnet; briefs/X-ci-main-signal.md",
+        "since": "2026-11-12T22:01:40Z",
         "status": "active"
       },
       {
@@ -8718,7 +8723,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-12T21:39:04Z",
+  "updated": "2026-11-12T22:01:40Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
