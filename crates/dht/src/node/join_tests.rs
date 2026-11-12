@@ -246,7 +246,10 @@ fn a_request_before_any_node_is_parked_then_finds_its_peer() {
     let (_, control, _) = far_request(false);
     // (The join refresh's find_node queries differ only by when each run
     // stops counting; while parked, the router saw only the bootstrap's.)
+    // The router answers in the routing table like any node, and its id
+    // here is near the hash, so ordinary routing asks it once either way.
     assert_eq!(parked.router_get_peers, control.router_get_peers);
+    assert_eq!(parked.router_get_peers, 1, "ordinary routing, not parking");
 }
 
 #[test]
@@ -337,7 +340,7 @@ fn a_joined_node_learns_the_far_half_its_neighbours_dont_know() {
         }
         a.maintain(&sockets);
         max_maintenance = max_maintenance.max(a.maintenance_lookups());
-        if a.join_planned && a.join_refresh.is_none() && a.lookups.is_empty() {
+        if a.join_planned[0] && a.join_refresh.is_none() && a.lookups.is_empty() {
             break;
         }
     }
@@ -372,4 +375,52 @@ fn a_joined_node_learns_the_far_half_its_neighbours_dont_know() {
         }
     }
     assert!(a.join_refresh.is_none(), "not planned twice");
+}
+
+#[test]
+fn a_v6_family_without_a_router_doesnt_end_the_parking() {
+    // Dual stack, routers only in v4: the v6 self-lookup has nobody to
+    // ask and ends at once, inside start_bootstrap. v4's is still out.
+    let router = unbound(false, 7);
+    let (mut a, mut sockets) = actor(router, Duration::from_secs(4));
+    // The v6 leg never sends (no v6 router, no v6 node), so its socket
+    // slot needs no IPv6 on the host: a placeholder runs everywhere.
+    let placeholder = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    placeholder.set_nonblocking(true).unwrap();
+    sockets.push(SendSocket::Udp(placeholder));
+    a.families.push(Family {
+        table: RoutingTable::new(a.ids[0], true),
+        ipv6: true,
+    });
+    a.join_planned.push(false);
+    a.start_bootstrap(&sockets, Vec::new());
+    assert!(
+        !a.lookups.values().any(|l| l.bootstrap && l.family == 1),
+        "the v6 self-lookup ended at once"
+    );
+    assert!(!a.bootstrapped, "v4's self-lookup is still out");
+    let _rx = request(&mut a, InfoHash([5; 20]));
+    a.maintain(&sockets);
+    assert_eq!(a.get_peers_queue.len(), 1, "still parked");
+    assert!(a.parks_lookups(Instant::now()));
+    // v4's bootstrap ends with nodes: parking lifts, and v4 alone plans
+    // its join refresh. The empty v6 family stays unplanned, free to
+    // plan once its own bootstrap fills it.
+    let own = a.ids[0];
+    let (_, groups) = two_neighbourhoods(own);
+    let net = Net {
+        router,
+        router_id: at_level(at_level(own, 0, 0x55), 1, 0),
+        groups,
+        holder: None,
+    };
+    let mut seen = Seen::default();
+    for _ in 0..ROUNDS {
+        if a.bootstrapped {
+            break;
+        }
+        answer(&mut a, &sockets, &net, &mut seen);
+    }
+    assert!(a.bootstrapped, "v4's self-lookup ended with nodes");
+    assert_eq!(a.join_planned, [true, false]);
 }

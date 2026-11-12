@@ -419,15 +419,19 @@ struct Actor {
     epoch: Instant,
     bootstrap: Vec<SocketAddr>,
     last_bootstrap: Option<Instant>,
-    /// A self-lookup has finished since the start, found nodes or not:
-    /// owned lookups stop waiting for one ([`Actor::parks_lookups`]).
+    /// The bootstrap has settled since the start: a self-lookup ended with
+    /// nodes in its family's table, or every one of them ended without.
+    /// Until then owned lookups wait ([`Actor::parks_lookups`]). Per
+    /// family, not per lookup: a dual-stack node's v6 self-lookup may end
+    /// at once (no v6 router, or v6 unroutable) while v4's is still out.
     bootstrapped: bool,
-    /// Kademlia's join step: the far targets still to look up once, after
-    /// the first self-lookup that left nodes in the table. `None` until
-    /// then; drained a few at a time on the tick.
+    /// Kademlia's join step: the far targets still to look up once, from
+    /// each family's first self-lookup that left nodes in its table.
+    /// `None` when there are none left; drained a few at a time on the
+    /// tick.
     join_refresh: Option<Vec<(usize, NodeId)>>,
-    /// The join refresh has been planned (it runs once per start).
-    join_planned: bool,
+    /// Per family: its join refresh has been planned (once per start).
+    join_planned: Vec<bool>,
     /// Bootstrap-router queries in flight, for `dht.bootstrap_unreachable`.
     seed_tids: Set<u64>,
     /// The last bootstrap's routers refused (policy or socket) and throttled
@@ -706,7 +710,7 @@ impl Actor {
             last_bootstrap: None,
             bootstrapped: false,
             join_refresh: None,
-            join_planned: false,
+            join_planned: vec![false; family_count],
             seed_tids: Set::default(),
             seed_refused: 0,
             seed_throttled: 0,
@@ -1860,6 +1864,9 @@ impl Actor {
             let Some((f, target)) = self.join_refresh.as_mut().and_then(Vec::pop) else {
                 break;
             };
+            // Below half of MAX_LOOKUPS, so start_lookup can't refuse it
+            // and no target is lost.
+            debug_assert!(self.maintenance_lookups() < MAX_LOOKUPS);
             self.start_lookup(sockets, f, target, &[], &[], None);
         }
         if self.join_refresh.as_ref().is_some_and(Vec::is_empty) {
@@ -2126,25 +2133,32 @@ impl Actor {
             return;
         };
         if done.bootstrap {
-            self.bootstrapped = true;
-            // The first self-lookup to leave nodes in the table plans the
-            // join refresh: every prefix length farther than our closest
-            // neighbour, once.
-            if !self.join_planned && self.families.iter().any(|f| !f.table.is_empty()) {
-                self.join_planned = true;
-                let mut targets = Vec::new();
-                for f in 0..self.families.len() {
-                    let rng = &mut self.rng;
-                    for t in self.families[f]
-                        .table
-                        .join_targets(JOIN_LEVELS, || rng.random())
-                    {
-                        targets.push((f, t));
-                    }
-                }
+            let f = done.family;
+            let found = !self.families[f].table.is_empty();
+            let others_out = self.lookups.values().any(|l| l.bootstrap);
+            if found || !others_out {
+                self.bootstrapped = true;
+            }
+            // A family's first self-lookup to leave nodes in its table
+            // plans its join refresh: every prefix length farther than its
+            // closest neighbour, once.
+            if self.join_planned.len() <= f {
+                self.join_planned.resize(f + 1, false);
+            }
+            if found && !self.join_planned[f] {
+                self.join_planned[f] = true;
+                let rng = &mut self.rng;
+                let mut targets: Vec<(usize, NodeId)> = self.families[f]
+                    .table
+                    .join_targets(JOIN_LEVELS, || rng.random())
+                    .into_iter()
+                    .map(|t| (f, t))
+                    .collect();
                 // Popped from the end: the farthest level goes first.
                 targets.reverse();
-                self.join_refresh = Some(targets);
+                let queue = self.join_refresh.get_or_insert_with(Vec::new);
+                targets.append(queue);
+                *queue = targets;
             }
         }
         if done.scrape {
@@ -2338,7 +2352,6 @@ impl Actor {
                 .store(h.guard_len() as u64, Ordering::Relaxed);
         }
 
-        self.join_refresh_tick(sockets);
         for f in 0..self.families.len() {
             // Refresh stale buckets.
             let targets = {
@@ -2389,6 +2402,9 @@ impl Actor {
             };
             self.start_peer_request(sockets, hash, reply, permit);
         }
+        // After the requests: in the turn that releases parked ones, they
+        // have first claim on the query budget.
+        self.join_refresh_tick(sockets);
         self.drop_cancelled_queued();
         self.scrape_tick(sockets, now_i);
         if self.cfg.harvest.sample && !self.paused {

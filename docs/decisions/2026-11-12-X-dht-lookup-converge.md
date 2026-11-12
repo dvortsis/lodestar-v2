@@ -24,7 +24,7 @@ The reproducer: 50 loopback nodes, 18 swarms announced to their true-closest 8 n
 
 - **Parking.** While routers are configured, no bootstrap self-lookup has finished since the start, no family table holds K (8) nodes, and less than `PARK_DEADLINE` (30 s) has passed, owned `get_peers` requests stay in their queue: `Actor::parks_lookups`, checked where the tick starts queued requests.
   - The queue is the existing bounded one (`MAX_GET_PEERS`, 32). Admission already refuses beyond it, and the pool's permits hold the rest, so nothing is dropped silently.
-  - They start when the first self-lookup ends (`Lookup::bootstrap` is set on bootstrap lookups), or once a table reaches K, whichever comes first.
+  - They start when the bootstrap settles, or once a table reaches K, whichever comes first. The bootstrap settles when a self-lookup (`Lookup::bootstrap` marks them) ends with nodes in its family's table, or when every self-lookup of the round has ended without. It's judged per family because a dual-stack node's v6 self-lookup can end at once, inside `start_bootstrap`: with no v6 router, or with v6 unroutable as on many Docker hosts. Counting that as "bootstrapped" would have turned parking off for every dual-stack install (fresh-review finding).
   - If the bootstrap fails, its self-lookup still ends, with an empty table, and the requests start and end empty as before. `dht.bootstrap_unreachable` already reports that, so there's no new event or metric.
   - At the deadline they start anyway.
   - With no routers configured (tests, a saved table), nothing parks.
@@ -33,10 +33,14 @@ The reproducer: 50 loopback nodes, 18 swarms announced to their true-closest 8 n
 
 ## B: the join refresh
 
-- **What it does.** When the first bootstrap self-lookup ends with nodes in the table, the node plans one `find_node` per prefix length shorter than the one it shares with its closest neighbour (`RoutingTable::join_targets`), and runs them once per start. That's Kademlia's join step.
+- **What it does.** When a family's first bootstrap self-lookup ends with nodes in its table, the node plans one `find_node` per prefix length shorter than the one it shares with its closest neighbour (`RoutingTable::join_targets`), and runs them once per start. That's Kademlia's join step. Planning is per family (`join_planned`), so a v6 family that fills later still gets its own.
 - **Why prefix lengths, not buckets.** The first cut refreshed every existing bucket but the last. It left islands in the reproducer: a young table has split into only 1–2 buckets, so a whole quarter of the keyspace never got a target. Counting by prefix length is Kademlia's own wording, and it's independent of how far the table has split. The runner accepted this refinement.
 - **Capped at `JOIN_LEVELS` = 32 levels,** from the farthest. A neighbour that shares a long prefix by chance or design can't inflate the cost: 2^32 nodes is far beyond the DHT's ~2^23.
 - **Paced.** The refresh starts lookups only while maintenance lookups number fewer than half of `MAX_LOOKUPS` (8 of 16), so the stale-bucket refresh and the re-bootstrap always have room. Owned `get_peers` lookups don't count against `MAX_LOOKUPS`, so it never takes their slot.
+- **It shares the query budget with the requests it releases.** Both draw on `query_rate`.
+  - The refresh runs after the turn's queued requests have started, so in the turn that releases parked requests, they claim the budget first.
+  - After that, up to 8 refresh lookups at `ALPHA` 3 compete with them for a second or two. At Balanced that can briefly throttle some of their queries (`Sent::Throttled`, retried on a later drive) within their 25 s `LOOKUP_DEADLINE`.
+  - Accepted: once per start, short, and paid back by lookups that converge.
 - **Query cost on the real DHT, named to the owner under §2.19 by the runner:**
   - one `find_node` lookup per level up to the closest neighbour, about log2(N) ≈ 20–23 lookups of ~8–20 queries each;
   - about 200–450 queries once per start;
@@ -55,19 +59,21 @@ The reproducer: 50 loopback nodes, 18 swarms announced to their true-closest 8 n
   - A bootstrap that times out ends parked requests empty.
   - `PARK_DEADLINE` releases them even with the bootstrap still out (the actor's epoch is moved past it, not slept to).
   - With no routers, nothing parks.
+  - Dual stack with routers only in v4: the v6 self-lookup ends at once, but requests stay parked until v4's ends with nodes. Then only v4 plans its join refresh. This fails if any ended self-lookup releases parking, and it runs without IPv6 on the host, since the v6 leg never sends.
   - A joined node whose neighbours know nothing far plans one target per level above its closest neighbour (11 here), keeps maintenance lookups at 8 or fewer, learns the far half, and plans nothing on a second bootstrap round.
   - Without the fix, the peer test fails (empty peers), the far-half test fails (no far node known), and the deadline test fails (not parked).
+  - The router answers in the routing table like any node. In the peer test its id is near the hash, so ordinary routing asks it one `get_peers` either way. Parking adds none, which the test checks against a control run made after the bootstrap.
 - **`routing.rs`:** `join_targets` covers exactly levels 0..closest and honours its cap.
 - **`tests/lookup_converge.rs`: the loopback reproducer,** `#[ignore]` because it measures on real time (about 45 s).
   - Before: 5 of the first 8 rounds had empty lookups, and the run aborted in round 8.
-  - After: 15/15 rounds clean, in each of 6 runs (90 rounds).
+  - After: 15/15 rounds clean, in each of 7 runs (105 rounds), the last on the final code.
 - **crawler-sim goldens re-blessed (runner-approved shared edit).** The join refresh changes the query sequence. Steady stored per minute:
 
 | Scenario | Single seed (golden), before → after | 8-seed mean (`noise_floor`), before → after | 8-seed spread, before / after |
 |---|---|---|---|
-| healthy | 81.3 → 84.4 | 76.0 → 77.6 (+2.1%) | 10.9% / 13.1% |
-| high-latency | 30.3 → 28.0 | 33.1 → 31.6 (−4.5%) | 15.1% / 24.4% |
-| admission-pressure | 30.7 → 27.9 | 29.6 → 30.9 (+4.4%) | 15.4% / 26.3% |
+| healthy | 81.3 → 77.6 | 76.0 → 76.3 (+0.4%) | 10.9% / 6.0% |
+| high-latency | 30.3 → 28.0 | 33.1 → 31.3 (−5.4%) | 15.1% / 24.7% |
+| admission-pressure | 30.7 → 27.9 | 29.6 → 30.6 (+3.4%) | 15.4% / 26.6% |
 | restart-honoured (leg 2) | 27.7 → 27.9 | — | — |
 
   Every move is inside the seed spread, and the 8-seed means go both ways. Neither yield nor cost is visibly affected beyond the noise.
