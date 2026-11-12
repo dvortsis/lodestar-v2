@@ -292,7 +292,6 @@ describe('storage step filesystem warning', () => {
 		expect(banner.textContent).toBe('');
 		release();
 		await waitFor(() => expect(banner.textContent).toContain('/mnt/cache/appdata/lodestar'));
-		expect(banner.textContent).toContain('/mnt/cache/appdata/lodestar');
 		expect(banner.textContent).toContain('You can continue');
 		expect(
 			(await screen.findByRole('button', { name: 'Save and continue' })).hasAttribute('disabled')
@@ -306,7 +305,7 @@ describe('storage step filesystem warning', () => {
 			await heading('Storage & retention');
 			await screen.findByRole('button', { name: 'Save and continue' });
 			await waitFor(() => expect(systemCalls).toBeGreaterThan(0));
-			// Let the settled /system promise run its handler before asserting absence.
+			// Let the settled /system promise run its handler before asserting the region is still empty.
 			await new Promise<void>((r) => queueMicrotask(r));
 			expect(screen.getByTestId('wizard-storage-fs').textContent).toBe('');
 			cleanup();

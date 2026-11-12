@@ -511,7 +511,7 @@ mod tests {
             w.command().unwrap(),
             "netsh int ipv4 set dynamicport tcp start=49152 num=16384"
         );
-        // The show forms `query` runs, as arguments.
+        // The family names `query` passes to `netsh int <family> show …`.
         assert_eq!(Family::V4.netsh(), "ipv4");
         assert_eq!(Family::V6.netsh(), "ipv6");
         assert!(
