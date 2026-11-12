@@ -9335,6 +9335,13 @@ export interface components {
                 max: number;
             };
             /**
+             * @description Everything it finds is Adult (§20.9, X-source-adult): its finds are
+             *     stored and judged as Adult unless you say Not adult. The detail view
+             *     reads it too, to keep a torrent such a source found out of the
+             *     "Identified as" section.
+             */
+            always_adult: boolean;
+            /**
              * @description The companion it waits for before it runs (§18.10); null when it
              *     needs none, or has it and it's healthy. Not the same as `needs`,
              *     which is what enabling it asks for.

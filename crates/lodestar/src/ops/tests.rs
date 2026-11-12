@@ -1867,3 +1867,54 @@ async fn the_purge_preview_counts_what_the_purge_removes() {
     }
     f.pipeline.shutdown().await.unwrap();
 }
+
+/// `GET /sources` and `GET /sources/{id}` serve each source's
+/// `always_adult` from its manifest (X-always-adult-detail-mask): the
+/// detail route's always-adult mask is read from this listing, so it must
+/// be the host's own answer, not a fixture's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_sources_listing_serves_each_manifests_always_adult() {
+    let plugin = |id: &'static str, always_adult: bool| {
+        Arc::new(Gated(
+            Manifest {
+                id,
+                name: id,
+                version: "1",
+                kinds: &[Kind::Discovery],
+                networks: &[Network::Bt],
+                endpoints: &[lodestar_sources::Endpoint {
+                    protocol: "https",
+                    host: "example.org",
+                }],
+                risk: Risk::High,
+                consent: Consent::None,
+                default_priority: Priority::Normal,
+                enabled_by_default: false,
+                always_adult,
+                finds_private: false,
+            },
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )) as Arc<dyn SourcePlugin>
+    };
+    let f = gated_fixture(
+        tempfile::tempdir().unwrap(),
+        vec![plugin("plain", false), plugin("adultsite", true)],
+    )
+    .await;
+    let c = f.session().await;
+    for (id, want) in [("plain", false), ("adultsite", true)] {
+        let listed = f.source(&c, id).await;
+        assert_eq!(listed["always_adult"], json!(want), "{id} in the listing");
+        let (status, one) = f
+            .send(req(
+                "GET",
+                &format!("/api/v1/sources/{}", listed["id"]),
+                &c,
+                None,
+            ))
+            .await;
+        assert_eq!(status, 200, "{id}: {one}");
+        assert_eq!(one["always_adult"], json!(want), "{id} on its own");
+    }
+    f.pipeline.shutdown().await.unwrap();
+}

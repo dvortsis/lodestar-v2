@@ -40,6 +40,7 @@ workspace = true
 [dev-dependencies]
 lodestar-bencode.workspace = true
 lodestar-pipeline.workspace = true
+lodestar-sources.workspace = true
 proptest = "1.11.0"
 # Parses the Torznab documents back in tests (runner, TZ-0); the
 # server writes them with its own escaping writer.

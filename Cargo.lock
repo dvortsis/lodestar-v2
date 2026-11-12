@@ -1617,6 +1617,7 @@ dependencies = [
  "lodestar-metainfo",
  "lodestar-pipeline",
  "lodestar-search",
+ "lodestar-sources",
  "lodestar-store",
  "proptest",
  "quick-xml",

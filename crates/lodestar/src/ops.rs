@@ -480,6 +480,7 @@ fn source(v: SourceView, companion: CompanionState) -> Source {
         enabled,
         // Exactly what an acknowledgement covers.
         endpoints: consent_rules::addresses(m),
+        always_adult: m.always_adult,
         finds_private: m.finds_private,
         health: SourceHealth {
             harvested_24h: v.harvested_24h,
