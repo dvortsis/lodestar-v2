@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T00:09:11Z",
+  "updated_at": "2026-11-12T00:10:14Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -6984,7 +6984,8 @@
     "G-v07 fixture: an always-adult-source torrent not yet classified isn't Adult until classified (store/src/lib.rs:663); cover in G-v07 (rv-716 N4)",
     "X-upd-stop-early takes rv-709 nit: services.rs:347 uses prowlarr::ID (moved from X-prowlarr-register-followups to avoid services.rs overlap with TZ-0)",
     "owner flag owed (\u00a72.19): OUT-2 Torznab key 'reveal' = shown once at create/regenerate behind the password dialog, because B12 keys are hash-only; one torznab-scoped key per app, named by app; no retrievable storage (would weaken B12, owner's call, not requested)",
-    "#718 shared edit approved: web/e2e/support/test.ts default getSystem mock with nothing pending"
+    "#718 shared edit approved: web/e2e/support/test.ts default getSystem mock with nothing pending",
+    "rv-712 nits for X-wk-own-lease-lost/WK-G: scenarios.rs:432 hand-back recorded after both fetches case; testing.rs:1436 'TTL of base time' -> 'holder silent for a TTL' once WK-G can override TTL; WK-G must handle 'two clocks expire leases' (pipeline wall-clock expiry lib.rs:1026-1042 vs harness base clock)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7737,7 +7738,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T00:09:11Z",
+    "updated": "2026-11-12T00:10:14Z",
     "items": [
       {
         "slot": 1,
@@ -7900,7 +7901,7 @@
     }
   ],
   "heartbeat": "2026-11-11T21:38:36Z",
-  "updated": "2026-11-12T00:09:11Z",
+  "updated": "2026-11-12T00:10:14Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
