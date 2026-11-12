@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T20:02:12Z",
+  "updated_at": "2026-11-12T20:20:40Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7448,6 +7448,10 @@
     {
       "id": "X-clippy-1-100-comment",
       "note": "2026-11-12T20:02:12Z: rv-776 MERGE + 1 Important (comment only): regex.rs:499 says 'Unicode 16', should be 'Unicode 17' (1.99's char::UNICODE_VERSION). Runner call: merge #776 on green without another CI cycle (comment-only, ~10 PRs waiting); fix the word plus a one-line regenerate recipe and the 'superset includes Unicode 17 chars regex-syntax 0.8.11 doesn't fold; don't trim without recalibrating' note in the next runner PR."
+    },
+    {
+      "id": "X-clippy-1-100-merged",
+      "note": "2026-11-12T20:20:40Z: #776 merged (main 925f69a9). All waiting sessions told to merge main once; cloud-testing #774 and #778 first, others no earlier than 20:40Z. #767 and #779 hold until their reviews are relayed. Owner FYI: clippy 1.100 + regex fold table freeze (search cost model frozen at Rust 1.99's cased set)."
     }
   ],
   "main_health": [
@@ -8657,7 +8661,7 @@
     }
   ],
   "heartbeat": "2026-11-12T18:39:05Z",
-  "updated": "2026-11-12T20:02:12Z",
+  "updated": "2026-11-12T20:20:40Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
