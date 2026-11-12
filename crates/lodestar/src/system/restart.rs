@@ -450,13 +450,14 @@ pub const PREDECESSOR_WAIT: std::time::Duration = std::time::Duration::from_secs
 /// before the old process's graceful shutdown, so this bound must outlast
 /// the whole hand-over ([`GO_LIMIT`](crate::windows::relaunch::GO_LIMIT),
 /// then [`EXIT_LIMIT`](crate::windows::relaunch::EXIT_LIMIT)) and then
-/// [`PREDECESSOR_WAIT`] twice over. Rust measures the 30 s from the
-/// hand-over ([`await_watch`]) and always ends first. A bare 30 s here would
+/// [`PREDECESSOR_WAIT`] three times over. Rust measures the 30 s from the
+/// later of the watch's `ready` and the hand-over ([`await_watch`]), and
+/// waits at most three times that, so it always ends first. A bare 30 s here would
 /// run out during a slow shutdown and refuse a restart without any wait.
 pub const WATCH_SCRIPT_LIMIT: std::time::Duration = std::time::Duration::from_secs(
     crate::windows::relaunch::GO_LIMIT.as_secs()
         + crate::windows::relaunch::EXIT_LIMIT.as_secs()
-        + 2 * PREDECESSOR_WAIT.as_secs(),
+        + 3 * PREDECESSOR_WAIT.as_secs(),
 );
 
 /// How often it looks.
@@ -501,38 +502,51 @@ pub fn predecessor_pid(token: &str) -> Option<u32> {
 }
 
 /// The Windows PowerShell the copy (`me`) runs to watch process `old`
-/// (X-flake-portable-restart-2). It prints one status word a line:
-/// `started` first, before anything that can be slow, then `exited` once
-/// `old` has exited (or isn't running), or `timeout` if it's still running
-/// after [`WATCH_SCRIPT_LIMIT`], which outlasts the copy's own wait. A
-/// process with that id that started after this copy (which `old` started)
-/// took the id later, so it isn't waited on, before or after the wait. Any
-/// error ends it non-zero with no status ([`await_watch`] calls
-/// that skipped).
+/// (X-flake-portable-restart-2 and -3). It prints one status word a line:
+/// - `started` first, a bare string, so not even `Write-Output`'s module
+///   has to load before it;
+/// - `ready` once its cmdlets have loaded (the first `Get-Process` and
+///   `Select-Object`) and the wait is about to begin: the copy measures its
+///   30 s from this word ([`await_watch`]), so a cold, scanned PowerShell
+///   doesn't eat into it;
+/// - `exited` once `old` has exited (or isn't running), or `timeout` if
+///   it's still running after [`WATCH_SCRIPT_LIMIT`], which outlasts the
+///   copy's own wait.
 ///
-/// Only cmdlets and operators, no .NET method calls, so it runs under
-/// Constrained Language Mode, where `$old.WaitForExit()` is blocked.
+/// The wait is a loop: a `Wait-Process` that comes back while `old` is
+/// still there (an error, or a missed exit event) is followed by another,
+/// so only the script's own clock (`New-TimeSpan` from when it was ready)
+/// says `timeout`. A process with that id that started after this copy
+/// (which `old` started) took the id later, so it isn't waited on. Any
+/// error ends it non-zero with no status ([`await_watch`] calls that
+/// skipped).
+///
+/// Only cmdlets, operators and a script block, no .NET method calls, so it
+/// runs under Constrained Language Mode, where `$old.WaitForExit()` is
+/// blocked.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn predecessor_script(old: u32, me: u32) -> String {
     let secs = WATCH_SCRIPT_LIMIT.as_secs();
     let timed_out = WATCH_EXIT_TIMED_OUT;
     format!(
         "$ErrorActionPreference = 'Stop'; \
-         Write-Output 'started'; \
+         'started'; \
          $me = Get-Process -Id {me} | Select-Object -ExpandProperty StartTime; \
          if (-not $me) {{ exit 2 }}; \
-         $old = Get-Process -Id {old} -ErrorAction SilentlyContinue; \
-         if ($old) {{ \
-           $since = $old | Select-Object -ExpandProperty StartTime; \
-           if (-not ($since -gt $me)) {{ \
-             Wait-Process -Id {old} -Timeout {secs} -ErrorAction SilentlyContinue; \
-             $still = Get-Process -Id {old} -ErrorAction SilentlyContinue; \
-             if ($still -and -not (($still | Select-Object -ExpandProperty StartTime) -gt $me)) {{ \
-               Write-Output 'timeout'; exit {timed_out} \
-             }} \
-           }} \
+         $t0 = Get-Date; \
+         $gone = {{ \
+           $p = Get-Process -Id {old} -ErrorAction SilentlyContinue; \
+           if ($p) {{ ($p | Select-Object -ExpandProperty StartTime) -gt $me }} else {{ $true }} \
          }}; \
-         Write-Output 'exited'; \
+         'ready'; \
+         while (-not (& $gone)) {{ \
+           $left = {secs} - (New-TimeSpan -Start $t0 | Select-Object -ExpandProperty TotalSeconds); \
+           if ($left -lt 1) {{ 'timeout'; exit {timed_out} }}; \
+           Wait-Process -Id {old} -Timeout $left -ErrorAction SilentlyContinue; \
+           if (& $gone) {{ break }}; \
+           Start-Sleep -Milliseconds 250 \
+         }}; \
+         'exited'; \
          exit 0"
     )
 }
@@ -565,6 +579,7 @@ pub const WATCH_EXIT_TIMED_OUT: i32 = 3;
 #[cfg_attr(not(windows), allow(dead_code))]
 pub enum WatchSays {
     Started,
+    Ready,
     Exited,
     Timeout,
 }
@@ -577,6 +592,7 @@ fn watch_line(line: &str) -> Option<WatchSays> {
         .trim_end_matches(['\r', '\n'])
     {
         "started" => Some(WatchSays::Started),
+        "ready" => Some(WatchSays::Ready),
         "exited" => Some(WatchSays::Exited),
         "timeout" => Some(WatchSays::Timeout),
         _ => None,
@@ -589,8 +605,11 @@ fn watch_line(line: &str) -> Option<WatchSays> {
 pub struct WatchLog {
     /// When `started` arrived.
     started: Option<Instant>,
-    /// The last status after it.
-    last: Option<WatchSays>,
+    /// When `ready` arrived, after `started`.
+    ready: Option<Instant>,
+    /// The last of `exited` and `timeout` after `started`, and when it
+    /// arrived.
+    last: Option<(WatchSays, Instant)>,
     /// The output has ended.
     done: bool,
 }
@@ -600,8 +619,8 @@ pub struct WatchLog {
 const WATCH_LINE: usize = 64;
 const WATCH_LINES: usize = 16;
 
-/// Reads the watch's status lines on a thread of its own, stamping
-/// `started` with `now()` as it arrives.
+/// Reads the watch's status lines on a thread of its own, stamping each
+/// word that counts with `now()` as it arrives.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn read_watch(
     out: impl std::io::Read + Send + 'static,
@@ -627,7 +646,14 @@ pub fn read_watch(
                 let mut log = shared.lock().unwrap_or_else(|e| e.into_inner());
                 match said {
                     Some(WatchSays::Started) if log.started.is_none() => log.started = Some(now()),
-                    Some(other) if log.started.is_some() => log.last = Some(other),
+                    Some(WatchSays::Ready) if log.started.is_some() && log.ready.is_none() => {
+                        log.ready = Some(now());
+                    }
+                    Some(word @ (WatchSays::Exited | WatchSays::Timeout))
+                        if log.started.is_some() =>
+                    {
+                        log.last = Some((word, now()));
+                    }
                     _ => {}
                 }
             }
@@ -646,21 +672,71 @@ pub fn read_watch(
 pub const WATCH_SKIPPED: &str = "Lodestar couldn't check that the copy it replaces had exited, so \
      it's starting without that check.";
 
-/// The one stderr line when the old process was still running at the end
-/// of the wait; the refusal ([`predecessor_refusal`]) follows.
+/// The first stderr line when the old process was still running at the
+/// end of the wait; [`watch_timeline`]'s line and then the refusal
+/// ([`predecessor_refusal`]) follow.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub const WATCH_TIMED_OUT: &str = "Lodestar's wait for the copy it replaces to exit timed out.";
 
-/// How long a watch that has exited gets for its last line to be read.
+/// How long a watch that has exited gets for its last line to be read,
+/// and a watch that said `exited` gets to end.
 const WATCH_DRAIN: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// Why a wait timed out, for [`watch_timeline`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TimedOut {
+    /// The watch said `timeout` (or exited with its code).
+    Said,
+    /// The copy's own clock ran out with no answer.
+    NoAnswer,
+}
+
+/// The second line of a timed-out wait (X-flake-portable-restart-3): when
+/// the watch said `started` and `ready`, and how the wait ended, in
+/// seconds from the hand-over (`go`), so a log from a failed restart shows
+/// whether PowerShell was slow to start, slow to load its cmdlets, or
+/// never saw the exit. Fixed words and numbers only: never the token.
+fn watch_timeline(log: &WatchLog, go: Instant, at: Instant, why: TimedOut) -> String {
+    let secs = |t: Instant| {
+        if t >= go {
+            format!("+{:.1} s", t.duration_since(go).as_secs_f64())
+        } else {
+            format!("-{:.1} s", go.duration_since(t).as_secs_f64())
+        }
+    };
+    let when = |t: Option<Instant>| t.map_or_else(|| "never".to_string(), secs);
+    let end = match why {
+        TimedOut::Said => "it said the copy was still running",
+        TimedOut::NoAnswer => "no answer",
+    };
+    let end_at = match (why, log.last) {
+        (TimedOut::Said, Some((WatchSays::Timeout, t))) => t,
+        _ => at,
+    };
+    format!(
+        "The check's timeline, from the hand-over: started {}, ready {}, {end} at {}.",
+        when(log.started),
+        when(log.ready),
+        secs(end_at)
+    )
+}
+
 /// The wait on the watch, once the old process has handed over
-/// (X-flake-portable-restart-2): [`Predecessor::Exited`] only once the
-/// watch said `exited` and ended well. `wait` runs from `started`, or from
-/// the hand-over if that came later, so a slow PowerShell start doesn't
-/// eat into it; it's never longer than twice `wait` from the hand-over.
-/// The note is the stderr line to write, if any. The clock and the sleep
-/// are passed in, so it's tested on every platform without waiting.
+/// (X-flake-portable-restart-2 and -3): [`Predecessor::Exited`] once the
+/// watch said `exited`, unless it then ended with an error.
+///
+/// `wait` runs from `ready`, or from the hand-over if that came later, so
+/// a slow PowerShell start or cmdlet load doesn't eat into it. Until
+/// `ready` arrives the copy waits at most twice `wait` from the hand-over;
+/// once it has, `wait` from it, so never more than three times `wait` in
+/// all.
+///
+/// A watch that said `exited` but hasn't ended within [`WATCH_DRAIN`] still
+/// counts as exited: the word comes only after its wait saw the exit, and
+/// a PowerShell slow to shut down shouldn't refuse the restart.
+///
+/// The note is what to write to stderr, if anything. The clock and the
+/// sleep are passed in, so it's tested on every platform without waiting.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn await_watch(
     watch: Option<&mut std::process::Child>,
@@ -669,44 +745,76 @@ pub fn await_watch(
     poll: std::time::Duration,
     now: impl Fn() -> Instant,
     mut sleep: impl FnMut(std::time::Duration),
-) -> (Predecessor, Option<&'static str>) {
+) -> (Predecessor, Option<String>) {
     let (Some(watch), Some(log)) = (watch, log) else {
-        return (Predecessor::Unknown, Some(WATCH_SKIPPED));
+        return (Predecessor::Unknown, Some(WATCH_SKIPPED.into()));
     };
-    let read = |log: &Mutex<WatchLog>| {
+    let lock = |log: &Mutex<WatchLog>| {
         let l = log.lock().unwrap_or_else(|e| e.into_inner());
-        (l.started, l.last, l.done)
+        WatchLog {
+            started: l.started,
+            ready: l.ready,
+            last: l.last,
+            done: l.done,
+        }
     };
     let go = now();
+    let timed_out = |why: TimedOut| {
+        let l = lock(log);
+        let line = watch_timeline(&l, go, now(), why);
+        (
+            Predecessor::Running,
+            Some(format!("{WATCH_TIMED_OUT}\n{line}")),
+        )
+    };
+    let skipped = || (Predecessor::Unknown, Some(WATCH_SKIPPED.to_string()));
     loop {
-        let (started, last, _) = read(log);
-        if last == Some(WatchSays::Timeout) {
-            return (Predecessor::Running, Some(WATCH_TIMED_OUT));
+        let l = lock(log);
+        match l.last {
+            Some((WatchSays::Timeout, _)) => return timed_out(TimedOut::Said),
+            Some((WatchSays::Exited, _)) => {
+                // Its end only confirms it: give it a moment, not a veto.
+                let drain = now();
+                loop {
+                    match watch.try_wait() {
+                        Ok(Some(status)) if !status.success() => return skipped(),
+                        Ok(Some(_)) => return (Predecessor::Exited, None),
+                        Ok(None) if now().saturating_duration_since(drain) < WATCH_DRAIN => {
+                            sleep(poll);
+                        }
+                        Ok(None) => return (Predecessor::Exited, None),
+                        Err(_) => return skipped(),
+                    }
+                }
+            }
+            _ => {}
         }
         match watch.try_wait() {
             Ok(Some(status)) if status.code() == Some(WATCH_EXIT_TIMED_OUT) => {
-                return (Predecessor::Running, Some(WATCH_TIMED_OUT));
+                return timed_out(TimedOut::Said);
             }
             Ok(Some(status)) => {
                 // Its last line may still be in the pipe.
                 let drain = now();
-                while !read(log).2 && now().saturating_duration_since(drain) < WATCH_DRAIN {
+                while !lock(log).done && now().saturating_duration_since(drain) < WATCH_DRAIN {
                     sleep(poll);
                 }
-                return match read(log).1 {
-                    Some(WatchSays::Exited) if status.success() => (Predecessor::Exited, None),
-                    Some(WatchSays::Timeout) => (Predecessor::Running, Some(WATCH_TIMED_OUT)),
-                    _ => (Predecessor::Unknown, Some(WATCH_SKIPPED)),
+                return match lock(log).last {
+                    Some((WatchSays::Exited, _)) if status.success() => (Predecessor::Exited, None),
+                    Some((WatchSays::Timeout, _)) => timed_out(TimedOut::Said),
+                    _ => skipped(),
                 };
             }
             Ok(None) => {}
-            Err(_) => return (Predecessor::Unknown, Some(WATCH_SKIPPED)),
+            Err(_) => return skipped(),
         }
-        let from = started.map_or(go, |s| s.max(go));
         let t = now();
-        if t.saturating_duration_since(from) >= wait || t.saturating_duration_since(go) >= wait * 2
-        {
-            return (Predecessor::Running, Some(WATCH_TIMED_OUT));
+        let out = match l.ready {
+            Some(ready) => t.saturating_duration_since(ready.max(go)) >= wait,
+            None => t.saturating_duration_since(go) >= wait * 2,
+        };
+        if out {
+            return timed_out(TimedOut::NoAnswer);
         }
         sleep(poll);
     }
@@ -1129,9 +1237,27 @@ mod tests {
     fn log(started: Option<Instant>, last: Option<WatchSays>, done: bool) -> Mutex<WatchLog> {
         Mutex::new(WatchLog {
             started,
-            last,
+            ready: started,
+            last: last.zip(started),
             done,
         })
+    }
+
+    /// `(Predecessor, note)` with the note as a `&str`, to compare.
+    #[cfg(unix)]
+    fn said(got: &(Predecessor, Option<String>)) -> (Predecessor, Option<&str>) {
+        (got.0, got.1.as_deref())
+    }
+
+    /// The note of a timed-out wait: the fixed line, then the timeline.
+    #[cfg(unix)]
+    fn is_timed_out(got: &(Predecessor, Option<String>)) -> bool {
+        got.0 == Predecessor::Running
+            && got.1.as_deref().is_some_and(|n| {
+                n.starts_with(&format!(
+                    "{WATCH_TIMED_OUT}\nThe check's timeline, from the hand-over: "
+                ))
+            })
     }
 
     /// A real child that ends with `code` at once, or runs until killed.
@@ -1174,7 +1300,7 @@ mod tests {
             || f.now(),
             |d| f.sleep(d),
         );
-        assert_eq!(got, (Predecessor::Exited, None));
+        assert_eq!(said(&got), (Predecessor::Exited, None));
     }
 
     /// The watch's last line can still be in the pipe when it has exited:
@@ -1195,11 +1321,11 @@ mod tests {
             |d| {
                 f.sleep(d);
                 let mut w = l.lock().unwrap();
-                w.last = Some(WatchSays::Exited);
+                w.last = Some((WatchSays::Exited, f.now()));
                 w.done = true;
             },
         );
-        assert_eq!(got, (Predecessor::Exited, None));
+        assert_eq!(said(&got), (Predecessor::Exited, None));
         // A reader that never finishes is given up on after the drain.
         let l = log(Some(f.now()), None, false);
         let start = f.now();
@@ -1211,7 +1337,7 @@ mod tests {
             || f.now(),
             |d| f.sleep(d),
         );
-        assert_eq!(got, (Predecessor::Unknown, Some(WATCH_SKIPPED)));
+        assert_eq!(said(&got), (Predecessor::Unknown, Some(WATCH_SKIPPED)));
         assert!(f.now().duration_since(start) >= WATCH_DRAIN);
         assert!(f.now().duration_since(start) < WATCH_DRAIN + Duration::from_secs(1));
     }
@@ -1237,7 +1363,7 @@ mod tests {
                 |d| f.sleep(d),
             );
             assert_eq!(
-                got,
+                said(&got),
                 (Predecessor::Unknown, Some(WATCH_SKIPPED)),
                 "{code} {last:?}"
             );
@@ -1252,7 +1378,7 @@ mod tests {
             || f.now(),
             |d| f.sleep(d),
         );
-        assert_eq!(got, (Predecessor::Unknown, Some(WATCH_SKIPPED)));
+        assert_eq!(said(&got), (Predecessor::Unknown, Some(WATCH_SKIPPED)));
         assert!(!WATCH_SKIPPED.contains("lodestar-"), "never the token");
     }
 
@@ -1271,7 +1397,14 @@ mod tests {
             || f.now(),
             |d| f.sleep(d),
         );
-        assert_eq!(got, (Predecessor::Running, Some(WATCH_TIMED_OUT)));
+        assert!(is_timed_out(&got), "{got:?}");
+        assert!(
+            got.1
+                .as_deref()
+                .unwrap()
+                .ends_with("it said the copy was still running at +0.0 s."),
+            "{got:?}"
+        );
         // Its exit code says the same even when no line was read.
         for last in [None, Some(WatchSays::Exited)] {
             let l = log(None, last, true);
@@ -1283,47 +1416,160 @@ mod tests {
                 || f.now(),
                 |d| f.sleep(d),
             );
-            assert_eq!(
-                got,
-                (Predecessor::Running, Some(WATCH_TIMED_OUT)),
-                "{last:?}"
-            );
+            assert!(is_timed_out(&got), "{last:?} {got:?}");
         }
     }
 
-    /// The wait runs from the watch's `started`, not from the hand-over, so
-    /// a slow PowerShell start doesn't eat into it; never past twice the
-    /// wait.
+    /// X-flake-portable-restart-3: the wait runs from the watch's `ready`,
+    /// not from the hand-over or `started`, so a slow PowerShell start or
+    /// cmdlet load doesn't eat into it. With no `ready` it ends twice the
+    /// wait after the hand-over; once `ready` has come, the wait after it.
+    /// `ready` arrives at its time, as the reader would stamp it.
     #[cfg(unix)]
     #[test]
-    fn the_wait_runs_from_the_started_marker() {
-        // `Some(50)`, a marker later than the cap, exercises the cap's
-        // arithmetic only: the real watch says `started` within seconds.
-        for (marker, waited) in [(None, 30), (Some(0), 30), (Some(10), 40), (Some(50), 60)] {
+    fn the_wait_runs_from_the_ready_marker() {
+        // (`ready` at, seconds after the hand-over; when the wait ended)
+        for (ready, waited) in [
+            (None, 60),
+            (Some(0), 30),
+            (Some(10), 40),
+            (Some(50), 80),
+            (Some(70), 60),
+        ] {
             let f = Fake::new();
+            let go = f.now();
             let mut c = child("exec sleep 60");
-            let l = log(
-                marker.map(|s| f.now() + Duration::from_secs(s)),
-                None,
-                false,
-            );
+            // `started` came at once; `ready` comes when the clock reaches it.
+            let l = Mutex::new(WatchLog {
+                started: Some(go),
+                ..WatchLog::default()
+            });
             let got = await_watch(
                 Some(&mut c),
                 Some(&l),
                 PREDECESSOR_WAIT,
                 PREDECESSOR_POLL,
                 || f.now(),
-                |d| f.sleep(d),
+                |d| {
+                    f.sleep(d);
+                    if let Some(r) = ready {
+                        let at = go + Duration::from_secs(r);
+                        let mut w = l.lock().unwrap();
+                        if f.now() >= at && w.ready.is_none() {
+                            w.ready = Some(at);
+                        }
+                    }
+                },
             );
             let _ = c.kill();
             let _ = c.wait();
-            assert_eq!(
-                got,
-                (Predecessor::Running, Some(WATCH_TIMED_OUT)),
-                "{marker:?}"
+            assert!(is_timed_out(&got), "{ready:?} {got:?}");
+            assert_eq!(f.elapsed.get(), Duration::from_secs(waited), "{ready:?}");
+            let note = got.1.unwrap();
+            let ready_text = ready
+                .filter(|&r| r < 60)
+                .map_or("never".to_string(), |r| format!("+{r}.0 s"));
+            assert!(
+                note.ends_with(&format!(
+                    "started +0.0 s, ready {ready_text}, no answer at +{waited}.0 s."
+                )),
+                "{note}"
             );
-            assert_eq!(f.elapsed.get(), Duration::from_secs(waited), "{marker:?}");
         }
+        // A `ready` before the hand-over counts from the hand-over.
+        let f = Fake::new();
+        let go = f.now();
+        let mut c = child("exec sleep 60");
+        let l = Mutex::new(WatchLog {
+            started: go.checked_sub(Duration::from_secs(3)),
+            ready: go.checked_sub(Duration::from_secs(1)),
+            ..WatchLog::default()
+        });
+        let got = await_watch(
+            Some(&mut c),
+            Some(&l),
+            PREDECESSOR_WAIT,
+            PREDECESSOR_POLL,
+            || f.now(),
+            |d| f.sleep(d),
+        );
+        let _ = c.kill();
+        let _ = c.wait();
+        assert_eq!(f.elapsed.get(), PREDECESSOR_WAIT);
+        let note = got.1.unwrap();
+        assert!(
+            note.ends_with("started -3.0 s, ready -1.0 s, no answer at +30.0 s."),
+            "{note}"
+        );
+    }
+
+    /// X-flake-portable-restart-3: `exited` is the watch's answer. A
+    /// PowerShell that said it but is slow to end doesn't refuse the
+    /// restart; one that ends with an error after it is a skipped check.
+    #[cfg(unix)]
+    #[test]
+    fn a_watch_that_said_exited_is_believed_even_before_it_ends() {
+        let f = Fake::new();
+        let mut c = child("exec sleep 60");
+        let l = log(Some(f.now()), Some(WatchSays::Exited), false);
+        let got = await_watch(
+            Some(&mut c),
+            Some(&l),
+            PREDECESSOR_WAIT,
+            PREDECESSOR_POLL,
+            || f.now(),
+            |d| f.sleep(d),
+        );
+        let _ = c.kill();
+        let _ = c.wait();
+        assert_eq!(said(&got), (Predecessor::Exited, None));
+        // It gave the watch the drain to end, and no more.
+        assert!(f.elapsed.get() >= WATCH_DRAIN, "{:?}", f.elapsed.get());
+        assert!(f.elapsed.get() < WATCH_DRAIN + Duration::from_secs(1));
+        // Said `exited`, then failed: the check didn't finish.
+        let f = Fake::new();
+        let mut c = child("exit 1");
+        settled(&mut c);
+        let l = log(Some(f.now()), Some(WatchSays::Exited), true);
+        let got = await_watch(
+            Some(&mut c),
+            Some(&l),
+            PREDECESSOR_WAIT,
+            PREDECESSOR_POLL,
+            || f.now(),
+            |d| f.sleep(d),
+        );
+        assert_eq!(said(&got), (Predecessor::Unknown, Some(WATCH_SKIPPED)));
+    }
+
+    /// The timeline line is fixed words and numbers, never the token.
+    #[test]
+    fn the_timeline_names_each_word_and_the_end() {
+        let go = Instant::now() + Duration::from_secs(100);
+        let at = |s: f64| go + Duration::from_secs_f64(s);
+        let l = WatchLog {
+            started: go.checked_sub(Duration::from_millis(900)),
+            ready: Some(at(0.4)),
+            last: Some((WatchSays::Timeout, at(1.24))),
+            done: true,
+        };
+        assert_eq!(
+            watch_timeline(&l, go, at(5.0), TimedOut::Said),
+            "The check's timeline, from the hand-over: started -0.9 s, ready +0.4 s, \
+             it said the copy was still running at +1.2 s."
+        );
+        // Its exit code with no line: the end is when the copy saw it.
+        let l = WatchLog::default();
+        assert_eq!(
+            watch_timeline(&l, go, at(2.0), TimedOut::Said),
+            "The check's timeline, from the hand-over: started never, ready never, \
+             it said the copy was still running at +2.0 s."
+        );
+        assert_eq!(
+            watch_timeline(&l, go, at(60.0), TimedOut::NoAnswer),
+            "The check's timeline, from the hand-over: started never, ready never, \
+             no answer at +60.0 s."
+        );
     }
 
     #[test]
@@ -1334,7 +1580,7 @@ mod tests {
             loop {
                 let w = l.lock().unwrap();
                 if w.done {
-                    return (w.started.is_some(), w.last);
+                    return (w.started.is_some(), w.last.map(|(word, _)| word));
                 }
                 drop(w);
                 assert!(Instant::now() < end, "the reader didn't finish");
@@ -1352,6 +1598,12 @@ mod tests {
         );
         assert_eq!(got("exited\n"), (false, None)); // a status before `started` doesn't count
         assert_eq!(got("started\nnoise\n"), (true, None));
+        // `ready` is stamped, not a last word.
+        assert_eq!(got("started\nready\n"), (true, None));
+        assert_eq!(
+            got("started\nready\nexited\n"),
+            (true, Some(WatchSays::Exited))
+        );
         assert_eq!(got(""), (false, None));
         // A long line or a flood is cut off, never read whole.
         let long: &'static str =
@@ -1364,69 +1616,99 @@ mod tests {
         // the start of the wait.
         let calls = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let base = Instant::now();
-        let l = read_watch(std::io::Cursor::new(&b"started\nstarted\nexited\n"[..]), {
-            let calls = calls.clone();
-            move || {
-                let n = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                base + Duration::from_secs(10 * (n + 1))
-            }
-        });
+        let l = read_watch(
+            std::io::Cursor::new(&b"ready\nstarted\nstarted\nready\nready\nexited\n"[..]),
+            {
+                let calls = calls.clone();
+                move || {
+                    let n = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    base + Duration::from_secs(10 * (n + 1))
+                }
+            },
+        );
         let end = Instant::now() + Duration::from_secs(10);
         while !l.lock().unwrap().done {
             assert!(Instant::now() < end, "the reader didn't finish");
             std::thread::yield_now();
         }
         let w = l.lock().unwrap();
+        // A `ready` before `started` doesn't count; the first after it does.
         assert_eq!(w.started, Some(base + Duration::from_secs(10)));
-        assert_eq!(w.last, Some(WatchSays::Exited));
+        assert_eq!(w.ready, Some(base + Duration::from_secs(20)));
+        assert_eq!(
+            w.last,
+            Some((WatchSays::Exited, base + Duration::from_secs(30)))
+        );
     }
 
     /// Under Constrained Language Mode `$old.WaitForExit()` is blocked, so
-    /// the script uses cmdlets and operators only, and prints `started`
-    /// before anything that can be slow.
+    /// the script uses cmdlets, operators and a script block only. It
+    /// prints `started` before anything that can be slow, and `ready` once
+    /// its cmdlets have loaded, before the wait.
     #[test]
     fn the_script_is_safe_under_constrained_language_mode() {
         let script = predecessor_script(4242, 77);
-        assert!(
-            script.contains(&format!(
-                "Wait-Process -Id 4242 -Timeout {} ",
-                WATCH_SCRIPT_LIMIT.as_secs()
-            )),
-            "{script}"
-        );
+        let secs = WATCH_SCRIPT_LIMIT.as_secs();
         // The script's bound outlasts the whole hand-over and the copy's
-        // own wait after it, so only Rust's 30 s from the hand-over ends it.
+        // own wait after it (up to three times the wait), so only Rust's
+        // clock ends it.
         assert!(
             WATCH_SCRIPT_LIMIT
                 >= crate::windows::relaunch::GO_LIMIT
                     + crate::windows::relaunch::EXIT_LIMIT
-                    + PREDECESSOR_WAIT * 2,
+                    + PREDECESSOR_WAIT * 3,
             "{WATCH_SCRIPT_LIMIT:?}"
         );
         // Wait-Process takes at most 32767 s.
+        assert!(secs <= 32_767, "{WATCH_SCRIPT_LIMIT:?}");
+        // X-flake-portable-restart-3: the wait is a loop on the script's
+        // own clock, so a `Wait-Process` that returns early is waited
+        // again, and only the clock says `timeout`.
         assert!(
-            WATCH_SCRIPT_LIMIT.as_secs() <= 32_767,
-            "{WATCH_SCRIPT_LIMIT:?}"
+            script.contains(&format!(
+                "$left = {secs} - (New-TimeSpan -Start $t0 | Select-Object -ExpandProperty TotalSeconds); "
+            )),
+            "{script}"
         );
+        assert!(
+            script.contains("if ($left -lt 1) { 'timeout'; exit 3 }; "),
+            "{script}"
+        );
+        assert!(script.contains("while (-not (& $gone)) { "), "{script}");
+        assert!(
+            script.contains("Wait-Process -Id 4242 -Timeout $left -ErrorAction SilentlyContinue; "),
+            "{script}"
+        );
+        assert!(script.contains("if (& $gone) { break }; "), "{script}");
+        // It never spins: a pause before each further `Wait-Process`.
+        assert!(script.contains("Start-Sleep -Milliseconds 250"), "{script}");
         // A process with the old id but started after this copy is a
-        // reused id, not the old process, after the wait as well as before.
-        assert_eq!(script.matches("-gt $me").count(), 2, "{script}");
+        // reused id, not the old process, before and after each wait.
+        assert_eq!(script.matches("-gt $me").count(), 1, "{script}");
+        assert_eq!(
+            script.matches("Get-Process -Id 4242 ").count(),
+            1,
+            "{script}"
+        );
         assert!(!script.contains(".WaitForExit("), "{script}");
         assert!(!script.contains("::"), "no .NET static calls: {script}");
         assert!(
-            !script.contains(").") && !script.contains("$old."),
+            !script.contains(").") && !script.contains("$old.") && !script.contains("$p."),
             "no .NET member access: {script}"
         );
-        let first = script.find("Write-Output 'started'").expect("the marker");
-        assert!(
-            first < script.find("Get-Process").unwrap(),
-            "the marker comes first: {script}"
-        );
-        assert!(
-            script.contains("Write-Output 'timeout'; exit 3"),
-            "{script}"
-        );
-        assert!(script.trim_end().ends_with("exit 0"), "{script}");
+        // The order of the words: `started` before any cmdlet, `ready`
+        // after the cmdlets have loaded and before the wait.
+        let at = |needle: &str| {
+            script
+                .find(needle)
+                .unwrap_or_else(|| panic!("{needle}: {script}"))
+        };
+        assert!(!script.contains("Write-Output"), "bare words: {script}");
+        assert!(at("'started'; ") < at("Get-Process"), "{script}");
+        assert!(at("Select-Object") < at("'ready'; "), "{script}");
+        assert!(at("New-TimeSpan") > at("'ready'; "), "{script}");
+        assert!(at("'ready'; ") < at("while ("), "{script}");
+        assert!(script.trim_end().ends_with("'exited'; exit 0"), "{script}");
     }
 
     /// The token goes to the new copy alone, never to the watch.
@@ -1449,8 +1731,8 @@ mod tests {
     }
 
     /// The real script on Windows, under Constrained Language Mode: it
-    /// prints `started`, waits on the old process with `Wait-Process`, and
-    /// says `exited` once it has gone. The mode is checked to be in force.
+    /// prints `started` and `ready`, waits on the old process with
+    /// `Wait-Process`, and says `exited` once it has gone. The mode is checked to be in force.
     #[cfg(windows)]
     #[test]
     fn the_script_runs_under_constrained_language_mode() {
@@ -1501,6 +1783,7 @@ mod tests {
             }
         });
         let first = lines.recv_timeout(Duration::from_secs(60));
+        let ready = lines.recv_timeout(Duration::from_secs(60));
         let waiting = watch.try_wait().unwrap().is_none();
         let _ = old.kill();
         let _ = old.wait();
@@ -1524,6 +1807,7 @@ mod tests {
         // `started` is streamed before the wait ends, and the script is
         // still waiting on `old` then.
         assert_eq!(first, Ok(Some(WatchSays::Started)));
+        assert_eq!(ready, Ok(Some(WatchSays::Ready)));
         assert!(waiting, "the script ended before `old` did");
         assert_eq!(next, Ok(Some(WatchSays::Exited)));
         let status = status.expect("the script didn't end once `old` had");
