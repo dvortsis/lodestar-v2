@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T18:39:05Z",
+  "updated_at": "2026-11-12T18:52:01Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8443,7 +8443,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T18:39:05Z",
+    "updated": "2026-11-12T18:52:01Z",
     "items": [
       {
         "slot": 1,
@@ -8464,6 +8464,15 @@
         "status": "active"
       },
       {
+        "slot": 3,
+        "slice": "WK-11b",
+        "role": "build",
+        "agent": "session_01MMjhnBmg6Pjb9KW5ozkWGR",
+        "doing": "Lease reconciliation after reconnect (briefs/WK-11b.md); /security-review on ready",
+        "since": "2026-11-12T18:52:01Z",
+        "status": "active"
+      },
+      {
         "slot": 4,
         "slice": "X-m8-net-e2e-nits",
         "role": "build",
@@ -8473,12 +8482,48 @@
         "status": "active"
       },
       {
+        "slot": 5,
+        "slice": "M8-PERF-1",
+        "role": "build",
+        "agent": "session_01MMjhnCqKPZbudhT8jXbC8k",
+        "doing": "10M bench mode (briefs/M8-PERF-1.md)",
+        "since": "2026-11-12T18:52:01Z",
+        "status": "active"
+      },
+      {
+        "slot": 6,
+        "slice": "M8-WIN-1",
+        "role": "helper",
+        "agent": "session_01MMjhnBMmuzWf5Xm5VJkAbP",
+        "doing": "Windows 1.0 soak runbook + analyzer checks (briefs/M8-WIN-1.md, Sonnet)",
+        "since": "2026-11-12T18:52:01Z",
+        "status": "active"
+      },
+      {
+        "slot": 7,
+        "slice": "GS-1",
+        "role": "build",
+        "agent": "session_01MMjhn8qXgAJy8Q8NE66YaY",
+        "doing": "#772 open 8a454e3e (~1,560 lines, ~750 tests); CI running; /security-review on ready",
+        "since": "2026-11-12T16:09:35Z",
+        "status": "active"
+      },
+      {
         "slot": 8,
         "slice": "X-dht-rejoin-nits",
         "role": "build",
         "agent": "claude",
         "doing": "rv-768 O-1 duplicate self-lookup fix + test; decisions file",
         "since": "2026-11-12T18:04:39Z",
+        "status": "active"
+      },
+      {
+        "slot": 9,
+        "slice": "X-ci-deploy-aws-test",
+        "role": "build",
+        "agent": "session_01MMjhnApj842sdoDVQHBSn3",
+        "doing": "#774 at 950a00a0: pwsh step in the infra job; awaiting ready",
+        "since": "2026-11-12T18:16:59Z",
         "status": "active"
       },
       {
@@ -8513,7 +8558,7 @@
         "slice": "X-test-vm",
         "role": "owner-started",
         "agent": "session_01MMjhnBD1KHxsn7QRHHmpeM",
-        "doing": "session_01MMjhnBD1KHxsn7QRHHmpeM: branch claude/dreamy-edison-xlmtoy. Owner authorized AWS setup (06:49Z/06:52Z, verified). \u00a72.60: up to 4 reserved sub-sessions outside the 8 (see cloud_tester).",
+        "doing": "session_01MMjhnBD1KHxsn7QRHHmpeM: branch claude/dreamy-edison-xlmtoy. Owner authorized AWS setup (06:49Z/06:52Z, verified). Owner 2026-11-12 (\u00a72.61, to record): 12 build slots + up to 4 for cloud testing; the tester and its lanes use the 4 (see cloud_tester).",
         "since": "2026-11-12T06:37:34Z",
         "status": "active"
       }
@@ -8576,7 +8621,7 @@
     }
   ],
   "heartbeat": "2026-11-12T18:39:05Z",
-  "updated": "2026-11-12T18:39:05Z",
+  "updated": "2026-11-12T18:52:01Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -8805,24 +8850,9 @@
     ]
   },
   "extra": {
-    "updated": "2026-11-12T18:16:59Z",
-    "max": 2,
-    "items": [
-      {
-        "slice": "GS-1",
-        "role": "build",
-        "agent": "claude",
-        "doing": "#772 open 8a454e3e (~1,560 lines, ~750 tests); CI running; /security-review on ready",
-        "since": "2026-11-12T16:09:35Z"
-      },
-      {
-        "slice": "X-ci-deploy-aws-test",
-        "role": "build",
-        "doing": "run Test-DeployAwsWindows.ps1 under pwsh in the existing infra CI job; no permissions/secrets changes",
-        "since": "2026-11-12T18:16:59Z",
-        "agent": "session_01MMjhnApj842sdoDVQHBSn3"
-      }
-    ],
-    "note": "\u00a72.60: runner holds 2 (GS-1, X-test-infra-blockers)."
+    "updated": "2026-11-12T18:52:01Z",
+    "max": 0,
+    "items": [],
+    "note": "Owner 2026-11-12 (\u00a72.61, to record in the next runner PR): 12 build slots (slots 1-12) plus up to 4 for cloud testing (slot 13 X-test-vm and its lanes). GS-1 and X-ci-deploy-aws-test moved into slots 7 and 9."
   }
 }
