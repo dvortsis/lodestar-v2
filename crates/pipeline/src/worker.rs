@@ -34,33 +34,129 @@ use crate::stages::{Inbox, Outbox, Reports};
 use crate::unix_now;
 use crate::writer::WriterStats;
 
-/// The tokens of the leases this worker holds.
+/// The tokens of the leases this worker holds, and of the results on
+/// their way out under them (X-wk-own-lease-lost).
+///
+/// Once a key is fetched and prepared, [`PrepareStage`] moves its token
+/// from *held* to *out* in one step ([`send_out`](Self::send_out)): the
+/// token now rides in the `Results` record (and the spool) until the
+/// coordinator commits it. A claim the worker makes for the key meanwhile
+/// is answered with that same lease; [`insert`](Self::insert) tells the
+/// caller so, under the same lock, so it's never taken for a new lease.
+/// The runtime clears an out entry when its result is committed, released
+/// or lost ([`done`](Self::done)); entries older than a lease TTL are
+/// pruned on insert, so a path that misses one can't grow the map.
+#[derive(Debug)]
+pub struct WorkerLeases {
+    inner: Mutex<Leases>,
+    ttl: Duration,
+}
+
 #[derive(Debug, Default)]
-pub struct WorkerLeases(Mutex<HashMap<InfoHash, Token>>);
+struct Leases {
+    held: HashMap<InfoHash, Token>,
+    out: HashMap<InfoHash, (Token, std::time::Instant)>,
+    /// `out`'s entries in the order they went out, for the prune.
+    order: std::collections::VecDeque<(std::time::Instant, InfoHash, Token)>,
+}
+
+impl Leases {
+    fn prune(&mut self, now: std::time::Instant, ttl: Duration) {
+        while let Some(&(at, key, token)) = self.order.front() {
+            if now.saturating_duration_since(at) < ttl {
+                break;
+            }
+            self.order.pop_front();
+            if self.out.get(&key) == Some(&(token, at)) {
+                self.out.remove(&key);
+            }
+        }
+    }
+}
+
+/// What [`WorkerLeases::insert`] made of a grant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Insert {
+    /// A lease the worker didn't hold under this token: held now.
+    New,
+    /// Held already under this token: nothing changed.
+    Held,
+    /// Its result is on its way out under this token: nothing changed,
+    /// and the key isn't held again.
+    Out,
+}
+
+impl Default for WorkerLeases {
+    fn default() -> WorkerLeases {
+        WorkerLeases {
+            inner: Mutex::default(),
+            ttl: Duration::from_secs(crate::LEASE_TTL_SECS.unsigned_abs()),
+        }
+    }
+}
 
 impl WorkerLeases {
-    fn map(&self) -> std::sync::MutexGuard<'_, HashMap<InfoHash, Token>> {
-        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    fn lock(&self) -> std::sync::MutexGuard<'_, Leases> {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// The token held for `key` before, if any: one check and insert,
-    /// under one lock.
-    pub fn insert(&self, key: InfoHash, token: Token) -> Option<Token> {
-        self.map().insert(key, token)
+    /// Records a grant of `key` under `token`, unless it's the lease the
+    /// worker holds or the one its result is on its way out under.
+    pub fn insert(&self, key: InfoHash, token: Token) -> Insert {
+        self.insert_at(key, token, std::time::Instant::now())
+    }
+
+    fn insert_at(&self, key: InfoHash, token: Token, now: std::time::Instant) -> Insert {
+        let mut l = self.lock();
+        l.prune(now, self.ttl);
+        if l.out.get(&key).is_some_and(|&(t, _)| t == token) {
+            return Insert::Out;
+        }
+        match l.held.insert(key, token) {
+            Some(t) if t == token => Insert::Held,
+            _ => Insert::New,
+        }
     }
 
     /// The key's token, removed: the lease ends with this report.
     pub fn take(&self, key: &InfoHash) -> Option<Token> {
-        self.map().remove(key)
+        self.lock().held.remove(key)
+    }
+
+    /// The key's token, moved from held to out in one step: its result
+    /// carries the lease from here.
+    pub fn send_out(&self, key: &InfoHash) -> Option<Token> {
+        self.send_out_at(key, std::time::Instant::now())
+    }
+
+    fn send_out_at(&self, key: &InfoHash, now: std::time::Instant) -> Option<Token> {
+        let mut l = self.lock();
+        let token = l.held.remove(key)?;
+        l.out.insert(*key, (token, now));
+        l.order.push_back((now, *key, token));
+        Some(token)
+    }
+
+    /// The result under `token` was committed, released or lost.
+    pub fn done(&self, key: &InfoHash, token: Token) {
+        let mut l = self.lock();
+        if l.out.get(key).is_some_and(|&(t, _)| t == token) {
+            l.out.remove(key);
+        }
     }
 
     /// Leases held.
     pub fn len(&self) -> usize {
-        self.map().len()
+        self.lock().held.len()
     }
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Results on their way out, still tracked.
+    pub fn out_len(&self) -> usize {
+        self.lock().out.len()
     }
 }
 
@@ -216,7 +312,15 @@ impl PrepareStage {
             self.preparer = preparer;
             for (item, result) in done {
                 let fk: &FetchedKey = item.borrow();
-                let Some(token) = self.leases.take(&fk.key) else {
+                // A result carries its lease out (in one step, so the
+                // worker's own claim meanwhile is known for what it is);
+                // a loss ends it here.
+                let token = if result.is_ok() {
+                    self.leases.send_out(&fk.key)
+                } else {
+                    self.leases.take(&fk.key)
+                };
+                let Some(token) = token else {
                     lodestar_log::log_event!(
                         crate::log_events::LEASE_MISSING,
                         key = lodestar_log::Torrent(&fk.key.0),
@@ -371,15 +475,93 @@ pub(crate) async fn collect<I: Inbox>(
 mod tests {
     use super::*;
 
+    const K: InfoHash = InfoHash([1; 20]);
+
     #[test]
-    fn insert_returns_the_token_it_replaced() {
-        let leases = WorkerLeases::default();
-        let key = InfoHash([1; 20]);
-        assert_eq!(leases.insert(key, Token(7)), None);
-        assert_eq!(leases.insert(key, Token(7)), Some(Token(7)));
-        assert_eq!(leases.insert(key, Token(8)), Some(Token(7)));
-        assert_eq!(leases.take(&key), Some(Token(8)));
+    fn a_grant_is_new_held_again_or_out() {
+        let l = WorkerLeases::default();
+        assert_eq!(l.insert(K, Token(7)), Insert::New);
+        assert_eq!(l.insert(K, Token(7)), Insert::Held);
+        assert_eq!(l.send_out(&K), Some(Token(7)));
+        // Its result is out: the same lease coming back isn't held again.
+        assert_eq!(l.insert(K, Token(7)), Insert::Out);
+        assert_eq!((l.len(), l.out_len()), (0, 1));
+        // A new lease is held as today; the old result stays tracked.
+        assert_eq!(l.insert(K, Token(8)), Insert::New);
+        assert_eq!((l.len(), l.out_len()), (1, 1));
+        assert_eq!(l.take(&K), Some(Token(8)));
     }
+
+    #[test]
+    fn done_clears_only_its_own_result() {
+        let l = WorkerLeases::default();
+        l.insert(K, Token(7));
+        l.send_out(&K);
+        l.done(&K, Token(6));
+        assert_eq!(l.out_len(), 1, "another token's result");
+        // Committed, released or lost: all end the same way.
+        l.done(&K, Token(7));
+        assert_eq!(l.out_len(), 0);
+        assert_eq!(l.insert(K, Token(7)), Insert::New);
+        // A loss before the result goes out leaves nothing out.
+        assert_eq!(l.take(&K), Some(Token(7)));
+        assert_eq!(l.send_out(&K), None);
+        assert_eq!((l.len(), l.out_len()), (0, 0));
+    }
+
+    #[test]
+    fn out_entries_older_than_a_ttl_are_pruned() {
+        let l = WorkerLeases::default();
+        let t0 = std::time::Instant::now();
+        l.insert_at(K, Token(7), t0);
+        l.send_out_at(&K, t0);
+        let just_before = t0 + l.ttl - Duration::from_millis(1);
+        assert_eq!(l.insert_at(K, Token(7), just_before), Insert::Out);
+        // Past the TTL (a spooled result replayed late): pruned, so its
+        // own lease coming back counts as new, as before this fix.
+        assert_eq!(l.insert_at(K, Token(7), t0 + l.ttl), Insert::New);
+        assert_eq!(l.out_len(), 0);
+        // An entry cleared and sent out again isn't pruned by the old
+        // one's place in the order.
+        let l = WorkerLeases::default();
+        l.insert_at(K, Token(7), t0);
+        l.send_out_at(&K, t0);
+        l.done(&K, Token(7));
+        let t1 = t0 + Duration::from_secs(1);
+        l.insert_at(K, Token(7), t1);
+        l.send_out_at(&K, t1);
+        assert_eq!(
+            l.insert_at(K, Token(7), t0 + l.ttl),
+            Insert::Out,
+            "still within its own TTL"
+        );
+    }
+
+    /// The prepare stage moving a key out while its own lease comes back
+    /// on another thread: whichever runs first, the token ends up held or
+    /// out, never both and never neither.
+    #[test]
+    fn a_grant_racing_the_move_out_is_never_lost_or_held_twice() {
+        for _ in 0..2_000 {
+            let l = Arc::new(WorkerLeases::default());
+            l.insert(K, Token(7));
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            let mover = {
+                let (l, barrier) = (l.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    l.send_out(&K)
+                })
+            };
+            barrier.wait();
+            let again = l.insert(K, Token(7));
+            let moved = mover.join().unwrap();
+            assert_eq!(moved, Some(Token(7)), "the result carries the lease");
+            assert!(matches!(again, Insert::Held | Insert::Out), "{again:?}");
+            assert_eq!((l.len(), l.out_len()), (0, 1), "held twice: {again:?}");
+        }
+    }
+
     use lodestar_bencode::{OwnedValue, to_vec};
     use lodestar_cluster::{Claim, Claimed};
     use lodestar_peer_wire::Fetched;

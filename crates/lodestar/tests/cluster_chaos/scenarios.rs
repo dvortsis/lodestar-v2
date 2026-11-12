@@ -340,6 +340,12 @@ async fn a_holder_sighting_its_own_keys_keeps_their_leases() {
     assert_eq!(h.fetch_violations(), Vec::<String>::new());
     let fetchers: HashSet<usize> = h.swarm.log().iter().map(|r| r.node).collect();
     assert_eq!(fetchers, HashSet::from([0]), "{}", h.diagnosis());
+    // Committed: nothing is left out, and nothing held.
+    let leases = h.leases(0).expect("worker 0 runs");
+    h.wait("the results no longer out", DEADLINE, || {
+        leases.out_len() == 0 && leases.is_empty()
+    })
+    .await;
     h.shutdown().await;
 }
 

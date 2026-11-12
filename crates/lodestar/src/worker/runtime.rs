@@ -539,6 +539,12 @@ impl Runtime {
         Finds(self.found.clone())
     }
 
+    /// The leases held and the results out under them (tests).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn leases(&self) -> Arc<lodestar_pipeline::stages::WorkerLeases> {
+        self.shared.leases.clone()
+    }
+
     pub fn counts(&self) -> Arc<Counts> {
         self.shared.counts.clone()
     }
@@ -848,7 +854,9 @@ impl Drop for Runtime {
 /// key still waiting for peers, and a key the pool is done with ignores
 /// them (a reply never ends a lease).
 fn granted(s: &Shared, key: InfoHash, token: Token, peers: Vec<std::net::SocketAddr>, at: i64) {
-    let held_again = s.leases.insert(key, token) == Some(token);
+    // Held already, or its result is on its way out under this token:
+    // one answer from one lock (`WorkerLeases::insert`).
+    let held_again = s.leases.insert(key, token) != lodestar_pipeline::stages::Insert::New;
     if held_again {
         bump(&s.counts.held_again);
     } else {
@@ -1325,6 +1333,7 @@ impl<O: Outbox<SealedRecord>> Outbox<Results> for Sealing<O> {
 /// reason that doesn't tombstone").
 fn release(s: &Shared, reports: &Arc<dyn Reports>, key: InfoHash, token: Token) {
     bump(&s.counts.released);
+    s.leases.done(&key, token);
     reports.lost(&key, token, Loss::GaveUp);
 }
 
@@ -2127,6 +2136,10 @@ async fn send_results(
                 if ok {
                     if let Some(f) = flight.remove(&batch) {
                         s.counts.committed.fetch_add(f.leases.len() as u64, Ordering::Relaxed);
+                        // Committed: their results are no longer out.
+                        for &(key, token) in &f.leases {
+                            s.leases.done(&InfoHash(key), Token(token));
+                        }
                         if let Some(h) = s.session.borrow().clone() {
                             let leases = f.leases;
                             tokio::spawn(async move { let _ = h.committed(leases).await; });
@@ -3411,7 +3424,12 @@ pub(crate) mod tests {
         .await;
         assert_eq!(c.lost.load(Ordering::Relaxed), 0, "its own lease ended");
         assert_eq!(c.granted.load(Ordering::Relaxed), 1, "one grant");
-        assert_eq!(rt.shared.leases.len(), 1, "the lease is still held");
+        // Its result carries it: out, not held twice.
+        assert_eq!(
+            (rt.shared.leases.len(), rt.shared.leases.out_len()),
+            (0, 1),
+            "the lease is still the result's"
+        );
         rt.shutdown().await;
     }
 
