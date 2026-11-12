@@ -327,6 +327,9 @@ impl Catalogue {
     /// source, or a source whose plugin this build doesn't run. For a
     /// check that must fail closed.
     pub(crate) fn adult_or_unknown(&self, bits: u64) -> u64 {
+        // Covers every bit of `bits` only while a source id fits a u64's
+        // bit, which is what `MAX_SOURCES` promises (`torrents.sources`).
+        const _: () = assert!(MAX_SOURCES == 64);
         (0..MAX_SOURCES)
             .filter(|&id| bits & (1u64 << id) != 0)
             .filter(|&id| self.get(id).is_none_or(|e| e.always_adult != Some(false)))
@@ -1698,6 +1701,55 @@ pub(crate) mod tests {
         // An unknown source isn't counted as always adult where that would
         // widen something: only the known ones are in the bits.
         assert_eq!(c.always_adult_bits() & (1 << 9), 0);
+    }
+
+    /// The catalogue's always-adult bits are the pipeline's own rule
+    /// (`AdultSources::of`) over the same registered manifests, so the
+    /// detail route and the reclassification agree on every source.
+    #[test]
+    fn the_always_adult_bits_are_the_pipelines_adult_sources() {
+        use lodestar_pipeline::source_adult::AdultSources;
+        use lodestar_sources::{Consent, Kind, Manifest, Network, Priority, Risk};
+        let manifest = |id: &'static str, always_adult: bool| Manifest {
+            id,
+            name: id,
+            version: "1",
+            kinds: &[Kind::Discovery],
+            networks: &[Network::Bt],
+            endpoints: &[],
+            risk: Risk::Low,
+            consent: Consent::None,
+            default_priority: Priority::Normal,
+            enabled_by_default: false,
+            always_adult,
+            finds_private: false,
+        };
+        let registered = [
+            (0u8, manifest("dht", false)),
+            (2, manifest("adultsite", true)),
+            (5, manifest("feed", false)),
+            (31, manifest("adultfeed", true)),
+            (63, manifest("last", true)),
+        ];
+        let catalogue = Catalogue::of(
+            registered
+                .iter()
+                .map(|(id, m)| SourceEntry {
+                    id: *id,
+                    plugin: m.id.into(),
+                    name: m.name.into(),
+                    public: Some(true),
+                    always_adult: Some(m.always_adult),
+                })
+                .collect(),
+        );
+        let pipeline = AdultSources::of(
+            registered
+                .iter()
+                .map(|(id, m)| (SourceId::new(*id).unwrap(), m)),
+        );
+        assert_eq!(catalogue.always_adult_bits(), pipeline.0);
+        assert_eq!(pipeline.0, (1 << 2) | (1 << 31) | (1 << 63));
     }
 
     /// Every text is cut to its limit on a character boundary, however

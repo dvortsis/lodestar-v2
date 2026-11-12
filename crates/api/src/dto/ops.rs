@@ -442,7 +442,10 @@ pub struct Source {
     /// reads it too, to keep a torrent such a source found out of the
     /// "Identified as" section.
     // `default` only lets a client or fixture written before this field
-    // read a `Source`; every listing sends it.
+    // read a `Source`; every listing sends it. The default, `false`, fails
+    // open: the server never deserializes a `Source` today, and anything
+    // that ever reads a listing from elsewhere (a remote host, a peer)
+    // must treat a missing field as unknown, never as "not always adult".
     #[serde(default)]
     #[schema(required = true)]
     pub always_adult: bool,

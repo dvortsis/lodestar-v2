@@ -12,6 +12,7 @@ Slice X-always-adult-detail-mask (runner brief, 2026-11-12), the follow-up to #7
   - a registered source whose plugin this build doesn't run, so its manifest isn't known.
 
   Any such finder hides the section.
+- **Local uploads and imports are never vouched for** (runner review of #767). Their built-in sources (`local_torrent::SOURCE`, registered in `pipeline/src/lib.rs`; the import adapters in `lodestar/src/cli/import.rs`) are registered sources with no plugin, so no manifest says they aren't always adult. A torrent found only through them never shows "Identified as". That's this fail-closed rule working as meant, not a bug: a later slice that wants them to show it gives them a known manifest, and doesn't weaken the rule.
 - **`None` (no section at all)** only when the plugins couldn't be listed (`plugin_names` empty: no pipeline served, or its listing failed). Then nothing about any source is known.
 - **Which case maps to which:**
 
@@ -40,4 +41,6 @@ No new route and no new text served. The served `/sources` shape gains one boole
 ## Files outside the brief's owns
 - The brief's shared allowance: `crates/api/src/torrents.rs`, `crates/api/tests/identified.rs` and `crates/api/tests/adult_enrichment.rs`, plus the regenerated `openapi.json` and `schema.d.ts`.
 - Test-only fixture lines, one `always_adult: false` each (runner-approved, 2026-11-12): `crates/api/tests/ops.rs` (two), `crates/api/tests/sources_spec.rs`, and `web/src/lib/features/sources/fixtures.ts`'s `source()` builder. They're needed because the field is required in the served shape.
+- `crates/api/Cargo.toml`: one dev-dependency, `lodestar-sources` (runner-approved, review of #767), so a unit test can build the manifests and check `Catalogue::always_adult_bits` against `AdultSources::of`. `Cargo.lock` gains only that edge.
+- `crates/lodestar/src/ops/tests.rs`: a real-`Ops` test that `GET /sources` and `GET /sources/{id}` serve each manifest's `always_adult` (runner review of #767).
 - The six `/sources` goldens in `crates/api/tests/golden/` (`ops_sources`, `ops_source_get`, `ops_source_priority`, `ops_source_credentials`, `ops_source_consent_given`, `ops_source_egress_socks5`), re-blessed with `LODESTAR_BLESS=1` (runner-approved). Each only gains `"always_adult":false`.
