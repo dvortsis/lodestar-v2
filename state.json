@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T23:24Z",
+  "updated_at": "2026-11-12T23:25Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7742,6 +7742,11 @@
       "id": "wk18-prs",
       "note": "WK-18s #801 a8c570a1 draft (self+security review pending); WK-18w #802 a6ecf89b draft until #801 merges; extras build-msi.ps1, README.md, join-ca/, join-token-file.ps1 accepted.",
       "added": "2026-11-12T23:24Z"
+    },
+    {
+      "id": "merged-778",
+      "note": "#778 X-test-blockers-1112 merged 9f3723ad (handshake reporting, two flakes, ANALYZE pg_catalog fix).",
+      "added": "2026-11-12T23:25Z"
     }
   ],
   "main_health": [
@@ -8764,7 +8769,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T23:24Z",
+    "updated": "2026-11-12T23:25Z",
     "items": [
       {
         "slot": 1,
@@ -8888,9 +8893,9 @@
         "slice": "X-test-blockers-1112",
         "role": "build",
         "agent": "claude",
-        "doing": "cloud-testing: session_01MMjhn9aPNpQpruF2s6sPjH: #778 CHANGES relayed (B1 ANALYZE pg_catalog.pg_database in Fixture::new; I1 confirm windows_service green)",
-        "since": "2026-11-12T18:57:19Z",
-        "status": "active"
+        "doing": "#778 merged 9f3723ad; session to archive after 2-min reply window",
+        "since": "2026-11-12T23:25Z",
+        "status": "idle"
       },
       {
         "slot": 15,
@@ -9112,7 +9117,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-12T23:24Z",
+  "updated": "2026-11-12T23:25Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
