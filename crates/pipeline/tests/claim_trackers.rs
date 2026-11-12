@@ -248,6 +248,29 @@ fn a_private_finds_external_ref_and_trackers_are_not_stored() {
         assert_eq!(c.provenance.published_at, Some(1_600_000_000));
         assert_eq!(c.name.as_deref(), Some("Sintel"));
     }
+    // A usenet find (UN-1) is always private: no reference, no trackers.
+    let mut found = Found::usenet("7", "a1b2c3", 0)
+        .unwrap()
+        .with_provenance(claims::Provenance {
+            external_ref: Some("https://idx.example/api?t=get&id=a1b2c3&apikey=secret".into()),
+            published_at: Some(1_600_000_000),
+            confidence: claims::Confidence::Low,
+        });
+    found.claims = Some(Box::new(claims::Claims {
+        name: Some("Sintel".into()),
+        trackers: vec!["https://t.example/announce/0123456789abcdef".into()],
+        ..claims::Claims::default()
+    }));
+    let d = Discovery {
+        source: SourceId::new(1).unwrap(),
+        found,
+        at: 0,
+        reply: false,
+    };
+    let c = store_claims(&d).expect("claims");
+    assert_eq!(c.provenance.external_ref, None, "usenet");
+    assert!(c.trackers.is_empty(), "usenet");
+    assert_eq!(c.provenance.published_at, Some(1_600_000_000));
 }
 
 /// A discovery whose claims leave exactly `room` bytes under the total
