@@ -26,8 +26,8 @@ use lodestar_companions::configure::{
 };
 use lodestar_companions::detect::{self, CompanionHttp, Runtime};
 use lodestar_companions::flaresolverr::{
-    self, ADD, EGRESS_DIRECT, PROXY_NAME, PROXY_NAME_TAKEN, Pairing, REMOVE, SOLVER_NOT_LOCAL,
-    SolverAddress, TAG, TAG_LABEL, UPDATE,
+    self, ADD, EGRESS_DIRECT, PROXY_NAME, PROXY_NAME_TAKEN, PROXY_REFUSED, Pairing, REMOVE,
+    SOLVER_NOT_LOCAL, SolverAddress, TAG, TAG_LABEL, UPDATE,
 };
 use lodestar_companions::inputs::{ContainerName, NetworkName, Pgid, PortNumber, Puid};
 use lodestar_companions::unraid::unraid;
@@ -431,7 +431,7 @@ async fn switched_on_the_proxy_is_written_once_then_removed() {
         mine[0]["fields"][0],
         json!({"name": "host", "value": "http://127.0.0.1:8191/"})
     );
-    assert_eq!(Pairing::notes(&on()), &[EGRESS_DIRECT]);
+    assert!(Pairing::notes(&on()).contains(&EGRESS_DIRECT));
 
     // Again: an empty plan, and nothing written.
     let n = server.writes().len();
@@ -440,10 +440,17 @@ async fn switched_on_the_proxy_is_written_once_then_removed() {
     assert_eq!(ours(&state).len(), 1);
 
     // FlareSolverr moved: the same proxy is updated, not a second added.
-    let moved = SolverAddress::from_target(&Target::Container(
-        ContainerName::parse("flaresolverr").unwrap(),
-        PortNumber::new(8191).unwrap(),
-    ))
+    let prowlarr_ct = Target::Container(
+        ContainerName::parse("prowlarr").unwrap(),
+        PortNumber::new(9696).unwrap(),
+    );
+    let moved = SolverAddress::for_prowlarr(
+        &Target::Container(
+            ContainerName::parse("flaresolverr").unwrap(),
+            PortNumber::new(8191).unwrap(),
+        ),
+        &prowlarr_ct,
+    )
     .unwrap();
     assert_eq!(
         pair(&server, Switch::On(moved.clone()), &input)
@@ -579,11 +586,129 @@ async fn hostile_prowlarr_answers_are_refused() {
     );
 }
 
+/// The fake Prowlarr, with one route answered otherwise.
+fn overriding(state: Prow, method: &'static str, prefix: &'static str, status: u16) -> Handler {
+    let inner = prowlarr_handler(state);
+    Arc::new(move |s: &Seen| {
+        if s.method == method && s.path.starts_with(prefix) {
+            Reply::Full(
+                status,
+                br#"[{"propertyName":"Host","errorMessage":"Unable to connect"}]"#.to_vec(),
+            )
+        } else {
+            inner(s)
+        }
+    })
+}
+
+#[tokio::test]
+async fn prowlarr_refusing_the_proxy_is_reported_by_code() {
+    // Prowlarr tests a proxy before saving it: an unreachable FlareSolverr
+    // is a 400.
+    let log = capture();
+    let state = yours();
+    let server = Server::start(overriding(
+        Arc::clone(&state),
+        "POST",
+        "/api/v1/indexerproxy",
+        400,
+    ))
+    .await;
+    assert_eq!(
+        pair(&server, on(), &installed(&server)).await.unwrap_err(),
+        AdapterError::Refused(PROXY_REFUSED)
+    );
+    assert!(ours(&state).is_empty());
+    let lines = log.0.lock().unwrap();
+    assert!(lines.iter().any(|l| l.contains("companions.config_failed")
+        && l.contains("indexer_proxy.add")
+        && l.contains(PROXY_REFUSED)));
+    assert!(lines.iter().all(|l| !l.contains(API_KEY)));
+}
+
+#[tokio::test]
+async fn a_proxy_already_gone_counts_as_removed() {
+    let state = yours();
+    let server = Server::start(prowlarr_handler(Arc::clone(&state))).await;
+    let input = installed(&server);
+    pair(&server, on(), &input).await.unwrap();
+    // Prowlarr answers 404 to the DELETE (someone removed it meanwhile).
+    let gone = Server::start(overriding(
+        Arc::clone(&state),
+        "DELETE",
+        "/api/v1/indexerproxy/",
+        404,
+    ))
+    .await;
+    let input = installed(&gone);
+    assert_eq!(
+        pair(&gone, Switch::Off, &input).await.unwrap(),
+        [REMOVE.as_str()]
+    );
+}
+
+#[tokio::test]
+async fn a_stale_plan_does_only_what_is_still_needed() {
+    let state = yours();
+    let server = Server::start(prowlarr_handler(Arc::clone(&state))).await;
+    let input = installed(&server);
+    let http = http();
+    let target = server.loopback();
+    let adapter = pairing(&fs_id(), on()).unwrap();
+    let plan = adapter.plan(&http, &target, &input).await.unwrap();
+    assert_eq!(names(plan.changes()), [TAG.as_str(), ADD.as_str()]);
+    // Another apply got there first: the old plan writes nothing more.
+    pair(&server, on(), &input).await.unwrap();
+    let n = server.writes().len();
+    adapter.apply(&http, &target, &input, &plan).await.unwrap();
+    assert_eq!(server.writes().len(), n);
+    assert_eq!(ours(&state).len(), 1);
+
+    // A plan for the proxy alone, but the tag was removed meanwhile: the
+    // tag isn't in the plan, so nothing is written.
+    pair(&server, Switch::Off, &input).await.unwrap();
+    let plan = adapter.plan(&http, &target, &input).await.unwrap();
+    assert_eq!(names(plan.changes()), [ADD.as_str()]);
+    state
+        .lock()
+        .unwrap()
+        .tags
+        .retain(|t| t["label"] != TAG_LABEL);
+    let n = server.writes().len();
+    assert!(matches!(
+        adapter.apply(&http, &target, &input, &plan).await,
+        Err(AdapterError::Refused(_))
+    ));
+    assert_eq!(server.writes().len(), n);
+}
+
+#[tokio::test]
+async fn apply_without_consent_sends_nothing() {
+    let state = yours();
+    let server = Server::start(prowlarr_handler(state)).await;
+    let http = http();
+    let target = server.loopback();
+    let adapter = pairing(&fs_id(), on()).unwrap();
+    let plan = adapter
+        .plan(&http, &target, &installed(&server))
+        .await
+        .unwrap();
+    let n = server.seen().len();
+    assert_eq!(
+        adapter
+            .apply(&http, &target, &ConfigureInput::new(&Creds), &plan)
+            .await
+            .unwrap_err(),
+        AdapterError::Refused(NOT_CONFIRMED)
+    );
+    assert_eq!(server.seen().len(), n);
+}
+
 #[test]
 fn flaresolverr_is_never_paired_at_an_entered_url() {
     let e = Target::Entered(EnteredUrl::parse("http://192.168.1.20:8191").unwrap());
     assert_eq!(
-        SolverAddress::from_target(&e),
+        SolverAddress::for_prowlarr(&e, &Target::Loopback(PortNumber::new(9696).unwrap())),
         Err(AdapterError::Refused(SOLVER_NOT_LOCAL))
     );
 }

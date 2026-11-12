@@ -32,6 +32,11 @@
 //! - Prowlarr sends an indexer through a FlareSolverr proxy only when they
 //!   share a tag, so Lodestar tags no indexer: you add [`TAG_LABEL`] to the
 //!   indexers that need it.
+//! - Lodestar's proxy is Lodestar's to keep as it set it: re-applying
+//!   resets its timeout to [`REQUEST_TIMEOUT`] and its tags to
+//!   [`TAG_LABEL`] alone. If you take that tag off it, it becomes yours:
+//!   switching off leaves it, and switching on is refused until you
+//!   rename or remove it.
 //! - Switching off removes Lodestar's proxy and leaves the tag, which your
 //!   indexers may still carry.
 //! - The address is FlareSolverr's on this machine or Docker's network
@@ -45,6 +50,11 @@
 //! directly, not through Prowlarr's route. Every pairing that's switched on
 //! carries [`EGRESS_DIRECT`] ([`Pairing::notes`]) for the screen that shows
 //! it.
+//!
+//! **Callers** (not in this slice): storing the switch per Prowlarr and
+//! calling [`find`] and [`pairing`] from it is the companions screen and
+//! endpoint's (CMP-9a's successor, placed by the runner). [`Switch`] is a
+//! plain value, so "only once you switch it on" is held by that caller.
 //!
 //! **Pins:** the entry's artifacts and image are unpinned until CMP-13's
 //! tool pins them (`TODO(CMP-13)`: a FlareSolverr recipe in
@@ -88,6 +98,15 @@ pub const EGRESS_DIRECT: &str = "flaresolverr_egress_direct";
 /// The refusal when FlareSolverr's address isn't on this machine or
 /// Docker's network.
 pub const SOLVER_NOT_LOCAL: &str = "flaresolverr_not_local";
+/// The refusal when Prowlarr can't reach FlareSolverr where Lodestar
+/// found it (one on loopback, the other a container).
+pub const SOLVER_UNREACHABLE: &str = "flaresolverr_unreachable_from_prowlarr";
+/// A note on every pairing that's switched on: some sites' terms forbid
+/// getting past their browser check (Q21).
+pub const SITE_TERMS: &str = "flaresolverr_site_terms";
+/// A note on every pairing that's switched on: only indexers you tag
+/// [`TAG_LABEL`] go through it.
+pub const TAG_INDEXERS: &str = "flaresolverr_tag_indexers";
 /// The refusal when a proxy that isn't Lodestar's has its name.
 pub const PROXY_NAME_TAKEN: &str = "indexer_proxy_name_taken";
 /// The refusal when Prowlarr's validation refused the proxy or the tag.
@@ -120,7 +139,7 @@ const API_KEY: HeaderName = header("X-Api-Key");
 /// is skipped, so only the marker and the version are decoded.
 const INDEX_LIMITS: json::Limits = json::Limits {
     max_depth: 2,
-    max_values: 32,
+    max_values: 128,
     max_array: 8,
     max_text: 64,
 };
@@ -268,13 +287,26 @@ pub enum SolverAddress {
 }
 
 impl SolverAddress {
-    /// From a detected or installed FlareSolverr's target; a URL you
-    /// entered is refused ([`SOLVER_NOT_LOCAL`]).
-    pub fn from_target(target: &Target) -> Result<SolverAddress, AdapterError> {
-        match target {
-            Target::Loopback(p) => Ok(SolverAddress::Loopback(*p)),
-            Target::Container(n, p) => Ok(SolverAddress::Container(n.clone(), *p)),
-            Target::Entered(_) => Err(AdapterError::Refused(SOLVER_NOT_LOCAL)),
+    /// FlareSolverr's address as Prowlarr reaches it, from where Lodestar
+    /// found each of them. Both on loopback means all three share this
+    /// machine; both by container name means Docker's network, where
+    /// Prowlarr resolves the name as Lodestar does. Any other mix is
+    /// refused ([`SOLVER_UNREACHABLE`]): a loopback FlareSolverr is
+    /// Lodestar's loopback, not a container Prowlarr's. A URL you entered,
+    /// for either, is refused ([`SOLVER_NOT_LOCAL`]).
+    pub fn for_prowlarr(
+        flaresolverr: &Target,
+        prowlarr: &Target,
+    ) -> Result<SolverAddress, AdapterError> {
+        match (flaresolverr, prowlarr) {
+            (Target::Entered(_), _) | (_, Target::Entered(_)) => {
+                Err(AdapterError::Refused(SOLVER_NOT_LOCAL))
+            }
+            (Target::Loopback(p), Target::Loopback(_)) => Ok(SolverAddress::Loopback(*p)),
+            (Target::Container(n, p), Target::Container(..)) => {
+                Ok(SolverAddress::Container(n.clone(), *p))
+            }
+            _ => Err(AdapterError::Refused(SOLVER_UNREACHABLE)),
         }
     }
 
@@ -317,11 +349,13 @@ pub fn pairing(id: &CompanionId, switch: Switch) -> Option<Box<dyn Configure>> {
 }
 
 impl Pairing {
-    /// The reason codes the screen showing this pairing must carry.
+    /// The reason codes the screen showing this pairing must carry:
+    /// traffic leaves directly, some sites forbid it, and only indexers
+    /// you tag use it.
     pub fn notes(switch: &Switch) -> &'static [&'static str] {
         match switch {
             Switch::Off => &[],
-            Switch::On(_) => &[EGRESS_DIRECT],
+            Switch::On(_) => &[EGRESS_DIRECT, SITE_TERMS, TAG_INDEXERS],
         }
     }
 }
@@ -976,17 +1010,25 @@ mod tests {
         let en =
             Target::Entered(crate::adapter::EnteredUrl::parse("http://10.0.0.2:8191").unwrap());
         assert_eq!(
-            SolverAddress::from_target(&lo).unwrap().url(),
+            SolverAddress::for_prowlarr(&lo, &lo).unwrap().url(),
             "http://127.0.0.1:8191/"
         );
         assert_eq!(
-            SolverAddress::from_target(&ct).unwrap().url(),
+            SolverAddress::for_prowlarr(&ct, &ct).unwrap().url(),
             "http://flaresolverr:8191/"
         );
-        assert_eq!(
-            SolverAddress::from_target(&en),
-            Err(AdapterError::Refused(SOLVER_NOT_LOCAL))
-        );
+        for (f, p) in [(&lo, &ct), (&ct, &lo)] {
+            assert_eq!(
+                SolverAddress::for_prowlarr(f, p),
+                Err(AdapterError::Refused(SOLVER_UNREACHABLE))
+            );
+        }
+        for (f, p) in [(&en, &lo), (&lo, &en), (&en, &en)] {
+            assert_eq!(
+                SolverAddress::for_prowlarr(f, p),
+                Err(AdapterError::Refused(SOLVER_NOT_LOCAL))
+            );
+        }
         assert_eq!(NATIVE_BIND, ("HOST", "127.0.0.1"));
         assert_eq!(Switch::default(), Switch::Off);
         assert!(Pairing::notes(&Switch::Off).is_empty());
@@ -994,7 +1036,7 @@ mod tests {
             Pairing::notes(&Switch::On(SolverAddress::Loopback(
                 PortNumber::new(8191).unwrap()
             ))),
-            &[EGRESS_DIRECT]
+            &[EGRESS_DIRECT, SITE_TERMS, TAG_INDEXERS]
         );
     }
 

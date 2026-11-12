@@ -159,9 +159,7 @@ impl fmt::Display for TemplateError {
                 TemplateError::Interpolation => "a value holds `$`",
                 TemplateError::P2pLoopback => "a peer port on 127.0.0.1 can't be reached by peers",
                 TemplateError::PortRemap => "this port must be published on the same number",
-                TemplateError::LanRefused => {
-                    "gluetun's control port and FlareSolverr's API stay off your network"
-                }
+                TemplateError::LanRefused => "gluetun's control port stays off your network",
                 TemplateError::PublishOnExisting => {
                     "publish the port on your gluetun container instead"
                 }
