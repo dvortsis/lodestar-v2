@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { waitFor } from '@testing-library/svelte';
+import { flushSync, tick } from 'svelte';
 import { restart } from './restart.svelte';
 import { watchRestart } from './watch.svelte';
 
@@ -92,7 +93,8 @@ it('survives a partial /system', async () => {
 });
 
 it('does not rewrite the live region when a refresh finds the same thing', async () => {
-	api.get.mockResolvedValue(system(['network.dht_port']));
+	// A new object with the same content on every call, as the server sends it.
+	api.get.mockImplementation(async () => system(['network.dht_port']));
 	const stop = watchRestart(vi.fn());
 	await until(() => expect(announce()!.textContent).toBe('1 change applies after a restart'));
 	const seen = vi.fn();
@@ -101,9 +103,15 @@ it('does not rewrite the live region when a refresh finds the same thing', async
 		characterData: true,
 		subtree: true
 	});
-	for (let i = 0; i < 3; i++) await restart.refresh();
-	await new Promise((done) => setTimeout(done, 50));
-	expect(seen).not.toHaveBeenCalled();
+	for (let i = 0; i < 3; i++) {
+		await restart.refresh();
+		await tick();
+		flushSync();
+	}
+	// Observers deliver after the microtask checkpoint.
+	await Promise.resolve();
+	expect(api.get.mock.calls.length).toBeGreaterThan(3);
+	expect(seen.mock.calls).toHaveLength(0);
 	stop();
 });
 

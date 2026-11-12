@@ -1317,7 +1317,7 @@ export default [
 	entry('Insights print layout (on demand)', insightsPrintLazy, '1.62 KB'),
 	// S-privacy-banner: measured + 10%.
 	entry('Privacy banner (on demand)', privacyBannerLazy, '3.71 KB'),
-	entry('Settings messages (on demand)', settingsMessagesLazy, '4.9 KB'),
+	entry('Settings messages (on demand)', settingsMessagesLazy, '4 KB'),
 	entry('Settings connection messages (on demand)', settingsConnectionMaps, '4.3 KB'),
 	entry('Settings connection screens (on demand)', settingsConnectionsLazy, '14.2 KB'),
 	// Security's password dialog, lock-out banner and navigation icon: measured + 10%.
@@ -1448,7 +1448,7 @@ export default [
 			'Restart banner (on demand)',
 			ownChunk(RESTART_BANNER, restartParts, false, settingsSectionView)
 		),
-		'4.9 KB'
+		'5.3 KB'
 	),
 	entry(
 		'Restart flow (on demand)',

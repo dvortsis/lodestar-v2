@@ -31,24 +31,31 @@
 		});
 	}
 	// The countdown runs on this browser's clock against the server's deadline, and the two can
-	// disagree. So at 0:00 the page asks the server and goes back only once it says the address was
-	// reverted, or stops answering (it is restarting onto the old address). While the server still
-	// waits, Keep stays available and the page asks again every few seconds.
+	// disagree. So at 0:00 the page asks the server, and goes back only when the server says the
+	// address was reverted (and can restart itself), or has stopped answering for FAILURES checks in
+	// a row (it is restarting onto the old address). `address_change: null` means it was kept: the
+	// prompt just goes. While the server still waits, Keep stays and the page asks again every 5 s.
+	const FAILURES = 3;
 	let nextCheck = 0;
 	let checking = false;
+	let failed = 0;
+	let answered = false;
 	$effect(() => {
 		if (!prompt || prompt.secondsLeft > 0 || busy || checking || now < nextCheck) return;
 		checking = true;
 		const back = prompt.previousUrl;
-		void restart.refresh().then((answered) => {
+		void restart.refresh().then((ok) => {
 			checking = false;
 			nextCheck = Date.now() + 5_000;
+			// Keep or Go back was pressed while this was in flight: that answer is the newer one.
+			if (answered) return;
+			failed = ok ? 0 : failed + 1;
 			const state = restart.system?.address_change?.state;
-			if (answered && state === 'awaiting_confirmation') return;
-			// Reverted: the server restarts onto the old address when it can, else at the next restart.
-			if (!answered || restart.system?.restart.available) goBack(back);
+			if (ok && state === 'reverted' && restart.system?.restart.available) goBack(back);
+			else if (failed >= FAILURES) goBack(back);
 		});
 	});
+
 	async function answer(kind: 'keep' | 'revert') {
 		if (!prompt) return;
 		busy = true;
@@ -57,9 +64,10 @@
 			const outcome = await api.post(
 				kind === 'keep' ? '/system/address/keep' : '/system/address/revert'
 			);
+			answered = true;
 			if (outcome.restarting) {
 				goBack(prompt.previousUrl);
-			} else await restart.refresh();
+			} else restart.setAddressChange(outcome.address_change);
 		} catch (e) {
 			failure = failureOf(e);
 			await restart.refresh();
@@ -81,8 +89,7 @@ restart watch's region. -->
 		<h2 id="keep-title" class="font-medium">{m.restart_keep_title()}</h2>
 		<p>{m.restart_keep_body({ url: prompt.url })}</p>
 		<p data-testid="keep-countdown">
-			<span aria-hidden="true">{m.restart_keep_countdown({ time: mins(prompt.secondsLeft) })}</span>
-			<span class="sr-only">{m.restart_keep_countdown_sr()}</span>
+			{m.restart_keep_countdown({ time: mins(prompt.secondsLeft) })}
 		</p>
 		{#if failure}<p data-testid="keep-failure">{failure.message}</p>{/if}
 		<div class="flex flex-wrap gap-2">

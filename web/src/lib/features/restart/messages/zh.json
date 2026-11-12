@@ -30,7 +30,6 @@
 	"restart_page_reload": "重新加载",
 	"restart_page_moving": "Lodestar 正在重启，之后将位于 {address}。",
 	"restart_page_open": "打开 {address}",
-	"restart_keep_countdown_sr": "如果不保留，约 5 分钟后会自动返回。",
 	"restart_tray_label": "重启",
 	"restart_keep_announce": "Lodestar 现在位于 {url}。请选择保留此地址，否则它会自动返回。"
 }

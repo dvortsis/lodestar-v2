@@ -30,7 +30,6 @@
 	"restart_page_reload": "Reload",
 	"restart_page_moving": "Lodestar is restarting and will be at {address}.",
 	"restart_page_open": "Open {address}",
-	"restart_keep_countdown_sr": "It goes back by itself after about 5 minutes if you don't keep it.",
 	"restart_tray_label": "Restart",
 	"restart_keep_announce": "Lodestar is now at {url}. Choose Keep this address, or it goes back by itself."
 }

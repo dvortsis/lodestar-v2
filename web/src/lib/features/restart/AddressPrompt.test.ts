@@ -44,12 +44,10 @@ it('is not a live region, and nothing live changes on a one-second tick', async 
 	const before = screen.getByTestId('keep-countdown').textContent;
 	await vi.advanceTimersByTimeAsync(3_000);
 	expect(screen.getByTestId('keep-countdown').textContent).not.toBe(before);
-	// The visible digits are hidden from assistive tech; what it reads does not change.
-	const spoken = screen.getByTestId('keep-countdown').querySelector('.sr-only')!.textContent;
-	await vi.advanceTimersByTimeAsync(3_000);
-	expect(screen.getByTestId('keep-countdown').querySelector('.sr-only')!.textContent).toBe(spoken);
 	expect(container.querySelectorAll(live)).toHaveLength(0);
-	expect(screen.getByTestId('keep-countdown').querySelector('[aria-hidden="true"]')).not.toBeNull();
+	// The time left is real text for a screen reader to read, not hidden.
+	expect(container.querySelector('[aria-hidden="true"]')).toBeNull();
+	expect(screen.getByTestId('keep-countdown').textContent).toMatch(/\d:\d\d/);
 });
 
 it('at 0:00 asks the server, and stays while the server still waits (a browser clock ahead)', async () => {
@@ -68,16 +66,44 @@ it('at 0:00 goes back once the server says it was reverted', async () => {
 	expect(restart.waiting!.target).toBe('http://a:1/');
 });
 
-it('at 0:00 goes back when the server stops answering', async () => {
-	api.get.mockRejectedValue(new Error('down'));
-	render(AddressPrompt, { props: { system: system(-60) } });
-	await until(() => expect(restart.waiting).not.toBeNull());
-});
-
 it('at 0:00 does not start a restart that will not happen when the server cannot restart itself', async () => {
 	api.get.mockResolvedValue(system(-60, 'reverted', false));
 	render(AddressPrompt, { props: { system: system(-60) } });
 	await until(() => expect(api.get).toHaveBeenCalled());
+	await vi.advanceTimersByTimeAsync(2_000);
+	expect(restart.waiting).toBeNull();
+});
+
+it('at 0:00 treats "no change any more" as kept: the prompt goes and nothing restarts', async () => {
+	api.get.mockResolvedValue({ ...system(-60), address_change: null });
+	render(AddressPrompt, { props: { system: system(-60) } });
+	await until(() => expect(api.get).toHaveBeenCalled());
+	await vi.advanceTimersByTimeAsync(7_000);
+	expect(restart.waiting).toBeNull();
+});
+
+it('one failed check at 0:00 is not enough to go back; three in a row are', async () => {
+	api.get.mockRejectedValue(new Error('down'));
+	render(AddressPrompt, { props: { system: system(-60) } });
+	await until(() => expect(api.get).toHaveBeenCalledTimes(1));
+	await vi.advanceTimersByTimeAsync(1_000);
+	expect(restart.waiting).toBeNull();
+	await vi.advanceTimersByTimeAsync(5_500);
+	expect(restart.waiting).toBeNull();
+	await vi.advanceTimersByTimeAsync(5_500);
+	await until(() => expect(restart.waiting).not.toBeNull());
+	expect(api.get).toHaveBeenCalledTimes(3);
+});
+
+it('Keep pressed while a 0:00 check is in flight wins over that check', async () => {
+	let release!: (s: System) => void;
+	api.get.mockReturnValue(new Promise<System>((done) => (release = done)));
+	api.post.mockResolvedValue({ address_change: null, restarting: false });
+	render(AddressPrompt, { props: { system: system(-60) } });
+	await until(() => expect(api.get).toHaveBeenCalledTimes(1));
+	screen.getByRole('button', { name: 'Keep this address' }).click();
+	await until(() => expect(api.post).toHaveBeenCalledWith('/system/address/keep'));
+	release(system(-60, 'reverted'));
 	await vi.advanceTimersByTimeAsync(2_000);
 	expect(restart.waiting).toBeNull();
 });

@@ -247,4 +247,40 @@ test.describe('restart banner', () => {
 			await expect.poll(() => backend.patches.length, DEADLINE).toBe(1);
 		});
 	}
+
+	for (const dirty of [false, true]) {
+		test(`the page makes room for the tray: the last control is reachable at 390 px (${dirty ? 'with' : 'without'} unsaved edits)`, async ({
+			page,
+			go,
+			mock
+		}) => {
+			new SettingsBackend().attach(mock);
+			mock.on('getSystem', systemWith(mock, pending) as never);
+			await page.setViewportSize({ width: 390, height: 800 });
+			await go('/settings/crawler');
+			const radio = page.getByRole('radio', { name: 'aggressive' });
+			await expect(radio).toBeVisible(DEADLINE);
+			await engage(page);
+			if (dirty) await radio.check();
+			await expect(page.getByTestId('restart-tray')).toBeVisible();
+			// To the very end of the page, where nothing may sit under the tray.
+			await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+			// The tray is not on top of the centre of any of the last controls.
+			const covered = await page.evaluate(() => {
+				const main = document.querySelector('main')!;
+				const controls = [
+					...main.querySelectorAll<HTMLElement>('input, button, [role="switch"], [role="radio"]')
+				].filter((el) => el.checkVisibility() && el.getBoundingClientRect().height > 0);
+				return controls.slice(-3).flatMap((el) => {
+					const r = el.getBoundingClientRect();
+					const at = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+					// Covered by the tray, which is what this is about (other layers are not its doing).
+					return at?.closest('[data-testid="restart-tray"]')
+						? [`${el.tagName} ${el.textContent?.trim().slice(0, 30)}`]
+						: [];
+				});
+			});
+			expect(covered).toEqual([]);
+		});
+	}
 });

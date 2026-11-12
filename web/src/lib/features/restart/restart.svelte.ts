@@ -20,6 +20,10 @@ function createRestartStore() {
 		get waiting() {
 			return waiting;
 		},
+		/** The server's answer to Keep or Revert is the new state: use it, don't ask again. */
+		setAddressChange(change: System['address_change']) {
+			if (system) system = { ...system, address_change: change };
+		},
 		/** Starts the Restarting state; `null` ends it (tests, and a page that gave up). */
 		begin(w: Waiting | null) {
 			waiting = w;

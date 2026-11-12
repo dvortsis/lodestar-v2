@@ -26,6 +26,46 @@
 	const awaiting = $derived(restart.system?.address_change?.state === 'awaiting_confirmation');
 
 	onMount(() => void restart.refresh());
+
+	// The tray floats above the page, so the page makes room for it: while it shows, the body gets
+	// bottom padding (and scroll padding) of the tray's height plus its lift, and the tray sits above
+	// the Settings save bar at that bar's measured height, however tall it wraps. Both follow resizes.
+	const MIN_LIFT = 72; // the first toast; the save bar is 56 px and gets a gap of 16 px
+	let tray = $state<HTMLElement>();
+	let lift = $state(MIN_LIFT);
+	$effect(() => {
+		if (!tray) return;
+		const el = tray;
+		const measure = () => {
+			const bar = document.querySelector<HTMLElement>('[data-testid="save-bar"]');
+			lift = Math.max(MIN_LIFT, bar ? bar.offsetHeight + 16 : 0);
+			const room = `${lift + el.offsetHeight + 16}px`;
+			document.body.style.paddingBottom = room;
+			document.documentElement.style.scrollPaddingBottom = room;
+		};
+		let frame = 0;
+		const soon = () => {
+			cancelAnimationFrame(frame);
+			frame = requestAnimationFrame(measure);
+		};
+		measure();
+		// (No observers where the browser has none, as in a unit test's DOM.)
+		const sizes = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(soon);
+		sizes?.observe(el);
+		// The save bar comes and goes with the screen and its edits.
+		const watch = new MutationObserver(soon);
+		watch.observe(document.querySelector('main') ?? document.body, {
+			childList: true,
+			subtree: true
+		});
+		return () => {
+			cancelAnimationFrame(frame);
+			sizes?.disconnect();
+			watch.disconnect();
+			document.body.style.paddingBottom = '';
+			document.documentElement.style.scrollPaddingBottom = '';
+		};
+	});
 	$effect(() => {
 		if (awaiting && !Prompt)
 			void door()
@@ -52,7 +92,9 @@
 
 {#if (pending || (awaiting && Prompt)) && !restart.waiting}
 	<div
+		bind:this={tray}
 		class="restart-tray"
+		style:bottom="{lift}px"
 		role="region"
 		aria-label={m.restart_tray_label()}
 		data-testid="restart-tray"
@@ -105,8 +147,8 @@
 	.restart-tray {
 		position: fixed;
 		inset-inline: calc(var(--spacing) * 4);
-		/* Above the Settings save bar (56 px, sticky at the bottom) and the first toast. */
-		bottom: calc(var(--spacing) * 18);
+		/* Above the first toast and the Settings save bar; the script sets the real lift. */
+		bottom: calc(var(--spacing) * 14 + var(--spacing) * 4);
 		z-index: 40;
 		display: flex;
 		flex-direction: column;
