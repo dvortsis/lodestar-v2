@@ -45,7 +45,11 @@
 		);
 	}
 	load();
+	// Set false on unmount: an action still loading its dialogs then stops instead of mounting one
+	// over another page.
+	let live = true;
 	onDestroy(() => {
+		live = false;
 		flows?.dismissPasswordDialogs();
 		flows?.dismissReveals();
 	});
@@ -127,6 +131,7 @@
 			// Loaded before the password is asked for: a dialog that can't load means nothing is made.
 			const { confirmWithPassword, loadReveal, revealSecret } = await loadFlows();
 			await loadReveal();
+			if (!live) return;
 			const outcome = await confirmWithPassword({
 				title: m.settings_outputs_create_title({ name: title }),
 				body: [m.settings_outputs_create_body({ name: title })],
@@ -138,7 +143,7 @@
 						})
 					)
 			});
-			if (!outcome) return;
+			if (!outcome || !live) return;
 			if ('invalid' in outcome) return refused(outcome.invalid);
 			const { made } = outcome;
 			if (Array.isArray(keys)) {
@@ -154,6 +159,7 @@
 		void run(`regenerate-${key.id}`, async () => {
 			const { confirmWithPassword, loadReveal, revealSecret } = await loadFlows();
 			await loadReveal();
+			if (!live) return;
 			const outcome = await confirmWithPassword({
 				title: m.settings_outputs_regenerate_title({ name: key.name }),
 				body: [m.settings_outputs_regenerate_body({ name: key.name })],
@@ -161,7 +167,7 @@
 				send: (password) =>
 					answer(api.post('/keys/{id}/regenerate', { path: { id: key.id }, body: { password } }))
 			});
-			if (!outcome) return;
+			if (!outcome || !live) return;
 			if ('invalid' in outcome) return refused(outcome.invalid);
 			const { made } = outcome;
 			// The new secret has a new id and prefix; the old row is gone.
@@ -260,7 +266,7 @@
 						</p>
 						{#if wider(key)}
 							<p class="text-small" data-testid="outputs-key-wider">
-								<span class="font-semibold">{m.settings_outputs_keys_wider()}.</span>
+								<span class="font-semibold">{m.settings_outputs_keys_wider()}</span>
 								{m.settings_outputs_keys_wider_help()}
 							</p>
 						{/if}
@@ -319,7 +325,7 @@
 	</form>
 	<p class="text-small text-muted-text">
 		{m.settings_outputs_keys_security()}
-		<a class="link" href={resolve('/settings/[section]', { section: 'security' })}
+		<a class="link ls-focus" href={resolve('/settings/[section]', { section: 'security' })}
 			>{m.settings_outputs_keys_security_link()}</a
 		>
 	</p>

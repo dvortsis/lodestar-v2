@@ -6,13 +6,15 @@ import type { components } from '$lib/api/schema';
 export type Key = components['schemas']['KeyInfo'];
 export type Job = components['schemas']['BackgroundJob'];
 
-/** Where Torznab answers (TZ-0): pasted into Prowlarr, Sonarr or Radarr with the key. */
-export const TORZNAB_PATH = '/api/v1/torznab/api';
+/** Where Torznab answers is `/api/v1/torznab/api` (TZ-0). Prowlarr, Sonarr and Radarr ask for a
+ * URL and an "API Path" (default `/api`) and request the two joined, so the URL to paste stops
+ * before the last `/api`. */
+export const TORZNAB_BASE = '/api/v1/torznab';
 
 /** The Torznab URL for this server as the browser reaches it: the address the apps need is the
  * same one unless they run elsewhere, which the help line says. */
 export function torznabUrl(origin: string): string {
-	return origin.replace(/\/+$/, '') + TORZNAB_PATH;
+	return origin.replace(/\/+$/, '') + TORZNAB_BASE;
 }
 
 /** The apps a Torznab key is usually for (TZ-0's how-to): one key each, named for the app, so

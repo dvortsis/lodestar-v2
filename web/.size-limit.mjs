@@ -1347,8 +1347,9 @@ export default [
 	),
 	// X-settings-trim: back at the §10.1 cap (44.95 kB measured) after the SRC-15a/LEGAL-1 raises.
 	// CMP-9a: the Companions registry entry adds ≈ 80 B here, which the 20 B of headroom couldn't take.
-	// Measured 45.06 kB, limit 45.1 KB: the runner decides this change to the §10.1 number (§2.26).
-	entry('Settings section (own JS + CSS)', settingsSectionView, '45.1 KB'),
+	// OUT-2 (runner §2.26): back under the §10.1 cap (44.98 KB measured) after the registry's
+	// default-only glob; it had been 45.1 KB at 45.06 KB measured.
+	entry('Settings section (own JS + CSS)', settingsSectionView, '45 KB'),
 	// The engine's on-demand code on a Settings screen, still gated: 34.34 KB with S-settings-1's
 	// screen (limit = measured + 10%). The production screen now uses it: missing chunks fail.
 	entry('Settings controls (on demand)', settingsLazy, '38 KB'),

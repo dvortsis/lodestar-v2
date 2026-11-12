@@ -73,8 +73,25 @@ describe('the screen registry', () => {
 			'/e/screen.ts': undefined
 		});
 		expect(got.map((screen) => `${screen.id}:${screen.group}`)).toEqual(['crawler:crawling']);
-		expect(error).toHaveBeenCalledTimes(3);
+		// The repeat, the bad group, the screen with no body, and the module with no default export.
+		expect(error).toHaveBeenCalledTimes(4);
 		error.mockRestore();
+	});
+	it('reads every screen.ts by its default export, so none can be left out', async () => {
+		const modules = import.meta.glob<Record<string, unknown>>([
+			'/src/lib/features/settings/*/screen.ts',
+			'/src/lib/features/*/screen.ts'
+		]);
+		const paths = Object.keys(modules);
+		expect(paths.length).toBeGreaterThan(10);
+		for (const path of paths) {
+			const mod = await modules[path]!();
+			expect(mod.default, `${path} needs an export default`).toBeDefined();
+		}
+		const listed = (await Promise.all(paths.map((p) => modules[p]!()))).flatMap((m) =>
+			Array.isArray(m.default) ? m.default : [m.default]
+		);
+		expect(screens.length).toBe(new Set(listed.map((s) => (s as { id: string }).id)).size);
 	});
 });
 

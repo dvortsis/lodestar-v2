@@ -44,13 +44,9 @@ const job = (over: Partial<Job>): Job =>
 	}) as Job;
 
 describe('Torznab address', () => {
-	it('is the origin plus TZ-0 path', () => {
-		expect(torznabUrl('http://192.168.1.5:8191')).toBe(
-			'http://192.168.1.5:8191/api/v1/torznab/api'
-		);
-		expect(torznabUrl('https://lodestar.example/')).toBe(
-			'https://lodestar.example/api/v1/torznab/api'
-		);
+	it("is the origin plus the path before the apps' own /api", () => {
+		expect(torznabUrl('http://192.168.1.5:8191')).toBe('http://192.168.1.5:8191/api/v1/torznab');
+		expect(torznabUrl('https://lodestar.example/')).toBe('https://lodestar.example/api/v1/torznab');
 	});
 });
 

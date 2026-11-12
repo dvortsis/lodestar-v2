@@ -118,7 +118,7 @@ describe('Torznab', () => {
 	it('shows the address and only the keys with the torznab scope', async () => {
 		render(OutputsScreen);
 		expect((screen.getByTestId('outputs-torznab-url') as HTMLInputElement).value).toBe(
-			`${location.origin}/api/v1/torznab/api`
+			`${location.origin}/api/v1/torznab`
 		);
 		const rows = await screen.findAllByTestId('outputs-key');
 		expect(rows.map((r) => within(r).getAllByText(/./)[0]!.textContent)).toEqual([
@@ -207,6 +207,53 @@ describe('Torznab', () => {
 		]);
 	});
 
+	it('Revoke asks first: Keep sends nothing, Revoke revokes', async () => {
+		replies['POST /keys/1/revoke'] = () => ({
+			status: 200,
+			body: { ...key(1, 'Prowlarr', ['torznab'], 'revoked'), revoked_at: 1_700_000_500 }
+		});
+		render(OutputsScreen);
+		await screen.findAllByTestId('outputs-key');
+		const revoke = () =>
+			fireEvent.click(screen.getByRole('button', { name: 'Revoke the key for Prowlarr' }));
+		await revoke();
+		let dialog = await screen.findByRole(
+			'dialog',
+			{ name: 'Revoke the key for Prowlarr?' },
+			{ timeout: 10_000 }
+		);
+		expect(dialog.textContent).toContain('Prowlarr stops finding anything in Lodestar');
+		await fireEvent.click(within(dialog).getByRole('button', { name: 'Keep key' }));
+		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
+		expect(writes()).toEqual([]);
+		await revoke();
+		dialog = await screen.findByRole(
+			'dialog',
+			{ name: 'Revoke the key for Prowlarr?' },
+			{ timeout: 10_000 }
+		);
+		await fireEvent.click(within(dialog).getByRole('button', { name: 'Revoke key' }));
+		await until(() =>
+			expect(writes()).toEqual([{ method: 'POST', path: '/keys/1/revoke', body: {} }])
+		);
+		const row = (await screen.findAllByTestId('outputs-key'))[0]!;
+		await until(() => expect(row.textContent).toContain('Revoked'));
+		// A revoked key has nothing left to press.
+		expect(within(row).queryByRole('button')).toBeNull();
+	});
+
+	it('refuses a name over 200 characters without asking for the password', async () => {
+		render(OutputsScreen);
+		await screen.findAllByTestId('outputs-key');
+		await fireEvent.input(screen.getByRole('textbox', { name: /App/ }), {
+			target: { value: 'x'.repeat(201) }
+		});
+		await fireEvent.click(screen.getByTestId('outputs-key-create'));
+		expect(await screen.findByText('Use at most 200 characters.')).toBeTruthy();
+		expect(screen.queryByRole('dialog')).toBeNull();
+		expect(writes()).toEqual([]);
+	});
+
 	it('a failed list offers Try again', async () => {
 		replies['GET /keys'] = () => ({ status: 500, body: { error: { code: 'x', message: 'x' } } });
 		render(OutputsScreen);
@@ -273,6 +320,57 @@ describe('bitmagnet export', () => {
 		// Turning it off asks nothing.
 		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
 		expect(writes()).toHaveLength(2);
+	});
+
+	it('a refused change says so and the switch shows the server value', async () => {
+		replies['PATCH /settings/content'] = () => ({
+			status: 500,
+			body: { error: { code: 'internal', message: 'x' } }
+		});
+		render(OutputsScreen);
+		await fireEvent.click(await screen.findByTestId('outputs-adult'));
+		const dialog = await screen.findByRole(
+			'dialog',
+			{ name: 'Include adult torrents in exports?' },
+			{ timeout: 10_000 }
+		);
+		await fireEvent.click(within(dialog).getByTestId('outputs-adult-include'));
+		expect(await screen.findByText("Couldn't change this setting. Try again.")).toBeTruthy();
+		await until(() =>
+			expect((screen.getByTestId('outputs-adult') as HTMLInputElement).checked).toBe(false)
+		);
+	});
+
+	it('an unreadable setting shows no switch, and Try again reads it', async () => {
+		replies['GET /settings/content'] = () => ({
+			status: 500,
+			body: { error: { code: 'internal', message: 'x' } }
+		});
+		render(OutputsScreen);
+		expect(await screen.findByText("Couldn't load this setting.")).toBeTruthy();
+		expect(screen.queryByTestId('outputs-adult')).toBeNull();
+		replies['GET /settings/content'] = () => ({ status: 200, body: CONTENT(true) });
+		await fireEvent.click(
+			within(screen.getByTestId('outputs-bitmagnet')).getByRole('button', { name: 'Try again' })
+		);
+		await until(() =>
+			expect((screen.getByTestId('outputs-adult') as HTMLInputElement).checked).toBe(true)
+		);
+	});
+
+	it('says the progress is lost when /jobs keeps failing', async () => {
+		replies['GET /jobs'] = () => ({ status: 500, body: { error: { code: 'x', message: 'x' } } });
+		render(OutputsScreen);
+		const link = screen.getByTestId('outputs-bitmagnet-start');
+		link.addEventListener('click', (e) => e.preventDefault());
+		await fireEvent.click(link);
+		await until(() =>
+			expect(screen.getByTestId('outputs-bitmagnet-progress').textContent).toContain(
+				"couldn't find this export's progress"
+			)
+		);
+		// Retried before giving up.
+		expect(calls.filter((c) => c.path === '/jobs').length).toBe(3);
 	});
 
 	it('shows the export job from start to a capped end', async () => {

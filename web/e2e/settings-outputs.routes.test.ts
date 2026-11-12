@@ -89,7 +89,7 @@ test.describe('Settings → Outputs', () => {
 
 	test('creates a Torznab key behind the password; its secret shows once', async ({ page, go }) => {
 		await go('/settings/outputs');
-		await expect(page.getByTestId('outputs-torznab-url')).toHaveValue(/\/api\/v1\/torznab\/api$/);
+		await expect(page.getByTestId('outputs-torznab-url')).toHaveValue(/\/api\/v1\/torznab$/);
 		await expect(page.getByText('Prowlarr', { exact: true })).toBeVisible();
 		await expect(page.getByRole('textbox', { name: /App/ })).toHaveValue('Sonarr');
 		await expectNoA11yViolations(page);

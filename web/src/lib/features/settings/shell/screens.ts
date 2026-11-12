@@ -96,6 +96,9 @@ export function collect(modules: Record<string, unknown>): Screen[] {
 	const ids = new Set<string>();
 	const out: Screen[] = [];
 	const take = (value: unknown, path: string) => {
+		// A module without a default export would otherwise vanish from the navigation.
+		if (value === undefined && import.meta.env.DEV)
+			console.error(`settings: ${path} has no default export`);
 		for (const v of Array.isArray(value) ? value : [value]) {
 			if (v === undefined || seen.has(v)) continue;
 			seen.add(v);
