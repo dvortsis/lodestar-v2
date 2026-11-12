@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T23:16Z",
+  "updated_at": "2026-11-12T23:18Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7580,7 +7580,7 @@
     },
     {
       "id": "enr-13b",
-      "note": "ENR-13b (Rust, Opus): the detail GET offers the id to lodestar_pipeline::identify::Interest, rate-limited per client and overall like DrawerInterest, not gated on adult. Launch after #764 ENR-14 merges (it wires identify).",
+      "note": "ENR-13b (Rust, Opus): the detail GET offers the id to lodestar_pipeline::identify::Interest, rate-limited per client and overall like DrawerInterest, not gated on adult. Launch after #764 ENR-14 merges (it wires identify). SCOPE (23:2xZ): IdentifySource is not constructed in serve on main 55e155a9 (no lodestar caller of identify::Interest/IdentifySource); ENR-13b must also wire the identify source into services.rs (owner-gated by ext:owner-v07-q5 consent like ENR-10?) \u2014 check deps before launch; not launched in the 00:00Z window.",
       "added": "2026-11-12T22:52Z"
     },
     {
@@ -7697,6 +7697,11 @@
       "id": "nos-1-nip-reread",
       "note": "NOS-1 brief: re-read NIP-01 and NIP-35 at a recorded revision (plan \u00a75.3; deferred from NOS-0, rv-789 I3).",
       "added": "2026-11-12T23:16Z"
+    },
+    {
+      "id": "merged-764",
+      "note": "#764 ENR-14 merged 55e155a9 after merged-tree clippy (ops.rs, pipeline lib.rs overlap) exit 0.",
+      "added": "2026-11-12T23:18Z"
     }
   ],
   "main_health": [
@@ -8719,16 +8724,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T23:16Z",
+    "updated": "2026-11-12T23:18Z",
     "items": [
       {
         "slot": 1,
         "slice": "UP-1",
         "role": "build",
         "agent": "claude",
-        "doing": "#765 security CHANGES relayed (B1 missing-at-start, B2 stuck cap, I1-I3 Windows); fix round",
-        "since": "2026-11-12T13:15:27Z",
-        "status": "active"
+        "doing": "#765 merged 8f820fcc; session archived",
+        "since": "2026-11-12T23:18Z",
+        "status": "idle"
       },
       {
         "slot": 2,
@@ -8807,9 +8812,9 @@
         "slice": "ENR-14",
         "role": "build",
         "agent": "claude",
-        "doing": "#764 d8f867dd delta self-check MERGE; awaiting green",
-        "since": "2026-11-12T12:41:40Z",
-        "status": "active"
+        "doing": "#764 merged 55e155a9; session archived",
+        "since": "2026-11-12T23:18Z",
+        "status": "idle"
       },
       {
         "slot": 11,
@@ -8825,9 +8830,9 @@
         "slice": "X-un1-nits",
         "role": "build",
         "agent": "claude",
-        "doing": "#769 CHANGES relayed (B1 retry test, I1 hourly stamp, I2 skip at budget 0); fix round",
-        "since": "2026-11-12T15:59:55Z",
-        "status": "active"
+        "doing": "#769 merged f47369b8; session archived",
+        "since": "2026-11-12T23:18Z",
+        "status": "idle"
       },
       {
         "slot": 13,
@@ -9067,7 +9072,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-12T23:16Z",
+  "updated": "2026-11-12T23:18Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
