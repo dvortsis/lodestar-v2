@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T14:26:30Z",
+  "updated_at": "2026-11-12T14:34:48Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8094,6 +8094,11 @@
       "pr": 761,
       "sha": "ea7125f93402a5bc84035b41008f4e9562957653",
       "at": "2026-11-12T14:19:12Z"
+    },
+    {
+      "pr": 760,
+      "sha": "413dfe25d3fc558b16937f9a9dc67e44a8d95812",
+      "at": "2026-11-12T14:34:48Z"
     }
   ],
   "active_sessions": {
@@ -8331,7 +8336,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T13:57:04Z",
+    "updated": "2026-11-12T14:34:48Z",
     "items": [
       {
         "slot": 1,
@@ -8365,7 +8370,7 @@
         "slice": null,
         "role": null,
         "agent": null,
-        "doing": "#759 X-wk-fetched-lease-nits merged (self-checked delta); reserved for X-always-adult-detail-mask after #760 merges",
+        "doing": "idle (X-always-adult-detail-mask went to slot 11, same session as ENR-12)",
         "since": "2026-11-12T12:42:43Z",
         "status": "idle"
       },
@@ -8380,11 +8385,11 @@
       },
       {
         "slot": 11,
-        "slice": "ENR-12",
+        "slice": "X-always-adult-detail-mask",
         "role": "build",
         "agent": "claude",
-        "doing": "#750 ENR-10 merged; ENR-12 Identified-as detail API + N6/N7 (briefs/ENR-12.md)",
-        "since": "2026-11-12T11:10:14Z",
+        "doing": "#760 ENR-12 merged; X-always-adult-detail-mask (briefs/X-always-adult-detail-mask.md), same session",
+        "since": "2026-11-12T14:34:48Z",
         "status": "active"
       },
       {
@@ -8464,7 +8469,7 @@
     }
   ],
   "heartbeat": "2026-11-12T12:38:43Z",
-  "updated": "2026-11-12T14:26:30Z",
+  "updated": "2026-11-12T14:34:48Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
