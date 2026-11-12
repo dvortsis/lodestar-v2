@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T08:43:44Z",
+  "updated_at": "2026-11-12T08:52:41Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7193,6 +7193,11 @@
       "id": "ENR-14-harvest-count",
       "at": "2026-11-12T08:43:44Z",
       "note": "ENR-10: intake harvest count in crates/pipeline/src/lib.rs still counts an identification as harvested. Metric only. Fix in ENR-14."
+    },
+    {
+      "id": "v052-rc3",
+      "at": "2026-11-12T08:52:41Z",
+      "note": "release/v0.5.2 at 833a0d25 green (CI, E2E, Release dry run; soak screen only the known memstats test). Runner call: tag v0.5.2-rc.3 (pre-release), scope frozen (no #597/#595/966fbc99b). P-v052-cut opens notes front-matter PR + drafts the rc.3 soak brief (manifest section 6). After merge: owner tag steps + soak brief via dashboard session."
     }
   ],
   "main_health": [
@@ -8238,7 +8243,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T08:43:44Z",
+  "updated": "2026-11-12T08:52:41Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
