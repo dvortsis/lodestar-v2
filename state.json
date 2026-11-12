@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T02:06:22Z",
+  "updated_at": "2026-11-12T02:09:24Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7026,7 +7026,8 @@
       "id": "flake-logging-refs-0707",
       "at": "2026-11-12T02:06:22Z",
       "note": "crates/lodestar/src/logging/refs.rs:55 bans substring '0707' in a random HMAC ref (~1/13k). Fixed as approved shared edit in RX-0 #717's next push (assert_ne!(r, \"ref:07070707\")). Seen on #717 Windows re-run job 130910086928."
-    }
+    },
+    "Next runner PR: add X-win-upd-history-polish slice entry (same session as #722, slot 5); owner FYI: #722 merged"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7555,6 +7556,11 @@
       "pr": 708,
       "sha": "c4c09a3e293d70b8689897548b1f5a5acd196140",
       "at": "2026-11-12T01:28:55Z"
+    },
+    {
+      "pr": 722,
+      "sha": "407cb87baee12cefb9cc83cfa04d814588a32eb2",
+      "at": "2026-11-12T02:09:24Z"
     }
   ],
   "active_sessions": {
@@ -7789,7 +7795,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T02:06:22Z",
+    "updated": "2026-11-12T02:09:24Z",
     "items": [
       {
         "slot": 1,
@@ -7828,11 +7834,11 @@
       },
       {
         "slot": 5,
-        "slice": "X-win-upd-history",
+        "slice": "X-win-upd-history-polish",
         "role": "Opus",
         "agent": "claude",
-        "doing": "session_01MMjhnAS5qWBVBGfPNAHPjt: Windows install history + rollback notice (Opus, /security-review); G-m6 path",
-        "since": "2026-11-11T23:09:03Z",
+        "doing": "follow-up from rv-722 nits (updates-Off wake, failed look, portable nonce, wording)",
+        "since": "2026-11-12T02:09:24Z",
         "status": "active"
       },
       {
@@ -7951,7 +7957,7 @@
     }
   ],
   "heartbeat": "2026-11-12T00:38:52Z",
-  "updated": "2026-11-12T02:06:22Z",
+  "updated": "2026-11-12T02:09:24Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
