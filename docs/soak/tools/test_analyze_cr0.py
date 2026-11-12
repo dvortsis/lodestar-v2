@@ -1250,6 +1250,18 @@ class ScreenCalibrationTests(unittest.TestCase):
         self.assertEqual([c["line"] for c in cps], ["ok", "ok", "ok"])
         self.assertLess(cps[0]["counters"]["anon_outside_mimalloc_mib_per_1000_stored"]["value"], 0)
 
+    def test_r4_with_an_early_fill_still_trips_by_hour_6(self):
+        """A fill lag like screen_r5_early_fill's can hide r4's growth at hour 3; hours
+        6 and 12 still trip (the decisions file, "Why 8")."""
+        def r4_fill(h):
+            values, prom = screen_r4_replay(h)
+            prom["mem_rss_anon_bytes"] -= 15 * max(0.0, 4 - abs(h - 4)) * SCREEN_MIB
+            return values, prom
+        cps = self.checkpoints(screen_points(r4_fill))
+        for c in cps[1:]:
+            self.assertEqual(c["status"], "trip", c["line"])
+            self.assertEqual(c["counter"], "anon_outside_mimalloc_mib_per_1000_stored")
+
     def no_reading_case(self, change):
         """r5's points to hour 4, with `change` applied; fetch_pending stays ok."""
         from analyze_cr0 import screen_checkpoint

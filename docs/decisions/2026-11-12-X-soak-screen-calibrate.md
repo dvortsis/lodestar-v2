@@ -40,7 +40,7 @@ These are estimates, not readings of this input. No run has recorded it yet.
 
 **r4's estimate:**
 - r4's anonymous memory grew about 47 MiB in 1.9 h, and about 63% of that was outside mimalloc: 47 × 0.63 = 29.6 MiB.
-- At about 680 stored an hour, 1.9 h is 1,292 stored, so the rate is 29.6 / 1.292 = 22.9 MiB per 1,000 stored.
+- At about 680 stored an hour, 1.9 h is 1,292 stored, so the rate is 29.6 / 1.292 = 22.9 MiB per 1,000 stored. The 680 is the runner's relay of r4's figures (2026-11-12), not a committed aggregate, and close to r5's committed 695. The committed mapping figures give a lower rate: 242 new mappings at about 0.2 per stored torrent is about 1,210 stored, about 640 an hour, which reads 24.5 per 1,000. Either way it's about 3 times the threshold.
 - A second route agrees: about 0.2 new 128–512 KiB mappings per stored torrent, at about 120 kB dirty each, is 24 kB per torrent, or 22.9 MiB per 1,000.
 - On the gate's own figure, r4's private slope of 29.35 MiB/h at 680 an hour is 43.2 MiB per 1,000. 63% of that is 27.2, so 22.9 is the lower of the two estimates.
 - **The 63% is "outside mimalloc's arena" as counted in smaps, not `RssAnon − committed`.** `2026-11-04-X-mem-gauges.md` records that this difference is an approximation:
@@ -54,7 +54,7 @@ These are estimates, not readings of this input. No run has recorded it yet.
 - With `override`, the harness held 0.7–0.8 MiB outside the arena from 1,000 to 10,000 torrents: about 0 growth.
 
 **Why 8:**
-- It's at least 1.5 times r5's figure, the margin #562 asked for, and it trips r4's shape at hours 3, 6 and 12 by a margin of 2.9.
+- It's at least 1.5 times r5's figure, the margin #562 asked for, and it trips r4's shape at hours 3, 6 and 12 by a margin of 2.9, without an early fill. **With a fill lag like the fixture's** (RssAnon trailing committed by up to 15 MiB to hour 4), hour 3 can miss r4's growth; hours 6 and 12 still trip (`test_r4_with_an_early_fill_still_trips_by_hour_6`).
 - 8 MiB per 1,000 is about 5.5 MiB/h at r5's rate, above the gate's 2.0 MiB/h bar. As before, slow growth below the in-run thresholds is the gate's to see, not the screen's.
 - **What isn't known:** r5's hours 0–12 weren't published. While mimalloc fills, committed bytes can rise faster than resident ones, which pushes this input down, not up; a fixture shows that reads ok (`test_an_early_fill_ahead_of_residency_reads_low_not_high`). The r5 fixtures otherwise build RssAnon as committed plus a slow rise, so their ok is by construction and documents the assumption rather than proving the threshold. A future screened soak on rc.4 or later measures it.
 
@@ -73,7 +73,7 @@ Every value in the tests is invented and shaped by the figures above. No owner s
   - **Through the analyzer:** both shapes, end to end.
 - **`test_screen.py`:**
   - The fixtures gain RssAnon, and r4's gains its growth outside mimalloc.
-  - The tests for snapshots without the new gauges and for Windows-shaped runs now expect `ok(without …)`. So does the r3-era run, which has only the pool's key count.
+  - The tests for snapshots without the new gauges and for Windows-shaped runs now expect `ok(without …)`. The r3-era run, which has only the pool's key count, now expects `unjudged(…)` (D5).
   - A run with nothing usable stays `not_available`.
   - Information counters are tested never to trip, and never to decide a checkpoint alone.
   - The loader's refusals cover a threshold on an information counter, and `"never"` on a judged one.

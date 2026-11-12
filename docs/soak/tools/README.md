@@ -106,7 +106,9 @@ never changes it.
   - `ok`: nothing tripped.
   - `ok(without <state>:<counter>, …)`: nothing tripped among the inputs that
     were there, and the named ones had no reading. That happens with an older
-    binary, or on Windows, which has no mapping gauge and no RssAnon.
+    binary, or on Windows, which has no mapping gauge and no RssAnon. When
+    `anon_outside_mimalloc_mib_per_1000_stored` is named, r4's failure mode
+    (a C heap growing outside mimalloc) wasn't watched.
   - `unjudged(no memory inputs: …)`: nothing tripped, but none of the memory
     inputs had a reading (an older binary, such as r4's rc.3). It isn't ok.
   - `trip(<counter>, <value>, <threshold>)`: **stop the run and investigate**.
