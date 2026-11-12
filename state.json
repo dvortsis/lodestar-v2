@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T18:16:59Z",
+  "updated_at": "2026-11-12T18:39:05Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4116,7 +4116,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-12T15:41:01Z",
+  "last_heartbeat": "2026-11-12T18:39:05Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -7413,6 +7413,14 @@
     {
       "id": "test-update-helper-real-upgrade",
       "note": "Tester 5c: real Windows update-helper upgrade/rollback and its event ID 900 need a signed release higher than 0.5.0 plus manifest; test after the next signed release (owner tags)."
+    },
+    {
+      "id": "X-ci-macos-starved",
+      "note": "On main, test (macos-latest) was cancelled while still queued in 3 runs in a row (cancel-in-progress supersedes before a macOS runner frees); only the nightly cron gives macOS signal. Consider not cancelling in-progress main runs for the macOS job, or a separate concurrency group. Workflow structure only; no permissions change."
+    },
+    {
+      "id": "X-clippy-1-100",
+      "note": "CI dtolnay stable = 1.100 adds needless_range_loop at crawler-sim/tests/sim/net.rs:566 (maybe more); fails fmt+clippy inside ci-ok on every PR and main. Runner PR in progress."
     }
   ],
   "main_health": [
@@ -8435,7 +8443,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T18:04:39Z",
+    "updated": "2026-11-12T18:39:05Z",
     "items": [
       {
         "slot": 1,
@@ -8567,8 +8575,8 @@
       "words": "go with the runner's recommendation"
     }
   ],
-  "heartbeat": "2026-11-12T15:41:01Z",
-  "updated": "2026-11-12T18:16:59Z",
+  "heartbeat": "2026-11-12T18:39:05Z",
+  "updated": "2026-11-12T18:39:05Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
