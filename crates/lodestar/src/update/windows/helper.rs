@@ -695,6 +695,36 @@ fn attempt(
     }
 }
 
+// What the update helper writes to the Application log, which every local
+// user can read (Legal Notice section 5: what happened, how to fix it, and
+// folder paths). So each reason is fixed text and Lodestar's own parsed
+// values alone: a count and semver versions, whose grammar holds only
+// `0-9 A-Z a-z . - +`. Never an account, a path, a config value or a
+// secret (X-event-log-followups).
+
+/// Why an install Windows Installer blocked (error 1920) is skipped.
+fn blocked_reason(attempts: u32, version: &Version) -> String {
+    format!(
+        "Windows Installer couldn't start the Lodestar service at the end of the install \
+         ({attempts} times in a row; error 1920): another program may hold lodestar.exe open, \
+         or {version} doesn't start. {version} is skipped."
+    )
+}
+
+/// Why an install that exited 0 but didn't replace the program is skipped.
+/// `from` is the journal's own text, read back from disk: shown only as a
+/// version, else as fixed words.
+fn not_replaced_reason(version: &Version, from: &str) -> String {
+    let from =
+        Version::parse(from).map_or_else(|_| "an earlier version".to_owned(), |v| v.to_string());
+    format!(
+        "Windows Installer reported {version} installed (exit 0), but the program in Program \
+         Files is still {from}, so it wasn't. {version} is skipped. To install it, an \
+         administrator repairs or removes Lodestar in Settings > Apps, then installs the \
+         {version} MSI by hand."
+    )
+}
+
 /// What follows the install's `msiexec`, inline or once the copy has
 /// answered.
 pub(super) fn after_install(
@@ -729,11 +759,7 @@ pub(super) fn after_install(
                 let _ = std::fs::remove_file(ctx.staging.dir.join(BLOCKED));
                 mark_failed(ctx, sys, &version);
                 sys.start_service();
-                let why = format!(
-                    "Windows Installer couldn't start the Lodestar service at the end of the \
-                     install ({attempts} times in a row; error 1920): another program may hold \
-                     lodestar.exe open, or {version} doesn't start. {version} is skipped."
-                );
+                let why = blocked_reason(attempts, &version);
                 sys.event_log(&format!("Lodestar's update helper: {why}"));
                 return Outcome::Failed {
                     version,
@@ -793,13 +819,7 @@ pub(super) fn after_install(
             mark_failed(ctx, sys, &version);
             let _ = sys.set_start(journal.start_before.unwrap_or(Start::Auto));
             sys.start_service();
-            let why = format!(
-                "Windows Installer reported {version} installed (exit 0), but the program in \
-                 Program Files is still {from}, so it wasn't. {version} is skipped. To install \
-                 it, an administrator repairs or removes Lodestar in Settings > Apps, then \
-                 installs the {version} MSI by hand.",
-                from = journal.from
-            );
+            let why = not_replaced_reason(&version, &journal.from);
             sys.event_log(&format!("Lodestar's update helper: {why}"));
             Outcome::Failed {
                 version,
@@ -1122,6 +1142,36 @@ pub(super) fn supervise(
         }
         sleep(poll);
     }
+}
+
+/// The longest the update helper waits for `eventcreate` to write its
+/// Event Log entry. One entry takes far less; past it, the entry is given
+/// up (it's best effort) so a hung `eventcreate` never holds up a rollback
+/// or the service's restart.
+pub(super) const EVENT_LOG_WAIT: Duration = Duration::from_secs(10);
+
+/// How often [`run_bounded`] looks at the child.
+const EVENT_LOG_POLL: Duration = Duration::from_millis(50);
+
+/// Runs `cmd` with no input or output, for at most `limit`: past it the
+/// child is killed and reaped, and the call answers `TimedOut`. Through
+/// [`supervise`], so the bound and the kill are the ones msiexec gets;
+/// its error text names msiexec, which the Event Log's caller discards.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(super) fn run_bounded(mut cmd: std::process::Command, limit: Duration) -> io::Result<i32> {
+    use std::process::Stdio;
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    supervise(
+        &mut child,
+        limit,
+        EVENT_LOG_POLL,
+        &Instant::now,
+        &mut std::thread::sleep,
+    )
 }
 
 /// Removes earlier copies (`run-*.exe`) and their parent locks
@@ -1472,7 +1522,9 @@ impl System for Windows {
         start_type_of(&out).ok_or_else(|| io::Error::other("sc qc gave no start type"))
     }
 
-    /// Through `eventcreate` (source "Lodestar update helper"), best effort.
+    /// Through `eventcreate` (source "Lodestar update helper"), best effort,
+    /// and bounded by [`EVENT_LOG_WAIT`]: a hung `eventcreate` is killed and
+    /// the entry given up.
     fn event_log(&self, message: &str) {
         let _ = Self::command("eventcreate.exe").and_then(|mut c| {
             c.args([
@@ -1486,8 +1538,8 @@ impl System for Windows {
                 "Lodestar update helper",
                 "/D",
                 message,
-            ])
-            .output()
+            ]);
+            run_bounded(c, EVENT_LOG_WAIT)
         });
     }
 
@@ -3385,8 +3437,11 @@ mod tests {
         assert!(!calls[4..].contains(&"start".to_string()), "{calls:?}");
         assert!(!calls[4..].contains(&"manual".to_string()), "{calls:?}");
         assert!(!calls[4..].contains(&"auto".to_string()), "{calls:?}");
-        // How to recover, in the Event Log and in result.json alike.
+        // How to recover, in the Event Log and in result.json. The Event
+        // Log's has the same steps with the folders by role and no reason
+        // text; result.json's has the full paths (X-event-log-followups).
         let event = fake.events.lock().unwrap()[0].clone();
+        let detail = env.answer().detail.unwrap();
         for needle in [
             "step 3 of 5",
             "sc config Lodestar start= delayed-auto",
@@ -3394,8 +3449,12 @@ mod tests {
             "Neither file starts anything",
         ] {
             assert!(event.contains(needle), "{needle}: {event}");
+            assert!(detail.contains(needle), "{needle}: {detail}");
         }
-        assert_eq!(env.answer().detail.as_deref(), Some(event.as_str()));
+        let data = env.ctx.data_dir.display().to_string();
+        assert!(detail.contains(&data), "{detail}");
+        assert!(!event.contains(&data), "{event}");
+        assert!(event.contains("in Lodestar's data folder"), "{event}");
         // The store was restored; the marker stays until step 5.
         let data = &env.ctx.data_dir;
         assert_eq!(
@@ -4362,6 +4421,167 @@ mod tests {
         let e = got.unwrap_err();
         assert_eq!(e.kind(), io::ErrorKind::TimedOut);
         assert!(started_then_failed(&e) && ended);
+    }
+
+    /// The Event Log reasons hold fixed text and Lodestar's parsed values
+    /// alone (X-event-log-followups): a count and semver versions. A
+    /// journal's `from` that isn't a version, such as a path, an account or
+    /// a setting, shows as fixed words instead.
+    #[test]
+    fn event_log_reasons_have_fixed_shapes() {
+        let v = Version::parse("0.7.0-rc.1+build.5").unwrap();
+        assert_eq!(
+            blocked_reason(3, &v),
+            "Windows Installer couldn't start the Lodestar service at the end of the install \
+             (3 times in a row; error 1920): another program may hold lodestar.exe open, or \
+             0.7.0-rc.1+build.5 doesn't start. 0.7.0-rc.1+build.5 is skipped."
+        );
+        assert_eq!(
+            not_replaced_reason(&v, "0.6.0"),
+            "Windows Installer reported 0.7.0-rc.1+build.5 installed (exit 0), but the program in \
+             Program Files is still 0.6.0, so it wasn't. 0.7.0-rc.1+build.5 is skipped. To \
+             install it, an administrator repairs or removes Lodestar in Settings > Apps, then \
+             installs the 0.7.0-rc.1+build.5 MSI by hand."
+        );
+        for hostile in [
+            r"C:\Users\alice\AppData\Local\x",
+            r"CONTOSO\alice",
+            "password=hunter2",
+            "0.6.0\nLodestar's service started",
+            "0.6.0 C:\\Users\\bob",
+            "",
+        ] {
+            let text = not_replaced_reason(&v, hostile);
+            assert!(
+                text.contains("is still an earlier version, so"),
+                "{hostile:?}: {text}"
+            );
+            for bad in ["alice", "bob", "hunter2", "Users", "CONTOSO", "\n"] {
+                assert!(!text.contains(bad), "{hostile:?}: {text}");
+            }
+        }
+        // A version can only add these characters to the fixed text.
+        for text in [
+            blocked_reason(u32::MAX, &v),
+            not_replaced_reason(&v, "1.2.3"),
+        ] {
+            assert!(
+                text.chars().all(|c| c.is_ascii_graphic() || c == ' '),
+                "{text}"
+            );
+            assert!(!text.contains('\\') && !text.contains('/'), "{text}");
+        }
+    }
+
+    /// The rollback's Event Log text (X-event-log-followups): fixed text,
+    /// parsed versions and the folders by role, at every step and cause;
+    /// never a path, a reason, or journal text that isn't a version. The
+    /// full recovery keeps the paths and the reason.
+    #[test]
+    fn the_rollbacks_event_log_text_has_fixed_shapes() {
+        let env = Env::new("0.6.0");
+        let v = |s: &str| Version::parse(s).unwrap();
+        let mut j = rollback::installing(&env.ctx, "id", &v("0.6.0"), &v("0.7.0")).unwrap();
+        let data = env.ctx.data_dir.display().to_string();
+        let staging = env.ctx.staging.dir.display().to_string();
+        let why = r"restoring C:\Users\alice\AppData\x: access denied";
+        for done in [0, 1, 3, 5] {
+            for cause in [rollback::Cause::Step, rollback::Cause::Journal] {
+                let text = rollback::recovery_event(&j, done, cause);
+                assert!(text.contains("0.7.0") && text.contains("0.6.0"), "{text}");
+                assert!(!text.contains(&data) && !text.contains(&staging), "{text}");
+                assert!(
+                    !text.contains("alice") && !text.contains("denied"),
+                    "{text}"
+                );
+                // Before step 1 the journal is cleared, so the pointer is
+                // the helper's answer; after it, the journal.
+                let pointer = if done == 0 {
+                    r"updates\result.json in Lodestar's data folder"
+                } else {
+                    "journal.json in Lodestar's update staging folder"
+                };
+                assert!(text.contains(pointer), "{done}: {text}");
+                assert!(
+                    text.chars().all(|c| c.is_ascii_graphic() || c == ' '),
+                    "{text}"
+                );
+                let full = rollback::recovery(&env.ctx, &j, done, why, cause);
+                assert!(full.contains("alice"), "the full text keeps the reason");
+                if done > 0 {
+                    assert!(full.contains(&data), "the full text keeps the paths");
+                }
+            }
+        }
+        // Journal text that isn't a version shows as fixed words.
+        j.from = r"C:\Users\alice\AppData".into();
+        j.to = r"CONTOSO\bob".into();
+        let text = rollback::recovery_event(&j, 3, rollback::Cause::Step);
+        assert!(text.contains("the previous version") && text.contains("the new version"));
+        for bad in ["alice", "bob", "Users", "CONTOSO"] {
+            assert!(!text.contains(bad), "{text}");
+        }
+        assert_eq!(rollback::shown_version("0.7.0-rc.1", "x"), "0.7.0-rc.1");
+        assert_eq!(rollback::shown_version("0.7.0 C:\\x", "x"), "x");
+        // The copy's refusal: a code, else fixed words.
+        assert_eq!(
+            rollback::shown_code("artifact_mismatch"),
+            "artifact_mismatch"
+        );
+        // The bound is the shape (see `shown_code`): a lowercase word
+        // passes, which only an administrator's own edit could put there.
+        assert_eq!(
+            rollback::shown_code("msiexec_not_started"),
+            "msiexec_not_started"
+        );
+        for bad in ["io: C:\\Users\\alice", "Artifact", "", &"a".repeat(41)] {
+            assert_eq!(rollback::shown_code(bad), "an unexpected reason", "{bad:?}");
+        }
+    }
+
+    /// A child that never exits: a long sleep, on either platform.
+    fn never_exits() -> std::process::Command {
+        if cfg!(windows) {
+            let mut c = std::process::Command::new("powershell.exe");
+            c.args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Start-Sleep -Seconds 600",
+            ]);
+            c
+        } else {
+            let mut c = std::process::Command::new("sleep");
+            c.arg("600");
+            c
+        }
+    }
+
+    /// The `eventcreate` bound (X-event-log-followups): a child that never
+    /// exits is killed at the limit and the call answers `TimedOut`, well
+    /// within the test's 10 s deadline; one that ends answers its code.
+    #[test]
+    fn a_hung_event_log_command_is_killed_at_its_bound() {
+        let start = Instant::now();
+        let e = run_bounded(never_exits(), Duration::from_millis(300)).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::TimedOut, "{e}");
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "{:?}",
+            start.elapsed()
+        );
+
+        let quick = if cfg!(windows) {
+            let mut c = std::process::Command::new("cmd.exe");
+            c.args(["/C", "exit 3"]);
+            c
+        } else {
+            let mut c = std::process::Command::new("sh");
+            c.args(["-c", "exit 3"]);
+            c
+        };
+        assert_eq!(run_bounded(quick, Duration::from_secs(10)).unwrap(), 3);
+        assert!(EVENT_LOG_WAIT >= Duration::from_secs(10));
     }
 
     /// `f`'s first `Some`, tried for up to 10 s: a lock just let go of can

@@ -31,7 +31,7 @@ pub struct Content {
     /// turning it on needs `"confirm_adult": true` in the same change
     /// (the 18+ confirmation). Applies at once.
     pub show_adult: bool,
-    /// Adult results in Torznab feeds. Not used yet.
+    /// Adult results in Torznab feeds (`/torznab/api`).
     pub torznab_adult: bool,
     /// Adult results in the Stremio add-on. Not used yet.
     pub stremio_adult: bool,
@@ -54,7 +54,8 @@ impl Section for Content {
             .group("adult")
             .keywords(),
         // The outputs' own (Torznab, Stremio, export), off by default;
-        // export's is read by `follow_export`, the others are reserved.
+        // export's is read by `follow_export`, Torznab's by
+        // `follow_torznab`; Stremio's is reserved.
         Field::new("torznab_adult").group("adult").advanced(),
         Field::new("stremio_adult").group("adult").advanced(),
         Field::new("export_adult").group("adult").advanced(),
@@ -106,6 +107,12 @@ pub fn follow_export(rx: watch::Receiver<Content>) -> lodestar_api::export::Expo
     lodestar_api::export::ExportAdult(AdultVisibility::follow(move || rx.borrow().export_adult))
 }
 
+/// Torznab's own adult setting (`torznab_adult`, §20.9), followed live,
+/// for `/torznab/api`.
+pub fn follow_torznab(rx: watch::Receiver<Content>) -> lodestar_api::torznab::TorznabAdult {
+    lodestar_api::torznab::TorznabAdult(AdultVisibility::follow(move || rx.borrow().torznab_adult))
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -129,6 +136,20 @@ mod tests {
         );
         tx.send_modify(|c| c.export_adult = true);
         assert!(export.0.shown());
+    }
+
+    #[test]
+    fn torznab_follows_its_own_setting_live() {
+        let (tx, rx) = watch::channel(Content::default());
+        let torznab = follow_torznab(rx);
+        assert!(!torznab.0.shown());
+        tx.send_modify(|c| {
+            c.show_adult = true;
+            c.export_adult = true;
+        });
+        assert!(!torznab.0.shown(), "search's and export's don't apply");
+        tx.send_modify(|c| c.torznab_adult = true);
+        assert!(torznab.0.shown());
     }
 
     #[test]
@@ -325,7 +346,7 @@ mod tests {
                     .unwrap();
                 assert_eq!(
                     help.contains("Not used yet"),
-                    f != "export_adult",
+                    f == "stremio_adult",
                     "{f}: {help}"
                 );
             }

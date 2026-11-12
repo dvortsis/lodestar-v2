@@ -615,6 +615,8 @@
 	"settings_logging_ev_update_state_unsaved_h": "The update status couldn't be saved.",
 	"settings_logging_ev_update_state_unreadable_n": "Update state unreadable",
 	"settings_logging_ev_update_state_unreadable_h": "The saved update status couldn't be read.",
+	"settings_logging_ev_update_history_unreadable_n": "Update history unreadable",
+	"settings_logging_ev_update_history_unreadable_h": "The update history couldn't be read, so it shows as empty.",
 	"settings_logging_ev_update_dir_sync_unsupported_n": "Folder sync unsupported",
 	"settings_logging_ev_update_dir_sync_unsupported_h": "This drive can't confirm that data reached the disk.",
 	"settings_logging_ev_update_overlay_unreadable_n": "Update overlay unreadable",

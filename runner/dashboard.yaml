@@ -1461,6 +1461,12 @@ owner_queue:
   action: 'PK-nightly-host: approve where nightly update manifests are published, signed with the nightly key (proposal in docs/decisions/2026-11-08-PK-manifest.md)'
   unblocks: Automatic updates on the Nightly channel
   when: Only if the Nightly channel is offered; pairs with item 3
+- n: 11
+  type: review
+  action: 'Runner calls you may want to veto (§2.19): Torznab keys are shown once, when made or regenerated, and only after you enter your password (OUT-2); the installer pin check for SourceForge downloads (size, MD5, exact path, signature date near the GitHub tag; X-cmp13-installer-pins); the Legal Notice on main now says it applies to main''s development builds, not 0.5.2 (§2.57)'
+  unblocks: Nothing; these go ahead unless you object
+  when: Any time
+
 gates:
 - id: G-v05
   name: v0.5 MVP exit
