@@ -187,7 +187,7 @@ const settingsEdit = [/features\/settings\/form\/edit\.ts$/];
 const settingsConnections = [
 	/features\/settings\/screens2\/(GroupTest|ClearUsage|ClientsWidget|ClientSelectWidget|ChannelsWidget|Advanced|LoadFailed)\.svelte$/,
 	/features\/settings\/screens2\/privacy\.ts$/,
-	// The four navigation icons, loaded after the navigation shows (`Screen.iconLoad`).
+	// The five navigation icons (Language too), loaded after the navigation shows (`Screen.iconLoad`).
 	/features\/settings\/screens2\/icons\.ts$/
 ];
 // The server labels, one generated map per section (M-settings-engine-2): a form loads its
