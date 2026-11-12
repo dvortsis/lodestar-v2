@@ -601,7 +601,10 @@ impl Store {
     /// held on stays queued while later ones go
     /// (X-percolate-promoted-hold). Hits for a row left queued are
     /// recorded too; a replay of them adds nothing (`alerts` is unique
-    /// per search and torrent).
+    /// per search and torrent), so `results` is per search, not per row.
+    ///
+    /// Every seq must name a queued row, each once: otherwise it's
+    /// [`Error::NotFound`] and nothing is written, alerts included.
     pub fn record_promoted_rows(
         &mut self,
         seqs: &[i64],
@@ -609,13 +612,16 @@ impl Store {
         now: i64,
     ) -> Result<Vec<Alert>> {
         let tx = crate::begin_write(&mut self.conn)?;
-        let created = insert_promoted(&tx, results, now)?;
         {
             let mut delete = tx.prepare_cached("DELETE FROM settings WHERE key = ?1")?;
             for &seq in seqs {
-                delete.execute([promoted_key(seq)])?;
+                if seq <= 0 || delete.execute([promoted_key(seq)])? != 1 {
+                    // Dropping `tx` rolls back the rows already deleted.
+                    return Err(Error::NotFound("queued promotion"));
+                }
             }
         }
+        let created = insert_promoted(&tx, results, now)?;
         tx.commit()?;
         Ok(created)
     }
@@ -794,6 +800,31 @@ mod tests {
             .unwrap();
         assert!(again.is_empty());
         assert!(s.promoted_due(99, 10).unwrap().is_empty());
+    }
+
+    /// A seq that names no queued row (unknown, already dropped, or given
+    /// twice) fails the call and rolls all of it back: no row is dropped
+    /// and no alert is made.
+    #[test]
+    fn record_promoted_rows_refuses_an_unknown_row_and_writes_nothing() {
+        let mut s = test_store(10);
+        let id = s.create_saved_search(&input("n"), 10, 0).unwrap();
+        for seq in [2, 4] {
+            queue_promoted(&s.conn, seq).unwrap();
+        }
+        let both = |s: &Store| s.promoted_due(99, 10).unwrap().len();
+        for seqs in [&[3][..], &[2, 3], &[2, 2], &[0], &[4, 2, 9]] {
+            let r = s.record_promoted_rows(seqs, &[(hits(id, &[3]), AST)], 1);
+            assert!(matches!(r, Err(Error::NotFound(_))), "{seqs:?}: {r:?}");
+            assert_eq!(both(&s), 2, "{seqs:?}: nothing dropped");
+            assert!(s.alerts(id, None, 10).unwrap().is_empty(), "{seqs:?}");
+        }
+        // The same call with known rows goes through.
+        let created = s
+            .record_promoted_rows(&[2, 4], &[(hits(id, &[3]), AST)], 1)
+            .unwrap();
+        assert_eq!(t_ids(&created), [3]);
+        assert_eq!(both(&s), 0);
     }
 
     #[test]

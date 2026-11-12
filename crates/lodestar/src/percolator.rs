@@ -1632,12 +1632,16 @@ mod tests {
         assert_eq!(alert_ids(&s.store, promo), vec![item], "not held");
         assert!(alert_ids(&s.store, sig).is_empty());
         assert_eq!(s.store.promoted_due(i64::MAX, 10).unwrap().len(), 1);
-        // Still backfilling: retried, still held, nothing new.
+        // Still backfilling: every run retries it, finds it still held,
+        // writes nothing and asks for no run straight away.
         step(&mut s);
         assert_backfilling(&s.index);
-        let r = run_seen(&mut s, w, &mut seen);
-        assert_eq!((r.promoted, r.promoted_held, r.alerts), (0, 1, 0));
-        assert_eq!(s.store.promoted_due(i64::MAX, 10).unwrap().len(), 1);
+        for _ in 0..3 {
+            let r = run_seen(&mut s, w, &mut seen);
+            assert_eq!((r.promoted, r.promoted_held, r.alerts), (0, 1, 0));
+            assert!(!r.more, "doesn't spin");
+            assert_eq!(s.store.promoted_due(i64::MAX, 10).unwrap().len(), 1);
+        }
 
         finish_backfill(&mut s);
         let r = run_seen(&mut s, w, &mut seen);
@@ -1648,6 +1652,73 @@ mod tests {
         assert!(seen.held.is_empty());
         let r = run_seen(&mut s, w, &mut seen);
         assert_eq!((r.promoted, r.alerts), (0, 0));
+    }
+
+    /// The held set is inferred: `percolate` returns none, and giving it
+    /// one needs `crates/search`. This pins the inference to the hold:
+    /// mid-backfill `percolate` leaves the `sig:` search out of both
+    /// `matched` and `failed` and runs the others, and `matched_promoted`
+    /// reports exactly that search held; once Ready, none.
+    #[test]
+    fn the_held_set_is_what_percolate_holds() {
+        let (mut s, item) = disk_setup();
+        let w = s.index.watermark().unwrap();
+        let sig = save(&mut s.store, "sig", &sig_of(5), w);
+        let promo = save(&mut s.store, "promo", "Promo", w);
+        let source = save(&mut s.store, "source", "source:dht", w);
+        start_backfill(&mut s);
+        promote(&mut s.store, item, "Promo.Even", 0);
+        step(&mut s);
+        s.index.refresh().unwrap();
+        let searches = s.store.percolation_due(i64::MAX).unwrap();
+        let parsed: Vec<(i64, i64, &str, Node)> = searches
+            .iter()
+            .map(|x| {
+                let node = serde_json::from_str::<Node>(&x.ast).unwrap();
+                (x.id, x.watermark, x.ast.as_str(), alert_query(node))
+            })
+            .collect();
+        let row = s.store.promoted_due(i64::MAX, 1).unwrap().remove(0);
+        let limits = PercolateLimits {
+            keep: 1,
+            max_range: 1,
+        };
+        let due: Vec<Due<'_>> = parsed
+            .iter()
+            .map(|(id, _, _, n)| promoted_due(*id, row.torrent_id, n))
+            .collect();
+        let p = percolate(
+            &s.index,
+            &due,
+            row.torrent_id,
+            limits,
+            NOW,
+            &CancelToken::new(),
+        )
+        .unwrap();
+        assert!(!p.stopped && p.failed.is_empty());
+        let ran: Vec<i64> = p.matched.iter().map(|m| m.id).collect();
+        // `source:` reads a population-tracked field too, but it's
+        // complete here, so it runs: only what `percolate` holds is held.
+        assert_eq!(ran, [promo, source]);
+        let held = |s: &Setup| {
+            let mut hits = BTreeMap::new();
+            matched_promoted(
+                &s.index,
+                &parsed,
+                &row,
+                None,
+                limits,
+                NOW,
+                &CancelToken::new(),
+                &mut hits,
+            )
+            .unwrap()
+        };
+        assert_eq!(held(&s), Some(vec![sig]));
+        finish_backfill(&mut s);
+        s.index.refresh().unwrap();
+        assert_eq!(held(&s), Some(vec![]));
     }
 
     /// A restart while a row is held: it's still queued, and runs once
