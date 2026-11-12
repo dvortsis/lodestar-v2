@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T12:47:06Z",
+  "updated_at": "2026-11-12T13:11:56Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7309,6 +7309,11 @@
       "id": "UN-3-send-ref",
       "at": "2026-11-12T12:47:06Z",
       "note": "UN-1 (runner call): usenet items stored with no send reference; L3 kept (external_ref never stored for private finds; some guids are apikey download links). UN-3 designs where the send reference lives (allowlisted store field via SRC-3b or a migration); owner question if it needs L3 loosened. UN-1 shared edits approved: sources/src/plugin.rs Found.usenet, pipeline lib.rs intake route, unverified.rs usenet ingest, writer.rs note_claims skip."
+    },
+    {
+      "id": "ENR-13-brief-notes",
+      "at": "2026-11-12T13:11:56Z",
+      "note": "From rv-760: ENR-13 renders identification text as plain text with bidi isolation (stored text may hold control/direction chars); resolved_via null is not \"from the name\"; Debug of response types prints titles (consider redaction). Also from ENR-14: call Interest::opened from the detail drawer; Switches::kill_switch_tripped reads false in host (route-down wastes lookups) -> later slice."
     }
   ],
   "main_health": [
@@ -8404,7 +8409,7 @@
     }
   ],
   "heartbeat": "2026-11-12T12:38:43Z",
-  "updated": "2026-11-12T12:47:06Z",
+  "updated": "2026-11-12T13:11:56Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
