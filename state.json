@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T02:42:12Z",
+  "updated_at": "2026-11-12T02:54:18Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7050,7 +7050,19 @@
       "id": "owner-fyi-tokio-v051",
       "what": "Owner FYI via dashboard: published v0.5.1 ships yanked tokio 1.54.0 (Interval UAF, tokio#8695; DHT actor select! over interval.tick()). Owner decides whether to cut v0.5.1.x; runner recommends folding the fix into v0.5.2 unless v0.5.2 slips",
       "at": "2026-11-12T02:42:12Z"
-    }
+    },
+    {
+      "id": "X-tz0-polish",
+      "note": "Slice entry for next runner PR: Opus, same session as TZ-0; owns torznab.rs, the TZ-0 decisions file; shared content.rs help + settings golden",
+      "at": "2026-11-12T02:54:18Z"
+    },
+    {
+      "id": "D-outputs-guide",
+      "note": "Add to notes (rv-715): check how Prowlarr/Sonarr/Radarr show non-200 Torznab error documents; Sonarr default categories miss 5030/5040 TV with no parsed resolution (I3)",
+      "at": "2026-11-12T02:54:18Z"
+    },
+    "X-upd-stop-early is now unblocked (#709 and #715 merged; services.rs free): launch on the next free slot",
+    "owner FYI owed: #715 TZ-0 Torznab server merged (c5abcb85); adult off by default and separate from Show adult content"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7594,6 +7606,11 @@
       "pr": 723,
       "sha": "7fafc95de430cafa0b368c631f2cd63b95da12ab",
       "at": "2026-11-12T02:35:52Z"
+    },
+    {
+      "pr": 715,
+      "sha": "c5abcb854f6606fca89119abab08a0f7505b449b",
+      "at": "2026-11-12T02:54:18Z"
     }
   ],
   "active_sessions": {
@@ -7828,7 +7845,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T02:42:12Z",
+    "updated": "2026-11-12T02:54:18Z",
     "items": [
       {
         "slot": 1,
@@ -7920,11 +7937,11 @@
       },
       {
         "slot": 11,
-        "slice": "TZ-0",
+        "slice": "X-tz0-polish",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnCR29cy7AsWtULXHBJ: Torznab server",
-        "since": "2026-11-11T21:46:53Z",
+        "doing": "session_01MMjhnCR29cy7AsWtULXHBJ: rv-715 polish (409 text, RSS channel link, writer departure note, settings help path)",
+        "since": "2026-11-12T02:54:18Z",
         "status": "active"
       },
       {
@@ -7932,7 +7949,7 @@
         "slice": "OUT-2",
         "role": "build",
         "agent": "claude",
-        "doing": "planning; branches after TZ-0 (#715) merges; #716 OUT-0 merged as dadcb069",
+        "doing": "session_01MMjhnCM61Vu5obDjZWTpeu: told to branch (TZ-0 #715 merged as c5abcb85)",
         "since": "2026-11-12T00:07:35Z",
         "status": "active"
       }
@@ -7990,7 +8007,7 @@
     }
   ],
   "heartbeat": "2026-11-12T00:38:52Z",
-  "updated": "2026-11-12T02:42:12Z",
+  "updated": "2026-11-12T02:54:18Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
