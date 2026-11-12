@@ -27,6 +27,7 @@ pub mod enrich;
 pub mod gate;
 mod have;
 pub mod health;
+pub mod identify;
 pub mod log_events;
 pub mod marginal;
 pub mod remote;
