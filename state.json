@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T12:25:24Z",
+  "updated_at": "2026-11-12T12:26:01Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7284,6 +7284,11 @@
       "id": "RX-1-brief-notes",
       "at": "2026-11-12T12:25:24Z",
       "note": "rv-755 for RX-1: N1 pin the ASCII and set-operation folded flags (regex.rs:449, :427) with tests, e.g. cost(\"[[:upper:]]\") > 10*cost(\"[A-Z]\"), cost(\"[A-Z--0]\") > 10*cost(\"[A-Z]\"), or a reference differential; N2 (pre-existing) class_text maps a one-codepoint property like \\p{Zl} to an empty set, handle HirKind::Literal; N3 verifier compile up to ~2.3x baseline for compiled-size-bound shapes ([\\W_]x62, [\\w.-]x51), fix the \"as long again\" comment; N4 decisions-file wording \"no bound loosened\" while the accepted set grows, pin [^/]x127 in the timing table."
+    },
+    {
+      "id": "X-scrub-job-ids",
+      "at": "2026-11-12T12:26:01Z",
+      "note": "main carries 12-digit CI job ids in comments and docs (crates/filter/tests/props.rs, docs/architecture.md, docs/decisions/2026-10-23-F-perf.md and others; find with git grep for 1[23] plus 10 digits, excluding goldens, lockfiles and json). Replace each with run/PR context only, in a small runner or helper PR; also consider a CI hygiene check."
     }
   ],
   "main_health": [
@@ -8374,7 +8379,7 @@
     }
   ],
   "heartbeat": "2026-11-12T09:44:56Z",
-  "updated": "2026-11-12T12:25:24Z",
+  "updated": "2026-11-12T12:26:01Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
