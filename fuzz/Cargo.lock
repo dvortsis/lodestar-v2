@@ -1188,11 +1188,11 @@ dependencies = [
 
 [[package]]
 name = "lodestar-bencode"
-version = "0.5.0"
+version = "0.5.2"
 
 [[package]]
 name = "lodestar-classify"
-version = "0.5.0"
+version = "0.5.2"
 dependencies = [
  "lodestar-metainfo",
  "lodestar-release-parser",
@@ -1200,7 +1200,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-cluster"
-version = "0.5.0"
+version = "0.5.2"
 dependencies = [
  "futures-util",
  "lodestar-integrations",
@@ -1221,7 +1221,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-dht"
-version = "0.5.0"
+version = "0.5.2"
 dependencies = [
  "lodestar-bencode",
  "lodestar-log",
@@ -1237,7 +1237,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-filter"
-version = "0.5.0"
+version = "0.5.2"
 dependencies = [
  "chacha20poly1305",
  "flate2",
@@ -1283,7 +1283,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-integrations"
-version = "0.5.0"
+version = "0.5.2"
 dependencies = [
  "chacha20poly1305",
  "getrandom 0.3.4",
@@ -1301,14 +1301,14 @@ dependencies = [
 
 [[package]]
 name = "lodestar-log"
-version = "0.5.0"
+version = "0.5.2"
 dependencies = [
  "tracing",
 ]
 
 [[package]]
 name = "lodestar-metainfo"
-version = "0.5.0"
+version = "0.5.2"
 dependencies = [
  "chardetng",
  "encoding_rs",
@@ -1319,11 +1319,11 @@ dependencies = [
 
 [[package]]
 name = "lodestar-network-policy"
-version = "0.5.0"
+version = "0.5.2"
 
 [[package]]
 name = "lodestar-peer-wire"
-version = "0.5.0"
+version = "0.5.2"
 dependencies = [
  "lodestar-bencode",
  "lodestar-log",
@@ -1339,7 +1339,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-pipeline"
-version = "0.5.0"
+version = "0.5.2"
 dependencies = [
  "lodestar-classify",
  "lodestar-cluster",
@@ -1359,11 +1359,11 @@ dependencies = [
 
 [[package]]
 name = "lodestar-release-parser"
-version = "0.5.0"
+version = "0.5.2"
 
 [[package]]
 name = "lodestar-search"
-version = "0.5.0"
+version = "0.5.2"
 dependencies = [
  "lodestar-classify",
  "lodestar-log",
@@ -1378,7 +1378,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-sources"
-version = "0.5.0"
+version = "0.5.2"
 dependencies = [
  "lodestar-integrations",
  "lodestar-metainfo",
@@ -1391,7 +1391,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-sources-feeds"
-version = "0.5.0"
+version = "0.5.2"
 dependencies = [
  "lodestar-metainfo",
  "quick-xml",
@@ -1399,7 +1399,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-sources-importers"
-version = "0.5.0"
+version = "0.5.2"
 dependencies = [
  "lodestar-classify",
  "lodestar-filter",
@@ -1418,7 +1418,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-sources-plugins"
-version = "0.5.0"
+version = "0.5.2"
 dependencies = [
  "lodestar-integrations",
  "lodestar-metainfo",
@@ -1434,7 +1434,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-store"
-version = "0.5.0"
+version = "0.5.2"
 dependencies = [
  "lodestar-metainfo",
  "rusqlite",
@@ -1443,7 +1443,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-tracker-scrape"
-version = "0.5.0"
+version = "0.5.2"
 dependencies = [
  "lodestar-bencode",
  "lodestar-metainfo",
@@ -1456,7 +1456,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-update"
-version = "0.5.0"
+version = "0.5.2"
 dependencies = [
  "base64 0.22.1",
  "blake2",
@@ -1469,7 +1469,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-utp"
-version = "0.5.0"
+version = "0.5.2"
 dependencies = [
  "rand 0.10.3",
  "socket2",
@@ -2713,9 +2713,9 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tokio"
-version = "1.54.0"
+version = "1.54.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0c168a474b95bfecfe908a65d4bdffc523144b649a74c09c286afb35d53e0bc"
+checksum = "b52fd3255258d26fac7264ab5a76b53c13367136dc011d3d6ad4f8ed070396a3"
 dependencies = [
  "bytes",
  "libc",

@@ -21,14 +21,14 @@ rand = "0.10"
 # is a C/CMake build that complicates the Windows and musl targets.
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-tokio = { version = "1.54.0", features = ["net", "time", "rt", "macros"] }
+tokio = { version = "1.54.1", features = ["net", "time", "rt", "macros"] }
 url = "2.5"
 
 [dev-dependencies]
 lodestar-tracker-scrape = { path = ".", features = ["testing"] }
 lodestar-bencode.workspace = true
 proptest = "1.11.0"
-tokio = { version = "1.54.0", features = ["net", "time", "rt", "rt-multi-thread", "macros", "io-util"] }
+tokio = { version = "1.54.1", features = ["net", "time", "rt", "rt-multi-thread", "macros", "io-util"] }
 
 [lints]
 workspace = true
