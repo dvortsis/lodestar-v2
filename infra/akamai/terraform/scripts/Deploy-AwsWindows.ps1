@@ -15,6 +15,11 @@
       LODESTAR_AWS_SECURITY_GROUP_ID approved security group (sg-...)
       LODESTAR_AWS_INSTANCE_PROFILE  name of the SSM instance profile
     There are no defaults: the script refuses to run without all of them.
+
+    The instance gets a public IPv4 at launch: the subnet has an internet gateway but
+    no NAT or VPC endpoints, so without one it never reaches SSM. SSM needs outbound
+    traffic only, so the script refuses to launch, dry run included, while the
+    security group has any inbound rule.
 #>
 [CmdletBinding()]
 param(
@@ -70,6 +75,26 @@ function Audit([string]$Message) {
 
 $region = 'us-east-1'
 $instanceType = 'c6a.xlarge'
+
+# A refused AWS call's reason, safe to print: the first non-blank line, printable
+# ASCII only (-creplace: -replace ignores case, and U+212A KELVIN SIGN would then
+# match a-z and survive), with ARNs, access key IDs, 12-digit account IDs, and IPv4 and IPv6
+# addresses masked, and AWS's encoded authorization message dropped. At most 200
+# characters; '(no reason given)' when there's nothing left.
+function Get-SafeAwsError([string]$Text) {
+    $line = (($Text -split "`r?`n") | ForEach-Object { ($_ -creplace '[^\x20-\x7E]', '').Trim() } |
+        Where-Object { $_ } | Select-Object -First 1)
+    if (-not $line) { return '(no reason given)' }
+    $line = $line -replace '(?i)\s*Encoded authorization failure message:.*$', ''
+    $line = $line -replace '(?i)arn:[^\s,;"''()\[\]]+', '[arn]'
+    $line = $line -replace '(?<![A-Z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])', '[key-id]'
+    $line = $line -replace '(?<![0-9])[0-9]{12}(?![0-9])', '[account]'
+    $line = $line -replace '(?<![0-9.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9])', '[ip]'
+    # IPv6: a '::' or eight groups, so a time such as 12:30:45 stays as it is.
+    $line = $line -replace '(?i)(?<![0-9a-f:])(?=[0-9a-f:]*::|(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4})[0-9a-f:]{2,39}(?:%[0-9a-z]+)?(?![0-9a-f:])', '[ip]'
+    if ($line.Length -gt 200) { $line = $line.Substring(0, 200) }
+    return $line.Trim()
+}
 
 # 0. Validate account-specific parameters before any AWS call (no defaults exist).
 function Assert-Id([string]$Name, [string]$Value, [string]$Pattern) {
@@ -133,6 +158,28 @@ if ($active.Count -gt 0) {
     throw "Deployment halted to prevent duplicate billable resources or partial deployment conflict. Terminate existing instance or recover state."
 }
 
+# 3b. The instance gets a public IPv4, so its security group must allow no inbound
+#     traffic at all (SSM is outbound only). One read-only call; a failed or unexpected
+#     answer stops the deployment, as above.
+Audit "Checking that security group $SecurityGroupId has no inbound rules..."
+$r = Invoke-AwsCli @('ec2', 'describe-security-groups', '--group-ids', $SecurityGroupId,
+    '--profile', 'lodestar-provisioner', '--region', $region,
+    '--query', 'SecurityGroups[].[GroupId,length(IpPermissions)]', '--output', 'text')
+if ($r.ExitCode -ne 0) {
+    Audit "AWS said: $(Get-SafeAwsError $r.Err)"
+    throw "Could not read security group $SecurityGroupId (exit $($r.ExitCode)). This read needs ec2:DescribeSecurityGroups on LodestarProvisioner (UnauthorizedOperation means the role lacks it). No deployment performed."
+}
+$sgRows = ConvertFrom-AwsTextRows $r.Out
+if ($sgRows.Count -ne 1 -or $sgRows[0].Count -ne 2 -or $sgRows[0][0] -cne $SecurityGroupId -or $sgRows[0][1] -cnotmatch '^[0-9]{1,4}$') {
+    throw "Unexpected answer describing security group $SecurityGroupId. No deployment performed."
+}
+$inboundRules = [int]$sgRows[0][1]
+if ($inboundRules -ne 0) {
+    Audit "REFUSED: security group $SecurityGroupId has $inboundRules inbound rule(s)."
+    throw "Security group $SecurityGroupId has $inboundRules inbound rule(s). The instance gets a public IPv4, so its group must allow no inbound traffic; SSM needs none. Remove every inbound rule and run again. No deployment performed."
+}
+Audit "Security group $SecurityGroupId has no inbound rules."
+
 Write-Host @"
 ================================================================================
                     LODESTAR AWS WINDOWS PROVISIONING PLAN
@@ -141,10 +188,13 @@ Target Region:         $region
 Instance Type:         $instanceType (4 vCPU, 8 GB RAM)
 AMI ID:                $AmiId (must be an approved Windows Server base AMI)
 Subnet:                $SubnetId
-Security Group:        $SecurityGroupId (Deny all inbound, SSM only)
+Security Group:        $SecurityGroupId (checked: no inbound rules)
+Public IPv4:           attached at launch, for outbound traffic to SSM only.
+                       Nothing can connect in: the group allows no inbound traffic.
 Instance Profile:      $instanceProfileArn
 Root Volume:           $RootVolumeGiB GiB, encrypted (EBS storage is billed on top)
 Hourly Rate:           `$0.3370 / hour (on-demand, us-east-1, incl. Windows licence; check current AWS pricing)
+                       The public IPv4 is billed on top (about `$0.005 / hour; check current AWS pricing).
 $($expCheck.LeaseHours)-Hour Estimated Cost:  `$$([math]::Round(0.3370 * $expCheck.LeaseHours, 3))
 Mandatory Tags:        Project=Lodestar, Environment=Test, ManagedBy=Terraform,
                        ExpiresAt=$($expCheck.IsoString)
@@ -153,11 +203,13 @@ Mandatory Tags:        Project=Lodestar, Environment=Test, ManagedBy=Terraform,
 
 # Shorthand syntax, not inline JSON: inline JSON needs different quoting in 5.1 and 7.
 $tags = "{Key=Project,Value=Lodestar},{Key=Environment,Value=Test},{Key=ManagedBy,Value=Terraform},{Key=ExpiresAt,Value=$($expCheck.IsoString)}"
+# One network interface instead of --subnet-id and --security-group-ids: the same
+# subnet and group, plus a public IPv4 (the subnet doesn't assign one by itself).
+$networkInterface = "DeviceIndex=0,SubnetId=$SubnetId,Groups=$SecurityGroupId,AssociatePublicIpAddress=true,DeleteOnTermination=true"
 $runArgs = @('ec2', 'run-instances',
     '--image-id', $AmiId,
     '--instance-type', $instanceType,
-    '--subnet-id', $SubnetId,
-    '--security-group-ids', $SecurityGroupId,
+    '--network-interfaces', $networkInterface,
     '--metadata-options', 'HttpTokens=required',
     '--block-device-mappings', "DeviceName=/dev/sda1,Ebs={VolumeSize=$RootVolumeGiB,Encrypted=true}",
     '--tag-specifications', "ResourceType=instance,Tags=[$tags]", "ResourceType=volume,Tags=[$tags]",
@@ -169,6 +221,7 @@ if ($DryRun) {
     $r = Invoke-AwsCli ($runArgs + '--dry-run')
     if ($r.Err -match 'DryRunOperation') {
         Audit "PASS: DryRunOperation succeeded. Cloud policy and parameters fully compliant."
+        Audit "The launch would attach a public IPv4; the instance would be reachable outbound only."
         return
     }
     throw "DryRun failed (exit $($r.ExitCode)): $($r.Err)"
@@ -228,4 +281,5 @@ $stateObj.launch_time = [string]$newInstance.LaunchTime
 $stateObj.private_ip = [string]$newInstance.PrivateIpAddress
 $stateObj | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $stateFile -Encoding utf8
 Audit "SUCCESS: Instance $instId provisioned and recorded in state."
+Audit "A public IPv4 is attached. The instance is reachable outbound only: its security group allows no inbound traffic. Connect with SSM Session Manager."
 Write-Host "Instance provisioned: $instId" -ForegroundColor Green

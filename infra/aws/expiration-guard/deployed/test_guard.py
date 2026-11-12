@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 VPC = "vpc-0aaaaaaaaaaaaaaaa"
 SG = "sg-0bbbbbbbbbbbbbbbb"
-TOPIC = "arn:aws:sns:us-east-1:123456789012:lodestar-expiration-alerts"
+TOPIC = "arn:aws:sns:us-east-1:111122223333:lodestar-expiration-alerts"
 
 # Stub the AWS SDK only while importing the Lambda under test.
 _boto3 = types.ModuleType("boto3")

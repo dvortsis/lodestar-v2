@@ -32,7 +32,7 @@ class WatchdogTests(unittest.TestCase):
         self.now = datetime.now(timezone.utc)
         self.created = self.now-timedelta(hours=49)
         os.environ['MIN_CREATED_UTC'] = (self.now-timedelta(days=4)).isoformat().replace('+00:00','Z')
-        os.environ['ALERT_TOPIC_ARN'] = 'arn:aws:sns:us-east-1:123456789012:topic'
+        os.environ['ALERT_TOPIC_ARN'] = 'arn:aws:sns:us-east-1:111122223333:topic'
         self.vm = {'id':12345,'label':'lodestar-worker-01','tags':['lodestar','test'],'region':'us-east','type':'g6-nanode-1','created':self.created.isoformat().replace('+00:00','Z')}
 
     def test_approved_scope(self):
@@ -171,7 +171,7 @@ class WatchdogTests(unittest.TestCase):
         client.get_secret_value.return_value={'SecretString':value}
         return patch.object(mod,'SECRETS',client)
 
-    @patch.dict(os.environ, {'SECRET_ARN': 'arn:aws:secretsmanager:us-east-1:123456789012:secret:x'})
+    @patch.dict(os.environ, {'SECRET_ARN': 'arn:aws:secretsmanager:us-east-1:111122223333:secret:x'})
     def test_token_value_parsing(self):
         good='a'*40
         with self._secret(good):
