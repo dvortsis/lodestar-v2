@@ -8,15 +8,23 @@
 //! section and checks the folder again each time it changes and at
 //! start.
 //!
-//! [`Section::check`] sees only this section, not the data directory, so
-//! a save checks what it can (absolute, there, a directory and not a
-//! link) and [`folder_problem`] checks the rest when the setting is
-//! applied: a folder that is the data directory, is inside it or holds
-//! it is never read, and the watch shows why.
+//! What's checked, and when (rv-765 B1):
+//! - **On every load,** saved values included: only that the folder is
+//!   empty or an absolute path ([`Section::check`]). Nothing about the
+//!   disk, so a share that isn't mounted yet at start keeps its setting.
+//! - **On a save** ([`Section::confirm`], which only a patch or an import
+//!   runs): also that it's there, a directory, and not a link.
+//! - **When the setting is applied and on every poll** ([`folder_problem`],
+//!   in [`crate::watch`]): all of that again, plus the data-directory
+//!   rule. A folder that is the data directory, is inside it or holds it
+//!   is never read; a missing one pauses the watch, which resumes once
+//!   it's there.
 
 use std::path::{Path, PathBuf};
 
+use lodestar_api::settings::SettingsError;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use utoipa::ToSchema;
 
 use super::{Field, Section};
@@ -70,16 +78,37 @@ impl Section for Watch {
 
     fn apply(&self, _: &str, _: &mut Config) {}
 
+    /// Only what doesn't depend on the disk now: it runs on saved values
+    /// at every start too, where a folder that isn't there yet (a share
+    /// mounted later) must keep its setting.
     fn check(&self, field: &str) -> Result<(), String> {
         if field != "folder" {
             return Ok(());
         }
         match self.folder() {
+            Some(folder) if !folder.is_absolute() => {
+                Err(FolderProblem::NotAbsolute.message().into())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// On a save only: the folder sent is there, a directory and not a
+    /// link.
+    fn confirm(patch: &Map<String, Value>) -> Result<(), SettingsError> {
+        let Some(Value::String(raw)) = patch.get("folder") else {
+            return Ok(());
+        };
+        let sent = Watch {
+            folder: raw.clone(),
+            ..Watch::default()
+        };
+        match sent.folder().and_then(|f| shape_problem(&f)) {
             None => Ok(()),
-            Some(folder) => match shape_problem(&folder) {
-                None => Ok(()),
-                Some(p) => Err(p.message().into()),
-            },
+            Some(p) => Err(SettingsError::Invalid {
+                field: "folder".into(),
+                message: p.message().into(),
+            }),
         }
     }
 }
@@ -203,6 +232,12 @@ mod tests {
         assert_eq!(blank.folder(), None);
     }
 
+    fn confirm_folder(p: &str) -> Result<(), SettingsError> {
+        let mut m = Map::new();
+        m.insert("folder".into(), Value::String(p.into()));
+        Watch::confirm(&m)
+    }
+
     #[test]
     fn a_save_checks_the_folders_shape() {
         let dir = tempfile::tempdir().unwrap();
@@ -215,10 +250,18 @@ mod tests {
             }
             .check("folder")
         };
+        // Every load: absolute or empty only.
         assert!(check(dir.path()).is_ok());
         assert!(check(Path::new("relative/folder")).is_err());
-        assert!(check(&dir.path().join("missing")).is_err());
-        assert!(check(&file).is_err());
+        assert!(check(&dir.path().join("missing")).is_ok());
+        assert!(check(&file).is_ok());
+        // A save: the disk too.
+        let confirm = |p: &Path| confirm_folder(&p.to_string_lossy());
+        assert!(confirm(dir.path()).is_ok());
+        assert!(confirm(&dir.path().join("missing")).is_err());
+        assert!(confirm(&file).is_err());
+        assert!(confirm_folder("").is_ok());
+        assert!(Watch::confirm(&Map::new()).is_ok());
         assert_eq!(
             shape_problem(Path::new("relative")),
             Some(FolderProblem::NotAbsolute)
@@ -254,8 +297,44 @@ mod tests {
             std::os::unix::fs::symlink(&plain, &link).unwrap();
             let folder = w(format!("{}/", link.display())).folder().unwrap();
             assert_eq!(shape_problem(&folder), Some(FolderProblem::Link));
-            assert!(w(format!("{}/", link.display())).check("folder").is_err());
+            assert!(confirm_folder(&format!("{}/", link.display())).is_err());
         }
+    }
+
+    /// A saved folder that's missing at the next start (a share not
+    /// mounted yet) keeps its setting: the watch reports it missing and
+    /// resumes once it's there (rv-765 B1).
+    #[test]
+    fn a_saved_folder_missing_at_start_keeps_its_setting() {
+        use crate::settings::tests::{config, patch, registry};
+        use lodestar_api::settings::SettingsApi;
+        let dir = tempfile::tempdir().unwrap();
+        let mounts = tempfile::tempdir().unwrap();
+        let share = mounts.path().join("share");
+        std::fs::create_dir(&share).unwrap();
+        let c = config(dir.path(), None, &[]);
+        let folder = share.to_string_lossy().into_owned();
+        registry(dir.path(), &c)
+            .patch("watch", patch(serde_json::json!({ "folder": folder })))
+            .unwrap();
+        std::fs::remove_dir(&share).unwrap();
+        // The next start, with the share not there yet.
+        let w = registry(dir.path(), &c).get::<Watch>();
+        assert_eq!(w.folder, folder);
+        let watcher = crate::watch::Watcher::new(&w, dir.path()).expect("still on");
+        assert_eq!(
+            watcher.check(),
+            Some(crate::watch::Problem::Folder(FolderProblem::Missing))
+        );
+        std::fs::create_dir(&share).unwrap();
+        assert_eq!(watcher.check(), None);
+        // A save of a missing folder is still refused.
+        std::fs::remove_dir(&share).unwrap();
+        assert!(
+            registry(dir.path(), &c)
+                .patch("watch", patch(serde_json::json!({ "folder": folder })))
+                .is_err()
+        );
     }
 
     #[test]
