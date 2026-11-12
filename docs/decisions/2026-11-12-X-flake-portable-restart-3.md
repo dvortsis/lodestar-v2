@@ -40,6 +40,7 @@
   - The word comes only after the wait has seen the exit, and it's the script's last statement before `exit 0`.
   - The copy now gives the watch `WATCH_DRAIN` (2 s) to end, and goes ahead even if it hasn't.
   - A watch that said `exited` but then ended with an error is still a skipped check (`WATCH_SKIPPED`), as before.
+  - Exit code 3 (`WATCH_EXIT_TIMED_OUT`) still wins over any line, an `exited` one included: the copy refuses. The real script can't produce both; a unit test checks the precedence.
   - **This refines X-flake-portable-restart-2's rule** that the watch must both say `exited` and end well. "Exited only after the process object signals" still holds: the word follows `Wait-Process` or a `Get-Process` that no longer finds the process, exactly as before.
 - **`WATCH_SCRIPT_LIMIT` grows to 750 s:** `GO_LIMIT` + `EXIT_LIMIT` + three times `PREDECESSOR_WAIT`, so the script still outlasts the copy's longest wait. It's still far under `Wait-Process`'s 32,767 s.
 
@@ -75,6 +76,8 @@
 - **A new user-visible line** after "Lodestar's wait for the copy it replaces to exit timed out.": the timeline line quoted above. The first line, the skip line and the refusal are unchanged.
 - **The copy's longest wait grows from 60 s to 90 s** from the hand-over. That's 30 s from `ready`, which may arrive up to 60 s after the hand-over. The refusal still says "30 s", which is the time it waited once the check was ready.
 - **A watch that said `exited` but hasn't ended within 2 s counts as exited** (case 3 above).
+- **The refusal keeps saying "still running 30 s after it shut down"** even when `ready` never arrived, so the copy gave up after 60 s without knowing. That was already so under -2; the timeline line (`ready never, no answer at +60.0 s`) now shows which it was.
+- **Left as it was:** if the old process vanishes between `Get-Process` and reading its `StartTime`, the script errors and the copy skips the check, as under -2. Treating an unreadable start time as "still there" would turn a reused id held by another user's process into a refusal.
 
 ## Evidence
 - **Linux:** unit tests on a fake clock cover each new behaviour:
@@ -83,12 +86,13 @@
   - the timeline's words and signs;
   - the reader stamping `ready` and the last word;
   - the script's text: the loop, the clock, the order of the words, and CLM safety.
-- **Mutation-checked:** 12 mutations of `restart.rs`, each made to fail a test:
+- **Mutation-checked:** 13 mutations of `restart.rs`, each made to fail a test:
   - the clock back on `started`, and the no-`ready` cap changed;
   - `exited` made to need the watch's end, and an error after `exited` ignored;
   - `ready` not parsed, accepted before `started`, or dropped from the script;
   - the loop collapsed to one `Wait-Process`, and `Write-Output` restored before `started`;
-  - the timeline dropped, its end time taken from the wrong place, and the `timeout` word's time not stamped.
+  - the timeline dropped, its end time taken from the wrong place, and the `timeout` word's time not stamped;
+  - after the review: exit code 3 no longer winning over an `exited` line.
 - **Windows:**
   - `cargo clippy --target x86_64-pc-windows-gnu -p lodestar --all-targets` is clean for the files this slice owns.
   - This session can't run Windows. CI's `test (windows-latest)` is the proof for the real script, the CLM test and the two portable-restart tests.

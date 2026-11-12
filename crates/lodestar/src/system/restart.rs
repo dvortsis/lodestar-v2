@@ -777,6 +777,10 @@ pub fn await_watch(
                 let drain = now();
                 loop {
                     match watch.try_wait() {
+                        // Its timed-out code still wins over any line.
+                        Ok(Some(status)) if status.code() == Some(WATCH_EXIT_TIMED_OUT) => {
+                            return timed_out(TimedOut::Said);
+                        }
                         Ok(Some(status)) if !status.success() => return skipped(),
                         Ok(Some(_)) => return (Predecessor::Exited, None),
                         Ok(None) if now().saturating_duration_since(drain) < WATCH_DRAIN => {
@@ -1405,9 +1409,15 @@ mod tests {
                 .ends_with("it said the copy was still running at +0.0 s."),
             "{got:?}"
         );
-        // Its exit code says the same even when no line was read.
+        // Its exit code says the same even when no line was read, or
+        // when it contradicts an `exited` line.
         for last in [None, Some(WatchSays::Exited)] {
-            let l = log(None, last, true);
+            let l = Mutex::new(WatchLog {
+                started: Some(f.now()),
+                last: last.map(|w| (w, f.now())),
+                done: true,
+                ..WatchLog::default()
+            });
             let got = await_watch(
                 Some(&mut c),
                 Some(&l),
@@ -1746,8 +1756,9 @@ mod tests {
         };
         // `old` runs until it's killed, so the script must be waiting on it
         // when it has said `started`.
-        let mut old = ping("60");
-        let mut me = ping("60"); // started after `old`
+        // Long enough to outlast a cold start: both are killed anyway.
+        let mut old = ping("600");
+        let mut me = ping("600"); // started after `old`
         let clm = "$ExecutionContext.SessionState.LanguageMode = 'ConstrainedLanguage'; ";
         let shell = |script: String| {
             let mut cmd = Command::new("powershell.exe");
