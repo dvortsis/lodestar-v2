@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T11:46:00Z",
+  "updated_at": "2026-11-12T12:01:24Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7269,6 +7269,11 @@
       "id": "X-always-adult-detail-mask",
       "at": "2026-11-12T11:46:00Z",
       "note": "From ENR-12: the detail route always-adult mask comes from the DrawerInterest extension, which production does not install, so it is 0 in the binary. Gap: the window before adult_by_source reclassification, and torrents marked Not adult. Fix: always_adult on ops::Source (dto/ops.rs and the host side), before ENR-13 ships the drawer; the reviewer checks ENR-7 section for the same gap. Content safety: Opus, /security-review."
+    },
+    {
+      "id": "X-dht-bep42-rejoin",
+      "at": "2026-11-12T12:01:24Z",
+      "note": "rv-756 N-3 (pre-existing): if the BEP 42 node id changes mid-bootstrap, the new id neighbourhood is never looked up; add one self-lookup on id change. Add to slices.yaml in the next runner PR."
     }
   ],
   "main_health": [
@@ -8354,7 +8359,7 @@
     }
   ],
   "heartbeat": "2026-11-12T09:44:56Z",
-  "updated": "2026-11-12T11:46:00Z",
+  "updated": "2026-11-12T12:01:24Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
