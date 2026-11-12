@@ -652,6 +652,11 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
       - No v0.5.1.x is cut now.
     - **If v0.5.2 slips by more than a few days,** the runner prepares v0.5.1.1 with only the bump and asks the owner before anything is cut or tagged. Cutting and tagging releases stays the owner's.
 
+59. **Back to eight sessions, and running ones finish** (owner, in the runner session, 2026-11-12T06:03Z): "Reduce max sessions to 8. Allow sessions to finish."
+    - **At most eight slices at a time in total,** Opus, helper and docs slices alike, replacing §2.56's twelve. `runner/slices.yaml` `limits.phase_total` is 8.
+    - **Nothing is stopped.** Each session that was running at the time finishes its slice, including its review rounds. While more than eight are running, nothing new launches, and a session that finishes isn't given a follow-on slice.
+    - Unchanged: filling every slot isn't required, `owns` never overlap, the ladder decides, and the runner runs at most three reviewers at once.
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.
