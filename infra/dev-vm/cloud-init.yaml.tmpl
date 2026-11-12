@@ -53,6 +53,9 @@ write_files:
     owner: root:root
     permissions: '0644'
     content: |
+      # Offer only the pinned ed25519 key: a package upgrade during boot can
+      # recreate the RSA and ECDSA keys that ssh_deletekeys removed.
+      HostKey /etc/ssh/ssh_host_ed25519_key
       PermitRootLogin no
       PasswordAuthentication no
       KbdInteractiveAuthentication no
@@ -118,6 +121,7 @@ write_files:
       [ -d ~/lodestar-v2 ] || git clone https://github.com/dvortsis/lodestar-v2.git ~/lodestar-v2
       install -d -m 0700 ~/secrets
       USEREOF
+      rm -f /etc/ssh/ssh_host_rsa_key* /etc/ssh/ssh_host_ecdsa_key*
       systemctl restart ssh
       test -c /dev/net/tun || { echo "ERROR: /dev/net/tun unavailable" >&2; exit 1; }
       docker --version; docker compose version

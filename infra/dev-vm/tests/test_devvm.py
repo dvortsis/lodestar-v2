@@ -63,6 +63,9 @@ class RenderTests(unittest.TestCase):
         self.assertTrue(doc["disable_root"])
         self.assertEqual(doc["ssh_genkeytypes"], [])
         self.assertNotIn("__", text.split("write_files:")[0])
+        sshd = next(f for f in doc["write_files"] if f["path"].startswith("/etc/ssh/"))["content"]
+        self.assertEqual([ln for ln in sshd.splitlines() if ln.startswith("HostKey")],
+                         ["HostKey /etc/ssh/ssh_host_ed25519_key"])
 
     def test_template_carries_no_secret_placeholders(self):
         t = (Path(devvm.__file__).parent / "cloud-init.yaml.tmpl").read_text()
