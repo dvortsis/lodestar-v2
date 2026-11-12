@@ -1,12 +1,13 @@
 //! The consent gate through the real binary (X-consent-gate-052,
-//! `docs/plan/2026-11-06-v052-feature-manifest.md` §3.4): until an
-//! owner-approved consent text ships (SRC-15b), `PATCH /sources/{id}`
-//! refuses, with a clear error, to turn on a source whose class asks for
-//! consent (the torrent cache, External), even when the request names the
-//! class and version `GET /sources` gives. A source that needs no consent
-//! (Sonarr/Radarr webhooks, None) can still be turned on. One an earlier
-//! build turned on with an acknowledgement is switched off at the next
-//! start, before it runs, and the log says so.
+//! X-consent-gate-lift). `PATCH /sources/{id}` turns on a source whose
+//! class asks for an acknowledgement (the torrent cache, External) only
+//! once the request accepts exactly the text version and addresses
+//! `GET /sources` gives. The acceptance survives a restart. A record of
+//! an older text version switches the source off at the next start,
+//! before it runs, and the log says so; accepting the new one turns it on
+//! again. A source that needs no consent (Sonarr/Radarr webhooks, None) is
+//! a toggle. An Account source (Prowlarr) stays refused by the gate: its
+//! dialog is X-consent-gate-lift r2's.
 #![cfg(unix)]
 
 use std::io::{BufRead, Read, Write};
@@ -207,8 +208,28 @@ fn assert_gated(r: &str) {
     );
 }
 
+/// Asserts `r` is a `409 consent_required` naming the `consent` field.
+fn assert_asks_consent(r: &str) {
+    assert_eq!(status(r), 409, "{r}");
+    let v: Value = serde_json::from_str(body(r)).unwrap();
+    assert_eq!(v["error"]["code"], "consent_required", "{r}");
+    assert_eq!(v["error"]["field"], "consent", "{r}");
+}
+
+/// The id of `plugin`'s row in the store at `dir`.
+fn row(dir: &Path, plugin: &str) -> lodestar_store::SourceId {
+    Store::open(dir.join("lodestar.db"), StoreConfig::default())
+        .unwrap()
+        .sources()
+        .unwrap()
+        .into_iter()
+        .find(|r| r.plugin == plugin)
+        .unwrap()
+        .id
+}
+
 #[test]
-fn a_source_that_needs_consent_cant_be_turned_on_and_one_that_doesnt_can() {
+fn a_source_that_needs_consent_turns_on_only_once_its_text_is_accepted() {
     let dir = tempfile::tempdir().unwrap();
     let mut s = Server::start(dir.path(), true);
 
@@ -216,34 +237,51 @@ fn a_source_that_needs_consent_cant_be_turned_on_and_one_that_doesnt_can() {
     assert_eq!(cache["consent"], "external", "{cache}");
     assert_eq!(cache["consent_required"], true, "{cache}");
     assert_eq!(cache["enabled"], false, "off by default: {cache}");
+    assert_eq!(cache["needs"], "endpoints", "{cache}");
     let cache_id = cache["id"].as_u64().unwrap();
     let version = cache["consent_version"].as_str().unwrap().to_owned();
-    assert!(!version.is_empty(), "{cache}");
+    assert!(version.starts_with("t2"), "the approved text: {cache}");
+    let draft = version.replacen("t2", "t1", 1);
 
-    // Refused however it's asked: bare, with the acknowledgement
-    // `GET /sources` asks for, and with the password as well.
+    // Refused unless it accepts exactly what's shown: bare, with the
+    // password alone, with the draft text's version, with another class,
+    // or with no version. Nothing is saved by any of them.
     for patch in [
         r#"{"enabled":true}"#.to_owned(),
-        format!(r#"{{"enabled":true,"consent":"external","consent_version":"{version}"}}"#),
+        format!(r#"{{"enabled":true,"password":"{PASSWORD}"}}"#),
+        format!(r#"{{"enabled":true,"consent":"external","consent_version":"{draft}"}}"#),
+        format!(r#"{{"enabled":true,"consent":"overlay","consent_version":"{version}"}}"#),
+        r#"{"enabled":true,"consent":"external"}"#.to_owned(),
         format!(
-            r#"{{"enabled":true,"consent":"external","consent_version":"{version}","password":"{PASSWORD}"}}"#
-        ),
-        format!(
-            r#"{{"enabled":true,"priority":"max","consent":"external","consent_version":"{version}"}}"#
+            r#"{{"enabled":true,"priority":"max","consent":"external","consent_version":"{draft}"}}"#
         ),
     ] {
-        assert_gated(&s.patch(cache_id, &patch));
+        assert_asks_consent(&s.patch(cache_id, &patch));
     }
-    // Nothing was saved: still off, still asking, priority unchanged.
     let after = s.source("torrent_cache");
     assert_eq!(after["enabled"], false, "{after}");
     assert_eq!(after["consent_required"], true, "{after}");
     assert_eq!(after["priority"], cache["priority"], "{after}");
-    // Turning it off, or a change that doesn't turn it on, still works.
-    let r = s.patch(cache_id, r#"{"enabled":false}"#);
-    assert_eq!(status(&r), 200, "{r}");
+    let stored = || {
+        Store::open_reader(dir.path().join("lodestar.db"), StoreConfig::default())
+            .unwrap()
+            .source_consent("torrent_cache")
+            .unwrap()
+    };
+    assert_eq!(stored(), None, "a refusal writes no record");
 
-    // The webhooks need no consent: they stay API-enable-able.
+    // Accepted: the class and exactly the version shown.
+    let r = s.patch(
+        cache_id,
+        &format!(r#"{{"enabled":true,"consent":"external","consent_version":"{version}"}}"#),
+    );
+    assert_eq!(status(&r), 200, "{r}");
+    let on = s.source("torrent_cache");
+    assert_eq!(on["enabled"], true, "{on}");
+    assert_eq!(on["needs"], Value::Null, "{on}");
+    assert_eq!(stored(), Some(format!("external|{version}|1")));
+
+    // The webhooks need no consent: a toggle.
     let arr = s.source("arr_webhooks");
     assert_eq!(arr["consent"], "none", "{arr}");
     let arr_id = arr["id"].as_u64().unwrap();
@@ -252,25 +290,36 @@ fn a_source_that_needs_consent_cant_be_turned_on_and_one_that_doesnt_can() {
     s.stop();
     drop(s);
 
-    // A build before the gate (a nightly) recorded the acknowledgement
-    // and turned the cache on.
+    // A restart keeps the acceptance: still on, nothing switched off. (With
+    // no cache listed it stops at once, asking for setup, so the webhooks
+    // running shows the start's checks are done.)
+    let mut s = Server::start(dir.path(), false);
+    wait_for("the webhooks source running", || {
+        let v = s.source("arr_webhooks");
+        (v["health"]["running"] == true).then_some(())
+    });
+    let cache = s.source("torrent_cache");
+    assert_eq!(cache["enabled"], true, "{cache}");
+    assert_eq!(cache["needs"], Value::Null, "{cache}");
     {
-        let mut store =
-            Store::open(dir.path().join("lodestar.db"), StoreConfig::default()).unwrap();
-        let id = store
-            .sources()
-            .unwrap()
-            .into_iter()
-            .find(|r| r.plugin == "torrent_cache")
-            .unwrap()
-            .id;
-        store
-            .enable_source(id, Some(&format!("external|{version}|1")))
-            .unwrap();
+        let log = s.log.lock().unwrap();
+        assert!(!log.contains("consent_lapsed"), "{log}");
+        assert!(!log.contains("consent_text_unapproved"), "{log}");
     }
+    s.stop();
+    drop(s);
 
-    // At the next start the cache is switched off before it runs, and the
-    // log says so; the webhooks run.
+    // A record of the text before this one, as a build before the gate
+    // could store it: the text version moved on, so the next start
+    // switches the cache off before it runs, says why, and keeps the
+    // record. The gate stays closed until the new text is accepted.
+    Store::open(dir.path().join("lodestar.db"), StoreConfig::default())
+        .unwrap()
+        .enable_source(
+            row(dir.path(), "torrent_cache"),
+            Some(&format!("external|{draft}|1")),
+        )
+        .unwrap();
     let mut s = Server::start(dir.path(), false);
     wait_for("the webhooks source running", || {
         let v = s.source("arr_webhooks");
@@ -279,31 +328,34 @@ fn a_source_that_needs_consent_cant_be_turned_on_and_one_that_doesnt_can() {
     let cache = s.source("torrent_cache");
     assert_eq!(cache["enabled"], false, "{cache}");
     assert_ne!(cache["health"]["running"], true, "{cache}");
-    // The stored record covers what's shown, so nothing is left to
-    // acknowledge: it's off because no consent text is approved yet, not
-    // because its consent lapsed. The log names that reason.
-    assert_eq!(cache["needs"], Value::Null, "{cache}");
+    assert_eq!(cache["needs"], "endpoints", "{cache}");
+    assert_eq!(cache["consent_version"], version.as_str(), "{cache}");
     {
         let log = s.log.lock().unwrap();
         assert!(
             log.lines().any(|l| l.contains("Source state changed")
                 && l.contains("torrent_cache")
                 && l.contains("disabled")
-                && l.contains("consent_text_unapproved")),
+                && l.contains("consent_lapsed")),
             "{log}"
         );
-        assert!(!log.contains("consent_lapsed"), "{log}");
+        assert!(!log.contains("consent_text_unapproved"), "{log}");
     }
-    // The record is kept for when an approved text ships.
-    let kept = Store::open_reader(dir.path().join("lodestar.db"), StoreConfig::default())
-        .unwrap()
-        .source_consent("torrent_cache")
-        .unwrap();
-    assert_eq!(kept, Some(format!("external|{version}|1")));
-    assert_gated(&s.patch(
+    assert_eq!(stored(), Some(format!("external|{draft}|1")));
+    // The old record doesn't open it.
+    assert_asks_consent(&s.patch(cache_id, r#"{"enabled":true}"#));
+    assert_asks_consent(&s.patch(
+        cache_id,
+        &format!(r#"{{"enabled":true,"consent":"external","consent_version":"{draft}"}}"#),
+    ));
+    // Accepting the new text turns it on again, and replaces the record.
+    let r = s.patch(
         cache_id,
         &format!(r#"{{"enabled":true,"consent":"external","consent_version":"{version}"}}"#),
-    ));
+    );
+    assert_eq!(status(&r), 200, "{r}");
+    assert_eq!(s.source("torrent_cache")["enabled"], true);
+    assert_eq!(stored(), Some(format!("external|{version}|1")));
     let log = s.stop();
     assert!(!log.contains(PASSWORD), "the password is never logged");
 }
