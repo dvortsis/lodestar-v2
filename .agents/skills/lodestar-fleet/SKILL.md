@@ -146,7 +146,7 @@ aws ec2 describe-instance-status --region us-east-1 --profile lodestar-observer
 The observer role has EC2 read access only. SSM inventory (`aws ssm describe-instance-information`) needs the human's provisioner session.
 
 ### 🔒 Remote access (human-run only, never by an agent)
-The instance's security group (`<SECURITY_GROUP_ID>`) denies all inbound traffic. Connect only through AWS Systems Manager Session Manager:
+The instance's security group (`<SECURITY_GROUP_ID>`) denies all inbound traffic. The instance has a public IPv4 so it can reach SSM (its subnet has an internet gateway but no NAT or VPC endpoints), and that address takes no inbound connections. Connect only through AWS Systems Manager Session Manager:
 ```powershell
 aws ssm start-session --target <INSTANCE_ID> --region us-east-1 --profile lodestar-provisioner
 ```
@@ -223,12 +223,17 @@ terraform apply -refresh-only
 All of these need `LODESTAR_AWS_ACCOUNT_ID`, `LODESTAR_AWS_AMI_ID`, `LODESTAR_AWS_SUBNET_ID`, `LODESTAR_AWS_SECURITY_GROUP_ID` and `LODESTAR_AWS_INSTANCE_PROFILE` set in the operator's local environment (or passed as parameters). The scripts have no built-in values and refuse to run without them.
 
 1. **MFA sign-in:** `aws sts get-caller-identity --profile lodestar-provisioner`
-2. **Dry run:** `.\scripts\Deploy-AwsWindows.ps1 -DryRun -Hours 48`
+2. **Dry run:** `.\scripts\Deploy-AwsWindows.ps1 -DryRun -Hours 48`. Before the launch check, it reads the security group and refuses if the group has **any inbound rule**: the instance gets a public IPv4 at launch, and SSM needs outbound traffic only. Remove the rules and run again, and keep the group free of inbound rules while the instance runs: the check happens only at launch. If the dry run fails with `UnauthorizedOperation`, `LodestarRestrictedEC2` may not allow a public IPv4 at launch; that policy is the owner's to change. The security-group read needs `ec2:DescribeSecurityGroups` on `LodestarProvisioner`; without it the script stops with `Could not read security group` and prints AWS's `UnauthorizedOperation` line (ARNs, access key IDs, account IDs and IPv4/IPv6 addresses masked). Granting it is the owner's decision too.
 3. **Deploy:** `.\scripts\Deploy-AwsWindows.ps1 -Hours 48` (add `-RootVolumeGiB <50-100>` for a larger disk; the IAM policy caps it at 100). Asks the human to type `DEPLOY 1 AWS WINDOWS INSTANCE`. State is kept in `state\aws-fleet-state.json` (git-ignored).
 4. **Partial deployment:** the deploy script refuses to run while any instance tagged `Project=Lodestar` is active, and lists it. Remove it with `Destroy-AwsWindows.ps1` before trying again.
 5. **Teardown:** `.\scripts\Destroy-AwsWindows.ps1`. Asks the human to type `DESTROY 1 AWS WINDOWS INSTANCE`, with no bypass. With more than one candidate instance, it stops and asks for `-InstanceId`.
 
-The live test suite `tests\Test-LodestarAutomation.ps1` calls AWS with several profiles, so it is human-run only too.
+The live test suite `tests\Test-LodestarAutomation.ps1` calls AWS with several profiles, so it is human-run only too. `tests\Test-DeployAwsWindows.ps1` is offline: it runs a copy of the deploy script against a stub AWS CLI (Linux or macOS `pwsh`).
+
+### Bootstrap and smoke test on the instance
+- **Bootstrap order:** install the Visual Studio 2022 Build Tools (the C++ workload) before running `rustup-init`. Don't run native tools under `$ErrorActionPreference = 'Stop'`: rustup-init's warning about installing the MSVC toolchain without its prerequisites goes to stderr, Stop turns it into a terminating error, and the bootstrap fails.
+- **Run `packaging\windows\smoke.ps1` as a real administrator, not as SYSTEM** (for example, not through an SSM Run Command document). SYSTEM is already allowed on the data folder, so the smoke test's admin-entry refusal check fails falsely.
+- **Run `smoke.ps1` with PowerShell 7 (`pwsh`), not Windows PowerShell 5.1.** Under 5.1, `2>&1` on a native command throws while `$ErrorActionPreference` is `Stop`.
 
 ---
 

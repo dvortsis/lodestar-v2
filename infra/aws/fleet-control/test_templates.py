@@ -220,7 +220,7 @@ class LeastPrivilege(unittest.TestCase):
         self.assertEqual(PIA["Parameters"]["FleetAccountId"]["AllowedPattern"], "^[0-9]{12}$")
         self.assertNotIn("Default", PIA["Parameters"]["FleetAccountId"])
         pat = re.compile(PIA["Parameters"]["PiaSecretArn"]["AllowedPattern"])
-        fake = "arn:aws:secretsmanager:us-east-1:000000000000:secret:"  # a placeholder account
+        fake = "arn:aws:secretsmanager:us-east-1:111122223333:secret:"  # a placeholder account
         self.assertTrue(pat.fullmatch(fake + "lodestar/pia-vpn-AbC123"))
         for bad in ("lodestar/pia-vpn-*", "lodestar/pia-vpn-??????", "lodestar/*", "*", "lodestar/pia-vpn",
                     "lodestar/other-AbC123"):
