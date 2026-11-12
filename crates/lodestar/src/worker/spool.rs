@@ -573,8 +573,14 @@ mod tests {
         until("removed", || (sp.bytes() == 0, sp.bytes())).await;
         assert_eq!(c.committed.load(Ordering::Relaxed), 2, "each once");
         // Drained: the session compares lease counts once, and a
-        // difference is counted (this runtime holds none).
-        assert_eq!(rt.reconcile(), Some(0));
+        // difference is counted (this runtime holds none). The flag is
+        // set just after the bytes reach 0, so wait on the flag itself.
+        let d = until("drained", || {
+            let r = rt.reconcile();
+            (r.is_some(), r)
+        })
+        .await;
+        assert_eq!(d, Some(0));
         assert_eq!(rt.reconcile(), None);
         rt.reconciled(0, 3);
         assert_eq!(sp.drift.load(Ordering::Relaxed), 3);
