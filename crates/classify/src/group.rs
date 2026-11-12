@@ -16,15 +16,21 @@
 //!   signed: with fewer, an overlap of one or two sizes says little,
 //!   and those torrents rely on the exact payload signature
 //!   ([`crate::payload`]);
-//! - [`HASHES`] hashes in [`BANDS`] bands of [`ROWS`]; two torrents are
-//!   candidates when any band agrees;
+//! - [`HASHES`] hashes in [`BANDS`] bands of [`ROWS`] (6 in 2 of 3); two
+//!   torrents are candidates when any band agrees;
 //! - two torrents are *similar* when the Jaccard similarity of their
 //!   major sizes, as multisets, is at least 4/5 ([`SIMILAR`]).
 //!
 //! The probability that two payloads with Jaccard `J` share a band is
-//! `1 − (1 − J^ROWS)^BANDS`: about 0.88 at `J = 0.8`, 0.99 at 0.9,
-//! 0.23 at 0.5 and under 0.04 at 0.3. Candidates are always confirmed
-//! on the exact sizes, so a band shared by chance never shows.
+//! `1 − (1 − J^ROWS)^BANDS`: about 0.76 at `J = 0.8`, 0.93 at 0.9,
+//! 0.23 at 0.5 and 0.05 at 0.3. Candidates are always confirmed on the
+//! exact sizes, so a band shared by chance never shows.
+//!
+//! **Why 2 bands of 3, not Q9's 4 of 4** (plan Q10 (a), the runner's
+//! §2.26 call): each band is a nearly unique term, about 9 B per torrent
+//! in the index, and 4 bands took the torrent index over §3's 512 B.
+//! Two bands of 3 cost half as much and find more at the threshold than
+//! two of 4 would (0.76 against 0.65 at `J = 0.8`).
 //!
 //! The band terms are stored in the index, so what this hashes, and
 //! how, must never change without bumping
@@ -38,9 +44,9 @@ pub const MAJOR_MIN_PERCENT: u64 = 1;
 /// Major files a torrent needs for a signature.
 pub const MIN_MAJOR_FILES: usize = 3;
 /// MinHash values per signature.
-pub const HASHES: usize = 16;
+pub const HASHES: usize = 6;
 /// Bands of the signature, each one index term.
-pub const BANDS: usize = 4;
+pub const BANDS: usize = 2;
 /// Values per band.
 pub const ROWS: usize = HASHES / BANDS;
 /// The similarity threshold as a fraction: Jaccard ≥ 4/5.

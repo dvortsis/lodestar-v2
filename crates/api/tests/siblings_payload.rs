@@ -179,6 +179,26 @@ fn fixture(torrents: &[T], adult: bool, generations: Option<Generations>) -> Fix
 
 /// [`fixture`], served with search on or off (`indexed`).
 fn build(torrents: &[T], adult: bool, generations: Option<Generations>, indexed: bool) -> Fixture {
+    build_with(torrents, adult, generations, indexed, None)
+}
+
+/// Fields an older build's schemas didn't have: (torrent index, file
+/// index).
+type Older<'a> = (&'a [&'a str], &'a [&'a str]);
+
+/// [`build`], the index then rewritten as an older build left it when
+/// `older` is given: an older version's directory, its schemas without
+/// those fields, every document with only the fields they keep, and the
+/// same commit payload. It's served as an older index is during a
+/// rebuild (`Serving`), so those fields are `Missing`; `generations` is
+/// then unused.
+fn build_with(
+    torrents: &[T],
+    adult: bool,
+    generations: Option<Generations>,
+    indexed: bool,
+    older: Option<Older<'_>>,
+) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("t.db");
     let mut store = Store::open(&db, StoreConfig::default()).unwrap();
@@ -225,17 +245,44 @@ fn build(torrents: &[T], adult: bool, generations: Option<Generations>, indexed:
         w.commit().unwrap();
         w.finish().unwrap();
     }
-    let mut index = SearchIndex::open(&index_dir).unwrap();
-    if let Some(g) = generations {
-        index = index.with_generations(g).unwrap();
-    }
+    let handle: lodestar_search::SearchHandle = match older {
+        // Served as during a rebuild: the older index, while the rebuild
+        // of this build's waits to start (until the fixture drops).
+        Some(older) => {
+            let old = lodestar_search::IndexVersion {
+                schema: lodestar_search::IndexVersion::CURRENT.schema - 1,
+                ..lodestar_search::IndexVersion::CURRENT
+            };
+            rewrite_older(
+                &index_dir,
+                &dir.path().join(old.dir_name()),
+                &mut store,
+                older,
+            );
+            std::fs::remove_dir_all(&index_dir).unwrap();
+            let config = lodestar_search::ServingConfig {
+                hold_before_start: Some(Arc::new(std::sync::atomic::AtomicBool::new(true))),
+                ..lodestar_search::ServingConfig::default()
+            };
+            let serving =
+                lodestar_search::Serving::open_or_rebuild(dir.path(), &db, config).unwrap();
+            lodestar_search::SearchHandle::serving(Arc::new(serving))
+        }
+        None => {
+            let mut index = SearchIndex::open(&index_dir).unwrap();
+            if let Some(g) = generations {
+                index = index.with_generations(g).unwrap();
+            }
+            index.into()
+        }
+    };
     let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
     let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
     let app = Router::new().nest(
         "/api/v1",
         router(ApiState {
             auth: auth.clone(),
-            index: indexed.then(|| index.into()),
+            index: indexed.then_some(handle),
             reader: Arc::new(Mutex::new(reader)),
             filters: None,
             settings: None,
@@ -253,6 +300,84 @@ fn build(torrents: &[T], adult: bool, generations: Option<Generations>, indexed:
         auth,
         hashes,
         _dir: dir,
+    }
+}
+
+/// Writes the index under `from` again at `dir`, without `older`'s
+/// fields (see [`build_with`]), as search's own rebuild tests build a v5
+/// index.
+fn rewrite_older(
+    from: &std::path::Path,
+    dir: &std::path::Path,
+    store: &mut Store,
+    older: Older<'_>,
+) {
+    use lodestar_search::tokenizer::{NAME_TOKENIZER, NameTokenizer};
+    use tantivy::TantivyDocument;
+    use tantivy::schema::Schema;
+    let without = |current: &Schema, drop: &[&str]| {
+        let mut b = Schema::builder();
+        for (_, entry) in current.fields() {
+            if !drop.contains(&entry.name()) {
+                b.add_field(entry.clone());
+            }
+        }
+        b.build()
+    };
+    let payload = |d: &std::path::Path| {
+        tantivy::Index::open_in_dir(d)
+            .unwrap()
+            .load_metas()
+            .unwrap()
+            .payload
+            .unwrap()
+    };
+    let files_dir = dir.join("files");
+    let (torrent_payload, file_payload) = (payload(from), payload(&from.join("files")));
+    std::fs::create_dir_all(&files_dir).unwrap();
+    let (schema, fields) = lodestar_search::schema::build();
+    let (file_schema, file_fields) = lodestar_search::files::schema();
+    let old = without(&schema, older.0);
+    let old_files = without(&file_schema, older.1);
+    let index = tantivy::Index::create_in_dir(dir, old.clone()).unwrap();
+    let files = tantivy::Index::builder()
+        .schema(old_files.clone())
+        .settings(lodestar_search::files::settings())
+        .create_in_dir(&files_dir)
+        .unwrap();
+    let map = |from: &Schema, to: &Schema, d: TantivyDocument| {
+        let mut out = TantivyDocument::new();
+        for (f, v) in d.field_values() {
+            if let Ok(g) = to.get_field(from.get_field_name(f)) {
+                out.add_field_value(g, v);
+            }
+        }
+        out
+    };
+    let writer = |i: &tantivy::Index| {
+        i.tokenizers()
+            .register(NAME_TOKENIZER, NameTokenizer::default());
+        i.tokenizers().register(
+            lodestar_search::schema::TRIGRAM_TOKENIZER,
+            lodestar_search::schema::trigram_analyzer(),
+        );
+        i.writer::<TantivyDocument>(15 << 20).unwrap()
+    };
+    let (mut w, mut fw) = (writer(&index), writer(&files));
+    for id in store.ids_after(0, 100_000).unwrap() {
+        let row = store.torrent(id).unwrap().unwrap();
+        let tree = store.files(id).unwrap().unwrap();
+        let doc = lodestar_search::TorrentDoc::new(&row, &tree).to_document(&fields);
+        w.add_document(map(&schema, &old, doc)).unwrap();
+        for d in lodestar_search::files::file_docs(id as u64, &tree) {
+            fw.add_document(map(&file_schema, &old_files, d.to_document(&file_fields)))
+                .unwrap();
+        }
+    }
+    for (w, p) in [(&mut fw, &file_payload), (&mut w, &torrent_payload)] {
+        let mut prepared = w.prepare_commit().unwrap();
+        prepared.set_payload(p);
+        prepared.commit().unwrap();
     }
 }
 
@@ -859,4 +984,52 @@ async fn similar_payloads_are_capped_and_partial_while_backfilling() {
         ("unavailable", "search_disabled")
     );
     assert_eq!(body["similar_payload_partial"], false);
+}
+
+/// An older index serving during a rebuild lacks the fields the groups
+/// need (`Availability::Missing`): each group says so with its own
+/// reason, never "none" and never partial (rv-772 O2 for GS-1's two).
+#[tokio::test]
+async fn an_index_without_the_fields_says_each_group_needs_them() {
+    // Payload A's clones (0), the v2 sharers (6), the seasons (13).
+    let torrents: Vec<T> = clones()
+        .into_iter()
+        .chain(shared())
+        .chain(seasons())
+        .collect();
+    let older: Older<'_> = (&["payload_sig", "group_minhash"], &["pieces_root"]);
+    let f = build_with(&torrents, false, None, true, Some(older));
+    let c = session(&f).await;
+    for (i, group, why) in [
+        (0, "identical_payload", "needs_payload_signature"),
+        (6, "same_file", "needs_piece_roots"),
+        (13, "similar_payload", "needs_group_minhash"),
+    ] {
+        let body = siblings(&f, &c, i).await;
+        assert_eq!(reason(&body[group]), ("unavailable", why), "{group}");
+        assert_eq!(body[group]["hits"], json!([]), "{group}");
+        for flag in [
+            "identical_payload_partial",
+            "same_file_partial",
+            "similar_payload_partial",
+            "same_file_capped",
+        ] {
+            assert_eq!(body[flag], false, "{group}: {flag}");
+        }
+    }
+    // The same torrents on a complete index: every group answers.
+    let f = plain(&torrents);
+    let c = session(&f).await;
+    assert_eq!(
+        names(&siblings(&f, &c, 0).await["identical_payload"]),
+        ["Renamed.Copy"]
+    );
+    assert_eq!(
+        siblings(&f, &c, 6).await["same_file"]["status"],
+        "available"
+    );
+    assert_eq!(
+        siblings(&f, &c, 13).await["similar_payload"]["status"],
+        "available"
+    );
 }

@@ -45,6 +45,10 @@ proptest = "1.11.0"
 # Parses the Torznab documents back in tests (runner, TZ-0); the
 # server writes them with its own escaping writer.
 quick-xml = { version = "=0.42.0", default-features = false }
+# Builds an index from an older schema in tests, so the siblings groups'
+# `Missing` paths can be served (runner, GS-2). The version and features
+# are search's.
+tantivy = { version = "=0.27.0", default-features = false, features = ["mmap", "lz4-compression", "zstd-compression", "stemmer"] }
 tempfile = "3.27.0"
 tokio = { version = "1.54.1", features = ["rt", "macros", "sync", "time", "net", "io-util", "test-util"] }
 tower = { version = "0.5", features = ["util"] }

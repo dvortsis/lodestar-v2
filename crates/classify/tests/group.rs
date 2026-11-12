@@ -2,14 +2,14 @@
 //! multiset of major sizes, and the band terms find similar payloads
 //! often and unrelated ones (almost) never, on a synthetic corpus.
 //!
-//! **The bounds this file holds the parameters to** (16 hashes, 4 bands
-//! of 4; theory `P(candidate) = 1 − (1 − J⁴)⁴`):
+//! **The bounds this file holds the parameters to** (6 hashes, 2 bands
+//! of 3; theory `P(candidate) = 1 − (1 − J³)²`):
 //! - unrelated payloads (random sizes): no pair of 3,000 torrents shares
 //!   a band (≈ 4.5M pairs; a chance band match is ~2⁻⁶⁴ per pair);
 //! - Jaccard 0.5: at most 35 % become candidates (theory 23 %), and
 //!   none of them is confirmed ([`similar`] is exact);
-//! - Jaccard 0.8: at least 75 % are found (theory 88 %);
-//! - Jaccard ≥ 0.9: at least 95 % are found (theory 99 %).
+//! - Jaccard 0.8: at least 65 % are found (theory 76 %);
+//! - Jaccard ≥ 0.9: at least 85 % are found (theory 93 %).
 
 use std::collections::HashMap;
 
@@ -112,10 +112,10 @@ fn far_payloads_are_rarely_candidates_and_never_similar() {
 fn near_payloads_are_found() {
     // 8 shared, 1 own each: J = 8 / 10 = 0.8.
     let rate = candidate_rate(5, 1000, 8, 1);
-    assert!(rate >= 0.75, "J = 0.8 found {rate}");
+    assert!(rate >= 0.65, "J = 0.8 found {rate}");
     // 18 shared, 1 own each: J = 18 / 20 = 0.9.
     let rate = candidate_rate(6, 1000, 18, 1);
-    assert!(rate >= 0.95, "J = 0.9 found {rate}");
+    assert!(rate >= 0.85, "J = 0.9 found {rate}");
 }
 
 #[test]
