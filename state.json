@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T20:46:15Z",
+  "updated_at": "2026-11-12T20:59:35Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7462,6 +7462,11 @@
       "id": "WK-11b-committed_at",
       "note": "Runner approved #779 crates/pipeline/src/worker.rs committed_at change (replayed result commit records a finished out entry); session adds it to its decisions file",
       "at": "2026-11-12T20:46:15Z"
+    },
+    {
+      "id": "runner-peer-assign-lesson",
+      "note": "Sessions may decline new slices assigned by peer message (PK-ops on CMP-D, stalled ~27 h). Launch each new slice in a fresh session, or check a reused session accepted within one wake",
+      "at": "2026-11-12T20:59:35Z"
     }
   ],
   "main_health": [
@@ -8484,7 +8489,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T20:46:15Z",
+    "updated": "2026-11-12T20:59:35Z",
     "items": [
       {
         "slot": 1,
@@ -8500,8 +8505,8 @@
         "slice": "CMP-D",
         "role": "docs",
         "agent": "claude",
-        "doing": "User guide: companions per platform",
-        "since": "2026-11-11T18:07Z",
+        "doing": "session_01MMjhnCvzTA2axHkbRfaczr: relaunched 2026-11-12 (the PK-ops session had declined the peer assignment); briefs/CMP-D.md",
+        "since": "2026-11-12T20:59:35Z",
         "status": "active"
       },
       {
@@ -8509,7 +8514,7 @@
         "slice": "WK-11b",
         "role": "build",
         "agent": "session_01MMjhnBmg6Pjb9KW5ozkWGR",
-        "doing": "Lease reconciliation after reconnect (briefs/WK-11b.md); /security-review on ready",
+        "doing": "#779 security MERGE + I1/I2 relayed; head 8f531987 red only on the Rust 1.100 breakage #776 fixed; merging main",
         "since": "2026-11-12T18:52:01Z",
         "status": "active"
       },
@@ -8572,7 +8577,7 @@
         "slice": "ENR-14",
         "role": "build",
         "agent": "claude",
-        "doing": "#764 security CHANGES relayed (B1 quadratic aliases parse, I1 missing id -> BAD_ANSWER, I3 list test edits); fix round",
+        "doing": "#764 d8f867dd delta self-check MERGE; awaiting green",
         "since": "2026-11-12T12:41:40Z",
         "status": "active"
       },
@@ -8608,7 +8613,7 @@
         "slice": "X-test-blockers-1112",
         "role": "cloud-testing",
         "agent": "session_01MMjhn9aPNpQpruF2s6sPjH",
-        "doing": "Leak-test 'handshake never completed' outcome + saturated portable-restart flake (briefs/X-test-blockers-1112.md); + bitmagnet NotQuiescent flake (item 3)",
+        "doing": "#778 CHANGES relayed (B1 ANALYZE pg_catalog.pg_database in Fixture::new; I1 confirm windows_service green)",
         "since": "2026-11-12T18:57:19Z",
         "status": "active"
       }
@@ -8671,7 +8676,7 @@
     }
   ],
   "heartbeat": "2026-11-12T18:39:05Z",
-  "updated": "2026-11-12T20:46:15Z",
+  "updated": "2026-11-12T20:59:35Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
