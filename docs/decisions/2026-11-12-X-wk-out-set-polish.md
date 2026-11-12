@@ -1,4 +1,4 @@
-# X-wk-out-set-polish decisions: the out set's cost, and tests that race
+# X-wk-out-set-polish decisions (#737): the out set's cost, and tests that race
 
 Follow-up to X-wk-own-lease-lost (#727), from its review (`reviews/rv-727-ebd93dd4.md` on runner-state). Brief: runner, 2026-11-12.
 
@@ -14,7 +14,7 @@ The out set is the tokens of a worker's results on their way out, in `WorkerLeas
   - Losses are a small share of results, so this barely changes the memory figures.
 - **At most `MAX_OUT` (50,000) entries,** the worker pool's key cap (plan Q5).
   - The cap is enforced on every insert and every move out, so it's hard.
-  - Past it, finished entries go first, oldest first, then the entry due to expire first.
+  - Past it, finished entries go first, the one due to expire first (so a committed entry goes before a lost one), then the entry due to expire first.
 - **Each entry has its own expiry,** indexed in a `BTreeMap`, so all the memory belongs to live entries. #727's queue held every entry for the full horizon, finished or not.
   - The prune takes the first index entry, then drops the map entry only if it matches, so it always progresses.
 - **The map gives back a peak's capacity:** when its capacity is over 1,024 and more than 4× its length, it shrinks to 2× its length.
@@ -30,7 +30,7 @@ The out set is the tokens of a worker's results on their way out, in `WorkerLeas
   - about 1.2 MB at 100 results/s;
   - about 3.5 MB at 250 results/s.
 - **Worst case: results aren't being committed.** That happens when the coordinator keeps granting leases but refuses the batches (backpressure), or the session drops while the worker still fetches the leases it holds. Then every result stays out until the horizon.
-  - That's capped at 50,000 entries, about 10 MB. Past the cap, finished entries go first, then the oldest (above).
+  - That's capped at 50,000 entries, about 10 MB. Past the cap, finished entries go first, then the one due to expire first (above).
   - An unreachable coordinator grants nothing new, so there the set is bounded by the leases already held, at most the pool cap.
 - **For WK-G:** include the out set in the worker RSS gate. Expect at most about 10 MB, and about 1–4 MB in steady state at defaults.
 

@@ -87,8 +87,9 @@ struct Leases {
     out: HashMap<InfoHash, Out>,
     /// `out`'s entries by when they expire, for the prune.
     expiry: std::collections::BTreeMap<(std::time::Instant, u64), InfoHash>,
-    /// `out`'s finished entries, oldest first, for the cap.
-    finished: std::collections::BTreeMap<u64, InfoHash>,
+    /// `out`'s finished entries by when they expire, for the cap: a
+    /// committed entry (a short grace) goes before a lost one.
+    finished: std::collections::BTreeMap<(std::time::Instant, u64), InfoHash>,
     /// Out entries kept and not finished yet.
     pending: usize,
     next_seq: u64,
@@ -113,14 +114,14 @@ impl Leases {
     fn unindex(&mut self, o: &Out) {
         self.expiry.remove(&(o.expires, o.seq));
         if o.finished {
-            self.finished.remove(&o.seq);
+            self.finished.remove(&(o.expires, o.seq));
         } else {
             self.pending -= 1;
         }
     }
 
-    /// Drops what has expired, then, past the cap, finished entries oldest
-    /// first, then the entry due to expire first.
+    /// Drops what has expired, then, past the cap, finished entries due to
+    /// expire first, then the entry due to expire first.
     fn prune(&mut self, now: std::time::Instant) {
         while let Some((&(at, _), _)) = self.expiry.first_key_value() {
             if at > now {
@@ -149,7 +150,7 @@ impl Leases {
         if self.out.get(&key).is_some_and(|o| o.seq == seq) {
             let o = self.out.remove(&key).expect("present");
             if o.finished {
-                self.finished.remove(&o.seq);
+                self.finished.remove(&(o.expires, o.seq));
             } else {
                 self.pending -= 1;
             }
@@ -169,7 +170,7 @@ impl Leases {
             self.unindex(&old);
         }
         if finished {
-            self.finished.insert(seq, key);
+            self.finished.insert((expires, seq), key);
         } else {
             self.pending += 1;
         }
@@ -317,8 +318,11 @@ impl WorkerLeases {
 
 /// `now + by`, or far in the future rather than a panic under the lock.
 fn later(now: std::time::Instant, by: Duration) -> std::time::Instant {
+    // Past what an `Instant` can hold: a century, or less where the
+    // platform's clock can't hold that, and never a panic.
     now.checked_add(by)
-        .unwrap_or_else(|| now + Duration::from_secs(100 * 365 * 24 * 3600))
+        .or_else(|| now.checked_add(Duration::from_secs(100 * 365 * 24 * 3600)))
+        .unwrap_or(now)
 }
 
 /// The pool's funnel on a worker: progress stages count directly, the
@@ -781,6 +785,15 @@ mod tests {
         // Then the earliest to expire.
         send(MAX_OUT + 1);
         assert_eq!(l.insert_at(key(0), Token(0), t0), Insert::New);
+        assert_eq!(l.out_len(), MAX_OUT);
+        // Among finished entries, the one due to expire first: key 30,
+        // committed (a short grace), goes before key 20, lost earlier but
+        // kept to the horizon.
+        l.done(&key(20), Token(20));
+        l.committed_at(&key(30), Token(30), t0);
+        send(MAX_OUT + 2);
+        assert_eq!(l.insert_at(key(30), Token(30), t0), Insert::New);
+        assert_eq!(l.insert_at(key(20), Token(20), t0), Insert::Out);
         assert_eq!(l.out_len(), MAX_OUT);
         // Most committed: past the grace, the map gives back its capacity
         // but keeps room for what's left.
