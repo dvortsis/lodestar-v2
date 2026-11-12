@@ -24,14 +24,16 @@ on:
         description: Container tag, if not the tool's default
         required: false
       artifacts:
-        description: Comma-separated platform-arch to pin (default every one but installers)
+        description: Comma-separated platform-arch to pin (default every one in the catalogue entry; an installer only where the tool names its source)
         required: false
 
 permissions:
   contents: read
 
+# One run per companion at a time. GitHub keeps only one pending run per
+# group, so a single group cancelled a queued run of another companion.
 concurrency:
-  group: ${{ github.workflow }}
+  group: ${{ github.workflow }}-${{ inputs.companion }}
   cancel-in-progress: false
 
 jobs:

@@ -17,6 +17,7 @@ pub mod acl;
 pub mod logfile;
 pub mod ports;
 pub mod priority;
+pub mod process;
 pub mod service;
 pub mod temp_log;
 
