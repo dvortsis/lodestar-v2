@@ -16,3 +16,10 @@ The runner's decision, after #771: CI parsed `Test-DeployAwsWindows.ps1` but nev
 
   The sandbox had three `AWS_*` variables set, and the step removed them.
 - **Small extras:** a lone CR mid-line is now a table case. It is stripped, not treated as a line break. The long comment above `Get-SafeAwsError` is reflowed.
+- **Two CI-only failures in the first CI run (950a00a0), both fixed in the test.**
+  - **The leak check caught a real leak.** PowerShell passes `$null` to a .NET `string` parameter as `""`. On .NET 9 and later (CI's pwsh is newer than the session sandbox's 7.4.6), `[Environment]::SetEnvironmentVariable(name, "")` on Linux sets an empty variable instead of removing it. So `AWS_PROFILE` and the other cleared names reached the stub empty. The test now removes a variable with `Remove-Item Env:` (`Set-ChildEnv`).
+    - Reproduced under pwsh 7.6.0 (.NET 10): the old test fails that check, and the new one passes.
+    - pwsh 7.4.6 passes too.
+  - **The refusal cases matched wrapped text.** CI's console wraps a thrown error's message across lines with `| ` margins. So `No deployment performed` didn't match the raw output, though the script refused correctly.
+    - The test now matches exception text after `ConvertTo-FlatText`, which strips ANSI codes and undoes that wrapping.
+    - Checked against the exact wrapped text from CI's log: the raw text doesn't match, and the flattened text does.
