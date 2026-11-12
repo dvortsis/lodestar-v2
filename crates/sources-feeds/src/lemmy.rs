@@ -44,7 +44,9 @@
 //!   repeated keys keep the first value.
 //! - **Caps:** a string over [`Limits::max_text`] (64 KiB, the body cap)
 //!   skips the post; more than [`Limits::max_posts`] (50, Lemmy's own page
-//!   limit) posts end the read with [`Stop::Items`].
+//!   limit) posts end the read with [`Stop::Items`]; nothing after that
+//!   point is read, so a `next_page` or `error` after the posts is lost.
+//!   Lemmy caps `limit` at 50, so a real page never reaches it.
 
 use crate::common::{
     Bad, external_ref, is_magnet, magnet_hashes, percent_decode, prepare, rfc3339, title,
@@ -137,7 +139,8 @@ pub struct Page {
     /// `next_page`: ASCII letters, digits and `_-`, at most [`MAX_CURSOR`]
     /// bytes.
     pub next_page: Option<String>,
-    /// The highest `post.id` among posts read whole, kept or skipped, so a
+    /// The highest `post.id` among posts read whole and sound, or cleanly
+    /// removed, kept or skipped, so a
     /// cursor can move past posts that will never be kept.
     pub newest_id: Option<u64>,
     /// A Lemmy error answer's code (`rate_limit_error`, …): ASCII
@@ -314,6 +317,9 @@ impl Parser<'_, '_> {
         }
         let mut d = Draft::default();
         self.object(|p, k| {
+            if escaped(k, &mut d) {
+                return p.j.skip().map(drop);
+            }
             let (seen, field): (bool, Field<'_, '_>) = match k {
                 "post" => (std::mem::replace(&mut d.seen_post, true), Draft::post_field),
                 "community" => (
@@ -345,7 +351,12 @@ impl Parser<'_, '_> {
             d.spoil(Bad::Malformed);
             return self.j.skip().map(drop);
         }
-        self.object(|p, k| field(d, p, k))
+        self.object(|p, k| {
+            if escaped(k, d) {
+                return p.j.skip().map(drop);
+            }
+            field(d, p, k)
+        })
     }
 
     fn finish(&mut self, d: Draft, emit: &mut dyn FnMut(Post)) {
@@ -378,6 +389,19 @@ enum Skip {
     Bad(Bad),
     NoHash,
     BadHash,
+}
+
+/// A key written with an escape (`"nsf\u0077"`) spoils the post. Keys are
+/// compared as written, so it would get past the flag and repeat rules,
+/// while a reader that decodes keys would see the flag. A real server never
+/// escapes an ASCII key, so this fails closed at no cost (as
+/// `2026-11-05-X-enr-page-flag.md` does for ThePornDB and StashDB).
+fn escaped(key: &str, d: &mut Draft) -> bool {
+    let e = key.contains('\\');
+    if e {
+        d.spoil(Bad::Malformed);
+    }
+    e
 }
 
 /// OR-s a repeated flag in, so a repeat can only add a restriction.
@@ -553,7 +577,9 @@ impl Magnets {
 
     /// One magnet URI, kept when it gives a new key within the cap.
     fn add(&mut self, uri: &str) {
-        self.seen = true;
+        // Only text with a query is a magnet attempt: a prose label such
+        // as "Magnet: below" stays `no_hash`.
+        self.seen |= uri.contains('?');
         let Some(hashes) = magnet_hashes(uri) else {
             return;
         };
@@ -661,7 +687,7 @@ mod tests {
         assert_eq!(id("0"), None);
         assert_eq!(id("1.5"), None);
         assert_eq!(id("-3"), None);
-        assert_eq!(id("99999999999999999999999"), None);
+        assert_eq!(id(&format!("{}0", u64::MAX)), None);
     }
 
     #[test]

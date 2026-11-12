@@ -26,8 +26,8 @@ fn view(id: u64, post: &str, community: &str) -> String {
 "published":"2026-11-01T12:00:00.123456Z","ap_id":"https://lemmy.example/post/{id}",
 "locked":false,"language_id":0,"featured_local":false{post}}},
 "creator":{{"id":7,"name":"uploader","actor_id":"https://lemmy.example/u/uploader","banned":false}},
-"community":{{"id":3,"name":"linux","title":"Linux ISOs","nsfw":false,"removed":false,
-"deleted":false,"actor_id":"https://lemmy.example/c/linux"{community}}},
+"community":{{"id":3,"name":"example_isos","title":"Example ISOs","nsfw":false,"removed":false,
+"deleted":false,"actor_id":"https://lemmy.example/c/example_isos"{community}}},
 "counts":{{"score":5,"comments":2}},"subscribed":"NotSubscribed","saved":false,"my_vote":null}}"#
     )
 }
@@ -98,10 +98,10 @@ fn post_list() {
     assert!(!a.adult);
     assert_eq!(a.published, Some(1_793_534_400));
     assert_eq!(a.link.as_deref(), Some("https://lemmy.example/post/10"));
-    assert_eq!(a.community.name.as_deref(), Some("linux"));
+    assert_eq!(a.community.name.as_deref(), Some("example_isos"));
     assert_eq!(
         a.community.actor_id.as_deref(),
-        Some("https://lemmy.example/c/linux")
+        Some("https://lemmy.example/c/example_isos")
     );
     assert_eq!(a.creator.name.as_deref(), Some("uploader"));
 
@@ -183,6 +183,47 @@ fn repeated_objects_skip_the_post() {
     let f = parse(page(&views).as_bytes());
     assert!(f.posts.is_empty());
     assert_eq!(f.page.summary.skipped.malformed, 3);
+}
+
+/// `key` with its last letter written as a JSON `\u` escape. The backslash
+/// is built at run time, so no editor or heredoc can decode it unseen.
+fn esc(key: &str) -> String {
+    let (head, last) = key.split_at(key.len() - 1);
+    format!("{head}{}u{:04x}", '\\', u32::from(last.as_bytes()[0]))
+}
+
+#[test]
+fn escaped_keys_skip_the_post() {
+    let m = format!(r#","url":"magnet:?xt=urn:btih:{A}""#);
+    assert!(esc("nsfw").contains('\\'));
+    let mut views = Vec::new();
+    for key in ["nsfw", "removed", "deleted"] {
+        // The escaped flag last in the post, and before its url.
+        views.push(view(1, &format!(r#"{m},"{}":true"#, esc(key)), ""));
+        views.push(view(2, &format!(r#","{}":true{m}"#, esc(key)), ""));
+    }
+    // A community's nsfw.
+    views.push(view(3, &m, &format!(r#","{}":true"#, esc("nsfw"))));
+    // A second post or community object, under an escaped key.
+    for key in ["post", "community"] {
+        let extra = format!(r#""{}":{{"nsfw":true}},"counts":"#, esc(key));
+        views.push(view(4, &m, "").replacen(r#""counts":"#, &extra, 1));
+    }
+    let n = views.len() as u32;
+    let f = parse(page(&views).as_bytes());
+    assert!(f.posts.is_empty());
+    assert_eq!(f.page.summary.skipped.malformed, n);
+    assert_eq!(f.page.removed, 0);
+    // An escaped key elsewhere in the view (here `counts`) is skipped too.
+    let v = view(5, &m, "").replacen(r#""counts":"#, &format!(r#""{}":"#, esc("counts")), 1);
+    let f = parse(page(&[v]).as_bytes());
+    assert_eq!(f.page.summary.skipped.malformed, 1);
+}
+
+#[test]
+fn prose_magnet_label_is_no_hash() {
+    let f = parse(page(&[view(1, r#","body":"Magnet: see the comments""#, "")]).as_bytes());
+    assert_eq!(f.page.summary.skipped.no_hash, 1);
 }
 
 #[test]
@@ -441,29 +482,38 @@ proptest! {
     #[test]
     fn posts_round_trip(
         posts in proptest::collection::vec(
-            (any::<[u8; 20]>().prop_filter("not zero", |h| *h != [0; 20]), any::<(bool, bool, bool)>()),
+            (
+                any::<[u8; 20]>().prop_filter("not zero", |h| *h != [0; 20]),
+                any::<(bool, bool, bool, bool)>(),
+            ),
             0..20,
         ),
     ) {
         let views: Vec<String> = posts
             .iter()
             .enumerate()
-            .map(|(i, (h, (nsfw, in_body, gone)))| {
+            .map(|(i, (h, (nsfw, community_nsfw, in_body, gone)))| {
                 let hex: String = h.iter().map(|b| format!("{b:02x}")).collect();
                 let field = if *in_body { "body" } else { "url" };
                 let v = view(i as u64 + 1, &format!(r#","{field}":"magnet:?xt=urn:btih:{hex}""#), "");
+                // The post's flag comes first in `view`, the community's last.
+                let at = v.rfind(r#""nsfw":false"#).unwrap();
+                let mut v = v;
+                if *community_nsfw {
+                    v.replace_range(at..at + 12, r#""nsfw":true "#);
+                }
                 let v = if *nsfw { v.replacen(r#""nsfw":false"#, r#""nsfw":true"#, 1) } else { v };
                 if *gone { v.replacen(r#""removed":false"#, r#""removed":true"#, 1) } else { v }
             })
             .collect();
         let f = parse(page(&views).as_bytes());
         prop_assert_eq!(f.page.summary.stop, None);
-        let live: Vec<_> = posts.iter().filter(|(_, (_, _, gone))| !gone).collect();
+        let live: Vec<_> = posts.iter().filter(|(_, (_, _, _, gone))| !gone).collect();
         prop_assert_eq!(f.posts.len(), live.len());
         prop_assert_eq!(f.page.removed as usize, posts.len() - live.len());
-        for (p, (h, (nsfw, _, _))) in f.posts.iter().zip(live) {
+        for (p, (h, (nsfw, community_nsfw, _, _))) in f.posts.iter().zip(live) {
             prop_assert_eq!(p.torrents[0].hashes.v1, Some(InfoHash(*h)));
-            prop_assert_eq!(p.adult, *nsfw);
+            prop_assert_eq!(p.adult, *nsfw || *community_nsfw);
         }
     }
 }
