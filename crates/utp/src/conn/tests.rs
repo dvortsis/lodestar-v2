@@ -665,9 +665,15 @@ fn a_lost_retransmission_is_fast_retransmitted_again() {
     assert_eq!(parse(&resend[0]).unwrap().header.seq_nr, hole);
     assert_eq!(a.retransmits, 1);
     // The resend is lost too. A packet sent before it arriving says
-    // nothing about it.
+    // nothing about it, and nor do duplicate ACKs: they may answer
+    // packets sent before the resend.
     deliver(&mut b, &first[4..5], now);
-    deliver(&mut a, &drain(&mut b, now), now);
+    let acks = drain(&mut b, now);
+    // (The first copy is progress: it newly acknowledges that packet.)
+    for _ in 0..=DUP_ACK_THRESHOLD {
+        deliver(&mut a, &acks, now);
+    }
+    assert!(a.dup_acks >= DUP_ACK_THRESHOLD);
     assert!(drain(&mut a, now).is_empty(), "no new evidence yet");
     // Three packets sent after the resend do.
     a.write(&payload(3 * MSS, 4)).unwrap();
@@ -724,8 +730,8 @@ fn backoff_stays_capped_across_timeouts_separated_by_progress() {
 
 #[test]
 fn a_round_trip_jump_costs_few_retransmissions() {
-    // The round trip jumps from 20 ms to 1.8 s, well past the 500 ms
-    // timeout. Resetting the backoff on any progress would resend each
+    // Guards Karn, not the cap: it passes without the cap too. The round
+    // trip jumps from 20 ms to 1.8 s, well past the 500 ms timeout. Resetting the backoff on any progress would resend each
     // of these one-packet messages twice; Karn keeps it until a first
     // transmission gets through, which then gives a sample.
     let mut sim = Sim::new(13, CLEAN, 1, 1);
@@ -777,4 +783,54 @@ fn a_peer_that_talks_but_never_acknowledges_is_given_up_on() {
     }
     assert_eq!(a.state(), State::Closed(Closed::TimedOut));
     assert_eq!(fired, MAX_TIMEOUTS + 1);
+}
+
+/// `packet` re-encoded with the advertised window replaced.
+fn with_window(packet: &[u8], wnd_size: u32) -> Vec<u8> {
+    let p = parse(packet).unwrap();
+    let mut h = p.header;
+    h.wnd_size = wnd_size;
+    let mut out = Vec::new();
+    packet::encode(&h, p.sack, p.payload, &mut out);
+    out
+}
+
+#[test]
+fn a_live_peer_with_a_closed_window_is_probed_not_given_up_on() {
+    let (mut a, mut b, mut now) = connected(15);
+    a.write(&[1; 100]).unwrap();
+    for _ in 0..MAX_TIMEOUTS + 10 {
+        // The probe doesn't fit, so the receiver drops it...
+        for p in drain(&mut a, now) {
+            if parse(&p).unwrap().header.ty != PacketType::Data {
+                deliver(&mut b, &[p], now);
+            }
+        }
+        // ...but keeps talking, with a window smaller than our packet.
+        let d = a.deadline().expect("the probe keeps the timer armed");
+        now = d - Duration::from_millis(1);
+        b.write(&[7; 100]).unwrap();
+        for p in drain(&mut b, now) {
+            deliver(&mut a, &[with_window(&p, 50)], now);
+        }
+        now = d;
+        a.on_timeout(now);
+        assert!(!a.is_closed(), "a full receiver isn't dead");
+    }
+    // A window that fits the packet makes the timeouts count again.
+    let mut fired = 0;
+    while !a.is_closed() {
+        assert!(fired <= MAX_TIMEOUTS + 1, "never gave up");
+        drain(&mut a, now);
+        let d = a.deadline().unwrap();
+        now = d - Duration::from_millis(1);
+        b.write(&[7; 100]).unwrap();
+        for p in drain(&mut b, now) {
+            deliver(&mut a, &[with_window(&p, 100)], now);
+        }
+        now = d;
+        a.on_timeout(now);
+        fired += 1;
+    }
+    assert_eq!(a.state(), State::Closed(Closed::TimedOut));
 }

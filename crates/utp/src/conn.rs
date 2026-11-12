@@ -413,12 +413,18 @@ impl Connection {
             self.close_with(Closed::Done);
             return;
         }
-        // A peer that answers with a closed window is flow control, not
-        // loss: we keep probing. Anything else that acknowledged nothing
-        // since the last timeout counts, even if the peer kept sending:
-        // one that talks but never acknowledges our data must not hold
-        // the connection open for ever.
-        if !(self.heard && self.peer_wnd < MSS as u32) {
+        // A peer that answers with a window too small for our oldest
+        // packet is flow control, not loss: we keep probing. Anything else
+        // that acknowledged nothing since the last timeout counts, even if
+        // the peer kept sending: one that talks but never acknowledges our
+        // data must not hold the connection open for ever.
+        let oldest = self
+            .inflight
+            .iter()
+            .find(|s| !s.acked)
+            .map_or(MSS, |s| s.payload.len().max(1));
+        let closed_window = (self.peer_wnd as usize) < oldest;
+        if !(self.heard && closed_window) {
             self.timeouts += 1;
         }
         let limit = if self.state == State::SynSent {
@@ -684,6 +690,9 @@ impl Connection {
                 s.lost = false;
                 s.transmissions += 1;
                 s.sent_at = now;
+                // Only the latest copy's order is kept, so a late selective
+                // ACK of an earlier copy also counts as "sent after"; that
+                // costs at worst one early resend.
                 s.order = self.next_order;
                 self.next_order += 1;
                 if s.transmissions > 1 {
