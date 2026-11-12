@@ -4,6 +4,8 @@ Download clients and notification channels (architecture §9, §8, §10.9.7), pl
 
 qBittorrent and the webhook sender are the reference implementations. Copy them for the other clients (Transmission, Deluge, rTorrent/ruTorrent, Aria2) and channels (ntfy, Discord, email, RSS).
 
+Usenet clients (SABnzbd, NZBGet; §18.6) implement `clients::usenet::UsenetClient` instead: an NZB's bytes in, the client's job id out, plus `test` and `categories`. They follow every rule below. They never send a URL, since an indexer's NZB link carries its API key. Their fixtures are in `tests/fixtures/usenet_clients/` and their tests in `tests/usenet_clients.rs`.
+
 ## The rules every adapter follows
 
 1. **Every request goes through a `GuardedClient`.** Never build a `reqwest::Client` yourself.

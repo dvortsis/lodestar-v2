@@ -28,7 +28,8 @@ use crate::dto::ops::ConsentClass;
 use crate::dto::search::{HitSource, SearchHit};
 use crate::dto::torrents::{
     AdultEnrichment, ClaimDifferences, ClaimedNumber, ClaimedText, EnrichmentSource, FileEntry,
-    FilesPage, FilesQuery, Provenance, ProvenanceSource, TorrentDetail,
+    FilesPage, FilesQuery, Identification, IdentifiedAs, IdentifiedId, IdentifiedTitle, Provenance,
+    ProvenanceSource, TorrentDetail,
 };
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{ClientIp, Path, Query};
@@ -567,9 +568,11 @@ fn detail_of(
     more: Detail,
     provenance: Provenance,
     adult_enrichment: Option<AdultEnrichment>,
+    identified_as: Option<IdentifiedAs>,
 ) -> TorrentDetail {
     TorrentDetail {
         adult_enrichment,
+        identified_as,
         completed: swarm.completed,
         dht_peers: more.dht_peers,
         dht_seeds: more.dht_seeds,
@@ -634,6 +637,10 @@ pub(crate) async fn detail(
     let adult_shown = s.adult.shown();
     let names = plugin_names(&s).await;
     let always_adult = interest.as_ref().map_or(0, |i| i.0.0.always_adult);
+    // `None` while the host hasn't said which sources are always adult:
+    // the "Identified as" section can't confirm a torrent isn't one's
+    // find, so it fails closed (runner, 2026-11-12).
+    let always_adult_known = interest.as_ref().map(|i| i.0.0.always_adult);
     let (detail, wanted) = tokio::task::spawn_blocking(move || {
         let (row, tree) = load(&s, &hash, adult_shown)?;
         // Opening a torrent is interest: scrape it soon (§15).
@@ -673,9 +680,18 @@ pub(crate) async fn detail(
         } else {
             (None, false)
         };
+        let identified = identified_section(
+            &store,
+            &row,
+            &claims,
+            &catalogue,
+            viewer,
+            always_adult_known,
+        )
+        .map_err(internal)?;
         drop(store);
         let id = row.id;
-        let detail = detail_of(&row, &tree, summary, more, provenance, section);
+        let detail = detail_of(&row, &tree, summary, more, provenance, section, identified);
         Ok::<_, ApiError>((detail, wanted.then_some(id)))
     })
     .await
@@ -726,6 +742,184 @@ pub(crate) async fn files(
     })
     .await
     .map_err(internal)?
+}
+
+// ── Identified as (ENR-12, §6, §10.5) ───────────────────────────────────
+
+/// The "Identified as" section of `row`'s detail: each general
+/// enrichment plugin's stored answer (ENR-10), for `viewer`. `None` when
+/// there's nothing to show.
+///
+/// - **Fails closed while the always-adult sources are unknown**
+///   (`always_adult` is `None`: the host hasn't installed
+///   [`DrawerInterest`]): no section at all, since no torrent can be
+///   confirmed not to be an always-adult source's find.
+/// - **Never wider than the detail view, and stricter where unsure.**
+///   None for a torrent that's hidden, held (a tombstone or quarantine on
+///   a swarm hash), private in any way (`PRIVACY`: a private source, BEP
+///   27, or a remote worker's unconfirmed bit), or Adult by its stored
+///   type or an always-adult finder. ENR-10 never looks those up, so an
+///   answer on one is stale, and Adult goes only through ENR-1's section.
+/// - **An answer** is a claims row from a source that didn't find the
+///   torrent (its bit isn't in `row.sources`), not through a private
+///   source, with a details section holding a match confidence: ENR-10's
+///   own rule (`identify::stored_title`), so a feed's claims never read as
+///   one.
+/// - **Sources:** the admin sees every answer with its source. Any other
+///   caller sees only answers from a source known to be public; the rest
+///   are left out, unannounced, as provenance leaves out private sources.
+/// - **Stored text only, bounded again:** each list cut to its stored cap,
+///   ids kept only in the closed schemes, each text cut to its limit.
+fn identified_section(
+    store: &Store,
+    row: &TorrentRow,
+    claims: &[StoredClaims],
+    catalogue: &Catalogue,
+    viewer: Viewer,
+    always_adult: Option<u64>,
+) -> lodestar_store::Result<Option<IdentifiedAs>> {
+    // Unknown always-adult sources: nothing can be confirmed, so nothing
+    // shows.
+    let Some(always_adult) = always_adult else {
+        return Ok(None);
+    };
+    if row.flags & (store_flags::HIDDEN | store_flags::PRIVACY) != 0
+        || always_adult & row.sources != 0
+    {
+        return Ok(None);
+    }
+    // Every stored answer, surest first, ties by source id: the order
+    // ENR-10's `identify::stored_title` reads them in, so the first with a
+    // canonical title is the one a resolved record shows. Chosen over all
+    // of them, before any is left out for this caller.
+    let mut answers: Vec<(u8, &Claims, &lodestar_store::claims::Details, u8)> = Vec::new();
+    for c in claims {
+        let id = c.source.get();
+        let bit = 1u64.checked_shl(u32::from(id)).unwrap_or(0);
+        if row.sources & bit != 0 || c.private_source {
+            continue;
+        }
+        let Some(stored) = c.claims.as_ref().filter(|s| s.adult.is_none()) else {
+            continue;
+        };
+        let Some(d) = stored.details.as_deref() else {
+            continue;
+        };
+        let Some(confidence) = d.match_confidence else {
+            continue;
+        };
+        answers.push((id, stored, d, confidence));
+    }
+    // Most torrents have none: the store reads below are only for those
+    // that do.
+    if answers.is_empty() {
+        return Ok(None);
+    }
+    let enrichment = store.enrichment(row.id)?;
+    if enrichment.as_ref().is_some_and(crate::search::is_adult) {
+        return Ok(None);
+    }
+    let hashes = store.torrent_swarm_hashes(row.id)?.unwrap_or_default();
+    if store.held_among(&hashes)?.into_iter().any(|h| h) {
+        return Ok(None);
+    }
+    let resolved = enrichment
+        .and_then(|e| lodestar_classify::Record::decode(&e.data).ok())
+        .and_then(|r| r.resolved);
+    answers.sort_by_key(|&(id, _, _, conf)| (std::cmp::Reverse(conf), id));
+    // Only when the record really shows a plugin's title: then it's this
+    // answer's. Otherwise none is chosen, so no answer claims a title the
+    // record doesn't show (today, always: ENR-10's lookups never resolve).
+    let chosen = answers
+        .iter()
+        .find(|(_, _, d, _)| d.canonical_title.is_some())
+        .map(|&(id, ..)| id)
+        .filter(|_| resolved == Some(lodestar_classify::ResolvedVia::Plugin));
+    let alternatives: Vec<Identification> = answers
+        .into_iter()
+        .filter_map(|(id, stored, d, confidence)| {
+            let source = catalogue.get(id)?;
+            if viewer == Viewer::Public && source.public != Some(true) {
+                return None;
+            }
+            let mut a = identification(stored, d, confidence, source);
+            a.chosen = chosen == Some(id);
+            Some(a)
+        })
+        .collect();
+    if alternatives.is_empty() {
+        return Ok(None);
+    }
+    let resolved_via = resolved
+        // Only the listed methods; `plugin` isn't one yet (ENR-10).
+        .filter(|v| lodestar_classify::ResolvedVia::ALL.contains(v))
+        .map(|v| v.as_str().to_owned());
+    Ok(Some(IdentifiedAs {
+        alternatives,
+        resolved_via,
+    }))
+}
+
+/// One stored answer as the section shows it, bounded again.
+fn identification(
+    c: &Claims,
+    d: &lodestar_store::claims::Details,
+    confidence: u8,
+    source: &SourceEntry,
+) -> Identification {
+    use lodestar_store::claims::{
+        MAX_ALT_TITLE, MAX_ALT_TITLES, MAX_CANONICAL_TITLE, MAX_GENRE, MAX_GENRES, MAX_IDS,
+        MAX_MATCH_CONFIDENCE, id_ok, language_ok,
+    };
+    Identification {
+        alt_titles: d
+            .alt_titles
+            .iter()
+            .filter(|a| language_ok(&a.language) && !a.title.is_empty())
+            .take(MAX_ALT_TITLES)
+            .map(|a| IdentifiedTitle {
+                language: a.language.clone(),
+                title: cut(&a.title, MAX_ALT_TITLE),
+            })
+            .collect(),
+        canonical_title: d
+            .canonical_title
+            .as_deref()
+            .map(|t| cut(t, MAX_CANONICAL_TITLE)),
+        chosen: false,
+        confidence: confidence.min(MAX_MATCH_CONFIDENCE),
+        genres: d
+            .genres
+            .iter()
+            .take(MAX_GENRES)
+            .map(|g| cut(g, MAX_GENRE))
+            .collect(),
+        ids: c
+            .ids
+            .iter()
+            .filter(|i| id_ok(&i.scheme, &i.value))
+            .take(MAX_IDS)
+            .map(|i| IdentifiedId {
+                scheme: i.scheme.clone(),
+                value: i.value.clone(),
+            })
+            .collect(),
+        source: EnrichmentSource {
+            id: source.id,
+            name: source.name.clone(),
+            plugin: source.plugin.clone(),
+        },
+        year: d.year.filter(|y| (1..=9999).contains(y)),
+    }
+}
+
+/// `s` cut to `max` bytes on a character boundary.
+fn cut(s: &str, max: usize) -> String {
+    let mut end = s.len().min(max);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s[..end].to_owned()
 }
 
 // ── Adult enrichment (ENR-7, §20.9) ─────────────────────────────────────
@@ -1272,6 +1466,193 @@ pub(crate) mod tests {
         assert!(c.provenance(&r, &stored, Viewer::Public).withheld);
         let admin = c.provenance(&r, &stored, Viewer::Admin);
         assert_eq!(plugins(&admin), ["dht"]);
+    }
+
+    /// A store with one verified film found by the DHT, and two answers:
+    /// Wikidata's (public) and an account-class enricher's (private).
+    fn identified_store() -> (Store, TorrentRow) {
+        use lodestar_bencode::{OwnedValue, to_vec};
+        let mut store = Store::open_in_memory(lodestar_store::StoreConfig::default()).unwrap();
+        let dht = store.register_source("dht", "1", 0).unwrap();
+        let wikidata = store.register_source("wikidata", "1", 0).unwrap();
+        let acct = store.register_source("acctenr", "1", 0).unwrap();
+        let d = |e: Vec<(&str, OwnedValue)>| {
+            OwnedValue::Dict(
+                e.into_iter()
+                    .map(|(k, v)| (k.as_bytes().to_vec(), v))
+                    .collect(),
+            )
+        };
+        let raw = to_vec(&d(vec![
+            ("length", OwnedValue::Int(1 << 30)),
+            (
+                "name",
+                OwnedValue::Bytes(b"Some.Film.1994.1080p.BluRay".to_vec()),
+            ),
+            ("piece length", OwnedValue::Int(1 << 16)),
+            ("pieces", OwnedValue::Bytes(vec![0; 20])),
+        ]));
+        let info = lodestar_metainfo::Info::parse(&raw).unwrap();
+        store
+            .insert(&[lodestar_store::NewTorrent {
+                info: &info,
+                raw_info: None,
+                discovered_at: 1,
+                metadata_at: 1,
+                extra_flags: 0,
+                source: dht,
+            }])
+            .unwrap();
+        let id = store.find(&info.primary_hash()).unwrap().unwrap();
+        let answer = |title: &str, conf: u8| Claims {
+            details: Some(Box::new(lodestar_store::claims::Details {
+                canonical_title: Some(title.into()),
+                match_confidence: Some(conf),
+                ..Default::default()
+            })),
+            ..Claims::default()
+        };
+        assert!(
+            store
+                .put_claims(id, wikidata, &answer("Public Answer", 70), false)
+                .unwrap()
+        );
+        assert!(
+            store
+                .put_claims(id, acct, &answer("Account Answer", 95), false)
+                .unwrap()
+        );
+        let row = store.torrent(id).unwrap().unwrap();
+        (store, row)
+    }
+
+    /// A caller other than the admin sees only answers from a known public
+    /// source.
+    #[test]
+    fn only_public_enrichers_reach_the_public() {
+        let (store, row) = identified_store();
+        let entry = |id: u8, plugin: &str, public: Option<bool>| SourceEntry {
+            id,
+            plugin: plugin.into(),
+            name: plugin.into(),
+            public,
+        };
+        let c = Catalogue::of(vec![
+            entry(0, "dht", Some(true)),
+            entry(1, "wikidata", Some(true)),
+            entry(2, "acctenr", Some(false)),
+        ]);
+        let claims = store.torrent_claims(row.id).unwrap();
+        let admin = identified_section(&store, &row, &claims, &c, Viewer::Admin, Some(0))
+            .unwrap()
+            .unwrap();
+        let plugins: Vec<&str> = admin
+            .alternatives
+            .iter()
+            .map(|a| a.source.plugin.as_str())
+            .collect();
+        assert_eq!(plugins, ["acctenr", "wikidata"]);
+        // The record isn't resolved via a plugin: nothing is chosen.
+        assert!(admin.alternatives.iter().all(|a| !a.chosen));
+        let public = identified_section(&store, &row, &claims, &c, Viewer::Public, Some(0))
+            .unwrap()
+            .unwrap();
+        assert_eq!(public.alternatives.len(), 1);
+        assert_eq!(public.alternatives[0].source.plugin, "wikidata");
+        let text = format!("{public:?}");
+        assert!(
+            !text.contains("acctenr") && !text.contains("Account Answer"),
+            "{text}"
+        );
+        // An unknown class is private to the public: nothing left.
+        let unknown = Catalogue::of(vec![entry(1, "wikidata", None), entry(2, "acctenr", None)]);
+        assert_eq!(
+            identified_section(&store, &row, &claims, &unknown, Viewer::Public, Some(0)).unwrap(),
+            None
+        );
+        // The always-adult sources unknown: none, for anyone.
+        assert_eq!(
+            identified_section(&store, &row, &claims, &c, Viewer::Admin, None).unwrap(),
+            None
+        );
+        // Found by an always-adult source: none, for anyone.
+        assert_eq!(
+            identified_section(&store, &row, &claims, &c, Viewer::Admin, Some(1 << 0)).unwrap(),
+            None
+        );
+    }
+
+    /// When the chosen answer's source is withheld from this caller, no
+    /// other answer is marked in its place (rv-760).
+    #[test]
+    fn a_withheld_chosen_answer_marks_nothing() {
+        let (mut store, row) = identified_store();
+        // Resolve the record via a plugin, so the account enricher's
+        // surer answer is the chosen one.
+        let mut e = lodestar_filter::reclassify::enrich_corrected(
+            &row.name,
+            &[],
+            lodestar_classify::Correction::default(),
+        )
+        .0;
+        let mut rec = lodestar_classify::Record::decode(&e.data).unwrap();
+        rec.resolved = Some(lodestar_classify::ResolvedVia::Plugin);
+        e.data = rec.encode();
+        store.set_enrichments(&[(row.id, e)]).unwrap();
+        let entry = |id: u8, plugin: &str, public: Option<bool>| SourceEntry {
+            id,
+            plugin: plugin.into(),
+            name: plugin.into(),
+            public,
+        };
+        let c = Catalogue::of(vec![
+            entry(0, "dht", Some(true)),
+            entry(1, "wikidata", Some(true)),
+            entry(2, "acctenr", Some(false)),
+        ]);
+        let claims = store.torrent_claims(row.id).unwrap();
+        let admin = identified_section(&store, &row, &claims, &c, Viewer::Admin, Some(0))
+            .unwrap()
+            .unwrap();
+        assert_eq!(admin.alternatives[0].source.plugin, "acctenr");
+        assert!(admin.alternatives[0].chosen && !admin.alternatives[1].chosen);
+        let public = identified_section(&store, &row, &claims, &c, Viewer::Public, Some(0))
+            .unwrap()
+            .unwrap();
+        assert_eq!(public.alternatives.len(), 1);
+        assert_eq!(public.alternatives[0].source.plugin, "wikidata");
+        assert!(
+            !public.alternatives[0].chosen,
+            "nothing promoted in its place"
+        );
+    }
+
+    /// Every text is cut to its limit on a character boundary, however
+    /// the row was written.
+    #[test]
+    fn texts_are_cut_to_their_limits() {
+        use lodestar_store::claims::{AltTitle, Details, MAX_ALT_TITLE, MAX_CANONICAL_TITLE};
+        let d = Details {
+            canonical_title: Some("é".repeat(MAX_CANONICAL_TITLE)),
+            alt_titles: vec![AltTitle {
+                language: "en".into(),
+                title: "ü".repeat(MAX_ALT_TITLE),
+            }],
+            year: Some(0),
+            match_confidence: Some(250),
+            ..Details::default()
+        };
+        let src = SourceEntry {
+            id: 1,
+            plugin: "w".into(),
+            name: "W".into(),
+            public: Some(true),
+        };
+        let a = identification(&Claims::default(), &d, 250, &src);
+        let t = a.canonical_title.unwrap();
+        assert!(t.len() <= MAX_CANONICAL_TITLE && t.chars().all(|c| c == 'é'));
+        assert!(a.alt_titles[0].title.len() <= MAX_ALT_TITLE);
+        assert_eq!((a.confidence, a.year), (100, None));
     }
 
     #[test]
