@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T19:49:24Z",
+  "updated_at": "2026-11-12T20:02:12Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7444,6 +7444,10 @@
     {
       "id": "WK-11b-drift-metric",
       "note": "2026-11-12T19:49:24Z: #779 WK-11b open; worker_spool_lease_drift_total left out (worker has no metrics export yet) -> follow-up."
+    },
+    {
+      "id": "X-clippy-1-100-comment",
+      "note": "2026-11-12T20:02:12Z: rv-776 MERGE + 1 Important (comment only): regex.rs:499 says 'Unicode 16', should be 'Unicode 17' (1.99's char::UNICODE_VERSION). Runner call: merge #776 on green without another CI cycle (comment-only, ~10 PRs waiting); fix the word plus a one-line regenerate recipe and the 'superset includes Unicode 17 chars regex-syntax 0.8.11 doesn't fold; don't trim without recalibrating' note in the next runner PR."
     }
   ],
   "main_health": [
@@ -8653,7 +8657,7 @@
     }
   ],
   "heartbeat": "2026-11-12T18:39:05Z",
-  "updated": "2026-11-12T19:49:24Z",
+  "updated": "2026-11-12T20:02:12Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
