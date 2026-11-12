@@ -108,8 +108,7 @@ async fn every_harvested_torrent_is_searchable_within_five_seconds() {
     client.ask_only(&net, hash(&orphan)).await;
     // The crawler starts once the swarms are announced: a node it had
     // already sampled would wait out its BEP 51 interval (at least 60 s)
-    // before listing them, and a hash it saw passively before its
-    // announce would race it (both findings in the decisions file).
+    // before listing them (decisions file, option 1).
     let app = prepared.start(net.bootstrap().to_string()).await;
 
     // When `/search` first returned each known torrent (by name). Polled,
@@ -118,6 +117,7 @@ async fn every_harvested_torrent_is_searchable_within_five_seconds() {
     let app_ref = &app;
     let known_ref = &known;
     let seen = &mut searchable;
+    let waited = Instant::now();
     let results = until(
         "every known torrent to be searchable",
         SEARCH_DEADLINE,
@@ -139,6 +139,10 @@ async fn every_harvested_torrent_is_searchable_within_five_seconds() {
                 .collect();
             if missing.is_empty() {
                 Ok(r)
+            } else if waited.elapsed() + Duration::from_secs(1) < SEARCH_DEADLINE {
+                // Cheap until the last second: the pool snapshot and stats
+                // below are for the timeout message only.
+                Err(format!("{} of {} missing", missing.len(), known_ref.len()))
             } else {
                 let queue: Vec<String> = app_ref
                     .pipeline
@@ -210,13 +214,18 @@ async fn every_harvested_torrent_is_searchable_within_five_seconds() {
         harvest_at.push(after);
     }
 
+    // The clock's premise: only the crawler samples, so each hash's first
+    // `sample` event is its own.
+    assert_eq!(net.harvested_sample(), 0, "a network node sampled");
+
     // The bar, per hash: harvest → searchable.
     let mut lag: Vec<(Duration, &str)> = known
         .iter()
         .map(|t| {
             let h = harvests::sampled(&t.seed.info_hash).expect("checked above");
             let s = searchable[&t.seed.info_hash];
-            (s.saturating_duration_since(h), t.name.as_str())
+            assert!(s >= h, "{} searchable before it was harvested", t.name);
+            (s.duration_since(h), t.name.as_str())
         })
         .collect();
     harvest_at.sort();

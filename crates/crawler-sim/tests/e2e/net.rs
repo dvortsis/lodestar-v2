@@ -103,6 +103,13 @@ impl Network {
 
     /// Replies the network's nodes dropped to their rate limits, and
     /// queries of theirs that timed out.
+    /// BEP 51 harvests the network's own nodes made: always 0, as they
+    /// don't sample, which is what makes the first `sample` event the
+    /// crawler's (`harvests.rs`).
+    pub fn harvested_sample(&self) -> u64 {
+        self.nodes.iter().map(|n| n.stats().harvested_sample).sum()
+    }
+
     pub fn dropped_and_timeouts(&self) -> (u64, u64) {
         self.nodes.iter().fold((0, 0), |(d, t), n| {
             let s = n.stats();
@@ -133,10 +140,10 @@ impl Client {
         }
     }
 
-    /// Sends `method` to `to` and returns the reply, tried up to three
-    /// times (UDP).
+    /// Sends `method` to `to` and returns the reply, tried up to four
+    /// times (UDP), 3 s each: 12 s in all, past standards §2's 10 s floor.
     async fn ask(&mut self, to: SocketAddr, method: Method<'_>) -> Vec<u8> {
-        for _ in 0..3 {
+        for _ in 0..4 {
             self.tid = self.tid.wrapping_add(1);
             let tid = self.tid.to_be_bytes();
             let msg = Message {
