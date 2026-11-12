@@ -118,8 +118,24 @@ try {
     [IO.File]::WriteAllText($exe, 'fixture')
     $image = Get-SoakServiceImage 'Lodestar' { '"' + $exe + '" serve' }
     Assert ($image.sha256 -eq (Get-FileHash -LiteralPath $exe).Hash) 'image hash'
+    # Attach binding: real files, only the service and process calls are stubbed.
+    $other = Join-Path $fixture 'other.exe'
+    [IO.File]::WriteAllText($other, 'older build')
+    $registered = (Get-FileHash -LiteralPath $exe).Hash
+    function New-BindProbe([string]$Running, [string]$Registered = $registered) {
+        @{ Identity = { param($n) @{ pid = 7; start_ticks = 99 } }
+           ProcessImage = { param($procId) $Running }.GetNewClosure()
+           ServiceImage = { param($n) $Registered }.GetNewClosure() }
+    }
+    Assert-SoakAttachBinding 'Lodestar' $exe (New-BindProbe $exe)
+    $rejected = $false; try { Assert-SoakAttachBinding 'Lodestar' $exe (New-BindProbe $other) } catch { $rejected = $true }
+    Assert $rejected 'a different running binary was accepted'
+    $rejected = $false; try { Assert-SoakAttachBinding 'Lodestar' $other (New-BindProbe $exe) } catch { $rejected = $true }
+    Assert $rejected 'a different -Exe was accepted'
+    $rejected = $false; try { Assert-SoakAttachBinding 'Lodestar' $exe (New-BindProbe '') } catch { $rejected = $true }
+    Assert $rejected 'an unreadable process path was accepted'
 } finally {
-    foreach ($f in @($life, $exe)) { if ($f -and [IO.File]::Exists($f)) { [IO.File]::Delete($f) } }
+    foreach ($f in @($life, $exe, $other)) { if ($f -and [IO.File]::Exists($f)) { [IO.File]::Delete($f) } }
     [IO.Directory]::Delete($fixture)
 }
 # Every changed script must parse: a slip in a branch would otherwise first show on the owner's PC.
