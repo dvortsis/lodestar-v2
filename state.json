@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T02:55:46Z",
+  "updated_at": "2026-11-12T02:56:34Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7065,7 +7065,8 @@
     "owner FYI owed: #715 TZ-0 Torznab server merged (c5abcb85); adult off by default and separate from Show adult content",
     "X-upd-stop-early: brief written (briefs/X-upd-stop-early.md); runs in slot 4 after X-companion-pins-polish",
     "owner FYI owed: #720 X-cmp13-installer-pins merged (65ce6ce4): installer pins from SourceForge at pin time only, bound to version by feed + tag date; no new run-time host",
-    "slices.yaml next runner PR: X-tz0-polish, X-companion-pins-polish, X-upd-stop-early entries"
+    "slices.yaml next runner PR: X-tz0-polish, X-companion-pins-polish, X-upd-stop-early entries",
+    "owner told (via dashboard session): #725, #715, #720 merged; notice wording; release/v0.5.2 notice editorial fix still owed before the v0.5.2 tag"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7619,6 +7620,11 @@
       "pr": 720,
       "sha": "65ce6ce40513bc731b46cf8bb96845d634a94608",
       "at": "2026-11-12T02:55:46Z"
+    },
+    {
+      "pr": 725,
+      "sha": "45143ae229a91c5a282f6073b7d00615137809b4",
+      "at": "2026-11-12T02:56:34Z"
     }
   ],
   "active_sessions": {
@@ -7853,7 +7859,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T02:55:46Z",
+    "updated": "2026-11-12T02:56:34Z",
     "items": [
       {
         "slot": 1,
@@ -8015,7 +8021,7 @@
     }
   ],
   "heartbeat": "2026-11-12T00:38:52Z",
-  "updated": "2026-11-12T02:55:46Z",
+  "updated": "2026-11-12T02:56:34Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
