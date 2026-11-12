@@ -23426,6 +23426,7 @@
         "description": "One source plugin of this build.",
         "required": [
           "agents",
+          "always_adult",
           "companion_need",
           "config_schema",
           "consent",
@@ -23481,6 +23482,10 @@
                 "minimum": 0
               }
             }
+          },
+          "always_adult": {
+            "type": "boolean",
+            "description": "Everything it finds is Adult (§20.9, X-source-adult): its finds are\nstored and judged as Adult unless you say Not adult. The detail view\nreads it too, to keep a torrent such a source found out of the\n\"Identified as\" section."
           },
           "companion_need": {
             "oneOf": [
