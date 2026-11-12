@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T06:14:22Z",
+  "updated_at": "2026-11-12T06:15:37Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7743,6 +7743,11 @@
       "pr": 743,
       "sha": "6301b885bf2f0f41ed3ef47e7af39ad0cce301b6",
       "at": "2026-11-12T06:14:22Z"
+    },
+    {
+      "pr": 736,
+      "sha": "7cae9e6b03afcd92e722c56cd94df297e6683761",
+      "at": "2026-11-12T06:15:37Z"
     }
   ],
   "active_sessions": {
@@ -7978,7 +7983,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T06:10:10Z",
+    "updated": "2026-11-12T06:15:37Z",
     "items": [
       {
         "slot": 1,
@@ -8005,15 +8010,6 @@
         "agent": "session_01MMjhn9asevZ2GAyojLHZJZ",
         "doing": "PR #734 (adb01dbe) CI running",
         "since": "2026-11-12T04:02:44Z",
-        "status": "active"
-      },
-      {
-        "slot": 5,
-        "slice": "X-win-upd-history-nits",
-        "role": "Opus",
-        "agent": "claude",
-        "doing": "rv-729 nits: double state_unsaved log, keep newer failed answer, decisions heading/supersedes, long lines; then archive",
-        "since": "2026-11-12T04:06:37Z",
         "status": "active"
       },
       {
@@ -8111,7 +8107,7 @@
     }
   ],
   "heartbeat": "2026-11-12T03:41:56Z",
-  "updated": "2026-11-12T06:14:22Z",
+  "updated": "2026-11-12T06:15:37Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
