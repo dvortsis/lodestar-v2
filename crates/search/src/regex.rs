@@ -5,13 +5,14 @@
 //! technique). It's pure: no index access and no matching engine. RX-1
 //! runs the plan as a prefilter and verifies the candidates with `regex`.
 //!
-//! Every bound is checked before the work it guards grows: the pattern's
-//! length before parsing, nesting during parsing (the parser's own nest
-//! limit), and node count, repetition, alternation, flags, the cost of
-//! case-folding the classes and an estimate of the compiled size on the
-//! syntax tree before it's translated (case folding is the costly step).
-//! Each refusal is a [`RegexError`] with a stable [`Reason::code`]. The plan's own size is held under [`MAX_PLAN_NODES`]
-//! by weakening it, which never loses a match (a smaller AND, or no
+//! Every bound is checked before the work it guards grows. The pattern's
+//! length is checked before parsing and its nesting during parsing (the
+//! parser's own nest limit). Node count, repetition, alternation, flags,
+//! the cost of case-folding the classes and an estimate of the compiled
+//! size are checked on the syntax tree before it's translated (case
+//! folding is the costly step). Each refusal is a [`RegexError`] with a
+//! stable [`Reason::code`]. The plan's own size is held under
+//! [`MAX_PLAN_NODES`] by weakening it, which never loses a match (a smaller AND, or no
 //! constraint at all), so a valid pattern is never refused for its plan.
 //!
 //! **Soundness.** A gram is three consecutive characters of the name, each
@@ -41,14 +42,15 @@ pub const MAX_REPEAT_PRODUCT: u64 = 1_000;
 /// The most branches one alternation may have.
 pub const MAX_ALTERNATION: usize = 32;
 /// The most case-folding work the pattern's classes may cost, in units
-/// of at most about 2 ns (release build). Patterns are case-insensitive by
+/// of about 2–2.5 ns at most (release build). Patterns are case-insensitive by
 /// default, and `regex-syntax` folds a class by walking every codepoint
 /// of each range that holds a cased character; inside the fold table's
 /// span each step is a binary search ([`FOLD_IN_TABLE`] units), past it
 /// one unit, plus [`FOLD_PER_CASED`] per cased character. Calibrated at
-/// 0.1–1.9 ns a unit; `\p{Any}` costs about 2,290,000, so two of them
-/// fit: about 7–9 ms to translate, and as long again for the verifier's
-/// compile.
+/// 0.1–2.5 ns a unit; `\p{Any}` costs about 2,290,000, so two of them
+/// fit. The slowest accepted patterns known translate in about 9–12 ms
+/// (`[\w.-]` 51 times, two `[[^a]b]`, two `\p{Any}`), and the verifier's
+/// compile takes as long again.
 pub const MAX_FOLD_COST: u64 = 4_600_000;
 /// A fold step inside the case-fold table's span costs about ten steps
 /// outside it (measured: about 23 ns against 2–3 ns).
@@ -398,56 +400,73 @@ impl Bounds<'_> {
 
     /// The set a bracket's contents make, case-sensitively, charging every
     /// fold the translator does on the way (`regex-syntax` 0.8.11
-    /// `hir/translate.rs`): each Unicode property item's own set, each
-    /// set operation's two operands, and each bracket's whole set before
-    /// its negation. Perl classes (`\w`, `\D`) are closed under folding
-    /// and never folded. Recursion is bounded by the parser's nest limit.
-    fn class_set(&mut self, set: &ast::ClassSet) -> Result<ClassUnicode, RegexError> {
+    /// `hir/translate.rs`): each Unicode property or ASCII item's own set,
+    /// each set operation's two operands, and each bracket's whole set
+    /// before its negation. Perl classes (`\w`, `\D`) are closed under
+    /// folding and never folded on their own; a bracket around them folds
+    /// them with its set. Recursion is bounded by the parser's nest limit.
+    ///
+    /// Also returns whether any part was folded already: only then can the
+    /// translator's set hold more than this one (fold images), so only
+    /// then is the next fold charged on the widened set.
+    fn class_set(&mut self, set: &ast::ClassSet) -> Result<(ClassUnicode, bool), RegexError> {
         match set {
             ast::ClassSet::Item(item) => self.class_item(item),
             ast::ClassSet::BinaryOp(op) => {
                 use ast::ClassSetBinaryOpKind as K;
-                let mut lhs = self.class_set(&op.lhs)?;
-                let rhs = self.class_set(&op.rhs)?;
-                self.fold(fold_cost_folded(&lhs))?;
-                self.fold(fold_cost_folded(&rhs))?;
+                let (mut lhs, lhs_folded) = self.class_set(&op.lhs)?;
+                let (rhs, rhs_folded) = self.class_set(&op.rhs)?;
+                self.fold(fold_cost_of(&lhs, lhs_folded))?;
+                self.fold(fold_cost_of(&rhs, rhs_folded))?;
                 match op.kind {
                     K::Intersection => lhs.intersect(&rhs),
                     K::Difference => lhs.difference(&rhs),
                     K::SymmetricDifference => lhs.symmetric_difference(&rhs),
                 }
-                Ok(lhs)
+                // The operands were folded before the operation.
+                Ok((lhs, true))
             }
         }
     }
 
-    fn class_item(&mut self, item: &ast::ClassSetItem) -> Result<ClassUnicode, RegexError> {
+    fn class_item(&mut self, item: &ast::ClassSetItem) -> Result<(ClassUnicode, bool), RegexError> {
         use regex_syntax::hir::ClassUnicodeRange as R;
         Ok(match item {
-            ast::ClassSetItem::Empty(_) => ClassUnicode::empty(),
-            ast::ClassSetItem::Literal(l) => ClassUnicode::new([R::new(l.c, l.c)]),
-            ast::ClassSetItem::Range(r) => ClassUnicode::new([R::new(r.start.c, r.end.c)]),
-            // `[:alpha:]` / `[:^alpha:]`: translated as a one-item bracket.
+            // Pushed as they are: nothing folded yet.
+            ast::ClassSetItem::Empty(_) => (ClassUnicode::empty(), false),
+            ast::ClassSetItem::Literal(l) => (ClassUnicode::new([R::new(l.c, l.c)]), false),
+            ast::ClassSetItem::Range(r) => (ClassUnicode::new([R::new(r.start.c, r.end.c)]), false),
+            ast::ClassSetItem::Perl(c) => (self.class_text(self.span_text(&c.span))?, false),
+            // `[:alpha:]` / `[:^alpha:]`, translated as a one-item bracket.
+            // The translator folds the ASCII set before negating it.
             ast::ClassSetItem::Ascii(a) => {
-                self.class_text(&format!("[{}]", self.span_text(&a.span)))?
+                let set = self.class_text(&format!("[{}]", self.span_text(&a.span)))?;
+                let mut folded = set.clone();
+                if a.negated {
+                    folded.negate();
+                }
+                self.fold(fold_cost(&folded))?;
+                (set, true)
             }
-            ast::ClassSetItem::Unicode(c) => self.unicode_item(c)?,
-            ast::ClassSetItem::Perl(c) => self.class_text(self.span_text(&c.span))?,
-            ast::ClassSetItem::Bracketed(b) => self.bracketed(b)?,
+            ast::ClassSetItem::Unicode(c) => (self.unicode_item(c)?, true),
+            ast::ClassSetItem::Bracketed(b) => (self.bracketed(b)?, true),
             ast::ClassSetItem::Union(u) => {
                 let mut out = ClassUnicode::empty();
+                let mut any_folded = false;
                 for item in &u.items {
-                    out.union(&self.class_item(item)?);
+                    let (set, folded) = self.class_item(item)?;
+                    out.union(&set);
+                    any_folded |= folded;
                 }
-                out
+                (out, any_folded)
             }
         })
     }
 
     /// A bracket, top-level or nested: its set is folded, then negated.
     fn bracketed(&mut self, b: &ast::ClassBracketed) -> Result<ClassUnicode, RegexError> {
-        let mut set = self.class_set(&b.kind)?;
-        self.fold(fold_cost_folded(&set))?;
+        let (mut set, folded) = self.class_set(&b.kind)?;
+        self.fold(fold_cost_of(&set, folded))?;
         if b.negated {
             set.negate();
         }
@@ -468,7 +487,8 @@ impl Bounds<'_> {
 
 /// Characters with a case mapping, per std: a superset of `regex-syntax`'s
 /// simple case-folding table (a test checks it against the pinned crate),
-/// and the span `[lo, hi]` that table covers.
+/// and the span `[lo, hi]` where a lookup is a binary search: from U+0000
+/// (codepoints below the table's first key are searched too) to its last.
 struct Cased {
     set: ClassUnicode,
     lo: u32,
@@ -489,9 +509,8 @@ fn cased() -> &'static Cased {
                 !c.to_lowercase().eq(std::iter::once(c)) || !c.to_uppercase().eq(std::iter::once(c))
             });
         let set = ClassUnicode::new(chars.map(|c| R::new(c, c)));
-        let lo = set.ranges().first().map_or(0, |r| u32::from(r.start()));
         let hi = set.ranges().last().map_or(0, |r| u32::from(r.end()));
-        Cased { set, lo, hi }
+        Cased { set, lo: 0, hi }
     })
 }
 
@@ -532,10 +551,14 @@ fn fold_cost(set: &ClassUnicode) -> u64 {
         .sum()
 }
 
-/// [`fold_cost`] for a set whose parts may already have been folded: the
-/// translator's set is then `set` plus some cased characters, so `set`
-/// with every cased character added bounds it.
-fn fold_cost_folded(set: &ClassUnicode) -> u64 {
+/// [`fold_cost`] of the set the translator holds. If none of its parts was
+/// folded, that's exactly `set`. If some were, it's `set` plus some of
+/// their fold images, all cased characters, so `set` with every cased
+/// character added bounds it.
+fn fold_cost_of(set: &ClassUnicode, parts_folded: bool) -> u64 {
+    if !parts_folded {
+        return fold_cost(set);
+    }
     let mut widened = set.clone();
     widened.union(&cased().set);
     fold_cost(&widened)
@@ -598,7 +621,7 @@ impl ast::Visitor for Bounds<'_> {
                 let set = self.unicode_item(c)?;
                 self.weigh((set.ranges().len() as u64).max(1))?;
             }
-            // Closed under folding, never folded.
+            // Closed under folding, never folded on its own.
             Ast::ClassPerl(c) => {
                 let set = self.class_text(self.span_text(&c.span))?;
                 self.weigh((set.ranges().len() as u64).max(1))?;
@@ -1155,7 +1178,7 @@ mod tests {
         for (p, n) in [
             (r"[\S]", 3),
             (r"[\D]", 5),
-            (r"[[^a]b]", 2),
+            (r"[[^a]b]", 3),
             (r"[\D--a]", 3),
             (r"[[:^alpha:]]", 3),
             (r"[^\D]", 5),
@@ -1220,6 +1243,54 @@ mod tests {
         assert_eq!(rest.ranges(), [tail]);
     }
 
+    /// A bracket of only literals, ranges and Perl classes reaches its
+    /// fold unfolded, so it's charged on exactly its own set (no widening):
+    /// that set must be the translator's, the bracket's case-sensitive
+    /// translation without its negation.
+    #[test]
+    fn an_unfolded_bracket_is_charged_on_exactly_the_translators_set() {
+        for p in [
+            r"[a-z0-9_.]",
+            r"[\w.-]",
+            r"[\W_]",
+            r"[^/]",
+            r"[\S\d]",
+            r"[ſK\x{212A}]",
+            r"[\x{80}-\x{FFFF}a]",
+            r"[^\D\s]",
+        ] {
+            let ast = ast::parse::ParserBuilder::new().build().parse(p).unwrap();
+            let Ast::ClassBracketed(b) = &ast else {
+                panic!("{p} is a bracket")
+            };
+            let mut bounds = Bounds {
+                pattern: p,
+                nodes: 0,
+                repeats: Vec::new(),
+                fold: 0,
+                weight: 0,
+            };
+            let (set, folded) = bounds.class_set(&b.kind).unwrap();
+            assert!(!folded, "{p}");
+            let whole = p.replacen("[^", "[", 1);
+            let hir = regex_syntax::ParserBuilder::new()
+                .build()
+                .parse(&whole)
+                .unwrap();
+            let want = match hir.kind() {
+                HirKind::Class(Class::Unicode(c)) => c.clone(),
+                // A one-character bracket translates to a literal.
+                HirKind::Literal(l) => {
+                    let c = std::str::from_utf8(&l.0).unwrap().chars().next().unwrap();
+                    ClassUnicode::new([regex_syntax::hir::ClassUnicodeRange::new(c, c)])
+                }
+                other => panic!("{p}: {other:?}"),
+            };
+            assert_eq!(set, want, "{p}");
+            assert_eq!(bounds.fold, 0, "nothing folded before the bracket: {p}");
+        }
+    }
+
     #[test]
     fn fold_costs_follow_what_gets_folded() {
         let cost = |p: &str| {
@@ -1239,6 +1310,12 @@ mod tests {
         assert_eq!(cost(r"\P{Any}"), cost(r"\p{Any}"));
         // `[\W_]` has no cased character to walk; `[\S]` walks nearly all.
         assert!(cost(r"[\W_]") * 10 < cost(r"[\S]"));
+        // Parts already folded widen the next fold (`[[a]b]`); parts that
+        // weren't don't (`[ab]`): a bracket of literals is charged exactly.
+        assert!(cost(r"[[a]b]") > cost(r"[ab]") * 10);
+        assert_eq!(cost(r"[^/]"), 1, "one range with no cased character");
+        // The ASCII item's own fold is charged too.
+        assert!(cost(r"[[:alpha:]]") > cost(r"[a-zA-Z]"));
         // A nested bracket is folded once more.
         assert!(cost(r"[[\x{80}-\x{FFFF}]a]") > cost(r"[\x{80}-\x{FFFF}]") * 3 / 2);
     }

@@ -513,6 +513,7 @@ placement:
   match:
   - GS-gate
   - RX-0
+  - X-rx0-nits
   - TZ-0
   - X-tz0-polish
   - UP-0

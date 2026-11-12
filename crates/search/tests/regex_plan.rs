@@ -295,10 +295,10 @@ fn worst_cases_stay_within_the_caps() {
 
 /// Each documented worst case is accepted and parses well within a
 /// bound, and one step past it is refused (I1, I2). In a release build
-/// the slowest accepted patterns known (two `\p{Any}`, and the shapes a
-/// randomized search found) take about 7–12 ms; the bound is generous
-/// enough for an unoptimized build on a slow CI runner, so it catches a
-/// lost limit (hundreds of times slower) without flaking.
+/// the slowest accepted patterns known (`[\w.-]` 51 times, two `[[^a]b]`,
+/// two `\p{Any}`) take about 9–12 ms; the bound is generous enough for an
+/// unoptimized build on a slow CI runner, so it catches a lost limit
+/// (hundreds of times slower) without flaking.
 #[test]
 fn the_worst_accepted_cases_are_cheap_and_one_more_step_is_refused() {
     use lodestar_search::regex::Reason;
@@ -318,8 +318,8 @@ fn the_worst_accepted_cases_are_cheap_and_one_more_step_is_refused() {
         row(r"[\S]", 2, Reason::ClassTooLarge),
         row(r"[\D]", 4, Reason::ClassTooLarge),
         row(r"[^\D]", 4, Reason::ClassTooLarge),
-        row(r"[[^a]b]", 1, Reason::ClassTooLarge),
-        row(r"[b[^a]]", 1, Reason::ClassTooLarge),
+        row(r"[[^a]b]", 2, Reason::ClassTooLarge),
+        row(r"[b[^a]]", 2, Reason::ClassTooLarge),
         row(r"[[:^alpha:]]", 2, Reason::ClassTooLarge),
         row(r"[\D--a]", 2, Reason::ClassTooLarge),
         row(r"[_\pL]", 27, Reason::ClassTooLarge),
@@ -335,8 +335,8 @@ fn the_worst_accepted_cases_are_cheap_and_one_more_step_is_refused() {
         ),
         // Cheap folds stay cheap (I3): a word or non-word bracket costs
         // little, and set operations over named classes are allowed.
-        row(r"[\W_]", 40, Reason::ClassTooLarge),
-        row(r"[\w--\d]", 18, Reason::ClassTooLarge),
+        row(r"[\W_]", 62, Reason::TooLarge),
+        row(r"[\w--\d]", 26, Reason::ClassTooLarge),
         row(r"[\pL&&\p{Greek}]", 14, Reason::ClassTooLarge),
         row(r"[\pL~~\pN]", 13, Reason::ClassTooLarge),
         row(r"S\d\d[\W_]E\d\d[\W_]", 18, Reason::TooManyNodes),
