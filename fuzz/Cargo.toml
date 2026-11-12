@@ -302,3 +302,10 @@ path = "fuzz_targets/nzbget_answer.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "nostr"
+path = "fuzz_targets/nostr.rs"
+test = false
+doc = false
+bench = false

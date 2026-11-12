@@ -1928,6 +1928,7 @@ dependencies = [
  "lodestar-sources",
  "proptest",
  "quick-xml",
+ "sha2",
 ]
 
 [[package]]
