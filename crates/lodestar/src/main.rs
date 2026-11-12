@@ -30,6 +30,7 @@ mod test_log;
 mod thp;
 mod torrent_cache;
 mod update;
+mod upload;
 mod web;
 #[cfg(test)]
 mod web_build;

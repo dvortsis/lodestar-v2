@@ -248,6 +248,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "local_torrent"
+path = "fuzz_targets/local_torrent.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "torrent_cache"
 path = "fuzz_targets/torrent_cache.rs"
 test = false

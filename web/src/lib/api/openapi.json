@@ -7920,6 +7920,126 @@
         ]
       }
     },
+    "/torrents/upload": {
+      "post": {
+        "tags": [
+          "torrents"
+        ],
+        "summary": "Adds one `.torrent` file, sent as the raw request body.",
+        "operationId": "uploadTorrent",
+        "requestBody": {
+          "description": "The `.torrent` file itself, at most 8 MiB. Nothing else: no multipart, no file name.",
+          "content": {
+            "application/x-bittorrent": {
+              "schema": {
+                "$ref": "#/components/schemas/TorrentBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Judged and handed to the store. The store judges it again when it commits, should the rules have changed meanwhile, and may then still hold it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed_torrent`: not a `.torrent` within the limits; or `bad_body`: the body couldn't be read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`: sent from another site.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "`body_timeout`: the body didn't arrive within 60 s.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`body_too_large`: over 8 MiB.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: the body isn't sent as `application/x-bittorrent`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`refused`: on the safety floor's list; or `held`: the filter holds it. Neither is stored.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: too many uploads; wait for `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`uploads_unavailable`: uploads aren't being taken right now.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/torrents/{hash}": {
       "get": {
         "tags": [
@@ -25031,6 +25151,11 @@
           "search_live"
         ]
       },
+      "TorrentBody": {
+        "type": "string",
+        "format": "binary",
+        "description": "The request body: the `.torrent` file's bytes (the schema only; the\nhandler reads the body itself)."
+      },
       "TorrentDetail": {
         "type": "object",
         "description": "`GET /torrents/{hash}`: the torrent summary (`docs/metrics.md` §7.1),\nits swarm section (§7.2) and the first 500 files.\n\nA null swarm field is \"never scraped\" (or no estimate), never 0.",
@@ -25819,6 +25944,24 @@
           "windows_helper"
         ],
         "example": "windows_helper"
+      },
+      "UploadAccepted": {
+        "type": "object",
+        "description": "The body of a `202`.",
+        "required": [
+          "info_hash",
+          "private"
+        ],
+        "properties": {
+          "info_hash": {
+            "type": "string",
+            "description": "The info dict's primary hash, as 40 hex characters."
+          },
+          "private": {
+            "type": "boolean",
+            "description": "The info dict says `private=1` (BEP 27): stored as private, so it\nnever reaches the DHT, a tracker or a cache."
+          }
+        }
       },
       "UsageClear": {
         "type": "object",

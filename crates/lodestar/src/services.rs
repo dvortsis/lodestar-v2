@@ -632,6 +632,7 @@ impl Services {
             torrent_cache: cache_task.as_ref().map(|_| cache.stats.clone()),
             crawl: Some(paused_now.clone()),
             cluster: Some(cluster.handle()),
+            uploads: Some(crate::upload::uploader(pipeline.uploads())),
         };
         // The live stream (§9): new torrents from the serving index's
         // commits, crawler snapshots from the status page's counters, and
