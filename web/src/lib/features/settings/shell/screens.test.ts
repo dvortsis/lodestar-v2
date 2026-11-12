@@ -45,13 +45,14 @@ describe('the screen registry', () => {
 		expect(byId('appearance').load).toBeTypeOf('function');
 		expect(byId('keyboard').load).toBeTypeOf('function');
 	});
-	it('orders by group, then §10.10.2, then title, and takes every export shape once', () => {
+	it('orders by group, then §10.10.2, then title, and takes a screen or a list once', () => {
 		const logging = fake('logging', 'system');
 		const got = collect({
-			'/b/screen.ts': { screens: [fake('zeta', 'system'), fake('alpha', 'system')] },
-			'/a/screen.ts': { screen: logging, default: logging },
-			'/c/screen.ts': { default: fake('look', 'preferences') },
-			'/d/screen.ts': { screens: [fake('about', 'system'), fake('general', 'system')] }
+			'/b/screen.ts': [fake('zeta', 'system'), fake('alpha', 'system')],
+			'/a/screen.ts': logging,
+			'/a2/screen.ts': [logging],
+			'/c/screen.ts': fake('look', 'preferences'),
+			'/d/screen.ts': [fake('about', 'system'), fake('general', 'system')]
 		});
 		expect(got.map((screen) => screen.id)).toEqual([
 			'look',
@@ -65,11 +66,11 @@ describe('the screen registry', () => {
 	it('leaves out invalid and repeated screens and names them in development', () => {
 		const error = vi.spyOn(console, 'error').mockImplementation(() => {});
 		const got = collect({
-			'/a/screen.ts': { screen: fake('crawler', 'crawling') },
-			'/b/screen.ts': { screen: fake('crawler', 'system') },
-			'/c/screen.ts': { screens: [{ ...fake('x', 'system'), group: 'nowhere' }] },
-			'/d/screen.ts': { screen: { id: 'empty', group: 'system', title: () => 'Empty' } },
-			'/e/screen.ts': {}
+			'/a/screen.ts': fake('crawler', 'crawling'),
+			'/b/screen.ts': fake('crawler', 'system'),
+			'/c/screen.ts': [{ ...fake('x', 'system'), group: 'nowhere' }],
+			'/d/screen.ts': { id: 'empty', group: 'system', title: () => 'Empty' },
+			'/e/screen.ts': undefined
 		});
 		expect(got.map((screen) => `${screen.id}:${screen.group}`)).toEqual(['crawler:crawling']);
 		expect(error).toHaveBeenCalledTimes(3);

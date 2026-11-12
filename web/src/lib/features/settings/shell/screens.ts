@@ -87,9 +87,9 @@ const isScreen = (v: unknown): v is Screen =>
 		(Array.isArray((v as Screen).sections) && (v as Screen).sections!.length > 0));
 
 /**
- * The screens these modules export, in navigation order. A screen exported under two names counts
- * once; anything that isn't a screen, and a repeated id after its first, is left out (and named in
- * development).
+ * The screens these modules' default exports hold (one screen, or a list), in navigation order. A
+ * screen listed twice counts once; anything that isn't a screen, and a repeated id after its first,
+ * is left out (and named in development).
  */
 export function collect(modules: Record<string, unknown>): Screen[] {
 	const seen = new Set<unknown>();
@@ -107,12 +107,8 @@ export function collect(modules: Record<string, unknown>): Screen[] {
 			}
 		}
 	};
-	for (const [path, mod] of Object.entries(modules).sort(([a], [b]) => a.localeCompare(b))) {
-		const exported = (mod ?? {}) as Record<string, unknown>;
-		take(exported.screens, path);
-		take(exported.screen, path);
-		take(exported.default, path);
-	}
+	for (const [path, value] of Object.entries(modules).sort(([a], [b]) => a.localeCompare(b)))
+		take(value, path);
 	const group = (s: Screen) => groups.findIndex((g) => g.id === s.group);
 	const rank = (s: Screen) => {
 		const at = SCREEN_ORDER[s.group].indexOf(s.id);
@@ -124,8 +120,11 @@ export function collect(modules: Record<string, unknown>): Screen[] {
 }
 
 export const screens: readonly Screen[] = collect(
+	// Only each module's default export: no module namespace object per screen in the chunk every
+	// Settings page loads (OUT-2 paid for its registry entry this way).
 	import.meta.glob(['/src/lib/features/settings/*/screen.ts', '/src/lib/features/*/screen.ts'], {
-		eager: true
+		eager: true,
+		import: 'default'
 	})
 );
 
