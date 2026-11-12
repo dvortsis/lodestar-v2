@@ -16,5 +16,7 @@ mod intake;
 pub mod ops;
 pub mod placement;
 pub mod serve;
+#[cfg(test)]
+mod testing;
 
 pub use serve::{Cluster, ClusterHandle, Wiring};

@@ -16,6 +16,7 @@ The setup illustration uses labels from `web/src/lib/features/auth/messages/en.j
 | 4.4 | Windows Services showing Lodestar: Automatic (Delayed Start), `NT SERVICE\Lodestar` | Owner | Pending host capture; `windows-service-illustration.svg` (source: `packaging/windows/main.wxs` `ServiceInstall`) |
 | 4.6 | Insights exception for a data folder on a FUSE or network filesystem | Fixture capture | Pending; needs a `data_filesystem` fixture in `web/e2e/docs/shots.docs.ts` |
 | 4.7 | Insights exception with the `netsh` command | Fixture capture | Pending; needs an `ephemeral_ports` fixture in `web/e2e/docs/shots.docs.ts` |
+| 4.8 | Updates status card with a version available and Install now (newer than v0.5.1) | Fixture capture | Pending; needs a Windows updates fixture in `web/e2e/docs/shots.docs.ts`; until then `windows-update-status-illustration.svg` (source: `web/src/lib/features/settings/updates/messages/en.json`) |
 | 5.1 | Search with facets and composition bars | Existing mock fixtures | Present; pending v0.5.1 verification (`search-light.png`, `search-dark.png`) |
 | 5.2 | Torrent detail drawer | Existing mock fixtures | Present; pending v0.5.1 verification (`detail-light.png`, `detail-dark.png`) |
 | 5.3 | Discover and Insights | Existing mock fixtures | Present; pending v0.5.1 verification (`discover-{light,dark}.png`, `insights-{light,dark}.png`) |

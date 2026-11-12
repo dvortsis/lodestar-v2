@@ -169,7 +169,10 @@ pub fn event_log_text(refusal: Refusal, dir: &Path) -> String {
         .to_string()
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
-        .filter(|c| !invisible(*c))
+        // Unicode's format and separator characters (bidirectional
+        // controls, zero-width and soft-hyphen characters, tags), which
+        // could make a folder name read as other text: `acl`'s list.
+        .filter(|c| !super::acl::invisible(*c))
         .collect();
     // A configured folder can be long; `eventcreate` takes a short line.
     let dir = match dir.char_indices().nth(MAX_SHOWN) {
@@ -196,15 +199,6 @@ pub fn event_log_text(refusal: Refusal, dir: &Path) -> String {
 
 /// The most of a folder's name the Event Log message shows, in characters.
 const MAX_SHOWN: usize = 260;
-
-/// The bidirectional controls and zero-width characters, which could make
-/// a folder name read as other text.
-fn invisible(c: char) -> bool {
-    matches!(
-        c,
-        '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}'
-    )
-}
 
 /// How the service's idle wait during a rollback ended.
 #[derive(Debug, PartialEq, Eq)]
@@ -1605,6 +1599,27 @@ mod tests {
                 .chars()
                 .any(|c| c.is_control() || c == '\u{202e}' || c == '\u{200b}')
         );
+    }
+
+    /// Every format character the brief names is dropped too: the soft
+    /// hyphen, the Arabic letter mark, the word joiner and invisible
+    /// operators, and the deprecated format controls (X-event-log-followups).
+    #[test]
+    fn the_event_log_text_drops_every_format_character() {
+        let hidden = ['\u{00ad}', '\u{061c}']
+            .into_iter()
+            .chain('\u{2060}'..='\u{2064}')
+            .chain('\u{206a}'..='\u{206f}')
+            .chain(['\u{200b}', '\u{202e}', '\u{2066}', '\u{feff}']);
+        for c in hidden {
+            let dir = format!("D:\\da{c}ta");
+            let text = event_log_text(Refusal::NotPrivate, Path::new(&dir));
+            assert!(!text.contains(c), "U+{:04X}: {text:?}", c as u32);
+            assert!(text.contains(r"D:\data,"), "U+{:04X}: {text:?}", c as u32);
+        }
+        // Visible text around them stays, accents included.
+        let text = event_log_text(Refusal::NotPrivate, Path::new("D:\\Données\u{2061}x"));
+        assert!(text.contains(r"D:\Donnéesx,"), "{text}");
     }
 
     /// The update helper's rollback marker refuses the service's start.

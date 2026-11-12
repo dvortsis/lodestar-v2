@@ -5069,7 +5069,7 @@ export interface components {
          * @description An export's format.
          * @enum {string}
          */
-        ExportFormat: "csv" | "json" | "magnets";
+        ExportFormat: "csv" | "json" | "magnets" | "bitmagnet";
         /** @description What an export job reports besides its progress. */
         ExportJob: {
             /**
@@ -5102,7 +5102,7 @@ export interface components {
             /**
              * @description A comma-separated subset of [`ExportField`] names, written in
              *     that type's order whatever the order given. Every field but
-             *     `magnet` by default; `magnets` takes none.
+             *     `magnet` by default; `magnets` and `bitmagnet` take none.
              * @default null
              * @example hash,name,size,seeders
              */
@@ -13015,11 +13015,11 @@ export interface operations {
                 q?: string;
                 /** @description As `/search`'s. */
                 sort?: string;
-                /** @description Include torrents a filter rule hid (§20.3). */
+                /** @description Include torrents a filter rule hid (§20.3); refused with `bitmagnet`. */
                 hidden?: boolean;
                 /** @description Export a collection instead, in its order. */
                 collection?: number;
-                /** @description `csv` (the default), `json` (NDJSON) or `magnets`. */
+                /** @description `csv` (the default), `json` (NDJSON), `magnets` or `bitmagnet` (bitmagnet's `/import` lines). */
                 format?: components["schemas"]["ExportFormat"];
                 /** @description A comma-separated subset of `ExportField`; every field but `magnet` by default. */
                 fields?: string;
@@ -13035,7 +13035,7 @@ export interface operations {
                 headers: {
                     /** @description `no-store`. */
                     "Cache-Control"?: string;
-                    /** @description `attachment` with a generated name, `lodestar-export-<UTC time>.<csv|ndjson|txt>`. */
+                    /** @description `attachment` with a generated name, `lodestar-export-<UTC time>.<csv|ndjson|txt|bitmagnet.ndjson>`. */
                     "Content-Disposition"?: string;
                     /** @description The export's job id. */
                     "X-Export-Job"?: number;
@@ -13047,7 +13047,7 @@ export interface operations {
                     "text/plain": string;
                 };
             };
-            /** @description A bad parameter, as `/search`'s, or `one_source`, `unknown_field`, `fields_unused`, `sort_unused`; `ast` or `hashes` in the query string is a `bad_parameter` (POST them). */
+            /** @description A bad parameter, as `/search`'s, or `one_source`, `unknown_field`, `fields_unused`, `sort_unused`, `hidden_unused` (`hidden=true` with `bitmagnet`); `ast` or `hashes` in the query string is a `bad_parameter` (POST them). */
             400: {
                 headers: {
                     [name: string]: unknown;

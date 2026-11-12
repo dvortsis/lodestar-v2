@@ -1,5 +1,6 @@
 //! `/export` (§7 "Read path", §9, §10.4): a search, a selection of
-//! hashes or a collection as a CSV, NDJSON or magnet-list download.
+//! hashes or a collection as a CSV, NDJSON, magnet-list or
+//! bitmagnet-import download.
 //!
 //! **What's never exported:** what search wouldn't show (a torrent a
 //! filter rule hid, unless `hidden=true`; Adult while "Show adult
@@ -10,6 +11,14 @@
 //! lag a reclassification) plus the private-source flag. A row left out
 //! counts in `skipped` and nothing says which or why: an unknown hash
 //! and a withheld one look the same.
+//!
+//! **The bitmagnet format** (OUT-0, `docs/decisions/2026-11-11-OUT-0.md`)
+//! is for another program, which looks up every hash it imports on the
+//! DHT, so it leaves out more: hidden torrents whatever `hidden` says
+//! (it refuses `hidden=true`), and every torrent a §18.7 privacy gate
+//! refuses ([`flags::PRIVACY`]: BEP 27 private, `private_source`, a
+//! remote worker's unverified row). Its lines carry only the six fields
+//! bitmagnet's import takes, never a setting, key or path.
 //!
 //! **Adult** follows export's own setting, [`ExportAdult`] (§20.9), not
 //! "Show adult content"; without it, as until the server wires
@@ -145,9 +154,9 @@ pub fn routes() -> Router<ApiState> {
     params(
         ("q" = Option<String>, Query, description = "The query text, as `/search` takes it; empty (or no source at all) exports everything."),
         ("sort" = Option<String>, Query, description = "As `/search`'s."),
-        ("hidden" = Option<bool>, Query, description = "Include torrents a filter rule hid (§20.3)."),
+        ("hidden" = Option<bool>, Query, description = "Include torrents a filter rule hid (§20.3); refused with `bitmagnet`."),
         ("collection" = Option<i64>, Query, description = "Export a collection instead, in its order."),
-        ("format" = Option<ExportFormat>, Query, description = "`csv` (the default), `json` (NDJSON) or `magnets`."),
+        ("format" = Option<ExportFormat>, Query, description = "`csv` (the default), `json` (NDJSON), `magnets` or `bitmagnet` (bitmagnet's `/import` lines)."),
         ("fields" = Option<String>, Query, description = "A comma-separated subset of `ExportField`; every field but `magnet` by default."),
     ),
     responses(
@@ -160,12 +169,12 @@ pub fn routes() -> Router<ApiState> {
                 (String = "text/plain"),
             ),
             headers(
-                ("Content-Disposition" = String, description = "`attachment` with a generated name, `lodestar-export-<UTC time>.<csv|ndjson|txt>`."),
+                ("Content-Disposition" = String, description = "`attachment` with a generated name, `lodestar-export-<UTC time>.<csv|ndjson|txt|bitmagnet.ndjson>`."),
                 ("X-Export-Job" = u64, description = "The export's job id."),
                 ("Cache-Control" = String, description = "`no-store`."),
             )
         ),
-        (status = 400, body = ErrorEnvelope, description = "A bad parameter, as `/search`'s, or `one_source`, `unknown_field`, `fields_unused`, `sort_unused`; `ast` or `hashes` in the query string is a `bad_parameter` (POST them)."),
+        (status = 400, body = ErrorEnvelope, description = "A bad parameter, as `/search`'s, or `one_source`, `unknown_field`, `fields_unused`, `sort_unused`, `hidden_unused` (`hidden=true` with `bitmagnet`); `ast` or `hashes` in the query string is a `bad_parameter` (POST them)."),
         (status = 404, body = ErrorEnvelope, description = "`collection_not_found`."),
         (status = 429, body = ErrorEnvelope, description = "`too_many_jobs`: four jobs are running or paused."),
         (status = 503, body = ErrorEnvelope, description = "`search_disabled` (a query while search is off), or `shutting_down`."),
@@ -276,14 +285,16 @@ struct Shape {
 fn shape(p: &ExportRequest) -> ApiResult<Shape> {
     let format = p.format.unwrap_or(ExportFormat::Csv);
     let fields = match (&p.fields, format) {
-        (Some(_), ExportFormat::Magnets) => {
+        (Some(_), ExportFormat::Magnets | ExportFormat::Bitmagnet) => {
             return Err(ApiError::bad_request(
                 "fields_unused",
-                "A magnet list has no fields: leave fields out.",
+                "A magnet list or a bitmagnet import has fixed fields: leave fields out.",
             )
             .field("fields"));
         }
         (None, ExportFormat::Magnets) => vec![ExportField::Magnet],
+        // Its own fixed set (`bitmagnet_line`).
+        (None, ExportFormat::Bitmagnet) => Vec::new(),
         (None, _) => ExportField::ALL
             .into_iter()
             .filter(|f| *f != ExportField::Magnet)
@@ -335,6 +346,14 @@ async fn start(
             "Selections and collections keep their own order: leave sort out.",
         )
         .field("sort"));
+    }
+    let bitmagnet = shape.format == ExportFormat::Bitmagnet;
+    if bitmagnet && p.hidden == Some(true) {
+        return Err(ApiError::bad_request(
+            "hidden_unused",
+            "A bitmagnet export never includes hidden torrents: leave hidden out.",
+        )
+        .field("hidden"));
     }
     let hidden = p.hidden.unwrap_or(false);
     let adult = export_adult.shown();
@@ -480,6 +499,7 @@ fn respond(
         ExportFormat::Csv => ("text/csv; charset=utf-8; header=present", "csv"),
         ExportFormat::Json => ("application/x-ndjson", "ndjson"),
         ExportFormat::Magnets => ("text/plain; charset=utf-8", "txt"),
+        ExportFormat::Bitmagnet => ("application/x-ndjson", "bitmagnet.ndjson"),
     };
     let disposition = format!(
         "attachment; filename=\"{}\"",
@@ -538,8 +558,33 @@ fn count_collection(reader: &Mutex<Store>, id: i64, chunk: usize) -> ApiResult<u
 /// `lodestar-export-YYYYMMDD-HHMMSS.<ext>` in UTC: nothing from the
 /// torrents, so no name can reach a header or a path.
 fn file_name(now: i64, ext: &str) -> String {
-    let days = now.div_euclid(86_400);
-    let secs = now.rem_euclid(86_400);
+    let (y, m, d, secs) = civil(now);
+    format!(
+        "lodestar-export-{y:04}{m:02}{d:02}-{:02}{:02}{:02}.{ext}",
+        secs / 3600,
+        secs / 60 % 60,
+        secs % 60
+    )
+}
+
+/// 9999-12-31T23:59:59Z, the last time [`rfc3339`] writes in four digits.
+const MAX_RFC3339: i64 = 253_402_300_799;
+
+/// `YYYY-MM-DDTHH:MM:SSZ`, as Go's `time.Time` reads it.
+fn rfc3339(t: i64) -> String {
+    let (y, m, d, secs) = civil(t);
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        secs / 3600,
+        secs / 60 % 60,
+        secs % 60
+    )
+}
+
+/// A Unix time as UTC year, month, day and seconds into the day.
+fn civil(t: i64) -> (i64, i64, i64, i64) {
+    let days = t.div_euclid(86_400);
+    let secs = t.rem_euclid(86_400);
     // Howard Hinnant's civil_from_days.
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
@@ -550,12 +595,7 @@ fn file_name(now: i64, ext: &str) -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + i64::from(m <= 2);
-    format!(
-        "lodestar-export-{y:04}{m:02}{d:02}-{:02}{:02}{:02}.{ext}",
-        secs / 3600,
-        secs / 60 % 60,
-        secs % 60
-    )
+    (y, m, d, secs)
 }
 
 /// Why an export stopped early.
@@ -643,6 +683,7 @@ impl Worker {
                 hidden: self.hidden,
                 // Off now, or when it started: withheld.
                 adult: self.started_adult && self.adult.shown(),
+                privacy: self.shape.format == ExportFormat::Bitmagnet,
             };
             let reader = self.reader.clone();
             let hot = self.hot.clone();
@@ -717,12 +758,22 @@ impl Worker {
 struct Rule {
     hidden: bool,
     adult: bool,
+    /// Leave out everything a §18.7 privacy gate refuses
+    /// ([`flags::PRIVACY`]), not only `private_source`: for an output
+    /// that hands hashes to a DHT crawler (bitmagnet).
+    privacy: bool,
 }
 
 /// Whether a stored row is left out: what search wouldn't show, and any
-/// private-source torrent (§18.7).
+/// private-source torrent (§18.7), or any private one at all under
+/// `rule.privacy`.
 fn excluded(row: &TorrentRow, e: Option<&Enriched>, rule: Rule) -> bool {
-    discover::withheld(row, e, rule.hidden, rule.adult) || row.flags & flags::PRIVATE_SOURCE != 0
+    let private = if rule.privacy {
+        flags::PRIVACY
+    } else {
+        flags::PRIVATE_SOURCE
+    };
+    discover::withheld(row, e, rule.hidden, rule.adult) || row.flags & private != 0
 }
 
 /// Reads up to `want` ids' rows from `source` in one read transaction
@@ -844,6 +895,7 @@ fn write_row(
     shape: &Shape,
 ) -> ApiResult<()> {
     match shape.format {
+        ExportFormat::Bitmagnet => bitmagnet_line(out, row, e.as_ref())?,
         ExportFormat::Magnets => {
             out.extend_from_slice(magnet(row).as_bytes());
             out.push(b'\n');
@@ -874,6 +926,83 @@ fn write_row(
         }
     }
     Ok(())
+}
+
+/// The source bitmagnet files every exported torrent under.
+pub const BITMAGNET_SOURCE: &str = "lodestar";
+
+/// One line of bitmagnet's import (`POST /import`: JSON lines its Go
+/// `importer.Item` decodes, keys matched without case). Keys in a fixed
+/// order; `null`s left out, as bitmagnet's own guide does.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BitmagnetItem<'a> {
+    info_hash: String,
+    name: std::borrow::Cow<'a, str>,
+    size: u64,
+    source: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    published_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content_type: Option<&'static str>,
+}
+
+fn bitmagnet_line(out: &mut Vec<u8>, row: &TorrentRow, e: Option<&Enriched>) -> ApiResult<()> {
+    // A NUL survives JSON, but PostgreSQL's text refuses it, which would
+    // fail bitmagnet's whole import batch: one hostile name mustn't.
+    let name = if row.name.contains('\0') {
+        std::borrow::Cow::Owned(row.name.replace('\0', "\u{fffd}"))
+    } else {
+        std::borrow::Cow::Borrowed(row.name.as_str())
+    };
+    let item = BitmagnetItem {
+        info_hash: torrents::hex(&row.info_hash.0),
+        name,
+        size: row.size,
+        source: BITMAGNET_SOURCE,
+        // Go's RFC 3339 parser takes four-digit years only, and one bad
+        // line fails the whole import: outside them, no time.
+        published_at: (1..=MAX_RFC3339)
+            .contains(&row.discovered_at)
+            .then(|| rfc3339(row.discovered_at)),
+        content_type: e
+            .and_then(|e| lodestar_classify::ContentType::from_code(e.content_type))
+            .and_then(bitmagnet_type),
+    };
+    let json = serde_json::to_string(&item).map_err(internal)?;
+    // Lossless for any JSON reader: the characters [`escaped`] names, and
+    // the line and paragraph separators, written `\uXXXX` (all are in
+    // the BMP, and only a string can hold them), so no viewer of the
+    // file or of bitmagnet's UI is shown them raw.
+    for c in json.chars() {
+        if escaped(c) || matches!(c, '\u{2028}' | '\u{2029}') {
+            out.extend_from_slice(format!("\\u{:04x}", u32::from(c)).as_bytes());
+        } else {
+            let mut buf = [0u8; 4];
+            out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+        }
+    }
+    out.push(b'\n');
+    Ok(())
+}
+
+/// bitmagnet's `ContentType` for Lodestar's, where one means the same:
+/// `None` leaves the hint out and bitmagnet classifies the torrent itself
+/// (a hint it's given, it keeps).
+fn bitmagnet_type(t: lodestar_classify::ContentType) -> Option<&'static str> {
+    use lodestar_classify::ContentType as C;
+    Some(match t {
+        C::Movie => "movie",
+        C::Tv => "tv_show",
+        C::Music => "music",
+        C::Audiobook => "audiobook",
+        C::Ebook => "ebook",
+        C::Comic => "comic",
+        C::Software => "software",
+        C::Game => "game",
+        C::Adult => "xxx",
+        C::Images | C::Video | C::Other => return None,
+    })
 }
 
 fn csv_header(fields: &[ExportField]) -> Vec<u8> {
@@ -1036,6 +1165,116 @@ mod tests {
     }
 
     #[test]
+    fn bitmagnet_times_are_rfc3339_utc() {
+        assert_eq!(rfc3339(0), "1970-01-01T00:00:00Z");
+        assert_eq!(rfc3339(1_700_000_000), "2023-11-14T22:13:20Z");
+        assert_eq!(rfc3339(951_782_400), "2000-02-29T00:00:00Z");
+        assert_eq!(rfc3339(253_402_300_799), "9999-12-31T23:59:59Z");
+    }
+
+    #[test]
+    fn every_bitmagnet_type_is_one_of_its_enum() {
+        // bitmagnet's `ContentType` ENUM (internal/model/content_type.go).
+        const THEIRS: [&str; 9] = [
+            "movie",
+            "tv_show",
+            "music",
+            "ebook",
+            "comic",
+            "audiobook",
+            "game",
+            "software",
+            "xxx",
+        ];
+        let mut mapped = Vec::new();
+        for t in lodestar_classify::ContentType::ALL {
+            if let Some(b) = bitmagnet_type(t) {
+                assert!(THEIRS.contains(&b), "{t:?} -> {b}");
+                mapped.push(b);
+            }
+        }
+        mapped.sort_unstable();
+        let mut theirs = THEIRS.to_vec();
+        theirs.sort_unstable();
+        assert_eq!(mapped, theirs, "one Lodestar type for each of theirs");
+        assert_eq!(
+            bitmagnet_type(lodestar_classify::ContentType::Adult),
+            Some("xxx")
+        );
+        assert_eq!(bitmagnet_type(lodestar_classify::ContentType::Video), None);
+    }
+
+    fn row(name: &str, discovered_at: i64) -> TorrentRow {
+        TorrentRow {
+            id: 1,
+            info_hash: InfoHash([0xab; 20]),
+            info_hash_v2: None,
+            name: name.to_string(),
+            name_raw: None,
+            size: 1 << 20,
+            piece_len: 1 << 16,
+            piece_count: 16,
+            file_count: 1,
+            info_size: 100,
+            flags: 0,
+            discovered_at,
+            metadata_at: discovered_at,
+            last_seen_at: discovered_at,
+            sources: 0,
+            first_source: None,
+        }
+    }
+
+    fn line(name: &str, discovered_at: i64) -> String {
+        let mut out = Vec::new();
+        bitmagnet_line(&mut out, &row(name, discovered_at), None).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn a_bitmagnet_line_is_one_object_with_its_keys_in_order() {
+        assert_eq!(
+            line("Plain", 1_700_000_000),
+            format!(
+                "{{\"infoHash\":\"{}\",\"name\":\"Plain\",\"size\":1048576,\"source\":\"lodestar\",\"publishedAt\":\"2023-11-14T22:13:20Z\"}}\n",
+                "ab".repeat(20)
+            )
+        );
+        // No plausible time: left out, so bitmagnet stores none.
+        assert!(!line("Plain", 0).contains("publishedAt"));
+        assert!(!line("Plain", -1).contains("publishedAt"));
+        assert!(!line("Plain", MAX_RFC3339 + 1).contains("publishedAt"));
+        assert!(line("Plain", MAX_RFC3339).contains("\"9999-12-31T23:59:59Z\""));
+    }
+
+    #[test]
+    fn hostile_names_stay_inside_one_json_string() {
+        for name in [
+            "a\nb\r\nc",
+            "\"},{\"infoHash\":\"0000000000000000000000000000000000000000\"",
+            "back\\slash\u{0}nul",
+            "x\u{1b}[31m\u{202e}gpj.exe\u{2028}\u{2029}",
+            "\u{feff}日本語\u{7f}\u{85}",
+        ] {
+            let l = line(name, 1);
+            // One line: bitmagnet splits on '\n' alone.
+            assert_eq!(l.matches('\n').count(), 1, "{l}");
+            assert!(l.ends_with('\n'));
+            let v: Value = serde_json::from_str(l.trim_end()).unwrap();
+            let obj = v.as_object().unwrap();
+            assert_eq!(obj.len(), 5, "{l}");
+            assert_eq!(obj["infoHash"], "ab".repeat(20));
+            assert!(
+                !l.contains(['\u{202e}', '\u{2028}', '\u{2029}', '\u{7f}', '\u{85}']),
+                "{l}"
+            );
+            let back = obj["name"].as_str().unwrap();
+            assert!(!back.contains('\0'), "a NUL reached PostgreSQL text");
+            assert_eq!(back, name.replace('\0', "\u{fffd}"));
+        }
+    }
+
+    #[test]
     fn fields_are_checked_and_ordered() {
         let p = |fields: Option<&str>, format| ExportRequest {
             fields: fields.map(str::to_string),
@@ -1061,6 +1300,18 @@ mod tests {
                 .unwrap_err()
                 .code(),
             "fields_unused"
+        );
+        assert_eq!(
+            shape(&p(Some("name"), Some(ExportFormat::Bitmagnet)))
+                .unwrap_err()
+                .code(),
+            "fields_unused"
+        );
+        assert!(
+            shape(&p(None, Some(ExportFormat::Bitmagnet)))
+                .unwrap()
+                .fields
+                .is_empty()
         );
     }
 }

@@ -67,6 +67,16 @@ lodestar_log::catalogue! {
         message: "The update settings couldn't be read; automatic updates are held",
         fields: { error: Error },
     }
+    /// `history.json` was there but couldn't be read: the history shows
+    /// as empty, and the next entry starts the file again (Windows,
+    /// X-win-upd-history). Display only, so nothing else is held.
+    UPDATE_HISTORY_UNREADABLE {
+        id: "update.history_unreadable",
+        component: System,
+        level: Warn,
+        message: "The update history couldn't be read; it shows as empty",
+        fields: { error: Error },
+    }
     /// The filesystem under `<data>/bin` can't fsync a folder (some FUSE
     /// mounts, such as Unraid's `/mnt/user`): updater changes are saved by
     /// rename without it. Logged once per run, without a path.
