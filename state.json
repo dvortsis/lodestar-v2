@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T22:11:11Z",
+  "updated_at": "2026-11-12T22:13:28Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7507,6 +7507,11 @@
       "id": "runner-arch-sage-seafoam-delta",
       "note": "From M8-DOC-2 (#785): architecture.md \u00a710.18 (two places) still says sage-seafoam \u0394E_ok \u2248 1.9; themes_check.py measures 4.4. Fix in the next runner PR after checking the script.",
       "added": "2026-11-12T22:11:11Z"
+    },
+    {
+      "id": "merged-777",
+      "note": "#777 M8-WIN-1 merged as c904f883 after delta self-check MERGE (rv-777-c62c03cf-delta). Session archived. O1 -> X-win-soak-attach-proc-hash. Owner FYI batch: M8-WIN-1 refinements.",
+      "added": "2026-11-12T22:13:28Z"
     }
   ],
   "main_health": [
@@ -8529,7 +8534,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T22:08:33Z",
+    "updated": "2026-11-12T22:13:28Z",
     "items": [
       {
         "slot": 1,
@@ -8578,11 +8583,11 @@
       },
       {
         "slot": 6,
-        "slice": "M8-WIN-1",
+        "slice": "X-soak-screen-calibrate",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBMmuzWf5Xm5VJkAbP: #777 delta MERGE at 908a48c6; one round for I1 hash wording, I2 WU pause 1 week + resume, I3 real temp files in producer tests; then self-check + merge",
-        "since": "2026-11-12T18:52:01Z",
+        "doing": "cloud-testing: session_01MMjhnBGH1xNKfTqZShKexC: launched after #777 merged; screen recalibration (r5 no trip, r4 trip), absent inputs; advisory only",
+        "since": "2026-11-12T22:13:28Z",
         "status": "active"
       },
       {
@@ -8671,7 +8676,7 @@
         "slice": "",
         "role": "build",
         "agent": "claude",
-        "doing": "cloud-testing: reserved: Cloud Tester lanes first; then the gluetun-leak fix when its diagnosis lands; else X-soak-screen-calibrate once #777 (shares analyze_cr0.py) merges",
+        "doing": "cloud-testing: reserved: Cloud Tester lanes first; then the gluetun-leak fix when its diagnosis lands (X-soak-screen-calibrate moved to slot 6)",
         "status": "idle"
       },
       {
@@ -8823,7 +8828,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-12T22:11:11Z",
+  "updated": "2026-11-12T22:13:28Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
