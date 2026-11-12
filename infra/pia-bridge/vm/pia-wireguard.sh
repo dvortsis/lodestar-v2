@@ -82,8 +82,9 @@ jq -e --arg r "$region" '[.regions[] | select(.id == $r)][0].servers.wg[0] | typ
   "$work/servers.json" >/dev/null 2>&1 || fail13 "region $region has no WireGuard server"
 # jq checks the characters first, as bash's $(...) drops NUL bytes ("a\u0000b"
 # would come out as "ab"). \A and \z anchor the whole string: jq's $ also
-# matches before a final newline, which $(...) would then strip. Anything else becomes "invalid:" and a JSON-escaped
-# copy, which the hostname check below rejects and reports.
+# matches before a final newline, which $(...) would then strip. Anything else
+# becomes "invalid:" and a JSON-escaped copy, which the hostname check below
+# rejects and reports.
 wg_ip=$(jq -er --arg r "$region" '[.regions[] | select(.id == $r)][0].servers.wg[0].ip
   | select(type == "string" and test("\\A[0-9.]{7,15}\\z"))' "$work/servers.json" 2>/dev/null) \
   || fail13 "region $region: the WireGuard server's address is not IPv4"

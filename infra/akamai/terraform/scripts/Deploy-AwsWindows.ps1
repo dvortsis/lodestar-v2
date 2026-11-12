@@ -77,11 +77,12 @@ $region = 'us-east-1'
 $instanceType = 'c6a.xlarge'
 
 # A refused AWS call's reason, safe to print: the first non-blank line, printable
-# ASCII only, with ARNs, access key IDs, 12-digit account IDs, and IPv4 and IPv6
+# ASCII only (-creplace: -replace ignores case, and U+212A KELVIN SIGN would then
+# match a-z and survive), with ARNs, access key IDs, 12-digit account IDs, and IPv4 and IPv6
 # addresses masked, and AWS's encoded authorization message dropped. At most 200
 # characters; '(no reason given)' when there's nothing left.
 function Get-SafeAwsError([string]$Text) {
-    $line = (($Text -split "`r?`n") | ForEach-Object { ($_ -replace '[^\x20-\x7E]', '').Trim() } |
+    $line = (($Text -split "`r?`n") | ForEach-Object { ($_ -creplace '[^\x20-\x7E]', '').Trim() } |
         Where-Object { $_ } | Select-Object -First 1)
     if (-not $line) { return '(no reason given)' }
     $line = $line -replace '(?i)\s*Encoded authorization failure message:.*$', ''

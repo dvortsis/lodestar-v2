@@ -31,10 +31,9 @@ $stubBody = @'
 #!/bin/sh
 # Records each call, one line: CALL <arg> <arg> ...
 { printf 'CALL'; for a in "$@"; do printf ' <%s>' "$a"; done; printf '\n'; } >> "$STUB_DIR/calls.log"
-# Whether any AWS credential variable reached the stub (never the values).
-for v in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE AWS_DEFAULT_PROFILE; do
-  eval "[ -n \"\${$v+set}\" ]" && echo "$v" >> "$STUB_DIR/creds.log"
-done
+# Whether any AWS_* variable but the test's own three reached the stub (names only).
+env | sed -n 's/^\(AWS_[A-Za-z0-9_]*\)=.*/\1/p' | grep -v -x -e AWS_CONFIG_FILE -e AWS_SHARED_CREDENTIALS_FILE \
+  -e AWS_EC2_METADATA_DISABLED >> "$STUB_DIR/creds.log" || true
 case "$1 $2" in
   "sts get-caller-identity")
     for a in "$@"; do
@@ -82,14 +81,14 @@ function Invoke-Deploy([string]$Root, [switch]$DryRun, [string]$PipeIn) {
         AWS_CONFIG_FILE             = '/nonexistent'
         AWS_SHARED_CREDENTIALS_FILE = '/nonexistent'
         AWS_EC2_METADATA_DISABLED   = 'true'
-        # No credentials reach the child, even should the stub not resolve.
-        AWS_ACCESS_KEY_ID           = $null
-        AWS_SECRET_ACCESS_KEY       = $null
-        AWS_SESSION_TOKEN           = $null
-        AWS_PROFILE                 = $null
-        AWS_DEFAULT_PROFILE         = $null
         LODESTAR_AWS_ACCOUNT_ID     = '111122223333'
     }
+    # No other AWS_* variable reaches the child (credentials, profiles, endpoints),
+    # even should the stub not resolve. The five credential names are listed too,
+    # so they're cleared even when unset here.
+    $names = @([Environment]::GetEnvironmentVariables().Keys | ForEach-Object { [string]$_ } | Where-Object { $_ -clike 'AWS_*' }) +
+        @('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_PROFILE', 'AWS_DEFAULT_PROFILE')
+    foreach ($n in $names) { if (-not $vars.ContainsKey($n)) { $vars[$n] = $null } }
     foreach ($k in $vars.Keys) { $saved[$k] = [Environment]::GetEnvironmentVariable($k); [Environment]::SetEnvironmentVariable($k, $vars[$k]) }
     $deploy = Join-Path (Join-Path $Root 'scripts') 'Deploy-AwsWindows.ps1'
     $argv = @('-NoProfile', '-File', $deploy, '-Hours', '4', '-AmiId', 'ami-0123456789abcdef0', '-SubnetId', $SUBNET,
@@ -137,6 +136,37 @@ function Calls-Of($Result, [string]$Op) { @($Result.Calls | Where-Object { $_.St
 # first real line runs past 200 characters once masked, so the cut is exercised.
 $script:sgError = "`e`a`e`nAn error occurred (UnauthorizedOperation) when calling the DescribeSecurityGroups operation: You are not authorized to perform this operation. User: (arn:aws:sts::999988887777:assumed-role/LodestarProvisioner/x) key AKIAABCDEFGHIJKLMNOP in account_999988887777 from 198.51.100.7 and 2001:db8::7 `e[31m. Encoded authorization failure message: SECRETBLOB`nsecond line 999988887777"
 
+# Get-SafeAwsError table test: each mask on its own line, so the 200-character
+# cut can't hide one. The function is loaded from the deploy script's own syntax
+# tree, so this tests the code that runs.
+$ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $scriptsDir 'Deploy-AwsWindows.ps1'), [ref]$null, [ref]$null)
+$fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-SafeAwsError' }, $true)
+if (-not $fn) { Write-Host 'FAIL Get-SafeAwsError not found in Deploy-AwsWindows.ps1'; exit 1 }
+. ([scriptblock]::Create($fn.Extent.Text))
+$K = [string][char]0x212A; $Idot = [string][char]0x130; $e = [string][char]27
+foreach ($t in @(
+        @{ Name = 'IPv6 (::)'; In = 'from 2001:db8::7 ok'; Out = 'from [ip] ok' },
+        @{ Name = 'IPv6 (eight groups)'; In = 'from 2001:0db8:0:0:0:ff00:42:8329 ok'; Out = 'from [ip] ok' },
+        @{ Name = 'IPv6 with a zone'; In = 'at fe80::1%eth0 ok'; Out = 'at [ip] ok' },
+        @{ Name = 'a time is not IPv6'; In = 'at 12:30:45 ok'; Out = 'at 12:30:45 ok' },
+        @{ Name = 'IPv4'; In = 'from 198.51.100.7 ok'; Out = 'from [ip] ok' },
+        @{ Name = 'ANSI escape'; In = "red${e}[31m text"; Out = 'red[31m text' },
+        @{ Name = 'encoded authorization message'; In = 'denied. Encoded authorization failure message: SECRETBLOB'; Out = 'denied.' },
+        @{ Name = 'ARN, punctuation kept'; In = 'User: (arn:aws:sts::999988887777:assumed-role/R/x) "arn:aws:s3:::b"'; Out = 'User: ([arn]) "[arn]"' },
+        @{ Name = 'bare account ID'; In = 'account 999988887777 and id=999988887777x and _999988887777'; Out = 'account [account] and id=[account]x and _[account]' },
+        @{ Name = 'longer digit runs are not account IDs'; In = 'n 1234567890123'; Out = 'n 1234567890123' },
+        @{ Name = 'access key IDs'; In = 'key AKIAABCDEFGHIJKLMNOP and ASIAABCDEFGHIJKLMNOP'; Out = 'key [key-id] and [key-id]' },
+        @{ Name = 'Kelvin sign and dotted I'; In = "a${K}b${Idot}c"; Out = 'abc' },
+        @{ Name = 'non-ASCII letters'; In = "caf$([char]0xE9) $([char]0x202E)x"; Out = 'caf x' },
+        @{ Name = 'skips a control-only line'; In = "${e}`a`nsecond"; Out = 'second' },
+        @{ Name = 'first line only'; In = "one`ntwo 999988887777"; Out = 'one' },
+        @{ Name = 'nothing left'; In = "${e}`a"; Out = '(no reason given)' },
+        @{ Name = 'empty'; In = ''; Out = '(no reason given)' },
+        @{ Name = 'cut at 200'; In = ('x' * 250); Out = ('x' * 200) })) {
+    $got = Get-SafeAwsError $t.In
+    Check "safe error: $($t.Name)" ($got -ceq $t.Out) "got '$got'"
+}
+
 $roots = [System.Collections.Generic.List[string]]::new()
 try {
     # 1. No inbound rules: the dry run asks for a public IPv4 on one interface.
@@ -160,7 +190,7 @@ try {
     Check 'the group is checked before the launch' ($sgIndex -ge 0 -and $sgIndex -lt $runIndex) "order $sgIndex, $runIndex"
     $credLog = Join-Path $root 'stub/creds.log'
     $leaked = if (Test-Path -LiteralPath $credLog) { (Get-Content -LiteralPath $credLog) -join ', ' } else { '' }
-    Check 'no AWS credential variable reaches the CLI' (-not $leaked) "set: $leaked"
+    Check 'no AWS_* variable but the test''s own three reaches the CLI' (-not $leaked) "set: $leaked"
     Check 'it says a public IPv4 is attached, outbound only' ($r.Out -match 'Public IPv4:\s+attached at launch' -and $r.Out -match 'reachable outbound only') $r.Out
     Check 'the plan names the public IPv4 charge' ($r.Out -match 'public IPv4 is billed on top') $r.Out
 
