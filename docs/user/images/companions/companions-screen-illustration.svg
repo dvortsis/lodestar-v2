@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 220" role="img" aria-labelledby="t d">
+  <title id="t">Settings, Companions: qBittorrent row</title>
+  <desc id="d">Illustration of one companion row with its status, version and the Restart, Logs, Passwords and keys, Run as its own container and Remove buttons.</desc>
+  <rect width="640" height="220" fill="#ffffff"/>
+  <rect x="16" y="16" width="608" height="188" rx="8" fill="#f6f4fa" stroke="#9381b6"/>
+  <text x="32" y="46" font-family="Atkinson Hyperlegible Next, sans-serif" font-size="16" font-weight="700" fill="#2b2433">Companions</text>
+  <text x="32" y="70" font-family="Atkinson Hyperlegible Next, sans-serif" font-size="13" fill="#4a4357">Nothing is downloaded until you confirm it.</text>
+  <rect x="32" y="86" width="576" height="100" rx="6" fill="#ffffff" stroke="#9381b6"/>
+  <text x="48" y="114" font-family="Atkinson Hyperlegible Next, sans-serif" font-size="15" font-weight="700" fill="#2b2433">qBittorrent</text>
+  <text x="48" y="136" font-family="Atkinson Hyperlegible Next, sans-serif" font-size="13" fill="#4a4357">Running · Installed: example version</text>
+  <rect x="48" y="148" width="72" height="28" rx="4" fill="#ffffff" stroke="#4a4357"/>
+  <text x="84" y="167" text-anchor="middle" font-family="Atkinson Hyperlegible Next, sans-serif" font-size="12" fill="#2b2433">Restart</text>
+  <rect x="128" y="148" width="56" height="28" rx="4" fill="#ffffff" stroke="#4a4357"/>
+  <text x="156" y="167" text-anchor="middle" font-family="Atkinson Hyperlegible Next, sans-serif" font-size="12" fill="#2b2433">Logs</text>
+  <rect x="192" y="148" width="132" height="28" rx="4" fill="#ffffff" stroke="#4a4357"/>
+  <text x="258" y="167" text-anchor="middle" font-family="Atkinson Hyperlegible Next, sans-serif" font-size="12" fill="#2b2433">Passwords and keys</text>
+  <rect x="332" y="148" width="188" height="28" rx="4" fill="#ffffff" stroke="#4a4357"/>
+  <text x="426" y="167" text-anchor="middle" font-family="Atkinson Hyperlegible Next, sans-serif" font-size="12" fill="#2b2433">Run as its own container</text>
+  <rect x="528" y="148" width="64" height="28" rx="4" fill="#ffffff" stroke="#4a4357"/>
+  <text x="560" y="167" text-anchor="middle" font-family="Atkinson Hyperlegible Next, sans-serif" font-size="12" fill="#2b2433">Remove</text>
+</svg>
