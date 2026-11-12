@@ -19,7 +19,9 @@ This skill covers the Lodestar test infrastructure on **AWS** (one Windows Serve
 **One owner-approved exception (2026-11-12Z, `docs/decisions/2026-11-12-X-test-vm.md`): the interactive test VMs.**
 - Claude may run commands inside two named machines only, until each is deleted: the Linode labelled `claude-dev-<yyyymmdd>`, and the AWS Windows test instance the owner creates with `Deploy-AwsWindows.ps1`.
 - Claude may create, check and delete that Linode and its `claude-dev-*-fw` firewall, but only with `infra/dev-vm/devvm.py` and the token saved on the owner's `lodestar-cloud-test` environment.
-- Nothing else is covered: no other Linode or firewall, no fleet Terraform or state, no watchdog, IAM, OIDC or account setting, and no AWS provisioning. The rule above still holds for everything else.
+- Claude may create, run commands on (SSM Run Command) and delete that Windows instance, but only as the IAM user `lodestar-claude-testvm` (`infra/dev-vm/aws-claude-testvm.json`), signed in through the AWS connector by the owner. That user's policy is the guardrail: c6a.xlarge, the Lodestar subnet and security group, an encrypted root of at most 100 GiB, the four mandatory tags with `ExpiresAt`, us-east-1 only.
+- The owner may sign the connector in once as their administrator so Claude can deploy that template. That sign-in is used for nothing else, and never to read a secret's value.
+- Nothing else is covered: no other Linode, firewall or EC2 instance, no fleet Terraform or state, no watchdog, OIDC or account setting, and no IAM change beyond that one template. The rule above still holds for everything else.
 
 - AWS: agents use the **observer** profile (`lodestar-observer`, or `lodestar-observer-mcp` for the MCP server), which assumes `LodestarObserver`. They have no access to `LodestarProvisioner`.
 - Akamai: agents may run `terraform plan` and `terraform output` with a read-only Linode token supplied by the human. They never run `terraform apply` or `terraform destroy`, and never hold the read-write token that `Deploy.ps1` and `Destroy.ps1` use.
