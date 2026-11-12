@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T07:16:24Z",
+  "updated_at": "2026-11-12T07:19:20Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7123,6 +7123,11 @@
       "id": "runner-pr-slices-note",
       "note": "slices.yaml D-outputs-guide note: \"Sonarr port 5000 vs 5045 trap\" is wrong; they are Newznab category ids (Sonarr defaults 5030/5040, add 5000/5045). Fix in next runner PR.",
       "at": "2026-11-12T07:16:24Z"
+    },
+    {
+      "id": "X-writer-upload-counters",
+      "note": "UP-0: lease-free commits count uploads under WriterStats::torrent_cache; split when a slice owns writer.rs. Owner flag due: UP-0 private=1 via flags::PRIVATE/PRIVACY (not private_source); created-by dropped.",
+      "at": "2026-11-12T07:19:20Z"
     }
   ],
   "main_health": [
@@ -8153,7 +8158,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T07:16:24Z",
+  "updated": "2026-11-12T07:19:20Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
