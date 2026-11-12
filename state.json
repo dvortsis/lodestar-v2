@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T08:04:08Z",
+  "updated_at": "2026-11-12T08:14:19Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7153,6 +7153,11 @@
       "id": "X-readme-torznab-planned",
       "at": "2026-11-12T08:04:08Z",
       "note": "README.md:64 still says \"Torznab is planned\"; Torznab shipped (OUT-*). Found in rv-747. Small docs fix via user-docs skill."
+    },
+    {
+      "id": "ENR-12-plugin-label",
+      "at": "2026-11-12T08:14:19Z",
+      "note": "ResolvedVia::Plugin (ENR-10) is kept out of /search/fields listed values until a slice makes it fire (id-based lookups). That slice lists it and adds the labels.ts entry + detail_via_plugin message key. Attach to ENR-12 notes in next runner PR."
     }
   ],
   "main_health": [
@@ -8198,7 +8203,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T08:04:08Z",
+  "updated": "2026-11-12T08:14:19Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
