@@ -1,0 +1,62 @@
+# Lodestar worker: adds crawling and metadata capacity to an existing Lodestar
+# (v0.6 or newer). It keeps no database and no web UI.
+#
+# 1. In the main Lodestar: Settings, Workers, Add worker. Copy the address and
+#    the one-time token (single-use, valid for 15 minutes).
+# 2. Put them in the two LODESTAR_ lines below and run:
+#      docker compose -f packaging/docker/compose.worker.yml up -d
+# 3. When the log says "joined", REMOVE the LODESTAR_TOKEN line and run the
+#    same command again. The worker keeps its own certificate in /data, and a
+#    token works only once, so leaving it in does nothing but a warning.
+#
+# The worker only has to reach the main instance's cluster port (8091/tcp).
+# Prefer a private link (Tailscale, WireGuard or your LAN) to the open internet.
+services:
+  worker:
+    image: ghcr.io/dvortsis/lodestar-v2:latest
+    container_name: lodestar-worker
+    restart: unless-stopped
+    command: ["worker"]
+    # Shutdown flushes the spool; give it more than Docker's default 10 s.
+    stop_grace_period: 60s
+
+    environment:
+      TZ: Etc/UTC
+      # The main Lodestar's cluster address, https://host:8091.
+      LODESTAR_JOIN: "https://192.168.1.10:8091"
+      # FIRST START ONLY. Paste the one-time token here, start the worker,
+      # then delete this line. Never commit a real token.
+      LODESTAR_TOKEN: "paste-one-time-token-here"
+      # LODESTAR_INTENSITY: balanced   # low | balanced | aggressive
+      # PUID: "65532"
+      # PGID: "65532"
+      # The DHT port inside the container; the mapping below is the host side.
+      # LODESTAR_DHT_PORT: "6881"
+
+    # Alternative to LODESTAR_TOKEN: a token file, which keeps the token out
+    # of the container's environment. Delete the LODESTAR_TOKEN and
+    # LODESTAR_JOIN lines above, uncomment all of this, and remove the file
+    # and the `command:` below after the worker has joined (a token file
+    # always tries to join, so it must go once it has been used).
+    # command: ["worker", "--join", "https://192.168.1.10:8091", "--token-file", "/run/secrets/join_token"]
+    # secrets:
+    #   - join_token
+
+    volumes:
+      # The worker's certificate and its on-disk spool (the spool/ folder
+      # inside it, used while the main instance is unreachable). Use a folder
+      # of its own on a local disk, never the main Lodestar's data folder.
+      - lodestar-worker-data:/data
+
+    # Only the DHT port is published. Host port 6882 so the worker can run on
+    # the same machine as the main Lodestar (6881). Forward this UDP port on
+    # your router for the best reach. No web UI, no cluster port.
+    ports:
+      - "6882:6881/udp"
+
+# secrets:
+#   join_token:
+#     file: ./join_token.txt   # a file holding only the token; chmod 600
+
+volumes:
+  lodestar-worker-data:
