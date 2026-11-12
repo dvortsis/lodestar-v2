@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T14:46:26Z",
+  "updated_at": "2026-11-12T14:47:39Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7354,6 +7354,11 @@
       "id": "playwright-host-vs-container",
       "note": "Tester: 18 Insights screenshot diffs on a bare host vs CI pinned container; identical at the baseline commit. Not a regression; no action.",
       "at": "2026-11-12T14:14:49Z"
+    },
+    {
+      "id": "UP-2-brief-watch-keys",
+      "note": "UP-2 brief: #765 (UP-1) adds settings_watch_after_option_move/_delete option labels and watch.* log event names/help in web messages; UP-2 adds section/group/field labels and help.",
+      "at": "2026-11-12T14:47:39Z"
     }
   ],
   "main_health": [
@@ -8474,7 +8479,7 @@
     }
   ],
   "heartbeat": "2026-11-12T12:38:43Z",
-  "updated": "2026-11-12T14:46:26Z",
+  "updated": "2026-11-12T14:47:39Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
