@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T01:25:03Z",
+  "updated_at": "2026-11-12T01:28:55Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7011,6 +7011,11 @@
       "slice": "X-svc-eventcreate-bounded",
       "at": "2026-11-12T01:25:03Z",
       "note": "After #721 merges (service.rs is its owns): windows/service.rs:918-937 eventcreate .status() has no deadline (called from :776 refusal and :789 rollback wait); move run_bounded/supervise to windows/mod.rs (or similar), give it the same 10 s deadline + kill/reap, test with a never-exiting child. Add slices.yaml entry in next runner PR. From rv-721."
+    },
+    {
+      "slice": "docs follow-up (from PK-guide-3)",
+      "at": "2026-11-12T01:28:55Z",
+      "note": "docs/user/04 \u00a74.8 step 3 duplicates 'notes' ('shows its notes and asks you to read its notes first'); and code follow-up: the in-app 'The last update didn't install' notice advises running the installer, which clashes with the guide's 'don't install the failed build by hand' (route to X-win-upd-history or a small UI slice)."
     }
   ],
   "main_health": [
@@ -7535,6 +7540,11 @@
       "pr": 712,
       "sha": "46b2a5dde6a1938420b6449fe2a22a4c9c4b9bf0",
       "at": "2026-11-12T00:33:17Z"
+    },
+    {
+      "pr": 708,
+      "sha": "c4c09a3e293d70b8689897548b1f5a5acd196140",
+      "at": "2026-11-12T01:28:55Z"
     }
   ],
   "active_sessions": {
@@ -7769,7 +7779,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T01:25:03Z",
+    "updated": "2026-11-12T01:28:55Z",
     "items": [
       {
         "slot": 1,
@@ -7826,12 +7836,12 @@
       },
       {
         "slot": 7,
-        "slice": "PK-guide-3",
+        "slice": null,
         "role": "slice",
         "agent": "session_01MMjhn9VBMRav8kboByPimR",
-        "doing": "User guide: Windows updates, rollback, Restart now (Sonnet, docs); M6 critical path",
-        "since": "2026-11-11T19:15:00Z",
-        "status": "active"
+        "doing": "free (PK-guide-3 merged #708)",
+        "since": "2026-11-12T01:28:55Z",
+        "status": "idle"
       },
       {
         "slot": 8,
@@ -7932,7 +7942,7 @@
     }
   ],
   "heartbeat": "2026-11-12T00:38:52Z",
-  "updated": "2026-11-12T01:25:03Z",
+  "updated": "2026-11-12T01:28:55Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
