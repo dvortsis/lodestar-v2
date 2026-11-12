@@ -206,9 +206,13 @@ fn a_served_instance_takes_files_from_its_watch_folder() {
         )
         .is_some_and(|r| r.contains("\"total\":1"))
     });
+    // The poll logs once its moves are done, and the log reaches us
+    // through the reader thread.
+    until("the log lines", || {
+        let log = s.log.lock().unwrap();
+        log.contains("watch.started") && log.contains("watch.took")
+    });
     let log = s.log.lock().unwrap().clone();
-    assert!(log.contains("watch.started"), "{log}");
-    assert!(log.contains("watch.took"), "{log}");
     assert!(!log.contains("Zq9"), "no file name in the log: {log}");
 }
 

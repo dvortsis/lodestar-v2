@@ -5,26 +5,31 @@
 //! `failed/` inside the folder, or deleted, so they're never read again.
 //!
 //! - **Polling, not filesystem events,** every [`POLL_EVERY`]: works on
-//!   Docker bind mounts and SMB. Each poll scans at most [`MAX_SCAN`]
-//!   entries and submits at most [`MAX_SUBMIT`] files, in name order,
-//!   resuming after the last file taken.
+//!   Docker bind mounts and SMB. Each poll keeps at most [`MAX_SCAN`]
+//!   `.torrent` names (among at most [`MAX_LIST`] entries) and submits at
+//!   most [`MAX_SUBMIT`] files, in name order, resuming after the last
+//!   file taken. The folder and the data-directory rule are checked again
+//!   on every poll; a problem pauses the watch until it's fixed.
 //! - **Only regular `.torrent` files directly in the folder.** Nothing is
 //!   followed: not a symbolic link, a junction or any other reparse
-//!   point, the folder's own `added/` and `failed/` included. The file is
-//!   checked through its open handle, not its name: on Unix every step
-//!   that acts on a file is relative to the folder's own handle, opened
-//!   without following, and the file is opened `O_NOFOLLOW`; on Windows it's opened as a reparse
-//!   point itself and refused if it is one. A file over
-//!   `local_torrent::MAX_BYTES` is never read.
+//!   point, the folder's own `added/` and `failed/` included. A file is
+//!   checked through its open handle, not its name. On Unix every step
+//!   that acts on a file (open, mkdir, rename, unlink) goes through the
+//!   folder's own handle, opened without following, and the file is
+//!   opened `O_NOFOLLOW`; the listing and each entry's type are only
+//!   hints. On Windows a file is opened as a reparse point itself and
+//!   refused if it is one. A file over `local_torrent::MAX_BYTES` is
+//!   never read.
 //! - **A file is read once it's complete:** its size and modification
 //!   time the same on two polls in a row, and not held open by another
 //!   program (skipped, never failed).
-//! - **Never read twice.** A file that can't be moved or deleted is kept
-//!   in a bounded set and skipped; when the set is full the watch stops.
+//! - **Never read twice.** A file that can't be moved or deleted yet is
+//!   remembered in a bounded set, never read again, and its move retried
+//!   quietly each poll; when the set is full the watch holds.
 //! - **No file name in any log line or status**, only counts and causes:
 //!   names in a user's folder are often torrent titles.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -44,7 +49,11 @@ pub const POLL_EVERY: Duration = Duration::from_secs(10);
 /// Directory entries looked at per poll, at most (a §2.26 number): enough
 /// for any folder a person fills by hand, while a folder of a million
 /// entries costs one bounded listing per poll, not a stall.
-pub const MAX_SCAN: usize = 10_000;
+pub const MAX_SCAN: usize = if cfg!(test) { 64 } else { 10_000 };
+/// Directory entries read per poll, at most, `.torrent` or not (a §2.26
+/// number): a bound on the listing's cost, high enough that other files
+/// left in the folder don't hide new torrents.
+pub const MAX_LIST: usize = if cfg!(test) { 200 } else { 200_000 };
 /// Files read and submitted per poll, at most (a §2.26 number): 32 every
 /// 10 s is about 190 a minute, more than the judge's share of the
 /// pipeline should take from the crawl, and one file is held at a time.
@@ -90,14 +99,15 @@ lodestar_log::catalogue! {
         message: "The watch folder is off until its setting is fixed",
         fields: { reason: Label },
     }
-    /// One poll took files: how many went to `added/` (or were deleted)
-    /// and how many to `failed/`.
+    /// One poll took files: how many went to `added/` (or were deleted),
+    /// how many to `failed/`, and of those how many because judging
+    /// failed on Lodestar's side (`errors`), not because of the file.
     WATCH_TOOK {
         id: "watch.took",
         component: Sources,
         level: Info,
         message: "Took .torrent files from the watch folder",
-        fields: { added: Label, failed: Label },
+        fields: { added: Label, failed: Label, errors: Label },
     }
     /// A file couldn't be moved or deleted after it was taken (a
     /// read-only folder, say). It won't be read again; `stuck` is how
@@ -189,11 +199,17 @@ impl Sink for Uploads {
 pub struct Polled {
     pub added: u64,
     pub failed: u64,
+    /// Of `failed`, files whose judging panicked (`failed/<stem>.failed`):
+    /// a fault on Lodestar's side, so counted apart from a bad file.
+    pub errors: u64,
     /// Files seen but not read yet: still changing, held open, or past
     /// this poll's [`MAX_SUBMIT`].
     pub waiting: u64,
-    /// The watch stopped during this poll.
-    pub stopped: Option<Problem>,
+    /// Why the watch isn't running now, if it isn't: checked again every
+    /// poll, so a mount that comes back or a fixed folder resumes it,
+    /// except [`Problem::TooManyStuck`], which holds until the setting
+    /// changes or a restart.
+    pub problem: Option<Problem>,
     /// The pipeline isn't taking uploads: the rest waits for the next
     /// poll.
     pub closed: bool,
@@ -202,87 +218,100 @@ pub struct Polled {
 /// A file's size and modification time, as two polls compare them.
 type Shape = (u64, Option<SystemTime>);
 
+/// A file taken but not moved or deleted yet (a read-only folder, say,
+/// or one another program still holds): never read again, and its move
+/// retried quietly on every poll.
+#[derive(Debug, Clone, Copy)]
+struct Stuck {
+    /// Its shape when it was taken; `None` for a link.
+    shape: Option<Shape>,
+    cause: Option<Cause>,
+}
+
 /// One watch folder's state between polls.
 #[derive(Debug)]
 pub struct Watcher {
     folder: PathBuf,
+    data_dir: PathBuf,
     after: After,
     /// Each candidate's shape on the last poll.
     seen: HashMap<OsString, Shape>,
     /// The last file taken: the next poll starts after it.
     cursor: Option<OsString>,
-    /// Files that couldn't be moved or deleted (name and shape).
-    stuck: HashSet<(OsString, Shape)>,
-    stopped: Option<Problem>,
+    /// Files taken but not moved yet, by name.
+    stuck: HashMap<OsString, Stuck>,
+    /// [`MAX_STUCK`] were: the watch holds.
+    halted: bool,
 }
 
 impl Watcher {
-    /// A watcher for `settings`, or why it can't run. `None` when the
-    /// setting is off.
-    pub fn new(settings: &Watch, data_dir: &Path) -> Option<Result<Watcher, Problem>> {
-        let folder = settings.folder()?;
-        if let Some(p) = folder_problem(&folder, data_dir) {
-            return Some(Err(Problem::Folder(p)));
-        }
-        Some(Ok(Watcher {
-            folder,
+    /// A watcher for `settings`; `None` when the setting is off. Whether
+    /// the folder can be watched is checked on every poll.
+    pub fn new(settings: &Watch, data_dir: &Path) -> Option<Watcher> {
+        Some(Watcher {
+            folder: settings.folder()?,
+            data_dir: data_dir.to_path_buf(),
             after: settings.after,
             seen: HashMap::new(),
             cursor: None,
-            stuck: HashSet::new(),
-            stopped: None,
-        }))
+            stuck: HashMap::new(),
+            halted: false,
+        })
     }
 
-    /// Why it stopped, if it has.
-    #[cfg(test)]
-    pub fn stopped(&self) -> Option<Problem> {
-        self.stopped
+    /// Why the folder can't be watched now, if it can't.
+    pub fn check(&self) -> Option<Problem> {
+        folder_problem(&self.folder, &self.data_dir).map(Problem::Folder)
     }
 
-    fn stop(&mut self, p: Problem, out: &mut Polled) {
-        self.stopped = Some(p);
-        out.stopped = Some(p);
+    /// Takes over `before`'s memory when it watched the same folder, so a
+    /// change to `after` alone never reads a stuck file again.
+    fn inherit(&mut self, before: Watcher) {
+        if before.folder == self.folder {
+            self.seen = before.seen;
+            self.cursor = before.cursor;
+            self.stuck = before.stuck;
+            self.halted = before.halted;
+        }
     }
 
-    /// One poll: scan, then take each file that's ready, in name order
-    /// after the last one taken, up to [`MAX_SUBMIT`]. Blocking file work
-    /// runs on the blocking pool. Does nothing once stopped.
+    /// One poll: check the folder, scan it, then take each file that's
+    /// ready, in name order after the last one taken, up to
+    /// [`MAX_SUBMIT`]. Blocking file work runs on the blocking pool.
     pub async fn poll<S: Sink>(&mut self, sink: &S) -> Polled {
         let mut out = Polled::default();
-        if self.stopped.is_some() {
+        if self.halted {
+            out.problem = Some(Problem::TooManyStuck);
             return out;
         }
-        let path = self.folder.clone();
+        let (path, data) = (self.folder.clone(), self.data_dir.clone());
         let cursor = self.cursor.clone();
-        // Listed and looked at in one go on the blocking pool, in the
-        // order they'll be taken.
+        // Checked, listed and looked at in one go on the blocking pool, in
+        // the order they'll be taken.
         let opened = blocking(move || {
-            Folder::open(&path).map(|f| {
-                let listed = f.list().map(|names| {
-                    resume_order(names, cursor.as_deref())
-                        .into_iter()
-                        .filter_map(|n| f.entry(&n).map(|e| (n, e)))
-                        .collect::<Vec<_>>()
-                });
-                (listed, f)
+            Folder::open(&path, &data).and_then(|f| {
+                let names = f.list().map_err(|_| Problem::Unreadable)?;
+                let entries: Vec<_> = resume_order(names, cursor.as_deref())
+                    .into_iter()
+                    .filter_map(|n| f.entry(&n).map(|e| (n, e)))
+                    .collect();
+                Ok((entries, f))
             })
         })
         .await;
         let (entries, folder) = match opened {
-            Ok((Ok(entries), f)) => (entries, std::sync::Arc::new(f)),
-            Ok((Err(_), _)) => {
-                self.stop(Problem::Unreadable, &mut out);
-                return out;
-            }
+            Ok((entries, f)) => (entries, std::sync::Arc::new(f)),
             Err(p) => {
-                self.stop(p, &mut out);
+                out.problem = Some(p);
                 return out;
             }
         };
         let mut seen = HashMap::new();
         let mut submitted = 0;
         for (name, entry) in entries {
+            if self.retry_stuck(&folder, &name, &entry).await {
+                continue;
+            }
             let shape = match entry {
                 Entry::Other => continue,
                 Entry::Link => {
@@ -292,9 +321,6 @@ impl Watcher {
                 }
                 Entry::File(shape) => shape,
             };
-            if self.stuck.contains(&(name.clone(), shape)) {
-                continue;
-            }
             if shape.0 > MAX_BYTES as u64 {
                 // Never read.
                 self.finish(&folder, &name, Some(shape), Some(Cause::TooLarge), &mut out)
@@ -339,18 +365,71 @@ impl Watcher {
             self.cursor = Some(name.clone());
             self.finish(&folder, &name, Some(shape), cause, &mut out)
                 .await;
-            if self.stopped.is_some() {
+            if self.halted {
                 break;
             }
         }
         self.seen = seen;
+        if self.halted {
+            out.problem = Some(Problem::TooManyStuck);
+        }
         out
     }
 
+    /// For a file taken before but not moved: retries its move quietly
+    /// (no count, no log) and says it's handled. A file that changed since
+    /// is a new file: forgotten here, and judged afresh. One still over
+    /// the cap stays stuck under its name, however it grows.
+    async fn retry_stuck(
+        &mut self,
+        folder: &std::sync::Arc<Folder>,
+        name: &OsStr,
+        entry: &Entry,
+    ) -> bool {
+        let Some(stuck) = self.stuck.get(name).copied() else {
+            return false;
+        };
+        let same = match (entry, stuck.shape) {
+            (Entry::Link, None) => true,
+            (Entry::File(now), Some(then)) => {
+                *now == then || (stuck.cause == Some(Cause::TooLarge) && now.0 > MAX_BYTES as u64)
+            }
+            _ => false,
+        };
+        if !same {
+            self.stuck.remove(name);
+            return false;
+        }
+        if self.put_away(folder, name, stuck.cause).await.is_ok() {
+            self.stuck.remove(name);
+        }
+        true
+    }
+
     /// Moves a taken file to `added/` (or deletes it, in delete mode) or
-    /// to `failed/` with its cause in its name. A file that can't be moved
-    /// or deleted is remembered, never read again; when [`MAX_STUCK`] are,
-    /// the watch stops.
+    /// to `failed/` with its cause in its name.
+    async fn put_away(
+        &self,
+        folder: &std::sync::Arc<Folder>,
+        name: &OsStr,
+        cause: Option<Cause>,
+    ) -> Result<(), MoveError> {
+        let delete = cause.is_none() && self.after == After::Delete;
+        let f = folder.clone();
+        let n = name.to_os_string();
+        blocking(move || {
+            if delete {
+                f.remove(&n)
+            } else {
+                f.move_out(&n, cause)
+            }
+        })
+        .await
+    }
+
+    /// Puts a taken file away and counts it. One that can't be moved or
+    /// deleted is remembered, never read again, and reported once; when
+    /// [`MAX_STUCK`] are, the watch holds.
     async fn finish(
         &mut self,
         folder: &std::sync::Arc<Folder>,
@@ -359,35 +438,32 @@ impl Watcher {
         cause: Option<Cause>,
         out: &mut Polled,
     ) {
-        let delete = cause.is_none() && self.after == After::Delete;
-        let f = folder.clone();
-        let n = name.to_os_string();
-        let done = blocking(move || {
-            if delete {
-                f.remove(&n)
-            } else {
-                f.move_out(&n, cause)
-            }
-        })
-        .await;
         match cause {
             None => out.added += 1,
+            Some(Cause::Failed) => {
+                out.failed += 1;
+                out.errors += 1;
+            }
             Some(_) => out.failed += 1,
         }
-        match done {
+        match self.put_away(folder, name, cause).await {
             Ok(()) => {}
-            Err(MoveError::Subfolder(p)) => self.stop(p, out),
+            // Checked again next poll; the file stays where it is.
+            Err(MoveError::Subfolder(p)) => {
+                self.stuck
+                    .insert(name.to_os_string(), Stuck { shape, cause });
+                out.problem = Some(p);
+            }
             Err(MoveError::Io) => {
-                let key = (name.to_os_string(), shape.unwrap_or((u64::MAX, None)));
                 if self.stuck.len() >= MAX_STUCK {
-                    self.stop(Problem::TooManyStuck, out);
+                    self.halted = true;
                     return;
                 }
-                if self.stuck.insert(key) {
-                    log_event!(WATCH_STUCK, stuck = Count(self.stuck.len() as u64));
-                }
+                self.stuck
+                    .insert(name.to_os_string(), Stuck { shape, cause });
+                log_event!(WATCH_STUCK, stuck = Count(self.stuck.len() as u64));
                 if self.stuck.len() >= MAX_STUCK {
-                    self.stop(Problem::TooManyStuck, out);
+                    self.halted = true;
                 }
             }
         }
@@ -482,8 +558,12 @@ struct Folder {
 }
 
 impl Folder {
-    fn open(path: &Path) -> Result<Folder, Problem> {
-        if let Some(p) = crate::settings::watch_folder::shape_problem(path) {
+    /// The folder as it is now: checked again every poll (its shape and
+    /// the data-directory rule, so a folder swapped for a link, or for one
+    /// inside the data directory, is never read), then opened without
+    /// following it and its `added/` and `failed/` checked.
+    fn open(path: &Path, data_dir: &Path) -> Result<Folder, Problem> {
+        if let Some(p) = folder_problem(path, data_dir) {
             return Err(Problem::Folder(p));
         }
         #[cfg(unix)]
@@ -494,12 +574,11 @@ impl Folder {
                 OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
                 Mode::empty(),
             )
-            .map_err(|e| {
-                Problem::Folder(if e == rustix::io::Errno::LOOP {
-                    FolderProblem::Link
-                } else {
-                    FolderProblem::Missing
-                })
+            .map_err(|e| match e {
+                rustix::io::Errno::LOOP => Problem::Folder(FolderProblem::Link),
+                rustix::io::Errno::NOENT => Problem::Folder(FolderProblem::Missing),
+                rustix::io::Errno::NOTDIR => Problem::Folder(FolderProblem::NotDirectory),
+                _ => Problem::Unreadable,
             })?
         };
         let f = Folder {
@@ -546,15 +625,20 @@ impl Folder {
         }
     }
 
-    /// The `.torrent` names directly in the folder, at most [`MAX_SCAN`]
-    /// entries looked at.
+    /// The `.torrent` names directly in the folder: at most [`MAX_SCAN`]
+    /// of them, among at most [`MAX_LIST`] entries read. Only `.torrent`
+    /// names count against the first, so other files and folders that stay
+    /// there can't hide a new torrent.
     fn list(&self) -> std::io::Result<Vec<OsString>> {
         let mut names = Vec::new();
-        for entry in std::fs::read_dir(&self.path)?.take(MAX_SCAN) {
+        for entry in std::fs::read_dir(&self.path)?.take(MAX_LIST) {
             let Ok(entry) = entry else { continue };
             let name = entry.file_name();
             if is_torrent_name(&name) {
                 names.push(name);
+                if names.len() == MAX_SCAN {
+                    break;
+                }
             }
         }
         Ok(names)
@@ -689,13 +773,24 @@ impl Folder {
         Ok(())
     }
 
+    /// A hard link at the target, which fails if anything is there, then
+    /// the original removed: never over a file (`std::fs::rename` would
+    /// replace one, so it's never used). Where hard links aren't there
+    /// (FAT, exFAT, some shares) the move fails, and the file joins the
+    /// never-read-again set (runner, 2026-11-12). A link entry isn't
+    /// moved at all: a hard link to a link isn't defined the same way
+    /// everywhere, so it stays where it is, never read. Should Lodestar
+    /// stop between the link and the removal, both names are left and the
+    /// next poll may submit the file again: harmless, the store keeps one
+    /// torrent per info hash.
     #[cfg(windows)]
     fn rename_no_replace(&self, name: &OsStr, sub: &str, target: &OsStr) -> std::io::Result<()> {
-        let to = self.path.join(sub).join(target);
-        if std::fs::symlink_metadata(&to).is_ok() {
-            return Err(std::io::ErrorKind::AlreadyExists.into());
+        let from = self.path.join(name);
+        if std::fs::symlink_metadata(&from).is_ok_and(|m| is_link(&m)) {
+            return Err(std::io::ErrorKind::Unsupported.into());
         }
-        std::fs::rename(self.path.join(name), to)
+        std::fs::hard_link(&from, self.path.join(sub).join(target))?;
+        std::fs::remove_file(&from)
     }
 
     fn remove(&self, name: &OsStr) -> Result<(), MoveError> {
@@ -747,8 +842,9 @@ fn busy(e: &std::io::Error) -> bool {
 }
 
 /// Follows the `watch` section: applies it at once and whenever it
-/// changes (checking the folder again each time), and polls every
-/// [`POLL_EVERY`] while it's on. Ends when the registry goes away.
+/// changes, and polls every [`POLL_EVERY`] while it's on. A problem is
+/// logged when it starts and the recovery when it ends, never per poll.
+/// Ends when the registry goes away.
 pub fn follow(
     mut rx: watch::Receiver<Watch>,
     data_dir: PathBuf,
@@ -756,7 +852,8 @@ pub fn follow(
 ) -> JoinHandle<()> {
     let first = rx.borrow_and_update().clone();
     tokio::spawn(async move {
-        let mut watcher = apply(&first, &data_dir, None);
+        let mut shown = None;
+        let mut watcher = apply(&first, &data_dir, None, &mut shown);
         let mut tick = tokio::time::interval(POLL_EVERY);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -766,7 +863,7 @@ pub fn follow(
                         return;
                     }
                     let now = rx.borrow_and_update().clone();
-                    watcher = apply(&now, &data_dir, watcher.as_ref());
+                    watcher = apply(&now, &data_dir, watcher.take(), &mut shown);
                 }
                 _ = tick.tick() => {
                     let Some(w) = watcher.as_mut() else { continue };
@@ -775,36 +872,51 @@ pub fn follow(
                         log_event!(
                             WATCH_TOOK,
                             added = Count(polled.added),
-                            failed = Count(polled.failed)
+                            failed = Count(polled.failed),
+                            errors = Count(polled.errors)
                         );
                     }
-                    if let Some(p) = polled.stopped {
-                        log_event!(WATCH_DISABLED, reason = p.code());
-                    }
+                    show(polled.problem, &mut shown);
                 }
             }
         }
     })
 }
 
-/// The watcher for `settings`, logging the change from `before`.
-fn apply(settings: &Watch, data_dir: &Path, before: Option<&Watcher>) -> Option<Watcher> {
-    match Watcher::new(settings, data_dir) {
-        None => {
-            if before.is_some() {
-                log_event!(WATCH_STOPPED);
-            }
-            None
-        }
-        Some(Err(p)) => {
-            log_event!(WATCH_DISABLED, reason = p.code());
-            None
-        }
-        Some(Ok(w)) => {
-            log_event!(WATCH_STARTED);
-            Some(w)
-        }
+/// Logs a change of problem: `watch.disabled` when one starts or
+/// changes, `watch.started` when it clears.
+fn show(problem: Option<Problem>, shown: &mut Option<Option<Problem>>) {
+    if *shown == Some(problem) {
+        return;
     }
+    match problem {
+        Some(p) => log_event!(WATCH_DISABLED, reason = p.code()),
+        None => log_event!(WATCH_STARTED),
+    }
+    *shown = Some(problem);
+}
+
+/// The watcher for `settings`, keeping `before`'s memory of the same
+/// folder, with the change logged.
+fn apply(
+    settings: &Watch,
+    data_dir: &Path,
+    before: Option<Watcher>,
+    shown: &mut Option<Option<Problem>>,
+) -> Option<Watcher> {
+    let Some(mut w) = Watcher::new(settings, data_dir) else {
+        if before.is_some() {
+            log_event!(WATCH_STOPPED);
+        }
+        *shown = None;
+        return None;
+    };
+    if let Some(b) = before {
+        w.inherit(b);
+    }
+    *shown = None;
+    show(w.check(), shown);
+    Some(w)
 }
 
 #[cfg(test)]
@@ -873,7 +985,7 @@ mod tests {
                 folder: self.dir().to_string_lossy().into_owned(),
                 after,
             };
-            Watcher::new(&w, self.data.path()).unwrap().unwrap()
+            Watcher::new(&w, self.data.path()).unwrap()
         }
         fn names(&self, sub: &str) -> Vec<String> {
             let mut v: Vec<String> = std::fs::read_dir(self.dir().join(sub))
@@ -934,7 +1046,7 @@ mod tests {
         let f = Fake::default();
         let mut w = t.watcher(After::Move);
         let p = settle(&mut w, &f).await;
-        assert_eq!((p.added, p.failed), (1, 4));
+        assert_eq!((p.added, p.failed, p.errors), (1, 4, 1));
         assert_eq!(
             t.names(FAILED),
             [
@@ -1100,12 +1212,57 @@ mod tests {
             after: After::Move,
         };
         std::fs::create_dir(t.data.path().join("x")).unwrap();
-        assert!(matches!(
-            Watcher::new(&inside, t.data.path()),
-            Some(Err(Problem::Folder(FolderProblem::InsideDataDir)))
-        ));
+        std::fs::write(t.data.path().join("x").join("a.torrent"), b"fine").unwrap();
+        let mut w = Watcher::new(&inside, t.data.path()).unwrap();
+        let want = Some(Problem::Folder(FolderProblem::InsideDataDir));
+        assert_eq!(w.check(), want);
+        let f = Fake::default();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        for _ in 0..2 {
+            assert_eq!(rt.block_on(w.poll(&f)).problem, want);
+        }
+        assert_eq!(calls(&f), 0, "nothing read");
+        assert!(
+            !t.data.path().join("x").join(ADDED).exists(),
+            "nothing made"
+        );
         let off = Watch::default();
         assert!(Watcher::new(&off, t.data.path()).is_none());
+    }
+
+    #[tokio::test]
+    async fn other_entries_dont_hide_a_new_torrent() {
+        let t = T::new();
+        // More other entries than `.torrent` names a poll keeps.
+        for i in 0..MAX_SCAN + 50 {
+            t.put(&format!("{i:04}.txt"), b"x");
+        }
+        t.put("zz.torrent", b"fine");
+        let f = Fake::default();
+        let mut w = t.watcher(After::Move);
+        assert_eq!(settle(&mut w, &f).await.added, 1);
+    }
+
+    /// A change to the section that keeps the folder keeps what the
+    /// watcher knows, so nothing it holds back is read again.
+    #[tokio::test]
+    async fn a_change_that_keeps_the_folder_keeps_its_memory() {
+        let t = T::new();
+        t.put("a.torrent", b"fine");
+        let f = Fake::default();
+        let mut w = t.watcher(After::Move);
+        w.poll(&f).await;
+        let delete = Watch {
+            folder: t.dir().to_string_lossy().into_owned(),
+            after: After::Delete,
+        };
+        let mut shown = None;
+        let mut w = apply(&delete, t.data.path(), Some(w), &mut shown).unwrap();
+        // Seen once already: taken on this poll, and deleted now.
+        assert_eq!(w.poll(&f).await.added, 1);
+        assert!(t.top().is_empty() && t.names(ADDED).is_empty());
     }
 
     #[test]
@@ -1169,7 +1326,7 @@ mod tests {
         fn a_swap_for_a_link_after_listing_is_refused() {
             let t = T::new();
             t.put("swap.torrent", b"fine");
-            let folder = Folder::open(t.dir()).ok().unwrap();
+            let folder = Folder::open(t.dir(), t.data.path()).ok().unwrap();
             let Some(Entry::File(shape)) = folder.entry(OsStr::new("swap.torrent")) else {
                 panic!("listed as a file");
             };
@@ -1209,13 +1366,17 @@ mod tests {
             t.put("a.torrent", b"fine");
             let f = Fake::default();
             let mut w = t.watcher(After::Move);
-            let p = w.poll(&f).await;
-            assert_eq!(p.stopped, Some(Problem::SubfolderLink));
-            assert_eq!(w.stopped(), Some(Problem::SubfolderLink));
+            for _ in 0..2 {
+                let p = w.poll(&f).await;
+                assert_eq!(p.problem, Some(Problem::SubfolderLink));
+            }
             assert_eq!(calls(&f), 0);
             assert!(std::fs::read_dir(outside.path()).unwrap().next().is_none());
-            // Stopped stays stopped.
-            assert_eq!(w.poll(&f).await, Polled::default());
+            // Fixed: it resumes on the next polls.
+            std::fs::remove_file(t.dir().join(ADDED)).unwrap();
+            let p = settle(&mut w, &f).await;
+            assert_eq!((p.added, p.problem), (1, None));
+            assert_eq!(t.names(ADDED), ["a.torrent"]);
         }
 
         #[tokio::test]
@@ -1228,9 +1389,55 @@ mod tests {
             std::fs::rename(t.dir(), &real).unwrap();
             std::os::unix::fs::symlink(&real, t.dir()).unwrap();
             let p = w.poll(&f).await;
-            assert_eq!(p.stopped, Some(Problem::Folder(FolderProblem::Link)));
+            assert_eq!(p.problem, Some(Problem::Folder(FolderProblem::Link)));
             std::fs::remove_file(t.dir()).unwrap();
             std::fs::rename(&real, t.dir()).unwrap();
+        }
+
+        /// A link that can't be moved is retried quietly: counted and
+        /// reported once, not on every poll.
+        #[tokio::test]
+        async fn a_link_that_cant_be_moved_is_reported_once() {
+            let t = T::new();
+            let outside = tempfile::tempdir().unwrap();
+            let name = format!("{}.torrent", "l".repeat(244));
+            std::os::unix::fs::symlink(outside.path(), t.dir().join(&name)).unwrap();
+            let f = Fake::default();
+            let mut w = t.watcher(After::Move);
+            assert_eq!(w.poll(&f).await.failed, 1);
+            for _ in 0..3 {
+                assert_eq!(w.poll(&f).await, Polled::default());
+            }
+            assert_eq!(w.stuck.len(), 1);
+        }
+
+        /// A folder written with a trailing separator is still checked as
+        /// itself: a link written `link/` is refused, and a folder swapped
+        /// for one into the data directory is never read.
+        #[tokio::test]
+        async fn a_trailing_separator_doesnt_hide_a_link() {
+            let t = T::new();
+            let link = t.root.path().join("link");
+            std::os::unix::fs::symlink(t.data.path(), &link).unwrap();
+            std::fs::write(t.data.path().join("in.torrent"), b"fine").unwrap();
+            let w = Watch {
+                folder: format!("{}/", link.display()),
+                after: After::Move,
+            };
+            assert!(crate::settings::Section::check(&w, "folder").is_err());
+            let mut watcher = Watcher::new(&w, t.data.path()).unwrap();
+            let f = Fake::default();
+            for _ in 0..2 {
+                assert_eq!(
+                    watcher.poll(&f).await.problem,
+                    Some(Problem::Folder(FolderProblem::Link))
+                );
+            }
+            assert_eq!(calls(&f), 0);
+            assert_eq!(
+                std::fs::read(t.data.path().join("in.torrent")).unwrap(),
+                b"fine"
+            );
         }
 
         /// A file that can't be moved (here, its name in `failed/` would
@@ -1245,7 +1452,7 @@ mod tests {
             let f = Fake::default();
             let mut w = t.watcher(After::Move);
             let p = settle(&mut w, &f).await;
-            assert_eq!((p.failed, p.stopped), (1, None));
+            assert_eq!((p.failed, p.problem), (1, None));
             for _ in 0..3 {
                 assert_eq!(w.poll(&f).await.failed, 0);
             }
@@ -1256,7 +1463,11 @@ mod tests {
             }
             w.poll(&f).await;
             let p = w.poll(&f).await;
-            assert_eq!(p.stopped, Some(Problem::TooManyStuck));
+            assert_eq!(p.problem, Some(Problem::TooManyStuck));
+            // It holds: nothing more is read.
+            let before = calls(&f);
+            assert_eq!(w.poll(&f).await.problem, Some(Problem::TooManyStuck));
+            assert_eq!(calls(&f), before);
             let log = crate::test_log::text();
             assert!(!log.contains("qqqqqqqq"), "no file name: {log}");
             assert!(log.contains("event=\"watch.stuck\""), "{log}");

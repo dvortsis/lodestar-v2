@@ -46,9 +46,13 @@ pub struct Watch {
 }
 
 impl Watch {
-    /// The folder, when one is set.
+    /// The folder, when one is set, rebuilt from its components: a
+    /// trailing separator or `.` is dropped, since on Unix `lstat` and
+    /// `O_NOFOLLOW` resolve a last component written as `link/`, so the
+    /// checks that the folder isn't a link would pass for one.
     pub fn folder(&self) -> Option<PathBuf> {
-        (!self.folder.trim().is_empty()).then(|| PathBuf::from(self.folder.trim()))
+        let raw = self.folder.trim();
+        (!raw.is_empty()).then(|| Path::new(raw).components().collect())
     }
 }
 
@@ -224,6 +228,34 @@ mod tests {
             shape_problem(&dir.path().join("missing")),
             Some(FolderProblem::Missing)
         );
+    }
+
+    /// A trailing separator or `.` is dropped before any check, so a link
+    /// written as `link/` is still seen as a link.
+    #[test]
+    fn the_folder_is_normalised_before_it_is_checked() {
+        let sep = std::path::MAIN_SEPARATOR;
+        let w = |s: String| Watch {
+            folder: s,
+            after: After::Move,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let plain = dir.path().to_path_buf();
+        for written in [
+            format!("{}{sep}", plain.display()),
+            format!("{}{sep}.", plain.display()),
+            format!("{}{sep}.{sep}", plain.display()),
+        ] {
+            assert_eq!(w(written).folder(), Some(plain.clone()));
+        }
+        #[cfg(unix)]
+        {
+            let link = dir.path().join("link");
+            std::os::unix::fs::symlink(&plain, &link).unwrap();
+            let folder = w(format!("{}/", link.display())).folder().unwrap();
+            assert_eq!(shape_problem(&folder), Some(FolderProblem::Link));
+            assert!(w(format!("{}/", link.display())).check("folder").is_err());
+        }
     }
 
     #[test]
