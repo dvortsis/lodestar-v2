@@ -73,6 +73,12 @@ pub struct SynthTorrent {
     pub discovered_at: i64,
 }
 
+/// The generator's version. Raise it in the same change as anything that
+/// alters the stream a seed gives (names, layouts, the mix, sizes, times),
+/// so a persisted benchmark dataset built by an older generator is refused
+/// rather than reported as this one ([`crate::dataset::Key`]).
+pub const VERSION: u32 = 1;
+
 /// A fixed reference time so output never depends on the clock.
 pub const EPOCH: i64 = 1_767_225_600; // 2026-01-01T00:00:00Z
 
