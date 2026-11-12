@@ -316,6 +316,10 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_update_install_failed_n,
 		m.settings_logging_ev_update_install_failed_h
 	],
+	'update.install_stopped': [
+		m.settings_logging_ev_update_install_stopped_n,
+		m.settings_logging_ev_update_install_stopped_h
+	],
 	'update.state_unsaved': [
 		m.settings_logging_ev_update_state_unsaved_n,
 		m.settings_logging_ev_update_state_unsaved_h
