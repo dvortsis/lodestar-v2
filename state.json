@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T06:21:10Z",
+  "updated_at": "2026-11-12T06:28:11Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7987,7 +7987,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T06:21:10Z",
+    "updated": "2026-11-12T06:28:11Z",
     "items": [
       {
         "slot": 1,
@@ -8030,7 +8030,7 @@
         "slice": "RX-0",
         "role": "build",
         "agent": "claude",
-        "doing": "#717: told to bring main in (spool flake fix), push once, report ready; then fresh delta review vs rv-717-8424bfa6",
+        "doing": "#717 rv-717-bfbdb9a6 CHANGES (B2: bracketed negated Perl/nested negated classes bypass codepoint budget, 691 ms) relayed; fix round, then fresh delta review",
         "since": "2026-11-11T21:46:53Z",
         "status": "active"
       },
@@ -8111,7 +8111,7 @@
     }
   ],
   "heartbeat": "2026-11-12T03:41:56Z",
-  "updated": "2026-11-12T06:21:10Z",
+  "updated": "2026-11-12T06:28:11Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
