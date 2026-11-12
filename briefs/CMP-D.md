@@ -1,6 +1,6 @@
 # CMP-D (Sonnet, docs): user guide on companions, per platform
 
-Assigned by the runner on 2026-11-11 to the session that built PK-ops (#700, merged as 912934ca). The slices.yaml entry is CMP-D, spec architecture §18.10 (docs/architecture.md:3218 onwards) and docs/owner-decisions.md §2.14. Use the user-docs skill, which builds on github-docs.
+Assigned by the runner on 2026-11-11; relaunched in a fresh session on 2026-11-12 (the first assignee declined a peer-message assignment, correctly). The slices.yaml entry is CMP-D, spec architecture §18.10 (docs/architecture.md:3218 onwards) and docs/owner-decisions.md §2.14. Use the user-docs skill, which builds on github-docs.
 
 ## 1. Read first
 - **§18.10 Companion manager:** the catalogue, platform modes, detection, auto-configuration, guided setup and safety rules.
@@ -31,8 +31,7 @@ Write `docs/user/companions.md` (owned). If the guide's chapter numbering needs 
 7. **`docs/user/README.md` index:** a shared edit adding one line for the chapter.
 
 ## 3. Don't
-- Don't edit glossary.md, index.md, revisions.md or appendix-a-answers.md while PK-guide-2 is open, because it owns them.
-  - If PK-guide-2 has merged by the time you're ready, bring main in and add your entries.
+- PK-guide-2 has merged (#704), so you may add your entries to glossary.md, index.md, revisions.md and appendix-a-answers.md: small, additive edits only.
   - Otherwise list the entries you need in the PR description, and the runner adds them after both merge.
 - Don't edit docs/operations.md, chapter 04 or 06, `runner/`, packaging or code.
 
