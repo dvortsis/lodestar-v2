@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T18:09:17Z",
+  "updated_at": "2026-11-12T18:16:59Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7386,11 +7386,6 @@
       "logged": "2026-11-12T16:57:53Z"
     },
     {
-      "id": "X-ci-deploy-aws-test",
-      "what": "Wire infra/akamai/terraform/tests/Test-DeployAwsWindows.ps1 (stub aws CLI, offline) into ci.yml next to Test-StateBackend.ps1, after #770 merges.",
-      "logged": "2026-11-12T17:12:50Z"
-    },
-    {
       "id": "X-adult-hidden-finder-window",
       "what": "rv-767 O2 (pre-existing): torrents.rs load() decides the adult_hidden 404 from stored type only; during the reclassification window, with Show adult off, a torrent found only by an always-adult source still serves its name and files (no sections). Content-safety: decide fix (use the always-adult finder mask in load) after #767 merges.",
       "logged": "2026-11-12T17:28:49Z"
@@ -8198,6 +8193,11 @@
       "pr": 768,
       "sha": "d20bc0ac0fc379b501e284eb9912c668372d8946",
       "at": "2026-11-12T18:04:39Z"
+    },
+    {
+      "pr": 771,
+      "sha": "65dda95ee86cd861f29efa82743396a2155a6848",
+      "at": "2026-11-12T18:16:59Z"
     }
   ],
   "active_sessions": {
@@ -8568,7 +8568,7 @@
     }
   ],
   "heartbeat": "2026-11-12T15:41:01Z",
-  "updated": "2026-11-12T18:09:17Z",
+  "updated": "2026-11-12T18:16:59Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -8797,7 +8797,7 @@
     ]
   },
   "extra": {
-    "updated": "2026-11-12T18:09:17Z",
+    "updated": "2026-11-12T18:16:59Z",
     "max": 2,
     "items": [
       {
@@ -8808,10 +8808,10 @@
         "since": "2026-11-12T16:09:35Z"
       },
       {
-        "slice": "X-test-infra-nits",
+        "slice": "X-ci-deploy-aws-test",
         "role": "build",
-        "doing": "#771 CHANGES relayed (B1 short fixture per mask, B2 -creplace; + four example account ids -> 111122223333); fix round",
-        "since": "2026-11-12T17:37:15Z",
+        "doing": "run Test-DeployAwsWindows.ps1 under pwsh in the existing infra CI job; no permissions/secrets changes",
+        "since": "2026-11-12T18:16:59Z",
         "agent": "session_01MMjhnApj842sdoDVQHBSn3"
       }
     ],
