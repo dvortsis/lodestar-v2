@@ -31,7 +31,8 @@ concurrency:
   # Scheduled runs get their own group, so a push to main can't cancel
   # the nightly (G-m5a).
   group: ${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || github.ref }}
-  cancel-in-progress: true
+  # Only pull requests cancel superseded runs; main runs finish in order.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
