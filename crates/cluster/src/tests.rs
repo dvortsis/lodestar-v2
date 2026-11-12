@@ -1548,7 +1548,7 @@ mod queues {
             .unwrap();
         assert_eq!(s.leases(), 0);
         // A `Fetched` arriving after the commit (the usual order) isn't a
-        // stale report: the key has no lease left.
+        // stale report: the key was committed lately.
         s.report(vec![report(1, t1, Outcome::Fetched)])
             .await
             .unwrap();
