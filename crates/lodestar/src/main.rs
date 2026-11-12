@@ -298,13 +298,11 @@ async fn serve_as(
         Ok(s) => s,
         Err(e) => {
             #[cfg(windows)]
-            if let Some(lock) = probation.take() {
-                if let Some(code) =
-                    update::windows::portable::serve::start_failed(&config.data_dir, lock)
-                {
-                    eprintln!("lodestar serve: {e}; the previous version is starting instead");
-                    return Ok(Some(code));
-                }
+            if let Some(code) = probation.take().and_then(|lock| {
+                update::windows::portable::serve::start_failed(&config.data_dir, lock)
+            }) {
+                eprintln!("lodestar serve: {e}; the previous version is starting instead");
+                return Ok(Some(code));
             }
             return Err(e);
         }

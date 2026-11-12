@@ -777,6 +777,7 @@ fn last(name: &Normalised) -> &str {
 }
 
 fn create_dir(path: &Path) -> io::Result<()> {
+    #[cfg_attr(not(unix), allow(unused_mut))] // only Unix sets a mode
     let mut b = fs::DirBuilder::new();
     #[cfg(unix)]
     {

@@ -114,6 +114,10 @@ pub struct Journal {
     #[serde(default, with = "chosen")]
     pub restore: Option<Option<Snapshot>>,
     pub state: State,
+    /// This attempt's own id (random), so each install of the same build
+    /// is its own history entry. Absent in a journal from before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<u64>,
 }
 
 /// A snapshot the rollback restores: its name beside the store and its
@@ -307,6 +311,7 @@ pub fn install(
             attempts: 0,
             restore: None,
             state: State::Staged,
+            attempt: getrandom::u64().ok(),
         };
         write(bin, &j)?;
         swap(sys, bin, &mut j)
@@ -680,6 +685,7 @@ fn rolling_back(sys: &dyn Sys, bin: &Bin, db: &Path, j: Journal) -> Start {
         &j.from,
         &j.to,
         history::Outcome::RolledBack,
+        j.attempt,
         &j.new_sha256,
         crate::unix_now(),
     );
@@ -763,6 +769,7 @@ pub fn passed(sys: &dyn Sys, data_dir: &Path) {
         &j.from,
         &j.to,
         history::Outcome::Installed,
+        j.attempt,
         &j.new_sha256,
         crate::unix_now(),
     );
@@ -1625,6 +1632,8 @@ mod tests {
     fn a_passed_self_test_keeps_the_update() {
         let f = Fake::new();
         f.install().unwrap();
+        // Each install attempt has its own id, for its history entry.
+        assert!(f.journal().unwrap().attempt.is_some());
         // Only the new version can pass it.
         passed(&f, &f.data());
         assert!(f.journal().is_some());
@@ -1878,6 +1887,7 @@ mod tests {
             attempts: 0,
             restore: None,
             state,
+            attempt: None,
         };
         f.bin().write(JOURNAL, &j).unwrap();
         let path = f.app.join(PROGRAM);
@@ -1966,6 +1976,7 @@ mod tests {
             attempts: 0,
             restore: None,
             state: State::Swapped,
+            attempt: None,
         })
         .unwrap();
         f.bin().write(JOURNAL, &j).unwrap();
@@ -1996,6 +2007,7 @@ mod tests {
                 attempts: 0,
                 restore: None,
                 state: State::Swapped,
+                attempt: None,
             })
             .unwrap()
         };

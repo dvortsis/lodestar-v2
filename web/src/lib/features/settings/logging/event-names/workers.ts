@@ -75,5 +75,9 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 	'workers.revoked': [
 		m.settings_logging_ev_workers_revoked_n,
 		m.settings_logging_ev_workers_revoked_h
+	],
+	'pipeline.spool_damaged': [
+		m.settings_logging_ev_pipeline_spool_damaged_n,
+		m.settings_logging_ev_pipeline_spool_damaged_h
 	]
 };

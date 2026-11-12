@@ -2,9 +2,10 @@
 //! history.json`, in the Unix engine's format (`update/history.rs`, which
 //! is Unix-only), so the same file reads the same on either.
 //!
-//! **The service writes it, never the update helper.** At the notifier's
-//! start, the helper's last answer (`<data>\updates\result.json`) is
-//! turned into at most one entry. The helper gains no file and no right
+//! **The service writes it, never the update helper.** Each time the
+//! service looks (at its start, at every status, at each check-loop wake
+//! and before a hand-over), the helper's last answer
+//! (`<data>\updates\result.json`) is turned into at most one entry. The helper gains no file and no right
 //! (§2.47 Q13). The answer is display-only input that this account can
 //! write too, so it's checked before anything is kept: the version must
 //! parse, the outcome must be one that ends an install, and the time must
@@ -132,14 +133,15 @@ struct Seen {
 }
 
 /// Records the helper's `answer` unless it was recorded before (even if
-/// the history was cleared since); the entry when it was added.
+/// the history was cleared since); the entry when it was added. A failed
+/// write names its file.
 pub fn record(
     bin: &Bin,
     answer: &Answer,
     running: &Version,
     now: u64,
     fault: &dyn Fn(Step) -> io::Result<()>,
-) -> io::Result<Option<Entry>> {
+) -> Result<Option<Entry>, (&'static str, io::Error)> {
     let Some(entry) = entry_for(answer, running, now) else {
         return Ok(None);
     };
@@ -153,21 +155,32 @@ pub fn record(
     {
         return Ok(None);
     }
-    let added = append(bin, entry.clone(), fault)?;
+    let added = append(bin, entry.clone(), fault).map_err(|e| (FILE, e))?;
     let seen = Seen {
         id: answer.id.clone(),
         outcome: answer.outcome.clone(),
     };
-    bin.write_acknowledged(SEEN, &seen, fault)?;
+    bin.write_acknowledged(SEEN, &seen, fault)
+        .map_err(|e| (SEEN, e))?;
     Ok(added.then_some(entry))
 }
 
 /// The portable build's own install or rollback (`portable.rs`), which
-/// finish in this process: no answer, so `key` (the new program's SHA-256,
-/// hex, from the journal) stands for it, the same at every repeat of the
-/// step, so a repeat adds nothing. `now` is the clock. Best effort, as
-/// the record must never stop the step: a failed write is logged.
-pub fn record_portable(bin: &Bin, from: &str, to: &str, result: Outcome, key: &str, now: i64) {
+/// finish in this process: no answer, so the journal's `attempt` id (or,
+/// in a journal from before it, `key`, the new program's SHA-256 in hex)
+/// stands for it. It's the same at every repeat of the step, so a repeat
+/// adds nothing, and each install attempt is its own entry. `now` is the
+/// clock. Best effort, as the record must never stop the step: a failed
+/// write is logged.
+pub fn record_portable(
+    bin: &Bin,
+    from: &str,
+    to: &str,
+    result: Outcome,
+    attempt: Option<u64>,
+    key: &str,
+    now: i64,
+) {
     let Some(version) = parse_version(to) else {
         return;
     };
@@ -182,7 +195,7 @@ pub fn record_portable(bin: &Bin, from: &str, to: &str, result: Outcome, key: &s
         // The journal doesn't keep why the self-test failed.
         reason: None,
         lost_torrents: None,
-        journal: key.get(..16).and_then(|k| u64::from_str_radix(k, 16).ok()),
+        journal: attempt.or_else(|| key.get(..16).and_then(|k| u64::from_str_radix(k, 16).ok())),
     };
     if let Err(e) = append(bin, entry, &|_| Ok(())) {
         log_event!(
@@ -376,6 +389,37 @@ mod tests {
                 "{id}"
             );
         }
+    }
+
+    #[test]
+    fn a_failed_write_names_its_file() {
+        let (_dir, bin) = bin();
+        let running = Version::new(0, 5, 3);
+        std::fs::create_dir(bin.path(SEEN)).unwrap();
+        let a = answer("installed", "0.5.4", NOW);
+        let (file, _) = record(&bin, &a, &running, NOW, &ok).unwrap_err();
+        assert_eq!(file, SEEN);
+    }
+
+    /// The portable build: each attempt is its own entry (a build that
+    /// rolled back without being skipped, installed and rolled back
+    /// again), and a repeat of one attempt's step adds none.
+    #[test]
+    fn each_portable_attempt_is_its_own_entry() {
+        let (_dir, bin) = bin();
+        let key = "ab".repeat(32);
+        for attempt in [Some(1), Some(1), Some(2), None, None] {
+            record_portable(
+                &bin,
+                "0.5.4",
+                "0.5.5",
+                Outcome::RolledBack,
+                attempt,
+                &key,
+                NOW as i64,
+            );
+        }
+        assert_eq!(read(&bin).unwrap().entries.len(), 3);
     }
 
     #[test]

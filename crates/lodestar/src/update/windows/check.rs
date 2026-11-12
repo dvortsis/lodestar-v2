@@ -457,6 +457,11 @@ struct Inner {
     /// Looks at the helper's answer finished, for the tests.
     #[cfg(test)]
     looks: std::sync::atomic::AtomicU64,
+    /// The helper's answer whose record failed, until it's recorded.
+    unrecorded: Mutex<Option<super::msi::Answer>>,
+    /// How long the check loop sleeps at most, for a look even with
+    /// updates Off, in milliseconds: [`MAX_SLEEP`], shorter in tests.
+    look_every: std::sync::atomic::AtomicU64,
     /// The version being downloaded for the helper.
     installing: Mutex<Option<Version>>,
 }
@@ -526,6 +531,8 @@ impl Notifier {
                 at_lock: std::sync::atomic::AtomicU64::new(0),
                 #[cfg(test)]
                 looks: std::sync::atomic::AtomicU64::new(0),
+                unrecorded: Mutex::new(None),
+                look_every: std::sync::atomic::AtomicU64::new(MAX_SLEEP.as_millis() as u64),
                 installing: Mutex::new(None),
             }),
         };
@@ -638,7 +645,9 @@ impl Notifier {
                             if r.is_err() { return; }
                             continue;
                         }
-                        () = sleep(wait.map(|w| w.min(MAX_SLEEP))) => {}
+                        // Off has no check to wait for, but still wakes to
+                        // look at the helper's answer.
+                        () = sleep(Some(wait.map_or(n.look_every(), |w| w.min(n.look_every())))) => {}
                     }
                     if n.due() {
                         #[cfg(test)]
@@ -780,22 +789,35 @@ impl Notifier {
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 
+    fn look_every(&self) -> Duration {
+        Duration::from_millis(
+            self.inner
+                .look_every
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
+    }
+
     fn look_once(&self) {
         let Some(bin) = self.bin() else {
             return;
         };
         let ctx = &self.inner.ctx;
-        if let Some(answer) = super::msi::answer(&ctx.data_dir) {
-            let now = u64::try_from((self.inner.clock)()).unwrap_or(0);
+        // One whose record failed is kept here and tried first: a
+        // hand-over may have removed it from `result.json` since.
+        let kept = lock(&self.inner.unrecorded).take();
+        let now = u64::try_from((self.inner.clock)()).unwrap_or(0);
+        for answer in kept.into_iter().chain(super::msi::answer(&ctx.data_dir)) {
             // With `clear_history`, one writer at a time.
             let _state = lock(&self.inner.state);
-            if let Err(e) = history::record(&bin, &answer, &ctx.running, now, &*self.inner.fault) {
-                // Looked at again at the next look.
+            if let Err((file, e)) =
+                history::record(&bin, &answer, &ctx.running, now, &*self.inner.fault)
+            {
                 log_event!(
                     UPDATE_STATE_UNSAVED,
-                    file = history::FILE,
+                    file = file,
                     error = lodestar_log::Error::io(&e)
                 );
+                lock(&self.inner.unrecorded).get_or_insert(answer);
             }
         }
         let Some(last) = history::read(&bin)
@@ -2652,6 +2674,52 @@ mod tests {
         }
         stop.send(true).unwrap();
         task.await.unwrap();
+    }
+
+    /// With updates Off there's no check to wait for, but the loop still
+    /// wakes to look (at most [`MAX_SLEEP`] apart; shorter here).
+    #[tokio::test]
+    async fn with_updates_off_the_loop_still_looks() {
+        let e = Env::new(Mode::Off, InstallKind::Msi);
+        e.n()
+            .inner
+            .look_every
+            .store(20, std::sync::atomic::Ordering::Relaxed);
+        let (stop, stopped) = watch::channel(false);
+        let task = e.n().spawn(stopped);
+        let looks = || e.n().inner.looks.load(std::sync::atomic::Ordering::SeqCst);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        // The start's look and the loop's first, both before the answer.
+        while looks() < 2 {
+            assert!(Instant::now() < deadline, "no looks");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        answered(&e, "installed", "0.5.4", NOW - 10);
+        let bin = Bin::open(e.dir.path()).unwrap();
+        while history::read(&bin).unwrap_or_default().entries.is_empty() {
+            assert!(Instant::now() < deadline, "Off never looked again");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        stop.send(true).unwrap();
+        task.await.unwrap();
+    }
+
+    /// The look before a hand-over fails to record the answer: it's kept,
+    /// and the next look records it, though the hand-over removed it.
+    #[tokio::test]
+    async fn an_answer_whose_record_failed_is_kept_until_it_is_recorded() {
+        let e = Env::installing();
+        e.n().bin().unwrap();
+        answered(&e, "install_failed", "0.5.4", NOW - 10);
+        // `history.json` can't be written: a folder in its place.
+        std::fs::create_dir(e.bin_file(history::FILE)).unwrap();
+        handed_over(&e).await;
+        let updates = e.dir.path().join(super::super::msi::UPDATES);
+        assert!(!updates.join(super::super::msi::RESULT).exists());
+        std::fs::remove_dir(e.bin_file(history::FILE)).unwrap();
+        let s = UpdatesApi::status(e.n()).await;
+        assert_eq!(s.history.len(), 1);
+        assert_eq!(s.history[0].result, "failed");
     }
 
     /// The service's start records the answer through `spawn`.

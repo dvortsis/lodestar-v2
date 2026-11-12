@@ -66,5 +66,7 @@
 	"shell_return_insights": "Go to Insights",
 	"shell_stale_text": "A newer version of Lodestar is running. Reload to update.",
 	"shell_stale_unsaved": "Save or discard your changes first.",
-	"shell_stale_reload": "Reload"
+	"shell_stale_reload": "Reload",
+	"shell_status_restart": "Restart needed",
+	"shell_status_restart_help": "Saved settings apply after a restart. Open Settings to review them and restart."
 }

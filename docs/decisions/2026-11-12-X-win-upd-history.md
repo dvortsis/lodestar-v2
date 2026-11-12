@@ -1,4 +1,4 @@
-# X-win-upd-history decisions: the Windows install history, and the notice after a rollback
+# X-win-upd-history decisions (#722): the Windows install history, and the notice after a rollback
 
 Brief: `runner-state:briefs/X-win-upd-history.md`; PK-guide-3 found the gap, and rv-708 I5 the notice's. The code is `crates/lodestar/src/update/windows/history.rs` (new), `check.rs` and two calls in `portable.rs`. Calls here are the runner's under §2.19; the owner can veto them.
 

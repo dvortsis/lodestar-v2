@@ -56,7 +56,7 @@
 	"settings_updates_step_checking_health": "Checking health",
 	"settings_updates_step_current": "in progress",
 	"settings_updates_rolled_back": "The last update to {version} didn't work and was rolled back. {reason}",
-	"settings_updates_rolled_back_next": "You're running the version that worked, and the history below shows what happened. Wait for a newer version instead of installing this one again.",
+	"settings_updates_rolled_back_next": "You're running the version that worked, and the history below shows what happened. Wait for a version newer than the failed one.",
 	"settings_updates_how_heading": "How to update",
 	"settings_updates_contacts": "Checking for updates contacts GitHub. Off never does, unless you press Check now.",
 	"settings_updates_mode_off": "Off",
