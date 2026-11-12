@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T06:48:20Z",
+  "updated_at": "2026-11-12T06:57:51Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7987,7 +7987,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T06:48:20Z",
+    "updated": "2026-11-12T06:57:51Z",
     "items": [
       {
         "slot": 1,
@@ -8057,7 +8057,7 @@
         "slice": "X-test-vm",
         "role": "owner-started",
         "agent": "session_01MMjhnBD1KHxsn7QRHHmpeM",
-        "doing": "session_01MMjhnBD1KHxsn7QRHHmpeM: branch claude/dreamy-edison-xlmtoy ab257738 (slices.yaml + ws-fix placement done; PR after Linux VM proves tooling). Runner call 06:42Z: the VM's own Remote Control session counts against \u00a72.59 (sessions, not slices); first freed slot goes to it, second offered too.",
+        "doing": "session_01MMjhnBD1KHxsn7QRHHmpeM: branch claude/dreamy-edison-xlmtoy 487bbcf9. Owner authorized AWS setup in that session (transcript 06:49Z/06:52Z, verified by runner). Freed-slot queue, in order: (a) a new cloud session in env lodestar-cloud-test for the Windows lane (AWS setup + Windows a-d via SSM); (b) the Linux VM Remote Control session. Both count toward \u00a72.59.",
         "since": "2026-11-12T06:37:34Z",
         "status": "active"
       }
@@ -8120,7 +8120,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T06:48:20Z",
+  "updated": "2026-11-12T06:57:51Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
