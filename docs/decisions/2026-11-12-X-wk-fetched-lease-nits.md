@@ -6,12 +6,12 @@ Follow-up to X-wk-fetched-lease (#752), from its review rv-752. Brief: runner, 2
 - **Before:** #752 counted no `Fetched` report whose key had no lease, whatever the reason. The server looked the lease up after `fetched` had released the authority's lock.
 - **Now:** the authority answers `FetchedReport` under the one lock it marks with (`LeaseAuthority::fetched`):
   - **`Marked`:** the sender holds the key under that token, so the lease is marked;
-  - **`Committed`:** the key has no lease, isn't waiting for a re-grant, and is among the recent commits (`RECENT_COMMITS`, the set `serve_remote` turns on). The commit beat the report, the usual order;
-  - **`Stale`:** anything else, such as another token or holder, or a key this run doesn't know.
+  - **`Committed`:** the key has no lease, isn't waiting for a re-grant, and is among the recent commits (`RECENT_COMMITS`, the set `serve_remote` turns on; a loss as blocked joins it too). The commit beat the report, the usual order;
+  - **`Stale`:** anything else, such as a lease under another token or holder, a key waiting for a re-grant, or a key this run doesn't know.
 - **Only `Stale` counts** in `cluster_stale_reports_total`, and the `docs/metrics.md` row says so.
 - **The limits:**
-  - **The token:** the recent-commit set remembers keys, not tokens. A `Fetched` with a wrong token for a key committed lately counts as committed, not stale. That only changes a counter.
-  - **Old commits:** a commit older than the set's memory makes a late `Fetched` count as stale, which only happens far past any normal lag.
+  - **The sender and token:** the recent-commit set remembers keys only. A `Fetched` from another holder, or under a wrong token, for a key committed lately counts as committed, not stale. That only changes a counter.
+  - **Old commits:** the set holds `RECENT_COMMITS` keys, about ten seconds of commits at the §19.8 target rate. A `Fetched` arriving later than that after its commit, at full rate, counts as stale.
 
 ## The third way a lease ends (a refinement of §19.3)
 - **§19.3 names two ways:** the holder commits or reports a loss, or it goes silent past the TTL.
@@ -23,8 +23,8 @@ Follow-up to X-wk-fetched-lease (#752), from its review rv-752. Brief: runner, 2
 ## Tests
 - `a_marked_lease_of_a_silent_holder_expires_once`: a lease that is both marked and held by a silent worker expires once, with nothing lost. Its mark goes, and nothing is left for a later expiry.
 - `the_holders_claim_after_a_marked_lease_expires_is_granted_anew`: the holder's claim after the expiry is a re-grant under a new token, not a denial and not a second harvest.
-- `a_fetched_report_is_marked_committed_or_stale`: the three answers.
-- **`fetched_keeps_the_lease_and_results_need_a_sink`** (`crates/cluster/src/tests.rs`, unchanged): it still shows, over a real session, that a `Fetched` after the commit isn't counted. It now takes the `Committed` path.
+- `a_fetched_report_is_marked_committed_or_stale`: the three answers, including a key leased again since its commit and one waiting for a re-grant, both stale.
+- **`fetched_keeps_the_lease_and_results_need_a_sink`** (`crates/cluster/src/tests.rs`, one comment reworded): it still shows, over a real session, that a `Fetched` after the commit isn't counted. It now takes the `Committed` path.
 
 ## Not done: skipping hints for a marked lease
 - **What the brief offered,** as optional: stop relaying another worker's peer hints to the holder of a marked lease.

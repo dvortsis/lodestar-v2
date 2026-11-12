@@ -379,11 +379,14 @@ pub(crate) const LOSS_BLOCKED: u8 = 7;
 pub enum FetchedReport {
     /// The sender holds the key under that token: the lease is marked.
     Marked(Lease),
-    /// The key has no lease and was committed lately: the commit beat the
-    /// report, the usual order (`Fetched` goes out on `Accepted`).
+    /// The key has no lease, isn't waiting for a re-grant, and was
+    /// committed (or lost as blocked) lately: the commit beat the report,
+    /// the usual order (`Fetched` goes out on `Accepted`). The recent
+    /// commits are keys only, so this doesn't check the sender or token.
     Committed,
-    /// Anything else: another token or holder, or a key this run doesn't
-    /// know (or committed too long ago to remember).
+    /// Anything else: a lease under another token or holder, a key
+    /// waiting for a re-grant, or a key this run doesn't know (or
+    /// committed too long ago to remember: [`RECENT_COMMITS`]).
     Stale,
 }
 
@@ -771,11 +774,12 @@ impl LeaseAuthority {
     /// The holder's batch carrying `key`'s result was accepted
     /// (`Outcome::Fetched`): the lease stays for the commit, marked so the
     /// holder's own claims no longer get it back, and expires a TTL after
-    /// the mark if the commit never comes. Nothing is marked unless
-    /// `worker` holds the key under `token`; then the report is
-    /// [`FetchedReport::Committed`] if the key was committed lately (with
-    /// no lease or re-grant since), else [`FetchedReport::Stale`]. One lock
-    /// for the mark and the answer, so a commit can't land in between.
+    /// the mark if the commit never comes: [`FetchedReport::Marked`]. Only
+    /// if `worker` holds the key under `token`; otherwise nothing is
+    /// marked, and the report is [`FetchedReport::Committed`] if the key
+    /// was committed lately (with no lease or re-grant since), else
+    /// [`FetchedReport::Stale`]. One lock for the mark and the answer, so a
+    /// commit can't land in between.
     pub fn fetched(
         &self,
         worker: WorkerId,
@@ -2047,5 +2051,13 @@ mod tests {
             FetchedReport::Stale,
             "a key this run doesn't know"
         );
+        // Leased again since its commit (the built-in worker may), then
+        // waiting for a re-grant: the old token's report is stale both ways.
+        let Claimed::Granted(_) = a.claim(WorkerId::LOCAL, claim(1, 0), 3) else {
+            panic!()
+        };
+        assert_eq!(a.fetched(A, &key, t, 3), FetchedReport::Stale, "leased");
+        assert_eq!(a.evict(WorkerId::LOCAL), 1);
+        assert_eq!(a.fetched(A, &key, t, 3), FetchedReport::Stale, "pending");
     }
 }
