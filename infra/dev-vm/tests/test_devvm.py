@@ -97,12 +97,25 @@ class CreateTests(unittest.TestCase):
     def args(self, d, pub=PUB):
         p = Path(d) / "key.pub"
         p.write_text(pub)
-        return SimpleNamespace(ssh_pubkey_file=str(p), admin_ip="8.8.8.8", workdir=str(Path(d) / "w"))
+        return SimpleNamespace(ssh_pubkey_file=str(p), admin_ip="8.8.8.8", workdir=str(Path(d) / "w"),
+                               role="", type=devvm.TYPE)
 
-    def test_refuses_while_one_of_ours_exists(self):
-        api = FakeApi(linodes=[{"label": "claude-dev-20261101", "id": 1}])
+    def test_refuses_more_than_the_ceiling(self):
+        api = FakeApi(linodes=[{"label": f"claude-dev-2026110{i}", "id": i} for i in range(devvm.MAX_VMS)])
         with tempfile.TemporaryDirectory() as d, patched(api), self.assertRaises(SystemExit):
             devvm.cmd_create(self.args(d))
+        self.assertEqual(api.mutations(), [])
+
+    def test_refuses_an_existing_label_and_other_types(self):
+        with mock.patch.object(devvm.dt, "datetime", wraps=devvm.dt.datetime) as fake:
+            fake.now.return_value = devvm.dt.datetime(2026, 11, 12, tzinfo=devvm.dt.timezone.utc)
+            api = FakeApi(linodes=[{"label": "claude-dev-20261112-worker", "id": 1}])
+            with tempfile.TemporaryDirectory() as d, patched(api), self.assertRaises(SystemExit):
+                a = self.args(d); a.role = "worker"; a.type = "g6-nanode-1"
+                devvm.cmd_create(a)
+        with tempfile.TemporaryDirectory() as d, patched(FakeApi()), self.assertRaises(SystemExit):
+            a = self.args(d); a.type = "g6-standard-32"
+            devvm.cmd_create(a)
         self.assertEqual(api.mutations(), [])
 
     def test_refuses_a_private_key(self):
@@ -117,7 +130,7 @@ class CreateTests(unittest.TestCase):
             devvm.cmd_create(self.args(d))
             work = Path(d) / "w"
             self.assertFalse((work / "host_ed25519").exists())
-            self.assertTrue((work / "vm.json").exists())
+            self.assertEqual(len(list(work.glob("claude-dev-*.json"))), 1)
         self.assertEqual(api.mutations(), [("POST", "/networking/firewalls"), ("POST", "/linode/instances")])
 
 

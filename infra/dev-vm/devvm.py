@@ -11,12 +11,13 @@ Bearer header.
 
 Guard rails, enforced in code:
 - only resources whose label starts with PREFIX are ever changed or deleted;
-- `create` refuses while any PREFIX Linode exists (one VM at a time);
+- `create` refuses a label that exists, and more than MAX_VMS PREFIX Linodes;
+- only the types in TYPES;
 - `delete` needs the exact label typed as --confirm, and verifies a 404.
 
 Usage:
   devvm.py status
-  devvm.py create --ssh-pubkey-file KEY.pub --admin-ip A.B.C.D|none --workdir DIR
+  devvm.py create --ssh-pubkey-file KEY.pub --admin-ip A.B.C.D|none --workdir DIR [--role worker --type g6-nanode-1]
   devvm.py set-admin-ip --label claude-dev-YYYYMMDD --admin-ip A.B.C.D
   devvm.py delete --label claude-dev-YYYYMMDD --confirm claude-dev-YYYYMMDD
 """
@@ -28,6 +29,7 @@ import datetime as dt
 import ipaddress
 import json
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -40,6 +42,12 @@ API = "https://api.linode.com/v4"
 PREFIX = "claude-dev-"
 REGION = "us-east"
 TYPE = "g6-dedicated-4"
+# Types a test VM may use: the main lane's, and the 1 GiB worker lane's (Lane K).
+TYPES = ("g6-dedicated-4", "g6-nanode-1")
+MAX_VMS = 3  # a hard ceiling on concurrent claude-dev VMs
+# The owner's cap is $50 per cloud for the whole testing period (2026-11-12T16:58Z);
+# status warns from here so the coordinator can delete in time.
+STOP_USD = 45.0
 IMAGE = "linode/ubuntu24.04"
 TAGS = ["claude-dev"]
 HERE = Path(__file__).resolve().parent
@@ -80,18 +88,26 @@ def cmd_status(_a) -> None:
     acct = call("GET", "/account")
     linodes = all_pages("/linode/instances")
     fws = all_pages("/networking/firewalls")
-    hourly = call("GET", f"/linode/types/{TYPE}")["price"]["hourly"]
+    rates: dict[str, float] = {}
     now = dt.datetime.now(dt.timezone.utc)
     print(f"account {acct['euuid']} uninvoiced ${acct['balance_uninvoiced']:.2f} balance ${acct['balance']:.2f}")
     print(f"linodes on account: {len(linodes)} (ours: {len(ours(linodes))}); firewalls: {len(fws)} (ours: {len(ours(fws))})")
+    running = 0.0
     for x in linodes:
+        if x["type"] not in rates:
+            rates[x["type"]] = call("GET", f"/linode/types/{x['type']}")["price"]["hourly"]
         created = dt.datetime.fromisoformat(x["created"]).replace(tzinfo=dt.timezone.utc)
         hrs = (now - created).total_seconds() / 3600
-        mine = "ours" if x["label"].startswith(PREFIX) else "NOT OURS"
-        print(f"  {x['label']} [{mine}] id={x['id']} {x['type']} {x['status']} created={x['created']}Z "
-              f"age={hrs:.1f}h est=${hrs * hourly:.2f} ipv4={x['ipv4'][0] if x['ipv4'] else '-'}")
+        est = hrs * rates[x["type"]]
+        mine = x["label"].startswith(PREFIX)
+        running += est if mine else 0.0
+        print(f"  {x['label']} [{'ours' if mine else 'NOT OURS'}] id={x['id']} {x['type']} {x['status']} created={x['created']}Z "
+              f"age={hrs:.1f}h est=${est:.2f} ipv4={x['ipv4'][0] if x['ipv4'] else '-'}")
     for f in fws:
         print(f"  firewall {f['label']} id={f['id']} status={f['status']}")
+    spent = max(running, float(acct["balance_uninvoiced"]))
+    flag = "STOP LINE REACHED: delete the test VMs" if spent >= STOP_USD else "ok"
+    print(f"test spend so far (live VMs or uninvoiced, whichever is larger): ${spent:.2f} of the $50 cap, stop line ${STOP_USD:.0f}: {flag}")
 
 
 def render_user_data(pubkey: str, host_priv: str, host_pub: str) -> str:
@@ -134,10 +150,16 @@ def cmd_create(a) -> None:
     pubkey = Path(a.ssh_pubkey_file).read_text().strip()
     if not pubkey.startswith(("ssh-ed25519 ", "ssh-rsa ", "ecdsa-sha2-")) or "PRIVATE" in pubkey:
         sys.exit("that is not an SSH public key")
+    if a.type not in TYPES:
+        sys.exit(f"refusing type {a.type}: allowed {TYPES}")
+    if a.role and not re.fullmatch(r"[a-z][a-z0-9]{0,15}", a.role):
+        sys.exit("role must be lowercase letters and digits")
+    label = PREFIX + dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d") + (f"-{a.role}" if a.role else "")
     existing = ours(all_pages("/linode/instances"))
-    if existing:
-        sys.exit(f"refusing: {PREFIX}* Linode already exists: {[x['label'] for x in existing]}")
-    label = PREFIX + dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d")
+    if any(x["label"] == label for x in existing):
+        sys.exit(f"refusing: {label} already exists")
+    if len(existing) >= MAX_VMS:
+        sys.exit(f"refusing: already {len(existing)} {PREFIX}* Linodes (max {MAX_VMS})")
     work = Path(a.workdir)
     work.mkdir(parents=True, exist_ok=True)
     keyfile = work / "host_ed25519"
@@ -158,7 +180,7 @@ def cmd_create(a) -> None:
     body = {
         "label": label,
         "region": REGION,
-        "type": TYPE,
+        "type": a.type,
         "image": IMAGE,
         "root_pass": secrets.token_urlsafe(48),  # required by the API; never stored, root login is off
         "authorized_keys": [pubkey],
@@ -177,10 +199,10 @@ def cmd_create(a) -> None:
             break
         time.sleep(10)
     print(f"status: {st}")
-    (work / "vm.json").write_text(json.dumps({
+    (work / f"{label}.json").write_text(json.dumps({
         "label": label, "id": vm["id"], "firewall_id": fw["id"], "ipv4": vm["ipv4"][0],
         "ipv6": vm.get("ipv6"), "host_key_fingerprint": fp, "host_key_public": host_pub.strip(),
-        "created_utc": vm["created"] + "Z", "type": TYPE, "region": REGION,
+        "created_utc": vm["created"] + "Z", "type": a.type, "region": REGION,
     }, indent=2))
     print(f"host key fingerprint: {fp}")
 
@@ -226,6 +248,8 @@ def main() -> None:
     c.add_argument("--ssh-pubkey-file", required=True)
     c.add_argument("--admin-ip", required=True, help='public IPv4 for SSH, or "none" for no inbound at all')
     c.add_argument("--workdir", required=True, help="outside the repository")
+    c.add_argument("--role", default="", help="label suffix, e.g. worker")
+    c.add_argument("--type", default=TYPE, choices=TYPES)
     s = sub.add_parser("set-admin-ip")
     s.add_argument("--label", required=True)
     s.add_argument("--admin-ip", required=True)

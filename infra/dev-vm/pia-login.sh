@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
-# The owner runs this once on the test VM (X-test-vm): it asks for the PIA login
+# The owner runs this on the test VM (X-test-vm): it asks for the PIA login
 # (nothing is echoed, not even the username), picks a US WireGuard region, and has the fleet's reviewed
 # step (infra/pia-bridge/vm/pia-wireguard.sh) turn it into a root-only
-# WireGuard configuration for gluetun. The login lives only in a tmpfs
-# directory that the step deletes whatever happens; it never reaches a file
-# outside it, argv, the shell history, git or a log.
+# WireGuard configuration for gluetun. While it runs, the login lives only in
+# memory and in a tmpfs directory that the step deletes whatever happens; it
+# never reaches argv, the shell history, git or a log.
 #
-#   sudo infra/dev-vm/pia-login.sh [region-id]
+#   sudo infra/dev-vm/pia-login.sh [--keep] [region-id]   asks for the login
+#   sudo infra/dev-vm/pia-login.sh --rekey [region-id]    uses the kept login
+#
+# --keep (owner, 2026-11-12T16:55Z, docs/decisions/2026-11-12-X-test-vm.md):
+# after a success, the login and region are also kept in /root/.lodestar-pia
+# (root:root, 0700/0600) on the VM's encrypted disk, so --rekey can register a
+# fresh key later without the owner. The kept login goes with the VM at deletion.
 #
 # Writes /home/lodestar/lodestar/secrets/wg0.conf (root:root 0600), where the
 # fleet's compose.yaml reads it from when run from /home/lodestar/lodestar.
@@ -18,22 +24,41 @@ step="$repo/infra/pia-bridge/vm/pia-wireguard.sh"
 ca="$repo/infra/pia-bridge/vm/pia-ca.rsa.4096.crt"
 dest_dir=/home/lodestar/lodestar/secrets
 dest="$dest_dir/wg0.conf"
+store=/root/.lodestar-pia
+
+mode=ask
+region=""
+for arg in "$@"; do
+  case $arg in
+    --keep) mode=keep ;;
+    --rekey) mode=rekey ;;
+    -*) echo "unknown option: $arg" >&2; exit 2 ;;
+    *) region=$arg ;;
+  esac
+done
+if [[ $mode == rekey && -z $region && -f $store/region ]]; then region=$(<"$store/region"); fi
 
 # A region with WireGuard servers, in the US (PIA's US servers have no port
-# forwarding, as the test plan's ground rule 1 requires).
+# forwarding, as the test plan's ground rule 1 requires), whose first server's
+# name passes the step's own check (some PIA names don't, e.g. us-brooklyn's).
 servers=$(curl --fail --silent --show-error --max-time 30 https://serverlist.piaservers.net/vpninfo/servers/v6 | head -1)
-mapfile -t regions < <(jq -r '.regions[] | select(.country == "US" and (.servers.wg | length) > 0 and (.offline | not) and (.port_forward | not)) | .id' <<<"$servers" | sort)
+mapfile -t regions < <(jq -r '.regions[] | select(.country == "US" and (.servers.wg | length) > 0 and (.offline | not) and (.port_forward | not)) | select(.servers.wg[0].cn | test("^[a-z0-9.-]{1,253}$")) | .id' <<<"$servers" | sort)
 [[ ${#regions[@]} -gt 0 ]] || { echo "no US WireGuard region found" >&2; exit 3; }
-region=${1:-}
 if [[ -z $region ]]; then
-  for r in "${regions[@]}"; do [[ $r =~ new_?jersey|newjersey|new_york|newyork ]] && { region=$r; break; }; done
+  for r in "${regions[@]}"; do [[ $r =~ new_?york|new_?jersey ]] && { region=$r; break; }; done
   region=${region:-${regions[0]}}
 fi
 printf '%s\n' "${regions[@]}" | grep -qx -- "$region" || { echo "unknown or unsuitable region: $region" >&2; exit 4; }
-echo "PIA region: $region (pass another id as the first argument to change it)"
+echo "PIA region: $region (pass another id to change it)"
 
-read -r -s -p "PIA username (hidden): " pia_user; echo
-read -r -s -p "PIA password: " pia_pass; echo
+if [[ $mode == rekey ]]; then
+  [[ -f $store/login.json ]] || { echo "no kept login: run once with --keep" >&2; exit 6; }
+  pia_user=$(jq -j '.username' "$store/login.json")
+  pia_pass=$(jq -j '.password' "$store/login.json")
+else
+  read -r -s -p "PIA username (hidden): " pia_user; echo
+  read -r -s -p "PIA password: " pia_pass; echo
+fi
 [[ -n $pia_user && -n $pia_pass ]] || { echo "empty username or password" >&2; exit 5; }
 
 work=""
@@ -74,12 +99,21 @@ for attempt in 1 2 3 4; do
   case $rc in 13|15|16) ;; *) break ;; esac
   [[ $attempt -lt 4 ]] && sleep $((attempt * 15))
 done
-unset pia_pass
-
 if [[ $rc -eq 0 ]]; then
   chmod 600 "$dest"
-  echo "OK: WireGuard configuration written (root only). The login is deleted."
+  if [[ $mode == keep ]]; then
+    install -d -m 0700 -o root -g root "$store"
+    PIA_USER=$pia_user PIA_PASS=$pia_pass jq -n '{username: env.PIA_USER, password: env.PIA_PASS}' >"$store/login.json"
+    printf '%s' "$region" >"$store/region"
+    chmod 600 "$store/login.json" "$store/region"
+  fi
+  case $mode in
+    keep) echo "OK: WireGuard configuration written (root only). The login is kept root-only in $store for --rekey." ;;
+    rekey) echo "OK: WireGuard configuration written (root only), from the kept login." ;;
+    *) echo "OK: WireGuard configuration written (root only). The login is deleted." ;;
+  esac
 else
-  echo "FAILED ($rc): $(stage "$rc"). The login is deleted." >&2
+  echo "FAILED ($rc): $(stage "$rc")." >&2
 fi
+unset pia_pass
 exit "$rc"
