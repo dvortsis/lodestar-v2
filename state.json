@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T13:30:19Z",
+  "updated_at": "2026-11-12T13:49:37Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7324,6 +7324,11 @@
       "id": "runner-notes-761-fixups",
       "note": "Next runner PR: owner_queue entry for the Wikimedia bulk-backfill ToS question (rv-761 I1); runner-notes.md:30 wording \u2014 7.5 also matches plain words like \"invalid credentials\", \"timed out\", \"no results\" (I2); plus rv-761 nits (sentence ref, scrub reason line 43 incl. architecture.md, define L3, D-outputs-guide 5030/5040 note, owns lists for X-watch-env/X-dht-bep42-rejoin/X-always-adult-detail-mask tests).",
       "at": "2026-11-12T13:30:19Z"
+    },
+    {
+      "id": "owner-q-un1-usenet-ref",
+      "note": "UN-1 #762: L3 kept (no external_ref on private usenet finds). Its decisions file carries an open owner question with a proposed narrow rule (usenet:<id>:<guid>). Send with the UN-1 merge FYI; also flag USENET_POLL_EVERY hourly vs Q4 15 min (\u00a72.26, \u00a72.19).",
+      "at": "2026-11-12T13:49:37Z"
     }
   ],
   "main_health": [
@@ -8429,7 +8434,7 @@
     }
   ],
   "heartbeat": "2026-11-12T12:38:43Z",
-  "updated": "2026-11-12T13:30:19Z",
+  "updated": "2026-11-12T13:49:37Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
