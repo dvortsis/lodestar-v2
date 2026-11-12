@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T17:52:37Z",
+  "updated_at": "2026-11-12T17:59:34Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7398,6 +7398,14 @@
     {
       "id": "owner-flag-describe-sg",
       "note": "#770 Deploy-AwsWindows.ps1 pre-launch SG check needs ec2:DescribeSecurityGroups on the provisioner role; fails closed if missing. IAM is the owner decision; flag via dashboard FYI batch."
+    },
+    {
+      "id": "enr-consent-rerecord",
+      "note": "rv-764 I4: the slice that enables External consent must re-record Wikidata fixtures from the real service and re-read Wikimedia terms/API policy pages directly (ENR-14 read them via search results)."
+    },
+    {
+      "id": "owner-flag-enr14-ua",
+      "note": "rv-764 I2: ENR-14 User-Agent carries the project repo URL (owner GitHub handle) as Wikimedia-required contact; runner accepted (project public URL, nothing about the user); \u00a72.19 flag in the dashboard FYI batch."
     }
   ],
   "main_health": [
@@ -8410,7 +8418,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T17:52:37Z",
+    "updated": "2026-11-12T17:59:34Z",
     "items": [
       {
         "slot": 1,
@@ -8453,7 +8461,7 @@
         "slice": "ENR-14",
         "role": "build",
         "agent": "claude",
-        "doing": "#764 ready 5a96f302; fresh Opus security review running",
+        "doing": "#764 security CHANGES relayed (B1 quadratic aliases parse, I1 missing id -> BAD_ANSWER, I3 list test edits); fix round",
         "since": "2026-11-12T12:41:40Z",
         "status": "active"
       },
@@ -8543,7 +8551,7 @@
     }
   ],
   "heartbeat": "2026-11-12T15:41:01Z",
-  "updated": "2026-11-12T17:52:37Z",
+  "updated": "2026-11-12T17:59:34Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
