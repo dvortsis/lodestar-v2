@@ -25,7 +25,7 @@ use std::fmt;
 use super::{Category, ClientError, nzbget, sabnzbd};
 use crate::BoxFuture;
 use crate::net::redact;
-use crate::secret::Secret;
+use crate::secret::{Secret, Zeroizing};
 
 /// The largest NZB a client is sent: 16 MiB, the `.torrent` cap
 /// ([`MAX_TORRENT_FILE`](super::MAX_TORRENT_FILE)). An NZB lists every
@@ -293,29 +293,70 @@ pub(crate) fn version_text(raw: &str) -> Option<String> {
     (!v.is_empty() && v.len() <= 64 && !v.chars().any(char::is_control)).then(|| v.to_owned())
 }
 
-/// Replaces every copy of `secret` in an answer with `***` before it's
-/// parsed, so a reverse proxy that reflects the request can't put a
-/// credential into an error's reason. Secrets under 4 bytes are left alone.
-pub(crate) fn scrub(body: &mut Vec<u8>, secret: &str) {
-    let secret = secret.as_bytes();
-    if secret.len() < 4 || body.len() < secret.len() {
-        return;
+/// The shortest credential [`parse_guarded`] looks for: a shorter one
+/// would match ordinary text and withhold reasons for nothing.
+const MIN_GUARDED: usize = 4;
+
+/// The reason given instead of one that echoed a credential.
+pub(crate) const WITHHELD: &str =
+    "the client refused; its reason was withheld because it repeated a credential";
+
+/// Parses an answer as it was received, then keeps every credential out of
+/// the error's reason. Only a [`ClientError::Rejected`] carries the client's
+/// text, so a success or any other error is returned untouched.
+///
+/// When the answer or the reason holds a credential (a reverse proxy's
+/// error page that echoes the request, say), the answer is parsed again
+/// with every copy replaced by `***`, so a copy cut short by the 200-character
+/// limit can't leak either. If that reason still holds one, [`WITHHELD`] is
+/// given instead. The scrubbed copy is zeroized.
+pub(crate) fn parse_guarded<T>(
+    body: &[u8],
+    secrets: &[&str],
+    parse: impl Fn(&[u8]) -> Result<T, ClientError>,
+) -> Result<T, ClientError> {
+    let result = parse(body);
+    let secrets: Vec<&[u8]> = secrets
+        .iter()
+        .map(|s| s.as_bytes())
+        .filter(|s| s.len() >= MIN_GUARDED)
+        .collect();
+    let leaks = |text: &[u8]| {
+        secrets
+            .iter()
+            .any(|s| text.windows(s.len()).any(|w| w == *s))
+    };
+    let leaked = match &result {
+        Err(ClientError::Rejected(why)) => leaks(body) || leaks(why.as_bytes()),
+        _ => false,
+    };
+    if !leaked {
+        return result;
     }
+    let clean = Zeroizing::new(replace_all(body, &secrets));
+    match parse(&clean) {
+        Err(ClientError::Rejected(why)) if !leaks(why.as_bytes()) => {
+            Err(ClientError::Rejected(why))
+        }
+        _ => Err(ClientError::Rejected(WITHHELD.to_owned())),
+    }
+}
+
+fn replace_all(body: &[u8], secrets: &[&[u8]]) -> Vec<u8> {
     let mut out = Vec::with_capacity(body.len());
     let mut i = 0;
-    while i < body.len() {
-        if body[i..].starts_with(secret) {
-            out.extend_from_slice(b"***");
-            i += secret.len();
-        } else {
-            out.push(body[i]);
-            i += 1;
+    'scan: while i < body.len() {
+        for s in secrets {
+            if body[i..].starts_with(s) {
+                out.extend_from_slice(b"***");
+                i += s.len();
+                continue 'scan;
+            }
         }
+        out.push(body[i]);
+        i += 1;
     }
-    if out.len() != body.len() {
-        zeroize::Zeroize::zeroize(body);
-        *body = out;
-    }
+    out
 }
 
 /// The error for a redirect: never followed, since the target would get
@@ -385,14 +426,39 @@ mod tests {
         assert!(d.contains("http://sab.lan:8080/…"), "{d}");
     }
 
+    fn reason(body: &[u8]) -> Result<u32, ClientError> {
+        match std::str::from_utf8(body).ok().and_then(|t| t.parse().ok()) {
+            Some(n) => Ok(n),
+            None => Err(ClientError::Rejected(super::super::client_reason(body))),
+        }
+    }
+
     #[test]
-    fn secrets_are_scrubbed_from_answers() {
-        let mut body = b"echo: apikey=SECRETKEY&x=SECRETKEY".to_vec();
-        scrub(&mut body, "SECRETKEY");
-        assert_eq!(body, b"echo: apikey=***&x=***");
-        let mut body = b"abc".to_vec();
-        scrub(&mut body, "abc");
-        assert_eq!(body, b"abc", "too short to scrub");
+    fn a_credential_never_reaches_a_reason() {
+        let key = "SECRETKEY";
+        // A success is parsed from the answer as received, even when it
+        // holds a credential.
+        assert_eq!(parse_guarded(b"912024", &["2024"], reason), Ok(912024));
+        assert_eq!(
+            parse_guarded(b"echo apikey=SECRETKEY&x=SECRETKEY", &[key], reason),
+            Err(ClientError::Rejected("echo apikey=***&x=***".into()))
+        );
+        // A copy the 200-character cut would split is scrubbed before the cut.
+        let long = format!("{}{key}", "y".repeat(195));
+        let Err(ClientError::Rejected(why)) = parse_guarded(long.as_bytes(), &[key], reason) else {
+            panic!()
+        };
+        assert!(!why.contains("SECR"), "{why}");
+        // Whitespace the reason collapses can't smuggle a spaced password.
+        assert_eq!(
+            parse_guarded(b"pass\tword here", &["pass word"], reason),
+            Err(ClientError::Rejected(WITHHELD.into()))
+        );
+        // A short credential would match ordinary text, so it isn't looked for.
+        assert_eq!(
+            parse_guarded(b"abc", &["abc"], reason),
+            Err(ClientError::Rejected("abc".into()))
+        );
     }
 
     #[test]

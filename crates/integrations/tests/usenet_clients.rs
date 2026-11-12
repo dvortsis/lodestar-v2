@@ -108,6 +108,27 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
 
+fn base64_encode(bytes: &[u8]) -> String {
+    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = u32::from(b[0]) << 16 | u32::from(b[1]) << 8 | u32::from(b[2]);
+        for i in 0..4 {
+            out.push(if i <= chunk.len() {
+                T[(n >> (18 - 6 * i) & 63) as usize] as char
+            } else {
+                '='
+            });
+        }
+    }
+    out
+}
+
 fn base64_decode(s: &str) -> Vec<u8> {
     const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = Vec::new();
@@ -678,7 +699,13 @@ async fn no_key_or_password_in_logs_debug_errors_or_urls() {
     seen += &format!("{e} {e:?} {boxed:?}");
 
     let logged = String::from_utf8_lossy(&logs.lock().unwrap()).into_owned();
-    for secret in [API_KEY, USER, PASSWORD, QUERY_TOKEN] {
+    // The Basic header's own form of the credentials, too.
+    let basic = base64_encode(format!("{USER}:{PASSWORD}").as_bytes());
+    assert_eq!(
+        base64_decode(&basic),
+        format!("{USER}:{PASSWORD}").into_bytes()
+    );
+    for secret in [API_KEY, USER, PASSWORD, QUERY_TOKEN, basic.as_str()] {
         assert!(
             !seen.contains(secret),
             "{secret} in Debug or Display: {seen}"
@@ -696,4 +723,69 @@ async fn no_key_or_password_in_logs_debug_errors_or_urls() {
         logged.contains("sabnzbd") && logged.contains("nzbget"),
         "{logged}"
     );
+}
+
+#[tokio::test]
+async fn a_credential_inside_a_valid_answer_is_still_read() {
+    // The password is part of the job id, and the user name is a field the
+    // parser reads: the answer is read as the client sent it.
+    let mut fixtures = nzbget_script(&["append_ok"]);
+    let mut body: Value = serde_json::from_str(&fixtures[0].response.body).unwrap();
+    body["result"] = json!(12024);
+    fixtures[0].response.body = body.to_string();
+    let server = ReplayServer::start(fixtures).await;
+    let n = Nzbget::new(&server.url(), Secret::new("result"), Secret::new("2024")).unwrap();
+    let job = n.add_nzb(&nzb(), &NzbOptions::default()).await.unwrap();
+    assert_eq!(job.as_str(), "12024");
+    server.finish();
+
+    // The key is part of the nzo id.
+    let server = ReplayServer::start(vec![sab_f("addfile_ok")]).await;
+    let job = sab_with(&server, "p86tgx")
+        .add_nzb(&nzb(), &NzbOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(job.as_str(), "SABnzbd_nzo_p86tgx");
+    server.finish();
+}
+
+#[tokio::test]
+async fn an_answer_that_echoes_a_credential_keeps_it_out_of_the_error() {
+    // A reverse proxy's error page that repeats the request body, and a
+    // client reason that repeats a credential.
+    let mut sab_500 = sab_f("addfile_ok");
+    sab_500.response.status = 500;
+    sab_500.response.body = format!("Bad gateway for mode=addfile&apikey={API_KEY}&output=json");
+    let mut sab_json = sab_f("addfile_refused");
+    sab_json.response.body = format!(r#"{{"status": false, "error": "unknown key {API_KEY}"}}"#);
+    let server = ReplayServer::start(vec![sab_500, sab_json]).await;
+    let s = sab(&server);
+    let mut errors = Vec::new();
+    for _ in 0..2 {
+        errors.push(s.add_nzb(&nzb(), &NzbOptions::default()).await.unwrap_err());
+    }
+    server.finish();
+
+    let mut fixtures = nzbget_script(&["append_bad_param", "append_ok"]);
+    let mut rpc: Value = serde_json::from_str(&fixtures[0].response.body).unwrap();
+    rpc["error"]["message"] = json!(format!("bad login {USER}:{PASSWORD}"));
+    fixtures[0].response.body = rpc.to_string();
+    fixtures[1].response.status = 502;
+    fixtures[1].response.body = format!("upstream refused password={PASSWORD}");
+    let server = ReplayServer::start(fixtures).await;
+    let n = nzbget(&server);
+    for _ in 0..2 {
+        errors.push(n.add_nzb(&nzb(), &NzbOptions::default()).await.unwrap_err());
+    }
+    server.finish();
+
+    assert_eq!(errors.len(), 4);
+    for e in &errors {
+        assert!(matches!(e, ClientError::Rejected(_)), "{e:?}");
+        let text = format!("{e} {e:?}");
+        for secret in [API_KEY, USER, PASSWORD] {
+            assert!(!text.contains(secret), "{secret} in {text}");
+        }
+        assert!(text.contains("***"), "the reason is kept, scrubbed: {text}");
+    }
 }

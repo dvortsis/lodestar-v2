@@ -42,8 +42,8 @@ use serde::Deserialize;
 
 use super::qbittorrent::upload_timeout;
 use super::usenet::{
-    Access, JobId, Nzb, NzbOptions, NzbPriority, UsenetClient, UsenetInfo, UsenetKind, redirected,
-    scrub, version_text,
+    Access, JobId, Nzb, NzbOptions, NzbPriority, UsenetClient, UsenetInfo, UsenetKind,
+    parse_guarded, redirected, version_text,
 };
 use super::{AuthFailure, CLIENT_TIMEOUT, Category, ClientError, category_name, client_reason};
 use crate::BoxFuture;
@@ -157,8 +157,7 @@ impl Sabnzbd {
             .map_err(|_| ClientError::Protocol("couldn't build the request"))?;
         let resp = self.http.send(req).await?;
         let status = resp.status().as_u16();
-        let mut bytes = read_limited(resp, MAX_ANSWER).await?;
-        scrub(&mut bytes, self.api_key.expose());
+        let bytes = read_limited(resp, MAX_ANSWER).await?;
         lodestar_log::log_event!(
             crate::log_events::CLIENT_REQUEST,
             client = "sabnzbd",
@@ -168,15 +167,24 @@ impl Sabnzbd {
         Ok((status, bytes))
     }
 
+    /// Parses an answer, keeping the key out of any reason.
+    fn read<T>(
+        &self,
+        body: &[u8],
+        parse: impl Fn(&[u8]) -> Result<T, ClientError>,
+    ) -> Result<T, ClientError> {
+        parse_guarded(body, &[self.api_key.expose()], parse)
+    }
+
     async fn version(&self) -> Result<String, ClientError> {
         let (status, body) = self.call("version", Body::Form(Vec::new())).await?;
-        parse_version(status, &body)
+        self.read(&body, |b| parse_version(status, b))
     }
 
     async fn access(&self) -> Result<Access, ClientError> {
         let fields = vec![("key", self.api_key.expose())];
         let (status, body) = self.call("auth", Body::Form(fields)).await?;
-        parse_auth(status, &body)
+        self.read(&body, |b| parse_auth(status, b))
     }
 
     async fn add(&self, nzb: &Nzb, opts: &NzbOptions) -> Result<JobId, ClientError> {
@@ -199,13 +207,13 @@ impl Sabnzbd {
             fields.push(("priority", p.to_string()));
         }
         let (status, body) = self.call("addfile", Body::Upload(fields, nzb)).await?;
-        parse_add(status, &body)
+        self.read(&body, |b| parse_add(status, b))
     }
 
     async fn list_categories(&self) -> Result<Vec<Category>, ClientError> {
         let fields = vec![("apikey", self.api_key.expose())];
         let (status, body) = self.call("get_cats", Body::Form(fields)).await?;
-        parse_categories(status, &body)
+        self.read(&body, |b| parse_categories(status, b))
     }
 }
 

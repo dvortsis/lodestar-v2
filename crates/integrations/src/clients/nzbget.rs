@@ -46,8 +46,8 @@ use serde_json::{Value, json};
 
 use super::qbittorrent::upload_timeout;
 use super::usenet::{
-    Access, JobId, Nzb, NzbOptions, NzbPriority, UsenetClient, UsenetInfo, UsenetKind, redirected,
-    scrub, version_text,
+    Access, JobId, Nzb, NzbOptions, NzbPriority, UsenetClient, UsenetInfo, UsenetKind,
+    parse_guarded, redirected, version_text,
 };
 use super::{
     AuthFailure, CLIENT_TIMEOUT, Category, ClientError, base64, category_name, client_reason,
@@ -162,9 +162,7 @@ impl Nzbget {
             .map_err(|_| ClientError::Protocol("couldn't build the request"))?;
         let resp = self.http.send(req).await?;
         let status = resp.status().as_u16();
-        let mut bytes = Zeroizing::new(read_limited(resp, limit).await?);
-        scrub(&mut bytes, self.password.expose());
-        scrub(&mut bytes, self.username.expose());
+        let bytes = Zeroizing::new(read_limited(resp, limit).await?);
         lodestar_log::log_event!(
             crate::log_events::CLIENT_REQUEST,
             client = "nzbget",
@@ -174,9 +172,22 @@ impl Nzbget {
         Ok((id, status, bytes))
     }
 
+    /// Parses an answer, keeping the credentials out of any reason.
+    fn read<T>(
+        &self,
+        body: &[u8],
+        parse: impl Fn(&[u8]) -> Result<T, ClientError>,
+    ) -> Result<T, ClientError> {
+        parse_guarded(
+            body,
+            &[self.password.expose(), self.username.expose()],
+            parse,
+        )
+    }
+
     async fn version(&self) -> Result<String, ClientError> {
         let (id, status, body) = self.call("version", &[], MAX_ANSWER).await?;
-        parse_version(id, status, &body)
+        self.read(&body, |b| parse_version(id, status, b))
     }
 
     async fn add(&self, nzb: &Nzb, opts: &NzbOptions) -> Result<JobId, ClientError> {
@@ -199,12 +210,12 @@ impl Nzbget {
             json!("SCORE"),
         ];
         let (id, status, body) = self.call("append", &params, MAX_ANSWER).await?;
-        parse_append(id, status, &body)
+        self.read(&body, |b| parse_append(id, status, b))
     }
 
     async fn list_categories(&self) -> Result<Vec<Category>, ClientError> {
         let (id, status, body) = self.call("config", &[], MAX_CONFIG).await?;
-        parse_categories(id, status, &body)
+        self.read(&body, |b| parse_categories(id, status, b))
     }
 }
 
