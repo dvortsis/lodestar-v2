@@ -265,6 +265,9 @@ pub enum Method {
     Post,
     /// Prowlarr's settings take `PUT` only (CMP-8b).
     Put,
+    /// Removing Lodestar's own FlareSolverr indexer proxy from Prowlarr
+    /// (CMP-12).
+    Delete,
 }
 
 /// A request path and query (`/api/v2/app/version`,
@@ -615,6 +618,13 @@ impl<'a> ProbeRequest<'a> {
     pub fn put(mut self, body: Vec<u8>) -> ProbeRequest<'a> {
         self.method = Method::Put;
         self.body = Some(body);
+        self
+    }
+
+    /// Makes it a `DELETE`, with no body.
+    pub fn delete(mut self) -> ProbeRequest<'a> {
+        self.method = Method::Delete;
+        self.body = None;
         self
     }
 
@@ -1093,6 +1103,17 @@ impl dyn Configure + Send + Sync + '_ {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delete_has_no_body() {
+        let t = Target::Loopback(PortNumber::new(9696).unwrap());
+        let path = RequestPath::parse("/api/v1/indexerproxy/3").unwrap();
+        let r = ProbeRequest::new(&t, path, Limits::PROBE)
+            .post(b"x".to_vec())
+            .delete();
+        assert_eq!(r.method, Method::Delete);
+        assert!(r.body.is_none());
+    }
     use std::sync::Mutex;
 
     #[test]

@@ -159,7 +159,9 @@ impl fmt::Display for TemplateError {
                 TemplateError::Interpolation => "a value holds `$`",
                 TemplateError::P2pLoopback => "a peer port on 127.0.0.1 can't be reached by peers",
                 TemplateError::PortRemap => "this port must be published on the same number",
-                TemplateError::LanRefused => "gluetun's control port stays off your network",
+                TemplateError::LanRefused => {
+                    "gluetun's control port and FlareSolverr's API stay off your network"
+                }
                 TemplateError::PublishOnExisting => {
                     "publish the port on your gluetun container instead"
                 }
@@ -598,8 +600,9 @@ fn check_publish(
             return Err(TemplateError::P2pLoopback);
         }
         // gluetun's control server reports the public address and can
-        // change the VPN's state: never on your network.
-        if profile.id == GLUETUN && p.bind == Bind::Lan {
+        // change the VPN's state; FlareSolverr's API fetches any URL it's
+        // given, with no sign-in (CMP-12): neither on your network.
+        if matches!(profile.id, GLUETUN | crate::flaresolverr::ID) && p.bind == Bind::Lan {
             return Err(TemplateError::LanRefused);
         }
         // A port the image is told about (qBittorrent's `WEBUI_PORT`) must
