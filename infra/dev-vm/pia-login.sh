@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The owner runs this once on the test VM (X-test-vm): it asks for the PIA login
-# (nothing is echoed), picks a US WireGuard region, and has the fleet's reviewed
+# (nothing is echoed, not even the username), picks a US WireGuard region, and has the fleet's reviewed
 # step (infra/pia-bridge/vm/pia-wireguard.sh) turn it into a root-only
 # WireGuard configuration for gluetun. The login lives only in a tmpfs
 # directory that the step deletes whatever happens; it never reaches a file
@@ -32,7 +32,7 @@ fi
 printf '%s\n' "${regions[@]}" | grep -qx -- "$region" || { echo "unknown or unsuitable region: $region" >&2; exit 4; }
 echo "PIA region: $region (pass another id as the first argument to change it)"
 
-read -r -p "PIA username: " pia_user
+read -r -s -p "PIA username (hidden): " pia_user; echo
 read -r -s -p "PIA password: " pia_pass; echo
 [[ -n $pia_user && -n $pia_pass ]] || { echo "empty username or password" >&2; exit 5; }
 
