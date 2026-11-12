@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T06:28:11Z",
+  "updated_at": "2026-11-12T06:37:34Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7987,7 +7987,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T06:28:11Z",
+    "updated": "2026-11-12T06:37:34Z",
     "items": [
       {
         "slot": 1,
@@ -8051,6 +8051,15 @@
         "doing": "session_01MMjhnCM61Vu5obDjZWTpeu: told to branch (TZ-0 #715 merged as c5abcb85)",
         "since": "2026-11-12T00:07:35Z",
         "status": "active"
+      },
+      {
+        "slot": 13,
+        "slice": "X-test-vm",
+        "role": "owner-started",
+        "agent": "session_01MMjhnBD1KHxsn7QRHHmpeM",
+        "doing": "owner-started testing-env session (Linode claude-dev-* + AWS Windows VMs); counts toward \u00a72.59 cap; 0 helpers until runner slots free; PR on claude/dreamy-edison-xlmtoy; decisions file must quote owner verbatim (cloud/spend/token) - runner verifies before merge",
+        "since": "2026-11-12T06:37:34Z",
+        "status": "active"
       }
     ]
   },
@@ -8111,7 +8120,7 @@
     }
   ],
   "heartbeat": "2026-11-12T03:41:56Z",
-  "updated": "2026-11-12T06:28:11Z",
+  "updated": "2026-11-12T06:37:34Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
