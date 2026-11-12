@@ -6,6 +6,7 @@ import base64
 import importlib.util
 import io
 import json
+import os
 import re
 import subprocess
 import tarfile
@@ -591,7 +592,7 @@ class EndToEnd(unittest.TestCase):
         def boot(region, **kw):
             return subprocess.run(["bash", "-c", deliver.bootstrap(str(run_dir), str(out), str(marker), str(lock))],
                                   input=deliver.payload(LOGIN, region), env=env, capture_output=True, timeout=60, **kw)
-        env = {"PATH": f"{stub / 'bin'}:/usr/bin:/bin", "STUB": str(stub), "STUB_MODE": "", "TOKEN": TOKEN,
+        env = {"PATH": f"{stub / 'bin'}:{os.environ.get('PATH', '/usr/bin:/bin')}", "STUB": str(stub), "STUB_MODE": "", "TOKEN": TOKEN,
                "PRIV": PRIV, "PUB": PUB}
         r = boot("ca_test")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -663,7 +664,7 @@ esac
             log = stub / "docker.log"
             if log.exists():
                 log.unlink()
-            env = {"PATH": f"{stub / 'bin'}:/usr/bin:/bin", "STUB": str(stub), "STUB_MODE": "", "TOKEN": TOKEN,
+            env = {"PATH": f"{stub / 'bin'}:{os.environ.get('PATH', '/usr/bin:/bin')}", "STUB": str(stub), "STUB_MODE": "", "TOKEN": TOKEN,
                    "PRIV": PRIV, "PUB": PUB, **{k: "1" for k, v in flags.items() if v}}
             r = subprocess.run(["bash", "-c", deliver.bootstrap(str(run_dir), str(out), str(marker), str(lock))],
                                input=deliver.payload(LOGIN, "ca_test"), env=env, capture_output=True, timeout=60)

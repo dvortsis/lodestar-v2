@@ -25,7 +25,7 @@ def load(name):
 
 
 def sub(env, wf):
-    return f"repo:{REPO}:environment:{env}:job_workflow_ref:{REPO}/.github/workflows/{wf}@refs/heads/main"
+    return f"repo:dvortsis@83323977/lodestar-v2@1427502271:environment:{env}:workflow_ref:{REPO}/.github/workflows/{wf}@refs/heads/main"
 
 
 PROVIDER = {"Fn::If": ["CreateOidcProvider", {"Ref": "GitHubOidcProvider"}, {"Ref": "ExistingOidcProviderArn"}]}
@@ -222,6 +222,18 @@ def add(name, stmt):
 
 
 MUTATIONS = {
+    "legacy name-only OIDC subject": lambda t: role(t, "LodestarFleetOperator")["AssumeRolePolicyDocument"]["Statement"][0]
+        ["Condition"]["StringEquals"].__setitem__(f"{OIDC}:sub", sub("cloud-fleet", "fleet.yml").replace(
+            "dvortsis@83323977/lodestar-v2@1427502271", REPO)),
+    "reusable-only claim on a direct workflow": lambda t: role(t, "LodestarPiaDelivery")["AssumeRolePolicyDocument"]["Statement"][0]
+        ["Condition"]["StringEquals"].__setitem__(f"{OIDC}:sub", sub("pia-delivery", "fleet.yml").replace(
+            ":workflow_ref:", ":job_workflow_ref:")),
+    "OIDC feature branch": lambda t: role(t, "LodestarFleetOperator")["AssumeRolePolicyDocument"]["Statement"][0]
+        ["Condition"]["StringEquals"].__setitem__(f"{OIDC}:sub", sub("cloud-fleet", "fleet.yml").replace(
+            "@refs/heads/main", "@refs/heads/feature")),
+    "recycled repository identity": lambda t: role(t, "LodestarFleetOperator")["AssumeRolePolicyDocument"]["Statement"][0]
+        ["Condition"]["StringEquals"].__setitem__(f"{OIDC}:sub", sub("cloud-fleet", "fleet.yml").replace(
+            "@1427502271", "@1427502272")),
     # The six the runner's review found slipping past the first tests:
     "GetObject on arn:aws:s3:::*/*": add("LodestarFleetOperator", {"Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::*/*"}),
     "GetObject on an Fn::Sub of every bucket": add("LodestarFleetOperator", {

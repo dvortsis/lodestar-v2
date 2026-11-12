@@ -1,0 +1,15 @@
+{
+  "repository": "dvortsis/lodestar-v2",
+  "repository_id": 1427502271,
+  "owner_id": 83323977,
+  "oidc": {
+    "use_default": false,
+    "use_immutable_subject": true,
+    "include_claim_keys": ["repo", "context", "workflow_ref"]
+  },
+  "environments": {
+    "cloud-fleet": ["fleet.yml"],
+    "pia-delivery": ["fleet.yml"],
+    "cloud-operator": ["operator-wake.yml", "operator-apply.yml", "operator-injection.yml"]
+  }
+}

@@ -96,6 +96,7 @@ jobs:
       contents: read
       pull-requests: write
       id-token: write # live mode assumes LodestarFleetOperator by OIDC, in-process
+      actions: read # verify main-only environment and owner approval before OIDC
     outputs:
       deliver: ${{ steps.act.outputs.deliver }} # "true": this run kept the lock for deliver-pia
       live: ${{ steps.act.outputs.live }} # the chain's mode, fixed when act ran
@@ -162,6 +163,7 @@ jobs:
       contents: read
       pull-requests: write
       id-token: write # live mode assumes LodestarFleetOperator by OIDC, in-process
+      actions: read # verify main-only environment and owner approval before OIDC
     outputs:
       lock_expires: ${{ steps.fence.outputs.lock_expires }} # the lease's end (UTC), for deliver-pia
     steps:
@@ -260,6 +262,7 @@ jobs:
       contents: read
       pull-requests: write
       id-token: write # live mode assumes LodestarFleetOperator by OIDC, in-process
+      actions: read # verify main-only environment and owner approval before OIDC
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -337,6 +340,7 @@ jobs:
       contents: read
       pull-requests: write
       id-token: write # live mode assumes LodestarFleetOperator by OIDC, in-process
+      actions: read # verify main-only environment and owner approval before OIDC
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -28,6 +28,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 OIDC_HOST = "token.actions.githubusercontent.com"
 REPO = "dvortsis/lodestar-v2"
+GITHUB_POLICY = json.loads((HERE / "github-deployment-policy.json").read_text(encoding="utf-8"))
+OWNER, NAME = REPO.split("/")
+SUB_PREFIX = f"repo:{OWNER}@{GITHUB_POLICY['owner_id']}/{NAME}@{GITHUB_POLICY['repository_id']}"
 
 # The exact object keys the control plane uses (docs/decisions/2026-11-08-OP-1.md,
 # and this slice's decisions for the Terraform state key).
@@ -42,9 +45,14 @@ CLAUDE_LOCK_KEY = "operator/claude-lock.json"
 
 
 def sub(environment: str, workflow: str) -> str:
-    """The OIDC `sub` with the repo's customized claim template
-    (repo, context, job_workflow_ref; owner setup step 2.8)."""
-    return f"repo:{REPO}:environment:{environment}:job_workflow_ref:{REPO}/.github/workflows/{workflow}@refs/heads/main"
+    """Immutable identity plus the environment and direct workflow at main.
+
+    workflow_ref is present for direct jobs; job_workflow_ref is reusable-only.
+    The owner must separately apply the reviewed GitHub claim configuration.
+    """
+    if workflow not in GITHUB_POLICY["environments"].get(environment, []):
+        raise ValueError("workflow/environment is not in the deployment policy")
+    return f"{SUB_PREFIX}:environment:{environment}:workflow_ref:{REPO}/.github/workflows/{workflow}@refs/heads/main"
 
 
 def trust(provider_arn, subs: list) -> dict:
@@ -227,6 +235,8 @@ def fleet_control() -> dict:
     }
     return {
         "AWSTemplateFormatVersion": "2010-09-09",
+        "Metadata": {"AWSToolsMetrics": {"AWSAgentToolkit": "aws-cloudformation@3"},
+                     "com.aws.cloudformation.Context": {"ref": [{"at": "docs/operations/fleet-control-bootstrap.md"}]}},
         "Description": "Lodestar cloud fleet control plane: OIDC provider, LodestarFleetOperator, LodestarOperatorBridge, state/evidence/control buckets, fleet token secret shell, deny-all policy (OP-2a).",
         "Parameters": {
             **OIDC_PARAMS,
@@ -272,6 +282,8 @@ def fleet_control() -> dict:
 def pia_delivery() -> dict:
     return {
         "AWSTemplateFormatVersion": "2010-09-09",
+        "Metadata": {"AWSToolsMetrics": {"AWSAgentToolkit": "aws-cloudformation@3"},
+                     "com.aws.cloudformation.Context": {"ref": [{"at": "docs/operations/fleet-control-bootstrap.md"}]}},
         "Description": "Lodestar PIA delivery role, in the account that holds lodestar/pia-vpn: LodestarPiaDelivery, the firewall token secret shell, deny-all policy (OP-2a).",
         "Parameters": {
             **OIDC_PARAMS,

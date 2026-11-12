@@ -23,7 +23,7 @@ import state as fleet_state  # noqa: E402
 
 REPO = "dvortsis/lodestar-v2"
 SUB = re.compile(
-    rf"^repo:{re.escape(REPO)}:environment:(?P<env>[a-z-]+):job_workflow_ref:{re.escape(REPO)}"
+    rf"^repo:dvortsis@83323977/lodestar-v2@1427502271:environment:(?P<env>[a-z-]+):workflow_ref:{re.escape(REPO)}"
     r"/\.github/workflows/(?P<wf>[a-z-]+\.yml)@refs/heads/main$"
 )
 EXPECTED_SUBS = {
@@ -90,8 +90,28 @@ class Built(unittest.TestCase):
         self.assertEqual(bt.SPEND_LEDGER_KEY, fleet_state.LEDGER_KEY)
         self.assertEqual(bt.MISMATCH_KEY, fleet_state.MISMATCH_KEY)
 
+    def test_bootstrap_guidance_preserves_existing_secrets(self):
+        readme = (HERE / "README.md").read_text(encoding="utf-8")
+        self.assertNotIn("force-delete-without-recovery", readme)
+        self.assertNotIn("delete-secret", readme)
+        self.assertIn("stop and preserve it", readme)
+        self.assertIn("resource-import/adoption", readme)
+
 
 class Trust(unittest.TestCase):
+    def test_all_source_aws_oidc_roles_are_in_this_policy_audit(self):
+        found = set()
+        for path in (ROOT / "infra" / "aws").rglob("*.json"):
+            template = json.loads(path.read_text(encoding="utf-8"))
+            for name, resource in template.get("Resources", {}).items():
+                if resource.get("Type") != "AWS::IAM::Role":
+                    continue
+                trust = resource.get("Properties", {}).get("AssumeRolePolicyDocument", {})
+                if "sts:AssumeRoleWithWebIdentity" in json.dumps(trust):
+                    self.assertIn(path.resolve(), {(HERE / name).resolve() for name in TEMPLATES})
+                    found.add(name)
+        self.assertEqual(found, set(EXPECTED_SUBS))
+
     def test_every_role_pins_aud_and_an_exact_sub_at_main(self):
         self.assertEqual(set(roles()), set(EXPECTED_SUBS))
         for name, role in roles().items():

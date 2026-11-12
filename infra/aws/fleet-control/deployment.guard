@@ -1,0 +1,72 @@
+# Local security checks complement the independent Python IAM allowlist audit.
+let buckets = Resources.*[ Type == 'AWS::S3::Bucket' ]
+let policies = Resources.*[ Type == 'AWS::S3::BucketPolicy' ]
+let secrets = Resources.*[ Type == 'AWS::SecretsManager::Secret' ]
+
+rule private_retained_storage when %buckets !empty {
+    %buckets {
+        DeletionPolicy == 'Retain'
+        UpdateReplacePolicy == 'Retain'
+        Properties {
+            PublicAccessBlockConfiguration {
+                BlockPublicAcls == true
+                BlockPublicPolicy == true
+                IgnorePublicAcls == true
+                RestrictPublicBuckets == true
+            }
+            BucketEncryption.ServerSideEncryptionConfiguration[*].ServerSideEncryptionByDefault.SSEAlgorithm == 'AES256'
+            OwnershipControls.Rules[*].ObjectOwnership == 'BucketOwnerEnforced'
+        }
+    }
+}
+
+rule tls_only_retained_policies when %policies !empty {
+    %policies {
+        DeletionPolicy == 'Retain'
+        UpdateReplacePolicy == 'Retain'
+        Properties.PolicyDocument.Statement[ Sid == 'DenyNonTls' ] !empty
+        Properties.PolicyDocument.Statement[ Sid == 'DenyTlsBelow12' ] !empty
+        Properties.PolicyDocument.Statement[ Sid == 'DenyNonTls' ] {
+            Effect == 'Deny'
+            Condition.Bool.'aws:SecureTransport' == 'false'
+        }
+        Properties.PolicyDocument.Statement[ Sid == 'DenyTlsBelow12' ] {
+            Effect == 'Deny'
+            Condition.NumericLessThan.'s3:TlsVersion' == '1.2'
+        }
+    }
+}
+
+rule secret_shells_have_no_value when %secrets !empty {
+    %secrets {
+        DeletionPolicy == 'Retain'
+        UpdateReplacePolicy == 'Retain'
+        Properties.SecretString !exists
+        Properties.GenerateSecretString !exists
+    }
+}
+
+rule fleet_identity when Resources.LodestarFleetOperator exists {
+    Resources.LodestarFleetOperator.Properties.AssumeRolePolicyDocument.Statement[0].Condition.StringEquals {
+        'token.actions.githubusercontent.com:aud' == 'sts.amazonaws.com'
+        'token.actions.githubusercontent.com:sub' == 'repo:dvortsis@83323977/lodestar-v2@1427502271:environment:cloud-fleet:workflow_ref:dvortsis/lodestar-v2/.github/workflows/fleet.yml@refs/heads/main'
+    }
+}
+
+rule pia_identity when Resources.LodestarPiaDelivery exists {
+    Resources.LodestarPiaDelivery.Properties.AssumeRolePolicyDocument.Statement[0].Condition.StringEquals {
+        'token.actions.githubusercontent.com:aud' == 'sts.amazonaws.com'
+        'token.actions.githubusercontent.com:sub' == 'repo:dvortsis@83323977/lodestar-v2@1427502271:environment:pia-delivery:workflow_ref:dvortsis/lodestar-v2/.github/workflows/fleet.yml@refs/heads/main'
+    }
+}
+
+rule operator_identity when Resources.LodestarOperatorBridge exists {
+    Resources.LodestarOperatorBridge.Properties.AssumeRolePolicyDocument.Statement[0].Condition.StringEquals {
+        'token.actions.githubusercontent.com:aud' == 'sts.amazonaws.com'
+        'token.actions.githubusercontent.com:sub' == [
+            'repo:dvortsis@83323977/lodestar-v2@1427502271:environment:cloud-operator:workflow_ref:dvortsis/lodestar-v2/.github/workflows/operator-wake.yml@refs/heads/main',
+            'repo:dvortsis@83323977/lodestar-v2@1427502271:environment:cloud-operator:workflow_ref:dvortsis/lodestar-v2/.github/workflows/operator-apply.yml@refs/heads/main',
+            'repo:dvortsis@83323977/lodestar-v2@1427502271:environment:cloud-operator:workflow_ref:dvortsis/lodestar-v2/.github/workflows/operator-injection.yml@refs/heads/main'
+        ]
+    }
+}

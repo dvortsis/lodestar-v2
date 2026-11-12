@@ -343,7 +343,7 @@ Timing: steps 3.1–3.3 any time, before step 2.5; steps 1, 2 and 4–5 after OP
       - install it on `dvortsis/lodestar-v2` only.
    2. Note the App's bot user ID: `gh api users/<app-slug>%5Bbot%5D --jq .id`. The runner's ID is `gh api users/dvortsis --jq .id`.
    3. Generate a private key.
-   4. Create the environments `cloud-operator` and `cloud-fleet`, each with Deployment branches and tags → Selected → `main` only (`pia-delivery` comes in step 6).
+   4. After separate owner approval, create/configure `cloud-operator` and `cloud-fleet` with selected deployment branch `main` only and no tags (`pia-delivery` comes in step 6). Require the repository owner as sole approval reviewer and disable administrator approval bypass. Keep owner self-review available for owner-triggered emergency `down`; it still requires an explicit owner approval click. These protections also gate scheduled reaping. Follow `docs/operations/fleet-control-bootstrap.md`; code-only remediation does not install these settings.
    5. In `cloud-operator`, add the secrets `OPERATOR_APP_ID`, `OPERATOR_APP_PRIVATE_KEY` and `ANTHROPIC_API_KEY` (step 3).
    6. In `cloud-operator`, also add `AWS_BRIDGE_ROLE_ARN` and `CONTROL_BUCKET`. In `cloud-fleet`, add the secrets `AWS_FLEET_ROLE_ARN`, `FLEET_SSH_KEY`, `OWNER_ADMIN_CIDR`, `STATE_BUCKET`, `EVIDENCE_BUCKET` and `CONTROL_BUCKET`. For `FLEET_SSH_KEY`, run `ssh-keygen -t ed25519 -f lodestar_fleet_ci` on your machine, paste the private key, then delete the local private key.
    7. As repository variables (not secret), add:
@@ -352,7 +352,7 @@ Timing: steps 3.1–3.3 any time, before step 2.5; steps 1, 2 and 4–5 after OP
       - `OPERATOR_STOP=false`;
       - `FLEET_LIVE=false` (set it to `true` after OP-G's dry cycle);
       - `OPERATOR_MODEL_ROUTINE` and `OPERATOR_MODEL_TRIAGE`, the model IDs the runner names.
-   8. Customize the repo's OIDC subject claim to include `job_workflow_ref` (`gh api -X PUT repos/dvortsis/lodestar-v2/actions/oidc/customization/sub` with `include_claim_keys` of `repo`, `context` and `job_workflow_ref`), so the AWS roles can require `fleet.yml@refs/heads/main`.
+   8. After reviewing all federated consumers and separately authorizing the settings change, customize OIDC with `use_default=false`, `use_immutable_subject=true`, and `include_claim_keys` of `repo`, `context`, `workflow_ref` in that order. Keep immutable owner/repository IDs in the exact template subjects. `workflow_ref` binds these direct workflows to `main`; `job_workflow_ref` applies to reusable workflows. The desired payload is `infra/aws/fleet-control/github-deployment-policy.json`'s `oidc` object. Run the read-only deployment-policy audit; do not enable live mode while it refuses.
 3. **Anthropic Console:**
    1. Create a workspace, `lodestar-operator`.
    2. Set its spend limit to $200, with an alert at $100.
@@ -371,7 +371,7 @@ Timing: steps 3.1–3.3 any time, before step 2.5; steps 1, 2 and 4–5 after OP
    Then add an AWS Budgets alert on the account; $10 a month is ample, since AWS here holds only roles, buckets and secrets. `LodestarPiaSecretReader` is already done.
 5. **Akamai:** create a personal access token for the fleet (scopes as in §4, 90-day expiry), and store it only in `lodestar/akamai-fleet-token`.
 6. **PIA delivery:**
-   1. Create the GitHub environment `pia-delivery`: Deployment branches and tags → Selected branches and tags → add `main` only, no tags.
+   1. After separate owner approval, configure `pia-delivery` with the same main-only, sole owner reviewer and no-administrator-bypass protections as step 2.4. It remains blocked until the read-only audit passes.
    2. Add its secrets: `AWS_PIA_ROLE_ARN`, `STATE_BUCKET`, `FLEET_SSH_KEY` (the same key as `cloud-fleet`), and `PIA_SERVERS` (one server for Main and a different one for Worker, neither used by the Unraid host).
    3. Create a separate Akamai token with only Firewalls read/write (90-day expiry), and store it only in Secrets Manager as `lodestar/akamai-firewall-token`, in the same account as `lodestar/pia-vpn`.
    4. Your MFA bridge stays available for manual use.

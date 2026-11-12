@@ -530,6 +530,12 @@ def oidc_session(env: dict, run_id: str, role_env: str = "AWS_FLEET_ROLE_ARN"): 
     in-process. No third-party action, and the credentials never reach
     GITHUB_ENV or a log."""
     import urllib.request
+    from deployment_policy import DeploymentBlocked, require_for_run, require_token_claims
+
+    try:
+        environment = require_for_run(env, role_env, lambda path: github_json(env["GITHUB_TOKEN"], path))
+    except DeploymentBlocked as exc:
+        raise SystemExit(str(exc)) from None
 
     import boto3  # noqa: PLC0415
 
@@ -539,6 +545,7 @@ def oidc_session(env: dict, run_id: str, role_env: str = "AWS_FLEET_ROLE_ARN"): 
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             jwt = json.loads(r.read())["value"]
+        require_token_claims(jwt, env, environment)
         creds = boto3.client("sts", region_name=REGION, config=cfg).assume_role_with_web_identity(
             RoleArn=env[role_env], RoleSessionName=f"fleet-{run_id}", WebIdentityToken=jwt,
             DurationSeconds=3600)["Credentials"]

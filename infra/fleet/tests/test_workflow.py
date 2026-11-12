@@ -29,7 +29,7 @@ from timefmt import fmt
 
 ROOT = Path(__file__).resolve().parents[3]
 WORKFLOWS = ROOT / ".github" / "workflows"
-COVERED = ["fleet.yml", "operator-wake.yml", "operator-injection.yml"]
+COVERED = ["fleet.yml", "operator-wake.yml", "operator-apply.yml", "operator-injection.yml"]
 FLEET = WORKFLOWS / "fleet.yml"
 L = limits.load()
 
@@ -83,9 +83,9 @@ class FleetStructure(unittest.TestCase):
     def test_permissions_minimal(self):
         self.assertEqual(self.wf["permissions"], {})
         base = {"contents": "read", "pull-requests": "write"}
-        oidc = dict(base, **{"id-token": "write"})
+        oidc = dict(base, **{"id-token": "write", "actions": "read"})
         want = {"gate": {"contents": "read"}, "refuse": base, "act": oidc, "dispatch-down": oidc,
-                "reaper": dict(oidc, actions="read"),  # the sweeping jobs alone read run status
+                "reaper": dict(oidc, actions="read"),  # live jobs also read environment protection settings
                 "pia-fence": oidc, "deliver-pia": dict(oidc, actions="read"), "pia-release": oidc}
         self.assertEqual({n: j.get("permissions") for n, j in self.jobs.items()}, want)
 
@@ -127,6 +127,21 @@ class FleetStructure(unittest.TestCase):
                 keys = list(job)
                 self.assertIn("if", job)
                 self.assertLess(keys.index("if"), keys.index("environment"))
+
+    def test_all_deployment_jobs_pin_main_and_can_read_approval_settings(self):
+        from deployment_policy import POLICY
+        for path in WORKFLOWS.glob("*.yml"):
+            for name, job in load(path)["jobs"].items():
+                environment = job.get("environment")
+                if isinstance(environment, dict):
+                    environment = environment.get("name")
+                if environment not in POLICY["environments"]:
+                    continue
+                with self.subTest(workflow=path.name, job=name):
+                    self.assertIn(path.name, POLICY["environments"][environment])
+                    self.assertIn("github.ref == 'refs/heads/main'", job.get("if", ""))
+                    self.assertLess(list(job).index("if"), list(job).index("environment"))
+                    self.assertEqual(job["permissions"].get("actions"), "read")
 
     def test_filter_job_has_no_secrets_or_environment(self):
         gate = self.jobs["gate"]
