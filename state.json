@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T07:04:58Z",
+  "updated_at": "2026-11-12T07:11:01Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7752,6 +7752,16 @@
       "pr": 736,
       "sha": "7cae9e6b03afcd92e722c56cd94df297e6683761",
       "at": "2026-11-12T06:15:37Z"
+    },
+    {
+      "pr": 744,
+      "sha": "f7681f94eeff0626ea2a1d866d331cb5f0bf902b",
+      "at": "2026-11-12T07:08:00Z"
+    },
+    {
+      "pr": 746,
+      "sha": "d8b9b71737c865d30e9a93eca09680804eddd079",
+      "at": "2026-11-12T07:11:01Z"
     }
   ],
   "active_sessions": {
@@ -7989,15 +7999,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T07:01:12Z",
+    "updated": "2026-11-12T07:11:01Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-win-fs-followups",
+        "slice": "UP-0",
         "role": "build",
         "agent": "claude",
-        "doing": "go given 05:53Z: rv-728 N1+N4 and X-spool-open-size (spool.rs free after #724) PR #744 (dc231ac2), awaiting ready.",
-        "since": "2026-11-12T04:27:50Z",
+        "doing": "session_01MMjhnBPrS4p53kbc5CSm2o: step 1 (restate plan \u00a75 in decisions file), runner confirms before code; /security-review",
+        "since": "2026-11-12T07:11:01Z",
         "status": "active"
       },
       {
@@ -8122,7 +8132,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T07:04:58Z",
+  "updated": "2026-11-12T07:11:01Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
