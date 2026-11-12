@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T13:57:04Z",
+  "updated_at": "2026-11-12T14:14:49Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7334,6 +7334,26 @@
       "id": "m8-net-e2e-macos-time",
       "note": "After #763 merges: read the e2e_search: line from main's macOS test job; record it in the next runner note; follow-up slice if > 5 s per hash.",
       "at": "2026-11-12T13:57:04Z"
+    },
+    {
+      "id": "X-wizard-size-headroom",
+      "note": "Tester (main 8e40a63): size-limit Wizard steps at 53.59 of 53.6 kB (10 B headroom). Next wizard change trips it; plan a trim or a \u00a72.26 budget call before the next wizard slice.",
+      "at": "2026-11-12T14:14:49Z"
+    },
+    {
+      "id": "X-leak-test-handshake-msg",
+      "note": "Tester: leak test fails generically when the WireGuard handshake never completes (expired PIA key). Kill switch held (0 packets). Follow-up: start-block / leak test reports \"handshake never completed\" explicitly. Await tester rerun confirmation.",
+      "at": "2026-11-12T14:14:49Z"
+    },
+    {
+      "id": "X-aws-win-subnet-reach",
+      "note": "Tester infra finding: Lodestar Windows subnet has an IGW but MapPublicIpOnLaunch=false and no NAT/VPC endpoints, so Deploy-AwsWindows.ps1 instances never reach SSM. Phase 2 used AssociatePublicIpAddress=true on the ENI (SG no inbound). Slice: fix the script (ENI public IP) or subnet setting; VPC endpoints/NAT cost money -> owner. No terraform init / cloud calls by runner.",
+      "at": "2026-11-12T14:14:49Z"
+    },
+    {
+      "id": "playwright-host-vs-container",
+      "note": "Tester: 18 Insights screenshot diffs on a bare host vs CI pinned container; identical at the baseline commit. Not a regression; no action.",
+      "at": "2026-11-12T14:14:49Z"
     }
   ],
   "main_health": [
@@ -8439,7 +8459,7 @@
     }
   ],
   "heartbeat": "2026-11-12T12:38:43Z",
-  "updated": "2026-11-12T13:57:04Z",
+  "updated": "2026-11-12T14:14:49Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
