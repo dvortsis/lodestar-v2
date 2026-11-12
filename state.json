@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T05:17:01Z",
+  "updated_at": "2026-11-12T05:19:17Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7099,7 +7099,8 @@
     "slices.yaml entry: X-flake-portable-restart-3 (next runner PR)",
     "release/v0.5.2: P-v052-cut opening release/v052-tokio-notice from runner-state patches/v052-tokio-notice.patch (runner 06383e6b); review + merge before v0.5.2 tag",
     "slices.yaml entry: X-restart-banner-polish (next runner PR)",
-    "X-restart-save-lag (Opus, web): banner learns of a Settings save within 15 s; restart store is async-race code, so Opus only"
+    "X-restart-save-lag (Opus, web): banner learns of a Settings save within 15 s; restart store is async-race code, so Opus only",
+    "slices.yaml entry: X-filters-budget-headroom (next runner PR)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7698,6 +7699,11 @@
       "pr": 718,
       "sha": "5decc4ad3a11cd68b67edfde17c4daac918c79bf",
       "at": "2026-11-12T05:16:30Z"
+    },
+    {
+      "pr": 733,
+      "sha": "2151e97d9b38223cc1450a45b8c387371ebd28c0",
+      "at": "2026-11-12T05:19:17Z"
     }
   ],
   "active_sessions": {
@@ -7932,7 +7938,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T05:17:01Z",
+    "updated": "2026-11-12T05:19:17Z",
     "items": [
       {
         "slot": 1,
@@ -7989,11 +7995,11 @@
       },
       {
         "slot": 7,
-        "slice": "X-win-clippy",
-        "role": "helper",
+        "slice": "X-filters-budget-headroom",
+        "role": "Sonnet slice",
         "agent": "session_01MMjhn8WrGpnM1jiYP9RY1X",
-        "doing": "session_01MMjhn8WrGpnM1jiYP9RY1X (Sonnet): Windows-only clippy fixes + Windows clippy step in CI test job",
-        "since": "2026-11-12T03:14:46Z"
+        "doing": "find >=0.3 kB headroom on Filters first view without raising the limit",
+        "since": "2026-11-12T05:19:17Z"
       },
       {
         "slot": 8,
@@ -8098,7 +8104,7 @@
     }
   ],
   "heartbeat": "2026-11-12T03:41:56Z",
-  "updated": "2026-11-12T05:17:01Z",
+  "updated": "2026-11-12T05:19:17Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
