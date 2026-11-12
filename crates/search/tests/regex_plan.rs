@@ -249,7 +249,12 @@ proptest! {
     /// Plan soundness: any string the pattern matches, inside any name,
     /// passes the plan.
     #[test]
-    fn every_match_passes_the_plan(p in pattern(), seed in 1u64.., before in affix(), after in affix()) {
+    fn every_match_passes_the_plan(
+        p in pattern(),
+        seed in 1u64..,
+        before in affix(),
+        after in affix(),
+    ) {
         if parse(&p).is_ok() {
             check_sound(&p, seed, &before, &after);
         }
@@ -289,74 +294,56 @@ fn worst_cases_stay_within_the_caps() {
 }
 
 /// Each documented worst case is accepted and parses well within a
-/// bound, and one step past it is refused (I1, I2). Release builds
-/// measured about 9 ms for the slowest (two bare `\p{Any}`; a randomized
-/// search over bracket shapes found none slower); the bound is generous enough for an
-/// unoptimized build on a slow CI runner, so it catches a lost limit
-/// (hundreds of times slower) without flaking.
+/// bound, and one step past it is refused (I1, I2). In a release build
+/// the slowest accepted patterns known (two `\p{Any}`, and the shapes a
+/// randomized search found) take about 7–12 ms; the bound is generous
+/// enough for an unoptimized build on a slow CI runner, so it catches a
+/// lost limit (hundreds of times slower) without flaking.
 #[test]
 fn the_worst_accepted_cases_are_cheap_and_one_more_step_is_refused() {
     use lodestar_search::regex::Reason;
     let bound = std::time::Duration::from_secs(10);
+    let row = |unit: &str, max: usize, reason| (unit.repeat(max), unit.repeat(max + 1), reason);
     let cases: Vec<(String, String, Reason)> = vec![
-        // Case folding walks each class's codepoints: about two \p{Any}.
+        // The fold budget: two of the widest property.
+        row(r"\p{Any}", 2, Reason::ClassTooLarge),
+        row(r"\P{Any}", 2, Reason::ClassTooLarge),
+        // A bracket folds its whole set again, negated items included
+        // (B2), and every range with a cased character is walked in full,
+        // dearly inside the fold table's span (B3).
+        row(r"[\P{Any}]", 1, Reason::ClassTooLarge),
+        row(r"[^\p{Any}]", 1, Reason::ClassTooLarge),
+        row(r"[\x{0}-\x{10FFFF}]", 2, Reason::ClassTooLarge),
+        row(r"[\x{80}-\x{FFFF}]", 6, Reason::ClassTooLarge),
+        row(r"[\S]", 2, Reason::ClassTooLarge),
+        row(r"[\D]", 4, Reason::ClassTooLarge),
+        row(r"[^\D]", 4, Reason::ClassTooLarge),
+        row(r"[[^a]b]", 1, Reason::ClassTooLarge),
+        row(r"[b[^a]]", 1, Reason::ClassTooLarge),
+        row(r"[[:^alpha:]]", 2, Reason::ClassTooLarge),
+        row(r"[\D--a]", 2, Reason::ClassTooLarge),
+        row(r"[_\pL]", 27, Reason::ClassTooLarge),
+        // The slowest shapes the randomized search found, at the baseline.
+        row(r"[a-z\S]", 2, Reason::ClassTooLarge),
+        row(r"[\x{0}-\x{10FFFF}ſ]{2,9}", 2, Reason::ClassTooLarge),
+        row(r"\pL", 56, Reason::ClassTooLarge),
         (
-            r"\p{Any}".repeat(2),
-            r"\p{Any}".repeat(3),
+            // Each bracket level folds the fold table's whole span again.
+            r"[[[\x{41}-\x{1E943}]a]a]".to_owned(),
+            r"[[[[\x{41}-\x{1E943}]a]a]a]".to_owned(),
             Reason::ClassTooLarge,
         ),
-        // A negated class folds its complement (B1).
-        (
-            r"\P{Any}".repeat(2),
-            r"\P{Any}".repeat(3),
-            Reason::ClassTooLarge,
-        ),
-        // Inside brackets, the bracket folds its whole set again, once per
-        // level, negated items at full width (B2): one each.
-        (
-            r"[\P{Any}]".into(),
-            r"[\P{Any}]".repeat(2),
-            Reason::ClassTooLarge,
-        ),
-        (
-            r"[^\p{Any}]".into(),
-            r"[^\p{Any}]".repeat(2),
-            Reason::ClassTooLarge,
-        ),
-        (
-            r"[\x{0}-\x{10FFFF}]".into(),
-            r"[\x{0}-\x{10FFFF}]".repeat(2),
-            Reason::ClassTooLarge,
-        ),
-        (r"[\S]".into(), r"[\S]".repeat(2), Reason::ClassTooLarge),
-        (r"[\D]".into(), r"[\D]".repeat(2), Reason::ClassTooLarge),
-        (r"[^\D]".into(), r"[^\D]".repeat(2), Reason::ClassTooLarge),
-        (
-            r"[[^a]b]".into(),
-            r"[[^a]b]".repeat(2),
-            Reason::ClassTooLarge,
-        ),
-        (
-            r"[b[^a]]".into(),
-            r"[b[^a]]".repeat(2),
-            Reason::ClassTooLarge,
-        ),
-        (
-            r"[[:^alpha:]]".into(),
-            r"[[:^alpha:]]".repeat(2),
-            Reason::ClassTooLarge,
-        ),
-        // A set operation is charged every codepoint, so one with a
-        // negated operand is refused outright.
-        (r"[a--b]".into(), r"[\D--a]".into(), Reason::ClassTooLarge),
-        (
-            r"[\w.-]".repeat(8),
-            r"[\w.-]".repeat(9),
-            Reason::ClassTooLarge,
-        ),
-        (r"\w".repeat(17), r"\w".repeat(18), Reason::ClassTooLarge),
-        (r"\W".repeat(17), r"\W".repeat(18), Reason::ClassTooLarge),
-        // The compiled-size estimate: \w's ranges times the count.
+        // Cheap folds stay cheap (I3): a word or non-word bracket costs
+        // little, and set operations over named classes are allowed.
+        row(r"[\W_]", 40, Reason::ClassTooLarge),
+        row(r"[\w--\d]", 18, Reason::ClassTooLarge),
+        row(r"[\pL&&\p{Greek}]", 14, Reason::ClassTooLarge),
+        row(r"[\pL~~\pN]", 13, Reason::ClassTooLarge),
+        row(r"S\d\d[\W_]E\d\d[\W_]", 18, Reason::TooManyNodes),
+        row(r"[\w.-]", 51, Reason::TooManyNodes),
+        // Perl classes stand alone unfolded; the compiled size bounds them.
+        row(r"\w", 62, Reason::TooLarge),
+        row(r"\W", 62, Reason::TooLarge),
         (r"\w{62}".to_owned(), r"\w{63}".to_owned(), Reason::TooLarge),
         // Length and node count.
         ("a".repeat(254), "a".repeat(256), Reason::TooManyNodes),
