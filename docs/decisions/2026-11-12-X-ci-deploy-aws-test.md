@@ -1,4 +1,4 @@
-# X-ci-deploy-aws-test decisions
+# X-ci-deploy-aws-test decisions (#774)
 
 The runner's decision, after #771: CI parsed `Test-DeployAwsWindows.ps1` but never ran it, so nothing guarded `Get-SafeAwsError`'s cases or the launch arguments.
 
