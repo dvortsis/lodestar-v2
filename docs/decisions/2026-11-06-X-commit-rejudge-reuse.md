@@ -71,7 +71,7 @@ The first run of the property built its trails before the engine went into a `Ha
 
 Every held case passed in this container. In instructions (callgrind), the two judgments cost 1.02–1.05× one, and the two-way reading 1.075–1.09× one, from 1.96×.
 
-**From CI** (`filter budget` job 127755868647 on #532 at `fcbe86e9`). It ran on an Intel Xeon Platinum 8370C, not the EPYC 7763, so the times are scaled to the reference: the calibration × the 8370C's skew, 1.033×, which the job marks provisional (from 4 jobs). Reference-runner µs per torrent at 10,000 rules, mixed:
+**From CI** (`filter budget` job on #532 at `fcbe86e9`). It ran on an Intel Xeon Platinum 8370C, not the EPYC 7763, so the times are scaled to the reference: the calibration × the 8370C's skew, 1.033×, which the job marks provisional (from 4 jobs). Reference-runner µs per torrent at 10,000 rules, mixed:
 
 | Case | Before (RP-G, EPYC 7763) | After |
 |---|---|---|

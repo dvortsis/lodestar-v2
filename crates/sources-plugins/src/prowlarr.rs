@@ -28,14 +28,26 @@
 //! names are dropped; the info hash comes only from the Torznab
 //! `infohash` attribute or a magnet's `xt` (SRC-6), never from a link;
 //! sizes and dates outside sane ranges are dropped.
+//!
+//! **Usenet results (UN-1), off by default.** With the `usenet` setting
+//! on (Prowlarr only), enabled Usenet indexers are polled the same way
+//! and each Newznab result becomes a usenet item (UN-0): keyed by the
+//! indexer id and the result's GUID, always `private_source`, never
+//! fetched or verified. **The NZB link is never kept:** Prowlarr's
+//! download links carry its API key, and the indexer's. The item is keyed by
+//! the indexer id and the GUID, and only a GUID that can't fetch anything
+//! is used ([`usenet_guid`]); no reference is stored (L3), so send's
+//! (UN-3) is still to be designed. The poster is never read. See
+//! `docs/decisions/2026-11-12-UN-1.md`.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lodestar_integrations::net::{self, NetPolicy};
 use lodestar_integrations::secret::Secret;
-use lodestar_sources::claims::{ClaimedFile, Claims, Confidence, ExternalId, Provenance};
+use lodestar_sources::claims::{ClaimedFile, Claims, Confidence, Details, ExternalId, Provenance};
 use lodestar_sources::consent::{CredentialKind, CredentialSpec};
 use lodestar_sources::http::host_key;
 use lodestar_sources::{
@@ -90,6 +102,44 @@ pub const PAGE_LIMITS: Limits = Limits {
     ..LIMITS
 };
 
+/// Bytes in one Usenet indexer page, checked before it's parsed; a larger
+/// answer is refused whole. A page of [`PAGE_SIZE`] Newznab results is
+/// about 100–300 KiB (a result's attributes and links are under 3 KiB).
+pub const USENET_PAGE_BYTES: usize = 2 * 1024 * 1024;
+/// Usenet results kept per indexer page: the [`PAGE_SIZE`] asked for.
+/// The rest of a longer page is read (so it's still checked) and dropped.
+pub const USENET_PAGE_ITEMS: usize = PAGE_SIZE;
+/// Usenet results emitted per poll of the whole indexer list; the rest
+/// wait for the next poll. The store takes at most this many usenet items
+/// in one write (`MAX_USENET_BATCH`), and 4,096 is about 40 busy indexers'
+/// newest page.
+pub const USENET_POLL_ITEMS: usize = 4096;
+/// How often each Usenet indexer is polled: hourly, 24 API hits a day.
+/// Newznab indexers count API hits per day (free accounts often get 100
+/// or fewer), and Sonarr and Radarr share them, so the torrent indexers'
+/// 15 minutes (96 a day) could use up a user's quota.
+pub const USENET_POLL_EVERY: Duration = Duration::from_secs(3600);
+/// Bytes in a Usenet result's GUID, the store's limit on a key part
+/// (`USENET_MAX_PART`).
+pub const USENET_MAX_GUID: usize = 1024;
+/// The earliest posting date believed: 1980-01-01. Binary retention
+/// reaches back to about 2008; anything before 1980 is junk.
+pub const USENET_MIN_POSTED: i64 = 315_532_800;
+/// Bytes of text a usenet item's claims can give the filter to judge at
+/// ingest: the title (at most 1,024) on its own and joined with the
+/// category (at most 10 digits), with room. The claims carry nothing else
+/// that's judged, so a poll judges at most [`USENET_POLL_ITEMS`] × this
+/// (16 MiB), well inside the ingest budget.
+pub const USENET_MAX_JUDGED: usize = 4 * 1024;
+
+/// The caps for one Usenet page: SRC-6's, with [`USENET_PAGE_BYTES`] and
+/// ten times [`PAGE_SIZE`] items read.
+pub const USENET_PAGE_LIMITS: Limits = Limits {
+    max_bytes: USENET_PAGE_BYTES,
+    max_items: PAGE_SIZE * 10,
+    ..LIMITS
+};
+
 pub(crate) const MANIFEST: Manifest = Manifest {
     id: ID,
     name: "Prowlarr / Jackett",
@@ -111,7 +161,7 @@ pub(crate) const MANIFEST: Manifest = Manifest {
 /// The settings form (§10.10). The API key isn't a setting: it's the
 /// `api_key` credential the policy declares (X-sources-api-spec), stored
 /// through the credential store, and [`Config::from_json`] refuses it.
-pub const CONFIG_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"url":{"type":"string","format":"uri","title":"Address","description":"Your Prowlarr or Jackett address, such as http://prowlarr:9696"},"manager":{"type":"string","enum":["prowlarr","jackett"],"default":"prowlarr","title":"Indexer manager"},"agents":{"type":"integer","minimum":1,"maximum":8,"default":2,"title":"Indexers queried at once"}},"required":["url","manager"],"additionalProperties":false}"#;
+pub const CONFIG_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"url":{"type":"string","format":"uri","title":"Address","description":"Your Prowlarr or Jackett address, such as http://prowlarr:9696"},"manager":{"type":"string","enum":["prowlarr","jackett"],"default":"prowlarr","title":"Indexer manager"},"agents":{"type":"integer","minimum":1,"maximum":8,"default":2,"title":"Indexers queried at once"},"usenet":{"type":"boolean","default":false,"title":"Usenet results","description":"Also keep results from your Usenet indexers (Prowlarr only). They stay on this machine and are never verified."}},"required":["url","manager"],"additionalProperties":false}"#;
 
 /// Q4 (runner): each indexer's RSS at most every 15 minutes. The manager
 /// is the user's own, usually on the LAN, and paces its indexers itself;
@@ -161,6 +211,9 @@ pub struct Config {
     host: String,
     manager: Manager,
     agents: u8,
+    /// Keep Usenet indexers' results (UN-1). Off unless the user turns it
+    /// on, and Prowlarr only: Jackett has no Usenet indexers.
+    usenet: bool,
 }
 
 /// Why settings were refused. Names the rule, never the value.
@@ -182,6 +235,8 @@ struct RawConfig {
     manager: Manager,
     #[serde(default)]
     agents: Option<u8>,
+    #[serde(default)]
+    usenet: Option<bool>,
 }
 
 impl Config {
@@ -214,7 +269,18 @@ impl Config {
             host,
             manager,
             agents,
+            usenet: false,
         })
+    }
+
+    /// The same settings with Usenet results on or off. Jackett has no
+    /// Usenet indexers, so turning them on for it is refused.
+    pub fn with_usenet(mut self, on: bool) -> Result<Config, ConfigError> {
+        if on && self.manager != Manager::Prowlarr {
+            return Err(ConfigError("Usenet results need Prowlarr"));
+        }
+        self.usenet = on;
+        Ok(self)
     }
 
     /// The settings as the form saves them (see [`CONFIG_SCHEMA`]). An
@@ -225,18 +291,24 @@ impl Config {
         }
         let raw: RawConfig = serde_json::from_str(json)
             .map_err(|_| ConfigError("the settings don't match the form"))?;
-        Config::new(&raw.url, raw.manager, raw.agents)
+        Config::new(&raw.url, raw.manager, raw.agents)?.with_usenet(raw.usenet.unwrap_or(false))
     }
 
     /// The settings in the form [`Config::from_json`] reads back as the
-    /// same [`Config`]: the checked address, the manager and the agent
-    /// count. Never holds a credential.
+    /// same [`Config`]: the checked address, the manager, the agent count
+    /// and, only when it's on, `usenet` (so forms saved before UN-1 read
+    /// back unchanged). Never holds a credential.
     pub fn to_json(&self) -> String {
         let manager = match self.manager {
             Manager::Prowlarr => "prowlarr",
             Manager::Jackett => "jackett",
         };
-        serde_json::json!({"url": self.base, "manager": manager, "agents": self.agents}).to_string()
+        let mut v =
+            serde_json::json!({"url": self.base, "manager": manager, "agents": self.agents});
+        if self.usenet {
+            v["usenet"] = serde_json::Value::Bool(true);
+        }
+        v.to_string()
     }
 
     pub fn manager(&self) -> Manager {
@@ -245,6 +317,10 @@ impl Config {
 
     pub fn agents(&self) -> u8 {
         self.agents
+    }
+
+    pub fn usenet(&self) -> bool {
+        self.usenet
     }
 }
 
@@ -419,8 +495,11 @@ impl Prowlarr {
             key,
             http: kit.http,
             emitter,
+            usenet_left: AtomicUsize::new(0),
+            usenet_polled: Mutex::default(),
         });
         loop {
+            job.usenet_left.store(USENET_POLL_ITEMS, Ordering::Relaxed);
             let listed = tokio::select! {
                 _ = shutdown.requested() => return Ok(()),
                 r = job.list() => r,
@@ -477,6 +556,9 @@ pub struct Indexer {
     pub id: String,
     /// Anything but public.
     pub private: bool,
+    /// A Usenet indexer (Prowlarr's `protocol: usenet`), listed only when
+    /// the `usenet` setting is on.
+    pub usenet: bool,
 }
 
 struct Job {
@@ -484,6 +566,10 @@ struct Job {
     key: Secret,
     http: Client,
     emitter: Emitter,
+    /// Usenet results this poll may still emit ([`USENET_POLL_ITEMS`]).
+    usenet_left: AtomicUsize,
+    /// When each Usenet indexer was last polled ([`USENET_POLL_EVERY`]).
+    usenet_polled: Mutex<std::collections::HashMap<String, tokio::time::Instant>>,
 }
 
 impl Job {
@@ -522,7 +608,7 @@ impl Job {
             _ => {}
         }
         let res = answer(res)?;
-        parse_indexers(self.config.manager, &res).map_err(|e| match e {
+        parse_indexers_with(self.config.manager, &res, self.config.usenet).map_err(|e| match e {
             ListError::Refused => Failure::Refused,
             // Over the size cap is a real (if huge) list: not a setup error.
             ListError::TooBig => Failure::Other,
@@ -531,9 +617,15 @@ impl Job {
     }
 
     async fn poll(&self, ix: &Indexer) -> Result<(), Failure> {
+        if ix.usenet && !self.usenet_due(&ix.id) {
+            return Ok(());
+        }
         let unit = format!("indexer/{}", ix.id);
         let body = answer(self.http.poll(&unit, &self.page_request(ix)).await)?;
         let now = unix_now();
+        if ix.usenet {
+            return self.emit_usenet(ix, &body, now).await;
+        }
         let mut found = Vec::new();
         let summary = torznab::parse_each(&body, &PAGE_LIMITS, |item| {
             found.extend(to_found(item, ix.private, &self.config.host, now));
@@ -546,6 +638,55 @@ impl Job {
         }
         Ok(())
     }
+}
+
+impl Job {
+    /// One Usenet indexer's page as usenet items: at most
+    /// [`USENET_PAGE_ITEMS`] of it, and only while the poll's
+    /// [`USENET_POLL_ITEMS`] last. A page over [`USENET_PAGE_BYTES`] is
+    /// refused whole. Nothing about a result is logged.
+    /// Whether a Usenet indexer is due ([`USENET_POLL_EVERY`]), marking
+    /// it polled now when it is. Entries older than the interval are
+    /// dropped, so the map holds at most the indexers polled within it.
+    fn usenet_due(&self, id: &str) -> bool {
+        let now = tokio::time::Instant::now();
+        let mut polled = self.usenet_polled.lock().unwrap_or_else(|e| e.into_inner());
+        polled.retain(|_, at| now.duration_since(*at) < USENET_POLL_EVERY);
+        if polled.contains_key(id) {
+            return false;
+        }
+        polled.insert(id.to_owned(), now);
+        true
+    }
+
+    async fn emit_usenet(&self, ix: &Indexer, body: &[u8], now: i64) -> Result<(), Failure> {
+        let found = match usenet_page(body, ix, &self.config.host, self.key.expose(), now) {
+            Ok(found) => found,
+            Err(UsenetPage::Refused) => return Err(Failure::Refused),
+            Err(UsenetPage::TooBig) => return Err(Failure::Other),
+        };
+        for u in found {
+            let Some(f) = u.into_found() else { continue };
+            if !take_one(&self.usenet_left) {
+                break;
+            }
+            self.emitter.emit(f).await.map_err(|_| Failure::Closed)?;
+        }
+        Ok(())
+    }
+}
+
+/// Takes one from `n` unless it's 0: agents share a poll's budget, and
+/// it never wraps.
+fn take_one(n: &AtomicUsize) -> bool {
+    let mut cur = n.load(Ordering::Relaxed);
+    while cur > 0 {
+        match n.compare_exchange_weak(cur, cur - 1, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return true,
+            Err(now) => cur = now,
+        }
+    }
+    false
 }
 
 /// The body of a 200, or why not.
@@ -587,7 +728,9 @@ async fn poll_all(job: &Arc<Job>, indexers: Vec<Indexer>) -> Result<(), Failure>
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_secs()).ok())
+        .unwrap_or(0)
 }
 
 /// One Torznab item as a discovery, or `None` for an item that isn't a
@@ -666,6 +809,271 @@ pub fn is_manager_download(url: &str) -> bool {
     })
 }
 
+// ---- Usenet results (UN-1) ----
+
+/// Why a Usenet page gave nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsenetPage {
+    /// Over [`USENET_PAGE_BYTES`]: refused whole, tried next poll.
+    TooBig,
+    /// The manager's Newznab error 100–102: the key was refused.
+    Refused,
+}
+
+/// A Usenet page's results as usenet items, at most
+/// [`USENET_PAGE_ITEMS`]. Results that aren't Newznab items, or that
+/// [`to_usenet`] refuses, are skipped.
+pub fn usenet_page(
+    body: &[u8],
+    ix: &Indexer,
+    manager_host: &str,
+    manager_key: &str,
+    now: i64,
+) -> Result<Vec<UsenetFind>, UsenetPage> {
+    if body.len() > USENET_PAGE_BYTES {
+        return Err(UsenetPage::TooBig);
+    }
+    let mut found = Vec::new();
+    let summary = torznab::parse_each(body, &USENET_PAGE_LIMITS, |item| {
+        if found.len() < USENET_PAGE_ITEMS {
+            found.extend(to_usenet(item, ix, manager_host, manager_key, now));
+        }
+    });
+    if matches!(summary.error, Some(100..=102)) {
+        return Err(UsenetPage::Refused);
+    }
+    Ok(found)
+}
+
+/// One Newznab result, checked, as it will be stored: the indexer id and
+/// GUID it's keyed and found again by, and its claims. It never holds the
+/// result's link: [`to_usenet`] drops it before this is built.
+#[derive(Clone, PartialEq, Eq)]
+pub struct UsenetFind {
+    /// Prowlarr's indexer id, in decimal without leading zeros (UN-0).
+    pub indexer: String,
+    /// The GUID, as [`usenet_guid`] passed it.
+    pub guid: String,
+    /// The indexer isn't public. The store makes every usenet item
+    /// private either way (UN-0); this keeps the plugin's own word.
+    pub private: bool,
+    pub claims: Claims,
+}
+
+/// Lengths only: a title can be one a rule holds, and a GUID can be a
+/// details page's address.
+impl std::fmt::Debug for UsenetFind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UsenetFind")
+            .field("indexer", &self.indexer)
+            .field("guid_len", &self.guid.len())
+            .field("private", &self.private)
+            .field("title_len", &self.claims.name.as_ref().map(String::len))
+            .finish_non_exhaustive()
+    }
+}
+
+/// One Newznab result as a usenet item, or `None` for one that isn't a
+/// Newznab item or can't be kept. Every field stays a claim:
+///
+/// - **the title** is required: send finds the result again by it;
+/// - **the GUID** must pass [`usenet_guid`], or nothing is kept;
+/// - **the link** (Prowlarr's download URL, with its API key and the
+///   indexer's) is dropped here, read only to compare with the GUID;
+/// - **the size**, 1 byte to [`MAX_SIZE`];
+/// - **the category**, the most specific Newznab id ([`usenet_category`]);
+/// - **the posting date**, [`USENET_MIN_POSTED`] to a day past `now`;
+/// - **the external ids** the details section allows (imdb, tmdb, tvdb);
+///   the claims' clamp drops any other;
+/// - **the poster is never read** (the parser doesn't keep it): it's
+///   often an email address. Nor is a description or a publisher set,
+///   which the details section forbids beside it (ENR-9).
+///
+/// No external reference is set: every usenet find is private, and a
+/// private find stores none (L3). Send's reference is UN-3's design.
+pub fn to_usenet(
+    item: Item,
+    ix: &Indexer,
+    manager_host: &str,
+    manager_key: &str,
+    now: i64,
+) -> Option<UsenetFind> {
+    if item.kind != torznab::Kind::Usenet || !ix.usenet || !canonical_indexer(&ix.id) {
+        return None;
+    }
+    let title = item
+        .title
+        .filter(|t| !t.is_empty() && !holds_key(t, manager_key))?;
+    let guid = usenet_guid(
+        item.guid.as_deref(),
+        item.link.as_deref(),
+        manager_host,
+        manager_key,
+    )?;
+    let posted = item.published.filter(|t| {
+        let last = now
+            .saturating_add(MAX_FUTURE)
+            .min(lodestar_sources::claims::MAX_POSTED_AT);
+        (USENET_MIN_POSTED..=last).contains(t)
+    });
+    let details = Details {
+        source_category: usenet_category(&item.categories),
+        posted_at: posted,
+        ..Details::default()
+    };
+    let claims = Claims {
+        name: Some(title),
+        size: item.size.filter(|s| (1..=MAX_SIZE).contains(s)),
+        ids: item
+            .ids
+            .into_iter()
+            .map(|(scheme, value)| ExternalId {
+                scheme: scheme.to_owned(),
+                value,
+            })
+            .collect(),
+        details: (details != Details::default()).then(|| Box::new(details)),
+        ..Claims::default()
+    };
+    Some(UsenetFind {
+        indexer: ix.id.clone(),
+        guid,
+        private: ix.private,
+        claims,
+    })
+}
+
+impl UsenetFind {
+    /// The find the pipeline stores as a usenet item, or `None` when the
+    /// key can't be made (a part out of range, already refused above).
+    pub fn into_found(self) -> Option<Found> {
+        let posted = self.claims.details.as_ref().and_then(|d| d.posted_at);
+        let mut found = Found::usenet(&self.indexer, &self.guid, STRATEGY_RSS)
+            .ok()?
+            .with_claims(self.claims)
+            .with_provenance(Provenance {
+                // None: a private find stores no reference (L3), and
+                // every usenet find is private.
+                external_ref: None,
+                published_at: posted,
+                confidence: Confidence::Low,
+            });
+        found.private_source = true;
+        Some(found)
+    }
+}
+
+/// Prowlarr's id form, the one UN-0 keys by: decimal digits, no leading
+/// zero.
+fn canonical_indexer(id: &str) -> bool {
+    !id.is_empty()
+        && id.bytes().all(|b| b.is_ascii_digit())
+        && !(id.len() > 1 && id.starts_with('0'))
+}
+
+/// Whether `text` holds the manager's API key, in any case.
+fn holds_key(text: &str, key: &str) -> bool {
+    !key.is_empty()
+        && text
+            .as_bytes()
+            .windows(key.len())
+            .any(|w| w.eq_ignore_ascii_case(key.as_bytes()))
+}
+
+/// Words that mark a credential anywhere in a GUID.
+const CREDENTIAL_WORDS: [&str; 6] = [
+    "apikey", "api_key", "passkey", "token", "password", "secret",
+];
+/// Path segments that mark an address that fetches rather than shows.
+const FETCH_SEGMENTS: [&str; 8] = [
+    "api", "getnzb", "download", "dl", "nzb", "get", "rss", "sendnzb",
+];
+
+/// The GUID a usenet item is keyed and found again by, or `None` when it
+/// can't be kept. `guid` and `link` are the parser's (credentials already
+/// taken out of an http(s) URL). A GUID is kept only when it can't fetch
+/// anything and carries no key:
+///
+/// - 1–[`USENET_MAX_GUID`] bytes, never equal to the link, never holding
+///   the manager's key or a credential word ([`CREDENTIAL_WORDS`]);
+/// - an opaque id (the parser keeps only letters, digits and `.:_-`), or
+/// - an http(s) details page: no user info or fragment, not on the
+///   manager's host, not a manager download ([`is_manager_download`]),
+///   no path segment that fetches ([`FETCH_SEGMENTS`]) and no `.nzb`,
+///   and no query but `guid=` (NZBGeek's `geekseek.php?guid=…`).
+pub fn usenet_guid(
+    guid: Option<&str>,
+    link: Option<&str>,
+    manager_host: &str,
+    manager_key: &str,
+) -> Option<String> {
+    let g = guid?;
+    if g.is_empty() || g.len() > USENET_MAX_GUID || Some(g) == link || holds_key(g, manager_key) {
+        return None;
+    }
+    let lower = g.to_ascii_lowercase();
+    if CREDENTIAL_WORDS.iter().any(|w| lower.contains(w)) || made_up(&lower) {
+        return None;
+    }
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        let opaque = g
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b".:_-".contains(&b));
+        return opaque.then(|| g.to_owned());
+    }
+    let u = url::Url::parse(g).ok()?;
+    if !u.username().is_empty() || u.password().is_some() || u.fragment().is_some() {
+        return None;
+    }
+    if host_key(g).is_none_or(|h| h == manager_host) || is_manager_download(g) {
+        return None;
+    }
+    let fetches = u.path_segments().is_none_or(|mut segs| {
+        segs.any(|s| {
+            let s = s.to_ascii_lowercase();
+            FETCH_SEGMENTS.contains(&s.as_str()) || s.ends_with(".nzb")
+        })
+    });
+    if fetches {
+        return None;
+    }
+    if let Some(q) = u.query()
+        && !q.split('&').all(|p| {
+            p.split_once('=')
+                .is_some_and(|(k, v)| k == "guid" && !v.is_empty())
+        })
+    {
+        return None;
+    }
+    Some(g.to_owned())
+}
+
+/// A dashed UUID, bare or as `urn:uuid:…`. The *arr parsers make one up
+/// (`Guid.NewGuid()`) for an item with no `<guid>`, a new one on every
+/// poll, so it can't key an item or find it again. Newznab's own GUIDs
+/// are undashed hex or a details page.
+fn made_up(lower: &str) -> bool {
+    let u = lower.strip_prefix("urn:uuid:").unwrap_or(lower);
+    let groups: Vec<&str> = u.split('-').collect();
+    groups.len() == 5
+        && groups
+            .iter()
+            .zip([8, 4, 4, 4, 12])
+            .all(|(g, n)| g.len() == n && g.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+/// The most specific Newznab category the result names: the first
+/// sub-category (an id that isn't a multiple of 1,000, like `5040`
+/// TV/HD), else the first one (`5000` TV). In decimal, as the feed
+/// writes it.
+pub fn usenet_category(categories: &[u32]) -> Option<String> {
+    categories
+        .iter()
+        .find(|c| **c % 1000 != 0)
+        .or(categories.first())
+        .map(u32::to_string)
+}
+
 /// Why an indexer list was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ListError {
@@ -695,11 +1103,22 @@ const MAX_TYPE: usize = 32;
 /// The enabled BitTorrent indexers in `manager`'s list, at most
 /// [`MAX_INDEXERS`], without duplicates.
 pub fn parse_indexers(manager: Manager, body: &[u8]) -> Result<Vec<Indexer>, ListError> {
+    parse_indexers_with(manager, body, false)
+}
+
+/// [`parse_indexers`], and with `usenet` Prowlarr's enabled Usenet
+/// indexers too (UN-1), under the same [`MAX_INDEXERS`]. Jackett lists
+/// none.
+pub fn parse_indexers_with(
+    manager: Manager,
+    body: &[u8],
+    usenet: bool,
+) -> Result<Vec<Indexer>, ListError> {
     if body.len() > MAX_LIST_BYTES {
         return Err(ListError::TooBig);
     }
     let mut list = match manager {
-        Manager::Prowlarr => prowlarr_list(body)?,
+        Manager::Prowlarr => prowlarr_list(body, usenet)?,
         Manager::Jackett => jackett_list(body)?,
     };
     let mut seen = std::collections::HashSet::new();
@@ -721,7 +1140,7 @@ fn valid_id(id: &[u8]) -> bool {
 /// Prowlarr's `/api/v1/indexer`: a JSON array of indexer resources.
 /// Fields other than these four are skipped unread (serde's
 /// `IgnoredAny`), and serde_json's recursion limit bounds nesting.
-fn prowlarr_list(body: &[u8]) -> Result<Vec<Indexer>, ListError> {
+fn prowlarr_list(body: &[u8], usenet: bool) -> Result<Vec<Indexer>, ListError> {
     #[derive(Deserialize)]
     struct Raw {
         #[serde(default)]
@@ -738,13 +1157,17 @@ fn prowlarr_list(body: &[u8]) -> Result<Vec<Indexer>, ListError> {
 
     struct List(Vec<Indexer>);
 
-    impl<'de> Deserialize<'de> for List {
-        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<List, D::Error> {
-            d.deserialize_seq(ListVisitor)
-        }
+    struct ListVisitor {
+        usenet: bool,
     }
 
-    struct ListVisitor;
+    impl<'de> serde::de::DeserializeSeed<'de> for ListVisitor {
+        type Value = List;
+
+        fn deserialize<D: serde::Deserializer<'de>>(self, d: D) -> Result<List, D::Error> {
+            d.deserialize_seq(self)
+        }
+    }
 
     impl<'de> Visitor<'de> for ListVisitor {
         type Value = List;
@@ -764,7 +1187,12 @@ fn prowlarr_list(body: &[u8]) -> Result<Vec<Indexer>, ListError> {
                 };
                 // An indexer without RSS answers an empty search with
                 // nothing; asking every 15 minutes only costs it.
-                if raw.protocol.as_deref() != Some("torrent") || raw.supports_rss == Some(false) {
+                let is_usenet = match raw.protocol.as_deref() {
+                    Some("torrent") => false,
+                    Some("usenet") if self.usenet => true,
+                    _ => continue,
+                };
+                if raw.supports_rss == Some(false) {
                     continue;
                 }
                 let id = id.to_string();
@@ -774,6 +1202,7 @@ fn prowlarr_list(body: &[u8]) -> Result<Vec<Indexer>, ListError> {
                     out.push(Indexer {
                         id,
                         private: raw.privacy.as_deref() != Some("public"),
+                        usenet: is_usenet,
                     });
                 }
             }
@@ -783,9 +1212,10 @@ fn prowlarr_list(body: &[u8]) -> Result<Vec<Indexer>, ListError> {
         }
     }
 
-    serde_json::from_slice::<List>(body)
-        .map(|l| l.0)
-        .map_err(|_| ListError::Malformed)
+    let mut de = serde_json::Deserializer::from_slice(body);
+    let list = serde::de::DeserializeSeed::deserialize(ListVisitor { usenet }, &mut de)
+        .and_then(|l| de.end().map(|()| l));
+    list.map(|l| l.0).map_err(|_| ListError::Malformed)
 }
 
 /// Jackett's `t=indexers&configured=true`:
@@ -842,6 +1272,7 @@ fn jackett_list(body: &[u8]) -> Result<Vec<Indexer>, ListError> {
             out.push(Indexer {
                 id,
                 private: !(d.type_seen && d.kind == b"public"),
+                usenet: false,
             });
         }
     }

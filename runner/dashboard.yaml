@@ -312,6 +312,7 @@ placement:
   - X-wk-own-lease-lost
   - X-wk-out-set-polish
   - X-wk-fetched-lease
+  - X-wk-fetched-lease-nits
 - ws: ws-web
   match:
   - W*
@@ -411,6 +412,8 @@ placement:
   - X-op4-polish
   - X-tripwire-reviews-lookback
   - X-flake-dht-scrape-join
+  - X-dht-lookup-converge
+  - X-dht-bep42-rejoin
   - X-win-clippy
   - X-banner-live-region
   - X-prowlarr-no-fetch-wait
@@ -542,6 +545,7 @@ placement:
   - GS-3
   - ENR-12
   - UP-2
+  - X-watch-env
   - /^ENR-[a-z]+$/
 - ws: ws-m7-w5
   match:
@@ -549,11 +553,14 @@ placement:
   - GS-4
   - GS-5
   - ENR-13
+  - X-always-adult-detail-mask
+  - X-percolate-promoted-hold
 - ws: ws-m7-w6
   match:
   - SRC-3b
   - UN-3
   - UN-4
+  - X-unverified-cap-index
   - OUT-1
   - OUT-3
   - D-outputs-guide

@@ -1,6 +1,6 @@
 # X-flake-portable-restart-3 decisions
 
-`test (windows-latest)` failed on #717 (job 130967136165, 2026-11-12T04:57Z) in `a_portable_restart_serves_again_on_the_same_port`. The copy started by Restart now printed `WATCH_TIMED_OUT` and the refusal, so it never served. This slice hardens the copy's wait on the process it replaces (`crates/lodestar/src/system/restart.rs`) and makes a repeat failure explain itself. Nothing here loosens an owner or security decision. The changes to user-visible wording and to the wait's upper bound are the runner's call (`docs/owner-decisions.md` §2.26); they're listed under "For the runner".
+`test (windows-latest)` failed on #717 (the Windows test job, 2026-11-12T04:57Z) in `a_portable_restart_serves_again_on_the_same_port`. The copy started by Restart now printed `WATCH_TIMED_OUT` and the refusal, so it never served. This slice hardens the copy's wait on the process it replaces (`crates/lodestar/src/system/restart.rs`) and makes a repeat failure explain itself. Nothing here loosens an owner or security decision. The changes to user-visible wording and to the wait's upper bound are the runner's call (`docs/owner-decisions.md` §2.26); they're listed under "For the runner".
 
 ## What the log shows, and what it can't
 - **The old process didn't linger.** The test's `child.try_wait()` saw it exit (code 80), and the failing `nth_port` wait of 90 s ended at 04:57:40.92. So the test saw the exit at about 04:56:10.6–10.9Z, under a second after `app.relaunch` (04:56:10.213Z).

@@ -28,6 +28,7 @@ pub mod gate;
 mod have;
 pub mod health;
 pub mod identify;
+pub mod local_torrent;
 pub mod log_events;
 pub mod marginal;
 pub mod remote;
@@ -632,6 +633,8 @@ pub struct Pipeline {
     health: Option<(watch::Sender<bool>, JoinHandle<Store>)>,
     /// The torrent-cache feed and its judge task (SRC-13b).
     torrent_cache: Option<(torrent_cache::Feed, JoinHandle<()>)>,
+    /// The uploads handle and its judge task (UP-0).
+    uploads: (local_torrent::Uploads, JoinHandle<()>),
     /// The registered always-adult sources ([`Pipeline::adult_sources`]).
     adult: source_adult::AdultSources,
 }
@@ -677,6 +680,16 @@ impl Pipeline {
             tokio::task::spawn_blocking(move || prepare(store, &manifests, backfill))
                 .await
                 .map_err(Error::Join)??;
+        // Uploads (UP-0) are stored under a built-in source, as imports
+        // register theirs.
+        let (store, upload_source) = tokio::task::spawn_blocking(move || {
+            let mut store = store;
+            let id = store.register_source(local_torrent::SOURCE, "1", unix_now());
+            (store, id)
+        })
+        .await
+        .map_err(Error::Join)?;
+        let upload_source = upload_source?;
         // The sources SP-3 counts, with a publisher or without (RP-4).
         let flood = writer::Flooding::for_sources(
             registered
@@ -785,6 +798,7 @@ impl Pipeline {
                 .map(|((id, ..), _)| *id)
         });
         let cache_preparer = cache_source.map(|_| store.preparer());
+        let upload_preparer = store.preparer();
 
         let (stop_plugins, plugin_shutdown) = Shutdown::new();
         let (stop_intake, intake_shutdown) = Shutdown::new();
@@ -1117,6 +1131,20 @@ impl Pipeline {
             ));
             (feed, task)
         });
+        // Uploads (UP-0): judged off the writer like a cache's files, then
+        // committed through the same lease-free entry.
+        let uploads = {
+            let (handle, uploads) = local_torrent::channel();
+            let task = tokio::spawn(local_torrent::task(
+                uploads,
+                cache_tx.clone(),
+                upload_preparer,
+                config.filter.clone(),
+                config.sealer.clone(),
+                upload_source,
+            ));
+            (handle, task)
+        };
         drop(cache_tx);
         let lease_stats = coordinator.stats.clone();
         let authority = coordinator.authority().clone();
@@ -1208,6 +1236,7 @@ impl Pipeline {
             writer,
             health: health_task,
             torrent_cache,
+            uploads,
             adult,
         })
     }
@@ -1217,6 +1246,12 @@ impl Pipeline {
     /// plugin that's registered and enabled at this start.
     pub fn torrent_cache_feed(&self) -> Option<torrent_cache::Feed> {
         self.torrent_cache.as_ref().map(|(feed, _)| feed.clone())
+    }
+
+    /// Where the host hands uploaded `.torrent` files (UP-0,
+    /// [`local_torrent`]).
+    pub fn uploads(&self) -> local_torrent::Uploads {
+        self.uploads.0.clone()
     }
 
     pub fn monitor(&self) -> Monitor {
@@ -1293,6 +1328,8 @@ impl Pipeline {
         if let Some((_, task)) = self.torrent_cache {
             task.abort();
         }
+        // Nor from an upload: one not yet judged answers `Closed`.
+        self.uploads.1.abort();
         // The egress monitors end at the same signal.
         for mut task in self.egress_tasks {
             if tokio::time::timeout(PLUGIN_STOP_TIMEOUT, &mut task)
@@ -1535,8 +1572,11 @@ async fn intake(mut io: Intake, mut shutdown: Shutdown) {
             // An enrichment match (ENR-1b) or identification (ENR-10) is
             // an answer about a stored torrent, not a key the source
             // harvested.
+            // Nor is a usenet result (UN-1): it has no swarm hash, and it's
+            // sent again on every poll.
             if !adult_enrich::is_match(&d, io.enrichers)
                 && !unverified::is_identification(&d, io.enrichers)
+                && !d.found.is_usenet()
             {
                 io.rollups.add(
                     d.at,
@@ -1551,9 +1591,21 @@ async fn intake(mut io: Intake, mut shutdown: Shutdown) {
             // (SRC-2), never fetched from here: verification fetches go
             // through the writer's cursor, behind its switch. A held key
             // is refused first, as below, and the store refuses it too.
+            // A usenet result (UN-1) has no swarm hash: it's judged and
+            // stored by the writer as a usenet item, never claimed, fetched,
+            // looked up or checked as a hash. Without claims there's
+            // nothing to store.
+            let usenet = d.found.is_usenet();
+            if usenet && d.found.claims.is_none() {
+                io.stats.refused.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
             if d.found.claims.is_some() {
                 let key = d.found.key.0;
-                if io.held.contains(&key) || io.filter.current().blocked_hash(&[key]).is_some() {
+                let held = !usenet
+                    && (io.held.contains(&key)
+                        || io.filter.current().blocked_hash(&[key]).is_some());
+                if held {
                     io.stats.refused.fetch_add(1, Ordering::Relaxed);
                     continue;
                 }

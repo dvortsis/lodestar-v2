@@ -270,7 +270,12 @@ impl Committing {
     /// record a worker would hand over for a BEP 9 fetch, under a lease
     /// that names the plugin as its only finder. Never in the funnel or
     /// the gate, and never ends a lease (`leased` is `false`).
-    fn lease_free(a: crate::torrent_cache::Admitted, source: SourceId, at: i64) -> Committing {
+    fn lease_free(
+        a: crate::torrent_cache::Admitted,
+        source: SourceId,
+        at: i64,
+        private_source: bool,
+    ) -> Committing {
         Committing {
             results: Results {
                 key: a.key,
@@ -287,10 +292,11 @@ impl Committing {
                 // judgment, where one is needed, judges in full.
                 trail: lodestar_filter::Trail::default(),
                 fix: a.fix,
-                // A private key is never looked up (§18.7); whether a
-                // private source stored it since is read at the commit's
-                // judge (`stored_private`).
-                private_source: false,
+                // A private key is never looked up (§18.7), so a cache's
+                // file is `false`; a `private=1` upload is `true` (UP-0).
+                // Whether a private source stored it since is read at
+                // the commit's judge (`stored_private`).
+                private_source,
                 // Decided at commit (`source_adult`): the item it promotes,
                 // or a stored torrent under its hash.
                 source_adult: false,
@@ -1149,7 +1155,7 @@ impl Writer {
                         at: t.at,
                         reply: false,
                     });
-                    let mut c = Committing::lease_free(*a, t.source, t.at);
+                    let mut c = Committing::lease_free(*a, t.source, t.at, t.private_source);
                     c.publisher = publisher;
                     admitted.push(c);
                 }
@@ -1851,7 +1857,7 @@ fn judge(
         // source has stored the key since is read here, so the commit
         // never clears a private mark from the lookup's old view.
         if !c.leased {
-            c.results.private_source = stored_private(store, &c.results);
+            c.results.private_source |= stored_private(store, &c.results);
         }
         // Found by an always-adult source the worker didn't see: the
         // lease's, or the source of an unverified item it promotes.
@@ -4520,6 +4526,7 @@ mod tests {
             at: unix_now(),
             info_raw: raw,
             key,
+            private_source: false,
         }
     }
 

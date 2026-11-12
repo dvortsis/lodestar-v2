@@ -255,6 +255,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "local_torrent"
+path = "fuzz_targets/local_torrent.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "torrent_cache"
 path = "fuzz_targets/torrent_cache.rs"
 test = false
@@ -285,6 +292,20 @@ bench = false
 [[bin]]
 name = "regex_plan"
 path = "fuzz_targets/regex_plan.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sabnzbd_answer"
+path = "fuzz_targets/sabnzbd_answer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "nzbget_answer"
+path = "fuzz_targets/nzbget_answer.rs"
 test = false
 doc = false
 bench = false

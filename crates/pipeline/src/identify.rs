@@ -89,6 +89,18 @@ pub const IDLE: Duration = Duration::from_secs(60);
 /// How long one lookup may take by default ([`Config::lookup_timeout`]).
 pub const LOOKUP_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// The shortest [`Config::lookup_timeout`] a host can set. The runtime
+/// also keeps it at least twice the plugin's own per-host interval (its
+/// `Policy`, floored as its client floors it), so a lookup always has
+/// time to wait for its first request's token and send it.
+pub const MIN_LOOKUP_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// The longest [`Config::lookup_timeout`] a host can set: a lookup is a
+/// few requests at the plugins' rate caps (AniDB's one per 2 s is the
+/// slowest), so five minutes is ample, and a hung plugin holds the
+/// runtime no longer.
+pub const MAX_LOOKUP_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// The shortest [`Config::idle`] a host can set.
 pub const MIN_IDLE: Duration = Duration::from_millis(10);
 
@@ -480,6 +492,15 @@ impl IdentifySource {
             return Err(NotAdmitted);
         }
         let (tx, rx) = mpsc::channel(INTEREST_QUEUE);
+        let host_interval = plugin
+            .policy()
+            .limits(&lodestar_sources::UserLimits::default())
+            .floored()
+            .per_host
+            .interval;
+        let min_timeout = MIN_LOOKUP_TIMEOUT
+            .max(host_interval.saturating_mul(2))
+            .min(MAX_LOOKUP_TIMEOUT);
         let interval = config
             .interval
             .max(plugin.min_interval())
@@ -497,6 +518,9 @@ impl IdentifySource {
                 interval,
                 // No busy loop, whatever the host sets.
                 idle: config.idle.max(MIN_IDLE),
+                // Never so short that a lookup can't get its host's token,
+                // never so long that a hung plugin stalls the runtime.
+                lookup_timeout: config.lookup_timeout.clamp(min_timeout, MAX_LOOKUP_TIMEOUT),
                 ..config
             },
             stats: Arc::default(),
@@ -719,6 +743,10 @@ impl IdentifySource {
         };
         // A lookup that took too long failed: dropped, as on shutdown.
         let Ok(lookup) = lookup else {
+            // The client never saw an answer, so it recorded nothing: the
+            // plugin's hosts are charged a failure here, and a slow host
+            // backs off as any failing one does (rv-750 N7).
+            timed_out(kit, self.plugin.manifest());
             bump(&self.stats.failed);
             return Step::Asked;
         };
@@ -740,6 +768,30 @@ impl IdentifySource {
             Err(_) => bump(&self.stats.failed),
         }
         Step::Asked
+    }
+}
+
+/// Records a timed-out lookup as a failure on each of the plugin's hosts
+/// (its manifest's endpoints) in its client's limiter, so a slow host
+/// backs off.
+///
+/// **Only a host that's ready.** A lookup that started while its host was
+/// backing off or blocked spent the time waiting in the client's gate and
+/// sent nothing; charging that host again would push its back-off out
+/// with every lookup, and no request would ever reach it to clear it.
+fn timed_out(kit: &Kit, manifest: &Manifest) {
+    let now = Instant::now();
+    let failed = Err(lodestar_sources::HttpError::Transport(
+        "the lookup timed out".into(),
+    ));
+    for e in manifest.endpoints {
+        let url = format!("{}://{}", e.protocol, e.host);
+        if let Some(host) = lodestar_sources::http::host_key(&url) {
+            let limiter = kit.http.limiter();
+            if limiter.state(&host, now) == lodestar_sources::HostState::Ready {
+                limiter.record(&host, &failed, now);
+            }
+        }
     }
 }
 
@@ -1215,6 +1267,262 @@ mod tests {
         }
         assert!(Budget::load(&Broken, 0).await.is_none());
         assert!(!Budget::take(&Broken, 0, 5).await);
+    }
+
+    static MANIFEST: Manifest = Manifest {
+        id: "unit-identify",
+        name: "Unit",
+        version: "1",
+        kinds: &[lodestar_sources::Kind::Enrichment],
+        networks: &[],
+        endpoints: &[lodestar_sources::Endpoint {
+            protocol: "https",
+            host: "api.example.test",
+        }],
+        risk: lodestar_sources::Risk::Low,
+        consent: lodestar_sources::Consent::External,
+        default_priority: lodestar_sources::Priority::Normal,
+        enabled_by_default: false,
+        always_adult: false,
+        finds_private: false,
+    };
+
+    struct Never;
+
+    impl Identifier for Never {
+        fn manifest(&self) -> &Manifest {
+            &MANIFEST
+        }
+        fn kinds(&self) -> &[MediaKind] {
+            &MediaKind::ALL
+        }
+        fn lookup<'a>(
+            &'a self,
+            _: &'a Kit,
+            _: &'a Query,
+        ) -> BoxFuture<'a, Result<Lookup, PluginError>> {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    fn source_with(timeout: Duration) -> IdentifySource {
+        let store = Store::open_in_memory(lodestar_store::StoreConfig::default()).unwrap();
+        struct Off;
+        impl Switches for Off {
+            fn kill_switch_tripped(&self) -> bool {
+                false
+            }
+        }
+        IdentifySource::new(
+            Arc::new(Never),
+            Arc::new(Mutex::new(store)),
+            Arc::new(Handle::new(Engine::new(lodestar_filter::Core::new(
+                lodestar_filter::Lists {
+                    sexual: lodestar_filter::TermSet::of(&["lexa"]),
+                    child_roles: lodestar_filter::TermSet::of(&["rolea"]),
+                    codes: lodestar_filter::TermSet::of(&["codex"]),
+                },
+                lodestar_filter::CsList::default(),
+                lodestar_filter::Switches::default(),
+            )))),
+            AdultSources::default(),
+            Arc::new(Off),
+            Config {
+                lookup_timeout: timeout,
+                ..Config::default()
+            },
+        )
+        .unwrap()
+        .0
+    }
+
+    /// N6 (rv-750): the host's timeout is held between the floor and the
+    /// ceiling, and passed through between them.
+    #[test]
+    fn the_lookup_timeout_is_clamped() {
+        let t = |d| source_with(d).config().lookup_timeout;
+        // `Never`'s policy is STRICT: one request per 10 s per host, so
+        // the floor is two intervals.
+        let floor = Duration::from_secs(20);
+        assert_eq!(t(Duration::ZERO), floor);
+        assert_eq!(t(Duration::from_millis(1)), floor);
+        assert_eq!(t(Duration::from_secs(30)), Duration::from_secs(30));
+        assert_eq!(t(Duration::from_secs(86_400)), MAX_LOOKUP_TIMEOUT);
+        assert_eq!(t(LOOKUP_TIMEOUT), LOOKUP_TIMEOUT);
+    }
+
+    /// A plugin with an endpoint that never answers, on a fast policy.
+    struct Slow;
+
+    static FAST: Policy = Policy {
+        caps: lodestar_sources::Caps {
+            per_host: lodestar_sources::HostRate::per_second(1000),
+            ..lodestar_sources::Caps::STRICT
+        },
+        ..Policy::STRICT
+    };
+
+    impl Identifier for Slow {
+        fn manifest(&self) -> &Manifest {
+            &MANIFEST
+        }
+        fn policy(&self) -> &Policy {
+            &FAST
+        }
+        fn kinds(&self) -> &[MediaKind] {
+            &MediaKind::ALL
+        }
+        fn min_interval(&self) -> Duration {
+            Duration::ZERO
+        }
+        fn lookup<'a>(
+            &'a self,
+            _: &'a Kit,
+            _: &'a Query,
+        ) -> BoxFuture<'a, Result<Lookup, PluginError>> {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    /// N7 through the runtime (rv-760 I1): an opened item whose lookup
+    /// never answers times out, and the plugin's endpoint host backs off.
+    #[tokio::test]
+    async fn a_timed_out_lookup_backs_the_host_off() {
+        use lodestar_bencode::{OwnedValue, to_vec};
+        let mut store = Store::open_in_memory(lodestar_store::StoreConfig::default()).unwrap();
+        let dht = store.register_source("dht", "1", 0).unwrap();
+        let src = store.register_source(MANIFEST.id, "1", 0).unwrap();
+        let ack = format!(
+            "external|{}|1",
+            lodestar_sources::consent::version(&MANIFEST)
+        );
+        store.enable_source(src, Some(&ack)).unwrap();
+        let name = "Some.Film.2010.1080p.BluRay.x264.mkv";
+        let d = |e: Vec<(&str, OwnedValue)>| {
+            OwnedValue::Dict(
+                e.into_iter()
+                    .map(|(k, v)| (k.as_bytes().to_vec(), v))
+                    .collect(),
+            )
+        };
+        let raw = to_vec(&d(vec![
+            ("length", OwnedValue::Int(900 << 20)),
+            ("name", OwnedValue::Bytes(name.as_bytes().to_vec())),
+            ("piece length", OwnedValue::Int(1 << 18)),
+            ("pieces", OwnedValue::Bytes(vec![0; 20 * 3600])),
+        ]));
+        let info = lodestar_metainfo::Info::parse(&raw).unwrap();
+        let id = store
+            .insert(&[lodestar_store::NewTorrent {
+                info: &info,
+                raw_info: None,
+                discovered_at: 1,
+                metadata_at: 1,
+                extra_flags: 0,
+                source: dht,
+            }])
+            .unwrap()[0]
+            .id();
+        let files = crate::enrich::file_infos(&info.files, info.path_encoding);
+        let e = crate::enrich::enrich_with_rule(name, &files, None);
+        store.set_enrichments(&[(id, e)]).unwrap();
+        struct Off;
+        impl Switches for Off {
+            fn kill_switch_tripped(&self) -> bool {
+                false
+            }
+        }
+        let filter = Handle::new(Engine::new(lodestar_filter::Core::new(
+            lodestar_filter::Lists {
+                sexual: lodestar_filter::TermSet::of(&["lexa"]),
+                child_roles: lodestar_filter::TermSet::of(&["rolea"]),
+                codes: lodestar_filter::TermSet::of(&["codex"]),
+            },
+            lodestar_filter::CsList::default(),
+            lodestar_filter::Switches::default(),
+        )));
+        let (runtime, interest) = IdentifySource::new(
+            Arc::new(Slow),
+            Arc::new(Mutex::new(store)),
+            Arc::new(filter),
+            AdultSources::default(),
+            Arc::new(Off),
+            Config {
+                background: false,
+                idle: Duration::from_millis(10),
+                lookup_timeout: Duration::from_secs(2),
+                ..Config::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(runtime.config().lookup_timeout, Duration::from_secs(2));
+        assert!(interest.opened(id));
+        let limiter = lodestar_sources::HostLimiter::new(FAST.limits(&Default::default()));
+        let kit = Kit::with_limiter(
+            Arc::new(MemoryState::new()),
+            Arc::new(lodestar_sources::NoEgress),
+            limiter.clone(),
+        );
+        let (tx, _rx) = mpsc::channel(8);
+        let (stop, shutdown) = lodestar_sources::Shutdown::new();
+        let ctx = SourceCtx {
+            source: src,
+            emitter: lodestar_sources::Emitter::new(src, tx),
+            peer_requests: None,
+            peer_replies: None,
+            shutdown,
+            kit,
+        };
+        let stats = runtime.stats();
+        let task = tokio::spawn(async move { runtime.run(ctx).await });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let state = limiter.state("api.example.test", Instant::now());
+            if matches!(state, lodestar_sources::HostState::BackingOff { .. }) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "still {state:?}; looked up {}, failed {}",
+                stats.looked_up.load(Ordering::SeqCst),
+                stats.failed.load(Ordering::SeqCst)
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(stats.failed.load(Ordering::SeqCst), 1);
+        let _ = stop.send(true);
+        let _ = task.await;
+    }
+
+    /// N7 (rv-750): a timed-out lookup counts as a failure on the
+    /// plugin's hosts, so the limiter backs them off.
+    #[tokio::test]
+    async fn a_timeout_counts_in_the_limiter() {
+        let limiter =
+            lodestar_sources::HostLimiter::new(Policy::STRICT.limits(&Default::default()));
+        let kit = Kit::with_limiter(
+            Arc::new(MemoryState::new()),
+            Arc::new(lodestar_sources::NoEgress),
+            limiter.clone(),
+        );
+        let now = Instant::now();
+        assert_eq!(
+            limiter.state("api.example.test", now),
+            lodestar_sources::HostState::Ready
+        );
+        timed_out(&kit, &MANIFEST);
+        assert!(matches!(
+            limiter.state("api.example.test", Instant::now()),
+            lodestar_sources::HostState::BackingOff { failures: 1, .. }
+        ));
+        // Backing off: the lookup waited in the gate and sent nothing, so
+        // the host isn't charged again.
+        timed_out(&kit, &MANIFEST);
+        timed_out(&kit, &MANIFEST);
+        assert!(matches!(
+            limiter.state("api.example.test", Instant::now()),
+            lodestar_sources::HostState::BackingOff { failures: 1, .. }
+        ));
     }
 
     #[tokio::test]

@@ -279,8 +279,8 @@ fn query(text: &str) -> ApiResult<Node> {
     if node.mentions_provenance() {
         return Err(bad(
             "provenance_in_rule",
-            "Rules can't test verified:, source: or network:. Filters judge what a torrent \
-             says it is, before search knows where it came from.",
+            "Rules can't test verified:, source:, network: or sig:. Filters judge what a \
+             torrent says it is, before search knows where it came from or what it's a copy of.",
         ));
     }
     Ok(node)

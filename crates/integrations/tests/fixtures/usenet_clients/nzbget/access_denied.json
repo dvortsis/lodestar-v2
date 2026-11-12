@@ -1,0 +1,23 @@
+{
+  "recorded_from": "Built from NZBGet (nzbget-ng) v24.8 source (daemon/remote/XmlRpc.cpp BuildResponse and BuildErrorResponse, WebServer.cpp SendAuthResponse), checked against v26.3; not a live recording",
+  "note": "config as the add-only user (AddUsername)",
+  "request": {
+    "method": "POST",
+    "path": "/jsonrpc",
+    "query": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "server",
+        "nzbget-24.8"
+      ]
+    ],
+    "body": "{\n\"version\" : \"1.1\",\n\"id\" : 1,\n\"error\" : {\n\"name\" : \"JSONRPCError\",\n\"code\" : 401,\n\"message\" : \"Access denied\"\n}\n}"
+  }
+}

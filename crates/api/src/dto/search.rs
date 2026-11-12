@@ -716,6 +716,12 @@ pub enum AstNode {
         from: u16,
         to: u16,
     },
+    /// Torrents with this payload signature (16 lowercase hex digits),
+    /// or, given an info hash (40), those with the same payload as that
+    /// torrent, itself included.
+    Sig {
+        sig: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -803,6 +809,7 @@ mod tests {
         "cat:video>=80% bytes:video=10..50",
         "seeders:>=5 leechers:<10 trackers:3.. dht:>0 seen:<7d time:22:00..02:00",
         "verified:yes,no source:nyaa,dht network:bt,bt-i2p,ed2k,ipfs,usenet",
+        "sig:7a9f3c12dd0e44b1 sig:38a68a3bbc7cdb158e44c404c52c7d1ea6aa2cff",
     ];
 
     #[test]
@@ -837,6 +844,7 @@ mod tests {
             "prefix",
             "range",
             "share",
+            "sig",
             "source",
             "tag",
             "time_of_day",

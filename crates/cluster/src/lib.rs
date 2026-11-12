@@ -57,8 +57,8 @@ pub use join::{
     valid_worker_name,
 };
 pub use leases::{
-    BatchAnswer, Claim, Claimed, Lease, LeaseAuthority, LeaseEvents, LeaseTable, NoEvents,
-    RECENT_COMMITS, Regranted, RestoredLease, Token, WorkerId,
+    BatchAnswer, Claim, Claimed, FetchedReport, Lease, LeaseAuthority, LeaseEvents, LeaseTable,
+    NoEvents, RECENT_COMMITS, Regranted, RestoredLease, Token, WorkerId,
 };
 pub use link::{CoordinatorLink, Link, LinkError, WorkerLink, local_pair};
 pub use server::{

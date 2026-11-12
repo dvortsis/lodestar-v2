@@ -2348,6 +2348,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/torrents/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Adds one `.torrent` file, sent as the raw request body. */
+        post: operations["uploadTorrent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/torrents/{hash}": {
         parameters: {
             query?: never;
@@ -3258,6 +3275,10 @@ export interface components {
             op: "time_of_day";
             /** Format: int32 */
             to: number;
+        } | {
+            /** @enum {string} */
+            op: "sig";
+            sig: string;
         };
         /** @enum {string} */
         AstNumField: "size" | "files" | "largest" | "piece" | "year" | "season" | "episode" | "junk" | "seeders" | "leechers" | "trackers" | "dht";
@@ -4863,7 +4884,10 @@ export interface components {
          * @enum {string}
          */
         EmailSecurity: "tls" | "starttls" | "none";
-        /** @description The source behind an adult-enrichment match. */
+        /**
+         * @description The source behind an enrichment answer: an adult-enrichment match or
+         *     an identification.
+         */
         EnrichmentSource: {
             /** Format: int32 */
             id: number;
@@ -5744,6 +5768,110 @@ export interface components {
         IdBody: {
             /** Format: int64 */
             id: number;
+        };
+        /** @description One plugin's answer. */
+        Identification: {
+            /** @description Other titles the work is known by, at most 32. */
+            alt_titles: components["schemas"]["IdentifiedTitle"][];
+            /** @description The work's own title in the plugin's database. */
+            canonical_title: string | null;
+            /**
+             * @description The torrent's effective title is this answer's: its name said
+             *     nothing, and the record was resolved via a plugin with the surest
+             *     answer that has a canonical title. At most one answer is chosen;
+             *     none when the title isn't a plugin's, or the chosen answer's source
+             *     isn't shown to this caller.
+             */
+            chosen: boolean;
+            /**
+             * Format: int32
+             * @description How sure the plugin is of the match, 0–100 percent.
+             */
+            confidence: number;
+            /** @description Normalised genres, at most 16. */
+            genres: string[];
+            /**
+             * @description The work's ids, at most 32, in the closed schemes enrichment
+             *     writes: imdb, tmdb, tvdb, anidb, anilist, mbid, olid, igdb,
+             *     discogs, steam, wikidata.
+             */
+            ids: components["schemas"]["IdentifiedId"][];
+            /** @description The plugin that answered: "Identified by Wikidata". */
+            source: components["schemas"]["EnrichmentSource"];
+            /**
+             * Format: int32
+             * @description The work's year, 1–9999.
+             */
+            year: number | null;
+        };
+        /**
+         * @description What general enrichment plugins (Wikidata, TMDB, …) identified a
+         *     torrent as (ENR-10, ENR-12; architecture §6, §10.5). Every text was
+         *     judged by the content filter before it was stored, and nothing is
+         *     judged again here.
+         * @example {
+         *       "alternatives": [
+         *         {
+         *           "alt_titles": [
+         *             {
+         *               "language": "ja",
+         *               "title": "ショーシャンクの空に"
+         *             }
+         *           ],
+         *           "canonical_title": "The Shawshank Redemption",
+         *           "chosen": true,
+         *           "confidence": 92,
+         *           "genres": [
+         *             "drama"
+         *           ],
+         *           "ids": [
+         *             {
+         *               "scheme": "imdb",
+         *               "value": "tt0111161"
+         *             },
+         *             {
+         *               "scheme": "wikidata",
+         *               "value": "Q172241"
+         *             }
+         *           ],
+         *           "source": {
+         *             "id": 7,
+         *             "name": "Wikidata",
+         *             "plugin": "wikidata"
+         *           },
+         *           "year": 1994
+         *         }
+         *       ],
+         *       "resolved_via": null
+         *     }
+         */
+        IdentifiedAs: {
+            /**
+             * @description Each plugin's answer, the surest first (ties by source id). Two
+             *     plugins that disagree are both kept.
+             */
+            alternatives: components["schemas"]["Identification"][];
+            /**
+             * @description How an ambiguous name's effective title was resolved, when it was
+             *     from the file tree: `files`, `folder` or `structure`. Null in every
+             *     other case: the name said it itself, the title came from a plugin
+             *     (see `chosen`), or the record can't be read. **Null never means
+             *     "from the name"**: don't present it as that.
+             */
+            resolved_via: string | null;
+        };
+        /** @description A work's id in one scheme. */
+        IdentifiedId: {
+            /** @description `imdb`, `tmdb`, `wikidata`, … */
+            scheme: string;
+            /** @description In the scheme's one spelling (`tt0111161`, `Q172241`). */
+            value: string;
+        };
+        /** @description An alternative title and its language. */
+        IdentifiedTitle: {
+            /** @description A BCP 47 tag, lower case; `und` when the plugin didn't say. */
+            language: string;
+            title: string;
         };
         /** @description One setting an import changes. */
         ImportChange: {
@@ -10253,6 +10381,12 @@ export interface components {
          */
         Topic: "torrents" | "crawler" | "rebuild" | "alerts" | "insights" | "settings" | "updates" | "search_live";
         /**
+         * Format: binary
+         * @description The request body: the `.torrent` file's bytes (the schema only; the
+         *     handler reads the body itself).
+         */
+        TorrentBody: string;
+        /**
          * @description `GET /torrents/{hash}`: the torrent summary (`docs/metrics.md` §7.1),
          *     its swarm section (§7.2) and the first 500 files.
          *
@@ -10298,6 +10432,15 @@ export interface components {
             hash_v2: string | null;
             /** Format: int64 */
             id: number;
+            /**
+             * @description What general enrichment identified the torrent as (ENR-10, §6):
+             *     each plugin's answer, surest first. **Absent**, never null or
+             *     empty, when there's none to show: no answer is stored, the torrent
+             *     is hidden, held, private or Adult, the host hasn't said which
+             *     sources are always adult, or every answer came from a source this
+             *     caller may not see.
+             */
+            identified_as?: components["schemas"]["IdentifiedAs"];
             /**
              * Format: int64
              * @description Null = never scraped.
@@ -10618,6 +10761,16 @@ export interface components {
          * @enum {string}
          */
         UpdatesUnavailable: "fixture" | "network" | "windows_helper";
+        /** @description The body of a `202`. */
+        UploadAccepted: {
+            /** @description The info dict's primary hash, as 40 hex characters. */
+            info_hash: string;
+            /**
+             * @description The info dict says `private=1` (BEP 27): stored as private, so it
+             *     never reaches the DHT, a tracker or a cache.
+             */
+            private: boolean;
+        };
         /** @description `POST /usage/clear`. */
         UsageClear: {
             /**
@@ -16093,6 +16246,104 @@ export interface operations {
             };
             /** @description `restart_unavailable`: restart it the way it was started (the message says how). `restart_failed`: it couldn't get ready to restart (the portable build couldn't start its new copy), so it's still running. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    uploadTorrent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The `.torrent` file itself, at most 8 MiB. Nothing else: no multipart, no file name. */
+        requestBody: {
+            content: {
+                "application/x-bittorrent": components["schemas"]["TorrentBody"];
+            };
+        };
+        responses: {
+            /** @description Judged and handed to the store. The store judges it again when it commits, should the rules have changed meanwhile, and may then still hold it. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadAccepted"];
+                };
+            };
+            /** @description `malformed_torrent`: not a `.torrent` within the limits; or `bad_body`: the body couldn't be read. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `cross_origin`: sent from another site. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `body_timeout`: the body didn't arrive within 60 s. */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `body_too_large`: over 8 MiB. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unsupported_media_type`: the body isn't sent as `application/x-bittorrent`. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `refused`: on the safety floor's list; or `held`: the filter holds it. Neither is stored. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `rate_limited`: too many uploads; wait for `Retry-After`. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `uploads_unavailable`: uploads aren't being taken right now. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
