@@ -200,6 +200,17 @@ pub fn event_log_text(refusal: Refusal, dir: &Path) -> String {
 /// The most of a folder's name the Event Log message shows, in characters.
 const MAX_SHOWN: usize = 260;
 
+/// Runs the refusal note's `eventcreate` (`cmd`) for at most `limit`,
+/// through the shared bounded run (`windows::process`): a hung one is
+/// killed and reaped, and the refusal goes on whatever happened, since the
+/// temp log and the exit code already carry it. The service has reported
+/// Running by then, so without the bound a hung `eventcreate` would keep
+/// it Running, and on the rollback path the stop signal would never be
+/// seen (rv-702 N2; X-svc-eventcreate-bounded).
+fn write_event_note(cmd: std::process::Command, limit: std::time::Duration) {
+    let _ = super::process::run_bounded(cmd, "eventcreate", limit);
+}
+
 /// How the service's idle wait during a rollback ended.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Idle {
@@ -912,9 +923,9 @@ mod scm {
     /// Writes [`super::event_log_text`] to the Windows Application event
     /// log as [`super::EVENT_SOURCE`], through `eventcreate` from
     /// `System32` as the update helper does (the workspace forbids
-    /// `unsafe`, so no `ReportEventW`). Best effort: the temp log and the
-    /// exit code already say it, and a refusal never waits on this for
-    /// long. The Legal Notice's section 5 names this write.
+    /// `unsafe`, so no `ReportEventW`). Best effort, and bounded
+    /// ([`super::write_event_note`]): the temp log and the exit code
+    /// already say it. The Legal Notice's section 5 names this write.
     fn event_log(refusal: super::Refusal, dir: &std::path::Path) {
         use std::os::windows::process::CommandExt;
         /// `CREATE_NO_WINDOW`.
@@ -924,19 +935,16 @@ mod scm {
         };
         let (kind, id) = refusal.event();
         let id = id.to_string();
-        let _ = std::process::Command::new(
+        let mut cmd = std::process::Command::new(
             std::path::Path::new(&root)
                 .join("System32")
                 .join("eventcreate.exe"),
-        )
-        .creation_flags(NO_WINDOW)
-        .args(["/T", kind, "/ID", id.as_str(), "/L", "APPLICATION"])
-        .args(["/SO", super::EVENT_SOURCE, "/D"])
-        .arg(super::event_log_text(refusal, dir))
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
+        );
+        cmd.creation_flags(NO_WINDOW)
+            .args(["/T", kind, "/ID", id.as_str(), "/L", "APPLICATION"])
+            .args(["/SO", super::EVENT_SOURCE, "/D"])
+            .arg(super::event_log_text(refusal, dir));
+        super::write_event_note(cmd, crate::windows::process::EVENT_LOG_WAIT);
     }
 
     /// Serialises status reports, so a progress tick never follows
@@ -1620,6 +1628,23 @@ mod tests {
         // Visible text around them stays, accents included.
         let text = event_log_text(Refusal::NotPrivate, Path::new("D:\\Données\u{2061}x"));
         assert!(text.contains(r"D:\Donnéesx,"), "{text}");
+    }
+
+    /// A hung `eventcreate` never holds up the refusal: it's killed at its
+    /// bound and the call returns, well inside the test's 10 s deadline
+    /// (X-svc-eventcreate-bounded).
+    #[test]
+    fn a_hung_event_note_never_holds_up_the_refusal() {
+        let start = std::time::Instant::now();
+        write_event_note(
+            crate::windows::process::never_exits(),
+            std::time::Duration::from_millis(300),
+        );
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(10),
+            "{:?}",
+            start.elapsed()
+        );
     }
 
     /// The update helper's rollback marker refuses the service's start.
