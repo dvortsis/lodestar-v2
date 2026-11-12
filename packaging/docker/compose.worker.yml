@@ -6,17 +6,25 @@
 # 2. Put them in the two LODESTAR_ lines below and run:
 #      docker compose -f packaging/docker/compose.worker.yml up -d
 # 3. When the log says "joined", REMOVE the LODESTAR_TOKEN line and run the
-#    same command again. The worker keeps its own certificate in /data, and a
-#    token works only once, so leaving it in does nothing but a warning.
+#    same command again. The worker keeps its own certificate in /data. A used
+#    token is harmless (it works only once), but a token left here stays
+#    readable in `docker inspect` and in this file, and the worker logs a
+#    warning at every start.
 #
 # The worker only has to reach the main instance's cluster port (8091/tcp).
 # Prefer a private link (Tailscale, WireGuard or your LAN) to the open internet.
+name: lodestar-worker
+
 services:
   worker:
     image: ghcr.io/dvortsis/lodestar-v2:latest
     container_name: lodestar-worker
     restart: unless-stopped
     command: ["worker"]
+    # The image's health check asks the web UI, which a worker doesn't have,
+    # so it would show "unhealthy" for good.
+    healthcheck:
+      disable: true
     # Shutdown flushes the spool; give it more than Docker's default 10 s.
     stop_grace_period: 60s
 
@@ -34,10 +42,14 @@ services:
       # LODESTAR_DHT_PORT: "6881"
 
     # Alternative to LODESTAR_TOKEN: a token file, which keeps the token out
-    # of the container's environment. Delete the LODESTAR_TOKEN and
-    # LODESTAR_JOIN lines above, uncomment all of this, and remove the file
-    # and the `command:` below after the worker has joined (a token file
-    # always tries to join, so it must go once it has been used).
+    # of the container's environment. To use it:
+    #   - delete the LODESTAR_TOKEN and LODESTAR_JOIN lines above;
+    #   - REPLACE the `command: ["worker"]` line above with the command below;
+    #   - uncomment `secrets:` below and the top-level `secrets:` block at the
+    #     end of this file.
+    # After the worker has joined, set `command:` back to ["worker"] and delete
+    # the file: a token file always tries to join, so it must go once used.
+    # (Without a `command:` the image starts a coordinator, not a worker.)
     # command: ["worker", "--join", "https://192.168.1.10:8091", "--token-file", "/run/secrets/join_token"]
     # secrets:
     #   - join_token
@@ -56,7 +68,8 @@ services:
 
 # secrets:
 #   join_token:
-#     file: ./join_token.txt   # a file holding only the token; chmod 600
+#     file: ./join_token.txt   # holds only the token. The worker reads it as user 65532 (or PUID):
+#                              # run `chown 65532 join_token.txt && chmod 600 join_token.txt`
 
 volumes:
   lodestar-worker-data:
