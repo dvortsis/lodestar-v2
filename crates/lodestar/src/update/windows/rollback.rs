@@ -1576,6 +1576,7 @@ mod tests {
     /// A Windows that does what it's asked: every call is recorded.
     struct Fake {
         start: Start,
+        unhealthy: bool,
         calls: Mutex<Vec<String>>,
     }
 
@@ -1583,6 +1584,7 @@ mod tests {
         fn new(start: Start) -> Fake {
             Fake {
                 start,
+                unhealthy: false,
                 calls: Mutex::new(Vec::new()),
             }
         }
@@ -1622,7 +1624,7 @@ mod tests {
             Ok(helper::Ran::Code(0))
         }
         fn healthy(&self) -> bool {
-            true
+            !self.unhealthy
         }
         fn set_start(&self, start: Start) -> io::Result<()> {
             self.note(format!("set_start {start:?}"));
@@ -1976,6 +1978,150 @@ mod tests {
                 .any(|c| c == "stop" || c.starts_with("set_start")),
             "{calls:?}"
         );
+    }
+
+    fn skipped(env: &Env) -> Option<serde_json::Value> {
+        Bin::open(&env.ctx.data_dir)
+            .unwrap()
+            .read(super::super::check::SKIPPED_FILE)
+            .unwrap()
+    }
+
+    /// A crash or restart after the journal was written and before step 1
+    /// ran: the next run's `resume` finishes it as a manual one.
+    #[test]
+    fn a_manual_journal_written_before_a_crash_is_finished_by_resume() {
+        let env = env();
+        installed_and_passed(&env);
+        let j = manual_journal(&env.ctx, &v("0.7.0"), "ab").unwrap();
+        write(&env.ctx, &j).unwrap();
+        let fake = Fake::new(Start::Manual);
+        let out = resume(&env.ctx, &fake, &v("0.7.0")).unwrap().unwrap();
+        assert!(matches!(out, Outcome::RolledBack { .. }), "{out:?}");
+        assert_eq!(
+            std::fs::read(env.ctx.data_dir.join(STORE)).unwrap(),
+            b"old store"
+        );
+        assert_eq!(skipped(&env).unwrap()[0]["reason"], SKIP_MANUAL);
+        assert!(read(&env.ctx).unwrap().is_none());
+        assert!(record(&env).is_none());
+    }
+
+    /// Resumed after step 2 (the snapshot chosen) and after step 4 (the
+    /// store restored, the MSI reinstalled): each finishes, from where it
+    /// stood.
+    #[test]
+    fn a_manual_rollback_resumes_after_steps_2_and_4() {
+        for done in [2u8, 4] {
+            let env = env();
+            installed_and_passed(&env);
+            let mut j = manual_journal(&env.ctx, &v("0.7.0"), "ab").unwrap();
+            let snap = choose(&env.ctx, &j.snapshots_before).unwrap();
+            assert_eq!(snap.as_ref().map(|s| s.name.as_str()), Some(SNAP));
+            j.touched = true;
+            j.state = State::RollingBack {
+                snapshot: snap,
+                done,
+            };
+            // What step 1 left.
+            Bin::open(&env.ctx.data_dir)
+                .unwrap()
+                .write(MARKER, &serde_json::json!({ "windows_rollback": "0.7.0" }))
+                .unwrap();
+            if done == 4 {
+                // Step 3's restore, and step 4's reinstall of 0.6.0.
+                std::fs::rename(env.ctx.data_dir.join(SNAP), env.ctx.data_dir.join(STORE)).unwrap();
+            }
+            write(&env.ctx, &j).unwrap();
+            let running = if done == 4 { "0.6.0" } else { "0.7.0" };
+            let fake = Fake::new(Start::Manual);
+            let out = resume(&env.ctx, &fake, &v(running)).unwrap().unwrap();
+            assert!(matches!(out, Outcome::RolledBack { .. }), "{done}: {out:?}");
+            let ran = fake.calls().iter().any(|c| c.starts_with("msiexec"));
+            assert_eq!(ran, done < 4, "{done}: {:?}", fake.calls());
+            assert_eq!(
+                std::fs::read(env.ctx.data_dir.join(STORE)).unwrap(),
+                b"old store",
+                "{done}"
+            );
+            assert!(
+                !env.ctx.data_dir.join("bin").join(MARKER).exists(),
+                "{done}"
+            );
+            assert!(read(&env.ctx).unwrap().is_none(), "{done}");
+            assert!(record(&env).is_none(), "{done}");
+        }
+    }
+
+    /// The next install that passes replaces the record.
+    #[test]
+    fn a_later_install_that_passes_replaces_the_record() {
+        let env = env();
+        installed_and_passed(&env);
+        let j = installing(&env.ctx, "0123abce", &v("0.7.0"), &v("0.8.0")).unwrap();
+        write(&env.ctx, &j).unwrap();
+        probation(&env.ctx, &Fake::new(Start::Auto), j, false);
+        let rec = record(&env).unwrap();
+        assert_eq!((rec.from.as_str(), rec.to.as_str()), ("0.7.0", "0.8.0"));
+        // It took no snapshot: the 0.7.0 one is an older install's.
+        assert_eq!(rec.snapshot, None);
+    }
+
+    /// A newer install that fails probation is rolled back automatically:
+    /// the record goes with it, since `previous\` no longer holds its MSI.
+    #[test]
+    fn an_automatic_rollback_removes_the_record() {
+        let env = env();
+        installed_and_passed(&env);
+        // The helper kept 0.7.0's MSI as `current\` (its pins are `env`'s).
+        std::fs::write(env.ctx.staging.current().join("lodestar-0.7.0.msi"), b"new").unwrap();
+        let j = installing(&env.ctx, "0123abce", &v("0.7.0"), &v("0.8.0")).unwrap();
+        write(&env.ctx, &j).unwrap();
+        let fake = Fake {
+            unhealthy: true,
+            ..Fake::new(Start::Auto)
+        };
+        let out = probation(&env.ctx, &fake, j, false);
+        assert!(matches!(out, Outcome::RolledBack { .. }), "{out:?}");
+        assert!(record(&env).is_none());
+        assert_eq!(skipped(&env).unwrap()[0]["reason"], "failed");
+    }
+
+    /// A record that can't be written leaves none behind: a stale one from
+    /// an earlier install mustn't stay and match later.
+    #[test]
+    fn a_record_that_cant_be_written_leaves_none() {
+        let env = env();
+        installed_and_passed(&env);
+        assert!(record(&env).is_some());
+        // A folder where the record's temporary file goes makes the write
+        // fail; then `keep_installed` removes the record it can.
+        let j = installing(&env.ctx, "0123abce", &v("0.7.0"), &v("0.8.0")).unwrap();
+        let path = env.ctx.staging.dir.join(INSTALLED);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        keep_installed(&env.ctx, &j);
+        // The folder stays (it isn't a file to remove), and a record that
+        // can't be read refuses.
+        assert_eq!(manual_plan(&env.ctx, &v("0.8.0")).unwrap_err().code(), "io");
+        std::fs::remove_dir(&path).unwrap();
+        // An older record, and a listing that fails: removed.
+        installed_and_passed_again(&env);
+    }
+
+    fn installed_and_passed_again(env: &Env) {
+        let j = installing(&env.ctx, "0123abcf", &v("0.6.0"), &v("0.7.0")).unwrap();
+        keep_installed(&env.ctx, &j);
+        assert!(record(env).is_some());
+        // The store's folder can't be listed: no record.
+        let data = env.ctx.data_dir.clone();
+        let aside = data.with_extension("aside");
+        std::fs::rename(&data, &aside).unwrap();
+        std::fs::write(&data, b"not a folder").unwrap();
+        keep_installed(&env.ctx, &j);
+        assert!(record(env).is_none());
+        std::fs::remove_file(&data).unwrap();
+        std::fs::rename(&aside, &data).unwrap();
     }
 
     #[test]

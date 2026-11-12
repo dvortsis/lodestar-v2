@@ -17,8 +17,7 @@ Architecture §12.2 says manual Roll back "is always there": the previous versio
 2. **The helper's request** (`helper.rs`): a `rollback` request kind that calls `rollback::manual` after `resume`, plus its `result.json` and Event Log answers.
 3. **The API** (`check.rs`): `rollback.available` and `rollback.reason` from a check the service can make. The service account may not be able to read staging, so the service needs a copy of the plan it is allowed to read. Roll back then writes the request and starts the helper's task, with a confirmation that names the torrents stored since the install, which are lost.
 4. **Docs:** the user guide's "automatic rollback only" (`PK-guide-3`) changes once this is wired. `check.rs`'s and `windows/mod.rs`'s `not_built_yet` comments change too.
-5. **More tests** (from the self-review): a manual journal resumed through `resume` at steps 0, 2 and 4; a failed `installed.json` write; a later install replacing the record; an automatic rollback of a newer install removing it.
-6. **Tests on Windows:** CI's Windows job runs these unit tests. The real service and installer path needs the owner's manual M6 check.
+5. **Tests on Windows:** CI's Windows job runs these unit tests. The real service and installer path needs the owner's manual M6 check.
 
 ## Self-review and security review
 See the PR description.
