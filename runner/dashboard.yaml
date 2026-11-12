@@ -411,7 +411,6 @@ placement:
   - X-tripwire-reviews-lookback
   - X-flake-dht-scrape-join
   - X-win-clippy
-  - X-filters-budget-headroom
   - X-banner-live-region
   - X-prowlarr-no-fetch-wait
   - X-svc-eventcreate-bounded
