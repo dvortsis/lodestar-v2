@@ -12,6 +12,7 @@ pub mod egress;
 pub mod enrich;
 mod funnel;
 pub mod http;
+pub mod identify;
 mod manifest;
 mod plugin;
 pub mod pool;
