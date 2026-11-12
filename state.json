@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T16:32:37Z",
+  "updated_at": "2026-11-12T16:50:39Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8514,7 +8514,7 @@
     }
   ],
   "heartbeat": "2026-11-12T15:41:01Z",
-  "updated": "2026-11-12T16:32:37Z",
+  "updated": "2026-11-12T16:50:39Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -8716,7 +8716,23 @@
         "doing": "infra/dev-vm/linux-lane.md priorities 1, 2, 4; crawl results are leads only"
       }
     ],
-    "note": "Tester holds 1 (Linux lane). It archived Windows phase 1 at ~07:30Z (stalled on a connector prompt) and lent the slot to the runner overnight; it asks before taking it back in the morning. Lent slot cleared 2026-11-12T07:37:09Z; tester not yet told (its session refuses cross-session messages without a trusted device)."
+    "note": "Tester holds 1 (Linux lane). It archived Windows phase 1 at ~07:30Z (stalled on a connector prompt) and lent the slot to the runner overnight; it asks before taking it back in the morning. Lent slot cleared 2026-11-12T07:37:09Z; tester not yet told (its session refuses cross-session messages without a trusted device).",
+    "extra_sessions": [
+      {
+        "lane": "linux-vm",
+        "session": "session_01MMjhnA1E7uHD6h6eTQyuh9"
+      },
+      {
+        "lane": "windows",
+        "session": "session_01MMjhnCNfmCRdUu7uGef1X9",
+        "teardown_by": "2026-11-13T12:45Z"
+      }
+    ],
+    "extra_note": "2026-11-12T16:50:39Z: tester holds 2 extras (max 2, \u00a72.60); archived two stalled Windows-lane sessions (connector prompts are read only at session start).",
+    "findings_1112": [
+      "Linux VM leak-test fails after tunnel-down: established-connection teardown packets (DoT :853, :443, ICMP) seen on the compose bridge outside wg0; suspected gluetun kill switch lets ESTABLISHED/RELATED out. Host-eth0 capture + iptables dump pending. Possible owner security FYI (Unraid gluetun template users).",
+      "pia-wireguard.sh cn regex rejects some PIA server names (us-brooklyn fails stage 13); addKey HTTP status discarded (exit 15 undiagnosable)."
+    ]
   },
   "extra": {
     "updated": "2026-11-12T16:09:35Z",
