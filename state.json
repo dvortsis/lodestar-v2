@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T11:45:17Z",
+  "updated_at": "2026-11-12T11:46:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7264,7 +7264,12 @@
       "note": "e2e.yml workflow_dispatch runs heavy jobs only with update_snapshots; release branches get no dispatchable E2E. Consider a dispatch input to run (not regenerate) on a ref. Runner-owned CI improvement; owner decides workflow permission changes if any.",
       "at": "2026-11-12T11:40:16Z"
     },
-    "X-dog-decisions-grammar: docs/decisions/2026-11-12-D-outputs-guide.md, the \"So section 7.5 maps...\" sentence has \"not by exact text\" misplaced after the bracketed-form sentence; fix in the next runner docs PR"
+    "X-dog-decisions-grammar: docs/decisions/2026-11-12-D-outputs-guide.md, the \"So section 7.5 maps...\" sentence has \"not by exact text\" misplaced after the bracketed-form sentence; fix in the next runner docs PR",
+    {
+      "id": "X-always-adult-detail-mask",
+      "at": "2026-11-12T11:46:00Z",
+      "note": "From ENR-12: the detail route always-adult mask comes from the DrawerInterest extension, which production does not install, so it is 0 in the binary. Gap: the window before adult_by_source reclassification, and torrents marked Not adult. Fix: always_adult on ops::Source (dto/ops.rs and the host side), before ENR-13 ships the drawer; the reviewer checks ENR-7 section for the same gap. Content safety: Opus, /security-review."
+    }
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -8349,7 +8354,7 @@
     }
   ],
   "heartbeat": "2026-11-12T09:44:56Z",
-  "updated": "2026-11-12T11:45:17Z",
+  "updated": "2026-11-12T11:46:00Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
