@@ -5,7 +5,7 @@
 Each test failed under CI load on 2026-11-07 in a PR that touches no `web/` code, and passed on re-run. Per CLAUDE.md, a flake gets fixed once, not re-run onto the next PR. No running slice owns either test.
 
 1. **`web/e2e/shell.routes.test.ts:368`**, "a server that never answers shows the unreachable page, and Try again reloads".
-   - Timed out clicking **Try again** (line ~387) on #582 (run 42386800085, job 128445845679).
+   - Timed out clicking **Try again** (line ~387) on #582 (run 42386800085, job <job id>).
    - Likely race: the test unroutes the API and restores the event stream (`liveEvents`) *before* the click. The app's own probe can recover first and remove the button, so the click waits on a button that's gone.
 2. **`web/e2e/filters-block.keyboard.test.ts:70`**, "from a result: Shift+F10, Block this…, preview, Apply adds one rule".
    - After `End`, the "Block this…" menu item didn't become focused within 10 s (#583 run 42392077532).

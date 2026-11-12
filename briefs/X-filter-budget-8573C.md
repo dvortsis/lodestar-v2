@@ -5,7 +5,7 @@
 Branch `fix/filter-budget-8573C` from `origin/main`. Open a PR to `main` and follow `.claude/skills/steward/SKILL.md`. The runner merges.
 
 ## The failure
-On #210 (IMP-1, a store-only PR), the `filter budget (§20.8)` job (run 41065412960, job 124095631213) ran on an INTEL XEON PLATINUM 8573C:
+On #210 (IMP-1, a store-only PR), the `filter budget (§20.8)` job (run 41065412960, job <job id>) ran on an INTEL XEON PLATINUM 8573C:
 - the 8573C's `ENGINE_SPEED` factor is 0.900, provisional, from one job (41015045891);
 - the calibration said 0.92×;
 - raw mixed was 43.4 µs, which by itself implies ≈ 43.4 ÷ 45.3 = 0.958;

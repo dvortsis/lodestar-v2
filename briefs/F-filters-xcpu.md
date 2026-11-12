@@ -5,7 +5,7 @@
 Branch `slice/F-filters-xcpu` from `origin/main`, **after F-filters-neutral-perf has merged** (it changes the same engine code). The runner launches it then.
 
 ## Evidence
-- `main`'s `filter budget (§20.8)` job went red at `a84c3681` (run 41015045891, job 123930410931). The held mixed rule set read 50.4 µs reference (40.9 µs raw) on an Intel Xeon Platinum 8573C, calibrated at 0.81×.
+- `main`'s `filter budget (§20.8)` job went red at `a84c3681` (run 41015045891, job <job id>). The held mixed rule set read 50.4 µs reference (40.9 µs raw) on an Intel Xeon Platinum 8573C, calibrated at 0.81×.
 - The same code passed at `b4d80387` at 39.3 µs on an AMD EPYC 9V45, calibrated at 0.65×. `git diff b4d80387 a84c3681` is empty in filter, search, classify and release-parser.
 - So the engine runs about 28% slower relative to calibration on that Intel type. It's runner variance, not a regression.
 - F-filters-neutral-perf brought the neutralized case to 1.08–1.11× the mixed set. It stays reported, not held, until this slice: it projects to ~43 µs on EPYC and ~55 µs on the 8573C.

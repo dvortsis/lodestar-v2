@@ -1,6 +1,6 @@
 # X-flake-portable-restart-3: the relaunched copy's 30 s wait times out on a loaded runner (Opus, core)
 
-**Why:** `test (windows-latest)` failed on #717 (RX-0, head 3557c1f2; run job 130967136165, 2026-11-12T04:57Z). The failing test is `a_portable_restart_serves_again_on_the_same_port` (`crates/lodestar/tests/windows_service.rs:652`, "no new copy served"). RX-0 doesn't touch `crates/lodestar`, so this belongs to the portable restart path that X-flake-portable-restart-2 (abf890e1) last hardened.
+**Why:** `test (windows-latest)` failed on #717 (RX-0, head 3557c1f2; run job <job id>, 2026-11-12T04:57Z). The failing test is `a_portable_restart_serves_again_on_the_same_port` (`crates/lodestar/tests/windows_service.rs:652`, "no new copy served"). RX-0 doesn't touch `crates/lodestar`, so this belongs to the portable restart path that X-flake-portable-restart-2 (abf890e1) last hardened.
 
 ## What the log shows
 - **The old process stopped cleanly:**

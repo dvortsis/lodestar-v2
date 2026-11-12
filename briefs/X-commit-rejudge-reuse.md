@@ -2,7 +2,7 @@
 **Model:** Opus. This is core content-safety code. Run `/security-review`. The runner reviews the result with a fresh Opus reviewer. Runner brief, 2026-11-06T04:45Z, the follow-up to RP-G (#526, merged at 636ac941).
 
 ## Finding
-The owner's filter budget is 50 µs per torrent (architecture §20, `crates/filter/tests/props.rs` `budget`). RP-G measured two commit paths that judge a torrent twice, on the reference runner (AMD EPYC 7763, CI `filter budget` job 127699073103):
+The owner's filter budget is 50 µs per torrent (architecture §20, `crates/filter/tests/props.rs` `budget`). RP-G measured two commit paths that judge a torrent twice, on the reference runner (AMD EPYC 7763, CI `filter budget` job <job id>):
 - **A flooded or cloned commit:** prepare's `Engine::judge`, then the writer's `Engine::judge_at_commit` with SP-3 or SP-4 matching (`crates/pipeline/src/writer.rs`, around lines 1879 and 2262). That's **81.3–82.0 µs** for both.
 - **A find from an always-adult source at commit:** `judge_at_commit(.., adult: true)` builds a second `Doc` and judges the item again as Adult (`crates/filter/src/engine.rs`, around lines 309–345). That's **82.3 µs**.
 
