@@ -9,7 +9,7 @@
 ### 0.1 Where things stand
 Status as of `main` at `f47369b8` (committed 2026-11-12T22:53Z). This table is a snapshot and goes stale within hours: `main` takes 40 to 60 merges a day. **The live view is the roadmap dashboard** (`tools/status-connector`, reading `runner/slices.yaml`, `runner/dashboard.yaml` and GitHub) and the `runner-state` branch (`state.json`); reconcile both against `main`'s merges before acting ([handoff §2](handoff.md#2-where-the-truth-lives)).
 
-**Slices:** 588 in `runner/slices.yaml`. The dashboard counts 436 merged, 19 in progress, 123 not started, 3 closed and 7 epics (all expanded). Three of the 123 are in fact finished and only need marking (CR-AB-COMP, X-tokio-1541-v052, WK-10d-store; `docs/decisions/2026-11-12-master-plan-r4.md`), so about 120 slices are left to start. 21 slice PRs are open (#764 and #778 to #797), plus #632, which no slice owns.
+**Slices:** 588 in `runner/slices.yaml`. The dashboard counts 436 merged, 19 in progress, 123 not started, 3 closed and 7 epics (all expanded). Three of the 123 are in fact finished and only need marking (CR-AB-COMP, X-tokio-1541-v052, WK-10d-store; `docs/decisions/2026-11-12-master-plan-r4.md`), so about 120 slices are left to start. 21 slice PRs are open (#764 and #778 to #797), plus #632, the owner's own branch, which the runner leaves alone.
 
 | Area | State | What's left |
 |---|---|---|
@@ -50,7 +50,7 @@ The runner checks each of these against `runner/slices.yaml` and adds a slice wh
 So: **the host is never idle, and build slots never wait for it.**
 
 **The ladder** (r4; the owner approved it on 2026-11-12 by approving this plan, recorded in `docs/decisions/2026-11-12-master-plan-r4.md` until the runner adds it to `docs/owner-decisions.md`; fill free slots in this order; the owner can reorder it in one line). Rungs 2 to 8 run in parallel wherever their slices are ready; the order decides only between ready slices competing for a slot.
-1. **Land what's open.** The open PRs go through review and the landing lane before new launches. #632 is landed through a session or closed.
+1. **Land what's open.** The open PRs go through review and the landing lane before new launches. #632 (`feat/lodestar-secure-pia-bridge`) is the owner's branch: the runner leaves it alone, and the owner decides whether it lands, goes to a slice or is closed. A cloud review the owner ran on it raised 11 findings, not yet verified, four of which could stop live fleet runs; they are with the owner.
 2. **Ship v0.5.2** (§0.4): the gate on the current candidate, then the owner's tag. v0.5.1 carries tokio 1.54.0, which was yanked; §2.58 puts the fix in v0.5.2, so this rung doesn't wait behind the crawler runs for the host.
 3. **The v0.6 build side, to its three gates:**
    - workers: WK-11b and WK-18 (in review); WK-12 (the next migration) → WK-13 → WK-16 → **WK-G**; WK-19, the guide chapter, after WK-16 and WK-18;
@@ -385,7 +385,7 @@ flowchart LR
 
 ### 0.9 Next actions
 In ladder order, as slots allow (§0.2; no two with overlapping `owns`):
-1. **Land the open PRs** (#764 and #778 to #797). Decide #632.
+1. **Land the open PRs** (#764 and #778 to #797). #632 waits for the owner (§0.2 rung 1).
 2. **Bring the records up to date** (runner): the slices missing from `runner/slices.yaml`, the gates and notes in `runner/dashboard.yaml` that still describe 2026-11-08, the owner decisions made after §2.60, and `state.json`'s slice statuses. The list is in `docs/decisions/2026-11-12-master-plan-r4.md`.
 3. **v0.5.2:** state which candidate the gate runs on (rc.3 = `833a0d25` is the newest) and what evidence exists, finish the gate in §0.4, give the owner the go for the tag.
 4. **Launch what's ready** (at 2026-11-12T22:55Z, not yet in a slot): ENR-G, X-unverified-cap-index, X-win-upd-first-rollback, ADH-0, UP-2, X-watch-env.
