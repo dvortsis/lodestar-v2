@@ -37,8 +37,11 @@ reuses it after that:
   `dataset.json`. A folder whose key differs is refused, and the message
   names both keys. Raise `synth::VERSION` in any change to what a seed
   generates, and `FORMAT` in any change to how a dataset is built.
+  A dataset built with another store schema is refused too: it's never
+  migrated in place.
 - **Never a data directory.** It builds only in a new or empty folder, or
-  one holding a `dataset.json`, and refuses `$LODESTAR_DATA_DIR`.
+  one holding a `dataset.json`, and refuses `$LODESTAR_DATA_DIR` and any
+  folder under it.
 - **Built like a real store:** 20,000 torrents, a trained zstd
   dictionary, the rest with it; enrichment; one scrape a torrent from 20
   synthetic trackers; a year of Insights rollups (B11a's wide hour, every

@@ -125,8 +125,15 @@ pub enum Refused {
     },
     /// Not empty and no manifest: possibly someone's data.
     NotADataset(PathBuf),
-    /// `$LODESTAR_DATA_DIR`.
+    /// `$LODESTAR_DATA_DIR` or a folder under it.
     DataDir(PathBuf),
+    /// Built with another store schema: measuring it would measure a
+    /// store migrated in place, not one this build wrote.
+    StoreSchema {
+        dir: PathBuf,
+        found: i64,
+        wanted: i64,
+    },
     /// A manifest that can't be read.
     BadManifest(PathBuf, String),
 }
@@ -148,7 +155,13 @@ impl fmt::Display for Refused {
             ),
             Refused::DataDir(dir) => write!(
                 f,
-                "{} is $LODESTAR_DATA_DIR: a dataset is never built in a data directory",
+                "{} is in $LODESTAR_DATA_DIR: a dataset is never built in a data directory",
+                dir.display()
+            ),
+            Refused::StoreSchema { dir, found, wanted } => write!(
+                f,
+                "{} was built with store schema {found}; this build's is {wanted}. \
+                 A dataset is never migrated in place: delete the folder to rebuild",
                 dir.display()
             ),
             Refused::BadManifest(dir, why) => {
@@ -277,6 +290,17 @@ pub fn check(dir: &Path, wanted: Key) -> Result<Option<(String, Totals)>, Refuse
             wanted,
         });
     }
+    let schema = lodestar_store::latest_schema_version();
+    match m.get("store_schema").and_then(Value::as_i64) {
+        Some(found) if found == schema => {}
+        found => {
+            return Err(Refused::StoreSchema {
+                dir: dir.into(),
+                found: found.unwrap_or(0),
+                wanted: schema,
+            });
+        }
+    }
     let phase = m
         .get("phase")
         .and_then(Value::as_str)
@@ -358,7 +382,18 @@ pub fn build_until(
             "no index for this build's search schema at {}: indexing the stored corpus",
             index_path.display()
         ));
+        // Recorded, so an index rebuild a crash cuts short resumes from
+        // the indexer's watermark instead of failing the coverage check.
         phase = "rollups".to_owned();
+        write_manifest(dir, key, &phase, &totals)?;
+        if stop_after == Some("reindex") {
+            return Ok(Dataset {
+                dir: dir.into(),
+                key,
+                totals,
+                built_now: true,
+            });
+        }
     }
     if done(&phase, "complete") {
         verify_index(&index_path, key)?;
@@ -1113,4 +1148,57 @@ pub fn rss() -> Option<u64> {
         .parse()
         .ok()?;
     Some(kb * 1024)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inside;
+    use std::path::Path;
+
+    #[test]
+    fn inside_the_data_dir_is_any_folder_under_it_existing_or_not() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        std::fs::create_dir_all(data.join("sub")).unwrap();
+        std::fs::create_dir_all(root.path().join("data2")).unwrap();
+        assert!(inside(&data, &data));
+        assert!(inside(&data.join("sub"), &data), "an existing subfolder");
+        assert!(
+            inside(&data.join("new/deeper"), &data),
+            "two levels down, not created yet"
+        );
+        assert!(
+            inside(&data.join("sub/../sub/x"), &data),
+            "through a `..` that stays inside"
+        );
+        assert!(
+            !inside(&root.path().join("data2"), &data),
+            "a sibling sharing a prefix"
+        );
+        assert!(!inside(&root.path().join("data2/x"), &data));
+        assert!(
+            !inside(&data.join("../elsewhere"), &data),
+            "a `..` that leaves it"
+        );
+        assert!(!inside(root.path(), &data), "its parent");
+    }
+
+    #[test]
+    fn a_relative_path_resolves_against_the_working_directory() {
+        let cwd = std::env::current_dir().unwrap();
+        assert!(inside(Path::new("not-created-yet/x"), &cwd));
+        assert!(inside(Path::new("."), &cwd));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_into_the_data_dir_is_inside_it() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let link = root.path().join("link");
+        std::os::unix::fs::symlink(&data, &link).unwrap();
+        assert!(inside(&link, &data));
+        assert!(inside(&link.join("new"), &data));
+    }
 }

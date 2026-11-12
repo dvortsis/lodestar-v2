@@ -133,6 +133,71 @@ fn a_dataset_without_this_builds_index_is_reindexed_never_empty() {
 }
 
 #[test]
+fn an_index_rebuild_cut_short_resumes() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = Key::new(7, N);
+    let ds = build(dir.path(), key);
+    let index = lodestar_search::index_dir(&ds.index_root());
+    std::fs::remove_dir_all(&index).unwrap();
+    // Stopped right after it chose to re-index, as a crash there would.
+    dataset::build_until(dir.path(), key, &mut |_| {}, Some("reindex")).unwrap();
+    let m: Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join(dataset::MANIFEST)).unwrap())
+            .unwrap();
+    assert_eq!(m["phase"], "rollups", "the rebuild isn't recorded");
+    // An empty index folder from the cut-short rebuild: resumed, not refused.
+    lodestar_search::SearchIndex::open(&index).unwrap();
+    let again = build(dir.path(), key);
+    assert!(again.built_now);
+    let docs = lodestar_search::SearchIndex::open(&index)
+        .unwrap()
+        .num_docs();
+    assert_eq!(docs, N);
+}
+
+#[test]
+fn another_store_schema_is_refused_naming_both() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = Key::new(7, N);
+    let ds = build(dir.path(), key);
+    let before = dataset::digest(&ds.db()).unwrap();
+    let manifest = dir.path().join(dataset::MANIFEST);
+    let mut m: Value = serde_json::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
+    let now = lodestar_store::latest_schema_version();
+    m["store_schema"] = (now - 1).into();
+    std::fs::write(&manifest, serde_json::to_vec(&m).unwrap()).unwrap();
+    let err = dataset::open_or_build(dir.path(), key, &mut |_| {}).unwrap_err();
+    let refused = err.downcast_ref::<Refused>().expect("a refusal");
+    assert!(
+        matches!(refused, Refused::StoreSchema { .. }),
+        "{refused:?}"
+    );
+    let msg = refused.to_string();
+    assert!(msg.contains(&format!("store schema {}", now - 1)), "{msg}");
+    assert!(msg.contains(&format!("this build's is {now}")), "{msg}");
+    assert_eq!(dataset::digest(&ds.db()).unwrap(), before);
+}
+
+#[test]
+fn a_folder_in_the_data_directory_is_refused_and_never_created() {
+    let data = tempfile::tempdir().unwrap();
+    let target = data.path().join("bench/10m");
+    let run = Command::new(env!("CARGO_BIN_EXE_size-report"))
+        .env("LODESTAR_DATA_DIR", data.path())
+        .args(["--dataset", target.to_str().unwrap(), "--torrents", "300"])
+        .output()
+        .unwrap();
+    assert!(!run.status.success());
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(stderr.contains("LODESTAR_DATA_DIR"), "{stderr}");
+    assert_eq!(
+        std::fs::read_dir(data.path()).unwrap().count(),
+        0,
+        "something was written to the data directory"
+    );
+}
+
+#[test]
 fn the_generator_stream_depends_only_on_its_seed() {
     let take = |seed| {
         Generator::new(seed)
@@ -278,6 +343,24 @@ fn size_report_gives_every_size_figure_and_leaves_the_dataset_as_built() {
         .output()
         .unwrap();
     assert_eq!(refused.status.code(), Some(2));
+
+    // `--gate` on a dataset fails unless the verdict is `pass`: a small
+    // corpus is `incomplete` (unpopulated fields) or `fail`, never `pass`.
+    let gated = Command::new(env!("CARGO_BIN_EXE_size-report"))
+        .args([
+            "--dataset",
+            dir.path().to_str().unwrap(),
+            "--torrents",
+            &N.to_string(),
+        ])
+        .args(["--seed", "7", "--gate"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        gated.status.code(),
+        Some(1),
+        "--gate let a non-pass verdict through"
+    );
 
     let r = size_report(dir.path(), &out.path().join("size.json"), &[]);
     assert_eq!(r["report_format"], dataset::REPORT_FORMAT);
