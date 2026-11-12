@@ -38,4 +38,4 @@ No new route and no new text served. `always_adult` is one boolean per source in
 
 ## Files outside the brief's owns
 - The brief's shared allowance: `crates/api/src/torrents.rs`, `crates/api/tests/identified.rs` and `crates/api/tests/adult_enrichment.rs`, plus the regenerated `openapi.json` and `schema.d.ts`.
-- `crates/api/tests/ops.rs` and `crates/api/tests/sources_spec.rs`: one `always_adult: false` line in each struct-literal `Source` fixture (runner approval requested).
+- Test-only fixture lines, one `always_adult: false` each (runner-approved, 2026-11-12): `crates/api/tests/ops.rs` (two), `crates/api/tests/sources_spec.rs`, and `web/src/lib/features/sources/fixtures.ts`'s `source()` builder. They're needed because the field is required in the served shape.
