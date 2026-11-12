@@ -954,7 +954,7 @@ class AnalyzerTests(unittest.TestCase):
 
     # ---- Windows 1.0 checks (M8-WIN-1) ----
     def svc_rows(self, pid_at=lambda i: 700, start=1000):
-        return [sample(i * 60, i, service_pid=pid_at(i), service_start_ticks=pid_at(i) * 10,
+        return [sample(i * 60, i, service_pid=pid_at(i), service_start_ticks=pid_at(i) * 10, image_sha256="b" * 64,
                        values={"start_time_seconds": start, "dht_peer_admitted_total": i,
                                "dht_peer_active": 3, "dht_peer_queued": 0,
                                "dht_sample_cooling": 200000, "dht_sample_inflight": 0})
@@ -965,6 +965,7 @@ class AnalyzerTests(unittest.TestCase):
 
     GOOD_UP = {"from_version": "0.5.1", "to_version": "1.0.0-rc.1", "service_running": True,
                "service_restarted": True, "image_matches_installed": True,
+               "from_image_sha256": "a" * 64, "to_image_sha256": "b" * 64,
                "data_present": True, "torrents_before": 500, "torrents_after": 520}
     GOOD_UN = {"service_present": False, "program_files_present": False,
                "data_present": True, "data_policy": "kept"}
@@ -974,7 +975,8 @@ class AnalyzerTests(unittest.TestCase):
             {"schema_version": 2, "reason": "baseline_window_complete", "samples": 5,
              "service_detached": True, "shutdown": {"exit_confirmed": False}, **changes}))
 
-    def checks(self, rows=None, finished=True, **parts):
+    def checks(self, rows=None, finished=True, bound="b" * 64, **parts):
+        self.run_json(service_image_sha256=bound, settings={"baseline_hours": 24, "service_mode": True})
         self.rows(rows if rows is not None else self.svc_rows())
         if finished:
             self.done()
@@ -1013,6 +1015,22 @@ class AnalyzerTests(unittest.TestCase):
         rows = self.svc_rows()
         del rows[2]["service_pid"]
         self.assertEqual(self.checks(rows)["service_restart"]["status"], "fail")
+
+    def test_build_binding(self):
+        self.assertEqual(self.checks()["build_binding"]["status"], "pass")
+        rows = self.svc_rows()
+        rows[3]["image_sha256"] = "c" * 64  # binary swapped mid-run
+        self.assertEqual(self.checks(rows)["build_binding"]["status"], "fail")
+        self.assertEqual(self.checks(bound="d" * 64)["build_binding"]["status"], "fail")
+        rows = self.svc_rows()
+        del rows[1]["image_sha256"]
+        self.assertEqual(self.checks(rows)["build_binding"]["status"], "fail")
+
+    def test_upgrade_must_land_on_the_bound_binary(self):
+        same = {**self.GOOD_UP, "from_image_sha256": "b" * 64}
+        other = {**self.GOOD_UP, "to_image_sha256": "c" * 64}
+        for up in (same, other):
+            self.assertEqual(self.checks(upgrade=up)["upgrade"]["status"], "fail")
 
     def test_upgrade_pass_and_fail(self):
         self.assertEqual(self.checks(upgrade=self.GOOD_UP)["upgrade"]["status"], "pass")

@@ -32,6 +32,22 @@ foreach ($field in @('exe_sha256', 'source_commit', 'ui', 'index_sha256', 'rustc
     Assert $rejected "invalid build provenance: $field"
 }
 
+# Service mode (M8-WIN-1): attach skips ownership checks but never the bind rules.
+Test-SoakLaunchEnvironment '127.0.0.1:8090' { @('lodestar') } { @{tcp=@(@{Port=8090});udp=@(@{Port=6881})} } $true
+$rejected=$false
+try { Test-SoakLaunchEnvironment '0.0.0.0:8090' { @() } $emptyPorts $true } catch { $rejected=$true }
+Assert $rejected 'unsafe bind accepted in attach mode'
+$rejected=$false
+try { Test-SoakLaunchEnvironment '127.0.0.1:8090' { @('dockerd') } $emptyPorts $true } catch { $rejected=$true }
+Assert $rejected 'docker accepted in attach mode'
+$identity = Get-SoakServiceIdentity 'Lodestar' { param($n) Assert ($n -eq 'Lodestar') 'service name'; @{ pid = 7; start_ticks = 99 } }
+Assert ($identity.pid -eq 7 -and $identity.start_ticks -eq 99) 'service identity'
+$rejected=$false
+try { Get-SoakServiceIdentity 'Lodestar' { $null } | Out-Null } catch { $rejected=$true }
+Assert $rejected 'stopped service accepted'
+Assert ((Get-SoakImagePath '"C:\Program Files\Lodestar\lodestar.exe" serve') -eq 'C:\Program Files\Lodestar\lodestar.exe') 'quoted image path'
+Assert ((Get-SoakImagePath 'C:\Lodestar\lodestar.exe serve') -eq 'C:\Lodestar\lodestar.exe') 'bare image path'
+
 $volumes = @(@{ free_bytes = 9GB })
 Assert ((Get-SoakGuardReason $volumes 10GB 0 1GB 0) -eq 'disk_reserve_reached') 'disk reserve'
 Assert ((Get-SoakGuardReason @(@{free_bytes=11GB}) 10GB 0 1GB 0) -eq $null) 'healthy disk'
@@ -88,6 +104,22 @@ try {
 } finally {
     # Only this test's known file and then its empty directory; no recursive deletion.
     [IO.File]::Delete($path)
+    [IO.Directory]::Delete($fixture)
+}
+$fixture = Join-Path ([IO.Path]::GetTempPath()) ('cr0-life-' + [Guid]::NewGuid().ToString('N'))
+[void][IO.Directory]::CreateDirectory($fixture)
+$life = Join-Path $fixture 'lifecycle.json'
+try {
+    Save-SoakLifecycle $life 'upgrade' @{ from_version = '0.5.1'; to_version = '1.0.0' }
+    Save-SoakLifecycle $life 'uninstall' @{ service_present = $false }
+    $record = Get-Content -LiteralPath $life -Raw | ConvertFrom-Json
+    Assert ($record.schema_version -eq 1 -and $record.upgrade.to_version -eq '1.0.0' -and $record.uninstall.service_present -eq $false) 'lifecycle steps merge'
+    $exe = Join-Path $fixture 'lodestar.exe'
+    [IO.File]::WriteAllText($exe, 'fixture')
+    $image = Get-SoakServiceImage 'Lodestar' { '"' + $exe + '" serve' }
+    Assert ($image.sha256 -eq (Get-FileHash -LiteralPath $exe).Hash) 'image hash'
+} finally {
+    foreach ($f in @($life, $exe)) { if ($f -and [IO.File]::Exists($f)) { [IO.File]::Delete($f) } }
     [IO.Directory]::Delete($fixture)
 }
 'Collector fault-injection assertions passed.'

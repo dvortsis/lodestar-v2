@@ -139,7 +139,12 @@ $latestVolumes = @()
 $lastLogs = 0L
 try {
     Enable-SoakChildCtrlC
-    if ($serviceMode) { $svcId = Get-SoakServiceIdentity $ServiceName; $p = Get-Process -Id $svcId.pid }
+    if ($serviceMode) {
+        $svcId = Get-SoakServiceIdentity $ServiceName; $p = Get-Process -Id $svcId.pid
+        # Bind the evidence to the binary the service runs; every sample repeats the hash.
+        $img = Get-SoakServiceImage $ServiceName
+        $run.service_image_sha256 = $img.sha256; $run.service_version = $img.version
+    }
     else { $p = Start-Process -FilePath $Exe -ArgumentList 'serve' -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $Root 'lodestar.out.log') `
         -RedirectStandardError (Join-Path $Root 'lodestar.err.log') }
@@ -249,7 +254,7 @@ try {
         }
         if ($serviceMode) {
             # A restart shows as a new PID or start time, even between two samples.
-            try { $svcNow = Get-SoakServiceIdentity $ServiceName; $row.service_pid = $svcNow.pid; $row.service_start_ticks = $svcNow.start_ticks }
+            try { $svcNow = Get-SoakServiceIdentity $ServiceName; $row.service_pid = $svcNow.pid; $row.service_start_ticks = $svcNow.start_ticks; $row.image_sha256 = (Get-SoakServiceImage $ServiceName).sha256 }
             catch { Note 'service not running at sample time' }
         }
         Write-Evidence (Join-Path $Root 'samples.jsonl') ($row | ConvertTo-Json -Depth 6 -Compress) -Append

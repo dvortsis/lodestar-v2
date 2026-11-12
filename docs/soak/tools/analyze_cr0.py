@@ -880,6 +880,19 @@ def windows_checks(root, rows, result, run):
             problems.append(f"{missing} samples without a service identity")
         checks["service_restart"] = (("fail", "; ".join(problems)) if problems else
                                      ("pass", f"one service process across {len(rows)} samples, window complete"))
+    seen_hashes = {r["image_sha256"] for r in rows if isinstance(r.get("image_sha256"), str)}
+    bound = run.get("service_image_sha256")
+    if not service_mode or (not seen_hashes and bound is None):
+        checks["build_binding"] = ("absent", "no service binary hash recorded")
+    else:
+        bad = []
+        if seen_hashes != {bound}:
+            bad.append(f"{len(seen_hashes)} sample hashes, attach hash "
+                       + ("matches" if bound in seen_hashes else "differs"))
+        if sum(1 for r in rows if not isinstance(r.get("image_sha256"), str)):
+            bad.append("samples without a hash")
+        checks["build_binding"] = (("fail", "; ".join(bad)) if bad else
+                                   ("pass", "service binary hash unchanged at every sample"))
     life = {}
     try:
         life = read_json(root / "lifecycle.json") if (root / "lifecycle.json").exists() else {}
@@ -897,6 +910,8 @@ def windows_checks(root, rows, result, run):
         ok = (isinstance(old, str) and isinstance(new, str) and VERSION.fullmatch(old)
               and VERSION.fullmatch(new) and old != new and up.get("service_running") is True
               and up.get("service_restarted") is True and up.get("image_matches_installed") is True
+              and isinstance(up.get("from_image_sha256"), str) and bound is not None
+              and up.get("from_image_sha256") != up.get("to_image_sha256") == bound
               and up.get("data_present") is True and number(before) and number(after)
               and before > 0 and after >= before)
         checks["upgrade"] = ("pass" if ok else "fail",

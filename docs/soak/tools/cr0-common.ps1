@@ -195,6 +195,22 @@ function Get-SoakServiceIdentity([string]$Name,
     return $found
 }
 
+function Get-SoakImagePath([string]$PathName) {
+    # The executable in a service's ImagePath: quoted, or up to the first ".exe".
+    if ($PathName -match '^\s*"([^"]+)"') { return $Matches[1] }
+    if ($PathName -match '^\s*(.+?\.exe)(\s|$)') { return $Matches[1] }
+    throw 'Cannot read the service image path.'
+}
+
+function Get-SoakServiceImage([string]$Name,
+    [scriptblock]$Query = { param($n) (Get-CimInstance Win32_Service -Filter "Name='$n'").PathName }) {
+    # Hash and file version of the binary the service is registered to run. The path
+    # itself is not recorded.
+    $path = Get-SoakImagePath (& $Query $Name)
+    @{ sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+       version = (Get-Item -LiteralPath $path).VersionInfo.FileVersion }
+}
+
 function Save-SoakLifecycle([string]$Path, [string]$Step, [hashtable]$Fields) {
     # Merge one step ('upgrade' or 'uninstall') into lifecycle.json.
     $record = if ([IO.File]::Exists($Path)) { Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -AsHashtable } else { @{ schema_version = 1 } }
@@ -213,7 +229,7 @@ function Get-SoakInstalledVersion([string]$Exe = (Join-Path $env:ProgramFiles 'L
     (Get-SoakExecutableVersion $Exe) -replace '^\S+\s+', ''
 }
 
-function Save-SoakUpgrade([string]$Path, [string]$FromVersion, [long]$TorrentsBefore, [long]$PreviousStartTicks,
+function Save-SoakUpgrade([string]$Path, [string]$FromVersion, [string]$FromImageSha256, [long]$TorrentsBefore, [long]$PreviousStartTicks,
     [string]$Bind = '127.0.0.1:8484', [string]$Service = 'Lodestar', [string]$DataDir = (Join-Path $env:ProgramData 'Lodestar'),
     [string]$Exe = (Join-Path $env:ProgramFiles 'Lodestar\lodestar.exe')) {
     # Run after the MSI upgrade finished. FromVersion and PreviousStartTicks are measured
@@ -222,6 +238,7 @@ function Save-SoakUpgrade([string]$Path, [string]$FromVersion, [long]$TorrentsBe
     $image = (Get-Process -Id $now.pid).Path
     Save-SoakLifecycle $Path 'upgrade' @{
         from_version = $FromVersion; to_version = (Get-SoakInstalledVersion $Exe)
+        from_image_sha256 = $FromImageSha256; to_image_sha256 = (Get-SoakServiceImage $Service).sha256
         service_running = ((Get-Service $Service).Status -eq 'Running')
         service_restarted = ($now.start_ticks -gt $PreviousStartTicks)
         image_matches_installed = ((Get-FileHash -LiteralPath $image).Hash -eq (Get-FileHash -LiteralPath $Exe).Hash)

@@ -5,7 +5,7 @@ This is the owner's run for gate **G-v1-windows**. It tests the release candidat
 **Pass means all four hold:**
 
 1. **Memory.** Private memory grows by no more than 2.0 MiB an hour over hours 12–24 (upper 95 % bound). This is CR-0's rule, unchanged.
-2. **No service restart.** The service runs as one process for the whole 24 hours.
+2. **No service restart.** The service runs as one process for the whole 24 hours, and its program file (SHA-256) never changes during the run.
 3. **Upgrade.** Upgrading from the last public release (v0.5.1) leaves the service running on the new version, with your data.
 4. **Clean uninstall.** The service and program files are gone, and your data is kept or removed as you chose.
 
@@ -39,6 +39,7 @@ New-Item -ItemType Directory C:\LodestarSoak | Out-Null
    $Before  = Get-SoakTorrentCount '127.0.0.1:8090'
    $FromVer = Get-SoakInstalledVersion
    $OldPid  = Get-SoakServiceIdentity Lodestar
+   $OldImg  = (Get-SoakServiceImage Lodestar).sha256
    ```
 
 ## Phase 2: upgrade to the RC (about 10 min)
@@ -51,7 +52,7 @@ New-Item -ItemType Directory C:\LodestarSoak | Out-Null
 2. Wait for `Get-Service Lodestar` to show `Running` (the upgrade restarts it), then record the upgrade:
 
    ```powershell
-   Save-SoakUpgrade $Life -FromVersion $FromVer -TorrentsBefore $Before -PreviousStartTicks $OldPid.start_ticks -Bind 127.0.0.1:8090
+   Save-SoakUpgrade $Life -FromVersion $FromVer -FromImageSha256 $OldImg -TorrentsBefore $Before -PreviousStartTicks $OldPid.start_ticks -Bind 127.0.0.1:8090
    ```
 
    **Result:** `lifecycle.json` holds the two versions, whether the service runs, restarted and runs the installed program, whether the data folder is non-empty, and the torrent count before and after. **Pass needs** `torrents_after` at least `torrents_before`.
@@ -93,6 +94,6 @@ Open `report.md`. The **Memory gate** says "meets the bar", and the **Windows 1.
 
 ## What to send back
 
-Send the runner **`report.md`** (its `run.json` `sha256` is checked against the RC's published checksums), plus `$Run\run.json`, `$Run\result.json` and `$Run\lifecycle.json`. They hold versions, counts, memory figures and pass/fail lines only.
+Send the runner **`report.md`** (the runner checks `service_image_sha256` in `run.json` against the RC's published checksums), plus `$Run\run.json`, `$Run\result.json` and `$Run\lifecycle.json`. They hold versions, counts, memory figures and pass/fail lines only.
 
 **Never send** the raw `samples.jsonl` or `metrics` folder unless asked, the database, anything under `C:\ProgramData\Lodestar` (logs, keys, the setup token), your password, or screenshots of the web page. Keep them private.
