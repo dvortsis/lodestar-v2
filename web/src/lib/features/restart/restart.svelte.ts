@@ -62,6 +62,7 @@ function createRestartStore() {
 		/**
 		 * A Settings save answered. A read still in flight left before the save, so it may carry
 		 * the old `restart_required`: drop it, and ask again now instead of at the next poll.
+		 * Each save starts its own read (one small GET per save), never one from before it.
 		 */
 		saved(): Promise<boolean> {
 			generation++;
