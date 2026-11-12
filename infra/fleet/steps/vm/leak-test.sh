@@ -145,24 +145,39 @@ if ((rc == 0)); then bad block_running; finish; fi
 install -m 0644 -- "$work/compose.yaml" "$STACK/compose.yaml" || { bad compose_installed; finish; }
 tunnel_up || { bad tunnel_started; finish; }
 wait_healthy; up=$?
-docker pull "$PROBE_IMAGE" >/dev/null 2>&1 || { bad probe_image; finish; }
+unhealthy_stop() { ((up == 0)) || bad tunnel_healthy; bad "$1"; finish; }  # an early stop still says so
+docker pull "$PROBE_IMAGE" >/dev/null 2>&1 || unhealthy_stop probe_image
 check probe_tools probe sh -c 'command -v curl && command -v nc && command -v dig && command -v ip'
 iface=$(docker inspect --type container -f '{{range .Config.Env}}{{println .}}{{end}}' gluetun 2>/dev/null \
   | sed -n 's/^VPN_INTERFACE=//p' | tail -n 1)
 iface=${iface:-wg0}  # gluetun's WireGuard default; compose.yaml sets it explicitly
-[[ $iface =~ ^[a-z][a-z0-9]{0,14}$ ]] || { bad vpn_interface; finish; }
+[[ $iface =~ ^[a-z][a-z0-9]{0,14}$ ]] || unhealthy_stop vpn_interface
 
-# An unhealthy tunnel whose interface has received nothing never completed
-# its WireGuard handshake (an expired or wrong PIA key, say): its own outcome,
-# so the report says why. It's still a failure, and the kill-switch phases
+# An unhealthy tunnel whose interface has received nothing never completed its
+# WireGuard handshake: an expired or wrong PIA key, or an endpoint that can't be
+# reached. Check the VPN credentials, then the endpoint. It's its own outcome,
+# so the report says why; it's still a failure, and the kill-switch phases
 # below still run and judge any leak on their own. The counter is read in
 # gluetun's namespace with no capabilities (`wg show` would need NET_ADMIN, and
-# gluetun may run WireGuard in userspace); an unreadable one is never read as
-# "no handshake".
+# gluetun may run WireGuard in userspace). gluetun's VPN restarts recreate the
+# interface (a fresh counter, or none for a moment), so it's read several
+# times: "no handshake" needs at least one read, and every read 0. A counter
+# that can't be read is never read as "no handshake".
+rx_zero() {
+  local i rx zero=""
+  for ((i = 0; i < 5; i++)); do
+    ((i > 0)) && sleep 2
+    rx=$(probe cat "/sys/class/net/$iface/statistics/rx_bytes" 2>/dev/null | tr -d '\r\n')
+    [[ -z $rx ]] && continue
+    [[ $rx == 0 ]] || return 1
+    zero=1
+  done
+  [[ -n $zero ]]
+}
 no_handshake=""
 if ((up == 0)); then
   pass tunnel_healthy
-elif [[ $(probe cat "/sys/class/net/$iface/statistics/rx_bytes" 2>/dev/null | tr -d '\r\n') == 0 ]]; then
+elif rx_zero; then
   no_handshake=1
   bad wireguard_handshake_never_completed  # check the VPN credentials
 else

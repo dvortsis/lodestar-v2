@@ -454,7 +454,12 @@ case "$1" in
         "grep"*) [ -n "$DNS_REMOTE" ] && exit 1; exit 0 ;;
         "sh -c echo"*) exit 0 ;;
         # The VPN interface's received bytes: none until a handshake completes.
-        "cat /sys/class/net/${VPN_IFACE-wg0}/statistics/rx_bytes") [ -n "$NO_HANDSHAKE" ] && echo 0 || echo 4096 ;;
+        # NO_COUNTER: the interface is gone (gluetun restarting its VPN); RX_LATE:
+        # the first read lands on a freshly recreated interface, then data comes.
+        "cat /sys/class/net/${VPN_IFACE-wg0}/statistics/rx_bytes")
+          n=$(cat "$STUB/rx_reads" 2>/dev/null || echo 0); echo $((n + 1)) > "$STUB/rx_reads"
+          [ -n "$NO_COUNTER" ] && exit 1
+          if [ -n "$NO_HANDSHAKE" ] || { [ -n "$RX_LATE" ] && [ "$n" -eq 0 ]; }; then echo 0; else echo 4096; fi ;;
         "ip link set dev "*) [ -n "$IFDOWN_FAILS" ] && exit 2; : > "$STUB/ifdown"; exit 0 ;;
         *) exit 99 ;;
       esac
@@ -723,25 +728,33 @@ class VMScripts(unittest.TestCase):
         self.assertFalse((self.stub / "blocked").exists())
 
     def test_a_leak_with_no_handshake_is_still_a_leak(self):
-        rc, lines, _ = self.run_script("leak-test.sh", NO_HANDSHAKE=1, FIREWALL_OFF=1)
-        self.assertEqual(rc, 1)
-        self.assertIn("fail wireguard_handshake_never_completed", lines)
-        self.assertIn("fail no_egress_captured_ifdown", lines)
-        self.assertIn("count captured_packets_ifdown 3", lines)
-        self.assertEqual(lines[-1], "fail leak_test")
+        for flags, failed in (({"FIREWALL_OFF": 1}, "no_egress_captured_ifdown"),
+                              ({"CAPTURED": 2}, "no_egress_captured_down")):
+            with self.subTest(flags=flags):
+                self.setUp()
+                rc, lines, _ = self.run_script("leak-test.sh", NO_HANDSHAKE=1, **flags)
+                self.assertEqual(rc, 1)
+                self.assertIn("fail wireguard_handshake_never_completed", lines)
+                self.assertIn(f"fail {failed}", lines)
+                self.assertEqual(lines[-1], "fail leak_test")
 
-    def test_an_unhealthy_tunnel_that_handshook_is_not_a_handshake_failure(self):
-        rc, lines, _ = self.run_script("leak-test.sh", UNHEALTHY=1)
-        self.assertEqual(rc, 1)
-        self.assertIn("fail tunnel_healthy", lines)
-        self.assertNotIn("fail wireguard_handshake_never_completed", lines)
-        self.assertIn("ok ipv4_through_tunnel", lines)  # judged, not skipped
-        self.assertEqual(lines[-1], "fail leak_test")
-        # A counter probe that never ran is never read as "no handshake".
-        self.setUp()
-        rc, lines, _ = self.run_script("leak-test.sh", UNHEALTHY=1, PROBE_NOT_RUN=1)
-        self.assertNotIn("fail wireguard_handshake_never_completed", lines)
-        self.assertEqual(lines[-1], "fail leak_test")
+    def test_an_unhealthy_tunnel_is_a_handshake_failure_only_when_nothing_was_received(self):
+        # Data came through (at once, or after a read on a recreated interface), no
+        # counter could be read: the generic failure.
+        for flags in ({}, {"RX_LATE": 1}, {"NO_COUNTER": 1}):
+            with self.subTest(flags=flags):
+                self.setUp()
+                rc, lines, _ = self.run_script("leak-test.sh", UNHEALTHY=1, **flags)
+                self.assertEqual(rc, 1)
+                self.assertIn("fail tunnel_healthy", lines)
+                self.assertNotIn("fail wireguard_handshake_never_completed", lines)
+                self.assertEqual(lines[-1], "fail leak_test")
+                if not flags:
+                    self.assertIn("ok ipv4_through_tunnel", lines)  # judged, not skipped
+
+    def test_an_early_stop_still_reports_an_unhealthy_tunnel(self):
+        rc, lines, _ = self.run_script("leak-test.sh", UNHEALTHY=1, PULL_FAIL=1)
+        self.assertEqual((rc, lines[-3:]), (1, ["fail tunnel_healthy", "fail probe_image", "fail leak_test"]))
 
     def test_probes_that_never_ran_never_pass(self):
         rc, lines, _ = self.run_script("leak-test.sh", PROBE_NOT_RUN=1)
