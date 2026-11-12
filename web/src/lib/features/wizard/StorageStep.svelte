@@ -26,7 +26,7 @@
 </script>
 
 <!-- Always in the DOM, empty until the warning arrives, so assistive tech hears the change. -->
-<div role="status" class="empty:-mb-4" data-testid="wizard-storage-fs">
+<div role="status" class="contents" data-testid="wizard-storage-fs">
 	{#if warning}<Banner kind="warning">{warning} {m.wizard_storage_fs_note()}</Banner>{/if}
 </div>
 <FieldsStep
