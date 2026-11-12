@@ -44,7 +44,7 @@ Section 5 of the Legal Notice allows the Application log to hold what happened, 
   - "stops at once and stays stopped": look for the Lodestar error, event ID 3, first.
 
   The wording matches the service's note: it names the data folder and the Repair fix. `lint_docs.py docs/user --strict`: 0 failed, 0 warnings.
-- **`docs/legal/operator-guidance.md`:** version 4 of the Legal Notice becomes version 5, with the status date. The rest of the page says nothing about the Event Log, and needs nothing: the notes hold no visitor's data.
+- **`docs/legal/operator-guidance.md`:** its status line now describes the development builds on `main`, which lead to the release after 0.5.2, as version 5 of the Legal Notice. That's the runner's wording (owner-decisions §2.57 delegates it), since 0.5.2 itself ships version 4. The rest of the page says nothing about the Event Log, and needs nothing: the notes hold no visitor's data.
 - **`docs/legal/README.md`:** the section 5 row lists .NET's `System.Diagnostics.EventLog` and `WriteEntry` beside `eventcreate` and the rest, as `tests/legal_facts.rs` already checks them, compared without case.
 - **`packaging/windows/smoke.ps1`:** after the refused start (the administrator's Explorer entry on the data folder), it waits up to 30 s for an Application log event from the source `Lodestar`, ID 3, since the start. The wait polls, with no fixed sleep. It checks that:
   - the service's own account, `NT SERVICE\Lodestar` (its SID from `sc showsid`), wrote it;

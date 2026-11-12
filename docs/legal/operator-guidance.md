@@ -1,6 +1,6 @@
 # Running a Lodestar that other people can reach
 
-*Status (2026-11-11): this page describes Lodestar 0.5.2 and the development builds that lead to it, the same software as version 5 of the Legal Notice. Rule packs on by default for a new data folder and the unauthorised-copy pack are built; the sources marked **(planned)** come later.*
+*Status (2026-11-12): this page describes the development builds of Lodestar on the `main` branch, which lead to the release after 0.5.2, the same software as version 5 of the Legal Notice. Rule packs on by default for a new data folder and the unauthorised-copy pack are built; the sources marked **(planned)** come later.*
 
 This page is for the person who makes a Lodestar instance reachable by others: through its web interface, its API, an alert feed or an integration. Publishing the software and running a service are different things. The makers do the first; if you do the second, the duties below may fall on you. **This is guidance, not legal advice.** What applies to you depends on where you and your users are and on what your service does; ask a lawyer before you offer an index to others.
 
