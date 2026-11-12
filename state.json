@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T06:18:09Z",
+  "updated_at": "2026-11-12T06:21:10Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7109,6 +7109,10 @@
     {
       "at": "2026-11-12T06:04:10Z",
       "what": "\u00a72.59 cap 8: idle slots 3, 7, 9 removed; X-restart-save-lag (was next for slot 9) waits for a free slot under the cap; 9 sessions finishing; runner PR #743 records it"
+    },
+    {
+      "at": "2026-11-12T06:21:10Z",
+      "what": "X-wk-fetched-lease: closes rv-737 I1 window (writer lag > FINISHED_GRACE reopens #727 double-hold); owns cluster leases.rs/server.rs, worker/runtime.rs, pipeline worker.rs; slice PR adds own slices.yaml entry + ws-workers placement"
     }
   ],
   "main_health": [
@@ -7983,7 +7987,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T06:18:09Z",
+    "updated": "2026-11-12T06:21:10Z",
     "items": [
       {
         "slot": 1,
@@ -8017,7 +8021,7 @@
         "slice": "X-wk-out-set-polish",
         "role": "slice",
         "agent": "session_01MMjhnCfcVrMUCDWwedtr7c",
-        "doing": "#737 rv-737-84da83fe MERGE+1 Important (60 s grace vs writer-commit lag reopens double-hold) relayed; fix round, then runner self-checks delta; archive after merge",
+        "doing": "#737 option B (180 s grace, window named; a-prime spec in decisions); then X-wk-fetched-lease (a-prime: Outcome::Fetched on Accepted, holder claim on fetched lease -> Denied{Stored}) in same session; fresh Opus review",
         "since": "2026-11-12T04:01:05Z",
         "status": "active"
       },
@@ -8107,7 +8111,7 @@
     }
   ],
   "heartbeat": "2026-11-12T03:41:56Z",
-  "updated": "2026-11-12T06:18:09Z",
+  "updated": "2026-11-12T06:21:10Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
