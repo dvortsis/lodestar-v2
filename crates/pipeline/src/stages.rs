@@ -44,7 +44,7 @@ use crate::source_adult::AdultSources;
 use crate::worker::{PrepareStage, WorkerFunnel, collect};
 use crate::writer::WriterStats;
 
-pub use crate::worker::{Results, WorkerLeases};
+pub use crate::worker::{Insert, Results, WorkerLeases};
 
 /// Keys per claim batch on the wire (§19.2: "≤ 512 or every 250 ms").
 pub const CLAIM_BATCH: usize = MAX_CLAIM_BATCH;

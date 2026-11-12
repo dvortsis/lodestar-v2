@@ -765,6 +765,7 @@ struct Running {
     _stop: oneshot::Sender<()>,
     finds: Finds,
     counts: Arc<Counts>,
+    leases: Arc<lodestar_pipeline::stages::WorkerLeases>,
 }
 
 /// One worker: its folder, clock, link and, while it runs, its task.
@@ -929,7 +930,7 @@ impl Harness {
             },
             ..base
         });
-        let (finds, counts) = (rt.finds(), rt.counts());
+        let (finds, counts, leases) = (rt.finds(), rt.counts(), rt.leases());
         let clock: Arc<dyn Clock> = node.clock.clone();
         let lines = node.lines.clone();
         let worker = Worker {
@@ -965,6 +966,7 @@ impl Harness {
             _stop: stop,
             finds,
             counts,
+            leases,
         });
     }
 
@@ -1026,6 +1028,11 @@ impl Harness {
     /// The running worker's counters (`None` while it's down).
     pub(crate) fn counts(&self, i: usize) -> Option<Arc<Counts>> {
         self.node(i).run.as_ref().map(|r| r.counts.clone())
+    }
+
+    /// The running worker's leases: held, and results out under them.
+    pub(crate) fn leases(&self, i: usize) -> Option<Arc<lodestar_pipeline::stages::WorkerLeases>> {
+        self.node(i).run.as_ref().map(|r| r.leases.clone())
     }
 
     /// Whether worker `i`'s task is still running (it hasn't exited).
@@ -1208,10 +1215,11 @@ impl Harness {
     /// these workers have no DHT to look any up); while the key waits for
     /// a re-grant, a claimer gets it with the peers itself.
     ///
-    /// Never the holder itself: its claim gets its own lease back, which
-    /// the runtime puts in its pool as a new sighting, and once it has
-    /// fetched the key the pool turns that away as recently fetched,
-    /// ending the lease as lost (see the decisions file). And a sighting
+    /// Not the holder itself (use [`sight_with`](Self::sight_with) to
+    /// include it): its claim only gets its own lease back. That used to
+    /// end the lease as lost once the key was fetched, until
+    /// X-wk-own-lease-lost; `a_holder_sighting_its_own_keys_keeps_their_leases`
+    /// pins the fix. And a sighting
     /// while the lease is still a dead holder's, before the expiry runs,
     /// sends its hints nowhere: sight after [`wait_leased`], or keep
     /// sighting with [`wait_stored_sighting`].

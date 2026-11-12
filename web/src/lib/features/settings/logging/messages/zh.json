@@ -485,6 +485,8 @@
 	"settings_logging_ev_pipeline_tracker_skipped_h": "某个 tracker 已被跳过。",
 	"settings_logging_ev_pipeline_hot_snapshot_unreadable_n": "已存队列无法读取",
 	"settings_logging_ev_pipeline_hot_snapshot_unreadable_h": "无法读取已保存的工作队列快照。",
+	"settings_logging_ev_pipeline_spool_damaged_n": "工作节点缓存损坏",
+	"settings_logging_ev_pipeline_spool_damaged_h": "工作节点离线缓存中的一个分段已损坏。无法读取的部分已丢弃，其余部分会在重新连接后发送。",
 	"settings_logging_ev_pipeline_scheduler_store_failed_n": "调度状态未保存",
 	"settings_logging_ev_pipeline_scheduler_store_failed_h": "无法保存调度器的状态。",
 	"settings_logging_ev_pipeline_priority_unreadable_n": "优先级无法读取",

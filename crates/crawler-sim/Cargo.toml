@@ -21,4 +21,4 @@ lodestar-network-policy.workspace = true
 lodestar-peer-wire.workspace = true
 lodestar-sources = { workspace = true, features = ["testing"] }
 lodestar-store.workspace = true
-tokio = { version = "1.54.0", features = ["sync", "time", "rt", "macros", "test-util"] }
+tokio = { version = "1.54.1", features = ["sync", "time", "rt", "macros", "test-util"] }

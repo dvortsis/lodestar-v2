@@ -280,6 +280,75 @@ async fn expired_keys_with_nobody_to_take_them_stay_in_flight() {
     h.shutdown().await;
 }
 
+/// The holder sights its own keys again after it has fetched them but
+/// before their commit reaches it, as a busy DHT does. Its claim gets its
+/// own lease back; that must never end the lease as lost nor send the key
+/// to another worker (X-wk-own-lease-lost).
+///
+/// Made deterministic with the relay: the coordinator's answers to those
+/// claims are held until the holder's pool has fetched the keys, so they
+/// land in the window between the fetch and the commit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_holder_sighting_its_own_keys_keeps_their_leases() {
+    let h = Harness::start(Options::workers(3)).await;
+    let keys = torrents(&h, "Sighted by its holder", 3);
+    h.swarm.hold(0);
+    for &k in &keys {
+        h.find(0, k);
+    }
+    h.wait_fetched(0, &keys).await;
+
+    // Its sightings' claims reach the coordinator (its heartbeats say
+    // so), and the answers, "your own lease", wait in the relay.
+    h.partition(0, Cut::ToWorker);
+    let w0 = h.worker_id(0);
+    let claimed = || {
+        h.fleet()
+            .workers
+            .iter()
+            .find(|w| w.worker == w0)
+            .map_or(0, |w| w.stats.claimed)
+    };
+    let before = claimed();
+    for &k in &keys {
+        h.find(0, k);
+    }
+    h.wait("the holder's claims sent", DEADLINE, || {
+        claimed() >= before + 3
+    })
+    .await;
+
+    // The fetches finish and the results are committed; then the answers
+    // reach the holder, whose pool has fetched the keys already.
+    h.swarm.release(0);
+    h.wait_stored(&keys).await;
+    h.heal(0);
+    let counts = h.counts(0).expect("worker 0 runs");
+    h.wait("the commits acknowledged", DEADLINE, || {
+        counts.committed.load(Ordering::Relaxed) >= 3
+    })
+    .await;
+    let f = h
+        .wait_reconciled(|f| f.stored == 3 && f.in_flight == 0)
+        .await;
+    assert_eq!(
+        (counts.lost.load(Ordering::Relaxed), f.harvested, f.lost),
+        (0, 3, 0),
+        "the holder's own lease came back and ended as lost: {}",
+        h.diagnosis()
+    );
+    assert_eq!(h.fetch_violations(), Vec::<String>::new());
+    let fetchers: HashSet<usize> = h.swarm.log().iter().map(|r| r.node).collect();
+    assert_eq!(fetchers, HashSet::from([0]), "{}", h.diagnosis());
+    // Committed: nothing is left out, and nothing held.
+    let leases = h.leases(0).expect("worker 0 runs");
+    h.wait("the results no longer out", DEADLINE, || {
+        leases.pending_len() == 0 && leases.is_empty()
+    })
+    .await;
+    h.shutdown().await;
+}
+
 /// A worker whose clock is off: past the allowed offset (60 s) it is
 /// flagged and told to fix its clock; past the certificates' slack
 /// (5 min) the TLS handshake refuses it. Either way it stays up, holds no
@@ -448,4 +517,16 @@ fn a_recorded_hand_back_excuses_only_later_fetches() {
     assert!(violations(&swarm.log(), &swarm.hand_backs(), 600_000).is_empty());
     // Without it, the same two fetches are a violation.
     assert_eq!(violations(&swarm.log(), &[], 600_000).len(), 1);
+
+    // Recorded after both fetches, it excuses neither: the second came
+    // before the hand-back.
+    let late = Swarm::new(Arc::new(ManualClock::new(0)));
+    lock(&late.log).push(at(0, 0));
+    lock(&late.log).push(at(1, 1));
+    late.handed_back(0);
+    assert_eq!(late.hand_backs(), vec![HandBack { node: 0, seq: 2 }]);
+    assert_eq!(
+        violations(&late.log(), &late.hand_backs(), 600_000).len(),
+        1
+    );
 }

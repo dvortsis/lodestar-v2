@@ -187,7 +187,8 @@ impl Fetch for Loopback {
     }
 }
 
-/// Runs one cycle of the plugin as `manager` against the fake manager
+/// Runs the plugin as `manager` until it asks for the indexer list a
+/// second time (one whole cycle), against the fake manager
 /// serving `pages` (request path, recorded body in `case`), with every URL
 /// in those bodies pointing at the trap, and checks that nothing but those
 /// paths was asked for and the trap was never reached.
@@ -227,18 +228,24 @@ async fn never_fetches_an_item(manager: Manager, case: &str, pages: &[(&str, &st
     let mut ctx = FakeCtx::with_fetch(&*p, SourceId::new(5).unwrap(), fetch.clone());
     let running = ctx.start(p.clone());
 
-    // One full cycle: the list and each torrent indexer's page, and the
-    // finds those pages hold (as `prowlarr.rs`'s own tests count them). A
-    // request to the trap ends the wait at once, so it fails below by name.
+    // Past one whole cycle: the plugin has asked for the list again, which
+    // it does only after every page of the first cycle has been polled and
+    // its finds sent (`run_inner`'s loop), so anything that cycle would
+    // fetch has been asked for. The clock is paused, so the poll interval
+    // between the two lists passes at once. A request to the trap ends
+    // the wait early, so it fails below by name.
+    let list_line = format!("GET {} HTTP/1.1", pages[0].0);
     let mut got = Vec::new();
-    wait_for(
-        "the cycle's requests and finds, or a request to the trap",
-        || {
-            got.extend(ctx.drain());
-            trap.conns.load(Ordering::SeqCst) > 0
-                || (manager_server.lines().len() >= pages.len() && got.len() >= finds)
-        },
-    )
+    wait_for("the next cycle's list, or a request to the trap", || {
+        got.extend(ctx.drain());
+        trap.conns.load(Ordering::SeqCst) > 0
+            || manager_server
+                .lines()
+                .iter()
+                .filter(|l| **l == list_line)
+                .count()
+                >= 2
+    })
     .await;
     running.stop_within().await.unwrap();
 
@@ -256,6 +263,7 @@ async fn never_fetches_an_item(manager: Manager, case: &str, pages: &[(&str, &st
     );
     let mut lines = manager_server.lines();
     lines.sort();
+    lines.dedup();
     let mut want: Vec<String> = pages
         .iter()
         .map(|(p, _)| format!("GET {p} HTTP/1.1"))
@@ -265,10 +273,11 @@ async fn never_fetches_an_item(manager: Manager, case: &str, pages: &[(&str, &st
         lines, want,
         "only the list and the pages, never a download path"
     );
-    assert_eq!(got.len(), finds, "{got:#?}");
+    // At least: the second cycle may already have sent some of its own.
+    assert!(got.len() >= finds, "the first cycle's finds: {got:#?}");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(start_paused = true)]
 async fn prowlarr_never_requests_an_items_link() {
     never_fetches_an_item(
         Manager::Prowlarr,
@@ -283,7 +292,7 @@ async fn prowlarr_never_requests_an_items_link() {
     .await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(start_paused = true)]
 async fn jackett_never_requests_an_items_link() {
     let api = "/api/v2.0/indexers";
     let page = "results/torznab/api?apikey=REDACTED&t=search&extended=1&limit=100";
@@ -311,7 +320,9 @@ fn plugin_source() -> String {
     let src = std::fs::read_to_string(&p)
         .unwrap_or_else(|e| panic!("{}: {e}", p.display()))
         .replace("\r\n", "\n");
-    match src.find("\n#[cfg(test)]\nmod tests") {
+    // Unit tests, if the file ever gains a `#[cfg(test)] mod …`, aren't
+    // the plugin's requests. It has none today.
+    match src.find("\n#[cfg(test)]\nmod ") {
         Some(at) => src[..at].to_owned(),
         None => src,
     }
@@ -386,12 +397,15 @@ fn every_request_is_built_from_the_configured_base() {
          section 2"
     );
     // It sends only the requests it built, through any client handle: every
-    // `.http.`, `.send(`, `.poll(` and `.poll_stream(` (the last-but-one also
-    // matches `Job::poll`, the indexer page's own step).
+    // use of an `http` client (`.http`, so a handle passed to a helper as
+    // `&self.http` or `job.http` counts too), and every `.send(`, `.poll(`
+    // and `.poll_stream(` (`.poll(` also matches `Job::poll`, the indexer
+    // page's own step). A client reached by another name isn't seen: the
+    // behavioural tests above cover that.
     let sends: Vec<&&str> = code
         .iter()
         .filter(|l| {
-            [".http.", ".send(", ".poll(", ".poll_stream("]
+            [".http", ".send(", ".poll(", ".poll_stream("]
                 .iter()
                 .any(|p| l.contains(p))
         })
@@ -399,6 +413,7 @@ fn every_request_is_built_from_the_configured_base() {
     assert_eq!(
         sends,
         [
+            &"http: kit.http,",
             &"let res = self.http.poll(\"indexers\", &self.list_request()).await;",
             &"let body = answer(self.http.poll(&unit, &self.page_request(ix)).await)?;",
             &"match job.poll(&ix).await {",

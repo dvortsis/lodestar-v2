@@ -79,6 +79,12 @@ export const test = base.extend<
 			mock.on('getInsightsEvents', { annotations: [], paused: [], truncated: false });
 			// A single-machine fixture: no fleet, so the status pill adds nothing (WK-17).
 			mock.on('insightsFleetSummary', { fleet: null });
+			// The documented `/system` example has a change waiting for a restart, which the status pill
+			// shows as "Restart needed" (§10.10.6). Nothing is pending by default; the restart specs
+			// override this.
+			const system = mock.operations.find((o) => o.id === 'getSystem')?.example?.body;
+			if (system && typeof system === 'object')
+				mock.on('getSystem', { ...system, restart_required: [] } as never);
 			await use(mock);
 			mock.assertNoFailures();
 		},

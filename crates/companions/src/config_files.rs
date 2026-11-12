@@ -23,7 +23,7 @@
 //! with 100,000 iterations over a 16-byte salt from the OS RNG.
 
 use std::fmt;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::Path;
 
@@ -757,6 +757,6 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ConfigError> {
     // Best effort, like the key file's: the rename has happened, so the
     // file is in place and an error here would wrongly say it isn't.
     #[cfg(unix)]
-    let _ = File::open(dir).and_then(|d| d.sync_all());
+    let _ = fs::File::open(dir).and_then(|d| d.sync_all());
     Ok(())
 }

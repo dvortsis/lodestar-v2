@@ -181,8 +181,10 @@ export function buildPlan(inp: Inputs) {
   const edges = (cfg.roadmap?.arrows || []).filter(([a, b]: string[]) => { const ok = stepIds.has(a) && stepIds.has(b); if (!ok) warn('Unknown roadmap step', a + ' -> ' + b, 'an arrow in dashboard.yaml names a step that is not defined'); return ok; }).map(([a, b]: string[]) => ({ source: a, target: b }));
 
   const byDay: Record<string, number> = {}; const merged = [...inp.mergedPRs].filter((p) => p.merged_at).sort((a, b) => (a.merged_at! < b.merged_at! ? 1 : -1));
-  for (const p of merged) { const d = p.merged_at!.slice(0, 10); byDay[d] = (byDay[d] || 0) + 1; }
-  const activity = Object.keys(byDay).sort().slice(-14).map((d) => ({ day: d, merged: byDay[d] }));
+  const byHour: Record<string, number[]> = {};
+  for (const p of merged) { const d = p.merged_at!.slice(0, 10); byDay[d] = (byDay[d] || 0) + 1; (byHour[d] = byHour[d] || new Array(24).fill(0))[Number(p.merged_at!.slice(11, 13))]++; }
+  // `h` is the same count split by UTC hour, so a viewer can regroup the days into its own time zone.
+  const activity = Object.keys(byDay).sort().slice(-14).map((d) => ({ day: d, merged: byDay[d], h: byHour[d] }));
   const recent = merged.slice(0, 14).map((p) => ({ pr: p.number, sha: '', when: p.merged_at!.slice(0, 16).replace('T', ' ') + 'Z', title: p.title.slice(0, 110), agent: agentOf(p) }));
 
   const gates = (cfg.gates || []).map((g: any) => {

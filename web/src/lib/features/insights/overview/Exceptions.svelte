@@ -22,8 +22,8 @@
 	// `fix.kind: "guide"` targets (PK-exc): the user guide pages that cover them.
 	const GUIDE = 'https://github.com/dvortsis/lodestar-v2/blob/main/docs/user/';
 	const GUIDES: Record<string, string> = {
-		data_folder: '02-install-lodestar-on-unraid-and-docker.md',
-		windows_ports: '04-install-on-windows-and-linux.md'
+		data_folder: '04-install-on-windows-and-linux.md#46-fix-a-data-folder-warning',
+		windows_ports: '04-install-on-windows-and-linux.md#47-fix-the-windows-port-warning'
 	};
 	const guideHref = (e: Exception) =>
 		e.fix.kind === 'guide' && Object.hasOwn(GUIDES, e.fix.target)
@@ -142,7 +142,7 @@
 								target="_blank"
 								rel="noopener noreferrer"
 								data-testid="insights-exception-{e.kind}-fix"
-								>{fixText(e)}<span class="sr-only"> {m.settings_about_new_tab()}</span></a
+								>{fixText(e)}<span class="sr-only"> {m.insights_overview_exc_new_tab()}</span></a
 							>
 							<!-- eslint-enable svelte/no-navigation-without-resolve -->
 						{/if}

@@ -68,6 +68,8 @@ pub struct TorznabAdult(pub AdultVisibility);
 
 /// The server's name in caps and feeds.
 const TITLE: &str = "Lodestar";
+/// The feed's `<channel><link>`: the web UI, relative to the server.
+const CHANNEL_LINK: &str = "/";
 /// Further lease reads a page may take to fill itself, past rows the
 /// stored check left out: bounds the work one request does.
 const MAX_REFILLS: usize = 4;
@@ -114,9 +116,14 @@ async fn as_torznab_error(req: Request, next: Next) -> Response {
     }
     let (code, description) = match status {
         StatusCode::UNAUTHORIZED => (code::CREDENTIALS, "Incorrect user credentials"),
-        StatusCode::FORBIDDEN | StatusCode::CONFLICT => (
+        StatusCode::FORBIDDEN => (
             code::PRIVILEGES,
             "Insufficient privileges: use an API key with the Torznab scope",
+        ),
+        // Only a signed-in browser meets the notice gate: keys skip it.
+        StatusCode::CONFLICT => (
+            code::PRIVILEGES,
+            "Insufficient privileges: accept the Legal Notice in the Lodestar web UI first",
         ),
         StatusCode::TOO_MANY_REQUESTS => (code::LIMIT, "Request limit reached"),
         StatusCode::METHOD_NOT_ALLOWED => (query::NO_FUNCTION, "No such function"),
@@ -388,6 +395,9 @@ fn feed(offset: usize, total: u64, items: &[Item]) -> String {
     );
     x.open("channel", &[]);
     x.text("title", &[], TITLE);
+    // RSS 2.0 requires a channel link: the instance's own web UI, as a
+    // constant relative URL, never built from the request's Host.
+    x.text("link", &[], CHANNEL_LINK);
     x.text("description", &[], "Lodestar search results");
     x.empty(
         "torznab:response",

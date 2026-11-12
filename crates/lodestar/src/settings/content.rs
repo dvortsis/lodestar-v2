@@ -31,7 +31,7 @@ pub struct Content {
     /// turning it on needs `"confirm_adult": true` in the same change
     /// (the 18+ confirmation). Applies at once.
     pub show_adult: bool,
-    /// Adult results in Torznab feeds (`/torznab/api`).
+    /// Adult results in Torznab feeds (`/api/v1/torznab/api`).
     pub torznab_adult: bool,
     /// Adult results in the Stremio add-on. Not used yet.
     pub stremio_adult: bool,

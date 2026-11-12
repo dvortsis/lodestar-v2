@@ -429,6 +429,10 @@ const settingsFirstView = [
 	...settingsBodies,
 	...settingsExtras
 ];
+const RESTART_BANNER = 'src/lib/features/restart/RestartBanner.svelte';
+const restartParts = [
+	/features\/restart\/(?:ReviewList|RestartDialog|AddressPrompt|RestartingPage)\.svelte$/
+];
 const settingsSectionView = own('/settings/[section]', { onDemand: settingsFirstView });
 const settingsShellView = own('/settings/[section]', {
 	onDemand: [...settingsFirstView, ...settingsFormChunk, ...settingsAbout]
@@ -1434,6 +1438,27 @@ export default [
 	// The registry's purpose lines and notices, and the generated screens' navigation icons
 	// (X-settings-registry-slim): measured 0.87 KB and 1.5 KB, limits = measured + 10%.
 	entry('Settings screen purposes (on demand)', settingsAboutLazy, '0.96 KB'),
+	// The restart banner (X-restart-banner): loaded by the chrome's watch once a change waits for a
+	// restart (or a new address waits to be kept) and mounted on the body as a floating tray, never
+	// part of a first view. Measured beyond a Settings section's first view, where it mostly shows;
+	// behind its buttons, the dialog, Review (it reads the form engine), the Restarting page and the
+	// address prompt are separate on-demand chunks.
+	entry(
+		'Restart banner (on demand)',
+		requireMeasuredJs(
+			'Restart banner (on demand)',
+			ownChunk(RESTART_BANNER, restartParts, false, settingsSectionView)
+		),
+		'5.3 KB'
+	),
+	entry(
+		'Restart flow (on demand)',
+		requireMeasuredJs(
+			'Restart flow (on demand)',
+			ownChunk(RESTART_BANNER, restartParts, true, settingsSectionView)
+		),
+		'29.4 KB'
+	),
 	entry('Settings screen icons (on demand)', settingsIconsLazy, '1.66 KB'),
 	// The dialogs' on-demand code (Bits UI overlays, Dialog, both dialogs), still gated.
 	entry(

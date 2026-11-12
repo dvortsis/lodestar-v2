@@ -35,7 +35,7 @@ The document is at most 256 KiB and has 1–64 entries.
 | `needed_for` | 1–4 unique values from `download_client`, `indexer_manager`, `vpn_route`, `challenge_solver` |
 | `opt_in` | `true` for anything off and not installed by default. **Required for `challenge_solver`** (owner §2.47, Q21). An entry whose id, container name or image names FlareSolverr must be both `challenge_solver` and opt-in, however else it's labelled |
 | `hosts` | 0–8 unique hosts for downloads and their redirects. Each must be in `DOWNLOAD_HOSTS` (`github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`). Not empty if `native` is set; empty if it isn't |
-| `native` | `null`, or `{release, artifacts}`. `release` is the entry's release folder (`https://github.com/<owner>/<project>/releases/download/`): an `https` URL on one of the entry's hosts, exactly `/<owner>/<project>/releases/download/`. Each pin URL inside it is exactly `<tag>/<file>`. `artifacts` holds 1–8 artifacts, one per platform |
+| `native` | `null`, or `{release, artifacts}`. `release` is the entry's release folder (`https://github.com/<owner>/<project>/releases/download/`): an `https` URL on one of the entry's hosts, exactly `/<owner>/<project>/releases/download/`. Each pin URL inside it is exactly `<tag>/<file>`, except an installer's that names its own `release` (below). `artifacts` holds 1–8 artifacts, one per platform |
 | `container` | `null`, or `{image, digest, name}` |
 | `ports` | 1–16 ports, each `{name, port, proto, exposure}`. Names are unique, and so are number and protocol pairs |
 | `health` | `null`, or `{port, path}`. `port` names an `internal` TCP port. `path` is an `adapter::RequestPath`, the same grammar every adapter request uses |
@@ -50,6 +50,7 @@ Each entry has at least one of `native` and `container`. An entry needed for `vp
 | `platform`, `arch` | One of the pairs v0.6 supports: `linux` with `x86_64` or `aarch64`, or `windows` with `x86_64` |
 | `archive` | `zip`, `tar_gz`, `binary` (the file is the executable) or `installer` (Windows only; offered for you to run, plan Q4) |
 | `executable` | Required for `zip` and `tar_gz`, `null` otherwise. A path inside the archive: `/`-separated `[A-Za-z0-9._-]` components; nothing absolute; no component made only of dots or ending in `.` (Windows trims it), and no Windows device name (`CON`, `NUL`, `COM1`, …); at most 16 components and 255 bytes. It ends in `.exe` exactly when the platform is Windows |
+| `release` | Optional, and only on an `installer` (X-cmp13-installer-pins). The installer's own release folder: an `https` URL on an `INSTALLER_SOURCES` host (`downloads.sourceforge.net`), which is never a fetch host, so it can't be in the entry's `hosts` or in `DOWNLOAD_HOSTS`. It must be exactly `/project/<project>/<folder>/`. Its pin is checked against that folder and its host only, as `<version folder>/<file>`. Nothing reads it at run time: Lodestar never fetches an installer. Without it, an installer's pin is checked against the entry's `native.release`, as before |
 | `pin` | `null` until CMP-13 pins it, or `{version, url, size, sha256, upstream_sig}` |
 
 **Pins:**
@@ -57,7 +58,7 @@ Each entry has at least one of `native` and `container`. An entry needed for `vp
 | Field | Rule |
 |---|---|
 | `version` | 1–4 dot-separated decimal numbers, each with no leading zero and at most 9 digits. All pins in an entry name the same version, written identically |
-| `url` | `https`, with no port, user information, query, fragment or percent-encoding. The path is `[A-Za-z0-9-._~/+]` with no empty, `.` or `..` segment. The host must be one of the entry's `hosts`, and the URL must be a file inside the entry's `release` folder (owner §2.47 cq6: no other owner or project on the same host). The file name must match the archive kind: `.zip`; `.tar.gz` or `.tgz`; `.exe` or `.msi` for an installer; for a bare binary, no extension at all on Linux and exactly `.exe` on Windows |
+| `url` | `https`, with no port, user information, query, fragment or percent-encoding. The path is `[A-Za-z0-9-._~/+]` with no empty, `.` or `..` segment. The host must be one of the entry's `hosts`, and the URL must be a file inside the entry's `release` folder (for an installer with its own `release`, that folder and its host instead) (owner §2.47 cq6: no other owner or project on the same host). The file name must match the archive kind: `.zip`; `.tar.gz` or `.tgz`; `.exe` or `.msi` for an installer; for a bare binary, no extension at all on Linux and exactly `.exe` on Windows |
 | `size` | Exact, `1..=536870912`: 512 MiB, plan Q16's "512 MB" read as binary megabytes |
 | `sha256` | 64 lower-case hex digits, and not one digit repeated (a placeholder) |
 | `upstream_sig` | `{"kind": "none"}`, or `{"kind": "verified_at_pin", "fingerprint": "<40 or 64 upper-case hex>"}` |

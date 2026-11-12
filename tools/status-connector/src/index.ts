@@ -9,7 +9,7 @@ const TOOLS = [
   ['plan_nodes', 'Every phase, workstream and slice of the Lodestar plan with its state, derived from GitHub. Fields that are empty or zero are left out.'],
   ['plan_road', 'The big roadmap steps with their state rolled up from their slices.'],
   ['plan_edges', 'Which roadmap step has to finish before which.'],
-  ['plan_activity', 'Pull requests merged into main per UTC day, last 14 days with merges.'],
+  ['plan_activity', 'Pull requests merged into main per UTC day, last 14 days with merges. Each row also has h, the same count by UTC hour (24 numbers).'],
   ['plan_recent', 'The 14 most recently merged pull requests, with who made them (claude or other).'],
   ['plan_meta', 'Which commit the tables were built from, and any problems found in runner/dashboard.yaml.'],
   ['plan_gates', 'The release and milestone gates with their status and latest measurements.'],

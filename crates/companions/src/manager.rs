@@ -527,6 +527,7 @@ fn config_dir(home: &Path, parts: &[&str]) -> Result<PathBuf, ManagerError> {
         if !p.is_empty() {
             dir.push(p);
         }
+        #[cfg_attr(not(unix), allow(unused_mut))] // only Unix sets a mode
         let mut b = std::fs::DirBuilder::new();
         #[cfg(unix)]
         {
