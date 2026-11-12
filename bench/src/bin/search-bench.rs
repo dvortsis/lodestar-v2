@@ -106,10 +106,14 @@ const NRT_GIVE_UP: Duration = Duration::from_secs(120);
 const REGEX_P95: Duration = Duration::from_millis(500);
 /// §3: Insights overview and stage-page queries (rollups only), p95.
 const INSIGHTS_P95: Duration = Duration::from_millis(50);
-/// §3: steady-state RSS at 10M with default caches.
-const RSS_MAX: u64 = 1 << 30;
-/// Plan 2026-11-06 RQ8: steady-state RSS in low-resource mode.
-const RSS_MAX_LOW: u64 = 512 << 20;
+/// §3: steady-state RSS at 10M with default caches, "< 1 GB": decimal,
+/// the stricter reading.
+const RSS_MAX: u64 = 1_000_000_000;
+/// Plan 2026-11-06 RQ8: steady-state RSS in low-resource mode, "< 512 MB".
+const RSS_MAX_LOW: u64 = 512_000_000;
+/// The trickle ingest while steady-state RSS is sampled: about the
+/// crawler gate's 100 a minute, twice over.
+const STEADY_INGEST: u64 = 4;
 
 const USAGE: &str = "\
 Usage: search-bench [--torrents N] [--queries N] [--dir PATH] [--seed S] [--no-hot] [--gate]
@@ -181,7 +185,19 @@ fn args() -> Result<Args, String> {
         json: None,
     };
     let mut it = std::env::args().skip(1);
+    let mut dataset_only = None;
     while let Some(arg) = it.next() {
+        if [
+            "--low-resource",
+            "--steady-secs",
+            "--ingest-rate",
+            "--nrt-rounds",
+            "--drop-caches",
+        ]
+        .contains(&arg.as_str())
+        {
+            dataset_only = Some(arg.clone());
+        }
         let mut value = |name: &str| it.next().ok_or(format!("{name} needs a value"));
         match arg.as_str() {
             "--torrents" => {
@@ -224,15 +240,11 @@ fn args() -> Result<Args, String> {
     if a.dataset.is_some() && a.dir.is_some() {
         return Err("--dataset and --dir are different corpora: name one".into());
     }
-    if a.dataset.is_none()
-        && (a.low_resource || a.drop_caches || a.nrt_rounds != 50 || a.steady_secs != 60)
-    {
-        return Err(
-            "--low-resource, --drop-caches, --nrt-rounds and --steady-secs need --dataset".into(),
-        );
+    if let (None, Some(flag)) = (&a.dataset, dataset_only) {
+        return Err(format!("{flag} needs --dataset"));
     }
-    if a.nrt_rounds == 0 {
-        return Err("--nrt-rounds must be positive".into());
+    if a.nrt_rounds == 0 || a.ingest_rate == 0 || a.steady_secs == 0 {
+        return Err("--nrt-rounds, --ingest-rate and --steady-secs must be positive".into());
     }
     Ok(a)
 }
@@ -611,18 +623,7 @@ fn budget_row(target: Option<Duration>) -> &'static str {
     }
 }
 
-/// A row id's slug: lowercase letters and digits, the rest dashes.
-fn slug(name: &str) -> String {
-    let mut out = String::new();
-    for c in name.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
-        } else if !out.ends_with('-') {
-            out.push('-');
-        }
-    }
-    out.trim_matches('-').to_owned()
-}
+use dataset::slug;
 
 fn ms_f(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
@@ -760,12 +761,15 @@ fn run(
     ok &= recovery_path(a, &index, now, rows)?;
     if a.low_resource {
         // RQ8: not offered in low-resource mode, so never a pass.
-        for id in ["search.broad-file-cold.p95", "search.broad-file-warm.p95"] {
+        for (id, budget) in [
+            ("search.broad-file-cold.p95", FILE_P95),
+            ("search.broad-file-warm.p95", KEYWORD_P95),
+        ] {
             rows.push(Row::without(
                 id,
                 "File-level query joined to torrents",
                 "ms",
-                Some(ms_f(FILE_P95)),
+                Some(ms_f(budget)),
                 Status::Off("low-resource mode has no file index".into()),
             ));
         }
@@ -780,18 +784,29 @@ fn run(
     };
     ok &= regex_path(a, &index, &reader, now, rows)?;
     ok &= insights_path(&reader, rows)?;
-    ok &= steady_rss(a, ds, &index, &reader, now, rows)?;
     drop((index, reader));
-    // The writing rows, on a scratch copy: the dataset stays as built.
+    // The rows that write, on a scratch copy: the dataset stays as built.
     let scratch = dataset::scratch(ds)?;
     let written = (|| {
-        let index = SearchIndex::open(&index_dir(&scratch.join("index")))?;
+        let mut index = SearchIndex::open(&index_dir(&scratch.join("index")))?;
         let db = scratch.join(dataset::DB);
-        let idle = nrt(a, &index, &db, rows)?;
-        Ok::<_, Box<dyn std::error::Error>>(idle & nrt_under_ingest(a, &index, &db, rows)?)
+        let reader = Store::open_reader(&db, StoreConfig::default())?;
+        if a.hot {
+            let hot = HotColumns::new();
+            reader.load_hot(&hot)?;
+            hot.epoch();
+            index = index.with_hot(Arc::new(hot));
+        }
+        let mut ok = steady_rss(a, ds, &index, &reader, &db, now, rows)?;
+        drop(reader);
+        ok &= nrt(a, &index, &db, rows)?;
+        ok &= nrt_under_ingest(a, &index, &db, rows)?;
+        Ok::<_, Box<dyn std::error::Error>>(ok)
     })();
-    dataset::drop_scratch(ds)?;
+    // The run's own error first: a failed removal mustn't hide it.
+    let removed = dataset::drop_scratch(ds);
     ok &= written?;
+    removed?;
     if a.low_resource {
         // The switches architecture §3 names for the mode that this build
         // doesn't have: until it does, the mode isn't what was measured.
@@ -808,7 +823,7 @@ fn run(
                 "Low-resource mode (§3, plan RQ8)",
                 "",
                 None,
-                Status::Unavailable(format!("this build has no switch to turn off {what}")),
+                Status::Unavailable(format!("this build has no low-resource switch for {what}")),
             ));
         }
     }
@@ -849,6 +864,7 @@ fn nrt(
         let started = Instant::now();
         while index.num_docs() < want {
             if started.elapsed() > NRT_GIVE_UP {
+                live.stop()?;
                 return Err("the live indexer never indexed a new torrent".into());
             }
             std::thread::sleep(Duration::from_millis(5));
@@ -1630,12 +1646,28 @@ fn drop_page_cache() -> bool {
 /// path), and answer the UI's first page (everything, newest first)
 /// with its rows. Reported (§3 sets no number), with whether the OS
 /// page cache was dropped first: without `--drop-caches` as root, the
-/// files may be cached and the figure is a lower bound.
+/// files may be cached and the figure is a lower bound. A dataset this
+/// process just built is in the page cache, so the row is unmeasured.
 fn cold_start(
     a: &Args,
     ds: &dataset::Dataset,
     rows: &mut Vec<Row>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    const ROW: &str = "Cold start to the first query (reported)";
+    if ds.built_now {
+        for part in ["open", "first_query"] {
+            rows.push(Row::without(
+                format!("cold_start.{part}"),
+                ROW,
+                "s",
+                None,
+                Status::Unmeasured(
+                    "the dataset was built by this process: run again to measure".into(),
+                ),
+            ));
+        }
+        return Ok(());
+    }
     let dropped = a.drop_caches && drop_page_cache();
     let cache = if dropped {
         "page-cache-dropped"
@@ -1666,28 +1698,19 @@ fn cold_start(
         opened.as_secs_f64(),
         first.as_secs_f64()
     );
-    let row = "Cold start to the first query (reported)";
-    rows.push(Row::measured(
-        format!("cold_start.{cache}.open"),
-        row,
-        opened.as_secs_f64(),
-        "s",
-        None,
-    ));
-    rows.push(Row::measured(
-        format!("cold_start.{cache}.first_query"),
-        row,
-        first.as_secs_f64(),
-        "s",
-        None,
-    ));
-    if !a.drop_caches {
-        return Ok(());
+    for (part, d) in [("open", opened), ("first_query", first)] {
+        rows.push(Row::measured(
+            format!("cold_start.{cache}.{part}"),
+            ROW,
+            d.as_secs_f64(),
+            "s",
+            None,
+        ));
     }
-    if !dropped {
+    if a.drop_caches && !dropped {
         rows.push(Row::without(
             "cold_start.page-cache-dropped.first_query",
-            row,
+            ROW,
             "s",
             None,
             Status::Unmeasured("--drop-caches needs root to write /proc/sys/vm/drop_caches".into()),
@@ -1708,25 +1731,18 @@ fn regex_path(
     rows: &mut Vec<Row>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     const ROW: &str = "Full-name regex (trigram prefilter + verify)";
+    let without = |status| Row::without("regex.p95", ROW, "ms", Some(ms_f(REGEX_P95)), status);
     if a.low_resource {
-        rows.push(Row::without(
-            "regex.p95",
-            ROW,
-            "ms",
-            Some(ms_f(REGEX_P95)),
-            Status::Off("low-resource mode has no trigram field".into()),
-        ));
+        rows.push(without(Status::Off(
+            "low-resource mode has no trigram field".into(),
+        )));
         return Ok(true);
     }
     if let Err(e) = parse("/abc/") {
         println!("\n  regex: unavailable ({e})");
-        rows.push(Row::without(
-            "regex.p95",
-            ROW,
-            "ms",
-            Some(ms_f(REGEX_P95)),
-            Status::Unavailable(format!("this build's parser refuses a /…/ pattern: {e}")),
-        ));
+        rows.push(without(Status::Unavailable(format!(
+            "this build's parser refuses a /…/ pattern: {e}"
+        ))));
         return Ok(true);
     }
     let (words, _) = vocabulary(a.seed ^ 0x5eed, 20_000);
@@ -1756,13 +1772,7 @@ fn regex_path(
         let ast = match parse(q) {
             Ok(ast) => ast,
             Err(e) => {
-                rows.push(Row::without(
-                    "regex.p95",
-                    ROW,
-                    "ms",
-                    Some(ms_f(REGEX_P95)),
-                    Status::Unmeasured(format!("{q}: {e}")),
-                ));
+                rows.push(without(Status::Unmeasured(format!("{q}: {e}"))));
                 return Ok(true);
             }
         };
@@ -1786,54 +1796,43 @@ fn regex_path(
     Ok(pass)
 }
 
-/// One window of Insights' reads at the store, as the overview's
-/// `read_period` and the stage pages make them (`crates/api/src/insights.rs`,
-/// `insights/stages.rs`): hourly rows above the compaction boundary,
-/// day tables below it. Returns the rows read.
-fn insights_reads(
+/// The API's longest hourly window (`crates/api/src/insights.rs`
+/// `HOURLY_MAX`): wider ranges, or ones reaching below the compaction
+/// boundary, are read in whole UTC days.
+const INSIGHTS_HOURLY_MAX: i64 = 7 * 24;
+/// The API's retry horizon and the overview's yield baseline
+/// (`RETRY_HORIZON_HOURS`, `BASELINE_FROM_H`).
+const INSIGHTS_RETRY_H: i64 = 72;
+const INSIGHTS_BASELINE_H: i64 = INSIGHTS_RETRY_H + 24 + 7 * 24;
+
+/// One period's store reads, as the overview's `read_period` makes them:
+/// day tables below the compaction boundary `compacted`, hourly rows
+/// above it, and the most recent cohorts raw. Returns the rows read.
+fn insights_period(
     store: &Store,
     from_h: i64,
     to_h: i64,
-    stages: bool,
+    compacted: i64,
 ) -> Result<usize, Box<dyn std::error::Error>> {
     use lodestar_pipeline::metric as m;
-    let compacted = store.insights_state()?.compacted_before_day * 24;
-    let cb = compacted.clamp(from_h, to_h);
-    let cut = (to_h - 48).max(cb);
-    let mut n = 0;
-    let (from_d, cb_d) = (from_h.div_euclid(24), cb.div_euclid(24));
-    let day = |metric: u32, by: RollupBy| -> Result<usize, Box<dyn std::error::Error>> {
-        if cb <= from_h {
-            return Ok(0);
-        }
-        Ok(store.rollup_day_sums(metric, from_d, cb_d, by)?.len()
-            + store.rollup_straggler_sums(metric, from_h, cb, by)?.len())
+    let grain = if to_h - from_h <= INSIGHTS_HOURLY_MAX && from_h >= compacted {
+        1
+    } else {
+        24
     };
-    if stages {
-        for metric in [
-            m::WORKER_LEASES,
-            m::COVERAGE,
-            m::HARVESTED,
-            m::REDISCOVERED,
-            m::DROPPED,
-            m::FUNNEL_EVENTS,
-            m::STORED,
-            m::NEWLY_SEARCHABLE,
-            m::REMOVED,
-        ] {
-            n += day(metric, RollupBy::All)?;
-            n += store.rollup_sums(metric, cb, to_h, RollupBy::All)?.len();
-        }
-        n += day(m::SEARCHABLE, RollupBy::Hour)?;
-        n += store
-            .rollup_sums(m::SEARCHABLE, cb, to_h, RollupBy::Hour)?
-            .len();
-        if cb > from_h {
-            n += store.cohort_day_sums(from_d, cb_d)?.len();
-        }
-        n += store.cohort_sums(cb, to_h, 24)?.len();
-        return Ok(n);
-    }
+    let (from_h, to_h) = if grain == 24 {
+        (from_h.div_euclid(24) * 24, (to_h + 23).div_euclid(24) * 24)
+    } else {
+        (from_h, to_h)
+    };
+    let cb = if grain == 24 {
+        compacted.clamp(from_h, to_h)
+    } else {
+        from_h
+    };
+    let cut = (to_h - INSIGHTS_RETRY_H).max(cb);
+    let (from_d, cb_d) = (from_h.div_euclid(24), cb.div_euclid(24));
+    let mut n = 0;
     for (metric, by) in [
         (m::NEWLY_SEARCHABLE, RollupBy::HourKey),
         (m::NEWLY_SEARCHABLE, RollupBy::DimKey),
@@ -1842,7 +1841,10 @@ fn insights_reads(
         (m::TIME_TO_SEARCHABLE, RollupBy::Key),
         (m::FUNNEL_EVENTS, RollupBy::Dim),
     ] {
-        n += day(metric, by)?;
+        if cb > from_h {
+            n += store.rollup_day_sums(metric, from_d, cb_d, by)?.len();
+            n += store.rollup_straggler_sums(metric, from_h, cb, by)?.len();
+        }
         n += store.rollup_sums(metric, cb, to_h, by)?.len();
     }
     n += store
@@ -1851,15 +1853,76 @@ fn insights_reads(
     if cb > from_h {
         n += store.cohort_day_sums(from_d, cb_d)?.len();
     }
-    n += store.cohort_sums(cb, cut, 24)?.len();
+    n += store.cohort_sums(cb, cut, grain)?.len();
     n += store.cohorts(cut, to_h)?.len();
-    n += store.events(from_h * 3600, to_h * 3600)?.len();
+    Ok(n)
+}
+
+/// One request's store reads, uncached: the overview (the range, the
+/// period before it, the current hours, the yield baseline and the
+/// events) or the stage pages (every summed metric and the searchable
+/// gauge, by day below the boundary). Returns the rows read.
+fn insights_reads(
+    store: &Store,
+    from_h: i64,
+    to_h: i64,
+    stages: bool,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    use lodestar_pipeline::metric as m;
+    let compacted = store.insights_state()?.compacted_before_day * 24;
+    if !stages {
+        let span = to_h - from_h;
+        let mut n = insights_period(store, from_h, to_h, compacted)?;
+        n += insights_period(store, from_h - span, from_h, compacted)?;
+        n += store.cohorts(to_h - INSIGHTS_RETRY_H, to_h + 1)?.len();
+        n += store
+            .rollup_sums(m::STORED, to_h - 25, to_h, RollupBy::Hour)?
+            .len();
+        n += store
+            .rollup_sums(m::COVERAGE, to_h - 25, to_h, RollupBy::HourDim)?
+            .len();
+        n += store
+            .cohorts(to_h - INSIGHTS_BASELINE_H, to_h - INSIGHTS_RETRY_H)?
+            .len();
+        n += store.events(from_h * 3600, to_h * 3600)?.len();
+        return Ok(n);
+    }
+    let cb = compacted.clamp(from_h, to_h);
+    let (from_d, cb_d) = (from_h.div_euclid(24), cb.div_euclid(24));
+    let mut n = 0;
+    let mut read = |metric: u32, by: RollupBy| -> Result<(), Box<dyn std::error::Error>> {
+        if cb > from_h {
+            n += store.rollup_day_sums(metric, from_d, cb_d, by)?.len();
+            n += store.rollup_straggler_sums(metric, from_h, cb, by)?.len();
+        }
+        n += store.rollup_sums(metric, cb, to_h, by)?.len();
+        Ok(())
+    };
+    for metric in [
+        m::WORKER_LEASES,
+        m::COVERAGE,
+        m::HARVESTED,
+        m::REDISCOVERED,
+        m::DROPPED,
+        m::FUNNEL_EVENTS,
+        m::STORED,
+        m::NEWLY_SEARCHABLE,
+        m::REMOVED,
+    ] {
+        read(metric, RollupBy::All)?;
+    }
+    read(m::SEARCHABLE, RollupBy::Hour)?;
+    if cb > from_h {
+        n += store.cohort_day_sums(from_d, cb_d)?.len();
+    }
+    n += store.cohort_sums(cb, to_h, 24)?.len();
     Ok(n)
 }
 
 /// Insights overview and stage-page queries (§3: rollups only, < 50 ms)
-/// over the dataset's year of rollups, for each range the UI offers,
-/// with no cache (the first open of a range, the slow case).
+/// over the dataset's year of rollups, for each range the UI offers
+/// (`all` is the year), with no cache: a range's first open, the slow
+/// case.
 fn insights_path(store: &Store, rows: &mut Vec<Row>) -> Result<bool, Box<dyn std::error::Error>> {
     const RUNS: usize = 50;
     let to = dataset::ANCHOR_HOUR;
@@ -1874,8 +1937,7 @@ fn insights_path(store: &Store, rows: &mut Vec<Row>) -> Result<bool, Box<dyn std
             ("24h", 24),
             ("7d", 7 * 24),
             ("30d", 30 * 24),
-            ("90d", 90 * 24),
-            ("1y", 365 * 24),
+            ("all", 365 * 24),
         ] {
             let mut times = Vec::with_capacity(RUNS);
             let mut read = 0;
@@ -1910,151 +1972,38 @@ fn insights_path(store: &Store, rows: &mut Vec<Row>) -> Result<bool, Box<dyn std
     Ok(ok)
 }
 
-/// Steady-state RSS (§3: < 1 GB at 10M with default caches; RQ8: < 512 MB
-/// in low-resource mode): after every table above has warmed the caches,
-/// a mixed load of keyword, browse and facet queries runs for
-/// `--steady-secs` while a sampler reads the resident set every 250 ms.
-/// Gated on the highest sample; the median is reported. A dataset built
-/// by this process is no steady state (the build's memory stays mapped),
-/// so the row is unmeasured then.
-fn steady_rss(
-    a: &Args,
-    ds: &dataset::Dataset,
-    index: &SearchIndex,
-    reader: &Store,
-    now: i64,
-    rows: &mut Vec<Row>,
-) -> Result<bool, Box<dyn std::error::Error>> {
-    let (row, max) = if a.low_resource {
-        (
-            "Steady-state RSS, low-resource mode (plan RQ8)",
-            RSS_MAX_LOW,
-        )
-    } else {
-        ("Steady-state RSS at 10M, default caches", RSS_MAX)
-    };
-    let mb = |b: u64| b as f64 / f64::from(1 << 20);
-    if ds.built_now {
-        rows.push(Row::without(
-            "rss.steady.max",
-            row,
-            "MiB",
-            Some(mb(max)),
-            Status::Unmeasured(
-                "the dataset was built by this process: run again to measure".into(),
-            ),
-        ));
-        return Ok(true);
-    }
-    if rss().is_none() {
-        rows.push(Row::without(
-            "rss.steady.max",
-            row,
-            "MiB",
-            Some(mb(max)),
-            Status::Unavailable("no /proc/self/status on this platform".into()),
-        ));
-        return Ok(true);
-    }
-    let lease_index = Arc::new(index.clone());
-    let cancel = CancelToken::new();
-    let mix: Vec<(String, Sort, bool)> = classes(a.seed, 20, a.hot)
-        .into_iter()
-        .filter(|c| !(a.low_resource && c.name.contains("file")))
-        .flat_map(|c| {
-            let sort = c.sort;
-            c.queries.into_iter().map(move |q| (q, sort, false))
-        })
-        .chain(["", "type:movie", "res:1080p"].map(|q| (q.to_string(), Sort::Relevance, true)))
-        .collect();
-    let deadline = Instant::now() + Duration::from_secs(a.steady_secs);
-    let samples = std::sync::Mutex::new(Vec::new());
-    let done = std::sync::atomic::AtomicBool::new(false);
-    let queries = std::thread::scope(|s| -> Result<usize, Box<dyn std::error::Error>> {
-        s.spawn(|| {
-            while !done.load(std::sync::atomic::Ordering::Relaxed) {
-                if let Some(r) = rss() {
-                    samples.lock().expect("samples").push(r);
-                }
-                std::thread::sleep(Duration::from_millis(250));
-            }
-        });
-        let mut n = 0;
-        let result = (|| {
-            while Instant::now() < deadline {
-                let (q, sort, facet) = &mix[n % mix.len()];
-                let ast = parse(q)?.without_hidden();
-                if *facet {
-                    let lease = Lease::new(lease_index.clone(), &ast, now, *sort, &cancel)?;
-                    facets(&lease, &ast, &[], &FacetParams::default(), &cancel)?;
-                } else {
-                    let (results, _) = index.search_with_fallback(&ast, now, *sort, 50, 0)?;
-                    for h in &results.hits {
-                        reader.torrent(h.id as i64)?;
-                    }
-                }
-                n += 1;
-            }
-            Ok::<_, Box<dyn std::error::Error>>(n)
-        })();
-        done.store(true, std::sync::atomic::Ordering::Relaxed);
-        result
-    })?;
-    let mut samples = samples.into_inner().expect("samples");
-    samples.sort();
-    let (Some(&top), false) = (samples.last(), samples.is_empty()) else {
-        rows.push(Row::without(
-            "rss.steady.max",
-            row,
-            "MiB",
-            Some(mb(max)),
-            Status::Unmeasured("no sample was taken".into()),
-        ));
-        return Ok(true);
-    };
-    let median = samples[samples.len() / 2];
-    let pass = top < max;
-    println!(
-        "\n  steady-state RSS over {} s ({queries} queries, {} samples): median {:.0} MiB, max {:.0} MiB  max < {:.0} MiB {}",
-        a.steady_secs,
-        samples.len(),
-        mb(median),
-        mb(top),
-        mb(max),
-        if pass { "PASS" } else { "FAIL" }
-    );
-    // `< max` as a row's `<=`: one byte under.
-    rows.push(Row::measured(
-        "rss.steady.max",
-        row,
-        mb(top),
-        "MiB",
-        Some(mb(max - 1)),
-    ));
-    rows.push(Row::measured(
-        "rss.steady.median",
-        row,
-        mb(median),
-        "MiB",
-        None,
-    ));
-    Ok(pass)
+/// What a background ingest reached.
+struct Ingested {
+    rate: f64,
+    asked: u64,
 }
 
-/// New torrent → searchable (§3, < 5 s) under a background ingest at
-/// `--ingest-rate` torrents a second, through a live indexer at its
-/// production settings: each round stores one probe torrent among the
-/// ingest and times it until the index finds its hash. Gated on the p95
-/// and reported with the max and the ingest rate reached.
-fn nrt_under_ingest(
+impl Ingested {
+    /// Below 90% of the rate asked, a measurement under it flatters.
+    fn starved(&self) -> Option<String> {
+        (self.rate < 0.9 * self.asked as f64).then(|| {
+            format!(
+                "the ingest reached {:.0}/s of {}/s asked",
+                self.rate, self.asked
+            )
+        })
+    }
+}
+
+/// Runs `f` while a live indexer at its production settings follows the
+/// store at `db` and a second thread inserts `rate` new torrents a
+/// second through `store`, paced by elapsed time (every 100 ms, as many
+/// as the rate owes). `f` gets the store to insert into as well.
+fn under_ingest<T>(
     a: &Args,
     index: &SearchIndex,
     db: &Path,
-    rows: &mut Vec<Row>,
-) -> Result<bool, Box<dyn std::error::Error>> {
+    store: &std::sync::Mutex<Store>,
+    rate: u64,
+    seed: u64,
+    f: impl FnOnce() -> Result<T, Box<dyn std::error::Error>>,
+) -> Result<(T, Ingested), Box<dyn std::error::Error>> {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-    const ROW: &str = "New torrent → searchable";
-    let store = std::sync::Mutex::new(Store::open(db, StoreConfig::default())?);
     let config = LiveConfig {
         // Low-resource: the one cache this bench can shrink.
         heap_bytes: if a.low_resource {
@@ -2071,44 +2020,225 @@ fn nrt_under_ingest(
     )?;
     let stop = AtomicBool::new(false);
     let ingested = AtomicU64::new(0);
-    let insert =
-        |store: &mut Store, t: &synth::SynthTorrent| -> Result<Info, Box<dyn std::error::Error>> {
-            let info = Info::parse(&t.info)?;
-            store.insert(&[NewTorrent {
-                info: &info,
-                raw_info: None,
-                discovered_at: t.discovered_at,
-                metadata_at: t.discovered_at + 5,
-                extra_flags: 0,
-                source: SourceId::new(0).expect("valid"),
-            }])?;
-            Ok(info)
-        };
-    let started_all = Instant::now();
-    let times = std::thread::scope(|s| -> Result<Vec<Duration>, Box<dyn std::error::Error>> {
+    let started = Instant::now();
+    let out = std::thread::scope(|s| {
         let background = s.spawn(|| -> Result<(), String> {
-            let mut generator = Generator::new(a.seed ^ 0x1e57_0000);
-            let tick = Duration::from_millis(100);
-            let per_tick = (a.ingest_rate / 10).max(u64::from(a.ingest_rate > 0));
-            let mut next = Instant::now();
-            while !stop.load(Ordering::Relaxed) && a.ingest_rate > 0 {
-                {
+            let mut generator = Generator::new(seed);
+            while !stop.load(Ordering::Relaxed) {
+                let owed = (rate as f64 * started.elapsed().as_secs_f64()) as u64;
+                let done = ingested.load(Ordering::Relaxed);
+                if owed > done {
                     let mut store = store.lock().map_err(|e| e.to_string())?;
-                    for _ in 0..per_tick {
+                    for _ in done..owed {
                         insert(&mut store, &generator.next_torrent()).map_err(|e| e.to_string())?;
                     }
+                    ingested.store(owed, Ordering::Relaxed);
                 }
-                ingested.fetch_add(per_tick, Ordering::Relaxed);
-                next += tick;
-                if let Some(wait) = next.checked_duration_since(Instant::now()) {
-                    std::thread::sleep(wait);
-                }
+                std::thread::sleep(Duration::from_millis(100));
             }
             Ok(())
         });
-        let mut probes = Generator::new(a.seed ^ 0x7072_6f62);
-        let mut times = Vec::with_capacity(a.nrt_rounds);
-        let result = (|| {
+        let out = f();
+        stop.store(true, Ordering::Relaxed);
+        let bg = background
+            .join()
+            .map_err(|_| "the ingest thread panicked".to_string())
+            .and_then(|r| r);
+        (out, bg)
+    });
+    let elapsed = started.elapsed();
+    let stopped = live.stop();
+    let (out, bg) = out;
+    let out = out?;
+    bg?;
+    stopped?;
+    Ok((
+        out,
+        Ingested {
+            rate: ingested.load(Ordering::Relaxed) as f64 / elapsed.as_secs_f64(),
+            asked: rate,
+        },
+    ))
+}
+
+/// Stores one synthetic torrent.
+fn insert(store: &mut Store, t: &synth::SynthTorrent) -> Result<Info, Box<dyn std::error::Error>> {
+    let info = Info::parse(&t.info)?;
+    store.insert(&[NewTorrent {
+        info: &info,
+        raw_info: None,
+        discovered_at: t.discovered_at,
+        metadata_at: t.discovered_at + 5,
+        extra_flags: 0,
+        source: SourceId::new(0).expect("valid"),
+    }])?;
+    Ok(info)
+}
+
+/// Steady-state RSS (§3: < 1 GB at 10M with default caches; RQ8: < 512 MB
+/// in low-resource mode), as a server holds memory: the scratch copy's
+/// index with hot columns and the title set, a live indexer at its
+/// production heap following a trickle ingest ([`STEADY_INGEST`]), and a
+/// mixed load of keyword, browse and facet queries. One pass of the mix
+/// warms the caches; then the load runs for `--steady-secs` while a
+/// sampler reads the resident set every 250 ms. Gated on the highest
+/// sample; the median is reported. The process's own earlier tables
+/// stay in it, so the figure errs high. A dataset built by this process
+/// is no steady state (the build's memory stays mapped): unmeasured.
+fn steady_rss(
+    a: &Args,
+    ds: &dataset::Dataset,
+    index: &SearchIndex,
+    reader: &Store,
+    db: &Path,
+    now: i64,
+    rows: &mut Vec<Row>,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let (row, max) = if a.low_resource {
+        (
+            "Steady-state RSS, low-resource mode (plan RQ8)",
+            RSS_MAX_LOW,
+        )
+    } else {
+        ("Steady-state RSS at 10M, default caches", RSS_MAX)
+    };
+    let mb = |b: u64| b as f64 / 1e6;
+    let without = |status| Row::without("rss.steady.max", row, "MB", Some(mb(max)), status);
+    if ds.built_now {
+        rows.push(without(Status::Unmeasured(
+            "the dataset was built by this process: run again to measure".into(),
+        )));
+        return Ok(true);
+    }
+    if rss().is_none() {
+        rows.push(without(Status::Unavailable(
+            "no /proc/self/status on this platform".into(),
+        )));
+        return Ok(true);
+    }
+    index.titles().rebuild_from(reader)?;
+    let lease_index = Arc::new(index.clone());
+    let cancel = CancelToken::new();
+    let mix: Vec<(String, Sort, bool)> = classes(a.seed, 20, a.hot)
+        .into_iter()
+        .filter(|c| !(a.low_resource && c.name.contains("file")))
+        .flat_map(|c| {
+            let sort = c.sort;
+            c.queries.into_iter().map(move |q| (q, sort, false))
+        })
+        .chain(["", "type:movie", "res:1080p"].map(|q| (q.to_string(), Sort::Relevance, true)))
+        .collect();
+    let one = |n: usize| -> Result<(), Box<dyn std::error::Error>> {
+        let (q, sort, facet) = &mix[n % mix.len()];
+        let ast = parse(q)?.without_hidden();
+        if *facet {
+            let lease = Lease::new(lease_index.clone(), &ast, now, *sort, &cancel)?;
+            facets(&lease, &ast, &[], &FacetParams::default(), &cancel)?;
+        } else {
+            let (results, _) = index.search_with_fallback(&ast, now, *sort, 50, 0)?;
+            for h in &results.hits {
+                reader.torrent(h.id as i64)?;
+            }
+        }
+        Ok(())
+    };
+    let store = std::sync::Mutex::new(Store::open(db, StoreConfig::default())?);
+    let samples = std::sync::Mutex::new(Vec::new());
+    let done = std::sync::atomic::AtomicBool::new(false);
+    let ((queries, ()), ingest) = under_ingest(
+        a,
+        index,
+        db,
+        &store,
+        STEADY_INGEST,
+        a.seed ^ 0x57ea_d700,
+        || {
+            for n in 0..mix.len() {
+                one(n)?;
+            }
+            let deadline = Instant::now() + Duration::from_secs(a.steady_secs);
+            std::thread::scope(|s| {
+                s.spawn(|| {
+                    while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                        if let Some(r) = rss() {
+                            samples.lock().expect("samples").push(r);
+                        }
+                        std::thread::sleep(Duration::from_millis(250));
+                    }
+                });
+                let mut n = 0;
+                let result = (|| {
+                    while Instant::now() < deadline {
+                        one(n)?;
+                        n += 1;
+                    }
+                    Ok::<_, Box<dyn std::error::Error>>(n)
+                })();
+                done.store(true, std::sync::atomic::Ordering::Relaxed);
+                result.map(|n| (n, ()))
+            })
+        },
+    )?;
+    let mut samples = samples.into_inner().expect("samples");
+    samples.sort();
+    let Some(&top) = samples.last() else {
+        rows.push(without(Status::Unmeasured("no sample was taken".into())));
+        return Ok(true);
+    };
+    let median = samples[samples.len() / 2];
+    let pass = top < max;
+    println!(
+        "\n  steady-state RSS over {} s ({queries} queries, live indexer and {:.1} torrents/s ingest, {} samples): median {:.0} MB, max {:.0} MB  max < {:.0} MB {}",
+        a.steady_secs,
+        ingest.rate,
+        samples.len(),
+        mb(median),
+        mb(top),
+        mb(max),
+        if pass { "PASS" } else { "FAIL" }
+    );
+    // `< max` as a row's `<=`: one byte under.
+    rows.push(Row::measured(
+        "rss.steady.max",
+        row,
+        mb(top),
+        "MB",
+        Some(mb(max - 1)),
+    ));
+    rows.push(Row::measured(
+        "rss.steady.median",
+        row,
+        mb(median),
+        "MB",
+        None,
+    ));
+    Ok(pass)
+}
+
+/// New torrent → searchable (§3, < 5 s) under a background ingest at
+/// `--ingest-rate` torrents a second: each round stores one probe
+/// torrent among the ingest and times it until the index finds its hash.
+/// Gated on the p95 and reported with the max and the ingest rate
+/// reached; both latency rows are unmeasured when the ingest fell short
+/// of the rate asked, since a starved ingest flatters them.
+fn nrt_under_ingest(
+    a: &Args,
+    index: &SearchIndex,
+    db: &Path,
+    rows: &mut Vec<Row>,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    const ROW: &str = "New torrent → searchable";
+    let store = std::sync::Mutex::new(Store::open(db, StoreConfig::default())?);
+    let (mut times, ingest) = under_ingest(
+        a,
+        index,
+        db,
+        &store,
+        a.ingest_rate,
+        a.seed ^ 0x1e57_0000,
+        || {
+            let mut probes = Generator::new(a.seed ^ 0x7072_6f62);
+            let mut times = Vec::with_capacity(a.nrt_rounds);
             for _ in 0..a.nrt_rounds {
                 let t = probes.next_torrent();
                 let info = {
@@ -2125,63 +2255,44 @@ fn nrt_under_ingest(
                 }
                 times.push(started.elapsed());
             }
-            Ok::<_, Box<dyn std::error::Error>>(())
-        })();
-        stop.store(true, Ordering::Relaxed);
-        let bg = background
-            .join()
-            .map_err(|_| "the ingest thread panicked")?;
-        result?;
-        bg?;
-        Ok(times)
-    })?;
-    let elapsed = started_all.elapsed();
-    live.stop()?;
-    let mut times = times;
+            Ok(times)
+        },
+    )?;
     times.sort();
     let p95 = pct(&times, 0.95);
-    let rate = ingested.load(Ordering::Relaxed) as f64 / elapsed.as_secs_f64();
-    let pass = p95 <= NRT_MAX;
+    let worst = *times.last().expect("rounds");
+    let starved = ingest.starved();
+    let pass = p95 <= NRT_MAX && starved.is_none();
     println!(
-        "  new torrent → searchable under ingest ({} rounds, {rate:.0} torrents/s reached of {} asked): p50 {:.2} s, p95 {:.2} s, max {:.2} s  p95 < {} s {}",
+        "  new torrent → searchable under ingest ({} rounds, {:.0} torrents/s reached of {} asked): p50 {:.2} s, p95 {:.2} s, max {:.2} s  p95 < {} s {}",
         a.nrt_rounds,
+        ingest.rate,
         a.ingest_rate,
         pct(&times, 0.5).as_secs_f64(),
         p95.as_secs_f64(),
-        times.last().expect("rounds").as_secs_f64(),
+        worst.as_secs_f64(),
         NRT_MAX.as_secs(),
-        if pass { "PASS" } else { "FAIL" }
+        match (&starved, p95 <= NRT_MAX) {
+            (Some(_), _) => "UNMEASURED (ingest starved)",
+            (None, true) => "PASS",
+            (None, false) => "FAIL",
+        }
     );
-    rows.push(Row::measured(
+    let mut push = |id: &str, value: f64, unit, budget| {
+        rows.push(match &starved {
+            Some(why) => Row::without(id, ROW, unit, budget, Status::Unmeasured(why.clone())),
+            None => Row::measured(id, ROW, value, unit, budget),
+        });
+    };
+    push(
         "nrt.ingest.p95",
-        ROW,
         p95.as_secs_f64(),
         "s",
         Some(NRT_MAX.as_secs_f64()),
-    ));
-    rows.push(Row::measured(
-        "nrt.ingest.max",
-        ROW,
-        times.last().expect("rounds").as_secs_f64(),
-        "s",
-        None,
-    ));
-    // The load was what was asked for: a starved ingest would flatter it.
-    let asked = a.ingest_rate as f64;
-    rows.push(if asked > 0.0 && rate < 0.9 * asked {
-        Row::without(
-            "nrt.ingest.rate",
-            ROW,
-            "torrents/s",
-            None,
-            Status::Unmeasured(format!(
-                "the ingest reached {rate:.0}/s of {asked:.0}/s asked"
-            )),
-        )
-    } else {
-        Row::measured("nrt.ingest.rate", ROW, rate, "torrents/s", None)
-    });
-    Ok(pass)
+    );
+    push("nrt.ingest.max", worst.as_secs_f64(), "s", None);
+    push("nrt.ingest.rate", ingest.rate, "torrents/s", None);
+    Ok(pass || starved.is_some())
 }
 
 fn main() -> ExitCode {

@@ -46,7 +46,9 @@ reuses it after that:
   dictionary, the rest with it; enrichment; one scrape a torrent from 20
   synthetic trackers; a year of Insights rollups (B11a's wide hour, every
   metric) compacted at the anchor; then both indexes. An interrupted build
-  resumes from its last finished phase.
+  resumes from its last finished phase. A newer search schema or tokenizer
+  names a new index folder, so the stored corpus is indexed again; every
+  open checks that the index holds the whole corpus.
 - **Deterministic:** nothing reads the clock, so two clean builds of one
   key give the same SQLite file byte for byte, except two header counters
   SQLite bumps at each checkpoint (`bench/tests/dataset.rs`).
@@ -65,12 +67,12 @@ reuses it after that:
 |---|---|
 | Cold start | Before anything else: open the store and index, load hot columns from SQLite, answer the first page. Reported. `--drop-caches` (root) drops the page cache first; the row id says whether it did. |
 | Regex | `/…/` queries timed like keyword ones, gated at 500 ms. `unavailable` until the parser accepts a pattern (RX-1). |
-| Insights | The overview's and stage pages' store reads for 24 h to 1 y, uncached, gated at 50 ms. |
-| Steady-state RSS | A mixed load for `--steady-secs` (60) after the tables, sampled every 250 ms; the highest sample is gated (< 1 GiB, < 512 MiB low-resource). |
-| New torrent → searchable | The CI's idle check, then `--nrt-rounds` (50) probes under a background ingest of `--ingest-rate` (100/s); p95 gated at 5 s. The ingest rate reached is a row too. |
+| Insights | The overview's and stage pages' store reads for the UI's ranges (24h, 7d, 30d, all: the year), uncached, gated at 50 ms. The overview reads the range, the period before it, the current hours and the yield baseline. |
+| Steady-state RSS | On the scratch copy, as a server holds memory: hot columns, the title set, and a live indexer following a trickle ingest (4/s). One pass of a mixed load warms it, then it runs for `--steady-secs` (60), sampled every 250 ms. The highest sample is gated: < 1 GB, < 512 MB low-resource (decimal). |
+| New torrent → searchable | The CI's idle check, then `--nrt-rounds` (50) probes under a background ingest of `--ingest-rate` (100/s); p95 gated at 5 s. If the ingest reached less than 90% of that rate, the rows are `unmeasured`. |
 
 `--low-resource` runs the plan's RQ8 subset: no file or regex rows (`off`),
-the RSS budget at 512 MiB. This build has no switch to turn the trigram
+the RSS budget at 512 MB. This build has no switch to turn the trigram
 field and the file index off, so those rows are `unavailable` and the
 verdict is `incomplete` until it does.
 

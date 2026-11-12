@@ -249,14 +249,10 @@ fn write_manifest(dir: &Path, key: Key, phase: &str, totals: &Totals) -> std::io
 /// Checks `dir` for `wanted` before anything is written: the manifest's
 /// key and phase when it has one, `None` when it's new or empty.
 pub fn check(dir: &Path, wanted: Key) -> Result<Option<(String, Totals)>, Refused> {
-    if let Some(data) = std::env::var_os("LODESTAR_DATA_DIR") {
-        let same = |a: &Path, b: &Path| match (a.canonicalize(), b.canonicalize()) {
-            (Ok(a), Ok(b)) => a == b,
-            _ => a == b,
-        };
-        if same(dir, Path::new(&data)) {
-            return Err(Refused::DataDir(dir.into()));
-        }
+    if let Some(data) = std::env::var_os("LODESTAR_DATA_DIR")
+        && inside(dir, Path::new(&data))
+    {
+        return Err(Refused::DataDir(dir.into()));
     }
     let Some(m) = read_manifest(dir)? else {
         let empty = match std::fs::read_dir(dir) {
@@ -298,12 +294,57 @@ pub fn check(dir: &Path, wanted: Key) -> Result<Option<(String, Totals)>, Refuse
     )))
 }
 
+/// Whether `dir` is `data` or anywhere under it, for a `dir` that may not
+/// exist yet (its nearest existing ancestor is resolved).
+fn inside(dir: &Path, data: &Path) -> bool {
+    let Ok(data) = data.canonicalize() else {
+        return dir.starts_with(data);
+    };
+    let mut rest = Vec::new();
+    let mut at = dir;
+    loop {
+        if let Ok(real) = at.canonicalize() {
+            let full = rest.iter().rev().fold(real, |p, c| p.join(c));
+            return full.starts_with(&data);
+        }
+        match (at.file_name(), at.parent()) {
+            (Some(name), Some(parent)) => {
+                rest.push(name.to_owned());
+                at = if parent.as_os_str().is_empty() {
+                    Path::new(".")
+                } else {
+                    parent
+                };
+            }
+            _ => return dir.starts_with(&data),
+        }
+    }
+}
+
 /// Opens the dataset for `key` in `dir`, building it (or finishing an
 /// interrupted build) first. `log` gets one line per step.
+///
+/// A complete dataset whose index this build can't open (a search schema
+/// or tokenizer version newer than the one it was built with: the index
+/// folder is named by both) is re-indexed from its store, and every open
+/// checks that the index holds the whole corpus, so no row ever runs on
+/// an empty or partial index.
 pub fn open_or_build(
     dir: &Path,
     key: Key,
     log: &mut dyn FnMut(&str),
+) -> Result<Dataset, Box<dyn std::error::Error>> {
+    build_until(dir, key, log, None)
+}
+
+/// [`open_or_build`], stopping once `stop_after` is done (tests: an
+/// interrupted build).
+#[doc(hidden)]
+pub fn build_until(
+    dir: &Path,
+    key: Key,
+    log: &mut dyn FnMut(&str),
+    stop_after: Option<&str>,
 ) -> Result<Dataset, Box<dyn std::error::Error>> {
     let found = check(dir, key)?;
     let (mut phase, mut totals) = found.unwrap_or_default();
@@ -311,7 +352,16 @@ pub fn open_or_build(
         PHASES.iter().position(|p| *p == phase) >= PHASES.iter().position(|p| *p == step)
             && !phase.is_empty()
     };
+    let index_path = lodestar_search::index_dir(&dir.join("index"));
+    if done(&phase, "complete") && !index_path.is_dir() {
+        log(&format!(
+            "no index for this build's search schema at {}: indexing the stored corpus",
+            index_path.display()
+        ));
+        phase = "rollups".to_owned();
+    }
     if done(&phase, "complete") {
+        verify_index(&index_path, key)?;
         return Ok(Dataset {
             dir: dir.into(),
             key,
@@ -325,16 +375,25 @@ pub fn open_or_build(
     let n = usize::try_from(key.torrents)?;
     let db = dir.join(DB);
     let mut store = Store::open(&db, StoreConfig::default())?;
-    let step = |phase: &mut String, name: &str, totals: &Totals| -> std::io::Result<()> {
+    let step = |phase: &mut String, name: &str, totals: &Totals| -> std::io::Result<bool> {
         *phase = name.to_owned();
-        write_manifest(dir, key, name, totals)
+        write_manifest(dir, key, name, totals)?;
+        Ok(stop_after == Some(name))
+    };
+    let stopped = |key: Key, totals: Totals| Dataset {
+        dir: dir.into(),
+        key,
+        totals,
+        built_now: true,
     };
     if phase.is_empty() {
         write_manifest(dir, key, "", &totals)?;
     }
     if !done(&phase, "stored") {
         totals = store_all(&mut store, key.seed, n, log)?;
-        step(&mut phase, "stored", &totals)?;
+        if step(&mut phase, "stored", &totals)? {
+            return Ok(stopped(key, totals));
+        }
     }
     if !done(&phase, "enriched") {
         let started = Instant::now();
@@ -348,22 +407,29 @@ pub fn open_or_build(
             "enriched in {:.0} s",
             started.elapsed().as_secs_f64()
         ));
-        step(&mut phase, "enriched", &totals)?;
+        if step(&mut phase, "enriched", &totals)? {
+            return Ok(stopped(key, totals));
+        }
     }
     if !done(&phase, "scraped") {
         scrape_all(&mut store, key.seed)?;
-        step(&mut phase, "scraped", &totals)?;
+        if step(&mut phase, "scraped", &totals)? {
+            return Ok(stopped(key, totals));
+        }
     }
     if !done(&phase, "rollups") {
         year_of_rollups(&mut store)?;
-        step(&mut phase, "rollups", &totals)?;
+        if step(&mut phase, "rollups", &totals)? {
+            return Ok(stopped(key, totals));
+        }
     }
     store.checkpoint()?;
     if !done(&phase, "indexed") {
-        let index =
-            lodestar_search::SearchIndex::open(&lodestar_search::index_dir(&dir.join("index")))?;
+        let index = lodestar_search::SearchIndex::open(&index_path)?;
         index_all(&mut store, &index, log)?;
-        step(&mut phase, "indexed", &totals)?;
+        if step(&mut phase, "indexed", &totals)? {
+            return Ok(stopped(key, totals));
+        }
     }
     // The store stamps two bookkeeping columns with the wall clock (when
     // each migration ran, when the dictionary was trained); nothing reads
@@ -376,6 +442,7 @@ pub fn open_or_build(
     store.checkpoint()?;
     drop(store);
     step(&mut phase, "complete", &totals)?;
+    verify_index(&index_path, key)?;
     Ok(Dataset {
         dir: dir.into(),
         key,
@@ -384,11 +451,25 @@ pub fn open_or_build(
     })
 }
 
+/// Fails unless the index at `path` holds every torrent of `key`.
+fn verify_index(path: &Path, key: Key) -> Result<(), Box<dyn std::error::Error>> {
+    let docs = lodestar_search::SearchIndex::open(path)?.num_docs();
+    if docs != key.torrents {
+        return Err(format!(
+            "the dataset's index at {} holds {docs} torrents of {}: delete the folder to rebuild",
+            path.display(),
+            key.torrents
+        )
+        .into());
+    }
+    Ok(())
+}
+
 /// Stores `n` torrents as the pipeline does: [`TRAIN`] without a
 /// dictionary, then a trained one, the first ones recompressed with it,
-/// and the rest with it. A resumed build skips what's stored (a crash
-/// before training trains on resume; after it, the stored dictionary
-/// stays active).
+/// and the rest with it. A resumed build skips what's stored, trains only
+/// if no dictionary was stored (a crash after training keeps that one),
+/// and recompresses again, which rewrites only blobs not yet on it.
 fn store_all(
     store: &mut Store,
     seed: u64,
@@ -407,7 +488,13 @@ fn store_all(
         load(store, &mut generator, first - have, &mut totals)?;
     }
     if have <= first {
-        store.train_file_dict(first, DICT_SIZE)?;
+        let trained: bool =
+            store
+                .connection()
+                .query_row("SELECT count(*) > 0 FROM zstd_dicts", [], |r| r.get(0))?;
+        if !trained {
+            store.train_file_dict(first, DICT_SIZE)?;
+        }
         store.recompress_files(1000)?;
         log(&format!("stored {first}, dictionary trained"));
     }
@@ -600,6 +687,18 @@ fn year_of_rollups(store: &mut Store) -> Result<(), Box<dyn std::error::Error>> 
     let hour = wide_hour();
     {
         let c = store.connection();
+        // From nothing, so a phase a crash cut short (compaction commits a
+        // day at a time, adding into the day tables) never folds twice.
+        // A new store has no Insights rows of its own.
+        c.execute_batch(
+            "BEGIN;
+             DELETE FROM rollup_hour; DELETE FROM cohort_hour;
+             DELETE FROM rollup_day; DELETE FROM cohort_day;
+             DELETE FROM index_watermark_hour;
+             UPDATE insights_state SET value = 0
+                 WHERE key IN ('compacted_before_day', 'last_compaction_at');
+             COMMIT;",
+        )?;
         c.execute_batch("BEGIN")?;
         let mut r = c.prepare(
             "INSERT OR REPLACE INTO rollup_hour (hour, metric, dim, key, value) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -692,6 +791,8 @@ pub fn digest(db: &Path) -> Result<u64, Box<dyn std::error::Error>> {
         "cohort_hour",
         "rollup_day",
         "cohort_day",
+        "index_watermark_hour",
+        "insights_state",
     ] {
         eat(table.as_bytes());
         let mut stmt = c.prepare(&format!("SELECT * FROM {table} ORDER BY 1, 2"))?;
@@ -857,6 +958,20 @@ impl Row {
             "reason": reason,
         })
     }
+}
+
+/// A row id's slug: lowercase ASCII letters and digits, anything else
+/// one dash ("file index (smart)" is `file-index-smart`).
+pub fn slug(name: &str) -> String {
+    let mut out = String::new();
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    out.trim_matches('-').to_owned()
 }
 
 /// The verdict over every row: `fail` if any row failed, else

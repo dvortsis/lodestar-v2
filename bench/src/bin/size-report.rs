@@ -191,10 +191,7 @@ impl Report {
             .iter()
             .map(|c| {
                 let mut row = Row::measured(
-                    format!(
-                        "size.{}",
-                        c.what.replace([' ', '(', ')'], "_").trim_end_matches('_')
-                    ),
+                    format!("size.{}", dataset::slug(c.what)),
                     c.what,
                     c.got,
                     "B/torrent",
@@ -206,9 +203,9 @@ impl Report {
                 row
             })
             .collect();
-        rows.extend(self.invalid.iter().map(|reason| {
+        rows.extend(self.invalid.iter().enumerate().map(|(i, reason)| {
             Row::without(
-                "size.coverage",
+                format!("size.coverage.{}", i + 1),
                 "The indexes hold the whole corpus",
                 "",
                 None,
@@ -600,7 +597,7 @@ fn measure(
 /// low-resource mode the switches this build lacks.
 fn full_rows(args: &Args, index: &lodestar_search::SearchIndex, all_in: f64) -> Vec<Row> {
     let mut rows = vec![Row::measured(
-        "size.all_in",
+        "size.all-in",
         "All-in (target about 2.3 KB per torrent, reported)",
         all_in,
         "B/torrent",
@@ -627,20 +624,23 @@ fn full_rows(args: &Args, index: &lodestar_search::SearchIndex, all_in: f64) -> 
     }
     if args.low_resource {
         rows.push(Row::without(
-            "size.file_index__smart",
+            "size.file-index-smart",
             "file index (smart)",
             "B/torrent",
             Some(FILE_INDEX_BUDGET),
             Status::Off("low-resource mode has no file index".into()),
         ));
-        for what in ["the trigram field", "the file index"] {
+        for (id, what) in [
+            ("low_resource.switch.trigram_off", "the trigram field"),
+            ("low_resource.switch.file_index_off", "the file index"),
+        ] {
             rows.push(Row::without(
-                format!("low_resource.switch.{}", what.replace(' ', "_")),
+                id,
                 "Low-resource mode (§3, plan RQ8)",
                 "",
                 None,
                 Status::Unavailable(format!(
-                    "this build has no switch to turn off {what}: the sizes above include it"
+                    "this build has no low-resource switch for {what}: the sizes above include it"
                 )),
             ));
         }

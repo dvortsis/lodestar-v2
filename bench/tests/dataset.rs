@@ -65,6 +65,73 @@ fn the_same_key_builds_the_same_bytes() {
     );
 }
 
+/// The store's bytes but for SQLite's two checkpoint counters (see
+/// `the_same_key_builds_the_same_bytes`).
+fn store_bytes(ds: &dataset::Dataset) -> Vec<u8> {
+    let mut b = std::fs::read(ds.db()).unwrap();
+    b[24..28].fill(0);
+    b[92..96].fill(0);
+    b
+}
+
+fn set_phase(dir: &Path, phase: &str) {
+    let path = dir.join(dataset::MANIFEST);
+    let mut m: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    m["phase"] = phase.into();
+    std::fs::write(&path, serde_json::to_vec(&m).unwrap()).unwrap();
+}
+
+#[test]
+fn an_interrupted_build_resumes_to_the_same_dataset() {
+    let key = Key::new(7, N);
+    let clean = tempfile::tempdir().unwrap();
+    let clean = build(clean.path(), key);
+    let (bytes, digest) = (store_bytes(&clean), dataset::digest(&clean.db()).unwrap());
+    // Resumed at a phase boundary: the same bytes. Resumed inside one
+    // (work done, not recorded): the same content; a redone phase may
+    // leave SQLite's pages laid out differently.
+    let same_content = |d: &dataset::Dataset, what: &str| {
+        assert_eq!(dataset::digest(&d.db()).unwrap(), digest, "{what}");
+    };
+    let same = |d: &dataset::Dataset, what: &str| {
+        same_content(d, what);
+        assert!(store_bytes(d) == bytes, "{what}: the store's bytes differ");
+    };
+    // Stopped after each phase, then finished.
+    for phase in ["stored", "enriched", "scraped", "rollups", "indexed"] {
+        let dir = tempfile::tempdir().unwrap();
+        dataset::build_until(dir.path(), key, &mut |_| {}, Some(phase)).unwrap();
+        same(&build(dir.path(), key), &format!("stopped after {phase}"));
+    }
+    // A crash after the work but before the manifest recorded it: the
+    // dictionary isn't trained twice...
+    let dir = tempfile::tempdir().unwrap();
+    dataset::build_until(dir.path(), key, &mut |_| {}, Some("stored")).unwrap();
+    set_phase(dir.path(), "");
+    same_content(&build(dir.path(), key), "stored, not recorded");
+    // ...and rollups compacted once are never folded again.
+    let dir = tempfile::tempdir().unwrap();
+    dataset::build_until(dir.path(), key, &mut |_| {}, Some("rollups")).unwrap();
+    set_phase(dir.path(), "scraped");
+    same_content(&build(dir.path(), key), "rollups, not recorded");
+}
+
+#[test]
+fn a_dataset_without_this_builds_index_is_reindexed_never_empty() {
+    // A search schema or tokenizer bump names a new index folder: the
+    // old one is gone from this build's view, as removing it shows.
+    let dir = tempfile::tempdir().unwrap();
+    let ds = build(dir.path(), Key::new(7, N));
+    let index = lodestar_search::index_dir(&ds.index_root());
+    std::fs::remove_dir_all(&index).unwrap();
+    let again = build(dir.path(), Key::new(7, N));
+    assert!(again.built_now);
+    let docs = lodestar_search::SearchIndex::open(&index)
+        .unwrap()
+        .num_docs();
+    assert_eq!(docs, N);
+}
+
 #[test]
 fn the_generator_stream_depends_only_on_its_seed() {
     let take = |seed| {
@@ -200,6 +267,20 @@ fn both_bins_report_every_row_and_leave_the_dataset_as_built() {
     let ds = build(dir.path(), Key::new(7, N));
     let digest = dataset::digest(&ds.db()).unwrap();
 
+    // Flags that only mean something on a dataset are refused without one,
+    // so the CI gate's command can't change by accident.
+    for flag in [
+        &["--ingest-rate", "5"][..],
+        &["--low-resource"],
+        &["--nrt-rounds", "50"],
+    ] {
+        let refused = Command::new(env!("CARGO_BIN_EXE_search-bench"))
+            .args(flag)
+            .output()
+            .unwrap();
+        assert_eq!(refused.status.code(), Some(2), "{flag:?}");
+    }
+
     let json = out.path().join("search.json");
     let run = bench(dir.path(), &json, &[]);
     assert!(
@@ -233,7 +314,7 @@ fn both_bins_report_every_row_and_leave_the_dataset_as_built() {
     ] {
         assert!(ids_starting(&r, prefix) > 0, "no {prefix} row");
     }
-    assert_eq!(ids_starting(&r, "insights."), 10);
+    assert_eq!(ids_starting(&r, "insights."), 8);
     // Regex search isn't in this build: never a pass.
     let regex = row(&r, "regex.p95");
     assert_ne!(regex["status"], "pass");
@@ -303,12 +384,12 @@ fn both_bins_report_every_row_and_leave_the_dataset_as_built() {
     let r = report(&sizes);
     assert_eq!(r["tool"], "size-report");
     for (id, budget) in [
-        ("size.file-tree_blob_mean", Some(600.0)),
-        ("size.canonical_store", Some(1024.0)),
-        ("size.torrent_index", Some(512.0)),
-        ("size.file_index__smart", Some(800.0)),
-        ("size.store_+_torrent_index", Some(1536.0)),
-        ("size.all_in", None),
+        ("size.file-tree-blob-mean", Some(600.0)),
+        ("size.canonical-store", Some(1024.0)),
+        ("size.torrent-index", Some(512.0)),
+        ("size.file-index-smart", Some(800.0)),
+        ("size.store-torrent-index", Some(1536.0)),
+        ("size.all-in", None),
     ] {
         let row = row(&r, id);
         assert_eq!(row["budget"].as_f64(), budget, "{id}");
