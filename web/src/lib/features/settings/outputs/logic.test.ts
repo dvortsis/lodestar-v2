@@ -4,6 +4,7 @@ import {
 	exportView,
 	keepPolling,
 	nameError,
+	lastExportId,
 	ourExport,
 	suggestName,
 	torznabKeys,
@@ -87,21 +88,38 @@ describe('bitmagnet export', () => {
 		expect(EXPORT_URL).not.toContain('hidden');
 	});
 
-	it('finds the export started at or after the click, newest first', () => {
+	it('finds the export by id, whatever either clock says', () => {
+		const old = job({
+			id: 6,
+			state: 'done',
+			finished_at: 1_700_000_090,
+			started_at: 1_700_000_080
+		});
+		expect(lastExportId([old, job({ id: 9, kind: 'purge', export: undefined })])).toBe(6);
+		expect(lastExportId([])).toBe(0);
+		// The browser's clock runs ahead of the server's: the new job "started" before the click.
+		const ahead = [job({ id: 7, started_at: 1_700_000_000 }), old];
+		expect(ourExport(ahead, 6, 1_700_000_500)?.id).toBe(7);
+		// It runs behind: an export that finished just before the click looks newer than it, but
+		// its id isn't, so its "Done" is never shown for the new download.
+		expect(ourExport([old], 6, 1_699_999_000)).toBeNull();
+		// Newest first; another format's export doesn't count.
+		const two = [
+			job({ id: 9, export: { cap: 1, format: 'csv', truncated: false } }),
+			job({ id: 8 }),
+			job({ id: 7 })
+		];
+		expect(ourExport(two, 6, 0)?.id).toBe(8);
+	});
+
+	it('falls back to the start time when no answer came before the click', () => {
 		const jobs = [
-			job({ id: 9, kind: 'purge', started_at: 1_700_000_200, export: undefined }),
-			job({
-				id: 8,
-				started_at: 1_700_000_150,
-				export: { cap: 1, format: 'csv', truncated: false }
-			}),
 			job({ id: 7, started_at: 1_700_000_100 }),
 			job({ id: 6, started_at: 1_699_000_000 })
 		];
-		expect(ourExport(jobs, 1_700_000_100)?.id).toBe(7);
-		expect(ourExport(jobs, 1_700_000_103)?.id).toBe(7);
-		expect(ourExport(jobs, 1_700_000_200)).toBeNull();
-		expect(ourExport([], 1)).toBeNull();
+		expect(ourExport(jobs, null, 1_700_000_100)?.id).toBe(7);
+		expect(ourExport(jobs, null, 1_700_000_103)?.id).toBe(7);
+		expect(ourExport(jobs, null, 1_700_000_200)).toBeNull();
 	});
 
 	it('shows the server word for each state', () => {

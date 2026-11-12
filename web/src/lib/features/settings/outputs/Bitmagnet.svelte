@@ -15,7 +15,7 @@
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import { FOCUS_RING, TARGET_MIN } from '$lib/ui/classes';
 	import Toggle from '$lib/ui/fields/Toggle.svelte';
-	import { EXPORT_URL, exportView, keepPolling, ourExport, type Job } from './logic';
+	import { EXPORT_URL, exportView, keepPolling, lastExportId, ourExport, type Job } from './logic';
 
 	const CONTENT = { path: { section: 'content' } } as const;
 	const POLL_MS = 1000;
@@ -26,6 +26,8 @@
 	let adultState = $state<'unknown' | 'ready' | 'failed' | 'unreadable'>('unknown');
 	let adultLock = $state<string | null>(null);
 	let adultKey = $state(0);
+	/** A change is being saved: the switch waits for it. */
+	let saving = $state(false);
 	let Dialog = $state<Component<ComponentProps<typeof import('./AdultDialog.svelte').default>>>();
 	let asking = $state(false);
 	let answer: ((ok: boolean) => void) | null = null;
@@ -33,11 +35,20 @@
 	// The export: when it was started (Unix seconds), and its job once found.
 	let clickedAt = $state<number | null>(null);
 	let job = $state.raw<Job | null>(null);
+	/** The highest export job id seen before the click (`lastExportId`); null until `/jobs` answers. */
+	let seen: number | null = null;
+	/** The first `/jobs` read, which sets `seen`; polls wait for it, so a quick click still
+	 * matches by id. It never rejects. */
+	let ready: Promise<void> = Promise.resolve();
+	// No job was ever found (`lost`), or one was and `/jobs` stopped answering (`stale`).
 	let lost = $state(false);
+	let stale = $state(false);
 	/** Failed `/jobs` reads in a row; a few are retried before saying the progress is lost. */
 	let misses = 0;
 	const MISSES = 3;
 	let timer: ReturnType<typeof setTimeout> | undefined;
+	/** Which press the polling belongs to: a newer one ends the older one's chain. */
+	let press = 0;
 	let live = true;
 
 	const n = (v: number | null) => formatCount(v, currentLocale());
@@ -84,30 +95,39 @@
 			const body = (on
 				? { export_adult: true, confirm_adult: true }
 				: { export_adult: false }) as unknown as components['schemas']['SettingsPatch'];
+			saving = true;
 			await api.patch('/settings/{section}', { ...CONTENT, body });
 			adult = on;
 		} catch (e) {
 			if (!(e instanceof ApiError) || e.code !== 'login_required') adultState = 'failed';
 			// The switch shows what the server has.
 			adultKey++;
+		} finally {
+			saving = false;
 		}
 	}
 
-	function poll() {
-		if (!live || clickedAt === null) return;
+	function poll(mine: number) {
+		if (!live || clickedAt === null || mine !== press) return;
 		const since = clickedAt;
+		// `seen` changes only once a job has finished, so it's the click's value throughout.
+		const after = seen;
 		api.get('/jobs').then(
 			(r) => {
-				if (!live || clickedAt !== since) return;
+				if (!live || mine !== press) return;
 				misses = 0;
-				job = ourExport(r.jobs, since) ?? job;
+				stale = false;
+				job = ourExport(r.jobs, after, since) ?? job;
 				const waited = Date.now() / 1000 - since;
-				if (keepPolling(job, waited)) timer = setTimeout(poll, POLL_MS);
+				if (keepPolling(job, waited)) timer = setTimeout(() => poll(mine), POLL_MS);
 				else if (!job) lost = true;
+				else seen = Math.max(seen ?? 0, lastExportId(r.jobs));
 			},
 			() => {
-				if (!live || clickedAt !== since) return;
-				if (++misses < MISSES) timer = setTimeout(poll, POLL_MS);
+				if (!live || mine !== press) return;
+				if (++misses < MISSES) timer = setTimeout(() => poll(mine), POLL_MS);
+				// A job already found keeps its last state; only a never-found one is lost.
+				else if (job) stale = true;
 				else lost = true;
 			}
 		);
@@ -118,12 +138,25 @@
 		clearTimeout(timer);
 		job = null;
 		lost = false;
+		stale = false;
 		misses = 0;
 		clickedAt = Math.floor(Date.now() / 1000);
-		timer = setTimeout(poll, POLL_MS / 2);
+		const mine = ++press;
+		void ready.then(() => {
+			if (live && mine === press) timer = setTimeout(() => poll(mine), POLL_MS / 2);
+		});
 	}
 
-	onMount(() => void loadAdult());
+	onMount(() => {
+		void loadAdult();
+		// The ids already taken, so the next export's job is told apart without comparing clocks.
+		ready = api.get('/jobs').then(
+			(r) => {
+				if (seen === null) seen = lastExportId(r.jobs);
+			},
+			() => {}
+		);
+	});
 	onDestroy(() => {
 		live = false;
 		clearTimeout(timer);
@@ -156,7 +189,7 @@
 				<Toggle
 					label={m.settings_outputs_adult_label()}
 					checked={adult}
-					disabled={adultLock !== null}
+					disabled={adultLock !== null || saving}
 					data-testid="outputs-adult"
 					onchange={(e) => void toggleAdult(e.currentTarget.checked)}
 				/>
@@ -177,7 +210,8 @@
 			>
 			<!-- eslint-enable svelte/no-navigation-without-resolve -->
 		</div>
-		<!-- Mounted from the start, so screen readers announce what it says once an export starts. -->
+		<!-- Mounted from the start, so screen readers announce what it says once an export starts.
+		     The banners after it announce themselves, so they sit outside it. -->
 		<div role="status" class="flex flex-col gap-1" data-testid="outputs-bitmagnet-progress">
 			{#if clickedAt === null}
 				<!-- nothing yet -->
@@ -215,12 +249,24 @@
 				{#if view.skipped > 0}<p class="text-small" data-testid="outputs-bitmagnet-skipped">
 						{m.settings_outputs_bitmagnet_skipped({ skipped: n(view.skipped) })}
 					</p>{/if}
-				{#if view.truncated}<Banner kind="warning"
-						><span data-testid="outputs-bitmagnet-truncated"
-							>{m.settings_outputs_bitmagnet_truncated({ cap: n(view.cap) })}</span
-						></Banner
-					>{/if}
-			{:else}
+			{/if}
+			{#if stale}
+				<p data-testid="outputs-bitmagnet-stale">
+					{m.settings_outputs_bitmagnet_stale()}
+					<a class="link ls-focus" href={resolve('/settings/[section]', { section: 'jobs' })}
+						>{m.settings_outputs_bitmagnet_jobs()}</a
+					>
+				</p>
+			{/if}
+		</div>
+		{#if clickedAt !== null && !lost}
+			{#if view.state === 'done' && view.truncated}
+				<Banner kind="warning"
+					><span data-testid="outputs-bitmagnet-truncated"
+						>{m.settings_outputs_bitmagnet_truncated({ cap: n(view.cap) })}</span
+					></Banner
+				>
+			{:else if view.state === 'cancelled' || view.state === 'failed'}
 				<Banner kind="error"
 					><span data-testid="outputs-bitmagnet-count"
 						>{view.state === 'cancelled'
@@ -229,11 +275,17 @@
 					></Banner
 				>
 			{/if}
-		</div>
+		{/if}
 	</div>
 
 	<p class="text-small">{m.settings_outputs_bitmagnet_import()}</p>
-	<pre class="overflow-x-auto rounded-box bg-base-200 p-3 font-mono text-small"><code
-			>curl --data-binary @lodestar-export-…bitmagnet.ndjson http://localhost:3333/import</code
+	<!-- Focusable, so a keyboard can scroll it sideways on a narrow screen. -->
+	<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+	<pre
+		tabindex="0"
+		aria-label={m.settings_outputs_bitmagnet_example()}
+		class="overflow-x-auto rounded-box bg-base-200 p-3 font-mono text-small {FOCUS_RING}"
+		data-testid="outputs-bitmagnet-curl"><code
+			>curl --data-binary @lodestar-export-YYYYMMDD-HHMMSS.bitmagnet.ndjson http://localhost:3333/import</code
 		></pre>
 </div>

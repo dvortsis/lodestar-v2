@@ -46,10 +46,13 @@ const key = (id: number, name: string): Key => ({
 
 test.describe('Settings → Outputs', () => {
 	let sent: { op: string; body: unknown }[];
+	/** Set once the download starts: until then `/jobs` holds no export, as on a fresh server. */
+	let exporting: boolean;
 	test.beforeEach(async ({ mock }) => {
 		new SettingsBackend(index, values).attach(mock as unknown as MockLike);
 		const on = mock.on.bind(mock) as (id: string, f: unknown) => unknown;
 		sent = [];
+		exporting = false;
 		on('listKeys', { keys: [key(1, 'Prowlarr')] });
 		on('createKey', (r: { postDataJSON(): Record<string, unknown> }) => {
 			const body = r.postDataJSON();
@@ -66,6 +69,7 @@ test.describe('Settings → Outputs', () => {
 		// A download is a navigation, which the mock doesn't answer; the job is what the screen shows.
 		on('listJobs', () => {
 			const at = Math.floor(Date.now() / 1000);
+			if (!exporting) return { jobs: [] };
 			return {
 				jobs: [
 					{
@@ -137,11 +141,14 @@ test.describe('Settings → Outputs', () => {
 		await go('/settings/outputs');
 		await expect(page.getByTestId('outputs-bitmagnet-left-out')).toContainText('hidden torrents');
 		const download = page.waitForEvent('download');
+		exporting = true;
 		await page.getByTestId('outputs-bitmagnet-start').click();
 		expect((await download).url()).toMatch(/\/api\/v1\/export\?format=bitmagnet$/);
 		await expect(page.getByTestId('outputs-bitmagnet-count')).toHaveText(
 			'Done: 42 torrents in the file.'
 		);
+		// The example command scrolls by keyboard on a narrow screen.
+		await expect(page.getByTestId('outputs-bitmagnet-curl')).toHaveAttribute('tabindex', '0');
 		await expectNoA11yViolations(page);
 	});
 });

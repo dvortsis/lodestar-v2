@@ -242,6 +242,24 @@ describe('Torznab', () => {
 		expect(within(row).queryByRole('button')).toBeNull();
 	});
 
+	it("shows the server's refusal of a name beside the field", async () => {
+		replies['POST /keys'] = () => ({
+			status: 409,
+			body: { error: { code: 'name_taken', message: 'A key has that name.', field: 'name' } }
+		});
+		render(OutputsScreen);
+		await screen.findAllByTestId('outputs-key');
+		await fireEvent.click(screen.getByTestId('outputs-key-create'));
+		const dialog = await password(/Create a Torznab key for Sonarr/);
+		await fireEvent.input(within(dialog).getByLabelText(/Your password/), {
+			target: { value: 'pw' }
+		});
+		await fireEvent.click(within(dialog).getByTestId('password-dialog-confirm'));
+		expect(await screen.findByText('A key has that name.')).toBeTruthy();
+		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
+		expect(document.body.innerHTML).not.toContain(SECRET);
+	});
+
 	it('refuses a name over 200 characters without asking for the password', async () => {
 		render(OutputsScreen);
 		await screen.findAllByTestId('outputs-key');
@@ -341,6 +359,126 @@ describe('bitmagnet export', () => {
 		);
 	});
 
+	it('a setting locked by the environment shows locked, and sends nothing', async () => {
+		replies['GET /settings/content'] = () => ({
+			status: 200,
+			body: {
+				...CONTENT(false),
+				fields: {
+					export_adult: {
+						value: false,
+						env: 'LODESTAR_EXPORT_ADULT',
+						read_only: true,
+						source: 'env'
+					}
+				}
+			}
+		});
+		render(OutputsScreen);
+		const toggle = (await screen.findByTestId('outputs-adult')) as HTMLInputElement;
+		expect(toggle.disabled).toBe(true);
+		expect(screen.getByText(/Set by LODESTAR_EXPORT_ADULT/)).toBeTruthy();
+		expect(writes()).toEqual([]);
+	});
+
+	it('the switch waits while its change is saving', async () => {
+		let release!: () => void;
+		const held = new Promise<void>((done) => (release = done));
+		const fetchStub = globalThis.fetch as unknown as import('vitest').Mock;
+		const inner = fetchStub.getMockImplementation()!;
+		fetchStub.mockImplementation(async (url: string, init: RequestInit = {}) => {
+			if (init.method === 'PATCH') await held;
+			return inner(url, init);
+		});
+		render(OutputsScreen);
+		await fireEvent.click(await screen.findByTestId('outputs-adult'));
+		const dialog = await screen.findByRole(
+			'dialog',
+			{ name: 'Include adult torrents in exports?' },
+			{ timeout: 10_000 }
+		);
+		await fireEvent.click(within(dialog).getByTestId('outputs-adult-include'));
+		await until(() =>
+			expect((screen.getByTestId('outputs-adult') as HTMLInputElement).disabled).toBe(true)
+		);
+		release();
+		await until(() =>
+			expect((screen.getByTestId('outputs-adult') as HTMLInputElement).disabled).toBe(false)
+		);
+		expect((screen.getByTestId('outputs-adult') as HTMLInputElement).checked).toBe(true);
+	});
+
+	it('never shows an export that finished before the click as the new one', async () => {
+		const now = Math.floor(Date.now() / 1000);
+		const old = {
+			id: 3,
+			kind: 'export',
+			state: 'done',
+			// The server's clock runs ahead: the old export looks as if it started after the click.
+			started_at: now + 60,
+			finished_at: now + 61,
+			done: 7,
+			skipped: 0,
+			total: 7,
+			total_approx: false,
+			rate: null,
+			eta_s: null,
+			export: { cap: 1_000_000, format: 'bitmagnet', truncated: false }
+		};
+		jobs = [old];
+		render(OutputsScreen);
+		await until(() => expect(calls.some((c) => c.path === '/jobs')).toBe(true));
+		const link = screen.getByTestId('outputs-bitmagnet-start');
+		link.addEventListener('click', (e) => e.preventDefault());
+		await fireEvent.click(link);
+		const polls = () => calls.filter((c) => c.path === '/jobs').length;
+		await until(() => expect(polls()).toBeGreaterThanOrEqual(3));
+		expect(screen.getByTestId('outputs-bitmagnet-progress').textContent).toContain(
+			'Starting the export'
+		);
+		jobs = [{ ...old, id: 4, state: 'running', finished_at: null, done: 2, total: 9 }, old];
+		await until(() =>
+			expect(screen.getByTestId('outputs-bitmagnet-count').textContent).toContain(
+				'Exported 2 of 9 torrents'
+			)
+		);
+	});
+
+	it('keeps the last progress when /jobs stops answering after the job was found', async () => {
+		render(OutputsScreen);
+		await until(() => expect(calls.some((c) => c.path === '/jobs')).toBe(true));
+		const link = screen.getByTestId('outputs-bitmagnet-start');
+		link.addEventListener('click', (e) => e.preventDefault());
+		jobs = [
+			{
+				id: 1,
+				kind: 'export',
+				state: 'running',
+				started_at: 0,
+				finished_at: null,
+				done: 5,
+				skipped: 0,
+				total: 10,
+				total_approx: false,
+				rate: null,
+				eta_s: null,
+				export: { cap: 1_000_000, format: 'bitmagnet', truncated: false }
+			}
+		];
+		await fireEvent.click(link);
+		await until(() =>
+			expect(screen.getByTestId('outputs-bitmagnet-count').textContent).toContain(
+				'Exported 5 of 10'
+			)
+		);
+		replies['GET /jobs'] = () => ({ status: 500, body: { error: { code: 'x', message: 'x' } } });
+		await until(() => expect(screen.getByTestId('outputs-bitmagnet-stale')).toBeTruthy());
+		expect(screen.getByTestId('outputs-bitmagnet-count').textContent).toContain('Exported 5 of 10');
+		expect(screen.getByTestId('outputs-bitmagnet-progress').textContent).not.toContain(
+			"couldn't find"
+		);
+	});
+
 	it('an unreadable setting shows no switch, and Try again reads it', async () => {
 		replies['GET /settings/content'] = () => ({
 			status: 500,
@@ -369,8 +507,8 @@ describe('bitmagnet export', () => {
 				"couldn't find this export's progress"
 			)
 		);
-		// Retried before giving up.
-		expect(calls.filter((c) => c.path === '/jobs').length).toBe(3);
+		// The read at mount, then three tries before giving up.
+		expect(calls.filter((c) => c.path === '/jobs').length).toBe(4);
 	});
 
 	it('shows the export job from start to a capped end', async () => {

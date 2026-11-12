@@ -80,5 +80,7 @@
 	"settings_outputs_adult_cancel": "取消",
 	"settings_outputs_dialog_close": "关闭",
 	"settings_outputs_adult_load_failed": "无法加载此设置。",
-	"settings_outputs_adult_read_only": "由 Lodestar 的配置设置，无法在此更改。"
+	"settings_outputs_adult_read_only": "由 Lodestar 的配置设置，无法在此更改。",
+	"settings_outputs_bitmagnet_stale": "Lodestar 无法更新这次导出的进度，它可能仍在运行：请查看“任务”。",
+	"settings_outputs_bitmagnet_example": "导入命令示例"
 }

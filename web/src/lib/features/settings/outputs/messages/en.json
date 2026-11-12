@@ -80,5 +80,7 @@
 	"settings_outputs_adult_cancel": "Cancel",
 	"settings_outputs_dialog_close": "Close",
 	"settings_outputs_adult_load_failed": "Couldn't load this setting.",
-	"settings_outputs_adult_read_only": "Lodestar's configuration sets this, so it can't be changed here."
+	"settings_outputs_adult_read_only": "Lodestar's configuration sets this, so it can't be changed here.",
+	"settings_outputs_bitmagnet_stale": "Lodestar couldn't update this export's progress. It may still be running: check Jobs.",
+	"settings_outputs_bitmagnet_example": "Example import command"
 }

@@ -49,22 +49,36 @@ export function nameError(name: string): 'required' | 'long' | null {
  * (OUT-0). The browser saves it to disk as it arrives; nothing holds it in memory. */
 export const EXPORT_URL = '/api/v1/export?format=bitmagnet';
 
-/** Seconds of slack between the click and the job's `started_at` (two clocks, one second's
- * granularity). */
+/** The highest export job id in a `/jobs` answer, 0 when there's none. Job ids only grow while the
+ * server runs, so a job with a higher id started later. */
+export function lastExportId(jobs: readonly Job[]): number {
+	return jobs.reduce((top, j) => (j.kind === 'export' && j.id > top ? j.id : top), 0);
+}
+
+/** Seconds of slack around the click when no `/jobs` answer came before it (the fallback below
+ * compares two clocks). */
 const SLACK_S = 5;
 
 /**
- * The export job this screen started: the newest bitmagnet export that started at or after the
- * click. `GET /jobs` lists newest first; a download's own job id is only in its response header,
- * which a browser download doesn't expose, so the screen finds it this way.
+ * The export job this screen started: the newest bitmagnet export with an id above `afterId`,
+ * the highest export id seen before the click (`lastExportId`). Ids, not times: the browser's and
+ * the server's clocks can differ. A download's own job id is only in its response header, which a
+ * browser download doesn't expose, so the screen finds it this way.
+ *
+ * With `afterId` null (no `/jobs` answer came before the click) it falls back to the job's start
+ * time against the click's, within `SLACK_S`.
  */
-export function ourExport(jobs: readonly Job[], clickedAt: number): Job | null {
+export function ourExport(
+	jobs: readonly Job[],
+	afterId: number | null,
+	clickedAt: number
+): Job | null {
 	return (
 		jobs.find(
 			(j) =>
 				j.kind === 'export' &&
 				j.export?.format === 'bitmagnet' &&
-				j.started_at >= clickedAt - SLACK_S
+				(afterId === null ? j.started_at >= clickedAt - SLACK_S : j.id > afterId)
 		) ?? null
 	);
 }

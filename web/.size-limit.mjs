@@ -1377,10 +1377,10 @@ export default [
 	entry('Settings updates icon and purpose (on demand)', settingsUpdatesModulesLazy, '0.8 KB'),
 	entry('Settings companions parts (on demand)', settingsCompanionsPartsLazy, '29 KB'),
 	entry('Settings companions icon and purpose (on demand)', settingsCompanionsModulesLazy, '1 KB'),
-	// OUT-2: Outputs' 18+ dialog and Security's key flows measured 25.71 KB, limit = measured + ~5%;
-	// its icon and purpose line 0.66 KB, limit 1 KB, as Companions'.
+	// OUT-2: Outputs' 18+ dialog and Security's key flows measured 26.32 kB, limit 27 KB (~2.6%
+	// headroom); its icon and purpose line 0.68 kB, limit 0.75 KB (measured + ~10%).
 	entry('Settings outputs parts (on demand)', settingsOutputsPartsLazy, '27 KB'),
-	entry('Settings outputs icon and purpose (on demand)', settingsOutputsModulesLazy, '1 KB'),
+	entry('Settings outputs icon and purpose (on demand)', settingsOutputsModulesLazy, '0.75 KB'),
 	// Logging (S-logs-2): its server labels, and the event list, data kinds and privacy dialogs.
 	// Measured 0.78 KB and 15.48 KB at first (limits = measured + 10%); 16.48 KB after the review
 	// round (the unreadable-state banner, closing dialogs on leave).
