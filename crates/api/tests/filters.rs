@@ -906,7 +906,13 @@ async fn every_filters_route_needs_a_session_and_errors_use_the_envelope() {
     );
     // Provenance isn't the judge's to know (SRC-3): refused, not
     // silently never (or, negated, always) matching.
-    for q in ["source:nyaa", "-verified:yes", "x (network:bt | y)"] {
+    for q in [
+        "source:nyaa",
+        "-verified:yes",
+        "x (network:bt | y)",
+        "-sig:7a9f3c12dd0e44b1",
+        "x sig:0123456789abcdef0123456789abcdef01234567",
+    ] {
         let (status, body) = apply(
             &f,
             &c,

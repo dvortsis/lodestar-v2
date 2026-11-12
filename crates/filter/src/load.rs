@@ -32,7 +32,8 @@ pub const KIND_QUERY: u8 = 2;
 pub const KIND_PAYLOAD: u8 = 3;
 
 /// A stored rule query, read as the engine may use it: `None` when it
-/// doesn't parse, or names `verified:`, `source:` or `network:` (SRC-3).
+/// doesn't parse, or names `verified:`, `source:` or `network:` (SRC-3)
+/// or `sig:` (GS-0).
 /// The judge can't answer those, so its matcher calls them no match, and
 /// a negated one would match everything (an Always-allow saved as
 /// `-network:foo` would release every torrent). The filters API refuses

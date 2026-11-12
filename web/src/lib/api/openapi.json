@@ -10867,6 +10867,25 @@
                 "minimum": 0
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "Torrents with this payload signature (16 lowercase hex digits),\nor, given an info hash (40), those with the same payload as that\ntorrent, itself included.",
+            "required": [
+              "sig",
+              "op"
+            ],
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "sig"
+                ]
+              },
+              "sig": {
+                "type": "string"
+              }
+            }
           }
         ],
         "description": "A parsed query (§8), tagged by `op`."

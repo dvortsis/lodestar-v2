@@ -95,6 +95,12 @@ const FRAGMENTS: &[&str] = &[
     "file:sample",
     "file:\"x y\"",
     "0123456789abcdef0123456789abcdef01234567",
+    "sig:7a9f3c12dd0e44b1",
+    "sig:7A9F3C12DD0E44B1",
+    "sig:0123456789abcdef0123456789abcdef01234567",
+    "sig:magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+    "sig:7a9f3c12",
+    "sig:",
 ];
 
 fn query() -> impl Strategy<Value = String> {

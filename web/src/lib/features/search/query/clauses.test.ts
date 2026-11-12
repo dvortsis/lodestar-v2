@@ -178,7 +178,11 @@ describe('labels: every AST op', () => {
 	});
 
 	it('has a fallback for an op this client does not know', () => {
-		expect(text({ op: 'sig' } as unknown as Ast)).toBe('Filter');
+		expect(text({ op: 'not_an_op' } as unknown as Ast)).toBe('Filter');
+	});
+
+	it('shows a payload signature as its query text', () => {
+		expect(text({ op: 'sig', sig: '7a9f3c12dd0e44b1' })).toBe('sig:7a9f3c12dd0e44b1');
 	});
 });
 
