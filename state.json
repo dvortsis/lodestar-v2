@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T20:20:40Z",
+  "updated_at": "2026-11-12T20:46:15Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7452,6 +7452,16 @@
     {
       "id": "X-clippy-1-100-merged",
       "note": "2026-11-12T20:20:40Z: #776 merged (main 925f69a9). All waiting sessions told to merge main once; cloud-testing #774 and #778 first, others no earlier than 20:40Z. #767 and #779 hold until their reviews are relayed. Owner FYI: clippy 1.100 + regex fold table freeze (search cost model frozen at Rust 1.99's cased set)."
+    },
+    {
+      "id": "X-tokio-1541-v052-done",
+      "note": "X-tokio-1541-v052 landed as #740 on release/v0.5.2 (tokio 1.54.1 there); plan_nodes still shows it ready. Mark done in the next runner PR",
+      "at": "2026-11-12T20:46:15Z"
+    },
+    {
+      "id": "WK-11b-committed_at",
+      "note": "Runner approved #779 crates/pipeline/src/worker.rs committed_at change (replayed result commit records a finished out entry); session adds it to its decisions file",
+      "at": "2026-11-12T20:46:15Z"
     }
   ],
   "main_health": [
@@ -8474,7 +8484,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T19:06:13Z",
+    "updated": "2026-11-12T20:46:15Z",
     "items": [
       {
         "slot": 1,
@@ -8568,12 +8578,11 @@
       },
       {
         "slot": 11,
-        "slice": "X-always-adult-detail-mask",
+        "slice": "M8-REL-1",
         "role": "build",
-        "agent": "claude",
-        "doing": "session_01MMjhnBLbxrt4466ABDDCXp: PR #767 at d0291784, CI running",
-        "since": "2026-11-12T14:34:48Z",
-        "status": "active"
+        "agent": "session_01MMjhn8mh12Mrj1m33EM83f",
+        "doing": "launched: relevance --data-dir (hash-keyed judgments) and --held-out aggregates",
+        "since": "2026-11-12T20:46:15Z"
       },
       {
         "slot": 12,
@@ -8661,7 +8670,7 @@
     }
   ],
   "heartbeat": "2026-11-12T18:39:05Z",
-  "updated": "2026-11-12T20:20:40Z",
+  "updated": "2026-11-12T20:46:15Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
