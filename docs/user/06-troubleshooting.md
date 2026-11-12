@@ -95,5 +95,5 @@ Open an issue at <https://github.com/dvortsis/lodestar-v2/issues>. Include your 
 <!-- nav:start -->
 ---
 
-[← Chapter 5: Use Lodestar](05-use-lodestar.md) · [Contents](README.md#contents) · [Appendix A: Answers to check your understanding →](appendix-a-answers.md)
+[← Chapter 5: Use Lodestar](05-use-lodestar.md) · [Contents](README.md#contents) · [Chapter 7: Connect other apps →](07-connect-other-apps.md)
 <!-- nav:end -->
