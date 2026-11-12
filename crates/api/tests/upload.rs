@@ -62,6 +62,11 @@ const ACCEPTED: Outcome = Outcome::Accepted {
 /// `burst` uploads per address and no refill, so a slow runner can't
 /// refill a bucket; `None` installs no [`Uploader`].
 fn fixture(burst: Option<f64>) -> Fixture {
+    fixture_with(burst, None)
+}
+
+/// [`fixture`] with `sink` in place of the [`Fake`] when it's given.
+fn fixture_with(burst: Option<f64>, sink: Option<Arc<dyn Sink>>) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("t.db");
     let store = Store::open(&db, StoreConfig::default()).unwrap();
@@ -87,8 +92,9 @@ fn fixture(burst: Option<f64>) -> Fixture {
     });
     let mut app = Router::new().nest("/api/v1", router(state));
     if let Some(burst) = burst {
+        let sink: Arc<dyn Sink> = sink.unwrap_or_else(|| fake.clone());
         app = app.layer(Extension(Uploader::with_rate(
-            fake.clone(),
+            sink,
             burst,
             0.0,
             upload::RATE_MAX_IPS,
@@ -533,4 +539,97 @@ async fn other_methods_and_paths_take_no_upload() {
         StatusCode::ACCEPTED
     );
     assert_eq!(f.fake.calls.load(Ordering::SeqCst), 0);
+}
+
+/// A body that sends `first` and then stalls; `polled` turns true once
+/// the route starts reading it.
+fn stalled_body(first: Vec<u8>, polled: Arc<std::sync::atomic::AtomicBool>) -> Body {
+    struct Stall(Option<Vec<u8>>, Arc<std::sync::atomic::AtomicBool>);
+    impl futures_core::Stream for Stall {
+        type Item = Result<Vec<u8>, std::io::Error>;
+        fn poll_next(
+            mut self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Self::Item>> {
+            self.1.store(true, Ordering::SeqCst);
+            match self.0.take() {
+                Some(b) => std::task::Poll::Ready(Some(Ok(b))),
+                // Never ready again, and never wakes: a stalled client.
+                None => std::task::Poll::Pending,
+            }
+        }
+    }
+    Body::from_stream(Stall(Some(first), polled))
+}
+
+/// A stalled client loses its turn after the read deadline: `408`, and
+/// nothing reaches the pipeline. Paused time, so no real wait.
+#[tokio::test]
+async fn a_stalled_body_times_out() {
+    let f = fixture(Some(100.0));
+    let cookie = signed_in(&f).await;
+    tokio::time::pause();
+    let mut req = upload_req(Some(&cookie), Vec::new(), &[]);
+    *req.body_mut() = stalled_body(b"d4:info".to_vec(), Arc::default());
+    let r = send(&f.app, req, fresh_ip()).await;
+    assert_eq!(r.status, StatusCode::REQUEST_TIMEOUT, "{}", r.text);
+    assert_eq!(code(&r), "body_timeout");
+    assert_eq!(f.fake.calls.load(Ordering::SeqCst), 0);
+}
+
+/// Holds every upload until the test lets one through.
+#[derive(Debug)]
+struct Gated {
+    entered: AtomicUsize,
+    gate: tokio::sync::Semaphore,
+}
+
+impl Sink for Gated {
+    fn submit(&self, _: Vec<u8>) -> BoxFuture<'_, Result<Outcome, Unavailable>> {
+        self.entered.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async move {
+            self.gate.acquire().await.unwrap().forget();
+            Ok(ACCEPTED)
+        })
+    }
+}
+
+/// At most `IN_FLIGHT` requests are read or wait on the pipeline: one
+/// more waits with its body unread until a turn frees up.
+#[tokio::test]
+async fn past_the_in_flight_bound_a_body_waits_unread() {
+    let gated = Arc::new(Gated {
+        entered: AtomicUsize::new(0),
+        gate: tokio::sync::Semaphore::new(0),
+    });
+    let f = fixture_with(Some(100.0), Some(gated.clone()));
+    let cookie = signed_in(&f).await;
+    // Paused time: each `sleep` below returns only once every task is
+    // idle, so what's asserted after it has had every chance to happen.
+    tokio::time::pause();
+    let mut tasks = Vec::new();
+    for _ in 0..upload::IN_FLIGHT {
+        let (app, req) = (f.app.clone(), upload_req(Some(&cookie), a_file(), &[]));
+        tasks.push(tokio::spawn(
+            async move { send(&app, req, fresh_ip()).await },
+        ));
+    }
+    let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut req = upload_req(Some(&cookie), Vec::new(), &[]);
+    *req.body_mut() = stalled_body(a_file(), polled.clone());
+    let app = f.app.clone();
+    let fifth = tokio::spawn(async move { send(&app, req, fresh_ip()).await });
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    assert_eq!(gated.entered.load(Ordering::SeqCst), upload::IN_FLIGHT);
+    assert!(!polled.load(Ordering::SeqCst), "the fifth body was read");
+    // One finishes: the fifth gets its turn and starts reading.
+    gated.gate.add_permits(1);
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    assert!(polled.load(Ordering::SeqCst), "the fifth never got a turn");
+    gated.gate.add_permits(upload::IN_FLIGHT);
+    for t in tasks {
+        assert_eq!(t.await.unwrap().status, StatusCode::ACCEPTED);
+    }
+    // The fifth stalls after its first chunk, so its deadline answers it.
+    assert_eq!(fifth.await.unwrap().status, StatusCode::REQUEST_TIMEOUT);
 }

@@ -16150,7 +16150,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Judged and handed to the store. */
+            /** @description Judged and handed to the store. The store judges it again when it commits, should the rules have changed meanwhile, and may then still hold it. */
             202: {
                 headers: {
                     [name: string]: unknown;
@@ -16159,7 +16159,7 @@ export interface operations {
                     "application/json": components["schemas"]["UploadAccepted"];
                 };
             };
-            /** @description `malformed_torrent`: not a `.torrent` within the limits. */
+            /** @description `malformed_torrent`: not a `.torrent` within the limits; or `bad_body`: the body couldn't be read. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -16170,6 +16170,15 @@ export interface operations {
             };
             /** @description `cross_origin`: sent from another site. */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `body_timeout`: the body didn't arrive within 60 s. */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };

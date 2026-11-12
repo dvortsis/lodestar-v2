@@ -149,6 +149,17 @@ async fn upload(
     bodies: Vec<Vec<u8>>,
     commits: u64,
 ) -> (Store, Vec<Outcome>) {
+    upload_holding(store, filter, bodies, commits, 0).await
+}
+
+/// [`upload`], waiting too for the writer to have recorded `holds` holds.
+async fn upload_holding(
+    store: Store,
+    filter: Arc<Handle>,
+    bodies: Vec<Vec<u8>>,
+    commits: u64,
+    holds: u64,
+) -> (Store, Vec<Outcome>) {
     let pipeline = Pipeline::start(config(filter), store, Vec::new())
         .await
         .unwrap();
@@ -157,8 +168,13 @@ async fn upload(
     for body in bodies {
         outcomes.push(uploads.submit(body).await.unwrap());
     }
-    until("the uploads stored", || stored(&pipeline) >= commits).await;
+    let held = |p: &Pipeline| p.writer_stats().torrent_cache.held.load(Ordering::Relaxed);
+    until("the uploads stored and held", || {
+        stored(&pipeline) >= commits && held(&pipeline) >= holds
+    })
+    .await;
     assert_eq!(stored(&pipeline), commits);
+    assert_eq!(held(&pipeline), holds);
     let n = outcomes.len() as u64;
     assert_eq!(uploads.stats().received.load(Ordering::Relaxed), n);
     (pipeline.shutdown().await.unwrap(), outcomes)
@@ -397,11 +413,14 @@ async fn floor_blocked_and_held_files_are_never_stored() {
     let mut cs = CsList::default();
     cs.add_hash(bkey.0, lodestar_filter::Origin::Imported);
     let store = Store::open_in_memory(StoreConfig::default()).unwrap();
-    let (store, outcomes) = upload(store, stand_in(cs), vec![blocked, held], 0).await;
+    // The floor's refusal never reaches the writer; the hold does, and
+    // the writer records it as a hold, never a torrent.
+    let (store, outcomes) = upload_holding(store, stand_in(cs), vec![blocked, held], 0, 1).await;
     assert_eq!(outcomes, [Outcome::Refused, Outcome::Held]);
     for k in [bkey, hkey] {
         assert!(store.find(&k).unwrap().is_none(), "never stored");
     }
+    assert_eq!(store.held_among(&[hkey.0, bkey.0]).unwrap(), [true, false]);
     assert!(store.count().unwrap() == 0);
     no_text_anywhere(&store, &["Ripped with care", "tracker.example"]);
 }

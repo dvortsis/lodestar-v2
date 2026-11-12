@@ -18,7 +18,8 @@
 //!   ([`RATE_BURST`], [`RATE_PER_SEC`], [`RATE_MAX_IPS`]), spent before
 //!   the body is read; a `Content-Length` over
 //!   [`MAX_BYTES`] is refused unread, and any other body is read through a
-//!   limit; at most [`IN_FLIGHT`] bodies are held at once.
+//!   limit within [`READ_DEADLINE`]; at most [`IN_FLIGHT`] requests read
+//!   or wait on the pipeline at once.
 //! - **Judged like any metadata,** by the pipeline's
 //!   `local_torrent` through the [`Sink`] the host installs.
 //!
@@ -68,9 +69,15 @@ pub const RATE_PER_SEC: f64 = 1.0;
 /// which is the same as a new one.
 pub const RATE_MAX_IPS: usize = 10_000;
 
-/// Bodies read or judged at once: at most 32 MiB held. A request past
-/// this waits, unread, for a turn.
+/// Requests reading a body or waiting on the pipeline at once. A request
+/// past this waits, unread, for a turn. With the pipeline's own queue
+/// (4) and its judge (1), and requests whose client left after sending,
+/// at most about 9 bodies (72 MiB) are held at once.
 pub const IN_FLIGHT: usize = 4;
+
+/// How long a body may take to arrive once it's this request's turn, so
+/// a stalled client can't keep a turn: `408 body_timeout` after it.
+pub const READ_DEADLINE: Duration = Duration::from_secs(60);
 
 /// What the pipeline made of an upload ([`Sink::submit`]).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -169,8 +176,9 @@ pub fn routes() -> Router<ApiState> {
     tag = "torrents",
     request_body(content = TorrentBody, content_type = "application/x-bittorrent", description = "The `.torrent` file itself, at most 8 MiB. Nothing else: no multipart, no file name."),
     responses(
-        (status = 202, body = UploadAccepted, description = "Judged and handed to the store."),
-        (status = 400, body = ErrorEnvelope, description = "`malformed_torrent`: not a `.torrent` within the limits."),
+        (status = 202, body = UploadAccepted, description = "Judged and handed to the store. The store judges it again when it commits, should the rules have changed meanwhile, and may then still hold it."),
+        (status = 400, body = ErrorEnvelope, description = "`malformed_torrent`: not a `.torrent` within the limits; or `bad_body`: the body couldn't be read."),
+        (status = 408, body = ErrorEnvelope, description = "`body_timeout`: the body didn't arrive within 60 s."),
         (status = 403, body = ErrorEnvelope, description = "`cross_origin`: sent from another site."),
         (status = 413, body = ErrorEnvelope, description = "`body_too_large`: over 8 MiB."),
         (status = 415, body = ErrorEnvelope, description = "`unsupported_media_type`: the body isn't sent as `application/x-bittorrent`."),
@@ -229,7 +237,15 @@ async fn take(
     let Ok(_permit) = up.in_flight.acquire().await else {
         return Err(refuse(unavailable()));
     };
-    let bytes = read_limited(body, declared).await?;
+    let bytes = tokio::time::timeout(READ_DEADLINE, read_limited(body, declared))
+        .await
+        .map_err(|_| {
+            refuse(ApiError::new(
+                StatusCode::REQUEST_TIMEOUT,
+                "body_timeout",
+                "The file took too long to arrive; try again.",
+            ))
+        })??;
     let outcome = up
         .sink
         .submit(bytes)

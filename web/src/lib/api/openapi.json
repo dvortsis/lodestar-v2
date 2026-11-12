@@ -7940,7 +7940,7 @@
         },
         "responses": {
           "202": {
-            "description": "Judged and handed to the store.",
+            "description": "Judged and handed to the store. The store judges it again when it commits, should the rules have changed meanwhile, and may then still hold it.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7950,7 +7950,7 @@
             }
           },
           "400": {
-            "description": "`malformed_torrent`: not a `.torrent` within the limits.",
+            "description": "`malformed_torrent`: not a `.torrent` within the limits; or `bad_body`: the body couldn't be read.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7961,6 +7961,16 @@
           },
           "403": {
             "description": "`cross_origin`: sent from another site.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "`body_timeout`: the body didn't arrive within 60 s.",
             "content": {
               "application/json": {
                 "schema": {
