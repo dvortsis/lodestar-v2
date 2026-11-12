@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T23:23Z",
+  "updated_at": "2026-11-12T23:24Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7727,6 +7727,21 @@
       "id": "pr800",
       "note": "#800 X-gluetun-leak d60760d5: security review running; runbook \u00a73.2 edit accepted; configs 0444 provisional; owner relay needed for VM re-run (testing session refuses runner + slice messages); slices.yaml entries for X-gluetun-leak(-cmp) in runner PR.",
       "added": "2026-11-12T23:23Z"
+    },
+    {
+      "id": "flag-wk18w-release-step",
+      "note": "\u00a72.19 flag: WK-18w adds packaging/windows/test-join-worker.ps1 as a test step in release.yml package-windows (beside test-secure-datadir.ps1); no permissions/secrets/env change. Runner approved.",
+      "added": "2026-11-12T23:24Z"
+    },
+    {
+      "id": "x-worker-service-log",
+      "note": "X-worker-service-log: worker lines have no log event under the SCM (from WK-18s #801).",
+      "added": "2026-11-12T23:24Z"
+    },
+    {
+      "id": "wk18-prs",
+      "note": "WK-18s #801 a8c570a1 draft (self+security review pending); WK-18w #802 a6ecf89b draft until #801 merges; extras build-msi.ps1, README.md, join-ca/, join-token-file.ps1 accepted.",
+      "added": "2026-11-12T23:24Z"
     }
   ],
   "main_health": [
@@ -8749,7 +8764,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T23:23Z",
+    "updated": "2026-11-12T23:24Z",
     "items": [
       {
         "slot": 1,
@@ -9097,7 +9112,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-12T23:23Z",
+  "updated": "2026-11-12T23:24Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
