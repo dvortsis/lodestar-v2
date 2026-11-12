@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T08:23:32Z",
+  "updated_at": "2026-11-12T08:24:46Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7163,6 +7163,11 @@
       "id": "X-sampler-frontier",
       "at": "2026-11-12T08:23:32Z",
       "note": "M8-NET-E2E finding: BEP 51 sampler frontier refills only from the crawler routing table; with K=8 buckets a 50-node loopback net does not fit, so some nodes are sampled only after 6-10 s (9 of 18 hashes at 1.1 s, rest at 10.1 s). Candidate fix: offer nodes from sample replies to the frontier. Track C (crawler yield); Opus; needs A/B evidence before shipping."
+    },
+    {
+      "id": "X-rx0-nits",
+      "at": "2026-11-12T08:24:46Z",
+      "note": "rv-717-e9350c1d N1 ([:alpha:] ASCII fold uncharged, <=1.6%), N2 (one timing figure: ~9-12 ms, [\\w.-]x51), N3 optional bracket over-charge, N4 <U+0041 cheap charge, N5 Perl-class wording. Fold into RX-1."
     }
   ],
   "main_health": [
@@ -8075,7 +8080,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T08:23:32Z",
+    "updated": "2026-11-12T08:24:46Z",
     "items": [
       {
         "slot": 1,
@@ -8118,7 +8123,7 @@
         "slice": "RX-0",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8dQvKpaNcN6wp9PY6: #717 e9350c1d (B3 fold-cost model, I3 relieved) CI running; fresh delta review running",
+        "doing": "session_01MMjhn8dQvKpaNcN6wp9PY6: #717 e9350c1d delta rv MERGE (rv-717-e9350c1d); waiting ci-ok, then merge. Nits N1-N5 to RX-1 or follow-up",
         "since": "2026-11-11T21:46:53Z",
         "status": "active"
       },
@@ -8208,7 +8213,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T08:23:32Z",
+  "updated": "2026-11-12T08:24:46Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
