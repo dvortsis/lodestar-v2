@@ -1727,12 +1727,13 @@ impl ClusterServer {
     /// evicted when it was revoked, so its tokens are already stale.
     fn outcome(&self, peer: &Peer, items: &[OutcomeItem]) {
         let w = peer.worker;
+        let now = self.clock.now_secs();
         let mut accepted = Vec::new();
         for item in items {
             let key = InfoHash(item.key);
             let token = Token(item.token);
             let lease = match item.outcome {
-                Outcome::Fetched => self.leases.held(w, &key, token).inspect(|_| {
+                Outcome::Fetched => self.leases.fetched(w, &key, token, now).inspect(|_| {
                     bump(&self.counters.fetched);
                 }),
                 Outcome::PeerFound { reason } | Outcome::Lost { reason } => self
@@ -1742,6 +1743,10 @@ impl ClusterServer {
             };
             match lease {
                 Some(lease) => accepted.push((key, lease, item.outcome)),
+                // A `Fetched` goes out on `Accepted`, so the writer's commit
+                // often ends the lease first: no lease left for the key is
+                // expected, not a stale report. One under another token is.
+                None if item.outcome == Outcome::Fetched && self.leases.get(&key).is_none() => {}
                 None => bump(&self.counters.stale_reports),
             }
         }
