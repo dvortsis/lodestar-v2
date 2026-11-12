@@ -1,5 +1,5 @@
 //! The SABnzbd and NZBGet adapters against answers built from SABnzbd
-//! 4.5.5's and nzbget-ng v24.8's source (`fixtures/usenet_clients/`; each
+//! 4.5.5's and nzbget-ng v24.8's source (`tests/fixtures/usenet_clients/`; each
 //! file says where its answer comes from). No network: a local replay
 //! server plays them back, and the tests check what the adapters sent.
 
@@ -16,7 +16,7 @@ use lodestar_integrations::clients::usenet::{
 };
 use lodestar_integrations::{AuthFailure, ClientError, Secret};
 use serde_json::{Value, json};
-use support::{Fixture, Received, ReplayServer, refused_addr};
+use support::{Fixture, Received, ReplayServer, fixture_bytes, refused_addr};
 
 const API_KEY: &str = "5f1e2d3c4b5a69788796a5b4c3d2e1f0";
 const NZB_KEY: &str = "0f1e2d3c4b5a69788796a5b4c3d2e1f5";
@@ -25,22 +25,13 @@ const PASSWORD: &str = "correct-horse-usenet";
 /// A token in the configured URL's query: dropped, never printed.
 const QUERY_TOKEN: &str = "query-token-e3a9";
 
-/// Loads `fixtures/usenet_clients/<client>/<name>.json`.
+/// Loads `tests/fixtures/usenet_clients/<client>/<name>.json`.
 fn fixture(client: &str, name: &str) -> Fixture {
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/usenet_clients")
-        .join(client)
-        .join(format!("{name}.json"));
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
-    serde_json::from_str(&text).unwrap_or_else(|e| panic!("{path:?}: {e}"))
+    support::fixture(&format!("usenet_clients/{client}"), name)
 }
 
 fn nzb_bytes() -> Vec<u8> {
-    std::fs::read(
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures/usenet_clients/fixture.nzb"),
-    )
-    .unwrap()
+    fixture_bytes("usenet_clients", "fixture.nzb")
 }
 
 fn nzb() -> Nzb {
@@ -539,16 +530,20 @@ async fn an_oversize_or_bogus_nzb_never_reaches_the_network() {
     assert!(Nzb::new(b"<html>401</html>".to_vec(), "x").is_err());
     // A bad category is refused before any request, by both adapters.
     let server = ReplayServer::start(Vec::new()).await;
-    let bad = NzbOptions {
-        category: Some("tv\nX-Injected: 1".into()),
-        ..NzbOptions::default()
-    };
     let clients: [Box<dyn UsenetClient>; 2] = [Box::new(sab(&server)), Box::new(nzbget(&server))];
-    for c in &clients {
-        assert!(matches!(
-            c.add_nzb(&nzb(), &bad).await.unwrap_err(),
-            ClientError::InvalidRequest(_)
-        ));
+    // A newline would inject; `""` or `\\` would desynchronise NZBGet 24's
+    // request parser, which ends a string at two adjacent escapes.
+    for category in ["tv\nX-Injected: 1", "a\"\"b", "a\\\\b"] {
+        let bad = NzbOptions {
+            category: Some(category.into()),
+            ..NzbOptions::default()
+        };
+        for c in &clients {
+            assert!(matches!(
+                c.add_nzb(&nzb(), &bad).await.unwrap_err(),
+                ClientError::InvalidRequest(_)
+            ));
+        }
     }
     assert!(server.finish().is_empty(), "no request was made");
 }

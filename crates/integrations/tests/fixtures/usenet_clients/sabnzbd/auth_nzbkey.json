@@ -1,5 +1,5 @@
 {
-  "recorded_from": "SABnzbd 4.5.5, built from its source (sabnzbd/api.py report(), sabnzbd/interface.py secured_expose and check_apikey); not a live recording",
+  "recorded_from": "Built from SABnzbd 4.5.5 source (sabnzbd/api.py report(), sabnzbd/interface.py secured_expose and check_apikey), not a live recording; same modes and texts on the develop branch",
   "note": "mode=auth&key=<the NZB key>: it can add, not list categories",
   "request": {
     "method": "POST",

@@ -161,10 +161,14 @@ impl NzbOptions {
         if let Some(category) = &self.category
             && (category.trim().is_empty()
                 || category.len() > 256
-                || category.chars().any(char::is_control))
+                || category
+                    .chars()
+                    .any(|c| c.is_control() || c == '"' || c == '\\'))
         {
+            // NZBGet 24.x's request parser ends a string early at two
+            // adjacent escapes (fixed in 26), so `"` and `\` are refused.
             return Err(ClientError::InvalidRequest(
-                "the category is empty, too long, or has control characters",
+                "the category is empty, too long, or has quotes, backslashes or control characters",
             ));
         }
         Ok(())
@@ -289,6 +293,31 @@ pub(crate) fn version_text(raw: &str) -> Option<String> {
     (!v.is_empty() && v.len() <= 64 && !v.chars().any(char::is_control)).then(|| v.to_owned())
 }
 
+/// Replaces every copy of `secret` in an answer with `***` before it's
+/// parsed, so a reverse proxy that reflects the request can't put a
+/// credential into an error's reason. Secrets under 4 bytes are left alone.
+pub(crate) fn scrub(body: &mut Vec<u8>, secret: &str) {
+    let secret = secret.as_bytes();
+    if secret.len() < 4 || body.len() < secret.len() {
+        return;
+    }
+    let mut out = Vec::with_capacity(body.len());
+    let mut i = 0;
+    while i < body.len() {
+        if body[i..].starts_with(secret) {
+            out.extend_from_slice(b"***");
+            i += secret.len();
+        } else {
+            out.push(body[i]);
+            i += 1;
+        }
+    }
+    if out.len() != body.len() {
+        zeroize::Zeroize::zeroize(body);
+        *body = out;
+    }
+}
+
 /// The error for a redirect: never followed, since the target would get
 /// the credentials in the body.
 pub(crate) fn redirected() -> ClientError {
@@ -357,6 +386,16 @@ mod tests {
     }
 
     #[test]
+    fn secrets_are_scrubbed_from_answers() {
+        let mut body = b"echo: apikey=SECRETKEY&x=SECRETKEY".to_vec();
+        scrub(&mut body, "SECRETKEY");
+        assert_eq!(body, b"echo: apikey=***&x=***");
+        let mut body = b"abc".to_vec();
+        scrub(&mut body, "abc");
+        assert_eq!(body, b"abc", "too short to scrub");
+    }
+
+    #[test]
     fn categories_are_checked() {
         let opts = |c: &str| NzbOptions {
             category: Some(c.into()),
@@ -365,6 +404,8 @@ mod tests {
         assert!(opts("tv").check().is_ok());
         assert!(opts(" ").check().is_err());
         assert!(opts("a\nb").check().is_err());
+        assert!(opts("a\"b").check().is_err());
+        assert!(opts("a\\b").check().is_err());
         assert!(opts(&"x".repeat(257)).check().is_err());
         assert!(NzbOptions::default().check().is_ok());
     }

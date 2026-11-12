@@ -26,12 +26,13 @@
 //! - **Categories** are the `CategoryN.Name` options of `config`. That
 //!   answer is the whole configuration, including the client's own server
 //!   passwords for the control user, so the parser keeps only category
-//!   names, and the answer's bytes are wiped once read.
+//!   names, and the adapter's copy of the answer is zeroized once parsed
+//!   (the HTTP stack's own buffers aren't).
 //!
 //! Written against nzbget-ng v24.8's source (`daemon/remote/XmlRpc.cpp`,
 //! `WebServer.cpp`), checked against v26.3, which only adds an optional
 //! trailing `autoCategory` to `append`; the fixtures in
-//! `fixtures/usenet_clients/nzbget/` follow it.
+//! `tests/fixtures/usenet_clients/nzbget/` follow it.
 
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -46,7 +47,7 @@ use serde_json::{Value, json};
 use super::qbittorrent::upload_timeout;
 use super::usenet::{
     Access, JobId, Nzb, NzbOptions, NzbPriority, UsenetClient, UsenetInfo, UsenetKind, redirected,
-    version_text,
+    scrub, version_text,
 };
 use super::{
     AuthFailure, CLIENT_TIMEOUT, Category, ClientError, base64, category_name, client_reason,
@@ -62,9 +63,10 @@ pub const MAX_ANSWER: usize = 1 << 20;
 pub const MAX_CONFIG: usize = 4 << 20;
 /// The most categories kept from a configuration.
 pub const MAX_CATEGORIES: usize = 10_000;
-/// The longest user name or password sent. NZBGet reads each header line
-/// into 1 KiB, so longer credentials would be cut off there.
-const MAX_CREDENTIAL: usize = 256;
+/// The longest `user:password` sent. NZBGet decodes Basic credentials into
+/// 257 bytes and refuses base64 longer than that (256 characters is 192
+/// bytes); it then drops the request without an answer.
+const MAX_CREDENTIALS: usize = 192;
 
 pub struct Nzbget {
     endpoint: Url,
@@ -107,11 +109,14 @@ impl Nzbget {
         password: Secret,
         http: GuardedClient,
     ) -> Result<Nzbget, ClientError> {
-        let bad =
-            |s: &Secret| s.expose().len() > MAX_CREDENTIAL || s.expose().contains(char::is_control);
-        if bad(&username) || bad(&password) || username.expose().contains(':') {
+        let (user, pass) = (username.expose(), password.expose());
+        if user.len() + 1 + pass.len() > MAX_CREDENTIALS
+            || user.contains(':')
+            || user.contains(char::is_control)
+            || pass.contains(char::is_control)
+        {
             return Err(ClientError::InvalidRequest(
-                "the user name or password is too long, or has a colon or control characters",
+                "the user name and password are over 191 bytes together, or have a colon or control characters",
             ));
         }
         Ok(Nzbget {
@@ -157,7 +162,9 @@ impl Nzbget {
             .map_err(|_| ClientError::Protocol("couldn't build the request"))?;
         let resp = self.http.send(req).await?;
         let status = resp.status().as_u16();
-        let bytes = Zeroizing::new(read_limited(resp, limit).await?);
+        let mut bytes = Zeroizing::new(read_limited(resp, limit).await?);
+        scrub(&mut bytes, self.password.expose());
+        scrub(&mut bytes, self.username.expose());
         lodestar_log::log_event!(
             crate::log_events::CLIENT_REQUEST,
             client = "nzbget",
@@ -461,7 +468,9 @@ mod tests {
         assert!(mk("nzbget", "tegbzn6789").is_ok());
         assert!(mk("a:b", "p").is_err());
         assert!(mk("a", "p\r\nX: y").is_err());
-        assert!(mk("a", &"p".repeat(257)).is_err());
+        assert!(mk("a", &"p".repeat(190)).is_ok());
+        assert!(mk("a", &"p".repeat(191)).is_err());
+        assert!(mk(&"u".repeat(150), &"p".repeat(100)).is_err());
     }
 
     #[test]

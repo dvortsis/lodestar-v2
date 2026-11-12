@@ -1,6 +1,6 @@
 {
-  "recorded_from": "SABnzbd 4.5.5, built from its source (sabnzbd/api.py report(), sabnzbd/interface.py secured_expose and check_apikey); not a live recording",
-  "note": "mode=auth&key=<neither key>",
+  "recorded_from": "Built from SABnzbd 4.5.5 source (sabnzbd/api.py report(), sabnzbd/interface.py secured_expose and check_apikey), not a live recording; same modes and texts on the develop branch",
+  "note": "mode=addfile, multipart, one NZB",
   "request": {
     "method": "POST",
     "path": "/api",
@@ -22,6 +22,6 @@
         "CherryPy/18.10.0"
       ]
     ],
-    "body": "{\"auth\": \"badkey\"}"
+    "body": "{\"status\": true, \"nzo_ids\": [\"SABnzbd_nzo_p86tgx\"]}"
   }
 }

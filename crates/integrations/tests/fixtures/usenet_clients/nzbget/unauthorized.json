@@ -1,5 +1,5 @@
 {
-  "recorded_from": "nzbget-ng v24.8, built from its source (daemon/remote/XmlRpc.cpp BuildResponse and BuildErrorResponse, WebServer.cpp SendAuthResponse); not a live recording",
+  "recorded_from": "Built from NZBGet (nzbget-ng) v24.8 source (daemon/remote/XmlRpc.cpp BuildResponse and BuildErrorResponse, WebServer.cpp SendAuthResponse), checked against v26.3; not a live recording",
   "note": "a wrong user name or password: no body",
   "request": {
     "method": "POST",

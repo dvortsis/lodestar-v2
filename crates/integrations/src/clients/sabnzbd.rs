@@ -7,7 +7,8 @@
 //!   no header for the key.
 //! - **Authentication** is `apikey`. SABnzbd answers a missing or wrong key
 //!   with HTTP 403 and the text `API Key Required` or `API Key Incorrect`
-//!   (an empty body when its `api_warnings` is off). Its other 403s are an
+//!   (an empty body when its `api_warnings` is off, which then also hides
+//!   the two refusals below, so an empty 403 is reported as a key problem). Its other 403s are an
 //!   address outside `inet_exposure` (`External internet access denied`)
 //!   and a host name not in `host_whitelist` (`Access denied - Hostname
 //!   verification failed`). There is no session.
@@ -28,7 +29,7 @@
 //!
 //! Written against SABnzbd 4.5.5's source (`sabnzbd/api.py`,
 //! `sabnzbd/interface.py`); the fixtures in
-//! `fixtures/usenet_clients/sabnzbd/` follow it. The develop branch (5.0)
+//! `tests/fixtures/usenet_clients/sabnzbd/` follow it. The develop branch (5.0)
 //! keeps these modes, keys and answers.
 
 use std::fmt;
@@ -42,7 +43,7 @@ use serde::Deserialize;
 use super::qbittorrent::upload_timeout;
 use super::usenet::{
     Access, JobId, Nzb, NzbOptions, NzbPriority, UsenetClient, UsenetInfo, UsenetKind, redirected,
-    version_text,
+    scrub, version_text,
 };
 use super::{AuthFailure, CLIENT_TIMEOUT, Category, ClientError, category_name, client_reason};
 use crate::BoxFuture;
@@ -156,7 +157,8 @@ impl Sabnzbd {
             .map_err(|_| ClientError::Protocol("couldn't build the request"))?;
         let resp = self.http.send(req).await?;
         let status = resp.status().as_u16();
-        let bytes = read_limited(resp, MAX_ANSWER).await?;
+        let mut bytes = read_limited(resp, MAX_ANSWER).await?;
+        scrub(&mut bytes, self.api_key.expose());
         lodestar_log::log_event!(
             crate::log_events::CLIENT_REQUEST,
             client = "sabnzbd",
@@ -364,8 +366,8 @@ pub fn parse_categories(status: u16, body: &[u8]) -> Result<Vec<Category>, Clien
     }
     let mut names: Vec<String> = names
         .iter()
-        .filter(|n| n.as_str() != "*")
         .filter_map(|n| category_name(n))
+        .filter(|n| n != "*")
         .collect();
     names.sort();
     names.dedup();
@@ -457,7 +459,7 @@ mod tests {
         assert_eq!(parse_add(302, b""), Err(redirected()));
         let cats = parse_categories(
             200,
-            br#"{"categories": ["*", "tv", "movies", "tv", "\u0007"]}"#,
+            br#"{"categories": ["*", " *", "* ", "tv", "movies", "tv", "\u0007"]}"#,
         )
         .unwrap();
         let names: Vec<_> = cats.iter().map(|c| c.name.as_str()).collect();
