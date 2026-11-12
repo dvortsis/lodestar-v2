@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T04:21:20Z",
+  "updated_at": "2026-11-12T04:27:50Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7088,7 +7088,8 @@
       "id": "X-spool-open-size",
       "note": "Spool::open sizes a segment with entry.metadata().len() (crates/pipeline spool.rs ~:971); on Windows a directory listing's size can lag the real file size, so after a crash the start-up byte count can be low until the next open. Pre-existing; use the open handle's metadata. Reported by X-spool-damage-log (#724).",
       "at": "2026-11-12T04:21:20Z"
-    }
+    },
+    "Next runner PR: slice entries X-win-fs-followups (slot 1, same session as #728), X-wk-out-set-polish (slot 8), X-win-upd-history-nits (slot 5); owner FYI: #728, #729, #730 merged"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -7667,6 +7668,11 @@
       "pr": 729,
       "sha": "1acd0e35334af51f52f083b4a4ebbcd73a82a325",
       "at": "2026-11-12T04:06:37Z"
+    },
+    {
+      "pr": 728,
+      "sha": "0fd80630dcd5cd836494220783bfeb23602c9c0b",
+      "at": "2026-11-12T04:27:50Z"
     }
   ],
   "active_sessions": {
@@ -7901,15 +7907,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T04:21:20Z",
+    "updated": "2026-11-12T04:27:50Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-svc-eventcreate-bounded",
+        "slice": "X-win-fs-followups",
         "role": "build",
         "agent": "claude",
-        "doing": "bound the service eventcreate call (shared run_bounded, 10 s, test)",
-        "since": "2026-11-12T02:17:45Z",
+        "doing": "rv-728 N1+N4 (service eventcreate via system32_command); X-spool-open-size after #724 merges",
+        "since": "2026-11-12T04:27:50Z",
         "status": "active"
       },
       {
@@ -8063,7 +8069,7 @@
     }
   ],
   "heartbeat": "2026-11-12T03:41:56Z",
-  "updated": "2026-11-12T04:21:20Z",
+  "updated": "2026-11-12T04:27:50Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
