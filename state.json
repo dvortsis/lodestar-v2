@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T06:37:34Z",
+  "updated_at": "2026-11-12T06:39:51Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4121,7 +4121,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 32,
-  "last_heartbeat": "2026-11-12T03:41:56Z",
+  "last_heartbeat": "2026-11-12T06:39:51Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -7987,14 +7987,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T06:37:34Z",
+    "updated": "2026-11-12T06:39:51Z",
     "items": [
       {
         "slot": 1,
         "slice": "X-win-fs-followups",
         "role": "build",
         "agent": "claude",
-        "doing": "go given 05:53Z: rv-728 N1+N4 and X-spool-open-size (spool.rs free after #724)",
+        "doing": "go given 05:53Z: rv-728 N1+N4 and X-spool-open-size (spool.rs free after #724) PR #744 (dc231ac2), awaiting ready.",
         "since": "2026-11-12T04:27:50Z",
         "status": "active"
       },
@@ -8119,8 +8119,8 @@
       "words": "go with the runner's recommendation"
     }
   ],
-  "heartbeat": "2026-11-12T03:41:56Z",
-  "updated": "2026-11-12T06:37:34Z",
+  "heartbeat": "2026-11-12T06:39:51Z",
+  "updated": "2026-11-12T06:39:51Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
