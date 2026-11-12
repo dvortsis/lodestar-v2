@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T06:04:10Z",
+  "updated_at": "2026-11-12T06:04:39Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7968,7 +7968,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T06:04:10Z",
+    "updated": "2026-11-12T06:04:39Z",
     "items": [
       {
         "slot": 1,
@@ -8038,7 +8038,7 @@
         "slice": "X-flake-portable-restart-3",
         "role": "Opus slice",
         "agent": "session_01MMjhn8cMB1NrRCcQ9XkWUg",
-        "doing": "root-cause the relaunched copy's 30 s predecessor-wait timeout (#717 Windows CI)",
+        "doing": "PR #745 (b20bb8b3) CI running; runner accepted (a) timeline line, (b) 60->90 s, (c) exited+2s only if bind/lock checks still guard; archive after merge (\u00a72.59)",
         "since": "2026-11-12T05:04:27Z",
         "status": "active"
       },
@@ -8110,7 +8110,7 @@
     }
   ],
   "heartbeat": "2026-11-12T03:41:56Z",
-  "updated": "2026-11-12T06:04:10Z",
+  "updated": "2026-11-12T06:04:39Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
