@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T12:14:43Z",
+  "updated_at": "2026-11-12T12:25:24Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3871,7 +3871,7 @@
     ],
     "flaky": [
       "2026-10-22 11:13 Windows: search/tests/rebuild.rs searches_keep_working_through_a_rebuild_and_the_swap timed out (rebuild never finished in 30s) on PR #61 run 39768313014. Hypothesis: SRWLock writer starvation by spinning readers of Serving RwLock. Routed to B5a to root-cause.",
-      "11:22 failed again on PR #62 (job 119791380998): now consistent; asked B5a for a separate fix PR slice/B5a-swapfix first",
+      "11:22 failed again on PR #62 (job <job id>): now consistent; asked B5a for a separate fix PR slice/B5a-swapfix first",
       "11:48 root cause per B5a: finishing rename refused on Windows (scanner holds files) -> Failed phase, rebuilding() stays true. Fix PR #65.",
       "12:59 swap fix #65 merged; Windows rebuild test green on #64 and #65 runs"
     ],
@@ -5858,7 +5858,7 @@
     {
       "id": "flake-shell-unreachable",
       "added": "2026-11-07T15:53Z",
-      "text": "Flake candidate: web/e2e/shell.routes.test.ts:368 \"a server that never answers shows the unreachable page, and Try again reloads\" timed out clicking Try again (line 387) on #582 (run 42386800085, job 128445845679); #582 touches no web/. Likely race: test unroutes API + restores event stream before click, app probe recovers and removes the button. One rerun spent. If it recurs: small X-flake-shell-unreachable fix (wait for button/click before restoring routes). WK-15: remote.rs counters() keys 4/5 into metric 18 approved (grouped query insufficient: 49/69 ms)."
+      "text": "Flake candidate: web/e2e/shell.routes.test.ts:368 \"a server that never answers shows the unreachable page, and Try again reloads\" timed out clicking Try again (line 387) on #582 (run 42386800085, job <job id>); #582 touches no web/. Likely race: test unroutes API + restores event stream before click, app probe recovers and removes the button. One rerun spent. If it recurs: small X-flake-shell-unreachable fix (wait for button/click before restoring routes). WK-15: remote.rs counters() keys 4/5 into metric 18 approved (grouped query insufficient: 49/69 ms)."
     },
     {
       "id": "cr-ab-comp-1-checkins",
@@ -6708,7 +6708,7 @@
     {
       "at": "2026-11-11T05:17Z",
       "id": "X-flake-portable-restart",
-      "item": "windows_service.rs a_portable_restart_serves_again_on_the_same_port: relaunched copy started 10 ms after app.relaunch and hit sqlite disk I/O error (old process still held the store). Runner Opus subagent building the fix on slice/X-flake-portable-restart; seen on #655 ca0fbf6d job 130326742759. Add slices.yaml entry in next runner PR."
+      "item": "windows_service.rs a_portable_restart_serves_again_on_the_same_port: relaunched copy started 10 ms after app.relaunch and hit sqlite disk I/O error (old process still held the store). Runner Opus subagent building the fix on slice/X-flake-portable-restart; seen on #655 ca0fbf6d job <job id>. Add slices.yaml entry in next runner PR."
     },
     "next runner PR: PK-win-portable-upd owns += crates/lodestar/src/cli/util.rs (runner approved 2026-11-11T05:2xZ; refuse_during_update_rollback also refuses on portable.json rolling_back or unreadable)",
     "next runner PR: CMP-9c owns += web/src/lib/features/wizard/messages/{en,zh}.json (keys only, runner 2026-11-11)",
@@ -6972,7 +6972,7 @@
     },
     {
       "at": "2026-11-11T23:19:37Z",
-      "note": "#711 CMP-11b merged (b98e18a9). Slot 1 -> X-event-log-followups same session (brief). #709 blocked: ruleset sees stuck queued ci-ok 130782590251 of run 43089754858 despite dispatched green; rerun_workflow_run 43089754858 accepted (attempt 2), watch bjltiyv5x, then merge f820eeba. companion-pins dry runs dispatched: prowlarr 43118372884, gluetun 43118382222; qbittorrent 43118377594 cancelled by concurrency (re-dispatch after). SourceForge 5.3.0 has .asc for both installers."
+      "note": "#711 CMP-11b merged (b98e18a9). Slot 1 -> X-event-log-followups same session (brief). #709 blocked: ruleset sees stuck queued ci-ok <job id> of run 43089754858 despite dispatched green; rerun_workflow_run 43089754858 accepted (attempt 2), watch bjltiyv5x, then merge f820eeba. companion-pins dry runs dispatched: prowlarr 43118372884, gluetun 43118382222; qbittorrent 43118377594 cancelled by concurrency (re-dispatch after). SourceForge 5.3.0 has .asc for both installers."
     },
     "next runner PR: add crates/lodestar/src/update/windows/rollback.rs (Event Log text only) to X-event-log-followups owns",
     "next runner PR: put the 2026-11-11T23:29Z nine \u00a72.19 FYIs (TZ-0 one PR, restart-banner on-demand, CI throughput, OUT-0, RX-0, WK-11, X-win-upd-history, X-cmp13 signature path, X-event-log-followups scope) in dashboard.yaml owner_queue/notes; dashboard session relayed them in chat",
@@ -7025,13 +7025,13 @@
     {
       "id": "flake-logging-refs-0707",
       "at": "2026-11-12T02:06:22Z",
-      "note": "crates/lodestar/src/logging/refs.rs:55 bans substring '0707' in a random HMAC ref (~1/13k). Fixed as approved shared edit in RX-0 #717's next push (assert_ne!(r, \"ref:07070707\")). Seen on #717 Windows re-run job 130910086928."
+      "note": "crates/lodestar/src/logging/refs.rs:55 bans substring '0707' in a random HMAC ref (~1/13k). Fixed as approved shared edit in RX-0 #717's next push (assert_ne!(r, \"ref:07070707\")). Seen on #717 Windows re-run job <job id>."
     },
     "Next runner PR: add X-win-upd-history-polish slice entry (same session as #722, slot 5); owner FYI: #722 merged",
     {
       "id": "X-flake-dht-scrape-join",
       "at": "2026-11-12T02:10:33Z",
-      "note": "crates/dht/tests/scrape.rs scrape_lookup_estimates_the_swarm aborted (SIGABRT) on test (ubuntu-latest), run 43132875604 job 130905291698, #725 head 428b5230 (docs-only PR): tokio 1.54 harness.rs:426 / state.rs:387 'assertion failed: snapshot.is_join_interested()' after a panic-cannot-unwind (core panicking.rs:233). First sighting. Needs an Opus slice (DHT, concurrency): find which JoinHandle/abort path in dht node shutdown or scrape lookup triggers it; queue for next free slot. Not a fixed-sleep fix."
+      "note": "crates/dht/tests/scrape.rs scrape_lookup_estimates_the_swarm aborted (SIGABRT) on test (ubuntu-latest), run 43132875604 job <job id>, #725 head 428b5230 (docs-only PR): tokio 1.54 harness.rs:426 / state.rs:387 'assertion failed: snapshot.is_join_interested()' after a panic-cannot-unwind (core panicking.rs:233). First sighting. Needs an Opus slice (DHT, concurrency): find which JoinHandle/abort path in dht node shutdown or scrape lookup triggers it; queue for next free slot. Not a fixed-sleep fix."
     },
     "Next runner PR: X-svc-eventcreate-bounded slice entry (slot 1, same session as #721); owner FYI: #721 + #722 merged",
     "Next runner PR: slice entries X-flake-dht-scrape-join and X-prowlarr-no-fetch-wait (slot 6, same session as #723); owner FYI: #723 merged",
@@ -7279,6 +7279,11 @@
       "id": "X-756-decisions-wording",
       "at": "2026-11-12T12:14:43Z",
       "note": "rv-756-ad83d61d N-a/N-b: fix lines 31 and 33 of docs/decisions/2026-11-12-X-dht-lookup-converge.md with the review replacement wording, in the next runner docs PR (avoids a CI round on #756)."
+    },
+    {
+      "id": "RX-1-brief-notes",
+      "at": "2026-11-12T12:25:24Z",
+      "note": "rv-755 for RX-1: N1 pin the ASCII and set-operation folded flags (regex.rs:449, :427) with tests, e.g. cost(\"[[:upper:]]\") > 10*cost(\"[A-Z]\"), cost(\"[A-Z--0]\") > 10*cost(\"[A-Z]\"), or a reference differential; N2 (pre-existing) class_text maps a one-codepoint property like \\p{Zl} to an empty set, handle HirKind::Literal; N3 verifier compile up to ~2.3x baseline for compiled-size-bound shapes ([\\W_]x62, [\\w.-]x51), fix the \"as long again\" comment; N4 decisions-file wording \"no bound loosened\" while the accepted set grows, pin [^/]x127 in the timing table."
     }
   ],
   "main_health": [
@@ -7460,7 +7465,7 @@
   },
   "log": [
     "2026-10-30T13:56Z S-settings-reconcile asked to confirm the edit-chunk decision; runner confirmed owner option A (2026-10-24) and told it to record and cite it, with the 45 KB budget unchanged",
-    "2026-10-30T14:05Z X-filter-budget-8573C: data shows the 8573C runs on two host bands, and job 124095631213's neutralized 53.3 was host interference (callgrind: equal instructions). Runner approved (d), per-model skew on the calibration (7763 reference and 50 us unchanged), and listing 9V74 and 8370C (provisional n<5); flag to owner under \u00a72.19",
+    "2026-10-30T14:05Z X-filter-budget-8573C: data shows the 8573C runs on two host bands, and job <job id>'s neutralized 53.3 was host interference (callgrind: equal instructions). Runner approved (d), per-model skew on the calibration (7763 reference and 50 us unchanged), and listing 9V74 and 8370C (provisional n<5); flag to owner under \u00a72.19",
     "2026-10-30T14:06Z IMP-1 #210 round-2 fix 562450ae (N1 fold of multi-match candidates); re-check sent to session_01MMjhnCGd8sA1XL9cargxwy; the old run 41065412960 is superseded",
     "2026-10-30T14:06Z CR-0d-2a: runner chose option 1. The I1 reason stays in the metrics gauge, the suppression seconds and the Warn event in 2a; the /stats sampling_blocked field, the pill wording and zh go in 2b",
     "2026-10-30T14:10Z merged #211 (904209d4, owner freshness key; review MERGE, CI green). Opened #212 X-freshness-hardening (869a5bb1, reviewed MERGE); merge on green",
@@ -7861,7 +7866,7 @@
     },
     {
       "pr": 728,
-      "sha": "0fd80630dcd5cd836494220783bfeb23602c9c0b",
+      "sha": "0fd80630dcd5cd<job id>bfeb23602c9c0b",
       "at": "2026-11-12T04:27:50Z"
     },
     {
@@ -7994,6 +7999,11 @@
       "pr": 758,
       "sha": "1d681d928a7574bf1695fc57e9b5b58e0685c60f",
       "at": "2026-11-12T11:45:17Z"
+    },
+    {
+      "pr": 755,
+      "sha": "38827fd53d9b0d49ae351fe3cf4f0051eb8db8c2",
+      "at": "2026-11-12T12:25:24Z"
     }
   ],
   "active_sessions": {
@@ -8231,7 +8241,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T11:45:17Z",
+    "updated": "2026-11-12T12:25:24Z",
     "items": [
       {
         "slot": 1,
@@ -8271,12 +8281,12 @@
       },
       {
         "slot": 10,
-        "slice": "X-rx0-nits",
-        "role": "build",
-        "agent": "claude",
-        "doing": "RX-0 review nits N1-N5 (regex cost model wording/charges)",
-        "since": "2026-11-12T09:00:35Z",
-        "status": "active"
+        "slice": null,
+        "role": null,
+        "agent": null,
+        "doing": "#755 X-rx0-nits merged; idle (RX-1 waits on GS-2)",
+        "since": "2026-11-12T12:25:24Z",
+        "status": "idle"
       },
       {
         "slot": 11,
@@ -8364,7 +8374,7 @@
     }
   ],
   "heartbeat": "2026-11-12T09:44:56Z",
-  "updated": "2026-11-12T12:14:43Z",
+  "updated": "2026-11-12T12:25:24Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -8484,7 +8494,7 @@
     {
       "pr": 701,
       "slice": "PK-ui",
-      "sha": "9d664250851764abeeb24939c437aca7e6759ed3",
+      "sha": "9d<job id>abeeb24939c437aca7e6759ed3",
       "at": "2026-11-11T18:02Z"
     },
     {
