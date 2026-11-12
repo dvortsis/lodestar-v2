@@ -42,6 +42,8 @@ pub struct Services {
     pub api: lodestar_api::ApiState,
     /// Export's own adult setting, followed live (§20.9).
     pub export_adult: lodestar_api::export::ExportAdult,
+    /// Torznab's own adult setting, followed live (§20.9).
+    pub torznab_adult: lodestar_api::torznab::TorznabAdult,
     /// The status page's and metrics' state.
     pub http: http::AppState,
     /// `/api/v1/events`: the live stream's hub.
@@ -720,6 +722,7 @@ impl Services {
         );
         Ok(Services {
             export_adult: settings::content::follow_export(settings.subscribe()),
+            torznab_adult: settings::content::follow_torznab(settings.subscribe()),
             api,
             http,
             events,
@@ -792,6 +795,7 @@ impl Services {
         let Services {
             api,
             export_adult,
+            torznab_adult,
             http,
             events,
             handles,
@@ -823,6 +827,7 @@ impl Services {
             .layer(Extension(logs.clone()))
             .layer(Extension(jobs.clone()))
             .layer(Extension(export_adult))
+            .layer(Extension(torznab_adult))
             .layer(Extension(system))
             .layer(Extension(updates))
             .layer(Extension(workers))

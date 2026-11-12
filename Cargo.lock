@@ -1619,6 +1619,7 @@ dependencies = [
  "lodestar-search",
  "lodestar-store",
  "proptest",
+ "quick-xml",
  "rand 0.10.3",
  "serde",
  "serde_json",

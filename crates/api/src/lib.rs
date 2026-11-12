@@ -55,6 +55,7 @@ mod suggest;
 mod swarm;
 pub mod system;
 mod torrents;
+pub mod torznab;
 pub mod updates;
 mod user_items;
 pub mod webhooks;
@@ -134,6 +135,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(workers::routes())
         .merge(companions::routes())
         .merge(companions_guided::routes())
+        .merge(torznab::routes())
         .merge(openapi::routes())
         // What `auth::protected` checks sessions against.
         .layer(Extension(auth::SessionAuth::of(&state)))
