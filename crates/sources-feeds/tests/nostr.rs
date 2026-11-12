@@ -272,6 +272,11 @@ fn missing_and_repeated_fields_are_refused() {
     assert_eq!(refused(&no_sig), Refused::Event(Field::Sig));
     let twice = m.replace("\"kind\":1,", "\"kind\":1,\"kind\":1,");
     assert_eq!(refused(&twice), Refused::Event(Field::Kind));
+    // A key written with an escape refuses the event, even an unknown one.
+    let esc = m.replace("\"kind\":1,", "\"kind\":1,\"\\u006bind\":2,");
+    assert_eq!(refused(&esc), Refused::EscapedKey);
+    let esc = m.replace("\"kind\":1,", "\"kind\":1,\"x\\ty\":2,");
+    assert_eq!(refused(&esc), Refused::EscapedKey);
 }
 
 #[test]
@@ -300,6 +305,11 @@ fn every_cap_is_refused() {
     // Bytes.
     let big = event_msg(1, &[], &"a".repeat(LIMITS.max_bytes));
     assert_eq!(refused(&big), Refused::TooLarge);
+    // A message of exactly the cap is read.
+    let base = event_msg(1, &[], "").len();
+    let exact = event_msg(1, &[], &"a".repeat(LIMITS.max_bytes - base));
+    assert_eq!(exact.len(), LIMITS.max_bytes);
+    assert!(parse(exact.as_bytes(), &LIMITS).is_ok());
     // Tags: the cap itself passes, one more is refused.
     let t: Vec<&[&str]> = vec![&["t", "a"]; LIMITS.max_tags];
     assert!(parse(event_msg(1, &t, "").as_bytes(), &LIMITS).is_ok());
@@ -472,6 +482,8 @@ fn the_key_comes_only_from_x() {
     assert!(release_of(&[&["x", "zz"]], "").is_none());
     assert!(release_of(&[&["x", &"0".repeat(40)]], "").is_none());
     assert!(release_of(&[&["x", &"a".repeat(64)]], "").is_none());
+    let upper = release_of(&[&["x", &HASH.to_uppercase()]], "").unwrap();
+    assert_eq!(upper.hash.to_string(), HASH);
     // Two that disagree: ambiguous, dropped. The same twice is fine.
     let other = "1123456789abcdef0123456789abcdef01234567";
     assert!(release_of(&[&["x", HASH], &["x", other]], "").is_none());
@@ -494,6 +506,11 @@ fn adult_tags_and_warnings() {
     }
     assert!(
         release_of(&[&["x", HASH], &["content-warning", "Adult content"]], "")
+            .unwrap()
+            .adult
+    );
+    assert!(
+        release_of(&[&["x", HASH], &["content-warning", "p\u{200b}orn"]], "")
             .unwrap()
             .adult
     );
@@ -557,12 +574,10 @@ proptest! {
     #[test]
     fn mutated_events_never_panic(
         content in ".{0,64}",
-        at in any::<u64>(),
         cut in 0usize..600,
         flip in 0usize..600,
     ) {
         let m = event_msg(KIND_TORRENT, &[&["x", HASH], &["title", &content]], &content);
-        let m = m.replace("1700000000", &at.to_string());
         let mut b = m.into_bytes();
         if let Some(x) = b.get_mut(flip) {
             *x ^= 0x20;
@@ -574,6 +589,66 @@ proptest! {
                 event.id
             );
             let _ = release(&event);
+        }
+    }
+
+    #[test]
+    fn release_stays_within_the_caps(
+        tags in proptest::collection::vec(
+            (
+                prop_oneof![
+                    Just("x"), Just("title"), Just("file"), Just("tracker"),
+                    Just("i"), Just("t"), Just("content-warning"), Just("other"),
+                ],
+                prop_oneof![
+                    Just(HASH.to_string()),
+                    Just("udp://t.example:1/announce".to_string()),
+                    Just("imdb:tt0111161".to_string()),
+                    Just("tcat:video".to_string()),
+                    Just("nsfw".to_string()),
+                    ".{0,40}",
+                    "[a-z]{1,8}:[^ ]{0,200}",
+                    "\\PC{0,5000}",
+                ],
+                proptest::option::of("[0-9]{0,22}"),
+            ),
+            0..80,
+        ),
+        content in ".{0,200}",
+    ) {
+        let tags: Vec<Vec<String>> = tags
+            .into_iter()
+            .map(|(n, v, size)| {
+                let mut t = vec![n.to_string(), v];
+                t.extend(size);
+                t
+            })
+            .collect();
+        let pubkey = [7u8; 32];
+        let e = Event {
+            id: event_id(&pubkey, 1, KIND_TORRENT, &tags, &content),
+            pubkey,
+            created_at: 1,
+            kind: KIND_TORRENT,
+            tags,
+            content,
+            sig: [0; 64],
+        };
+        if let Some(r) = release(&e) {
+            prop_assert!(r.name.as_ref().is_none_or(|n| !n.is_empty() && n.len() <= nostr::MAX_NAME));
+            prop_assert!(r.files.len() <= nostr::MAX_FILES);
+            prop_assert!(r.files.iter().all(|f| !f.path.is_empty() && f.path.len() <= nostr::MAX_PATH));
+            prop_assert!(r.trackers.len() <= nostr::MAX_TRACKERS);
+            prop_assert!(r.trackers.iter().all(|t| t.len() <= nostr::MAX_TRACKER));
+            prop_assert!(r.ids.len() <= nostr::MAX_IDS);
+            prop_assert!(r.ids.iter().all(|i| !i.scheme.is_empty()
+                && i.scheme.len() <= nostr::MAX_ID_PART
+                && !i.value.is_empty()
+                && i.value.len() <= nostr::MAX_ID_PART));
+            prop_assert!(r.tags.len() <= nostr::MAX_KEPT_TAGS);
+            prop_assert!(r.tags.iter().all(|t| !t.is_empty() && t.len() <= nostr::MAX_TAG));
+            prop_assert!(r.description.as_ref().is_none_or(|d| d.len() <= nostr::MAX_DESCRIPTION));
+            prop_assert_eq!(r.hash.to_string(), HASH);
         }
     }
 

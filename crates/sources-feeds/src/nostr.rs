@@ -145,6 +145,10 @@ pub enum Refused {
     Tags,
     /// The id isn't the SHA-256 of the canonical serialisation.
     IdMismatch,
+    /// An event key is written with an escape. Its decoded form could be
+    /// a field another reader would take, so two readers could see two
+    /// events; refused like a repeated key.
+    EscapedKey,
 }
 
 impl From<Stop> for Refused {
@@ -392,7 +396,10 @@ fn event(j: &mut Reader<'_>, limits: &Limits) -> R<Result<Event, Refused>> {
     let mut sig = None;
     let mut bad: Option<Refused> = None;
     j.object(|j, key| {
-        // Keys compare as written: an escaped spelling is an unknown key.
+        if key.contains('\\') {
+            bad.get_or_insert(Refused::EscapedKey);
+            return j.skip().map(|_| ());
+        }
         let f = match key {
             "id" => Field::Id,
             "pubkey" => Field::Pubkey,
@@ -757,7 +764,8 @@ pub fn release(e: &Event) -> Option<Release> {
                 push_tag(&mut r.tags, v);
             }
             "content-warning" => {
-                r.adult |= v.split(|c: char| !c.is_alphanumeric()).any(adult_term);
+                let shown: String = v.chars().filter(|&c| !hidden_char(c)).collect();
+                r.adult |= shown.split(|c: char| !c.is_alphanumeric()).any(adult_term);
             }
             _ => {}
         }
