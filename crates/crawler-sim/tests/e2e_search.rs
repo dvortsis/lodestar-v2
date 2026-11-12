@@ -314,9 +314,10 @@ async fn every_harvested_torrent_is_searchable_within_five_seconds() {
     drop((peers, liar));
 
     lag.sort();
-    let over: Vec<_> = lag.iter().filter(|(d, _)| *d > BAR).collect();
+    // The owner's budget is "< 5 s" (§1.6): exactly 5 s misses it.
+    let over: Vec<_> = lag.iter().filter(|(d, _)| *d >= BAR).collect();
     assert!(
         over.is_empty(),
-        "harvest to searchable over the {BAR:?} bar: {over:?}"
+        "harvest to searchable at or over the {BAR:?} bar: {over:?}"
     );
 }

@@ -1,0 +1,16 @@
+# X-m8-net-e2e-nits decisions
+
+Follow-ups from the review of #763 (M8-NET-E2E). These correct and add to `docs/decisions/2026-11-12-M8-NET-E2E.md`, which stays as merged.
+
+- **The announcing client does no lookup (correction).** The M8-NET-E2E file says the client "does what a BitTorrent client does: an iterative `get_peers` lookup from the bootstrap node, then `announce_peer` to the 8 closest nodes it found". The merged harness doesn't do that.
+  - `Network::closest` works out the 8 nodes closest to each hash by XOR distance from the test's own list of every node id, where a client's lookup would end.
+  - `Client::announce` then sends each of them a `get_peers` (for the token) and an `announce_peer`, directly.
+  - An iterative client lookup was tried during the slice (the runner's option 1) and dropped with that topology. The file's wording is left over from it.
+  - **For M8-CHAOS-1:** the announces don't exercise lookup convergence. Chaos on the network can't make the client miss the closest nodes; the client only panics if a node doesn't answer within its 12 s retry budget. Lookup convergence is exercised by the crawler's own `get_peers` lookups (the pool's peer finding) and by `crates/dht`'s tests (`node/join_tests.rs`, `tests/lookup_converge.rs`).
+- **The data dir's guard removes it (wording).** Where the M8-NET-E2E file says "a small drop guard keeps the data dir", it means `DataDir` creates the dir and removes it on drop.
+- **The bar is exclusive.** A hash fails at 5 s or more (`>=`), matching the owner's "new torrent → searchable < 5 s" (§1.6). Before, exactly 5000 ms passed. The difference is academic at nanosecond resolution, but the check now says what the budget says.
+- **A failed run's temp dir: left as it is, deliberately.** If an assertion panics before `App::shutdown`, the test unwinds with SQLite and the index still open, `DataDir`'s drop can't remove the dir on Windows, and `%TEMP%/lodestar-e2e-<pid>-<n>` is left behind.
+  - Why not fixed: removing it reliably means the pipeline's tasks, the tokio runtime and the live indexer's thread must all stop, and their files close, before the dir is removed, during the unwind. That means waiting on those very threads while a test is failing, possibly because one of them is stuck. A wait there could hang and hide the original panic. A bounded wait would be a timeout on teardown, close to the fixed sleeps standards §2 rules out.
+  - Why it's harmless: it happens only on a failure. The name is unique per process and per run, so a later run never collides with it. It sits in the system temp dir, which the OS and CI runners clean.
+  - Nothing sweeps other processes' leftovers: a sweep could delete the dir of a run going on at the same time.
+- **macOS (runner, 2026-11-12, option A):** no number yet. The `e2e_search` time on macOS is measured by the first `test (macos-latest)` job that completes, on `main` or the nightly run, and the runner records it in a runner note, as planned for #763. There's none yet because on `main` the macOS job was cancelled while still queued in three runs in a row after #763: cancel-in-progress supersedes each run when the next merge lands, and merges land faster than a macOS runner frees up. The nightly run isn't superseded that way. If macOS misses the 5 s bar, the runner opens a follow-up.

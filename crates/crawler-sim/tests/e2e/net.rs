@@ -101,8 +101,6 @@ impl Network {
         ids.into_iter().take(k).map(|(_, a)| a).collect()
     }
 
-    /// Replies the network's nodes dropped to their rate limits, and
-    /// queries of theirs that timed out.
     /// BEP 51 harvests the network's own nodes made: always 0, as they
     /// don't sample, which is what makes the first `sample` event the
     /// crawler's (`harvests.rs`).
@@ -110,6 +108,8 @@ impl Network {
         self.nodes.iter().map(|n| n.stats().harvested_sample).sum()
     }
 
+    /// Replies the network's nodes dropped to their rate limits, and
+    /// queries of theirs that timed out.
     pub fn dropped_and_timeouts(&self) -> (u64, u64) {
         self.nodes.iter().fold((0, 0), |(d, t), n| {
             let s = n.stats();
