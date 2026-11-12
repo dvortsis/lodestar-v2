@@ -7702,6 +7702,16 @@
       "id": "merged-764",
       "note": "#764 ENR-14 merged 55e155a9 after merged-tree clippy (ops.rs, pipeline lib.rs overlap) exit 0.",
       "added": "2026-11-12T23:18Z"
+    },
+    {
+      "id": "nos-2b-irc0-killswitch",
+      "note": "NOS-2b and IRC-0 briefs: the caller keeps the handed-over SOCKS stream under the kill-switch (rv-791 I3).",
+      "added": "2026-11-12T23:18Z"
+    },
+    {
+      "id": "flag-791-bnd-addr",
+      "note": "\u00a72.19 flag: NOS-2a checks the proxy BND.ADDR for form only, not against the destination policy (it is the proxy outbound socket, not the destination). Runner accepted (rv-791 I1).",
+      "added": "2026-11-12T23:18Z"
     }
   ],
   "main_health": [
