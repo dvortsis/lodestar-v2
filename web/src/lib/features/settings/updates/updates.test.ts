@@ -466,7 +466,7 @@ describe('the Updates screen', () => {
 		expect(text).not.toContain("didn't install");
 		expect(text).not.toContain('selftest');
 		// Never asks for the build that failed again.
-		expect(text).toContain('Wait for a newer version');
+		expect(text).toContain('newer than the failed one');
 		expect(text).not.toMatch(/try again|reinstall/i);
 	});
 
@@ -484,13 +484,13 @@ describe('the Updates screen', () => {
 		status.history = [entry];
 		const { unmount } = render(UpdatesScreen);
 		let text = (await screen.findByTestId('updates-rolled-back')).textContent ?? '';
-		expect(text).toContain('Wait for a newer version');
+		expect(text).toContain('newer than the failed one');
 		unmount();
 		status.history = [{ ...entry, reason: 'manual' }];
 		render(UpdatesScreen);
 		text = (await screen.findByTestId('updates-rolled-back')).textContent ?? '';
 		expect(text).toContain('You rolled Lodestar back');
-		expect(text).not.toContain('Wait for a newer version');
+		expect(text).not.toContain('newer than the failed one');
 	});
 
 	it('shows the saved security choice when the status can’t load', async () => {
