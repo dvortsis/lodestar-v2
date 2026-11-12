@@ -261,5 +261,5 @@ Plain `curl` in PowerShell runs a different command that doesn't understand `--d
 <!-- nav:start -->
 ---
 
-[← Chapter 6: Troubleshooting](06-troubleshooting.md) · [Contents](README.md#contents) · [Appendix A: Answers to check your understanding →](appendix-a-answers.md)
+[← Chapter 6: Troubleshooting](06-troubleshooting.md) · [Contents](README.md#contents) · [Chapter 8: Add companions →](08-add-companions.md)
 <!-- nav:end -->
