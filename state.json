@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T12:26:01Z",
+  "updated_at": "2026-11-12T12:38:43Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4121,7 +4121,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-12T09:44:56Z",
+  "last_heartbeat": "2026-11-12T12:38:43Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -7288,7 +7288,7 @@
     {
       "id": "X-scrub-job-ids",
       "at": "2026-11-12T12:26:01Z",
-      "note": "main carries 12-digit CI job ids in comments and docs (crates/filter/tests/props.rs, docs/architecture.md, docs/decisions/2026-10-23-F-perf.md and others; find with git grep for 1[23] plus 10 digits, excluding goldens, lockfiles and json). Replace each with run/PR context only, in a small runner or helper PR; also consider a CI hygiene check."
+      "note": "main carries 12-digit CI job ids in comments and docs (crates/filter/tests/props.rs, docs/architecture.md, docs/decisions/2026-10-23-F-perf.md and others; find with git grep for 1[23] plus 10 digits, excluding goldens, lockfiles and json). Replace each with run/PR context only, in a small runner or helper PR; also consider a CI hygiene check. Runner call: only CI job ids in comments and docs (props.rs comments, architecture.md, decisions files). Leave evidence byte counts and process ids alone. Done in the next runner docs PR, not a slot."
     }
   ],
   "main_health": [
@@ -8246,7 +8246,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T12:25:24Z",
+    "updated": "2026-11-12T12:38:43Z",
     "items": [
       {
         "slot": 1,
@@ -8378,8 +8378,8 @@
       "words": "go with the runner's recommendation"
     }
   ],
-  "heartbeat": "2026-11-12T09:44:56Z",
-  "updated": "2026-11-12T12:26:01Z",
+  "heartbeat": "2026-11-12T12:38:43Z",
+  "updated": "2026-11-12T12:38:43Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
