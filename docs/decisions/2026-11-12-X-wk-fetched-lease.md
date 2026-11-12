@@ -26,9 +26,20 @@ Closes the window that X-wk-out-set-polish (#737) named: a coordinator writer la
   - The claim's source still joins the lease, as any claim's does.
 - **Any other worker's claim is answered exactly as before:** `Held`, with its hints relayed to the holder.
 - **A fetched lease expires a TTL after the mark** (600 s at defaults), even while its holder heartbeats (`LeaseTable::expire`).
-  - **Why:** a batch the coordinator accepted but never committed would otherwise keep its lease for as long as the holder lives, and the holder's claims would be denied all that time.
+  - **Why:** the coordinator accepts a batch before it decodes it. One that doesn't decode (`RemoteIntake::take`'s `undecodable`) ends none of its leases.
+    - On main, the holder's next claim got such a lease back, and the pool's duplicate path ended it.
+    - With the mark, that claim is denied. Without an expiry, the lease would stay for as long as the holder lives, and the key would never be fetched again.
   - **What happens to the key then:** it expires like a silent worker's lease. It waits for a re-grant with its cohort and sources, and the next claimer gets it under a new token. That may be the same worker, which then fetches it again.
-  - **A commit that comes later** under the old token is stale, and the writer handles it as a late result (plan Q7).
+  - **The result still queued under the old token** (self-review I1):
+    - **Still in intake:** `take` finds no lease for it, counts it `stale` and drops it. The re-grant fetches the key again, and if its peers are gone by then, the key can end as lost.
+    - **Already with the writer:** it's stored, but with no lease to end, `end_lease` writes no funnel row. The re-grant then ends at the store check or on the refetch's `AlreadyStored`.
+    - Plan Q7's late-result path doesn't apply: it covers tokens from an earlier epoch only.
+  - **The trade-off, against main:**
+    - **On main:** a writer lagging more than 180 s ended the holder's lease as lost if the worker sighted the key again in that time, and its queued result was then dropped as stale. A lease the worker didn't sight again lived until the commit, however long.
+    - **Now:** no lag ends the lease through a re-sighting. A lag over 600 s ends it by expiry, sighted or not, and the queued result goes as above.
+    - **Why it's worth it:** a writer more than 600 s behind is far outside its budget, with 80 queued batches. The expiry is the only thing that frees a lease whose batch didn't decode.
+    - **A possible follow-up:** route a same-epoch record whose lease has expired through `restore_if_free`, as late results are, instead of dropping it as stale. That's in `crates/pipeline/src/remote.rs`, outside this slice; the runner decides.
+  - **Counted as expired:** the coordinator's expired-leases count (`LeaseEvents::expired`, `coordinator.rs`) now counts these too, not only leases of silent workers.
 - **A `Fetched` for a key with no lease isn't counted as a stale report.**
   - The worker sends `Fetched` on `Accepted`, so the writer's commit often ends the lease before the report arrives. That's expected.
   - A `Fetched` under another token, for a key that still has a lease, still counts in `cluster_stale_reports_total`, as before (`fetched_keeps_the_lease_and_results_need_a_sink`).
@@ -36,6 +47,8 @@ Closes the window that X-wk-out-set-polish (#737) named: a coordinator writer la
 ## Compatibility
 - **An older worker never sends `Fetched`.** Its leases are never marked, and its own claims get its lease back as today (`a_holder_that_never_reports_fetched_gets_its_lease_back`).
 - **A newer worker with an older coordinator:** the older coordinator checks a `Fetched` and keeps the lease, as it always did, and still answers the holder's claims with the lease. The worker's 180 s grace still covers it there.
+  - Each `Fetched` arriving after the commit counts in that coordinator's `cluster_stale_reports_total`, which is harmless noise.
+- **The cost everywhere:** one extra `Outcome` frame per accepted batch.
 - **No wire change:** `Outcome::Fetched` and `DenyReason::Stored` already exist.
 
 ## The worker's grace stays at 180 s
@@ -45,7 +58,7 @@ Closes the window that X-wk-out-set-polish (#737) named: a coordinator writer la
 
 ## The built-in worker
 - **It never sends `Fetched`:** its results go straight to the writer, not through `Accepted`. So its leases are never marked.
-- **No extra check for it:** the claim check doesn't special-case `WorkerId::LOCAL`. The server test's session connects under that id, which lets the test exercise the real path.
+- **No extra check for it:** neither the mark nor the claim check special-cases `WorkerId::LOCAL`. The server test's session connects under that id, which lets the test exercise the real path. A LOCAL lease that were somehow marked would expire like any marked lease.
 
 ## Tests
 - `a_fetched_lease_answers_its_holders_claims_as_committed` (`crates/cluster/src/leases.rs`), on the authority's injected time:
@@ -62,4 +75,11 @@ Closes the window that X-wk-out-set-polish (#737) named: a coordinator writer la
   - the old token is stale;
   - a loss or an eviction takes the mark too.
 - `an_accepted_batch_reports_its_leases_fetched` (the runtime): `Accepted` sends `Fetched` for the batch's lease.
-- `fetched_keeps_the_lease_and_results_need_a_sink` (`crates/cluster/src/tests.rs`, a shared edit): over a real session, the holder's claim after `Fetched` is `Denied{Stored}`, and the lease stays for the commit.
+- `fetched_keeps_the_lease_and_results_need_a_sink` (`crates/cluster/src/tests.rs`, a shared, test-only edit the runner approved), over a real session:
+  - 500 s after the mark, past the worker's grace, nothing has expired;
+  - the holder's claim is `Denied{Stored}`;
+  - the lease stays for the commit;
+  - a `Fetched` arriving after the commit isn't counted as stale.
+
+  The worker's own forgetting isn't simulated: a denied key never reaches the out set or the pool, so what the out set remembers doesn't matter.
+- **`cluster_stale_reports_total`** (`docs/metrics.md`, outside this slice's files): its row could say that a `Fetched` for a key with no lease isn't counted. That's left to the metrics doc's owner.

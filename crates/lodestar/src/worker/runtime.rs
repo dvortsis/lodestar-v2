@@ -2162,8 +2162,9 @@ async fn send_results(
                         s.counts.committed.fetch_add(f.leases.len() as u64, Ordering::Relaxed);
                         // Accepted: their results are no longer out. Kept,
                         // finished, for the grace: the coordinator holds the
-                        // lease until its writer commits, and answers this
-                        // worker's claims with it meanwhile.
+                        // lease until its writer commits. One that marks it
+                        // (the `Fetched` below) denies this worker's claims
+                        // meanwhile; an older one answers them with it.
                         for &(key, token) in &f.leases {
                             s.leases.committed(&InfoHash(key), Token(token));
                         }

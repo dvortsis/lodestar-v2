@@ -1516,8 +1516,12 @@ mod queues {
         );
         // The worker still counts the fetched lease, as the coordinator does.
         assert_eq!(s.leases(), 1);
-        // Its own claim on the fetched lease is answered as stored, never
-        // with the lease, which stays for the commit (X-wk-fetched-lease).
+        // The writer stalls 500 s, past the worker's 180 s grace: the
+        // lease isn't expired, and its holder's own claim is answered as
+        // stored, never with the lease, which stays for the commit
+        // (X-wk-fetched-lease). The worker drops a denied key, so whatever
+        // its out set has forgotten, nothing ends the lease as lost.
+        assert_eq!(authority.expire(super::T0 + 500), 0);
         assert_eq!(
             s.claim(vec![item(1)]).await.unwrap(),
             [GrantItem::Denied {
@@ -1543,6 +1547,13 @@ mod queues {
             .await
             .unwrap();
         assert_eq!(s.leases(), 0);
+        // A `Fetched` arriving after the commit (the usual order) isn't a
+        // stale report: the key has no lease left.
+        s.report(vec![report(1, t1, Outcome::Fetched)])
+            .await
+            .unwrap();
+        s.heartbeat().await.unwrap();
+        assert_eq!(server.snapshot().stale_reports, 1, "unchanged");
 
         // No sink: a batch is refused, never acknowledged and dropped.
         s.send(ToCoordinator::Results(Payload {

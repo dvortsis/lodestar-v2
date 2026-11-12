@@ -238,8 +238,9 @@ impl LeaseTable {
     }
 
     /// Ends every lease held by a worker silent for longer than the TTL,
-    /// and forgets the worker. The caller grants the keys again (see
-    /// [`regrant`](Self::regrant)).
+    /// and forgets the worker, and every lease marked fetched longer than
+    /// the TTL ago, its holder alive or not. The caller grants the keys
+    /// again (see [`regrant`](Self::regrant)).
     pub fn expire(&mut self, now: i64) -> Vec<(InfoHash, Lease)> {
         let ttl = self.ttl;
         let dead: Vec<WorkerId> = self
@@ -489,7 +490,8 @@ impl AuthorityState {
 /// [`LeaseEvents::harvested`] or [`LeaseEvents::lost`].
 ///
 /// The built-in worker ([`WorkerId::LOCAL`]) runs in the coordinator's own
-/// process and can't go silent, so its leases never expire; they end only
+/// process and can't go silent, and never reports `Fetched` (its results
+/// go straight to the writer), so its leases never expire; they end only
 /// by commit, loss or eviction.
 pub struct LeaseAuthority {
     state: Mutex<AuthorityState>,
@@ -823,8 +825,9 @@ impl LeaseAuthority {
         lease
     }
 
-    /// Ends the leases of workers silent past the TTL; their keys wait for
-    /// a re-grant. Returns how many. The built-in worker never expires.
+    /// Ends the leases of workers silent past the TTL, and leases marked
+    /// fetched longer than the TTL ago; their keys wait for a re-grant.
+    /// Returns how many. The built-in worker never expires.
     pub fn expire(&self, now: i64) -> usize {
         let mut s = self.lock();
         s.table.heartbeat(WorkerId::LOCAL, now);
