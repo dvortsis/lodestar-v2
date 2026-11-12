@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T16:26:15Z",
+  "updated_at": "2026-11-12T16:32:37Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7369,6 +7369,11 @@
       "id": "X-flake-bitmagnet-quiescent",
       "at": "2026-11-12T16:08:26Z",
       "note": "lodestar-sources-importers bitmagnet::pg_tests::batches_are_bounded_by_count_and_memory failed on #768 (unrelated, dht-only diff) with Err(NotQuiescent) at pg_tests.rs:297; NotQuiescent maps from Postgres 55P03 (lock_not_available). Likely the PG tests share one database and run in parallel, so another test holds a lock during the quiescence check. Fix: per-test schema/database or serialise the pg tests; no fixed sleeps. One re-run spent on #768."
+    },
+    {
+      "id": "X-flake-search-toolbar-skip",
+      "what": "keyboard-only e2e/search-toolbar.keyboard.test.ts:9 (Skip to results lands on active row): after j, row 2 not focused within 10 s. Seen on #765 at 2c48bc72 (code it does not touch); passed 15/15 locally. One re-run spent. Compare with #477 X-flake-search-keyboard.",
+      "logged": "2026-11-12T16:32:37Z"
     }
   ],
   "main_health": [
@@ -8509,7 +8514,7 @@
     }
   ],
   "heartbeat": "2026-11-12T15:41:01Z",
-  "updated": "2026-11-12T16:26:15Z",
+  "updated": "2026-11-12T16:32:37Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
