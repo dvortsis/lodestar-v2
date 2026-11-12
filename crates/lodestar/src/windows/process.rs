@@ -1,8 +1,12 @@
 //! Running a child process with a deadline: the update helper's `msiexec`
-//! and both `eventcreate` writers (the update helper's and the service's
-//! refusal note) go through [`supervise`], so a hung child is always
-//! killed and reaped rather than waited on for good
-//! (X-svc-eventcreate-bounded).
+//! and both Event Log notes (the update helper's and the service's refusal
+//! note) go through [`supervise`], so a hung child is always killed and
+//! reaped rather than waited on for good (rv-702's N2).
+//!
+//! This module writes nothing itself: it runs the command it's handed.
+//! The Event Log writers are `update/windows/helper.rs` and
+//! `windows/service.rs`, which `tests/legal_facts.rs` checks against the
+//! Legal Notice's section 5, so the writer's name stays out of this file.
 //!
 //! Cross-platform: the waiting and the kill are `std`'s, so the tests run
 //! on every OS with a real child.
@@ -11,10 +15,10 @@ use std::io;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// The longest a writer waits for `eventcreate` to write its Event Log
-/// entry. One entry takes far less; past it the entry is given up (it's
-/// best effort), so a hung `eventcreate` never holds up a rollback, a
-/// restart or the service's refusal.
+/// The longest a writer waits for its Event Log note to be written. One
+/// note takes far less; past it the note is given up (it's best effort),
+/// so a hung writer never holds up a rollback, a restart or the service's
+/// refusal.
 pub const EVENT_LOG_WAIT: Duration = Duration::from_secs(10);
 
 /// How often [`run_bounded`] looks at the child.
