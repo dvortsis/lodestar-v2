@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T19:27:34Z",
+  "updated_at": "2026-11-12T19:49:24Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7436,6 +7436,14 @@
     {
       "id": "X-clippy-1-100",
       "note": "2026-11-12T19:27:34Z: #776 head 7e6bb38f adds a frozen 1.99 cased table in crates/search/src/regex.rs (Rust 1.100 Unicode raised regex fold cost; regex_plan boundary row failed). Fresh Opus delta review running. #765 delta security review MERGE (rv-765-61492c7e); #765 and #773 hold until #776 merges."
+    },
+    {
+      "id": "M8-PERF-1-split",
+      "note": "2026-11-12T19:49:24Z: M8-PERF-1 split (runner call A): 1a = #780 (~2,080 lines, reason in PR), 1b local until 1a merges. Next runner PR adds M8-PERF-1a/1b to slices.yaml placements. Open: reporting overhead at 10M as a G-v1-10m JSON row (needs lodestar-api dev-dep) -> assign if the gate needs it."
+    },
+    {
+      "id": "WK-11b-drift-metric",
+      "note": "2026-11-12T19:49:24Z: #779 WK-11b open; worker_spool_lease_drift_total left out (worker has no metrics export yet) -> follow-up."
     }
   ],
   "main_health": [
@@ -8645,7 +8653,7 @@
     }
   ],
   "heartbeat": "2026-11-12T18:39:05Z",
-  "updated": "2026-11-12T19:27:34Z",
+  "updated": "2026-11-12T19:49:24Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
