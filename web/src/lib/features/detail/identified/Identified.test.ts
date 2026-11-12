@@ -55,36 +55,62 @@ describe('Identified', () => {
 		const { container } = show();
 		expect(container.querySelector('section')).toBeNull();
 	});
-	it('renders nothing for no answers and a null resolved_via, and never says "from the name"', () => {
-		const { container } = show({ alternatives: [], resolved_via: null });
-		expect(container.querySelector('section')).toBeNull();
-		expect(container.textContent).not.toMatch(/name/i);
+	it('renders nothing for no answers, whatever resolved_via says', () => {
+		for (const via of [null, 'folder']) {
+			const { container } = show({ alternatives: [], resolved_via: via });
+			expect(container.querySelector('section')).toBeNull();
+		}
 	});
-	it('says how a file-tree resolution was reached, only when resolved_via is set', () => {
-		show({ alternatives: [], resolved_via: 'folder' });
-		expect(text('detail-identified-via')).toBe('Resolved via folder');
+	it('never presents a null resolved_via as "from the name"', () => {
+		const { container } = show({ alternatives: [answer()], resolved_via: null });
+		expect(container.textContent).not.toMatch(/from.{0,3}name|resolved via/i);
 	});
-	it('shows no via line when an answer exists but resolved_via is null', () => {
-		show({ alternatives: [answer()], resolved_via: null });
-		expect(screen.queryByTestId('detail-identified-via')).toBeNull();
+	it('formats the confidence for the locale', () => {
+		show({ alternatives: [answer({ confidence: 92 })], resolved_via: null });
+		expect(text('detail-identified-confidence')).toBe('92% sure');
+		expect(text('detail-identified-year')).toBe('1994');
+	});
+	it('puts the heading at the level it is given', () => {
+		render(Identified, {
+			detail: torrentDetail({ identified_as: { alternatives: [answer()], resolved_via: null } }),
+			level: 2
+		});
+		expect(screen.getByRole('heading', { level: 2 })).toBeTruthy();
 	});
 	it('renders stored text as text, with direction controls made visible and isolated', () => {
-		const evil = '<img src=x onerror=alert(1)>‮evil';
+		const evil = '<img src=x onerror=alert(1)>\u202Eevil\u2066x';
 		const { container } = show({
 			alternatives: [
-				answer({ canonical_title: evil, alt_titles: [{ language: 'x"><b>', title: evil }] })
+				answer({
+					canonical_title: evil,
+					genres: [evil],
+					ids: [{ scheme: 'imdb', value: evil }],
+					source: { id: 7, name: evil, plugin: 'wikidata' },
+					alt_titles: [
+						{ language: 'x"><b>', title: evil },
+						{ language: 'und', title: 'u' }
+					]
+				})
 			],
 			resolved_via: null
 		});
 		expect(container.querySelector('img')).toBeNull();
 		expect(container.querySelector('b')).toBeNull();
-		const canon = screen.getByTestId('detail-identified-canonical');
-		expect(canon.textContent).toContain('<U+202E>evil');
-		expect(canon.textContent).not.toContain('‮');
-		expect(canon.querySelector('bdi')).not.toBeNull();
-		expect(
-			screen.getByTestId('detail-identified-alt').querySelector('bdi')?.hasAttribute('lang')
-		).toBe(false);
+		for (const id of [
+			'detail-identified-canonical',
+			'detail-identified-genres',
+			'detail-identified-ids',
+			'detail-identified-source',
+			'detail-identified-alt'
+		]) {
+			const el = screen.getByTestId(id);
+			expect(el.textContent).toContain('<U+202E>evil<U+2066>x');
+			expect(el.textContent).not.toMatch(/[\u202A-\u202E\u2066-\u2069]/);
+			expect(el.tagName === 'BDI' || el.querySelector('bdi')).toBeTruthy();
+		}
+		const alts = screen.getByTestId('detail-identified-alt').querySelectorAll('bdi');
+		expect(alts[0]!.hasAttribute('lang')).toBe(false);
+		expect(alts[1]!.hasAttribute('lang')).toBe(false);
 	});
 	it('omits rows with nothing to say', () => {
 		show({

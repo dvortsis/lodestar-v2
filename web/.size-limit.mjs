@@ -1635,8 +1635,8 @@ export default [
 	// ENR-8: the adult-enrichment section, loaded on demand and only when the API sent the field.
 	// Measured 1,530 B; limit = measured + 10%, rounded.
 	entry('Detail adult-enrichment section (on demand)', adultSection, '1700 B'),
-	// ENR-13: the "Identified as" section, on demand and only when the API sent the field. Measured 1,610 B; limit = measured + ~10%, rounded.
-	entry('Detail identified-as section (on demand)', identifiedSection, '1800 B'),
+	// ENR-13: the "Identified as" section, on demand and only when the API sent the field. Measured 1,830 B; limit = measured + at most 10%, rounded up to 100 B.
+	entry('Detail identified-as section (on demand)', identifiedSection, '2000 B'),
 	// The four stage pages (S-insights-2) are one route file and one lazy component, so one entry
 	// measures them all. uPlot loads with the first chart, after first paint, and has its own entry.
 	entry(
