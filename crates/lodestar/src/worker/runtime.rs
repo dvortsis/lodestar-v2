@@ -239,6 +239,10 @@ pub struct Counts {
     pub busy_gave_up: AtomicU64,
     pub busy_dropped: AtomicU64,
     pub granted: AtomicU64,
+    /// Grants of a lease this worker already held under the same token
+    /// (its own claim answered with it): not counted in `granted`, and
+    /// never a new sighting (X-wk-own-lease-lost).
+    pub held_again: AtomicU64,
     /// Results sent, and accepted by the coordinator.
     pub sent: AtomicU64,
     pub committed: AtomicU64,
@@ -832,16 +836,34 @@ impl Drop for Runtime {
 
 /// A key granted to this worker: its token into the leases, the key into
 /// the pool (queued until the stages run).
+///
+/// **The holder's own lease coming back** (X-wk-own-lease-lost): a claim
+/// for a key this worker already holds is answered with its own lease, the
+/// same token. That's no new grant: the key is in the pool already, or the
+/// pool has fetched it and its result is on its way. Passed on as a new
+/// sighting, a pool that fetched it lately would turn it away as a
+/// duplicate, which ends the lease as lost, and another worker would
+/// harvest and fetch the key again. So the lease stays as it is, the grant
+/// isn't counted, and its peers go in as a reply, as hints do: they join a
+/// key still waiting for peers, and a key the pool is done with ignores
+/// them (a reply never ends a lease).
 fn granted(s: &Shared, key: InfoHash, token: Token, peers: Vec<std::net::SocketAddr>, at: i64) {
-    bump(&s.counts.granted);
-    s.leases.insert(key, token);
+    let held_again = s.leases.insert(key, token) == Some(token);
+    if held_again {
+        bump(&s.counts.held_again);
+    } else {
+        bump(&s.counts.granted);
+    }
+    if held_again && peers.is_empty() {
+        return;
+    }
     let mut found = Found::key(key, 0);
     found.peers = peers;
     let _ = s.into_pool.send(Discovery {
         source: SourceId::new(DHT_SOURCE).expect("a source id"),
         found,
-        at,
-        reply: false,
+        at: if held_again { 0 } else { at },
+        reply: held_again,
     });
 }
 
@@ -3331,6 +3353,65 @@ pub(crate) mod tests {
         let c = rt.counts();
         assert_eq!(c.busy_retried.load(Ordering::Relaxed), 1);
         assert_eq!(c.busy_gave_up.load(Ordering::Relaxed), 0);
+        rt.shutdown().await;
+    }
+
+    /// X-wk-own-lease-lost: the holder sights a key it has fetched (its
+    /// result is out, not committed yet) and its claim is answered with its
+    /// own lease. The lease stays, nothing is reported lost, the key isn't
+    /// fetched again, and the grant isn't counted as a new one.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_holders_own_lease_coming_back_never_ends_it() {
+        let raw = info("A key sighted by its holder");
+        let key = key_of(&raw);
+        let fetch = Arc::new(MapFetch::default());
+        lock(&fetch.0).insert(key, raw);
+        let mut rt = Runtime::start(config(fetch.clone()));
+        let (mut coord, session) = session_pair().await;
+        rt.connected(session.handle());
+        rt.event(WorkerEvent::Assign(assignment(1, 0, 1)));
+        let (_, chunks) = filter_chunks().await;
+        for c in chunks {
+            rt.event(WorkerEvent::Snapshot(c));
+        }
+        until("started", || (rt.is_started(), ())).await;
+        let sighting = || {
+            let mut f = Found::key(key, 0);
+            f.peers = vec!["8.8.8.8:6881".parse().unwrap()];
+            f
+        };
+
+        assert!(rt.finds().found(sighting()));
+        let first = next_claim(&mut coord).await;
+        answer(&mut coord, &first, |_| None).await;
+        // Fetched and sent: the pool is done with it, the lease waits for
+        // the commit.
+        let _results = next_results(&mut coord).await;
+
+        // Sighted again; the coordinator answers with the same lease.
+        assert!(rt.finds().found(sighting()));
+        let again = next_claim(&mut coord).await;
+        assert_eq!(again.items[0].key, key.0);
+        answer(&mut coord, &again, |_| None).await;
+        let c = rt.counts();
+        until("the lease came back", || {
+            let n = c.held_again.load(Ordering::Relaxed);
+            (n == 1, n)
+        })
+        .await;
+        // Anything the pool did with it went through the same queue first:
+        // a third sighting's claim comes out after it.
+        assert!(rt.finds().found(sighting()));
+        let third = next_claim(&mut coord).await;
+        answer(&mut coord, &third, |_| None).await;
+        until("the lease came back again", || {
+            let n = c.held_again.load(Ordering::Relaxed);
+            (n == 2, n)
+        })
+        .await;
+        assert_eq!(c.lost.load(Ordering::Relaxed), 0, "its own lease ended");
+        assert_eq!(c.granted.load(Ordering::Relaxed), 1, "one grant");
+        assert_eq!(rt.shared.leases.len(), 1, "the lease is still held");
         rt.shutdown().await;
     }
 

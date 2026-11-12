@@ -43,8 +43,10 @@ impl WorkerLeases {
         self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    pub fn insert(&self, key: InfoHash, token: Token) {
-        self.map().insert(key, token);
+    /// The token held for `key` before, if any: one check and insert,
+    /// under one lock.
+    pub fn insert(&self, key: InfoHash, token: Token) -> Option<Token> {
+        self.map().insert(key, token)
     }
 
     /// The key's token, removed: the lease ends with this report.
@@ -368,6 +370,16 @@ pub(crate) async fn collect<I: Inbox>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn insert_returns_the_token_it_replaced() {
+        let leases = WorkerLeases::default();
+        let key = InfoHash([1; 20]);
+        assert_eq!(leases.insert(key, Token(7)), None);
+        assert_eq!(leases.insert(key, Token(7)), Some(Token(7)));
+        assert_eq!(leases.insert(key, Token(8)), Some(Token(7)));
+        assert_eq!(leases.take(&key), Some(Token(8)));
+    }
     use lodestar_bencode::{OwnedValue, to_vec};
     use lodestar_cluster::{Claim, Claimed};
     use lodestar_peer_wire::Fetched;
