@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T18:52:01Z",
+  "updated_at": "2026-11-12T18:53:23Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7421,6 +7421,12 @@
     {
       "id": "X-clippy-1-100",
       "note": "CI dtolnay stable = 1.100 adds needless_range_loop at crawler-sim/tests/sim/net.rs:566 (maybe more); fails fmt+clippy inside ci-ok on every PR and main. Runner PR in progress."
+    },
+    {
+      "id": "X-low-resource-mode",
+      "at": "2026-11-12T18:53:23Z",
+      "from": "M8-PERF-1 (session_01MMjhnCqKPZbudhT8jXbC8k)",
+      "note": "No low-resource mode exists in the product (architecture \u00a73 only describes it: trigram field, file index, caches, merge threads). M8-PERF-1's --low-resource records the missing switches and its verdict is 'incomplete', so G-v1-10m can't pass until a crates/search + settings slice adds the real switch. Plan it before G-v1-10m. Regex row reports 'unavailable' until RX-1 merges (runner agreed)."
     }
   ],
   "main_health": [
@@ -8621,7 +8627,7 @@
     }
   ],
   "heartbeat": "2026-11-12T18:39:05Z",
-  "updated": "2026-11-12T18:52:01Z",
+  "updated": "2026-11-12T18:53:23Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
