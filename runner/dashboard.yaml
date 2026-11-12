@@ -1481,6 +1481,11 @@ owner_queue:
   action: 'Runner calls you may want to veto (§2.19): Torznab keys are shown once, when made or regenerated, and only after you enter your password (OUT-2); the installer pin check for SourceForge downloads (size, MD5, exact path, signature date near the GitHub tag; X-cmp13-installer-pins); the Legal Notice on main now says it applies to main''s development builds, not 0.5.2 (§2.57)'
   unblocks: Nothing; these go ahead unless you object
   when: Any time
+- n: 12
+  type: action
+  action: 'Deploy the status connector: add the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets (repository Settings, Actions, or the status-connector-deploy environment) and re-run "Status connector deploy", or run `npx wrangler deploy` from tools/status-connector. Without them the workflow only runs the tests, so #742 is merged but not live'
+  unblocks: The dashboard's per-hour activity bars (#742)
+  when: Any time
 
 gates:
 - id: G-v05
