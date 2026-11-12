@@ -1,6 +1,6 @@
 # Chapter 7: Connect other apps
 
-This chapter lets Prowlarr, Sonarr and Radarr search Lodestar, and moves your torrents into [bitmagnet](glossary.md#bitmagnet). Everything in it is **(newer than v0.5.1)**.
+This chapter lets Prowlarr, Sonarr and Radarr search Lodestar, and copies your torrents into [bitmagnet](glossary.md#bitmagnet). Everything in it is **(newer than v0.5.1)**.
 
 > [!NOTE]
 > **What you will learn**
@@ -28,16 +28,16 @@ Both leave out the same things, whatever you ask for:
 - unverified torrents;
 - anything blocklisted or removed.
 
-Adult torrents are left out too. The bitmagnet export can include them when you turn that on (section 7.7). Torznab has no switch for them yet **(planned)**.
+Adult torrents are left out too. The bitmagnet export can include them when you turn that on (section 7.7). The settings screens have no switch for adult results in Torznab yet **(planned)**.
 
-Results are magnet links only. Your download client needs its [DHT](glossary.md#dht) turned on to fetch them.
+Torznab results are magnet links only. Your download client needs its [DHT](glossary.md#dht) turned on to fetch them.
 
 ## 7.2 Create a Torznab key
 <!-- index: Torznab key; API key; password dialog; key rotation -->
 
 A Torznab key lets one app search Lodestar, and nothing else. It isn't your password, and it can't sign in to the web UI or change settings.
 
-Lodestar keeps only a fingerprint of each key, so it shows a key once, when you create it. Make one key per app, named after the app. Then you can revoke one without breaking the others.
+Lodestar keeps only a hash of each key, so it shows a key once, when you create it. Make one key per app, named after the app. Then you can revoke one without breaking the others.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/outputs-dark.png">
@@ -50,9 +50,9 @@ To create a key for Prowlarr:
 2. Under **New Torznab key**, check the **App** field. It suggests the first app without a key, such as `Prowlarr`.
 3. Select **Create key**.
    **Result:** A dialog asks for your password.
-4. Enter your admin password and select **Create key**.
+4. Enter your password in **Your password** and select **Create key**.
    **Result:** The dialog **Copy the secret for Prowlarr** shows the key once.
-5. Select **Copy**, and paste the key straight into the app (section 7.3), or into a password manager.
+5. Select **Copy**, and paste the key straight into the app (section 7.3 or 7.4), or into a password manager.
 6. Select **Done**.
    **Result:** The key is gone from the screen. The list shows **Prowlarr** with the key's first few characters, its status and its dates.
 
@@ -88,6 +88,15 @@ To add Lodestar to Prowlarr:
 7. Select **Save**.
    **Result:** Lodestar is in Prowlarr's list of indexers. Prowlarr adds it to each Sonarr and Radarr you've connected under **Settings → Apps** in Prowlarr.
 
+Prowlarr passes Lodestar on only to the apps it knows. If you haven't connected Sonarr or Radarr to Prowlarr yet:
+
+1. In Sonarr or Radarr, open **Settings → General** and copy its **API Key**. This key belongs to that app, not to Lodestar.
+2. In Prowlarr, open **Settings → Apps**, add Sonarr or Radarr, and paste that key.
+3. Select **Test**, then **Save**.
+   **Result:** Prowlarr adds Lodestar to that app's indexers by itself.
+
+If you had already added Lodestar to the app directly, delete that indexer there, so the app doesn't search Lodestar twice.
+
 Prowlarr joins the URL and the API Path into one address. With **API Path** at `/api`, it asks Lodestar at `/api/v1/torznab/api`, which is right.
 
 <details>
@@ -96,7 +105,6 @@ Prowlarr joins the URL and the API Path into one address. With **API Path** at `
 When Prowlarr runs in its own [container](glossary.md#container), a packaged, running copy of an app:
 
 - Use the server's own address, such as `http://192.168.1.20:8090/api/v1/torznab`. `localhost` inside the Prowlarr container means Prowlarr itself, not Lodestar.
-
 - If both containers are on the same custom Docker network, you can use the container's name instead, such as `http://lodestar:8090/api/v1/torznab`.
 - If Lodestar runs through gluetun, use the server address and the port you published on gluetun.
 
@@ -117,7 +125,7 @@ To add Lodestar to Sonarr or Radarr:
 2. Set **URL** to the **Torznab address** from Lodestar.
 3. Select **Show Advanced**, and leave **API Path** at `/api`.
 4. Paste that app's key into **API Key**.
-5. In Sonarr only, open **Categories** and add **5000** and **5045** (the next part says why).
+5. In Sonarr only, open **Categories** and add **5000** and **5045** (the next part says why). The list fills in once **URL** and **API Key** are set.
 6. Select **Test**, then **Save**.
    **Result:** The app lists Lodestar under its indexers.
 
@@ -134,19 +142,20 @@ These are category numbers, not ports. Lodestar serves Torznab on its web UI por
 Radarr's defaults already include `2000` and its subcategories, so it misses nothing. Through Prowlarr, Sonarr also gets `5000` and `5045` by itself.
 
 ## 7.5 Read the apps' error messages
-<!-- index: Invalid API key; API limit reached; Torznab error -->
+<!-- index: invalid credentials; HTTP 401; HTTP 429; server is unavailable; no results -->
 
-Prowlarr, Sonarr and Radarr show Lodestar's errors in their own words. This table maps what they show to what to do.
+Prowlarr, Sonarr and Radarr show Lodestar's errors in their own long messages, with the HTTP status in them. Look for the words in the first column.
 
-| The app shows | What it means | What to do |
+| The message contains | What it means | What to do |
 |---|---|---|
-| **Invalid API key** | The key is wrong, revoked or regenerated, or it doesn't have Torznab access | Create a new key in **Settings → Outputs** and paste it into the app |
-| **API limit reached** | The app asked too often, or the address tried too many wrong keys | Wait a few minutes. The app tries again by itself |
-| **Torznab error detected: API disabled** | Search is turned off in Lodestar | Turn search back on in **Settings → Search & ranking** |
-| A 404 or "not found" error | The URL or the API Path is wrong | Set **URL** to the **Torznab address** and **API Path** to `/api` |
-| A connection error or timeout | The app can't reach Lodestar | Check the address and port from the app's computer or container (section 7.3) |
+| **invalid credentials**, **Invalid API key**, `401` or `403` | The key is wrong, revoked or regenerated, or it lacks Torznab access | Create a new key on **Settings → Outputs** and paste it into the app |
+| `429` or **TooManyRequests** | The app asked too often, or this address tried too many wrong keys | Wait a few minutes. The app pauses Lodestar for a while, then tries again by itself |
+| **server is unavailable** or `503` | Search is turned off in Lodestar | Turn on **Enable search** in **Settings → Search & ranking**, then restart Lodestar |
+| `404` or **NotFound** | The URL or the API Path is wrong | Set **URL** to the **Torznab address** and **API Path** to `/api` |
+| **no results in the configured categories** | Lodestar has nothing in those categories yet | Wait until Lodestar has indexed some shows or movies, then test again |
+| **timeout** or **connection failure** | The app can't reach Lodestar | Check the address and port from the app's computer or container (section 7.3) |
 
-**Invalid API key** also appears for a key that works for other things but not for Torznab. Keys made on **Settings → Outputs** always have Torznab access.
+Keys made on **Settings → Outputs** always have Torznab access. A key from **Settings → Security** without the Torznab scope gets the credentials error.
 
 ## 7.6 Regenerate or revoke a key
 <!-- index: regenerate key; revoke key; leaked key -->
@@ -179,7 +188,14 @@ The **Include adult torrents** switch on **Settings → Outputs** decides only w
 
 **Recommended:** Off, the default. Turn it on only if you're 18 or older and want them in bitmagnet. It asks you to confirm first, because bitmagnet will look each one up on the DHT.
 
+To undo, turn it off again; it asks nothing. Files you already downloaded keep their adult torrents, so delete them if you don't want those in bitmagnet.
+
 ### Download the export
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/outputs-export-dark.png">
+  <img src="images/outputs-export-light.png" alt="Settings, Outputs screen with the bitmagnet export section: what is always left out, the Include adult torrents switch and Download export"></picture>
+*Figure 7.2: The bitmagnet export section of Settings → Outputs, outlined.*
 
 To export your torrents:
 
@@ -197,6 +213,8 @@ What the screen says when it ends:
 | **The file stopped at the limit of 1,000,000 torrents, so it isn't complete.** | Import what you have. The rest can't come in this file. |
 | **The export was cancelled** or **The export failed** | Delete the file, then select **Download export** again. |
 | **Lodestar couldn't find this export's progress.** | Open **Jobs** in Settings. If no file downloaded, try again. |
+| **Paused at … torrents. Resume it in Jobs.** | Resume it in **Settings → Jobs**, and keep the browser open while it finishes. |
+| **Lodestar couldn't update this export's progress. It may still be running.** | Check **Settings → Jobs**. Import the file only once the job shows it's done. |
 
 > [!WARNING]
 > Never import a file from a cancelled or failed export. It ends partway through, and nothing inside the file says so: only the screen does.
@@ -213,13 +231,15 @@ curl --data-binary @<file> http://<bitmagnet-host>:3333/import
 
 Replace `<file>` with the file's name, such as `lodestar-export-20261112-093015.bitmagnet.ndjson`. Replace `<bitmagnet-host>` with the address of the computer running bitmagnet, and `3333` if you changed bitmagnet's port.
 
+On Windows, type `curl.exe` instead of `curl`. In PowerShell, plain `curl` runs a different command that doesn't understand `--data-binary`.
+
 **Result:** bitmagnet prints how many items it imported, then `import complete`.
 
 ## 7.8 Check your understanding
 
 1. Why make a separate key for each app instead of sharing one?
 2. You connect Sonarr directly and it never finds 4K shows. What do you change?
-3. Prowlarr's **Test** says **Invalid API key** right after you regenerated the key. What happened, and what do you do?
+3. Prowlarr's **Test** reports invalid credentials right after you regenerated the key. What happened, and what do you do?
 4. An export ends with **The export failed**. What do you do with the file?
 
 > [!TIP]
