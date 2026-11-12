@@ -231,7 +231,11 @@ fn identified(store: &Store, id: i64) -> Result<bool, lodestar_store::Error> {
     let Some(row) = store.torrent(id)? else {
         return Ok(false);
     };
-    Ok(crate::identify::stored_title(store, id, row.sources)?.is_some())
+    // Only an ambiguous name is resolved: the rest needn't be marked.
+    let ambiguous = store
+        .enrichment(id)?
+        .is_some_and(|e| lodestar_classify::Record::decode(&e.data).is_ok_and(|r| r.ambiguous));
+    Ok(ambiguous && crate::identify::stored_title(store, id, row.sources)?.is_some())
 }
 
 /// The enrichment match an adult-enrichment section gives classification

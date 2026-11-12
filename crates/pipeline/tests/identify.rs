@@ -528,8 +528,8 @@ proptest! {
             let plugin = Recorder::new(None);
             let r = run(plugin.clone(), Arc::new(Mutex::new(s)), filter, mask,
                 Arc::new(flags), src, interest_only(), Arc::new(MemoryState::new()), &ids);
-            let n = ids.len() as u64;
-            until("every item", || r.stats.done.load(Ordering::SeqCst) >= n).await;
+            let total = ids.len() as u64;
+            until("every item", || n(&r.stats.done) + n(&r.stats.deferred) >= total).await;
             r.stop().await;
             let mut got = plugin.titles();
             got.sort();
@@ -605,6 +605,9 @@ fn each_refusal_has_its_reason() {
         why(&mut s, &filter.current(), plain),
         Some(Ineligible::Adult)
     );
+    // Marked for reclassification: its kind may be stale, so it waits.
+    s.mark_unenriched(&[plain]).unwrap();
+    assert_eq!(why(&mut s, &engine, plain), Some(Ineligible::Pending));
     // Consent withdrawn: plugin-wide, before anything about the item.
     s.update_source_secrets(src, &[], &["api_key"], None)
         .unwrap();
@@ -758,13 +761,13 @@ async fn interest_comes_before_the_capped_backfill() {
     );
     // Two opened, three background, then the fourth is spent.
     until("the cap", || {
-        n(&r.stats.looked_up) == 5 && n(&r.stats.done) >= 6
+        n(&r.stats.looked_up) == 5 && n(&r.stats.deferred) >= 1
     })
     .await;
     // Spent: an opened item waits too, however long the runtime runs.
     assert!(r.interest.opened(ids[3]));
-    let spent = n(&r.stats.done);
-    until("more turns", || n(&r.stats.done) >= spent + 3).await;
+    let spent = n(&r.stats.deferred);
+    until("more turns", || n(&r.stats.deferred) >= spent + 3).await;
     assert_eq!(n(&r.stats.looked_up), 5);
     r.stop().await;
     let got = plugin.titles();
@@ -808,7 +811,7 @@ async fn a_restart_resumes_the_backfill() {
     );
     // Two looked up, then the third is spent: both saved by then.
     until("the day's two", || {
-        n(&r.stats.looked_up) == 2 && n(&r.stats.done) >= 3
+        n(&r.stats.looked_up) == 2 && n(&r.stats.deferred) >= 1
     })
     .await;
     r.stop().await;
@@ -831,7 +834,7 @@ async fn a_restart_resumes_the_backfill() {
         &[],
     );
     until("one more, then spent", || {
-        n(&r.stats.looked_up) == 1 && n(&r.stats.done) >= 2
+        n(&r.stats.looked_up) == 1 && n(&r.stats.deferred) >= 1
     })
     .await;
     r.stop().await;
@@ -1302,4 +1305,48 @@ fn consent_must_cover_the_plugin_as_it_is() {
     assert_eq!(why(&mut s), None);
     s.set_source_state(src, SourceState::Disabled).unwrap();
     assert_eq!(why(&mut s), Some(Ineligible::SourceOff));
+}
+
+/// The backfill applies a stored identification: an ambiguous torrent's
+/// record is resolved via the plugin and logged for the index, and
+/// `mark_matched` marks it so a rewrite without its claims is redone.
+#[test]
+fn the_backfill_resolves_an_identified_title() {
+    let (mut s, dht, src) = store();
+    let filter = stand_in();
+    let (id, key) = put(&mut s, "New Folder", dht, 0, false);
+    let (plain, pkey) = put(&mut s, &movie(0, "Plain"), dht, 0, false);
+    let head = s.reindex_head().unwrap();
+    let bit = 1u64 << src.get();
+    let batch = [
+        discovery(key, src, answer("The Film")),
+        discovery(pkey, src, answer("The Film")),
+    ];
+    let (_, out) = ingest_out(&mut s, &filter, &batch, bit);
+    assert_eq!(out.identified, vec![id, plain]);
+    let ctx = lodestar_pipeline::enrich::Backfill::default();
+    while let Some(b) = lodestar_pipeline::enrich::enrich_stored_with(&mut s, 0, 64, &ctx).unwrap()
+    {
+        if b.enriched == 0 && !b.rejected {
+            break;
+        }
+    }
+    let rec = Record::decode(&s.enrichment(id).unwrap().unwrap().data).unwrap();
+    assert_eq!(rec.resolved, Some(ResolvedVia::Plugin));
+    assert_eq!(rec.release("title"), Some("The Film"));
+    let plain_rec = Record::decode(&s.enrichment(plain).unwrap().unwrap().data).unwrap();
+    assert_eq!(plain_rec.release("title"), Some("Item0 Plain Film"));
+    assert_eq!(plain_rec.resolved, None);
+    let logged: Vec<i64> = s
+        .reindex_after(head, 100)
+        .unwrap()
+        .into_iter()
+        .map(|(_, t)| t)
+        .collect();
+    assert!(logged.contains(&id), "logged for the index");
+    // Only the ambiguous one needs marking again.
+    assert_eq!(
+        lodestar_pipeline::enrich::mark_matched(&mut s, &[id, plain]).unwrap(),
+        vec![id]
+    );
 }

@@ -89,6 +89,11 @@ pub const IDLE: Duration = Duration::from_secs(60);
 /// The shortest [`Config::idle`] a host can set.
 pub const MIN_IDLE: Duration = Duration::from_millis(10);
 
+/// Times in a row the store may fail on one background item before it's
+/// passed over until the next round, so one unreadable row can't stall the
+/// walk.
+pub const MAX_TRIES: u32 = 3;
+
 /// The pause after a background item the gate refused, so a round over a
 /// large store is a light, steady load (about 200 items a second).
 const SKIP_PAUSE: Duration = Duration::from_millis(5);
@@ -385,6 +390,14 @@ pub struct IdentifyStats {
     pub cached: AtomicU64,
     /// Items the runtime finished with, whatever the outcome.
     pub done: AtomicU64,
+    /// Turns where nothing could go: a plugin-wide condition, the day's
+    /// count spent, or the store couldn't answer. The item waits (or, if
+    /// opened while a condition failed, is dropped); it isn't done.
+    pub deferred: AtomicU64,
+    /// Background items passed over because the store failed on them
+    /// [`MAX_TRIES`] times in a row, or the gate panicked: tried again next
+    /// round.
+    pub unreadable: AtomicU64,
 }
 
 fn bump(c: &AtomicU64) {
@@ -492,6 +505,9 @@ impl IdentifySource {
     async fn run_inner(&self, mut ctx: SourceCtx) -> Result<(), PluginError> {
         // One run at a time holds the interest queue.
         let mut interest = self.interest.lock().await;
+        // Opened while no run was going: the drawer has long closed, and
+        // each condition may have failed then. Dropped, never sent later.
+        while interest.try_recv().is_ok() {}
         let state = ctx.kit.state.clone();
         // The plugin gets the same client, and its state without the
         // runtime's keys.
@@ -503,6 +519,8 @@ impl IdentifySource {
         let mut last: Option<Instant> = None;
         // An opened item that arrived while the runtime waited.
         let mut waiting: Option<i64> = None;
+        // The background item the store last failed on, and how often.
+        let mut stuck: (i64, u32) = (0, 0);
         loop {
             if ctx.shutdown.is_requested() {
                 return Ok(());
@@ -539,7 +557,20 @@ impl IdentifySource {
                     _ = tokio::time::sleep(SKIP_PAUSE) => {}
                 },
                 Step::Skipped => {}
-                step @ (Step::Wait | Step::Spent) => {
+                // The store failed on a background item too often in a row:
+                // passed over until the next round.
+                Step::Unreadable if !user && stuck.0 == id && stuck.1 + 1 >= MAX_TRIES => {
+                    stuck = (0, 0);
+                    bump(&self.stats.unreadable);
+                }
+                step @ (Step::Wait | Step::Spent | Step::Unreadable) => {
+                    if matches!(step, Step::Unreadable) && !user {
+                        stuck = if stuck.0 == id {
+                            (id, stuck.1 + 1)
+                        } else {
+                            (id, 1)
+                        };
+                    }
                     // Nothing can go now. A background item goes back to
                     // the front of the queue, never past the cursor. An
                     // opened item waits first in line only for the day's
@@ -552,7 +583,7 @@ impl IdentifySource {
                     } else if matches!(step, Step::Spent) {
                         waiting = Some(id);
                     }
-                    bump(&self.stats.done);
+                    bump(&self.stats.deferred);
                     tokio::select! {
                         biased;
                         _ = ctx.shutdown.requested() => return Ok(()),
@@ -652,9 +683,15 @@ impl IdentifySource {
                 };
             }
             // The store couldn't say: never asked, and tried again later.
-            _ => {
+            Ok(Err(_)) => {
                 bump(&self.stats.ineligible);
-                return Step::Wait;
+                return Step::Unreadable;
+            }
+            // The gate panicked on this item: never asked, and passed over.
+            Err(_) => {
+                bump(&self.stats.ineligible);
+                bump(&self.stats.unreadable);
+                return Step::Skipped;
             }
         };
         // One cap for both (Q12, stricter than "after user interest"): an
@@ -700,6 +737,9 @@ enum Step {
     /// The day's count is spent, or can't be written (fail closed): wait,
     /// keeping the item's place, an opened one included.
     Spent,
+    /// The store failed on this item: wait as for [`Step::Wait`], and pass
+    /// a background item over after [`MAX_TRIES`] in a row.
+    Unreadable,
     Shutdown,
 }
 
@@ -987,6 +1027,11 @@ pub fn with_identified(
     class: &Classification,
     enriched: Enriched,
 ) -> Result<Enriched, lodestar_store::Error> {
+    // Only an ambiguous name can be resolved, so the claims aren't read for
+    // the rest.
+    if !class.title.ambiguous {
+        return Ok(enriched);
+    }
     let Some((title, year, confidence)) = stored_title(store, row.id, row.sources)? else {
         return Ok(enriched);
     };

@@ -30,9 +30,10 @@ use crate::claims::{AltTitle, Claims, Details, ExternalId, MAX_MATCH_CONFIDENCE,
 use crate::manifest::{Manifest, Policy};
 use crate::plugin::{BoxFuture, Kit, PluginError};
 
-/// Background lookups one plugin may make a UTC day, after user interest
-/// (plan Q12, the runner's number under §2.26). Each plugin's own rate cap
-/// applies on top.
+/// Lookups one plugin may make a UTC day, user interest and background
+/// together (plan Q12, the runner's number under §2.26; one cap for both is
+/// stricter than the plan's "after user interest"). Each plugin's own rate
+/// cap applies on top.
 pub const PER_DAY: u32 = 100_000;
 /// How long a match is cached before the item may be looked up again.
 pub const HIT_TTL_SECS: i64 = 30 * 86_400;
