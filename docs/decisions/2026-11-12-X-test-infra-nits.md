@@ -1,4 +1,4 @@
-# X-test-infra-nits decisions
+# X-test-infra-nits decisions (#771)
 
 Follow-ups to #770 from its security review's optional findings (`runner-state:reviews/rv-770-e5aefe9e.md`). The runner set the list; none changes a decision in `2026-11-12-X-test-infra-blockers.md`.
 
