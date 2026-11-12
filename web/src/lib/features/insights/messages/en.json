@@ -334,5 +334,6 @@
 	"insights_overview_exc_ports_lower": "No port range is large enough: lower the crawler's intensity in Settings, then restart Lodestar.",
 	"insights_overview_exc_ports_bare": "Windows has too few ports left for outgoing connections. Lower the crawler's intensity in Settings, then restart Lodestar.",
 	"insights_overview_exc_ports_clears": "This notice clears within an hour.",
-	"insights_overview_exc_fix_guide": "Open the guide"
+	"insights_overview_exc_fix_guide": "Open the guide",
+	"insights_overview_exc_new_tab": "(opens in a new tab)"
 }

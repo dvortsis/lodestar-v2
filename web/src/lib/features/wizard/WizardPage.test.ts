@@ -248,28 +248,32 @@ describe('storage step filesystem warning', () => {
 		render(WizardPage);
 	};
 	let systemCalls = 0;
-	const withSystem = (warning: string | null | 'fail') => {
+	let release: () => void = () => {};
+	const withSystem = (warning: string | null | 'fail', hold = false) => {
 		systemCalls = 0;
+		const gate = hold ? new Promise<void>((r) => (release = r)) : Promise.resolve();
 		server = wizardServer();
 		const inner = server.fetch;
 		vi.stubGlobal('fetch', (url: string, init: RequestInit = {}) => {
 			if (String(url).endsWith('/system')) {
 				systemCalls++;
-				return warning === 'fail'
-					? Promise.resolve({
-							ok: false,
-							status: 500,
-							statusText: '',
-							headers: new Headers(),
-							json: async () => ({})
-						})
-					: Promise.resolve({
-							ok: true,
-							status: 200,
-							statusText: '',
-							headers: new Headers(),
-							json: async () => ({ data: { filesystem_warning: warning } })
-						});
+				return gate.then(() =>
+					warning === 'fail'
+						? Promise.resolve({
+								ok: false,
+								status: 500,
+								statusText: '',
+								headers: new Headers(),
+								json: async () => ({})
+							})
+						: Promise.resolve({
+								ok: true,
+								status: 200,
+								statusText: '',
+								headers: new Headers(),
+								json: async () => ({ data: { filesystem_warning: warning } })
+							})
+				);
 			}
 			return inner(url, init);
 		});
@@ -277,12 +281,17 @@ describe('storage step filesystem warning', () => {
 
 	it('shows the warning with its safe alternative, and still lets you continue', async () => {
 		withSystem(
-			"The data folder /data is on Unraid's user share. Map the data folder to a pool path instead, such as /mnt/cache/appdata/lodestar."
+			"The data folder /data is on Unraid's user share. Map the data folder to a pool path instead, such as /mnt/cache/appdata/lodestar.",
+			true
 		);
 		show('storage');
 		await heading('Storage & retention');
+		// The live region exists (empty) before the warning arrives.
 		const banner = await screen.findByTestId('wizard-storage-fs');
-		expect(banner.textContent).toContain('/mnt/cache/appdata/lodestar');
+		expect(banner.getAttribute('role')).toBe('status');
+		expect(banner.textContent).toBe('');
+		release();
+		await waitFor(() => expect(banner.textContent).toContain('/mnt/cache/appdata/lodestar'));
 		expect(banner.textContent).toContain('You can continue');
 		expect(
 			(await screen.findByRole('button', { name: 'Save and continue' })).hasAttribute('disabled')
@@ -296,9 +305,9 @@ describe('storage step filesystem warning', () => {
 			await heading('Storage & retention');
 			await screen.findByRole('button', { name: 'Save and continue' });
 			await waitFor(() => expect(systemCalls).toBeGreaterThan(0));
-			// Let the settled /system promise run its handler before asserting absence.
+			// Let the settled /system promise run its handler before asserting the region is still empty.
 			await new Promise<void>((r) => queueMicrotask(r));
-			expect(screen.queryByTestId('wizard-storage-fs')).toBeNull();
+			expect(screen.getByTestId('wizard-storage-fs').textContent).toBe('');
 			cleanup();
 		}
 	});

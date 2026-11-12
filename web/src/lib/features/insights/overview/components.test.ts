@@ -218,7 +218,9 @@ describe('Exceptions', () => {
 			'fuse.shfs'
 		);
 		const fix = screen.getByTestId('insights-exception-data_filesystem-fix');
-		expect(fix.getAttribute('href')).toContain('docs/user/02-install-lodestar-on-unraid');
+		expect(fix.getAttribute('href')).toBe(
+			'https://github.com/dvortsis/lodestar-v2/blob/main/docs/user/04-install-on-windows-and-linux.md#46-fix-a-data-folder-warning'
+		);
 	});
 
 	it('words the exceptions generically when their detail object is missing', () => {
@@ -255,9 +257,9 @@ describe('Exceptions', () => {
 		expect(screen.getByTestId('insights-exception-ephemeral_ports-netsh').textContent).toBe(
 			'netsh int ipv6 set dynamicport tcp start=10000 num=55000'
 		);
-		expect(
-			screen.getByTestId('insights-exception-ephemeral_ports-fix').getAttribute('href')
-		).toContain('docs/user/04-install-on-windows-and-linux');
+		expect(screen.getByTestId('insights-exception-ephemeral_ports-fix').getAttribute('href')).toBe(
+			'https://github.com/dvortsis/lodestar-v2/blob/main/docs/user/04-install-on-windows-and-linux.md#47-fix-the-windows-port-warning'
+		);
 	});
 
 	it('says to lower the intensity when no port range is large enough', () => {
