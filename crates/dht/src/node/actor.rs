@@ -1645,33 +1645,22 @@ impl Actor {
     /// family, through the ordinary lookup limits. It waits while a
     /// self-lookup for an old id is still out: that one carries the
     /// bootstrap's routers and its answers land in the rebuilt table,
-    /// which then seeds this one. A self-lookup that already targets the
-    /// new id (a re-bootstrap) stands in for it.
+    /// which then seeds this one.
     fn rejoin_tick(&mut self, sockets: &[SendSocket]) {
         let target = self.ids[0];
         for f in 0..self.families.len() {
             if !self.rejoin.get(f).copied().unwrap_or(false) {
                 continue;
             }
-            let (mut current, mut stale) = (false, false);
-            for l in self
+            let stale = self
                 .lookups
                 .values()
-                .filter(|l| l.bootstrap && l.family == f)
-            {
-                if l.target == target {
-                    current = true;
-                } else {
-                    stale = true;
-                }
-            }
-            if !current && (stale || self.maintenance_lookups() >= MAX_LOOKUPS) {
+                .any(|l| l.bootstrap && l.family == f && l.target != target);
+            if stale || self.maintenance_lookups() >= MAX_LOOKUPS {
                 continue;
             }
             self.rejoin[f] = false;
-            if !current {
-                self.start_lookup_as(sockets, f, target, &[], &[], None, false, None, true);
-            }
+            self.start_lookup_as(sockets, f, target, &[], &[], None, false, None, true);
         }
     }
 
@@ -3726,6 +3715,7 @@ mod tests {
         vote_rejoin(&mut a, IpAddr::from(REJOIN_PUBLIC));
         let new = a.ids[0];
         assert_ne!(new, old, "the vote gave a new BEP 42 id");
+        assert!(!a.bootstrapped, "mid-bootstrap");
         // The old self-lookup is still out: the rejoin waits for it.
         a.maintain(&sockets);
         assert_eq!(self_lookups_for(&a, new), 0);
@@ -3795,6 +3785,80 @@ mod tests {
         a.maintain(&sockets);
         assert!(a.lookups.values().all(|l| !l.bootstrap));
         assert!(find_nodes_for(&a, a.ids[0]).is_empty());
+        // Ids that already fit a new public address are kept too.
+        let public = IpAddr::from(REJOIN_PUBLIC);
+        a.ids = secure_id::virtual_ids(&public, a.ids.len(), &mut StdRng::seed_from_u64(9));
+        let ids = a.ids.clone();
+        vote_rejoin(&mut a, public);
+        assert_eq!(a.ids, ids, "fitting ids are kept");
+        assert!(a.rejoin.iter().all(|r| !r) && a.join_planned[0]);
+        a.maintain(&sockets);
+        assert!(a.lookups.values().all(|l| !l.bootstrap));
+    }
+
+    #[test]
+    fn a_rejoin_waits_for_room_under_max_lookups() {
+        let (mut a, sockets) = fixture();
+        let first = rejoin_bootstrap(&mut a, &sockets);
+        reply(&mut a, &sockets, first, vec![]);
+        // Maintenance lookups fill MAX_LOOKUPS (inserted, not driven).
+        let mut fillers = Vec::new();
+        while a.maintenance_lookups() < MAX_LOOKUPS {
+            let target = NodeId([fillers.len() as u8 + 1; 20]);
+            fillers.push(a.insert_lookup(0, target, &[], None, false, None));
+        }
+        vote_rejoin(&mut a, IpAddr::from(REJOIN_PUBLIC));
+        let new = a.ids[0];
+        a.maintain(&sockets);
+        assert_eq!(self_lookups_for(&a, new), 0, "no room yet");
+        assert!(a.rejoin[0], "kept, not lost");
+        a.lookups.remove(&fillers[0]);
+        a.maintain(&sockets);
+        assert_eq!(self_lookups_for(&a, new), 1, "started once there's room");
+        assert!(!a.rejoin[0]);
+    }
+
+    #[test]
+    fn each_family_waits_only_for_its_own_old_self_lookup() {
+        for v6_first in [false, true] {
+            let (mut a, mut sockets) = fixture();
+            // A v6 family with no node: its self-lookup ends at once. It
+            // never sends, so its socket slot needs no IPv6 on the host.
+            let placeholder = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+            placeholder.set_nonblocking(true).unwrap();
+            let (v6, v4) = if v6_first { (0, 1) } else { (1, 0) };
+            sockets.insert(v6, SendSocket::Udp(placeholder));
+            a.families.insert(
+                v6,
+                Family {
+                    table: RoutingTable::new(a.ids[0], true),
+                    ipv6: true,
+                },
+            );
+            a.join_planned.insert(v6, false);
+            a.rejoin.insert(v6, false);
+            let first = rejoin_bootstrap(&mut a, &sockets);
+            assert!(!a.lookups.values().any(|l| l.family == v6));
+            vote_rejoin(&mut a, IpAddr::from(REJOIN_PUBLIC));
+            let new = a.ids[0];
+            // v6's rejoin starts (and ends at once, empty); v4's waits for
+            // its old self-lookup, which keeps the bootstrap open.
+            a.maintain(&sockets);
+            assert!(!a.rejoin[v6] && a.rejoin[v4], "v6 first {v6_first}");
+            assert!(!a.bootstrapped, "v6 first {v6_first}: not settled early");
+            assert_eq!(self_lookups_for(&a, new), 0);
+            reply(&mut a, &sockets, first, vec![]);
+            assert!(a.bootstrapped);
+            a.maintain(&sockets);
+            assert!(!a.rejoin[v4]);
+            let rejoin: Vec<_> = a
+                .lookups
+                .values()
+                .filter(|l| l.bootstrap && l.target == new)
+                .map(|l| l.family)
+                .collect();
+            assert_eq!(rejoin, vec![v4], "v6 first {v6_first}");
+        }
     }
 
     #[test]
