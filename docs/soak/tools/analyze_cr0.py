@@ -38,7 +38,7 @@ CORE_COUNTERS = ("writer_stored_total", "writer_errors_total", "fetch_attempts_t
 STOP_REASONS = {
     "baseline_window_complete", "operator_stop", "collector_error", "evidence_write_error",
     "disk_monitor_failed", "disk_reserve_reached", "redirected_logs_limit",
-    "embedded_ui_mismatch",
+    "embedded_ui_mismatch", "service_process_exited",
     "overall_deadline_without_complete_baseline", "three_consecutive_health_failures",
     "three_consecutive_metrics_failures", "three_consecutive_capacity_violations",
     "rss_over_1GiB_for_five_samples", "process_memory_over_1GiB_for_five_samples",
@@ -850,9 +850,6 @@ def memory_context(rows):
     return out
 
 
-VERSION = re.compile(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.]{1,24})?")
-
-
 def windows_checks(root, rows, result, run):
     """The 1.0 Windows soak checks beside the memory rule (M8-WIN-1, plan OQ3):
     no service restart, upgrade from the last release, clean uninstall. Each is
@@ -868,8 +865,9 @@ def windows_checks(root, rows, result, run):
     else:
         # A restart ends the collector's loop before another sample, so the samples alone
         # can't prove none happened: the run must also have ended by completing its window.
-        done = (result is not None and result.get("service_detached") is True
-                and result.get("reason") == "baseline_window_complete")
+        done = (bool(rows) and result is not None and result.get("service_detached") is True
+                and result.get("reason") == "baseline_window_complete"
+                and result.get("samples") == len(rows) and result.get("finalization_complete") is True)
         missing = sum(1 for r in rows if not number(r.get("service_pid")))
         problems = []
         if len(seen) > 1 or len(starts) > 1:
@@ -882,8 +880,10 @@ def windows_checks(root, rows, result, run):
                                      ("pass", f"one service process across {len(rows)} samples, window complete"))
     seen_hashes = {r["image_sha256"] for r in rows if isinstance(r.get("image_sha256"), str)}
     bound = run.get("service_image_sha256")
-    if not service_mode or (not seen_hashes and bound is None):
-        checks["build_binding"] = ("absent", "no service binary hash recorded")
+    if not service_mode:
+        checks["build_binding"] = ("absent", "not a service-mode run")
+    elif not seen_hashes and bound is None:
+        checks["build_binding"] = ("fail", "no service binary hash recorded")
     else:
         bad = []
         if seen_hashes != {bound}:
@@ -893,22 +893,23 @@ def windows_checks(root, rows, result, run):
             bad.append("samples without a hash")
         checks["build_binding"] = (("fail", "; ".join(bad)) if bad else
                                    ("pass", "service binary hash unchanged at every sample"))
-    life = {}
+    life, unreadable = {}, False
     try:
         life = read_json(root / "lifecycle.json") if (root / "lifecycle.json").exists() else {}
     except (ValueError, OSError):
         checks["upgrade"] = checks["uninstall"] = ("fail", "lifecycle.json is unreadable")
-        life = {"invalid": True}
+        unreadable = True
     up = life.get("upgrade")
-    if life.get("invalid"):
+    if unreadable:
         pass
     elif not isinstance(up, dict):
         checks["upgrade"] = ("absent", "no upgrade record")
     else:
         old, new = up.get("from_version"), up.get("to_version")
         before, after = up.get("torrents_before"), up.get("torrents_after")
-        ok = (isinstance(old, str) and isinstance(new, str) and VERSION.fullmatch(old)
-              and VERSION.fullmatch(new) and old != new and up.get("service_running") is True
+        # The versions are information (--version prints the base version, so an RC and the
+        # release look alike); the binary hash is the proof the service changed.
+        ok = (isinstance(old, str) and isinstance(new, str) and up.get("service_running") is True
               and up.get("service_restarted") is True and up.get("image_matches_installed") is True
               and isinstance(up.get("from_image_sha256"), str) and bound is not None
               and up.get("from_image_sha256") != up.get("to_image_sha256") == bound
@@ -919,7 +920,7 @@ def windows_checks(root, rows, result, run):
                              f"{up.get('service_restarted')}, image matches {up.get('image_matches_installed')}, "
                              f"data present {up.get('data_present')}, torrents {before} -> {after}")
     un = life.get("uninstall")
-    if life.get("invalid"):
+    if unreadable:
         pass
     elif not isinstance(un, dict):
         checks["uninstall"] = ("absent", "no uninstall record")
@@ -1402,7 +1403,7 @@ def markdown(report):
                 "| --- | ---: | ---: | ---: | ---: |"]
         for name, b in p["bounds"].items():
             out.append(f"| {name} | {fmt(b['max'])} | {b['limit']} | {b['at_capacity_samples']} | {b['over_capacity_samples']} |")
-    out += ["", "## Windows 1.0 checks (service restart, upgrade, uninstall)", ""]
+    out += ["", "## Windows 1.0 checks (service restart, build binding, upgrade, uninstall)", ""]
     out += [f"- {name.replace('_', ' ')}: **{c['status']}** ({c['evidence']})"
             for name, c in report["windows_checks"].items()]
     out += ["", "## Interpretation", ""] + [f"- {s}" for s in report["limitations"]]

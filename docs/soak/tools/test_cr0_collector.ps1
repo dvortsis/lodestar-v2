@@ -122,4 +122,60 @@ try {
     foreach ($f in @($life, $exe)) { if ($f -and [IO.File]::Exists($f)) { [IO.File]::Delete($f) } }
     [IO.Directory]::Delete($fixture)
 }
+# Every changed script must parse: a slip in a branch would otherwise first show on the owner's PC.
+foreach ($script in @('cr0-soak.ps1', 'cr0-common.ps1', 'test_cr0_collector.ps1')) {
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot $script), [ref]$null, [ref]$parseErrors)
+    Assert ($parseErrors.Count -eq 0) "parse errors in $script"
+}
+
+# Evidence producers (M8-WIN-1), with the Windows calls replaced.
+Assert ((Get-SoakTorrentCount '127.0.0.1:8090' { param($u) "# HELP`nlodestar_torrents 1234`r`nlodestar_other 1`r`n" }) -eq 1234) 'torrent count'
+$rejected=$false
+try { Get-SoakTorrentCount '127.0.0.1:8090' { 'lodestar_other 1' } | Out-Null } catch { $rejected=$true }
+Assert $rejected 'missing torrent metric accepted'
+Assert ((Get-SoakInstalledVersion 'x.exe' { param($e) 'lodestar 1.0.0' }) -eq '1.0.0') 'version prefix stripped'
+
+$lifeDir = Join-Path ([IO.Path]::GetTempPath()) ('cr0-prod-' + [Guid]::NewGuid().ToString('N'))
+[void][IO.Directory]::CreateDirectory($lifeDir)
+$lifePath = Join-Path $lifeDir 'lifecycle.json'
+function New-UpgradeProbe([hashtable]$Over = @{}) {
+    $probe = @{
+        Identity = { param($n) @{ pid = 7; start_ticks = 500 } }
+        Status = { param($n) 'Running' }
+        ProcessImage = { param($procId) 'image' }
+        Hash = { param($f) 'H1' }
+        Data = { param($d) $true }
+        Torrents = { param($b) 520 }
+        Version = { param($e) '1.0.0' }
+        ServiceImage = { param($n) 'H1' }
+    }
+    foreach ($key in $Over.Keys) { $probe[$key] = $Over[$key] }
+    $probe
+}
+function Read-Step([string]$Step) { (Get-Content -LiteralPath $lifePath -Raw | ConvertFrom-Json).$Step }
+try {
+    Save-SoakUpgrade $lifePath '0.5.1' 'H0' 500 100 -Probe (New-UpgradeProbe)
+    $up = Read-Step 'upgrade'
+    Assert ($up.service_running -and $up.service_restarted -and $up.image_matches_installed -and $up.data_present) 'upgrade pass booleans'
+    Assert ($up.from_image_sha256 -eq 'H0' -and $up.to_image_sha256 -eq 'H1' -and $up.torrents_before -eq 500 -and $up.torrents_after -eq 520) 'upgrade values'
+    Save-SoakUpgrade $lifePath '0.5.1' 'H0' 500 500 -Probe (New-UpgradeProbe)
+    Assert (-not (Read-Step 'upgrade').service_restarted) 'same start time is not a restart'
+    Save-SoakUpgrade $lifePath '0.5.1' 'H0' 500 100 -Probe (New-UpgradeProbe @{ Data = { param($d) $false }; Status = { param($n) 'Stopped' }; Hash = { param($f) $f } })
+    $up = Read-Step 'upgrade'
+    Assert (-not $up.data_present -and -not $up.service_running -and -not $up.image_matches_installed) 'upgrade failure booleans'
+    $rejected=$false
+    try { Save-SoakUpgrade $lifePath '0.5.1' 'H0' 500 100 -Probe (New-UpgradeProbe @{ Identity = { param($n) throw 'Service is not running.' } }) } catch { $rejected=$true }
+    Assert $rejected 'stopped service accepted'
+    Save-SoakUninstall $lifePath 'kept' -Probe @{ ServicePresent = { param($n) $false }; Exists = { param($d) $d -like '*Data*' } } -DataDir 'Data' -ProgramDir 'Program'
+    $un = Read-Step 'uninstall'
+    Assert (-not $un.service_present -and -not $un.program_files_present -and $un.data_present -and $un.data_policy -eq 'kept') 'uninstall record'
+    Assert ((Read-Step 'upgrade') -ne $null) 'uninstall keeps the upgrade step'
+    $rejected=$false
+    try { Save-SoakUninstall $lifePath 'maybe' } catch { $rejected=$true }
+    Assert $rejected 'unknown data policy accepted'
+} finally {
+    if ([IO.File]::Exists($lifePath)) { [IO.File]::Delete($lifePath) }
+    [IO.Directory]::Delete($lifeDir)
+}
 'Collector fault-injection assertions passed.'

@@ -105,7 +105,7 @@ $clock = New-SoakClock
 $run = [ordered]@{
     schema_version = 2; commit = $Commit; exe = $Exe; sha256 = (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash
     version = Get-SoakExecutableVersion $Exe; started = $started.ToString('o')
-    timezone = (Get-TimeZone).Id; user_timezone = 'UTC'
+    timezone = if ($serviceMode) { 'withheld' } else { (Get-TimeZone).Id }; user_timezone = 'UTC'
     os = [Environment]::OSVersion.VersionString; logical_cpus = [Environment]::ProcessorCount
     collector_sha256 = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash
     common_sha256 = (Get-FileHash -LiteralPath (Join-Path $Root 'cr0-common.ps1') -Algorithm SHA256).Hash
@@ -143,7 +143,8 @@ try {
         $svcId = Get-SoakServiceIdentity $ServiceName; $p = Get-Process -Id $svcId.pid
         # Bind the evidence to the binary the service runs; every sample repeats the hash.
         $img = Get-SoakServiceImage $ServiceName
-        $run.service_image_sha256 = $img.sha256; $run.service_version = $img.version
+        $run.service_image_sha256 = $img.sha256
+        $run.service_reported_version = Get-SoakInstalledVersion $Exe  # information only, never compared
     }
     else { $p = Start-Process -FilePath $Exe -ArgumentList 'serve' -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $Root 'lodestar.out.log') `
@@ -158,7 +159,7 @@ try {
     while ($true) {
         if (Test-Path (Join-Path $Root 'stop.request')) { $reason = 'operator_stop'; break }
         $p.Refresh()
-        if ($p.HasExited) { $reason = "process_exited_$($p.ExitCode)"; break }
+        if ($p.HasExited) { $reason = if ($serviceMode) { 'service_process_exited' } else { "process_exited_$($p.ExitCode)" }; break }
         $elapsed = $clock.Elapsed.TotalSeconds
         if ($elapsed -ge (8 + $BaselineHours) * 3600) { $reason = 'overall_deadline_without_complete_baseline'; break }
         if ($elapsed -ge $nextDisk) {

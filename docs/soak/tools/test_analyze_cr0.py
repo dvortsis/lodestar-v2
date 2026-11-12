@@ -963,7 +963,7 @@ class AnalyzerTests(unittest.TestCase):
     def life(self, **parts):
         (self.root / "lifecycle.json").write_text(json.dumps({"schema_version": 1, **parts}))
 
-    GOOD_UP = {"from_version": "0.5.1", "to_version": "1.0.0-rc.1", "service_running": True,
+    GOOD_UP = {"from_version": "0.5.1", "to_version": "1.0.0", "service_running": True,
                "service_restarted": True, "image_matches_installed": True,
                "from_image_sha256": "a" * 64, "to_image_sha256": "b" * 64,
                "data_present": True, "torrents_before": 500, "torrents_after": 520}
@@ -973,7 +973,8 @@ class AnalyzerTests(unittest.TestCase):
     def done(self, **changes):
         (self.root / "result.json").write_text(json.dumps(
             {"schema_version": 2, "reason": "baseline_window_complete", "samples": 5,
-             "service_detached": True, "shutdown": {"exit_confirmed": False}, **changes}))
+             "service_detached": True, "finalization_complete": True,
+             "shutdown": {"exit_confirmed": False}, **changes}))
 
     def checks(self, rows=None, finished=True, bound="b" * 64, **parts):
         self.run_json(service_image_sha256=bound, settings={"baseline_hours": 24, "service_mode": True})
@@ -1026,6 +1027,27 @@ class AnalyzerTests(unittest.TestCase):
         del rows[1]["image_sha256"]
         self.assertEqual(self.checks(rows)["build_binding"]["status"], "fail")
 
+    def test_versions_are_information_not_a_check(self):
+        # An RC prints the base version, so equal versions with a new binary still pass.
+        up = {**self.GOOD_UP, "from_version": "1.0.0", "to_version": "1.0.0"}
+        self.assertEqual(self.checks(upgrade=up)["upgrade"]["status"], "pass")
+
+    def test_service_restart_needs_a_complete_sample_set(self):
+        self.assertEqual(self.checks([])["service_restart"]["status"], "fail")  # empty samples
+        self.rows(self.svc_rows())
+        self.done(samples=1440)  # truncated file
+        self.assertEqual(analyze(self.root)["windows_checks"]["service_restart"]["status"], "fail")
+        self.done(finalization_complete=False)
+        self.assertEqual(analyze(self.root)["windows_checks"]["service_restart"]["status"], "fail")
+
+    def test_service_mode_without_any_hash_fails_binding(self):
+        rows = [{k: v for k, v in r.items() if k != "image_sha256"} for r in self.svc_rows()]
+        self.assertEqual(self.checks(rows, bound=None)["build_binding"]["status"], "fail")
+
+    def test_lifecycle_file_cannot_hide_check_lines_with_a_key(self):
+        checks = self.checks(invalid=True, upgrade=self.GOOD_UP, uninstall=self.GOOD_UN)
+        self.assertEqual((checks["upgrade"]["status"], checks["uninstall"]["status"]), ("pass", "pass"))
+
     def test_upgrade_must_land_on_the_bound_binary(self):
         same = {**self.GOOD_UP, "from_image_sha256": "b" * 64}
         other = {**self.GOOD_UP, "to_image_sha256": "c" * 64}
@@ -1035,8 +1057,7 @@ class AnalyzerTests(unittest.TestCase):
     def test_upgrade_pass_and_fail(self):
         self.assertEqual(self.checks(upgrade=self.GOOD_UP)["upgrade"]["status"], "pass")
         for change in ({"service_running": False}, {"service_restarted": False}, {"image_matches_installed": False}, {"data_present": False}, {"torrents_after": 10},
-                       {"torrents_before": 0}, {"to_version": "0.5.1"}, {"to_version": "C:\\Users\\x"},
-                       {"torrents_after": None}):
+                       {"torrents_before": 0}, {"torrents_after": None}):
             self.assertEqual(self.checks(upgrade={**self.GOOD_UP, **change})["upgrade"]["status"],
                              "fail", change)
 
