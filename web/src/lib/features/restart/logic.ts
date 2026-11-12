@@ -1,6 +1,5 @@
-// What the restart banner offers (§10.10.6), as pure decisions. This is all of the feature a
-// Settings first view carries (with the banner and the store); the flow's own logic is in
-// `flow.ts`, loaded when it is needed.
+// What the restart banner offers (§10.10.6), as pure decisions. The flow's own logic is in
+// `flow.ts`.
 import type { components } from '$lib/api/schema';
 
 export type System = components['schemas']['SystemInfo'];

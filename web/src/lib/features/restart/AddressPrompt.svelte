@@ -6,8 +6,7 @@
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
-	import Button from '$lib/ui/controls/Button.svelte';
-	import Banner from '$lib/ui/feedback/Banner.svelte';
+	import { FOCUS_RING, TARGET_MIN } from '$lib/ui/classes';
 	import { addressPromptOf, failureOf, type RestartFailure } from './flow';
 	import type { System } from './logic';
 	import { restart } from './restart.svelte';
@@ -31,11 +30,25 @@
 			estimateSeconds: system.restart.estimated_seconds
 		});
 	}
-	// Nobody answered in time: the server reverts by itself and restarts onto the old address.
+	// The countdown runs on this browser's clock against the server's deadline, and the two can
+	// disagree. So at 0:00 the page asks the server and goes back only once it says the address was
+	// reverted, or stops answering (it is restarting onto the old address). While the server still
+	// waits, Keep stays available and the page asks again every few seconds.
+	let nextCheck = 0;
+	let checking = false;
 	$effect(() => {
-		if (prompt && prompt.secondsLeft === 0 && !busy) goBack(prompt.previousUrl);
+		if (!prompt || prompt.secondsLeft > 0 || busy || checking || now < nextCheck) return;
+		checking = true;
+		const back = prompt.previousUrl;
+		void restart.refresh().then((answered) => {
+			checking = false;
+			nextCheck = Date.now() + 5_000;
+			const state = restart.system?.address_change?.state;
+			if (answered && state === 'awaiting_confirmation') return;
+			// Reverted: the server restarts onto the old address when it can, else at the next restart.
+			if (!answered || restart.system?.restart.available) goBack(back);
+		});
 	});
-
 	async function answer(kind: 'keep' | 'revert') {
 		if (!prompt) return;
 		busy = true;
@@ -58,21 +71,33 @@
 	const mins = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 </script>
 
+<!-- Not a live region: the countdown ticks every second. The prompt is announced once, by the
+restart watch's region. -->
 {#if prompt}
-	<Banner kind="warning" title={m.restart_keep_title()}>
+	<section
+		class="flex flex-col gap-2 rounded-box border border-warning bg-base-100 p-3"
+		aria-labelledby="keep-title"
+	>
+		<h2 id="keep-title" class="font-medium">{m.restart_keep_title()}</h2>
 		<p>{m.restart_keep_body({ url: prompt.url })}</p>
 		<p data-testid="keep-countdown">
-			{m.restart_keep_countdown({ time: mins(prompt.secondsLeft) })}
+			<span aria-hidden="true">{m.restart_keep_countdown({ time: mins(prompt.secondsLeft) })}</span>
+			<span class="sr-only">{m.restart_keep_countdown_sr()}</span>
 		</p>
-		{#if failure}<p role="alert" data-testid="keep-failure">{failure.message}</p>{/if}
-		{#snippet action()}
-			<div class="flex flex-wrap gap-2">
-				<Button variant="primary" loading={busy} onclick={() => void answer('keep')}
-					>{m.restart_keep_yes()}</Button
-				>
-				<Button loading={busy} onclick={() => void answer('revert')}>{m.restart_keep_back()}</Button
-				>
-			</div>
-		{/snippet}
-	</Banner>
+		{#if failure}<p data-testid="keep-failure">{failure.message}</p>{/if}
+		<div class="flex flex-wrap gap-2">
+			<button
+				type="button"
+				class="btn btn-primary {FOCUS_RING} {TARGET_MIN}"
+				aria-busy={busy || undefined}
+				onclick={() => void (busy || answer('keep'))}>{m.restart_keep_yes()}</button
+			>
+			<button
+				type="button"
+				class="btn btn-outline border-field-border {FOCUS_RING} {TARGET_MIN}"
+				aria-busy={busy || undefined}
+				onclick={() => void (busy || answer('revert'))}>{m.restart_keep_back()}</button
+			>
+		</div>
+	</section>
 {/if}

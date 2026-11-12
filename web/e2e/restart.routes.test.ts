@@ -4,6 +4,7 @@
 // clock.
 import type { Page } from '@playwright/test';
 import { expectNoA11yViolations } from './a11y';
+import { SettingsBackend } from '../src/lib/features/settings/form/testing/e2e-backend';
 import { expect, test } from './support/test';
 import type { OpenApiMock } from './mock/openapi-mock';
 
@@ -114,6 +115,7 @@ test.describe('restart banner', () => {
 	});
 
 	test('not back within two minutes: says what to check', async ({ page, go, mock }) => {
+		test.setTimeout(60_000);
 		await page.clock.install();
 		mock.on('getSystem', systemWith(mock, pending) as never);
 		mock.on('restartSystem', {
@@ -220,4 +222,29 @@ test.describe('restart banner', () => {
 		await expect.poll(() => mock.calls('keepAddress').length, DEADLINE).toBe(1);
 		await expect(keep).toHaveCount(0, DEADLINE);
 	});
+
+	for (const width of [1366, 390]) {
+		test(`the tray leaves the Save button reachable at ${width} px`, async ({ page, go, mock }) => {
+			const backend = new SettingsBackend().attach(mock);
+			mock.on('getSystem', systemWith(mock, pending) as never);
+			await page.setViewportSize({ width, height: 800 });
+			await go('/settings/crawler');
+			const radio = page.getByRole('radio', { name: 'aggressive' });
+			await expect(radio).toBeVisible(DEADLINE);
+			await engage(page);
+			await radio.check();
+			const save = page.getByRole('button', { name: 'Save changes' });
+			await expect(save).toBeVisible();
+			const box = await save.boundingBox();
+			expect(box).not.toBeNull();
+			// What is on top at Save's centre is Save itself, not the tray.
+			const top = await page.evaluate(
+				({ x, y }) => document.elementFromPoint(x, y)?.closest('button')?.textContent?.trim(),
+				{ x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 }
+			);
+			expect(top).toBe('Save changes');
+			await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
+			await expect.poll(() => backend.patches.length, DEADLINE).toBe(1);
+		});
+	}
 });

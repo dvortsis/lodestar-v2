@@ -8,7 +8,7 @@
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import { FOCUS_RING, TARGET_MIN } from '$lib/ui/classes';
-	import { isOtherOrigin, waitForServer, waitUntilDown } from './flow';
+	import { isOtherOrigin, parseTarget, waitForServer, waitUntilDown } from './flow';
 
 	import type { Waiting } from './logic';
 
@@ -22,8 +22,9 @@
 	// fetch only itself. So it never probes the new address: it waits for this one to stop answering,
 	// gives the server the time it estimates, then goes there once; the link is always shown.
 	const other = $derived(isOtherOrigin(target, location.origin));
-	const address = $derived(target ? new URL(target).host : '');
-	const href = $derived(target ? new URL('/settings', target).href : '');
+	const dest = $derived(parseTarget(target));
+	const address = $derived(dest?.host ?? '');
+	const href = $derived(dest ? new URL('/settings', dest).href : '');
 
 	const sleep = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
 

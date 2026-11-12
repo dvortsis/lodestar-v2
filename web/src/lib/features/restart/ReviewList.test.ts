@@ -19,6 +19,8 @@ vi.mock('../settings/form/display', () => ({
 }));
 vi.mock('../settings/form/requests', () => ({ getSection: form.getSection }));
 
+// Waits for conditions with a deadline of 15 s; the test's own timeout must not cut them short.
+vi.setConfig({ testTimeout: 30_000 });
 const until = (check: () => void) => waitFor(check, { timeout: 10_000 });
 
 it('lists each pending field with its saved value, and never a secret', async () => {

@@ -5,6 +5,8 @@ import {
 	addressPromptOf,
 	backoffMs,
 	failureOf,
+	isOtherOrigin,
+	parseTarget,
 	usableUrl,
 	waitForServer
 } from './flow';
@@ -225,5 +227,26 @@ describe('waitForServer with a new address', () => {
 		});
 		expect(result).toBe('up');
 		expect(c.now()).toBeLessThan(10_000);
+	});
+});
+
+describe('parseTarget and isOtherOrigin', () => {
+	it('accepts only http(s) addresses', () => {
+		expect(parseTarget('http://nas.local:9000/')?.host).toBe('nas.local:9000');
+		expect(parseTarget('https://nas.local/')?.protocol).toBe('https:');
+		for (const bad of [
+			null,
+			'',
+			'javascript:alert(1)',
+			'data:text/html,x',
+			'not a url',
+			'file:///etc'
+		])
+			expect(parseTarget(bad)).toBeNull();
+	});
+	it('tells another origin from this one', () => {
+		expect(isOtherOrigin('http://nas.local:9000/', 'http://nas.local:8090')).toBe(true);
+		expect(isOtherOrigin('http://nas.local:8090/x', 'http://nas.local:8090')).toBe(false);
+		expect(isOtherOrigin('javascript:alert(1)', 'http://nas.local:8090')).toBe(false);
 	});
 });

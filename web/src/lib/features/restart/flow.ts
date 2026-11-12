@@ -119,11 +119,19 @@ export async function waitUntilDown(
 	}
 }
 
+/** `url` as an http(s) address, or null: anything else is never navigated to or linked. */
+export function parseTarget(url: string | null): URL | null {
+	if (!url) return null;
+	try {
+		const u = new URL(url);
+		return u.protocol === 'http:' || u.protocol === 'https:' ? u : null;
+	} catch {
+		return null;
+	}
+}
+
 /** Whether `url` is a different origin from this page: the CSP only lets the page fetch itself. */
 export function isOtherOrigin(url: string | null, here: string): boolean {
-	try {
-		return url !== null && new URL(url).origin !== here;
-	} catch {
-		return false;
-	}
+	const u = parseTarget(url);
+	return u !== null && u.origin !== here;
 }

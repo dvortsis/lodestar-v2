@@ -11,6 +11,8 @@ vi.mock('$lib/api/client', async (original) => ({
 	api
 }));
 
+// Waits for conditions with a deadline of 15 s; the test's own timeout must not cut them short.
+vi.setConfig({ testTimeout: 30_000 });
 const until = (check: () => void) => waitFor(check, { timeout: 15_000 });
 const announce = () => document.querySelector('[data-testid="restart-announce"]');
 const banner = () => document.querySelector('[data-testid="restart-banner"]');
@@ -86,5 +88,37 @@ it('survives a partial /system', async () => {
 	const set = vi.fn();
 	const stop = watchRestart(set);
 	await until(() => expect(set).toHaveBeenCalledWith(false));
+	stop();
+});
+
+it('does not rewrite the live region when a refresh finds the same thing', async () => {
+	api.get.mockResolvedValue(system(['network.dht_port']));
+	const stop = watchRestart(vi.fn());
+	await until(() => expect(announce()!.textContent).toBe('1 change applies after a restart'));
+	const seen = vi.fn();
+	new MutationObserver(seen).observe(announce()!, {
+		childList: true,
+		characterData: true,
+		subtree: true
+	});
+	for (let i = 0; i < 3; i++) await restart.refresh();
+	await new Promise((done) => setTimeout(done, 50));
+	expect(seen).not.toHaveBeenCalled();
+	stop();
+});
+
+it('announces an address waiting to be kept once, in the same region', async () => {
+	api.get.mockResolvedValue(
+		system([], {
+			deadline: Math.floor(Date.now() / 1000) + 300,
+			kind: 'http_bind',
+			previous_url: 'http://a:1/',
+			state: 'awaiting_confirmation',
+			stored: true,
+			url: 'http://a:2/'
+		})
+	);
+	const stop = watchRestart(vi.fn());
+	await until(() => expect(announce()!.textContent).toMatch(/Lodestar is now at http:\/\/a:2\//));
 	stop();
 });

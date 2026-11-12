@@ -51,7 +51,12 @@
 </script>
 
 {#if (pending || (awaiting && Prompt)) && !restart.waiting}
-	<div class="restart-tray" data-testid="restart-tray">
+	<div
+		class="restart-tray"
+		role="region"
+		aria-label={m.restart_tray_label()}
+		data-testid="restart-tray"
+	>
 		{#if awaiting && Prompt && restart.system}<Prompt system={restart.system} />{/if}
 		{#if pending}
 			<div class="flex flex-col gap-3" data-testid="restart-banner">
@@ -100,7 +105,8 @@
 	.restart-tray {
 		position: fixed;
 		inset-inline: calc(var(--spacing) * 4);
-		bottom: calc(var(--spacing) * 4);
+		/* Above the Settings save bar (56 px, sticky at the bottom) and the first toast. */
+		bottom: calc(var(--spacing) * 18);
 		z-index: 40;
 		display: flex;
 		flex-direction: column;

@@ -6,13 +6,13 @@
 //   minute elsewhere; the banner shares the same store.
 // - The banner floats (a fixed tray at the bottom), so it never moves content; it is mounted on the
 //   body and checks the route itself.
-// - The polite live region is created here, empty, as soon as the watch starts, and filled only
-//   when the pending count changes. The pill's own announcement stays quiet for this state, so the
+// - The polite live region is created here, empty, as soon as the watch starts, and its text is
+//   set only when the words change (the pending count, or an address waiting to be kept). The pill's own announcement stays quiet for this state, so the
 //   two never say it twice.
 import { mount, unmount, type Component } from 'svelte';
 import { page } from '$app/state';
 import { restart } from './restart.svelte';
-import { countText } from './text';
+import { announceText } from './text';
 
 const SETTINGS_MS = 15_000;
 const ELSEWHERE_MS = 60_000;
@@ -31,7 +31,6 @@ export function watchRestart(set: (needed: boolean) => void): () => void {
 	const live = document.createElement('div');
 	live.className = 'sr-only';
 	live.setAttribute('role', 'status');
-	live.dataset.testid = 'restart-announce';
 	live.setAttribute('data-testid', 'restart-announce');
 	document.body.append(live);
 
@@ -49,7 +48,9 @@ export function watchRestart(set: (needed: boolean) => void): () => void {
 		$effect(() => {
 			const pending = restart.pending;
 			set(pending !== null);
-			live.textContent = countText(pending);
+			// Only a change of words: the same text, rewritten, can be read out again.
+			const text = announceText(pending, restart.system);
+			if (live.textContent !== text) live.textContent = text;
 		});
 		$effect(() => {
 			const awaiting = restart.system?.address_change?.state === 'awaiting_confirmation';

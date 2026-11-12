@@ -9,6 +9,8 @@ vi.mock('$lib/api/client', async (original) => ({
 	api
 }));
 
+// Waits for conditions with a deadline of 15 s; the test's own timeout must not cut them short.
+vi.setConfig({ testTimeout: 30_000 });
 const until = (check: () => void) => waitFor(check, { timeout: 15_000 });
 const assign = vi.fn();
 const reload = vi.fn();
@@ -116,4 +118,15 @@ it('is not torn down by a /system refresh that finds nothing pending', async () 
 	await restart.refresh();
 	expect(api.get).not.toHaveBeenCalled();
 	expect(restart.waiting).not.toBeNull();
+});
+
+it('ignores a target that is not an http(s) address: no link, and it waits for this one', async () => {
+	vi.stubGlobal('fetch', fetchOk());
+	api.get.mockResolvedValue({ started_at: 2, restart_required: [] });
+	render(RestartingPage, {
+		props: { target: 'javascript:alert(1)', startedAt: 1, estimateSeconds: 0 }
+	});
+	expect(screen.queryByTestId('restarting-open')).toBeNull();
+	await vi.advanceTimersByTimeAsync(1_500);
+	await until(() => expect(reload).toHaveBeenCalled());
 });
