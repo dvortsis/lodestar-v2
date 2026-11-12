@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T09:48:47Z",
+  "updated_at": "2026-11-12T09:50:03Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8155,7 +8155,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T09:48:47Z",
+    "updated": "2026-11-12T09:50:03Z",
     "items": [
       {
         "slot": 1,
@@ -8288,7 +8288,7 @@
     }
   ],
   "heartbeat": "2026-11-12T09:44:56Z",
-  "updated": "2026-11-12T09:48:47Z",
+  "updated": "2026-11-12T09:50:03Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -8493,7 +8493,7 @@
     "note": "Tester holds 1 (Linux lane). It archived Windows phase 1 at ~07:30Z (stalled on a connector prompt) and lent the slot to the runner overnight; it asks before taking it back in the morning. Lent slot cleared 2026-11-12T07:37:09Z; tester not yet told (its session refuses cross-session messages without a trusted device)."
   },
   "extra": {
-    "updated": "2026-11-12T07:37:09Z",
+    "updated": "2026-11-12T09:50:03Z",
     "max": 2,
     "items": [
       {
@@ -8502,8 +8502,15 @@
         "agent": "claude",
         "doing": "session_01MMjhn8qXgAJy8Q8NE66YaY: building per briefs/GS-0.md",
         "since": "2026-11-12T07:04Z"
+      },
+      {
+        "slice": "UN-2",
+        "role": "build",
+        "agent": "claude",
+        "doing": "session_01MMjhnA886zsZUmN7UDXYkQ: building per briefs/UN-2.md",
+        "since": "2026-11-12T09:50:03Z"
       }
     ],
-    "note": "\u00a72.60: runner holds 2 (GS-0, UN-0). The slot lent overnight by the tester is clear again (ENR-10 moved to build slot 11 at 2026-11-12T07:37:09Z)."
+    "note": "\u00a72.60: runner holds 2 (GS-0, UN-2). UN-0 merged as #748 and its session was archived; UN-2 took its extra."
   }
 }
