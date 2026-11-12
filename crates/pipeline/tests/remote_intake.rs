@@ -1473,13 +1473,16 @@ async fn remote_leases_survive_a_restart_and_parked_ones_go_to_the_built_in_work
     assert_eq!(rows, [(parked, src(2)), (held, src(1))]);
     // Worker 8 is revoked: its key waits, then goes to the built-in worker.
     assert_eq!(authority.evict(WorkerId(8)), 1);
-    until("the built-in worker holds the parked key", || {
+    // One condition for both: `hand_parked` makes the built-in worker the
+    // holder before the pool takes the key, and counts it only after, so
+    // waiting for the holder alone could read `parked` in between.
+    until("the built-in worker holds the parked key, counted", || {
         authority
             .get(&parked)
             .is_some_and(|l| l.holder == WorkerId::LOCAL)
+            && stat(&rig.remote(), |s| &s.parked) == 1
     })
     .await;
-    assert_eq!(stat(&rig.remote(), |s| &s.parked), 1);
     assert_eq!(authority.get(&parked).unwrap().source, src(2), "kept");
     let Rig { db, pipeline, .. } = rig;
     let stopped = now();

@@ -570,10 +570,22 @@ impl Drop for KillByConfig {
 
 /// The console (stderr, which the relaunched copy shares) and
 /// `lodestar.jsonl`, for a failure message: a copy that died at start
-/// says why on the console.
-fn dump(console: &std::sync::Mutex<String>, jsonl: &Path) -> String {
+/// says why on the console. Each console line carries the UTC time the
+/// test read it (X-flake-portable-restart-3), and `seen` the moments the
+/// test saw, so a failure shows when the copy gave up against when the old
+/// process had exited and the hand-over (`app.relaunch`) came.
+fn dump(
+    console: &std::sync::Mutex<String>,
+    jsonl: &Path,
+    seen: &[(&str, jiff::Timestamp)],
+) -> String {
+    let seen: String = seen
+        .iter()
+        .map(|(what, at)| format!("{at:.3} {what}\n"))
+        .collect();
     format!(
-        "--- console ---\n{}\n--- lodestar.jsonl ---\n{}",
+        "--- seen by the test ---\n{seen}{:.3} this failure\n--- console (read at) ---\n{}\n--- lodestar.jsonl ---\n{}",
+        jiff::Timestamp::now(),
         console.lock().unwrap_or_else(|e| e.into_inner()),
         std::fs::read_to_string(jsonl).unwrap_or_else(|e| format!("(unreadable: {e})"))
     )
@@ -617,14 +629,14 @@ fn portable_restart(bind: &str) -> (u16, u16) {
                 .map_while(Result::ok)
             {
                 let mut c = console.lock().unwrap();
-                c.push_str(&line);
-                c.push('\n');
+                c.push_str(&format!("[{:.3}] {line}\n", jiff::Timestamp::now()));
             }
         }
     });
     let jsonl = dir.path().join("data").join("logs").join("lodestar.jsonl");
+    let mut seen = vec![("started the old process", jiff::Timestamp::now())];
     let first = nth_port(&jsonl, 1, Duration::from_secs(60))
-        .unwrap_or_else(|| panic!("server didn't come up\n{}", dump(&console, &jsonl)));
+        .unwrap_or_else(|| panic!("server didn't come up\n{}", dump(&console, &jsonl, &seen)));
     wait_for(Duration::from_secs(60), || healthz(first)).expect("healthz");
     let token_logged = wait_for(Duration::from_secs(30), || {
         let c = console.lock().unwrap().clone();
@@ -636,22 +648,34 @@ fn portable_restart(bind: &str) -> (u16, u16) {
     assert_eq!(info["method"], "relaunch", "{info}");
     assert_eq!(info["available"], true, "{info}");
 
+    seen.push(("asked for Restart now", jiff::Timestamp::now()));
     let restart = signed_in(first, "POST", "/api/v1/system/restart", &cookie);
     assert!(restart.starts_with("HTTP/1.0 202"), "{restart}");
     let status = wait_for(Duration::from_secs(90), || child.try_wait().ok().flatten())
-        .unwrap_or_else(|| panic!("the old process didn't exit\n{}", dump(&console, &jsonl)));
+        .unwrap_or_else(|| {
+            panic!(
+                "the old process didn't exit\n{}",
+                dump(&console, &jsonl, &seen)
+            )
+        });
+    // When the process object signalled, to within the 250 ms poll.
+    seen.push(("saw the old process exit", jiff::Timestamp::now()));
     assert_eq!(
         status.code(),
         Some(80),
         "the old process exited with {status}\n{}",
-        dump(&console, &jsonl)
+        dump(&console, &jsonl, &seen)
     );
 
     // The new copy: same config, so the same log, and the same store.
     let second = nth_port(&jsonl, 2, Duration::from_secs(90))
-        .unwrap_or_else(|| panic!("no new copy served\n{}", dump(&console, &jsonl)));
-    let health = wait_for(Duration::from_secs(60), || healthz(second))
-        .unwrap_or_else(|| panic!("no healthz from the new copy\n{}", dump(&console, &jsonl)));
+        .unwrap_or_else(|| panic!("no new copy served\n{}", dump(&console, &jsonl, &seen)));
+    let health = wait_for(Duration::from_secs(60), || healthz(second)).unwrap_or_else(|| {
+        panic!(
+            "no healthz from the new copy\n{}",
+            dump(&console, &jsonl, &seen)
+        )
+    });
     assert!(health.starts_with("HTTP/1.0 200"), "{health}");
     let info = restart_info(second, &cookie);
     assert_eq!(info["method"], "relaunch", "{info}");
@@ -846,6 +870,14 @@ fn a_relaunched_copy_waits_for_the_process_it_replaces() {
         shown.contains("wait for the copy it replaces to exit timed out"),
         "{shown}"
     );
+    // X-flake-portable-restart-3: then when the check started, was ready
+    // and gave up, from the hand-over. It never answered, since this
+    // process never exits.
+    assert!(
+        shown.contains("The check's timeline, from the hand-over: started "),
+        "{shown}"
+    );
+    assert!(shown.contains(", no answer at +"), "{shown}");
     assert!(!shown.contains(&token), "{shown}");
 }
 
