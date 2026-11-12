@@ -95,10 +95,10 @@ function Invoke-Join([string]$mode, [string]$token = $sentinel, [string]$address
   $script:case++
   $data = Join-Path $root "data-$script:case"
   $log = New-Object 'Collections.Generic.List[string]'
-  $extra = "-TempRoot `"$tmp`" -StubArgs $mode -TimeoutSeconds $timeout"
+  $extra = "-StubArgs $mode -TimeoutSeconds $timeout"
   $before = @(Get-ChildItem -LiteralPath $tmp -Directory | ForEach-Object FullName)
   $result = [Lodestar.Setup.JoinRunner]::Run($install, $data, $address, $token,
-    [Action[string]] ({ param($l) $log.Add($l) }.GetNewClosure()), $extra, 120000)
+    [Action[string]] ({ param($l) $log.Add($l) }.GetNewClosure()), $tmp, $extra, 120000)
   $work = @(Get-ChildItem -LiteralPath $tmp -Directory | Where-Object { $before -notcontains $_.FullName })
   $seen = @{}
   $seenFile = Join-Path $data 'stub-seen.txt'

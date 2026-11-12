@@ -28,6 +28,9 @@ param(
   [Parameter(Mandatory)][string]$Exe,
   [Parameter(Mandatory)][string]$Coordinator,
   [Parameter(Mandatory)][string]$DataDir,
+  # The custom action's name for the folders, so it can delete the token folder if it has
+  # to stop this script.
+  [Parameter(Mandatory)][ValidatePattern('\A[0-9a-f]{32}\z')][string]$WorkId,
   [ValidateRange(10, 600)][int]$TimeoutSeconds = 120,
   # Tests only: where the private folders go (default C:\Windows\Temp) and extra arguments
   # put before `worker` (a stub's mode). The MSI passes neither.
@@ -97,8 +100,8 @@ $DataDir = [IO.Path]::GetFullPath($DataDir).TrimEnd('\')
 
 # ---- 2. the private folders ----
 $root = if ($TempRoot) { $TempRoot } else { Join-Path $env:SystemRoot 'Temp' }
-$work = Join-Path $root ('lodestar-join-' + [guid]::NewGuid().ToString('N'))
-$tokenDir = Join-Path $work ('t-' + [guid]::NewGuid().ToString('N'))
+$work = Join-Path $root ('lodestar-join-' + $WorkId)
+$tokenDir = Join-Path $work ('t-' + $WorkId)
 $tokenFile = Join-Path $tokenDir 'join-token'
 $exitCode = 2
 $message = $null
@@ -141,7 +144,10 @@ try {
   if ($timedOut) {
     Log "lodestar did not finish within $TimeoutSeconds s: stopping it"
     $taskkill = Join-Path $env:SystemRoot 'System32\taskkill.exe'
+    # Its error output (the process already gone) must not stop this script.
+    $ErrorActionPreference = 'Continue'
     & $taskkill /PID $p.Id /T /F 2>&1 | Out-Null
+    $ErrorActionPreference = 'Stop'
     if (-not $p.WaitForExit(10000)) { try { $p.Kill() } catch { } ; [void]$p.WaitForExit(10000) }
   } else {
     $p.WaitForExit()   # the parameterless wait also waits for the output to be read
@@ -166,8 +172,28 @@ try {
     $message = "lodestar finished but $DataDir holds no worker credentials. Install again with a new join token."
     $exitCode = 1
   } else {
-    Log "joined $addr"
-    $exitCode = 0
+    # The join ran as SYSTEM, so SYSTEM owns the key and the credentials, and their lists
+    # allow only OWNER RIGHTS, SYSTEM and Administrators (integrations secret.rs): the
+    # service's own account gets them as their owner. /L: never through a link.
+    . (Join-Path $PSScriptRoot 'service-sid.ps1')
+    $svc = (Get-ServiceSid 'Lodestar').Value
+    $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
+    $owned = $true
+    foreach ($target in @(@((Join-Path $DataDir 'secrets.key'), @()), @((Join-Path $DataDir 'cluster'), @('/T')))) {
+      if (-not (Test-Path -LiteralPath $target[0])) { continue }
+      $ErrorActionPreference = 'Continue'
+      $o = & $icacls $target[0] /setowner "*$svc" @($target[1]) /L /C /Q 2>&1 | Out-String
+      $code = $LASTEXITCODE
+      $ErrorActionPreference = 'Stop'
+      if ($code -ne 0) { Log "icacls /setowner $($target[0]) failed ($code): $o"; $owned = $false }
+    }
+    if ($owned) {
+      Log "joined $addr"
+      $exitCode = 0
+    } else {
+      $message = "Joined $addr, but the worker's files in $DataDir could not be handed to the Lodestar service. Remove the worker in Settings, Workers on the main Lodestar, then install again with a new join token."
+      $exitCode = 1
+    }
   }
 } catch {
   $message = "Unexpected error: $($_.Exception.Message)"

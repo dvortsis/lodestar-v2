@@ -154,7 +154,7 @@
          web page on this PC itself needs no rule. -->
     <DirectoryRef Id="INSTALLFOLDER">
       <Component Id="FirewallWeb" Guid="2D5B2E5C-6B34-4F0F-9D54-3D1A3F8E9A06" Win64="yes">
-        <Condition>WEB_FIREWALL = "1"</Condition>
+        <Condition>WEB_FIREWALL = "1" AND NOT (LODESTAR_MODE = "worker")</Condition>
         <RegistryValue Root="HKLM" Key="Software\Lodestar" Name="FirewallWeb" Type="integer" Value="1" KeyPath="yes" />
         <fire:FirewallException Id="FwWeb" Name="Lodestar web UI (8090/tcp, private networks)"
                                 Protocol="tcp" Port="8090" Profile="private" Scope="any"

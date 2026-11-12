@@ -50,11 +50,11 @@
     <CustomAction Id="WorkerNeedsWizard"
                   Error="Joining an existing Lodestar needs the setup wizard, so the join token is typed into it and never onto a command line. Run the installer without /qn, /qb or /passive." />
     <CustomAction Id="WorkerNeedsDetails"
-                  Error="Joining an existing Lodestar needs the main Lodestar's address and a join token. Run the installer again and fill both in." />
+                  Error="Joining an existing Lodestar needs the main Lodestar's address, like https://192.168.1.10:8091, and a join token. Run the installer again and fill both in." />
 
     <!-- The token's only way into the install script. HideTarget on both: no value in the log. -->
     <CustomAction Id="SetJoinWorker" Property="JoinWorker" HideTarget="yes"
-                  Value="INSTALLFOLDER=[INSTALLFOLDER];DATADIR=[DataFolderDir];ADDRESS=[JOIN_ADDRESS];TOKEN=[JOIN_TOKEN]" />
+                  Value="ADDRESS=[JOIN_ADDRESS];TOKEN=[JOIN_TOKEN];INSTALLFOLDER=[INSTALLFOLDER]" />
     <CustomAction Id="JoinWorker" BinaryKey="LodestarJoinCA" DllEntry="JoinWorker"
                   Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
     <Binary Id="LodestarJoinCA" SourceFile="$(env.LODESTAR_JOIN_CA)" />
@@ -67,7 +67,7 @@
       <Custom Action="KeepWorkerMode" After="AppSearch">(Installed OR WIX_UPGRADE_DETECTED) AND LODESTAR_MODE_PREV = "worker"</Custom>
       <Custom Action="KeepMainMode" After="KeepWorkerMode">(Installed OR WIX_UPGRADE_DETECTED) AND NOT (LODESTAR_MODE_PREV = "worker")</Custom>
       <Custom Action="WorkerNeedsWizard" After="KeepMainMode">LODESTAR_MODE = "worker" AND NOT Installed AND NOT WIX_UPGRADE_DETECTED AND UILevel &lt; 5</Custom>
-      <Custom Action="WorkerNeedsDetails" After="WorkerNeedsWizard">LODESTAR_MODE = "worker" AND NOT Installed AND NOT WIX_UPGRADE_DETECTED AND (JOIN_ADDRESS = "" OR JOIN_TOKEN = "")</Custom>
+      <Custom Action="WorkerNeedsDetails" After="WorkerNeedsWizard">LODESTAR_MODE = "worker" AND NOT Installed AND NOT WIX_UPGRADE_DETECTED AND (JOIN_ADDRESS = "" OR JOIN_TOKEN = "" OR JOIN_ADDRESS &gt;&lt; ";" OR JOIN_ADDRESS &gt;&lt; "=" OR JOIN_TOKEN &gt;&lt; ";" OR JOIN_TOKEN &gt;&lt; "=")</Custom>
       <Custom Action="SetServiceArgsWorker" After="CostFinalize">LODESTAR_MODE = "worker"</Custom>
       <!-- After the data folder is secured (SecureDataFolder and the actions after
            InstallServices in main.wxs), before the service is started. First install only. -->
