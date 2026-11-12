@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T14:34:48Z",
+  "updated_at": "2026-11-12T14:46:26Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8099,6 +8099,11 @@
       "pr": 760,
       "sha": "413dfe25d3fc558b16937f9a9dc67e44a8d95812",
       "at": "2026-11-12T14:34:48Z"
+    },
+    {
+      "pr": 757,
+      "sha": "385aae12ae497eda87a42ba962f85682a6b4a054",
+      "at": "2026-11-12T14:46:26Z"
     }
   ],
   "active_sessions": {
@@ -8336,7 +8341,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T14:34:48Z",
+    "updated": "2026-11-12T14:46:26Z",
     "items": [
       {
         "slot": 1,
@@ -8469,7 +8474,7 @@
     }
   ],
   "heartbeat": "2026-11-12T12:38:43Z",
-  "updated": "2026-11-12T14:34:48Z",
+  "updated": "2026-11-12T14:46:26Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
@@ -8685,11 +8690,11 @@
         "since": "2026-11-12T07:04Z"
       },
       {
-        "slice": "UN-2",
+        "slice": null,
         "role": "build",
-        "agent": "claude",
-        "doing": "session_01MMjhnA886zsZUmN7UDXYkQ: building per briefs/UN-2.md",
-        "since": "2026-11-12T09:50:03Z"
+        "doing": "idle: #757 UN-2 merged, session archived; UN-3 waits on UN-1 and ext:owner-v07-q6",
+        "since": "2026-11-12T14:46:26Z",
+        "status": "idle"
       }
     ],
     "note": "\u00a72.60: runner holds 2 (GS-0, UN-2). UN-0 merged as #748 and its session was archived; UN-2 took its extra."
