@@ -353,6 +353,9 @@ struct Opts {
     /// The index is built without the torrents' flags and Adult
     /// corrections, so only the stored rows say what's left out.
     stale_index: bool,
+    /// Set up with this build's notice, then served one version later:
+    /// a signed-in browser has the notice pending.
+    notice_raised: bool,
 }
 
 /// Stores and classifies `ts` (ids 1, 2, … in order) in a database at
@@ -450,7 +453,18 @@ fn fixture(ts: &[T], o: Opts) -> Fixture {
     }
     drop(store);
     drop(twin);
-    let mut auth = Auth::load(&dir.path().join("auth.json"), false).unwrap();
+    let auth_path = dir.path().join("auth.json");
+    if o.notice_raised {
+        let first = Auth::load(&auth_path, false).unwrap();
+        let token = first.setup_token().unwrap();
+        first
+            .setup("127.0.0.1".parse().unwrap(), &token, PASSWORD)
+            .unwrap();
+    }
+    let mut auth = Auth::load(&auth_path, false).unwrap();
+    if o.notice_raised {
+        auth = auth.with_notice_version(lodestar_api::legal::NOTICE_VERSION + 1);
+    }
     if o.frozen {
         auth = auth.without_refill();
     }
@@ -769,6 +783,8 @@ async fn items_carry_magnets_categories_and_attributes() {
     // Never scraped: no swarm counts claimed.
     assert!(item.tz("seeders").is_empty());
     assert_eq!(item.tz("downloadvolumefactor"), ["0"]);
+    // The channel's link is the web UI, relative: never the request's Host.
+    assert_eq!(channel.child("link").unwrap().text, "/");
     // Only magnets: no link back to this server, so nothing that could
     // carry the key.
     assert!(!channel_text(&f.feed(&key, "t=search").await).contains("http"));
@@ -1260,4 +1276,50 @@ async fn each_key_has_its_own_request_limit() {
     assert!(!r.body.contains(&key));
     // Another key isn't held back by it.
     assert_eq!(f.api(&other, "t=caps").await.body, CAPS);
+}
+
+/// A signed-in browser whose Legal Notice is pending is told to accept
+/// it, not to use a key: keys skip the gate.
+#[tokio::test]
+async fn a_pending_notice_says_to_accept_it() {
+    let f = fixture(
+        &[],
+        Opts {
+            notice_raised: true,
+            ..Opts::default()
+        },
+    );
+    let mut login = Request::post("/api/v1/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            serde_json::json!({ "password": PASSWORD }).to_string(),
+        ))
+        .unwrap();
+    login.extensions_mut().insert(ConnectInfo(fresh_ip()));
+    let resp = f.app.clone().oneshot(login).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let cookie = resp.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let r = f
+        .send(
+            Request::get("/api/v1/torznab/api?t=caps")
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.body);
+    assert_eq!(error_code(&r), "102");
+    let e = parse_xml(&r.body);
+    let description = e.attr("description").unwrap();
+    assert!(description.contains("Legal Notice"), "{description}");
+    assert!(!description.contains("API key"), "{description}");
+    // A Torznab key skips the gate.
+    let key = f.torznab_key();
+    assert_eq!(f.api(&key, "t=caps").await.body, CAPS);
 }
