@@ -19,7 +19,7 @@
   <DateInstalled/>
   <DonateText/>
   <DonateLink/>
-  <Requires></Requires>
+  <Requires>A running gluetun VPN container named gluetun. Install it first.</Requires>
   <Icon>https://raw.githubusercontent.com/dvortsis/lodestar-v2/main/packaging/icons/lodestar-256.png</Icon>
   <Config Name="Data" Target="/data" Default="/mnt/cache/appdata/lodestar" Mode="rw" Description="Index, database and settings. Use a pool path (/mnt/cache/... or your pool name), not /mnt/user. /mnt/user goes through Unraid's FUSE layer, which is slow for this workload and risky for SQLite." Type="Path" Display="always" Required="true" Mask="false">/mnt/cache/appdata/lodestar</Config>
   <Config Name="PUID" Target="PUID" Default="99" Mode="rw" Description="User ID the container runs as (99 = nobody)." Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>

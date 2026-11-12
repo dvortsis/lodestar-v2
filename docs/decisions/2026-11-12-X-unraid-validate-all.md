@@ -1,0 +1,7 @@
+# X-unraid-validate-all decisions
+
+- **The validator checks every `*.xml` in `packaging/unraid/`.** A template with no entry in `TEMPLATES` fails, naming the file, so a new template can't skip the checks.
+- **Every template has a `<Requires>` element.** `lodestar.xml` has no dependency, so its text may stay empty. `lodestar-worker.xml` must name v0.6. Any template whose `ExtraParams` has `--network=container:<name>` must name `<name>` in `<Requires>`.
+- **`lodestar-gluetun.xml` `<Requires>` now says "A running gluetun VPN container named gluetun. Install it first."** It was empty, though the template can't start without that container. The wording matches `docs/user/03-keep-lodestar-safe.md`. The illustration `docs/user/images/unraid-template-illustration.svg` was not regenerated here.
+- **The Overview's first sentence must say what the container is** (name Lodestar or the worker). A leading "Requires Lodestar v0.6+." sentence doesn't count as the first.
+- **CI runs it.** `ci_changes.py` has an `unraid` output (any change under `packaging/unraid/`, and every `main`, schedule and dispatch run). A new `unraid-templates` job runs the validator and its tests, and `ci-ok` needs it. No new actions, secrets or packages.
