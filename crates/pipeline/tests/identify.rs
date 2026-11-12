@@ -243,6 +243,11 @@ impl Identifier for Recorder {
         Duration::ZERO
     }
 
+    fn policy(&self) -> &Policy {
+        static FAST: std::sync::OnceLock<Policy> = std::sync::OnceLock::new();
+        FAST.get_or_init(fast)
+    }
+
     fn lookup<'a>(
         &'a self,
         kit: &'a Kit,
