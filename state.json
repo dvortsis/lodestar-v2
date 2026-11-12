@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T21:02:06Z",
+  "updated_at": "2026-11-12T21:10:55Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7467,6 +7467,21 @@
       "id": "runner-peer-assign-lesson",
       "note": "Sessions may decline new slices assigned by peer message (PK-ops on CMP-D, stalled ~27 h). Launch each new slice in a fresh session, or check a reused session accepted within one wake",
       "at": "2026-11-12T20:59:35Z"
+    },
+    {
+      "id": "X-cmp-template-folder-required",
+      "note": "CMP-D (#782): companion template folder fields say Optional but qBittorrent needs both",
+      "added": "2026-11-12T21:10:55Z"
+    },
+    {
+      "id": "X-cmp-cli-remove-client",
+      "note": "CMP-D (#782): CLI remove leaves the managed download client in Integrations",
+      "added": "2026-11-12T21:10:55Z"
+    },
+    {
+      "id": "X-cmp-lodestar-network",
+      "note": "CMP-D (#782): shipped compose file and Unraid template are not on the lodestar network the generated companion files join; testing-relevant (Unraid lane)",
+      "added": "2026-11-12T21:10:55Z"
     }
   ],
   "main_health": [
@@ -8693,7 +8708,7 @@
     }
   ],
   "heartbeat": "2026-11-12T18:39:05Z",
-  "updated": "2026-11-12T21:02:06Z",
+  "updated": "2026-11-12T21:10:55Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
