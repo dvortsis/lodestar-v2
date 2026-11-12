@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T15:59:55Z",
+  "updated_at": "2026-11-12T16:03:30Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -8119,6 +8119,11 @@
       "pr": 762,
       "sha": "d6acfeadb74778f8c8ceb84b28cb5664ee08a3bf",
       "at": "2026-11-12T15:59:55Z"
+    },
+    {
+      "pr": 766,
+      "sha": "64bb0f7228b483c2d616d3e3e8b2fdd17d300b4c",
+      "at": "2026-11-12T16:03:30Z"
     }
   ],
   "active_sessions": {
@@ -8356,14 +8361,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T15:59:55Z",
+    "updated": "2026-11-12T16:03:30Z",
     "items": [
       {
         "slot": 1,
         "slice": "UP-1",
         "role": "build",
         "agent": "claude",
-        "doing": "X-settings-section-headroom PR first (Settings section 2 B over the 45 KB \u00a710.1 cap; glob measured worse), then #765 with 3 runner-approved limits",
+        "doing": "session_01MMjhnBPrS4p53kbc5CSm2o: #766 headroom merged (64bb0f72, section 44686 B); merging main into slice/UP-1, then #765 ready",
         "since": "2026-11-12T13:15:27Z",
         "status": "active"
       },
@@ -8489,7 +8494,7 @@
     }
   ],
   "heartbeat": "2026-11-12T15:41:01Z",
-  "updated": "2026-11-12T15:59:55Z",
+  "updated": "2026-11-12T16:03:30Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
