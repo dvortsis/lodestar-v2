@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T07:12:06Z",
+  "updated_at": "2026-11-12T07:13:28Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7113,6 +7113,11 @@
     {
       "at": "2026-11-12T06:21:10Z",
       "what": "X-wk-fetched-lease: closes rv-737 I1 window (writer lag > FINISHED_GRACE reopens #727 double-hold); owns cluster leases.rs/server.rs, worker/runtime.rs, pipeline worker.rs; slice PR adds own slices.yaml entry + ws-workers placement"
+    },
+    {
+      "id": "UN-1-rejudge-keys",
+      "note": "pipeline/src/unverified.rs judge_item (~1322) removes non-20-byte keys on re-judge; UN-1 (or a pipeline slice before it) must judge usenet items by claims and never drop them for key length (UN-0 heads-up 07:06Z)",
+      "at": "2026-11-12T07:13:28Z"
     }
   ],
   "main_health": [
@@ -7762,6 +7767,11 @@
       "pr": 746,
       "sha": "d8b9b71737c865d30e9a93eca09680804eddd079",
       "at": "2026-11-12T07:11:01Z"
+    },
+    {
+      "pr": 735,
+      "sha": "8e40a635072e948bd57ed9b39f108bddf78ab1ce",
+      "at": "2026-11-12T07:13:28Z"
     }
   ],
   "active_sessions": {
@@ -7999,7 +8009,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T07:12:06Z",
+    "updated": "2026-11-12T07:13:28Z",
     "items": [
       {
         "slot": 1,
@@ -8057,11 +8067,11 @@
       },
       {
         "slot": 12,
-        "slice": "OUT-2",
-        "role": "build",
+        "slice": "D-outputs-guide",
+        "role": "docs",
         "agent": "claude",
-        "doing": "session_01MMjhnCM61Vu5obDjZWTpeu: PR #735 (f2c9ad5a) rv-735 MERGE + I1 relayed; awaiting ready.",
-        "since": "2026-11-12T00:07:35Z",
+        "doing": "session_01MMjhnCM61Vu5obDjZWTpeu: #735 OUT-2 merged 8e40a635; D-outputs-guide per briefs/D-outputs-guide.md (same session)",
+        "since": "2026-11-12T07:13:28Z",
         "status": "active"
       },
       {
@@ -8132,7 +8142,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T07:12:06Z",
+  "updated": "2026-11-12T07:13:28Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
