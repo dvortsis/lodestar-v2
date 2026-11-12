@@ -124,9 +124,12 @@
 				if (!live || mine !== press) return;
 				misses = 0;
 				stale = false;
-				// Every export id below the press's: the server restarted (or the old jobs expired),
+				lost = false;
+				// Every listed export id below the press's: the server restarted and its ids began again,
 				// so ids can't tell old from new any more.
-				if (after !== null && lastExportId(r.jobs) < after) after = null;
+				// An empty list (old jobs expired, the new one not listed yet) is no restart.
+				const top = lastExportId(r.jobs);
+				if (after !== null && top > 0 && top < after) after = null;
 				job = ourExport(r.jobs, after, since) ?? job;
 				// A job once found is never a later press's.
 				if (job) seen = Math.max(seen ?? 0, job.id);

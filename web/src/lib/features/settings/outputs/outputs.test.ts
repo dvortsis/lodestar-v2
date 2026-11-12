@@ -588,6 +588,58 @@ describe('bitmagnet export', () => {
 		expect(seenTexts.filter((t) => /Exported [45] of 10/.test(t))).toEqual([]);
 	});
 
+	it("an older press's failed reply doesn't cost the newer press its retries", async () => {
+		render(OutputsScreen);
+		const link = screen.getByTestId('outputs-bitmagnet-start');
+		await until(() => expect(link.dataset.idsKnown).toBe('true'));
+		link.addEventListener('click', (e) => e.preventDefault());
+		const release = hold('/jobs');
+		await fireEvent.click(link);
+		await until(() => expect(held()).toBe(1));
+		await fireEvent.click(link);
+		const before = calls.filter((c) => c.path === '/jobs').length;
+		// The first press's reply comes back as a failure, and so do the second press's.
+		replies['GET /jobs'] = () => ({ status: 500, body: { error: { code: 'x', message: 'x' } } });
+		release();
+		await until(() =>
+			expect(screen.getByTestId('outputs-bitmagnet-progress').textContent).toContain(
+				"couldn't find this export's progress"
+			)
+		);
+		// The released reply, then the second press's own three tries.
+		expect(calls.filter((c) => c.path === '/jobs').length - before).toBe(1 + 3);
+	});
+
+	it('an empty /jobs list is no restart: the press keeps matching by id', async () => {
+		const now = Math.floor(Date.now() / 1000);
+		jobs = [exportJob(5, { state: 'done', finished_at: now, done: 9, total: 9 })];
+		render(OutputsScreen);
+		const link = screen.getByTestId('outputs-bitmagnet-start');
+		await until(() => expect(link.dataset.idsKnown).toBe('true'));
+		link.addEventListener('click', (e) => e.preventDefault());
+		const region = screen.getByTestId('outputs-bitmagnet-progress');
+		const seenTexts: string[] = [];
+		const watch = new MutationObserver(() => seenTexts.push(region.textContent ?? ''));
+		watch.observe(region, { subtree: true, childList: true, characterData: true });
+		// The old job has expired from the list, and the new one isn't listed yet.
+		jobs = [];
+		await fireEvent.click(link);
+		const polls = calls.filter((c) => c.path === '/jobs').length;
+		await until(() =>
+			expect(calls.filter((c) => c.path === '/jobs').length).toBeGreaterThan(polls)
+		);
+		// The old job shows up again, started "now" by the clock: ids still say it isn't ours.
+		jobs = [exportJob(5, { state: 'done', finished_at: now, done: 9, total: 9 })];
+		const again = calls.filter((c) => c.path === '/jobs').length;
+		await until(() =>
+			expect(calls.filter((c) => c.path === '/jobs').length).toBeGreaterThan(again)
+		);
+		jobs = [exportJob(6, { done: 1, total: 4 }), ...jobs];
+		await until(() => expect(region.textContent).toContain('Exported 1 of 4'));
+		watch.disconnect();
+		expect(seenTexts.filter((t) => t.includes('Done: 9'))).toEqual([]);
+	});
+
 	it('finds the job after a server restart reset the ids', async () => {
 		jobs = [exportJob(5, { state: 'done', finished_at: 1, done: 9, total: 9 })];
 		render(OutputsScreen);

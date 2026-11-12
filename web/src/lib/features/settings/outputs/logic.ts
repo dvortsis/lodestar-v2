@@ -60,27 +60,30 @@ export function lastExportId(jobs: readonly Job[]): number {
 const SLACK_S = 5;
 
 /**
- * The export job this screen started: the newest bitmagnet export with an id above `afterId`,
- * the highest export id seen before the click (`lastExportId`). Ids, not times: the browser's and
- * the server's clocks can differ. A download's own job id is only in its response header, which a
+ * The export job this screen started: the newest export job with an id above `afterId`, the
+ * highest export id seen before the click (`lastExportId`). Ids, not times: the browser's and the
+ * server's clocks can differ. A download's own job id is only in its response header, which a
  * browser download doesn't expose, so the screen finds it this way.
  *
- * With `afterId` null (no `/jobs` answer came before the click) it falls back to the job's start
- * time against the click's, within `SLACK_S`.
+ * Only the newest is taken, never an older one, so a double press never takes the first press's
+ * job for the second. While that newest job's format isn't known yet (`export` not set, just after
+ * it starts) the answer is null: wait. Another format's export is someone else's and is passed over.
+ *
+ * With `afterId` null (no `/jobs` answer came before the click, or the server restarted) it falls
+ * back to the job's start time against the click's, within `SLACK_S`.
  */
 export function ourExport(
 	jobs: readonly Job[],
 	afterId: number | null,
 	clickedAt: number
 ): Job | null {
-	return (
-		jobs.find(
-			(j) =>
-				j.kind === 'export' &&
-				j.export?.format === 'bitmagnet' &&
-				(afterId === null ? j.started_at >= clickedAt - SLACK_S : j.id > afterId)
-		) ?? null
+	const newest = jobs.find(
+		(j) =>
+			j.kind === 'export' &&
+			(j.export == null || j.export.format === 'bitmagnet') &&
+			(afterId === null ? j.started_at >= clickedAt - SLACK_S : j.id > afterId)
 	);
+	return newest?.export ? newest : null;
 }
 
 export type ExportView =

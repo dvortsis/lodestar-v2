@@ -112,6 +112,14 @@ describe('bitmagnet export', () => {
 		expect(ourExport(two, 6, 0)?.id).toBe(8);
 	});
 
+	it('waits while the newest export above the id has no format yet, never taking an older one', () => {
+		// A double press: the second press's job (8) has just started and has no format yet; the
+		// first press's (7) mustn't stand in for it.
+		const jobs = [job({ id: 8, export: undefined }), job({ id: 7 })];
+		expect(ourExport(jobs, 6, 0)).toBeNull();
+		expect(ourExport([job({ id: 8 }), job({ id: 7 })], 6, 0)?.id).toBe(8);
+	});
+
 	it('falls back to the start time when no answer came before the click', () => {
 		const jobs = [
 			job({ id: 7, started_at: 1_700_000_100 }),
