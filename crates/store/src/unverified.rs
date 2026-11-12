@@ -9,6 +9,14 @@
 //!   ([`claims`](crate::claims)), on an unverified item or a stored torrent.
 //! - **Plugin state** is each plugin's key-value store (cursors, ETags).
 //!
+//! **Usenet items** (UN-0, `docs/decisions/2026-11-12-UN-0.md`) live in the
+//! same table under [`Network::Usenet`], keyed by [`UsenetKey`]. The store
+//! enforces their rules whatever the caller passes: they're always
+//! private-source (§18.7), never offered for verification or promoted
+//! (`Error::NeverVerified`), never looked up as a swarm hash, capped at
+//! [`USENET_CAP`] oldest first, and purged as a tier
+//! ([`Store::purge_network`], §18.6).
+//!
 //! **Content safety.** Nothing here writes under a hash in `tombstones`,
 //! `quarantine` or `cs_hashes`, and the schema's triggers delete the item
 //! or claims under a hash that enters one later (journalling the hash for
@@ -21,6 +29,7 @@
 use std::fmt;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use sha2::{Digest, Sha256};
 
 use crate::claims::{self, Claims};
 use crate::filter::{self, Filtered};
@@ -63,6 +72,22 @@ pub const STATE_MAX_VALUE: usize = 64 * 1024;
 /// Keys per plugin.
 pub const STATE_MAX_KEYS: usize = 1024;
 
+/// Usenet items kept at most (plan Q13, a §2.26 number the runner sets):
+/// past it, the oldest (lowest id, first found) go first. Each write of
+/// new usenet items evicts in the same transaction, at most
+/// [`MAX_PURGE_STEP`] rows.
+pub const USENET_CAP: u64 = 1_000_000;
+/// Usenet items one [`Store::put_unverified`] call may hold: with the cap
+/// at least this, one batch's eviction always brings the tier back under
+/// [`USENET_CAP`], and never evicts the batch's own new items.
+pub const MAX_USENET_BATCH: usize = MAX_PURGE_STEP;
+const _: () = assert!(USENET_CAP >= MAX_USENET_BATCH as u64);
+/// Bytes in each part of a [`UsenetKey`] at most: an indexer id or a
+/// Newznab GUID longer than this is refused, not hashed.
+pub const USENET_MAX_PART: usize = 1024;
+/// The domain tag that starts every [`UsenetKey`] preimage.
+const USENET_KEY_TAG: &[u8] = b"lodestar.usenet.v1";
+
 /// Which network a key belongs to (§18.6). Values are persisted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -70,14 +95,73 @@ pub enum Network {
     /// Clearnet BitTorrent: the key is a 20-byte swarm hash (a v1 hash or
     /// a truncated v2 one).
     Bt = 0,
+    /// Usenet (v0.7, UN-0): the key is a 32-byte [`UsenetKey`]. Items are
+    /// always private-source and never verified; there's no info hash.
+    Usenet = 4,
 }
 
 impl Network {
     fn from_sql(v: i64) -> Result<Network> {
         match v {
             0 => Ok(Network::Bt),
+            4 => Ok(Network::Usenet),
             _ => Err(Error::Corrupt("unknown network")),
         }
+    }
+
+    /// The name search's `network:` field uses (§18.6).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Network::Bt => "bt",
+            Network::Usenet => "usenet",
+        }
+    }
+}
+
+/// A usenet item's key (UN-0): SHA-256 over the indexer's id and the
+/// item's Newznab GUID, each length-prefixed, so no two pairs share a
+/// preimage. The preimage is
+///
+/// ```text
+/// "lodestar.usenet.v1" || u32be(len(indexer)) || indexer || u32be(len(guid)) || guid
+/// ```
+///
+/// with both parts as the indexer sent them (no case folding or trimming).
+/// The NZB link isn't part of it: it embeds the indexer's API key.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct UsenetKey([u8; 32]);
+
+impl UsenetKey {
+    /// `Error::Invalid` for an empty part or one over [`USENET_MAX_PART`].
+    pub fn new(indexer: &str, guid: &str) -> Result<UsenetKey> {
+        let (i, g) = (indexer.as_bytes(), guid.as_bytes());
+        for part in [i, g] {
+            if part.is_empty() || part.len() > USENET_MAX_PART {
+                return Err(Error::Invalid("a usenet key part is 1 to 1024 bytes"));
+            }
+        }
+        let mut h = Sha256::new();
+        h.update(USENET_KEY_TAG);
+        for part in [i, g] {
+            // Fits: bounded by USENET_MAX_PART above.
+            h.update((part.len() as u32).to_be_bytes());
+            h.update(part);
+        }
+        Ok(UsenetKey(h.finalize().into()))
+    }
+
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl fmt::Debug for UsenetKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("UsenetKey(")?;
+        for b in &self.0[..4] {
+            write!(f, "{b:02x}")?;
+        }
+        f.write_str("…)")
     }
 }
 
@@ -87,7 +171,8 @@ pub struct NewUnverified<'a> {
     pub network: Network,
     pub key: &'a [u8],
     pub source: SourceId,
-    /// Found through a private source (§18.7).
+    /// Found through a private source (§18.7). Ignored for
+    /// [`Network::Usenet`]: a usenet item is always private-source.
     pub private_source: bool,
     /// Already judged by the filter engine. A new item needs them: bare
     /// keys wait in the verification queue, not here (§18.5).
@@ -273,6 +358,16 @@ pub struct PurgePreview {
     pub queue_deleted: u64,
 }
 
+/// One step of [`Store::purge_network`]. Start with `after` 0, then pass
+/// `next` back until it's `None`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NetworkPurgeStep {
+    /// The id to go on after; `None` when the tier is empty past it.
+    pub next: Option<i64>,
+    /// Unverified items deleted in this step.
+    pub deleted: usize,
+}
+
 /// What a purge of one source does to a row its bit may be set on. The
 /// one rule [`Store::purge_source`] applies and [`Store::purge_preview`]
 /// counts, so the two can't drift apart.
@@ -328,7 +423,28 @@ impl Store {
     /// Records keys sources found, in one transaction (see [`Put`]).
     /// Claims must be within the [`claims`] limits (`Error::Invalid`
     /// otherwise, and nothing is written).
+    ///
+    /// A [`Network::Usenet`] item is stored private-source whatever
+    /// `private_source` says, and never matched against torrents or holds
+    /// by hash (it has none). More than [`MAX_USENET_BATCH`] usenet items
+    /// in one call is `Error::Invalid`. A call that adds usenet items drops
+    /// the oldest past [`USENET_CAP`] in its transaction.
     pub fn put_unverified(&mut self, items: &[NewUnverified<'_>]) -> Result<Vec<Put>> {
+        self.put_unverified_capped(items, USENET_CAP)
+    }
+
+    fn put_unverified_capped(
+        &mut self,
+        items: &[NewUnverified<'_>],
+        usenet_cap: u64,
+    ) -> Result<Vec<Put>> {
+        let usenet = items
+            .iter()
+            .filter(|i| i.network == Network::Usenet)
+            .count();
+        if usenet > MAX_USENET_BATCH {
+            return Err(Error::Invalid("too many usenet items in one batch"));
+        }
         let level = self.config.compression_level;
         let blobs = items
             .iter()
@@ -345,8 +461,14 @@ impl Store {
             check_running(&tx, s)?;
         }
         let mut out = Vec::with_capacity(items.len());
+        let mut added = false;
         for (item, blob) in items.iter().zip(&blobs) {
-            out.push(put_one(&tx, item, blob.as_deref(), self.adult_mark)?);
+            let put = put_one(&tx, item, blob.as_deref(), self.adult_mark)?;
+            added |= item.network == Network::Usenet && matches!(put, Put::New(_));
+            out.push(put);
+        }
+        if added {
+            cap_network(&tx, Network::Usenet, usenet_cap)?;
         }
         tx.commit()?;
         Ok(out)
@@ -424,14 +546,16 @@ impl Store {
         Ok(ids)
     }
 
-    /// Whether any unverified item is stored: the writer's duplicate check
-    /// is skipped for a batch when none is (SRC-2), so a store with no
-    /// sources pays one cheap read per batch, not a probe per insert.
+    /// Whether any clearnet BitTorrent unverified item is stored: the
+    /// writer's duplicate check is skipped for a batch when none is
+    /// (SRC-2), so a store with no sources pays one cheap read per batch,
+    /// not a probe per insert. Usenet items don't count: the writer looks
+    /// up swarm hashes, and a usenet key is never one (UN-0).
     pub fn has_unverified(&self) -> Result<bool> {
         Ok(self
             .conn
-            .prepare_cached("SELECT EXISTS (SELECT 1 FROM unverified_items)")?
-            .query_row([], |r| r.get(0))?)
+            .prepare_cached("SELECT EXISTS (SELECT 1 FROM unverified_items WHERE network = ?1)")?
+            .query_row([Network::Bt as i64], |r| r.get(0))?)
     }
 
     /// A stored torrent's swarm hashes (its v1 hash, and a hybrid's
@@ -476,12 +600,14 @@ impl Store {
     /// Keys of unverified items after `after` (by id), at most `limit`
     /// (capped at [`MAX_PAGE`]), whose claims' source is enabled or paused:
     /// a disabled or purged source's items aren't verified. Their claims
-    /// aren't read (SRC-2's verification cursor).
+    /// aren't read (SRC-2's verification cursor). Only clearnet
+    /// BitTorrent keys: a usenet item is never verified, so its key never
+    /// reaches peer finding (UN-0).
     pub fn pending_keys_after(&self, after: i64, limit: usize) -> Result<Vec<PendingKey>> {
         let mut stmt = self.conn.prepare_cached(
             "SELECT u.id, u.network, u.key, u.source_id, u.flags
              FROM unverified_items u JOIN sources s ON s.id = u.source_id
-             WHERE u.id > ?1 AND s.state IN (?2, ?3)
+             WHERE u.id > ?1 AND s.state IN (?2, ?3) AND u.network = ?5
              ORDER BY u.id LIMIT ?4",
         )?;
         let rows = stmt.query_map(
@@ -489,7 +615,8 @@ impl Store {
                 after,
                 SourceState::Enabled as i64,
                 SourceState::Paused as i64,
-                limit.clamp(1, MAX_PAGE) as i64
+                limit.clamp(1, MAX_PAGE) as i64,
+                Network::Bt as i64
             ],
             |r| {
                 Ok((
@@ -504,12 +631,13 @@ impl Store {
         let mut out = Vec::new();
         for row in rows {
             let (id, network, key, source, flags) = row?;
+            let network = Network::from_sql(network)?;
             out.push(PendingKey {
                 id,
-                network: Network::from_sql(network)?,
+                network,
                 key,
                 source: SourceId::from_sql(source)?,
-                private_source: flags & PRIVATE != 0,
+                private_source: forced_private(network, flags),
             });
         }
         Ok(out)
@@ -661,6 +789,8 @@ impl Store {
     ///
     /// `Error::Invalid` when `t`'s hashes don't include the item's key, or
     /// `t` isn't verified metadata (§18.5: only that promotes).
+    /// `Error::NeverVerified` for a usenet item, which nothing promotes
+    /// (UN-0); it's left as it was.
     ///
     /// **Insights** (SRC-2): a kept id at or below the searchable watermark
     /// is counted as newly searchable at `at` under `codes`, in this
@@ -674,6 +804,16 @@ impl Store {
         at: i64,
     ) -> Result<Promoted> {
         let p = t.torrent;
+        // A usenet item is refused first, with its own error, whatever
+        // `t` is; checked again in the transaction below.
+        let network: Option<i64> = self
+            .conn
+            .prepare_cached("SELECT network FROM unverified_items WHERE id = ?1")?
+            .query_row([id], |r| r.get(0))
+            .optional()?;
+        if network == Some(Network::Usenet as i64) {
+            return Err(Error::NeverVerified);
+        }
         if !t.verified {
             return Err(Error::Invalid("promotion needs verified metadata"));
         }
@@ -690,6 +830,9 @@ impl Store {
         let Some(row) = row else {
             return Ok(Promoted::Gone);
         };
+        if row.network == Network::Usenet as i64 {
+            return Err(Error::NeverVerified);
+        }
         let hashes: Vec<[u8; 20]> = p.swarm_hashes().map(|h| h.0).collect();
         if row.network != Network::Bt as i64 || !hashes.iter().any(|h| h[..] == row.key[..]) {
             return Err(Error::Invalid(
@@ -1024,6 +1167,60 @@ impl Store {
         Ok(preview)
     }
 
+    /// One step of purging a network tier's unverified items (§18.6's
+    /// one-click purge per tier): at most `limit` (capped at
+    /// [`MAX_PURGE_STEP`]) items with ids after `after`, in one
+    /// transaction, whatever sources found them. Clearnet BitTorrent isn't
+    /// a tier this purges (`Error::Invalid`): its items are the
+    /// verification queue's, and its torrents are the store's.
+    ///
+    /// The store doesn't know which sources write a tier (that's their
+    /// manifests'), so the caller disables them first, as for
+    /// [`Store::purge_source`]: an item a running source writes behind the
+    /// cursor would survive the purge. Deleted items aren't journalled for
+    /// the snapshot purge (`docs/decisions/2026-11-12-UN-0.md`).
+    pub fn purge_network(
+        &mut self,
+        network: Network,
+        after: i64,
+        limit: usize,
+    ) -> Result<NetworkPurgeStep> {
+        if network == Network::Bt {
+            return Err(Error::Invalid("the clearnet tier isn't purged by network"));
+        }
+        let limit = limit.clamp(1, MAX_PURGE_STEP);
+        let tx = begin_write(&mut self.conn)?;
+        let ids: Vec<i64> = tx
+            .prepare_cached(
+                "SELECT id FROM unverified_items WHERE network = ?1 AND id > ?2
+                 ORDER BY id LIMIT ?3",
+            )?
+            .query_map(params![network as i64, after, limit as i64], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        for &id in &ids {
+            // Not journalled: the snapshot journal holds swarm hashes only.
+            delete_item(&tx, id, false)?;
+        }
+        tx.commit()?;
+        if !ids.is_empty() {
+            self.scrub_wal();
+        }
+        Ok(NetworkPurgeStep {
+            next: (ids.len() == limit).then(|| ids[ids.len() - 1]),
+            deleted: ids.len(),
+        })
+    }
+
+    /// Unverified items stored under `network`: the count a tier purge
+    /// would remove now, and what [`USENET_CAP`] bounds.
+    pub fn unverified_count(&self, network: Network) -> Result<u64> {
+        let n: i64 = self
+            .conn
+            .prepare_cached("SELECT count(*) FROM unverified_items WHERE network = ?1")?
+            .query_row([network as i64], |r| r.get(0))?;
+        Ok(n as u64)
+    }
+
     /// A plugin's state value.
     pub fn plugin_state(&self, source: SourceId, key: &str) -> Result<Option<Vec<u8>>> {
         check_state(key, None)?;
@@ -1141,14 +1338,16 @@ impl RawItem {
                 Err(_) => (None, true),
             },
         };
+        let network = Network::from_sql(self.network)?;
         Ok(UnverifiedItem {
             id: self.id,
-            network: Network::from_sql(self.network)?,
+            network,
             key: self.key,
             source: SourceId::from_sql(self.source)?,
             sources: self.sources as u64,
-            private_source: self.flags & PRIVATE != 0,
-            claims_private: self.flags & CLAIMS_PRIVATE != 0,
+            private_source: forced_private(network, self.flags),
+            claims_private: self.flags & CLAIMS_PRIVATE != 0
+                || (network == Network::Usenet && claims.is_some()),
             claims,
             unreadable,
             first_at: self.first_at,
@@ -1184,7 +1383,37 @@ fn check_key(network: Network, key: &[u8]) -> Result<()> {
     match network {
         Network::Bt if key.len() == 20 => Ok(()),
         Network::Bt => Err(Error::Invalid("a BitTorrent key is 20 bytes")),
+        Network::Usenet if key.len() == 32 => Ok(()),
+        Network::Usenet => Err(Error::Invalid("a usenet key is 32 bytes")),
     }
+}
+
+/// Whether a stored item is private-source: its flag, or always for a
+/// usenet item (§18.7), so even a row written outside this module reads
+/// back private.
+fn forced_private(network: Network, flags: i64) -> bool {
+    network == Network::Usenet || flags & PRIVATE != 0
+}
+
+/// Drops `network`'s oldest unverified items (lowest id: first found)
+/// past `cap`, at most [`MAX_PURGE_STEP`] in this call. An old item seen
+/// again in the same batch is still old: it can go, though the call
+/// reported it as [`Put::Existing`]. Usenet items have
+/// no swarm hash, so nothing is journalled.
+fn cap_network(tx: &Transaction<'_>, network: Network, cap: u64) -> Result<usize> {
+    let n: i64 = tx
+        .prepare_cached("SELECT count(*) FROM unverified_items WHERE network = ?1")?
+        .query_row([network as i64], |r| r.get(0))?;
+    let excess = (n as u64).saturating_sub(cap).min(MAX_PURGE_STEP as u64);
+    if excess == 0 {
+        return Ok(0);
+    }
+    Ok(tx
+        .prepare_cached(
+            "DELETE FROM unverified_items WHERE id IN (
+                 SELECT id FROM unverified_items WHERE network = ?1 ORDER BY id LIMIT ?2)",
+        )?
+        .execute(params![network as i64, excess as i64])?)
 }
 
 fn check_state(key: &str, value: Option<&[u8]>) -> Result<()> {
@@ -1204,24 +1433,16 @@ fn put_one(
     adult_mark: crate::AdultMark,
 ) -> Result<Put> {
     let key = item.key;
-    let swarm: [u8; 20] = key.try_into().map_err(|_| Error::Invalid("key length"))?;
-    if held(tx, &[swarm])? {
-        return Ok(Put::Held);
-    }
     let bit = item.source.bit();
-    if let Some(id) = crate::find_any(tx, std::iter::once(lodestar_metainfo::InfoHash(swarm)))? {
-        crate::add_sources(tx, id, bit as u64)?;
-        // An always-adult source's bit, in this transaction: marked for
-        // the backfill, so the reclassification after it is retried if
-        // it never commits (X-source-adult's crash window, SRC-13b).
-        crate::mark_adult_found(tx, adult_mark, id)?;
-        if !item.private_source {
-            crate::make_public(tx, id)?;
-        }
-        if let Some(blob) = blob {
-            write_claims(tx, id, item.source, blob, item.private_source)?;
-        }
-        return Ok(Put::Torrent(id));
+    // A usenet item is always private-source (§18.7), whatever the caller
+    // says: its claims come from an account source.
+    let private_source = item.private_source || item.network == Network::Usenet;
+    // Only a swarm hash is looked up among holds and torrents: a usenet
+    // key is neither, and is never treated as one.
+    if item.network == Network::Bt
+        && let Some(put) = put_bt_torrent(tx, item, blob, adult_mark)?
+    {
+        return Ok(put);
     }
     let existing: Option<(i64, i64, bool)> = tx
         .prepare_cached(
@@ -1234,12 +1455,8 @@ fn put_one(
         .optional()?;
     // A public sighting clears the item's private mark; a private one
     // never sets it. The claims' mark follows whichever claims are kept.
-    let keep_private = if item.private_source { PRIVATE } else { 0 };
-    let claims_private = if item.private_source {
-        CLAIMS_PRIVATE
-    } else {
-        0
-    };
+    let keep_private = if private_source { PRIVATE } else { 0 };
+    let claims_private = if private_source { CLAIMS_PRIVATE } else { 0 };
     match existing {
         Some((id, owner, bare)) => {
             let take = blob.is_some() && (bare || owner == i64::from(item.source.get()));
@@ -1288,6 +1505,38 @@ fn put_one(
             Ok(Put::New(id))
         }
     }
+}
+
+/// A BitTorrent key's held and stored-torrent cases of [`put_one`]:
+/// `None` when neither applies and the key goes to `unverified_items`.
+fn put_bt_torrent(
+    tx: &Transaction<'_>,
+    item: &NewUnverified<'_>,
+    blob: Option<&[u8]>,
+    adult_mark: crate::AdultMark,
+) -> Result<Option<Put>> {
+    let swarm: [u8; 20] = item
+        .key
+        .try_into()
+        .map_err(|_| Error::Invalid("key length"))?;
+    if held(tx, &[swarm])? {
+        return Ok(Some(Put::Held));
+    }
+    let Some(id) = crate::find_any(tx, std::iter::once(lodestar_metainfo::InfoHash(swarm)))? else {
+        return Ok(None);
+    };
+    crate::add_sources(tx, id, item.source.bit() as u64)?;
+    // An always-adult source's bit, in this transaction: marked for
+    // the backfill, so the reclassification after it is retried if
+    // it never commits (X-source-adult's crash window, SRC-13b).
+    crate::mark_adult_found(tx, adult_mark, id)?;
+    if !item.private_source {
+        crate::make_public(tx, id)?;
+    }
+    if let Some(blob) = blob {
+        write_claims(tx, id, item.source, blob, item.private_source)?;
+    }
+    Ok(Some(Put::Torrent(id)))
 }
 
 fn write_claims(
@@ -1374,8 +1623,214 @@ fn held(conn: &Connection, hashes: &[[u8; 20]]) -> Result<bool> {
 
 impl fmt::Display for Network {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Network::Bt => "bt",
-        })
+        f.write_str(self.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::StoreConfig;
+
+    const T: i64 = 1_700_000_000;
+
+    fn claims() -> Claims {
+        Claims {
+            name: Some("x".into()),
+            ..Claims::default()
+        }
+    }
+
+    fn usenet<'a>(k: &'a UsenetKey, source: SourceId, c: &'a Claims, at: i64) -> NewUnverified<'a> {
+        NewUnverified {
+            network: Network::Usenet,
+            key: k.as_bytes(),
+            source,
+            private_source: false,
+            claims: Some(c),
+            at,
+        }
+    }
+
+    fn ids(store: &Store) -> Vec<i64> {
+        let mut stmt = store
+            .conn
+            .prepare("SELECT id FROM unverified_items WHERE network = 4 ORDER BY id")
+            .unwrap();
+        stmt.query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn networks_decode_and_name_themselves() {
+        assert_eq!(Network::from_sql(0).unwrap(), Network::Bt);
+        assert_eq!(Network::from_sql(4).unwrap(), Network::Usenet);
+        for v in [-1, 1, 2, 3, 5, 15, 16, i64::MAX] {
+            assert!(matches!(
+                Network::from_sql(v),
+                Err(Error::Corrupt("unknown network"))
+            ));
+        }
+        // As search's `network:` values (`lodestar_search::query::Network`).
+        assert_eq!(Network::Bt.as_str(), "bt");
+        assert_eq!(Network::Usenet.as_str(), "usenet");
+        assert_eq!(Network::Usenet as i64, 4);
+    }
+
+    #[test]
+    fn the_key_preimage_is_as_documented() {
+        let mut h = Sha256::new();
+        h.update(b"lodestar.usenet.v1\0\0\0\x017\0\0\0\x03abc");
+        let want: [u8; 32] = h.finalize().into();
+        assert_eq!(UsenetKey::new("7", "abc").unwrap().as_bytes(), &want);
+    }
+
+    #[test]
+    fn the_cap_evicts_the_oldest_first() {
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let bt_source = store.register_source("dht", "1", T).unwrap();
+        let src = store.register_source("prowlarr", "1", T).unwrap();
+        let c = claims();
+        let keys: Vec<UsenetKey> = (0..8)
+            .map(|n| UsenetKey::new("1", &format!("g{n}")).unwrap())
+            .collect();
+        // A Bt item in between counts for nothing and is never evicted.
+        let bt = [5u8; 20];
+        let first: Vec<i64> = store
+            .put_unverified_capped(
+                &[
+                    usenet(&keys[0], src, &c, T),
+                    usenet(&keys[1], src, &c, T),
+                    NewUnverified {
+                        network: Network::Bt,
+                        key: &bt,
+                        source: bt_source,
+                        private_source: false,
+                        claims: Some(&c),
+                        at: T,
+                    },
+                    usenet(&keys[2], src, &c, T),
+                ],
+                3,
+            )
+            .unwrap()
+            .into_iter()
+            .filter_map(|p| match p {
+                Put::New(id) => Some(id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids(&store).len(), 3);
+        // Two more: the two oldest go, in the same call.
+        store
+            .put_unverified_capped(
+                &[
+                    usenet(&keys[3], src, &c, T + 1),
+                    usenet(&keys[4], src, &c, T + 1),
+                ],
+                3,
+            )
+            .unwrap();
+        let kept = ids(&store);
+        assert_eq!(kept.len(), 3);
+        assert!(!kept.contains(&first[0]) && !kept.contains(&first[1]));
+        assert!(kept.contains(&first[3]), "the third usenet item stays");
+        assert!(store.unverified(Network::Bt, &bt).unwrap().is_some());
+        // Seeing a kept item again adds nothing, so evicts nothing.
+        store
+            .put_unverified_capped(&[usenet(&keys[2], src, &c, T + 2)], 3)
+            .unwrap();
+        assert_eq!(ids(&store), kept);
+        // A cap lowered under the stored count converges, at most a step
+        // per call.
+        store
+            .put_unverified_capped(&[usenet(&keys[5], src, &c, T + 3)], 1)
+            .unwrap();
+        assert_eq!(ids(&store).len(), 1);
+        assert!(
+            store
+                .unverified(Network::Usenet, keys[5].as_bytes())
+                .unwrap()
+                .is_some(),
+            "the newest is kept"
+        );
+    }
+
+    #[test]
+    fn the_cap_step_is_bounded() {
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let src = store.register_source("prowlarr", "1", T).unwrap();
+        let c = claims();
+        let keys: Vec<UsenetKey> = (0..MAX_PURGE_STEP + 10)
+            .map(|n| UsenetKey::new("1", &format!("g{n}")).unwrap())
+            .collect();
+        for chunk in keys.chunks(MAX_USENET_BATCH) {
+            let items: Vec<_> = chunk.iter().map(|k| usenet(k, src, &c, T)).collect();
+            store.put_unverified_capped(&items, u64::MAX).unwrap();
+        }
+        let tx = begin_write(&mut store.conn).unwrap();
+        assert_eq!(
+            cap_network(&tx, Network::Usenet, 0).unwrap(),
+            MAX_PURGE_STEP
+        );
+        assert_eq!(cap_network(&tx, Network::Usenet, 0).unwrap(), 10);
+        assert_eq!(cap_network(&tx, Network::Usenet, 0).unwrap(), 0);
+    }
+
+    /// A store upgraded from V13 to V14 through the real migration path
+    /// (as a released v0.6 store is) takes usenet rows under its CHECKs,
+    /// with no migration of UN-0's own.
+    #[test]
+    fn an_upgraded_v14_schema_accepts_usenet_rows() {
+        let v14 = crate::schema::MIGRATIONS
+            .iter()
+            .position(|(v, _)| *v == 14)
+            .unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (
+                 version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL) STRICT;",
+        )
+        .unwrap();
+        for (v, sql) in &crate::schema::MIGRATIONS[..v14] {
+            conn.execute_batch(sql).unwrap();
+            conn.execute("INSERT INTO schema_migrations VALUES (?1, 0)", [v])
+                .unwrap();
+        }
+        // V13 data: a registered source.
+        conn.execute(
+            "INSERT INTO sources (id, plugin, version, state, added_at) VALUES (1, 'p', '1', 0, 0)",
+            [],
+        )
+        .unwrap();
+        crate::schema::migrate(&mut conn, None).unwrap();
+        let version: i64 = conn
+            .query_row("SELECT max(version) FROM schema_migrations", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(version >= 14);
+        let k = UsenetKey::new("1", "g").unwrap();
+        let blob = claims::encode(&claims(), 3).unwrap();
+        conn.execute(
+            "INSERT INTO unverified_items (id, network, key, source_id, sources, flags, claims,
+                 first_at, last_at) VALUES (8, ?1, ?2, 1, 2, 3, ?3, 0, 0)",
+            params![Network::Usenet as i64, &k.as_bytes()[..], blob],
+        )
+        .unwrap();
+        let item = conn
+            .query_row(
+                &format!("SELECT {ITEM_COLUMNS} FROM unverified_items"),
+                [],
+                read_item,
+            )
+            .unwrap()
+            .into_item()
+            .unwrap();
+        assert_eq!(item.network, Network::Usenet);
+        assert!(item.private_source);
+        assert_eq!(item.claims, Some(claims()));
     }
 }

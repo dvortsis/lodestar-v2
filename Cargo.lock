@@ -1978,6 +1978,7 @@ dependencies = [
  "lodestar-metainfo",
  "proptest",
  "rusqlite",
+ "sha2",
  "tempfile",
  "zstd",
 ]
