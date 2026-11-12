@@ -267,3 +267,10 @@ path = "fuzz_targets/companion_archive.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "worker_spool"
+path = "fuzz_targets/worker_spool.rs"
+test = false
+doc = false
+bench = false

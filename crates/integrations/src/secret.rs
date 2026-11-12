@@ -37,7 +37,9 @@ use std::path::{Path, PathBuf};
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroize;
+/// Re-exported for [`SecretStore::open_bytes`]'s callers.
+pub use zeroize::Zeroizing;
 
 /// A credential or token in memory. It can't be printed by accident.
 #[derive(Clone)]
@@ -340,6 +342,69 @@ impl SecretStore {
         }
     }
 
+    /// The largest plaintext [`seal_bytes`](Self::seal_bytes) takes: well
+    /// above a worker spool record (a 512 KiB payload with its leases).
+    pub const MAX_BYTES: usize = 1 << 20;
+
+    /// Seals binary `plain` for `context`, with the primary key: the same
+    /// format and key ids as [`seal`](Self::seal), so rotation, retiring
+    /// and [`needs_reseal`](Self::needs_reseal) apply unchanged (WK-11's
+    /// spool). The context is bound as associated data behind a 0xFF byte,
+    /// which no UTF-8 context of [`seal`](Self::seal) can contain, so a
+    /// byte seal never opens as a `Secret` and a `Secret` never opens here,
+    /// whatever the two contexts.
+    pub fn seal_bytes(&self, context: &str, plain: &[u8]) -> Result<SealedSecret, SecretError> {
+        if plain.len() > Self::MAX_BYTES {
+            return Err(SecretError::Seal);
+        }
+        let key = self.primary();
+        let mut out = Vec::with_capacity(HEADER_LEN + NONCE_LEN + plain.len() + TAG_LEN);
+        out.push(SEAL_VERSION);
+        out.extend_from_slice(&key.id.to_le_bytes());
+        let mut nonce = [0u8; NONCE_LEN];
+        getrandom::fill(&mut nonce).map_err(|_| SecretError::Random)?;
+        let aad = bytes_associated_data(&out, context);
+        let ct = key
+            .cipher
+            .encrypt(
+                XNonce::from_slice(&nonce),
+                Payload {
+                    msg: plain,
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| SecretError::Seal)?;
+        out.extend_from_slice(&nonce);
+        out.extend_from_slice(&ct);
+        Ok(SealedSecret(out))
+    }
+
+    /// Opens bytes sealed by [`seal_bytes`](Self::seal_bytes) for the same
+    /// `context`, into a buffer zeroed when dropped. A sealed value longer
+    /// than [`MAX_BYTES`](Self::MAX_BYTES) allows is refused unopened.
+    pub fn open_bytes(
+        &self,
+        context: &str,
+        sealed: &SealedSecret,
+    ) -> Result<Zeroizing<Vec<u8>>, SecretError> {
+        if sealed.0.len() > HEADER_LEN + NONCE_LEN + Self::MAX_BYTES + TAG_LEN {
+            return Err(SecretError::Malformed);
+        }
+        let id = sealed.key_id();
+        let key = self
+            .keys
+            .iter()
+            .find(|k| k.id == id)
+            .ok_or(SecretError::UnknownKey(id))?;
+        let (header, rest) = sealed.0.split_at(HEADER_LEN);
+        let (nonce, ct) = rest.split_at(NONCE_LEN);
+        let aad = bytes_associated_data(header, context);
+        key.cipher
+            .decrypt(XNonce::from_slice(nonce), Payload { msg: ct, aad: &aad })
+            .map(Zeroizing::new)
+            .map_err(|_| SecretError::Open)
+    }
+
     /// Whether `sealed` was sealed with a key other than the primary.
     pub fn needs_reseal(&self, sealed: &SealedSecret) -> bool {
         sealed.key_id() != self.primary_key_id()
@@ -420,6 +485,17 @@ impl SecretStore {
 fn associated_data(header: &[u8], context: &str) -> Vec<u8> {
     let mut aad = Vec::with_capacity(header.len() + context.len());
     aad.extend_from_slice(header);
+    aad.extend_from_slice(context.as_bytes());
+    aad
+}
+
+/// [`SecretStore::seal_bytes`]' associated data: the header, 0xFF (never
+/// in a UTF-8 text context, so the two kinds of seal can't collide), then
+/// the context.
+fn bytes_associated_data(header: &[u8], context: &str) -> Vec<u8> {
+    let mut aad = Vec::with_capacity(header.len() + 1 + context.len());
+    aad.extend_from_slice(header);
+    aad.push(0xFF);
     aad.extend_from_slice(context.as_bytes());
     aad
 }
@@ -637,6 +713,81 @@ fn sync_dir(dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bytes_round_trip_and_bind_their_context() {
+        let store = SecretStore::from_key(&[9; 32]);
+        let plain = [0u8, 0xFF, 0xC3, 0x28, 7];
+        let a = store.seal_bytes("worker-spool/v1:3:1", &plain).unwrap();
+        assert_eq!(a.key_id(), store.primary_key_id());
+        assert_eq!(
+            store
+                .open_bytes("worker-spool/v1:3:1", &a)
+                .unwrap()
+                .as_slice(),
+            &plain
+        );
+        assert_eq!(
+            store.open_bytes("worker-spool/v1:3:2", &a).unwrap_err(),
+            SecretError::Open
+        );
+        let big = vec![1u8; SecretStore::MAX_BYTES + 1];
+        assert!(store.seal_bytes("worker-spool/v1", &big).is_err());
+        assert!(store.seal_bytes("worker-spool/v1", &big[1..]).is_ok());
+    }
+
+    #[test]
+    fn byte_seals_and_text_seals_never_open_as_each_other() {
+        let store = SecretStore::from_key(&[9; 32]);
+        // The same context, and contexts that differ only by the marker.
+        for (seal_ctx, open_ctx) in [
+            ("worker-spool/v1", "worker-spool/v1"),
+            ("cluster:ca:x", "cluster:ca:x"),
+            ("worker-spool/v1", "\u{FF}worker-spool/v1"),
+        ] {
+            let bytes = store.seal_bytes(seal_ctx, b"text-looking bytes").unwrap();
+            assert_eq!(store.open(open_ctx, &bytes).unwrap_err(), SecretError::Open);
+            let text = store.seal(seal_ctx, &Secret::new("a credential")).unwrap();
+            assert_eq!(
+                store.open_bytes(open_ctx, &text).unwrap_err(),
+                SecretError::Open
+            );
+        }
+    }
+
+    #[test]
+    fn byte_seals_follow_a_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = SecretStore::open_or_create(dir.path()).unwrap();
+        let old = store.seal_bytes("worker-spool/v1", b"x").unwrap();
+        store.rotate().unwrap();
+        assert!(store.needs_reseal(&old));
+        assert_eq!(
+            store
+                .open_bytes("worker-spool/v1", &old)
+                .unwrap()
+                .as_slice(),
+            b"x"
+        );
+        let new = store
+            .seal_bytes(
+                "worker-spool/v1",
+                &store.open_bytes("worker-spool/v1", &old).unwrap(),
+            )
+            .unwrap();
+        store.retire_old_keys().unwrap();
+        assert!(matches!(
+            store.open_bytes("worker-spool/v1", &old),
+            Err(SecretError::UnknownKey(_))
+        ));
+        assert_eq!(
+            store
+                .open_bytes("worker-spool/v1", &new)
+                .unwrap()
+                .as_slice(),
+            b"x"
+        );
+    }
 
     #[test]
     fn seal_and_open_round_trip_with_context() {

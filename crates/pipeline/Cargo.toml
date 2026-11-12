@@ -27,6 +27,11 @@ lodestar-network-policy.workspace = true
 siphasher = "=1.0.4"
 tokio = { version = "1.54.0", features = ["sync", "time", "rt", "macros"] }
 
+# The spool's no-follow, non-blocking opens (WK-11, runner-asked
+# `O_NOFOLLOW | O_NONBLOCK`); already in the lockfile through tokio.
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.191"
+
 [lints]
 workspace = true
 
