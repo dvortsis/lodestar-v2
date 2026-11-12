@@ -435,7 +435,7 @@ sig:0123456789abcdef0123456789abcdef01234567
 - Give it a signature (16 hex digits) or the info hash of a torrent (40 hex digits, or a magnet link). With a hash, you get that torrent and every torrent with the same payload.
 - A torrent with no content files has no signature: by hash, it finds only itself.
 - After an upgrade, Lodestar fills in the signature of torrents it already had in the background. Until that's done, `sig:` finds only the torrents done so far, and the results say they may be incomplete.
-- A saved search with `sig:` and a pasted hash sends no alerts until that background work is done, then catches up on the torrents it missed.
+- A saved search with `sig:` and a pasted hash waits for that background work for new torrents, then catches up on the ones it missed. While the work runs, an unverified item that becomes a verified torrent alerts only if the pasted hash's torrent is already done. Otherwise that one alert is missed.
 
 A shortened signature is an error, so a typo never quietly finds nothing:
 

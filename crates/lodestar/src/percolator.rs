@@ -182,16 +182,7 @@ pub fn run_once(
     let asts: HashMap<i64, &str> = due.iter().map(|s| (s.id, s.ast.as_str())).collect();
     let due: Vec<Due<'_>> = parsed
         .iter()
-        .map(|(id, watermark, node)| Due {
-            id: *id,
-            watermark: *watermark,
-            query: node,
-            utc_offset: 0,
-            count_only: false,
-            stems: false,
-            stoppable: false,
-            hold_unresolved: true,
-        })
+        .map(|(id, watermark, node)| forward_due(*id, *watermark, node))
         .collect();
     let cancel = CancelToken::new().with_budget(config.budget);
     let limits = PercolateLimits {
@@ -375,16 +366,7 @@ fn matched_promoted(
     let due: Vec<Due<'_>> = searches
         .iter()
         .filter(|(id, watermark, ..)| *id <= row.searches_through && *watermark >= row.torrent_id)
-        .map(|(id, _, _, node)| Due {
-            id: *id,
-            watermark: row.torrent_id - 1,
-            query: node,
-            utc_offset: 0,
-            count_only: false,
-            stems: false,
-            stoppable: false,
-            hold_unresolved: false,
-        })
+        .map(|(id, _, _, node)| promoted_due(*id, row.torrent_id, node))
         .collect();
     if due.is_empty() || row.torrent_id <= 0 {
         return Ok(true);
@@ -399,6 +381,38 @@ fn matched_promoted(
         }
     }
     Ok(true)
+}
+
+/// A saved search's forward run from its watermark. It's held while a
+/// `sig:<info hash>` can't resolve every reference (GS-0): its watermark
+/// would otherwise move past clones that then never alert.
+fn forward_due(id: i64, watermark: i64, query: &Node) -> Due<'_> {
+    Due {
+        id,
+        watermark,
+        query,
+        utc_offset: 0,
+        count_only: false,
+        stems: false,
+        stoppable: false,
+        hold_unresolved: true,
+    }
+}
+
+/// A saved search's one-off pass over a promoted torrent. Not held: its
+/// promotion row is consumed either way, so it runs and alerts on the
+/// references already backfilled (the rest is X-percolate-promoted-hold).
+fn promoted_due(id: i64, torrent_id: i64, query: &Node) -> Due<'_> {
+    Due {
+        id,
+        watermark: torrent_id - 1,
+        query,
+        utc_offset: 0,
+        count_only: false,
+        stems: false,
+        stoppable: false,
+        hold_unresolved: false,
+    }
 }
 
 /// Keeps each saved search's newest `keep` alerts.
@@ -562,6 +576,20 @@ fn alert_query(node: Node) -> Node {
 
 #[cfg(test)]
 mod tests {
+    /// GS-0: the forward run waits for the `payload_sig` backfill, and a
+    /// promoted torrent's pass doesn't (each flip brings back a lost
+    /// alert, see `docs/decisions/2026-11-12-GS-0.md`).
+    #[test]
+    fn forward_runs_hold_and_promoted_passes_dont() {
+        let q = Node::All;
+        let f = super::forward_due(3, 40, &q);
+        assert!(f.hold_unresolved);
+        assert_eq!((f.id, f.watermark, f.count_only), (3, 40, false));
+        let p = super::promoted_due(3, 41, &q);
+        assert!(!p.hold_unresolved);
+        assert_eq!((p.id, p.watermark, p.count_only), (3, 40, false));
+    }
+
     #[test]
     fn alerts_leave_unverified_items_out_unless_asked() {
         use lodestar_search::parse;
