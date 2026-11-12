@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T07:55:55Z",
+  "updated_at": "2026-11-12T07:59:10Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7818,6 +7818,11 @@
       "pr": 737,
       "sha": "d3ac57bb51dd825a677f893fd5e1d4816a04107f",
       "at": "2026-11-12T07:55:22Z"
+    },
+    {
+      "pr": 734,
+      "sha": "073e6ed45ff5649febe9410d3a37bcb110a77248",
+      "at": "2026-11-12T07:59:10Z"
     }
   ],
   "active_sessions": {
@@ -8055,7 +8060,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T07:55:22Z",
+    "updated": "2026-11-12T07:59:10Z",
     "items": [
       {
         "slot": 1,
@@ -8077,11 +8082,11 @@
       },
       {
         "slot": 4,
-        "slice": "X-upd-stop-early",
-        "role": "slice",
-        "agent": "session_01MMjhn9asevZ2GAyojLHZJZ",
-        "doing": "session_01MMjhn9asevZ2GAyojLHZJZ: PR #734 e26ceb50 delta self-checked OK, CI green; merge refused (logs_catalog.txt golden conflict with #736). Told to merge main + re-bless; then merge-delta check.",
-        "since": "2026-11-12T04:02:44Z",
+        "slice": "M8-NET-E2E",
+        "role": "build",
+        "agent": "session_01MMjhnAsZmQbQajtBLyTfXU",
+        "doing": "session_01MMjhnAsZmQbQajtBLyTfXU: building per briefs/M8-NET-E2E.md (#734 X-upd-stop-early merged 073e6ed4, session archived)",
+        "since": "2026-11-12T07:59:10Z",
         "status": "active"
       },
       {
@@ -8188,7 +8193,7 @@
     }
   ],
   "heartbeat": "2026-11-12T06:39:51Z",
-  "updated": "2026-11-12T07:55:55Z",
+  "updated": "2026-11-12T07:59:10Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
