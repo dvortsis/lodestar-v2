@@ -10,7 +10,11 @@ use lodestar_store::unverified::{
     MAX_USENET_BATCH, Network, NetworkPurgeStep, NewUnverified, PurgeCursor, Put, USENET_MAX_PART,
     UsenetKey,
 };
-use lodestar_store::{Error, PreparedTorrent, SourceId, SourceState, Store, StoreConfig};
+use lodestar_store::unverified::{RefiledUnverified, UnverifiedRefiled};
+use lodestar_store::{
+    Error, Filtered, Held, PreparedTorrent, SourceId, SourceState, Store, StoreConfig,
+};
+use proptest::prelude::*;
 use rusqlite::params;
 
 const T: i64 = 1_700_000_000;
@@ -443,4 +447,65 @@ fn a_reopened_v14_store_accepts_usenet_rows() {
         ),
         1
     );
+}
+
+#[test]
+fn a_held_refile_of_a_usenet_item_touches_no_hash() {
+    let mut store = mem();
+    let (_, prowlarr) = sources(&mut store);
+    let k = key("guid-1");
+    let c = named("x");
+    let id = new_id(&store.put_unverified(&[usenet(&k, prowlarr, &c)]).unwrap()[0]);
+    let r = [RefiledUnverified {
+        id,
+        filtered: Some(Filtered {
+            hashes: &[],
+            rule: "CS-2",
+            action: 0,
+            held: Some(Held::Tombstone),
+            sealed: None,
+            evidence: &[],
+            at: T,
+            expires_at: T,
+            adult_hold: false,
+        }),
+    }];
+    assert_eq!(
+        store.refile_unverified(&r, || true).unwrap(),
+        Some(UnverifiedRefiled {
+            ids: vec![id],
+            torrents_deleted: vec![]
+        })
+    );
+    assert_eq!(store.unverified_count(Network::Usenet).unwrap(), 0);
+    // The key is neither journalled nor held as a swarm hash.
+    assert_eq!(count(&store, "SELECT count(*) FROM snapshot_deletions"), 0);
+    assert_eq!(count(&store, "SELECT count(*) FROM tombstones"), 0);
+}
+
+#[test]
+fn usenet_items_alone_skip_the_writers_duplicate_check() {
+    let mut store = mem();
+    let (_, prowlarr) = sources(&mut store);
+    let c = named("x");
+    let k = key("g");
+    store.put_unverified(&[usenet(&k, prowlarr, &c)]).unwrap();
+    assert!(!store.has_unverified().unwrap());
+}
+
+proptest! {
+    /// Distinct (indexer, guid) pairs give distinct keys: the preimage is
+    /// length-prefixed, so moving the boundary or bytes between the parts
+    /// changes it.
+    #[test]
+    fn distinct_pairs_give_distinct_keys(
+        a in "[a-c\\x00\\x01]{1,6}",
+        b in "[a-c\\x00\\x01]{1,6}",
+        c in "[a-c\\x00\\x01]{1,6}",
+        d in "[a-c\\x00\\x01]{1,6}",
+    ) {
+        let x = UsenetKey::new(&a, &b).unwrap();
+        let y = UsenetKey::new(&c, &d).unwrap();
+        prop_assert_eq!(x == y, (a, b) == (c, d));
+    }
 }

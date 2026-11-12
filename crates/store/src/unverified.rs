@@ -546,14 +546,16 @@ impl Store {
         Ok(ids)
     }
 
-    /// Whether any unverified item is stored: the writer's duplicate check
-    /// is skipped for a batch when none is (SRC-2), so a store with no
-    /// sources pays one cheap read per batch, not a probe per insert.
+    /// Whether any clearnet BitTorrent unverified item is stored: the
+    /// writer's duplicate check is skipped for a batch when none is
+    /// (SRC-2), so a store with no sources pays one cheap read per batch,
+    /// not a probe per insert. Usenet items don't count: the writer looks
+    /// up swarm hashes, and a usenet key is never one (UN-0).
     pub fn has_unverified(&self) -> Result<bool> {
         Ok(self
             .conn
-            .prepare_cached("SELECT EXISTS (SELECT 1 FROM unverified_items)")?
-            .query_row([], |r| r.get(0))?)
+            .prepare_cached("SELECT EXISTS (SELECT 1 FROM unverified_items WHERE network = ?1)")?
+            .query_row([Network::Bt as i64], |r| r.get(0))?)
     }
 
     /// A stored torrent's swarm hashes (its v1 hash, and a hybrid's
@@ -802,6 +804,16 @@ impl Store {
         at: i64,
     ) -> Result<Promoted> {
         let p = t.torrent;
+        // A usenet item is refused first, with its own error, whatever
+        // `t` is; checked again in the transaction below.
+        let network: Option<i64> = self
+            .conn
+            .prepare_cached("SELECT network FROM unverified_items WHERE id = ?1")?
+            .query_row([id], |r| r.get(0))
+            .optional()?;
+        if network == Some(Network::Usenet as i64) {
+            return Err(Error::NeverVerified);
+        }
         if !t.verified {
             return Err(Error::Invalid("promotion needs verified metadata"));
         }
@@ -1161,6 +1173,12 @@ impl Store {
     /// transaction, whatever sources found them. Clearnet BitTorrent isn't
     /// a tier this purges (`Error::Invalid`): its items are the
     /// verification queue's, and its torrents are the store's.
+    ///
+    /// The store doesn't know which sources write a tier (that's their
+    /// manifests'), so the caller disables them first, as for
+    /// [`Store::purge_source`]: an item a running source writes behind the
+    /// cursor would survive the purge. Deleted items aren't journalled for
+    /// the snapshot purge (`docs/decisions/2026-11-12-UN-0.md`).
     pub fn purge_network(
         &mut self,
         network: Network,
@@ -1378,7 +1396,9 @@ fn forced_private(network: Network, flags: i64) -> bool {
 }
 
 /// Drops `network`'s oldest unverified items (lowest id: first found)
-/// past `cap`, at most [`MAX_PURGE_STEP`] in this call. Usenet items have
+/// past `cap`, at most [`MAX_PURGE_STEP`] in this call. An old item seen
+/// again in the same batch is still old: it can go, though the call
+/// reported it as [`Put::Existing`]. Usenet items have
 /// no swarm hash, so nothing is journalled.
 fn cap_network(tx: &Transaction<'_>, network: Network, cap: u64) -> Result<usize> {
     let n: i64 = tx
@@ -1759,22 +1779,39 @@ mod tests {
         assert_eq!(cap_network(&tx, Network::Usenet, 0).unwrap(), 0);
     }
 
-    /// A store upgraded from V13 to V14 (as a released v0.6 store is)
-    /// takes usenet rows under its CHECKs, with no migration.
+    /// A store upgraded from V13 to V14 through the real migration path
+    /// (as a released v0.6 store is) takes usenet rows under its CHECKs,
+    /// with no migration of UN-0's own.
     #[test]
     fn an_upgraded_v14_schema_accepts_usenet_rows() {
-        let conn = Connection::open_in_memory().unwrap();
-        for (_, sql) in &crate::schema::MIGRATIONS[..13] {
+        let v14 = crate::schema::MIGRATIONS
+            .iter()
+            .position(|(v, _)| *v == 14)
+            .unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (
+                 version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL) STRICT;",
+        )
+        .unwrap();
+        for (v, sql) in &crate::schema::MIGRATIONS[..v14] {
             conn.execute_batch(sql).unwrap();
+            conn.execute("INSERT INTO schema_migrations VALUES (?1, 0)", [v])
+                .unwrap();
         }
-        conn.execute_batch(crate::schema::MIGRATIONS[13].1).unwrap();
-        assert_eq!(crate::schema::MIGRATIONS[13].0, 14);
-        assert_eq!(crate::schema::MIGRATIONS.len(), 14, "no newer migration");
+        // V13 data: a registered source.
         conn.execute(
             "INSERT INTO sources (id, plugin, version, state, added_at) VALUES (1, 'p', '1', 0, 0)",
             [],
         )
         .unwrap();
+        crate::schema::migrate(&mut conn, None).unwrap();
+        let version: i64 = conn
+            .query_row("SELECT max(version) FROM schema_migrations", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(version >= 14);
         let k = UsenetKey::new("1", "g").unwrap();
         let blob = claims::encode(&claims(), 3).unwrap();
         conn.execute(
