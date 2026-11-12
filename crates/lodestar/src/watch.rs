@@ -160,7 +160,9 @@ pub enum Cause {
     TooLarge,
     /// A link or reparse point in place of a file.
     Link,
-    /// A Unix hard link: the same file is also somewhere else.
+    /// A Unix hard link: the same file is also somewhere else. Windows
+    /// has no link count on stable Rust, so it's never built there.
+    #[cfg_attr(not(unix), allow(dead_code))]
     Linked,
     Unreadable,
 }
