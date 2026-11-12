@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T05:54:51Z",
+  "updated_at": "2026-11-12T06:04:10Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7105,6 +7105,10 @@
       "id": "X-filters-budget-headroom-closed",
       "at": "2026-11-12T05:27:33Z",
       "note": "Closed, no change (runner \u00a72.26): Filters first view 31144 B local vs 31140 B limit (CI green on main, so CI is at or just under). Dialogs already lazy; no unused code; folding Rules remove buttons into a snippet grew it +83 B; moving add-forms on demand only moves cost into Filters dialogs (35.88/35.9 kB). Rule: the next PR adding to that chunk gets a measured raise (measured + ~10%) with an owner flag. Session archived."
+    },
+    {
+      "at": "2026-11-12T06:04:10Z",
+      "what": "\u00a72.59 cap 8: idle slots 3, 7, 9 removed; X-restart-save-lag (was next for slot 9) waits for a free slot under the cap; 9 sessions finishing; runner PR #743 records it"
     }
   ],
   "main_health": [
@@ -7948,9 +7952,10 @@
     }
   ],
   "limits": {
-    "phase_total": 12,
+    "phase_total": 8,
     "note": "owner \u00a72.36 (2026-11-04): up to 12 slots; cut to 4 at 2026-11-06T00:00Z by trig_01RJzwL47gE81BrRv2vR2cx4 (running ones finish). \u00a72.33 auto-approve best-practice decisions. Owner 2026-11-05 ~01:20Z: memory/performance and soak r5 first; keep other slots busy with work that does not compete. The 2026-11-02 two-slot cut and launch pause are superseded. Owner 2026-11-05 ~02:45Z (\u00a72.41): until 2026-11-06T00:00Z, launch the next ready slice whenever a slot is free (critical path, then unlocks); a slot stays empty only for a recorded reason (status idle, reason in doing); hourly check from the dashboard session.",
-    "source": "owner 2026-11-11 (replaces \u00a72.42 4)"
+    "source": "owner \u00a72.59 2026-11-12T06:03Z: \"Reduce max sessions to 8. Allow sessions to finish.\" (replaces \u00a72.56 12)",
+    "rule_2_59": "9 active at the time: none stopped; each finishes its slice incl. review rounds; no launch and no follow-on slice while >= 8 active; finished slots are removed until <= 8."
   },
   "owner_instructions": [
     {
@@ -7963,7 +7968,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T05:54:51Z",
+    "updated": "2026-11-12T06:04:10Z",
     "items": [
       {
         "slot": 1,
@@ -7982,12 +7987,6 @@
         "doing": "User guide: companions per platform",
         "since": "2026-11-11T18:07Z",
         "status": "active"
-      },
-      {
-        "slot": 3,
-        "status": "idle",
-        "doing": "free: #724 X-spool-damage-log merged (5b68f0c7); session archived",
-        "since": "2026-11-12T05:53:04Z"
       },
       {
         "slot": 4,
@@ -8017,12 +8016,6 @@
         "status": "active"
       },
       {
-        "slot": 7,
-        "status": "idle",
-        "doing": "idle by choice: review backlog (~9 PRs); X-banner-live-region deferred (fix goes in shared Banner.svelte, every bundle pays; wizard at 53.58/53.6 kB; StorageStep outer region is deliberate per rv-701 N4)",
-        "since": "2026-11-12T05:27:33Z"
-      },
-      {
         "slot": 8,
         "slice": "X-wk-out-set-polish",
         "role": "slice",
@@ -8030,12 +8023,6 @@
         "doing": "rv-727 Importants: real race test (spin flag, alternate order, both outcomes), out-set memory numbers in decisions + WK-G notes, nits",
         "since": "2026-11-12T04:01:05Z",
         "status": "active"
-      },
-      {
-        "slot": 9,
-        "status": "idle",
-        "doing": "free: #739 merged (self-checked; mutant re-run); session archived. Next queued here: X-restart-save-lag (Opus) when review load drops",
-        "since": "2026-11-12T05:54:51Z"
       },
       {
         "slot": 10,
@@ -8052,7 +8039,8 @@
         "role": "Opus slice",
         "agent": "session_01MMjhn8cMB1NrRCcQ9XkWUg",
         "doing": "root-cause the relaunched copy's 30 s predecessor-wait timeout (#717 Windows CI)",
-        "since": "2026-11-12T05:04:27Z"
+        "since": "2026-11-12T05:04:27Z",
+        "status": "active"
       },
       {
         "slot": 12,
@@ -8122,7 +8110,7 @@
     }
   ],
   "heartbeat": "2026-11-12T03:41:56Z",
-  "updated": "2026-11-12T05:54:51Z",
+  "updated": "2026-11-12T06:04:10Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
