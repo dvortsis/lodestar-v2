@@ -1,4 +1,4 @@
-# X-prowlarr-register decisions
+# X-prowlarr-register decisions (#709)
 
 - **Prowlarr / Jackett is registered, off, behind the consent gate** (owner §2.55). `Services::start` builds it through `Prowlarr::at_start` from its saved settings and the API key stored at that moment. It's an Account source, off by default, and `consent_text_approved` refuses the Account class in this build, so it can't be turned on yet, the same as the torrent cache.
 - **A store error reading its settings at start-up fails the start.** The first version of the registration (9e7285e5) turned an unreadable `sources.config.prowlarr` into "unconfigured" with `.ok().flatten()`. Now `prowlarr_saved` stops `Services::start` with a message that names the setting and never its value, and unit tests cover it. A source quietly registered without its saved address would hide a damaged store.
