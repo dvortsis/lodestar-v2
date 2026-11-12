@@ -108,11 +108,12 @@ In words: up → deliver-pia → (leak test) → start-block → four segments w
 ### 3.2 `/fleet run leak-test <vm>` (optional: `start-block` runs it too)
 - **What it does:** proves nothing leaves the VM outside PIA.
   - **With the tunnel up:** IPv4 goes out through PIA, not the host's own address; IPv6 is blocked; DNS goes through gluetun.
-  - **With the tunnel down, twice** (the endpoint blocked, then gluetun's VPN interface also taken down): IPv4, IPv6, DNS and UDP all fail, and a capture on gluetun's side sees zero packets.
+  - **gluetun's post-rules are loaded** (IPv4 and IPv6). Without them, gluetun lets connections opened through the tunnel leave by the host's network once its interface is down.
+  - **With the tunnel down, twice** (the endpoint blocked, then gluetun's VPN interface also taken down): IPv4, IPv6, DNS and UDP all fail. A capture on gluetun's side sees zero packets, and a counter on the host sees zero packets forwarded out of the host from the stack's network, apart from the endpoint's own UDP.
   - **Then the tunnel recovers** through the same exit.
   - **The host's own IPv6 too:** no IPv6 forwarding, no IPv6 on the stack's Docker network, and no global IPv6 address in gluetun's namespace.
   - It refuses while a block is recorded or running.
-- **Works:** `run leak-test main: done; <n> ok; captured_packets_down 0, captured_packets_ifdown 0`.
+- **Works:** `run leak-test main: done; <n> ok; captured_packets_down 0, captured_packets_ifdown 0, host_egress_packets_down 0, host_egress_packets_ifdown 0`.
 - **Fails:** `failed (exit 1); <n> ok; failed: <names>, leak_test`. **That's a stop condition: no crawl starts on that VM.** Tell the runner, with the failed names.
 
 ### 3.3 `/fleet run start-block <vm> <rules commit>`

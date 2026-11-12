@@ -75,6 +75,21 @@ To use it:
 4. Open the web UI at your server address and the port you published on gluetun.
 5. Restart Lodestar whenever gluetun restarts. A container that shares a network stays attached to the old one.
 
+### Close gluetun's gap when the VPN drops
+
+gluetun's firewall is its kill switch. When the VPN drops, it blocks every new connection. On its own, though, it lets packets of connections that were already open leave through your normal network, with your home IP. Lodestar's post-rules file closes that gap.
+
+> [!IMPORTANT]
+> Add the post-rules file to gluetun. Without it, a few packets can leave outside the VPN each time the tunnel drops. **Recommended:** add it before you start Lodestar.
+
+1. Download [`gluetun-post-rules.txt`](../../packaging/companions/gluetun-post-rules.txt) and save it as `/mnt/cache/appdata/gluetun/post-rules.txt`.
+2. In the gluetun container, add a **Path**: container path `/iptables/post-rules.txt`, host path the file from step 1, access mode **Read Only**.
+3. Add a **Variable**: key `VPN_INTERFACE`, value `wg0`. The rules name the tunnel `wg0`; gluetun's own default is `tun0`.
+4. Apply, then open gluetun's log.
+   **Result:** The log shows `[firewall] enabled successfully`. If gluetun stops with `post-rules.txt: is a directory`, the file wasn't at the host path, so Docker made a folder there. Delete the folder, save the file in its place, and start gluetun again.
+
+With the file, a connection that used the VPN never leaves any other way. Each rule only blocks traffic; none lets anything new through. Lodestar's own example templates don't include the file yet **(planned)**.
+
 A VPN hides your home IP from peers. It doesn't hide your activity from the VPN provider, and it doesn't make the web UI private. Inbound DHT reach needs a port your provider forwards: allow it in gluetun with `FIREWALL_VPN_INPUT_PORTS` and set **DHT port** in the template to the same number. Without it, Lodestar still crawls with fewer nodes.
 
 <details>

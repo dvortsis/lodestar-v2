@@ -234,6 +234,16 @@ Change the DHT port with `LODESTAR_DHT_PORT`. The web address comes from
   reaches fewer nodes.
 - If gluetun restarts, restart Lodestar afterwards; a container sharing
   another container's network stays attached to the old one.
+- **Add Lodestar's post-rules to gluetun.** gluetun's firewall (its kill
+  switch) blocks new connections while the VPN is down, but as of v3.41.3 it
+  lets packets of connections opened earlier leave through the normal
+  network, with your own address. Mount
+  `packaging/companions/gluetun-post-rules.txt` read-only at
+  `/iptables/post-rules.txt` in gluetun and set `VPN_INTERFACE=wg0` (gluetun's
+  default is `tun0`, which the rules don't name). Then a connection that used
+  the tunnel never leaves another way. Every rule only marks or drops traffic.
+  In compose, a `configs:` entry with the file's text does the same without a
+  host file (`infra/fleet/steps/vm/compose.yaml`).
 
 ### 4.4 IPv6
 `dht.bind` accepts at most one IPv4 and one IPv6 address in `config.toml`

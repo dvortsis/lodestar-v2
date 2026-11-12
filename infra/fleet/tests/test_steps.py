@@ -356,6 +356,42 @@ class Compose(unittest.TestCase):
         self.assertEqual(g["oom_score_adj"], -500)
         self.assertEqual(g["volumes"], ["./secrets/wg0.conf:/gluetun/wireguard/wg0.conf:ro"])
 
+    def test_gluetun_loads_the_post_rules_read_only(self):
+        """X-gluetun-leak: gluetun's post-rules close its established-flow leak.
+        Compose mounts a config read-only; the text is the shipped file's."""
+        g = self.svc["gluetun"]
+        self.assertEqual(g["configs"], [{"source": "gluetun-post-rules", "target": "/iptables/post-rules.txt"}])
+        text = self.doc["configs"]["gluetun-post-rules"]["content"]
+        self.assertEqual(text, (ROOT / "packaging/companions/gluetun-post-rules.txt").read_text())
+        self.assertNotIn("$", text)  # nothing for compose to interpolate
+        rules = [ln for ln in text.splitlines() if ln.startswith(("iptables", "ip6tables"))]
+        # gluetun runs only lines that start with these words; every other line is a comment.
+        for ln in text.splitlines():
+            self.assertTrue(ln.startswith(("iptables ", "ip6tables ", "#")), ln)
+        self.assertEqual(rules, [
+            "iptables -I OUTPUT 1 -o wg0 -j CONNMARK --set-xmark 0x800000/0x800000",
+            "ip6tables -I OUTPUT 1 -o wg0 -j CONNMARK --set-xmark 0x800000/0x800000",
+            "iptables -I OUTPUT 2 ! -o wg0 -m connmark --mark 0x800000/0x800000 -j DROP",
+            "ip6tables -I OUTPUT 2 ! -o wg0 -m connmark --mark 0x800000/0x800000 -j DROP",
+            "iptables -I OUTPUT 3 ! -o wg0 -p icmp --icmp-type port-unreachable -j DROP",
+            "ip6tables -I OUTPUT 3 ! -o wg0 -p ipv6-icmp --icmpv6-type port-unreachable -j DROP",
+        ])
+        # Never loosens gluetun's firewall: each rule marks or drops, on the interface
+        # the leak test reads, for IPv4 and IPv6 alike.
+        for r in rules:
+            self.assertRegex(r, r"-j (DROP|CONNMARK --set-xmark 0x800000/0x800000)$")
+            self.assertNotRegex(r, r"ACCEPT|RETURN|-P |-F|-X|-D |-t ")
+            self.assertIn(" wg0 ", r)
+        self.assertEqual(g["environment"]["VPN_INTERFACE"], "wg0")  # gluetun's image defaults to tun0
+
+    def test_the_pia_example_ships_the_same_post_rules(self):
+        doc = yaml.safe_load((ROOT / "infra/akamai/terraform/pia-example/compose.vpn.yaml").read_text())
+        g = doc["services"]["gluetun"]
+        self.assertEqual(g["image"], self.svc["gluetun"]["image"])  # pinned, the version the rules were checked on
+        self.assertEqual(g["environment"]["VPN_INTERFACE"], "wg0")
+        self.assertEqual(g["configs"], self.svc["gluetun"]["configs"])
+        self.assertEqual(doc["configs"], self.doc["configs"])
+
     def test_only_the_ui_on_the_hosts_loopback(self):
         ports = [p for s in self.svc.values() for p in s.get("ports", [])]
         self.assertEqual(ports, ["127.0.0.1:8090:8090"])
@@ -416,7 +452,15 @@ case "$1" in
       *) bad "$*" ;;
     esac ;;
   pull) [ -n "$PULL_FAIL" ] && exit 1; exit 0 ;;
-  exec) echo 7 ;;  # exec gluetun cat .../iflink
+  exec)
+    case "$*" in
+      "exec gluetun cat /sys/class/net/eth0/iflink") echo 7 ;;
+      # post_rules_on: exactly the script's check, with the family and gluetun's interface.
+      "exec gluetun sh -c "*" rules iptables ${VPN_IFACE-wg0}"|"exec gluetun sh -c "*" rules ip6tables ${VPN_IFACE-wg0}")
+        case "$*" in *'-C OUTPUT ! -o "$2" -m connmark --mark 0x800000/0x800000 -j DROP'*) ;; *) bad "$*" ;; esac
+        [ -n "$NO_POST_RULES" ] && exit 1; exit 0 ;;
+      *) bad "$*" ;;
+    esac ;;
   network) [ "$*" = "network inspect -f {{.EnableIPv6}} lodestar_default" ] || bad "$*"
            [ -n "$BRIDGE_V6" ] && echo true || echo false ;;
   run)
@@ -434,6 +478,8 @@ case "$1" in
     if [ -e "$STUB/blocked" ]; then down=1; else down=; fi
     [ -n "$down" ] && [ -n "$PROBE_NOT_RUN" ] && exit 125  # the container never ran the command
     # With the interface down, only gluetun's firewall holds: off, everything leaks.
+    # (Without its post-rules it leaks only flows opened earlier: the capture and
+    # the host counter see those; a fresh probe still fails.)
     if [ -e "$STUB/ifdown" ] && [ -n "$FIREWALL_OFF" ]; then leak=1; else leak=; fi
     echo "$*" >> "$STUB/probes"
     (
@@ -470,10 +516,27 @@ echo 93.184.215.14
 """
 STUB_IPTABLES = r"""#!/usr/bin/env bash
 printf 'iptables %s\n' "$*" >> "$STUB/log"
-case "$1" in
-  -I) : > "$STUB/blocked"; : > "$STUB/was_blocked" ;;
-  -D) if [ -n "$FAIL_FIRST_DELETE" ] && [ ! -e "$STUB/deleted_once" ]; then : > "$STUB/deleted_once"; exit 1; fi
+bad() { printf 'iptables %s\n' "$*" >> "$STUB/badargs"; exit 2; }
+counter="-i br-abc123 -o eth0 -m comment --comment lodestar-leak-egress"
+case "$*" in
+  "-I DOCKER-USER 1 -d 192.0.2.77/32 -p udp --dport 1337 -j DROP") : > "$STUB/blocked"; : > "$STUB/was_blocked" ;;
+  "-I DOCKER-USER 2 $counter")
+    [ -e "$STUB/blocked" ] || bad "counter without the block above it: $*"
+    [ -n "$COUNTER_FAILS" ] && exit 1; : > "$STUB/counter" ;;
+  "-D DOCKER-USER $counter") rm -f "$STUB/counter" ;;
+  "-D DOCKER-USER -d 192.0.2.77/32 -p udp --dport 1337 -j DROP")
+      if [ -n "$FAIL_FIRST_DELETE" ] && [ ! -e "$STUB/deleted_once" ]; then : > "$STUB/deleted_once"; exit 1; fi
       rm -f "$STUB/blocked" ;;
+  "-L DOCKER-USER -v -x -n")
+    [ -e "$STUB/counter" ] || exit 0
+    [ -n "$COUNTER_UNREADABLE" ] && exit 1
+    n=${EGRESS:-0}
+    if [ -e "$STUB/ifdown" ] && { [ -n "$FIREWALL_OFF" ] || [ -n "$NO_POST_RULES" ]; }; then n=$((n + 3)); fi
+    echo "Chain DOCKER-USER (1 references)"
+    echo "    pkts      bytes target     prot opt in     out     source               destination"
+    echo "       0        0 DROP       17   --  *      *       0.0.0.0/0            192.0.2.77           udp dpt:1337"
+    printf '%8d %8d            0    --  br-abc123 eth0    0.0.0.0/0            0.0.0.0/0            /* lodestar-leak-egress */\n' "$n" $((n * 60)) ;;
+  *) bad "$*" ;;
 esac
 """
 # The capture must be on gluetun's veth, with exactly the filter that leaves out
@@ -483,8 +546,17 @@ case "$*" in
   "-r "*)
     [ -n "$READ_FAILS" ] && exit 1
     n=${CAPTURED:-0}
-    case "$2" in *cap-ifdown.pcap) [ -n "$FIREWALL_OFF" ] && n=$((n + 3)) ;; esac
-    [ "$n" -gt 0 ] && printf 'pkt\n%.0s' $(seq "$n"); exit 0 ;;
+    [ "$n" -gt 0 ] && printf 'pkt\n%.0s' $(seq "$n")
+    case "$2" in *cap-ifdown.pcap)
+      # What the VM saw (X-gluetun-leak): an open flow's teardown, and a port
+      # unreachable to the endpoint.
+      if [ -n "$FIREWALL_OFF" ] || [ -n "$NO_POST_RULES" ]; then
+        echo "00:00:01.000000 IP 10.2.0.2.40000 > 192.0.2.53.853: Flags [F.], seq 1, ack 1, length 0"
+        echo "00:00:01.100000 IP 10.2.0.2.40000 > 192.0.2.53.853: Flags [.], ack 2, length 0"
+        echo "00:00:01.200000 IP 172.20.0.2 > 192.0.2.77: ICMP 172.20.0.2 udp port 40001 unreachable, length 36"
+      fi ;;
+    esac
+    exit 0 ;;
   *)
     if [ "$1 $2 $3 $4 $5" != "-i vethabc123 -n -U -w" ] || [ $# -ne 7 ] \
        || [ "$7" != "not arp and not (udp and host 192.0.2.77 and port 1337)" ]; then
@@ -497,6 +569,9 @@ esac
 """
 STUB_IP = r"""#!/usr/bin/env bash
 case "$*" in
+  "-o link show dev vethabc123")
+    [ -n "$NO_BRIDGE" ] && { echo "7: vethabc123@if6: <BROADCAST> mtu 1500 state UP"; exit 0; }
+    echo "7: vethabc123@if6: <BROADCAST,UP> mtu 1500 qdisc noqueue master br-abc123 state UP mode DEFAULT" ;;
   *"route get"*) echo "1.1.1.1 via 192.0.2.1 dev eth0 src ${HOST_IP:-192.0.2.10} uid 0" ;;
   *"-o link"*) printf '7: vethabc123@if6: <BROADCAST> mtu 1500\n2: eth0: <UP>\n' ;;
 esac
@@ -563,13 +638,22 @@ class VMScripts(unittest.TestCase):
             names += [f"{n}_{phase}" for n in ("ipv4_blocked", "tcp_literal_blocked", "ipv6_blocked", "dns_blocked",
                                                  "dns_direct_blocked", "capture_alive", "capture_read",
                                                  "no_egress_captured")]
-            self.assertIn(f"count captured_packets_{phase} 0", lines)
+            names += [f"no_host_egress_{phase}"]
+            for n in ("captured_packets", "captured_tcp", "captured_udp", "captured_icmp", "captured_other",
+                      "host_egress_packets"):
+                self.assertIn(f"count {n}_{phase} 0", lines)
+        names += ["post_rules_ipv4", "post_rules_ipv6", "egress_found"]
         for name in names:
             self.assertIn(f"ok {name}", lines)
         self.assertFalse(any(ln.startswith("fail ") for ln in lines))
         self.assertEqual(remote.parse(raw.encode()), raw.splitlines())  # nothing outside the grammar, no address
         self.assertIn("iptables -I DOCKER-USER 1 -d 192.0.2.77/32 -p udp --dport 1337 -j DROP", self.log())
         self.assertIn("iptables -D DOCKER-USER -d 192.0.2.77/32 -p udp --dport 1337 -j DROP", self.log())
+        # The host counter sits just below the block, once per phase, and is gone after.
+        counter = "-i br-abc123 -o eth0 -m comment --comment lodestar-leak-egress"
+        self.assertEqual(self.log().count(f"iptables -I DOCKER-USER 2 {counter}"), 2)
+        self.assertEqual(self.log().count(f"iptables -D DOCKER-USER {counter}"), 2)
+        self.assertFalse((self.stub / "counter").exists())
         self.assertIn("docker compose -f " + str(self.stack / "compose.yaml"), self.log())
         self.assertIn(" up -d --force-recreate gluetun", self.log())  # gluetun alone, from the current wg0.conf
         probes = (self.stub / "probes").read_text()
@@ -604,6 +688,12 @@ class VMScripts(unittest.TestCase):
             # Phase B: gluetun with its firewall off holds while the tunnel is merely
             # dead, and leaks once its interface is down.
             "gluetun's firewall off": ({"FIREWALL_OFF": 1}, "no_egress_captured_ifdown"),
+            # X-gluetun-leak: without its post-rules, open flows leave by eth0 in phase B.
+            "gluetun without its post-rules": ({"NO_POST_RULES": 1}, "post_rules_ipv4"),
+            "a packet forwarded out of the host": ({"EGRESS": 1}, "no_host_egress_down"),
+            "the host counter can't be read": ({"COUNTER_UNREADABLE": 1}, "no_host_egress_down"),
+            "the host counter can't be set": ({"COUNTER_FAILS": 1}, "no_host_egress_down"),
+            "no compose bridge on the veth": ({"NO_BRIDGE": 1}, "egress_found"),
             "the interface won't go down": ({"IFDOWN_FAILS": 1}, "vpn_interface_down"),
             # A probe container that never runs its command is never read as blocked.
             "the probes never run": ({"PROBE_NOT_RUN": 1}, "probe_ran"),
@@ -627,6 +717,7 @@ class VMScripts(unittest.TestCase):
                 self.assertIn(f"fail {failed}", lines)
                 self.assertEqual(lines[-1], "fail leak_test")
                 self.assertFalse((self.stub / "blocked").exists())  # the block is always lifted
+                self.assertFalse((self.stub / "counter").exists())  # and so is the counter
                 if failed.startswith(("capture_alive", "capture_read")):  # never read as zero packets
                     self.assertIn("fail no_egress_captured_down", lines)
 
@@ -701,7 +792,22 @@ class VMScripts(unittest.TestCase):
             self.assertIn(f"ok {n}_down", lines)  # a dead tunnel alone can't tell
             self.assertIn(f"fail {n}_ifdown", lines)
         self.assertIn("count captured_packets_ifdown 3", lines)
+        self.assertIn("fail no_host_egress_ifdown", lines)
         self.assertFalse((self.stub / "blocked").exists())
+
+    def test_gluetun_without_its_post_rules_leaks_open_flows_in_phase_b(self):
+        """X-gluetun-leak: what the VM saw. No new connection leaves, so every probe
+        passes; the capture and the host counter both catch the open flows."""
+        rc, lines, _ = self.run_script("leak-test.sh", NO_POST_RULES=1)
+        self.assertEqual(rc, 1)
+        for n in ("post_rules_ipv4", "post_rules_ipv6", "no_egress_captured_ifdown", "no_host_egress_ifdown"):
+            self.assertIn(f"fail {n}", lines)
+        for n in ("ipv4_blocked", "tcp_literal_blocked", "ipv6_blocked", "dns_blocked", "dns_direct_blocked"):
+            self.assertIn(f"ok {n}_ifdown", lines)
+        self.assertIn("ok no_egress_captured_down", lines)
+        for n, v in (("captured_packets", 3), ("captured_tcp", 2), ("captured_udp", 0), ("captured_icmp", 1),
+                     ("captured_other", 0), ("host_egress_packets", 3)):
+            self.assertIn(f"count {n}_ifdown {v}", lines)
 
     def test_probes_that_never_ran_never_pass(self):
         rc, lines, _ = self.run_script("leak-test.sh", PROBE_NOT_RUN=1)

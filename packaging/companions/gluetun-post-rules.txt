@@ -1,0 +1,23 @@
+# Lodestar's post-rules for gluetun (checked on v3.41.3). gluetun reads this
+# file at /iptables/post-rules.txt when it turns its firewall on, before the
+# tunnel starts. It runs each line that starts with "iptables " or
+# "ip6tables " and skips every other line.
+# Why: gluetun accepts packets of an open connection on any interface. When
+# the tunnel drops, a connection opened through it is routed out of your
+# normal network, and those packets pass. These rules stop that.
+# Every rule only marks or drops traffic; none lets anything new through.
+# They name the tunnel wg0: set VPN_INTERFACE=wg0 on gluetun. Its image
+# defaults to tun0, and with another name these rules do nothing.
+# 1. Mark every connection that sends a packet out of the tunnel: set one
+#    bit of its conntrack mark. CONNMARK changes no verdict.
+iptables -I OUTPUT 1 -o wg0 -j CONNMARK --set-xmark 0x800000/0x800000
+ip6tables -I OUTPUT 1 -o wg0 -j CONNMARK --set-xmark 0x800000/0x800000
+# 2. A marked connection never leaves by any other interface. Loopback,
+#    the Docker network, replies to the web UI and WireGuard's own UDP
+#    to the endpoint never use the tunnel, so they keep their mark clear.
+iptables -I OUTPUT 2 ! -o wg0 -m connmark --mark 0x800000/0x800000 -j DROP
+ip6tables -I OUTPUT 2 ! -o wg0 -m connmark --mark 0x800000/0x800000 -j DROP
+# 3. No "port unreachable" replies outside the tunnel: with the tunnel
+#    down, the endpoint's packets would draw them from the host's address.
+iptables -I OUTPUT 3 ! -o wg0 -p icmp --icmp-type port-unreachable -j DROP
+ip6tables -I OUTPUT 3 ! -o wg0 -p ipv6-icmp --icmpv6-type port-unreachable -j DROP
