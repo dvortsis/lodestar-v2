@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T14:19:12Z",
+  "updated_at": "2026-11-12T14:26:30Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7312,7 +7312,7 @@
     },
     {
       "id": "ext-consent-lift-prereqs",
-      "note": "Slice that lifts the External consent gate must: record real Wikidata fixtures; read Wikimedia API policy/ToS directly; owner adds Wikidata to Legal Notice \u00a72 in the same slice (owner wording).",
+      "note": "Slice that lifts the External consent gate must: record real Wikidata fixtures; read Wikimedia API policy/ToS directly; owner adds Wikidata to Legal Notice \u00a72 in the same slice (owner wording). Also: ENR-14 host wiring (services.rs identify_source + EgressEnforced, legal_facts.rs count 4->5) and X-identify-route-switch land in that slice (runner 2026-11-12, supersedes \"wiring in ENR-14\").",
       "at": "2026-11-12T13:29:37Z"
     },
     {
@@ -8464,7 +8464,7 @@
     }
   ],
   "heartbeat": "2026-11-12T12:38:43Z",
-  "updated": "2026-11-12T14:19:12Z",
+  "updated": "2026-11-12T14:26:30Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
