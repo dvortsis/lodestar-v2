@@ -214,6 +214,22 @@ fn write_event_note(
     super::process::run_bounded(cmd, "eventcreate", limit)
 }
 
+/// The refusal note's `eventcreate`, started as the update helper starts
+/// its own: from `System32` by absolute path with no console window
+/// ([`super::system32_command`]), and with every `LODESTAR_*` variable
+/// removed ([`crate::update::windows::helper::clean_env`]), so both writers
+/// spawn the same way (rv-728 N4). `None` without `%SystemRoot%`.
+#[cfg(windows)]
+fn event_note_command(kind: &str, id: u16, text: &str) -> Option<std::process::Command> {
+    let mut cmd = super::system32_command("eventcreate.exe")?;
+    crate::update::windows::helper::clean_env(&mut cmd);
+    let id = id.to_string();
+    cmd.args(["/T", kind, "/ID", id.as_str(), "/L", "APPLICATION"])
+        .args(["/SO", EVENT_SOURCE, "/D"])
+        .arg(text);
+    Some(cmd)
+}
+
 /// How the service's idle wait during a rollback ended.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Idle {
@@ -924,30 +940,17 @@ mod scm {
     }
 
     /// Writes [`super::event_log_text`] to the Windows Application event
-    /// log as [`super::EVENT_SOURCE`], through `eventcreate` from
-    /// `System32` as the update helper does (the workspace forbids
-    /// `unsafe`, so no `ReportEventW`). Best effort, and bounded
+    /// log as [`super::EVENT_SOURCE`], through `eventcreate` started as the
+    /// update helper starts its own ([`super::event_note_command`]; the
+    /// workspace forbids `unsafe`, so no `ReportEventW`). Best effort, and bounded
     /// ([`super::write_event_note`]): the temp log and the exit code
     /// already say it. The Legal Notice's section 5 names this write.
     fn event_log(refusal: super::Refusal, dir: &std::path::Path) {
-        use std::os::windows::process::CommandExt;
-        /// `CREATE_NO_WINDOW`.
-        const NO_WINDOW: u32 = 0x0800_0000;
-        let Some(root) = std::env::var_os("SystemRoot") else {
-            return;
-        };
         let (kind, id) = refusal.event();
-        let id = id.to_string();
-        let mut cmd = std::process::Command::new(
-            std::path::Path::new(&root)
-                .join("System32")
-                .join("eventcreate.exe"),
-        );
-        cmd.creation_flags(NO_WINDOW)
-            .args(["/T", kind, "/ID", id.as_str(), "/L", "APPLICATION"])
-            .args(["/SO", super::EVENT_SOURCE, "/D"])
-            .arg(super::event_log_text(refusal, dir));
-        let _ = super::write_event_note(cmd, crate::windows::process::EVENT_LOG_WAIT);
+        if let Some(cmd) = super::event_note_command(kind, id, &super::event_log_text(refusal, dir))
+        {
+            let _ = super::write_event_note(cmd, crate::windows::process::EVENT_LOG_WAIT);
+        }
     }
 
     /// Serialises status reports, so a progress tick never follows
@@ -1651,6 +1654,53 @@ mod tests {
             start.elapsed() < std::time::Duration::from_secs(10),
             "{:?}",
             start.elapsed()
+        );
+    }
+
+    /// The refusal note's `eventcreate` spawns as the update helper's does:
+    /// `System32`'s by absolute path, and without the relaunch token or any
+    /// other `LODESTAR_*` variable this process has (rv-728 N4).
+    #[cfg(windows)]
+    #[test]
+    fn the_event_note_spawns_as_the_helpers_does() {
+        let cmd = event_note_command("ERROR", 3, "text").unwrap();
+        let program = std::path::Path::new(cmd.get_program());
+        let root = std::env::var_os("SystemRoot").unwrap();
+        assert_eq!(
+            program,
+            std::path::Path::new(&root)
+                .join("System32")
+                .join("eventcreate.exe")
+        );
+        let removed: Vec<_> = cmd
+            .get_envs()
+            .filter(|(_, v)| v.is_none())
+            .map(|(k, _)| k.to_os_string())
+            .collect();
+        let marker = std::ffi::OsString::from(crate::windows::relaunch::MARKER);
+        assert!(removed.contains(&marker), "{removed:?}");
+        for (k, _) in std::env::vars_os() {
+            if k.to_string_lossy()
+                .to_ascii_uppercase()
+                .starts_with("LODESTAR_")
+            {
+                assert!(removed.contains(&k), "{k:?} reaches eventcreate");
+            }
+        }
+        assert!(
+            cmd.get_args().eq([
+                "/T",
+                "ERROR",
+                "/ID",
+                "3",
+                "/L",
+                "APPLICATION",
+                "/SO",
+                "Lodestar",
+                "/D",
+                "text"
+            ]
+            .map(std::ffi::OsStr::new))
         );
     }
 
