@@ -521,3 +521,65 @@ fn alerts_never_resolve_a_withheld_reference() {
     // the hidden and Adult ones included (left out when alerts are read).
     assert_eq!(alerts(&format!("sig:{}", sig_hex(sig_of(&infos, 0)))), 11);
 }
+
+/// While the backfill hasn't reached a `sig:<info hash>` reference, a
+/// saved search with it isn't run: it keeps its watermark, so a clone
+/// indexed meanwhile still alerts once the field is complete.
+#[test]
+fn an_alert_waits_for_the_backfill_and_loses_no_clone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = index_dir(tmp.path());
+    let (mut store, infos) = store(tmp.path());
+    drop(complete_index(tmp.path(), &mut store));
+    unpopulate(&dir, &mut store);
+    let index = SearchIndex::open(&dir).unwrap();
+    let percolate = |q: &str, watermark: i64| {
+        let node = parse(q).unwrap();
+        let due = [lodestar_search::Due {
+            id: 1,
+            watermark,
+            query: &node,
+            utc_offset: 0,
+            count_only: false,
+            stems: false,
+            stoppable: false,
+        }];
+        let limits = lodestar_search::PercolateLimits {
+            keep: 1000,
+            max_range: 1000,
+        };
+        let cancel = lodestar_search::CancelToken::new();
+        lodestar_search::percolate(&index, &due, i64::MAX, limits, NOW, &cancel)
+            .unwrap()
+            .matched
+    };
+    // Torrent 27 (id 28): payload 0, past where the walk will be.
+    let late = format!("sig:{}", hash(&infos, 27));
+    let bare = format!("sig:{}", sig_hex(sig_of(&infos, 0)));
+    let mut w = index.writer(HEAP).unwrap();
+    assert_eq!(w.catch_up_counted(&mut store, 12).unwrap().backfilled, 12);
+    w.commit().unwrap();
+    assert!(matches!(
+        index.availability("payload_sig"),
+        Availability::Backfilling { .. }
+    ));
+    // Mid-backfill, watermark 1: not run, so the watermark stays.
+    assert!(percolate(&late, 1).is_empty(), "not run while backfilling");
+    // A bare signature looks nothing up and runs (ids past the walk lack
+    // it here only because this test unpopulated them).
+    let ran = percolate(&bare, 1);
+    assert_eq!(ran.len(), 1);
+    assert_eq!(ran[0].through, N as i64);
+    while w.catch_up(&mut store, 10).unwrap() > 0 {
+        w.commit().unwrap();
+    }
+    w.commit().unwrap();
+    assert_eq!(index.availability("payload_sig"), Availability::Ready);
+    // From the same watermark: every visible clone after it, 28 included.
+    let ran = percolate(&late, 1);
+    assert_eq!(ran.len(), 1);
+    assert_eq!(ran[0].through, N as i64);
+    assert!(ran[0].torrent_ids.contains(&28), "{:?}", ran[0].torrent_ids);
+    // Ids 4, 7, …, 28 (id 1 is hidden and below the watermark anyway).
+    assert_eq!(ran[0].count, 9);
+}

@@ -41,7 +41,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tantivy::collector::{Collector, SegmentCollector};
-use tantivy::query::{BooleanQuery, EnableScoring, Occur, Query, RangeQuery};
+use tantivy::query::{BooleanQuery, EmptyQuery, EnableScoring, Occur, Query, RangeQuery};
 use tantivy::{DocId, Score, Searcher, SegmentOrdinal, SegmentReader, Term};
 
 use crate::cancel::{CHECK_EVERY, CancelToken};
@@ -149,8 +149,21 @@ pub fn percolate(
         // search has none, so a withheld reference's clones would alert
         // where an unknown hash alerts nothing: it runs with the default
         // visibility instead (GS-0). Live queries carry their own.
+        //
+        // Until `payload_sig` is complete in this snapshot, the reference
+        // may not carry its signature yet and would match only itself; the
+        // watermark would then move past clones that never alert. So such
+        // a search isn't run: it keeps its watermark and runs once the
+        // backfill is done. A bare signature looks nothing up and runs:
+        // the new torrents it covers are indexed with the field.
         let guarded;
         let query = if !d.count_only && d.query.mentions_same_payload() {
+            let complete = index
+                .prefilter("payload_sig", &searcher, Box::new(EmptyQuery))
+                .is_some();
+            if !complete {
+                continue;
+            }
             guarded = d.query.clone().with_default_visibility();
             &guarded
         } else {

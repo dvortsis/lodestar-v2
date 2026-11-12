@@ -1070,7 +1070,7 @@ fn compile_opt(node: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
             )),
             _ => Box::new(EmptyQuery),
         },
-        Node::Sig { sig } => match (hex8(sig), hex20(sig)) {
+        Node::Sig { sig } => match (hex16(sig), hex20(sig)) {
             (Some(sig), _) => sig_term(f.payload_sig, sig),
             (None, Some(hash)) if f.hash != ABSENT => Box::new(SamePayload {
                 hash,
@@ -1366,7 +1366,7 @@ pub(crate) fn regex_escape(s: &str) -> String {
 }
 
 /// [`crate::query::SIG_DIGITS`] hex digits as the signature.
-fn hex8(s: &str) -> Option<u64> {
+fn hex16(s: &str) -> Option<u64> {
     if s.len() != crate::query::SIG_DIGITS || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
