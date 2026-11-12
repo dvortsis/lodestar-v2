@@ -179,19 +179,19 @@ impl CompanionsApi for Fake {
                 "flaresolverr" => return Err(CompanionsError::Refused("busy")),
                 _ => return Err(CompanionsError::Unknown),
             }
-            let not_applied = match &self.restart {
+            let not_restarted = match &self.restart {
                 Ok(()) => None,
                 Err(CompanionsError::Refused(code)) => Some((*code).to_owned()),
                 Err(_) => Some("restart_failed".to_owned()),
             };
             Ok(CompanionEgressChanged {
-                applied: not_applied.is_none(),
                 egress: CompanionEgress {
                     from: EgressFrom::Saved,
                     setting: Some(egress),
                 },
                 id,
-                not_applied,
+                restarting: not_restarted.is_none(),
+                not_restarted,
             })
         })
     }
@@ -343,10 +343,10 @@ async fn a_valid_route_is_passed_on_and_its_restart_reported() {
     assert_eq!(
         r.body,
         json!({
-            "applied": true,
             "egress": { "from": "saved", "setting": { "route": "socks5", "proxy": "10.8.0.1:1080", "dns": "proxy" } },
             "id": "qbittorrent",
-            "not_applied": null,
+            "not_restarted": null,
+            "restarting": true,
         })
     );
     let r = put(
@@ -356,7 +356,10 @@ async fn a_valid_route_is_passed_on_and_its_restart_reported() {
         with_password(json!({ "route": "direct" })),
     )
     .await;
-    assert_eq!((r.status, r.body["applied"].as_bool()), (200, Some(true)));
+    assert_eq!(
+        (r.status, r.body["restarting"].as_bool()),
+        (200, Some(true))
+    );
     assert_eq!(
         f.fake.calls(),
         vec![
@@ -388,8 +391,8 @@ async fn a_failed_restart_is_saved_but_not_applied() {
         )
         .await;
         assert_eq!(r.status, 200, "{}", r.text);
-        assert_eq!(r.body["applied"], false, "{}", r.text);
-        assert_eq!(r.body["not_applied"], code, "{}", r.text);
+        assert_eq!(r.body["restarting"], false, "{}", r.text);
+        assert_eq!(r.body["not_restarted"], code, "{}", r.text);
         assert_eq!(r.body["egress"]["setting"]["route"], "direct");
         assert_eq!(f.fake.calls().len(), 1);
     }
@@ -523,7 +526,7 @@ async fn the_binarys_refusals_pass_through() {
     ] {
         let r = put(&f, &cookie, path, direct()).await;
         assert_eq!((r.status, r.code()), (status, code), "{path}: {}", r.text);
-        assert!(r.body.get("applied").is_none(), "{path}: {}", r.text);
+        assert!(r.body.get("restarting").is_none(), "{path}: {}", r.text);
     }
     // An id that isn't an id is unknown before the binary is asked.
     let before = f.fake.calls().len();

@@ -15,7 +15,7 @@
 //! - `PUT /companions/{id}/egress`: its route (Q18), checked as a source's
 //!   route is and confirmed with the admin password, as a source's route
 //!   change is. Saved, then the companion is restarted on it; the answer
-//!   says whether that restart began, never that it did when it didn't.
+//!   says whether that restart began (`restarting`), never more.
 //! - `POST /companions/{id}/template`: CMP-7's compose service or Unraid
 //!   template, from checked inputs. Nothing is stored.
 //! - `POST /companions/{id}/credentials/{field}/reveal`: one stored
@@ -133,7 +133,7 @@ pub trait CompanionsApi: Send + Sync + std::fmt::Debug {
     /// is, then restarts it on it. Refused, with nothing saved, for an
     /// unknown id (`Unknown`), one that takes no route (`takes_no_route`),
     /// one Lodestar didn't install (`not_installed`) and one another
-    /// operation holds (`busy`). Once saved it's `Ok`: `applied` says
+    /// operation holds (`busy`). Once saved it's `Ok`: `restarting` says
     /// whether the restart began. Off by default: a binary that doesn't
     /// implement it refuses `not_wired`, and nothing is saved.
     fn set_egress(
@@ -497,9 +497,10 @@ pub(crate) async fn restart_companion(
 /// `interface` and `bind_address` routes, whose lookups would leave outside
 /// them, are `409 route_unavailable`), and a SOCKS5 route's kill switch is
 /// always on. Like a source's route change it needs the admin `password`
-/// (`428 confirm_required`). `200` once saved: `applied` says whether the
-/// restart began; when it didn't, `not_applied` says why, and the route is
-/// used at its next start.
+/// (`428 confirm_required`). `200` once saved: `restarting` says whether
+/// its restart on the new route began (its row's `health` shows when it's
+/// back); when it didn't, `not_restarted` says why, and the route is used
+/// at its next start.
 #[utoipa::path(
     operation_id = "setCompanionEgress",
     put,

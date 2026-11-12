@@ -1040,16 +1040,28 @@ impl Service {
             Err(err) => return Err(CompanionsError::Internal(err.code())),
         };
         let installed = present.as_ref().and_then(|p| p.version.clone());
-        let runs = if self.installed(&e.id)? {
+        // A journal that can't be read isn't Lodestar's install, for this.
+        let ours = self.installed(&e.id).unwrap_or(false);
+        let runs = if ours {
             CompanionRuns::Lodestar
-        } else if self.added(&e.id)? {
+        } else if self.added(&e.id)? || present.is_some() {
+            // Added, or detected running: someone else runs it.
             CompanionRuns::Yours
         } else if self.host.in_container {
             CompanionRuns::OwnContainer
-        } else if refusal.as_deref() == Some(Refusal::GuidedOnly.code()) {
-            CompanionRuns::Yours
         } else {
-            CompanionRuns::Lodestar
+            match refusal.as_deref() {
+                None => CompanionRuns::Lodestar,
+                Some(code) if code == Refusal::GuidedOnly.code() => CompanionRuns::Yours,
+                Some(_) => CompanionRuns::NotHere,
+            }
+        };
+        // Its route only where Lodestar runs it, or would: elsewhere its
+        // route is whatever runs it, and this setting changes nothing.
+        let egress = if runs == CompanionRuns::Lodestar {
+            self.egress(&e.id)?
+        } else {
+            None
         };
         Ok(Companion {
             available,
@@ -1062,7 +1074,7 @@ impl Service {
                 .as_ref()
                 .and(present.as_ref())
                 .map(|p| health(p.health)),
-            egress: self.egress(&e.id)?,
+            egress,
             id: e.id.as_str().to_owned(),
             installed: installed.map(|v| v.as_str().to_owned()),
             licence: e.licence.spdx.clone(),
@@ -1106,18 +1118,40 @@ impl Service {
         )
     }
 
-    /// Saves `setting` as its own route, one committed write. Blocking.
+    /// Saves `setting` as its own route, one committed write, and returns
+    /// the row it replaced. Blocking.
     fn save_egress(
         &self,
         id: &CompanionId,
         setting: &EgressSetting,
+    ) -> Result<Option<String>, CompanionsError> {
+        let store = || CompanionsError::Internal("store");
+        let mut s = self.rows.0.lock().map_err(|_| store())?;
+        let key = egress_key(id);
+        let before = s.setting_text(&key).map_err(|_| store())?;
+        s.update_settings_text(&[(&key, &setting.encode())], &[])
+            .map_err(|_| store())?;
+        Ok(before)
+    }
+
+    /// Puts back the row [`Service::save_egress`] replaced (`None`: there
+    /// was none). Blocking.
+    fn restore_egress(
+        &self,
+        id: &CompanionId,
+        before: Option<&str>,
     ) -> Result<(), CompanionsError> {
-        self.rows
+        let key = egress_key(id);
+        let mut s = self
+            .rows
             .0
             .lock()
-            .map_err(|_| CompanionsError::Internal("store"))?
-            .update_settings_text(&[(&egress_key(id), &setting.encode())], &[])
-            .map_err(|_| CompanionsError::Internal("store"))
+            .map_err(|_| CompanionsError::Internal("store"))?;
+        match before {
+            Some(text) => s.update_settings_text(&[(&key, text)], &[]),
+            None => s.update_settings_text(&[], &[&key]),
+        }
+        .map_err(|_| CompanionsError::Internal("store"))
     }
 
     /// The secrets file credentials are sealed with (CMP-5g-2's paste).
@@ -1442,35 +1476,47 @@ impl CompanionsApi for Service {
                 field: Some("egress.proxy"),
                 code: "invalid_egress",
             };
-            let setting = crate::ops::egress_back(egress).map_err(|_| bad())?;
+            let setting = crate::ops::egress_back(egress).map_err(|e| match e {
+                lodestar_api::ops::OpsError::RouteUnavailable => {
+                    CompanionsError::Refused("route_unavailable")
+                }
+                _ => bad(),
+            })?;
             if EgressSetting::decode(&setting.encode()).as_ref() != Some(&setting) {
                 return Err(bad());
             }
-            self.ours(e).await?;
             // Held until the restart has claimed it (or was refused), so a
             // second change sees that restart as `busy` and saves nothing.
             let _one = self.routing.lock().await;
             if self.live.busy(&e.id) {
                 return Err(CompanionsError::Refused("busy"));
             }
+            self.ours(e).await?;
             let saved = setting.clone();
-            self.off(move |s| s.save_egress(&e.id, &saved)).await?;
-            // Saved: from here the answer is `Ok`, and says whether the
-            // restart that applies it began. It's never reported applied
-            // when it wasn't; otherwise it's used at the next start.
-            let not_applied = match self.live.restart(&e.id).await {
+            let before = self.off(move |s| s.save_egress(&e.id, &saved)).await?;
+            // Saved: from here the answer says whether the restart that
+            // applies it began. When it didn't, it's used at the next start.
+            let not_restarted = match self.live.restart(&e.id).await {
                 Ok(()) => None,
+                // Removed since the check above: its route goes back to
+                // what it was, and the change is refused as if it had come
+                // after the removal.
+                Err(CompanionsError::Refused("not_installed")) => {
+                    self.off(move |s| s.restore_egress(&e.id, before.as_deref()))
+                        .await?;
+                    return Err(CompanionsError::Refused("not_installed"));
+                }
                 Err(CompanionsError::Refused(code)) => Some(code),
                 Err(_) => Some("restart_failed"),
             };
             Ok(CompanionEgressChanged {
-                applied: not_applied.is_none(),
                 egress: CompanionEgress {
                     from: EgressFrom::Saved,
                     setting: Some(crate::ops::egress_setting(&setting)),
                 },
                 id: e.id.as_str().to_owned(),
-                not_applied: not_applied.map(str::to_owned),
+                not_restarted: not_restarted.map(str::to_owned),
+                restarting: not_restarted.is_none(),
             })
         })
     }
@@ -2788,6 +2834,10 @@ mod tests {
         answer: Result<(), CompanionsError>,
         busy: std::sync::atomic::AtomicBool,
         seen: Mutex<Vec<Option<String>>>,
+        /// A restart that pauses before it claims the companion: says so
+        /// on the first, waits for the second, then holds it (`busy`), as
+        /// a real one holds its slot until it ends.
+        park: Option<Arc<(tokio::sync::Notify, tokio::sync::Notify)>>,
     }
 
     impl Restarts {
@@ -2797,6 +2847,7 @@ mod tests {
                 answer,
                 busy: Default::default(),
                 seen: Mutex::default(),
+                park: None,
             })
         }
         fn seen(&self) -> Vec<Option<String>> {
@@ -2811,7 +2862,14 @@ mod tests {
         ) -> BoxFuture<'a, Result<(), CompanionsError>> {
             let row = egress_row(&self.store, &egress_key(id));
             self.seen.lock().unwrap().push(row);
-            Box::pin(async { self.answer.clone() })
+            Box::pin(async {
+                if let Some(p) = &self.park {
+                    p.0.notify_one();
+                    p.1.notified().await;
+                    self.busy.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+                self.answer.clone()
+            })
         }
         fn logs(&self, _: &CompanionId) -> Result<Vec<String>, CompanionsError> {
             Ok(Vec::new())
@@ -2882,7 +2940,7 @@ mod tests {
                 .set_egress("qbittorrent".into(), api_route(sent.clone()))
                 .await
                 .unwrap();
-            assert!(got.applied && got.not_applied.is_none(), "{sent}");
+            assert!(got.restarting && got.not_restarted.is_none(), "{sent}");
             assert_eq!(got.egress.from, EgressFrom::Saved);
             assert_eq!(
                 serde_json::to_value(&got.egress.setting).unwrap(),
@@ -2942,7 +3000,6 @@ mod tests {
         );
         // A route the API would have refused never reaches the store.
         for bad in [
-            serde_json::json!({ "route": "interface" }),
             serde_json::json!({ "route": "socks5" }),
             serde_json::json!({ "route": "socks5", "proxy": "0.0.0.0:1080" }),
         ] {
@@ -2980,8 +3037,8 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            assert!(!got.applied, "{code}");
-            assert_eq!(got.not_applied.as_deref(), Some(code));
+            assert!(!got.restarting, "{code}");
+            assert_eq!(got.not_restarted.as_deref(), Some(code));
             assert_eq!(live.seen().len(), 1);
             assert_eq!(
                 egress_row(&s.rows.0, "companions.qbittorrent.egress").as_deref(),
@@ -2999,6 +3056,8 @@ mod tests {
     async fn get_shows_the_route_its_start_would_use() {
         let dir = tempfile::tempdir().unwrap();
         let s = service(dir.path(), pinned(), NATIVE, Arc::new(Unwired));
+        installed(&s, dir.path(), "qbittorrent").await;
+        installed(&s, dir.path(), "prowlarr").await;
         let st = s.rows.0.clone();
         set_row(&st, "sources.egress.prowlarr", "socks5 10.8.0.1 1080 auto");
         let route = |id: &str| s.get(id.into());
@@ -3041,7 +3100,9 @@ mod tests {
             let s = s.clone_parts();
             async move { s.get(id.into()).await.unwrap().runs }
         };
-        assert_eq!(runs(&s, "qbittorrent").await, CompanionRuns::Lodestar);
+        // Nothing in this catalogue is pinned: none can be installed here.
+        assert_eq!(runs(&s, "qbittorrent").await, CompanionRuns::NotHere);
+        assert_eq!(runs(&s, "gluetun").await, CompanionRuns::NotHere);
         installed(&s, dir.path(), "qbittorrent").await;
         assert_eq!(runs(&s, "qbittorrent").await, CompanionRuns::Lodestar);
         let docker = Service {
@@ -3060,5 +3121,155 @@ mod tests {
         );
         assert_eq!(runs(&s, "prowlarr").await, CompanionRuns::Yours);
         assert_eq!(runs(&docker, "prowlarr").await, CompanionRuns::Yours);
+    }
+
+    /// Two route changes at once: the second waits for the first's
+    /// restart to claim the companion, then sees it as `busy` and saves
+    /// nothing, so the route that restart reads is the one it reported.
+    #[tokio::test]
+    async fn a_second_route_change_waits_and_is_refused_busy() {
+        let dir = tempfile::tempdir().unwrap();
+        let (s, _) = routed(dir.path(), Ok(())).await;
+        let park = Arc::new((tokio::sync::Notify::new(), tokio::sync::Notify::new()));
+        let live = Arc::new(Restarts {
+            park: Some(park.clone()),
+            ..Arc::into_inner(Restarts::new(&s, Ok(()))).unwrap()
+        });
+        let s = Arc::new(Service {
+            live: live.clone(),
+            ..s.clone_parts()
+        });
+        let first = tokio::spawn({
+            let s = s.clone();
+            async move {
+                s.set_egress(
+                    "qbittorrent".into(),
+                    api_route(serde_json::json!({ "route": "socks5", "proxy": "10.8.0.1:1080" })),
+                )
+                .await
+            }
+        });
+        let deadline = std::time::Duration::from_secs(10);
+        tokio::time::timeout(deadline, park.0.notified())
+            .await
+            .expect("the first change never reached its restart");
+        let second = tokio::spawn({
+            let s = s.clone();
+            async move {
+                s.set_egress(
+                    "qbittorrent".into(),
+                    api_route(serde_json::json!({ "route": "direct" })),
+                )
+                .await
+            }
+        });
+        // The second is waiting for the first, whatever it has checked.
+        assert!(!second.is_finished());
+        park.1.notify_one();
+        let first = tokio::time::timeout(deadline, first)
+            .await
+            .expect("the first change didn't finish")
+            .unwrap()
+            .unwrap();
+        assert!(first.restarting);
+        let second = tokio::time::timeout(deadline, second)
+            .await
+            .expect("the second change didn't finish")
+            .unwrap();
+        assert_eq!(second, Err(CompanionsError::Refused("busy")));
+        assert_eq!(
+            egress_row(&s.rows.0, "companions.qbittorrent.egress").as_deref(),
+            Some("socks5 10.8.0.1 1080 auto")
+        );
+        assert_eq!(live.seen().len(), 1);
+    }
+
+    /// Removed between the check and the restart: the route goes back to
+    /// what it was, and the change is refused `not_installed`.
+    #[tokio::test]
+    async fn a_route_change_raced_by_a_removal_is_undone() {
+        let dir = tempfile::tempdir().unwrap();
+        let (s, live) = routed(dir.path(), Err(CompanionsError::Refused("not_installed"))).await;
+        let key = "companions.qbittorrent.egress";
+        let direct = || api_route(serde_json::json!({ "route": "direct" }));
+        assert_eq!(
+            s.set_egress("qbittorrent".into(), direct()).await,
+            Err(CompanionsError::Refused("not_installed"))
+        );
+        assert_eq!(egress_row(&s.rows.0, key), None);
+        set_row(&s.rows.0, key, "socks5 10.8.0.2 1080 local");
+        assert_eq!(
+            s.set_egress("qbittorrent".into(), direct()).await,
+            Err(CompanionsError::Refused("not_installed"))
+        );
+        assert_eq!(
+            egress_row(&s.rows.0, key).as_deref(),
+            Some("socks5 10.8.0.2 1080 local")
+        );
+        // Each was saved before its restart was asked.
+        assert_eq!(
+            live.seen(),
+            vec![Some("direct".into()), Some("direct".into())]
+        );
+    }
+
+    /// The route is shown only where Lodestar runs the companion: one you
+    /// added, one found running and every one inside a container show
+    /// none, since whatever runs them sets their route. One found running
+    /// is yours.
+    #[tokio::test]
+    async fn the_route_shows_only_where_lodestar_runs_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = service(dir.path(), pinned(), NATIVE, Arc::new(Unwired));
+        installed(&s, dir.path(), "qbittorrent").await;
+        installed(&s, dir.path(), "prowlarr").await;
+        let get = |s: &Service, id: &'static str| {
+            let s = s.clone_parts();
+            async move { s.get(id.into()).await.unwrap() }
+        };
+        assert!(get(&s, "prowlarr").await.egress.is_some());
+        let docker = Service {
+            host: Host {
+                in_container: true,
+                ..NATIVE
+            },
+            ..s.clone_parts()
+        };
+        let c = get(&docker, "prowlarr").await;
+        assert_eq!((c.runs, c.egress), (CompanionRuns::OwnContainer, None));
+        // Published, then its journal goes: found running, not Lodestar's.
+        s.manager.recover().await;
+        std::fs::remove_file(dir.path().join("companions/prowlarr/state.json")).unwrap();
+        let c = get(&s, "prowlarr").await;
+        assert_eq!((c.runs, c.egress), (CompanionRuns::Yours, None));
+        // Added by you.
+        let qbt = CompanionId::parse("qbittorrent").unwrap();
+        std::fs::remove_file(dir.path().join("companions/qbittorrent/state.json")).unwrap();
+        set_row(
+            &s.rows.0,
+            &lodestar_companions::guided::origin_key(&qbt),
+            "added",
+        );
+        let c = get(&s, "qbittorrent").await;
+        assert_eq!((c.runs, c.egress), (CompanionRuns::Yours, None));
+    }
+
+    /// Past the API's check, the binary refuses the routes it doesn't
+    /// offer with the API's own code.
+    #[tokio::test]
+    async fn an_unoffered_route_is_refused_as_the_api_refuses_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (s, live) = routed(dir.path(), Ok(())).await;
+        for route in ["interface", "bind_address"] {
+            assert_eq!(
+                s.set_egress(
+                    "qbittorrent".into(),
+                    api_route(serde_json::json!({ "route": route }))
+                )
+                .await,
+                Err(CompanionsError::Refused("route_unavailable"))
+            );
+        }
+        assert!(live.seen().is_empty());
     }
 }

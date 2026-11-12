@@ -1358,7 +1358,7 @@
         "tags": [
           "companions"
         ],
-        "summary": "Sets its route, then restarts it on the new route. The route is checked\nas a source's is (`direct`, or `socks5` with a usable `host:port`; the\n`interface` and `bind_address` routes, whose lookups would leave outside\nthem, are `409 route_unavailable`), and a SOCKS5 route's kill switch is\nalways on. Like a source's route change it needs the admin `password`\n(`428 confirm_required`). `200` once saved: `applied` says whether the\nrestart began; when it didn't, `not_applied` says why, and the route is\nused at its next start.",
+        "summary": "Sets its route, then restarts it on the new route. The route is checked\nas a source's is (`direct`, or `socks5` with a usable `host:port`; the\n`interface` and `bind_address` routes, whose lookups would leave outside\nthem, are `409 route_unavailable`), and a SOCKS5 route's kill switch is\nalways on. Like a source's route change it needs the admin `password`\n(`428 confirm_required`). `200` once saved: `restarting` says whether\nits restart on the new route began (its row's `health` shows when it's\nback); when it didn't, `not_restarted` says why, and the route is used\nat its next start.",
         "operationId": "setCompanionEgress",
         "parameters": [
           {
@@ -12871,7 +12871,7 @@
               },
               {
                 "$ref": "#/components/schemas/CompanionEgress",
-                "description": "Its route (Q18), read from its saved row as its start reads it;\nnull for a companion that takes no route (gluetun). Read-only\nhere: `PUT /companions/{id}/egress` changes it."
+                "description": "Its route (Q18), read from its saved row as its start reads it.\nNull unless `runs` is `lodestar` (elsewhere whatever runs it sets\nits route), and for a companion that takes no route (gluetun).\nRead-only here: `PUT /companions/{id}/egress` changes it."
               }
             ]
           },
@@ -12930,7 +12930,8 @@
                 "enum": [
                   "lodestar",
                   "own_container",
-                  "yours"
+                  "yours",
+                  "not_here"
                 ]
               }
             ],
@@ -13009,18 +13010,14 @@
       },
       "CompanionEgressChanged": {
         "type": "object",
-        "description": "The route was saved. `applied` says whether the companion's restart on\nit has begun; when it hasn't, it's used at the companion's next start.",
+        "description": "The route was saved. `restarting` says whether the companion's restart\non it has begun; when it hasn't, the route is saved but not applied yet,\nand it's used at the companion's next start.",
         "required": [
-          "applied",
           "egress",
           "id",
-          "not_applied"
+          "not_restarted",
+          "restarting"
         ],
         "properties": {
-          "applied": {
-            "type": "boolean",
-            "description": "True once its restart on the new route has begun (its row shows\nwhen it's back). False: saved, but not applied yet."
-          },
           "egress": {
             "$ref": "#/components/schemas/CompanionEgress",
             "description": "The route as saved now."
@@ -13028,12 +13025,16 @@
           "id": {
             "type": "string"
           },
-          "not_applied": {
+          "not_restarted": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Why it wasn't applied, as a stable code (`not_wired`, `busy`,\n`restart_failed`, …); null when it was."
+            "description": "Why it isn't restarting on the new route, as a stable code\n(`not_wired`, `busy`, `restart_failed`, …); null when it is."
+          },
+          "restarting": {
+            "type": "boolean",
+            "description": "True once its restart on the new route has begun. That isn't yet\nrunning on it: the companion's row (its `health`) shows when it's\nback, as after `POST …/restart`. False: saved, not applied yet."
           }
         }
       },

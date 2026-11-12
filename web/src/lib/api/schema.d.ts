@@ -408,9 +408,10 @@ export interface paths {
          *     `interface` and `bind_address` routes, whose lookups would leave outside
          *     them, are `409 route_unavailable`), and a SOCKS5 route's kill switch is
          *     always on. Like a source's route change it needs the admin `password`
-         *     (`428 confirm_required`). `200` once saved: `applied` says whether the
-         *     restart began; when it didn't, `not_applied` says why, and the route is
-         *     used at its next start.
+         *     (`428 confirm_required`). `200` once saved: `restarting` says whether
+         *     its restart on the new route began (its row's `health` shows when it's
+         *     back); when it didn't, `not_restarted` says why, and the route is used
+         *     at its next start.
          */
         put: operations["setCompanionEgress"];
         post?: never;
@@ -4027,7 +4028,7 @@ export interface components {
              */
             refusal: string | null;
             /** @description Where it runs, or would run if it were installed here. */
-            runs: "lodestar" | "own_container" | "yours";
+            runs: "lodestar" | "own_container" | "yours" | "not_here";
             /** @description The templates it offers. */
             templates: ("compose" | "unraid")[];
         };
@@ -4055,23 +4056,25 @@ export interface components {
             setting: null | components["schemas"]["EgressSetting"];
         };
         /**
-         * @description The route was saved. `applied` says whether the companion's restart on
-         *     it has begun; when it hasn't, it's used at the companion's next start.
+         * @description The route was saved. `restarting` says whether the companion's restart
+         *     on it has begun; when it hasn't, the route is saved but not applied yet,
+         *     and it's used at the companion's next start.
          */
         CompanionEgressChanged: {
-            /**
-             * @description True once its restart on the new route has begun (its row shows
-             *     when it's back). False: saved, but not applied yet.
-             */
-            applied: boolean;
             /** @description The route as saved now. */
             egress: components["schemas"]["CompanionEgress"];
             id: string;
             /**
-             * @description Why it wasn't applied, as a stable code (`not_wired`, `busy`,
-             *     `restart_failed`, …); null when it was.
+             * @description Why it isn't restarting on the new route, as a stable code
+             *     (`not_wired`, `busy`, `restart_failed`, …); null when it is.
              */
-            not_applied: string | null;
+            not_restarted: string | null;
+            /**
+             * @description True once its restart on the new route has begun. That isn't yet
+             *     running on it: the companion's row (its `health`) shows when it's
+             *     back, as after `POST …/restart`. False: saved, not applied yet.
+             */
+            restarting: boolean;
         };
         /**
          * @description `PUT /companions/{id}/egress`: the new route, and the admin password

@@ -3,21 +3,23 @@
 A companion's route in the API, and `PUT /companions/{id}/egress`, which changes the route and restarts the companion (architecture §18.10, §18.7; plan `docs/plan/2026-11-06-v06-companions.md` Q18). This closes the gap CMP-9a found (`2026-11-11-CMP-9a.md`, "Egress"). None of these decisions loosens an owner decision or weakens a security decision. The runner flags the refinements to the owner (§2.19).
 
 - **`Companion` gains `egress` and `runs`. Both are read-only in GET.**
-  - `egress` is null for a companion that takes no route (gluetun). Otherwise it is `{from, setting}`, where `setting` is the source route's own type and names (`EgressSetting`: `route`, `proxy`, `dns`), read the way `egress_setting` reads it at start:
+  - `egress` is null for a companion that takes no route (gluetun), and wherever `runs` isn't `lodestar`: in a container, or for one you added or Lodestar found running, whatever runs it sets its route, so this setting would change nothing. Otherwise it is `{from, setting}`, where `setting` is the source route's own type and names (`EgressSetting`: `route`, `proxy`, `dns`), read the way `egress_setting` reads it at start:
     - the companion's own row (`from: saved`);
     - otherwise the route of the source it serves (`from: source`), which it copies as its own at its next start.
   - GET writes nothing: the read is the same function the start path uses (`egress_row`), minus the copy.
   - A row that doesn't decode shows `setting: null`, never direct, because the route stays down.
-- **`runs` is CMP-9a's "where it runs", as a value the server supplies.** The UI will no longer need its fixed sentence. It takes one of three values:
+- **`runs` is CMP-9a's "where it runs", as a value the server supplies.** The UI will no longer need its fixed sentence. It takes one of four values:
   - `lodestar`: on this computer, started and stopped by Lodestar. That means Lodestar installed it, or an install here would put it there.
   - `own_container`: Lodestar runs in a container, so the companion comes from its template.
-  - `yours`: you added it, or its own installer is offered for you to run (`guided_only`).
+  - `yours`: you added it, Lodestar found it running (it's in the snapshot without Lodestar's install journal), or its own installer is offered for you to run (`guided_only`).
+  - `not_here`: none of those, and Lodestar can't install it here (`refusal` says why: `awaiting_pin`, `no_build`, `unsupported_platform`, …).
+  - A journal that can't be read counts as "not Lodestar's" for `runs`, so one damaged `state.json` doesn't fail the whole list.
 - **The PUT validates the route exactly as a source's route is validated.** The egress part of `check_settings` became `ops::check_egress`, shared by both:
   - `interface` and `bind_address` are refused with `409 route_unavailable`, because their lookups would leave outside them;
   - a direct route with a proxy or a DNS choice is `400 invalid_egress`;
   - a SOCKS5 proxy must pass `parse_proxy`, which refuses the unspecified address, multicast, broadcast, disguised numbers and port 0;
   - the body is `deny_unknown_fields`, so no field can turn a SOCKS5 route's kill switch off or name a fallback (`422 bad_body`).
-  - The binary converts the route with the sources' own `egress_back` and saves it only if it reads back as itself, so a start never finds it unreadable.
+  - The binary converts the route with the sources' own `egress_back` and saves it only if it reads back as itself, so a start never finds it unreadable. Past the API, it refuses `interface` and `bind_address` with the API's own `route_unavailable`.
 - **Refinement: a route change needs the admin password.** No other companion write asks for it (install, remove, restart). A source's route change always does, though (`patch_source`: "the route is what keeps a source's traffic on the VPN"), and the brief asks for the same rules as the sources' route. So the password is checked first, before the id or the route, as the reveal does it: `428 confirm_required`, `401 bad_password`, the shared rate limit. Same session guard and same-origin JSON as every companion write.
 - **Refusals happen before anything is saved:**
   - `404 unknown_companion`;
@@ -25,10 +27,18 @@ A companion's route in the API, and `PUT /companions/{id}/egress`, which changes
   - `409 not_installed` (any companion Lodestar didn't install, and every companion inside a container);
   - `409 busy`.
 - **`busy` before saving.** A running restart holds only the manager's in-memory slot, not the journal. So the manager gained `Manager::busy(&id)`, a read of that slot list (`crates/companions/src/manager.rs`, outside the brief's owns; named to the runner). A route change holds a lock of its own from that check until its restart has claimed the companion. A second change therefore sees that restart and is refused `busy` with nothing saved, and the route a started restart reads is the one its answer reports.
-- **Once the route is saved, the answer is `200` with `applied`.**
-  - `applied: true` means the restart through the existing path (`Live::restart`, which is `Manager::restart`) has begun.
-  - Otherwise `applied: false`, and `not_applied` carries the restart's refusal code (`not_wired`, `busy` if another operation won the race after the check) or `restart_failed`. The route stays saved and is used at the next start.
-  - It never reports applied when the restart didn't begin. "Began" is the same promise `POST …/restart`'s `202` makes; the row's health shows when the companion is back.
+- **Refinement: once the route is saved, the answer is `200` with `restarting`, not `applied`.** The brief asks for a response that says when the route was saved but not applied, and never claims applied when it wasn't. The manager's restart answers once it has begun, and finishing can take up to `LIVE_DEADLINE` (5 minutes: the health wait and configuration). Holding the request that long isn't a good answer, and `applied: true` at "began" would overclaim. So:
+  - `restarting: true` means the restart through the existing path (`Live::restart`, which is `Manager::restart`) has claimed the companion and begun on the new route. It is the same promise `POST …/restart`'s `202` makes; the row's `health` shows when the companion is back (CMP-9a's screen already polls it after a restart).
+  - `restarting: false` means saved but not applied yet: `not_restarted` carries the restart's refusal code (`not_wired`, `busy` if another operation won the race after the check) or `restart_failed`, and the route is used at the next start.
+  - Neither answer claims the companion runs on the new route.
+- **A removal that races the change undoes it.** The install check runs inside the lock, after the busy check. If a removal still slips in before the restart, the restart answers `not_installed`, the route row goes back to what it was (or is deleted if there was none), and the change is refused `409 not_installed`, as if it had come after the removal.
+- **Shared edits outside the brief's `owns`**, each needed for the brief's items and named to the runner before they were made:
+  - `crates/api/src/dto/companions.rs`: `Companion` and the new request and response types live there;
+  - `crates/api/src/ops.rs`: `check_egress`, the sources' egress check moved into a function of its own (no behaviour change);
+  - `crates/lodestar/src/ops.rs`: `egress_setting` and `egress_back` made `pub(crate)`;
+  - `crates/companions/src/manager.rs`: `Manager::busy`, and `crates/companions/tests/manager.rs`: three assertions on it in the existing busy test;
+  - `crates/api/tests/companions.rs` and `crates/api/tests/companions_guided.rs`: the two new fields in their fixtures.
+  - No web fixture needed a change: `npm run check` passes as it is.
 - **No secrets.** A companion's route carries no credentials (`2026-11-11-X-cmp-egress-prelaunch.md`, "Credentials"), and the request type has no field for one: a `user:pass@host` proxy is `invalid_egress`, and a `password` or `credentials` field inside `egress` is `bad_body`. Refusals name the field, never the value. The request's `Debug` redacts the admin password.
 - **No new log event.** A source's route change logs none either. A `companions.egress_changed` event, with the route kind only, would touch five shared files (`log_events.rs`, `logs_catalog.txt`, `event-names.ts` and the en/zh logging messages). That is left for a follow-up if the runner wants an audit line. The restart's existing events still fire.
 - **No UI in this slice.** The route editor on Settings → Companions, and switching the screen's "where it runs" sentence and its route notes to these fields, are a follow-up. The generated `openapi.json` and `schema.d.ts` are the only `web/` changes.

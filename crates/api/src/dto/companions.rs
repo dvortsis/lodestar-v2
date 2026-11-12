@@ -46,9 +46,10 @@ pub struct Companion {
     /// The stored credentials, by field (`webui_password`, `api_key`):
     /// names only, never values. What `…/reveal` can show.
     pub credentials: Vec<String>,
-    /// Its route (Q18), read from its saved row as its start reads it;
-    /// null for a companion that takes no route (gluetun). Read-only
-    /// here: `PUT /companions/{id}/egress` changes it.
+    /// Its route (Q18), read from its saved row as its start reads it.
+    /// Null unless `runs` is `lodestar` (elsewhere whatever runs it sets
+    /// its route), and for a companion that takes no route (gluetun).
+    /// Read-only here: `PUT /companions/{id}/egress` changes it.
     #[schema(required = true)]
     pub egress: Option<CompanionEgress>,
     /// Null when Lodestar didn't install it.
@@ -89,10 +90,14 @@ pub enum CompanionRuns {
     /// Unraid template: Lodestar runs in a container, so it doesn't
     /// install, start or stop companions.
     OwnContainer,
-    /// Wherever you run it: you added it yourself, or its own installer is
-    /// offered for you to run (`guided_only`). Lodestar only connects to
-    /// it, and doesn't start or stop it.
+    /// Wherever you run it: you added it yourself, Lodestar found it
+    /// running, or its own installer is offered for you to run
+    /// (`guided_only`). Lodestar only connects to it, and doesn't start or
+    /// stop it.
     Yours,
+    /// Nowhere yet: Lodestar can't install it here (`refusal` says why),
+    /// and nobody added it.
+    NotHere,
 }
 
 /// Where a companion's route comes from.
@@ -139,20 +144,22 @@ impl fmt::Debug for CompanionEgressRequest {
     }
 }
 
-/// The route was saved. `applied` says whether the companion's restart on
-/// it has begun; when it hasn't, it's used at the companion's next start.
+/// The route was saved. `restarting` says whether the companion's restart
+/// on it has begun; when it hasn't, the route is saved but not applied yet,
+/// and it's used at the companion's next start.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct CompanionEgressChanged {
-    /// True once its restart on the new route has begun (its row shows
-    /// when it's back). False: saved, but not applied yet.
-    pub applied: bool,
     /// The route as saved now.
     pub egress: CompanionEgress,
     pub id: String,
-    /// Why it wasn't applied, as a stable code (`not_wired`, `busy`,
-    /// `restart_failed`, …); null when it was.
+    /// Why it isn't restarting on the new route, as a stable code
+    /// (`not_wired`, `busy`, `restart_failed`, …); null when it is.
     #[schema(required = true)]
-    pub not_applied: Option<String>,
+    pub not_restarted: Option<String>,
+    /// True once its restart on the new route has begun. That isn't yet
+    /// running on it: the companion's row (its `health`) shows when it's
+    /// back, as after `POST …/restart`. False: saved, not applied yet.
+    pub restarting: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
