@@ -343,7 +343,7 @@ async fn a_holder_sighting_its_own_keys_keeps_their_leases() {
     // Committed: nothing is left out, and nothing held.
     let leases = h.leases(0).expect("worker 0 runs");
     h.wait("the results no longer out", DEADLINE, || {
-        leases.out_len() == 0 && leases.is_empty()
+        leases.pending_len() == 0 && leases.is_empty()
     })
     .await;
     h.shutdown().await;

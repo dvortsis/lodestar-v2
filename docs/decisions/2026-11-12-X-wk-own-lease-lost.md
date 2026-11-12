@@ -23,21 +23,35 @@ A worker claims every key its DHT sees, including keys it already holds. The coo
   - **The runtime alone** (record the token when the result reaches the runtime's `Sealing` outbox): it leaves a gap after `PrepareStage`'s `take`, with no await but other threads running, where the bug still happens.
   - **The session client's held set** (`crates/cluster`): it's per session, rebuilt on every reconnect, while a spooled result can come back under a later session. It's also next to WK-11b's work.
 
-## Keeping `out` bounded
-- **An out entry is cleared** (`done(key, token)`, only for its own token) when:
+## Only a remote worker tracks `out`
+- **The coordinator's built-in pipeline** also uses `WorkerLeases` and `PrepareStage`, but its intake never asks `insert` about its own leases: a held key's sighting is answered as a reply there.
+- So **tracking is opt-in.** The remote worker's runtime builds its leases with `WorkerLeases::tracking_out(horizon)`, and `Default` tracks nothing. With tracking off, `send_out` is the old `take` and `insert` answers as before.
+- The coordinator's memory and behaviour don't change (#712-style self-review, I2).
+
+## Keeping `out` bounded, and its order race
+- **An out entry is finished, not removed** (`done(key, token)`, for its own token only). That happens when:
   - its batch is committed: each of an accepted batch's `(key, token)` pairs;
-  - its result is released (`release`: it couldn't be sealed in time, or similar). Every runtime path that gives up on a result goes through `release`.
-- **Entries older than a lease TTL (600 s) are pruned on each `insert`,** from a queue in the order they went out, so a missed path can't grow the map beyond one TTL of results.
-  - A spooled result replayed more than a TTL later has been pruned. Its own lease coming back then counts as new, which is the old behaviour, not worse. By then the coordinator has expired the lease anyway, unless the worker kept heartbeating.
+  - its result is released (`release`);
+  - its result is lost in the judge (`Judged::Dropped`, `Judged::Invalid`);
+  - its result is refused while batching (`batch_up`);
+  - the prepare stage's send fails.
+- **A finished entry still answers `Out`.** The commit (`Accepted`, through the session's events to the results task) and the answer to the holder's claim (a oneshot to the claim task) take different paths, so the commit can be seen first. Tokens are never reissued, so answering `Out` for a finished entry is always right. The race is closed instead of narrowed (self-review B1).
+- **`pending_len`** counts out entries not finished yet. The chaos scenario and the runtime test assert it returns to 0.
+- **Every entry is pruned on `insert` once it's older than the horizon**, a lease TTL (600 s) plus the longest a result may wait to be sealed (`seal_wait`, 600 s). That bounds the map to the results of one horizon.
+  - **The limit:** a result still out past the horizon is forgotten. That covers a batch the coordinator keeps refusing for longer, or a spool replayed later, with the session up or not. Its own lease coming back then counts as new, which is the old behaviour, not worse, and the coordinator fences any stale result as before. WK-G's gates should know a holder's sightings stay safe only within the horizon.
 - **The funnel's identity holds:** a held-again grant changes no lease on either side, so harvested = Σ terminal − late + in flight, as the chaos scenario asserts.
 
 ## Tests
 - **`WorkerLeases` unit tests:**
   - the three answers;
-  - each clearing path (`done` for its own token only, `take` on a loss);
-  - the prune, at the TTL and when an entry was cleared and sent out again;
-  - a two-thread race between `send_out` and the same lease's `insert`, 2,000 rounds: the token ends up held or out, never both and never neither.
-- **A runtime unit test** (`the_holders_own_lease_coming_back_never_ends_it`), through the real claim path on the claim test rig: claim, fetch, results out, then two more sightings answered with the same lease. Nothing is lost, there's one grant, and the lease stays with the result.
+  - untracked leases behaving as before;
+  - `done` finishing only its own token and staying known;
+  - a loss before the result goes out;
+  - the prune, at the horizon and for an entry finished and sent out again;
+  - two-thread races, 1,000 rounds each, between the same lease's `insert` and `send_out`, and between that `insert` and `send_out` then `done`: the key is never held again once its result went out.
+- **A runtime unit test** (`the_holders_own_lease_coming_back_never_ends_it`), through the real claim path on the claim test rig: claim, fetch, results out, then a sighting answered with the same lease.
+  - It waits until the pool has taken the reply (its `duplicates` count). Then it asserts nothing is lost, one grant, and the lease out with the result.
+  - Then the batch is committed (`pending_len` back to 0), and another sighting answered with the same lease is still not new.
 - **A chaos scenario** (`a_holder_sighting_its_own_keys_keeps_their_leases`), made deterministic with WK-20's relay:
   1. The holder's fetch is held, its link is cut coordinator → worker, and it sights its own keys. Its heartbeats show the claims arrived.
   2. The fetch is released and the results are committed.

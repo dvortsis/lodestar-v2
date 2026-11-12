@@ -462,7 +462,7 @@ impl Runtime {
             generation: AtomicU64::new(0),
             have: WorkerHave::new(),
             judge: Arc::new(Judge::new(config.worker)),
-            leases: Arc::new(WorkerLeases::default()),
+            leases: Arc::new(WorkerLeases::tracking_out(out_horizon(&config))),
             counts: counts.clone(),
             session: watch::channel(None).0,
             assignment: Mutex::new(None),
@@ -540,8 +540,8 @@ impl Runtime {
     }
 
     /// The leases held and the results out under them (tests).
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub fn leases(&self) -> Arc<lodestar_pipeline::stages::WorkerLeases> {
+    #[cfg(test)]
+    pub(crate) fn leases(&self) -> Arc<lodestar_pipeline::stages::WorkerLeases> {
         self.shared.leases.clone()
     }
 
@@ -903,6 +903,16 @@ fn hints(s: &Shared, items: Vec<HintItem>) {
             reply: true,
         });
     }
+}
+
+/// How long a result's lease is remembered once its result is out
+/// (X-wk-own-lease-lost): a lease TTL, plus the longest a result may wait
+/// to be sealed. A result still out past that (a batch the coordinator
+/// keeps refusing, a spool replayed later) is forgotten, and its own lease
+/// coming back counts as new again, as before the fix.
+fn out_horizon(config: &Config) -> Duration {
+    let ttl = lodestar_cluster::ServerConfig::default().lease_ttl_secs;
+    Duration::from_secs(ttl.unsigned_abs()) + config.seal_wait
 }
 
 fn unix_now() -> i64 {
@@ -1308,10 +1318,12 @@ impl<O: Outbox<SealedRecord>> Outbox<Results> for Sealing<O> {
                 }
                 // The floor: never sent or spooled (WK-8).
                 Judged::Dropped { key, token, .. } => {
+                    s.leases.done(&key, token);
                     reports.lost(&key, token, Loss::Blocked);
                     Ok(())
                 }
                 Judged::Invalid { key, token } => {
+                    s.leases.done(&key, token);
                     reports.lost(&key, token, Loss::Invalid);
                     Ok(())
                 }
@@ -1979,6 +1991,7 @@ fn batch_up(
     for h in refused {
         let r = h.get();
         bump(&s.counts.released);
+        s.leases.done(&r.key, r.token);
         s.losses.lost(&r.key, r.token, Loss::GaveUp);
     }
     for (batch, payload, part) in batches {
@@ -3412,24 +3425,49 @@ pub(crate) mod tests {
             (n == 1, n)
         })
         .await;
-        // Anything the pool did with it went through the same queue first:
-        // a third sighting's claim comes out after it.
-        assert!(rt.finds().found(sighting()));
-        let third = next_claim(&mut coord).await;
-        answer(&mut coord, &third, |_| None).await;
-        until("the lease came back again", || {
-            let n = c.held_again.load(Ordering::Relaxed);
-            (n == 2, n)
+        // The pool took the reply and turned it away as one for a key it's
+        // done with (a duplicate it counts, and never a lost lease).
+        let pool = lock(&rt.shared.pool).clone().expect("the stages run");
+        until("the pool saw the reply", || {
+            let n = pool.stats().duplicates.load(Ordering::Relaxed);
+            (n >= 1, n)
         })
         .await;
         assert_eq!(c.lost.load(Ordering::Relaxed), 0, "its own lease ended");
         assert_eq!(c.granted.load(Ordering::Relaxed), 1, "one grant");
         // Its result carries it: out, not held twice.
         assert_eq!(
-            (rt.shared.leases.len(), rt.shared.leases.out_len()),
+            (rt.shared.leases.len(), rt.shared.leases.pending_len()),
             (0, 1),
             "the lease is still the result's"
         );
+
+        // Committed: finished, and the same lease coming back after the
+        // commit (the two travel different paths) is still not a new one.
+        rt.event(WorkerEvent::Accepted {
+            batch: 1,
+            accepted: true,
+        });
+        until("committed", || {
+            let n = rt.shared.leases.pending_len();
+            (n == 0, n)
+        })
+        .await;
+        assert!(rt.finds().found(sighting()));
+        let late = next_claim(&mut coord).await;
+        answer(&mut coord, &late, |_| None).await;
+        until("the lease came back after its commit", || {
+            let n = c.held_again.load(Ordering::Relaxed);
+            (n == 2, n)
+        })
+        .await;
+        until("the pool saw that reply too", || {
+            let n = pool.stats().duplicates.load(Ordering::Relaxed);
+            (n >= 2, n)
+        })
+        .await;
+        assert_eq!(c.lost.load(Ordering::Relaxed), 0);
+        assert_eq!(rt.shared.leases.len(), 0);
         rt.shutdown().await;
     }
 

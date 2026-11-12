@@ -34,41 +34,65 @@ use crate::stages::{Inbox, Outbox, Reports};
 use crate::unix_now;
 use crate::writer::WriterStats;
 
-/// The tokens of the leases this worker holds, and of the results on
-/// their way out under them (X-wk-own-lease-lost).
+/// The tokens of the leases this worker holds, and, when it tracks them,
+/// of its results out under them (X-wk-own-lease-lost).
 ///
 /// Once a key is fetched and prepared, [`PrepareStage`] moves its token
-/// from *held* to *out* in one step ([`send_out`](Self::send_out)): the
-/// token now rides in the `Results` record (and the spool) until the
-/// coordinator commits it. A claim the worker makes for the key meanwhile
-/// is answered with that same lease; [`insert`](Self::insert) tells the
-/// caller so, under the same lock, so it's never taken for a new lease.
-/// The runtime clears an out entry when its result is committed, released
-/// or lost ([`done`](Self::done)); entries older than a lease TTL are
-/// pruned on insert, so a path that misses one can't grow the map.
-#[derive(Debug)]
+/// out of *held* ([`send_out`](Self::send_out)): the token now rides in the
+/// `Results` record (and the spool) until the coordinator commits it. A
+/// remote worker's leases track it there ([`tracking_out`]), under the same
+/// lock: a claim the worker makes for the key meanwhile is answered with
+/// that same lease, and [`insert`](Self::insert) says so
+/// ([`Insert::Out`]), so it's never taken for a new lease.
+///
+/// An out entry is kept, marked finished ([`done`](Self::done)), after its
+/// result is committed, released or lost, and goes only when it is older
+/// than the horizon (pruned on insert). Tokens are never reissued, so a
+/// finished entry still answers `Out`: the lease coming back after its
+/// commit was processed first (the two travel different paths) is still
+/// known for what it is. The coordinator's built-in worker doesn't track
+/// out ([`Default`]): its intake never asks.
+///
+/// [`tracking_out`]: Self::tracking_out
+#[derive(Debug, Default)]
 pub struct WorkerLeases {
     inner: Mutex<Leases>,
-    ttl: Duration,
+    /// How long an out entry is kept; `None`: out isn't tracked.
+    horizon: Option<Duration>,
 }
 
 #[derive(Debug, Default)]
 struct Leases {
     held: HashMap<InfoHash, Token>,
-    out: HashMap<InfoHash, (Token, std::time::Instant)>,
+    out: HashMap<InfoHash, Out>,
     /// `out`'s entries in the order they went out, for the prune.
     order: std::collections::VecDeque<(std::time::Instant, InfoHash, Token)>,
+    /// Out entries not finished yet.
+    pending: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Out {
+    token: Token,
+    at: std::time::Instant,
+    finished: bool,
 }
 
 impl Leases {
-    fn prune(&mut self, now: std::time::Instant, ttl: Duration) {
+    fn prune(&mut self, now: std::time::Instant, horizon: Duration) {
         while let Some(&(at, key, token)) = self.order.front() {
-            if now.saturating_duration_since(at) < ttl {
+            if now.saturating_duration_since(at) < horizon {
                 break;
             }
             self.order.pop_front();
-            if self.out.get(&key) == Some(&(token, at)) {
+            if let Some(o) = self.out.get(&key).copied()
+                && o.token == token
+                && o.at == at
+            {
                 self.out.remove(&key);
+                if !o.finished {
+                    self.pending -= 1;
+                }
             }
         }
     }
@@ -81,36 +105,38 @@ pub enum Insert {
     New,
     /// Held already under this token: nothing changed.
     Held,
-    /// Its result is on its way out under this token: nothing changed,
-    /// and the key isn't held again.
+    /// Its result went out under this token: nothing changed, and the key
+    /// isn't held again.
     Out,
 }
 
-impl Default for WorkerLeases {
-    fn default() -> WorkerLeases {
+impl WorkerLeases {
+    /// A remote worker's leases: results out are tracked for `horizon`
+    /// after they went out.
+    pub fn tracking_out(horizon: Duration) -> WorkerLeases {
         WorkerLeases {
             inner: Mutex::default(),
-            ttl: Duration::from_secs(crate::LEASE_TTL_SECS.unsigned_abs()),
+            horizon: Some(horizon),
         }
     }
-}
 
-impl WorkerLeases {
     fn lock(&self) -> std::sync::MutexGuard<'_, Leases> {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Records a grant of `key` under `token`, unless it's the lease the
-    /// worker holds or the one its result is on its way out under.
+    /// worker holds or the one a result of its went out under.
     pub fn insert(&self, key: InfoHash, token: Token) -> Insert {
         self.insert_at(key, token, std::time::Instant::now())
     }
 
     fn insert_at(&self, key: InfoHash, token: Token, now: std::time::Instant) -> Insert {
         let mut l = self.lock();
-        l.prune(now, self.ttl);
-        if l.out.get(&key).is_some_and(|&(t, _)| t == token) {
-            return Insert::Out;
+        if let Some(horizon) = self.horizon {
+            l.prune(now, horizon);
+            if l.out.get(&key).is_some_and(|o| o.token == token) {
+                return Insert::Out;
+            }
         }
         match l.held.insert(key, token) {
             Some(t) if t == token => Insert::Held,
@@ -123,8 +149,8 @@ impl WorkerLeases {
         self.lock().held.remove(key)
     }
 
-    /// The key's token, moved from held to out in one step: its result
-    /// carries the lease from here.
+    /// The key's token, removed from held: its result carries the lease
+    /// from here. Tracked as out, in the same step, when out is tracked.
     pub fn send_out(&self, key: &InfoHash) -> Option<Token> {
         self.send_out_at(key, std::time::Instant::now())
     }
@@ -132,16 +158,31 @@ impl WorkerLeases {
     fn send_out_at(&self, key: &InfoHash, now: std::time::Instant) -> Option<Token> {
         let mut l = self.lock();
         let token = l.held.remove(key)?;
-        l.out.insert(*key, (token, now));
-        l.order.push_back((now, *key, token));
+        if self.horizon.is_some() {
+            let old = l.out.insert(
+                *key,
+                Out {
+                    token,
+                    at: now,
+                    finished: false,
+                },
+            );
+            if old.is_none_or(|o| o.finished) {
+                l.pending += 1;
+            }
+            l.order.push_back((now, *key, token));
+        }
         Some(token)
     }
 
-    /// The result under `token` was committed, released or lost.
+    /// The result under `token` was committed, released or lost: its entry
+    /// stays, finished, until the horizon.
     pub fn done(&self, key: &InfoHash, token: Token) {
         let mut l = self.lock();
-        if l.out.get(key).is_some_and(|&(t, _)| t == token) {
-            l.out.remove(key);
+        let Some(o) = l.out.get_mut(key) else { return };
+        if o.token == token && !o.finished {
+            o.finished = true;
+            l.pending -= 1;
         }
     }
 
@@ -154,9 +195,9 @@ impl WorkerLeases {
         self.len() == 0
     }
 
-    /// Results on their way out, still tracked.
-    pub fn out_len(&self) -> usize {
-        self.lock().out.len()
+    /// Results out whose commit, release or loss hasn't been seen yet.
+    pub fn pending_len(&self) -> usize {
+        self.lock().pending
     }
 }
 
@@ -346,9 +387,12 @@ impl PrepareStage {
                             private_source: fk.private_source,
                             source_adult: done.source_adult,
                         };
+                        let (key, token) = (r.key, r.token);
                         let sent = out.send(r).await;
                         drop(item);
                         if sent.is_err() {
+                            // Never sent: nothing will finish it.
+                            self.leases.done(&key, token);
                             return;
                         }
                     }
@@ -476,89 +520,118 @@ mod tests {
     use super::*;
 
     const K: InfoHash = InfoHash([1; 20]);
+    const H: Duration = Duration::from_secs(1200);
+
+    fn tracking() -> WorkerLeases {
+        WorkerLeases::tracking_out(H)
+    }
 
     #[test]
     fn a_grant_is_new_held_again_or_out() {
-        let l = WorkerLeases::default();
+        let l = tracking();
         assert_eq!(l.insert(K, Token(7)), Insert::New);
         assert_eq!(l.insert(K, Token(7)), Insert::Held);
         assert_eq!(l.send_out(&K), Some(Token(7)));
         // Its result is out: the same lease coming back isn't held again.
         assert_eq!(l.insert(K, Token(7)), Insert::Out);
-        assert_eq!((l.len(), l.out_len()), (0, 1));
-        // A new lease is held as today; the old result stays tracked.
+        assert_eq!((l.len(), l.pending_len()), (0, 1));
+        // A new lease is held as before; the old result stays tracked.
         assert_eq!(l.insert(K, Token(8)), Insert::New);
-        assert_eq!((l.len(), l.out_len()), (1, 1));
+        assert_eq!((l.len(), l.pending_len()), (1, 1));
         assert_eq!(l.take(&K), Some(Token(8)));
     }
 
+    /// The coordinator's built-in worker: nothing is tracked out, and the
+    /// answers are as before this fix.
     #[test]
-    fn done_clears_only_its_own_result() {
+    fn untracked_leases_behave_as_before() {
         let l = WorkerLeases::default();
+        assert_eq!(l.insert(K, Token(7)), Insert::New);
+        assert_eq!(l.send_out(&K), Some(Token(7)));
+        assert_eq!(l.pending_len(), 0);
+        assert_eq!(l.insert(K, Token(7)), Insert::New);
+    }
+
+    /// Committed, released or lost: finished, but still known, so the
+    /// same lease coming back after its commit is still not new.
+    #[test]
+    fn done_finishes_only_its_own_result_and_keeps_it_known() {
+        let l = tracking();
         l.insert(K, Token(7));
         l.send_out(&K);
         l.done(&K, Token(6));
-        assert_eq!(l.out_len(), 1, "another token's result");
-        // Committed, released or lost: all end the same way.
+        assert_eq!(l.pending_len(), 1, "another token's result");
         l.done(&K, Token(7));
-        assert_eq!(l.out_len(), 0);
-        assert_eq!(l.insert(K, Token(7)), Insert::New);
+        l.done(&K, Token(7));
+        assert_eq!(l.pending_len(), 0, "finished once");
+        assert_eq!(l.insert(K, Token(7)), Insert::Out, "after the commit");
+        assert_eq!(l.len(), 0);
         // A loss before the result goes out leaves nothing out.
-        assert_eq!(l.take(&K), Some(Token(7)));
+        assert_eq!(l.insert(K, Token(9)), Insert::New);
+        assert_eq!(l.take(&K), Some(Token(9)));
         assert_eq!(l.send_out(&K), None);
-        assert_eq!((l.len(), l.out_len()), (0, 0));
+        assert_eq!((l.len(), l.pending_len()), (0, 0));
     }
 
     #[test]
-    fn out_entries_older_than_a_ttl_are_pruned() {
-        let l = WorkerLeases::default();
+    fn out_entries_older_than_the_horizon_are_pruned() {
+        let l = tracking();
         let t0 = std::time::Instant::now();
         l.insert_at(K, Token(7), t0);
         l.send_out_at(&K, t0);
-        let just_before = t0 + l.ttl - Duration::from_millis(1);
+        let just_before = t0 + H - Duration::from_millis(1);
         assert_eq!(l.insert_at(K, Token(7), just_before), Insert::Out);
-        // Past the TTL (a spooled result replayed late): pruned, so its
-        // own lease coming back counts as new, as before this fix.
-        assert_eq!(l.insert_at(K, Token(7), t0 + l.ttl), Insert::New);
-        assert_eq!(l.out_len(), 0);
-        // An entry cleared and sent out again isn't pruned by the old
+        // Past the horizon: pruned (finished or not), so its own lease
+        // coming back counts as new, as before this fix.
+        assert_eq!(l.insert_at(K, Token(7), t0 + H), Insert::New);
+        assert_eq!(l.pending_len(), 0);
+        // An entry finished and sent out again isn't pruned by the old
         // one's place in the order.
-        let l = WorkerLeases::default();
+        let l = tracking();
         l.insert_at(K, Token(7), t0);
         l.send_out_at(&K, t0);
         l.done(&K, Token(7));
         let t1 = t0 + Duration::from_secs(1);
-        l.insert_at(K, Token(7), t1);
+        l.insert_at(K, Token(8), t1);
         l.send_out_at(&K, t1);
+        assert_eq!(l.pending_len(), 1);
         assert_eq!(
-            l.insert_at(K, Token(7), t0 + l.ttl),
+            l.insert_at(K, Token(8), t0 + H),
             Insert::Out,
-            "still within its own TTL"
+            "within its own"
         );
+        assert_eq!(l.pending_len(), 1);
     }
 
-    /// The prepare stage moving a key out while its own lease comes back
-    /// on another thread: whichever runs first, the token ends up held or
-    /// out, never both and never neither.
+    /// The prepare stage moving a key out, and its commit, each racing the
+    /// same lease coming back on another thread: whichever runs first, the
+    /// token is never held again once it went out.
     #[test]
-    fn a_grant_racing_the_move_out_is_never_lost_or_held_twice() {
-        for _ in 0..2_000 {
-            let l = Arc::new(WorkerLeases::default());
-            l.insert(K, Token(7));
-            let barrier = Arc::new(std::sync::Barrier::new(2));
-            let mover = {
-                let (l, barrier) = (l.clone(), barrier.clone());
-                std::thread::spawn(move || {
-                    barrier.wait();
-                    l.send_out(&K)
-                })
-            };
-            barrier.wait();
-            let again = l.insert(K, Token(7));
-            let moved = mover.join().unwrap();
-            assert_eq!(moved, Some(Token(7)), "the result carries the lease");
-            assert!(matches!(again, Insert::Held | Insert::Out), "{again:?}");
-            assert_eq!((l.len(), l.out_len()), (0, 1), "held twice: {again:?}");
+    fn a_grant_racing_the_move_out_or_the_commit_is_never_held_twice() {
+        for commit in [false, true] {
+            for _ in 0..1_000 {
+                let l = Arc::new(tracking());
+                l.insert(K, Token(7));
+                let barrier = Arc::new(std::sync::Barrier::new(2));
+                let other = {
+                    let (l, barrier) = (l.clone(), barrier.clone());
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        let moved = l.send_out(&K);
+                        if commit {
+                            l.done(&K, Token(7));
+                        }
+                        moved
+                    })
+                };
+                barrier.wait();
+                let again = l.insert(K, Token(7));
+                assert_eq!(other.join().unwrap(), Some(Token(7)));
+                assert!(matches!(again, Insert::Held | Insert::Out), "{again:?}");
+                assert_eq!(l.len(), 0, "held twice: {again:?}");
+                assert_eq!(l.pending_len(), usize::from(!commit));
+                assert_eq!(l.insert(K, Token(7)), Insert::Out);
+            }
         }
     }
 
