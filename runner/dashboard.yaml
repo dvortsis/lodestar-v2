@@ -311,6 +311,8 @@ placement:
   - X-spool-damage-log
   - X-wk-own-lease-lost
   - X-wk-out-set-polish
+  - X-wk-fetched-lease
+  - X-wk-fetched-lease-nits
 - ws: ws-web
   match:
   - W*
@@ -410,6 +412,7 @@ placement:
   - X-op4-polish
   - X-tripwire-reviews-lookback
   - X-flake-dht-scrape-join
+  - X-dht-lookup-converge
   - X-win-clippy
   - X-banner-live-region
   - X-prowlarr-no-fetch-wait
@@ -512,6 +515,7 @@ placement:
   match:
   - GS-gate
   - RX-0
+  - X-rx0-nits
   - TZ-0
   - X-tz0-polish
   - UP-0
@@ -555,6 +559,7 @@ placement:
   - OUT-1
   - OUT-3
   - D-outputs-guide
+  - X-outputs-guide-nits
   - IRC-2
   - IRC-3
 - ws: ws-m7-gates

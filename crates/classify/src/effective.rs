@@ -17,9 +17,18 @@ pub enum ResolvedVia {
     Folder,
     /// The folder holding a `BDMV/` or `VIDEO_TS/`.
     Structure,
+    /// An enrichment plugin identified the work ([`via_plugin`], ENR-10).
+    Plugin,
 }
 
 impl ResolvedVia {
+    /// The listed methods: what `/search/fields` and the query language's
+    /// hints offer. [`ResolvedVia::Plugin`] isn't listed yet: ENR-10's own
+    /// lookups never resolve a title (runner, 2026-11-12), so offering it
+    /// would match nothing, and `resolved:plugin` stays refused, as
+    /// `docs/query-language.md` documents. The slice that first makes it
+    /// fire lists it, with its label and the doc. Stored records read it
+    /// through [`from_stored`](Self::from_stored).
     pub const ALL: [ResolvedVia; 3] = [
         ResolvedVia::File,
         ResolvedVia::Folder,
@@ -32,11 +41,19 @@ impl ResolvedVia {
             ResolvedVia::File => "files",
             ResolvedVia::Folder => "folder",
             ResolvedVia::Structure => "structure",
+            ResolvedVia::Plugin => "plugin",
         }
     }
 
+    /// A listed method by name, as `resolved:` queries read it.
     pub fn from_name(name: &str) -> Option<ResolvedVia> {
         ResolvedVia::ALL.into_iter().find(|v| v.as_str() == name)
+    }
+
+    /// Any method by name, [`ResolvedVia::Plugin`] included, as a stored
+    /// record reads it back.
+    pub fn from_stored(name: &str) -> Option<ResolvedVia> {
+        ResolvedVia::from_name(name).or((name == "plugin").then_some(ResolvedVia::Plugin))
     }
 }
 
@@ -128,6 +145,8 @@ pub(crate) fn resolve(name: &str, files: &[FileInfo], comp: &Composition) -> Eff
                 (ResolvedVia::Folder, true) => 80,
                 (ResolvedVia::Folder, false) => 60,
                 (ResolvedVia::Structure, _) => 50,
+                // Never a file-tree candidate.
+                (ResolvedVia::Plugin, _) => 0,
             };
             Effective {
                 release,
@@ -147,6 +166,63 @@ pub(crate) fn resolve(name: &str, files: &[FileInfo], comp: &Composition) -> Eff
             episodic_files,
         },
     }
+}
+
+/// What an enrichment plugin resolved a torrent to (architecture §6,
+/// plan ENR-10): the work's title and year as its database holds them,
+/// and how sure the plugin is of the match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PluginTitle<'a> {
+    pub title: &'a str,
+    pub year: Option<u16>,
+    /// 0–100 percent.
+    pub confidence: u8,
+}
+
+/// The highest title confidence a plugin's answer gives: an informative
+/// name (100) is always surer than a lookup.
+pub const MAX_PLUGIN_CONFIDENCE: u8 = 95;
+
+/// `e` resolved via a plugin: `Some` only when the torrent's name is
+/// ambiguous and the plugin is surer of the title than the file tree was
+/// (its confidence, capped at [`MAX_PLUGIN_CONFIDENCE`], above
+/// `e.confidence`). An informative name always keeps its own title, and a
+/// plugin never changes what the name says.
+///
+/// The plugin names the work: its title and year replace `e`'s. Episode
+/// numbers, the pack flag and every quality field still come from the
+/// torrent itself, since the plugin knows the work, not this release of
+/// it. `resolved_from` is cleared: the title wasn't parsed from a file or
+/// folder name.
+pub fn via_plugin(e: &Effective, p: PluginTitle<'_>) -> Option<Effective> {
+    let title: String = p.title.chars().filter(|c| !c.is_control()).collect();
+    let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
+    let confidence = p.confidence.min(MAX_PLUGIN_CONFIDENCE);
+    if !e.ambiguous || title.is_empty() || confidence <= e.confidence {
+        return None;
+    }
+    let mut release = Release {
+        title,
+        year: p
+            .year
+            .filter(|y| (1..=9999).contains(y))
+            .map(lodestar_release_parser::Span::one),
+        season: e.release.season,
+        episode: e.release.episode,
+        absolute: e.release.absolute,
+        date: e.release.date,
+        pack: e.release.pack,
+        ..Release::default()
+    };
+    fill_quality(&mut release, &e.release);
+    Some(Effective {
+        release,
+        ambiguous: true,
+        resolved: Some(ResolvedVia::Plugin),
+        resolved_from: None,
+        confidence,
+        episodic_files: e.episodic_files,
+    })
 }
 
 /// The largest files of the dominant category, skipping samples, largest
@@ -305,6 +381,98 @@ mod tests {
         assert_eq!(e.release.group, None);
         assert_eq!(e.release.resolution.map(|r| r.as_str()), Some("1080p"));
         assert_eq!(e.release.container, Some("mkv"));
+    }
+
+    #[test]
+    fn a_plugin_resolves_only_an_ambiguous_name_it_is_surer_of() {
+        let p = PluginTitle {
+            title: " The\u{7}  Work ",
+            year: Some(1999),
+            confidence: 100,
+        };
+        let (files, comp) = tree(&[("New Folder/01.mp4", 9)]);
+        let e = resolve("New Folder", &files, &comp);
+        let r = via_plugin(&e, p).unwrap();
+        assert_eq!(r.release.title, "The Work");
+        assert_eq!(r.release.year.map(|y| y.first), Some(1999));
+        assert_eq!(r.resolved, Some(ResolvedVia::Plugin));
+        assert_eq!(r.confidence, MAX_PLUGIN_CONFIDENCE);
+        assert!(r.ambiguous && r.resolved_from.is_none());
+        assert_eq!(ResolvedVia::from_name("plugin"), None, "not a query value");
+        assert_eq!(
+            ResolvedVia::from_stored("plugin"),
+            Some(ResolvedVia::Plugin)
+        );
+        assert_eq!(ResolvedVia::from_stored("files"), Some(ResolvedVia::File));
+        assert!(
+            !ResolvedVia::ALL.contains(&ResolvedVia::Plugin),
+            "not listed yet"
+        );
+        // Not surer than the files: kept.
+        let (files, comp) = tree(&[("Show.Name.S02E05.2160p.WEB-DL.mkv", 9)]);
+        let e = resolve("a8f3x.zip.part", &files, &comp);
+        assert_eq!(
+            via_plugin(
+                &e,
+                PluginTitle {
+                    confidence: 85,
+                    ..p
+                }
+            ),
+            None
+        );
+        let r = via_plugin(
+            &e,
+            PluginTitle {
+                confidence: 90,
+                year: Some(0),
+                ..p
+            },
+        )
+        .unwrap();
+        // The episode and the quality still come from the release.
+        assert_eq!(r.release.episode.map(|s| s.first), Some(5));
+        assert_eq!(r.release.resolution.map(|r| r.as_str()), Some("2160p"));
+        assert_eq!(r.release.year, None);
+        // An informative name keeps its own title, and an empty title
+        // resolves nothing.
+        let (files, comp) = tree(&[("Movie.2010.mkv", 9)]);
+        let e = resolve("Some Movie 2010", &files, &comp);
+        assert_eq!(via_plugin(&e, p), None);
+        let (files, comp) = tree(&[("New Folder/01.mp4", 9)]);
+        let e = resolve("New Folder", &files, &comp);
+        assert_eq!(
+            via_plugin(
+                &e,
+                PluginTitle {
+                    title: " \u{0} ",
+                    ..p
+                }
+            ),
+            None
+        );
+    }
+
+    /// A record resolved via a plugin encodes, decodes and reads back as
+    /// such, though `plugin` isn't a query value.
+    #[test]
+    fn a_plugin_resolved_record_round_trips() {
+        let mut c = crate::classify("New Folder", &[]);
+        c.title = via_plugin(
+            &c.title,
+            PluginTitle {
+                title: "The Work",
+                year: Some(1999),
+                confidence: 90,
+            },
+        )
+        .unwrap();
+        let r = crate::Record::new(&c);
+        assert_eq!(r.resolved, Some(ResolvedVia::Plugin));
+        let back = crate::Record::decode(&r.encode()).unwrap();
+        assert_eq!(back, r);
+        assert_eq!(back.resolved, Some(ResolvedVia::Plugin));
+        assert_eq!(back.release("title"), Some("The Work"));
     }
 
     #[test]

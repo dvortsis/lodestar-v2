@@ -68,8 +68,9 @@ use crate::leases::LOSS_BLOCKED;
 use crate::link::{BoxIo, CoordinatorLink, Link, WorkerLink, local_pair, ws_config};
 use crate::proto::*;
 use crate::{
-    ALPN_JOIN, BatchAnswer, Claim, Claimed, ClusterError, Coordinator, CoordinatorTls, JoinToken,
-    Lease, LeaseAuthority, NoEvents, PeerIdentity, QUEUE_BYTES, Regranted, Token, WorkerId,
+    ALPN_JOIN, BatchAnswer, Claim, Claimed, ClusterError, Coordinator, CoordinatorTls,
+    FetchedReport, JoinToken, Lease, LeaseAuthority, NoEvents, PeerIdentity, QUEUE_BYTES,
+    Regranted, Token, WorkerId,
 };
 
 /// The WebSocket path on the cluster port.
@@ -1727,14 +1728,22 @@ impl ClusterServer {
     /// evicted when it was revoked, so its tokens are already stale.
     fn outcome(&self, peer: &Peer, items: &[OutcomeItem]) {
         let w = peer.worker;
+        let now = self.clock.now_secs();
         let mut accepted = Vec::new();
         for item in items {
             let key = InfoHash(item.key);
             let token = Token(item.token);
             let lease = match item.outcome {
-                Outcome::Fetched => self.leases.held(w, &key, token).inspect(|_| {
-                    bump(&self.counters.fetched);
-                }),
+                Outcome::Fetched => match self.leases.fetched(w, &key, token, now) {
+                    FetchedReport::Marked(lease) => {
+                        bump(&self.counters.fetched);
+                        Some(lease)
+                    }
+                    // The commit beat the report (`Fetched` goes out on
+                    // `Accepted`): expected, not a stale report.
+                    FetchedReport::Committed => continue,
+                    FetchedReport::Stale => None,
+                },
                 Outcome::PeerFound { reason } | Outcome::Lost { reason } => self
                     .leases
                     .report(w, &key, token, Some(reason))

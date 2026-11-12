@@ -348,7 +348,8 @@ fn feed_xml(store: &Store, id: i64, adult: bool, origin: &str) -> ApiResult<Opti
         let Some((row, _)) = shown_row(store, a.torrent_id, false, adult)? else {
             continue;
         };
-        let private = row.flags & flags::PRIVATE_SOURCE != 0;
+        // Every privacy bit, BEP 27's included (UP-0), as the SQL's.
+        let private = row.flags & flags::PRIVACY != 0;
         if private {
             continue;
         }

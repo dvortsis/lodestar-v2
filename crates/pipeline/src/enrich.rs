@@ -153,6 +153,8 @@ fn enrich_ids(
                 Some(e) => e,
                 None => r.enriched,
             };
+            // A stored identification resolves an ambiguous title (ENR-10).
+            let enriched = crate::identify::with_identified(store, &row, &r.class, enriched)?;
             batch.push((id, enriched));
         }
     }
@@ -223,6 +225,19 @@ pub fn adult_by_source(
     Ok(done)
 }
 
+/// Whether stored torrent `id` holds an identification that could resolve
+/// its title ([`crate::identify::stored_title`]).
+fn identified(store: &Store, id: i64) -> Result<bool, lodestar_store::Error> {
+    let Some(row) = store.torrent(id)? else {
+        return Ok(false);
+    };
+    // Only an ambiguous name is resolved: the rest needn't be marked.
+    let ambiguous = store
+        .enrichment(id)?
+        .is_some_and(|e| lodestar_classify::Record::decode(&e.data).is_ok_and(|r| r.ambiguous));
+    Ok(ambiguous && crate::identify::stored_title(store, id, row.sources)?.is_some())
+}
+
 /// The enrichment match an adult-enrichment section gives classification
 /// (ENR-6's [`EnrichmentMatch`]): the kind the service reports. A section
 /// without a kind pins nothing.
@@ -283,14 +298,15 @@ fn with_match(
 }
 
 /// Marks for the backfill those of the stored torrents `ids` whose claims
-/// hold an adult-enrichment section, so their match is applied again.
+/// hold an adult-enrichment section or an identification (ENR-10), so
+/// their match or resolved title is applied again.
 /// For a commit that rewrote a torrent's classification without reading
 /// its claims: a partial import's upgrade writes prepare's record, which
 /// knows no match (ENR-1b). Returns the ids marked.
 pub fn mark_matched(store: &mut Store, ids: &[i64]) -> Result<Vec<i64>, lodestar_store::Error> {
     let mut marked = Vec::new();
     for &id in ids {
-        if !marked.contains(&id) && stored_match(store, id)?.is_some() {
+        if !marked.contains(&id) && (stored_match(store, id)?.is_some() || identified(store, id)?) {
             marked.push(id);
         }
     }
@@ -368,7 +384,10 @@ pub fn apply_matches(
         // Stored as adult, so it's judged as adult already: nothing to hold.
         let r = reclassify_row(&row, &files, own, true, Some(engine), now);
         if let Some(e) = with_match(store, &row, &files, own, &r)? {
-            batch.push((id, e));
+            batch.push((
+                id,
+                crate::identify::with_identified(store, &row, &r.class, e)?,
+            ));
         }
     }
     if !deferred.is_empty() {

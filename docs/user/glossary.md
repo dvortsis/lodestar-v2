@@ -2,6 +2,10 @@
 
 Terms used in this guide, A to Z. Each chapter links a term here the first time it uses it.
 
+## bitmagnet
+
+Another self-hosted torrent indexer. Lodestar can export its torrents as a file that bitmagnet imports.
+
 ## Cache pool
 
 A group of SSDs or NVMe drives in Unraid, used for fast storage. A path starting `/mnt/cache` is on it.
@@ -34,6 +38,10 @@ A PowerShell window opened with **Run as administrator**. Windows asks you to co
 
 The layer behind Unraid's `/mnt/user` paths. It adds overhead that databases notice.
 
+## Indexer
+
+A service that apps such as Sonarr and Radarr search for torrents. Lodestar acts as one through Torznab.
+
 ## Install window
 
 A daily time range, in the PC's local time, when automatic updates may install. **Install now** ignores it. Windows installs nothing automatically.
@@ -49,6 +57,10 @@ A named volume is a data folder Docker manages for you. A bind mount is a folder
 ## Network or shared-folder filesystem
 
 NFS, SMB, a Windows network drive, or a shared folder such as the ones WSL2 and Docker Desktop mount from a Windows drive. Its file locking isn't reliable enough for Lodestar's database.
+
+## Newznab category
+
+A number that files a result by kind, such as `5000` for TV or `2000` for movies. Apps search only the categories you choose.
 
 ## Port forwarding
 
@@ -81,6 +93,14 @@ The database Lodestar stores its torrents in. It needs fast local storage.
 ## TLS reverse proxy
 
 A web server in front of an app that adds HTTPS. Lodestar needs `LODESTAR_SECURE_COOKIES=true` behind one.
+
+## Torznab
+
+The common way apps such as Prowlarr, Sonarr and Radarr search an indexer for torrents.
+
+## Torznab key
+
+A key that lets one app search Lodestar through Torznab, and nothing else. It is shown once, when you create or regenerate it.
 
 ## UDP
 

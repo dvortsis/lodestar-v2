@@ -1896,6 +1896,7 @@ dependencies = [
  "lodestar-release-parser",
  "lodestar-store",
  "proptest",
+ "regex-syntax",
  "serde",
  "serde_json",
  "tantivy",
@@ -1985,6 +1986,7 @@ dependencies = [
  "lodestar-metainfo",
  "proptest",
  "rusqlite",
+ "sha2",
  "tempfile",
  "zstd",
 ]

@@ -11,6 +11,7 @@ repository.workspace = true
 [dependencies]
 lodestar-metainfo.workspace = true
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+sha2 = "0.11.0"
 zstd = "0.14.3"
 
 # The workspace's lints, except `unsafe_code`: "deny" here instead of
