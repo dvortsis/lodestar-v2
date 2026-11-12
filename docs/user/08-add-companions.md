@@ -31,7 +31,7 @@ Lodestar stays a [metadata](glossary.md#metadata) index. A companion downloads o
 
 Lodestar's built-in catalogue lists the companions. It ships inside the program and changes only with a release. A download is offered only when the catalogue holds a checked **SHA-256** for it (a [checksum](glossary.md#checksum)).
 
-In the build this chapter was written against, no entry has its checked download yet. Installs from the app say **This companion isn't available to install yet.** The Compose and Unraid files are refused for the same reason. Until a release pins them, run the companion as its own [container](glossary.md#container). Or install it yourself and follow section 8.7.
+In the build this chapter was written against, no entry has its checked download yet. Installs from the app say **This companion isn't available to install yet.** The Compose and Unraid files are refused for the same reason. Until a release pins them, run the companion as its own [container](glossary.md#container), or install it yourself. Today only qBittorrent can then be added to Lodestar (section 8.7).
 
 <details>
 <summary>What about FlareSolverr, i2pd and the others?</summary>
@@ -63,7 +63,7 @@ flowchart LR
 
 In words: Lodestar talks to qBittorrent on the internal network. qBittorrent has no network of its own: it uses gluetun's, so everything it sends goes to your VPN provider. Your router never sends traffic from the internet to it.
 
-Companions also run with the least rights that work: as their own low-privilege user or container, never as an administrator.
+Companions run with the least rights that work. A native companion runs as Lodestar's own account, and Lodestar refuses to start one if it runs as root or an administrator. A container companion runs as the `PUID` and `PGID` you give it.
 
 ## 8.3 Add a companion with Docker Compose
 <!-- index: compose service; lodestar companion compose; network_mode; --gluetun; --gluetun-container -->
@@ -72,7 +72,7 @@ Lodestar prints a Compose service for the companion. You read it, paste it into 
 
 The generated service joins an **existing** Docker network that Lodestar must be on too. Its default name is `lodestar`. Lodestar's own Compose file and Unraid template don't put it on a network of that name, so set that up first:
 
-1. Create the network once: `docker network create lodestar`.
+1. Create the network once: `docker network create lodestar`. On Unraid, open the terminal (the `>_` icon) and run it there. Then open **Settings → Docker** in Advanced View, stop Docker, set **Preserve user defined networks** to **Yes**, and start Docker again. Without that, the network disappears when Docker restarts.
 2. Put Lodestar on it. In Compose, add `networks: [lodestar]` to Lodestar's service, and a top-level `networks:` block with `lodestar:` set to `external: true`. On Unraid, set Lodestar's **Network Type** to `lodestar`.
 
 To use another network, name it with `--network <name>` instead.
@@ -88,7 +88,7 @@ To print qBittorrent's service:
    **Result:** The command prints a Compose service named `qbittorrent`. It runs the pinned image, on the network you named, with those two folders, `Etc/UTC` as its time zone and no published ports.
 2. Copy the printed service into your Compose file under `services:`, and copy its `networks:` block to the top level of the file. Compose rejects the service without that block.
 3. Start it with `docker compose up -d`.
-   **Result:** The container starts and keeps running. Add it to Lodestar with section 8.7.
+   **Result:** The container starts and keeps running. Add it to Lodestar with section 8.7. Only qBittorrent can be added there today.
 
 A container that already has the same name stops the new one from starting, so remove or rename the old one first.
 
@@ -104,7 +104,7 @@ Useful options:
 
 | Flag | What it does |
 |---|---|
-| `--puid` and `--pgid` | The user and group the companion runs as. Both default to `1000`. Never use `0`, which is root. |
+| `--puid` and `--pgid` | The user and group the companion runs as. Both default to `1000`. Lodestar refuses `0`, which is root. |
 | `--gluetun` | Prints a gluetun service too, and puts the companion on its network. |
 | `--gluetun-container <name>` | Routes through a gluetun container you already run, by its container name. |
 
@@ -114,6 +114,10 @@ For a VPN, add `--gluetun` or `--gluetun-container`. The printed gluetun service
 > **Without** `--gluetun` or `--gluetun-container`, the companion's traffic leaves outside any VPN. Choose one of them if you want it inside one.
 
 The app offers the same choices. Open **Settings → Companions** and select **Run as its own container** on the row. Set **How its traffic leaves** to **Directly (no VPN)**, **Through a new gluetun container** or **Through a gluetun container I already run**. Then select **Compose service**, and **Copy**. The screen warns that **Directly** leaves outside any VPN. Nothing you enter there is stored.
+
+To open a companion's own web page, for example to set qBittorrent's password, add a `ports:` entry for its web port. Use your server's LAN address, such as `"192.168.1.20:8080:8080"`, and never `0.0.0.0`. Never forward it on your router (rule 4), and remove the entry afterwards if you don't need it.
+
+For a companion behind gluetun, publish the port on the gluetun service instead. If you publish qBittorrent's peer port, don't use `6881` on the same host as Lodestar's own [DHT](glossary.md#dht) port, which is [UDP](glossary.md#udp) `6881`.
 
 <details>
 <summary>Why not let Lodestar start the container itself?</summary>
@@ -144,13 +148,16 @@ To add qBittorrent:
    - **Through a new gluetun container**;
    - **Through a gluetun container I already run**, then type **gluetun container name**.
 4. Set **Settings folder on the host** and **Downloads folder on the host**. For qBittorrent, both are required, although the screen says they are optional. Put them on the [cache pool](glossary.md#cache-pool), such as `/mnt/cache/appdata/qbittorrent`, as [section 2.2](02-install-lodestar-on-unraid-and-docker.md#22-settings-in-the-unraid-template) does.
+   Never use Lodestar's own appdata folder, such as `/mnt/cache/appdata/lodestar`, or a folder inside it. It holds its secrets, and Lodestar can't check this from inside its container.
 5. Select **Unraid template**.
    **Result:** Lodestar shows the template file, such as `my-qbittorrent.xml`, with **Copy**, and a line **In Unraid, open:** with a path.
 6. Save the file in `/boot/config/plugins/dockerMan/templates-user/` on the Unraid server. The easiest way is the `flash` share from another computer: `\\<server>\flash\config\plugins\dockerMan\templates-user`. Use the exact file name Lodestar showed.
 7. In your browser, put your Unraid server's address in front of the path from step 5, such as `http://tower` followed by the path. Or open **Docker → Add Container** and pick the template under **Template**.
    **Result:** Add Container opens with the form filled in.
 8. Review the form, then select **Apply**.
-   **Result:** Unraid creates the container. Add it to Lodestar with section 8.7.
+   **Result:** Unraid creates the container. Add it to Lodestar with section 8.7. Only qBittorrent can be added there today.
+
+To open the companion's own web page, add a **Port** for its web port in the template form, on your LAN only. Never forward it on your router. Remove it afterwards if you don't need it.
 
 If you chose a new gluetun, Lodestar shows two files, gluetun's first. Apply gluetun's first and fill in its VPN settings. The companion's template shares gluetun's network, so that container must exist already.
 
@@ -163,9 +170,9 @@ If you'd rather fill the form by hand, Lodestar also shows each field and its va
 > Your Unraid server already runs gluetun. In **Settings → Companions**, you choose **Through a gluetun container I already run**, enter `gluetun` and select **Unraid template**. You save `my-qbittorrent.xml` into `templates-user`, open the path Lodestar showed, check the form and apply it. The container starts with `--network=container:gluetun`.
 
 ## 8.5 Add a companion on Windows or Linux
-<!-- index: managed companion; supervised; lodestar companion install; lodestar companion remove; Install dialog; Job Objects; cgroups -->
+<!-- index: managed companion; supervised; lodestar companion install; lodestar companion remove; Install dialog; Job Objects; Landlock -->
 
-When Lodestar runs directly on Windows or Linux, it can install a companion itself. It then starts and stops it as a **child process**: a program that Lodestar launches and watches. It also limits what the companion can use, with Job Objects on Windows and control groups on Linux where they're available.
+When Lodestar runs directly on Windows or Linux, it can install a companion itself. It then starts and stops it as a **child process**: a program that Lodestar launches and watches. Lodestar also caps what it can use. That is a Job Object on Windows, and resource limits on Linux, with a Landlock sandbox where the kernel supports it. On Windows a companion can still read Lodestar's data folder.
 
 <img src="images/companions/companions-screen-illustration.svg" alt="Illustration of Settings, Companions: the qBittorrent row shows Running and an installed version, with the buttons Restart, Logs, Remove, Passwords and keys and Run as its own container">
 
@@ -188,7 +195,7 @@ Where Lodestar runs in a container, it can't install a companion itself. Use sec
 
 The first-run wizard has the same step, under **Download client**: select **Install qBittorrent for me**, check the details and select **Confirm and install**. Select **Not now** to skip it. The wizard offers this only where Lodestar can install it itself, which means native Linux, not Windows, Docker or Unraid.
 
-The terminal commands are below. In this version `install` is refused on every platform with "this version can't start companions yet, so nothing was installed". It still shows the version and SHA-256 you would confirm. `list` and `compose` work.
+The terminal commands are below. Today `install` answers `awaiting_pin` and shows nothing to confirm, because no build is pinned. Once a release pins one, the terminal still can't start companions (`not_wired`), so install from the app.
 
 ```bash
 lodestar companion list
@@ -200,7 +207,7 @@ lodestar companion remove qbittorrent --yes
 
 - Without `--sha256`, `install` only shows what it would install, with its SHA-256, size and licence. Run it again with `--sha256` and that exact value to confirm. There's no `--yes`: you type the hash.
 - Without `--yes`, `remove` only shows what it would delete. Run it again with `--yes` to delete it.
-- Both commands need Lodestar stopped. See [`docs/operations.md`](../operations.md#10-the-command-line) for the command line.
+- `list`, `install` and `remove` need Lodestar stopped. `compose` doesn't. See [`docs/operations.md`](../operations.md#10-the-command-line) for the command line.
 
 ### What Lodestar keeps an eye on
 
@@ -212,18 +219,23 @@ The only official qBittorrent for Windows is an installer. It needs an administr
 
 1. Download qBittorrent from `https://www.qbittorrent.org/download`.
 2. Install it and start it.
-3. In qBittorrent, open **Tools → Options → Web UI** and turn on **Web User Interface (Remote control)**. Keep the user name `admin`, which Lodestar always signs in as, and set a password you choose.
-4. In Lodestar, follow section 8.7. Lodestar finds qBittorrent at `http://localhost:8080`.
+3. In qBittorrent, open **Tools → Options → Web UI** and turn on **Web User Interface (Remote control)**. Then:
+   - set **IP address** to `127.0.0.1`, so only this computer can reach it (the default `*` opens it to your whole network), and keep **Port** `8080`;
+   - keep the user name `admin`, which Lodestar always signs in as;
+   - set a long, unique password from a password manager;
+   - leave **Bypass authentication for clients on localhost** off.
+4. If Windows Firewall asks about qBittorrent, allow **Private networks** only, or select **Cancel**. Lodestar reaches it on `127.0.0.1`.
+5. In Lodestar, follow section 8.7. Lodestar finds qBittorrent at `http://localhost:8080`.
 
-Use qBittorrent 4.6.0 up to 5.2.x. Lodestar refuses a version outside that range, and the app then shows only a generic "That didn't work" message. If you downloaded a newer version, install 5.2.x instead. The range will widen when the installer is pinned.
+Lodestar is tested with qBittorrent 4.6.0 to 5.2.x. When its set-up step arrives **(planned)**, it will refuse a version outside that range.
 
-On the qBittorrent row, **Set up** says **This one is set up through the guided setup, not downloaded by Lodestar.** That is expected.
+On the qBittorrent row, the message says **This one is set up through the guided setup, not downloaded by Lodestar.** That is expected.
 
 ### Remove a companion
 
 1. Open **Settings → Companions** and select **Remove** on the row.
    **Result:** The dialog **Remove qBittorrent?** lists the **Folder** and the **Saved setting** rows it will delete.
-2. Confirm it.
+2. Select **Remove** in the dialog.
    **Result:** The companion stops, and its folder and those rows are deleted. The download client Lodestar set up for it in **Settings → Integrations** goes too. Nothing else changes.
 
 The terminal `remove` command doesn't remove that download client. Use the app, or remove it by hand in **Settings → Integrations**.
@@ -277,7 +289,10 @@ The screen says the same under **If this companion's route uses a SOCKS5 proxy**
 ## 8.7 Add a companion you already run
 <!-- index: Companions you already run; Look for companions; hand-over; guided; temporary password -->
 
-Use this for a companion you started yourself (section 8.3, 8.4 or the qBittorrent Windows installer), or one you run on another computer. The app records where it is and checks its health.
+Use this for a qBittorrent you started yourself (section 8.3, 8.4 or the Windows installer), or one you run on another computer. The app records where it is and checks its health.
+
+> [!IMPORTANT]
+> Today only qBittorrent can be added here. Prowlarr and gluetun answer **This can't be done yet.** **(planned)**. To use Prowlarr, add it as a source in **Settings → Sources** instead ([Chapter 7](07-connect-other-apps.md) covers the other direction).
 
 1. Open **Settings → Companions** and scroll to **Companions you already run**.
 2. Select **Look for companions**.
@@ -293,7 +308,6 @@ On Windows, the qBittorrent row also has **Passwords and keys**. Open it, paste 
 
 If Lodestar installed qBittorrent for you, you don't need this section. Lodestar says **Lodestar installed this one itself, so this isn't needed.**
 
-If you set up a download client by hand in **Settings → Integrations**, remove it there first. Until you do, Lodestar says **Lodestar is using a download client you set up yourself.**
 
 ## 8.8 Fix a problem
 <!-- index: companion not detected; credentials refused; port in use; Needs setup; Set up chip -->
@@ -303,12 +317,13 @@ A source that needs a companion that isn't there shows **Needs qBittorrent** wit
 | Problem | What to do |
 |---|---|
 | **None found.** after **Look for companions** | The companion may not be on its usual port or may be on another computer. Behind gluetun, the companion's own name doesn't answer, so type gluetun's address. Choose it under **Companion**, type its **Address**, and select **Add**. In Docker, check that Lodestar and the companion share a network: Lodestar finds a container by its name on Docker's network. |
-| **That program didn't answer there.** | The address or port is wrong, or the program isn't running. Open the address in your browser from the Lodestar computer. If qBittorrent's web page doesn't open, turn on its web interface first. |
+| **That program didn't answer there.** | The address or port is wrong, or the program isn't running. Check that the program is running and that its web interface is on. In a container, the address works only inside the Docker network, so you can't test it from your browser unless you publish its port on your LAN (section 8.3). |
 | **The companion didn't answer.** | The program is stopped or still starting. Wait a minute, then try again. |
 | **The companion refused the saved password.** | The password changed outside Lodestar. Reset the password in the companion, then add it again with section 8.7. |
 | **That password isn't right.** | You typed the wrong **Your Lodestar password** for **Show**. That is your Lodestar admin password, not the companion's. |
 | **Too many tries. Wait a few minutes and try again.** | Lodestar limits how often you can try a password. Wait, then try again. |
-| **That didn't work. Try again in a minute.** on Windows | qBittorrent's version may be outside 4.6.0 to 5.2.x. Install 5.2.x. |
+| **This can't be done yet.** | Only qBittorrent can be added under **Companions you already run** today. |
+| **Lodestar is using a download client you set up yourself.** | You already added a download client by hand. Remove it in **Settings → Integrations**, then install qBittorrent from Lodestar again. |
 | A port is already in use | A companion Lodestar installed always uses its usual port on this computer, `8080` or `9696`, and can't be moved. Find the other program, stop it or move it, then select **Restart**. On Windows run `netstat -ano \| findstr :8080`. On Linux run `ss -ltnp`. |
 | **This companion isn't available to install yet.** | This version of Lodestar has no checked download for it. Run it as its own container (section 8.3 or 8.4), or install it yourself and use section 8.7. |
 | **Lodestar is running in a container, so it can't install this program itself.** | Run the companion as its own container (section 8.3 or 8.4). |

@@ -26,5 +26,7 @@ The setup illustration uses labels from `web/src/lib/features/auth/messages/en.j
 | 7.7 | bitmagnet export section of Settings → Outputs | Mock fixtures | Present (`outputs-export-light.png`, `outputs-export-dark.png`); newer than v0.5.1 |
 | 7.7 | bitmagnet export showing Done | Fixture capture | Pending; needs an export-job fixture in `web/e2e/docs/shots.docs.ts` (newer than v0.5.1) |
 | 8.5 | Settings → Companions with qBittorrent, its health and the Install dialog (newer than v0.5.1) | Fixture capture | Pending; `companions.routes.test.ts` has no docs shots yet, so add a test to `web/e2e/docs/shots.docs.ts`; until then `images/companions/companions-screen-illustration.svg` (labels from `web/src/lib/features/settings/companions/messages/en.json`) |
+| 8.4 | Unraid `flash` share showing `config/plugins/dockerMan/templates-user` | Owner | Pending host capture |
+| 8.5 | qBittorrent Tools → Options → Web UI with IP address `127.0.0.1` (Windows) | Owner | Pending capture from qBittorrent, with the version in the caption |
 
 `setup-notice.png`, `setup-screen.png` and `sources-{light,dark}.png` remain development assets. They are not used as v0.5.1 setup or Sources instructions. Sources, webhook setup and safe restart are outside this release guide.
