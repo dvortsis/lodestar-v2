@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-12T22:27:39Z",
+  "updated_at": "2026-11-12T22:33Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -7542,6 +7542,21 @@
       "id": "owner-flags-window-1112",
       "note": "\u00a72.19 flags for the owner batch: NOS-0 canonical escaping per NIP-01 text and i-tag split at first colon; NOS-2a BND.ADDR form-checked not policy-checked; X-utp-backoff three decisions; ENR-13 own size-limit entry for the Identified chunk; X-restart-save-lag form dispatch line.",
       "added": "2026-11-12T22:27:39Z"
+    },
+    {
+      "id": "merged-772",
+      "note": "#772 GS-1 merged 88a632a0 (merged-tree openapi.json + schema.d.ts regenerated clean). Follow-ups: rv-772 O2 Missing-path tests -> GS-2 brief; root-cap gating note (rv-772 line 64) and O5 same-file wording -> GS-4 notes",
+      "added": "2026-11-12T22:33Z"
+    },
+    {
+      "id": "merged-775",
+      "note": "#775 X-m8-net-e2e-nits merged b2a3e94f (rv-775 MERGE, 2 optional notes, no action)",
+      "added": "2026-11-12T22:33Z"
+    },
+    {
+      "id": "owner-2-64",
+      "note": "Owner 22:30Z: window sessions run until 00:00Z 2026-11-13; replace each when its PR is ready; keep 10 building while work exists; at 00:00Z cut to 4 build + 4 cloud-testing. Record as owner-decisions \u00a72.64 (UTC only) in the next runner PR; limits.phase_total 4 (+4 testing).",
+      "added": "2026-11-12T22:33Z"
     }
   ],
   "main_health": [
@@ -8564,7 +8579,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-12T22:27:39Z",
+    "updated": "2026-11-12T22:33Z",
     "items": [
       {
         "slot": 1,
@@ -8595,11 +8610,11 @@
       },
       {
         "slot": 4,
-        "slice": "X-m8-net-e2e-nits",
+        "slice": "X-cmp-egress-api",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAsZmQbQajtBLyTfXU: #763 M8-NET-E2E merged (423a91b1); now the rv-763 follow-ups + macOS time (briefs/X-m8-net-e2e-nits.md)",
-        "since": "2026-11-12T16:26:15Z",
+        "doing": "session_01MMjhn8PqqssoVTSpsA9adU: launched after #775 merged (b2a3e94f); brief briefs/X-cmp-egress-api.md; /security-review",
+        "since": "2026-11-12T22:33Z",
         "status": "active"
       },
       {
@@ -8622,11 +8637,11 @@
       },
       {
         "slot": 7,
-        "slice": "GS-1",
+        "slice": "GS-2",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn8qXgAJy8Q8NE66YaY: #772 open 8a454e3e (~1,560 lines, ~750 tests); CI running; /security-review on ready",
-        "since": "2026-11-12T16:09:35Z",
+        "doing": "session_01MMjhnC44KzkX1DrvLVgHim: launched after #772 GS-1 merged (88a632a0); brief briefs/GS-2.md (includes rv-772 O2 Missing-path tests)",
+        "since": "2026-11-12T22:33Z",
         "status": "active"
       },
       {
@@ -8714,7 +8729,7 @@
         "slice": "X-utp-backoff",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnB3JA4wKEcwoa3rh91: owner window (\u00a72.63) until 23:30Z; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/X-utp-backoff.md",
+        "doing": "session_01MMjhnB3JA4wKEcwoa3rh91: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/X-utp-backoff.md",
         "since": "2026-11-12T22:08:33Z",
         "status": "active"
       },
@@ -8723,7 +8738,7 @@
         "slice": "NOS-0",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAcF2hAwDyo9ArAQHd: owner window (\u00a72.63) until 23:30Z; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/NOS-0.md",
+        "doing": "session_01MMjhnAcF2hAwDyo9ArAQHd: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/NOS-0.md",
         "since": "2026-11-12T22:08:33Z",
         "status": "active"
       },
@@ -8732,7 +8747,7 @@
         "slice": "LEM-0",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAT9qFMjMJiH91VUfM: owner window (\u00a72.63) until 23:30Z; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/LEM-0.md",
+        "doing": "session_01MMjhnAT9qFMjMJiH91VUfM: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/LEM-0.md",
         "since": "2026-11-12T22:08:33Z",
         "status": "active"
       },
@@ -8741,7 +8756,7 @@
         "slice": "NOS-2a",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn9T6q1G9rBENxYZuHb: owner window (\u00a72.63) until 23:30Z; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/NOS-2a.md",
+        "doing": "session_01MMjhn9T6q1G9rBENxYZuHb: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/NOS-2a.md",
         "since": "2026-11-12T22:08:33Z",
         "status": "active"
       },
@@ -8750,7 +8765,7 @@
         "slice": "X-restart-save-lag",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnAmqVHzHLPT4ZUX58K: owner window (\u00a72.63) until 23:30Z; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/X-restart-save-lag.md",
+        "doing": "session_01MMjhnAmqVHzHLPT4ZUX58K: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/X-restart-save-lag.md",
         "since": "2026-11-12T22:08:33Z",
         "status": "active"
       },
@@ -8759,7 +8774,7 @@
         "slice": "X-win-upd-manual-rollback",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnA7MTzJty5dGrxtPTC: owner window (\u00a72.63) until 23:30Z; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/X-win-upd-manual-rollback.md",
+        "doing": "session_01MMjhnA7MTzJty5dGrxtPTC: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/X-win-upd-manual-rollback.md",
         "since": "2026-11-12T22:08:33Z",
         "status": "active"
       },
@@ -8768,7 +8783,7 @@
         "slice": "M8-SEC-0",
         "role": "docs",
         "agent": "claude",
-        "doing": "session_01MMjhnCiy9xmJwkhkDiZsd4: owner window (\u00a72.63) until 23:30Z; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/M8-SEC-0.md",
+        "doing": "session_01MMjhnCiy9xmJwkhkDiZsd4: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/M8-SEC-0.md",
         "since": "2026-11-12T22:08:33Z",
         "status": "active"
       },
@@ -8777,7 +8792,7 @@
         "slice": "ENR-13",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhn9aiUogqrUAigBpjxV: owner window (\u00a72.63) until 23:30Z; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/ENR-13.md",
+        "doing": "session_01MMjhn9aiUogqrUAigBpjxV: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/ENR-13.md",
         "since": "2026-11-12T22:08:33Z",
         "status": "active"
       },
@@ -8786,7 +8801,7 @@
         "slice": "X-banner-live-region",
         "role": "build",
         "agent": "claude",
-        "doing": "session_01MMjhnBn59gULGWufMiioeP: owner window (\u00a72.63) until 23:30Z; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/X-banner-live-region.md",
+        "doing": "session_01MMjhnBn59gULGWufMiioeP: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/X-banner-live-region.md",
         "since": "2026-11-12T22:08:33Z",
         "status": "active"
       },
@@ -8795,7 +8810,7 @@
         "slice": "M8-DOC-2",
         "role": "docs",
         "agent": "claude",
-        "doing": "session_01MMjhnA41Z4h2JU2HX9jca2: owner window (\u00a72.63) until 23:30Z; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/M8-DOC-2.md",
+        "doing": "session_01MMjhnA41Z4h2JU2HX9jca2: owner window (\u00a72.64) until 00:00Z 2026-11-13; replace on ready; push/PR by 23:20Z, report by 23:25Z, then stop; briefs/M8-DOC-2.md",
         "since": "2026-11-12T22:08:33Z",
         "status": "active"
       }
@@ -8858,7 +8873,7 @@
     }
   ],
   "heartbeat": "2026-11-12T21:39:04Z",
-  "updated": "2026-11-12T22:27:39Z",
+  "updated": "2026-11-12T22:33Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
     "by": "owner (in chat, runner session)",
